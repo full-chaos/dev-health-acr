@@ -1796,7 +1796,7 @@ the served one and keeps the rest; it runs at the end of
 `ApplyServerCompletenessAuthority` (every serving path and the stored read route)
 and inside `servedMeasurementShape`, so each budget measurement and lever weighs
 the answer with its served-status head. A head with no such opening sentence
-(no_match, clarification, client-written text) is left alone. `QueryVersion` v58.
+(no_match, clarification, client-written text) is left alone. `QueryVersion` v60.
 
 ---
 

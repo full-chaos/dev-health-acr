@@ -22,6 +22,7 @@ import (
 
 var (
 	probeAlpha = SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:probe-alpha", Label: "probe-alpha"}
+	probeTeam  = SubjectRef{Kind: SubjectTeam, CanonicalID: "team:probe-gamma", Label: "probe-gamma"}
 	probeBeta  = SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:probe-beta", Label: "probe-beta"}
 )
 

@@ -514,7 +514,7 @@ func TestDecideCountPopulationScopeCoversItsInputDomain(t *testing.T) {
 		{"one candidate", "", SubjectResolution{Candidates: []SubjectCandidate{offered}}, nil, CountPopulationScopeAnchorUnresolved, 0, 0, ""},
 		{"two candidates", "", SubjectResolution{Candidates: []SubjectCandidate{offered, offered}}, nil, CountPopulationScopeAnchorAmbiguous, 0, 0, ""},
 		{"member committed", "", SubjectResolution{Committed: []SubjectRef{member}}, nil, CountPopulationScopeAnchorUnresolved, 0, 0, ""},
-		{"member committed with anchor match", "", SubjectResolution{Committed: []SubjectRef{member}, Candidates: []SubjectCandidate{scopeAnchorMatch(member)}}, nil, CountPopulationScopeAnchorUnresolved, 0, 0, ""},
+		{"member committed with anchor match", "", SubjectResolution{Committed: []SubjectRef{member}, Candidates: []SubjectCandidate{scopeAnchorMatch(member)}}, nil, CountPopulationScopeSingleSubject, 0, 0, ""},
 		{"unbound non-member committed", "", SubjectResolution{Committed: []SubjectRef{other}}, nil, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
 		{"unbound non-member committed, two candidates", "", SubjectResolution{Committed: []SubjectRef{other}, Candidates: []SubjectCandidate{offered, offered}}, nil, CountPopulationScopeAnchorAmbiguous, 0, 1, ""},
 		{"anchor match on another subject", "", SubjectResolution{Committed: []SubjectRef{other}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, CountPopulationScopeAnchorUnresolved, 0, 1, ""},

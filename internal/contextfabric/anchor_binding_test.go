@@ -594,7 +594,7 @@ func TestAnchorBindingLineVocabularyIsClosedOverItsProducers(t *testing.T) {
 		"shadow_agreement":      {"agree", "disagree", "not_evaluated"},
 		"disagreement_field":    {"none", "pending_proof", "carried_anchor", "count_anchor"},
 		"persisted":             {"persisted", "payload_rejected", "replay_conflict", "superseded", "save_failed", "state_absent", "binding_unencodable", "not_saved"},
-		"served_count_decision": {"not_evaluated", "anchor_committed", "anchor_ambiguous", "anchor_unresolved"},
+		"served_count_decision": {"not_evaluated", "anchor_committed", "anchor_ambiguous", "anchor_unresolved", "single_subject"},
 		"carry_checks":          {"not_applicable", "not_evaluated"},
 	} {
 		if got := AnchorBindingTransitionLineVocabulary(key); !reflect.DeepEqual(got, members) {
