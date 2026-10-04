@@ -368,6 +368,12 @@ const (
 	credentialLookupCauseOther    = "other"
 )
 
+// connectionFailureSQLStates are the class 08 SQLSTATEs that mean the
+// connection failed. 08P01 (protocol_violation) is not one of them.
+var connectionFailureSQLStates = map[string]bool{"08000": true, "08001": true, "08003": true, "08004": true, "08006": true, "08007": true}
+
+func connectionFailureSQLState(state string) bool { return connectionFailureSQLStates[state] }
+
 // credentialLookupCause maps a store error to a closed token; the error text
 // never reaches the log.
 func credentialLookupCause(err error) string {
@@ -377,7 +383,7 @@ func credentialLookupCause(err error) string {
 		return credentialLookupCauseCanceled
 	case errors.Is(err, context.DeadlineExceeded):
 		return credentialLookupCauseDeadline
-	case errors.As(err, &class) && (class.Class == "connection_failure" || strings.HasPrefix(class.SQLState, "08")):
+	case errors.As(err, &class) && (class.Class == "connection_failure" || connectionFailureSQLState(class.SQLState)):
 		return credentialLookupCauseConn
 	default:
 		return credentialLookupCauseOther

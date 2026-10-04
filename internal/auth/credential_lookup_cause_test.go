@@ -32,6 +32,10 @@ func TestCredentialLookupFailureNamesCauseAndFailsClosed(t *testing.T) {
 		{"connection", connection, "ERROR", "connection_failure", "credential_store"},
 		{"connection exception", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08000", Class: "connection_exception"}), "ERROR", "connection_failure", "credential_store"},
 		{"connection does not exist", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08003", Class: "connection_does_not_exist"}), "ERROR", "connection_failure", "credential_store"},
+		{"connection failure to establish", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08001", Class: "unclassified"}), "ERROR", "connection_failure", "credential_store"},
+		{"connection rejected", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08004", Class: "unclassified"}), "ERROR", "connection_failure", "credential_store"},
+		{"transaction resolution unknown", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08007", Class: "unclassified"}), "ERROR", "connection_failure", "credential_store"},
+		{"protocol violation", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08P01", Class: "unclassified"}), "ERROR", "other", "credential_store"},
 		{"non connection class", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "42501", Class: "insufficient_privilege"}), "ERROR", "other", "credential_store"},
 		{"other", errors.New("postgres://operator:secret@example"), "ERROR", "other", "credential_store"},
 	}
@@ -72,6 +76,9 @@ func TestCredentialLookupFailureNamesCauseAndFailsClosed(t *testing.T) {
 					t.Fatalf("log line is not a JSON record %q: %v", raw, err)
 				}
 				records = append(records, entry)
+				if cause, _ := entry["cause"].(string); cause != tc.wantCause {
+					t.Fatalf("record cause = %q, want %q: %s", cause, tc.wantCause, raw)
+				}
 			}
 			if len(records) != 1 || records[0]["level"] != tc.wantLevel {
 				t.Fatalf("records = %v, want exactly one at %s", records, tc.wantLevel)
