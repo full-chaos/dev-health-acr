@@ -111,17 +111,21 @@ func TestLiveFindSubjectsNameLookupReachesBeyondTheScanWindow(t *testing.T) {
 				require.NotEqual(t, target.id, subject.CanonicalID, "the target lies outside the list window")
 			}
 
-			for _, probe := range []struct{ query, match string }{
-				{tc.label, "exact"}, {strings.ToUpper(tc.label), "exact"}, {"Ünï Älias", "alias"}, {"zeta-alias", "alias"}, {"GITHUB:ZETA/PROVIDER", "provider_key"},
+			for _, probe := range []struct{ name, query, match string }{
+				{"label", tc.label, "exact"}, {"label folded", strings.ToUpper(tc.label), "exact"},
+				{"alias folded", "zeta-alias", "alias"}, {"alias exact case non-ascii", "Ünï Älias", "alias"},
+				{"provider alias folded", "GITHUB:ZETA/PROVIDER", "provider_key"},
 			} {
-				resp, err := lookup.Find(ctx, unrestricted(org), directread.FindRequest{Query: probe.query, Kinds: []string{string(tc.kind)}})
-				require.NoError(t, err)
-				require.Len(t, resp.Subjects, 1, "query %q: %+v", probe.query, resp)
-				require.Equal(t, target.id, resp.Subjects[0].CanonicalID)
-				require.Equal(t, probe.match, resp.Subjects[0].Match)
-				require.Equal(t, directread.FindComplete, resp.Status)
-				require.True(t, resp.Page.Complete)
-				require.False(t, resp.Population.Truncated)
+				t.Run(probe.name, func(t *testing.T) {
+					resp, err := lookup.Find(ctx, unrestricted(org), directread.FindRequest{Query: probe.query, Kinds: []string{string(tc.kind)}})
+					require.NoError(t, err)
+					require.Len(t, resp.Subjects, 1, "query %q: %+v", probe.query, resp)
+					require.Equal(t, target.id, resp.Subjects[0].CanonicalID)
+					require.Equal(t, probe.match, resp.Subjects[0].Match)
+					require.Equal(t, directread.FindComplete, resp.Status)
+					require.True(t, resp.Page.Complete)
+					require.False(t, resp.Population.Truncated)
+				})
 			}
 
 			absent, err := lookup.Find(ctx, unrestricted(org), directread.FindRequest{Query: "no such subject", Kinds: []string{string(tc.kind)}})
