@@ -63,7 +63,7 @@ const (
 // ownership tables the library rule reads. Naming a subset picks WHICH
 // declared tables to render; every column type still comes from
 // devhealthschema.DDL.
-// devhealthschema:not-a-production-replica
+// devhealthschema:not-a-production-replica -- this list only picks which declared tables to render through devhealthschema.DDL; it declares no column.
 var oracleSchemaTables = []string{
 	"repos", "work_items", "git_pull_requests", "git_pull_request_reviews",
 	"ci_pipeline_runs", "deployments", "operational_incidents",
@@ -227,7 +227,7 @@ func oracleFalkor(t *testing.T, ctx context.Context) *falkorgraph.Adapter {
 	}
 	adapter, err := falkorgraph.New(falkorgraph.Config{
 		Addr: host + ":" + port.Port(), GraphPrefix: "acr-cf-8667", RequestTimeout: 15 * time.Second,
-		MaxAttempts: 1, MaxResults: 100, PoolSize: 10, AllowInsecure: true, TLS: false,
+		MaxAttempts: 1, MaxResults: 50, PoolSize: 10, AllowInsecure: true, TLS: false,
 	})
 	if err != nil {
 		t.Fatalf("falkorgraph.New: %v", err)
@@ -388,6 +388,7 @@ func TestChaos8667RepositoryWorkItemMembersGraphAgreesWithLibraryRule(t *testing
 		}
 		return n
 	}
+	// devhealthschema:not-a-production-replica -- these names are the seed row-count guard's targets; no column or type is declared here.
 	for _, c := range []struct {
 		table string
 		want  int
