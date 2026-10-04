@@ -3,27 +3,11 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
-
-// A project has no edge to a repository. It reaches its deployments through
-// its issues' linked pull requests: project <-BELONGS_TO_PROJECT- issue
-// -RELATES_TO- pull request -BELONGS_TO_REPOSITORY-> repository
-// <-BELONGS_TO_REPOSITORY- deployment. The link is the projected
-// work_item_dependencies row between an issue and a pull-request work item,
-// never an issue-key prefix, an external issue key, or an issue's own
-// repository.
-//
-// The walk is four batched reads, one per step, not a wider hop radius: each
-// step is bounded by the caller's collect budget and a spent budget is
-// reported as truncation.
 
 // propWorkItemType is the work item's stored `type` property.
 const propWorkItemType = propPropertyPrefix + "type"
@@ -53,18 +37,6 @@ type walkHit struct {
 	rel  *edge
 }
 
-// The two steps of the project deployment walk after its link read, in order.
-var (
-	pullRequestRepositoriesStep = walkStep{
-		fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectRepository,
-		relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkOut,
-	}
-	repositoryDeploymentsStep = walkStep{
-		fromKind: contractsv1.ContextFabricSubjectRepository, toKind: contractsv1.ContextFabricSubjectDeployment,
-		relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkIn,
-	}
-)
-
 // walkStepCypher is the read of one step: the neighbours of the batched ids
 // along one relationship, as ONE path pattern from the origin node, in a
 // deterministic order, with the window applied to the edge and the neighbour.
@@ -88,86 +60,6 @@ func walkStepCypher(step walkStep, temporal temporalFilter) string {
 	return fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+arrow+"(b:%s {%s:$org, %s:$toKind}) WHERE r.%s = $rel%s%s%s RETURN id, b, r ORDER BY id, b.%s, r.%s LIMIT $limit",
 		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, propKind,
 		propRelationType, typeClause, temporal.predicate("r"), temporal.predicate("b"), propCanonicalID, propRelationshipID)
-}
-
-// projectLinkPageCap bounds how many pages of issue links one walk reads. A
-// walk that reaches it is cut.
-const projectLinkPageCap = 8
-
-// projectLinkCypher is the walk's first read: the project's issues joined to
-// the pull-request work items they are linked to, one row per link, in a
-// deterministic order, paged. An issue with no link is not a row, so the read
-// budget is spent on links only, and a project none of whose issues links a
-// pull request returns no row at all.
-//
-// For a repository-restricted caller the read also keeps only the links the
-// caller's grants can admit: the pull request's repository list meets the
-// grants, and the issue's does or the issue has no repository. That is a
-// necessary condition of the authorization the walk applies to each row, so
-// it drops no row the caller could see, and links the caller cannot see do
-// not fill the pages before the ones it can.
-func projectLinkCypher(temporal temporalFilter, restricted bool) string {
-	grants := ""
-	if restricted {
-		grants = fmt.Sprintf(" AND ANY(s IN pr.%[1]s WHERE s IN $grants) AND (ANY(s IN i.%[1]s WHERE s IN $grants) OR $noRepository IN i.%[1]s)", propAuthzRepos)
-	}
-	return fmt.Sprintf("MATCH (p:%[1]s {%[2]s:$org, %[3]s:$projectKind, %[4]s:$project})<-[rp:%[5]s]-(i:%[1]s {%[2]s:$org, %[3]s:$workItemKind})-[rl:%[5]s]-(pr:%[1]s {%[2]s:$org, %[3]s:$workItemKind}) "+
-		"WHERE rp.%[6]s = $belongs AND rl.%[6]s = $relates AND (i.%[7]s IS NULL OR NOT i.%[7]s IN $prtypes) AND pr.%[7]s IN $prtypes%[13]s%[8]s%[9]s%[10]s%[11]s "+
-		"RETURN i, pr, rl ORDER BY i.%[4]s, pr.%[4]s, rl.%[12]s SKIP $skip LIMIT $limit",
-		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, propRelationType, propWorkItemType,
-		temporal.predicate("rp"), temporal.predicate("i"), temporal.predicate("rl"), temporal.predicate("pr"), propRelationshipID, grants)
-}
-
-// projectLinkGrants binds a restricted caller's grants to the link read.
-func projectLinkGrants(params map[string]interface{}, principal storage.Principal) map[string]interface{} {
-	grants := make([]interface{}, 0, len(principal.RepositoryScopes))
-	for _, scope := range principal.RepositoryScopes {
-		if scope = strings.TrimSpace(scope); scope != "" {
-			grants = append(grants, scope)
-		}
-	}
-	params["grants"] = grants
-	params["noRepository"] = noRepositoryScope
-	return params
-}
-
-// projectIssueCountCypher counts the project's issues, before authorization.
-func projectIssueCountCypher(temporal temporalFilter) string {
-	return fmt.Sprintf("MATCH (p:%[1]s {%[2]s:$org, %[3]s:$projectKind, %[4]s:$project})<-[rp:%[5]s]-(i:%[1]s {%[2]s:$org, %[3]s:$workItemKind}) "+
-		"WHERE rp.%[6]s = $belongs AND (i.%[7]s IS NULL OR NOT i.%[7]s IN $prtypes)%[8]s%[9]s RETURN count(DISTINCT i) AS issues",
-		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, propRelationType, propWorkItemType,
-		temporal.predicate("rp"), temporal.predicate("i"))
-}
-
-// projectLinkParams binds the link read and the issue count.
-func projectLinkParams(orgID, project string, skip, limit int, temporal temporalFilter) map[string]interface{} {
-	return temporal.bind(map[string]interface{}{
-		"org": orgID, "project": project,
-		"projectKind": string(contractsv1.ContextFabricSubjectProject), "workItemKind": string(contractsv1.ContextFabricSubjectWorkItem),
-		"belongs": string(contractsv1.ContextFabricRelationshipBelongsToProject), "relates": string(contractsv1.ContextFabricRelationshipRelatesTo),
-		"prtypes": pullRequestWorkItemTypes, "skip": skip, "limit": limit,
-	})
-}
-
-// projectIssueCount reads how many issues the project has, before
-// authorization.
-func (a *Adapter) projectIssueCount(ctx context.Context, key, orgID, project string, temporal temporalFilter) (int, error) {
-	rows, err := a.api.query(ctx, key, projectIssueCountCypher(temporal), projectLinkParams(orgID, project, 0, 1, temporal), true)
-	if err != nil {
-		return 0, safeDependencyError("count project issues", err)
-	}
-	if len(rows) == 0 {
-		return 0, nil
-	}
-	switch n := rows[0]["issues"].(type) {
-	case int64:
-		return int(n), nil
-	case int:
-		return n, nil
-	case float64:
-		return int(n), nil
-	}
-	return 0, nil
 }
 
 // walkStepParams binds one batch of a step read.
@@ -207,7 +99,7 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 		}
 		rows, err := a.api.query(ctx, key, cypher, walkStepParams(orgID, batch, step, limit, temporal), true)
 		if err != nil {
-			return nil, false, safeDependencyError("walk project deployments", err)
+			return nil, false, safeDependencyError("walk the entity tree", err)
 		}
 		if budget > 0 && len(rows) > remaining {
 			rows = rows[:remaining]
@@ -226,25 +118,6 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 	return hits, cut, nil
 }
 
-// projectDeploymentWalk is the result of the project -> deployments read.
-type projectDeploymentWalk struct {
-	// anchorKind is the kind of the anchor the read started from.
-	anchorKind contextfabric.SubjectKind
-	nodes      []graphrank.CandidateNode
-	edges      []graphrank.ResolvedEdge
-	filters    edgeFilterCounts
-	truncated  bool
-	// issues is how many issues the project has and linkedPullRequests how
-	// many distinct pull-request work items the link read returned, both
-	// before authorization. Zero linked pull requests over an uncut read is
-	// the unlinked terminal: the link read returns every link of the project.
-	issues, linkedPullRequests int
-	// denied counts the links, repositories and deployments the caller's
-	// authorization hid. Members unseen for that reason are not an unlinked
-	// project.
-	denied int
-}
-
 // noRepositoryScope is the authorization scope a work item with no repository
 // carries.
 const noRepositoryScope = "acr-context-fabric:no-repository"
@@ -255,113 +128,6 @@ func repositoryLess(n *node) bool {
 }
 
 func canonicalIDOf(n *node) string { return propStringValue(n.Properties[propCanonicalID]) }
-
-// projectDeploymentMembers returns the deployments of the repositories the
-// project's issues' linked pull requests belong to. Only the pull request,
-// the repository and the deployment must pass the caller's authorization, and
-// so must the issue under the work-item rule: an issue with a repository of its
-// own is decided by that repository; a repository-less issue (Linear, Jira) is
-// admitted by its native link to a pull request the caller is granted.
-func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, project contextfabric.SubjectRef, collectLimit int, temporal temporalFilter) (projectDeploymentWalk, error) {
-	out := projectDeploymentWalk{anchorKind: contextfabric.SubjectProject}
-	authorized := func(n *node) bool {
-		return graphrank.AuthorizedAttributes(principal, scope, toCandidateNode(n).Attributes)
-	}
-	// cut bounds a frontier by the collect budget; a cut one is truncation.
-	cut := func(ids []string) []string {
-		sort.Strings(ids)
-		if collectLimit > 0 && len(ids) > collectLimit {
-			out.truncated = true
-			return ids[:collectLimit]
-		}
-		return ids
-	}
-	deny := func() {
-		out.filters.add(edgeFiltered, edgeFilterReasonAuthz)
-		out.denied++
-	}
-
-	issues, err := a.projectIssueCount(ctx, key, orgID, project.CanonicalID, temporal)
-	if err != nil {
-		return out, err
-	}
-	out.issues = issues
-
-	// The links are paged and each row is authorized before it counts
-	// against the budget, so links the caller cannot see do not crowd out
-	// links it can.
-	pageSize := 1 << 30
-	if collectLimit > 0 {
-		pageSize = collectLimit + 1
-	}
-	restricted := needsProjectReach(principal)
-	linkCypher := projectLinkCypher(temporal, restricted)
-	seenPullRequests := map[string]bool{}
-	authorizedPRs := map[string]bool{}
-	for page := 0; ; page++ {
-		if page >= projectLinkPageCap {
-			out.truncated = true
-			break
-		}
-		params := projectLinkParams(orgID, project.CanonicalID, page*pageSize, pageSize, temporal)
-		if restricted {
-			params = projectLinkGrants(params, principal)
-		}
-		rows, err := a.api.query(ctx, key, linkCypher, params, true)
-		if err != nil {
-			return out, safeDependencyError("walk project deployments", err)
-		}
-		for _, r := range rows {
-			issue, _ := r["i"].(*node)
-			pullRequest, _ := r["pr"].(*node)
-			if issue == nil || pullRequest == nil {
-				continue
-			}
-			id := canonicalIDOf(pullRequest)
-			if !seenPullRequests[id] {
-				seenPullRequests[id] = true
-				out.linkedPullRequests++
-			}
-			switch {
-			case !(authorized(issue) || repositoryLess(issue)):
-				deny()
-			case !authorized(pullRequest):
-				deny()
-			default:
-				authorizedPRs[id] = true
-			}
-		}
-		if len(rows) < pageSize || (collectLimit > 0 && len(authorizedPRs) > collectLimit) {
-			break
-		}
-	}
-	pullRequests := make([]string, 0, len(authorizedPRs))
-	for id := range authorizedPRs {
-		pullRequests = append(pullRequests, id)
-	}
-	pullRequests = cut(pullRequests)
-	if len(pullRequests) == 0 {
-		return out, nil
-	}
-
-	repoHits, reposCut, err := a.walkStepHits(ctx, key, orgID, pullRequests, pullRequestRepositoriesStep, temporal, collectLimit)
-	if err != nil {
-		return out, err
-	}
-	out.truncated = out.truncated || reposCut
-	repositories := map[string]contextfabric.SubjectRef{}
-	for _, h := range repoHits {
-		if !authorized(h.to) {
-			deny()
-			continue
-		}
-		if repository, ok := graphrank.NodeSubject(toCandidateNode(h.to)); ok {
-			repositories[repository.CanonicalID] = repository
-		}
-	}
-	err = a.repositoryDeployments(ctx, key, orgID, repositories, &out, authorized, deny, cut, collectLimit, temporal)
-	return out, err
-}
 
 // currentOwnership is the window ownership edges are read under: the
 // question's window, or the adapter clock for a question about now. An
@@ -374,131 +140,6 @@ func currentOwnership(temporal temporalFilter, now time.Time) temporalFilter {
 	return newTemporalFilter(contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &now})
 }
 
-// teamRepositoriesStep reads the repositories a team owns: the repository's
-// OWNED_BY_TEAM edge points at the team.
-var teamRepositoriesStep = walkStep{
-	fromKind: contractsv1.ContextFabricSubjectTeam, toKind: contractsv1.ContextFabricSubjectRepository,
-	relation: contractsv1.ContextFabricRelationshipOwnedByTeam, direction: walkIn,
-}
-
-// anchorDeploymentMembers returns the deployments a named anchor reaches by a
-// read directed at deployments: a project through its issues' linked pull
-// requests, a team through the repositories it owns, a repository directly.
-// Each read has its own budget and every hop passes the caller's
-// authorization.
-func (a *Adapter) anchorDeploymentMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, collectLimit int, temporal temporalFilter) (projectDeploymentWalk, error) {
-	if anchor.Kind == contextfabric.SubjectProject {
-		return a.projectDeploymentMembers(ctx, key, orgID, principal, scope, anchor, collectLimit, temporal)
-	}
-	out := projectDeploymentWalk{anchorKind: anchor.Kind}
-	authorized := func(n *node) bool {
-		return graphrank.AuthorizedAttributes(principal, scope, toCandidateNode(n).Attributes)
-	}
-	cut := func(ids []string) []string {
-		sort.Strings(ids)
-		if collectLimit > 0 && len(ids) > collectLimit {
-			out.truncated = true
-			return ids[:collectLimit]
-		}
-		return ids
-	}
-	deny := func() {
-		out.filters.add(edgeFiltered, edgeFilterReasonAuthz)
-		out.denied++
-	}
-	repositories := map[string]contextfabric.SubjectRef{}
-	switch anchor.Kind {
-	case contextfabric.SubjectRepository:
-		repositories[anchor.CanonicalID] = anchor
-	case contextfabric.SubjectTeam:
-		// A repository can carry several ownership edges to one team (one per
-		// provider and source), so the edges are read under the census bound
-		// and the budget is spent on distinct repositories.
-		hits, hitsCut, err := a.walkStepHits(ctx, key, orgID, []string{anchor.CanonicalID}, teamRepositoriesStep, currentOwnership(temporal, a.now()), exactNameCandidateQueryLimit)
-		if err != nil {
-			return out, err
-		}
-		out.truncated = out.truncated || hitsCut
-		owned := map[string]walkHit{}
-		for _, h := range hits {
-			if !authorized(h.to) {
-				deny()
-				continue
-			}
-			owned[canonicalIDOf(h.to)] = h
-		}
-		ids := make([]string, 0, len(owned))
-		for id := range owned {
-			ids = append(ids, id)
-		}
-		for _, id := range cut(ids) {
-			h := owned[id]
-			repository, ok := graphrank.NodeSubject(toCandidateNode(h.to))
-			if !ok {
-				continue
-			}
-			repositories[id] = repository
-			edgeCandidate := toCandidateEdge(h.rel, string(repository.Kind), repository.CanonicalID, string(anchor.Kind), anchor.CanonicalID)
-			out.edges = append(out.edges, graphrank.ResolvedEdge{
-				UUID: edgeCandidate.UUID, Name: edgeCandidate.Name, Fact: edgeCandidate.Fact, From: repository, To: anchor,
-				Attributes: edgeCandidate.Attributes, CreatedAt: edgeCandidate.CreatedAt, ValidAt: edgeCandidate.ValidAt, InvalidAt: edgeCandidate.InvalidAt,
-			})
-		}
-	default:
-		return out, nil
-	}
-	err := a.repositoryDeployments(ctx, key, orgID, repositories, &out, authorized, deny, cut, collectLimit, temporal)
-	return out, err
-}
-
-// repositoryDeployments adds to out the deployments of repositories, each
-// passing the caller's authorization, bounded by the budget.
-func (a *Adapter) repositoryDeployments(ctx context.Context, key, orgID string, repositories map[string]contextfabric.SubjectRef, out *projectDeploymentWalk, authorized func(*node) bool, deny func(), cut func([]string) []string, collectLimit int, temporal temporalFilter) error {
-	repositoryIDs := make([]string, 0, len(repositories))
-	for id := range repositories {
-		repositoryIDs = append(repositoryIDs, id)
-	}
-	repositoryIDs = cut(repositoryIDs)
-	if len(repositoryIDs) == 0 {
-		return nil
-	}
-	deploymentHits, deploymentsCut, err := a.walkStepHits(ctx, key, orgID, repositoryIDs, repositoryDeploymentsStep, temporal, collectLimit)
-	if err != nil {
-		return err
-	}
-	out.truncated = out.truncated || deploymentsCut
-	seen := map[string]bool{}
-	for _, h := range deploymentHits {
-		if !authorized(h.to) {
-			deny()
-			continue
-		}
-		id := canonicalIDOf(h.to)
-		if seen[id] {
-			continue
-		}
-		if collectLimit > 0 && len(out.nodes) >= collectLimit {
-			out.truncated = true
-			break
-		}
-		seen[id] = true
-		candidate := toCandidateNode(h.to)
-		out.nodes = append(out.nodes, candidate)
-		deployment, okDeployment := graphrank.NodeSubject(candidate)
-		repository, okRepository := repositories[h.from]
-		if !okDeployment || !okRepository {
-			continue
-		}
-		edgeCandidate := toCandidateEdge(h.rel, string(deployment.Kind), deployment.CanonicalID, string(repository.Kind), repository.CanonicalID)
-		out.edges = append(out.edges, graphrank.ResolvedEdge{
-			UUID: edgeCandidate.UUID, Name: edgeCandidate.Name, Fact: edgeCandidate.Fact, From: deployment, To: repository,
-			Attributes: edgeCandidate.Attributes, CreatedAt: edgeCandidate.CreatedAt, ValidAt: edgeCandidate.ValidAt, InvalidAt: edgeCandidate.InvalidAt,
-		})
-	}
-	sortCandidateNodesBySubjectKey(out.nodes)
-	return nil
-}
-
 // ProjectDeploymentWalkOutcome is the closed outcome of one deployment-members
 // discovery with respect to the project walk.
 type ProjectDeploymentWalkOutcome string
@@ -509,8 +150,9 @@ const (
 	ProjectDeploymentWalkNotRouted ProjectDeploymentWalkOutcome = "not_routed"
 	// ProjectDeploymentWalkMembers: the walk reached at least one deployment.
 	ProjectDeploymentWalkMembers ProjectDeploymentWalkOutcome = "members"
-	// ProjectDeploymentWalkUnlinked: no member, and no issue of the project
-	// links a pull request (unrestricted caller, uncut frontier).
+	// ProjectDeploymentWalkUnlinked: no member, the path crosses the issue <>
+	// pull request link, and nothing crosses it (unrestricted caller, uncut
+	// frontier): no issue of the project links a pull request.
 	ProjectDeploymentWalkUnlinked ProjectDeploymentWalkOutcome = "unlinked"
 	// ProjectDeploymentWalkDenied: no member for a repository-restricted
 	// caller. The served reason is neutral; the counts stay on this line.
@@ -558,7 +200,7 @@ type ProjectDeploymentWalkDecision struct {
 // projectDeploymentWalkOutcome classifies a finished walk. A restricted caller
 // with no member is denied whether links are hidden or absent; a cut frontier
 // is never reported as unlinked.
-func projectDeploymentWalkOutcome(walk projectDeploymentWalk, restricted bool, err error) ProjectDeploymentWalkOutcome {
+func projectDeploymentWalkOutcome(walk treeWalk, restricted bool, err error) ProjectDeploymentWalkOutcome {
 	switch {
 	case err != nil:
 		return ProjectDeploymentWalkReadFailed
@@ -568,7 +210,7 @@ func projectDeploymentWalkOutcome(walk projectDeploymentWalk, restricted bool, e
 		return ProjectDeploymentWalkDenied
 	case walk.truncated:
 		return ProjectDeploymentWalkTruncated
-	case walk.anchorKind == contextfabric.SubjectProject && walk.linkedPullRequests == 0:
+	case walk.hasLink && walk.linkTargets == 0:
 		return ProjectDeploymentWalkUnlinked
 	default:
 		return ProjectDeploymentWalkNoDeployments

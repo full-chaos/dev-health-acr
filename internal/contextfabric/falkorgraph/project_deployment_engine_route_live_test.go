@@ -134,20 +134,22 @@ func TestLiveNamedProjectsServeTheirOwnDeployments(t *testing.T) {
 	// a window, and returns exactly the next frontier. The raw driver error is
 	// printed on a refusal: the adapter's own error never carries it.
 	for windowName, temporal := range walkWindows(time.Now().UTC()) {
-		countCypher := projectIssueCountCypher(temporal)
-		rows, err := adapter.api.query(ctx, key, countCypher, projectLinkParams(orgID, "project.v2:linear:alpha", 0, 1, temporal), true)
+		feed, link := projectLinkHops(t)
+		alpha := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:linear:alpha"}
+		countCypher := linkSourceCountCypher(feed, temporal)
+		rows, err := adapter.api.query(ctx, key, countCypher, linkSegmentParams(orgID, alpha, feed, link, 0, 1, temporal), true)
 		if err != nil || len(rows) != 1 {
 			t.Fatalf("%s, issue count: the graph store refused the read: %v (%d rows)\nquery: %s", windowName, err, len(rows), countCypher)
 		}
-		linkCypher := projectLinkCypher(temporal, false)
-		rows, err = adapter.api.query(ctx, key, linkCypher, projectLinkParams(orgID, "project.v2:linear:alpha", 0, 26, temporal), true)
+		linkCypher := linkSegmentCypher(feed, link, temporal, false)
+		rows, err = adapter.api.query(ctx, key, linkCypher, linkSegmentParams(orgID, alpha, feed, link, 0, 26, temporal), true)
 		if err != nil {
 			t.Fatalf("%s, link read: the graph store refused the read: %v\nquery: %s", windowName, err, linkCypher)
 		}
 		var frontier []string
 		for _, r := range rows {
-			issue, _ := r["i"].(*node)
-			pullRequest, _ := r["pr"].(*node)
+			issue, _ := r["m"].(*node)
+			pullRequest, _ := r["b"].(*node)
 			if issue == nil || pullRequest == nil || canonicalIDOf(issue) != "work_item:linear:alpha-1" {
 				t.Fatalf("%s, link read: row %v, want the alpha issue and its pull request", windowName, r)
 			}
@@ -180,10 +182,10 @@ func TestLiveNamedProjectsServeTheirOwnDeployments(t *testing.T) {
 				t.Fatalf("%s, %s: reached %v, want %v", windowName, s.name, frontier, want)
 			}
 		}
-		walk, err := adapter.projectDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{},
+		walk, err := adapter.anchorDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{},
 			contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:linear:alpha", Label: "alpha"}, 25, temporal)
-		if err != nil || len(walk.nodes) != 2 || walk.issues != 1 || walk.linkedPullRequests != 1 || walk.truncated {
-			t.Fatalf("%s: walk = %d members, %d issues, %d links, truncated %v, error %v; want 2 members from 1 issue and 1 link", windowName, len(walk.nodes), walk.issues, walk.linkedPullRequests, walk.truncated, err)
+		if err != nil || len(walk.nodes) != 2 || walk.linkSources != 1 || walk.linkTargets != 1 || walk.truncated {
+			t.Fatalf("%s: walk = %d members, %d issues, %d links, truncated %v, error %v; want 2 members from 1 issue and 1 link", windowName, len(walk.nodes), walk.linkSources, walk.linkTargets, walk.truncated, err)
 		}
 	}
 
@@ -309,13 +311,13 @@ func TestLiveTheLinkReadFindsLinksPastTheBudgetAndCountsAnUnlinkedProject(t *tes
 		t.Fatalf("effectiveKey() error = %v", err)
 	}
 	for windowName, temporal := range walkWindows(time.Now().UTC()) {
-		gamma, err := adapter.projectDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, projects["gamma"], 25, temporal)
-		if err != nil || len(gamma.nodes) != 2 || gamma.issues != 30 || gamma.linkedPullRequests != 1 || gamma.truncated {
-			t.Fatalf("%s, gamma: walk = %d members, %d issues, %d links, truncated %v, error %v; want 2 members, 30 issues, 1 link, uncut", windowName, len(gamma.nodes), gamma.issues, gamma.linkedPullRequests, gamma.truncated, err)
+		gamma, err := adapter.anchorDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, projects["gamma"], 25, temporal)
+		if err != nil || len(gamma.nodes) != 2 || gamma.linkSources != 30 || gamma.linkTargets != 1 || gamma.truncated {
+			t.Fatalf("%s, gamma: walk = %d members, %d issues, %d links, truncated %v, error %v; want 2 members, 30 issues, 1 link, uncut", windowName, len(gamma.nodes), gamma.linkSources, gamma.linkTargets, gamma.truncated, err)
 		}
-		delta, err := adapter.projectDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, projects["delta"], 25, temporal)
-		if err != nil || len(delta.nodes) != 0 || delta.issues != 30 || delta.linkedPullRequests != 0 || delta.truncated {
-			t.Fatalf("%s, delta: walk = %d members, %d issues, %d links, truncated %v, error %v; want no member, 30 issues, no link, uncut", windowName, len(delta.nodes), delta.issues, delta.linkedPullRequests, delta.truncated, err)
+		delta, err := adapter.anchorDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, projects["delta"], 25, temporal)
+		if err != nil || len(delta.nodes) != 0 || delta.linkSources != 30 || delta.linkTargets != 0 || delta.truncated {
+			t.Fatalf("%s, delta: walk = %d members, %d issues, %d links, truncated %v, error %v; want no member, 30 issues, no link, uncut", windowName, len(delta.nodes), delta.linkSources, delta.linkTargets, delta.truncated, err)
 		}
 		if outcome := projectDeploymentWalkOutcome(delta, false, nil); outcome != ProjectDeploymentWalkUnlinked {
 			t.Fatalf("%s, delta: outcome = %q, want unlinked", windowName, outcome)
@@ -327,7 +329,7 @@ func TestLiveTheLinkReadFindsLinksPastTheBudgetAndCountsAnUnlinkedProject(t *tes
 			members int
 		}{{"acme/ledger", 2}, {"acme/other", 0}} {
 			restricted := storage.Principal{OrgID: orgID, RepositoryScopes: []string{c.grant}}
-			walk, err := adapter.projectDeploymentMembers(ctx, key, orgID, restricted, contextfabric.RequestedScope{}, projects["gamma"], 25, temporal)
+			walk, err := adapter.anchorDeploymentMembers(ctx, key, orgID, restricted, contextfabric.RequestedScope{}, projects["gamma"], 25, temporal)
 			if err != nil || len(walk.nodes) != c.members || walk.truncated {
 				t.Fatalf("%s, gamma granted %s: walk = %d members, truncated %v, error %v; want %d members, uncut", windowName, c.grant, len(walk.nodes), walk.truncated, err, c.members)
 			}
