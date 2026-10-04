@@ -59,6 +59,7 @@ func ServeWorkItemTupleCensus(candidate InvestigationResult, census *WorkItemTup
 	if census.gap != nil {
 		candidate = applyWorkItemAuthorizationGap(candidate, *census.gap)
 	}
+	candidate = withWorkItemStatusFilterLimitations(candidate, census.statusFilter, census)
 	return candidate
 }
 

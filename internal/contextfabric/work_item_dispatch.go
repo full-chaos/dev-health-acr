@@ -14,17 +14,17 @@ const workItemMembershipRationale = "Work items are members of the resolved proj
 
 // discoverWorkItemTuple reads S1 under the response owner's existing lease
 // lifetime. It never reads the graph or expands the content subject set.
-func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Principal, request InvestigationRequest, resolution SubjectResolution, plan *AnswerPlan) (GraphContext, *WorkItemTupleCensus, error) {
+func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Principal, request InvestigationRequest, resolution SubjectResolution, plan *AnswerPlan, statusFilter string) (GraphContext, *WorkItemTupleCensus, error) {
 	graph := GraphContext{Resolution: resolution, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, EvidenceRefIDs: []string{}, FactRequirements: []FactRequirement{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}}
 	digest, err := WorkItemAuthorizationDigest(principal, request.RequestedScope.RepositorySlugs)
 	if err != nil {
 		return graph, nil, err
 	}
-	census := &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusUnmeasured, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), AuthorizationDigest: digest}
+	census := &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusUnmeasured, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), AuthorizationDigest: digest, statusFilter: statusFilter}
 	if e.workItemMembership == nil {
 		return graph, census, nil
 	}
-	lease, membership, readErr := e.workItemMembership.BeginWorkItemMembership(ctx, principal, WorkItemMembershipRequest{Anchor: WorkItemMembershipAnchor{Subject: resolution.Committed[0]}, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), PlanMaxMembers: plan.Budget.MaxMembers, RequestMaxMembers: request.Options.MaxCohortMembers})
+	lease, membership, readErr := e.workItemMembership.BeginWorkItemMembership(ctx, principal, WorkItemMembershipRequest{Anchor: WorkItemMembershipAnchor{Subject: resolution.Committed[0]}, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), PlanMaxMembers: plan.Budget.MaxMembers, RequestMaxMembers: request.Options.MaxCohortMembers, Status: statusFilter})
 	if lease != nil {
 		owner, ok := WorkItemResponseOwnerFromContext(ctx)
 		if !ok {
@@ -41,7 +41,11 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	if readErr != nil || lease == nil || !membership.Census.PopulationMeasured || membership.Census.State == WorkItemMembershipCensusUnmeasured {
 		return graph, census, nil
 	}
-	if gap, ok := workItemAuthorizationGapOf(membership.Census); ok {
+	// A filtered read never measures the denied partition: its count would be
+	// the denied items' count for one status, a distribution the unfiltered
+	// read does not give. The filtered answer states one fixed exclusion
+	// instead (workItemStatusDeniedExclusion).
+	if gap, ok := workItemAuthorizationGapOf(membership.Census); ok && statusFilter == "" {
 		census.gap = &gap
 		if gap.NoneAuthorized() {
 			// Members exist and none are authorized: the answer is a
@@ -256,3 +260,38 @@ func applyWorkItemTitles(cohort *Cohort, facts []CanonicalFact) {
 		}
 	}
 }
+
+// workItemStatusFilterDisclosure states the filter beside a served member
+// set: a current-status read, not a period, and not completion or readiness.
+func workItemStatusFilterDisclosure(status string) string {
+	return "Members are the work items whose current status is " + status + "; status is read as of now, over no period, and is not completion or readiness."
+}
+
+// workItemStatusNoMatchDisclosure names the empty result. Zero matches is a
+// count of matching items, not a statement that the project is healthy.
+func workItemStatusNoMatchDisclosure(status string) string {
+	return "No work item in this project within the authorized scope currently has status " + status + "; that is a count of matches, not a statement about the project's health."
+}
+
+// withWorkItemStatusFilterLimitations appends the filter disclosure, and the
+// named empty result when the measured population is exactly zero. Nothing
+// is added for an unfiltered read.
+func withWorkItemStatusFilterLimitations(result InvestigationResult, status string, census *WorkItemTupleCensus) InvestigationResult {
+	if status == "" {
+		return result
+	}
+	additions := []string{workItemStatusFilterDisclosure(status), workItemStatusDeniedExclusion}
+	if census != nil && census.State == WorkItemMembershipCensusExact && census.Value == 0 && census.gap == nil {
+		additions = append(additions, workItemStatusNoMatchDisclosure(status))
+	}
+	composed, displaced := appendBoundedLimitations(result.Limitations, additions)
+	result.Limitations = composed
+	result.LimitationsDisplaced += displaced
+	return result
+}
+
+// workItemStatusDeniedExclusion is the fixed statement a filtered read makes
+// about work items outside the principal's scope. It is the same words for
+// every outcome, so it cannot tell the caller how many denied items hold a
+// given status.
+const workItemStatusDeniedExclusion = "Work items outside this principal's authorized scope are neither counted nor described here."

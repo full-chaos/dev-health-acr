@@ -558,7 +558,7 @@ func TestWorkItemFreshMembershipCapsAreLexicalAndCensusIndependent(t *testing.T)
 			ctx, owner := NewWorkItemResponseOwnerContext(context.Background())
 			defer owner.Complete()
 			resolution := workItemTuplePayloadFixture(t).SubjectResolution
-			graph, census, err := engine.discoverWorkItemTuple(ctx, storage.Principal{OrgID: "org-1"}, InvestigationRequest{Options: InvestigationOptions{MaxCohortMembers: caps.request}}, resolution, &AnswerPlan{Budget: AnswerPlanBudget{MaxMembers: caps.plan}})
+			graph, census, err := engine.discoverWorkItemTuple(ctx, storage.Principal{OrgID: "org-1"}, InvestigationRequest{Options: InvestigationOptions{MaxCohortMembers: caps.request}}, resolution, &AnswerPlan{Budget: AnswerPlanBudget{MaxMembers: caps.plan}}, "")
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -6186,6 +6186,18 @@
         ]
       },
       {
+        "key": "member_filter",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "status",
+          "status_without_value",
+          "assignee",
+          "unrecognized"
+        ]
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",

@@ -39,6 +39,11 @@ type WorkItemTupleCensus struct {
 	// of the persisted encoding: a stored answer already carries the
 	// disclosure it was served with.
 	gap *workItemAuthorizationGap
+
+	// statusFilter is the status the member read applied, set on the request
+	// that measured the census and never persisted: a stored answer already
+	// carries the disclosure it was served with.
+	statusFilter string
 }
 
 // WorkItemTupleCensusReadStatus describes the independent status of the

@@ -178,6 +178,7 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 	extraBindings = append(extraBindings,
 		readers.Binding{Name: "anchor_provider", Value: provider},
 		readers.Binding{Name: "anchor_project_id", Value: projectID},
+		readers.Binding{Name: "status_filter", Value: request.Status},
 		readers.Binding{Name: "s1_instant", Value: s1Instant},
 		readers.Binding{Name: "serve_limit", Value: uint32(k)},
 	)
@@ -725,6 +726,7 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
     AND p.provider = {anchor_provider:String}
     AND p.id = {anchor_project_id:String}
     AND p.key_resolution_count = 1
+    AND ({status_filter:String} = '' OR w.status = {status_filter:String})
   GROUP BY canonical_key, repo_id, work_item_id, repo_slug, authorized_flag,
     ` + workItemMembershipPathColumns("path_") + `, repo_less, project_less, excluded_explicit_text_link, excluded_heuristic_link`
 
