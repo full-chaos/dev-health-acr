@@ -519,7 +519,7 @@ func newRepositoryGrants(scopes []string) repositoryGrants {
 // fill the pages before the ones it can. An issue with no repository is kept
 // only on a link of a tier that grants authority, as the per-row rule has it.
 func (v treeNodeVar) grantClause() string {
-	clause := fmt.Sprintf("ANY(s IN %s.%s WHERE s IN $grantRaw OR toLower(trim(s)) IN $grantNorm OR ANY(o IN $grantOwners WHERE toLower(trim(s)) STARTS WITH o))", v.name, propAuthzRepos)
+	clause := fmt.Sprintf("ANY(s IN %s.%s WHERE s IN $grantRaw)", v.name, propAuthzRepos)
 	if v.position == treeIssue {
 		clause = fmt.Sprintf("(%s OR ($noRepository IN %s.%s AND rl.%s IN $authorityTiers))", clause, v.name, propAuthzRepos, propPropertyPrefix+linkTierProperty)
 	}
