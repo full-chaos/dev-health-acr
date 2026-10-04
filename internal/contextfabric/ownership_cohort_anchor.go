@@ -40,7 +40,9 @@ const (
 //     a label match).
 //  7. When no candidate is named, a repository the caller named by its id is
 //     the anchor (bound), but only when it is the only committed repository
-//     and no committed subject matched an anchor term.
+//     and no subject resolution found, committed or not, matched an anchor
+//     term: a subject the anchor term names, even one left uncommitted, is
+//     what the question is about.
 //
 // PURE: reads its arguments and mutates nothing.
 func OwnershipAnchor(frame *QuestionFrame, declaredAnchorKind SubjectKind, resolution SubjectResolution, bases CommitBasisSet) (SubjectRef, OwnershipAnchorBasis) {
@@ -68,7 +70,7 @@ func OwnershipAnchor(frame *QuestionFrame, declaredAnchorKind SubjectKind, resol
 	}
 	switch len(named) {
 	case 0:
-		if !otherNamed && len(candidates) == 1 && bases.For(candidates[0]) == CommitBasisCallerCanonicalID {
+		if !anyCandidateNamed(frame, resolution) && len(candidates) == 1 && bases.For(candidates[0]) == CommitBasisCallerCanonicalID {
 			return candidates[0], OwnershipAnchorBound
 		}
 	case 1:
@@ -81,4 +83,15 @@ func OwnershipAnchor(frame *QuestionFrame, declaredAnchorKind SubjectKind, resol
 	}
 	// Two or more named candidates fall through: the question is ambiguous.
 	return SubjectRef{}, OwnershipAnchorNone
+}
+
+// anyCandidateNamed reports whether any subject resolution found, committed
+// or not, matched one of the frame's anchor terms.
+func anyCandidateNamed(frame *QuestionFrame, resolution SubjectResolution) bool {
+	for _, candidate := range resolution.Candidates {
+		if anchorTermMatched(frame, candidate.Subject, resolution) {
+			return true
+		}
+	}
+	return false
 }

@@ -15,14 +15,17 @@ import (
 //     committed subject (routed, sole_commit).
 //   - With no repository named by an anchor term, a repository the caller
 //     named by its id is the anchor (routed, bound) when it is the only
-//     committed repository and nothing committed matched an anchor term.
+//     committed repository and no subject resolution found, committed or not,
+//     matched an anchor term.
 //   - Two named repositories, or a non-repository subject an anchor term
 //     names under a reading that declares no kind, mean no anchor.
 //
 // Every row of the cross product below is listed. A repository in a committed
 // set carries the row's commit and term match; the project in the
 // "repository + project" set is the project the question's anchor term names,
-// committed by its label.
+// committed by its label; in "repository + project candidate" the same
+// project is a candidate resolution matched to the anchor term and left
+// uncommitted.
 
 // ownershipVariant is how every repository of a row was committed.
 type ownershipVariant struct {
@@ -49,11 +52,11 @@ var ownershipVariants = []ownershipVariant{
 // repository on a bound basis, 'S' routed to it as the sole commit, '-' not
 // routed.
 var ownershipTruthTable = map[string]map[string]string{
-	"":           {"none": "------", "repository": "BBB-S-", "project": "------", "repository + project": "------", "two repositories": "------"},
-	"repository": {"none": "------", "repository": "BBB-S-", "project": "------", "repository + project": "B-B---", "two repositories": "------"},
-	"project":    {"none": "------", "repository": "------", "project": "------", "repository + project": "------", "two repositories": "------"},
-	"team":       {"none": "------", "repository": "------", "project": "------", "repository + project": "------", "two repositories": "------"},
-	"incident":   {"none": "------", "repository": "------", "project": "------", "repository + project": "------", "two repositories": "------"},
+	"":           {"none": "------", "repository": "BBB-S-", "project": "------", "repository + project": "------", "repository + project candidate": "B-B-S-", "two repositories": "------"},
+	"repository": {"none": "------", "repository": "BBB-S-", "project": "------", "repository + project": "B-B---", "repository + project candidate": "B-B-S-", "two repositories": "------"},
+	"project":    {"none": "------", "repository": "------", "project": "------", "repository + project": "------", "repository + project candidate": "------", "two repositories": "------"},
+	"team":       {"none": "------", "repository": "------", "project": "------", "repository + project": "------", "repository + project candidate": "------", "two repositories": "------"},
+	"incident":   {"none": "------", "repository": "------", "project": "------", "repository + project": "------", "repository + project candidate": "------", "two repositories": "------"},
 }
 
 func TestOwnershipAnchorTruthTable(t *testing.T) {
@@ -67,7 +70,7 @@ func TestOwnershipAnchorTruthTable(t *testing.T) {
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project:api", Label: "api"}
 	sets := map[string][]SubjectRef{
 		"none": nil, "repository": {repository}, "project": {project},
-		"repository + project": {repository, project}, "two repositories": {repository, other},
+		"repository + project": {repository, project}, "repository + project candidate": {repository}, "two repositories": {repository, other},
 	}
 	rows := 0
 	for declared, bySet := range ownershipTruthTable {
@@ -89,6 +92,9 @@ func TestOwnershipAnchorTruthTable(t *testing.T) {
 					}
 					bases.Record(subject, basis)
 					resolution.Candidates = append(resolution.Candidates, SubjectCandidate{Subject: subject, State: ResolutionCommitted, MatchedTerms: terms})
+				}
+				if setName == "repository + project candidate" {
+					resolution.Candidates = append(resolution.Candidates, SubjectCandidate{Subject: project, State: ResolutionAmbiguous, MatchedTerms: []string{"acme/api"}})
 				}
 				anchor, basis := OwnershipAnchor(frame, SubjectKind(declared), resolution, bases)
 				var got byte = '-'
@@ -112,7 +118,7 @@ func TestOwnershipAnchorTruthTable(t *testing.T) {
 			}
 		}
 	}
-	if want := 5 * 5 * len(ownershipVariants); rows != want {
+	if want := 5 * 6 * len(ownershipVariants); rows != want {
 		t.Fatalf("checked %d rows, want the whole cross product of %d", rows, want)
 	}
 }
