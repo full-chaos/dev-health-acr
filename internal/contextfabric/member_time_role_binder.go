@@ -128,6 +128,7 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 	var bound []BoundMemberTimeRole
 	seen := map[MemberTimeRole]bool{}
 	predicate := map[MemberTimeRole]bool{}
+	indeterminate := false
 	for _, entry := range memberTimeRoleRegistry {
 		for _, loc := range entry.pattern.FindAllStringIndex(clause, -1) {
 			if hyphenJoined(clause, loc[0], loc[1]) || wordRuneAdjacent(clause, loc[0], loc[1]) {
@@ -135,7 +136,11 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 			}
 			bound = append(bound, BoundMemberTimeRole{Role: entry.role, Grammar: entry.grammar, SpanStart: start + loc[0], SpanEnd: start + loc[1]})
 			seen[entry.role] = true
-			if !nounPhraseModifier(clause, loc[0], loc[1]) && !stateDescription(clause, loc[0], loc[1], spanStart) {
+			reading := copulaReading(clause, loc[0], loc[1], spanStart)
+			if reading == copulaIndeterminate {
+				indeterminate = true
+			}
+			if !nounPhraseModifier(clause, loc[0], loc[1]) && reading != copulaState {
 				predicate[entry.role] = true
 			}
 		}
@@ -149,6 +154,9 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 			}
 		}
 		bound = kept
+	}
+	if indeterminate {
+		return MemberTimeRoleOutcome{Reason: MemberTimeRoleAmbiguous, Bound: bound}
 	}
 	switch len(seen) {
 	case 0:
@@ -189,24 +197,59 @@ func nounPhraseModifier(clause string, start, end int) bool {
 }
 
 // presentCopulaState matches what stands before a form that states the items'
-// present state: "is" or "are", an optional adverb, then only coordinated
-// forms ("are created and closed").
-var presentCopulaState = regexp.MustCompile(`(?i)\b(?:is|are)\s+(?:(?:now|already|currently|still|all)\s+)?(?:(?:` + memberTimeRoleFormAlternation + `)\s+(?:(?:and|or)\s+)?)*$`)
+// present state: "is" or "are" (or "that's", "that're" and the like after a
+// relative pronoun), an optional adverb, then only coordinated forms ("are
+// created and closed").
+var presentCopulaState = regexp.MustCompile(`(?i)(?:\b(?:is|are)|\b(?:that|which|who)['’](?:s|re))\s+(?:(?:now|already|currently|still|all)\s+)?(?:(?:` + memberTimeRoleFormAlternation + `)\s+(?:(?:and|or)\s+)?)*$`)
 
 // leadsIntoWindow matches the text between a form and the window span when the
 // form governs the period: only coordinated forms, a preposition and a
 // determiner ("closed in the last 30 days", "created and closed in the").
 var leadsIntoWindow = regexp.MustCompile(`(?i)^(?:\s+(?:and|or)\s+(?:` + memberTimeRoleFormAlternation + `))*(?:\s+(?:in|within|during|over|for|from|since|across))?(?:\s+(?:the|this|these))?\s*$`)
 
-// stateDescription reports a form after a present copula that does not govern
-// the period: "items that are closed were created in the last 30 days" states
-// the items' status, and the period belongs to "created". A form that leads
-// straight into the period ("are closed in the last 30 days") still governs it.
-func stateDescription(clause string, start, end, spanStart int) bool {
-	if end > spanStart {
-		return false
+// followedByPredicate matches the text between a status form and the verb
+// that governs the period: only coordinated forms, then "was" or "were" and a
+// form ("closed were created", "created and closed were updated").
+var followedByPredicate = regexp.MustCompile(`(?i)^(?:\s+(?:and|or)\s+(?:` + memberTimeRoleFormAlternation + `))*(?:\s+and)?\s+(?:was|were)\s+(?:` + memberTimeRoleFormAlternation + `)\b`)
+
+// relativeMarker matches a word that opens a relative clause.
+var relativeMarker = regexp.MustCompile(`(?i)\b(?:that|which|who|whose)\b`)
+
+// interrogativeOpening matches a clause that opens with "which" or "what".
+var interrogativeOpening = regexp.MustCompile(`(?i)^\s*(?:which|what)\b`)
+
+type copulaFormReading uint8
+
+const (
+	// copulaNone: no present copula before the form, or the form leads into
+	// the period; the ordinary predicate and modifier rules decide it.
+	copulaNone copulaFormReading = iota
+	// copulaState: the form states the items' present status and the period
+	// belongs to the verb that follows it.
+	copulaState
+	// copulaIndeterminate: a present-copula form in any other shape. The
+	// binder does not guess its reading: the outcome is ambiguous.
+	copulaIndeterminate
+)
+
+// copulaReading reads a form after a present copula ("is/are closed") that
+// does not lead into the period. Only one shape is a status description: one
+// relative clause, the form, then "was/were" and the period's verb ("items
+// that are closed were created in the last 30 days"). Every other shape with a
+// present copula (an agent, an adverb after the form, a second relative
+// clause, an unlisted verb) fails closed as indeterminate.
+func copulaReading(clause string, start, end, spanStart int) copulaFormReading {
+	if end > spanStart || !presentCopulaState.MatchString(clause[:start]) || leadsIntoWindow.MatchString(clause[end:spanStart]) {
+		return copulaNone
 	}
-	return presentCopulaState.MatchString(clause[:start]) && !leadsIntoWindow.MatchString(clause[end:spanStart])
+	markers := len(relativeMarker.FindAllStringIndex(clause[:start], -1))
+	if interrogativeOpening.MatchString(clause) {
+		markers--
+	}
+	if markers > 1 || !followedByPredicate.MatchString(clause[end:spanStart]) {
+		return copulaIndeterminate
+	}
+	return copulaState
 }
 
 func clauseBounds(question string, window BoundWindowSpan) (int, int) {

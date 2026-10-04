@@ -103,6 +103,7 @@ func TestMemberTimeRoleBinderReadsAPresentCopulaStatusAsNoRole(t *testing.T) {
 		{"Which issues are closed in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCompleted},
 		{"Which issues are closed within the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCompleted},
 		{"Which issues are created and closed in the last 30 days?", MemberTimeRoleAmbiguous, ""},
+		{"Which issues are created or opened in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCreated},
 		{"Which issues that were created are done in the last 30 days?", MemberTimeRoleAmbiguous, ""},
 		{"Which issues that were created are closed within the last 30 days?", MemberTimeRoleAmbiguous, ""},
 		{"which work items of project Alpha were created and closed in the last 30 days?", MemberTimeRoleAmbiguous, ""},
@@ -134,6 +135,7 @@ func TestWorkItemStatusPeriodQuestionFormsServeOnTheFullPath(t *testing.T) {
 		{"which work items of project Alpha that are closed were created in the last 30 days?", "created_at", "created"},
 		{"which work items of project Alpha are closed were created in the last 30 days?", "created_at", "created"},
 		{"which work item of project Alpha that is closed was created in the last 30 days?", "created_at", "created"},
+		{"which work item of project Alpha that's closed was created in the last 30 days?", "created_at", "created"},
 		{"which closed work items of project Alpha were created in the last 30 days?", "created_at", "created"},
 		{"which closed work item of project Alpha was created in the last 30 days?", "created_at", "created"},
 		{"which work items of project Alpha were closed in the last 30 days?", "completed_at", "completed"},
@@ -188,6 +190,55 @@ func inProgressPeriodFrame() QuestionFrame {
 	frame := prodStatusPeriodFrame()
 	frame.SubjectExpression.Scoped.MemberQualifierValue = "in_progress"
 	return frame
+}
+
+// Every copula or relative-clause shape outside the one status shape fails
+// closed: the outcome is ambiguous (the readings are offered), never one bound
+// role.
+func TestMemberTimeRoleBinderFailsClosedOnUnlistedCopulaShapes(t *testing.T) {
+	for _, question := range []string{
+		"which work items of project Alpha that were closed were created in the last 30 days?",
+		"which work item of project Alpha that was closed was created in the last 30 days?",
+		"which work items of project Alpha that are not closed were created in the last 30 days?",
+		"which work items of project Alpha that have been closed were created in the last 30 days?",
+		"which work item of project Alpha that has been closed was created in the last 30 days?",
+		"which work items of project Alpha that were closed by Sam were created in the last 30 days?",
+		"which work items of project Alpha that are closed by Sam were created in the last 30 days?",
+		"which work items of project Alpha that are assigned to Sam and that are closed were created in the last 30 days?",
+		"which work items of project Alpha that are closed and that are new were updated in the last 30 days?",
+		"which work items of project Alpha that are being closed were created in the last 30 days?",
+		"which work items of project Alpha that are closed now were created in the last 30 days?",
+		"which work items of project Alpha that are closed were not created in the last 30 days?",
+		"which work items of project Alpha are closed that were created in the last 30 days?",
+		"which work items of project Alpha that are closed got created in the last 30 days?",
+		"which work items of project Alpha that is closed were reopened in the last 30 days?",
+		"which work items of project Alpha that are closed exist in the last 30 days?",
+		"is anything that is closed created in the last 30 days?",
+		"Sam's closed issues were created in the last 30 days?",
+		"which work items of project Alpha that are assigned to Sam and whose status is closed were created in the last 30 days?",
+	} {
+		outcome := BindMemberTimeRole(question, windowSpanOf(t, question))
+		if outcome.Reason != MemberTimeRoleAmbiguous || outcome.Role != "" {
+			t.Errorf("%q: reason=%s role=%q, want ambiguous", question, outcome.Reason, outcome.Role)
+		}
+	}
+	for _, question := range []string{
+		"which work items of project Alpha that are closed were created in the last 30 days?",
+		"which work items of project Alpha which are closed were created in the last 30 days?",
+		"which work items of project Alpha whose status is closed were created in the last 30 days?",
+		"which work items of project Alpha that are closed or done were created in the last 30 days?",
+		"which work items of project Alpha that are already closed were created in the last 30 days?",
+		"which work items of project Alpha that are closed and were created in the last 30 days?",
+		"which work items of project Alpha that're closed were created in the last 30 days?",
+		"which work item of project Alpha that's closed was created in the last 30 days?",
+		"which work item of project Alpha that’s closed was created in the last 30 days?",
+		"which work item of project Alpha which's closed was created in the last 30 days?",
+	} {
+		outcome := BindMemberTimeRole(question, windowSpanOf(t, question))
+		if outcome.Reason != MemberTimeRoleBound || outcome.Role != MemberTimeRoleCreated {
+			t.Errorf("%q: reason=%s role=%q, want bound created", question, outcome.Reason, outcome.Role)
+		}
+	}
 }
 
 func TestWorkItemCurrentFrameWithCallerWindowAndTwoRolesAsksForTheReading(t *testing.T) {
