@@ -116,6 +116,12 @@ type statusFilterRun struct {
 
 func runStatusFilterTuple(t *testing.T, frame QuestionFrame, population int) statusFilterRun {
 	t.Helper()
+	return runStatusFilterTupleCensus(t, frame, WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: population})
+}
+
+func runStatusFilterTupleCensus(t *testing.T, frame QuestionFrame, census WorkItemMembershipCensus) statusFilterRun {
+	t.Helper()
+	population := census.AuthorizedPopulation
 	var run statusFilterRun
 	frame = ValidateFrame(frame, nil, "").Frame
 	payload := workItemTuplePayloadFixture(t)
@@ -134,7 +140,7 @@ func runStatusFilterTuple(t *testing.T, frame QuestionFrame, population int) sta
 			run.reads++
 			run.request = request
 			lease, err := gate.Acquire(ctx)
-			m := WorkItemMembershipResult{Census: WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: population}}
+			m := WorkItemMembershipResult{Census: census}
 			if population > 0 {
 				m.Members = []WorkItemMembershipMember{{CanonicalID: payload.Cohort.Members[0].Subject.CanonicalID, WorkItemID: "work-1"}}
 			}
@@ -260,5 +266,49 @@ func TestWorkItemNoMatchDisclosureNeedsAnExactZeroCensus(t *testing.T) {
 		if !limitationsContain(got.Limitations, workItemStatusFilterDisclosure("blocked")) {
 			t.Errorf("%s: filter disclosure missing", tc.name)
 		}
+	}
+}
+
+func TestWorkItemStatusFilteredReadNeverDisclosesTheDeniedPartition(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	for _, tc := range []struct {
+		name       string
+		authorized int
+		denied     int
+	}{{"partially denied", 2, 7}, {"all denied", 0, 7}, {"none denied", 2, 0}} {
+		census := WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: tc.authorized, DeniedPopulation: tc.denied, CappedPopulation: tc.authorized + tc.denied}
+		run := runStatusFilterTupleCensus(t, statusQualifiedTupleFrame(MemberQualifierStatus, "blocked"), census)
+		if run.invokedErr != nil {
+			t.Fatalf("%s: %v", tc.name, run.invokedErr)
+		}
+		if hasWorkItemAuthorizationGapLimitation(run.result.Limitations) {
+			t.Errorf("%s: a filtered read disclosed the denied partition, which would give the denied items' status distribution: %v", tc.name, run.result.Limitations)
+		}
+		for _, limitation := range run.result.Limitations {
+			if strings.Contains(limitation, "7") {
+				t.Errorf("%s: the denied count reached the answer: %q", tc.name, limitation)
+			}
+		}
+		if run.result.Status == InvestigationDegraded {
+			t.Errorf("%s: a filtered read degraded on a denied partition", tc.name)
+		}
+		if !limitationsContain(run.result.Limitations, workItemStatusDeniedExclusion) {
+			t.Errorf("%s: the fixed exclusion statement is missing: %v", tc.name, run.result.Limitations)
+		}
+	}
+	// The output must not depend on the denied partition at all.
+	a := runStatusFilterTupleCensus(t, statusQualifiedTupleFrame(MemberQualifierStatus, "blocked"), WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 0, DeniedPopulation: 7})
+	b := runStatusFilterTupleCensus(t, statusQualifiedTupleFrame(MemberQualifierStatus, "blocked"), WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 0, DeniedPopulation: 0})
+	if strings.Join(a.result.Limitations, "|") != strings.Join(b.result.Limitations, "|") || a.result.Status != b.result.Status {
+		t.Errorf("filtered answer differs with the denied count: %v / %v", a.result.Limitations, b.result.Limitations)
+	}
+}
+
+func TestWorkItemUnfilteredReadStillDisclosesTheDeniedPartition(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	census := WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 2, DeniedPopulation: 7, CappedPopulation: 9}
+	run := runStatusFilterTupleCensus(t, prospectiveTupleFrame(GoalAssessState, GoalCountOrAggregate), census)
+	if run.invokedErr != nil || !hasWorkItemAuthorizationGapLimitation(run.result.Limitations) {
+		t.Fatalf("the unfiltered partition disclosure was lost: err=%v %v", run.invokedErr, run.result.Limitations)
 	}
 }

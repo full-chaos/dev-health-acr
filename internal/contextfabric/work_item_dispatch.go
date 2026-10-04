@@ -20,7 +20,7 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	if err != nil {
 		return graph, nil, err
 	}
-	census := &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusUnmeasured, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), AuthorizationDigest: digest}
+	census := &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusUnmeasured, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), AuthorizationDigest: digest, statusFilter: statusFilter}
 	if e.workItemMembership == nil {
 		return graph, census, nil
 	}
@@ -41,7 +41,11 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	if readErr != nil || lease == nil || !membership.Census.PopulationMeasured || membership.Census.State == WorkItemMembershipCensusUnmeasured {
 		return graph, census, nil
 	}
-	if gap, ok := workItemAuthorizationGapOf(membership.Census); ok {
+	// A filtered read never measures the denied partition: its count would be
+	// the denied items' count for one status, a distribution the unfiltered
+	// read does not give. The filtered answer states one fixed exclusion
+	// instead (workItemStatusDeniedExclusion).
+	if gap, ok := workItemAuthorizationGapOf(membership.Census); ok && statusFilter == "" {
 		census.gap = &gap
 		if gap.NoneAuthorized() {
 			// Members exist and none are authorized: the answer is a
@@ -276,7 +280,7 @@ func withWorkItemStatusFilterLimitations(result InvestigationResult, status stri
 	if status == "" {
 		return result
 	}
-	additions := []string{workItemStatusFilterDisclosure(status)}
+	additions := []string{workItemStatusFilterDisclosure(status), workItemStatusDeniedExclusion}
 	if census != nil && census.State == WorkItemMembershipCensusExact && census.Value == 0 && census.gap == nil {
 		additions = append(additions, workItemStatusNoMatchDisclosure(status))
 	}
@@ -285,3 +289,9 @@ func withWorkItemStatusFilterLimitations(result InvestigationResult, status stri
 	result.LimitationsDisplaced += displaced
 	return result
 }
+
+// workItemStatusDeniedExclusion is the fixed statement a filtered read makes
+// about work items outside the principal's scope. It is the same words for
+// every outcome, so it cannot tell the caller how many denied items hold a
+// given status.
+const workItemStatusDeniedExclusion = "Work items outside this principal's authorized scope are neither counted nor described here."
