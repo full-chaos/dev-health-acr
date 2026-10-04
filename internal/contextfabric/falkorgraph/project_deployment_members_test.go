@@ -331,13 +331,13 @@ func TestProjectDeploymentWalkAdmitsAnIssueByTheWorkItemRule(t *testing.T) {
 	}
 }
 
-func walkProject(t *testing.T, s projectSeed, principal storage.Principal, limit int) projectDeploymentWalk {
+func walkProject(t *testing.T, s projectSeed, principal storage.Principal, limit int) treeWalk {
 	t.Helper()
 	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
-	walk, err := adapter.projectDeploymentMembers(context.Background(), "key", "org-1", principal, contextfabric.RequestedScope{},
+	walk, err := adapter.anchorDeploymentMembers(context.Background(), "key", "org-1", principal, contextfabric.RequestedScope{},
 		contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: projectAnchorID}, limit, newTemporalFilter(contextfabric.TimeContext{}))
 	if err != nil {
-		t.Fatalf("projectDeploymentMembers() error = %v", err)
+		t.Fatalf("anchorDeploymentMembers() error = %v", err)
 	}
 	return walk
 }
@@ -389,7 +389,7 @@ func TestProjectDeploymentWalkReportsMoreLinksThanTheBudgetAsTruncation(t *testi
 // requests, so many issues linking one pull request fit in it.
 func TestManyIssuesLinkingOnePullRequestAreNotACut(t *testing.T) {
 	walk := walkProject(t, manyIssuesOneRepository(5), storage.Principal{OrgID: "org-1"}, 2)
-	if walk.truncated || len(walk.nodes) != 1 || walk.issues != 5 || walk.linkedPullRequests != 1 {
+	if walk.truncated || len(walk.nodes) != 1 || walk.linkSources != 5 || walk.linkTargets != 1 {
 		t.Fatalf("walk = %+v, want the one deployment, 5 issues, 1 linked pull request, uncut", walk)
 	}
 }
@@ -489,7 +489,7 @@ func TestProjectDeploymentStepQueriesAreBounded(t *testing.T) {
 		}
 		return inner(ctx, key, cypher, params, ro)
 	}
-	walk, err := adapter.projectDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{},
+	walk, err := adapter.anchorDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{},
 		contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: projectAnchorID}, 5, newTemporalFilter(contextfabric.TimeContext{}))
 	if err != nil {
 		t.Fatal(err)

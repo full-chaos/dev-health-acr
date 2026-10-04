@@ -10,18 +10,30 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
+// projectLinkHops are the project deployment path's first two hops, read
+// fused: the project's issues and their links to pull requests.
+func projectLinkHops(t *testing.T) (treeHop, treeHop) {
+	t.Helper()
+	path, ok := treePath(treeProject, treeDeployment)
+	if !ok || len(path) != 4 || !path[1].edge.link {
+		t.Fatalf("project -> deployment path = %+v, want project, issue, pull request, repository, deployment", path)
+	}
+	return path[0], path[1]
+}
+
 // walkStepsInOrder are the step reads of the project deployment walk after
 // its link read.
 func walkStepsInOrder() []struct {
 	name string
 	step walkStep
 } {
+	path, _ := treePath(treeProject, treeDeployment)
 	return []struct {
 		name string
 		step walkStep
 	}{
-		{"repositories of the pull requests", pullRequestRepositoriesStep},
-		{"deployments of the repositories", repositoryDeploymentsStep},
+		{"repositories of the pull requests", path[2].step},
+		{"deployments of the repositories", path[3].step},
 	}
 }
 
@@ -63,21 +75,22 @@ func TestEveryWalkStepReadIsOnePathPattern(t *testing.T) {
 }
 
 // TestTheProjectLinkReadIsOnePathPattern pins the grammar of the walk's link
-// read and issue count: one path from the project through its issue to the
+// read and source count: one path from the project through its issue to the
 // linked pull request, and one path from the project to its issue.
 func TestTheProjectLinkReadIsOnePathPattern(t *testing.T) {
+	feed, link := projectLinkHops(t)
 	node := `\((%s):Subject \{[^{}()]*\}\)`
-	link := regexp.MustCompile("^" + fmt.Sprintf(node, "p") + regexp.QuoteMeta("<-[rp:Relates]-") + fmt.Sprintf(node, "i") + regexp.QuoteMeta("-[rl:Relates]-") + fmt.Sprintf(node, "pr") + "$")
-	count := regexp.MustCompile("^" + fmt.Sprintf(node, "p") + regexp.QuoteMeta("<-[rp:Relates]-") + fmt.Sprintf(node, "i") + "$")
+	linkPattern := regexp.MustCompile("^" + fmt.Sprintf(node, "a") + regexp.QuoteMeta("<-[ra:Relates]-") + fmt.Sprintf(node, "m") + regexp.QuoteMeta("-[rl:Relates]-") + fmt.Sprintf(node, "b") + "$")
+	count := regexp.MustCompile("^" + fmt.Sprintf(node, "a") + regexp.QuoteMeta("<-[ra:Relates]-") + fmt.Sprintf(node, "m") + "$")
 	for windowName, temporal := range walkWindows(time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)) {
 		for name, c := range map[string]struct {
 			cypher  string
 			pattern *regexp.Regexp
 			suffix  string
 		}{
-			"link read":            {projectLinkCypher(temporal, false), link, " SKIP $skip LIMIT $limit"},
-			"restricted link read": {projectLinkCypher(temporal, true), link, " SKIP $skip LIMIT $limit"},
-			"issue count":          {projectIssueCountCypher(temporal), count, " RETURN count(DISTINCT i) AS issues"},
+			"link read":            {linkSegmentCypher(feed, link, temporal, false), linkPattern, " SKIP $skip LIMIT $limit"},
+			"restricted link read": {linkSegmentCypher(feed, link, temporal, true), linkPattern, " SKIP $skip LIMIT $limit"},
+			"issue count":          {linkSourceCountCypher(feed, temporal), count, " RETURN count(DISTINCT m) AS sources"},
 		} {
 			from, to := strings.Index(c.cypher, "MATCH "), strings.Index(c.cypher, " WHERE ")
 			if from != 0 || to < from {
@@ -94,13 +107,16 @@ func TestTheProjectLinkReadIsOnePathPattern(t *testing.T) {
 }
 
 // TestARestrictedLinkReadKeepsOnlyLinksTheGrantsCanAdmit pins the grant clause
-// of a restricted caller's link read, and its absence for any other caller.
+// of a restricted caller's link read, and its absence for any other caller:
+// the pull request must meet the grants, and the issue must or have no
+// repository.
 func TestARestrictedLinkReadKeepsOnlyLinksTheGrantsCanAdmit(t *testing.T) {
-	clause := "ANY(s IN pr.authorization_repositories WHERE s IN $grants) AND (ANY(s IN i.authorization_repositories WHERE s IN $grants) OR $noRepository IN i.authorization_repositories)"
-	if !strings.Contains(projectLinkCypher(temporalFilter{}, true), clause) {
-		t.Errorf("restricted link read = %q, want the grant clause", projectLinkCypher(temporalFilter{}, true))
+	feed, link := projectLinkHops(t)
+	clause := "ANY(s IN b.authorization_repositories WHERE s IN $grants) AND (ANY(s IN m.authorization_repositories WHERE s IN $grants) OR $noRepository IN m.authorization_repositories)"
+	if got := linkSegmentCypher(feed, link, temporalFilter{}, true); !strings.Contains(got, clause) {
+		t.Errorf("restricted link read = %q, want the grant clause", got)
 	}
-	if strings.Contains(projectLinkCypher(temporalFilter{}, false), "$grants") {
-		t.Errorf("unrestricted link read = %q, want no grant clause", projectLinkCypher(temporalFilter{}, false))
+	if got := linkSegmentCypher(feed, link, temporalFilter{}, false); strings.Contains(got, "$grants") {
+		t.Errorf("unrestricted link read = %q, want no grant clause", got)
 	}
 }

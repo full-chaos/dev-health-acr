@@ -574,7 +574,7 @@ func TestAStrayCommitsCutReadIsNotTheAnchorsCut(t *testing.T) {
 // TestEachFailedProjectReadIsAReadFailure: the issue count and the link read
 // are reads of the walk; either failing ends the call as a failed read.
 func TestEachFailedProjectReadIsAReadFailure(t *testing.T) {
-	for name, fails := range map[string]string{"issue count": "count(DISTINCT i)", "link read": "SKIP $skip"} {
+	for name, fails := range map[string]string{"issue count": "count(DISTINCT m)", "link read": "SKIP $skip"} {
 		t.Run(name, func(t *testing.T) {
 			nodes, edges := projectWithOneIssue(true, 2)
 			conn := seededGraphConn(nodes, edges)
