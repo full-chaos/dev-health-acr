@@ -1195,7 +1195,7 @@ func narrowCensusSatisfiers(ctx context.Context, narrow SatisfierNarrower, kind 
 	switch {
 	case !ok:
 		return censusNarrowing{outcome: narrowReadFailed}
-	case len(kept) == 1:
+	case len(kept) >= 1:
 		return censusNarrowing{outcome: narrowedToOne, kept: kept}
 	case len(kept) == 0:
 		return censusNarrowing{outcome: narrowedToNone}

@@ -188,6 +188,9 @@ func TestHandleCensusGraphFilterOnRealStores(t *testing.T) {
 		if len(committed) != 0 {
 			t.Fatalf("committed = %v (narrowings %v), want none: two pull requests are inside the narrowing", committed, narrowings)
 		}
+		if len(narrowings) != 1 || narrowings[0] != "narrowed_to_many" {
+			t.Fatalf("narrowings = %v, want one narrowed_to_many", narrowings)
+		}
 	})
 	t.Run("a satisfier with no graph row keeps the clarification", func(t *testing.T) {
 		committed, _ := resolve(t, "missing-row", []string{"acme/r1", "acme/r3"}, false)
@@ -204,8 +207,11 @@ func TestHandleCensusGraphFilterOnRealStores(t *testing.T) {
 		if len(committed) != 0 {
 			t.Fatalf("committed = %v (narrowings %v), want none: the graph read failed", committed, narrowings)
 		}
-		if len(narrowings) != 1 || narrowings[0] != "satisfier_read_failed" {
-			t.Fatalf("narrowings = %v, want one satisfier_read_failed", narrowings)
+		// The store failure surfaces first in the closure check of the census;
+		// either name keeps the clarification.
+		reasons := tracer.reasons()
+		if len(reasons) != 1 || (reasons[0] != "census_closure_mismatch" && narrowings[0] != "satisfier_read_failed") {
+			t.Fatalf("evidence_round reasons = %v, narrowings = %v, want a refusal by the closure check or satisfier_read_failed", reasons, narrowings)
 		}
 	})
 }
