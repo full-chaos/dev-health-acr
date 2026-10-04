@@ -2518,6 +2518,15 @@
               },
               "max_bytes": {
                 "type": "integer"
+              },
+              "rows_returned": {
+                "type": "integer"
+              },
+              "rows_read": {
+                "type": "integer"
+              },
+              "cut": {
+                "type": "string"
               }
             }
           },

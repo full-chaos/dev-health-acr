@@ -333,10 +333,15 @@ import (
 // v59 can open with a stronger status than its own served status and must not
 // be reused.
 //
-// v60 -> v62: a count about one named subject over a period is answered with
+// v60 -> v61: a run_operation answer of an operation with one list of rows,
+// over the response budget, is served as the largest whole-row page that fits,
+// with the cut stated, where it was refused with response_budget. A candidate
+// saved under v60 for such a question holds a refusal and must not be reused.
+//
+// v61 -> v62: a count about one named subject over a period is answered with
 // the total of the subject's stored daily rows of every additive daily count
 // column, with the days it rests on, where it was answered with the daily rows
-// and no total. A candidate saved under v60 for such a question must not be
+// and no total. A candidate saved under v61 for such a question must not be
 // reused.
 const QueryVersion = "devhealthfacts.clickhouse.v62"
 

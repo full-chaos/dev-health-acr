@@ -18,8 +18,11 @@ package directread
 //	    every row id must be in the grant, else the WHOLE answer is refused
 //	    (row_outside_grant), with an ERROR line and zero data
 //	9b  output allowlist (FilterResponse); removed paths = ERROR line
-//	9a' max_bytes on the serialized data; over = response_budget, never a
-//	    cut payload
+//	9a' max_bytes on the serialized data; an operation with one primary list
+//	    (a row-limit variable and one top-level list) is cut to the largest
+//	    whole-row page that fits, with the cut stated in page; any other
+//	    answer over it, or a list whose first row does not fit, is
+//	    response_budget, never a half row
 //	10  D.7 status and the "context fabric operation read" event
 //
 // Constraints run before the gate (7e' above): they depend on the request
@@ -179,6 +182,11 @@ type EffectiveScope struct {
 type OperationPage struct {
 	ReturnedBytes int `json:"returned_bytes"`
 	MaxBytes      int `json:"max_bytes"`
+	// RowsReturned, RowsRead and Cut are set only when the answer was cut
+	// to the largest whole-row page that fits MaxBytes.
+	RowsReturned int    `json:"rows_returned,omitempty"`
+	RowsRead     int    `json:"rows_read,omitempty"`
+	Cut          string `json:"cut,omitempty"`
 }
 
 // UntrustedContent marks fields that carry upstream text.
@@ -567,6 +575,17 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 	// 9a': the response budget, on the serialized data.
 	measured := len(filtered.Data)
 	x.read.Bytes = measured
+	var cut *pageCut
+	if measured > maxBytes {
+		if listPath, has := op.PrimaryList(); has {
+			if fit, ok := fitListPage(filtered.Data, listPath, maxBytes); ok {
+				cut = &fit
+				filtered.Data = fit.data
+				measured = len(fit.data)
+				x.read.Bytes = measured
+			}
+		}
+	}
 	if measured > maxBytes {
 		resp := x.refuse(RefusalResponseBudget, "the serialized data exceeds max_bytes; narrow the window, the scope or the limit variable", "")
 		resp.Refusal.MeasuredBytes = measured
@@ -577,6 +596,14 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 
 	// 10: D.7 status.
 	completeness := op.Completeness(filtered.Data)
+	if cut != nil {
+		if completeness == CompletenessDeclaredComplete {
+			completeness = CompletenessUnknown
+		}
+		x.resp.Page.RowsReturned = cut.rowsReturned
+		x.resp.Page.RowsRead = cut.rowsRead
+		x.resp.Page.Cut = cut.statement(maxBytes, op)
+	}
 	x.resp.Call = CallServed
 	x.resp.Completeness = completeness
 	x.resp.Result = ResultStateFor(dataIsEmpty(filtered.Data), completeness)
