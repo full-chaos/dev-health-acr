@@ -165,12 +165,12 @@ func TestServedCounts(t *testing.T) {
 		}
 		return n
 	}
-	wantUnrestricted := []string{"acrRepositoryScopes", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad", "complexityTimeseries", "compoundingRisk", "home", "hotspots", "investmentBreakdown", "investmentFull", "recommendations", "securityAlerts", "securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges", "workGraphFlow", "workItemTeamAttributions"}
+	wantUnrestricted := []string{"acrRepositoryScopes", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad", "complexityTimeseries", "compoundingRisk", "home", "hotspots", "investmentBreakdown", "investmentFull", "recommendations", "securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges", "workGraphFlow", "workItemTeamAttributions"}
 	if got := names(cat.Operations(directread.CallerUnrestricted)); !slices.Equal(got, wantUnrestricted) {
-		t.Fatalf("unrestricted = %v (%d), want the 16 of design D.3 plus home, recommendations and workItemTeamAttributions (CHAOS-7202)", got, len(got))
+		t.Fatalf("unrestricted = %v (%d), want the 16 of design D.3 plus home, recommendations and workItemTeamAttributions, minus the dark securityAlerts", got, len(got))
 	}
-	if got := names(cat.Operations(directread.CallerRestricted)); !slices.Equal(got, []string{"compoundingRisk", "hotspots", "securityAlerts"}) {
-		t.Fatalf("restricted = %v, want the 3 of POLICY-ARTIFACT-v0", got)
+	if got := names(cat.Operations(directread.CallerRestricted)); !slices.Equal(got, []string{"compoundingRisk", "hotspots"}) {
+		t.Fatalf("restricted = %v, want the 2 of POLICY-ARTIFACT-v0", got)
 	}
 }
 

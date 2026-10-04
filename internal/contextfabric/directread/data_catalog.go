@@ -9,8 +9,8 @@ package directread
 //   - Operations come from the loaded policy artifact only (the same
 //     *Catalogue the runner refuses with), so the catalogue can never list an
 //     operation the runner would refuse as unknown, nor hide one it serves.
-//   - The operation list is the one for the caller's class: 19 operations for
-//     an unrestricted caller, 3 for a repository-restricted one. Every other
+//   - The operation list is the one for the caller's class: 18 operations for
+//     an unrestricted caller, 2 for a repository-restricted one. Every other
 //     registered document is listed under not_served with its code and
 //     reason, and every refused variable value (the K14-A
 //     basis_dependent_shape and the person-scoped values) under
@@ -99,7 +99,6 @@ var operationPurposes = map[string]string{
 	"home":                     "The org-wide home summary: data freshness, metric deltas, tiles, signals, the limiting factor and data confidence.",
 	"recommendations":          "A team's stored recommendations over a lookback window, each with its rationale and evidence rows.",
 	"workItemTeamAttributions": "Raw team attribution facts per work item, with source, confidence, primary flag and evidence text.",
-	"securityAlerts":           "Security alerts as a page, with severity, state and repository.",
 	"securityOverview":         "Security posture: open alert counts by severity, the trend and 30-day indicators.",
 	"throughputForecast":       "A throughput forecast with its history sufficiency flag.",
 	"workGraphArtifacts":       "Work graph artifacts (issues, pull requests and more) in a window, with a degraded-reason disclosure.",

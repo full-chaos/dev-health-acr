@@ -25,7 +25,7 @@
   "properties": {
     "operation": {
       "type": "string",
-      "description": "The operation name exactly as data_catalog lists it, for example compoundingRisk, hotspots, securityAlerts, catalogValues or capacityForecasts. An unknown name is refused.",
+      "description": "The operation name exactly as data_catalog lists it, for example compoundingRisk, hotspots, securityOverview, catalogValues or capacityForecasts. An unknown name is refused.",
       "minLength": 1,
       "maxLength": 64,
       "pattern": "^[A-Za-z][A-Za-z0-9]*$"

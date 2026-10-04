@@ -750,7 +750,7 @@ func (x *run) gateAndScope(ctx context.Context, op *OperationPolicy, scope Calle
 	}
 	bareIDs, acrIDs = sortedUnique(bareIDs), sortedUnique(acrIDs)
 	if len(bareIDs) == 0 {
-		// Never an empty filter: hotspots and securityAlerts read an empty
+		// Never an empty filter: hotspots and compoundingRisk read an empty
 		// list as ALL repositories.
 		resp := x.refuse(RefusalNoGrantedScope, "the requested repositories and the caller's grant do not intersect", "")
 		return nil, &resp, nil

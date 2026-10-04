@@ -167,7 +167,7 @@ func TestQueryClientRefusesBeforeSending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := runner.Run(context.Background(), opUnrestricted(opOrgA), directread.OperationRequest{Operation: "securityAlerts"})
+	resp, err := runner.Run(context.Background(), opUnrestricted(opOrgA), directread.OperationRequest{Operation: "securityOverview"})
 	if err != nil || resp.Refusal == nil || resp.Refusal.Code != directread.RefusalInvalidRequest {
 		t.Fatalf("runner mapping: %+v %v", resp.Refusal, err)
 	}

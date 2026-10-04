@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,6 +78,8 @@ func runOracle(t *testing.T, o *Oracle) *Report {
 // same findings.
 func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
+	dark := darkOperations(t)
+	manifest = withoutDarkRoots(t, manifest, dark)
 	planes := localPlanes(t, seedStore(t, extract), &recording)
 	oracle := oracleFor(t, manifest, planes, extract)
 	report := runOracle(t, oracle)
@@ -92,8 +95,26 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	if failures := planes.Listener.Failures(); len(failures) > 0 {
 		t.Fatalf("the replay listener was asked for something it has no record of: %v", failures)
 	}
-	if unused := planes.Unused(); len(unused) > 0 {
-		t.Fatalf("%d recorded replies were never asked for (the run no longer makes the calls of the capture), first: %s", len(unused), unused[0])
+	unused := planes.Unused()
+	darkKeys := darkReplyKeys(recording, dark)
+	if len(darkKeys) == 0 {
+		t.Fatalf("the capture holds no recorded reply of a dark operation: the exclusion measured nothing")
+	}
+	unusedSet := map[string]bool{}
+	var live []string
+	for _, key := range unused {
+		unusedSet[key] = true
+		if !darkKeys[key] {
+			live = append(live, key)
+		}
+	}
+	for key := range darkKeys {
+		if !unusedSet[key] {
+			t.Fatalf("the recorded reply %s of a dark operation was replayed: the policy marks it as not served", key)
+		}
+	}
+	if len(live) > 0 {
+		t.Fatalf("%d recorded replies were never asked for (the run no longer makes the calls of the capture), first: %s", len(live), live[0])
 	}
 	if err := report.Err(); err != nil {
 		t.Fatal(err)
@@ -178,4 +199,94 @@ func sortFindings(findings []Finding) {
 		}
 		return a.Detail < b.Detail
 	})
+}
+
+// darkOperations are the operations the policy marks as not served because
+// their root field is not enabled on the ops query service. The recorded
+// capture is evidence from the real producer and stays as recorded; the test
+// side excludes these operations and asserts they are never replayed.
+func darkOperations(t *testing.T) map[string]bool {
+	t.Helper()
+	policy, err := directread.DefaultGraphQLPolicy()
+	if err != nil {
+		t.Fatalf("root policy: %v", err)
+	}
+	dark := map[string]bool{}
+	for _, ns := range policy.Catalogue().NotServed() {
+		if strings.Contains(ns.Reason, "root_field_not_enabled") {
+			dark[ns.Name] = true
+		}
+	}
+	if len(dark) == 0 {
+		t.Fatal("the policy marks no operation as dark")
+	}
+	return dark
+}
+
+func isDarkCase(id string, dark map[string]bool) bool {
+	parts := strings.Split(strings.SplitN(id, "#", 2)[0], "/")
+	if len(parts) >= 2 && parts[0] == "run_operation" {
+		return dark[parts[1]]
+	}
+	return len(parts) >= 2 && (dark[parts[0]] || dark[parts[1]])
+}
+
+func darkReplyKeys(recording Recording, dark map[string]bool) map[string]bool {
+	out := map[string]bool{}
+	for key := range recording.Replies {
+		if isDarkCase(key, dark) {
+			out[key] = true
+		}
+	}
+	return out
+}
+
+// withoutDarkRoots returns the manifest without the shape cases and the
+// pinned outcome of a dark root. A root missing from the policy that is not
+// dark is an error, never an exclusion.
+func withoutDarkRoots(t *testing.T, manifest Manifest, dark map[string]bool) Manifest {
+	t.Helper()
+	policy, err := directread.DefaultGraphQLPolicy()
+	if err != nil {
+		t.Fatalf("root policy: %v", err)
+	}
+	cases := make([]ShapeCase, 0, len(manifest.ShapeCases))
+	for _, c := range manifest.ShapeCases {
+		root := strings.SplitN(c.ShapeID, "/", 2)[0]
+		if _, allowed := policy.Root(root); allowed {
+			cases = append(cases, c)
+			continue
+		}
+		if !dark[root] {
+			t.Fatalf("shape case %s names root %s, which the policy does not allow and does not mark dark", c.ShapeID, root)
+		}
+	}
+	expect := map[string]RootExpectation{}
+	for root, want := range manifest.Expect {
+		if _, allowed := policy.Root(root); allowed {
+			expect[root] = want
+			continue
+		}
+		if !dark[root] {
+			t.Fatalf("the capture pins root %s, which the policy does not allow and does not mark dark", root)
+		}
+	}
+	manifest.ShapeCases, manifest.Expect = cases, expect
+	return manifest
+}
+
+func TestRecordedCaptureKeepsTheDarkOperationAndTheTestExcludesIt(t *testing.T) {
+	manifest, recording, _ := loadedCapture(t)
+	dark := darkOperations(t)
+	if got := len(darkReplyKeys(recording, dark)); got != 5 {
+		t.Fatalf("the capture holds %d recorded replies of a dark operation, want 5", got)
+	}
+	filtered := withoutDarkRoots(t, manifest, dark)
+	policy := mustPolicy(t)
+	if len(filtered.Expect) != len(policy.Roots()) {
+		t.Fatalf("filtered capture pins %d roots, the policy allows %d", len(filtered.Expect), len(policy.Roots()))
+	}
+	if len(manifest.Expect) != len(filtered.Expect)+len(dark) || len(manifest.ShapeCases) != len(filtered.ShapeCases)+4 {
+		t.Fatalf("the recorded manifest was changed: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
+	}
 }

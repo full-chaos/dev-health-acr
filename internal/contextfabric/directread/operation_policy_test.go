@@ -94,17 +94,17 @@ func TestEmbeddedCopyIsByteIdenticalToContract(t *testing.T) {
 	}
 }
 
-func TestCatalogueServesNineteenAndThree(t *testing.T) {
+func TestCatalogueServesEighteenAndTwo(t *testing.T) {
 	cat := loadDefault(t)
-	if got := len(cat.Operations(CallerUnrestricted)); got != 19 {
-		t.Fatalf("unrestricted caller: %d operations, want 19", got)
+	if got := len(cat.Operations(CallerUnrestricted)); got != 18 {
+		t.Fatalf("unrestricted caller: %d operations, want 18", got)
 	}
 	var restricted []string
 	for _, op := range cat.Operations(CallerRestricted) {
 		restricted = append(restricted, op.Name)
 	}
-	if !slices.Equal(restricted, []string{"compoundingRisk", "hotspots", "securityAlerts"}) {
-		t.Fatalf("restricted caller: %v, want compoundingRisk, hotspots, securityAlerts", restricted)
+	if !slices.Equal(restricted, []string{"compoundingRisk", "hotspots"}) {
+		t.Fatalf("restricted caller: %v, want compoundingRisk, hotspots", restricted)
 	}
 	for _, class := range PrincipalClassVocabulary() {
 		want := CallerRestricted
