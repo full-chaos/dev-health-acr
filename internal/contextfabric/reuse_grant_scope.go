@@ -43,7 +43,8 @@ func GrantScopedTimeAxisKey(principal storage.Principal, axisKey string) string 
 }
 
 // RequestScopeTimeAxisKey widens the reuse key's time-axis dimension with a
-// digest of the repository slugs the caller named in the request. The census
+// digest of the repository slugs the caller named in the request, (trimmed by the digest) and
+// lower-cased as the census compares them (order and case never split a key). The census
 // that identifies a ticket key or a pull request number runs inside that
 // scope, so an answer built under one scope must not be served to a request
 // under another, or to one with none: the unscoped census would see every
@@ -54,7 +55,11 @@ func RequestScopeTimeAxisKey(request InvestigationRequest, axisKey string) strin
 	if axisKey == "" || len(request.RequestedScope.RepositorySlugs) == 0 {
 		return axisKey
 	}
-	scoped := axisKey + "+s:" + reuseGrantDigest(request.RequestedScope.RepositorySlugs)
+	slugs := make([]string, 0, len(request.RequestedScope.RepositorySlugs))
+	for _, slug := range request.RequestedScope.RepositorySlugs {
+		slugs = append(slugs, strings.ToLower(slug))
+	}
+	scoped := axisKey + "+s:" + reuseGrantDigest(slugs)
 	if len(scoped) > reuseTimeAxisKeyMaxLength {
 		return ""
 	}

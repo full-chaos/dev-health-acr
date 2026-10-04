@@ -118,3 +118,25 @@ func TestRequestScopeTimeAxisKeyFailsClosed(t *testing.T) {
 		t.Fatalf("unscoped key = %q, want it unchanged", got)
 	}
 }
+
+func TestRequestScopeTimeAxisKeyIgnoresPaddingOrderAndCase(t *testing.T) {
+	t.Parallel()
+	key := func(slugs ...string) string {
+		request := InvestigationRequest{}
+		request.RequestedScope.RepositorySlugs = slugs
+		return RequestScopeTimeAxisKey(request, "current")
+	}
+	want := key("acme/repo-25", "acme/repo-01")
+	for name, got := range map[string]string{
+		"padding": key(" acme/repo-25 ", "acme/repo-01\t"),
+		"order":   key("acme/repo-01", "acme/repo-25"),
+		"case":    key("ACME/Repo-25", "acme/REPO-01"),
+	} {
+		if got != want {
+			t.Errorf("%s: key %q, want %q", name, got, want)
+		}
+	}
+	if key("acme/repo-25") == want {
+		t.Errorf("a different scope shares the key %q", want)
+	}
+}
