@@ -236,12 +236,18 @@ import (
 // validator refuses is now served (with a not-saved disclosure) instead of
 // failing the turn.
 //
-// v36 -> v38 (v37 is held by a change in review): the teams of a repository
-// named by its label are read from its ownership records, and a team the
-// question text matched is not one of them. A candidate saved under v36 for
-// such a question can hold teams that do not own the repository and must not
-// be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v38"
+// v36 -> v39 (v37 and v38 are held by changes in review): the project walk
+// reads its issues' links first, so a project whose linked issues sort past
+// the read budget is served, and a project with no link is unlinked with its
+// exact issue count instead of cut. A candidate saved under v36 for such a
+// question holds a cut or empty answer and must not be reused.
+//
+// v39 -> v41 (v37 and v40 are held by changes in review): the teams of a
+// repository named by its label are read from its ownership records, and a
+// team the question text matched is not one of them. A candidate saved under
+// v39 for such a question can hold teams that do not own the repository and
+// must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v41"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

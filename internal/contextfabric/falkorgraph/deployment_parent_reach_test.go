@@ -35,6 +35,8 @@ func seededGraphConn(nodes []seededNode, edges []seededEdge) *fakeConn {
 		kind, _ := params["kind"].(string)
 		id, _ := params["id"].(string)
 		switch {
+		case params["relates"] != nil:
+			return seededProjectLinks(byKey, edges, cypher, params), nil
 		case params["fromKind"] != nil:
 			return seededWalkStep(byKey, edges, cypher, params), nil
 		case strings.Contains(cypher, "fulltext"), strings.Contains(cypher, "$kinds"):
@@ -191,6 +193,87 @@ func TestTeamDeploymentMembersFollowTheCallersRepositoryGrant(t *testing.T) {
 	}
 }
 
+// seededProjectLinks answers the project walk's link read and issue count from
+// the seeded topology: the project's issues (work items that are not pull
+// requests, joined by BELONGS_TO_PROJECT) and, for the link read, one row per
+// RELATES_TO link from such an issue to a pull-request work item, in the
+// read's order, paged by skip and limit.
+func seededProjectLinks(byKey map[string]seededNode, edges []seededEdge, cypher string, params map[string]interface{}) []row {
+	project, _ := params["project"].(string)
+	pullRequestTypes := map[string]bool{}
+	if list, ok := params["prtypes"].([]interface{}); ok {
+		for _, v := range list {
+			pullRequestTypes[v.(string)] = true
+		}
+	}
+	isPullRequest := func(n seededNode) bool { return pullRequestTypes[n.workItemType] }
+	issues := map[string]seededNode{}
+	for _, e := range edges {
+		if e.typ != "BELONGS_TO_PROJECT" || e.dstKind != "project" || e.dstID != project || e.srcKind != "work_item" {
+			continue
+		}
+		if n, ok := byKey["work_item|"+e.srcID]; ok && !isPullRequest(n) {
+			issues[n.id] = n
+		}
+	}
+	if strings.Contains(cypher, "count(DISTINCT i)") {
+		return []row{{"issues": int64(len(issues))}}
+	}
+	type link struct {
+		issue, pullRequest seededNode
+		rel                string
+	}
+	var links []link
+	for i, e := range edges {
+		if e.typ != "RELATES_TO" || e.srcKind != "work_item" || e.dstKind != "work_item" {
+			continue
+		}
+		for _, pair := range [][2]string{{e.srcID, e.dstID}, {e.dstID, e.srcID}} {
+			issue, isIssue := issues[pair[0]]
+			pullRequest, ok := byKey["work_item|"+pair[1]]
+			if isIssue && ok && isPullRequest(pullRequest) && seededGrantsAdmit(params, issue, pullRequest) {
+				links = append(links, link{issue, pullRequest, fmt.Sprintf("rel_%03d", i)})
+			}
+		}
+	}
+	sort.Slice(links, func(a, b int) bool {
+		if links[a].issue.id != links[b].issue.id {
+			return links[a].issue.id < links[b].issue.id
+		}
+		if links[a].pullRequest.id != links[b].pullRequest.id {
+			return links[a].pullRequest.id < links[b].pullRequest.id
+		}
+		return links[a].rel < links[b].rel
+	})
+	skip, _ := params["skip"].(int)
+	limit, _ := params["limit"].(int)
+	if skip > len(links) {
+		skip = len(links)
+	}
+	links = links[skip:]
+	if limit >= 0 && len(links) > limit {
+		links = links[:limit]
+	}
+	asNode := func(n seededNode) *node {
+		out := fakeSubjectNodeRow(n.kind, n.id, n.label)["n"].(*node)
+		if len(n.repos) > 0 {
+			out.Properties[propAuthzRepos] = n.repos
+		}
+		if n.workItemType != "" {
+			out.Properties[propWorkItemType] = n.workItemType
+		}
+		return out
+	}
+	rows := make([]row, 0, len(links))
+	for _, l := range links {
+		rows = append(rows, row{
+			"i": asNode(l.issue), "pr": asNode(l.pullRequest),
+			"rl": &edge{Properties: map[string]interface{}{propRelationType: "RELATES_TO", propRelationshipID: l.rel}},
+		})
+	}
+	return rows
+}
+
 // seededWalkStep answers one project-walk step from the seeded topology: the
 // neighbours of the batched ids along one relationship type, in the direction
 // the query pattern names, with the optional work item type filter applied.
@@ -256,4 +339,33 @@ func seededWalkStep(byKey map[string]seededNode, edges []seededEdge, cypher stri
 		rows = rows[:limit]
 	}
 	return rows
+}
+
+// seededGrantsAdmit applies the link read's grant clause when the read carries
+// one: the pull request's repositories meet the grants, and the issue's do or
+// the issue has no repository.
+func seededGrantsAdmit(params map[string]interface{}, issue, pullRequest seededNode) bool {
+	grants, restricted := params["grants"].([]interface{})
+	if !restricted {
+		return true
+	}
+	meets := func(repos []string) bool {
+		for _, r := range repos {
+			for _, g := range grants {
+				if g == r {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	issueRepos := issue.repos
+	if len(issueRepos) == 0 {
+		issueRepos = []string{noRepositoryScope}
+	}
+	issueOK := meets(issueRepos)
+	for _, r := range issueRepos {
+		issueOK = issueOK || r == noRepositoryScope
+	}
+	return meets(pullRequest.repos) && issueOK
 }

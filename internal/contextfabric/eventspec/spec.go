@@ -2948,9 +2948,11 @@ var OwnershipRouting = Event{
 // outcome=not_routed is a call whose anchor is not a committed project
 // (anchor_kind says which kind, or "none"); the walk did not run and no walk
 // count is written. outcome=read_failed carries the error and no count: the
-// walk did not finish. Every other outcome carries the walk's counts:
-// issues examined, pull requests they link, deployments reached, hops the
-// caller's authorization hid, and whether a frontier was cut. anchor_basis
+// walk did not finish. Every other outcome carries the walk's counts: the
+// project's issues, the distinct pull requests its issues link (both before
+// authorization), deployments reached, hops the caller's authorization hid,
+// and whether the read was cut (more linked pull requests, repositories or
+// deployments than the budget). anchor_basis
 // says how the anchor was chosen from the committed subjects: bound (the
 // frame's proven anchor) or sole_commit (the one committed subject).
 //
