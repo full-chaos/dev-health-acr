@@ -6393,6 +6393,7 @@
         "presence": "required",
         "closed_vocabulary": [
           "reading_unavailable",
+          "member_filter_not_reusable",
           "payload_rejected",
           "census_unavailable",
           "digest_changed",

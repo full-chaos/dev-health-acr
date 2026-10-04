@@ -2773,6 +2773,9 @@ func requestDerivedLogInt(value int) int {
 // workItemReuseRejectReason keeps the record's reject_reason inside its closed
 // vocabulary.
 func workItemReuseRejectReason(reason string) string {
+	if reason == "" {
+		return WorkItemTupleRuleNone
+	}
 	if slices.Contains(WorkItemTupleRejectReasonVocabulary(), reason) {
 		return reason
 	}
