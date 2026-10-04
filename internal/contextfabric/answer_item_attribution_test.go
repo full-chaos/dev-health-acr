@@ -823,6 +823,43 @@ func assembledResultArmCases() []assembledResultArmCase {
 			},
 		},
 		{
+			// The budget-trim lever served the FIRST document: one claim per
+			// member still overran the item ceiling and no retry was possible.
+			// The event measures that document, before the cut.
+			name:          "budget-trim lever served the assembled result",
+			discriminator: "retry_declined=no_reserve narrower",
+			spec:          attributionFixtureSpec{members: 3, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 2, memberDrivers: 1, memberClaims: 2},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(15, 0), cohortSizes)
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err != nil {
+					t.Fatalf("Investigate() error = %v, want the budget-trim lever to serve", err)
+				}
+				if len(*cohortSizes) != 1 || budgetTrimTrimLines(result) != 1 {
+					t.Fatalf("want one synthesis and the trim disclosure; cohorts=%v limitations=%v", *cohortSizes, result.Limitations)
+				}
+				return result, true
+			},
+		},
+		{
+			// The retry ran, its document still overran, and the budget-trim
+			// lever served the RETRIED document. The event measures it.
+			name:          "budget-trim lever served the re-synthesized result",
+			discriminator: "retry_attempted=true retry_fit=false retry_failed=false refusal_planned=false deadline_reserved=true",
+			spec:          attributionFixtureSpec{members: 4, globalFindings: 7, groupDrivers: 4, multiGroupDrivers: 2, memberDrivers: 1, memberClaims: 3},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(17, time.Second), cohortSizes)
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err != nil {
+					t.Fatalf("Investigate() error = %v, want the budget-trim lever to serve the retried document", err)
+				}
+				if len(*cohortSizes) != 2 || budgetTrimTrimLines(result) != 1 {
+					t.Fatalf("want one retry and the trim disclosure; cohorts=%v limitations=%v", *cohortSizes, result.Limitations)
+				}
+				return result, true
+			},
+		},
+		{
 			name: "outcome layer served a candidate narrowing",
 			// The arm a review proved I had wrongly declared unreachable.
 			// One member means the cohort cannot be narrowed, so stage three

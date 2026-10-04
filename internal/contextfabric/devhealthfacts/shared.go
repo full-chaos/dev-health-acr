@@ -296,7 +296,12 @@ import (
 // row limit cuts, so a question with more matching rows than the limit is
 // served the same rows on every call. A candidate saved under v49 may hold a
 // different arbitrary cut and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v50"
+//
+// v50 -> v51: an answer over the item budget with no time to re-synthesize is
+// served with its member-attributed claimed facts cut and one fixed limitation
+// naming the cut, where it was refused. An answer saved under v50 for such a
+// question is a refusal and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v51"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

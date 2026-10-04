@@ -344,6 +344,23 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			e.recordCandidateNarrowing(ctx, principal, plan, attempt, overrun, grouped, narrowed.Basis, before, after, declined, false, false)
 			return attempt.Result, firstPass, nil
 		}
+		trim, trimErr := e.planBudgetTrim(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality)
+		if trimErr != nil {
+			return InvestigationResult{}, firstPass, trimErr
+		}
+		e.recordClaimDepthNarrowing(ctx, principal, plan, answerPassFirst, measured, trim, budget)
+		if trim.Served {
+			members := cohortMemberCount(params.Graph.Cohort)
+			event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
+				members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
+			event.recordMeasurement(measured)
+			event.PredictedItems = PredictedItemsForPlan(*plan, members)
+			event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+			event.RetryDeclined = declined
+			event.OutcomeCompletenessState = trim.Result.Completeness.State
+			e.recordPlanNarrowing(ctx, principal, event)
+			return trim.Result, firstPass, nil
+		}
 		// CHAOS-4809 PATH 2: BOTH counts, as narrowSynthesisInput actually
 		// computed them. This used to pass `before` for both, so a refusal
 		// that had already run a real overlap-aware set-cover selection
@@ -636,6 +653,27 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality, params.WorkItemCensus)
 		if accountingErr != nil {
 			return InvestigationResult{}, retryPending, accountingErr
+		}
+		if !outcomeAttempt.Served {
+			trim, trimErr := e.planBudgetTrim(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality)
+			if trimErr != nil {
+				return InvestigationResult{}, retryPending, trimErr
+			}
+			e.recordClaimDepthNarrowing(ctx, principal, plan, answerPassSecond, retryMeasured, trim, budget)
+			if trim.Served {
+				event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, retryOverrun, narrowed.Basis)
+				event.recordMeasurement(retryMeasured)
+				event.PredictedItems = PredictedItemsForPlan(*plan, after)
+				event.RetryAttempted = true
+				event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+				event.OutcomeCompletenessState = trim.Result.Completeness.State
+				e.recordPlanNarrowing(ctx, principal, event)
+				retryRanked := narrowed.Ranked
+				if params.WorkItemCensus == nil {
+					retryPending.CohortRanked = &retryRanked
+				}
+				return trim.Result, retryPending, nil
+			}
 		}
 	}
 	// ONE decision event per investigation. When the reduction rescues a

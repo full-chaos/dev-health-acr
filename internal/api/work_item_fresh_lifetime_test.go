@@ -17,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -147,9 +148,9 @@ func (t *freshTupleBudgetTelemetry) RecordCohortRanked(context.Context, storage.
 	t.ranked++
 }
 
-// Both candidate-reduction sites must preserve the sole project anchor.
-// The actual provider/synthesizer result contains 47 items against 46; a
-// candidate cut cannot make that tuple servable by removing its authority.
+// Both over-budget sites must preserve the sole project anchor. The actual
+// provider/synthesizer result contains 47 items against 46; the tuple is
+// served by cutting its member claims, never by removing its authority.
 func TestWorkItemFreshRetryKeepsAuthorizedAnchor(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -192,27 +193,37 @@ func TestWorkItemFreshRetryKeepsAuthorizedAnchor(t *testing.T) {
 			body.Options.MaxCohortMembers = 250
 			body.TimeContext.EvidenceWindow = &contextfabric.RequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing90D}
 			recorder := roundTripFreshTupleRequest(t, f, body)
-			var envelope struct {
-				Error struct {
-					Code    string `json:"code"`
-					Message string `json:"message"`
-					Details struct {
-						MaxItems       int    `json:"max_items"`
-						MeasuredItems  int    `json:"measured_items"`
-						Overrun        string `json:"overrun"`
-						RetryAttempted bool   `json:"retry_attempted"`
-					} `json:"details"`
-				} `json:"error"`
+			var served struct {
+				Status            string   `json:"status"`
+				Limitations       []string `json:"limitations"`
+				SubjectResolution struct {
+					Candidates []struct {
+						Subject struct {
+							CanonicalID string `json:"canonical_id"`
+						} `json:"subject"`
+					} `json:"candidates"`
+				} `json:"subject_resolution"`
+				Cohort struct {
+					Members []json.RawMessage `json:"members"`
+				} `json:"cohort"`
 			}
-			if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+			if err := json.Unmarshal(recorder.Body.Bytes(), &served); err != nil {
 				t.Fatal(err)
 			}
-			if recorder.Code != http.StatusRequestEntityTooLarge || envelope.Error.Code != "invalid_request" || envelope.Error.Message != "The Context Fabric answer did not fit the response budget" || !errors.Is(f.engineErr, contextfabric.ErrAnswerExceedsBudget) {
-				t.Fatalf("budget outcome HTTP%d %s; engine=%v", recorder.Code, recorder.Body.String(), f.engineErr)
+			if recorder.Code != http.StatusOK || f.engineErr != nil || served.Status != "partial" {
+				t.Fatalf("over-budget outcome HTTP%d %s; engine=%v", recorder.Code, recorder.Body.String(), f.engineErr)
 			}
-			details := envelope.Error.Details
-			if details.MaxItems != 46 || details.MeasuredItems != 47 || details.Overrun != "items" || details.RetryAttempted != tc.retry {
-				t.Errorf("refusal measurements=%+v", details)
+			trimLines := 0
+			for _, limitation := range served.Limitations {
+				if contractsv1.IsContextFabricBudgetTrimLimitation(limitation) {
+					trimLines++
+				}
+			}
+			if trimLines != 1 || len(served.Cohort.Members) != 15 {
+				t.Errorf("trim lines=%d members=%d", trimLines, len(served.Cohort.Members))
+			}
+			if len(served.SubjectResolution.Candidates) != 1 || served.SubjectResolution.Candidates[0].Subject.CanonicalID != f.graph.projectID {
+				t.Errorf("served answer lost its authorized anchor: %+v", served.SubjectResolution)
 			}
 			wantSizes := []int{15}
 			if tc.retry {
@@ -221,23 +232,13 @@ func TestWorkItemFreshRetryKeepsAuthorizedAnchor(t *testing.T) {
 			if !reflect.DeepEqual(sizes, wantSizes) || !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "work"}) {
 				t.Errorf("synthesis=%v phases=%v", sizes, f.client.phases)
 			}
-			refusals := 0
 			for _, event := range telemetry.plans {
-				if event.OutcomeReductionApplied || event.OutcomeReductionInnerFit {
-					t.Errorf("tuple reduced its anchor candidate: %+v", event)
-				}
-				if event.RefusalPlanned {
-					refusals++
-					if event.OutcomeReductionDeclined != contextfabric.OutcomeReductionNothingReducible || event.MeasuredItems != 47 || event.RetryAttempted != tc.retry {
-						t.Errorf("refusal trace=%+v", event)
-					}
+				if event.OutcomeReductionApplied || event.OutcomeReductionInnerFit || event.RefusalPlanned {
+					t.Errorf("tuple reduced its anchor candidate or planned a refusal: %+v", event)
 				}
 			}
-			if refusals != 1 || telemetry.ranked != 0 {
-				t.Errorf("refusals=%d rank events=%d", refusals, telemetry.ranked)
-			}
-			if _, err := f.store.Get(context.Background(), f.principal, "result_tuple_producer_001"); err == nil {
-				t.Error("refused tuple was saved")
+			if telemetry.ranked != 0 {
+				t.Errorf("rank events=%d", telemetry.ranked)
 			}
 			assertResponseOwnerGateFree(t, f.gate)
 		})

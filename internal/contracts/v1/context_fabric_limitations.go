@@ -617,6 +617,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSubjectIdentityUnconfirmedLimitation,
 		ContextFabricSynthesisInputBoundedLimitation,
 		ContextFabricTerminalNotSavedLimitation,
+		ContextFabricBudgetTrimClaimedFactsLimitation,
 	}
 }
 
@@ -651,6 +652,7 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricCohortNarrowingLimitation(limitation) ||
 		IsContextFabricFactRowTruncationLimitation(limitation) ||
 		IsContextFabricClaimDepthLimitation(limitation) ||
+		IsContextFabricBudgetTrimLimitation(limitation) ||
 		IsContextFabricPathDropLimitation(limitation) ||
 		IsContextFabricWorkItemMemberFilterLimitation(limitation) ||
 		IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation)
