@@ -75,6 +75,11 @@ func seedRepositoryWalkRows(t *testing.T) {
 		// an issue of acme/api by its own repository column and no link
 		{"gh:acme/api#6", repoWalkAPI, "github", "issue", "todo", nil},
 		{"gh:acme/web#21", repoWalkWeb, "github", "issue", "todo", nil},
+		// related to an issue of acme/api, not to a pull request
+		{"linear:ENG-77", repoWalkZero, "linear", "issue", "todo", nil},
+		// linked from a pull request of acme/api with the pull request as
+		// the row's target
+		{"linear:ENG-55", repoWalkZero, "linear", "issue", "todo", nil},
 	}
 	for _, item := range items {
 		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, type, status, url, created_at, updated_at, completed_at, parent_id, project_id, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -88,9 +93,16 @@ func seedRepositoryWalkRows(t *testing.T) {
 		{"ghpr:acme/api#11", "linear:ENG-40", "relates_to", "linear_attachment"},
 		{"ghpr:acme/web#20", "linear:ENG-40", "relates_to", "linear_attachment"},
 		{"ghpr:acme/web#20", "gh:acme/web#21", "relates_to", "github_closing_reference"},
-		// not a link: a blocking relation, and an unresolved external key
+		// not a link of acme/api: a blocking relation, an unresolved external
+		// key, an issue related to an issue, and a pull request related to a
+		// pull request of another repository
 		{"ghpr:acme/api#10", "gh:acme/api#6", "blocks", "github_text_reference"},
 		{"ghpr:acme/api#11", "ENG-99", "external_issue_key", "external_issue_key"},
+		{"gh:acme/api#6", "linear:ENG-77", "relates_to", "github_text_reference"},
+		{"ghpr:acme/api#11", "ghpr:acme/web#20", "relates_to", "github_text_reference"},
+		// The graph's RELATES_TO is read in either direction, as the project
+		// walk reads it: a row whose target is the pull request still links.
+		{"linear:ENG-55", "ghpr:acme/api#11", "relates_to", "linear_attachment"},
 	}
 	for _, link := range links {
 		exec(`INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -157,7 +169,7 @@ func TestLiveARepositoryServesTheIssuesLinkedToItsPullRequests(t *testing.T) {
 		pullRequests int
 		linked       int
 	}{
-		{"tracker, GitHub and Jira issues; two pull requests to one issue; an own-repository issue with no link is out", repoWalkAPI, []string{"gh:acme/api#5", "jira:OPS-3", "linear:ENG-12", "linear:ENG-40"}, 2, 4},
+		{"tracker, GitHub and Jira issues; two pull requests to one issue; an own-repository issue with no link is out", repoWalkAPI, []string{"gh:acme/api#5", "jira:OPS-3", "linear:ENG-12", "linear:ENG-40", "linear:ENG-55"}, 2, 5},
 		{"one issue linked into two repositories is a member of each", repoWalkWeb, []string{"gh:acme/web#21", "linear:ENG-40"}, 1, 2},
 		{"pull requests and no linked issue", repoWalkQuiet, []string{}, 1, 0},
 		{"no pull request", repoWalkNoPulls, []string{}, 0, 0},
@@ -205,7 +217,7 @@ func TestLiveARepositoryAppliesTheStatusAndPeriodFilters(t *testing.T) {
 	if got := repoWalkMembers(closed); len(got) != 1 || got[0] != "jira:OPS-3" {
 		t.Fatalf("completed in the last 30 days = %v, want the one completed linked issue", got)
 	}
-	if closed.Census.RepositoryLinkedIssues != 4 {
+	if closed.Census.RepositoryLinkedIssues != 5 {
 		t.Fatalf("a filter changed the repository's linked issue count: %d", closed.Census.RepositoryLinkedIssues)
 	}
 }
@@ -215,13 +227,14 @@ func TestLiveARestrictedCallerSeesOnlyTheLinkedIssuesItMayRead(t *testing.T) {
 	restricted := storage.Principal{OrgID: repoWalkOrg, RepositoryScopes: []string{"acme/api"}}
 	result := readRepositoryWalk(t, restricted, repoWalkAPI, nil)
 	// gh:acme/api#5 by its own granted repository; linear:ENG-12 by its
-	// provider-recorded link to a granted repository. jira:OPS-3 and
-	// linear:ENG-40 have no such grant and are neither served nor named.
+	// provider-recorded link to a granted repository. jira:OPS-3,
+	// linear:ENG-40 and linear:ENG-55 have no such grant and are neither
+	// served nor named.
 	if got := repoWalkMembers(result); len(got) != 2 || got[0] != "gh:acme/api#5" || got[1] != "linear:ENG-12" {
 		t.Fatalf("restricted members = %v, want gh:acme/api#5 and linear:ENG-12", got)
 	}
-	if result.Census.AuthorizedPopulation != 2 || result.Census.DeniedPopulation != 2 {
-		t.Fatalf("restricted census authorized=%d denied=%d, want 2/2", result.Census.AuthorizedPopulation, result.Census.DeniedPopulation)
+	if result.Census.AuthorizedPopulation != 2 || result.Census.DeniedPopulation != 3 {
+		t.Fatalf("restricted census authorized=%d denied=%d, want 2/3", result.Census.AuthorizedPopulation, result.Census.DeniedPopulation)
 	}
 	other := readRepositoryWalk(t, storage.Principal{OrgID: repoWalkOrg, RepositoryScopes: []string{"acme/elsewhere"}}, repoWalkAPI, nil)
 	if len(other.Members) != 0 || other.Census.AuthorizedPopulation != 0 {

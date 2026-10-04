@@ -67,9 +67,6 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 		return InvestigationResult{}, false, nil
 	}
 	anchor := candidate.SubjectResolution.Committed[0]
-	if !WorkItemTupleAnchorKind(anchor.Kind) {
-		return InvestigationResult{}, false, nil
-	}
 	authorized, _ := e.candidateVerifier(ctx, principal, request.RequestedScope, binding, anchor.Kind, anchor.CanonicalID)
 	if !authorized || ctx.Err() != nil {
 		return InvestigationResult{}, false, nil
