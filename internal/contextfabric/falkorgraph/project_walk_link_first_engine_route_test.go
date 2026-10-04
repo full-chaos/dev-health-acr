@@ -117,3 +117,50 @@ func TestARestrictedCallerOfAProjectWhoseLinksAreAllHiddenGetsOnlyTheNeutralReas
 		t.Fatalf("walk lines = %v, want one denied line", answer.walkLines)
 	}
 }
+
+// TestManyHiddenLinksDoNotCrowdOutAVisibleLinkThroughTheEngine: more hidden
+// links than the read's pages hold sort before the one link the caller can
+// see; the caller is still served that link's deployments.
+func TestManyHiddenLinksDoNotCrowdOutAVisibleLinkThroughTheEngine(t *testing.T) {
+	linked := map[int]bool{}
+	for i := 0; i < 300; i++ {
+		linked[i] = true
+	}
+	s := manyIssueProject(300, linked, nil)
+	for i := range s.nodes {
+		if s.nodes[i].workItemType == "pr" && !strings.HasSuffix(s.nodes[i].id, "-299") {
+			s.nodes[i].repos = []string{"acme/hidden"}
+		}
+	}
+	s.reach[routeProjectAlpha] = []string{"acme/alpha-service"}
+	answer := askProjectDeployments(t, s, storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/alpha-service"}}, "alpha")
+	requireNameCommit(t, answer, routeProjectAlpha)
+	if got := answer.members(); len(got) != 2 || !answer.result.Cohort.Complete {
+		t.Fatalf("served %v (cohort %+v), want the 2 deployments of the one visible link as a complete cohort", got, answer.result.Cohort)
+	}
+}
+
+// TestAMergeRequestLinkIsALink: a merge request work item linked to an issue
+// reaches its repository's deployments as a pull request does.
+func TestAMergeRequestLinkIsALink(t *testing.T) {
+	s := manyIssueProject(1, map[int]bool{0: true}, nil)
+	for i := range s.nodes {
+		if s.nodes[i].workItemType == "pr" {
+			s.nodes[i].workItemType = "merge_request"
+		}
+	}
+	answer := askProjectDeployments(t, s, storage.Principal{OrgID: "org-1"}, "alpha")
+	if got := answer.members(); len(got) != 2 {
+		t.Fatalf("served %v, want the 2 deployments the merge request's repository holds", got)
+	}
+}
+
+// TestMoreLinkRowsThanThePagesHoldIsACut: many issues linking one pull request
+// fill every page before the rows end, so the read is cut.
+func TestMoreLinkRowsThanThePagesHoldIsACut(t *testing.T) {
+	s := manyIssuesOneRepository(300)
+	walk := walkProject(t, s, storage.Principal{OrgID: "org-1"}, 25)
+	if !walk.truncated || len(walk.nodes) != 1 {
+		t.Fatalf("walk = %+v, want the one deployment and a cut: 300 link rows exceed 8 pages of 26", walk)
+	}
+}

@@ -75,8 +75,9 @@ func TestTheProjectLinkReadIsOnePathPattern(t *testing.T) {
 			pattern *regexp.Regexp
 			suffix  string
 		}{
-			"link read":   {projectLinkCypher(temporal), link, " SKIP $skip LIMIT $limit"},
-			"issue count": {projectIssueCountCypher(temporal), count, " RETURN count(DISTINCT i) AS issues"},
+			"link read":            {projectLinkCypher(temporal, false), link, " SKIP $skip LIMIT $limit"},
+			"restricted link read": {projectLinkCypher(temporal, true), link, " SKIP $skip LIMIT $limit"},
+			"issue count":          {projectIssueCountCypher(temporal), count, " RETURN count(DISTINCT i) AS issues"},
 		} {
 			from, to := strings.Index(c.cypher, "MATCH "), strings.Index(c.cypher, " WHERE ")
 			if from != 0 || to < from {
@@ -89,5 +90,17 @@ func TestTheProjectLinkReadIsOnePathPattern(t *testing.T) {
 				t.Errorf("%s, %s: read = %q, want it to end %q", name, windowName, c.cypher, c.suffix)
 			}
 		}
+	}
+}
+
+// TestARestrictedLinkReadKeepsOnlyLinksTheGrantsCanAdmit pins the grant clause
+// of a restricted caller's link read, and its absence for any other caller.
+func TestARestrictedLinkReadKeepsOnlyLinksTheGrantsCanAdmit(t *testing.T) {
+	clause := "ANY(s IN pr.authorization_repositories WHERE s IN $grants) AND (ANY(s IN i.authorization_repositories WHERE s IN $grants) OR $noRepository IN i.authorization_repositories)"
+	if !strings.Contains(projectLinkCypher(temporalFilter{}, true), clause) {
+		t.Errorf("restricted link read = %q, want the grant clause", projectLinkCypher(temporalFilter{}, true))
+	}
+	if strings.Contains(projectLinkCypher(temporalFilter{}, false), "$grants") {
+		t.Errorf("unrestricted link read = %q, want no grant clause", projectLinkCypher(temporalFilter{}, false))
 	}
 }

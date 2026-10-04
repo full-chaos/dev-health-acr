@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -98,12 +99,36 @@ const projectLinkPageCap = 8
 // deterministic order, paged. An issue with no link is not a row, so the read
 // budget is spent on links only, and a project none of whose issues links a
 // pull request returns no row at all.
-func projectLinkCypher(temporal temporalFilter) string {
+//
+// For a repository-restricted caller the read also keeps only the links the
+// caller's grants can admit: the pull request's repository list meets the
+// grants, and the issue's does or the issue has no repository. That is a
+// necessary condition of the authorization the walk applies to each row, so
+// it drops no row the caller could see, and links the caller cannot see do
+// not fill the pages before the ones it can.
+func projectLinkCypher(temporal temporalFilter, restricted bool) string {
+	grants := ""
+	if restricted {
+		grants = fmt.Sprintf(" AND ANY(s IN pr.%[1]s WHERE s IN $grants) AND (ANY(s IN i.%[1]s WHERE s IN $grants) OR $noRepository IN i.%[1]s)", propAuthzRepos)
+	}
 	return fmt.Sprintf("MATCH (p:%[1]s {%[2]s:$org, %[3]s:$projectKind, %[4]s:$project})<-[rp:%[5]s]-(i:%[1]s {%[2]s:$org, %[3]s:$workItemKind})-[rl:%[5]s]-(pr:%[1]s {%[2]s:$org, %[3]s:$workItemKind}) "+
-		"WHERE rp.%[6]s = $belongs AND rl.%[6]s = $relates AND (i.%[7]s IS NULL OR NOT i.%[7]s IN $prtypes) AND pr.%[7]s IN $prtypes%[8]s%[9]s%[10]s%[11]s "+
+		"WHERE rp.%[6]s = $belongs AND rl.%[6]s = $relates AND (i.%[7]s IS NULL OR NOT i.%[7]s IN $prtypes) AND pr.%[7]s IN $prtypes%[13]s%[8]s%[9]s%[10]s%[11]s "+
 		"RETURN i, pr, rl ORDER BY i.%[4]s, pr.%[4]s, rl.%[12]s SKIP $skip LIMIT $limit",
 		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, propRelationType, propWorkItemType,
-		temporal.predicate("rp"), temporal.predicate("i"), temporal.predicate("rl"), temporal.predicate("pr"), propRelationshipID)
+		temporal.predicate("rp"), temporal.predicate("i"), temporal.predicate("rl"), temporal.predicate("pr"), propRelationshipID, grants)
+}
+
+// projectLinkGrants binds a restricted caller's grants to the link read.
+func projectLinkGrants(params map[string]interface{}, principal storage.Principal) map[string]interface{} {
+	grants := make([]interface{}, 0, len(principal.RepositoryScopes))
+	for _, scope := range principal.RepositoryScopes {
+		if scope = strings.TrimSpace(scope); scope != "" {
+			grants = append(grants, scope)
+		}
+	}
+	params["grants"] = grants
+	params["noRepository"] = noRepositoryScope
+	return params
 }
 
 // projectIssueCountCypher counts the project's issues, before authorization.
@@ -269,7 +294,8 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 	if collectLimit > 0 {
 		pageSize = collectLimit + 1
 	}
-	linkCypher := projectLinkCypher(temporal)
+	restricted := needsProjectReach(principal)
+	linkCypher := projectLinkCypher(temporal, restricted)
 	seenPullRequests := map[string]bool{}
 	authorizedPRs := map[string]bool{}
 	for page := 0; ; page++ {
@@ -277,7 +303,11 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 			out.truncated = true
 			break
 		}
-		rows, err := a.api.query(ctx, key, linkCypher, projectLinkParams(orgID, project.CanonicalID, page*pageSize, pageSize, temporal), true)
+		params := projectLinkParams(orgID, project.CanonicalID, page*pageSize, pageSize, temporal)
+		if restricted {
+			params = projectLinkGrants(params, principal)
+		}
+		rows, err := a.api.query(ctx, key, linkCypher, params, true)
 		if err != nil {
 			return out, safeDependencyError("walk project deployments", err)
 		}

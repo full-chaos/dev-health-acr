@@ -323,8 +323,10 @@ func TestProjectDeploymentWalkAdmitsAnIssueByTheWorkItemRule(t *testing.T) {
 		if len(walk.nodes) != c.want {
 			t.Errorf("%s: served %d deployments, want %d", c.name, len(walk.nodes), c.want)
 		}
-		if c.want == 0 && (walk.denied == 0 || walk.linkedPullRequests == 0) {
-			t.Errorf("%s: denied=%d linked=%d, want the unseen link counted as denied, not as unlinked", c.name, walk.denied, walk.linkedPullRequests)
+		if c.want == 0 {
+			if outcome := projectDeploymentWalkOutcome(walk, true, nil); outcome != ProjectDeploymentWalkDenied {
+				t.Errorf("%s: outcome = %q, want denied: a restricted caller never reads unlinked", c.name, outcome)
+			}
 		}
 	}
 }
