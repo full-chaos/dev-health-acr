@@ -549,6 +549,7 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// CHAOS-7127: a restricted caller's answers are built from gated facts;
 	// its key carries its grant, so no answer is reused across grants. The
 	// same widening runs in saveResult.
+	timeAxisKey = RequestScopeTimeAxisKey(request, timeAxisKey)
 	timeAxisKey = GrantScopedTimeAxisKey(principal, timeAxisKey)
 	if timeAxisKey == "" {
 		// A historical context missing its own required bounds. Fail

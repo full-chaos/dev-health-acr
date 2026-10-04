@@ -42,6 +42,25 @@ func GrantScopedTimeAxisKey(principal storage.Principal, axisKey string) string 
 	return scoped
 }
 
+// RequestScopeTimeAxisKey widens the reuse key's time-axis dimension with a
+// digest of the repository slugs the caller named in the request. The census
+// that identifies a ticket key or a pull request number runs inside that
+// scope, so an answer built under one scope must not be served to a request
+// under another, or to one with none: the unscoped census would see every
+// holder of the key and ask which one. An unscoped request keeps its key
+// byte for byte. A key that would exceed the stored column's bound returns "",
+// which the lookup misses and Save stores as never reusable.
+func RequestScopeTimeAxisKey(request InvestigationRequest, axisKey string) string {
+	if axisKey == "" || len(request.RequestedScope.RepositorySlugs) == 0 {
+		return axisKey
+	}
+	scoped := axisKey + "+s:" + reuseGrantDigest(request.RequestedScope.RepositorySlugs)
+	if len(scoped) > reuseTimeAxisKeyMaxLength {
+		return ""
+	}
+	return scoped
+}
+
 // reuseGrantDigest is a stable digest of a grant: trimmed, de-duplicated and
 // sorted slugs, so the same grant in any order keys the same. 128 bits.
 func reuseGrantDigest(scopes []string) string {

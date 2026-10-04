@@ -878,8 +878,8 @@ func TestConfirmedNeedConsumers_RememberedWindowStandsTheCarryDown(t *testing.T)
 	if entries := memberEntries(changed.result, contractsv1.ContextFabricStructureNeedWindow); len(entries) != 1 || entries[0].Source != contractsv1.ContextFabricStructureSourceCarried {
 		t.Fatalf("control: window disclosure = %#v, want the carry's one entry", entries)
 	}
-	if changed.saveKey != frozenKey {
-		t.Fatalf("control: carried turn keyed %q, want its effective window's %q", changed.saveKey, frozenKey)
+	if wantKey := RequestScopeTimeAxisKey(changedRequest, frozenKey); changed.saveKey != wantKey {
+		t.Fatalf("control: carried turn keyed %q, want its effective window's scoped %q", changed.saveKey, wantKey)
 	}
 
 	// The subjectless terminal keys the same way: a resolution committing
@@ -890,11 +890,15 @@ func TestConfirmedNeedConsumers_RememberedWindowStandsTheCarryDown(t *testing.T)
 	terminalChangedRequest.RequestedScope.RepositorySlugs = []string{"full-chaos/dev-health-acr"}
 	terminalChanged := h.turn(terminalChangedRequest, nothing)
 	for name, turn := range map[string]needTurnOutcome{"ledger": terminalLedger, "carried": terminalChanged} {
+		wantKey := frozenKey
+		if name == "carried" {
+			wantKey = RequestScopeTimeAxisKey(terminalChangedRequest, frozenKey)
+		}
 		if len(turn.calls) != 1 || len(turn.result.SubjectResolution.Committed) != 0 || turn.result.EffectiveEvidenceWindow == nil {
 			t.Fatalf("fixture defect: %s terminal must resolve once, commit nothing and keep the window; calls=%d window=%#v", name, len(turn.calls), turn.result.EffectiveEvidenceWindow)
 		}
-		if turn.saveKey != frozenKey {
-			t.Fatalf("%s subjectless terminal keyed %q, want %q", name, turn.saveKey, frozenKey)
+		if turn.saveKey != wantKey {
+			t.Fatalf("%s subjectless terminal keyed %q, want %q", name, turn.saveKey, wantKey)
 		}
 	}
 }
@@ -1525,7 +1529,7 @@ func TestConfirmedNeedConsumers_RememberedWindowAppliesWhereTheReceiptDoes(t *te
 		if ledger.saveKey != receipt.saveKey || ledger.saveKey == control.saveKey {
 			t.Fatalf("save keys ledger=%q receipt=%q control=%q, want ledger == receipt != control", ledger.saveKey, receipt.saveKey, control.saveKey)
 		}
-		if control.result.EffectiveEvidenceWindow != nil || len(control.windows) != 0 || control.saveKey != TimeAxisKeyFor(TimeContext{Axis: TemporalCurrent}) {
+		if control.result.EffectiveEvidenceWindow != nil || len(control.windows) != 0 || control.saveKey != RequestScopeTimeAxisKey(changed(InvestigationRequest{}), TimeAxisKeyFor(TimeContext{Axis: TemporalCurrent})) {
 			t.Fatalf("control: window=%#v ledger windows=%#v key=%q, want no window, no decision, the unwindowed key", control.result.EffectiveEvidenceWindow, control.windows, control.saveKey)
 		}
 		last := func(o needTurnOutcome) WindowCanonicalizationOutcome { return o.windowCanons[len(o.windowCanons)-1] }
