@@ -231,12 +231,12 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 	}, extraBindings...)
 	if queryErr != nil {
 		result := unmeasuredWorkItemMembershipResult(classifyWorkItemMembershipS1Error(queryErr))
-		r.recordS1(ctx, principal, result, settings, grant)
+		r.recordS1(ctx, principal, result, settings, grant, request.Status != "" || timeColumn != "")
 		return lease, result, nil
 	}
 
 	result := finalizeWorkItemMembershipS1(rows, request.Anchor, k)
-	r.recordS1(ctx, principal, result, settings, grant)
+	r.recordS1(ctx, principal, result, settings, grant, request.Status != "" || timeColumn != "")
 	return lease, result, nil
 }
 
@@ -589,7 +589,7 @@ func workItemMembershipGrantShape(scope readers.AuthorizationScope) contextfabri
 	}
 }
 
-func (r *WorkItemMembershipReader) recordS1(ctx context.Context, principal storage.Principal, result contextfabric.WorkItemMembershipResult, settings readers.Settings, grant contextfabric.WorkItemMembershipGrantShape) {
+func (r *WorkItemMembershipReader) recordS1(ctx context.Context, principal storage.Principal, result contextfabric.WorkItemMembershipResult, settings readers.Settings, grant contextfabric.WorkItemMembershipGrantShape, filtered bool) {
 	event := contextfabric.WorkItemMembershipS1Event{
 		State:                    result.Census.State,
 		Reason:                   result.Census.UnmeasuredReason,
@@ -608,6 +608,17 @@ func (r *WorkItemMembershipReader) recordS1(ctx context.Context, principal stora
 		MaxRowsToRead:            settings.MaxRowsToRead,
 		MaxMemoryUsage:           settings.MaxMemoryUsage,
 		MaxResultRows:            settings.MaxResultRows,
+	}
+	if filtered {
+		// A filtered read's denied counts are the denied items' counts for one
+		// status or period; the unfiltered line states only the aggregate.
+		// Withhold every figure that is, or is derived from, the denied side.
+		event.CappedPopulation = event.AuthorizedPopulation
+		event.DeniedPopulation = 0
+		event.Paths.RepoLessDenied = 0
+		event.Paths.DeniedProjectLess = 0
+		event.Paths.ExcludedExplicitTextLink = 0
+		event.Paths.ExcludedHeuristicLink = 0
 	}
 	r.telemetry.RecordWorkItemMembershipS1(ctx, principal, event)
 }

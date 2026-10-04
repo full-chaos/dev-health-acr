@@ -402,13 +402,16 @@ type workItemTupleWindowBasis struct {
 // composeEffectiveWindow: a request-side window, or a trailing period the
 // question states. A window carried from an earlier turn, remembered, or
 // inferred from the class table is not committed here.
-func deriveWorkItemTupleWindowBasis(question string, windowCanon requestWindowCanonicalization) workItemTupleWindowBasis {
+func deriveWorkItemTupleWindowBasis(question string, windowCanon requestWindowCanonicalization, remembered bool) workItemTupleWindowBasis {
 	basis := workItemTupleWindowBasis{RoleReason: MemberTimeRoleNoVerb}
 	span := BoundWindowSpan{SpanStart: 0, SpanEnd: len(question)}
 	if spans := BindWindowSpans(question); len(spans) == 1 {
 		span = spans[0]
 	}
 	switch {
+	case remembered:
+		// A window remembered from an earlier turn is not one this request
+		// states or supplies.
 	case windowCanon.Effective != nil && windowCanon.Effective.Start != nil && windowCanon.Effective.End != nil:
 		basis.Committed = true
 	case windowCanon.BinderProposal.Reason == WindowBindRoutedInferred && windowCanon.BinderProposal.Trailing:
@@ -469,6 +472,9 @@ func windowedWorkItemTupleFrameGate(gate FrameGate, frame *QuestionFrame, family
 
 // workItemWindowFilterBasis names the window decision for the admission line.
 func workItemWindowFilterBasis(frame *QuestionFrame, familyAllowsWorkItemTuple bool, timeContext TimeContext, basis workItemTupleWindowBasis) string {
+	if workItemTupleInScope(frame) && (frame.Temporal == TemporalIntentPeriodComparison || frame.Temporal == TemporalIntentTimeSeries) {
+		return WorkItemMemberFilterWindowNotServed
+	}
 	if !workItemTupleIsPeriodFrame(frame) {
 		return ""
 	}

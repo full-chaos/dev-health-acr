@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // MemberTimeRole is the closed time field a period names for the members of a
@@ -81,8 +82,8 @@ type MemberTimeRoleOutcome struct {
 }
 
 // BindMemberTimeRole binds the role from the clause that holds the window
-// span. The clause is the sentence around the span (terminal punctuation and
-// line breaks end it), so a verb in another sentence never decides it.
+// span. The clause is the stretch around the span that no sentence mark, comma
+// or line break separates, so a verb elsewhere in the sentence never decides it.
 func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleOutcome {
 	if window.SpanStart < 0 || window.SpanEnd > len(question) || window.SpanStart > window.SpanEnd {
 		return MemberTimeRoleOutcome{Reason: MemberTimeRoleNoVerb}
@@ -128,17 +129,21 @@ func clauseBounds(question string, window BoundWindowSpan) (int, int) {
 }
 
 func isClauseBreak(b byte) bool {
-	return b == '.' || b == '?' || b == '!' || b == ';' || b == '\n' || b == '\r'
+	return b == '.' || b == '?' || b == '!' || b == ';' || b == ',' || b == '\n' || b == '\r'
 }
 
 // hyphenJoined reports a match that is one part of a hyphenated compound
 // ("closed-source", "done-for-you"): the word is not the verb of the clause.
 func hyphenJoined(clause string, start, end int) bool {
-	if start >= 2 && clause[start-1] == '-' && isWordRune(rune(clause[start-2])) {
-		return true
+	if start >= 1 && clause[start-1] == '-' {
+		if r, size := utf8.DecodeLastRuneInString(clause[:start-1]); size > 0 && isWordRune(r) {
+			return true
+		}
 	}
-	if end+1 < len(clause) && clause[end] == '-' && isWordRune(rune(clause[end+1])) {
-		return true
+	if end < len(clause) && clause[end] == '-' {
+		if r, size := utf8.DecodeRuneInString(clause[end+1:]); size > 0 && isWordRune(r) {
+			return true
+		}
 	}
 	return false
 }

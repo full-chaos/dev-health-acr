@@ -2,11 +2,13 @@ package contextfabric
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -76,6 +78,11 @@ func TestMemberTimeRoleClauseAndAmbiguity(t *testing.T) {
 		{"Closed items are listed elsewhere. Which were created in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCreated},
 		{"Which were created in the last 30 days? Closed ones too.", MemberTimeRoleBound, MemberTimeRoleCreated},
 		{"Which items in the last 30 days? Created ones.", MemberTimeRoleNoVerb, ""},
+		{"Among previously created work items, which were closed in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCompleted},
+		{"Which work items were created, closed in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCompleted},
+		{"Which pré-closed work items were created in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCreated},
+		{"Which work items were created in the last 30 days, post-closed?", MemberTimeRoleBound, MemberTimeRoleCreated},
+		{"Which done-for-you items were created in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCreated},
 	}
 	for _, tc := range cases {
 		outcome := BindMemberTimeRole(tc.question, windowSpanOf(t, tc.question))
@@ -120,8 +127,8 @@ func TestWorkItemWindowAdmission(t *testing.T) {
 		{"role missing", nil, TemporalCurrent, workItemTupleWindowBasis{Committed: true, RoleReason: MemberTimeRoleNoVerb}, WorkItemMemberFilterWindowRoleUnresolved},
 		{"role ambiguous", nil, TemporalCurrent, workItemTupleWindowBasis{Committed: true, RoleReason: MemberTimeRoleAmbiguous}, WorkItemMemberFilterWindowRoleUnresolved},
 		{"historical axis needs status history", nil, TemporalValidTime, committed, WorkItemMemberFilterWindowNotServed},
-		{"period comparison", func(f *QuestionFrame) { f.Temporal = TemporalIntentPeriodComparison }, TemporalCurrent, committed, ""},
-		{"time series", func(f *QuestionFrame) { f.Temporal = TemporalIntentTimeSeries }, TemporalCurrent, committed, ""},
+		{"period comparison", func(f *QuestionFrame) { f.Temporal = TemporalIntentPeriodComparison }, TemporalCurrent, committed, WorkItemMemberFilterWindowNotServed},
+		{"time series", func(f *QuestionFrame) { f.Temporal = TemporalIntentTimeSeries }, TemporalCurrent, committed, WorkItemMemberFilterWindowNotServed},
 		{"assignee qualifier", func(f *QuestionFrame) {
 			f.SubjectExpression.Scoped.MemberQualifier = MemberQualifierAssignee
 			f.SubjectExpression.Scoped.MemberQualifierValue = "alice"
@@ -155,20 +162,20 @@ func TestWorkItemWindowAdmission(t *testing.T) {
 
 func TestWorkItemWindowBasisFollowsTheServersCommittedWindowOnly(t *testing.T) {
 	stated := requestWindowCanonicalization{BinderProposal: ProposeWindowFromSpans("Which items were created in the last 30 days?")}
-	if b := deriveWorkItemTupleWindowBasis("Which items were created in the last 30 days?", stated); !b.Committed || b.Role != MemberTimeRoleCreated {
+	if b := deriveWorkItemTupleWindowBasis("Which items were created in the last 30 days?", stated, false); !b.Committed || b.Role != MemberTimeRoleCreated {
 		t.Errorf("stated trailing window: %+v", b)
 	}
 	// A bare calendar period is a proposal, never a commitment.
 	bare := "Which items were created last month?"
-	if b := deriveWorkItemTupleWindowBasis(bare, requestWindowCanonicalization{BinderProposal: ProposeWindowFromSpans(bare)}); b.Committed || b.Role != "" {
+	if b := deriveWorkItemTupleWindowBasis(bare, requestWindowCanonicalization{BinderProposal: ProposeWindowFromSpans(bare)}, false); b.Committed || b.Role != "" {
 		t.Errorf("bare last month committed: %+v", b)
 	}
 	none := "Which items were created?"
-	if b := deriveWorkItemTupleWindowBasis(none, requestWindowCanonicalization{BinderProposal: ProposeWindowFromSpans(none)}); b.Committed {
+	if b := deriveWorkItemTupleWindowBasis(none, requestWindowCanonicalization{BinderProposal: ProposeWindowFromSpans(none)}, false); b.Committed {
 		t.Errorf("no window committed: %+v", b)
 	}
 	explicit := requestWindowCanonicalization{Effective: validEffectiveWindowForTest(t)}
-	if b := deriveWorkItemTupleWindowBasis("Which items were closed?", explicit); !b.Committed || b.Role != MemberTimeRoleCompleted {
+	if b := deriveWorkItemTupleWindowBasis("Which items were closed?", explicit, false); !b.Committed || b.Role != MemberTimeRoleCompleted {
 		t.Errorf("caller window with the verb elsewhere in the question: %+v", b)
 	}
 }
@@ -201,7 +208,7 @@ func TestWorkItemWindowTupleReadsTheBoundTimeFieldOverTheDisclosedWindow(t *test
 			t.Fatalf("%s: reads=%d column=%q, want one read on %s", tc.question, run.reads, run.request.TimeColumn, tc.column)
 		}
 		window := run.result.EffectiveEvidenceWindow
-		if window == nil || window.Start == nil || window.End == nil || !window.Start.Equal(run.request.TimeStart) || !window.End.Equal(run.request.TimeEnd) {
+		if window == nil || window.Start == nil || window.End == nil || !window.Start.Truncate(time.Microsecond).Equal(run.request.TimeStart) || !window.End.Truncate(time.Microsecond).Equal(run.request.TimeEnd) {
 			t.Fatalf("%s: the read window %v..%v is not the disclosed window %+v", tc.question, run.request.TimeStart, run.request.TimeEnd, window)
 		}
 		if run.request.Status != "" {
@@ -303,6 +310,7 @@ func TestWorkItemWindowThatNeedsStatusHistoryStaysRefusedAndNamed(t *testing.T) 
 		{"historical axis", "Which work items in Project Alpha were in progress last March?", TemporalValidTime},
 		{"no stated window", "Which work items in Project Alpha were created in March?", TemporalCurrent},
 		{"active needs history", "Which work items in Project Alpha were active in the last 30 days?", TemporalCurrent},
+		{"no verb on a historical axis", "Which work items in Project Alpha were there in the last 30 days?", TemporalValidTime},
 		{"assignee has no source", "Which work items assigned to alice in Project Alpha were created in the last 30 days?", TemporalCurrent},
 	} {
 		request := statedPeriodRequest(tc.question)
@@ -367,5 +375,86 @@ func TestWorkItemPeriodStoredAnswerIsATupleButNeverReused(t *testing.T) {
 	_, hit, err := engine.tryReuseWorkItemTuple(context.Background(), storage.Principal{OrgID: "org-1"}, InvestigationRequest{}, ResolvedGraphBinding{}, StoredInvestigationResult{SemanticState: state, SemanticStateRead: SemanticStateReadAvailable}, WorkItemTupleClassification{Disposition: WorkItemTupleEligible})
 	if hit || err != nil || len(telemetry.decisions) != 1 || telemetry.decisions[0] != "member_filter_not_reusable" {
 		t.Fatalf("hit=%v err=%v decisions=%v", hit, err, telemetry.decisions)
+	}
+}
+
+func TestWorkItemRememberedWindowIsNotCommitted(t *testing.T) {
+	explicit := requestWindowCanonicalization{Effective: validEffectiveWindowForTest(t)}
+	if b := deriveWorkItemTupleWindowBasis("Which items were closed?", explicit, true); b.Committed || b.Role != "" {
+		t.Errorf("a remembered window satisfied the gate: %+v", b)
+	}
+}
+
+func TestWorkItemWindowFilterBasisNamesComparisonAndSeriesAsNotServed(t *testing.T) {
+	policy := workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus)
+	committed := workItemTupleWindowBasis{Committed: true, Role: MemberTimeRoleCreated, RoleReason: MemberTimeRoleBound}
+	for _, intent := range []TemporalIntent{TemporalIntentPeriodComparison, TemporalIntentTimeSeries} {
+		frame := prospectiveTupleFrame(GoalAssessState)
+		frame.Temporal = intent
+		if token := workItemTupleMemberFilterToken(&frame, policy, TimeContext{Axis: TemporalCurrent}, committed); token != WorkItemMemberFilterWindowNotServed {
+			t.Errorf("%s frame token = %q, want %q", intent, token, WorkItemMemberFilterWindowNotServed)
+		}
+	}
+	current := prospectiveTupleFrame(GoalAssessState)
+	if token := workItemTupleMemberFilterToken(&current, policy, TimeContext{Axis: TemporalCurrent}, committed); token != WorkItemMemberFilterNone {
+		t.Errorf("a current frame token = %q", token)
+	}
+}
+
+func TestWorkItemWindowDisclosuresSurviveAFullLimitationList(t *testing.T) {
+	filter := workItemMemberFilter{Status: "blocked", TimeRole: MemberTimeRoleCreated, Start: time.Date(2026, 9, 4, 0, 0, 0, 123456000, time.UTC), End: time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}
+	for _, withStatus := range []bool{false, true} {
+		f := filter
+		if !withStatus {
+			f.Status = ""
+		}
+		var model []string
+		for i := 0; i < contractsv1.ContextFabricLimitationsMaxCount; i++ {
+			model = append(model, fmt.Sprintf("model caveat %03d", i))
+		}
+		census := &WorkItemTupleCensus{State: WorkItemMembershipCensusExact, Value: 0}
+		got := withWorkItemMemberFilterLimitations(InvestigationResult{Limitations: model}, f, census)
+		wants := []string{workItemWindowFilterDisclosure(f), workItemStatusDeniedExclusion, workItemMemberFilterNoMatchDisclosure(f)}
+		if withStatus {
+			wants = append(wants, workItemStatusFilterDisclosure("blocked"))
+		}
+		for _, want := range wants {
+			if !contractsv1.IsContextFabricServiceAuthoredLimitation(want) {
+				t.Errorf("%q is not recognised as service-authored, so a full list would displace it", want)
+			}
+			if !limitationsContain(got.Limitations, want) {
+				t.Errorf("a disclosure was displaced from a full list: %q", want)
+			}
+		}
+		if len(got.Limitations) > contractsv1.ContextFabricLimitationsMaxCount {
+			t.Errorf("limitations over the cap: %d", len(got.Limitations))
+		}
+	}
+	for _, status := range WorkItemStatusVocabulary() {
+		if !contractsv1.IsContextFabricServiceAuthoredLimitation(workItemStatusNoMatchDisclosure(status)) || !contractsv1.IsContextFabricServiceAuthoredLimitation(workItemStatusFilterDisclosure(status)) {
+			t.Errorf("status %q disclosures are not recognised", status)
+		}
+	}
+	if contractsv1.IsContextFabricServiceAuthoredLimitation("Some ordinary model caveat.") {
+		t.Error("an ordinary caveat was recognised as a member-filter disclosure")
+	}
+}
+
+func TestWorkItemWindowReadsAndDisclosesTheWindowToTheMicrosecond(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	start := time.Date(2026, 9, 4, 1, 2, 3, 123456789, time.UTC)
+	end := start.Add(24 * time.Hour)
+	request := statedPeriodRequest("Which work items in Project Alpha were created in the period?")
+	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{Start: &start, End: &end}
+	run := runTupleFilterCase(t, periodTupleFrame(), WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1}, request)
+	if run.invokedErr != nil {
+		t.Fatal(run.invokedErr)
+	}
+	wantStart := start.Truncate(time.Microsecond)
+	if !run.request.TimeStart.Equal(wantStart) || !run.request.TimeEnd.Equal(end.Truncate(time.Microsecond)) {
+		t.Fatalf("read window %v..%v, want the effective window to the microsecond", run.request.TimeStart, run.request.TimeEnd)
+	}
+	if !limitationsContain(run.result.Limitations, "2026-09-04T01:02:03.123456Z") {
+		t.Fatalf("the disclosure does not state the microsecond bound: %v", run.result.Limitations)
 	}
 }

@@ -117,3 +117,38 @@ type timeWindowShape struct {
 	column     string
 	start, end time.Time
 }
+
+func TestWorkItemMembershipS1LogWithholdsTheDeniedSideOfAFilteredRead(t *testing.T) {
+	repo := "00000000-0000-0000-0000-000000000001"
+	start := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name     string
+		request  contextfabric.WorkItemMembershipRequest
+		filtered bool
+	}{
+		{"unfiltered", contextfabric.WorkItemMembershipRequest{}, false},
+		{"status", contextfabric.WorkItemMembershipRequest{Status: "blocked"}, true},
+		{"window", contextfabric.WorkItemMembershipRequest{TimeColumn: "created_at", TimeStart: start, TimeEnd: start.Add(time.Hour)}, true},
+	} {
+		client := &workItemMembershipFakeClient{scanErrAt: -1, rows: append([][]any{workItemMembershipTestRow(t, repo, "WI-1", 1, 9, 2, 7)}, workItemMembershipTestSentinelRow())}
+		telemetry := &workItemMembershipTelemetrySpy{}
+		reader, _ := newWorkItemMembershipTestReader(t, client, telemetry)
+		tc.request.Anchor = workItemMembershipTestAnchor(t, "linear", "P1")
+		lease, _, err := reader.BeginWorkItemMembership(context.Background(), storage.Principal{OrgID: workItemMembershipTestOrg}, tc.request)
+		if err != nil || lease == nil {
+			t.Fatalf("%s: lease=%v err=%v", tc.name, lease, err)
+		}
+		lease.Release()
+		if len(telemetry.s1) != 1 {
+			t.Fatalf("%s: s1 events = %d", tc.name, len(telemetry.s1))
+		}
+		event := telemetry.s1[0]
+		denied := event.DeniedPopulation != 0 || event.CappedPopulation != event.AuthorizedPopulation
+		if tc.filtered && denied {
+			t.Errorf("%s: the log carries the denied side of a filtered read: %+v", tc.name, event)
+		}
+		if !tc.filtered && !denied {
+			t.Errorf("%s: the unfiltered log lost its denied population: %+v", tc.name, event)
+		}
+	}
+}

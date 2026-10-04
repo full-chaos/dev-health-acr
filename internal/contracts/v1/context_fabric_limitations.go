@@ -635,7 +635,39 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricCohortNarrowingLimitation(limitation) ||
 		IsContextFabricFactRowTruncationLimitation(limitation) ||
 		IsContextFabricClaimDepthLimitation(limitation) ||
-		IsContextFabricPathDropLimitation(limitation)
+		IsContextFabricPathDropLimitation(limitation) ||
+		IsContextFabricWorkItemMemberFilterLimitation(limitation)
+}
+
+// The work-item member-filter disclosures. A filtered member answer states the
+// filter it was read under, names an empty match set, and states one fixed
+// exclusion for the items the caller may not read. Each is composed from these
+// parts by internal/contextfabric and recognised here by them, so a composer
+// and the recogniser cannot drift apart, and none is displaced at the cap.
+const (
+	ContextFabricWorkItemMemberFilterLimitationPrefix = "Members are the work items "
+	ContextFabricWorkItemNoMatchLimitationPrefix      = "No work item in this project within the authorized scope "
+	ContextFabricWorkItemNoMatchLimitationSuffix      = "; that is a count of matches, not a statement about the project's health."
+	// ContextFabricWorkItemDeniedScopeExclusionLimitation is the same words
+	// for every outcome, so it cannot tell a caller how many denied items hold
+	// a status or fall in a period.
+	ContextFabricWorkItemDeniedScopeExclusionLimitation = "Work items outside this principal's authorized scope are neither counted nor described here."
+	contextFabricWorkItemMemberFilterLimitationMaxRunes = 400
+)
+
+// IsContextFabricWorkItemMemberFilterLimitation reports whether one limitation
+// is a work-item member-filter disclosure.
+func IsContextFabricWorkItemMemberFilterLimitation(limitation string) bool {
+	if limitation == ContextFabricWorkItemDeniedScopeExclusionLimitation {
+		return true
+	}
+	if len(limitation) > contextFabricWorkItemMemberFilterLimitationMaxRunes*4 {
+		return false
+	}
+	if strings.HasPrefix(limitation, ContextFabricWorkItemMemberFilterLimitationPrefix) {
+		return true
+	}
+	return strings.HasPrefix(limitation, ContextFabricWorkItemNoMatchLimitationPrefix) && strings.HasSuffix(limitation, ContextFabricWorkItemNoMatchLimitationSuffix)
 }
 
 // HasContextFabricServiceAuthoredLimitation reports whether any entry is

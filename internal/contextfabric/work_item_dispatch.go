@@ -265,13 +265,13 @@ func applyWorkItemTitles(cohort *Cohort, facts []CanonicalFact) {
 // workItemStatusFilterDisclosure states the filter beside a served member
 // set: a current-status read, not a period, and not completion or readiness.
 func workItemStatusFilterDisclosure(status string) string {
-	return "Members are the work items whose current status is " + status + "; status is read as of now, over no period, and is not completion or readiness."
+	return contractsv1.ContextFabricWorkItemMemberFilterLimitationPrefix + "whose current status is " + status + "; status is read as of now, over no period, and is not completion or readiness."
 }
 
 // workItemStatusNoMatchDisclosure names the empty result. Zero matches is a
 // count of matching items, not a statement that the project is healthy.
 func workItemStatusNoMatchDisclosure(status string) string {
-	return "No work item in this project within the authorized scope currently has status " + status + "; that is a count of matches, not a statement about the project's health."
+	return contractsv1.ContextFabricWorkItemNoMatchLimitationPrefix + "currently has status " + status + contractsv1.ContextFabricWorkItemNoMatchLimitationSuffix
 }
 
 // workItemMemberFilter is what the member read applied: a status of the closed
@@ -298,7 +298,7 @@ func (f workItemMemberFilter) timeColumn() string {
 // The period filters one time field; every other fact is as of now.
 func workItemWindowFilterDisclosure(f workItemMemberFilter) string {
 	field := map[MemberTimeRole]string{MemberTimeRoleCreated: "created", MemberTimeRoleCompleted: "completed", MemberTimeRoleUpdated: "last updated"}[f.TimeRole]
-	return "Members are the work items " + field + " from " + f.Start.UTC().Format("2006-01-02T15:04:05Z") + " to " + f.End.UTC().Format("2006-01-02T15:04:05Z") + " (the " + f.timeColumn() + " field); their status and every other fact is as of now, not as of the period."
+	return contractsv1.ContextFabricWorkItemMemberFilterLimitationPrefix + field + " from " + f.Start.UTC().Format(workItemWindowTimeLayout) + " to " + f.End.UTC().Format(workItemWindowTimeLayout) + " (the " + f.timeColumn() + " field); their status and every other fact is as of now, not as of the period."
 }
 
 // workItemMemberFilterNoMatchDisclosure names the empty result of a filter that
@@ -310,7 +310,7 @@ func workItemMemberFilterNoMatchDisclosure(f workItemMemberFilter) string {
 	if f.Status != "" {
 		with = " and a current status of " + f.Status
 	}
-	return "No work item in this project within the authorized scope was " + field + " in that period" + with + "; that is a count of matches, not a statement about the project's health."
+	return contractsv1.ContextFabricWorkItemNoMatchLimitationPrefix + "was " + field + " in that period" + with + contractsv1.ContextFabricWorkItemNoMatchLimitationSuffix
 }
 
 // withWorkItemMemberFilterLimitations appends the filter disclosures, and the
@@ -345,4 +345,8 @@ func withWorkItemMemberFilterLimitations(result InvestigationResult, f workItemM
 // about work items outside the principal's scope. It is the same words for
 // every outcome, so it cannot tell the caller how many denied items hold a
 // given status.
-const workItemStatusDeniedExclusion = "Work items outside this principal's authorized scope are neither counted nor described here."
+const workItemStatusDeniedExclusion = contractsv1.ContextFabricWorkItemDeniedScopeExclusionLimitation
+
+// workItemWindowTimeLayout names an instant to the microsecond, the precision
+// the member read binds.
+const workItemWindowTimeLayout = "2006-01-02T15:04:05.000000Z"
