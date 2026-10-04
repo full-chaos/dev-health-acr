@@ -2387,56 +2387,11 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	started := time.Now()
 	input, draft, receipt, inputBounded, err := r.synthesizeWithinInputBound(ctx, principal, input)
 	if err == nil {
-		// CHAOS-4355 follow-up (tolerance): a model that still authors
-		// ClaimedFact.Rows despite CHAOS-4364's model-facing facts no
-		// longer showing it any Rows-shaped field (a bare hallucination,
-		// not a value it could have copied) must not have its WHOLE
-		// otherwise-valid answer rejected for it -- Rows are attached
-		// server-side from the SAME canonical fact the claim cites, in
-		// attachCanonicalRows below, so a model-authored Rows array is
-		// pure noise to discard, never signal to trust or reject on. This
-		// is defense-in-depth alongside the identical strip
-		// genkitruntime.Runtime.SynthesizeAnswer already applies before
-		// its OWN ValidateAgainst call (the actual production rejection
-		// site) -- a draft reaching here has normally already been
-		// stripped, so stripped is normally 0; this still runs for any
-		// ModelRuntime implementation that does not strip on its own.
-		var stripped int
-		draft.ClaimedFacts, stripped = StripModelAuthoredClaimedFactTableContent(draft.ClaimedFacts)
-		if stripped > 0 && r.Telemetry != nil {
-			r.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
-		}
-		// CHAOS-5364: driver identity is resolved HERE, and at exactly ONE
-		// site, unlike the Rows strip above it.
-		//
-		// The strip needs two sites because the INNER ValidateAgainst (in
-		// genkitruntime.Runtime.SynthesizeAnswer) rejects on Rows, so a draft
-		// that reached it unstripped was already lost. Nothing rejects on
-		// driver identity at that inner call -- ValidateAgainst has no
-		// uniqueness rule and deliberately still does not gain one, since
-		// this function resolves the collision rather than refusing the
-		// answer for it. A second resolve there would therefore be
-		// unreachable by construction and unpinnable, and two authorities
-		// over one identity is the shape that produced this defect in the
-		// first place (narration deconflicted; nothing deconflicted the
-		// model's own drivers).
-		//
-		// This is the right single site because it is the ONE producer of
-		// result.Drivers: the line below copies these drivers into the
-		// result verbatim (`Drivers: cloneSlice(draft.Drivers)`), and
-		// validateDrivers judges exactly that array. Every fallback return
-		// inside SynthesizeAnswer also lands here, so no draft reaches
-		// result.Drivers around it.
-		var driverCollisions DriverIdentityCollisions
-		draft.Drivers, driverCollisions = ResolveDriverIdentityCollisions(draft.Drivers)
-		// UNCONDITIONAL, zeros included -- see RecordDriverIdentityCollisions'
-		// own doc comment on EngineTelemetry.
-		if r.Telemetry != nil {
-			r.Telemetry.RecordDriverIdentityCollisions(ctx, principal, driverCollisions)
-		}
-		if validateErr := draft.ValidateAgainst(input); validateErr != nil {
+		var validateErr error
+		draft, validateErr = r.vetSynthesisDraft(ctx, principal, input, draft)
+		if validateErr != nil {
 			receipt.Outcome = "invalid_output"
-			err = ClassifySynthesisRejection(draft, input, validateErr)
+			err = validateErr
 		} else if receipt.Outcome == "pending_validation" {
 			receipt.Outcome = "success"
 		}
@@ -2460,6 +2415,62 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		return InvestigationResult{}, err
 	}
 	return r.composeSynthesisResult(ctx, principal, input, draft, receipt, inputBounded, false)
+}
+
+// vetSynthesisDraft is the one sequence both the service's own model draft
+// and a draft a caller wrote go through before a result is composed from it.
+func (r RuntimeAnswerSynthesizer) vetSynthesisDraft(ctx context.Context, principal storage.Principal, input SynthesisInput, draft SynthesisDraft) (SynthesisDraft, error) {
+	// CHAOS-4355 follow-up (tolerance): a model that still authors
+	// ClaimedFact.Rows despite CHAOS-4364's model-facing facts no
+	// longer showing it any Rows-shaped field (a bare hallucination,
+	// not a value it could have copied) must not have its WHOLE
+	// otherwise-valid answer rejected for it -- Rows are attached
+	// server-side from the SAME canonical fact the claim cites, in
+	// attachCanonicalRows below, so a model-authored Rows array is
+	// pure noise to discard, never signal to trust or reject on. This
+	// is defense-in-depth alongside the identical strip
+	// genkitruntime.Runtime.SynthesizeAnswer already applies before
+	// its OWN ValidateAgainst call (the actual production rejection
+	// site) -- a draft reaching here has normally already been
+	// stripped, so stripped is normally 0; this still runs for any
+	// ModelRuntime implementation that does not strip on its own.
+	var stripped int
+	draft.ClaimedFacts, stripped = StripModelAuthoredClaimedFactTableContent(draft.ClaimedFacts)
+	if stripped > 0 && r.Telemetry != nil {
+		r.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
+	}
+	// CHAOS-5364: driver identity is resolved HERE, and at exactly ONE
+	// site, unlike the Rows strip above it.
+	//
+	// The strip needs two sites because the INNER ValidateAgainst (in
+	// genkitruntime.Runtime.SynthesizeAnswer) rejects on Rows, so a draft
+	// that reached it unstripped was already lost. Nothing rejects on
+	// driver identity at that inner call -- ValidateAgainst has no
+	// uniqueness rule and deliberately still does not gain one, since
+	// this function resolves the collision rather than refusing the
+	// answer for it. A second resolve there would therefore be
+	// unreachable by construction and unpinnable, and two authorities
+	// over one identity is the shape that produced this defect in the
+	// first place (narration deconflicted; nothing deconflicted the
+	// model's own drivers).
+	//
+	// This is the right single site because it is the ONE producer of
+	// result.Drivers: the line below copies these drivers into the
+	// result verbatim (`Drivers: cloneSlice(draft.Drivers)`), and
+	// validateDrivers judges exactly that array. Every fallback return
+	// inside SynthesizeAnswer also lands here, so no draft reaches
+	// result.Drivers around it.
+	var driverCollisions DriverIdentityCollisions
+	draft.Drivers, driverCollisions = ResolveDriverIdentityCollisions(draft.Drivers)
+	// UNCONDITIONAL, zeros included -- see RecordDriverIdentityCollisions'
+	// own doc comment on EngineTelemetry.
+	if r.Telemetry != nil {
+		r.Telemetry.RecordDriverIdentityCollisions(ctx, principal, driverCollisions)
+	}
+	if validateErr := draft.ValidateAgainst(input); validateErr != nil {
+		return draft, ClassifySynthesisRejection(draft, input, validateErr)
+	}
+	return draft, nil
 }
 
 // composeSynthesisResult composes the served result from a validated draft,

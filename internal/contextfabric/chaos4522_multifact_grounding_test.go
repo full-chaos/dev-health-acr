@@ -302,6 +302,13 @@ func TestSynthesisRejectionReasonVocabularyIsClosed(t *testing.T) {
 	if got := SynthesisRejectionReasonOf(nil); got != RejectionReasonUnclassified {
 		t.Fatalf("SynthesisRejectionReasonOf(nil) = %q, want %q", got, RejectionReasonUnclassified)
 	}
+	if !ValidSynthesisRejectionReason(RejectionReasonOutputSchemaMismatch) || RejectionReasonOutputSchemaMismatch != "output_schema_mismatch" {
+		t.Fatal("output_schema_mismatch must be a member of the closed vocabulary")
+	}
+	schema := NewSynthesisRejection(RejectionReasonOutputSchemaMismatch, errors.New("x"))
+	if got := SynthesisRejectionReasonOf(schema); got != RejectionReasonOutputSchemaMismatch {
+		t.Fatalf("SynthesisRejectionReasonOf(schema) = %q, want %q", got, RejectionReasonOutputSchemaMismatch)
+	}
 }
 
 // TestClassifySynthesisRejectionPreservesTheReasonThroughItsWrapping: the

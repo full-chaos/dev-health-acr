@@ -1014,6 +1014,7 @@ func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 		"supplied_interpretation": {"exempt", "who interpreted this turn, not what is asked: its contract is checked at the start of the turn, and once the interpreter accepts that contract a supplied interpretation enters where the model's own does and the continuation decision reads neither", func(r *InvestigationRequest) {
 			r.SuppliedInterpretation = &SuppliedInterpretation{Output: json.RawMessage(`{}`), ModelOutputVersion: "schema-v1", PromptVersion: "prompt-v1"}
 		}},
+		"supplied_synthesis":               {"exempt", "who writes the answer, not what is asked: refused at the start of the turn unless it names the contract and the input it was written from, and read only at the synthesis step, after the continuation decision", nil},
 		"synthesis_mode":                   {"exempt", "who writes the answer, not what is asked: the continuation decision is made before synthesis and reads neither", func(r *InvestigationRequest) { r.SynthesisMode = SynthesisModeClient }},
 		"requested_scope.repository_slugs": {"disqualifier", "a stated repository scope", func(r *InvestigationRequest) { r.RequestedScope.RepositorySlugs = []string{"widget-service"} }},
 		"requested_scope.project_ids":      {"disqualifier", "a stated project scope", func(r *InvestigationRequest) { r.RequestedScope.ProjectIDs = []string{"project_ask_dev"} }},
