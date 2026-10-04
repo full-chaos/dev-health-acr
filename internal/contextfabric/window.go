@@ -871,7 +871,7 @@ func withinDuration(a, b time.Time, tolerance time.Duration) bool {
 // limitation names both periods and says the answer used the stated one.
 func (c *statedRangeConflict) limitation() string {
 	const layout = "2006-01-02"
-	return "The interpretation sent with this question read its period as " + c.InterpretedStart.Format(layout) + " to " + c.InterpretedEnd.Format(layout) + ", which is not the period the question states; this answer uses the stated period, " + c.StatedStart.Format(layout) + " to " + c.StatedEnd.Format(layout) + "."
+	return contractsv1.ContextFabricStatedRangeConflictLimitation(c.InterpretedStart.Format(layout), c.InterpretedEnd.Format(layout), c.StatedStart.Format(layout), c.StatedEnd.Format(layout))
 }
 
 // statedRangeConflictLimitations is the conflict disclosure to append, if any.

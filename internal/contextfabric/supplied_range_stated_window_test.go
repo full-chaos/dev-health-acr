@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 func TestQuestionStatesWindowIsTheBoundTrailingPhraseForACurrentOrPeriodFrame(t *testing.T) {
@@ -118,10 +120,6 @@ func runSuppliedRangeCell(t *testing.T, cell suppliedRangeCell, surface string) 
 }
 
 func suppliedRangeRow(result InvestigationResult, family QuestionFamily, cell suppliedRangeCell) string {
-	window := "no window"
-	if w := result.EffectiveEvidenceWindow; w != nil {
-		window = string(w.Provenance) + " " + string(w.RelativeID) + " class=" + string(w.WindowClass)
-	}
 	temporal := "none"
 	if cell.frame != nil {
 		temporal = string(cell.frame.Temporal)
@@ -130,7 +128,30 @@ func suppliedRangeRow(result InvestigationResult, family QuestionFamily, cell su
 	if class == "" {
 		class = "(none)"
 	}
-	return fmt.Sprintf("ROW|%s|%s|%s|%s|%s %s %s", family, class, temporal, cell.question, result.Status, result.Interpretation.TimeContext.Axis, window)
+	return fmt.Sprintf("ROW|%s|%s|%s|%s|%s", family, class, temporal, cell.question, suppliedRangeOutcome(result))
+}
+
+// suppliedRangeOutcome is a cell's served outcome in one line: status, executed
+// axis, window provenance, relative window, window class, and whether the range
+// conflict was disclosed.
+func suppliedRangeOutcome(result InvestigationResult) string {
+	window := "no window"
+	if w := result.EffectiveEvidenceWindow; w != nil {
+		class := string(w.WindowClass)
+		if class == "" {
+			class = "none"
+		}
+		relative := string(w.RelativeID)
+		if relative == "" {
+			relative = "calendar"
+		}
+		window = string(w.Provenance) + " " + relative + " class " + class
+	}
+	conflict := ""
+	if limitationsContain(result.Limitations, "which is not the period the question states") {
+		conflict = " +conflict"
+	}
+	return fmt.Sprintf("%s %s %s%s", result.Status, result.Interpretation.TimeContext.Axis, window, conflict)
 }
 
 // familyFrame is a frame of the given temporal intent whose subject
@@ -219,8 +240,8 @@ func TestSuppliedRangeWithAStatedTrailingPhraseRunsOnTheCurrentAxis(t *testing.T
 				t.Errorf("%s/%q %q: resolved family %s, want the cell's own family", cell.family, cell.class, cell.question, family)
 			}
 			key := suppliedRangeCellKey(cell)
-			if want, ok := suppliedRangeServedStatus[key]; !ok || result.Status != want {
-				t.Errorf("%s: status %s, want %q (pinned)", key, result.Status, want)
+			if want, ok := suppliedRangeServedOutcome[key]; !ok || suppliedRangeOutcome(result) != want {
+				t.Errorf("%s: served %q, want %q (hand-pinned)", key, suppliedRangeOutcome(result), want)
 			}
 			binder := ProposeWindowFromSpans(cell.question)
 			interpreted := suppliedRangeInterpreted(cell)
@@ -265,69 +286,69 @@ func suppliedRangeCellKey(cell suppliedRangeCell) string {
 	return string(cell.family) + "|" + string(cell.class) + "|" + temporal + "|" + cell.question
 }
 
-// suppliedRangeServedStatus pins the status the rig serves each cell, the same
-// before and after this rule: the rule moves the axis and the window, never
-// the status.
-var suppliedRangeServedStatus = map[string]InvestigationStatus{
-	"subject_investigation|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                         InvestigationComplete,
-	"discovered_cohort_ranking|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                     InvestigationComplete,
-	"scoped_cohort_status|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                          InvestigationComplete,
-	"grouped_cohort_status|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                         InvestigationComplete,
-	"explicit_comparison|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                           InvestigationComplete,
-	"unclassified|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                                  InvestigationComplete,
-	"subject_investigation|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                          InvestigationComplete,
-	"discovered_cohort_ranking|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                      InvestigationComplete,
-	"scoped_cohort_status|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                           InvestigationComplete,
-	"grouped_cohort_status|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                          InvestigationComplete,
-	"explicit_comparison|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                            InvestigationComplete,
-	"unclassified|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                                   InvestigationComplete,
-	"subject_investigation||none|How is the Ask Dev project doing in the last 30 days?":                                                        InvestigationComplete,
-	"discovered_cohort_ranking||none|How is the Ask Dev project doing in the last 30 days?":                                                    InvestigationComplete,
-	"scoped_cohort_status||none|How is the Ask Dev project doing in the last 30 days?":                                                         InvestigationComplete,
-	"grouped_cohort_status||none|How is the Ask Dev project doing in the last 30 days?":                                                        InvestigationComplete,
-	"explicit_comparison||none|How is the Ask Dev project doing in the last 30 days?":                                                          InvestigationComplete,
-	"unclassified||none|How is the Ask Dev project doing in the last 30 days?":                                                                 InvestigationComplete,
-	"subject_investigation|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                      InvestigationComplete,
-	"discovered_cohort_ranking|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                  InvestigationComplete,
-	"scoped_cohort_status|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                       InvestigationNoMatch,
-	"grouped_cohort_status|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                      InvestigationComplete,
-	"explicit_comparison|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                        InvestigationComplete,
-	"subject_investigation|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                               InvestigationComplete,
-	"discovered_cohort_ranking|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                           InvestigationComplete,
-	"scoped_cohort_status|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                                InvestigationNoMatch,
-	"grouped_cohort_status|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                               InvestigationComplete,
-	"explicit_comparison|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                                 InvestigationComplete,
-	"subject_investigation|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":                InvestigationComplete,
-	"discovered_cohort_ranking|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":            InvestigationComplete,
-	"scoped_cohort_status|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":                 InvestigationNoMatch,
-	"grouped_cohort_status|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":                InvestigationComplete,
-	"explicit_comparison|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":                  InvestigationComplete,
-	"subject_investigation|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":            InvestigationComplete,
-	"discovered_cohort_ranking|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":        InvestigationComplete,
-	"scoped_cohort_status|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":             InvestigationNoMatch,
-	"grouped_cohort_status|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":            InvestigationComplete,
-	"explicit_comparison|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":              InvestigationComplete,
-	"subject_investigation|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?":     InvestigationComplete,
-	"discovered_cohort_ranking|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?": InvestigationComplete,
-	"scoped_cohort_status|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?":      InvestigationNoMatch,
-	"grouped_cohort_status|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?":     InvestigationComplete,
-	"explicit_comparison|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?":       InvestigationComplete,
-	"subject_investigation|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                     InvestigationComplete,
-	"discovered_cohort_ranking|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                 InvestigationComplete,
-	"scoped_cohort_status|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                      InvestigationNoMatch,
-	"grouped_cohort_status|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                     InvestigationComplete,
-	"explicit_comparison|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                       InvestigationComplete,
-	"subject_investigation|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":              InvestigationComplete,
-	"discovered_cohort_ranking|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":          InvestigationComplete,
-	"scoped_cohort_status|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":               InvestigationNoMatch,
-	"grouped_cohort_status|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":              InvestigationComplete,
-	"explicit_comparison|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":                InvestigationComplete,
-	"subject_investigation|explicit_window|none|How is the Ask Dev project doing?":                                                             InvestigationComplete,
-	"discovered_cohort_ranking|explicit_window|none|How is the Ask Dev project doing?":                                                         InvestigationComplete,
-	"scoped_cohort_status|explicit_window|none|How is the Ask Dev project doing?":                                                              InvestigationComplete,
-	"grouped_cohort_status|explicit_window|none|How is the Ask Dev project doing?":                                                             InvestigationComplete,
-	"explicit_comparison|explicit_window|none|How is the Ask Dev project doing?":                                                               InvestigationComplete,
-	"unclassified|explicit_window|none|How is the Ask Dev project doing?":                                                                      InvestigationComplete,
+// suppliedRangeServedOutcome hand-pins each cell's served outcome, the table
+// in the change's notes: status, axis, window, window class and the conflict
+// disclosure. The derived checks beside it must agree with it.
+var suppliedRangeServedOutcome = map[string]string{
+	"subject_investigation|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                         "complete current question_stated trailing_30d class recent_activity_lookup",
+	"discovered_cohort_ranking|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                     "complete current question_stated trailing_30d class trend_assessment",
+	"scoped_cohort_status|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                          "complete current question_stated trailing_30d class none",
+	"grouped_cohort_status|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                         "complete current question_stated trailing_30d class trend_assessment",
+	"explicit_comparison|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                           "complete current question_stated trailing_30d class none",
+	"unclassified|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                                  "complete current question_stated trailing_30d class none",
+	"subject_investigation|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                          "complete current question_stated trailing_30d class state_snapshot",
+	"discovered_cohort_ranking|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                      "complete current question_stated trailing_30d class state_snapshot",
+	"scoped_cohort_status|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                           "complete current question_stated trailing_30d class state_snapshot",
+	"grouped_cohort_status|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                          "complete current question_stated trailing_30d class state_snapshot",
+	"explicit_comparison|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                            "complete current question_stated trailing_30d class state_snapshot",
+	"unclassified|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                                   "complete current question_stated trailing_30d class state_snapshot",
+	"subject_investigation||none|How is the Ask Dev project doing in the last 30 days?":                                                        "complete current question_stated trailing_30d class recent_activity_lookup",
+	"discovered_cohort_ranking||none|How is the Ask Dev project doing in the last 30 days?":                                                    "complete current question_stated trailing_30d class trend_assessment",
+	"scoped_cohort_status||none|How is the Ask Dev project doing in the last 30 days?":                                                         "complete current question_stated trailing_30d class none",
+	"grouped_cohort_status||none|How is the Ask Dev project doing in the last 30 days?":                                                        "complete current question_stated trailing_30d class trend_assessment",
+	"explicit_comparison||none|How is the Ask Dev project doing in the last 30 days?":                                                          "complete current question_stated trailing_30d class none",
+	"unclassified||none|How is the Ask Dev project doing in the last 30 days?":                                                                 "complete current question_stated trailing_30d class none",
+	"subject_investigation|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                      "complete current question_stated trailing_30d class recent_activity_lookup",
+	"discovered_cohort_ranking|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                  "complete current question_stated trailing_30d class trend_assessment",
+	"scoped_cohort_status|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                       "no_match current question_stated trailing_30d class none",
+	"grouped_cohort_status|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                      "complete current question_stated trailing_30d class trend_assessment",
+	"explicit_comparison|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                        "complete current question_stated trailing_30d class none",
+	"subject_investigation|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                               "complete current question_stated trailing_30d class recent_activity_lookup",
+	"discovered_cohort_ranking|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                           "complete current question_stated trailing_30d class trend_assessment",
+	"scoped_cohort_status|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                                "no_match current question_stated trailing_30d class none",
+	"grouped_cohort_status|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                               "complete current question_stated trailing_30d class trend_assessment",
+	"explicit_comparison|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                                 "complete current question_stated trailing_30d class none",
+	"subject_investigation|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":                "complete current question_stated trailing_30d class recent_activity_lookup",
+	"discovered_cohort_ranking|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":            "complete current question_stated trailing_30d class trend_assessment",
+	"scoped_cohort_status|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":                 "no_match range no window",
+	"grouped_cohort_status|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":                "complete current question_stated trailing_30d class trend_assessment",
+	"explicit_comparison|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":                  "complete range no window",
+	"subject_investigation|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":            "complete current question_stated trailing_30d class recent_activity_lookup",
+	"discovered_cohort_ranking|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":        "complete current question_stated trailing_30d class trend_assessment",
+	"scoped_cohort_status|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":             "no_match range no window",
+	"grouped_cohort_status|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":            "complete current question_stated trailing_30d class trend_assessment",
+	"explicit_comparison|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":              "complete range no window",
+	"subject_investigation|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?":     "complete current question_stated calendar class none",
+	"discovered_cohort_ranking|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?": "complete current question_stated calendar class none",
+	"scoped_cohort_status|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?":      "no_match current question_stated calendar class none",
+	"grouped_cohort_status|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?":     "complete current question_stated calendar class none",
+	"explicit_comparison|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?":       "complete current question_stated calendar class none",
+	"subject_investigation|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                     "complete current question_stated trailing_30d class recent_activity_lookup",
+	"discovered_cohort_ranking|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                 "complete current question_stated trailing_30d class trend_assessment",
+	"scoped_cohort_status|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                      "no_match range no window",
+	"grouped_cohort_status|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                     "complete current question_stated trailing_30d class trend_assessment",
+	"explicit_comparison|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                       "complete range no window",
+	"subject_investigation|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":              "complete current question_stated trailing_90d class recent_activity_lookup +conflict",
+	"discovered_cohort_ranking|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":          "complete current question_stated trailing_90d class trend_assessment +conflict",
+	"scoped_cohort_status|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":               "no_match range no window",
+	"grouped_cohort_status|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":              "complete current question_stated trailing_90d class trend_assessment +conflict",
+	"explicit_comparison|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":                "complete range no window",
+	"subject_investigation|explicit_window|none|How is the Ask Dev project doing?":                                                             "complete range no window",
+	"discovered_cohort_ranking|explicit_window|none|How is the Ask Dev project doing?":                                                         "complete range no window",
+	"scoped_cohort_status|explicit_window|none|How is the Ask Dev project doing?":                                                              "complete range no window",
+	"grouped_cohort_status|explicit_window|none|How is the Ask Dev project doing?":                                                             "complete range no window",
+	"explicit_comparison|explicit_window|none|How is the Ask Dev project doing?":                                                               "complete range no window",
+	"unclassified|explicit_window|none|How is the Ask Dev project doing?":                                                                      "complete range no window",
 }
 
 // A client range that differs from the period the question states: the turn
@@ -383,6 +404,27 @@ func TestSuppliedRangeThatDiffersFromTheStatedPeriodIsDisclosed(t *testing.T) {
 		if got != tc.conflict || (tc.conflict && !limitationsContain(result.Limitations, want)) {
 			t.Errorf("%s: limitations %q, want conflict disclosed=%v (%q)", tc.name, result.Limitations, tc.conflict, want)
 		}
+	}
+}
+
+// A synthesis that fills the limitation cap with its own caveats cannot push
+// the range-conflict disclosure out: it is a service disclosure, and the
+// member-filter disclosures composed after it displace model caveats only.
+func TestSuppliedRangeConflictSurvivesAFullLimitationList(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	weekStart := time.Now().UTC().Add(-7 * 24 * time.Hour)
+	weekEnd := time.Now().UTC()
+	frame := prodStatusPeriodFrame()
+	frame.Temporal = TemporalIntentCurrent
+	run := runInterpretedTupleCaseWithCaveats(t, suppliedInterpretedPath, "which work items of project Alpha that are closed were created in the last 30 days?", frame, TimeContext{Axis: TemporalRange, Start: &weekStart, End: &weekEnd}, contractsv1.ContextFabricLimitationsMaxCount)
+	if run.invokedErr != nil {
+		t.Fatalf("a cap-full synthesis with a range conflict: %v", run.invokedErr)
+	}
+	if run.reads != 1 || !limitationsContain(run.result.Limitations, "which is not the period the question states") || !limitationsContain(run.result.Limitations, "(the created_at field)") {
+		t.Errorf("reads=%d limitations=%q, want the conflict and the created_at period both kept", run.reads, run.result.Limitations)
+	}
+	if run.result.LimitationsDisplaced == 0 {
+		t.Error("a cap-full synthesis displaced nothing: the fixture did not fill the cap")
 	}
 }
 
