@@ -677,6 +677,14 @@ const (
 	ContextFabricWorkItemMemberFilterLimitationPrefix = "Members are the work items "
 	ContextFabricWorkItemNoMatchLimitationPrefix      = "No work item in this project within the authorized scope "
 	ContextFabricWorkItemNoMatchLimitationSuffix      = "; that is a count of matches, not a statement about the project's health."
+	// ContextFabricWorkItemRepositoryMembershipRationale is the inclusion
+	// reason of a work item read on a repository: an issue with a linked
+	// pull request of that repository.
+	ContextFabricWorkItemRepositoryMembershipRationale = "Issue linked to a pull request of the named repository."
+	// The no-match sentence for members read through a repository's pull
+	// requests.
+	ContextFabricWorkItemRepositoryNoMatchLimitationPrefix = "No work item of this repository within the authorized scope "
+	ContextFabricWorkItemRepositoryNoMatchLimitationSuffix = "; that is a count of matches, not a statement about the repository's health."
 	// ContextFabricWorkItemDeniedScopeExclusionLimitation is the same words
 	// for every outcome, so it cannot tell a caller how many denied items hold
 	// a status or fall in a period.
@@ -690,7 +698,7 @@ const (
 var (
 	workItemStatusFilterLimitationPattern = regexp.MustCompile(`^Members are the work items whose current status is [a-z_]{1,32}; status is read as of now, over no period, and is not completion or readiness\.$`)
 	workItemWindowFilterLimitationPattern = regexp.MustCompile(`^Members are the work items (?:created|completed|last updated) from \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z to \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z \(the (?:created|completed|updated)_at field\); their status and every other fact is as of now, not as of the period\.$`)
-	workItemNoMatchLimitationPattern      = regexp.MustCompile(`^No work item in this project within the authorized scope (?:currently has status [a-z_]{1,32}|was (?:created|completed|last updated) in that period(?: and a current status of [a-z_]{1,32})?); that is a count of matches, not a statement about the project's health\.$`)
+	workItemNoMatchLimitationPattern      = regexp.MustCompile(`^(?:No work item in this project within the authorized scope (?:currently has status [a-z_]{1,32}|was (?:created|completed|last updated) in that period(?: and a current status of [a-z_]{1,32})?); that is a count of matches, not a statement about the project's health|No work item of this repository within the authorized scope (?:currently has status [a-z_]{1,32}|was (?:created|completed|last updated) in that period(?: and a current status of [a-z_]{1,32})?); that is a count of matches, not a statement about the repository's health)\.$`)
 )
 
 // IsContextFabricWorkItemMemberFilterLimitation reports whether one limitation

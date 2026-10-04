@@ -67,7 +67,10 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 		return InvestigationResult{}, false, nil
 	}
 	anchor := candidate.SubjectResolution.Committed[0]
-	authorized, _ := e.candidateVerifier(ctx, principal, request.RequestedScope, binding, SubjectProject, anchor.CanonicalID)
+	if !WorkItemTupleAnchorKind(anchor.Kind) {
+		return InvestigationResult{}, false, nil
+	}
+	authorized, _ := e.candidateVerifier(ctx, principal, request.RequestedScope, binding, anchor.Kind, anchor.CanonicalID)
 	if !authorized || ctx.Err() != nil {
 		return InvestigationResult{}, false, nil
 	}
@@ -111,7 +114,7 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	servingEvent.CensusRead = event.CensusRead
 	servingEvent.Basis = "digest_matched"
 	serving := *census
-	if gap, gapped := workItemAuthorizationGapOf(current.Census); gapped {
+	if gap, gapped := workItemAuthorizationGapOf(current.Census, workItemCandidateAnchorKind(candidate)); gapped {
 		serving.gap = &gap
 	}
 	candidate = ServeWorkItemTupleCensus(candidate, &serving)
@@ -147,8 +150,17 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	return candidate, true, nil
 }
 
+// workItemCandidateAnchorKind is the kind of a stored tuple answer's committed
+// anchor; the zero value when it has none.
+func workItemCandidateAnchorKind(candidate InvestigationResult) SubjectKind {
+	if len(candidate.SubjectResolution.Committed) == 0 {
+		return ""
+	}
+	return candidate.SubjectResolution.Committed[0].Kind
+}
+
 func workItemReuseMembershipEqual(candidate InvestigationResult, census *WorkItemTupleCensus, current WorkItemMembershipResult) bool {
-	if gap, gapped := workItemAuthorizationGapOf(current.Census); gapped {
+	if gap, gapped := workItemAuthorizationGapOf(current.Census, workItemCandidateAnchorKind(candidate)); gapped {
 		if gap.NoneAuthorized() || !slices.Contains(candidate.Limitations, gap.Limitation()) {
 			return false
 		}

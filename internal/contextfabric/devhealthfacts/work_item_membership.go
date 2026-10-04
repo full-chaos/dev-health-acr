@@ -95,7 +95,13 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	provider, projectID, err := contextfabric.WorkItemMembershipAnchorSegments(request.Anchor)
+	var provider, projectID, repoID string
+	var err error
+	if request.Anchor.Subject.Kind == contextfabric.SubjectRepository {
+		repoID, err = contextfabric.WorkItemMembershipRepositoryAnchorID(request.Anchor)
+	} else {
+		provider, projectID, err = contextfabric.WorkItemMembershipAnchorSegments(request.Anchor)
+	}
 	if err != nil {
 		return nil, contextfabric.WorkItemMembershipResult{}, err
 	}
@@ -182,10 +188,19 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 		}
 		timeColumn = request.TimeColumn
 	}
-	statement, extraBindings := workItemMembershipS1StatementFor(authorization, k, timeColumn)
+	var statement string
+	var extraBindings []readers.Binding
+	if repoID != "" {
+		statement, extraBindings = workItemRepositoryMembershipStatementFor(authorization, k, timeColumn)
+		extraBindings = append(extraBindings, readers.Binding{Name: "anchor_repo_id", Value: repoID})
+	} else {
+		statement, extraBindings = workItemMembershipS1StatementFor(authorization, k, timeColumn)
+		extraBindings = append(extraBindings,
+			readers.Binding{Name: "anchor_provider", Value: provider},
+			readers.Binding{Name: "anchor_project_id", Value: projectID},
+		)
+	}
 	extraBindings = append(extraBindings,
-		readers.Binding{Name: "anchor_provider", Value: provider},
-		readers.Binding{Name: "anchor_project_id", Value: projectID},
 		readers.Binding{Name: "status_filter", Value: request.Status},
 		readers.Binding{Name: "s1_instant", Value: s1Instant},
 		readers.Binding{Name: "serve_limit", Value: uint32(k)},
@@ -223,6 +238,8 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 			&row.TransitionAssertionCount,
 			&row.RowKind,
 			&row.AnchorResolution,
+			&row.RepositoryPullRequests,
+			&row.RepositoryLinkedIssues,
 		); scanErr != nil {
 			return scanErr
 		}
@@ -254,6 +271,12 @@ type workItemMembershipS1Row struct {
 	TransitionAssertionCount uint64
 	RowKind                  uint8
 	AnchorResolution         uint8
+	// RepositoryPullRequests and RepositoryLinkedIssues are the anchor
+	// state of a repository read, on every row: the repository's pull
+	// requests and the issues linked to them, before any filter or
+	// authorization. Zero for a project read.
+	RepositoryPullRequests uint64
+	RepositoryLinkedIssues uint64
 }
 
 // workItemMembershipPathPopulations are S1's per-path window counts, in the
@@ -414,7 +437,14 @@ func unmeasuredWorkItemMembershipResult(reason contextfabric.WorkItemMembershipU
 }
 
 func finalizeWorkItemMembershipS1(rows []workItemMembershipS1Row, anchor contextfabric.WorkItemMembershipAnchor, k int) contextfabric.WorkItemMembershipResult {
-	provider, projectID, err := contextfabric.WorkItemMembershipAnchorSegments(anchor)
+	repositoryAnchor := anchor.Subject.Kind == contextfabric.SubjectRepository
+	var provider, projectID string
+	var err error
+	if repositoryAnchor {
+		_, err = contextfabric.WorkItemMembershipRepositoryAnchorID(anchor)
+	} else {
+		provider, projectID, err = contextfabric.WorkItemMembershipAnchorSegments(anchor)
+	}
 	if err != nil {
 		return unmeasuredWorkItemMembershipResult(contextfabric.WorkItemMembershipUnmeasuredS1Error)
 	}
@@ -426,6 +456,7 @@ func finalizeWorkItemMembershipS1(rows []workItemMembershipS1Row, anchor context
 	// successful S1 result.
 	actualRows := make([]workItemMembershipS1Row, 0, len(rows))
 	anchorSentinelSeen := false
+	var sentinel workItemMembershipS1Row
 	for _, row := range rows {
 		switch row.RowKind {
 		case workItemMembershipRowMember:
@@ -438,6 +469,7 @@ func finalizeWorkItemMembershipS1(rows []workItemMembershipS1Row, anchor context
 				return unmeasuredWorkItemMembershipResult(contextfabric.WorkItemMembershipUnmeasuredS1Error)
 			}
 			anchorSentinelSeen = true
+			sentinel = row
 		default:
 			return unmeasuredWorkItemMembershipResult(contextfabric.WorkItemMembershipUnmeasuredS1Error)
 		}
@@ -459,6 +491,10 @@ func finalizeWorkItemMembershipS1(rows []workItemMembershipS1Row, anchor context
 			CensusLimit:        contextfabric.WorkItemMembershipCensusLimit,
 		},
 	}
+	if repositoryAnchor {
+		result.Census.RepositoryPullRequests = boundedInt(sentinel.RepositoryPullRequests)
+		result.Census.RepositoryLinkedIssues = boundedInt(sentinel.RepositoryLinkedIssues)
+	}
 	if len(rows) == 0 {
 		return result
 	}
@@ -474,6 +510,9 @@ func finalizeWorkItemMembershipS1(rows []workItemMembershipS1Row, anchor context
 	result.Census.FutureBoundaryCount = boundedInt(first.FutureBoundaryCount)
 	result.Census.TransitionAssertionCount = boundedInt(first.TransitionAssertionCount)
 	for _, row := range rows {
+		if row.RepositoryPullRequests != sentinel.RepositoryPullRequests || row.RepositoryLinkedIssues != sentinel.RepositoryLinkedIssues {
+			return unmeasuredWorkItemMembershipResult(contextfabric.WorkItemMembershipUnmeasuredS1Error)
+		}
 		if row.Authorized > 1 || row.ScopedPopulation != first.ScopedPopulation || row.AuthorizedPopulation != first.AuthorizedPopulation || row.DeniedPopulation != first.DeniedPopulation || row.Paths != first.Paths || row.FutureBoundaryCount != first.FutureBoundaryCount || row.TransitionAssertionCount != first.TransitionAssertionCount {
 			return unmeasuredWorkItemMembershipResult(contextfabric.WorkItemMembershipUnmeasuredS1Error)
 		}
@@ -689,11 +728,21 @@ func workItemMembershipS1Statement(scope readers.AuthorizationScope, k int) (str
 // comes from this set and never from a caller's text.
 var workItemMembershipTimeColumns = map[string]bool{"created_at": true, "completed_at": true, "updated_at": true}
 
-func workItemMembershipS1StatementFor(scope readers.AuthorizationScope, k int, timeColumn string) (string, []readers.Binding) {
-	timePredicate := ""
-	if workItemMembershipTimeColumns[timeColumn] {
-		timePredicate = "\n    AND w." + timeColumn + " >= {time_start:DateTime64(6, 'UTC')} AND w." + timeColumn + " < {time_end:DateTime64(6, 'UTC')}"
+// workItemMembershipCanonicalKeySQL mints a member's canonical work-item id
+// from its work_items row, as the projector does.
+const workItemMembershipCanonicalKeySQL = `concat('work_item.v2:', replaceAll(replaceAll(toString(w.repo_id), '%', '%25'), ':', '%3A'), ':', replaceAll(replaceAll(w.work_item_id, '%', '%25'), ':', '%3A'))`
+
+// workItemMembershipTimePredicate restricts members to the window on one
+// column of the closed set; empty for any other value.
+func workItemMembershipTimePredicate(timeColumn string) string {
+	if !workItemMembershipTimeColumns[timeColumn] {
+		return ""
 	}
+	return "\n    AND w." + timeColumn + " >= {time_start:DateTime64(6, 'UTC')} AND w." + timeColumn + " < {time_end:DateTime64(6, 'UTC')}"
+}
+
+func workItemMembershipS1StatementFor(scope readers.AuthorizationScope, k int, timeColumn string) (string, []readers.Binding) {
+	timePredicate := workItemMembershipTimePredicate(timeColumn)
 	rendered := readers.WorkItemScopeSQL(scope)
 	resolvedProjects := `(
   SELECT provider, id, join_key, count() OVER (PARTITION BY provider, join_key) AS key_resolution_count
@@ -721,7 +770,9 @@ func workItemMembershipS1StatementFor(scope readers.AuthorizationScope, k int, t
     AND join_key = {anchor_project_id:String}
     AND id = {anchor_project_id:String}
     AND key_resolution_count = 1
-  ) = 1, 1, 0)) AS anchor_resolved
+  ) = 1, 1, 0)) AS anchor_resolved,
+    toUInt64(0) AS repository_pull_requests,
+    toUInt64(0) AS repository_linked_issues
   FROM ` + resolvedProjects + `
 )`
 	from := `FROM project_membership_presence AS m
@@ -746,7 +797,7 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
   AND tm.project_id = m.project_id
   AND tm.observed_at = m.observed_at`
 
-	canonicalKey := `concat('work_item.v2:', replaceAll(replaceAll(toString(w.repo_id), '%', '%25'), ':', '%3A'), ':', replaceAll(replaceAll(w.work_item_id, '%', '%25'), ':', '%3A'))`
+	canonicalKey := workItemMembershipCanonicalKeySQL
 	memberRows := `
   SELECT
     ` + canonicalKey + ` AS canonical_key,
@@ -771,6 +822,14 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
   GROUP BY canonical_key, repo_id, work_item_id, repo_slug, authorized_flag,
     ` + workItemMembershipPathColumns("path_") + `, repo_less, project_less, excluded_explicit_text_link, excluded_heuristic_link`
 
+	return workItemMembershipEnvelope(memberRows, anchorResolution), rendered.Bindings
+}
+
+// workItemMembershipEnvelope wraps one anchor's member relation in the S1
+// protocol: the windowed census over every member, the authorized-first
+// bound, the identity-free sentinel row and the anchor state joined to every
+// row.
+func workItemMembershipEnvelope(memberRows, anchorResolution string) string {
 	selectedRows := `(
   SELECT
     if(authorized_flag = 1, canonical_key, '') AS canonical_id,
@@ -913,11 +972,13 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
 	  result_rows.future_boundary_count,
 	  result_rows.transition_assertion_count,
 	  result_rows.row_kind,
-	  anchor_state.anchor_resolved AS anchor_resolution
+	  anchor_state.anchor_resolved AS anchor_resolution,
+	  anchor_state.repository_pull_requests,
+	  anchor_state.repository_linked_issues
 FROM ` + memberAndSentinelRows + ` AS result_rows
 CROSS JOIN ` + anchorResolution + ` AS anchor_state
 ORDER BY row_kind ASC, authorized_flag DESC, canonical_id ASC`
-	return statement, rendered.Bindings
+	return statement
 }
 
 // workItemMembershipPathFlagsSQL projects one 0/1 flag per authorization

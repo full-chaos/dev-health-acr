@@ -336,6 +336,9 @@ type EngineTelemetry interface {
 	// FrameValidationEvent's PredictedStrippedObligations -- see
 	// WorkItemTupleAdmissionEvent's own doc comment.
 	RecordWorkItemTupleAdmission(context.Context, storage.Principal, WorkItemTupleAdmissionEvent)
+	// RecordRepositoryWorkItemWalk reports one read of a repository's work
+	// items (eventspec.RepositoryWorkItemWalk).
+	RecordRepositoryWorkItemWalk(context.Context, storage.Principal, RepositoryWorkItemWalkEvent)
 	// QuestionFamilyTelemetry (CHAOS-4632 §4.3) is EMBEDDED, not offered
 	// as a separate optional interface a caller might or might not
 	// implement.
@@ -3133,7 +3136,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var graphContext GraphContext
 	var tupleCensus *WorkItemTupleCensus
 	if workItemTuple {
-		if len(resolution.Committed) != 1 || resolution.Committed[0].Kind != SubjectProject {
+		if len(resolution.Committed) != 1 || !WorkItemTupleAnchorKind(resolution.Committed[0].Kind) {
 			if len(resolution.Committed) > 0 {
 				familyOutcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectWorkItem}
 				resolution = withoutSubjects(resolution)
@@ -3142,7 +3145,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		authorized := false
 		if e.candidateVerifier != nil {
-			authorized, _ = e.candidateVerifier(ctx, principal, request.RequestedScope, binding, SubjectProject, resolution.Committed[0].CanonicalID)
+			authorized, _ = e.candidateVerifier(ctx, principal, request.RequestedScope, binding, resolution.Committed[0].Kind, resolution.Committed[0].CanonicalID)
 		}
 		if !authorized || ctx.Err() != nil {
 			resolution = withoutSubjects(resolution)
@@ -3151,7 +3154,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		resolution = restrictWorkItemTupleCandidate(resolution)
 		plan.MemberKind = SubjectWorkItem
 		plan.FactKinds = []FactKind{FactStatus, FactWork}
-		memberFilter := workItemMemberFilter{Status: workItemTupleStatusFilter(familyOutcome.Frame)}
+		memberFilter := workItemMemberFilter{AnchorKind: resolution.Committed[0].Kind, Status: workItemTupleStatusFilter(familyOutcome.Frame)}
 		memberFilter.WindowNotApplied = workItemCurrentFrameCarriesUnappliedWindow(familyOutcome.Frame, windowBasis)
 		if workItemTupleIsPeriodFrame(familyOutcome.Frame) {
 			// The read applies the window the answer discloses: the effective

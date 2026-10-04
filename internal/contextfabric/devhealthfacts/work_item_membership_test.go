@@ -123,11 +123,11 @@ func workItemMembershipTestRow(t *testing.T, repoID, workItemID string, authoriz
 	if authorized == 0 {
 		canonicalID, repoID, workItemID = "", "", ""
 	}
-	return append(append([]any{canonicalID, repoID, workItemID, "acme/api", authorized, scoped, allowed, denied}, workItemMembershipTestZeroPaths()...), uint64(0), uint64(0), uint8(0), uint8(1))
+	return append(append([]any{canonicalID, repoID, workItemID, "acme/api", authorized, scoped, allowed, denied}, workItemMembershipTestZeroPaths()...), uint64(0), uint64(0), uint8(0), uint8(1), uint64(0), uint64(0))
 }
 
 func workItemMembershipTestSentinelRow() []any {
-	return append(append([]any{"", "", "", "", uint8(0), uint64(0), uint64(0), uint64(0)}, workItemMembershipTestZeroPaths()...), uint64(0), uint64(0), uint8(1), uint8(1))
+	return append(append([]any{"", "", "", "", uint8(0), uint64(0), uint64(0), uint64(0)}, workItemMembershipTestZeroPaths()...), uint64(0), uint64(0), uint8(1), uint8(1), uint64(0), uint64(0))
 }
 
 // workItemMembershipTestZeroPaths is the nine per-path census columns

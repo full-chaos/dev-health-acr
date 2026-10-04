@@ -3929,6 +3929,105 @@
     ]
   },
   {
+    "id": "contextfabric.repository_work_item_walk",
+    "msg": "context_fabric: repository work item walk",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one line per request, emitted only when the work-item members of a committed repository are read",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "members",
+          "no_pull_requests",
+          "unlinked",
+          "no_match",
+          "denied",
+          "read_failed"
+        ]
+      },
+      {
+        "key": "anchor_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "repository"
+        ]
+      },
+      {
+        "key": "filtered",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "restricted",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "pull_requests",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read measured the population (every outcome but read_failed)"
+      },
+      {
+        "key": "linked_issues",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read measured the population (every outcome but read_failed)"
+      },
+      {
+        "key": "members",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read measured the population (every outcome but read_failed)"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "conditional",
+        "applicability": "written when the read measured the population (every outcome but read_failed)"
+      },
+      {
+        "key": "denied",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read measured the population and applied no member filter"
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "",
+          "s1_error",
+          "read_limit_exceeded",
+          "cancelled",
+          "excluded_provider",
+          "zero_authorized_overflow",
+          "identity_omitted"
+        ],
+        "applicability": "written when outcome=read_failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.requirement_outcome_transition",
     "msg": "context fabric requirement outcome transition",
     "level": "info",

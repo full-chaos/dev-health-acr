@@ -112,6 +112,7 @@ type statusFilterRun struct {
 	admissions  []WorkItemTupleAdmissionEvent
 	invokedErr  error
 	savedCensus *WorkItemTupleCensus
+	walks       []RepositoryWorkItemWalkEvent
 }
 
 func runStatusFilterTuple(t *testing.T, frame QuestionFrame, population int) statusFilterRun {
@@ -164,6 +165,7 @@ func runTupleFilterCase(t *testing.T, frame QuestionFrame, census WorkItemMember
 	}
 	run.result, run.invokedErr = engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, investigation)
 	run.admissions = telemetry.workItemTupleAdmissions
+	run.walks = telemetry.repositoryWorkItemWalks
 	if store.savedSemantic != nil && store.savedSemantic.State != nil {
 		run.savedCensus = store.savedSemantic.State.WorkItemCensus
 	}

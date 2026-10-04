@@ -13,6 +13,15 @@ import (
 
 const workItemMembershipRationale = "Work items are members of the resolved project within the authorized scope."
 
+// workItemMembershipRationaleFor is the inclusion reason for members read on
+// an anchor of this kind.
+func workItemMembershipRationaleFor(anchor SubjectKind) string {
+	if anchor == SubjectRepository {
+		return contractsv1.ContextFabricWorkItemRepositoryMembershipRationale
+	}
+	return workItemMembershipRationale
+}
+
 // discoverWorkItemTuple reads S1 under the response owner's existing lease
 // lifetime. It never reads the graph or expands the content subject set.
 func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Principal, request InvestigationRequest, resolution SubjectResolution, plan *AnswerPlan, filter workItemMemberFilter) (GraphContext, *WorkItemTupleCensus, error) {
@@ -25,7 +34,29 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	if e.workItemMembership == nil {
 		return graph, census, nil
 	}
-	lease, membership, readErr := e.workItemMembership.BeginWorkItemMembership(ctx, principal, WorkItemMembershipRequest{Anchor: WorkItemMembershipAnchor{Subject: resolution.Committed[0]}, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), PlanMaxMembers: plan.Budget.MaxMembers, RequestMaxMembers: request.Options.MaxCohortMembers, Status: filter.Status, TimeColumn: filter.timeColumn(), TimeStart: filter.Start, TimeEnd: filter.End})
+	anchorKind := resolution.Committed[0].Kind
+	var membership WorkItemMembershipResult
+	measured := false
+	if anchorKind == SubjectRepository {
+		defer func() {
+			restricted := workItemRepositoryRestricted(principal, request.RequestedScope.RepositorySlugs)
+			event := RepositoryWorkItemWalkEvent{
+				Outcome:  repositoryWorkItemWalkOutcome(membership.Census, measured, cohortMemberCount(graph.Cohort), restricted),
+				Filtered: filter.Active(), Restricted: restricted, Measured: measured, UnmeasuredReason: membership.Census.UnmeasuredReason,
+			}
+			if measured {
+				event.PullRequests, event.LinkedIssues = membership.Census.RepositoryPullRequests, membership.Census.RepositoryLinkedIssues
+				event.Members, event.Truncated = cohortMemberCount(graph.Cohort), membership.Census.State == WorkItemMembershipCensusFloor
+				if !filter.Active() {
+					event.Denied = membership.Census.DeniedPopulation
+				}
+			}
+			if e.telemetry != nil {
+				e.telemetry.RecordRepositoryWorkItemWalk(ctx, principal, event)
+			}
+		}()
+	}
+	lease, read, readErr := e.workItemMembership.BeginWorkItemMembership(ctx, principal, WorkItemMembershipRequest{Anchor: WorkItemMembershipAnchor{Subject: resolution.Committed[0]}, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), PlanMaxMembers: plan.Budget.MaxMembers, RequestMaxMembers: request.Options.MaxCohortMembers, Status: filter.Status, TimeColumn: filter.timeColumn(), TimeStart: filter.Start, TimeEnd: filter.End})
 	if lease != nil {
 		owner, ok := WorkItemResponseOwnerFromContext(ctx)
 		if !ok {
@@ -39,14 +70,16 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	if ctx.Err() != nil {
 		return graph, census, ctx.Err()
 	}
+	membership = read
 	if readErr != nil || lease == nil || !membership.Census.PopulationMeasured || membership.Census.State == WorkItemMembershipCensusUnmeasured {
 		return graph, census, nil
 	}
+	measured = true
 	// A filtered read never measures the denied partition: its count would be
 	// the denied items' count for one status, a distribution the unfiltered
 	// read does not give. The filtered answer states one fixed exclusion
 	// instead (workItemStatusDeniedExclusion).
-	if gap, ok := workItemAuthorizationGapOf(membership.Census); ok && !filter.Active() {
+	if gap, ok := workItemAuthorizationGapOf(membership.Census, anchorKind); ok && !filter.Active() {
 		census.gap = &gap
 		if gap.NoneAuthorized() {
 			// Members exist and none are authorized: the answer is a
@@ -73,7 +106,8 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	if len(members) > limit {
 		members = members[:limit]
 	}
-	cohort := &Cohort{Kind: SubjectWorkItem, Rationale: workItemMembershipRationale, Members: []CohortMember{}, Complete: census.State == WorkItemMembershipCensusExact && census.Value == len(members), Truncated: census.Value > len(members)}
+	rationale := workItemMembershipRationaleFor(anchorKind)
+	cohort := &Cohort{Kind: SubjectWorkItem, Rationale: rationale, Members: []CohortMember{}, Complete: census.State == WorkItemMembershipCensusExact && census.Value == len(members), Truncated: census.Value > len(members)}
 	for index, member := range members {
 		subject := SubjectRef{Kind: SubjectWorkItem, CanonicalID: member.CanonicalID, Label: member.WorkItemID}
 		if subject.Label == "" {
@@ -83,7 +117,7 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 		if !ok {
 			return graph, nil, fmt.Errorf("work-item membership identity invalid")
 		}
-		cohort.Members = append(cohort.Members, CohortMember{Subject: subject, Rank: index + 1, InclusionReasons: []string{workItemMembershipRationale}, EvidenceRefIDs: []string{ref}})
+		cohort.Members = append(cohort.Members, CohortMember{Subject: subject, Rank: index + 1, InclusionReasons: []string{rationale}, EvidenceRefIDs: []string{ref}})
 		graph.EvidenceRefIDs = append(graph.EvidenceRefIDs, ref)
 	}
 	census.Retained = len(cohort.Members)
@@ -271,17 +305,29 @@ func workItemStatusFilterDisclosure(status string) string {
 // workItemStatusNoMatchDisclosure names the empty result. Zero matches is a
 // count of matching items, not a statement that the project is healthy.
 func workItemStatusNoMatchDisclosure(status string) string {
-	return contractsv1.ContextFabricWorkItemNoMatchLimitationPrefix + "currently has status " + status + contractsv1.ContextFabricWorkItemNoMatchLimitationSuffix
+	return workItemNoMatchDisclosure(SubjectProject, "currently has status "+status)
+}
+
+// workItemNoMatchDisclosure names the empty result for the anchor the members
+// were read on.
+func workItemNoMatchDisclosure(anchor SubjectKind, body string) string {
+	if anchor == SubjectRepository {
+		return contractsv1.ContextFabricWorkItemRepositoryNoMatchLimitationPrefix + body + contractsv1.ContextFabricWorkItemRepositoryNoMatchLimitationSuffix
+	}
+	return contractsv1.ContextFabricWorkItemNoMatchLimitationPrefix + body + contractsv1.ContextFabricWorkItemNoMatchLimitationSuffix
 }
 
 // workItemMemberFilter is what the member read applied: a status of the closed
 // set, and/or a half-open window on one bound time field. The zero value reads
 // every member.
 type workItemMemberFilter struct {
-	Status   string
-	TimeRole MemberTimeRole
-	Start    time.Time
-	End      time.Time
+	// AnchorKind is the kind of the subject the members were read on; the
+	// zero value is a project.
+	AnchorKind SubjectKind
+	Status     string
+	TimeRole   MemberTimeRole
+	Start      time.Time
+	End        time.Time
 	// WindowNotApplied marks a current read served although the request
 	// committed a window: the membership is as of now.
 	WindowNotApplied bool
@@ -313,7 +359,7 @@ func workItemMemberFilterNoMatchDisclosure(f workItemMemberFilter) string {
 	if f.Status != "" {
 		with = " and a current status of " + f.Status
 	}
-	return contractsv1.ContextFabricWorkItemNoMatchLimitationPrefix + "was " + field + " in that period" + with + contractsv1.ContextFabricWorkItemNoMatchLimitationSuffix
+	return workItemNoMatchDisclosure(f.AnchorKind, "was "+field+" in that period"+with)
 }
 
 // withWorkItemMemberFilterLimitations appends the filter disclosures, and the
@@ -346,7 +392,7 @@ func withWorkItemMemberFilterLimitations(result InvestigationResult, f workItemM
 		if f.hasWindow() {
 			additions = append(additions, workItemMemberFilterNoMatchDisclosure(f))
 		} else {
-			additions = append(additions, workItemStatusNoMatchDisclosure(f.Status))
+			additions = append(additions, workItemNoMatchDisclosure(f.AnchorKind, "currently has status "+f.Status))
 		}
 	}
 	composed, displaced := appendBoundedLimitations(result.Limitations, additions)

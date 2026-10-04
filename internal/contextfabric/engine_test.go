@@ -410,6 +410,7 @@ type recordingTelemetry struct {
 	// workItemTupleAdmissions records every settled work-item tuple
 	// admission decision verbatim, in emission order.
 	workItemTupleAdmissions   []WorkItemTupleAdmissionEvent
+	repositoryWorkItemWalks   []RepositoryWorkItemWalkEvent
 	workItemAuthorizationGaps []WorkItemAuthorizationGapEvent
 	// planCarries records every applied carry verbatim -- the ONLY event
 	// that can carry family_source=carried, since the family-resolution
@@ -2386,6 +2387,10 @@ func (r *recordingTelemetry) RecordWorkItemStoredServing(context.Context, storag
 
 func (r *recordingTelemetry) RecordWorkItemAuthorizationGap(_ context.Context, _ storage.Principal, event WorkItemAuthorizationGapEvent) {
 	r.workItemAuthorizationGaps = append(r.workItemAuthorizationGaps, event)
+}
+
+func (r *recordingTelemetry) RecordRepositoryWorkItemWalk(_ context.Context, _ storage.Principal, event RepositoryWorkItemWalkEvent) {
+	r.repositoryWorkItemWalks = append(r.repositoryWorkItemWalks, event)
 }
 
 func (r *recordingTelemetry) RecordWorkItemTupleAdmission(_ context.Context, _ storage.Principal, event WorkItemTupleAdmissionEvent) {

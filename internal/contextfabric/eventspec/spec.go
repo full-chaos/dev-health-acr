@@ -2987,6 +2987,40 @@ var ProjectDeploymentWalk = Event{
 	},
 }
 
+// RepositoryWorkItemWalk is one read of a repository's work items: the
+// issues linked to the repository's pull requests. outcome says which path
+// the read took: members served, a repository with no pull request, pull
+// requests that link no issue, linked issues the member filter or the
+// caller's authorization left out (no_match), a repository-restricted caller
+// with no member (denied; the served reason stays neutral), or a read that
+// failed or measured nothing (read_failed, with the closed reason).
+//
+// pull_requests and linked_issues are the repository's, before any member
+// filter or authorization; denied is withheld on a filtered read. Counts and
+// closed values only, never a subject name or id.
+var RepositoryWorkItemWalk = Event{
+	ID:                 "contextfabric.repository_work_item_walk",
+	Msg:                "context_fabric: repository work item walk",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one line per request, emitted only when the work-item members of a committed repository are read",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RepositoryWorkItemWalkOutcomeVocabulary()},
+		{Key: "anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"repository"}},
+		{Key: "filtered", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "restricted", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "pull_requests", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
+		{Key: "linked_issues", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
+		{Key: "members", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
+		{Key: "denied", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population and applied no member filter"},
+		{Key: "reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed", ClosedVocabulary: []string{"", "s1_error", "read_limit_exceeded", "cancelled", "excluded_provider", "zero_authorized_overflow", "identity_omitted"}},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 var All = []Event{
 	AnswerDisplay,
 	RetainedRankingAccounting,
@@ -3030,6 +3064,7 @@ var All = []Event{
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,
+	RepositoryWorkItemWalk,
 	OwnershipRouting,
 	AnchorBindingTransition,
 	MCPHostedContextScope,

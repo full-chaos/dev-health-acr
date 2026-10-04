@@ -507,3 +507,13 @@ func TestQueryVersionMovedPastTheArbitraryRowLimitCut(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when a read cut at the row limit without a total order can hold an arbitrary subset of the matching rows and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheTotalOrder)
 	}
 }
+
+func TestQueryVersionMovedPastTheProjectOnlyWorkItemAnchor(t *testing.T) {
+	t.Parallel()
+	for _, versionBeforeTheRepositoryAnchor := range []string{"devhealthfacts.clickhouse.v50", "devhealthfacts.clickhouse.v51", "devhealthfacts.clickhouse.v52", "devhealthfacts.clickhouse.v53"} {
+		if devhealthfacts.QueryVersion != versionBeforeTheRepositoryAnchor {
+			continue
+		}
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when the work items of a repository were refused holds that refusal and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheRepositoryAnchor)
+	}
+}
