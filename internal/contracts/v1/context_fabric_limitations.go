@@ -127,6 +127,12 @@ const ContextFabricClientSynthesisCommitNotAffirmedLimitation = "Client synthesi
 // clarification to offer.
 const ContextFabricSynthesisClarificationUnavailableLimitation = "This question could not be answered from the evidence assembled, and no clarification could be offered to narrow it further."
 
+// ContextFabricSynthesisNarrativeWithheldLimitation discloses that the model
+// returned no_match for a question whose subject was committed and for which
+// the service itself held a cohort or fact outcome. The status served is the
+// service's, and the model's narrative was not served.
+const ContextFabricSynthesisNarrativeWithheldLimitation = "The written narrative for this question was withheld: the service established a subject and retrieval outcome that the narrative did not reflect, so the status, coverage and members shown are the service's own."
+
 // ContextFabricFactScopeUnexpandedLimitation is CHAOS-4099's disclosure that
 // a requested fact family could not be reached from the subject this answer
 // is about.
@@ -600,6 +606,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricCommitRetractionLimitation,
 		ContextFabricClientSynthesisCommitNotAffirmedLimitation,
 		ContextFabricSynthesisClarificationUnavailableLimitation,
+		ContextFabricSynthesisNarrativeWithheldLimitation,
 		ContextFabricFactScopeUnexpandedLimitation,
 		ContextFabricFactScopeActivityProxyLimitation,
 		ContextFabricFactScopeAttributedPrimaryTeamLimitation,

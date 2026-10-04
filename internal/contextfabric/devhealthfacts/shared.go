@@ -258,7 +258,13 @@ import (
 // ownership records, and a team the question text matched is not one of
 // them. A candidate saved under v41 for such a question can hold teams that
 // do not own the repository and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v42"
+//
+// v42 -> v43: a synthesis no_match over a
+// committed subject with a served cohort outcome or a read fact row is served
+// as the status the service established, with the narrative withheld. A
+// candidate saved under v42 for such a question can hold a no_match and must
+// not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v43"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
