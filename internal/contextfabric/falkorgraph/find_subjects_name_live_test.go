@@ -3,6 +3,7 @@ package falkorgraph_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,7 +112,7 @@ func TestLiveFindSubjectsNameLookupReachesBeyondTheScanWindow(t *testing.T) {
 			}
 
 			for _, probe := range []struct{ query, match string }{
-				{tc.label, "exact"}, {"zeta-alias", "alias"}, {"GITHUB:ZETA/PROVIDER", "provider_key"},
+				{tc.label, "exact"}, {strings.ToUpper(tc.label), "exact"}, {"zeta-alias", "alias"}, {"GITHUB:ZETA/PROVIDER", "provider_key"},
 			} {
 				resp, err := lookup.Find(ctx, unrestricted(org), directread.FindRequest{Query: probe.query, Kinds: []string{string(tc.kind)}})
 				require.NoError(t, err)
