@@ -562,3 +562,12 @@ func TestQueryVersionMovedPastTheOneWindowSeriesAndComparison(t *testing.T) {
 		}
 	}
 }
+
+func TestQueryVersionMovedPastTheRefusedRepositoryWorkItemAnchor(t *testing.T) {
+	t.Parallel()
+	for _, versionBeforeTheRepositoryWalk := range []string{"devhealthfacts.clickhouse.v65", "devhealthfacts.clickhouse.v66", "devhealthfacts.clickhouse.v67"} {
+		if devhealthfacts.QueryVersion == versionBeforeTheRepositoryWalk {
+			t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when the work items of a repository were refused holds that refusal and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheRepositoryWalk)
+		}
+	}
+}

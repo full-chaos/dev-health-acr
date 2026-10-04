@@ -67,12 +67,12 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 		return InvestigationResult{}, false, nil
 	}
 	anchor := candidate.SubjectResolution.Committed[0]
-	authorized, _ := e.candidateVerifier(ctx, principal, request.RequestedScope, binding, SubjectProject, anchor.CanonicalID)
+	authorized, _ := e.candidateVerifier(ctx, principal, request.RequestedScope, binding, anchor.Kind, anchor.CanonicalID)
 	if !authorized || ctx.Err() != nil {
 		return InvestigationResult{}, false, nil
 	}
 	event.Decision = "membership_unavailable"
-	if e.workItemMembership == nil {
+	if anchor.Kind != SubjectRepository && e.workItemMembership == nil {
 		return InvestigationResult{}, false, nil
 	}
 	owner, owned := WorkItemResponseOwnerFromContext(ctx)
@@ -83,11 +83,18 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	if candidate.AnswerPlan != nil {
 		planCap = candidate.AnswerPlan.Budget.MaxMembers
 	}
-	lease, current, err := e.workItemMembership.BeginWorkItemMembership(ctx, principal, WorkItemMembershipRequest{
+	lease, current, err := e.beginWorkItemMembership(ctx, principal, request.RequestedScope, binding, WorkItemMembershipRequest{
 		Anchor:                   WorkItemMembershipAnchor{Subject: anchor},
 		RequestedRepositoryScope: append([]string(nil), request.RequestedScope.RepositorySlugs...),
 		PlanMaxMembers:           planCap, RequestMaxMembers: request.Options.MaxCohortMembers,
 	})
+	if anchor.Kind == SubjectRepository {
+		// A re-walk is a walk: it owes its decision line too.
+		defer func() {
+			measured := err == nil && current.Census.PopulationMeasured && current.Census.State != WorkItemMembershipCensusUnmeasured
+			e.recordRepositoryWorkItemWalk(ctx, principal, current, measured, len(current.Members), false, workItemRepositoryRestricted(principal, request.RequestedScope.RepositorySlugs))
+		}()
+	}
 	// The production Begin registers before S1; repeating the same pointer is
 	// idempotent and also covers a port that returns an acquired lease + error.
 	if lease != nil {
@@ -111,7 +118,7 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	servingEvent.CensusRead = event.CensusRead
 	servingEvent.Basis = "digest_matched"
 	serving := *census
-	if gap, gapped := workItemAuthorizationGapOf(current.Census); gapped {
+	if gap, gapped := workItemAuthorizationGapOf(current.Census, anchor.Kind); gapped {
 		serving.gap = &gap
 	}
 	candidate = ServeWorkItemTupleCensus(candidate, &serving)
@@ -147,8 +154,18 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	return candidate, true, nil
 }
 
+// workItemCandidateAnchorKind is the kind of a stored tuple answer's committed
+// anchor; the zero value when it has none.
+func workItemCandidateAnchorKind(candidate InvestigationResult) SubjectKind {
+	if len(candidate.SubjectResolution.Committed) == 0 {
+		return ""
+	}
+	return candidate.SubjectResolution.Committed[0].Kind
+}
+
 func workItemReuseMembershipEqual(candidate InvestigationResult, census *WorkItemTupleCensus, current WorkItemMembershipResult) bool {
-	if gap, gapped := workItemAuthorizationGapOf(current.Census); gapped {
+	anchorKind := workItemCandidateAnchorKind(candidate)
+	if gap, gapped := workItemAuthorizationGapOf(current.Census, anchorKind); gapped {
 		if gap.NoneAuthorized() || !slices.Contains(candidate.Limitations, gap.Limitation()) {
 			return false
 		}
@@ -177,5 +194,27 @@ func workItemReuseMembershipEqual(candidate InvestigationResult, census *WorkIte
 	}
 	slices.Sort(storedIDs)
 	slices.Sort(currentIDs)
-	return len(storedIDs) == census.Retained && len(slices.Compact(slices.Clone(currentIDs))) == len(currentIDs) && slices.Equal(storedIDs, currentIDs)
+	if !(len(storedIDs) == census.Retained && len(slices.Compact(slices.Clone(currentIDs))) == len(currentIDs) && slices.Equal(storedIDs, currentIDs)) {
+		return false
+	}
+	if anchorKind != SubjectRepository {
+		return true
+	}
+	// A repository member's reason names the tier of its link: a stored member
+	// whose link is now of another tier is not the member the walk finds, and
+	// the heuristic count the stored answer states would be stale.
+	storedReasons := map[string]string{}
+	if candidate.Cohort != nil {
+		for _, member := range candidate.Cohort.Members {
+			if len(member.InclusionReasons) == 1 {
+				storedReasons[member.Subject.CanonicalID] = member.InclusionReasons[0]
+			}
+		}
+	}
+	for _, member := range current.Members {
+		if storedReasons[member.CanonicalID] != workItemMemberReason(SubjectRepository, member) {
+			return false
+		}
+	}
+	return true
 }

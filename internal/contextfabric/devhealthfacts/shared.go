@@ -368,7 +368,14 @@ import (
 // per-row rule does (owner wildcard, case-insensitive slug). A candidate saved
 // under v66 or earlier for such a question holds the deployments of the old
 // topology and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v67"
+//
+// v67 -> v68: the work items of a named repository are the issues linked to
+// its pull requests, walked from the repository in the graph store, with each
+// member's link tier named and the status and completion filters read on the
+// canonical facts of the walked members. Before it a repository anchor was
+// refused as a work-item population. A candidate saved before v68 for such a
+// question holds that refusal and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v68"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

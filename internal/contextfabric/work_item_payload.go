@@ -62,7 +62,7 @@ func workItemTupleSemanticState(state *PersistedSemanticState) bool {
 	if state == nil || state.Family != QuestionFamilyScopedCohortStatus || !state.FramePresent || state.Frame == nil {
 		return false
 	}
-	if state.ScopeAnchor.Kind != SubjectProject {
+	if !WorkItemTupleAnchorKind(state.ScopeAnchor.Kind) {
 		return false
 	}
 	expression := state.Frame.SubjectExpression
@@ -175,8 +175,8 @@ func validateWorkItemAnchorCandidate(resolution SubjectResolution) (SubjectRef, 
 	}
 	candidate := resolution.Candidates[0]
 	anchor := resolution.Committed[0]
-	if candidate.State != ResolutionCommitted || candidate.Subject.Kind != SubjectProject || anchor.Kind != SubjectProject || candidate.Subject.CanonicalID == "" || anchor.CanonicalID == "" {
-		return SubjectRef{}, workItemRuleErrorf(WorkItemRuleAnchorNotCommittedProject, "work-item tuple payload anchor must be one committed project candidate")
+	if candidate.State != ResolutionCommitted || !WorkItemTupleAnchorKind(anchor.Kind) || candidate.Subject.Kind != anchor.Kind || candidate.Subject.CanonicalID == "" || anchor.CanonicalID == "" {
+		return SubjectRef{}, workItemRuleErrorf(WorkItemRuleAnchorNotCommittedProject, "work-item tuple payload anchor must be one committed project or repository candidate")
 	}
 	if workItemSubjectKey(candidate.Subject) != workItemSubjectKey(anchor) {
 		return SubjectRef{}, workItemRuleErrorf(WorkItemRuleAnchorDisagree, "work-item tuple candidate and committed anchor disagree")

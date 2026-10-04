@@ -423,6 +423,9 @@ func (e *Engine) terminalResult(
 		if familyOutcome.MemberTimeRoleClarification != "" {
 			limitation = memberTimeRoleClarificationLimitation(familyOutcome.MemberTimeRoleClarification)
 		}
+		if familyOutcome.RepositoryPeriodRoleRefused {
+			limitation = contractsv1.ContextFabricWorkItemRepositoryPeriodRoleRefusalLimitation
+		}
 	}
 	// CHAOS-5660: the declared-kind terminal discloses its own basis on the
 	// same field, and the limitation it already carries is that basis's own

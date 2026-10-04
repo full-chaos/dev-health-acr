@@ -24,6 +24,7 @@ func cohortTerminalCoverageCode(code contractsv1.ContextFabricCoverageDetailCode
 	switch code {
 	case contractsv1.ContextFabricCoverageDetailKindCensusTruncated,
 		contractsv1.ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked,
+		contractsv1.ContextFabricCoverageDetailWorkItemRepositoryUnlinked,
 		contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization,
 		contractsv1.ContextFabricCoverageDetailGraphExactNameCandidatesTruncated:
 		return true

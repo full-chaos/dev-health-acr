@@ -44,6 +44,17 @@ type WorkItemTupleCensus struct {
 	// that measured the census and never persisted: a stored answer already
 	// carries the disclosure it was served with.
 	memberFilter workItemMemberFilter
+
+	// incomplete marks an exact census over a repository read that did not
+	// read every walked member (an unread member, or a walk cut at its read
+	// bound): the count is a lower bound without being a floor, whose value is
+	// pinned to the census limit. Never persisted.
+	incomplete bool
+
+	// repository is what the read of a repository's work items measured, set
+	// on the request that measured it and never persisted: a stored answer
+	// already carries the disclosures it was served with.
+	repository *repositoryWorkItemReading
 }
 
 // WorkItemTupleCensusReadStatus describes the independent status of the

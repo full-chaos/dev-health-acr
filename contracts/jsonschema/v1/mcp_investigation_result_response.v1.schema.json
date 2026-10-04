@@ -2632,6 +2632,7 @@
                 "graph_endpoint_lookup_failed",
                 "graph_exact_name_candidates_truncated",
                 "graph_project_deployments_unlinked",
+                "work_item_repository_unlinked",
                 "graph_cohort_denied_by_authorization",
                 "graph_unknown_relationship_type",
                 "graph_validity_unbounded",

@@ -279,6 +279,8 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		label = countPhrase(d.Count, "group member", "group members") + " excluded by authorization"
 	case ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked:
 		label = "No issue of this project links a pull request, so its deployments could not be reached (" + countPhrase(d.Count, "issue", "issues") + " checked)"
+	case ContextFabricCoverageDetailWorkItemRepositoryUnlinked:
+		label = "No pull request of this repository links an issue, so its work items could not be reached (" + countPhrase(d.Count, "pull request", "pull requests") + " checked)"
 	case ContextFabricCoverageDetailGraphUnknownRelationshipType:
 		label = countPhrase(d.Count, "relationship edge", "relationship edges") + " of an unrecognized type dropped"
 	case ContextFabricCoverageDetailGraphValidityUnbounded:

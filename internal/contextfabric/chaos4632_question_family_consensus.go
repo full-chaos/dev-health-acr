@@ -69,6 +69,11 @@ type QuestionFamilyOutcome struct {
 	// never reaches the wire as a field: it selects the fixed sentence that
 	// offers the three readings.
 	MemberTimeRoleClarification MemberTimeRoleReason
+	// RepositoryPeriodRoleRefused is set, by the engine only, when a period
+	// with the created or updated role was asked over the work items of a
+	// repository: no canonical fact carries those times for a walked member,
+	// so the refusal names that.
+	RepositoryPeriodRoleRefused bool
 
 	// Interpretation names the interpret call this outcome was resolved
 	// from. Zero when no call produced it. Engine reads it only to stamp the

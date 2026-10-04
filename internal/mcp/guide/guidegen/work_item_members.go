@@ -7,7 +7,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-const workItemMemberHeading = "Work items of a project: status and period"
+const workItemMemberHeading = "Work items of a project or a repository: status and period"
 
 // workItemMemberSection renders the work-item member questions of the
 // question-shape guide from the registries the engine reads: the closed
@@ -18,7 +18,10 @@ func workItemMemberSection(in Inputs) (string, error) {
 	}
 	var b strings.Builder
 	b.WriteString("## " + workItemMemberHeading + "\n\n")
-	b.WriteString("Name one project and ask for its work items (\"which issues of project X are in progress\"). `investigate_question` lists the members and states the filter it used in the answer's limitations.\n\n")
+	b.WriteString("Name one project or one repository and ask for its work items (\"which issues of project X are in progress\", \"which issues are open in repository owner/name\"). `investigate_question` lists the members and states the filter it used in the answer's limitations.\n\n")
+	b.WriteString("- The work items of a repository are the issues linked to a pull request of that repository, whatever the source of the issue. Each member's reason names the tier of its link: \"" + contractsv1.ContextFabricWorkItemRepositoryMembershipReason(contractsv1.ContextFabricWorkItemRepositoryTierNative) + "\", \"" + contractsv1.ContextFabricWorkItemRepositoryMembershipReason(contractsv1.ContextFabricWorkItemRepositoryTierExplicitText) + "\" or \"" + contractsv1.ContextFabricWorkItemRepositoryMembershipReason(contractsv1.ContextFabricWorkItemRepositoryTierHeuristic) + "\". A member linked only by a heuristic match is never presented as natively linked, and the answer says how many are. An issue whose own repository is the named one but that no pull request links is not a member. The answer always states: \"" + contractsv1.ContextFabricWorkItemRepositoryFreshnessLimitation + "\"\n")
+	b.WriteString("- A repository answers a status and a period over completion (\"completed in the last 30 days\"). A period over when the work items were created or last updated is refused for a repository, because no canonical fact carries those times for the members: \"" + contractsv1.ContextFabricWorkItemRepositoryPeriodRoleRefusalLimitation + "\"\n")
+	b.WriteString("- A repository that has no pull request, or whose pull requests link no issue, lists no members and says which; that is a count of links, not a statement about the repository's health.\n")
 	b.WriteString("- Status: the closed set is " + strings.Join(quoteAll(in.WorkItemStatuses), ", ") + ". The filter reads the current status only, as of now and over no period. Status is not completion and not readiness. A status outside the set is refused, not answered as unqualified membership. On GitHub and GitLab the status is mapped from issue labels and open or closed state: a mapping, not a provider fact.\n")
 	b.WriteString("- Period: a period needs one time-role verb in the same clause. The verb picks the field:\n")
 	for _, row := range in.MemberTimeRoles {

@@ -231,7 +231,7 @@ func TestProspectiveWorkItemTupleAnchorAnswerability(t *testing.T) {
 	}
 	for _, admission := range []workItemTupleAdmission{workItemTupleNotApplicable, workItemTupleRefused, workItemTupleProspective, 255} {
 		for _, kind := range kinds {
-			want := admission == workItemTupleProspective && kind == SubjectProject
+			want := admission == workItemTupleProspective && (kind == SubjectProject || kind == SubjectRepository)
 			if got := admission.anchorAnswerable(kind); got != want {
 				t.Fatalf("admission=%d anchor kind=%q answerable=%v want=%v", admission, kind, got, want)
 			}
@@ -242,7 +242,7 @@ func TestProspectiveWorkItemTupleAnchorAnswerability(t *testing.T) {
 			t.Fatalf("non-refusal admission=%d received a refusal", admission)
 		}
 	}
-	t.Logf("anchor domain: %d cells; project kind alone is no existence or authorization assertion", 4*len(kinds))
+	t.Logf("anchor domain: %d cells; project and repository kinds alone are no existence or authorization assertion", 4*len(kinds))
 }
 
 func TestProspectiveWorkItemTupleAdmissionLeavesLivePathsDormant(t *testing.T) {
