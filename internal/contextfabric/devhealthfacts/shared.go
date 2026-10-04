@@ -276,7 +276,13 @@ import (
 // issues created last month") no longer competes with it. A candidate saved
 // under v46 for such a question holds a refusal or another role and must not
 // be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v47"
+//
+// v49 -> v50: every LIMIT read of the fact store orders its rows by a total
+// order (newest first on the time column, then the natural key) before the
+// row limit cuts, so a question with more matching rows than the limit is
+// served the same rows on every call. A candidate saved under v49 may hold a
+// different arbitrary cut and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v50"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

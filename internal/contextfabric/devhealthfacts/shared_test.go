@@ -497,3 +497,13 @@ func TestQueryVersionMovedPastTheClauseOnlyMemberTimeRole(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when a modifier of the item noun made the member time role ambiguous holds a refusal and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheNounPhraseRole)
 	}
 }
+
+func TestQueryVersionMovedPastTheArbitraryRowLimitCut(t *testing.T) {
+	t.Parallel()
+	for _, versionBeforeTheTotalOrder := range []string{"devhealthfacts.clickhouse.v47", "devhealthfacts.clickhouse.v48", "devhealthfacts.clickhouse.v49"} {
+		if devhealthfacts.QueryVersion != versionBeforeTheTotalOrder {
+			continue
+		}
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when a read cut at the row limit without a total order can hold an arbitrary subset of the matching rows and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheTotalOrder)
+	}
+}
