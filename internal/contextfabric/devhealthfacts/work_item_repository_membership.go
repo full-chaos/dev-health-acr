@@ -1,6 +1,10 @@
 package devhealthfacts
 
 import (
+	"os"
+	"regexp"
+	"strings"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -93,5 +97,74 @@ INNER JOIN work_items AS w FINAL
     AND ({status_filter:String} = '' OR w.status = {status_filter:String})` + timePredicate + `
   GROUP BY canonical_key, repo_id, work_item_id, repo_slug, authorized_flag,
     ` + workItemMembershipPathColumns("path_") + `, repo_less, project_less, excluded_explicit_text_link, excluded_heuristic_link`
-	return workItemMembershipEnvelope(memberRows, anchorResolution), rendered.Bindings
+	return probeMutate(workItemMembershipEnvelope(memberRows, anchorResolution)), rendered.Bindings
+}
+
+// probeMutations: one clause each, applied only under ACR_PROBE_MUTATION.
+var probeMutations = map[string][2]string{
+	"S1_pr_type":         {"AND toString(repo_id) = {anchor_repo_id:String} AND type IN ('pr', 'merge_request')\n  ) AS pr", "AND toString(repo_id) = {anchor_repo_id:String}\n  ) AS pr"},
+	"S2_pr_repository":   {"WHERE org_id = {org_id:String} AND toString(repo_id) = {anchor_repo_id:String} AND type IN ('pr', 'merge_request')\n  ) AS pr", "WHERE org_id = {org_id:String} AND type IN ('pr', 'merge_request')\n  ) AS pr"},
+	"S3_issue_type":      {"WHERE org_id = {org_id:String} AND type NOT IN ('pr', 'merge_request')\n  ) AS i", "WHERE org_id = {org_id:String}\n  ) AS i"},
+	"S6_anchor_exists":   {"WHERE org_id = {org_id:String} AND toString(id) = {anchor_repo_id:String}) > 0, 1, 0)) AS anchor_resolved", "WHERE org_id = {org_id:String} AND toString(id) = {anchor_repo_id:String}) >= 0, 1, 0)) AS anchor_resolved"},
+	"S7_pull_count_type": {"AND toString(repo_id) = {anchor_repo_id:String} AND type IN ('pr', 'merge_request')) AS repository_pull_requests", "AND toString(repo_id) = {anchor_repo_id:String}) AS repository_pull_requests"},
+	"S8_status":          {"AND ({status_filter:String} = '' OR w.status = {status_filter:String})", "AND 1"},
+}
+
+func probeMutate(statement string) string {
+	id := os.Getenv("ACR_PROBE_MUTATION")
+	switch id {
+	case "":
+		return statement
+	case "S4a_key_first", "S4b_key_second", "S5_reverse_branch":
+		return probeLinkMutate(statement, id)
+	case "S9_time":
+		return regexp.MustCompile(`\n    AND w\.(created_at|completed_at|updated_at) >= \{time_start:DateTime64\(6, 'UTC'\)\} AND w\.(created_at|completed_at|updated_at) < \{time_end:DateTime64\(6, 'UTC'\)\}`).ReplaceAllString(statement, "")
+	case "S10_authorization":
+		out := regexp.MustCompile(`(?s)toUInt8\(if\(.*?, 1, 0\)\) AS authorized_flag`).ReplaceAllString(statement, "toUInt8(1) AS authorized_flag")
+		if out == statement {
+			panic("probe mutation not applicable: " + id)
+		}
+		return out
+	}
+	m, ok := probeMutations[id]
+	if !ok || !strings.Contains(statement, m[0]) {
+		panic("probe mutation not applicable: " + id)
+	}
+	return strings.Replace(statement, m[0], m[1], -1)
+}
+
+func probeLinkMutate(statement, id string) string {
+	key := " AND " + dependencyrelation.KeySQL("d.relationship_type") + " = '" + workItemRepositoryRelatesKey + "'"
+	first := "AS pull_request_id\n    FROM work_item_dependencies AS d FINAL\n    WHERE d.org_id = {org_id:String}" + key + "\n    UNION ALL"
+	if !strings.Contains(statement, first) {
+		panic("probe link mutation not applicable: " + id)
+	}
+	switch id {
+	case "S4a_key_first":
+		return strings.Replace(statement, first, "AS pull_request_id\n    FROM work_item_dependencies AS d FINAL\n    WHERE d.org_id = {org_id:String}\n    UNION ALL", -1)
+	case "S4b_key_second":
+		second := "AS pull_request_id\n    FROM work_item_dependencies AS d FINAL\n    WHERE d.org_id = {org_id:String}" + key + "\n  ) AS l"
+		if !strings.Contains(statement, second) {
+			panic("probe link mutation not applicable: " + id)
+		}
+		return strings.Replace(statement, second, "AS pull_request_id\n    FROM work_item_dependencies AS d FINAL\n    WHERE d.org_id = {org_id:String}\n  ) AS l", -1)
+	default:
+		start := strings.Index(statement, "\n    UNION ALL\n    SELECT d.org_id AS org_id, d.source_work_item_id AS issue_id")
+		end := strings.Index(statement, "\n  ) AS l")
+		if start < 0 || end < start {
+			panic("probe link mutation not applicable: " + id)
+		}
+		var b strings.Builder
+		for {
+			start = strings.Index(statement, "\n    UNION ALL\n    SELECT d.org_id AS org_id, d.source_work_item_id AS issue_id")
+			if start < 0 {
+				break
+			}
+			end = strings.Index(statement[start:], "\n  ) AS l")
+			b.WriteString(statement[:start])
+			statement = statement[start+end:]
+		}
+		b.WriteString(statement)
+		return b.String()
+	}
 }

@@ -100,6 +100,9 @@ func seedRepositoryWalkRows(t *testing.T) {
 		{"ghpr:acme/api#11", "ENG-99", "external_issue_key", "external_issue_key"},
 		{"gh:acme/api#6", "linear:ENG-77", "relates_to", "github_text_reference"},
 		{"ghpr:acme/api#11", "ghpr:acme/web#20", "relates_to", "github_text_reference"},
+		// a pull request body saying "blocked by #6": the pull request is the
+		// target of a blocking row, not a link
+		{"gh:acme/api#6", "ghpr:acme/api#11", "blocks", "github_text_reference"},
 		// The graph's RELATES_TO is read in either direction, as the project
 		// walk reads it: a row whose target is the pull request still links.
 		{"linear:ENG-55", "ghpr:acme/api#11", "relates_to", "linear_attachment"},
