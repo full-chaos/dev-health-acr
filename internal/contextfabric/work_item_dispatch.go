@@ -350,3 +350,21 @@ const workItemStatusDeniedExclusion = contractsv1.ContextFabricWorkItemDeniedSco
 // workItemWindowTimeLayout names an instant to the microsecond, the precision
 // the member read binds.
 const workItemWindowTimeLayout = "2006-01-02T15:04:05.000000Z"
+
+// workItemWindowReadBounds widens a window to the microsecond the read binds:
+// the start rounds down and the end rounds up, so the read never narrows the
+// window the answer speaks for and a sub-microsecond window cannot collapse to
+// an empty interval.
+func workItemWindowReadBounds(start, end time.Time) (time.Time, time.Time) {
+	start = start.UTC().Truncate(time.Microsecond)
+	end = end.UTC()
+	if rounded := end.Truncate(time.Microsecond); rounded.Before(end) {
+		end = rounded.Add(time.Microsecond)
+	} else {
+		end = rounded
+	}
+	if !start.Before(end) {
+		end = start.Add(time.Microsecond)
+	}
+	return start, end
+}

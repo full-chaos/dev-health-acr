@@ -83,6 +83,8 @@ func TestMemberTimeRoleClauseAndAmbiguity(t *testing.T) {
 		{"Which pré-closed work items were created in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCreated},
 		{"Which work items were created in the last 30 days, post-closed?", MemberTimeRoleBound, MemberTimeRoleCreated},
 		{"Which done-for-you items were created in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCreated},
+		{"Which préclosed work items were created in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCreated},
+		{"Which work items were closedé in the last 30 days?", MemberTimeRoleNoVerb, ""},
 	}
 	for _, tc := range cases {
 		outcome := BindMemberTimeRole(tc.question, windowSpanOf(t, tc.question))
@@ -208,7 +210,7 @@ func TestWorkItemWindowTupleReadsTheBoundTimeFieldOverTheDisclosedWindow(t *test
 			t.Fatalf("%s: reads=%d column=%q, want one read on %s", tc.question, run.reads, run.request.TimeColumn, tc.column)
 		}
 		window := run.result.EffectiveEvidenceWindow
-		if window == nil || window.Start == nil || window.End == nil || !window.Start.Truncate(time.Microsecond).Equal(run.request.TimeStart) || !window.End.Truncate(time.Microsecond).Equal(run.request.TimeEnd) {
+		if window == nil || window.Start == nil || window.End == nil || window.Start.Sub(run.request.TimeStart) < 0 || window.Start.Sub(run.request.TimeStart) >= time.Microsecond || run.request.TimeEnd.Sub(*window.End) < 0 || run.request.TimeEnd.Sub(*window.End) >= time.Microsecond {
 			t.Fatalf("%s: the read window %v..%v is not the disclosed window %+v", tc.question, run.request.TimeStart, run.request.TimeEnd, window)
 		}
 		if run.request.Status != "" {
@@ -451,10 +453,114 @@ func TestWorkItemWindowReadsAndDisclosesTheWindowToTheMicrosecond(t *testing.T) 
 		t.Fatal(run.invokedErr)
 	}
 	wantStart := start.Truncate(time.Microsecond)
-	if !run.request.TimeStart.Equal(wantStart) || !run.request.TimeEnd.Equal(end.Truncate(time.Microsecond)) {
-		t.Fatalf("read window %v..%v, want the effective window to the microsecond", run.request.TimeStart, run.request.TimeEnd)
+	wantEnd := end.Truncate(time.Microsecond).Add(time.Microsecond)
+	if !run.request.TimeStart.Equal(wantStart) || !run.request.TimeEnd.Equal(wantEnd) {
+		t.Fatalf("read window %v..%v, want start rounded down and end rounded up to the microsecond: %v..%v", run.request.TimeStart, run.request.TimeEnd, wantStart, wantEnd)
 	}
-	if !limitationsContain(run.result.Limitations, "2026-09-04T01:02:03.123456Z") {
+	if !limitationsContain(run.result.Limitations, "2026-09-04T01:02:03.123456Z") || !limitationsContain(run.result.Limitations, "2026-09-05T01:02:03.123457Z") {
 		t.Fatalf("the disclosure does not state the microsecond bound: %v", run.result.Limitations)
+	}
+}
+
+func TestWorkItemWindowReadBoundsNeverNarrowOrCollapse(t *testing.T) {
+	base := time.Date(2026, 9, 4, 1, 2, 3, 0, time.UTC)
+	for _, tc := range []struct {
+		name       string
+		start, end time.Time
+	}{
+		{"whole microseconds", base, base.Add(time.Hour)},
+		{"sub-microsecond ends", base.Add(123456789), base.Add(time.Hour + 987654321)},
+		{"interval of 800ns inside one microsecond", base.Add(100), base.Add(900)},
+		{"equal bounds", base.Add(500), base.Add(500)},
+		{"equal whole-microsecond bounds", base, base},
+	} {
+		start, end := workItemWindowReadBounds(tc.start, tc.end)
+		if !start.Before(end) {
+			t.Errorf("%s: collapsed to %v..%v", tc.name, start, end)
+		}
+		if start.After(tc.start) || end.Before(tc.end) {
+			t.Errorf("%s: narrowed %v..%v to %v..%v", tc.name, tc.start, tc.end, start, end)
+		}
+		if start.Nanosecond()%1000 != 0 || end.Nanosecond()%1000 != 0 {
+			t.Errorf("%s: not whole microseconds: %v..%v", tc.name, start, end)
+		}
+	}
+}
+
+func TestWorkItemMemberFilterRecogniserMatchesTheComposedSentencesWhole(t *testing.T) {
+	f := workItemMemberFilter{Status: "blocked", TimeRole: MemberTimeRoleCompleted, Start: time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}
+	for _, composed := range []string{workItemWindowFilterDisclosure(f), workItemMemberFilterNoMatchDisclosure(f), workItemStatusFilterDisclosure("in_progress"), workItemStatusNoMatchDisclosure("done"), workItemStatusDeniedExclusion} {
+		if !contractsv1.IsContextFabricServiceAuthoredLimitation(composed) {
+			t.Errorf("composed sentence not recognised: %q", composed)
+		}
+	}
+	for _, role := range []MemberTimeRole{MemberTimeRoleCreated, MemberTimeRoleCompleted, MemberTimeRoleUpdated} {
+		g := f
+		g.TimeRole = role
+		g.Status = ""
+		if !contractsv1.IsContextFabricServiceAuthoredLimitation(workItemWindowFilterDisclosure(g)) || !contractsv1.IsContextFabricServiceAuthoredLimitation(workItemMemberFilterNoMatchDisclosure(g)) {
+			t.Errorf("role %s sentences not recognised", role)
+		}
+	}
+	for _, impostor := range []string{
+		"Members are the work items the model chose to discuss.",
+		"Members are the work items whose current status is in progress.",
+		"Members are the work items created from yesterday to today.",
+		"No work item in this project within the authorized scope matters; that is a count of matches, not a statement about the project's health.",
+		workItemWindowFilterDisclosure(f) + " Extra.",
+		"Work items outside this principal's authorized scope are neither counted nor described here. Also this.",
+	} {
+		if contractsv1.IsContextFabricServiceAuthoredLimitation(impostor) {
+			t.Errorf("a caveat that only resembles a disclosure was recognised: %q", impostor)
+		}
+	}
+	// A full list of look-alike caveats must not hide the real disclosures.
+	var model []string
+	for i := 0; i < contractsv1.ContextFabricLimitationsMaxCount; i++ {
+		model = append(model, fmt.Sprintf("Members are the work items model note %03d", i))
+	}
+	got := withWorkItemMemberFilterLimitations(InvestigationResult{Limitations: model}, f, &WorkItemTupleCensus{State: WorkItemMembershipCensusExact, Value: 0})
+	for _, want := range []string{workItemWindowFilterDisclosure(f), workItemStatusDeniedExclusion, workItemMemberFilterNoMatchDisclosure(f)} {
+		if !limitationsContain(got.Limitations, want) {
+			t.Errorf("a look-alike caveat list displaced %q", want)
+		}
+	}
+}
+
+func TestWorkItemInvalidFrameIsNotOfferedTheThreeReadings(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	frame := periodTupleFrame()
+	frame.Goals = []InvestigationGoal{GoalAssessState}
+	frame.Emphasis = []AnswerEmphasis{EmphasisPositiveOutliers}
+	if validation := ValidateFrame(frame, nil, ""); validation.Outcome.Accepted() {
+		t.Fatalf("the fixture must be an invalid frame, got %+v", validation.Outcome)
+	}
+	run := runTupleFilterCase(t, frame, WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1}, statedPeriodRequest("Which work items in Project Alpha are there in the last 30 days?"))
+	if limitationsContain(run.result.Limitations, memberTimeRoleClarificationLimitation()) {
+		t.Errorf("an invalid frame received the role clarification: %v", run.result.Limitations)
+	}
+}
+
+func TestWorkItemRoleClarificationReasonNeedsTheMemberKindRefusal(t *testing.T) {
+	policy := workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus)
+	current := TimeContext{Axis: TemporalCurrent}
+	unresolved := workItemTupleWindowBasis{Committed: true, RoleReason: MemberTimeRoleNoVerb}
+	frame := periodTupleFrame()
+	member := FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectWorkItem}
+	if got := workItemRoleClarificationReason(member, &frame, policy, current, unresolved); got != MemberTimeRoleNoVerb {
+		t.Fatalf("member-kind refusal with no verb: reason=%q", got)
+	}
+	for name, gate := range map[string]FrameGate{
+		"invalid frame": {Outcome: FrameGateRejectedInvalid, FailedInvariant: FrameInvariantI14},
+		"passed":        {Outcome: FrameGatePassed},
+		"other basis":   {Outcome: FrameGateRefusedBasis, RefuseBasis: "other_basis"},
+		"not proposed":  {Outcome: FrameGateNotProposed},
+	} {
+		if got := workItemRoleClarificationReason(gate, &frame, policy, current, unresolved); got != "" {
+			t.Errorf("%s: reason=%q, want none", name, got)
+		}
+	}
+	if got := workItemRoleClarificationReason(member, &frame, policy, TimeContext{Axis: TemporalValidTime}, unresolved); got != "" {
+		t.Errorf("historical axis: reason=%q, want none", got)
 	}
 }

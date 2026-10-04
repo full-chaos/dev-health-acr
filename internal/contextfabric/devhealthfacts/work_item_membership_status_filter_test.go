@@ -130,7 +130,11 @@ func TestWorkItemMembershipS1LogWithholdsTheDeniedSideOfAFilteredRead(t *testing
 		{"status", contextfabric.WorkItemMembershipRequest{Status: "blocked"}, true},
 		{"window", contextfabric.WorkItemMembershipRequest{TimeColumn: "created_at", TimeStart: start, TimeEnd: start.Add(time.Hour)}, true},
 	} {
-		client := &workItemMembershipFakeClient{scanErrAt: -1, rows: append([][]any{workItemMembershipTestRow(t, repo, "WI-1", 1, 9, 2, 7)}, workItemMembershipTestSentinelRow())}
+		row := workItemMembershipTestRow(t, repo, "WI-1", 1, 9, 2, 7)
+		// RepoLess, RepoLessDenied, DeniedProjectLess, then the future-boundary
+		// and transition-assertion counts: every figure the denied rows feed.
+		row[12], row[13], row[14], row[17], row[18] = uint64(5), uint64(4), uint64(3), uint64(2), uint64(6)
+		client := &workItemMembershipFakeClient{scanErrAt: -1, rows: append([][]any{row}, workItemMembershipTestSentinelRow())}
 		telemetry := &workItemMembershipTelemetrySpy{}
 		reader, _ := newWorkItemMembershipTestReader(t, client, telemetry)
 		tc.request.Anchor = workItemMembershipTestAnchor(t, "linear", "P1")
@@ -143,7 +147,7 @@ func TestWorkItemMembershipS1LogWithholdsTheDeniedSideOfAFilteredRead(t *testing
 			t.Fatalf("%s: s1 events = %d", tc.name, len(telemetry.s1))
 		}
 		event := telemetry.s1[0]
-		denied := event.DeniedPopulation != 0 || event.CappedPopulation != event.AuthorizedPopulation
+		denied := event.DeniedPopulation != 0 || event.CappedPopulation != event.AuthorizedPopulation || event.FutureBoundaryCount != 0 || event.TransitionAssertionCount != 0 || event.Paths.RepoLess != 0 || event.Paths.RepoLessDenied != 0 || event.Paths.DeniedProjectLess != 0
 		if tc.filtered && denied {
 			t.Errorf("%s: the log carries the denied side of a filtered read: %+v", tc.name, event)
 		}

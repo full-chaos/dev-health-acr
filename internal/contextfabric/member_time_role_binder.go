@@ -94,7 +94,7 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 	seen := map[MemberTimeRole]bool{}
 	for _, entry := range memberTimeRoleRegistry {
 		for _, loc := range entry.pattern.FindAllStringIndex(clause, -1) {
-			if hyphenJoined(clause, loc[0], loc[1]) {
+			if hyphenJoined(clause, loc[0], loc[1]) || wordRuneAdjacent(clause, loc[0], loc[1]) {
 				continue
 			}
 			bound = append(bound, BoundMemberTimeRole{Role: entry.role, Grammar: entry.grammar, SpanStart: start + loc[0], SpanEnd: start + loc[1]})
@@ -144,6 +144,18 @@ func hyphenJoined(clause string, start, end int) bool {
 		if r, size := utf8.DecodeRuneInString(clause[end+1:]); size > 0 && isWordRune(r) {
 			return true
 		}
+	}
+	return false
+}
+
+// wordRuneAdjacent reports a match glued to a letter or digit the ASCII word
+// boundary of the pattern does not see ("préclosed"): not a standalone verb.
+func wordRuneAdjacent(clause string, start, end int) bool {
+	if r, size := utf8.DecodeLastRuneInString(clause[:start]); size > 0 && isWordRune(r) {
+		return true
+	}
+	if r, size := utf8.DecodeRuneInString(clause[end:]); size > 0 && isWordRune(r) {
+		return true
 	}
 	return false
 }

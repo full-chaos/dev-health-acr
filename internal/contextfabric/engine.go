@@ -2439,9 +2439,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if workItemTupleIsPeriodFrame(familyOutcome.Frame) {
 		familyOutcome.Gate = windowedWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext, windowBasis)
 		workItemTuple = prospectiveWorkItemWindowAdmission(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext, windowBasis) == workItemTupleProspective
-		if familyOutcome.Gate.Refuses() && workItemWindowFilterBasis(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext, windowBasis) == WorkItemMemberFilterWindowRoleUnresolved {
-			familyOutcome.MemberTimeRoleClarification = windowBasis.RoleReason
-		}
+		familyOutcome.MemberTimeRoleClarification = workItemRoleClarificationReason(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext, windowBasis)
 	} else {
 		familyOutcome.Gate = tightenWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext)
 		workItemTuple = prospectiveWorkItemTupleAdmission(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext) == workItemTupleProspective
@@ -3147,7 +3145,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				resolution = withoutSubjects(resolution)
 				return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
 			}
-			memberFilter.TimeRole, memberFilter.Start, memberFilter.End = windowBasis.Role, effectiveWindow.Start.UTC().Truncate(time.Microsecond), effectiveWindow.End.UTC().Truncate(time.Microsecond)
+			readStart, readEnd := workItemWindowReadBounds(*effectiveWindow.Start, *effectiveWindow.End)
+			memberFilter.TimeRole, memberFilter.Start, memberFilter.End = windowBasis.Role, readStart, readEnd
 		}
 		graphContext, tupleCensus, err = e.discoverWorkItemTuple(ctx, principal, request, resolution, &plan, memberFilter)
 		if err != nil {

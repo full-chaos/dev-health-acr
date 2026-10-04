@@ -499,3 +499,17 @@ func workItemTupleMemberFilterToken(frame *QuestionFrame, familyAllowsWorkItemTu
 	}
 	return workItemTupleMemberFilterBasis(frame)
 }
+
+// workItemRoleClarificationReason is the binder's reason when the three
+// readings are the one thing missing: the gate refused on the member-kind
+// basis this arm sets, and every other admission clause holds. An invalid
+// frame, or any other refusal, keeps its own explanation.
+func workItemRoleClarificationReason(gate FrameGate, frame *QuestionFrame, familyAllowsWorkItemTuple bool, timeContext TimeContext, basis workItemTupleWindowBasis) MemberTimeRoleReason {
+	if gate.Outcome != FrameGateRefusedBasis || gate.RefuseBasis != CohortMemberKindUnservable {
+		return ""
+	}
+	if workItemWindowFilterBasis(frame, familyAllowsWorkItemTuple, timeContext, basis) != WorkItemMemberFilterWindowRoleUnresolved {
+		return ""
+	}
+	return basis.RoleReason
+}

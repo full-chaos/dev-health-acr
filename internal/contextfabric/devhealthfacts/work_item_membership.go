@@ -616,6 +616,9 @@ func (r *WorkItemMembershipReader) recordS1(ctx context.Context, principal stora
 		event.CappedPopulation = event.AuthorizedPopulation
 		event.DeniedPopulation = 0
 		event.Paths.RepoLessDenied = 0
+		event.Paths.RepoLess = 0
+		event.FutureBoundaryCount = 0
+		event.TransitionAssertionCount = 0
 		event.Paths.DeniedProjectLess = 0
 		event.Paths.ExcludedExplicitTextLink = 0
 		event.Paths.ExcludedHeuristicLink = 0
