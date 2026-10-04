@@ -29,7 +29,7 @@ func (a *Adapter) ReadSubjectNodes(ctx context.Context, principal storage.Princi
 	if err != nil {
 		return nil, err
 	}
-	cypher := fmt.Sprintf("UNWIND $refs AS s MATCH (n:%s {%s:$org, %s:s.k, %s:s.i}) (n) RETURN n",
+	cypher := fmt.Sprintf("UNWIND $refs AS s MATCH (n:%s {%s:$org, %s:s.k, %s:s.i}) RETURN n",
 		labelSubject, propOrgID, propKind, propCanonicalID)
 	var out []directread.LookupNode
 	for start := 0; start < len(subjects); start += storedSubjectBatch {

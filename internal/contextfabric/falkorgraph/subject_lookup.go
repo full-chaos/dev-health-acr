@@ -48,7 +48,7 @@ func (a *Adapter) ListSubjectsByKind(ctx context.Context, principal storage.Prin
 	if afterCanonicalID != "" {
 		after = fmt.Sprintf(" AND n.%s > $after", propCanonicalID)
 	}
-	cypher := fmt.Sprintf("MATCH (n:%s) (n) WHERE n.%s = $org AND n.%s = $kind%s%s RETURN n ORDER BY n.%s LIMIT %d",
+	cypher := fmt.Sprintf("MATCH (n:%s) WHERE n.%s = $org AND n.%s = $kind%s%s RETURN n ORDER BY n.%s LIMIT %d",
 		labelSubject, propOrgID, propKind, after, current.predicate("n"), propCanonicalID, pageSize+1)
 	params := map[string]interface{}{"org": orgID, "kind": kind}
 	if afterCanonicalID != "" {
@@ -135,7 +135,7 @@ func (a *Adapter) FindSubjectsByExactName(ctx context.Context, principal storage
 }
 
 func (a *Adapter) exactNameKindPool(ctx context.Context, key, orgID, kind string, temporal temporalFilter) ([]graphrank.CandidateNode, bool, error) {
-	cypher := fmt.Sprintf("MATCH (n:%s) (n) WHERE n.%s = $org AND n.%s = $kind%s RETURN n ORDER BY n.%s LIMIT %d",
+	cypher := fmt.Sprintf("MATCH (n:%s) WHERE n.%s = $org AND n.%s = $kind%s RETURN n ORDER BY n.%s LIMIT %d",
 		labelSubject, propOrgID, propKind, temporal.predicate("n"), propCanonicalID, exactNameCandidateQueryLimit+1)
 	rows, err := a.api.query(ctx, key, cypher, temporal.bind(map[string]interface{}{"org": orgID, "kind": kind}), true)
 	if err != nil {

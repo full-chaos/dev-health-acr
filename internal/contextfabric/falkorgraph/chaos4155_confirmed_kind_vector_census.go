@@ -375,7 +375,7 @@ func watermarkSnapshotsEqual(before, after map[string]watermarkSnapshotEntry) bo
 // SubjectKind.
 func (a *Adapter) countKindEmbedderFenceCorpus(ctx context.Context, key, orgID, kind, identity string) (int64, error) {
 	cypher := fmt.Sprintf(
-		"MATCH (n:%s {%s:$org}) (n) WHERE n.%s IS NOT NULL AND n.%s = $identity "+
+		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity "+
 			"AND n.%s = $kind AND n.%s IS NOT NULL "+
 			"RETURN count(n) AS total",
 		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID,
@@ -403,7 +403,7 @@ func (a *Adapter) countKindEmbedderFenceCorpus(ctx context.Context, key, orgID, 
 // queried population) as ConfirmedKindVectorScopeMalformed, fail-closed.
 func (a *Adapter) fetchKindEmbedderFenceCorpus(ctx context.Context, key, orgID, kind, identity string) (corpus []oracleVector, enumeratedCount int64, malformedCount int64, err error) {
 	cypher := fmt.Sprintf(
-		"MATCH (n:%s {%s:$org}) (n) WHERE n.%s IS NOT NULL AND n.%s = $identity "+
+		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity "+
 			"AND n.%s = $kind AND n.%s IS NOT NULL "+
 			"RETURN n ORDER BY n.%s SKIP $skip LIMIT $limit",
 		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID, propCanonicalID,
