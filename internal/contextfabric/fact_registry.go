@@ -1949,13 +1949,14 @@ func sortCanonicalFacts(facts []CanonicalFact) {
 // keep one order however the provider returned them.
 func canonicalFactTieKey(fact CanonicalFact) string {
 	encoded, err := json.Marshal(struct {
+		Label          string               `json:"l"`
 		Fields         map[string]FactValue `json:"f"`
 		ObservedAt     *time.Time           `json:"o"`
 		EventAt        *time.Time           `json:"e"`
 		EvidenceRefIDs []string             `json:"r"`
 		SourceState    SourceState          `json:"s"`
 		SourceVersion  string               `json:"v"`
-	}{fact.Fields, fact.ObservedAt, fact.EventAt, fact.EvidenceRefIDs, fact.SourceState, fact.SourceVersion})
+	}{fact.Subject.Label, fact.Fields, fact.ObservedAt, fact.EventAt, fact.EvidenceRefIDs, fact.SourceState, fact.SourceVersion})
 	if err != nil {
 		return ""
 	}

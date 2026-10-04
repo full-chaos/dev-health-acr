@@ -580,9 +580,9 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 		}
 		fields := make(map[string]contextfabric.FactValue, 2*len(canonicalInvestmentThemes)+4)
 		for _, theme := range canonicalInvestmentThemes {
-			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(themeValues[theme] / currentTotal)
+			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(roundMixEffort(themeValues[theme] / currentTotal))
 		}
-		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(bugfixWeighted / currentTotal)
+		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(roundMixEffort(bugfixWeighted / currentTotal))
 		// rollup_basis names both hops (owning teams, then their owned
 		// repos) so a synthesizer never presents this as a project-native
 		// attribution computed directly from the project's own work items.
@@ -723,9 +723,9 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		}
 		fields := make(map[string]contextfabric.FactValue, 2*len(canonicalInvestmentThemes)+8)
 		for _, theme := range canonicalInvestmentThemes {
-			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(themeValues[theme] / currentTotal)
+			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(roundMixEffort(themeValues[theme] / currentTotal))
 		}
-		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(row.BugfixWeighted / currentTotal)
+		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(roundMixEffort(row.BugfixWeighted / currentTotal))
 		fields[contextfabric.FactFieldInvestmentMixSource] = contextfabric.StringFactValue(contextfabric.InvestmentMixSourceProjectNative)
 		fields["rollup_basis"] = contextfabric.StringFactValue(projectNativeMixBasis)
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(int64(row.WorkUnits))

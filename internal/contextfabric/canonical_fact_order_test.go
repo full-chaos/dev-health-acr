@@ -80,3 +80,17 @@ func TestSortCanonicalFactsKeepsTheKindSubjectSourceOrderBeforeTheTieBreak(t *te
 		}
 	}
 }
+
+// TestSortCanonicalFactsOrdersFactsThatDifferOnlyInTheSubjectLabel pins the
+// label in the tie-break: two facts of one subject id with different labels
+// keep one order whichever way the provider returned them.
+func TestSortCanonicalFactsOrdersFactsThatDifferOnlyInTheSubjectLabel(t *testing.T) {
+	a, b := orderTestFact("scope-a", "2026-10-03", 0), orderTestFact("scope-a", "2026-10-03", 0)
+	a.Subject.Label, b.Subject.Label = "Alpha", "Beta"
+	forward, backward := []CanonicalFact{a, b}, []CanonicalFact{b, a}
+	sortCanonicalFacts(forward)
+	sortCanonicalFacts(backward)
+	if forward[0].Subject.Label != backward[0].Subject.Label || forward[1].Subject.Label != backward[1].Subject.Label {
+		t.Fatalf("labels %q,%q versus %q,%q", forward[0].Subject.Label, forward[1].Subject.Label, backward[0].Subject.Label, backward[1].Subject.Label)
+	}
+}

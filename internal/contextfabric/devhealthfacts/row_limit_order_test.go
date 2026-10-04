@@ -94,3 +94,37 @@ func TestEveryRowLimitedStatementOrdersItsRows(t *testing.T) {
 		t.Fatalf("only %d row-limited statements were found, the guard is not reading the source", checked)
 	}
 }
+
+// TestEveryServedThemeShareIsRounded requires every line that writes a theme
+// share field (theme_*, theme_quality_bugfix, prior_theme_*) to go through the
+// declared rounding, whichever read (repository, team, project) it is on: a
+// share written without it moves in its last digits with the aggregation
+// order and changes the client input digest.
+func TestEveryServedThemeShareIsRounded(t *testing.T) {
+	checked := 0
+	for _, name := range []string{"investment.go", "investment_repo_mix.go", "investment_project_rollup_mix.go", "investment_project_mix_phased.go", "investment_project_native_mix.go"} {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for number, line := range strings.Split(string(raw), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "//") {
+				continue
+			}
+			if !strings.Contains(line, "] = contextfabric.NumberFactValue(") {
+				continue
+			}
+			if !strings.Contains(line, "FactFieldTheme(") && !strings.Contains(line, "FactFieldThemeQualityBugfix") && !strings.Contains(line, "FactFieldPriorTheme(") {
+				continue
+			}
+			checked++
+			if !strings.Contains(line, "roundMixEffort(") {
+				t.Errorf("%s:%d writes a theme share without the declared rounding: %s", name, number+1, trimmed)
+			}
+		}
+	}
+	if checked < 8 {
+		t.Fatalf("only %d theme share writes were found, the guard is not reading the source", checked)
+	}
+}
