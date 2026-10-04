@@ -19,7 +19,7 @@ func (a *Adapter) CountKind(ctx context.Context, orgID string, kind contextfabri
 	if err != nil {
 		return 0, err
 	}
-	cypher := fmt.Sprintf("MATCH (n:%s {%s:$org, %s:$kind}) RETURN count(n) AS total", labelSubject, propOrgID, propKind)
+	cypher := fmt.Sprintf("MATCH (n:%s {%s:$org, %s:$kind}) (n) RETURN count(n) AS total", labelSubject, propOrgID, propKind)
 	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "kind": string(kind)}, true)
 	if err != nil {
 		return 0, safeDependencyError("count subject nodes by kind", err)
