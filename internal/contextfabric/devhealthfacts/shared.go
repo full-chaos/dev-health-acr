@@ -216,12 +216,17 @@ import (
 // members of one status are served. A candidate saved under v31 for such a
 // question is the member-kind refusal and must not be reused.
 //
-// v32 -> v33: a deployment cohort of a named anchor holds only the deployments
+// v32 -> v33: an exact repository hint beside a pull request handle in the
+// question commits the census-attested pull request too, where it used to
+// commit the repository alone. A candidate saved under v32 for such a question
+// answers about the repository and must not be reused.
+//
+// v33 -> v34: a deployment cohort of a named anchor holds only the deployments
 // reached from the anchor, and a project named by its label is served by the
-// project walk. A candidate saved under v32 for such a question holds
+// project walk. A candidate saved under v33 for such a question holds
 // deployments the question text matched across the organization and must not
 // be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v33"
+const QueryVersion = "devhealthfacts.clickhouse.v34"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
