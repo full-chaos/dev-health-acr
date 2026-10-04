@@ -182,6 +182,9 @@ func TestResolveSubjects_CohortFrameBindingAHandleKeepsTheScopeAnchorAlone(t *te
 			t.Fatalf("committed = %v, want the pull request left out: in a cohort question the handle is an example, not the subject", scopeAnchorCommittedIDs(resolution))
 		}
 	}
+	if calls != 0 {
+		t.Fatalf("census calls = %d, want 0: a cohort question must not run the handle census", calls)
+	}
 }
 
 func TestAppendCensusAttestedCommitHonoursTheCandidateCap(t *testing.T) {
@@ -223,11 +226,14 @@ func TestAppendCensusAttestedCommitHonoursTheCandidateCap(t *testing.T) {
 func TestResolveSubjects_NamedRepositoryFrameKeepsTheScopeAnchorAlone(t *testing.T) {
 	t.Parallel()
 	repository := contextfabric.SubjectRepository
-	resolution, _, _ := resolveScopeAnchorQuestionWith(t, scopeAnchorBackend(true, -1),
+	resolution, _, calls := resolveScopeAnchorQuestionWith(t, scopeAnchorBackend(true, -1),
 		"How is full-chaos/dev-health-acr doing over the last 30 days? Use pull request 747 as an example.", namedScopeAnchorFrame(&repository), 0)
 	ids := scopeAnchorCommittedIDs(resolution)
 	if len(ids) != 1 || ids[0] != scopeAnchorRepoID {
 		t.Fatalf("committed = %v, want only the repository: the frame says the repository is the subject", ids)
+	}
+	if calls != 0 {
+		t.Fatalf("census calls = %d, want 0: a frame expecting another kind must not run the handle census", calls)
 	}
 }
 
