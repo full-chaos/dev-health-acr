@@ -2420,6 +2420,7 @@ var DirectRelationshipsRead = Event{
 		{Key: "evidence_refs_withheld", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "end_nodes_gated", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "end_nodes_refused", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "link_tier_unserved", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "latency_ms", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "truncated_by", Type: FieldString, Presence: PresenceConditional, Applicability: "written when a bound cut a depth-2 walk", ClosedVocabulary: []string{"frontier_cap", "frontier_scan_cap"}},
 		{Key: "cursor_in", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request carried a cursor", ClosedVocabulary: arrayTokens(directRelationshipsCursorArr[:])},

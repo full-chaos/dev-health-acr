@@ -52,3 +52,23 @@ func TestLinkTierServedOnLinksPullRequestOnly(t *testing.T) {
 		})
 	}
 }
+
+// The read's Info line carries link_tier_unserved, so an edge served without
+// its link tier is explained in the logs, not only counted in the record.
+func TestLinkTierUnservedIsOnTheReadLogLine(t *testing.T) {
+	for _, n := range []int{0, 2} {
+		args := RelationshipsReadLogArgs(restrictedA, RelationshipsReadRecord{LinkTierUnserved: n})
+		found := false
+		for i := 0; i+1 < len(args); i += 2 {
+			if args[i] == "link_tier_unserved" {
+				found = true
+				if args[i+1] != n {
+					t.Fatalf("link_tier_unserved = %v, want %d", args[i+1], n)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("read log line lacks link_tier_unserved (record count %d): %v", n, args)
+		}
+	}
+}

@@ -51,6 +51,7 @@ func RelationshipsReadLogArgs(principal storage.Principal, record RelationshipsR
 		"evidence_refs_withheld", record.EvidenceRefs,
 		"end_nodes_gated", record.EndNodesGated,
 		"end_nodes_refused", record.EndNodesRefused,
+		"link_tier_unserved", record.LinkTierUnserved,
 		"latency_ms", record.Latency.Milliseconds(),
 	}
 	if record.TruncatedBy != "" {

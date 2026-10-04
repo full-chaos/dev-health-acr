@@ -1191,6 +1191,7 @@ type DirectRelationshipsReadFields struct {
 	EvidenceRefsWithheld    int
 	EndNodesGated           int
 	EndNodesRefused         int
+	LinkTierUnserved        int
 	LatencyMs               int
 	TruncatedBy             string
 	CursorIn                string
@@ -1210,7 +1211,7 @@ type DirectRelationshipsReadFields struct {
 
 // NewDirectRelationshipsReadFields is the generated constructor for DirectRelationshipsReadFields -- every
 // field DirectRelationshipsRead.Fields declares is a required parameter.
-func NewDirectRelationshipsReadFields(tool string, orgID string, principalClass string, status string, subjectKind string, depth int, hop int, typeCount int, direction string, windowMode string, edgesExamined int, edgesReturned int, edgesNotVisible int, edgesWithheldReasons []string, edgesWithheldAttributes int, edgesWithheldSource int, edgesWithheldTarget int, evidenceRefsWithheld int, endNodesGated int, endNodesRefused int, latencyMs int, truncatedBy string, cursorIn string, cursorOut string, failureClass string, requestID string) DirectRelationshipsReadFields {
+func NewDirectRelationshipsReadFields(tool string, orgID string, principalClass string, status string, subjectKind string, depth int, hop int, typeCount int, direction string, windowMode string, edgesExamined int, edgesReturned int, edgesNotVisible int, edgesWithheldReasons []string, edgesWithheldAttributes int, edgesWithheldSource int, edgesWithheldTarget int, evidenceRefsWithheld int, endNodesGated int, endNodesRefused int, linkTierUnserved int, latencyMs int, truncatedBy string, cursorIn string, cursorOut string, failureClass string, requestID string) DirectRelationshipsReadFields {
 	valid := true
 	if edgesWithheldReasons == nil {
 		valid = false
@@ -1236,6 +1237,7 @@ func NewDirectRelationshipsReadFields(tool string, orgID string, principalClass 
 		EvidenceRefsWithheld:    evidenceRefsWithheld,
 		EndNodesGated:           endNodesGated,
 		EndNodesRefused:         endNodesRefused,
+		LinkTierUnserved:        linkTierUnserved,
 		LatencyMs:               latencyMs,
 		TruncatedBy:             truncatedBy,
 		CursorIn:                cursorIn,
@@ -1279,6 +1281,7 @@ func (f DirectRelationshipsReadFields) SlogArgs() []any {
 		"evidence_refs_withheld", f.EvidenceRefsWithheld,
 		"end_nodes_gated", f.EndNodesGated,
 		"end_nodes_refused", f.EndNodesRefused,
+		"link_tier_unserved", f.LinkTierUnserved,
 		"latency_ms", f.LatencyMs,
 		"truncated_by", contextfabric.SanitizeLogAttr(f.TruncatedBy),
 		"cursor_in", contextfabric.SanitizeLogAttr(f.CursorIn),

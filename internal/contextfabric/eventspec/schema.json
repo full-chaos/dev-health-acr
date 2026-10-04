@@ -2023,6 +2023,11 @@
         "presence": "required"
       },
       {
+        "key": "link_tier_unserved",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "latency_ms",
         "type": "int",
         "presence": "required"
