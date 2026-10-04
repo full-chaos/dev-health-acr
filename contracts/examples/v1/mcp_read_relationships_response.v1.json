@@ -45,6 +45,29 @@
           "evr_1"
         ]
       }
+    },
+    {
+      "relationship_id": "rel-2",
+      "type": "LINKS_PULL_REQUEST",
+      "hop": 1,
+      "from": {
+        "kind": "work_item",
+        "canonical_id": "work_item:issue-482",
+        "label": "Retry failed charges"
+      },
+      "to": {
+        "kind": "pull_request",
+        "canonical_id": "pull_request:repo-payments-api:532",
+        "label": "Retry failed charges"
+      },
+      "provenance": {
+        "source": "acr_graph",
+        "observed_at": "2026-09-27T00:00:00Z",
+        "valid_from": null,
+        "valid_to": null,
+        "evidence_ref_ids": [],
+        "link_tier": "heuristic"
+      }
     }
   ],
   "withheld": {
@@ -52,8 +75,8 @@
     "evidence_refs": 0
   },
   "page": {
-    "returned": 1,
-    "examined": 2,
+    "returned": 2,
+    "examined": 3,
     "complete": true
   },
   "meaning": "An edge shows a relation. It does not show a cause.",

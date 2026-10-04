@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -155,6 +156,10 @@ type RelationshipSource struct {
 	ValidFrom       *string  `json:"valid_from"`
 	ValidTo         *string  `json:"valid_to"`
 	EvidenceRefIDs  []string `json:"evidence_ref_ids"`
+	// LinkTier names how a LINKS_PULL_REQUEST link was made: native,
+	// explicit_text or heuristic, as stored on the edge. Set on that edge
+	// type only; absent on every other type and never an empty string.
+	LinkTier string `json:"link_tier,omitempty"`
 }
 
 // RelationshipsWithheld counts what the gates removed from this page. Ids,
@@ -189,20 +194,23 @@ type RelationshipsRecorder interface {
 // RelationshipsReadRecord is the trace of one read: counts and closed
 // vocabulary values only.
 type RelationshipsReadRecord struct {
-	Status          RelationshipsStatus
-	SubjectKind     string
-	Depth           int
-	Hop             int
-	TypeCount       int
-	Direction       string
-	WindowMode      string
-	EdgesExamined   int
-	EdgesReturned   int
-	EdgesWithheld   map[EdgeWithheldReason]int
-	EvidenceRefs    int
-	EndNodesGated   int
-	EndNodesRefused int
-	TruncatedBy     string
+	Status        RelationshipsStatus
+	SubjectKind   string
+	Depth         int
+	Hop           int
+	TypeCount     int
+	Direction     string
+	WindowMode    string
+	EdgesExamined int
+	EdgesReturned int
+	EdgesWithheld map[EdgeWithheldReason]int
+	EvidenceRefs  int
+	// LinkTierUnserved counts LINKS_PULL_REQUEST edges served without
+	// link_tier because the stored tier was missing or outside the closed set.
+	LinkTierUnserved int
+	EndNodesGated    int
+	EndNodesRefused  int
+	TruncatedBy      string
 	// CursorIn is what the page did with the cursor it was given (accepted,
 	// expired, stale, invalid, foreign_org), or "" when it had none.
 	CursorIn CursorOutcome
@@ -698,6 +706,14 @@ func (r *RelationshipsReader) gateEdges(ctx context.Context, principal storage.P
 			}
 		}
 		record.EvidenceRefs += len(graphrank.EvidenceRefs(candidate.Attributes)) - len(refs)
+		linkTier := ""
+		if candidate.RelationType == string(contractsv1.ContextFabricRelationshipLinksPullRequest) {
+			if linkTier = linkTierOf(candidate.Attributes); linkTier == "" {
+				// Not invented and not withheld: the edge is a real stored
+				// relation, so it is served without the field and counted.
+				record.LinkTierUnserved++
+			}
+		}
 		served = append(served, ServedEdge{
 			RelationshipID: candidate.Key.RelationshipID,
 			Type:           candidate.RelationType,
@@ -714,11 +730,30 @@ func (r *RelationshipsReader) gateEdges(ctx context.Context, principal storage.P
 				ValidFrom:       optionalAttribute(candidate.Attributes, "valid_from"),
 				ValidTo:         optionalAttribute(candidate.Attributes, "valid_to"),
 				EvidenceRefIDs:  refs,
+				LinkTier:        linkTier,
 			},
 		})
 	}
 	return served, withheld, nil
 }
+
+// linkTierProperty is the stored edge property holding the link tier
+// (falkorgraph writes the relationship property link_provenance under the
+// property_ prefix).
+const linkTierProperty = "property_link_provenance"
+
+// linkTierOf returns the stored tier when it is in the closed set, else "".
+func linkTierOf(attributes map[string]interface{}) string {
+	tier := graphrank.StringAttribute(attributes, linkTierProperty)
+	if slices.Contains(linkTierVocabulary, tier) {
+		return tier
+	}
+	return ""
+}
+
+// linkTierVocabulary is the closed set of stored link tiers, the enum of
+// provenance.link_tier in the response schema.
+var linkTierVocabulary = []string{"explicit_text", "heuristic", "native"}
 
 func servedEnd(end EdgeEnd) ServedEdgeEnd {
 	label := strings.TrimSpace(graphrank.StringAttribute(end.Attributes, "label"))
