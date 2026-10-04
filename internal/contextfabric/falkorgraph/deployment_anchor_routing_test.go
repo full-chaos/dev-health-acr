@@ -180,7 +180,7 @@ func walkOutcomeFixtures() map[ProjectDeploymentWalkOutcome]walkOutcomeFixture {
 		},
 		ProjectDeploymentWalkTruncated: {
 			principal: open, limit: 3, request: projectDeploymentsRequest,
-			seed: func() ([]seededNode, []seededEdge) { s := linklessThenLinked(6); return s.nodes, s.edges },
+			seed: func() ([]seededNode, []seededEdge) { s := linkedIssues(6, 0); return s.nodes, s.edges },
 			check: func(t *testing.T, d ProjectDeploymentWalkDecision) {
 				if d.Members != 0 || !d.Truncated {
 					t.Errorf("truncated decision = %+v, want no member and a cut frontier", d)
@@ -416,7 +416,7 @@ func TestABoundRepositoryAnchorKeepsAStrayCommitsDeploymentsOut(t *testing.T) {
 // TestARestrictedCallerWithACutFrontierStillGetsTheNeutralReason: a cut
 // frontier does not replace the neutral reason of a restricted caller.
 func TestARestrictedCallerWithACutFrontierStillGetsTheNeutralReason(t *testing.T) {
-	s := linklessThenLinked(6)
+	s := linkedIssues(40, 1)
 	telemetry := &recordingTelemetry{}
 	adapter := newFakeAdapterWithTelemetry(t, seededGraphConn(s.nodes, s.edges), telemetry)
 	adapter.config.MaxResults = 3
@@ -556,5 +556,31 @@ func TestAStrayCommitsCutReadIsNotTheAnchorsCut(t *testing.T) {
 	}
 	if cutDetail(result) != nil {
 		t.Fatalf("details = %+v, want no truncation detail: the anchor's own read was not cut", result.Coverage.Details)
+	}
+}
+
+// TestEachFailedProjectReadIsAReadFailure: the issue count and the link read
+// are reads of the walk; either failing ends the call as a failed read.
+func TestEachFailedProjectReadIsAReadFailure(t *testing.T) {
+	for name, fails := range map[string]string{"issue count": "count(DISTINCT i)", "link read": "SKIP $skip"} {
+		t.Run(name, func(t *testing.T) {
+			nodes, edges := projectWithOneIssue(true, 2)
+			conn := seededGraphConn(nodes, edges)
+			inner := conn.queryFunc
+			conn.queryFunc = func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+				if strings.Contains(cypher, fails) {
+					return nil, errors.New("connection reset")
+				}
+				return inner(ctx, key, cypher, params, readOnly)
+			}
+			telemetry := &recordingTelemetry{}
+			adapter := newFakeAdapterWithTelemetry(t, conn, telemetry)
+			if _, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, projectDeploymentsRequest()); err == nil {
+				t.Fatal("DiscoverContext() error = nil, want the failed read")
+			}
+			if len(telemetry.projectDeploymentWalks) != 1 || telemetry.projectDeploymentWalks[0].Outcome != ProjectDeploymentWalkReadFailed {
+				t.Fatalf("walk decisions = %+v, want one read_failed decision", telemetry.projectDeploymentWalks)
+			}
+		})
 	}
 }

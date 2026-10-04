@@ -235,7 +235,13 @@ import (
 // v35 -> v36: a terminal answer whose stored reading the strict work-item
 // validator refuses is now served (with a not-saved disclosure) instead of
 // failing the turn.
-const QueryVersion = "devhealthfacts.clickhouse.v36"
+//
+// v36 -> v39 (v37 and v38 are held by changes in review): the project walk
+// reads its issues' links first, so a project whose linked issues sort past
+// the read budget is served, and a project with no link is unlinked with its
+// exact issue count instead of cut. A candidate saved under v36 for such a
+// question holds a cut or empty answer and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v39"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

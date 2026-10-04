@@ -1,6 +1,7 @@
 package falkorgraph
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -9,7 +10,8 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
-// walkStepsInOrder are the four step reads of the project deployment walk.
+// walkStepsInOrder are the step reads of the project deployment walk after
+// its link read.
 func walkStepsInOrder() []struct {
 	name string
 	step walkStep
@@ -18,8 +20,6 @@ func walkStepsInOrder() []struct {
 		name string
 		step walkStep
 	}{
-		{"issues of the project", projectIssuesStep},
-		{"pull requests linked to the issues", issuePullRequestsStep},
 		{"repositories of the pull requests", pullRequestRepositoriesStep},
 		{"deployments of the repositories", repositoryDeploymentsStep},
 	}
@@ -57,6 +57,36 @@ func TestEveryWalkStepReadIsOnePathPattern(t *testing.T) {
 			}
 			if !strings.HasSuffix(cypher, " LIMIT $limit") || !strings.Contains(cypher, " ORDER BY id, b.") {
 				t.Errorf("%s, %s: read = %q, want a deterministic order and a bound", s.name, windowName, cypher)
+			}
+		}
+	}
+}
+
+// TestTheProjectLinkReadIsOnePathPattern pins the grammar of the walk's link
+// read and issue count: one path from the project through its issue to the
+// linked pull request, and one path from the project to its issue.
+func TestTheProjectLinkReadIsOnePathPattern(t *testing.T) {
+	node := `\((%s):Subject \{[^{}()]*\}\)`
+	link := regexp.MustCompile("^" + fmt.Sprintf(node, "p") + regexp.QuoteMeta("<-[rp:Relates]-") + fmt.Sprintf(node, "i") + regexp.QuoteMeta("-[rl:Relates]-") + fmt.Sprintf(node, "pr") + "$")
+	count := regexp.MustCompile("^" + fmt.Sprintf(node, "p") + regexp.QuoteMeta("<-[rp:Relates]-") + fmt.Sprintf(node, "i") + "$")
+	for windowName, temporal := range walkWindows(time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)) {
+		for name, c := range map[string]struct {
+			cypher  string
+			pattern *regexp.Regexp
+			suffix  string
+		}{
+			"link read":   {projectLinkCypher(temporal), link, " SKIP $skip LIMIT $limit"},
+			"issue count": {projectIssueCountCypher(temporal), count, " RETURN count(DISTINCT i) AS issues"},
+		} {
+			from, to := strings.Index(c.cypher, "MATCH "), strings.Index(c.cypher, " WHERE ")
+			if from != 0 || to < from {
+				t.Fatalf("%s, %s: read = %q, want MATCH ... WHERE", name, windowName, c.cypher)
+			}
+			if pattern := c.cypher[len("MATCH "):to]; !c.pattern.MatchString(pattern) {
+				t.Errorf("%s, %s: MATCH pattern = %q, want one path", name, windowName, pattern)
+			}
+			if !strings.HasSuffix(c.cypher, c.suffix) {
+				t.Errorf("%s, %s: read = %q, want it to end %q", name, windowName, c.cypher, c.suffix)
 			}
 		}
 	}

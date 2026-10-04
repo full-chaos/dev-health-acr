@@ -359,14 +359,36 @@ func manyIssuesOneRepository(issues int) projectSeed {
 	return s
 }
 
-func TestProjectDeploymentWalkReportsAFrontierCutAsTruncation(t *testing.T) {
-	walk := walkProject(t, manyIssuesOneRepository(5), storage.Principal{OrgID: "org-1"}, 2)
-	if !walk.truncated {
-		t.Fatalf("a frontier of 5 issues cut at a budget of 2 must report truncation, got %+v", walk)
+// linkedIssues is a project with issues issues, each linked to a pull request
+// of its own in a repository of its own holding deployments deployments.
+func linkedIssues(issues, deployments int) projectSeed {
+	s := projectSeed{served: map[string]string{}}
+	s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
+	for i := 0; i < issues; i++ {
+		slug := fmt.Sprintf("acme/linked-%02d", i)
+		repoID := s.repository(slug, deployments)
+		s.link("github", fmt.Sprintf("work_item:gh:%02d", i), nil, fmt.Sprintf("work_item:ghpr:%02d", i), "pr", repoID, slug, false)
 	}
-	whole := walkProject(t, manyIssuesOneRepository(5), storage.Principal{OrgID: "org-1"}, 50)
-	if whole.truncated || len(whole.nodes) != 1 {
+	return s
+}
+
+func TestProjectDeploymentWalkReportsMoreLinksThanTheBudgetAsTruncation(t *testing.T) {
+	walk := walkProject(t, linkedIssues(5, 1), storage.Principal{OrgID: "org-1"}, 2)
+	if !walk.truncated {
+		t.Fatalf("5 linked pull requests under a budget of 2 must report truncation, got %+v", walk)
+	}
+	whole := walkProject(t, linkedIssues(5, 1), storage.Principal{OrgID: "org-1"}, 50)
+	if whole.truncated || len(whole.nodes) != 5 {
 		t.Fatalf("a walk inside its budget must not report truncation, got truncated=%v nodes=%d", whole.truncated, len(whole.nodes))
+	}
+}
+
+// TestManyIssuesLinkingOnePullRequestAreNotACut: the budget counts linked pull
+// requests, so many issues linking one pull request fit in it.
+func TestManyIssuesLinkingOnePullRequestAreNotACut(t *testing.T) {
+	walk := walkProject(t, manyIssuesOneRepository(5), storage.Principal{OrgID: "org-1"}, 2)
+	if walk.truncated || len(walk.nodes) != 1 || walk.issues != 5 || walk.linkedPullRequests != 1 {
+		t.Fatalf("walk = %+v, want the one deployment, 5 issues, 1 linked pull request, uncut", walk)
 	}
 }
 
@@ -430,7 +452,9 @@ func linklessThenLinked(linkless int) projectSeed {
 	return s
 }
 
-func TestACutIssueFrontierIsNeverTheUnlinkedLimitation(t *testing.T) {
+// TestALinkPastMoreLinklessIssuesThanTheBudgetIsFound: issues with no link do
+// not use up the read, so a link past them is found and the cohort is whole.
+func TestALinkPastMoreLinklessIssuesThanTheBudgetIsFound(t *testing.T) {
 	s := linklessThenLinked(6)
 	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
 	adapter.config.MaxResults = 3
@@ -439,21 +463,21 @@ func TestACutIssueFrontierIsNeverTheUnlinkedLimitation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if unlinkedDetail(result) != nil {
-		t.Fatalf("the first 3 of 7 issues have no link but a later one does: details = %+v, 'unlinked' is false", result.Coverage.Details)
+		t.Fatalf("details = %+v: a later issue has a link, so 'unlinked' is false", result.Coverage.Details)
 	}
-	if result.Cohort != nil && result.Cohort.Complete {
-		t.Fatalf("a cut issue frontier must not claim a complete cohort: %+v", result.Cohort)
+	if result.Cohort == nil || len(result.Cohort.Members) != 1 || !result.Cohort.Complete {
+		t.Fatalf("cohort = %+v, want the late link's deployment as a complete cohort", result.Cohort)
 	}
 }
 
 func TestProjectDeploymentStepQueriesAreBounded(t *testing.T) {
-	s := manyIssuesOneRepository(40)
+	s := linkedIssues(40, 1)
 	conn := seededGraphConn(s.nodes, s.edges)
 	adapter := newFakeAdapter(t, conn)
 	var limits []int
 	inner := conn.queryFunc
 	conn.queryFunc = func(ctx context.Context, key, cypher string, params map[string]interface{}, ro bool) ([]row, error) {
-		if strings.Contains(cypher, "UNWIND $ids") {
+		if strings.Contains(cypher, "UNWIND $ids") || strings.Contains(cypher, "SKIP $skip") {
 			if !strings.Contains(cypher, "LIMIT $limit") {
 				t.Errorf("step query has no LIMIT: %s", cypher)
 			}
@@ -469,10 +493,19 @@ func TestProjectDeploymentStepQueriesAreBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !walk.truncated {
-		t.Fatal("40 issues under a budget of 5 must report truncation")
+		t.Fatal("40 linked pull requests under a budget of 5 must report truncation")
 	}
 	if len(limits) == 0 {
 		t.Fatal("no step query observed")
+	}
+	linkReads := 0
+	for _, l := range limits {
+		if l == 6 {
+			linkReads++
+		}
+	}
+	if linkReads > 4 {
+		t.Errorf("%d reads at the budget's page size, want the link read to stop once the budget is spent", linkReads)
 	}
 	for _, l := range limits {
 		if l > 6 {
@@ -540,7 +573,7 @@ func TestADeploymentReachedFromAStrayCommittedSubjectIsNotAProjectMember(t *test
 }
 
 func TestACutFrontierWithNoMemberIsPartialAndNamesTheTruncation(t *testing.T) {
-	s := linklessThenLinked(6)
+	s := linkedIssues(6, 0)
 	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
 	adapter.config.MaxResults = 3
 	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, projectDeploymentsRequest())

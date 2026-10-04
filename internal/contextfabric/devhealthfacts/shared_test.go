@@ -455,3 +455,11 @@ func TestQueryVersionMovedPastTheLexicalDeploymentCohort(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved before a named anchor's deployment cohort was held to the anchor's reach holds deployments the question text matched across the organization and must not be reused", devhealthfacts.QueryVersion, versionBeforeAnchoredDeploymentCohortsHeldToTheirReach)
 	}
 }
+
+func TestQueryVersionMovedPastTheIssueFirstProjectWalk(t *testing.T) {
+	t.Parallel()
+	const versionBeforeTheProjectWalkReadLinksFirst = "devhealthfacts.clickhouse.v36"
+	if devhealthfacts.QueryVersion == versionBeforeTheProjectWalkReadLinksFirst {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when the project walk read issues before links holds a cut or empty answer for a project whose links sort past the budget and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheProjectWalkReadLinksFirst)
+	}
+}

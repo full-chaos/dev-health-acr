@@ -51,16 +51,8 @@ type walkHit struct {
 	rel  *edge
 }
 
-// The four steps of the project deployment walk, in order.
+// The two steps of the project deployment walk after its link read, in order.
 var (
-	projectIssuesStep = walkStep{
-		fromKind: contractsv1.ContextFabricSubjectProject, toKind: contractsv1.ContextFabricSubjectWorkItem,
-		relation: contractsv1.ContextFabricRelationshipBelongsToProject, direction: walkIn, notToTypes: pullRequestWorkItemTypes,
-	}
-	issuePullRequestsStep = walkStep{
-		fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectWorkItem,
-		relation: contractsv1.ContextFabricRelationshipRelatesTo, direction: walkEither, toTypes: pullRequestWorkItemTypes,
-	}
 	pullRequestRepositoriesStep = walkStep{
 		fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectRepository,
 		relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkOut,
@@ -94,6 +86,62 @@ func walkStepCypher(step walkStep, temporal temporalFilter) string {
 	return fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+arrow+"(b:%s {%s:$org, %s:$toKind}) WHERE r.%s = $rel%s%s%s RETURN id, b, r ORDER BY id, b.%s, r.%s LIMIT $limit",
 		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, propKind,
 		propRelationType, typeClause, temporal.predicate("r"), temporal.predicate("b"), propCanonicalID, propRelationshipID)
+}
+
+// projectLinkPageCap bounds how many pages of issue links one walk reads. A
+// walk that reaches it is cut.
+const projectLinkPageCap = 8
+
+// projectLinkCypher is the walk's first read: the project's issues joined to
+// the pull-request work items they are linked to, one row per link, in a
+// deterministic order, paged. An issue with no link is not a row, so the read
+// budget is spent on links only, and a project none of whose issues links a
+// pull request returns no row at all.
+func projectLinkCypher(temporal temporalFilter) string {
+	return fmt.Sprintf("MATCH (p:%[1]s {%[2]s:$org, %[3]s:$projectKind, %[4]s:$project})<-[rp:%[5]s]-(i:%[1]s {%[2]s:$org, %[3]s:$workItemKind})-[rl:%[5]s]-(pr:%[1]s {%[2]s:$org, %[3]s:$workItemKind}) "+
+		"WHERE rp.%[6]s = $belongs AND rl.%[6]s = $relates AND (i.%[7]s IS NULL OR NOT i.%[7]s IN $prtypes) AND pr.%[7]s IN $prtypes%[8]s%[9]s%[10]s%[11]s "+
+		"RETURN i, pr, rl ORDER BY i.%[4]s, pr.%[4]s, rl.%[12]s SKIP $skip LIMIT $limit",
+		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, propRelationType, propWorkItemType,
+		temporal.predicate("rp"), temporal.predicate("i"), temporal.predicate("rl"), temporal.predicate("pr"), propRelationshipID)
+}
+
+// projectIssueCountCypher counts the project's issues, before authorization.
+func projectIssueCountCypher(temporal temporalFilter) string {
+	return fmt.Sprintf("MATCH (p:%[1]s {%[2]s:$org, %[3]s:$projectKind, %[4]s:$project})<-[rp:%[5]s]-(i:%[1]s {%[2]s:$org, %[3]s:$workItemKind}) "+
+		"WHERE rp.%[6]s = $belongs AND (i.%[7]s IS NULL OR NOT i.%[7]s IN $prtypes)%[8]s%[9]s RETURN count(DISTINCT i) AS issues",
+		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, propRelationType, propWorkItemType,
+		temporal.predicate("rp"), temporal.predicate("i"))
+}
+
+// projectLinkParams binds the link read and the issue count.
+func projectLinkParams(orgID, project string, skip, limit int, temporal temporalFilter) map[string]interface{} {
+	return temporal.bind(map[string]interface{}{
+		"org": orgID, "project": project,
+		"projectKind": string(contractsv1.ContextFabricSubjectProject), "workItemKind": string(contractsv1.ContextFabricSubjectWorkItem),
+		"belongs": string(contractsv1.ContextFabricRelationshipBelongsToProject), "relates": string(contractsv1.ContextFabricRelationshipRelatesTo),
+		"prtypes": pullRequestWorkItemTypes, "skip": skip, "limit": limit,
+	})
+}
+
+// projectIssueCount reads how many issues the project has, before
+// authorization.
+func (a *Adapter) projectIssueCount(ctx context.Context, key, orgID, project string, temporal temporalFilter) (int, error) {
+	rows, err := a.api.query(ctx, key, projectIssueCountCypher(temporal), projectLinkParams(orgID, project, 0, 1, temporal), true)
+	if err != nil {
+		return 0, safeDependencyError("count project issues", err)
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	switch n := rows[0]["issues"].(type) {
+	case int64:
+		return int(n), nil
+	case int:
+		return n, nil
+	case float64:
+		return int(n), nil
+	}
+	return 0, nil
 }
 
 // walkStepParams binds one batch of a step read.
@@ -158,9 +206,10 @@ type projectDeploymentWalk struct {
 	edges     []graphrank.ResolvedEdge
 	filters   edgeFilterCounts
 	truncated bool
-	// issues is how many of the project's issues the read examined and
-	// linkedPullRequests how many pull-request work items they link, before
-	// authorization. Zero linked pull requests is the unlinked terminal.
+	// issues is how many issues the project has and linkedPullRequests how
+	// many distinct pull-request work items the link read returned, both
+	// before authorization. Zero linked pull requests over an uncut read is
+	// the unlinked terminal: the link read returns every link of the project.
 	issues, linkedPullRequests int
 	// denied counts the links, repositories and deployments the caller's
 	// authorization hid. Members unseen for that reason are not an unlinked
@@ -199,62 +248,65 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 		}
 		return ids
 	}
-	unique := func(hits []walkHit, pick func(walkHit) string) []string {
-		seen := map[string]bool{}
-		var ids []string
-		for _, h := range hits {
-			if id := pick(h); id != "" && !seen[id] {
-				seen[id] = true
-				ids = append(ids, id)
-			}
-		}
-		return ids
-	}
-	toID := func(h walkHit) string { return canonicalIDOf(h.to) }
 	deny := func() {
 		out.filters.add(edgeFiltered, edgeFilterReasonAuthz)
 		out.denied++
 	}
 
-	issueHits, issuesCut, err := a.walkStepHits(ctx, key, orgID, []string{project.CanonicalID}, projectIssuesStep, temporal, collectLimit)
+	issues, err := a.projectIssueCount(ctx, key, orgID, project.CanonicalID, temporal)
 	if err != nil {
 		return out, err
 	}
-	out.truncated = out.truncated || issuesCut
-	issues := cut(unique(issueHits, toID))
-	out.issues = len(issues)
-	issueNodes := map[string]*node{}
-	for _, h := range issueHits {
-		issueNodes[canonicalIDOf(h.to)] = h.to
-	}
+	out.issues = issues
 
-	var pullRequests []string
-	if len(issues) > 0 {
-		linkHits, linksCut, err := a.walkStepHits(ctx, key, orgID, issues, issuePullRequestsStep, temporal, collectLimit)
-		if err != nil {
-			return out, err
+	// The links are paged and each row is authorized before it counts
+	// against the budget, so links the caller cannot see do not crowd out
+	// links it can.
+	pageSize := 1 << 30
+	if collectLimit > 0 {
+		pageSize = collectLimit + 1
+	}
+	linkCypher := projectLinkCypher(temporal)
+	seenPullRequests := map[string]bool{}
+	authorizedPRs := map[string]bool{}
+	for page := 0; ; page++ {
+		if page >= projectLinkPageCap {
+			out.truncated = true
+			break
 		}
-		out.truncated = out.truncated || linksCut
-		pullRequests = unique(linkHits, toID)
-		out.linkedPullRequests = len(pullRequests)
-		authorizedPRs := map[string]bool{}
-		for _, h := range linkHits {
-			issue := issueNodes[h.from]
+		rows, err := a.api.query(ctx, key, linkCypher, projectLinkParams(orgID, project.CanonicalID, page*pageSize, pageSize, temporal), true)
+		if err != nil {
+			return out, safeDependencyError("walk project deployments", err)
+		}
+		for _, r := range rows {
+			issue, _ := r["i"].(*node)
+			pullRequest, _ := r["pr"].(*node)
+			if issue == nil || pullRequest == nil {
+				continue
+			}
+			id := canonicalIDOf(pullRequest)
+			if !seenPullRequests[id] {
+				seenPullRequests[id] = true
+				out.linkedPullRequests++
+			}
 			switch {
-			case issue == nil || !(authorized(issue) || repositoryLess(issue)):
+			case !(authorized(issue) || repositoryLess(issue)):
 				deny()
-			case !authorized(h.to):
+			case !authorized(pullRequest):
 				deny()
 			default:
-				authorizedPRs[canonicalIDOf(h.to)] = true
+				authorizedPRs[id] = true
 			}
 		}
-		pullRequests = pullRequests[:0]
-		for id := range authorizedPRs {
-			pullRequests = append(pullRequests, id)
+		if len(rows) < pageSize || (collectLimit > 0 && len(authorizedPRs) > collectLimit) {
+			break
 		}
-		pullRequests = cut(pullRequests)
 	}
+	pullRequests := make([]string, 0, len(authorizedPRs))
+	for id := range authorizedPRs {
+		pullRequests = append(pullRequests, id)
+	}
+	pullRequests = cut(pullRequests)
 	if len(pullRequests) == 0 {
 		return out, nil
 	}
