@@ -143,9 +143,9 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 			}
 			cause := credentialLookupCause(err)
 			if cause == credentialLookupCauseCanceled {
-				a.logger.InfoContext(r.Context(), "credential lookup canceled", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "caller_canceled", "cause", cause)
+				a.logger.InfoContext(r.Context(), "credential lookup canceled", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "caller_canceled", "cause", cause, "db_class", credentialLookupDBClass(err))
 			} else {
-				a.logger.ErrorContext(r.Context(), "credential lookup failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "credential_store", "cause", cause)
+				a.logger.ErrorContext(r.Context(), "credential lookup failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "credential_store", "cause", cause, "db_class", credentialLookupDBClass(err))
 			}
 			a.writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Credential service is temporarily unavailable", true, nil)
 			return
@@ -388,4 +388,36 @@ func credentialLookupCause(err error) string {
 	default:
 		return credentialLookupCauseOther
 	}
+}
+
+// sqlStateClassNames names the two-character SQLSTATE class of a store error,
+// the closed vocabulary of the db_class log attribute. A class outside it
+// logs "other"; an error with no SQLSTATE logs "none".
+var sqlStateClassNames = map[string]string{
+	"08": "connection_exception",
+	"22": "data_exception",
+	"23": "integrity_constraint_violation",
+	"25": "invalid_transaction_state",
+	"28": "invalid_authorization_specification",
+	"40": "transaction_rollback",
+	"42": "access_rule_violation",
+	"53": "insufficient_resources",
+	"54": "program_limit_exceeded",
+	"55": "object_not_in_prerequisite_state",
+	"57": "operator_intervention",
+	"58": "system_error",
+	"XX": "internal_error",
+}
+
+// credentialLookupDBClass maps a store error to the closed db_class token; the
+// error text and the full SQLSTATE never reach the log.
+func credentialLookupDBClass(err error) string {
+	var class *storage.DependencyErrorClass
+	if !errors.As(err, &class) || len(class.SQLState) < 2 {
+		return "none"
+	}
+	if name, ok := sqlStateClassNames[class.SQLState[:2]]; ok {
+		return name
+	}
+	return "other"
 }

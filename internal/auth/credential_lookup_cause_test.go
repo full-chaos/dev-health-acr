@@ -26,18 +26,24 @@ func TestCredentialLookupFailureNamesCauseAndFailsClosed(t *testing.T) {
 		wantLevel string
 		wantCause string
 		wantClass string
+		wantDB    string
 	}{
-		{"canceled", fmt.Errorf("find credential: %w", context.Canceled), "INFO", "context_canceled", "caller_canceled"},
-		{"deadline", fmt.Errorf("find credential: %w", context.DeadlineExceeded), "ERROR", "deadline_exceeded", "credential_store"},
-		{"connection", connection, "ERROR", "connection_failure", "credential_store"},
-		{"connection exception", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08000", Class: "connection_exception"}), "ERROR", "connection_failure", "credential_store"},
-		{"connection does not exist", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08003", Class: "connection_does_not_exist"}), "ERROR", "connection_failure", "credential_store"},
-		{"connection failure to establish", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08001", Class: "unclassified"}), "ERROR", "connection_failure", "credential_store"},
-		{"connection rejected", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08004", Class: "unclassified"}), "ERROR", "connection_failure", "credential_store"},
-		{"transaction resolution unknown", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08007", Class: "unclassified"}), "ERROR", "connection_failure", "credential_store"},
-		{"protocol violation", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08P01", Class: "unclassified"}), "ERROR", "other", "credential_store"},
-		{"non connection class", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "42501", Class: "insufficient_privilege"}), "ERROR", "other", "credential_store"},
-		{"other", errors.New("postgres://operator:secret@example"), "ERROR", "other", "credential_store"},
+		{"canceled", fmt.Errorf("find credential: %w", context.Canceled), "INFO", "context_canceled", "caller_canceled", "none"},
+		{"deadline", fmt.Errorf("find credential: %w", context.DeadlineExceeded), "ERROR", "deadline_exceeded", "credential_store", "none"},
+		{"connection", connection, "ERROR", "connection_failure", "credential_store", "connection_exception"},
+		{"connection exception", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08000", Class: "connection_exception"}), "ERROR", "connection_failure", "credential_store", "connection_exception"},
+		{"connection does not exist", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08003", Class: "connection_does_not_exist"}), "ERROR", "connection_failure", "credential_store", "connection_exception"},
+		{"connection failure to establish", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08001", Class: "unclassified"}), "ERROR", "connection_failure", "credential_store", "connection_exception"},
+		{"connection rejected", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08004", Class: "unclassified"}), "ERROR", "connection_failure", "credential_store", "connection_exception"},
+		{"transaction resolution unknown", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08007", Class: "unclassified"}), "ERROR", "connection_failure", "credential_store", "connection_exception"},
+		{"protocol violation", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08P01", Class: "unclassified"}), "ERROR", "other", "credential_store", "connection_exception"},
+		{"non connection class", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "42501", Class: "insufficient_privilege"}), "ERROR", "other", "credential_store", "access_rule_violation"},
+		{"resource exhausted", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "53300", Class: "unclassified"}), "ERROR", "other", "credential_store", "insufficient_resources"},
+		{"operator shutdown", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "57P01", Class: "unclassified"}), "ERROR", "other", "credential_store", "operator_intervention"},
+		{"unmapped class", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "ZZ999", Class: "unclassified"}), "ERROR", "other", "credential_store", "other"},
+		{"class without sqlstate", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "5", Class: "unclassified"}), "ERROR", "other", "credential_store", "none"},
+		{"unavailable without class", fmt.Errorf("find credential: %w", storage.ErrUnavailable), "ERROR", "other", "credential_store", "none"},
+		{"other", errors.New("postgres://operator:secret@example"), "ERROR", "other", "credential_store", "none"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -62,7 +68,7 @@ func TestCredentialLookupFailureNamesCauseAndFailsClosed(t *testing.T) {
 			})).ServeHTTP(response, request)
 			assertContractError(t, response, http.StatusServiceUnavailable, "upstream_unavailable")
 			line := buf.String()
-			for _, want := range []string{`"level":"` + tc.wantLevel + `"`, `"cause":"` + tc.wantCause + `"`, `"failure_class":"` + tc.wantClass + `"`, `"request_id":"req_cause"`} {
+			for _, want := range []string{`"level":"` + tc.wantLevel + `"`, `"cause":"` + tc.wantCause + `"`, `"failure_class":"` + tc.wantClass + `"`, `"db_class":"` + tc.wantDB + `"`, `"request_id":"req_cause"`} {
 				if !strings.Contains(line, want) {
 					t.Fatalf("log line missing %s: %s", want, line)
 				}
