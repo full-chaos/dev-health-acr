@@ -73,11 +73,14 @@ const (
 	// serve (no committed window, a comparison or series, or a historical
 	// axis).
 	WorkItemMemberFilterWindowNotServed = "window_not_served"
+	// WorkItemMemberFilterWindowNotApplied: a current frame served with a
+	// committed window and no single time field; members are as of now.
+	WorkItemMemberFilterWindowNotApplied = "window_not_applied"
 )
 
 // WorkItemMemberFilterVocabulary is the closed member_filter vocabulary.
 func WorkItemMemberFilterVocabulary() []string {
-	return []string{WorkItemMemberFilterNone, WorkItemMemberFilterStatus, WorkItemMemberFilterStatusWithoutValue, WorkItemMemberFilterAssignee, WorkItemMemberFilterUnrecognized, WorkItemMemberFilterWindow, WorkItemMemberFilterWindowRoleUnresolved, WorkItemMemberFilterWindowNotServed}
+	return []string{WorkItemMemberFilterNone, WorkItemMemberFilterStatus, WorkItemMemberFilterStatusWithoutValue, WorkItemMemberFilterAssignee, WorkItemMemberFilterUnrecognized, WorkItemMemberFilterWindow, WorkItemMemberFilterWindowRoleUnresolved, WorkItemMemberFilterWindowNotServed, WorkItemMemberFilterWindowNotApplied}
 }
 
 // workItemTupleMemberFilterBasis names which qualifier shape decided the
@@ -475,6 +478,9 @@ func workItemWindowFilterBasis(frame *QuestionFrame, familyAllowsWorkItemTuple b
 	if workItemTupleInScope(frame) && (frame.Temporal == TemporalIntentPeriodComparison || frame.Temporal == TemporalIntentTimeSeries) {
 		return WorkItemMemberFilterWindowNotServed
 	}
+	if workItemCurrentFrameCarriesUnappliedWindow(frame, basis) && prospectiveWorkItemTupleAdmission(frame, familyAllowsWorkItemTuple, timeContext) == workItemTupleProspective {
+		return WorkItemMemberFilterWindowNotApplied
+	}
 	if !workItemTupleIsPeriodFrame(frame) {
 		return ""
 	}
@@ -512,4 +518,25 @@ func workItemRoleClarificationReason(gate FrameGate, frame *QuestionFrame, famil
 		return ""
 	}
 	return basis.RoleReason
+}
+
+// promoteCurrentWorkItemFrameToPeriod returns a copy of a current work-item
+// tuple frame as a bounded-window frame when the request committed a window
+// (supplied or stated; a remembered window never commits), the interpreted
+// axis is current and the question binds exactly one time field. Any other frame is not promoted.
+func promoteCurrentWorkItemFrameToPeriod(frame *QuestionFrame, timeContext TimeContext, basis workItemTupleWindowBasis) (*QuestionFrame, bool) {
+	if timeContext.Axis != TemporalCurrent || !workItemTupleInScope(frame) || frame.Temporal != TemporalIntentCurrent || !basis.Committed || basis.Role == "" {
+		return frame, false
+	}
+	promoted := cloneFrame(*frame)
+	promoted.Temporal = TemporalIntentBoundedWindow
+	return &promoted, true
+}
+
+// workItemCurrentFrameCarriesUnappliedWindow reports a current work-item frame
+// served with a committed window the membership read does not apply, because
+// the question names no single time field. A status-qualified frame already
+// states that its status is read as of now, over no period.
+func workItemCurrentFrameCarriesUnappliedWindow(frame *QuestionFrame, basis workItemTupleWindowBasis) bool {
+	return workItemTupleInScope(frame) && workItemTupleStatusFilter(frame) == "" && frame.Temporal == TemporalIntentCurrent && basis.Committed && basis.Role == ""
 }

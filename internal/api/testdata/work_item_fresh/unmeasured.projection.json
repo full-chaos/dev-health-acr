@@ -21,7 +21,8 @@
   "coverage_summary": [],
   "coverage_partial": false,
   "limitations": [
-    "Some requested evidence could not be reached from the subject of this question, so this answer's silence on it is a limit of what was retrievable rather than a finding that none exists."
+    "Some requested evidence could not be reached from the subject of this question, so this answer's silence on it is a limit of what was retrievable rather than a finding that none exists.",
+    "Members are the work items as of now; the period supplied with this request was not applied to the membership. Ask for work items created, completed or updated in that period to filter by one of those."
   ],
   "warnings": [],
   "evidence_ref_ids": [],

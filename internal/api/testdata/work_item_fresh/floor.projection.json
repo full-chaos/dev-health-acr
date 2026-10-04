@@ -112,7 +112,9 @@
     "acr:v1:work-item:repo-1:work-1": "Work item: repo-1:work-1"
   },
   "coverage_partial": true,
-  "limitations": [],
+  "limitations": [
+    "Members are the work items as of now; the period supplied with this request was not applied to the membership. Ask for work items created, completed or updated in that period to filter by one of those."
+  ],
   "warnings": [],
   "evidence_ref_ids": [
     "acr:v1:work-item:repo-1:work-1"

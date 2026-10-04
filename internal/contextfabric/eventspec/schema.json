@@ -6474,7 +6474,8 @@
           "unrecognized",
           "window",
           "window_role_unresolved",
-          "window_not_served"
+          "window_not_served",
+          "window_not_applied"
         ]
       },
       {
