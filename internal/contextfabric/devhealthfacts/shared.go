@@ -215,7 +215,12 @@ import (
 // v31 -> v32: the work-item member read takes a status filter, so a project's
 // members of one status are served. A candidate saved under v31 for such a
 // question is the member-kind refusal and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v32"
+//
+// v32 -> v33: the work-item member read takes a window on one bound time
+// field (created, completed or updated), so a project's members of a period
+// are served. A candidate saved under v32 for such a question is the
+// member-kind refusal and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v33"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

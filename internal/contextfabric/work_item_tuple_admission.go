@@ -64,11 +64,20 @@ const (
 	WorkItemMemberFilterStatusWithoutValue = "status_without_value"
 	WorkItemMemberFilterAssignee           = "assignee"
 	WorkItemMemberFilterUnrecognized       = "unrecognized"
+	// WorkItemMemberFilterWindow: a bounded window on one bound time field.
+	WorkItemMemberFilterWindow = "window"
+	// WorkItemMemberFilterWindowRoleUnresolved: a stated window whose time
+	// field the question did not fix to exactly one reading.
+	WorkItemMemberFilterWindowRoleUnresolved = "window_role_unresolved"
+	// WorkItemMemberFilterWindowNotServed: a period frame the read cannot
+	// serve (no committed window, a comparison or series, or a historical
+	// axis).
+	WorkItemMemberFilterWindowNotServed = "window_not_served"
 )
 
 // WorkItemMemberFilterVocabulary is the closed member_filter vocabulary.
 func WorkItemMemberFilterVocabulary() []string {
-	return []string{WorkItemMemberFilterNone, WorkItemMemberFilterStatus, WorkItemMemberFilterStatusWithoutValue, WorkItemMemberFilterAssignee, WorkItemMemberFilterUnrecognized}
+	return []string{WorkItemMemberFilterNone, WorkItemMemberFilterStatus, WorkItemMemberFilterStatusWithoutValue, WorkItemMemberFilterAssignee, WorkItemMemberFilterUnrecognized, WorkItemMemberFilterWindow, WorkItemMemberFilterWindowRoleUnresolved, WorkItemMemberFilterWindowNotServed}
 }
 
 // workItemTupleMemberFilterBasis names which qualifier shape decided the
@@ -377,4 +386,116 @@ func workItemMemberFilterLogValue(basis string) string {
 		}
 	}
 	return WorkItemMemberFilterNone
+}
+
+// workItemTupleWindowBasis is what the server bound from the question text and
+// the request for a period frame: whether a window is committed (a window the
+// caller supplied, or one the question states as a trailing period) and which
+// time field the question's verb names. The frame carries neither.
+type workItemTupleWindowBasis struct {
+	Committed  bool
+	Role       MemberTimeRole
+	RoleReason MemberTimeRoleReason
+}
+
+// deriveWorkItemTupleWindowBasis mirrors the two decisive branches of
+// composeEffectiveWindow: a request-side window, or a trailing period the
+// question states. A window carried from an earlier turn, remembered, or
+// inferred from the class table is not committed here.
+func deriveWorkItemTupleWindowBasis(question string, windowCanon requestWindowCanonicalization, remembered bool) workItemTupleWindowBasis {
+	basis := workItemTupleWindowBasis{RoleReason: MemberTimeRoleNoVerb}
+	span := BoundWindowSpan{SpanStart: 0, SpanEnd: len(question)}
+	if spans := BindWindowSpans(question); len(spans) == 1 {
+		span = spans[0]
+	}
+	switch {
+	case remembered:
+		// A window remembered from an earlier turn is not one this request
+		// states or supplies.
+	case windowCanon.Effective != nil && windowCanon.Effective.Start != nil && windowCanon.Effective.End != nil:
+		basis.Committed = true
+	case windowCanon.BinderProposal.Reason == WindowBindRoutedInferred && windowCanon.BinderProposal.Trailing:
+		basis.Committed = true
+	}
+	if !basis.Committed {
+		return basis
+	}
+	outcome := BindMemberTimeRole(question, span)
+	basis.RoleReason = outcome.Reason
+	if outcome.Reason == MemberTimeRoleBound {
+		basis.Role = outcome.Role
+	}
+	return basis
+}
+
+// workItemTupleIsPeriodFrame reports a work-item tuple frame that asks for a
+// bounded window. Only that temporal intent engages the window arm.
+func workItemTupleIsPeriodFrame(frame *QuestionFrame) bool {
+	return workItemTupleInScope(frame) && frame.Temporal == TemporalIntentBoundedWindow
+}
+
+// prospectiveWorkItemWindowAdmission decides a period frame: every clause of
+// the ordinary admission holds as if the frame were current, the axis is
+// current, and the server committed a window and bound exactly one time
+// field. Comparison and series intents never reach it.
+func prospectiveWorkItemWindowAdmission(frame *QuestionFrame, familyAllowsWorkItemTuple bool, timeContext TimeContext, basis workItemTupleWindowBasis) workItemTupleAdmission {
+	if !workItemTupleIsPeriodFrame(frame) {
+		return workItemTupleNotApplicable
+	}
+	asCurrent := *frame
+	asCurrent.Temporal = TemporalIntentCurrent
+	if prospectiveWorkItemTupleAdmission(&asCurrent, familyAllowsWorkItemTuple, timeContext) != workItemTupleProspective {
+		return workItemTupleRefused
+	}
+	if !basis.Committed || basis.Role == "" {
+		return workItemTupleRefused
+	}
+	return workItemTupleProspective
+}
+
+// windowedWorkItemTupleFrameGate settles the gate for a period frame. It may
+// promote the ordinary kind refusal, as the first admission does, because the
+// window basis exists only where the question text does. Other refusals and
+// invalid frames keep their gate.
+func windowedWorkItemTupleFrameGate(gate FrameGate, frame *QuestionFrame, familyAllowsWorkItemTuple bool, timeContext TimeContext, basis workItemTupleWindowBasis) FrameGate {
+	if gate.Outcome == FrameGateNotProposed || gate.Outcome == FrameGateRejectedInvalid || (gate.Refuses() && !(gate.Outcome == FrameGateRefusedBasis && gate.RefuseBasis == CohortMemberKindUnservable && gate.DeclaredMemberKind == SubjectWorkItem)) {
+		return gate
+	}
+	switch prospectiveWorkItemWindowAdmission(frame, familyAllowsWorkItemTuple, timeContext, basis) {
+	case workItemTupleProspective:
+		return FrameGate{Outcome: FrameGatePassed}
+	case workItemTupleRefused:
+		return FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectWorkItem}
+	}
+	return gate
+}
+
+// workItemWindowFilterBasis names the window decision for the admission line.
+func workItemWindowFilterBasis(frame *QuestionFrame, familyAllowsWorkItemTuple bool, timeContext TimeContext, basis workItemTupleWindowBasis) string {
+	if workItemTupleInScope(frame) && (frame.Temporal == TemporalIntentPeriodComparison || frame.Temporal == TemporalIntentTimeSeries) {
+		return WorkItemMemberFilterWindowNotServed
+	}
+	if !workItemTupleIsPeriodFrame(frame) {
+		return ""
+	}
+	switch prospectiveWorkItemWindowAdmission(frame, familyAllowsWorkItemTuple, timeContext, basis) {
+	case workItemTupleProspective:
+		return WorkItemMemberFilterWindow
+	}
+	asCurrent := *frame
+	asCurrent.Temporal = TemporalIntentCurrent
+	if basis.Committed && basis.Role == "" && prospectiveWorkItemTupleAdmission(&asCurrent, familyAllowsWorkItemTuple, timeContext) == workItemTupleProspective {
+		return WorkItemMemberFilterWindowRoleUnresolved
+	}
+	return WorkItemMemberFilterWindowNotServed
+}
+
+// workItemTupleMemberFilterToken is the settled admission line's member_filter
+// value: the window decision for a period frame, the qualifier shape for any
+// other.
+func workItemTupleMemberFilterToken(frame *QuestionFrame, familyAllowsWorkItemTuple bool, timeContext TimeContext, basis workItemTupleWindowBasis) string {
+	if token := workItemWindowFilterBasis(frame, familyAllowsWorkItemTuple, timeContext, basis); token != "" {
+		return token
+	}
+	return workItemTupleMemberFilterBasis(frame)
 }

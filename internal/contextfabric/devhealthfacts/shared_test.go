@@ -431,3 +431,11 @@ func TestQueryVersionMovedPastTheUnfilteredWorkItemMembershipRead(t *testing.T) 
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- a stored work-item member answer saved before the member read took a status filter must not be served as one", devhealthfacts.QueryVersion, versionBeforeMembersCouldBeFilteredByStatus)
 	}
 }
+
+func TestQueryVersionMovedPastTheMemberReadWithoutAWindow(t *testing.T) {
+	t.Parallel()
+	const versionBeforeMembersCouldBeWindowed = "devhealthfacts.clickhouse.v32"
+	if devhealthfacts.QueryVersion == versionBeforeMembersCouldBeWindowed {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- a stored work-item member refusal saved before the member read took a window must not be served as one", devhealthfacts.QueryVersion, versionBeforeMembersCouldBeWindowed)
+	}
+}

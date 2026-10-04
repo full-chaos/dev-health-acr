@@ -2472,7 +2472,7 @@ flowchart TD
   LEASE --> SETTINGS{"deadline has at least one whole second?"}
   SETTINGS -->|"no"| DREFUSE["refuse before S1<br/>deadline_too_short Info record"]
   SETTINGS -->|"yes"| RESOURCE["shared workitem_scope resource constants<br/>typed Settings: rows 8192 · memory 64 MiB · threads 1<br/>S1 result ceiling K+1 · overflow modes throw"]
-  RESOURCE --> SQL["ONE atomic S1 statement<br/>project_membership_presence m<br/>INNER JOIN work_items FINAL<br/>WorkItemScopeSQL repos join + org predicate<br/>unique provider-qualified project resolution<br/>optional w.status = status_filter predicate<br/>same authorization expression as the mask<br/>authorized-first, canonical order, LIMIT C+1"]
+  RESOURCE --> SQL["ONE atomic S1 statement<br/>project_membership_presence m<br/>INNER JOIN work_items FINAL<br/>WorkItemScopeSQL repos join + org predicate<br/>unique provider-qualified project resolution<br/>optional w.status = status_filter predicate<br/>optional w.&lt;created|completed|updated&gt;_at window<br/>same authorization expression as the mask<br/>authorized-first, canonical order, LIMIT C+1"]
   SQL --> COUNTS["12-column stream: member identities and counts<br/>future-boundary and transition assertions<br/>one identity-free anchor sentinel"]
   COUNTS --> FAILURE{"query, scan, iterator, or row error?"}
   FAILURE -->|"yes"| UNMEASURED["discard every scanned row<br/>state=unmeasured<br/>existing limitation string"]
@@ -2635,7 +2635,7 @@ uses `ServeStoredWorkItemTuple`; `response_owner_middleware.go` encloses recover
 flowchart TD
   REUSE["Try reuse first"] -->|"miss: release discarded lease"| INTERPRET["Validate and interpret frame + TimeContext"]
   INTERPRET --> POLICY["LookupQuestionFamily: private tuple policy<br/>true only for scoped_cohort_status; unknown denies<br/>question-family.v3 reuse/carry fence"]
-  POLICY --> INITIAL{"Initial tuple admission:<br/>children_of_scope + work_item<br/>assess_state/count_or_aggregate only<br/>current intent AND current axis<br/>qualifier absent, or a status qualifier<br/>whose value is in the closed status set<br/>(assignee and unrecognized stay refused)"}
+  POLICY --> INITIAL{"Initial tuple admission:<br/>children_of_scope + work_item<br/>assess_state/count_or_aggregate only<br/>current intent AND current axis<br/>qualifier absent, or a status qualifier<br/>whose value is in the closed status set<br/>(assignee and unrecognized stay refused).<br/>A bounded_window frame is admitted only with a<br/>server-committed window and exactly one time<br/>field bound from the question verb"}
   INITIAL -->|"refused / invalid"| REFUSE["existing refusal; no ResolveSubjects or S1"]
   INITIAL -->|"prospective"| FINAL["Final family routing + accepted continuation + plan carry<br/>lookup final family policy; tighten gate using policy and effective time"]
   FINAL -->|"refused"| REFUSE

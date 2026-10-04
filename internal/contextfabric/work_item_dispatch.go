@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -14,17 +15,17 @@ const workItemMembershipRationale = "Work items are members of the resolved proj
 
 // discoverWorkItemTuple reads S1 under the response owner's existing lease
 // lifetime. It never reads the graph or expands the content subject set.
-func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Principal, request InvestigationRequest, resolution SubjectResolution, plan *AnswerPlan, statusFilter string) (GraphContext, *WorkItemTupleCensus, error) {
+func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Principal, request InvestigationRequest, resolution SubjectResolution, plan *AnswerPlan, filter workItemMemberFilter) (GraphContext, *WorkItemTupleCensus, error) {
 	graph := GraphContext{Resolution: resolution, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, EvidenceRefIDs: []string{}, FactRequirements: []FactRequirement{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}}
 	digest, err := WorkItemAuthorizationDigest(principal, request.RequestedScope.RepositorySlugs)
 	if err != nil {
 		return graph, nil, err
 	}
-	census := &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusUnmeasured, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), AuthorizationDigest: digest, statusFilter: statusFilter}
+	census := &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusUnmeasured, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), AuthorizationDigest: digest, memberFilter: filter}
 	if e.workItemMembership == nil {
 		return graph, census, nil
 	}
-	lease, membership, readErr := e.workItemMembership.BeginWorkItemMembership(ctx, principal, WorkItemMembershipRequest{Anchor: WorkItemMembershipAnchor{Subject: resolution.Committed[0]}, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), PlanMaxMembers: plan.Budget.MaxMembers, RequestMaxMembers: request.Options.MaxCohortMembers, Status: statusFilter})
+	lease, membership, readErr := e.workItemMembership.BeginWorkItemMembership(ctx, principal, WorkItemMembershipRequest{Anchor: WorkItemMembershipAnchor{Subject: resolution.Committed[0]}, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), PlanMaxMembers: plan.Budget.MaxMembers, RequestMaxMembers: request.Options.MaxCohortMembers, Status: filter.Status, TimeColumn: filter.timeColumn(), TimeStart: filter.Start, TimeEnd: filter.End})
 	if lease != nil {
 		owner, ok := WorkItemResponseOwnerFromContext(ctx)
 		if !ok {
@@ -45,7 +46,7 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	// the denied items' count for one status, a distribution the unfiltered
 	// read does not give. The filtered answer states one fixed exclusion
 	// instead (workItemStatusDeniedExclusion).
-	if gap, ok := workItemAuthorizationGapOf(membership.Census); ok && statusFilter == "" {
+	if gap, ok := workItemAuthorizationGapOf(membership.Census); ok && !filter.Active() {
 		census.gap = &gap
 		if gap.NoneAuthorized() {
 			// Members exist and none are authorized: the answer is a
@@ -264,25 +265,75 @@ func applyWorkItemTitles(cohort *Cohort, facts []CanonicalFact) {
 // workItemStatusFilterDisclosure states the filter beside a served member
 // set: a current-status read, not a period, and not completion or readiness.
 func workItemStatusFilterDisclosure(status string) string {
-	return "Members are the work items whose current status is " + status + "; status is read as of now, over no period, and is not completion or readiness."
+	return contractsv1.ContextFabricWorkItemMemberFilterLimitationPrefix + "whose current status is " + status + "; status is read as of now, over no period, and is not completion or readiness."
 }
 
 // workItemStatusNoMatchDisclosure names the empty result. Zero matches is a
 // count of matching items, not a statement that the project is healthy.
 func workItemStatusNoMatchDisclosure(status string) string {
-	return "No work item in this project within the authorized scope currently has status " + status + "; that is a count of matches, not a statement about the project's health."
+	return contractsv1.ContextFabricWorkItemNoMatchLimitationPrefix + "currently has status " + status + contractsv1.ContextFabricWorkItemNoMatchLimitationSuffix
 }
 
-// withWorkItemStatusFilterLimitations appends the filter disclosure, and the
-// named empty result when the measured population is exactly zero. Nothing
-// is added for an unfiltered read.
-func withWorkItemStatusFilterLimitations(result InvestigationResult, status string, census *WorkItemTupleCensus) InvestigationResult {
-	if status == "" {
+// workItemMemberFilter is what the member read applied: a status of the closed
+// set, and/or a half-open window on one bound time field. The zero value reads
+// every member.
+type workItemMemberFilter struct {
+	Status   string
+	TimeRole MemberTimeRole
+	Start    time.Time
+	End      time.Time
+}
+
+func (f workItemMemberFilter) hasWindow() bool { return f.TimeRole != "" }
+
+// Active reports whether the read is filtered at all.
+func (f workItemMemberFilter) Active() bool { return f.Status != "" || f.hasWindow() }
+
+func (f workItemMemberFilter) timeColumn() string {
+	column, _ := f.TimeRole.WorkItemTimeColumn()
+	return column
+}
+
+// workItemWindowFilterDisclosure states the window beside a served member set.
+// The period filters one time field; every other fact is as of now.
+func workItemWindowFilterDisclosure(f workItemMemberFilter) string {
+	field := map[MemberTimeRole]string{MemberTimeRoleCreated: "created", MemberTimeRoleCompleted: "completed", MemberTimeRoleUpdated: "last updated"}[f.TimeRole]
+	return contractsv1.ContextFabricWorkItemMemberFilterLimitationPrefix + field + " from " + f.Start.UTC().Format(workItemWindowTimeLayout) + " to " + f.End.UTC().Format(workItemWindowTimeLayout) + " (the " + f.timeColumn() + " field); their status and every other fact is as of now, not as of the period."
+}
+
+// workItemMemberFilterNoMatchDisclosure names the empty result of a filter that
+// includes a window. Zero matches is a count of matches, not a statement that
+// the project is healthy.
+func workItemMemberFilterNoMatchDisclosure(f workItemMemberFilter) string {
+	field := map[MemberTimeRole]string{MemberTimeRoleCreated: "created", MemberTimeRoleCompleted: "completed", MemberTimeRoleUpdated: "last updated"}[f.TimeRole]
+	with := ""
+	if f.Status != "" {
+		with = " and a current status of " + f.Status
+	}
+	return contractsv1.ContextFabricWorkItemNoMatchLimitationPrefix + "was " + field + " in that period" + with + contractsv1.ContextFabricWorkItemNoMatchLimitationSuffix
+}
+
+// withWorkItemMemberFilterLimitations appends the filter disclosures, and the
+// named empty result when the measured population is exactly zero. Nothing is
+// added for an unfiltered read.
+func withWorkItemMemberFilterLimitations(result InvestigationResult, f workItemMemberFilter, census *WorkItemTupleCensus) InvestigationResult {
+	if !f.Active() {
 		return result
 	}
-	additions := []string{workItemStatusFilterDisclosure(status), workItemStatusDeniedExclusion}
+	var additions []string
+	if f.Status != "" {
+		additions = append(additions, workItemStatusFilterDisclosure(f.Status))
+	}
+	if f.hasWindow() {
+		additions = append(additions, workItemWindowFilterDisclosure(f))
+	}
+	additions = append(additions, workItemStatusDeniedExclusion)
 	if census != nil && census.State == WorkItemMembershipCensusExact && census.Value == 0 && census.gap == nil {
-		additions = append(additions, workItemStatusNoMatchDisclosure(status))
+		if f.hasWindow() {
+			additions = append(additions, workItemMemberFilterNoMatchDisclosure(f))
+		} else {
+			additions = append(additions, workItemStatusNoMatchDisclosure(f.Status))
+		}
 	}
 	composed, displaced := appendBoundedLimitations(result.Limitations, additions)
 	result.Limitations = composed
@@ -294,4 +345,8 @@ func withWorkItemStatusFilterLimitations(result InvestigationResult, status stri
 // about work items outside the principal's scope. It is the same words for
 // every outcome, so it cannot tell the caller how many denied items hold a
 // given status.
-const workItemStatusDeniedExclusion = "Work items outside this principal's authorized scope are neither counted nor described here."
+const workItemStatusDeniedExclusion = contractsv1.ContextFabricWorkItemDeniedScopeExclusionLimitation
+
+// workItemWindowTimeLayout names an instant to the microsecond, the precision
+// the member read binds.
+const workItemWindowTimeLayout = "2006-01-02T15:04:05.000000Z"

@@ -2430,8 +2430,22 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	familyOutcome = e.applyAndRecordCarry(ctx, principal, familyOutcome, planCarry)
 	tupleFamilyDefinition, tupleFamilyKnown := LookupQuestionFamily(familyOutcome.Family)
 	familyAllowsWorkItemTuple := tupleFamilyKnown && tupleFamilyDefinition.allowsWorkItemTuple
-	familyOutcome.Gate = tightenWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext)
-	workItemTuple := prospectiveWorkItemTupleAdmission(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext) == workItemTupleProspective
+	// A period frame is decided here, where the question text and the window
+	// canonicalization exist: the window and its time field are bound by the
+	// server, never carried on the frame. Every other frame keeps the
+	// ordinary tighten.
+	windowBasis := deriveWorkItemTupleWindowBasis(request.Question, windowCanon, ledgerWindow.Applied())
+	var workItemTuple bool
+	if workItemTupleIsPeriodFrame(familyOutcome.Frame) {
+		familyOutcome.Gate = windowedWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext, windowBasis)
+		workItemTuple = prospectiveWorkItemWindowAdmission(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext, windowBasis) == workItemTupleProspective
+		if familyOutcome.Gate.Refuses() && workItemWindowFilterBasis(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext, windowBasis) == WorkItemMemberFilterWindowRoleUnresolved {
+			familyOutcome.MemberTimeRoleClarification = windowBasis.RoleReason
+		}
+	} else {
+		familyOutcome.Gate = tightenWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext)
+		workItemTuple = prospectiveWorkItemTupleAdmission(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext) == workItemTupleProspective
+	}
 	// THE SETTLED-ADMISSION Info line's one call site. No mutation here or
 	// anywhere in this arm -- see workItemTupleEffectiveObligations's own
 	// doc comment for why.
@@ -2451,7 +2465,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			stripped = workItemTupleObligationsToStrip(familyOutcome.Frame)
 		}
 		if e.telemetry != nil {
-			e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: workItemTuple, StrippedObligations: stripped, MemberFilter: workItemTupleMemberFilterBasis(familyOutcome.Frame)})
+			e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: workItemTuple, StrippedObligations: stripped, MemberFilter: workItemTupleMemberFilterToken(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext, windowBasis)})
 		}
 	}
 	// requirementFrame is the ONE frame every requirement-coordinate reader
@@ -3124,7 +3138,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		resolution = restrictWorkItemTupleCandidate(resolution)
 		plan.MemberKind = SubjectWorkItem
 		plan.FactKinds = []FactKind{FactStatus, FactWork}
-		graphContext, tupleCensus, err = e.discoverWorkItemTuple(ctx, principal, request, resolution, &plan, workItemTupleStatusFilter(familyOutcome.Frame))
+		memberFilter := workItemMemberFilter{Status: workItemTupleStatusFilter(familyOutcome.Frame)}
+		if workItemTupleIsPeriodFrame(familyOutcome.Frame) {
+			// The read applies the window the answer discloses: the effective
+			// window's own bounds, committed from the question or the caller.
+			if effectiveWindow == nil || effectiveWindow.Provenance == WindowInferredDefault || effectiveWindow.Start == nil || effectiveWindow.End == nil || windowBasis.Role == "" {
+				familyOutcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectWorkItem}
+				resolution = withoutSubjects(resolution)
+				return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
+			}
+			memberFilter.TimeRole, memberFilter.Start, memberFilter.End = windowBasis.Role, effectiveWindow.Start.UTC().Truncate(time.Microsecond), effectiveWindow.End.UTC().Truncate(time.Microsecond)
+		}
+		graphContext, tupleCensus, err = e.discoverWorkItemTuple(ctx, principal, request, resolution, &plan, memberFilter)
 		if err != nil {
 			return InvestigationResult{}, stageError(StageGraph, err)
 		}

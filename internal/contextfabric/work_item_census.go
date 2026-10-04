@@ -40,10 +40,10 @@ type WorkItemTupleCensus struct {
 	// disclosure it was served with.
 	gap *workItemAuthorizationGap
 
-	// statusFilter is the status the member read applied, set on the request
+	// memberFilter is the filter the member read applied, set on the request
 	// that measured the census and never persisted: a stored answer already
 	// carries the disclosure it was served with.
-	statusFilter string
+	memberFilter workItemMemberFilter
 }
 
 // WorkItemTupleCensusReadStatus describes the independent status of the
