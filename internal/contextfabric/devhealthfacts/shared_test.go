@@ -472,9 +472,17 @@ func TestQueryVersionMovedPastTheTwoHopAnchorDeploymentReach(t *testing.T) {
 	}
 }
 
+func TestQueryVersionMovedPastUnwindowedCurrentWorkItemMembers(t *testing.T) {
+	t.Parallel()
+	const versionBeforeCallerWindowReachedMembers = "devhealthfacts.clickhouse.v40"
+	if devhealthfacts.QueryVersion == versionBeforeCallerWindowReachedMembers {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved before a committed window reached the work-item members holds members the period never filtered and must not be reused", devhealthfacts.QueryVersion, versionBeforeCallerWindowReachedMembers)
+	}
+}
+
 func TestQueryVersionMovedPastTheProximityOwnershipTeams(t *testing.T) {
 	t.Parallel()
-	const versionBeforeALabelNamedRepositoryRoutedOwnership = "devhealthfacts.clickhouse.v40"
+	const versionBeforeALabelNamedRepositoryRoutedOwnership = "devhealthfacts.clickhouse.v41"
 	if devhealthfacts.QueryVersion == versionBeforeALabelNamedRepositoryRoutedOwnership {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when the teams of a label-named repository came from graph proximity and the question text holds teams that do not own it and must not be reused", devhealthfacts.QueryVersion, versionBeforeALabelNamedRepositoryRoutedOwnership)
 	}

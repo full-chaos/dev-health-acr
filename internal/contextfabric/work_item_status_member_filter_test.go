@@ -231,8 +231,8 @@ func TestWorkItemUnqualifiedTupleReadsNoStatusAndCarriesNoFilterDisclosure(t *te
 	if run.request.Status != "" || limitationsContain(run.result.Limitations, "current status is") || limitationsContain(run.result.Limitations, "No work item in this project") {
 		t.Fatalf("an unqualified read carried a filter: status=%q limitations=%v", run.request.Status, run.result.Limitations)
 	}
-	if len(run.admissions) != 1 || run.admissions[0].MemberFilter != WorkItemMemberFilterNone {
-		t.Fatalf("settled admission = %+v, want member_filter=none", run.admissions)
+	if len(run.admissions) != 1 || run.admissions[0].MemberFilter != WorkItemMemberFilterWindowNotApplied {
+		t.Fatalf("settled admission = %+v, want member_filter=window_not_applied (the request committed a window the membership did not use)", run.admissions)
 	}
 }
 
