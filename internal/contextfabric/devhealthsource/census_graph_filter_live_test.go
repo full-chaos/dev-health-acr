@@ -64,6 +64,9 @@ func TestHandleCensusGraphFilterOnRealStores(t *testing.T) {
 		// answered, so the graph filter's next read fails on the real store.
 		c.CensusFunc = func(ctx context.Context, org string, kind graphrank.CensusKind, value string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorID string, anchorBound bool) (graphrank.CensusOutcome, error) {
 			outcome, err := census(ctx, org, kind, value, handleBound, anchorKind, anchorID, anchorBound)
+			if handleBound {
+				t.Logf("census kind=%s count=%d ids=%v closureMismatch=%t setClosureMismatch=%t err=%v", kind, outcome.Count, outcome.SatisfierCanonicalIDs, outcome.ClosureMismatch, outcome.SatisfierSetClosureMismatch, err)
+			}
 			if afterCensus != nil {
 				afterCensus()
 			}
@@ -149,6 +152,11 @@ func TestHandleCensusGraphFilterOnRealStores(t *testing.T) {
 				committed = append(committed, s.CanonicalID)
 			}
 		}
+		tracer.mu.Lock()
+		for _, e := range tracer.rounds {
+			t.Logf("evidence_round trigger=%q outcome=%q reason=%q narrowing=%q %d->%d", e.ShadowTrigger, e.ShadowOutcome, e.ShadowReason, e.ShadowCallerNarrowing, e.ShadowNarrowedFrom, e.ShadowNarrowedTo)
+		}
+		tracer.mu.Unlock()
 		return committed, tracer.narrowings()
 	}
 
