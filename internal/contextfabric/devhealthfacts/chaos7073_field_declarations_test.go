@@ -324,7 +324,7 @@ func t4Cases() []t4Case {
 		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "repo-1", "example-org/widget-service"}, {"WIDGET-101", "repo-1", ""}}},
 	}})
 	add(t4Case{name: "status/work_item", kind: contextfabric.FactStatus, subjects: work, tables: []fakeTable{
-		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "in_progress", "repo-1"}, {"WIDGET-101", "", "repo-1"}}},
+		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "in_progress", "repo-1", ""}, {"WIDGET-101", "", "repo-1", ""}}},
 	}})
 	add(t4Case{name: "work/work_item", kind: contextfabric.FactWork, subjects: work, tables: []fakeTable{
 		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "Investigate checkout flake", "repo-1"}, {"WIDGET-101", "", "repo-1"}}},

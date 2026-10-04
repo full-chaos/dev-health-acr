@@ -264,7 +264,13 @@ import (
 // as the status the service established, with the narrative withheld. A
 // candidate saved under v42 for such a question can hold a no_match and must
 // not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v43"
+//
+// v43 -> v44: a work item's status fact states its basis per item, from the
+// item's own provider (status_mapping_configuration, issue_labels_and_state,
+// workflow_state_type, or dev_health_normalized when the provider is not
+// known), and its provenance note names that provider. A candidate saved under
+// v43 carries one basis for every item and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v44"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
