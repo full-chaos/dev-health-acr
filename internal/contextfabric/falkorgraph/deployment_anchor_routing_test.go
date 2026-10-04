@@ -678,3 +678,70 @@ func TestATeamsOwnershipIsReadAsOfNowForAQuestionAboutNow(t *testing.T) {
 		t.Errorf("a question with a window read ownership under %v..%v, want its own window", bound[1][temporalParamStart], bound[1][temporalParamEnd])
 	}
 }
+
+// TestATeamsRepositoriesWithSeveralOwnershipEdgesSpendTheBudgetOnce: a
+// repository the team owns through several assertions (one edge per provider
+// and source) costs the read's budget once, so ten repositories with three
+// edges each fit a budget of 25 and are read uncut.
+func TestATeamsRepositoriesWithSeveralOwnershipEdgesSpendTheBudgetOnce(t *testing.T) {
+	s := projectSeed{served: map[string]string{}}
+	s.nodes = append(s.nodes, seededNode{kind: "team", id: "team:anchor", label: "payments"})
+	for i := 0; i < 10; i++ {
+		repoID := s.repository(fmt.Sprintf("acme/owned-%02d", i), 1)
+		for a := 0; a < 3; a++ {
+			s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", "team:anchor"})
+		}
+	}
+	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
+	reach, err := adapter.anchorDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{},
+		contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:anchor", Label: "payments"}, 25, newTemporalFilter(contextfabric.TimeContext{}))
+	if err != nil {
+		t.Fatalf("anchorDeploymentMembers() error = %v", err)
+	}
+	if len(reach.nodes) != 10 || reach.truncated {
+		t.Fatalf("reach = %d members, truncated %v; want the 10 owned repositories' deployments, uncut", len(reach.nodes), reach.truncated)
+	}
+}
+
+// TestATeamsOwnershipEdgesPastTheReadBoundAreACut: a repository whose only
+// ownership edge sorts past the edge read's bound is lost to the read, and
+// the reach says so even though the distinct repositories fit the budget.
+func TestATeamsOwnershipEdgesPastTheReadBoundAreACut(t *testing.T) {
+	s := projectSeed{served: map[string]string{}}
+	s.nodes = append(s.nodes, seededNode{kind: "team", id: "team:anchor", label: "payments"})
+	first := s.repository("acme/a-first", 1)
+	for a := 0; a < exactNameCandidateQueryLimit; a++ {
+		s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", first, "team", "team:anchor"})
+	}
+	last := s.repository("acme/z-last", 1)
+	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", last, "team", "team:anchor"})
+	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
+	reach, err := adapter.anchorDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{},
+		contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:anchor", Label: "payments"}, 25, newTemporalFilter(contextfabric.TimeContext{}))
+	if err != nil {
+		t.Fatalf("anchorDeploymentMembers() error = %v", err)
+	}
+	if !reach.truncated {
+		t.Fatalf("reach = %d members, truncated %v; want the cut reported", len(reach.nodes), reach.truncated)
+	}
+}
+
+// TestATeamsReachKeepsOwnershipEdgesOnlyForTheRepositoriesItReads: past the
+// budget, a repository's ownership edge does not join the paths.
+func TestATeamsReachKeepsOwnershipEdgesOnlyForTheRepositoriesItReads(t *testing.T) {
+	s := projectSeed{served: map[string]string{}}
+	s.nodes = append(s.nodes, seededNode{kind: "team", id: "team:anchor", label: "payments"})
+	for i := 0; i < 6; i++ {
+		repoID := s.repository(fmt.Sprintf("acme/owned-%02d", i), 0)
+		s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", "team:anchor"})
+	}
+	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
+	reach, err := adapter.anchorDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{},
+		contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:anchor", Label: "payments"}, 3, newTemporalFilter(contextfabric.TimeContext{}))
+	if err != nil {
+		t.Fatalf("anchorDeploymentMembers() error = %v", err)
+	}
+	if len(reach.edges) != 3 || !reach.truncated {
+		t.Fatalf("reach = %d edges, truncated %v; want the 3 ownership edges of the repositories read, and the cut", len(reach.edges), reach.truncated)
+	}
+}

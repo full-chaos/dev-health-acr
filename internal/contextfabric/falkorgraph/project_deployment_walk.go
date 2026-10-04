@@ -411,7 +411,10 @@ func (a *Adapter) anchorDeploymentMembers(ctx context.Context, key, orgID string
 	case contextfabric.SubjectRepository:
 		repositories[anchor.CanonicalID] = anchor
 	case contextfabric.SubjectTeam:
-		hits, hitsCut, err := a.walkStepHits(ctx, key, orgID, []string{anchor.CanonicalID}, teamRepositoriesStep, currentOwnership(temporal, a.now()), collectLimit)
+		// A repository can carry several ownership edges to one team (one per
+		// provider and source), so the edges are read under the census bound
+		// and the budget is spent on distinct repositories.
+		hits, hitsCut, err := a.walkStepHits(ctx, key, orgID, []string{anchor.CanonicalID}, teamRepositoriesStep, currentOwnership(temporal, a.now()), exactNameCandidateQueryLimit)
 		if err != nil {
 			return out, err
 		}
@@ -424,13 +427,11 @@ func (a *Adapter) anchorDeploymentMembers(ctx context.Context, key, orgID string
 			}
 			owned[canonicalIDOf(h.to)] = h
 		}
-		// The step read is bounded by the budget and reports its own cut.
 		ids := make([]string, 0, len(owned))
 		for id := range owned {
 			ids = append(ids, id)
 		}
-		sort.Strings(ids)
-		for _, id := range ids {
+		for _, id := range cut(ids) {
 			h := owned[id]
 			repository, ok := graphrank.NodeSubject(toCandidateNode(h.to))
 			if !ok {
