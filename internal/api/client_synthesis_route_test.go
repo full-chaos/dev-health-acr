@@ -156,6 +156,10 @@ func newClientRouteRig(t *testing.T, fixture clientRouteFixture) *clientRouteRig
 		resources = limits.ResourceBudget{MaxItems: 500, MaxTokens: 500_000, MaxBytes: 8 << 20}
 	}
 	rig.app, rig.token = newParityHostedAppWithLogs(t, engine, store, resources, rig.logs)
+	// The facts fixtures here reach 400 x 600 B; the parity helper's 5 s deadline
+	// is a wall clock that a slow -race runner can pass (same class as the team synthesis tests), so the
+	// deadline must not decide these tests.
+	rig.app.config.RequestTimeout = time.Minute
 	return rig
 }
 

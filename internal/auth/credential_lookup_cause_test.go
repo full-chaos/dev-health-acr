@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -58,6 +59,22 @@ func TestCredentialLookupFailureNamesCauseAndFailsClosed(t *testing.T) {
 				if !strings.Contains(line, want) {
 					t.Fatalf("log line missing %s: %s", want, line)
 				}
+			}
+			// Exactly one record, at the wanted level: a caller cancel writes
+			// the INFO record and no ERROR record beside it.
+			var records []map[string]any
+			for _, raw := range strings.Split(strings.TrimSpace(line), "\n") {
+				var entry map[string]any
+				if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+					t.Fatalf("log line is not a JSON record %q: %v", raw, err)
+				}
+				records = append(records, entry)
+			}
+			if len(records) != 1 || records[0]["level"] != tc.wantLevel {
+				t.Fatalf("records = %v, want exactly one at %s", records, tc.wantLevel)
+			}
+			if tc.wantLevel == "INFO" && strings.Contains(line, `"level":"ERROR"`) {
+				t.Fatalf("a caller cancel wrote an ERROR record: %s", line)
 			}
 			if strings.Contains(line, "secret") {
 				t.Fatalf("raw error text leaked: %s", line)

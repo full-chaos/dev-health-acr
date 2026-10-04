@@ -2836,7 +2836,9 @@ var cohortKindFulltextDecision = []string{"ran", "read_failed"}
 // kind, and never when the census already covers it: whichever census runs
 // there (chaos4348ExactNameCandidates for a kind in exactNameKinds, or
 // cohortKindCensusCandidates otherwise) already fetches that kind
-// exhaustively, so this arm would only duplicate it.
+// exhaustively, so this arm would only duplicate it. Never for the deployment
+// members of a named anchor either: the anchor's reach is the member set, so
+// the arm has no member to add.
 //
 // AN AUXILIARY ARM'S OWN FAILURE MUST DEGRADE, NEVER ABORT. decision
 // distinguishes a completed read (decision=ran, carrying members/truncated/
@@ -2862,7 +2864,7 @@ var CohortKindFulltext = Event{
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrOnePerRequest,
 	Attribution:        []string{"org_id"},
-	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind and the census is not already admitted for it",
+	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind, the census is not already admitted for it, and no named anchor holds the deployment member set",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: cohortKindFulltextDecision},
@@ -2884,6 +2886,57 @@ var CohortKindFulltext = Event{
 		{Key: "added_by_kind_arm", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when decision=ran"},
 		{Key: "duplicates_with_general", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when decision=ran"},
 		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when decision=read_failed"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// projectDeploymentWalkOutcome is the closed vocabulary of
+// ProjectDeploymentWalk's "outcome" field -- see
+// falkorgraph.ProjectDeploymentWalkOutcomeVocabulary, the producer's own list
+// this one must never drift from.
+var projectDeploymentWalkOutcome = []string{"not_routed", "members", "unlinked", "denied", "truncated", "no_deployments", "read_failed"}
+
+// projectDeploymentWalkAnchorBasis is the closed vocabulary of
+// ProjectDeploymentWalk's "anchor_basis" field -- see
+// falkorgraph.DeploymentAnchorBasisVocabulary.
+var projectDeploymentWalkAnchorBasis = []string{"none", "bound", "sole_commit"}
+
+// ProjectDeploymentWalk is the Info line of one DiscoverContext call that asks
+// for the deployment members of a named anchor: whether the project walk
+// (project -> issues -> linked pull requests -> repositories -> deployments)
+// ran, and what it found.
+//
+// outcome=not_routed is a call whose anchor is not a committed project
+// (anchor_kind says which kind, or "none"); the walk did not run and no walk
+// count is written. outcome=read_failed carries the error and no count: the
+// walk did not finish. Every other outcome carries the walk's counts:
+// issues examined, pull requests they link, deployments reached, hops the
+// caller's authorization hid, and whether a frontier was cut. anchor_basis
+// says how the anchor was chosen from the committed subjects: bound (the
+// frame's proven anchor) or sole_commit (the one committed subject).
+//
+// The line carries counts and closed values only, never a subject name or id.
+// The served reason for a repository-restricted caller stays the neutral one;
+// the counts here are the operator's.
+var ProjectDeploymentWalk = Event{
+	ID:                 "contextfabric.project_deployment_walk",
+	Msg:                "context_fabric: project deployment walk",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame asks for the deployment members of a named anchor",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: projectDeploymentWalkOutcome},
+		{Key: "anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextFabricSubjectKindTokens...)},
+		{Key: "anchor_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: projectDeploymentWalkAnchorBasis},
+		{Key: "committed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "issues", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
+		{Key: "linked_pull_requests", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
+		{Key: "members", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
+		{Key: "denied", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
+		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
@@ -2930,6 +2983,7 @@ var All = []Event{
 	FrameValidation,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
+	ProjectDeploymentWalk,
 	AnchorBindingTransition,
 	MCPHostedContextScope,
 	MCPHTTPRequest,
