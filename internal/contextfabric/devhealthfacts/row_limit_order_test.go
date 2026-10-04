@@ -1,0 +1,96 @@
+package devhealthfacts_test
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// rowLimitWithoutOrder lists the limited statements that need no top-level
+// ORDER BY, keyed by file and the start of the argument: a single aggregate
+// row, and an argument the guard cannot read because it is a variable (its
+// statement is checked at its own definition).
+var rowLimitWithoutOrder = map[string]string{
+	"investment.go|investmentWatermarkStatement": "one aggregate row, nothing to cut",
+	"workitems.go|statement":                     "built above with ORDER BY p.id; the variable cannot be read here",
+}
+
+func matchingParen(text string, open int) int {
+	depth := 0
+	for i := open; i < len(text); i++ {
+		switch text[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// TestEveryRowLimitedStatementOrdersItsRows requires a top-level ORDER BY on
+// every statement that is cut by withRowLimit or withRowProbeLimit: a LIMIT
+// over an unordered set changes WHICH rows are served, which no later sort
+// can repair.
+func TestEveryRowLimitedStatementOrdersItsRows(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(".", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(raw)
+		for _, marker := range []string{"withRowLimit(", "withRowProbeLimit("} {
+			for from := 0; ; {
+				at := strings.Index(text[from:], marker)
+				if at < 0 {
+					break
+				}
+				at += from
+				from = at + len(marker)
+				lineStart := strings.LastIndex(text[:at], "\n") + 1
+				lineEnd := at + strings.Index(text[at:], "\n")
+				line := strings.TrimSpace(text[lineStart:lineEnd])
+				if strings.HasPrefix(line, "//") || strings.HasPrefix(line, "func ") {
+					continue
+				}
+				closing := matchingParen(text, at+len(marker)-1)
+				if closing < 0 {
+					t.Fatalf("%s: unbalanced %s", name, marker)
+				}
+				body := text[at+len(marker) : closing]
+				key := name + "|" + strings.TrimSpace(body)
+				if reason, ok := rowLimitWithoutOrder[key]; ok {
+					_ = reason
+					checked++
+					continue
+				}
+				lastOrder := strings.LastIndex(body, "ORDER BY")
+				lastClose := strings.LastIndex(body, "\n)")
+				if lastOrder < 0 || lastOrder < lastClose {
+					short := body
+					if len(short) > 90 {
+						short = short[:90]
+					}
+					t.Errorf("%s: a row-limited statement has no top-level ORDER BY: %q", name, short)
+				}
+				checked++
+			}
+		}
+	}
+	if checked < 30 {
+		t.Fatalf("only %d row-limited statements were found, the guard is not reading the source", checked)
+	}
+}

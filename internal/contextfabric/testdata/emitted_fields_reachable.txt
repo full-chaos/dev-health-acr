@@ -170,19 +170,19 @@ FactIncidents
   fields             incident_attribution_basis incidents_count_window org_incidents_not_attributable_count_window owned_repositories owned_repositories_omitted_count owned_repository_count repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_name resolved_incidents_count_window rollup_basis severity status window_basis window_end window_start
 
 FactInvestment
-  reached_funcs      128
+  reached_funcs      130
   dynamic_key_sites  7
-  leaked_call_sites  23
+  leaked_call_sites  24
     leak interface_method     17
     leak external_func_value  4
     leak rebound_func_value   0
     leak no_body              0
-    leak unresolvable         2
-    calls followed            734
-    calls accounted           14
+    leak unresolvable         3
+    calls followed            737
+    calls accounted           15
     calls not_a_call          19
-    calls excluded_by_design  299
-    calls leaked              23
+    calls excluded_by_design  305
+    calls leaked              24
   fields             attribution attribution_basis churn_loc cycle_p50_hours day delivery_units effort_unit_count investment_area investment_mix_source mix_source native_multi_placed_unit_count owned_repository_count owning_team_rollup_work_unit_count population_window project_stream prs_merged repo_count rollup_basis share source spanning_unit_count team_breakdown team_count team_id team_name theme theme_breakdown theme_quality_bugfix weighted_effort work_items_completed work_unit_count work_units_without_repo_link
 
 FactLandscape
@@ -277,7 +277,7 @@ FactReadiness
     calls followed            648
     calls accounted           13
     calls not_a_call          6
-    calls excluded_by_design  117
+    calls excluded_by_design  119
     calls leaked              7
   fields             backlog_size basis daily_readiness daily_readiness_omitted_count day estimate_coverage_ratio estimated_count provider rollup_basis team_breakdown team_count team_id team_name unestimated_count work_scope_id
 

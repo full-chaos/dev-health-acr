@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"sort"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -233,6 +234,17 @@ func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string,
 	for _, dailyRows := range dailyByTeam {
 		dailySeriesRowCount += len(dailyRows)
 	}
+	// The reader returns its rows in no stated order, and the first row minted
+	// per team carries the daily table: fix one order before anything is minted.
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].TeamID != rows[j].TeamID {
+			return rows[i].TeamID < rows[j].TeamID
+		}
+		if rows[i].WorkScopeID != rows[j].WorkScopeID {
+			return rows[i].WorkScopeID < rows[j].WorkScopeID
+		}
+		return rows[i].Provider < rows[j].Provider
+	})
 	rowCount = len(rows)
 	if dailySeriesRowCount > rowCount {
 		rowCount = dailySeriesRowCount
@@ -378,6 +390,24 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 	if seriesErr != nil {
 		return 0, rejected, false, seriesErr
 	}
+	// One order for the reader's unordered rows: the per-team breakdown keeps
+	// the first row of a duplicated key and is cut by capFactValueRows.
+	sort.SliceStable(scanned, func(i, j int) bool {
+		a, b := scanned[i], scanned[j]
+		if a.ProjectSubjectKey != b.ProjectSubjectKey {
+			return a.ProjectSubjectKey < b.ProjectSubjectKey
+		}
+		if a.TeamID != b.TeamID {
+			return a.TeamID < b.TeamID
+		}
+		if a.WorkScopeID != b.WorkScopeID {
+			return a.WorkScopeID < b.WorkScopeID
+		}
+		if a.Provider != b.Provider {
+			return a.Provider < b.Provider
+		}
+		return a.Day > b.Day
+	})
 	rowCount = len(scanned)
 	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readTeamReadiness's
 	// identical note -- the daily-series query's own withRowLimit(200) cap,

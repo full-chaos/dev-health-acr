@@ -94,7 +94,8 @@ FROM (
 	FROM recommendations_daily FINAL
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)} AND ` + deficiencyWindowSQL("window_end", timeBound) + `
 )
-WHERE rn = 1 AND fired = 1`)
+WHERE rn = 1 AND fired = 1
+ORDER BY team_id, rule_id`)
 	rowCount := 0
 	firedTeams := map[string]struct{}{}
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {

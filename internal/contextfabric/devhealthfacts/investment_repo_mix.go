@@ -3,7 +3,9 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -166,7 +168,8 @@ FROM (
 	)
 	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
 )
-GROUP BY win, repo_uuid`)
+GROUP BY win, repo_uuid
+ORDER BY win, repo_uuid`)
 }
 
 // repoMixChunk bounds how many repositories one statement reads. Each
@@ -244,8 +247,37 @@ type repoThemeTotals struct {
 	repos int64
 }
 
+// mixEffortSignificantDigits is the declared precision of every effort value
+// the investment mix serves (weighted_effort, the shares derived from it and
+// the prior-window shares). ClickHouse sums Float64 in a thread-dependent
+// order, so the last digits of one persisted aggregate differ between two
+// reads of the same rows; served as-is they make the same question carry two
+// different inputs. Nine significant digits is far below what the effort
+// carries (the persisted distributions are model estimates with two or three
+// meaningful digits) and far above the last-digit noise (about 1e-16
+// relative), so a rounding edge is crossed with probability near 1e-7 per
+// value, never by a real change of the data.
+const mixEffortSignificantDigits = 9
+
+// roundMixEffort rounds v to mixEffortSignificantDigits significant digits.
+func roundMixEffort(v float64) float64 {
+	if v == 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return v
+	}
+	rounded, err := strconv.ParseFloat(strconv.FormatFloat(v, 'g', mixEffortSignificantDigits-1, 64), 64)
+	if err != nil {
+		return v
+	}
+	return rounded
+}
+
 func groupRepoMix(rows []repoMixRow) map[string]*repoThemeTotals {
 	out := map[string]*repoThemeTotals{}
+	defer func() {
+		for _, t := range out {
+			t.roundEffort()
+		}
+	}()
 	for _, r := range rows {
 		t, ok := out[r.RepoID]
 		if !ok {
@@ -261,6 +293,14 @@ func groupRepoMix(rows []repoMixRow) map[string]*repoThemeTotals {
 		t.bugfix += r.Bugfix
 	}
 	return out
+}
+
+// roundEffort applies the declared precision to every effort sum of t.
+func (t *repoThemeTotals) roundEffort() {
+	for theme, v := range t.theme {
+		t.theme[theme] = roundMixEffort(v)
+	}
+	t.bugfix = roundMixEffort(t.bugfix)
 }
 
 func (t *repoThemeTotals) total() float64 {
@@ -384,7 +424,7 @@ func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string,
 // (ownedRepositoriesSource, CHAOS-7073 K11).
 func (p *InvestmentProvider) readTeamOwnedRepositories(ctx context.Context, orgID string, teamIDs []string, bound factTimeBound) (map[string][]string, error) {
 	statement := withRowLimit(`SELECT DISTINCT team_id, repo_key FROM ` +
-		ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)))
+		ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)) + "\nORDER BY team_id, repo_key")
 	extra := make([]readers.Binding, 0, 2)
 	for _, b := range bound.bindings() {
 		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
@@ -411,14 +451,16 @@ func sumOwnedRepoMix(owned map[string][]string, perRepo map[string]*repoThemeTot
 	for teamID, repos := range owned {
 		seen := map[string]bool{}
 		team := &repoThemeTotals{theme: map[string]float64{}}
-		for _, repoID := range repos {
+		orderedRepos := append([]string(nil), repos...)
+		sort.Strings(orderedRepos)
+		for _, repoID := range orderedRepos {
 			t, ok := perRepo[repoID]
 			if !ok || seen[repoID] {
 				continue
 			}
 			seen[repoID] = true
-			for theme, v := range t.theme {
-				team.theme[theme] += v
+			for _, theme := range canonicalInvestmentThemes {
+				team.theme[theme] += t.theme[theme]
 			}
 			team.bugfix += t.bugfix
 			team.repos++

@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1911,7 +1912,16 @@ func classifyFactReadError(err error) (SourceState, string) {
 }
 
 func sortCanonicalFacts(facts []CanonicalFact) {
-	sort.SliceStable(facts, func(i, j int) bool {
+	keys := make([]string, len(facts))
+	for i := range facts {
+		keys[i] = canonicalFactTieKey(facts[i])
+	}
+	order := make([]int, len(facts))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		i, j := order[a], order[b]
 		if facts[i].Kind != facts[j].Kind {
 			return factKindOrder(facts[i].Kind) < factKindOrder(facts[j].Kind)
 		}
@@ -1921,8 +1931,35 @@ func sortCanonicalFacts(facts []CanonicalFact) {
 		if facts[i].Subject.CanonicalID != facts[j].Subject.CanonicalID {
 			return facts[i].Subject.CanonicalID < facts[j].Subject.CanonicalID
 		}
-		return facts[i].Source < facts[j].Source
+		if facts[i].Source != facts[j].Source {
+			return facts[i].Source < facts[j].Source
+		}
+		return keys[i] < keys[j]
 	})
+	sorted := make([]CanonicalFact, len(facts))
+	for position, index := range order {
+		sorted[position] = facts[index]
+	}
+	copy(facts, sorted)
+}
+
+// canonicalFactTieKey is the last tie-break of sortCanonicalFacts: the stable
+// serialisation (map keys sorted by encoding/json) of everything the fact
+// carries beyond kind, subject and source, so two facts that share those three
+// keep one order however the provider returned them.
+func canonicalFactTieKey(fact CanonicalFact) string {
+	encoded, err := json.Marshal(struct {
+		Fields         map[string]FactValue `json:"f"`
+		ObservedAt     *time.Time           `json:"o"`
+		EventAt        *time.Time           `json:"e"`
+		EvidenceRefIDs []string             `json:"r"`
+		SourceState    SourceState          `json:"s"`
+		SourceVersion  string               `json:"v"`
+	}{fact.Fields, fact.ObservedAt, fact.EventAt, fact.EvidenceRefIDs, fact.SourceState, fact.SourceVersion})
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func factKindOrder(kind FactKind) int {

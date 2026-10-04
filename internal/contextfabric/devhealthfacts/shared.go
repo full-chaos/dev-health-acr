@@ -264,7 +264,15 @@ import (
 // as the status the service established, with the narrative withheld. A
 // candidate saved under v42 for such a question can hold a no_match and must
 // not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v43"
+//
+// v43 -> v44: canonical fact rows are served in one total order (a tie on
+// kind, subject and source is broken by the facts' own content, not by the
+// provider's row order), the readers' rows are sorted before facts are minted,
+// and every effort sum of a theme mix is rounded to nine significant digits. A
+// candidate saved under v43 carries facts in provider order and effort values
+// with last-digit noise; its stored input no longer equals the input a fresh
+// read produces, so it must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v44"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
