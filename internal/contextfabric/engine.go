@@ -2278,6 +2278,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	clampedInterpretedTime := interpretedTimeBound.Bound
 	interpretation.TimeContext = clampedInterpretedTime
+	var readTimeClamps []time.Time
+	if interpretedTimeBound.ClampApplied {
+		readTimeClamps = []time.Time{interpretedTimeBound.ClampedTo}
+	}
 	// CHAOS-5465: ONE admission function, after every disqualifier and before
 	// every consumer; then ONE composition boundary that validates the frame
 	// consumers receive and decides its gate on that composition.
@@ -3835,6 +3839,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarried: windowCarried,
+		ReadTimeClamps: readTimeClamps,
 		StructureCanon: structureCanon, CarriedStructureEntries: carriedStructureEntriesForServed,
 		CommitBases: commitBases, CommitDigests: commitDigests,
 		GroupedNarrowingBasis: stage2GroupedBasis,

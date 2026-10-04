@@ -10,7 +10,7 @@ import (
 
 // ClientAssembly is what lets a turn that asks to write its own answer be
 // served: the synthesis contract this binary runs, the writing rules and the
-// encoder that builds the exact model input.
+// encoder that builds the client's model input.
 func ClientAssembly() *contextfabric.ClientSynthesisAssembly {
 	system := sha256.Sum256([]byte(System()))
 	return &contextfabric.ClientSynthesisAssembly{
@@ -19,6 +19,6 @@ func ClientAssembly() *contextfabric.ClientSynthesisAssembly {
 		SystemSHA256:       hex.EncodeToString(system[:]),
 		Rules:              ClientRules(),
 		MaxBytes:           contractsv1.ContextFabricSynthesisInputDefaultMaxBytes,
-		Encode:             UserPayload,
+		Encode:             ClientPayload,
 	}
 }

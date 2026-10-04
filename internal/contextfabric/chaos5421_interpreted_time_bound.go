@@ -144,6 +144,8 @@ type InterpretedTimeBoundDecision struct {
 	// is always written, true or false, so a missing clamp and a clamp of
 	// zero instants are never the same reading.
 	ClampApplied bool
+	// ClampedTo is the instant a clamp wrote, set exactly when ClampApplied.
+	ClampedTo time.Time
 	// RangeDays is the width, in whole days, of the FINAL bound on the
 	// range axis, and an explicit 0 on every other axis. Explicit rather
 	// than omitted for the same reason: a reader must never have to guess
@@ -249,7 +251,7 @@ func resolveInterpretedTimeContext(timeContext TimeContext, now time.Time) Inter
 		at := now
 		clamped.AsOf = &at
 		return InterpretedTimeBoundDecision{
-			Axis: timeContext.Axis, Outcome: InterpretedTimeBoundFutureEnd, ClampApplied: true, Bound: clamped,
+			Axis: timeContext.Axis, Outcome: InterpretedTimeBoundFutureEnd, ClampApplied: true, ClampedTo: now, Bound: clamped,
 		}
 	case TemporalRange:
 		if timeContext.Start == nil || timeContext.End == nil {
@@ -264,10 +266,12 @@ func resolveInterpretedTimeContext(timeContext TimeContext, now time.Time) Inter
 		// Step 4 for a range.
 		bound := timeContext
 		clampApplied := false
+		var clampedTo time.Time
 		if timeContext.End.After(now) {
 			end := now
 			bound.End = &end
 			clampApplied = true
+			clampedTo = now
 			// A window whose whole span sits in the future would otherwise
 			// invert once the end is pulled back -- the same guard
 			// resolveTimeContext carries for its tolerance window.
@@ -280,6 +284,7 @@ func resolveInterpretedTimeContext(timeContext TimeContext, now time.Time) Inter
 		rangeDays := int(bound.End.Sub(*bound.Start) / (24 * time.Hour))
 		if bound.End.Sub(*bound.Start) > maxHistoricalRangeDays*24*time.Hour {
 			decision := refuse(InterpretedTimeBoundRangeTooWide, clampApplied)
+			decision.ClampedTo = clampedTo
 			decision.RangeDays = rangeDays
 			decision.Bound = bound
 			return decision
@@ -289,7 +294,7 @@ func resolveInterpretedTimeContext(timeContext TimeContext, now time.Time) Inter
 			outcome = InterpretedTimeBoundFutureEnd
 		}
 		return InterpretedTimeBoundDecision{
-			Axis: timeContext.Axis, Outcome: outcome, ClampApplied: clampApplied, RangeDays: rangeDays, Bound: bound,
+			Axis: timeContext.Axis, Outcome: outcome, ClampApplied: clampApplied, ClampedTo: clampedTo, RangeDays: rangeDays, Bound: bound,
 		}
 	default:
 		return refuse(InterpretedTimeBoundUnknownAxis, false)

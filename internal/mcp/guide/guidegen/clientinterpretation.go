@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/mcp"
 )
@@ -54,23 +55,27 @@ type ClientFlowInputs struct {
 	StatusField        string
 	WindowReceipts     string
 
-	ArgSynthesis            string
-	SynthesisModeClient     string
-	SynthesisInputField     string
-	SynthesisInputFields    []string
-	SynthesisContractFields []string
-	SynthesisSourceField    string
-	SynthesisVersionField   string
-	SynthesisSourceServer   string
-	SynthesisSourceClient   string
-	SynthesisNotSynthesized string
-	StatusComplete          string
-	StatusPartial           string
-	StatusDegraded          string
-	TextFields              []string
-	StatusNoMatch           string
-	SynthesisMaxBytes       int
-	CommitNotAffirmed       string
+	ArgSynthesis         string
+	SynthesisModeClient  string
+	SynthesisInputField  string
+	SynthesisInputFields []string
+	// SynthesisObservationPaths are the input paths the client input leaves
+	// out when they hold the time a turn looked (synthesisprompt).
+	SynthesisObservationPaths []string
+	SourceWatermarkField      string
+	SynthesisContractFields   []string
+	SynthesisSourceField      string
+	SynthesisVersionField     string
+	SynthesisSourceServer     string
+	SynthesisSourceClient     string
+	SynthesisNotSynthesized   string
+	StatusComplete            string
+	StatusPartial             string
+	StatusDegraded            string
+	TextFields                []string
+	StatusNoMatch             string
+	SynthesisMaxBytes         int
+	CommitNotAffirmed         string
 
 	ArgSynthesisOutput           string
 	ArgSynthesisContract         string
@@ -103,6 +108,7 @@ func clientFlowInputs() ClientFlowInputs {
 	base := reflect.TypeOf(contractsv1.MCPInvestigateQuestionRequest{})
 	result := reflect.TypeOf(contractsv1.ContextFabricInvestigationResult{})
 	synthesisInput := reflect.TypeOf(contractsv1.ContextFabricSynthesisInput{})
+	sourceObservation := reflect.TypeOf(contractsv1.ContextFabricSourceObservation{})
 	synthesisContract := reflect.TypeOf(contractsv1.ContextFabricSynthesisContract{})
 	response := reflect.TypeOf(contractsv1.MCPInvestigateQuestionResponse{})
 	writeBack := reflect.TypeOf(contractsv1.MCPSynthesisContract{})
@@ -141,6 +147,8 @@ func clientFlowInputs() ClientFlowInputs {
 			jsonName(synthesisInput, "Contract"), jsonName(synthesisInput, "Input"), jsonName(synthesisInput, "InputSHA256"),
 			jsonName(synthesisInput, "Bounded"), jsonName(synthesisInput, "Rules"),
 		},
+		SynthesisObservationPaths: synthesisprompt.ClientInputObservationPaths(),
+		SourceWatermarkField:      jsonName(sourceObservation, "Watermark"),
 		SynthesisContractFields: []string{
 			jsonName(synthesisContract, "PromptVersion"), jsonName(synthesisContract, "ModelOutputVersion"), jsonName(synthesisContract, "SystemSHA256"),
 		},
@@ -199,7 +207,8 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 	if len(c.ContractFields) != 3 || len(c.PromptMetaKeys) == 0 {
 		return "", fmt.Errorf("guidegen: client interpretation contract fields or prompt meta keys are missing")
 	}
-	if len(c.SynthesisInputFields) != 5 || len(c.SynthesisContractFields) != 3 || c.SynthesisMaxBytes <= 0 {
+	if len(c.SynthesisInputFields) != 5 || len(c.SynthesisContractFields) != 3 || c.SynthesisMaxBytes <= 0 ||
+		len(c.SynthesisObservationPaths) == 0 || slices.Contains(c.SynthesisObservationPaths, "") || c.SourceWatermarkField == "" {
 		return "", fmt.Errorf("guidegen: client interpretation synthesis input fields or size bound are missing")
 	}
 	for i, field := range append(slices.Clone(c.SynthesisInputFields), c.SynthesisContractFields...) {
@@ -271,8 +280,10 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 	b.WriteString("\n## Write the answer on your own model\n\n")
 	fmt.Fprintf(&b, "- To write the answer yourself, send %s %s on %s or on %s. The service then makes no synthesis model call.\n",
 		q(c.ArgSynthesis), q(c.SynthesisModeClient), q(c.ServerSideTool), q(c.InterpretTool))
-	fmt.Fprintf(&b, "- The answer then carries %s with five fields: %s. The field %s holds %s, the same values as the `_meta` of the synthesis prompt. The field %s is the model input, bounded to the default byte bound. When %s is false it is byte for byte what the service would have sent its own synthesis model. When %s is true, facts were cut to fit the bound, and the service's own model can be given more.\n",
-		q(c.SynthesisInputField), strings.Join(quoteAll(c.SynthesisInputFields), ", "), q(c.SynthesisInputFields[0]), strings.Join(quoteAll(c.SynthesisContractFields), ", "), q(c.SynthesisInputFields[1]), q(c.SynthesisInputFields[3]), q(c.SynthesisInputFields[3]))
+	fmt.Fprintf(&b, "- The answer then carries %s with five fields: %s. The field %s holds %s, the same values as the `_meta` of the synthesis prompt. The field %s is the model input, bounded to the default byte bound. It holds no time at which the turn looked: of the paths %s, the first is always left out (the time we read the source; its freshness is the %s, which stays), and a time context instant is left out only when we pulled a future instant back to the time of our read (the span then runs to the read). Apart from those times, when %s is false it is byte for byte what the service would have sent its own synthesis model. When %s is true, facts were cut to fit the bound, and the service's own model can be given more.\n",
+		q(c.SynthesisInputField), strings.Join(quoteAll(c.SynthesisInputFields), ", "), q(c.SynthesisInputFields[0]), strings.Join(quoteAll(c.SynthesisContractFields), ", "), q(c.SynthesisInputFields[1]), strings.Join(quoteAll(c.SynthesisObservationPaths), ", "), q(c.SourceWatermarkField), q(c.SynthesisInputFields[3]), q(c.SynthesisInputFields[3]))
+	fmt.Fprintf(&b, "- %s is the sha256 of %s. Two calls over the same facts give the same %s and the same %s. A change in a fact, a source state, a watermark, the question or the interpretation changes it.\n",
+		q(c.SynthesisInputFields[2]), q(c.SynthesisInputFields[1]), q(c.SynthesisInputFields[1]), q(c.SynthesisInputFields[2]))
 	fmt.Fprintf(&b, "- Call `prompts/get` for the prompt %s, with no arguments. Its one message is the system message. Run it on your model with %s as the user message. The reply follows the schema resource %s. Follow the writing %s. The prompt and the schema are served to a caller with either %s or %s.\n",
 		q(c.SynthesisPrompt), q(c.SynthesisInputFields[1]), q(c.SynthesisOutputURI), q(c.SynthesisInputFields[4]), q(c.ServerSideTool), q(c.InterpretTool))
 	fmt.Fprintf(&b, "- The stored result of that turn holds facts and evidence only, with no drivers or claims written by a model. Its %s is %s, or %s when the service finds a required source unavailable, or %s when nothing was read; never %s. Its %s is %s (%s on an answer we wrote) and its %s is %s.\n",

@@ -2,6 +2,7 @@ package guidegen
 
 import (
 	"encoding/json"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -87,6 +88,8 @@ func clientFlowVocabulary(t *testing.T, c ClientFlowInputs) []string {
 	vocab = append(vocab, c.TextFields...)
 	vocab = append(vocab, c.SynthesisInputFields...)
 	vocab = append(vocab, c.SynthesisContractFields...)
+	vocab = append(vocab, c.SynthesisObservationPaths...)
+	vocab = append(vocab, c.SourceWatermarkField)
 	vocab = append(vocab, c.PromptMetaKeys...)
 	vocab = append(vocab, c.ContractFields...)
 	vocab = append(vocab, guideURIs(c)...)
@@ -217,6 +220,10 @@ func TestClientInterpretationGuideHasTheSynthesisSection(t *testing.T) {
 	want = append(want, c.SynthesisContractFields...)
 	want = append(want, c.TextFields...)
 	want = append(want, "never `"+c.StatusComplete+"`", "either `"+c.ServerSideTool+"` or `"+c.InterpretTool+"`", "byte for byte")
+	for _, path := range synthesisprompt.ClientInputObservationPaths() {
+		want = append(want, "`"+path+"`")
+	}
+	want = append(want, "`input_sha256` is the sha256 of `input`", "the same `input` and the same `input_sha256`")
 	for _, value := range want {
 		if value == "" || !strings.Contains(section, value) {
 			t.Errorf("synthesis section lacks %q", value)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -84,7 +85,9 @@ type synthesisAssemblyParams struct {
 	Resolution            SubjectResolution
 	CohortSignalCitations cohortMemberSignalCitations
 	EffectiveWindow       *contractsv1.ContextFabricEffectiveEvidenceWindow
-	WindowCanon           requestWindowCanonicalization
+	// ReadTimeClamps is SynthesisInput.ReadTimeClamps, carried to every pass.
+	ReadTimeClamps []time.Time
+	WindowCanon    requestWindowCanonicalization
 	// WindowCarried is true when this turn's effective window was carried --
 	// by the same-conversation window carry or by the confirmed-need
 	// ledger's window consumer -- rather than confirmed, stated or inferred
@@ -338,7 +341,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	synthesisInput, _ := canonicalizeSynthesisSubjectLabels(SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
-		EvidenceWindow: effectiveWindow,
+		EvidenceWindow: effectiveWindow, ReadTimeClamps: params.ReadTimeClamps,
 	})
 	var result InvestigationResult
 	var err error

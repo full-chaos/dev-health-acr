@@ -25,7 +25,11 @@ const (
 // UserPayload returns the bounded JSON user message the synthesize call sends
 // for input. orgID feeds the coverage merge's reconcile log only.
 func UserPayload(orgID string, input contextfabric.SynthesisInput, maxBytes int) ([]byte, error) {
-	encoded, err := json.Marshal(InputFromDomain(orgID, input))
+	return encodeBounded(InputFromDomain(orgID, input), maxBytes)
+}
+
+func encodeBounded(payload Input, maxBytes int) ([]byte, error) {
+	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("encode bounded model input: %w", err)
 	}

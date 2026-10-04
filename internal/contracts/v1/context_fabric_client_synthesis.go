@@ -55,9 +55,12 @@ type ContextFabricSynthesisContract struct {
 	SystemSHA256       string `json:"system_sha256"`
 }
 
-// ContextFabricSynthesisInput is the model input the service would have sent
-// its own synthesis model (cut to the size bound when Bounded is set), served to a caller that asked to write the answer.
-// It is served only in the turn that built it and is never stored.
+// ContextFabricSynthesisInput is the model input a caller that asked to write
+// the answer writes it from: the input the service would have sent its own
+// synthesis model (cut to the size bound when Bounded is set) without the
+// times at which the turn looked, so InputSHA256, the sha256 of Input, names
+// the facts and not the moment of the read. It is served only in the turn
+// that built it and is never stored.
 type ContextFabricSynthesisInput struct {
 	Contract    ContextFabricSynthesisContract `json:"contract"`
 	Input       json.RawMessage                `json:"input"`
