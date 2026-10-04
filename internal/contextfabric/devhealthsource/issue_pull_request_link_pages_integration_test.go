@@ -133,6 +133,11 @@ func TestIssuePullRequestLinkProducerPagesOnPopulatedStore(t *testing.T) {
 			{"jira:PROJ-2", repoGH, 42, "guess", at(14)},           // tier outside the vocabulary
 			{"gh:acme/widget#7", repoGL, 43, "NOT_A_TIER", at(15)}, // tier outside the vocabulary
 		}
+		// Background merges would collapse the duplicated pair before the
+		// read and hide whether the producer reads FINAL: stop them for this
+		// table while the test runs.
+		exec("stop merges", `SYSTEM STOP MERGES work_graph_issue_pr`)
+		t.Cleanup(func() { _ = direct.Exec(context.Background(), `SYSTEM START MERGES work_graph_issue_pr`) })
 		for i, r := range rows {
 			exec(fmt.Sprintf("link %d", i), `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 				r.repo, r.issue, r.number, float32(0.9), r.tier, "", r.at, orgID)
