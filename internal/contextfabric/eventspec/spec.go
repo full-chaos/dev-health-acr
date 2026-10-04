@@ -2907,9 +2907,12 @@ var projectDeploymentWalkAnchorBasis = []string{"none", "bound", "sole_commit"}
 // (project -> issues -> linked pull requests -> repositories -> deployments)
 // ran, and what it found.
 //
-// outcome=not_routed is a call whose anchor is not a committed project
-// (anchor_kind says which kind, or "none"); the walk did not run and no walk
-// count is written. outcome=read_failed carries the error and no count: the
+// The walk is the read directed at the anchor's deployments: for a project
+// through its issues' linked pull requests, for a team through the
+// repositories it owns, for a repository directly. outcome=not_routed is a
+// call with no anchor (anchor_kind "none"); the walk did not run and no walk
+// count is written. issues and linked_pull_requests ride only on a project
+// anchor. outcome=read_failed carries the error and no count: the
 // walk did not finish. Every other outcome carries the walk's counts: the
 // project's issues, the distinct pull requests its issues link (both before
 // authorization), deployments reached, hops the caller's authorization hid,
@@ -2934,8 +2937,8 @@ var ProjectDeploymentWalk = Event{
 		{Key: "anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextFabricSubjectKindTokens...)},
 		{Key: "anchor_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: projectDeploymentWalkAnchorBasis},
 		{Key: "committed", Type: FieldInt, Presence: PresenceRequired},
-		{Key: "issues", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
-		{Key: "linked_pull_requests", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
+		{Key: "issues", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed) and the anchor is a project"},
+		{Key: "linked_pull_requests", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed) and the anchor is a project"},
 		{Key: "members", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
 		{Key: "denied", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
 		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},

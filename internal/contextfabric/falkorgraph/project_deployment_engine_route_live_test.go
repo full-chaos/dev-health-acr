@@ -211,7 +211,8 @@ func TestLiveNamedProjectsServeTheirOwnDeployments(t *testing.T) {
 }
 
 // TestLiveTheLinkReadFindsLinksPastTheBudgetAndCountsAnUnlinkedProject runs the
-// walk's link read and issue count on a real graph store: a project with more
+// walk's link read and issue count, and the team and repository reach, on a
+// real graph store: a project with more
 // issues than the read budget whose only link sorts last reaches its
 // deployments uncut, and a project with no link at all is unlinked with its
 // exact issue count.
@@ -256,6 +257,23 @@ func TestLiveTheLinkReadFindsLinksPastTheBudgetAndCountsAnUnlinkedProject(t *tes
 		entity(deployment, repository, "")
 		relate(fmt.Sprintf("deployment_%d", d), contractsv1.ContextFabricRelationshipBelongsToRepository, deployment, repo, repository)
 	}
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:kilo", Label: "kilo"}
+	entity(team, repository, "")
+	relate("ledger_owned_by_kilo", contractsv1.ContextFabricRelationshipOwnedByTeam, repo, team, repository)
+	// A repository the team owned once: its ownership edge ended, and its
+	// deployments are not the team's now.
+	archiveScope := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/archive"}}
+	archive := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:github:acme/archive", Label: "acme/archive"}
+	entity(archive, archiveScope, "")
+	for d := 0; d < 2; d++ {
+		deployment := contextfabric.SubjectRef{Kind: contextfabric.SubjectDeployment, CanonicalID: fmt.Sprintf("deployment:archive:%d", d), Label: "deployment"}
+		entity(deployment, archiveScope, "")
+		relate(fmt.Sprintf("archive_deployment_%d", d), contractsv1.ContextFabricRelationshipBelongsToRepository, deployment, archive, archiveScope)
+	}
+	relate("archive_owned_by_kilo", contractsv1.ContextFabricRelationshipOwnedByTeam, archive, team, archiveScope)
+	ownedFrom, ownedTo := observed.Add(-72*time.Hour), observed.Add(-36*time.Hour)
+	relationships.Relationships[len(relationships.Relationships)-1].ValidFrom = &ownedFrom
+	relationships.Relationships[len(relationships.Relationships)-1].ValidTo = &ownedTo
 	projects := map[string]contextfabric.SubjectRef{}
 	for _, name := range []string{"gamma", "delta"} {
 		project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:linear:" + name, Label: name}
@@ -312,6 +330,12 @@ func TestLiveTheLinkReadFindsLinksPastTheBudgetAndCountsAnUnlinkedProject(t *tes
 			walk, err := adapter.projectDeploymentMembers(ctx, key, orgID, restricted, contextfabric.RequestedScope{}, projects["gamma"], 25, temporal)
 			if err != nil || len(walk.nodes) != c.members || walk.truncated {
 				t.Fatalf("%s, gamma granted %s: walk = %d members, truncated %v, error %v; want %d members, uncut", windowName, c.grant, len(walk.nodes), walk.truncated, err, c.members)
+			}
+		}
+		for _, anchor := range []contextfabric.SubjectRef{team, repo} {
+			reach, err := adapter.anchorDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, anchor, 25, temporal)
+			if err != nil || len(reach.nodes) != 2 || reach.truncated {
+				t.Fatalf("%s, %s anchor: reach = %d members, truncated %v, error %v; want the ledger's 2 deployments, uncut", windowName, anchor.Kind, len(reach.nodes), reach.truncated, err)
 			}
 		}
 	}

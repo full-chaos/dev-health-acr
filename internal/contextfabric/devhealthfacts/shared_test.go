@@ -463,3 +463,11 @@ func TestQueryVersionMovedPastTheIssueFirstProjectWalk(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when the project walk read issues before links holds a cut or empty answer for a project whose links sort past the budget and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheProjectWalkReadLinksFirst)
 	}
 }
+
+func TestQueryVersionMovedPastTheTwoHopAnchorDeploymentReach(t *testing.T) {
+	t.Parallel()
+	const versionBeforeTheDirectedAnchorReach = "devhealthfacts.clickhouse.v39"
+	if devhealthfacts.QueryVersion == versionBeforeTheDirectedAnchorReach {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when a named team's deployments came from the generic two-hop walk can hold an empty cohort and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheDirectedAnchorReach)
+	}
+}
