@@ -296,6 +296,17 @@ func TestExplicitPullRequestHandleAbsentLeavesTheTextDerivedAttestation(t *testi
 	if len(resolution.Committed) != 2 || resolution.Committed[1].CanonicalID != explicitHandlePRID {
 		t.Fatalf("Committed = %#v, want the hinted repository then the text-attested pull request", resolution.Committed)
 	}
+	// The explicit-handle path stays inert: one anchored census call, made by
+	// the ordinary evidence round with the hint as its anchor.
+	var anchored int
+	for _, call := range calls {
+		if call.anchorBound && call.anchorID == explicitHandleRepoID {
+			anchored++
+		}
+	}
+	if anchored != 1 {
+		t.Fatalf("anchored census calls = %d (%#v), want exactly 1 from the ordinary round", anchored, calls)
+	}
 }
 
 func hasCommittedKind(committed []contextfabric.SubjectRef, kind contextfabric.SubjectKind) bool {
