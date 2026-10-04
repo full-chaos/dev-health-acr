@@ -247,7 +247,13 @@ import (
 // two-hop walk whose budget the anchor's work items could spend first. A
 // candidate saved under v39 for such a question can hold an empty cohort and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v40"
+//
+// v40 -> v42 (v41 is held by a change in review): a synthesis no_match over a
+// committed subject with a served cohort outcome or a read fact row is served
+// as the status the service established, with the narrative withheld. A
+// candidate saved under v40 for such a question can hold a no_match and must
+// not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v42"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

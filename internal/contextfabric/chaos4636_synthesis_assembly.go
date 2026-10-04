@@ -493,6 +493,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// applySynthesisStatusOverride MUTATES result, so it still runs on every
 	// pass; only the RECORDING is deferred.
 	pending.SynthesisStatusOverride = applySynthesisStatusOverride(&result)
+	if pending.SynthesisStatusOverride == nil {
+		pending.SynthesisStatusOverride = applyServerStatusFloor(&result, graphContext, facts)
+	}
 	// CHAOS-4099: the answer's own statement that some requested evidence
 	// was never reachable. Placed alongside the other post-synthesis
 	// composers and before the commit-affirmation gate, Validate and Save,
