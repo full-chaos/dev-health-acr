@@ -173,8 +173,8 @@ func walkOutcomeFixtures() map[ProjectDeploymentWalkOutcome]walkOutcomeFixture {
 			principal: storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/somewhere-else"}},
 			seed:      func() ([]seededNode, []seededEdge) { return projectWithOneIssue(true, 2) }, request: projectDeploymentsRequest,
 			check: func(t *testing.T, d ProjectDeploymentWalkDecision) {
-				if d.Members != 0 || d.Denied == 0 {
-					t.Errorf("denied decision = %+v, want no member and a counted denial", d)
+				if d.Members != 0 || d.LinkedPullRequests != 0 {
+					t.Errorf("denied decision = %+v, want no member and no link read: the caller's grants admit none", d)
 				}
 			},
 		},
@@ -416,7 +416,19 @@ func TestABoundRepositoryAnchorKeepsAStrayCommitsDeploymentsOut(t *testing.T) {
 // TestARestrictedCallerWithACutFrontierStillGetsTheNeutralReason: a cut
 // frontier does not replace the neutral reason of a restricted caller.
 func TestARestrictedCallerWithACutFrontierStillGetsTheNeutralReason(t *testing.T) {
+	// Forty links the caller's grant admits, each to a repository node the
+	// caller cannot see: more links than the budget, and no visible member.
 	s := linkedIssues(40, 1)
+	for i := range s.nodes {
+		switch s.nodes[i].kind {
+		case "work_item":
+			if s.nodes[i].workItemType == "pr" {
+				s.nodes[i].repos = []string{"acme/somewhere-else"}
+			}
+		case "repository":
+			s.nodes[i].repos = []string{"acme/hidden"}
+		}
+	}
 	telemetry := &recordingTelemetry{}
 	adapter := newFakeAdapterWithTelemetry(t, seededGraphConn(s.nodes, s.edges), telemetry)
 	adapter.config.MaxResults = 3
@@ -491,8 +503,8 @@ func TestARestrictedCallerWithVisibleMembersIsAMembersOutcome(t *testing.T) {
 		t.Fatalf("%d walk decisions, want one", len(telemetry.projectDeploymentWalks))
 	}
 	got := telemetry.projectDeploymentWalks[0]
-	if got.Outcome != ProjectDeploymentWalkMembers || got.Members != 4 || got.Denied == 0 {
-		t.Fatalf("walk decision = %+v, want outcome members with the 4 granted deployments and the hidden hops counted", got)
+	if got.Outcome != ProjectDeploymentWalkMembers || got.Members != 4 || got.LinkedPullRequests != 2 {
+		t.Fatalf("walk decision = %+v, want outcome members with the 4 granted deployments from the 2 links the grants admit", got)
 	}
 }
 

@@ -139,7 +139,7 @@ func TestLiveNamedProjectsServeTheirOwnDeployments(t *testing.T) {
 		if err != nil || len(rows) != 1 {
 			t.Fatalf("%s, issue count: the graph store refused the read: %v (%d rows)\nquery: %s", windowName, err, len(rows), countCypher)
 		}
-		linkCypher := projectLinkCypher(temporal)
+		linkCypher := projectLinkCypher(temporal, false)
 		rows, err = adapter.api.query(ctx, key, linkCypher, projectLinkParams(orgID, "project.v2:linear:alpha", 0, 26, temporal), true)
 		if err != nil {
 			t.Fatalf("%s, link read: the graph store refused the read: %v\nquery: %s", windowName, err, linkCypher)
@@ -301,6 +301,18 @@ func TestLiveTheLinkReadFindsLinksPastTheBudgetAndCountsAnUnlinkedProject(t *tes
 		}
 		if outcome := projectDeploymentWalkOutcome(delta, false, nil); outcome != ProjectDeploymentWalkUnlinked {
 			t.Fatalf("%s, delta: outcome = %q, want unlinked", windowName, outcome)
+		}
+		// The restricted link read carries the grant clause: the store runs it,
+		// keeps the link the grant admits, and drops the one it does not.
+		for _, c := range []struct {
+			grant   string
+			members int
+		}{{"acme/ledger", 2}, {"acme/other", 0}} {
+			restricted := storage.Principal{OrgID: orgID, RepositoryScopes: []string{c.grant}}
+			walk, err := adapter.projectDeploymentMembers(ctx, key, orgID, restricted, contextfabric.RequestedScope{}, projects["gamma"], 25, temporal)
+			if err != nil || len(walk.nodes) != c.members || walk.truncated {
+				t.Fatalf("%s, gamma granted %s: walk = %d members, truncated %v, error %v; want %d members, uncut", windowName, c.grant, len(walk.nodes), walk.truncated, err, c.members)
+			}
 		}
 	}
 }

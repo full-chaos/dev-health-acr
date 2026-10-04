@@ -200,7 +200,13 @@ func TestTeamDeploymentMembersFollowTheCallersRepositoryGrant(t *testing.T) {
 // read's order, paged by skip and limit.
 func seededProjectLinks(byKey map[string]seededNode, edges []seededEdge, cypher string, params map[string]interface{}) []row {
 	project, _ := params["project"].(string)
-	isPullRequest := func(n seededNode) bool { return n.workItemType == "pr" || n.workItemType == "merge_request" }
+	pullRequestTypes := map[string]bool{}
+	if list, ok := params["prtypes"].([]interface{}); ok {
+		for _, v := range list {
+			pullRequestTypes[v.(string)] = true
+		}
+	}
+	isPullRequest := func(n seededNode) bool { return pullRequestTypes[n.workItemType] }
 	issues := map[string]seededNode{}
 	for _, e := range edges {
 		if e.typ != "BELONGS_TO_PROJECT" || e.dstKind != "project" || e.dstID != project || e.srcKind != "work_item" {
@@ -225,7 +231,7 @@ func seededProjectLinks(byKey map[string]seededNode, edges []seededEdge, cypher 
 		for _, pair := range [][2]string{{e.srcID, e.dstID}, {e.dstID, e.srcID}} {
 			issue, isIssue := issues[pair[0]]
 			pullRequest, ok := byKey["work_item|"+pair[1]]
-			if isIssue && ok && isPullRequest(pullRequest) {
+			if isIssue && ok && isPullRequest(pullRequest) && seededGrantsAdmit(params, issue, pullRequest) {
 				links = append(links, link{issue, pullRequest, fmt.Sprintf("rel_%03d", i)})
 			}
 		}
@@ -333,4 +339,33 @@ func seededWalkStep(byKey map[string]seededNode, edges []seededEdge, cypher stri
 		rows = rows[:limit]
 	}
 	return rows
+}
+
+// seededGrantsAdmit applies the link read's grant clause when the read carries
+// one: the pull request's repositories meet the grants, and the issue's do or
+// the issue has no repository.
+func seededGrantsAdmit(params map[string]interface{}, issue, pullRequest seededNode) bool {
+	grants, restricted := params["grants"].([]interface{})
+	if !restricted {
+		return true
+	}
+	meets := func(repos []string) bool {
+		for _, r := range repos {
+			for _, g := range grants {
+				if g == r {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	issueRepos := issue.repos
+	if len(issueRepos) == 0 {
+		issueRepos = []string{noRepositoryScope}
+	}
+	issueOK := meets(issueRepos)
+	for _, r := range issueRepos {
+		issueOK = issueOK || r == noRepositoryScope
+	}
+	return meets(pullRequest.repos) && issueOK
 }
