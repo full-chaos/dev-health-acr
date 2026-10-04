@@ -26,6 +26,9 @@ const (
 	routeProjectBravo = "project:bravo"
 	// routeWalkMessage is the decision line of the project deployment walk.
 	routeWalkMessage = "context_fabric: project deployment walk"
+	// routeReachReason is the inclusion reason of a member the two-hop walk
+	// reached from a named repository or team.
+	routeReachReason = "Graph retrieval reached this deployment from the anchor the question names."
 	// routeWalkReason is the inclusion reason of a member the walk reached.
 	routeWalkReason = "Deployment of a repository that a pull request linked to an issue of the named project belongs to."
 )
@@ -399,6 +402,8 @@ func (s *routeSeed) teamOwningAlpha() {
 func TestNamedTeamServesOnlyTheDeploymentsItReachesThroughTheEngine(t *testing.T) {
 	s := seedTwoLinkedProjects()
 	s.teamOwningAlpha()
+	// A repository the team does not own matches the question text.
+	s.text["repository|repository:github:acme/bravo-service"] = "belong"
 	answer := askAnchorDeployments(t, s, storage.Principal{OrgID: "org-1"}, contextfabric.SubjectTeam, "tango")
 	if len(answer.committed) != 1 || answer.committed[0].CanonicalID != "team:tango" || answer.basis != contextfabric.CommitBasisStatistical {
 		t.Fatalf("resolver committed %+v on basis %q, want the named team on the exact-label tier", answer.committed, answer.basis)
@@ -409,8 +414,26 @@ func TestNamedTeamServesOnlyTheDeploymentsItReachesThroughTheEngine(t *testing.T
 		t.Fatalf("team served %v, want only the deployments it reaches %v: a deployment the question text matched is not a member", got, want)
 	}
 	for _, member := range answer.result.Cohort.Members {
-		if len(member.InclusionReasons) != 1 || strings.Contains(member.InclusionReasons[0], "organization-level") {
+		if len(member.InclusionReasons) != 1 || member.InclusionReasons[0] != routeReachReason {
 			t.Errorf("member %s inclusion reasons = %q, want the anchor reach reason", member.Subject.CanonicalID, member.InclusionReasons)
+		}
+	}
+	reached := map[string]bool{}
+	for _, path := range answer.result.Paths {
+		for _, ref := range path.Nodes {
+			if ref.Kind == contextfabric.SubjectDeployment {
+				reached[ref.CanonicalID] = true
+			}
+		}
+	}
+	for _, id := range s.deployments[routeProjectBravo] {
+		if reached[id] {
+			t.Errorf("paths carry %s, a deployment of a repository the team does not own", id)
+		}
+	}
+	for _, id := range want {
+		if !reached[id] {
+			t.Errorf("paths do not carry %s, a deployment the team reaches", id)
 		}
 	}
 	if len(answer.walkLines) != 1 {

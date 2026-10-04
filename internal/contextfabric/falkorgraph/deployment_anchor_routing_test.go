@@ -150,11 +150,12 @@ func projectWithOneIssue(link bool, deployments int) ([]seededNode, []seededEdge
 func walkOutcomeFixtures() map[ProjectDeploymentWalkOutcome]walkOutcomeFixture {
 	open := storage.Principal{OrgID: "org-1"}
 	return map[ProjectDeploymentWalkOutcome]walkOutcomeFixture{
+		// One member is the smallest walk that has members.
 		ProjectDeploymentWalkMembers: {
-			principal: open, seed: func() ([]seededNode, []seededEdge) { return projectWithOneIssue(true, 2) }, request: projectDeploymentsRequest,
+			principal: open, seed: func() ([]seededNode, []seededEdge) { return projectWithOneIssue(true, 1) }, request: projectDeploymentsRequest,
 			check: func(t *testing.T, d ProjectDeploymentWalkDecision) {
-				if d.Members != 2 || d.Issues != 1 || d.LinkedPullRequests != 1 || d.Truncated || d.AnchorBasis != DeploymentAnchorBound {
-					t.Errorf("members decision = %+v, want 2 members from 1 issue and 1 link, bound, uncut", d)
+				if d.Members != 1 || d.Issues != 1 || d.LinkedPullRequests != 1 || d.Truncated || d.AnchorBasis != DeploymentAnchorBound {
+					t.Errorf("members decision = %+v, want 1 member from 1 issue and 1 link, bound, uncut", d)
 				}
 			},
 		},
@@ -322,5 +323,128 @@ func TestProjectDeploymentWalkClosedVocabulariesMatchEventspec(t *testing.T) {
 	}
 	if !reflect.DeepEqual(declared["anchor_basis"], bases) {
 		t.Errorf("eventspec declares anchor_basis %v, the producer %v", declared["anchor_basis"], bases)
+	}
+}
+
+// TestADiscoveryThatAsksNoDeploymentMembersWritesNoWalkLine: the decision line
+// belongs to a deployment-members discovery only.
+func TestADiscoveryThatAsksNoDeploymentMembersWritesNoWalkLine(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, &fakeConn{}, telemetry)
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:github:acme/api", Label: "acme/api"}
+	for name, request := range map[string]contextfabric.GraphDiscoveryRequest{
+		"team members of a repository": ownershipRoutingRequest(repositoryAnchorFrame(), anchor),
+		"no frame":                     fakeDiscoveryRequest(anchor, 10),
+	} {
+		if _, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request); err != nil {
+			t.Fatalf("%s: DiscoverContext() error = %v", name, err)
+		}
+		if len(telemetry.projectDeploymentWalks) != 0 {
+			t.Fatalf("%s: walk decisions = %+v, want none", name, telemetry.projectDeploymentWalks)
+		}
+	}
+}
+
+// TestSeveralUnboundCommitsWriteANotRoutedLineWithNoAnchor certifies the line
+// of a deployment-members discovery that has no anchor at all.
+func TestSeveralUnboundCommitsWriteANotRoutedLineWithNoAnchor(t *testing.T) {
+	var buf bytes.Buffer
+	adapter := newFakeAdapterWithTelemetry(t, &fakeConn{}, SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))})
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: projectAnchorID, Label: "payments"}
+	request := soleCommitRequest(project, contextfabric.CommitBasisStatistical)
+	request.Resolution.Committed = append(request.Resolution.Committed,
+		contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:github:acme/stray", Label: "acme/stray"})
+	if _, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() error = %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.ProjectDeploymentWalk,
+		Want:  map[string]any{"org_id": "org-1", "outcome": "not_routed", "anchor_kind": "none", "anchor_basis": "none", "committed": 2},
+	}); err != nil {
+		t.Fatalf("certify.Certify() error = %v", err)
+	}
+}
+
+// TestABoundRepositoryAnchorKeepsAStrayCommitsDeploymentsOut: the reach rule
+// holds for a repository or team anchor as it does for a project.
+func TestABoundRepositoryAnchorKeepsAStrayCommitsDeploymentsOut(t *testing.T) {
+	s := projectSeed{served: map[string]string{}}
+	anchorRepo := s.repository("acme/anchor", 2)
+	strayRepo := s.repository("acme/stray", 1)
+	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: anchorRepo, Label: "payments"}
+	request := ownershipRoutingRequest(deploymentMembersFrame(), anchor)
+	request.Request.Options.MaxCohortMembers = 50
+	request.Resolution.Committed = append(request.Resolution.Committed,
+		contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: strayRepo, Label: "acme/stray"})
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	var got []string
+	if result.Cohort != nil {
+		for _, m := range result.Cohort.Members {
+			got = append(got, m.Subject.CanonicalID)
+		}
+	}
+	if strings.Join(got, ",") != "deployment:acme/anchor:0,deployment:acme/anchor:1" {
+		t.Fatalf("members = %v, want the two deployments of the bound repository only", got)
+	}
+	anchored := 0
+	for _, path := range result.Paths {
+		for _, ref := range path.Nodes {
+			if ref.CanonicalID == "deployment:acme/stray:0" {
+				t.Fatalf("paths carry the stray commit's deployment: %+v", path)
+			}
+			if ref.Kind == contextfabric.SubjectDeployment {
+				anchored++
+			}
+		}
+	}
+	if anchored != 2 {
+		t.Fatalf("paths carry %d deployments of the anchor, want its 2", anchored)
+	}
+}
+
+// TestARestrictedCallerWithACutFrontierStillGetsTheNeutralReason: a cut
+// frontier does not replace the neutral reason of a restricted caller.
+func TestARestrictedCallerWithACutFrontierStillGetsTheNeutralReason(t *testing.T) {
+	s := linklessThenLinked(6)
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, seededGraphConn(s.nodes, s.edges), telemetry)
+	adapter.config.MaxResults = 3
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/somewhere-else"}}
+	result, err := adapter.DiscoverContext(context.Background(), principal, projectDeploymentsRequest())
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(telemetry.projectDeploymentWalks) != 1 || telemetry.projectDeploymentWalks[0].Outcome != ProjectDeploymentWalkDenied || !telemetry.projectDeploymentWalks[0].Truncated {
+		t.Fatalf("walk decisions = %+v, want one denied decision that records the cut", telemetry.projectDeploymentWalks)
+	}
+	if deniedDetail(result) == nil || unlinkedDetail(result) != nil {
+		t.Fatalf("details = %+v, want the neutral denied reason and no unlinked one", result.Coverage.Details)
+	}
+}
+
+// TestARestrictedCallerWithVisibleMembersIsAMembersOutcome: denied is the
+// outcome of a restricted caller with NO member, never of one who sees some.
+func TestARestrictedCallerWithVisibleMembersIsAMembersOutcome(t *testing.T) {
+	s := seedProject()
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, seededGraphConn(s.nodes, s.edges), telemetry)
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/github-linked", "acme/linear-linked"}}
+	if _, err := adapter.DiscoverContext(context.Background(), principal, projectDeploymentsRequest()); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(telemetry.projectDeploymentWalks) != 1 {
+		t.Fatalf("%d walk decisions, want one", len(telemetry.projectDeploymentWalks))
+	}
+	got := telemetry.projectDeploymentWalks[0]
+	if got.Outcome != ProjectDeploymentWalkMembers || got.Members != 4 || got.Denied == 0 {
+		t.Fatalf("walk decision = %+v, want outcome members with the 4 granted deployments and the hidden hops counted", got)
 	}
 }

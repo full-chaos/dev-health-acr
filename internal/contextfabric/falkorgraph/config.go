@@ -1011,7 +1011,7 @@ func (t SlogTelemetry) RecordProjectDeploymentWalk(ctx context.Context, orgID st
 			"denied", decision.Denied,
 			"truncated", decision.Truncated)
 	}
-	if decision.Outcome == ProjectDeploymentWalkReadFailed && decision.Err != nil {
+	if decision.Err != nil {
 		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
 	}
 	t.logger().Info(eventspec.ProjectDeploymentWalk.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
