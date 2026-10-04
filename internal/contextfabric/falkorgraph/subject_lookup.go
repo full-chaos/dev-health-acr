@@ -160,10 +160,7 @@ func (a *Adapter) exactNameKindPage(ctx context.Context, key, orgID, kind, term,
 // exactNamePredicate is the label / alias / provider alias equality over node
 // variable v, for $term and $termLower.
 func exactNamePredicate(v string) string {
-	return fmt.Sprintf("%[1]s.%[2]s = $term OR toLower(trim(%[1]s.%[2]s)) = $termLower"+
-		" OR ANY(a IN coalesce(%[1]s.%[3]s, []) WHERE a = $term OR toLower(a) = $termLower)"+
-		" OR ANY(a IN coalesce(%[1]s.%[4]s, []) WHERE a = $term OR toLower(a) = $termLower)",
-		v, propLabel, propAliases, propProviderAliases)
+	return "false"
 }
 
 // exactNameMatchClass classifies how query equals the node: exact (label or
