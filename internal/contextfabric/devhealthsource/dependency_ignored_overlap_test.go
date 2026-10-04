@@ -90,3 +90,40 @@ func TestLateIgnoredRowFoundByTheOverlapReReadIsCounted(t *testing.T) {
 		t.Fatalf("tick 2 re-counted the already judged late row (%d lines)", n)
 	}
 }
+
+// TestIgnoredRowsOfAnOverlapWalkAreNotRejudgedByTheNextPass: the frontier sits
+// just behind the clock, so every call starts a new pass over a window that
+// holds one late ignored row. The first walk judges it and counts it; the
+// walks after it must find it in the memo and count nothing, or ignored_count
+// grows by one on every tick for as long as the window stays open.
+func TestIgnoredRowsOfAnOverlapWalkAreNotRejudgedByTheNextPass(t *testing.T) {
+	t.Parallel()
+	frontier := time.Now().UTC().Add(-time.Minute)
+	created := frontier.Add(-24 * time.Hour)
+	late := frontier.Add(-10 * time.Minute)
+	rows := [][]any{unresolvedDependencyRow("WI-1", "EXT-1", "EXTERNAL_ISSUE_KEY", late, created)}
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: dependencyTablesOnly(t, frontier, rows)})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	var buf bytes.Buffer
+	source = source.WithLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName, Cursor: ingestSpaceCursor(t, frontier)}
+
+	total := 0
+	for tick := 1; tick <= 8; tick++ {
+		buf.Reset()
+		if _, available, err := source.NextProjectionBatch(context.Background(), checkpoint); err != nil || available {
+			t.Fatalf("tick %d: err=%v available=%v, want no batch and no error", tick, err, available)
+		}
+		for _, entry := range ignoredLines(t, buf.String()) {
+			total += int(entry["ignored_count"].(float64))
+		}
+		if tick == 3 && total != 1 {
+			t.Fatalf("after tick 3 ignored_count = %d, want the 1 late row", total)
+		}
+	}
+	if total != 1 {
+		t.Fatalf("ignored_count over 8 ticks = %d, want 1: the memo must keep the judged row out of later passes", total)
+	}
+}
