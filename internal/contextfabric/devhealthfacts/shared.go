@@ -242,12 +242,18 @@ import (
 // exact issue count instead of cut. A candidate saved under v36 for such a
 // question holds a cut or empty answer and must not be reused.
 //
-// v39 -> v40: a work-item members question whose request committed a window is
+// v39 -> v40: the deployments of a named team are read from the repositories
+// it owns and those of a named repository directly, not from the generic
+// two-hop walk whose budget the anchor's work items could spend first. A
+// candidate saved under v39 for such a question can hold an empty cohort and
+// must not be reused.
+//
+// v40 -> v41: a work-item members question whose request committed a window is
 // served by that window when the question binds one time field, and states that
-// the period was not applied when it does not. A candidate saved under v39 for
+// the period was not applied when it does not. A candidate saved under v40 for
 // such a question holds members the period never filtered and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v40"
+const QueryVersion = "devhealthfacts.clickhouse.v41"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

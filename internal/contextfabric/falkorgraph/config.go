@@ -1004,9 +1004,12 @@ func (t SlogTelemetry) RecordProjectDeploymentWalk(ctx context.Context, orgID st
 		"committed", decision.Committed,
 	}
 	if decision.Outcome != ProjectDeploymentWalkNotRouted && decision.Outcome != ProjectDeploymentWalkReadFailed {
+		if decision.AnchorKind == contextfabric.SubjectProject {
+			args = append(args,
+				"issues", decision.Issues,
+				"linked_pull_requests", decision.LinkedPullRequests)
+		}
 		args = append(args,
-			"issues", decision.Issues,
-			"linked_pull_requests", decision.LinkedPullRequests,
 			"members", decision.Members,
 			"denied", decision.Denied,
 			"truncated", decision.Truncated)
