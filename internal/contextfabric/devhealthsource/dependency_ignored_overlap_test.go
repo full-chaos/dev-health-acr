@@ -65,8 +65,12 @@ func TestLateIgnoredRowFoundByTheOverlapReReadIsCounted(t *testing.T) {
 	source = source.WithLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName, Cursor: ingestSpaceCursor(t, at)}
 
-	if _, available, err := source.NextProjectionBatch(context.Background(), checkpoint); err != nil || available {
-		t.Fatalf("tick 1: err=%v available=%v, want no batch and no error", err, available)
+	// Tick 1 judges the late row; the walk finishes on a later tick, which
+	// is when the pass line is flushed.
+	for tick := 1; tick <= 3; tick++ {
+		if _, available, err := source.NextProjectionBatch(context.Background(), checkpoint); err != nil || available {
+			t.Fatalf("tick %d: err=%v available=%v, want no batch and no error", tick, err, available)
+		}
 	}
 	lines := ignoredLines(t, buf.String())
 	total := 0
