@@ -633,41 +633,17 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	var ownershipRoutedRepoSlug string
 	var ownershipRoutedRepoID string
 	ownershipAnchorBasis := AnchorBasisNone
-	if declaredCohortKindForRouting == contextfabric.SubjectTeam {
-		for _, subject := range request.Resolution.Committed {
-			// Label is stamped verbatim as the repository's own slug at
-			// projection time (devhealthsource/tables.go's queryRepositories)
-			// and never rewritten by resolution, so it is the same string
-			// authorization_repositories carries for a team that owns it.
-			//
-			// GATED ON THE SUBJECT BEING THE FRAME'S OWN BOUND ANCHOR, not on
-			// "any committed repository": a committed subject set can carry
-			// more than one identity for reasons unrelated to this question's
-			// anchor (an explicit comparison operand, a carried-over hint), and
-			// a repository committed for one of those reasons is not what "how
-			// many teams own repository R" is asking about: a project-anchored,
-			// team-member frame with an unrelated committed repository must
-			// never route through ownership on that repository's account.
-			//
-			// The declared anchor kind binds too: a repository committed on the
-			// caller's id binds without a term match, and under a reading that
-			// names a project it is not the anchor.
-			if subject.Kind == contextfabric.SubjectRepository && subject.Label != "" && contextfabric.AnchorBound(request.Frame, request.ScopeAnchorKind, subject, request.Resolution, request.Bases) {
-				ownershipRoutedRepoSlug = subject.Label
-				ownershipRoutedRepoID = subject.CanonicalID
-				ownershipAnchorBasis = AnchorBasisBound
-				break
-			}
-		}
-		// A repository named by its label is committed on a basis that never
-		// binds. It is still the anchor when it is the one committed subject
-		// and the reading points at it.
-		if ownershipRoutedRepoSlug == "" {
-			if anchor, ok := contextfabric.OwnershipCohortAnchor(request.Frame, request.Resolution, request.ScopeAnchorKind); ok {
-				ownershipRoutedRepoSlug = anchor.Label
-				ownershipRoutedRepoID = anchor.CanonicalID
-				ownershipAnchorBasis = AnchorBasisSoleCommit
-			}
+	// ONE decision for every way a repository reaches the committed set
+	// (contextfabric.OwnershipAnchor holds the rule and its truth table). The
+	// repository's label is stamped verbatim as its slug at projection time
+	// and never rewritten by resolution, so it is the string a team's
+	// repository list carries.
+	if anchor, basis := contextfabric.OwnershipAnchor(request.Frame, request.ScopeAnchorKind, request.Resolution, request.Bases); basis != contextfabric.OwnershipAnchorNone {
+		ownershipRoutedRepoSlug = anchor.Label
+		ownershipRoutedRepoID = anchor.CanonicalID
+		ownershipAnchorBasis = AnchorBasisSoleCommit
+		if basis == contextfabric.OwnershipAnchorBound {
+			ownershipAnchorBasis = AnchorBasisBound
 		}
 	}
 	// teamMembersOfScope: the frame asks for the team members of a named
@@ -1708,7 +1684,7 @@ const (
 	AnchorBasisBound AnchorBasis = "bound"
 	// AnchorBasisSoleCommit: the one committed subject, under the rule of
 	// its member kind (contextfabric.DeploymentCohortAnchor,
-	// contextfabric.OwnershipCohortAnchor).
+	// contextfabric.OwnershipAnchor).
 	AnchorBasisSoleCommit AnchorBasis = "sole_commit"
 )
 
