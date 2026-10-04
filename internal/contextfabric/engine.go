@@ -2209,7 +2209,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if remembered.Outcome == ContinuationAxisOverriddenByReceipt {
 			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 		}
-	} else if statedOrigin := statedWindowOrigin(windowCanon, clampedRequestTime.Axis, request.Consumer.Surface); statedOrigin != "" {
+	} else if statedOrigin := statedWindowOrigin(windowCanon, interpretation, familyOutcome.Frame, clampedRequestTime.Axis, request.Consumer.Surface); statedOrigin != "" {
 		// CHAOS-6557: on the MCP surface a window the CALLER supplied (the
 		// evidence_window field, or a period stated in the question) is the
 		// caller's time, exactly as a window they confirmed by receipt is. The
@@ -2225,6 +2225,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, statedOrigin, interpretedTimeBound.Bound.Axis, executedTime.Axis, statedWindowAxisOutcomeOf(axisOutcome))
 		}
 		if axisOutcome == ContinuationAxisOverriddenByReceipt {
+			if statedOrigin == StatedWindowOriginQuestionPhrase {
+				windowCanon.StatedRangeConflict = detectStatedRangeConflict(windowCanon.BinderProposal, interpretation.TimeContext, e.now())
+			}
 			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 		}
 	} else if period := interpreterPeriodWindow(windowCanon, clampedRequestTime.Axis, interpretedTimeBound.Bound, interpretedTimeBound.Answerable(), request.Consumer.Surface); period != nil {

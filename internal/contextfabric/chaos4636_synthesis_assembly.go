@@ -438,6 +438,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// here (that case already gated and returned above) -- every path
 	// reaching this line carries a confirmed/stated window or none at all.
 	result.EffectiveEvidenceWindow = effectiveWindow
+	conflictLimited, conflictDisplaced := appendBoundedLimitations(result.Limitations, statedRangeConflictLimitations(windowCanon))
+	result.Limitations = conflictLimited
+	result.LimitationsDisplaced += conflictDisplaced
 	windowOutcome := windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow, params.WindowCarried)
 	pending.WindowCanonicalization = &windowOutcome
 	// CHAOS-3900 W2 (design brief §4): the fresh disclosure W1's own scope

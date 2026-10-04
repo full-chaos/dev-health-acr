@@ -308,6 +308,10 @@ type requestWindowCanonicalization struct {
 	// window already resolved at this step, so it is available unconditionally
 	// once Interpret returns without a second question-text scan.
 	BinderProposal WindowBindOutcome
+	// StatedRangeConflict is set when the turn runs on the period the
+	// question states while the interpretation carried a range that differs
+	// from it: the answer discloses both and says which one it used.
+	StatedRangeConflict *statedRangeConflict
 	// ConfirmedMember (CHAOS-4003) is set only when resolveWindowReceipts
 	// redeemed a winr_ receipt (Effective.Provenance == clarification_confirmed)
 	// -- window's own confirmedStructureMember, in the EXACT shape
@@ -795,13 +799,87 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 
 // questionStatesWindow reports whether the question itself states the
 // evidence window (CHAOS-6557): the binder bound exactly one role-checked
-// trailing span. Whatever window class the interpreter picked, exactly as
-// composeEffectiveWindow's stated-provenance branch commits it, so the turn
-// that executes on the current axis is exactly the turn that reports a
-// question_stated window: a range the interpreter read from the same phrase
-// does not keep the turn on a historical axis.
-func questionStatesWindow(binderProposal WindowBindOutcome) bool {
-	return binderProposal.Reason == WindowBindRoutedInferred && binderProposal.Trailing
+// trailing span. It holds when the interpreted class carries a window (the
+// "refuse to guess" rule composeEffectiveWindow applies), and also, whatever
+// the class, for a frame that asks about current state or one bounded period:
+// the interpreter's range is then its reading of the stated phrase, not a
+// historical axis. A point-in-time phrase ("as of the start of the last 30
+// days") is never a stated evidence window on that second arm, and a series or
+// a period comparison keeps the range it was given.
+func questionStatesWindow(interpretation InterpretedQuestion, frame *QuestionFrame, binderProposal WindowBindOutcome) bool {
+	if binderProposal.Reason != WindowBindRoutedInferred || !binderProposal.Trailing {
+		return false
+	}
+	outcome := ClassifyWindow(interpretation, interpretation.WindowClass, interpretation.WindowConfidence)
+	if _, ok := DefaultRelativeID(outcome, windowDefaultPolicy); ok {
+		return true
+	}
+	return !binderProposal.PointInTime && frameTakesAStatedPeriod(frame)
+}
+
+// frameTakesAStatedPeriod reports a frame whose temporal intent a stated
+// trailing period serves as an evidence window: no frame, current state, or
+// one bounded window.
+func frameTakesAStatedPeriod(frame *QuestionFrame) bool {
+	if frame == nil {
+		return true
+	}
+	switch frame.Temporal {
+	case "", TemporalIntentCurrent, TemporalIntentBoundedWindow:
+		return true
+	}
+	return false
+}
+
+// statedRangeTolerance is how far each bound of an interpreted range may sit
+// from the stated period and still be the same period: a client reads "the
+// last 30 days" from its own clock and may round to whole days.
+const statedRangeTolerance = 24 * time.Hour
+
+// statedRangeConflict is an interpreted range the turn did not use because the
+// question states a different period.
+type statedRangeConflict struct {
+	InterpretedStart, InterpretedEnd time.Time
+	StatedStart, StatedEnd           time.Time
+}
+
+// detectStatedRangeConflict compares the interpreted range with the period the
+// question states, as of now. nil when the interpretation carried no range, or
+// a range within statedRangeTolerance of the stated period at both bounds.
+func detectStatedRangeConflict(binder WindowBindOutcome, interpreted TimeContext, now time.Time) *statedRangeConflict {
+	if interpreted.Axis != TemporalRange || interpreted.Start == nil || interpreted.End == nil {
+		return nil
+	}
+	start, end, ok := relativeWindowBounds(binder.RelativeID, now)
+	if !ok {
+		return nil
+	}
+	if withinDuration(*interpreted.Start, start, statedRangeTolerance) && withinDuration(*interpreted.End, end, statedRangeTolerance) {
+		return nil
+	}
+	return &statedRangeConflict{InterpretedStart: interpreted.Start.UTC(), InterpretedEnd: interpreted.End.UTC(), StatedStart: start, StatedEnd: end}
+}
+
+func withinDuration(a, b time.Time, tolerance time.Duration) bool {
+	delta := a.Sub(b)
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= tolerance
+}
+
+// limitation names both periods and says the answer used the stated one.
+func (c *statedRangeConflict) limitation() string {
+	const layout = "2006-01-02"
+	return "The interpretation sent with this question read its period as " + c.InterpretedStart.Format(layout) + " to " + c.InterpretedEnd.Format(layout) + ", which is not the period the question states; this answer uses the stated period, " + c.StatedStart.Format(layout) + " to " + c.StatedEnd.Format(layout) + "."
+}
+
+// statedRangeConflictLimitations is the conflict disclosure to append, if any.
+func statedRangeConflictLimitations(canon requestWindowCanonicalization) []string {
+	if canon.StatedRangeConflict == nil {
+		return nil
+	}
+	return []string{canon.StatedRangeConflict.limitation()}
 }
 
 // StatedWindowOrigin values (CHAOS-6557) name where a caller-supplied
@@ -851,7 +929,7 @@ const mcpSurface = "mcp"
 // a stated window with no receipt follows the fresh interpretation. A phrase
 // only counts on a current-axis request: a caller who asked for a historical
 // axis keeps it.
-func statedWindowOrigin(canon requestWindowCanonicalization, requestAxis TemporalAxis, surface string) string {
+func statedWindowOrigin(canon requestWindowCanonicalization, interpretation InterpretedQuestion, frame *QuestionFrame, requestAxis TemporalAxis, surface string) string {
 	if strings.TrimSpace(surface) != mcpSurface {
 		return ""
 	}
@@ -861,7 +939,7 @@ func statedWindowOrigin(canon requestWindowCanonicalization, requestAxis Tempora
 		}
 		return ""
 	}
-	if canon.Veto == windowVetoNone && requestAxis == TemporalCurrent && questionStatesWindow(canon.BinderProposal) {
+	if canon.Veto == windowVetoNone && requestAxis == TemporalCurrent && questionStatesWindow(interpretation, frame, canon.BinderProposal) {
 		return StatedWindowOriginQuestionPhrase
 	}
 	return ""
