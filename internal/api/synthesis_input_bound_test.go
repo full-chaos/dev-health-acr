@@ -220,7 +220,14 @@ func teamSynthesisApp(t *testing.T, runtime cf.ModelRuntime, sink cf.ModelReceip
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
+	app, token := newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
+	// These tests pin the bound on the model input, not the request deadline.
+	// The parity helper's 5 s deadline is a wall clock: the large-facts reads
+	// take ~1.3 s here and ~6 s on a hosted -race runner, which ends the
+	// request as a 504 before the answer is built. Give the request more room
+	// than the model client's own 10 s timeout so the deadline never decides.
+	app.config.RequestTimeout = time.Minute
+	return app, token
 }
 
 // productionModelRuntime builds the model runtime the hosted composition
