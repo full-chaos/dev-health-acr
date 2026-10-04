@@ -49,6 +49,9 @@ func Shapes(policy *directread.GraphQLPolicy) ([]Shape, error) {
 			branches := map[string][]string{}
 			var order []string
 			for _, o := range op.Outputs {
+				if o.BeyondDocument {
+					continue
+				}
 				all = append(all, o.Path)
 				segs := strings.Split(strings.ReplaceAll(o.Path, "[*]", ""), ".")
 				if segs[0] != root.Field {

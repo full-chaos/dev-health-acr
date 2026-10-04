@@ -412,6 +412,9 @@ type OutputPath struct {
 	Type      string     `json:"type"`
 	Leaf      OutputLeaf `json:"leaf"`
 	Exception string     `json:"exception,omitempty"`
+	// BeyondDocument marks a path the registered document does not select:
+	// graphql_query serves it, run_operation and recorded ops replies do not.
+	BeyondDocument bool `json:"beyond_document,omitempty"`
 }
 
 // WithheldOutput is a path the document selects that never leaves acr.
