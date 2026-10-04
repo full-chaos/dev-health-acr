@@ -87,6 +87,19 @@ func declOn(kinds []contextfabric.SubjectKind, fields ...fieldDecl) []fieldDecl 
 	return out
 }
 
+// fDaily declares a table field that is one row per day of one subject.
+func fDaily(name string, columns ...columnDecl) fieldDecl {
+	field := fTable(name, columns...)
+	field.DailySeries = true
+	return field
+}
+
+// cAdd classifies a daily count column additive: its sum over days is the
+// count over the period. cNon classifies one that is not (a ratio, an
+// average, a percentile, a gauge or a state).
+func cAdd(c columnDecl) columnDecl { c.Additivity = contextfabric.FactAdditive; return c }
+func cNon(c columnDecl) columnDecl { c.Additivity = contextfabric.FactNonAdditive; return c }
+
 func cStr(name string) columnDecl { return columnDecl{Name: name, Type: contextfabric.FactFieldString} }
 func cInt(name, unit string) columnDecl {
 	return columnDecl{Name: name, Type: contextfabric.FactFieldInteger, Unit: unit}
@@ -478,8 +491,19 @@ func readinessCoverageColumns() []columnDecl {
 	}
 }
 
+// readinessDailyColumns classifies the readiness coverage columns for the
+// daily series: each is a snapshot of the backlog on that day, never a flow.
+func readinessDailyColumns() []columnDecl {
+	cols := readinessCoverageColumns()
+	out := make([]columnDecl, len(cols))
+	for i, c := range cols {
+		out[i] = cNon(c)
+	}
+	return out
+}
+
 func readinessFields() []fieldDecl {
-	daily := fTable("daily_readiness", append([]columnDecl{cStr("day")}, readinessCoverageColumns()...)...)
+	daily := fDaily("daily_readiness", append([]columnDecl{cStr("day")}, readinessDailyColumns()...)...)
 	teamBreakdown := fTable("team_breakdown", append([]columnDecl{
 		cNullable(cRef(declTeamRef, cStr("team_id"))),
 		cNullable(cStr("team_name")),
@@ -510,8 +534,8 @@ func readinessFields() []fieldDecl {
 }
 
 func workloadFields() []fieldDecl {
-	daily := fTable("daily_workload",
-		cStr("day"), cInt("backlog_size", "count"), cNum("throughput_mean", ""), cNum("throughput_stddev", ""))
+	daily := fDaily("daily_workload",
+		cStr("day"), cNon(cInt("backlog_size", "count")), cNon(cNum("throughput_mean", "")), cNon(cNum("throughput_stddev", "")))
 	teamBreakdown := fTable("team_breakdown",
 		cNullable(cRef(declTeamRef, cStr("team_id"))),
 		cNullable(cStr("team_name")),
@@ -599,13 +623,13 @@ func windowEchoFields() []fieldDecl {
 }
 
 func flowFields() []fieldDecl {
-	daily := fTable("daily_flow",
+	daily := fDaily("daily_flow",
 		cStr("day"),
-		cInt("items_started", "count"),
-		cInt("items_completed", "count"),
-		cInt("wip_count_end_of_day", "count"),
-		cNum("bug_completed_ratio", "ratio"),
-		cNum("story_points_completed", "points"),
+		cAdd(cInt("items_started", "count")),
+		cAdd(cInt("items_completed", "count")),
+		cNon(cInt("wip_count_end_of_day", "count")),
+		cNon(cNum("bug_completed_ratio", "ratio")),
+		cNon(cNum("story_points_completed", "points")),
 	)
 	scopeBreakdown := fTable("scope_breakdown", append([]columnDecl{
 		cStr("provider"),
@@ -644,15 +668,15 @@ func flowFields() []fieldDecl {
 }
 
 func metricsFields() []fieldDecl {
-	dailyMetrics := fTable("daily_metrics",
+	dailyMetrics := fDaily("daily_metrics",
 		cStr("day"),
-		cInt("commits_count", "count"),
-		cInt("prs_merged", "count"),
-		cNum("median_pr_cycle_hours", "hours"),
-		cNum("change_failure_rate", "ratio"),
-		cInt("bus_factor", "count"),
-		cNum("code_ownership_gini", "ratio"),
-		cNum("mttr_hours", "hours"),
+		cAdd(cInt("commits_count", "count")),
+		cAdd(cInt("prs_merged", "count")),
+		cNon(cNum("median_pr_cycle_hours", "hours")),
+		cNon(cNum("change_failure_rate", "ratio")),
+		cNon(cInt("bus_factor", "count")),
+		cNon(cNum("code_ownership_gini", "ratio")),
+		cNon(cNum("mttr_hours", "hours")),
 	)
 	teamBreakdown := fTable("team_breakdown",
 		cRef(declTeamRef, cStr("team_id")),
@@ -710,10 +734,10 @@ func healthFields() []fieldDecl {
 		cStr("severity_as_of"),
 		cStr("severity_unavailable_reason"),
 	)
-	daily := fTable("daily_health",
+	daily := fDaily("daily_health",
 		cStr("day"),
 		cNullable(cStr("severity")),
-		cNum("compounding_risk", ""),
+		cNon(cNum("compounding_risk", "")),
 	)
 	return declJoin(
 		declOn(declTeamProject, daily, fInt("daily_health_omitted_count", "count")),

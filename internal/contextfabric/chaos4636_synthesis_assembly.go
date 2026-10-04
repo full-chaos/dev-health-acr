@@ -649,6 +649,14 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	if !clientSynthesisWithoutDraft(request) && cardinalityOwedByFrame(params.Frame, e.requirements, cardinality) {
 		result.DeterministicAnswer = appendCardinalitySentence(result.DeterministicAnswer, cardinalityAnswerSentence(cardinality))
 	}
+	// A count about one named subject is answered with the total of its stored
+	// daily rows, composed from the same facts the answer carries and stated
+	// with the days it rests on.
+	if cardinality.Scope.Decision == CountPopulationScopeSingleSubject && !clientSynthesisWithoutDraft(request) {
+		for _, sentence := range e.singleSubjectPeriodSentences(params) {
+			result.DeterministicAnswer = appendCardinalitySentence(result.DeterministicAnswer, sentence)
+		}
+	}
 	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
 	// deliberately -- after every composer that touches Limitations or
 	// Coverage has run (retrieval degradation, temporal disclosures), and

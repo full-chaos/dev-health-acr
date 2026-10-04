@@ -327,7 +327,13 @@ import (
 // the label matched, is answered as a question about that subject with a
 // stated reason and no member count, where it ended as an unresolved anchor.
 // A candidate saved under v55 for such a question must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v59"
+//
+// v59 -> v60: a count about one named subject over a period is answered with
+// the total of the subject's stored daily rows of every additive daily count
+// column, with the days it rests on, where it was answered with the daily rows
+// and no total. A candidate saved under v59 for such a question must not be
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v60"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
