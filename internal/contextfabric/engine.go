@@ -3124,9 +3124,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			familyOutcome.WinningSample = withDerivedScopeAnchorKind(familyOutcome.WinningSample, resolution.Committed)
 		}
 		if declared, scoped := deploymentCohortFrameMember(familyOutcome.Frame); scoped && !deploymentCohortAnchorsServable(resolution.Committed, familyOutcome.WinningSample.ScopeAnchorKind) {
-			if len(resolution.Committed) > 0 {
+			zeroCommitRefused := zeroCommitAnchorKindUnservable(resolution.Committed, resolution.Candidates, familyOutcome.WinningSample.ScopeAnchorKind)
+			if len(resolution.Committed) > 0 || zeroCommitRefused {
 				familyOutcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: declared}
 				resolution = withoutSubjects(resolution)
+				if zeroCommitRefused {
+					resolution.ClarificationPrompt = ""
+				}
 			}
 			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
 		}

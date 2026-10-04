@@ -37,3 +37,25 @@ func deploymentCohortAnchorsServable(committed []SubjectRef, declaredAnchorKind 
 	}
 	return declaredAnchorKind == "" || declaredAnchorKind == committed[0].Kind
 }
+
+// zeroCommitAnchorKindUnservable is true when no subject was committed and
+// the anchor kind is known and cannot serve deployment members, so confirming
+// a candidate could never help. The known kinds are the declared one, else
+// the kinds of the offered candidates; an empty set is not a kind problem.
+func zeroCommitAnchorKindUnservable(committed []SubjectRef, candidates []SubjectCandidate, declaredAnchorKind SubjectKind) bool {
+	if len(committed) != 0 {
+		return false
+	}
+	if declaredAnchorKind != "" {
+		return !DeploymentCohortAnchorServable(declaredAnchorKind)
+	}
+	if len(candidates) == 0 {
+		return false
+	}
+	for _, c := range candidates {
+		if DeploymentCohortAnchorServable(c.Subject.Kind) {
+			return false
+		}
+	}
+	return true
+}
