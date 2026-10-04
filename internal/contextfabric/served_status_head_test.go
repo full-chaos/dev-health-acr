@@ -87,3 +87,65 @@ func TestRestateServedStatusHeadLeavesOtherTerminalsAlone(t *testing.T) {
 		}
 	}
 }
+
+func TestRestateServedStatusHeadFindsOnlyAnOpeningStatusSentence(t *testing.T) {
+	t.Parallel()
+	complete := statusSentence(InvestigationComplete, SubjectResolution{})
+	partial := statusSentence(InvestigationPartial, SubjectResolution{})
+	degraded := statusSentence(InvestigationDegraded, SubjectResolution{})
+	for _, row := range []struct {
+		name, head, want string
+	}{
+		{"opening sentence is replaced, the rest kept", complete + " Principal driver: A.", partial + " Principal driver: A."},
+		{"no recognisable status sentence is left alone", "Available work items.", "Available work items."},
+		{"empty head is left alone", "", ""},
+		{"a status sentence that is not the opening is left alone", "Note. " + complete, "Note. " + complete},
+		{"two status sentences: only the opening one is replaced", complete + " " + degraded, partial + " " + degraded},
+		{"already the served sentence is unchanged", partial + " Principal driver: A.", partial + " Principal driver: A."},
+	} {
+		got := restateHeadSentence(row.head, partial, directJudgmentMaxLength)
+		if got != row.want {
+			t.Errorf("%s: got %q, want %q", row.name, got, row.want)
+		}
+	}
+}
+
+func TestServedStatusHeadKeepsTheAnswerInsideTheBudgetItIsMeasuredAgainst(t *testing.T) {
+	t.Parallel()
+	partial := statusSentence(InvestigationPartial, SubjectResolution{})
+	run := func(maxBytes int64) (InvestigationResult, error) {
+		calls := 0
+		shape := chaos6558ProdShape
+		shape.maxBytes = maxBytes
+		shape.composedHead = true
+		engine := chaos6558Engine(t, &calls, &recordingTelemetry{}, shape)
+		return engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, chaos6558Request())
+	}
+	served, err := run(chaos6558MaxBytes)
+	if err != nil {
+		t.Fatalf("premise: Investigate() error = %v", err)
+	}
+	if served.Status != InvestigationPartial || !strings.HasPrefix(served.DirectJudgment, partial) {
+		t.Fatalf("premise: status %q head %q, want the lever's partial answer stating partial (draft was complete, a shorter head)", served.Status, served.DirectJudgment)
+	}
+	measured, err := contractsv1.MeasureContextFabricResponse(served)
+	if err != nil {
+		t.Fatalf("measure: %v", err)
+	}
+	for ceiling := measured.Bytes; ceiling > measured.Bytes-400; ceiling-- {
+		result, err := run(ceiling)
+		if err != nil {
+			t.Fatalf("ceiling %d: refused (%v); a one-row-per-table cut fits far below it, so the lever must measure the answer with its served-status head and serve", ceiling, err)
+		}
+		got, err := contractsv1.MeasureContextFabricResponse(result)
+		if err != nil {
+			t.Fatalf("ceiling %d: measure: %v", ceiling, err)
+		}
+		if got.Bytes > ceiling {
+			t.Fatalf("ceiling %d: served %d bytes", ceiling, got.Bytes)
+		}
+		if !strings.HasPrefix(result.DirectJudgment, statusSentence(result.Status, SubjectResolution{})) {
+			t.Fatalf("ceiling %d: head %q does not state served status %q", ceiling, result.DirectJudgment, result.Status)
+		}
+	}
+}
