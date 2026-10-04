@@ -262,6 +262,7 @@ func relationshipTypeVocabulary() map[string]struct{} {
 		contractsv1.ContextFabricRelationshipBlocks, contractsv1.ContextFabricRelationshipPartOf,
 		contractsv1.ContextFabricRelationshipRelatesTo, contractsv1.ContextFabricRelationshipDuplicates,
 		contractsv1.ContextFabricRelationshipBelongsToProject, contractsv1.ContextFabricRelationshipOwnedByTeam,
+		contractsv1.ContextFabricRelationshipLinksPullRequest,
 	} {
 		out[graphrank.NormalizeRelation(string(t))] = struct{}{}
 	}
@@ -289,7 +290,7 @@ func planRelationships(request RelationshipsRequest) (relationshipsPlan, error) 
 	plan := relationshipsPlan{root: contextfabric.SubjectRef{Kind: kind, CanonicalID: id}}
 	vocabulary := relationshipTypeVocabulary()
 	seen := map[string]struct{}{}
-	// The published schema: at most 12 items, unique (CHAOS-7074 r1 P3).
+	// The published schema: at most 13 items, unique (CHAOS-7074 r1 P3).
 	if len(request.Types) > len(vocabulary) {
 		return relationshipsPlan{}, relInvalid("types holds at most %d values", len(vocabulary))
 	}

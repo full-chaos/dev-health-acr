@@ -102,7 +102,15 @@ const SourceName = "dev_health_clickhouse"
 // incident row's full key -- instead of the retired bare-':' joins. Every
 // already-projected edge still carries a retired ref that no producer mints
 // any more; the rebuild (acr-projector rebuild --org) re-projects them.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v7"
+//
+// (v8, LINKS_PULL_REQUEST: queryIssuePullRequestLinks is a new producer that
+// projects the ops link table of record work_graph_issue_pr as work_item ->
+// pull_request edges carrying the link's provenance tier and rank. The cursor
+// is one shared watermark, so an already-projected organization has read past
+// every link row on the strength of other tables' rows: incremental catch-up
+// would never project them. The bump forces ErrProjectionSourceVersionChanged
+// until the operator-prescribed rebuild (acr-projector rebuild --org) runs.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v8"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and
@@ -126,7 +134,8 @@ var organizationAnchorTime = time.Unix(1, 0).UTC()
 // belongsToRepository (queryWorkItems/queryPullRequests/queryDeployments/
 // queryIncidents/queryCIRuns); BELONGS_TO_PULL_REQUEST from
 // queryPullRequestReviews; CORRELATED_WITH_INCIDENT from
-// queryDeploymentIncidentEdges; PART_OF from queryWorkItemHierarchy. See
+// queryDeploymentIncidentEdges; PART_OF from queryWorkItemHierarchy;
+// LINKS_PULL_REQUEST from queryIssuePullRequestLinks. See
 // the AC-3779-9 cross-wiring test in cmd/acr-projector, the only caller
 // today.
 func ProducedRelationshipTypes() []contractsv1.ContextFabricRelationshipType {
@@ -139,6 +148,7 @@ func ProducedRelationshipTypes() []contractsv1.ContextFabricRelationshipType {
 		contractsv1.ContextFabricRelationshipPartOf,
 		contractsv1.ContextFabricRelationshipRelatesTo,
 		contractsv1.ContextFabricRelationshipDuplicates,
+		contractsv1.ContextFabricRelationshipLinksPullRequest,
 	}
 }
 

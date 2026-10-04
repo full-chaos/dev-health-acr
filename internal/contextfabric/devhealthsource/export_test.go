@@ -239,3 +239,14 @@ func (s *ClickHouseProjectionSource) SetClockForTest(now func() time.Time) { s.n
 // of more than overlapWindowPagesPerCall (1,000+ rows). The walk logic is the
 // same; only the per-call bound changes.
 func (s *ClickHouseProjectionSource) SetWindowPagesPerCallForTest(n int) { s.windowPages = n }
+
+// IngestCursorForTest encodes a cursor in the current (ingest) position space,
+// unlike a space-less cursor, which the source reads as a reset and re-reads
+// from the start.
+func IngestCursorForTest(since time.Time, after string) string {
+	encoded, err := encodeCursor(cursorState{Since: since, After: after})
+	if err != nil {
+		panic(err)
+	}
+	return encoded
+}

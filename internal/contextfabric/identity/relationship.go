@@ -81,6 +81,10 @@ const (
 	// team ids are routinely `gl:full.chaos` and the provider/source
 	// discriminator is joined beside them.
 	RelationshipFamilyRepositoryTeam RelationshipFamily = "repository_team"
+	// RelationshipFamilyIssuePullRequestLink is devhealthsource's work_item ->
+	// pull_request LINKS_PULL_REQUEST edge, read from work_graph_issue_pr.
+	// Born on this digest scheme: work item ids routinely carry ':' and '#'.
+	RelationshipFamilyIssuePullRequestLink RelationshipFamily = "issue_pull_request_link"
 )
 
 // DeriveRelationship computes the `relationship.v2:<family>:

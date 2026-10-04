@@ -16,6 +16,12 @@ import (
 
 const propRelationType = "relation_type"
 
+// linkEdgePropertyNames are the relationship properties written onto the
+// edge, under the same property prefix nodes use: the LINKS_PULL_REQUEST
+// provenance tier and its rank. The names equal
+// devhealthsource.IssuePullRequestLinkTierProperty and ...RankProperty.
+var linkEdgePropertyNames = []string{"link_provenance", "link_provenance_rank"}
+
 // documentedByRelationType and hasEpisodeRelationType (CHAOS-3779 codex
 // round-1 finding L4) are the ONE place these two literal type strings are
 // spelled. projectContent and projectEpisode below set propRelationType
@@ -378,6 +384,17 @@ func (a *Adapter) projectRelationship(ctx context.Context, key, orgID string, re
 	// live-verified against FalkorDB.
 	edgeAttrs[propValidFrom], edgeAttrs[propValidFromNs] = validTimeAttrs(relationship.ValidFrom)
 	edgeAttrs[propValidTo], edgeAttrs[propValidToNs] = validTimeAttrs(relationship.ValidTo)
+	// The issue <> pull request link's provenance tier and rank are the only
+	// relationship properties persisted on the edge, by name: a later walk
+	// reads the tier from the edge, so it must survive projection. Other
+	// relationship properties stay unwritten, as before.
+	for _, name := range linkEdgePropertyNames {
+		if value, ok := relationship.Properties[name]; ok {
+			if v := scalarValue(value); v != nil {
+				edgeAttrs[propPropertyPrefix+safeName(name)] = v
+			}
+		}
+	}
 	cypher := referencedSubjectStubMergeCypher("a", kindLabel(relationship.From.Kind), "fromAttrs") + " " +
 		referencedSubjectStubMergeCypher("b", kindLabel(relationship.To.Kind), "toAttrs") + " " +
 		fmt.Sprintf("MERGE (a)-[r:%s {%s:$rid}]->(b) SET r += $edgeAttrs", labelRelation, propRelationshipID)

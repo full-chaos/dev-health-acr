@@ -49,7 +49,7 @@
     },
     "types": {
       "type": "array",
-      "maxItems": 12,
+      "maxItems": 13,
       "uniqueItems": true,
       "items": {
         "enum": [
@@ -61,6 +61,7 @@
           "DOCUMENTED_BY",
           "DUPLICATES",
           "HAS_EPISODE",
+          "LINKS_PULL_REQUEST",
           "OWNED_BY_TEAM",
           "PART_OF",
           "RELATED_TO",

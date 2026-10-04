@@ -133,6 +133,10 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		"WI-CHILD", "WI-PARENT", "blocks", orgID, at)
 	mustSeed("work_graph_deployment_incident_edges", `INSERT INTO work_graph_deployment_incident_edges (edge_id, deployment_id, incident_id, repo_id, org_id, observed_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		"edge-parity-1", "deploy-parity-1", "incident-parity-1", repoID, orgID, at)
+	// The Issue <> Pull request link of record: WI-CHILD (an issue of repoID,
+	// type '') links the seeded pull request at the native tier.
+	mustSeed("work_graph_issue_pr", `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		repoID, "WI-CHILD", uint32(4242), float32(0.9), "native", "", at, orgID)
 	mustSeed("git_pull_request_reviews", `INSERT INTO git_pull_request_reviews (review_id, repo_id, org_id, number, state, submitted_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		"review-parity-1", repoID, orgID, uint32(4242), "approved", at)
 	mustSeed("ci_pipeline_runs", `INSERT INTO ci_pipeline_runs (run_id, repo_id, org_id, branch, status, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -203,11 +207,16 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 	// ids computed above.
 	workItemHierarchyRelationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemHierarchy, workItemChildID, workItemParentID, string(contractsv1.ContextFabricRelationshipPartOf))
 
+	// The link edge's id is the digest-scheme id over the issue and pull
+	// request canonical ids, from the same derivation the producer uses.
+	issuePullRequestLinkRelationshipID := identity.DeriveRelationship(identity.RelationshipFamilyIssuePullRequestLink, workItemChildID, "pull_request:"+repoID+":4242", string(contractsv1.ContextFabricRelationshipLinksPullRequest))
+
 	wantCanonicalID := map[string]string{
 		// devhealthschema:not-a-production-replica this maps each table to the canonical ID its row is
 		// expected to project to. Keyed BY table on purpose, and it mirrors no
 		// column type, engine or sort key -- it is an assertion about output.
 		"repos":                                "repository:" + repoID,
+		"work_graph_issue_pr":                  issuePullRequestLinkRelationshipID,
 		"work_items":                           "work_item.v2:" + repoID + ":WI-CHILD",
 		"git_pull_requests":                    "pull_request:" + repoID + ":4242",
 		"deployments":                          "deployment.v2:" + repoID + ":deploy-parity-1",

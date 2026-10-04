@@ -519,6 +519,10 @@ func everyRelationshipTypeFixtureTables(at time.Time) []fakeTable {
 		// (queryWorkItems' entity query), so this does not collide with
 		// it in fakeClient's substring match.
 		fakeTable{match: "FROM work_items AS c", rows: [][]any{{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, at, uint8(0), zeroTime, "repo-1"}}},
+		// The Issue <> Pull request link of record: WIDGET-101 links pull
+		// request 1042 of repo-1 at the native tier.
+		fakeTable{match: "FROM work_graph_issue_pr AS l", rows: [][]any{issuePullRequestLinkRow("WIDGET-101", "repo-1", 1042, "native", at,
+			linkIssue{repoID: "repo-1", itemType: "bug", created: at}, linkPullRequest{slug: "example-org/widget-service", created: at})}},
 	)
 }
 
@@ -609,6 +613,7 @@ func TestClickHouseProjectionSourceProjectsEveryClosedVocabularyRelationshipType
 		contractsv1.ContextFabricRelationshipPartOf,
 		contractsv1.ContextFabricRelationshipRelatesTo,
 		contractsv1.ContextFabricRelationshipDuplicates,
+		contractsv1.ContextFabricRelationshipLinksPullRequest,
 	}
 	for _, want := range wantTypes {
 		if !seenTypes[want] {
