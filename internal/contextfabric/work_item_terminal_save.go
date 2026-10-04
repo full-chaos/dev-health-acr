@@ -11,11 +11,27 @@ func workItemTuplePreMembershipTerminal(site BudgetAssertStage, result Investiga
 	if result.Status != InvestigationNoMatch && result.Status != InvestigationClarificationRequired {
 		return false
 	}
-	if len(result.SubjectResolution.Committed) != 0 || result.Cohort != nil || len(result.ClaimedFacts) != 0 || len(result.Paths) != 0 || len(result.Drivers) != 0 || len(result.RemainingWork) != 0 || len(result.ReadinessGaps) != 0 || len(result.Conflicts) != 0 || len(result.EvidenceRefIDs) != 0 || len(result.EvidenceRefLabels) != 0 || result.DirectJudgment != "" || result.CurrentState != "" || len(result.StrongestPressures) != 0 {
+	if len(result.SubjectResolution.Committed) != 0 || result.Cohort != nil || len(result.ClaimedFacts) != 0 || len(result.Paths) != 0 || len(result.Drivers) != 0 || len(result.RemainingWork) != 0 || len(result.ReadinessGaps) != 0 || len(result.Conflicts) != 0 || result.DirectJudgment != "" || result.CurrentState != "" || len(result.StrongestPressures) != 0 {
 		return false
 	}
+	candidateEvidence := map[string]struct{}{}
 	for _, candidate := range result.SubjectResolution.Candidates {
 		if candidate.State == ResolutionCommitted {
+			return false
+		}
+		for _, ref := range candidate.EvidenceRefIDs {
+			candidateEvidence[ref] = struct{}{}
+		}
+	}
+	// An ambiguous-anchor terminal names its candidates' own evidence. A
+	// reference no candidate carries is not that, and keeps the strict check.
+	for _, ref := range result.EvidenceRefIDs {
+		if _, ok := candidateEvidence[ref]; !ok {
+			return false
+		}
+	}
+	for ref := range result.EvidenceRefLabels {
+		if _, ok := candidateEvidence[ref]; !ok {
 			return false
 		}
 	}
