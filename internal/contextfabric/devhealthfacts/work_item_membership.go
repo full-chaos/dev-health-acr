@@ -174,7 +174,15 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 	// scope shape is used by the later S2/S3 readers on the stacked tip.
 	authorization := workItemRepositoryAuthorization(principal, requestedScope)
 	grant := workItemMembershipGrantShape(authorization)
-	statement, extraBindings := workItemMembershipS1Statement(authorization, k)
+	timeColumn := ""
+	if request.TimeColumn != "" {
+		if !workItemMembershipTimeColumns[request.TimeColumn] || request.TimeStart.IsZero() || request.TimeEnd.IsZero() || !request.TimeStart.Before(request.TimeEnd) {
+			release()
+			return nil, contextfabric.WorkItemMembershipResult{}, errors.New("work item membership time window is invalid")
+		}
+		timeColumn = request.TimeColumn
+	}
+	statement, extraBindings := workItemMembershipS1StatementFor(authorization, k, timeColumn)
 	extraBindings = append(extraBindings,
 		readers.Binding{Name: "anchor_provider", Value: provider},
 		readers.Binding{Name: "anchor_project_id", Value: projectID},
@@ -182,6 +190,12 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 		readers.Binding{Name: "s1_instant", Value: s1Instant},
 		readers.Binding{Name: "serve_limit", Value: uint32(k)},
 	)
+	if timeColumn != "" {
+		extraBindings = append(extraBindings,
+			readers.Binding{Name: "time_start", Value: request.TimeStart.UTC()},
+			readers.Binding{Name: "time_end", Value: request.TimeEnd.UTC()},
+		)
+	}
 	statement = readers.WithSettings(statement, settings)
 
 	rows := make([]workItemMembershipS1Row, 0, k+1)
@@ -653,6 +667,19 @@ const workItemMembershipTransitionMetadataSQL = `(
 // same relation for the S1 authorization mask. The later S2/S3 carrier will
 // invoke the same library renderer from the stacked content-reader change.
 func workItemMembershipS1Statement(scope readers.AuthorizationScope, k int) (string, []readers.Binding) {
+	return workItemMembershipS1StatementFor(scope, k, "")
+}
+
+// workItemMembershipTimeColumns is the closed set of work_items columns a
+// member window may read. The column is spliced into the statement, so it
+// comes from this set and never from a caller's text.
+var workItemMembershipTimeColumns = map[string]bool{"created_at": true, "completed_at": true, "updated_at": true}
+
+func workItemMembershipS1StatementFor(scope readers.AuthorizationScope, k int, timeColumn string) (string, []readers.Binding) {
+	timePredicate := ""
+	if workItemMembershipTimeColumns[timeColumn] {
+		timePredicate = "\n    AND w." + timeColumn + " >= {time_start:DateTime64(6, 'UTC')} AND w." + timeColumn + " < {time_end:DateTime64(6, 'UTC')}"
+	}
 	rendered := readers.WorkItemScopeSQL(scope)
 	resolvedProjects := `(
   SELECT provider, id, join_key, count() OVER (PARTITION BY provider, join_key) AS key_resolution_count
@@ -726,7 +753,7 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
     AND p.provider = {anchor_provider:String}
     AND p.id = {anchor_project_id:String}
     AND p.key_resolution_count = 1
-    AND ({status_filter:String} = '' OR w.status = {status_filter:String})
+    AND ({status_filter:String} = '' OR w.status = {status_filter:String})` + timePredicate + `
   GROUP BY canonical_key, repo_id, work_item_id, repo_slug, authorized_flag,
     ` + workItemMembershipPathColumns("path_") + `, repo_less, project_less, excluded_explicit_text_link, excluded_heuristic_link`
 
