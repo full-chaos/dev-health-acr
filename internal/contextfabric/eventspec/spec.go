@@ -2920,6 +2920,7 @@ var All = []Event{
 	GraphCountCheckFinished,
 	SuppliedInterpretationDecision,
 	ClientSynthesisDecision,
+	SuppliedSynthesisDecision,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served

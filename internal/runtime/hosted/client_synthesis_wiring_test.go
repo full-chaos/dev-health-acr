@@ -40,7 +40,10 @@ func TestTheProductionSynthesizerIsWiredWithTheClientSynthesisAssembly(t *testin
 	if err != nil {
 		t.Fatalf("read open.go: %v", err)
 	}
-	if !strings.Contains(string(source), "contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry, ClientSynthesis: synthesisprompt.ClientAssembly()}") {
-		t.Fatal("open.go builds the production synthesizer without ClientSynthesis: synthesisprompt.ClientAssembly()")
+	if !strings.Contains(string(source), "contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry, ClientSynthesis: clientSynthesis}") {
+		t.Fatal("open.go builds the production synthesizer without ClientSynthesis: clientSynthesis")
+	}
+	if !strings.Contains(string(source), "clientSynthesis := synthesisprompt.ClientAssembly()\n\tclientSynthesis.ParseDraft = suppliedSynthesizer.Parse\n") {
+		t.Fatal("open.go does not hand the client synthesis assembly the supplied synthesizer's Parse")
 	}
 }

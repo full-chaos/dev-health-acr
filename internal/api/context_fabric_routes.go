@@ -79,6 +79,10 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		investigateCtx, collectedSynthesisInput := contextfabric.WithSynthesisInputCollector(r.Context())
 		result, err := investigateRecovered(investigateCtx, investigator, principal, request)
 		if err != nil {
+			if request.SuppliedSynthesis != nil && errors.Is(err, contextfabric.ErrSynthesisRejected) {
+				a.writeSuppliedSynthesisRejection(w, r, err)
+				return
+			}
 			a.writeContextFabricError(w, r, err)
 			return
 		}
@@ -257,8 +261,13 @@ const (
 	// again.
 	contextFabricClassInterpretationContract = "interpretation_contract_mismatch"
 	contextFabricClassClientSynthesis        = "client_synthesis_unavailable"
-	contextFabricClassUnclassified           = "unclassified"
-	contextFabricInvestigationFailureName    = "context_fabric_investigation"
+	// The refusals of a supplied synthesis (a draft the caller wrote).
+	contextFabricClassSynthesisContract       = "synthesis_contract_mismatch"
+	contextFabricClassSynthesisInputChanged   = "synthesis_input_changed"
+	contextFabricClassSynthesisNeedsInterpret = "supplied_synthesis_without_interpretation"
+	contextFabricClassSuppliedSynthesisReject = "supplied_synthesis_rejected"
+	contextFabricClassUnclassified            = "unclassified"
+	contextFabricInvestigationFailureName     = "context_fabric_investigation"
 )
 
 func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, err error) {
@@ -441,6 +450,26 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	if errors.As(err, &contractMismatch) {
 		details := map[string]any{contractsv1.ContextFabricInterpretationContractDetailsKey: contractMismatch.Refusal}
 		a.writeContextFabricFailure(w, r, err, contextFabricClassInterpretationContract, http.StatusConflict, "invalid_request", "The supplied interpretation was made under an interpretation contract this service does not run", false, details)
+		return
+	}
+	var synthesisMismatch *contextfabric.SynthesisContractMismatch
+	if errors.As(err, &synthesisMismatch) {
+		details := map[string]any{contractsv1.ContextFabricSynthesisContractDetailsKey: contractsv1.ContextFabricSynthesisContractRefusal{Mismatch: synthesisMismatch.Mismatch, Current: synthesisMismatch.Current}}
+		a.writeContextFabricFailure(w, r, err, contextFabricClassSynthesisContract, http.StatusConflict, "invalid_request", "The supplied synthesis was made under a synthesis contract this service does not run", false, details)
+		return
+	}
+	var inputChanged *contextfabric.SynthesisInputChanged
+	if errors.As(err, &inputChanged) && inputChanged.Input != nil {
+		details := map[string]any{
+			contractsv1.ContextFabricSuppliedSynthesisReasonKey: contractsv1.ContextFabricSuppliedSynthesisReasonInputChanged,
+			contractsv1.ContextFabricSynthesisInputDetailsKey:   inputChanged.Input,
+		}
+		a.writeContextFabricFailure(w, r, err, contextFabricClassSynthesisInputChanged, http.StatusConflict, "invalid_request", "The supplied synthesis was written from an input that has changed", false, details)
+		return
+	}
+	if errors.Is(err, contextfabric.ErrSuppliedInterpretationRequired) {
+		details := map[string]any{contractsv1.ContextFabricSuppliedSynthesisReasonKey: contractsv1.ContextFabricSuppliedSynthesisReasonInterpretationRequired}
+		a.writeContextFabricFailure(w, r, err, contextFabricClassSynthesisNeedsInterpret, http.StatusBadRequest, "invalid_request", "A supplied synthesis is accepted only together with a supplied interpretation", false, details)
 		return
 	}
 	if errors.Is(err, contextfabric.ErrInterpretationRejected) {
@@ -783,6 +812,14 @@ func contextFabricInnermostErrorType(err error) string {
 		}
 		err = next
 	}
+}
+
+// writeSuppliedSynthesisRejection answers a rejected draft the caller wrote:
+// the closed rejection reason is the one thing the caller can act on, and it
+// is the engine's own token, never caller text.
+func (a *App) writeSuppliedSynthesisRejection(w http.ResponseWriter, r *http.Request, err error) {
+	details := map[string]any{contractsv1.ContextFabricSynthesisRejectionReasonKey: string(contextfabric.SynthesisRejectionReasonOf(err))}
+	a.writeContextFabricFailure(w, r, err, contextFabricClassSuppliedSynthesisReject, http.StatusUnprocessableEntity, "synthesis_rejected", "The supplied synthesis was rejected", false, details)
 }
 
 // writeContextFabricRejectionError writes the shared 422 response shape for

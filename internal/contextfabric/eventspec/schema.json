@@ -4553,6 +4553,72 @@
     ]
   },
   {
+    "id": "contextfabric.supplied_synthesis_decision",
+    "msg": "context fabric supplied synthesis decision",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation that carries a supplied synthesis, written when the turn is refused at its start, when the draft is checked against the rebuilt input, or when the result is saved; a turn that ends before the synthesis step with an accepted contract emits none, and a request with no supplied synthesis emits none",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "served",
+          "contract_mismatch",
+          "interpretation_required",
+          "input_changed",
+          "rejected",
+          "unavailable"
+        ]
+      },
+      {
+        "key": "contract_mismatch",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "model_output_version",
+          "prompt_version",
+          "system_sha256",
+          "input_sha256"
+        ],
+        "applicability": "the contract fields whose declared value is absent or differs from the service's own when outcome=contract_mismatch; empty on every other line"
+      },
+      {
+        "key": "rejection_reason",
+        "type": "string",
+        "presence": "required",
+        "applicability": "the synthesis rejection reason when outcome=rejected; empty on every other line"
+      },
+      {
+        "key": "client_model",
+        "type": "string",
+        "presence": "required",
+        "applicability": "the declared model name, or undeclared when the caller sent none"
+      },
+      {
+        "key": "output_bytes",
+        "type": "int",
+        "presence": "required",
+        "applicability": "the size of the supplied output in bytes"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.synthesis_input",
     "msg": "context fabric synthesis input",
     "level": "info",

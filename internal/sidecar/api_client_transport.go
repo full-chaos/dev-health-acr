@@ -248,7 +248,16 @@ func decodeAPIError(status int, requestID, retryAfterHeader string, data []byte)
 	if err := validateErrorEnvelope(data, envelope, status); err != nil {
 		return newTransportError(status, requestID, data)
 	}
-	return newAPIError(status, envelope.Error, requestID, retryAfterHeader)
+	apiErr := newAPIError(status, envelope.Error, requestID, retryAfterHeader)
+	if status == 409 && apiErr.Reason == contractsv1.ContextFabricSuppliedSynthesisReasonInputChanged {
+		input, ok := synthesisInputFromBody(data)
+		if !ok {
+			return newTransportError(status, requestID, data)
+		}
+		apiErr.SynthesisInput = input
+		apiErr.Message = synthesisInputChangedSafeMessage
+	}
+	return apiErr
 }
 
 // newClientRequestID generates a contract-valid (8-256 char) opaque

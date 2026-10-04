@@ -40,6 +40,10 @@ const (
 	investigationRenderedMarkdownMax = renderedMarkdownMaxBytes
 )
 
+// writeBackNotHereMessage is the fixed refusal of a write-back argument sent to
+// the tool that cannot take it.
+const writeBackNotHereMessage = "investigate_question does not take synthesis_output or synthesis_contract; send the draft with investigate_with_interpretation, together with your interpretation"
+
 // handleInvestigateQuestion implements the investigate_question tool:
 // decode and validate the arguments, map them onto the hosted investigation
 // contract with safe defaults, call the SAME hosted investigation service
@@ -63,6 +67,9 @@ func handleInvestigateQuestion(ctx context.Context, cfg *ProcessConfig, req *mcp
 	if refused != nil {
 		return refused, nil
 	}
+	if contractsv1.MCPArgumentsCarrySynthesisWriteBack(args) {
+		return toolErrorResult(&classifiedError{category: "validation", message: writeBackNotHereMessage}), nil
+	}
 	var input contractsv1.MCPInvestigateQuestionRequest
 	if err := json.Unmarshal(args, &input); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_question arguments are not valid JSON for the declared schema"}), nil
@@ -70,7 +77,7 @@ func handleInvestigateQuestion(ctx context.Context, cfg *ProcessConfig, req *mcp
 	if err := input.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_question arguments failed schema validation"}), nil
 	}
-	return investigateAndRender(ctx, cfg, caller, toolInvestigateQuestion, input, nil)
+	return investigateAndRender(ctx, cfg, caller, toolInvestigateQuestion, input, nil, nil)
 }
 
 // normalizedInvestigationArgs expands bare receipt ids in the raw arguments
@@ -101,16 +108,17 @@ const clientSynthesisFlowLine = "\n\nThe service wrote no answer text on this tu
 
 // investigateAndRender maps a validated request onto the hosted contract,
 // calls the hosted investigation and renders the shared bounded projection.
-// A non-nil supplied interpretation is the only difference between the tools
-// that call it.
-func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *CallerContext, surface string, input contractsv1.MCPInvestigateQuestionRequest, supplied *contractsv1.ContextFabricSuppliedInterpretation) (*mcpsdk.CallToolResult, error) {
+// A non-nil supplied interpretation and supplied synthesis are the only
+// differences between the tools that call it.
+func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *CallerContext, surface string, input contractsv1.MCPInvestigateQuestionRequest, supplied *contractsv1.ContextFabricSuppliedInterpretation, suppliedSynthesis *contractsv1.ContextFabricSuppliedSynthesis) (*mcpsdk.CallToolResult, error) {
 	budget := answerBudget(input.Budget, caller.Capabilities().Limits)
 	hosted := hostedInvestigationRequest(input, budget)
 	hosted.SuppliedInterpretation = supplied
+	hosted.SuppliedSynthesis = suppliedSynthesis
 
 	hostedResponse, currentRequestID, err := caller.client.InvestigateWithSynthesisInput(ctx, hosted)
 	if err != nil {
-		return toolErrorResult(err), nil
+		return writeBackAwareErrorResult(err), nil
 	}
 	result := hostedResponse.ContextFabricInvestigationResult
 
