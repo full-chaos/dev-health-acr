@@ -772,7 +772,7 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// routing rules never becomes a candidate at all. See that field's
 	// own doc comment.
 	if storedDocumentStatesCount(candidate) {
-		if scope := DecideCountPopulationScope(reading.Frame, reading.AnchorKind, candidate.SubjectResolution, CommitBasisSetFromDigests(candidate.SubjectResolution.CommitDecisionDigests), CohortMemberSourceNotApplicable); !scope.Counts() {
+		if scope := DecideCountPopulationScopeWithDigests(reading.Frame, reading.AnchorKind, candidate.SubjectResolution, CommitBasisSetFromDigests(candidate.SubjectResolution.CommitDecisionDigests), CommitDigestSetFromWire(candidate.SubjectResolution.CommitDecisionDigests), CohortMemberSourceNotApplicable); !scope.Counts() {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissCountScope)
 			return InvestigationResult{}, false, false, storedCountReading{}, nil
 		}

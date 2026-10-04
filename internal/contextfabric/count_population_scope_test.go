@@ -1121,3 +1121,90 @@ func TestDecideCountPopulationScopeNormalizesMemberSource(t *testing.T) {
 		}
 	}
 }
+
+// TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch
+// lists every clause of the one admission a label-named repository has beyond
+// an identity proof: the exact-label commit, an untruncated search, a complete
+// alias lookup, a match to the anchor term, no other possible anchor matching
+// the term, and a repository the reading does not contradict.
+func TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch(t *testing.T) {
+	t.Parallel()
+	anchor := scopeAnchorRepository()
+	twin := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:SCOPE_TWIN", Label: "scope anchor"}
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project:SCOPE_ANCHOR", Label: "scope anchor"}
+	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:SCOPE_MEMBER", Label: "scope anchor"}
+	labelDigest := CommitDecisionDigest{CommitGate: "exact_index", AliasLookupComplete: true}
+	with := func(mutate func(*CommitDecisionDigest)) CommitDecisionDigestSet {
+		digest := labelDigest
+		mutate(&digest)
+		return CommitDecisionDigestSet{SubjectMapKey(anchor): digest}
+	}
+	matched := SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}
+	rows := []struct {
+		name       string
+		anchorKind SubjectKind
+		resolution SubjectResolution
+		digests    CommitDecisionDigestSet
+		want       CountPopulationScopeDecision
+	}{
+		{"exact label, untruncated, complete, one match", "", matched, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorCommitted},
+		{"reading declares repository", SubjectRepository, matched, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorCommitted},
+		{"no digest recorded", "", matched, nil, CountPopulationScopeAnchorUnresolved},
+		{"digest of another subject", "", matched, CommitDecisionDigestSet{SubjectMapKey(twin): labelDigest}, CountPopulationScopeAnchorUnresolved},
+		{"search truncated", "", matched, with(func(d *CommitDecisionDigest) { d.SearchTruncated = true }), CountPopulationScopeAnchorUnresolved},
+		{"alias lookup incomplete", "", matched, with(func(d *CommitDecisionDigest) { d.AliasLookupComplete = false }), CountPopulationScopeAnchorUnresolved},
+		{"lone floor commit", "", matched, with(func(d *CommitDecisionDigest) { d.CommitGate = "lone_floor" }), CountPopulationScopeAnchorUnresolved},
+		{"top of two commit", "", matched, with(func(d *CommitDecisionDigest) { d.CommitGate = "top_of_two" }), CountPopulationScopeAnchorUnresolved},
+		{"no commit gate", "", matched, with(func(d *CommitDecisionDigest) { d.CommitGate = "" }), CountPopulationScopeAnchorUnresolved},
+		{"committed subject did not match the anchor term", "", SubjectResolution{Committed: []SubjectRef{anchor}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorUnresolved},
+		{"committed subject matched another term", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor, "b")}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorUnresolved},
+		{"another repository matched the term", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeAnchorMatch(twin)}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorAmbiguous},
+		{"another repository matched the term, uncommitted", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeCandidateMatching(twin)}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorAmbiguous},
+		{"a project matched the term", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeAnchorMatch(project)}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorAmbiguous},
+		{"a project matched the term under a repository reading", SubjectRepository, SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeAnchorMatch(project)}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorCommitted},
+		{"a member-kind subject matched the term", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeAnchorMatch(team)}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorCommitted},
+		{"another repository only offered, no term match", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeCandidate(twin, "receipt_scope_02")}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorCommitted},
+		{"reading declares project", SubjectProject, matched, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorUnresolved},
+		{"committed anchor is a project", "", SubjectResolution{Committed: []SubjectRef{project}, Candidates: []SubjectCandidate{scopeAnchorMatch(project)}}, CommitDecisionDigestSet{SubjectMapKey(project): labelDigest}, CountPopulationScopeAnchorUnresolved},
+	}
+	frame := countingFrame(SubjectTeam)
+	for _, row := range rows {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			bases := CommitBasisSet{}
+			for _, subject := range row.resolution.Committed {
+				bases.Record(subject, CommitBasisStatistical)
+			}
+			scope := DecideCountPopulationScopeWithDigests(frame, row.anchorKind, row.resolution, bases, row.digests, CohortMemberSourceNotApplicable)
+			if scope.Decision != row.want {
+				t.Fatalf("decision = %q, want %q (%+v)", scope.Decision, row.want, scope)
+			}
+			if row.want == CountPopulationScopeAnchorCommitted && (scope.CommittedAnchors != 1 || scope.AnchorID != anchor.CanonicalID || scope.AnchorSubjectKind != SubjectRepository) {
+				t.Fatalf("anchor = %d %q %q, want the one repository", scope.CommittedAnchors, scope.AnchorID, scope.AnchorSubjectKind)
+			}
+			// The same digests, carried through a stored result's wire form,
+			// decide the same (reuse).
+			var wire []contractsv1.ContextFabricCommitDecisionDigest
+			for key, digest := range row.digests {
+				for _, subject := range append(append([]SubjectRef{}, row.resolution.Committed...), twin, project) {
+					if SubjectMapKey(subject) == key {
+						wire = append(wire, contractsv1.ContextFabricCommitDecisionDigest{Subject: subject, CommitGate: digest.CommitGate, IdentityProven: digest.IdentityProven, SearchTruncated: digest.SearchTruncated, AliasLookupComplete: digest.AliasLookupComplete})
+					}
+				}
+			}
+			reused := DecideCountPopulationScopeWithDigests(frame, row.anchorKind, row.resolution, CommitBasisSetFromDigests(wire), CommitDigestSetFromWire(wire), CohortMemberSourceNotApplicable)
+			if reused.Decision != row.want {
+				t.Fatalf("reused decision = %q, want %q", reused.Decision, row.want)
+			}
+		})
+	}
+}
+
+// scopeCandidateMatching is an uncommitted candidate that matched the fixture
+// frame's anchor term.
+func scopeCandidateMatching(subject SubjectRef) SubjectCandidate {
+	candidate := scopeAnchorMatch(subject)
+	candidate.State = ResolutionAmbiguous
+	return candidate
+}

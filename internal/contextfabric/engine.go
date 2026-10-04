@@ -1897,7 +1897,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// The same scope decision the fresh path applies, over the frame
 				// of the reading persisted beside the stored row and that row's
 				// own resolution.
-				reusedCardinality = scopedMembershipCardinality(reusedCardinality, DecideCountPopulationScope(reusedReading.Frame, reusedReading.AnchorKind, reused.SubjectResolution, CommitBasisSetFromDigests(reused.SubjectResolution.CommitDecisionDigests), CohortMemberSourceNotApplicable))
+				reusedCardinality = scopedMembershipCardinality(reusedCardinality, DecideCountPopulationScopeWithDigests(reusedReading.Frame, reusedReading.AnchorKind, reused.SubjectResolution, CommitBasisSetFromDigests(reused.SubjectResolution.CommitDecisionDigests), CommitDigestSetFromWire(reused.SubjectResolution.CommitDecisionDigests), CohortMemberSourceNotApplicable))
 				if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reusedCardinality, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
 					reused.Completeness.Outcomes = backfilled
 				}
@@ -1970,7 +1970,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// A stored document carries no pass to take a decision from, so
 				// the decision is the backfill's: the stored reading's frame and
 				// the stored resolution.
-				e.recordCountPopulationScope(ctx, principal, reused, DecideCountPopulationScope(reusedReading.Frame, reusedReading.AnchorKind, reused.SubjectResolution, CommitBasisSetFromDigests(reused.SubjectResolution.CommitDecisionDigests), CohortMemberSourceNotApplicable), true)
+				e.recordCountPopulationScope(ctx, principal, reused, DecideCountPopulationScopeWithDigests(reusedReading.Frame, reusedReading.AnchorKind, reused.SubjectResolution, CommitBasisSetFromDigests(reused.SubjectResolution.CommitDecisionDigests), CommitDigestSetFromWire(reused.SubjectResolution.CommitDecisionDigests), CohortMemberSourceNotApplicable), true)
 			}
 			// chris's promise of record, verbatim: "reuse and stored reads
 			// are re-validated against the current budget and refuse if they

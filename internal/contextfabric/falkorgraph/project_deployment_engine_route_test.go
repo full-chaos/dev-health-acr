@@ -183,6 +183,8 @@ type projectDeploymentsInterpreter struct {
 	// member is the member kind the question asks for; empty reads as
 	// deployment.
 	member contextfabric.SubjectKind
+	// count makes the question a count ("how many"), not a listing.
+	count bool
 }
 
 func (i projectDeploymentsInterpreter) Interpret(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.QuestionFamilyOutcome, error) {
@@ -194,8 +196,12 @@ func (i projectDeploymentsInterpreter) Interpret(context.Context, storage.Princi
 	if member == "" {
 		member = contextfabric.SubjectDeployment
 	}
+	goal := contextfabric.GoalAssessState
+	if i.count {
+		goal = contextfabric.GoalCountOrAggregate
+	}
 	frame := contextfabric.DeriveFrameObligations(contextfabric.QuestionFrame{
-		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		Goals: []contextfabric.InvestigationGoal{goal},
 		SubjectExpression: contextfabric.SubjectExpression{
 			Kind:   contextfabric.SubjectExpressionChildrenOfScope,
 			Scoped: &contextfabric.ScopedSetExpression{AnchorTerms: []string{i.name}, MemberKind: member},
@@ -277,11 +283,17 @@ func investigateAnchorDeployments(t *testing.T, adapter *Adapter, principal stor
 // names the decision line it collects.
 func investigateAnchorMembers(t *testing.T, adapter *Adapter, principal storage.Principal, member, kind contextfabric.SubjectKind, name, question, lineMessage string) routeAnswer {
 	t.Helper()
+	return investigateAnchor(t, adapter, principal, projectDeploymentsInterpreter{name: name, kind: kind, member: member}, question, lineMessage)
+}
+
+// investigateAnchor drives Engine.Investigate with the given interpreter.
+func investigateAnchor(t *testing.T, adapter *Adapter, principal storage.Principal, interpreter projectDeploymentsInterpreter, question, lineMessage string) routeAnswer {
+	t.Helper()
 	var logs bytes.Buffer
 	adapter.config.Telemetry = SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))}
 	graph := &routeBasisRecorder{Adapter: adapter}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
-		Interpreter: projectDeploymentsInterpreter{name: name, kind: kind, member: member},
+		Interpreter: interpreter,
 		Graph:       graph,
 		Facts:       emptyFactReader{},
 		// The shipped synthesizer in the mode a hosted client that writes its

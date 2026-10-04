@@ -339,3 +339,23 @@ func CommitBasisSetFromDigests(digests []contractsv1.ContextFabricCommitDecision
 	}
 	return bases
 }
+
+// CommitDigestSetFromWire is the live CommitDecisionDigestSet a STORED result's
+// wire digests describe, so a reuse path decides over the same facts the live
+// path did. Entries with no commit gate record nothing, as for the bases.
+func CommitDigestSetFromWire(digests []contractsv1.ContextFabricCommitDecisionDigest) CommitDecisionDigestSet {
+	if len(digests) == 0 {
+		return nil
+	}
+	set := make(CommitDecisionDigestSet, len(digests))
+	for _, digest := range digests {
+		if digest.CommitGate == "" {
+			continue
+		}
+		set.Record(digest.Subject, CommitDecisionDigest{
+			CommitGate: digest.CommitGate, IdentityProven: digest.IdentityProven,
+			SearchTruncated: digest.SearchTruncated, AliasLookupComplete: digest.AliasLookupComplete,
+		})
+	}
+	return set
+}
