@@ -232,3 +232,25 @@ func (t SlogEngineTelemetry) RecordAnchorBindingTransition(ctx context.Context, 
 	args := append(AnchorBindingTransitionLogArgs(event, principal.OrgID), requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, AnchorBindingTransitionLogMessage, args...)
 }
+
+// RecordTerminalSaveSkipped logs a terminal answer served without a stored
+// copy at Error. Closed tokens only: no caller text, ids beyond the result id,
+// or error text.
+func (t SlogEngineTelemetry) RecordTerminalSaveSkipped(ctx context.Context, principal storage.Principal, event TerminalSaveSkippedEvent) {
+	outcome := string(event.Outcome)
+	if event.Outcome != TerminalSaveSkippedPayloadRejected {
+		outcome = continuationTelemetryUnrecognised
+	}
+	site := string(event.Site)
+	if !validTerminalSaveSite(event.Site) {
+		site = continuationTelemetryUnrecognised
+	}
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"result_id", SanitizeLogAttr(event.ResultID),
+		"site", SanitizeLogAttr(site),
+		"outcome", SanitizeLogAttr(outcome),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.ErrorContext(ctx, "context fabric terminal save skipped", args...)
+}

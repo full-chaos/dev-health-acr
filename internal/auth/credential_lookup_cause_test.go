@@ -29,7 +29,7 @@ func TestCredentialLookupFailureNamesCauseAndFailsClosed(t *testing.T) {
 	}{
 		{"canceled", fmt.Errorf("find credential: %w", context.Canceled), "INFO", "context_canceled", "caller_canceled"},
 		{"deadline", fmt.Errorf("find credential: %w", context.DeadlineExceeded), "ERROR", "deadline_exceeded", "credential_store"},
-		{"connection", connection, "ERROR", "conn_reset", "credential_store"},
+		{"connection", connection, "ERROR", "connection_failure", "credential_store"},
 		{"other", errors.New("postgres://operator:secret@example"), "ERROR", "other", "credential_store"},
 	}
 	for _, tc := range cases {

@@ -231,7 +231,11 @@ import (
 // project walk. A candidate saved under v34 for such a question holds
 // deployments the question text matched across the organization and must not
 // be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v35"
+//
+// v35 -> v36: a terminal answer whose stored reading the strict work-item
+// validator refuses is now served (with a not-saved disclosure) instead of
+// failing the turn.
+const QueryVersion = "devhealthfacts.clickhouse.v36"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -60,17 +60,18 @@ func TestAReusedProjectAnswerKeepsItsMembers(t *testing.T) {
 	store := &routeStore{}
 	for turn := 1; turn <= 2; turn++ {
 		base := s.conn()
-		refs := map[string]string{}
 		conn := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, ro bool) ([]row, error) {
 			rows, err := base.queryFunc(ctx, key, cypher, params, ro)
 			for _, r := range rows {
 				for _, value := range r {
 					if n, ok := value.(*node); ok && n != nil {
+						// A node's ref is a function of the node's own id, the way
+						// production mints it (EvidenceRefID over the source row
+						// id). Numbering refs by read order gave the same node a
+						// different ref on the second turn, which the recheck
+						// rightly removed and which read as a recheck defect.
 						id, _ := n.Properties[propCanonicalID].(string)
-						if refs[id] == "" {
-							refs[id] = fmt.Sprintf("evidence_node_%03d", len(refs)+1)
-						}
-						n.Properties[propEvidenceRefs] = []string{refs[id]}
+						n.Properties[propEvidenceRefs] = []string{stableNodeRef(id)}
 					}
 				}
 			}
@@ -105,6 +106,11 @@ func TestAReusedProjectAnswerKeepsItsMembers(t *testing.T) {
 			}
 		}
 		sort.Strings(got)
+		for _, m := range result.Cohort.Members {
+			if len(m.EvidenceRefIDs) != 1 || m.EvidenceRefIDs[0] != stableNodeRef(m.Subject.CanonicalID) {
+				t.Fatalf("turn %d: member %s refs = %v, want its own node ref", turn, m.Subject.CanonicalID, m.EvidenceRefIDs)
+			}
+		}
 		if strings.Join(got, ",") != strings.Join(want, ",") || !result.Cohort.Complete {
 			t.Fatalf("turn %d: served %v (complete %v), want the project's own deployments %v as a complete cohort", turn, got, result.Cohort != nil && result.Cohort.Complete, want)
 		}
@@ -112,4 +118,10 @@ func TestAReusedProjectAnswerKeepsItsMembers(t *testing.T) {
 	if store.offers != 1 {
 		t.Fatalf("the stored answer was offered %d times, want once", store.offers)
 	}
+}
+
+// stableNodeRef is the test's stand-in for contractsv1.EvidenceRefID: a pure
+// function of the node id.
+func stableNodeRef(id string) string {
+	return "evidence_" + strings.NewReplacer(":", "_", "/", "_", "#", "_", "-", "_").Replace(id)
 }
