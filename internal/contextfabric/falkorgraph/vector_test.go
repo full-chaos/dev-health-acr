@@ -1147,6 +1147,9 @@ type recordingTelemetry struct {
 	// count argument (CHAOS-3884).
 	identityGraphMissing int
 
+	// projectDeploymentWalks records every RecordProjectDeploymentWalk call.
+	projectDeploymentWalks []ProjectDeploymentWalkDecision
+
 	// cohortKindBases records every RecordCohortKindBasis call verbatim.
 	cohortKindBases []cohortKindBasisRecord
 
@@ -1349,6 +1352,10 @@ func (r *recordingTelemetry) RecordCohortKindFulltext(_ context.Context, orgID s
 		orgID: orgID, decision: decision, memberKind: memberKind, members: members, truncated: truncated,
 		addedByKindArm: addedByKindArm, duplicatesWithGeneral: duplicatesWithGeneral, readErr: readErr,
 	})
+}
+
+func (r *recordingTelemetry) RecordProjectDeploymentWalk(_ context.Context, _ string, decision ProjectDeploymentWalkDecision) {
+	r.projectDeploymentWalks = append(r.projectDeploymentWalks, decision)
 }
 
 func (r *recordingTelemetry) RecordNeighborLookupFailed(_ context.Context, orgID, originCanonicalID, neighborUUID string, site NeighborLookupFailureSite, err error) {

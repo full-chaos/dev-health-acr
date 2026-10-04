@@ -1,6 +1,9 @@
 package v1
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // The retrieval-degradation limitation lives here, in the contract, rather
 // than in the engine that writes it (CHAOS-3746, option (a)).
@@ -566,6 +569,11 @@ const ContextFabricSubjectIdentityUnconfirmedLimitation = "This follow-up appear
 // a reader and no number: the counts are on the telemetry line.
 const ContextFabricSynthesisInputBoundedLimitation = "Only part of the facts read for this question was given to answer synthesis, because the full set is larger than the model input limit. The answer may not reflect every fact that was read."
 
+// ContextFabricTerminalNotSavedLimitation is the sentence a terminal answer
+// (clarification, refusal, no match) carries when the server could not store
+// its reading. The answer itself stands; what is lost is the stored copy.
+const ContextFabricTerminalNotSavedLimitation = "This answer could not be saved, so it cannot be fetched again by its result id and a follow-up cannot build on it. Ask the question again to continue."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -601,6 +609,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricOrganizationScopeUnsupportedLimitation,
 		ContextFabricSubjectIdentityUnconfirmedLimitation,
 		ContextFabricSynthesisInputBoundedLimitation,
+		ContextFabricTerminalNotSavedLimitation,
 	}
 }
 
@@ -635,7 +644,45 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricCohortNarrowingLimitation(limitation) ||
 		IsContextFabricFactRowTruncationLimitation(limitation) ||
 		IsContextFabricClaimDepthLimitation(limitation) ||
-		IsContextFabricPathDropLimitation(limitation)
+		IsContextFabricPathDropLimitation(limitation) ||
+		IsContextFabricWorkItemMemberFilterLimitation(limitation)
+}
+
+// The work-item member-filter disclosures. A filtered member answer states the
+// filter it was read under, names an empty match set, and states one fixed
+// exclusion for the items the caller may not read. Each is composed from these
+// parts by internal/contextfabric and recognised here by them, so a composer
+// and the recogniser cannot drift apart, and none is displaced at the cap.
+const (
+	ContextFabricWorkItemMemberFilterLimitationPrefix = "Members are the work items "
+	ContextFabricWorkItemNoMatchLimitationPrefix      = "No work item in this project within the authorized scope "
+	ContextFabricWorkItemNoMatchLimitationSuffix      = "; that is a count of matches, not a statement about the project's health."
+	// ContextFabricWorkItemDeniedScopeExclusionLimitation is the same words
+	// for every outcome, so it cannot tell a caller how many denied items hold
+	// a status or fall in a period.
+	ContextFabricWorkItemDeniedScopeExclusionLimitation = "Work items outside this principal's authorized scope are neither counted nor described here."
+	contextFabricWorkItemMemberFilterLimitationMaxRunes = 400
+)
+
+var (
+	workItemStatusFilterLimitationPattern = regexp.MustCompile(`^Members are the work items whose current status is [a-z_]{1,32}; status is read as of now, over no period, and is not completion or readiness\.$`)
+	workItemWindowFilterLimitationPattern = regexp.MustCompile(`^Members are the work items (?:created|completed|last updated) from \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z to \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z \(the (?:created|completed|updated)_at field\); their status and every other fact is as of now, not as of the period\.$`)
+	workItemNoMatchLimitationPattern      = regexp.MustCompile(`^No work item in this project within the authorized scope (?:currently has status [a-z_]{1,32}|was (?:created|completed|last updated) in that period(?: and a current status of [a-z_]{1,32})?); that is a count of matches, not a statement about the project's health\.$`)
+)
+
+// IsContextFabricWorkItemMemberFilterLimitation reports whether one limitation
+// is a work-item member-filter disclosure. It matches each composed sentence
+// whole, so a model caveat that only starts with the same words is not one.
+func IsContextFabricWorkItemMemberFilterLimitation(limitation string) bool {
+	if limitation == ContextFabricWorkItemDeniedScopeExclusionLimitation {
+		return true
+	}
+	if len(limitation) > contextFabricWorkItemMemberFilterLimitationMaxRunes*4 {
+		return false
+	}
+	return workItemStatusFilterLimitationPattern.MatchString(limitation) ||
+		workItemWindowFilterLimitationPattern.MatchString(limitation) ||
+		workItemNoMatchLimitationPattern.MatchString(limitation)
 }
 
 // HasContextFabricServiceAuthoredLimitation reports whether any entry is

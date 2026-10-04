@@ -680,7 +680,7 @@
     "attribution": [
       "org_id"
     ],
-    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind and the census is not already admitted for it",
+    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind, the census is not already admitted for it, and no named anchor holds the deployment member set",
     "fields": [
       {
         "key": "org_id",
@@ -3639,6 +3639,117 @@
     ]
   },
   {
+    "id": "contextfabric.project_deployment_walk",
+    "msg": "context_fabric: project deployment walk",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame asks for the deployment members of a named anchor",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_routed",
+          "members",
+          "unlinked",
+          "denied",
+          "truncated",
+          "no_deployments",
+          "read_failed"
+        ]
+      },
+      {
+        "key": "anchor_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "anchor_basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "bound",
+          "sole_commit"
+        ]
+      },
+      {
+        "key": "committed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "issues",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
+      },
+      {
+        "key": "linked_pull_requests",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
+      },
+      {
+        "key": "members",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
+      },
+      {
+        "key": "denied",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "conditional",
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
+      },
+      {
+        "key": "error",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when outcome=read_failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.remembered_window_axis",
     "msg": "context fabric remembered window axis",
     "level": "info",
@@ -5026,6 +5137,55 @@
     ]
   },
   {
+    "id": "contextfabric.terminal_save_skipped",
+    "msg": "context fabric terminal save skipped",
+    "level": "error",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one line per terminal exit, from the engine's terminal save helper; closed tokens and the result id only",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "site",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subjectless_terminal",
+          "window_veto",
+          "window_confirmation_required",
+          "structure_veto",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "skipped_payload_rejected",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.window_continuation_decision",
     "msg": "context fabric window continuation decision",
     "level": "info",
@@ -6304,7 +6464,10 @@
           "status",
           "status_without_value",
           "assignee",
-          "unrecognized"
+          "unrecognized",
+          "window",
+          "window_role_unresolved",
+          "window_not_served"
         ]
       },
       {

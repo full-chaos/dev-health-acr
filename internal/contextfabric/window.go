@@ -1400,8 +1400,8 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 		// exact request would have used (see timeAxisKeySource above) --
 		// never on a window key component: a window veto is never itself
 		// a reusable answer (its own status is a refusal, not a judgment).
-		if err := e.saveResult(ctx, principal, BudgetAssertWindowVeto, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), binding.Epoch, ancestryParent, semantic); err != nil {
-			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
+		if err := e.saveTerminalResult(ctx, principal, BudgetAssertWindowVeto, &result, plan, e.effectiveResponseBudget(request), nil, nil, TimeAxisKeyFor(timeAxisKeySource), binding.Epoch, ancestryParent, semantic); err != nil {
+			return InvestigationResult{}, persistenceStageError(err)
 		}
 	}
 	return result, nil
@@ -1741,7 +1741,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {
-		if err := e.saveResult(ctx, principal, BudgetAssertWindowConfirmationRequired, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), binding.Epoch, ancestryParent, semantic); err != nil {
+		if err := e.saveTerminalResult(ctx, principal, BudgetAssertWindowConfirmationRequired, &result, plan, e.effectiveResponseBudget(request), nil, nil, TimeAxisKeyFor(timeAxisKeySource), binding.Epoch, ancestryParent, semantic); err != nil {
 			// CHAOS-3927 P4 (codex xhigh review round 1, confirmed): a
 			// gate-2 Save carrying confirmed structure can lose the SAME
 			// atomic claim race every other structure-bearing Save call
@@ -1761,7 +1761,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, plan, ancestryParent, semantic)
 				}
 			}
-			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
+			return InvestigationResult{}, persistenceStageError(err)
 		}
 		if structureCanon != nil {
 			// Mirrors terminalResult's own deferred-until-durable success

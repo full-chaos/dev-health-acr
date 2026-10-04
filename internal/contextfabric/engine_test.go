@@ -422,6 +422,7 @@ type recordingTelemetry struct {
 	// semanticStatePersistences records every Save's semantic-state decision
 	// verbatim, in order.
 	semanticStatePersistences   []SemanticStatePersistenceEvent
+	terminalSaveSkipped         []TerminalSaveSkippedEvent
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
 	// answerReuseOwnershipRoutingVersions records, per RecordAnswerReuse
@@ -2367,6 +2368,10 @@ func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal
 func (g *countingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
 	g.discoverCalls++
 	return GraphContext{}, nil
+}
+
+func (r *recordingTelemetry) RecordTerminalSaveSkipped(_ context.Context, _ storage.Principal, event TerminalSaveSkippedEvent) {
+	r.terminalSaveSkipped = append(r.terminalSaveSkipped, event)
 }
 
 func (r *recordingTelemetry) RecordWorkItemReuse(context.Context, storage.Principal, WorkItemReuseEvent) {

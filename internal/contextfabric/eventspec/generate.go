@@ -176,6 +176,8 @@ func goVarName(e Event) string {
 		return "WorkItemMembershipS1"
 	case WorkItemMembershipGate.ID:
 		return "WorkItemMembershipGate"
+	case TerminalSaveSkipped.ID:
+		return "TerminalSaveSkipped"
 	case WorkItemReuse.ID:
 		return "WorkItemReuse"
 	case WorkItemStoredServing.ID:
@@ -206,6 +208,8 @@ func goVarName(e Event) string {
 		return "ConfirmedNeedLedger"
 	case CohortKindFulltext.ID:
 		return "CohortKindFulltext"
+	case ProjectDeploymentWalk.ID:
+		return "ProjectDeploymentWalk"
 	case AnchorBindingTransition.ID:
 		return "AnchorBindingTransition"
 	case MCPHostedContextScope.ID:

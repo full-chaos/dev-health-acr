@@ -63,6 +63,13 @@ const (
 
 // QuestionFamilyOutcome is the resolver's whole verdict.
 type QuestionFamilyOutcome struct {
+	// MemberTimeRoleClarification is set, by the engine only, when a period
+	// frame over work-item members stated a committed window but the question
+	// did not fix exactly one time field. Its value is the binder's reason. It
+	// never reaches the wire as a field: it selects the fixed sentence that
+	// offers the three readings.
+	MemberTimeRoleClarification MemberTimeRoleReason
+
 	// Interpretation names the interpret call this outcome was resolved
 	// from. Zero when no call produced it. Engine reads it only to stamp the
 	// version set of a terminal result that has no synthesis of its own.
