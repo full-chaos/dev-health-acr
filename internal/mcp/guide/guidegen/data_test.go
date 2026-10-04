@@ -207,3 +207,32 @@ func TestBuildRefusesAnEmptyOperationsCatalogue(t *testing.T) {
 		t.Fatal("Build accepted an empty operations catalogue")
 	}
 }
+
+func TestDataGuideStatesEveryFactKind(t *testing.T) {
+	text := embeddedFiles(t)[FileData]
+	in := FromRegistries()
+	if len(in.FactKinds) < 20 {
+		t.Fatalf("registry holds %d fact kinds; the check measured nothing", len(in.FactKinds))
+	}
+	for _, kind := range in.FactKinds {
+		if strings.Count(text, "\n- "+kind+": ") != 1 {
+			t.Errorf("the data guide has no single glossary line for fact kind %s", kind)
+		}
+	}
+	if !strings.Contains(text, "fact_requirements rules:") {
+		t.Error("the data guide lacks the word-to-kind rules")
+	}
+}
+
+func TestBuildRefusesAFactKindWithoutGlossaryLine(t *testing.T) {
+	in := FromRegistries()
+	in.FactKinds = append(in.FactKinds, "invented_kind")
+	if _, err := Build(in); err == nil {
+		t.Fatal("Build accepted a served fact kind with no glossary line")
+	}
+	in = FromRegistries()
+	in.FactKindsGuide = ""
+	if _, err := Build(in); err == nil {
+		t.Fatal("Build accepted an empty glossary")
+	}
+}
