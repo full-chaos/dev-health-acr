@@ -248,12 +248,18 @@ import (
 // candidate saved under v39 for such a question can hold an empty cohort and
 // must not be reused.
 //
-// v40 -> v42 (v41 is held by a change in review): a synthesis no_match over a
+// v40 -> v41: a work-item members question whose request committed a window is
+// served by that window when the question binds one time field, and states that
+// the period was not applied when it does not. A candidate saved under v40 for
+// such a question holds members the period never filtered and must not be
+// reused.
+//
+// v41 -> v43 (v42 is held by a change in review): a synthesis no_match over a
 // committed subject with a served cohort outcome or a read fact row is served
 // as the status the service established, with the narrative withheld. A
-// candidate saved under v40 for such a question can hold a no_match and must
+// candidate saved under v41 for such a question can hold a no_match and must
 // not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v42"
+const QueryVersion = "devhealthfacts.clickhouse.v43"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

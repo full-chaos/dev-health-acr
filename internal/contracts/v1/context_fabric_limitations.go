@@ -668,6 +668,9 @@ const (
 	// for every outcome, so it cannot tell a caller how many denied items hold
 	// a status or fall in a period.
 	ContextFabricWorkItemDeniedScopeExclusionLimitation = "Work items outside this principal's authorized scope are neither counted nor described here."
+	// ContextFabricWorkItemWindowNotAppliedLimitation is served beside current
+	// members when the request supplied a period the membership did not use.
+	ContextFabricWorkItemWindowNotAppliedLimitation     = "Members are the work items as of now; the period supplied with this request was not applied to the membership. Ask for work items created, completed or updated in that period to filter by one of those."
 	contextFabricWorkItemMemberFilterLimitationMaxRunes = 400
 )
 
@@ -681,7 +684,7 @@ var (
 // is a work-item member-filter disclosure. It matches each composed sentence
 // whole, so a model caveat that only starts with the same words is not one.
 func IsContextFabricWorkItemMemberFilterLimitation(limitation string) bool {
-	if limitation == ContextFabricWorkItemDeniedScopeExclusionLimitation {
+	if limitation == ContextFabricWorkItemDeniedScopeExclusionLimitation || limitation == ContextFabricWorkItemWindowNotAppliedLimitation {
 		return true
 	}
 	if len(limitation) > contextFabricWorkItemMemberFilterLimitationMaxRunes*4 {

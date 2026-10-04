@@ -164,7 +164,6 @@ func TestApplyServerStatusFloorClauses(t *testing.T) {
 			contractsv1.ContextFabricCoverageDetailKindCensusTruncated,
 			contractsv1.ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked,
 			contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization,
-			contractsv1.ContextFabricCoverageDetailPopulationTruncated,
 			contractsv1.ContextFabricCoverageDetailGraphExactNameCandidatesTruncated,
 		} {
 			graph := cutEmptyCohortGraph()
@@ -201,6 +200,30 @@ func TestApplyServerStatusFloorClauses(t *testing.T) {
 		r := base()
 		if applyServerStatusFloor(&r, emptyAffirmationGraph(), factsForSubject(other)) != nil {
 			t.Fatal("floored on a fact of another subject")
+		}
+	})
+	t.Run("a no_data fact row does not floor", func(t *testing.T) {
+		bundle := factsForSubject(affirmationSubject)
+		bundle.Facts[0].SourceState = SourceNoData
+		r := base()
+		if applyServerStatusFloor(&r, emptyAffirmationGraph(), bundle) != nil {
+			t.Fatal("floored on a no_data row")
+		}
+	})
+	t.Run("a stale fact row floors", func(t *testing.T) {
+		bundle := factsForSubject(affirmationSubject)
+		bundle.Facts[0].SourceState = SourceStale
+		r := base()
+		if applyServerStatusFloor(&r, emptyAffirmationGraph(), bundle) == nil || r.Status != InvestigationDegraded {
+			t.Fatal("did not floor on a stale row")
+		}
+	})
+	t.Run("population_truncated is an outcome-row cause, not a graph detail, and does not floor here", func(t *testing.T) {
+		graph := cutEmptyCohortGraph()
+		graph.Coverage.Details[0].Code = contractsv1.ContextFabricCoverageDetailPopulationTruncated
+		r := base()
+		if applyServerStatusFloor(&r, graph, emptyAffirmationFacts()) != nil {
+			t.Fatal("floored on population_truncated")
 		}
 	})
 	t.Run("refusal basis is left alone", func(t *testing.T) {

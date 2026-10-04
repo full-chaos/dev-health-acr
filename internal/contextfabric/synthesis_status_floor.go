@@ -25,7 +25,6 @@ func cohortTerminalCoverageCode(code contractsv1.ContextFabricCoverageDetailCode
 	case contractsv1.ContextFabricCoverageDetailKindCensusTruncated,
 		contractsv1.ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked,
 		contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization,
-		contractsv1.ContextFabricCoverageDetailPopulationTruncated,
 		contractsv1.ContextFabricCoverageDetailGraphExactNameCandidatesTruncated:
 		return true
 	}
@@ -34,6 +33,9 @@ func cohortTerminalCoverageCode(code contractsv1.ContextFabricCoverageDetailCode
 
 func committedFactRowRead(committed []SubjectRef, facts CanonicalFactBundle) bool {
 	for _, fact := range facts.Facts {
+		if fact.SourceState != SourceAvailable && fact.SourceState != SourceStale {
+			continue
+		}
 		for _, subject := range committed {
 			if fact.Subject == subject {
 				return true
