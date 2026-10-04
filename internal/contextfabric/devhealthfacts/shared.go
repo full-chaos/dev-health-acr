@@ -235,7 +235,13 @@ import (
 // v35 -> v36: a terminal answer whose stored reading the strict work-item
 // validator refuses is now served (with a not-saved disclosure) instead of
 // failing the turn.
-const QueryVersion = "devhealthfacts.clickhouse.v36"
+//
+// v36 -> v37: a work-item members question whose request committed a window is
+// served by that window when the question binds one time field, and states that
+// the period was not applied when it does not. A candidate saved under v36 for
+// such a question holds members the period never filtered and must not be
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v37"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

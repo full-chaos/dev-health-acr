@@ -282,6 +282,9 @@ type workItemMemberFilter struct {
 	TimeRole MemberTimeRole
 	Start    time.Time
 	End      time.Time
+	// WindowNotApplied marks a current read served although the request
+	// committed a window: the membership is as of now.
+	WindowNotApplied bool
 }
 
 func (f workItemMemberFilter) hasWindow() bool { return f.TimeRole != "" }
@@ -318,6 +321,14 @@ func workItemMemberFilterNoMatchDisclosure(f workItemMemberFilter) string {
 // added for an unfiltered read.
 func withWorkItemMemberFilterLimitations(result InvestigationResult, f workItemMemberFilter, census *WorkItemTupleCensus) InvestigationResult {
 	if !f.Active() {
+		if !f.WindowNotApplied {
+			return result
+		}
+		// An unfiltered read: only the period statement is added; the
+		// authorization gap keeps its own disclosure.
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
 		return result
 	}
 	var additions []string
@@ -326,6 +337,9 @@ func withWorkItemMemberFilterLimitations(result InvestigationResult, f workItemM
 	}
 	if f.hasWindow() {
 		additions = append(additions, workItemWindowFilterDisclosure(f))
+	}
+	if f.WindowNotApplied {
+		additions = append(additions, contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation)
 	}
 	additions = append(additions, workItemStatusDeniedExclusion)
 	if census != nil && census.State == WorkItemMembershipCensusExact && census.Value == 0 && census.gap == nil {

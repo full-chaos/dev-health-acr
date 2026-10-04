@@ -2439,6 +2439,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// ordinary tighten.
 	windowBasis := deriveWorkItemTupleWindowBasis(request.Question, windowCanon, ledgerWindow.Applied())
 	var workItemTuple bool
+	// A current frame whose request committed a window and whose question binds
+	// one time field is a period question: the window must reach the membership.
+	if promoted, ok := promoteCurrentWorkItemFrameToPeriod(familyOutcome.Frame, windowBasis); ok {
+		familyOutcome.Frame = promoted
+	}
 	if workItemTupleIsPeriodFrame(familyOutcome.Frame) {
 		familyOutcome.Gate = windowedWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext, windowBasis)
 		workItemTuple = prospectiveWorkItemWindowAdmission(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext, windowBasis) == workItemTupleProspective
@@ -3140,6 +3145,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		plan.MemberKind = SubjectWorkItem
 		plan.FactKinds = []FactKind{FactStatus, FactWork}
 		memberFilter := workItemMemberFilter{Status: workItemTupleStatusFilter(familyOutcome.Frame)}
+		memberFilter.WindowNotApplied = workItemCurrentFrameCarriesUnappliedWindow(familyOutcome.Frame, windowBasis)
 		if workItemTupleIsPeriodFrame(familyOutcome.Frame) {
 			// The read applies the window the answer discloses: the effective
 			// window's own bounds, committed from the question or the caller.

@@ -564,3 +564,150 @@ func TestWorkItemRoleClarificationReasonNeedsTheMemberKindRefusal(t *testing.T) 
 		t.Errorf("historical axis: reason=%q, want none", got)
 	}
 }
+
+func callerWindowRequest(question string) InvestigationRequest {
+	request := statedPeriodRequest(question)
+	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}
+	return request
+}
+
+func currentWorkItemFrame() QuestionFrame { return prospectiveTupleFrame(GoalAssessState) }
+
+func TestWorkItemCurrentFrameWithCallerWindowAndVerbIsFilteredByThatWindow(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	for _, tc := range []struct{ question, column string }{
+		{"Which work items in Project Alpha were closed?", "completed_at"},
+		{"Which work items in Project Alpha were created?", "created_at"},
+		{"Which work items in Project Alpha were touched?", "updated_at"},
+	} {
+		run := runTupleFilterCase(t, currentWorkItemFrame(), WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1}, callerWindowRequest(tc.question))
+		if run.invokedErr != nil {
+			t.Fatal(run.invokedErr)
+		}
+		if run.reads != 1 || run.request.TimeColumn != tc.column || run.request.TimeStart.IsZero() || run.request.TimeEnd.IsZero() {
+			t.Fatalf("%s: reads=%d request=%+v, want one read bounded on %s", tc.question, run.reads, run.request, tc.column)
+		}
+		if !limitationsContain(run.result.Limitations, "Members are the work items ") || !limitationsContain(run.result.Limitations, tc.column) {
+			t.Errorf("%s: no window disclosure: %v", tc.question, run.result.Limitations)
+		}
+		if limitationsContain(run.result.Limitations, contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation) {
+			t.Errorf("%s: a filtered read says the window was not applied", tc.question)
+		}
+		if len(run.admissions) != 1 || !run.admissions[0].Admitted || run.admissions[0].MemberFilter != WorkItemMemberFilterWindow {
+			t.Errorf("%s: admission = %+v", tc.question, run.admissions)
+		}
+	}
+}
+
+func TestWorkItemCurrentFrameWithCallerWindowAndNoVerbSaysThePeriodWasNotApplied(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	for _, question := range []string{
+		"Which work items in Project Alpha are there?",
+		"Which work items in Project Alpha were created and closed?",
+	} {
+		run := runTupleFilterCase(t, currentWorkItemFrame(), WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1}, callerWindowRequest(question))
+		if run.invokedErr != nil {
+			t.Fatal(run.invokedErr)
+		}
+		if run.reads != 1 || run.request.TimeColumn != "" || run.result.Cohort == nil || len(run.result.Cohort.Members) != 1 {
+			t.Fatalf("%s: reads=%d request=%+v cohort=%+v, want current members unfiltered", question, run.reads, run.request, run.result.Cohort)
+		}
+		count := 0
+		for _, l := range run.result.Limitations {
+			if l == contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("%s: window-not-applied limitation count=%d: %v", question, count, run.result.Limitations)
+		}
+		if len(run.admissions) != 1 || !run.admissions[0].Admitted || run.admissions[0].MemberFilter != WorkItemMemberFilterWindowNotApplied {
+			t.Errorf("%s: admission = %+v", question, run.admissions)
+		}
+		if err := ValidateWorkItemTuplePayload(run.result, storage.Principal{OrgID: "org-1"}); err != nil {
+			t.Errorf("%s: %v", question, err)
+		}
+	}
+}
+
+func TestWorkItemCurrentFrameWithoutAWindowIsUntouched(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	run := runTupleFilterCase(t, currentWorkItemFrame(), WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1}, statedPeriodRequest("Which work items in Project Alpha were closed?"))
+	if run.invokedErr != nil {
+		t.Fatal(run.invokedErr)
+	}
+	if run.request.TimeColumn != "" || limitationsContain(run.result.Limitations, "Members are the work items") || run.admissions[0].MemberFilter != WorkItemMemberFilterNone {
+		t.Fatalf("a current frame with no committed window changed: %+v %v %+v", run.request, run.result.Limitations, run.admissions)
+	}
+}
+
+func TestWorkItemRememberedWindowNeverPromotesACurrentFrame(t *testing.T) {
+	frame := currentWorkItemFrame()
+	explicit := requestWindowCanonicalization{Effective: validEffectiveWindowForTest(t)}
+	basis := deriveWorkItemTupleWindowBasis("Which items were closed?", explicit, true)
+	if _, promoted := promoteCurrentWorkItemFrameToPeriod(&frame, basis); promoted {
+		t.Fatalf("a remembered window promoted the frame: %+v", basis)
+	}
+	if workItemCurrentFrameCarriesUnappliedWindow(&frame, basis) {
+		t.Fatal("a remembered window was reported as an unapplied committed window")
+	}
+	committed := deriveWorkItemTupleWindowBasis("Which items were closed?", explicit, false)
+	if got, promoted := promoteCurrentWorkItemFrameToPeriod(&frame, committed); !promoted || got.Temporal != TemporalIntentBoundedWindow || frame.Temporal != TemporalIntentCurrent {
+		t.Fatalf("committed window did not promote a copy: promoted=%v", promoted)
+	}
+	nonWorkItem := currentWorkItemFrame()
+	nonWorkItem.SubjectExpression.Scoped.MemberKind = SubjectRepository
+	if _, promoted := promoteCurrentWorkItemFrameToPeriod(&nonWorkItem, committed); promoted {
+		t.Fatal("a non-work-item frame was promoted")
+	}
+}
+
+func TestWorkItemWindowNotAppliedSurvivesAFullLimitationListAndIsRecognisedWhole(t *testing.T) {
+	full := make([]string, contractsv1.ContextFabricLimitationsMaxCount)
+	for i := range full {
+		full[i] = fmt.Sprintf("model caveat %d", i)
+	}
+	result := withWorkItemMemberFilterLimitations(InvestigationResult{Limitations: full}, workItemMemberFilter{WindowNotApplied: true}, nil)
+	if !limitationsContain(result.Limitations, contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation) || len(result.Limitations) != contractsv1.ContextFabricLimitationsMaxCount || result.LimitationsDisplaced != 1 {
+		t.Fatalf("len=%d displaced=%d", len(result.Limitations), result.LimitationsDisplaced)
+	}
+	if !contractsv1.IsContextFabricWorkItemMemberFilterLimitation(contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation) {
+		t.Fatal("recogniser misses the composed sentence")
+	}
+	if contractsv1.IsContextFabricWorkItemMemberFilterLimitation(contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation + " Also fine.") {
+		t.Fatal("recogniser accepts a model caveat that extends the sentence")
+	}
+	if contractsv1.IsContextFabricWorkItemMemberFilterLimitation("Members are the work items as of now; the period was not applied.") {
+		t.Fatal("recogniser accepts a model caveat that mimics the sentence")
+	}
+	if !contractsv1.IsContextFabricServiceAuthoredLimitation(contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation) {
+		t.Fatal("not service-authored")
+	}
+}
+
+func TestWorkItemStatusQualifiedCurrentFrameWithCallerWindowKeepsItsStatusStatement(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	run := runTupleFilterCase(t, statusQualifiedTupleFrame(MemberQualifierStatus, "blocked"), WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1}, callerWindowRequest("Which work items in Project Alpha are blocked?"))
+	if run.invokedErr != nil {
+		t.Fatal(run.invokedErr)
+	}
+	if limitationsContain(run.result.Limitations, contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation) || !limitationsContain(run.result.Limitations, workItemStatusFilterDisclosure("blocked")) || run.admissions[0].MemberFilter != WorkItemMemberFilterStatus {
+		t.Fatalf("limitations=%v admission=%+v", run.result.Limitations, run.admissions)
+	}
+}
+
+func TestWorkItemPromotionAndUnappliedNoticeIgnoreEveryNonCurrentIntent(t *testing.T) {
+	committed := workItemTupleWindowBasis{Committed: true, Role: MemberTimeRoleCreated, RoleReason: MemberTimeRoleBound}
+	noRole := workItemTupleWindowBasis{Committed: true, RoleReason: MemberTimeRoleNoVerb}
+	for _, intent := range []TemporalIntent{TemporalIntentBoundedWindow, TemporalIntentPeriodComparison, TemporalIntentTimeSeries} {
+		frame := currentWorkItemFrame()
+		frame.Temporal = intent
+		got, promoted := promoteCurrentWorkItemFrameToPeriod(&frame, committed)
+		if promoted || got.Temporal != intent {
+			t.Errorf("%s frame was promoted to %s", intent, got.Temporal)
+		}
+		if workItemCurrentFrameCarriesUnappliedWindow(&frame, noRole) {
+			t.Errorf("%s frame was reported as carrying an unapplied window", intent)
+		}
+	}
+}
