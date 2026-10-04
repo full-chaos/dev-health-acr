@@ -3,6 +3,7 @@ package falkorgraph_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,7 +99,7 @@ func TestLiveFindSubjectsNameLookupReachesBeyondTheScanWindow(t *testing.T) {
 		t.Run(string(tc.kind)+" sorted last past the window", func(t *testing.T) {
 			org := newOrg("last-" + tc.prefix)
 			seeds := fillerSeeds(tc.prefix, window, "acme/pub")
-			target := nameSeed{id: tc.prefix + ":zzzzzz", label: tc.label, slug: "acme/pub", aliases: []string{"ZETA-ALIAS"}, providerAliases: []string{"github:zeta/provider"}}
+			target := nameSeed{id: tc.prefix + ":zzzzzz", label: tc.label, slug: "acme/pub", aliases: []string{"ZETA-ALIAS", "Ünï Älias"}, providerAliases: []string{"github:zeta/provider"}}
 			seeds = append(seeds, target)
 			projectNameSeeds(t, ctx, adapter, org, tc.prefix, tc.kind, seeds)
 
@@ -111,7 +112,7 @@ func TestLiveFindSubjectsNameLookupReachesBeyondTheScanWindow(t *testing.T) {
 			}
 
 			for _, probe := range []struct{ query, match string }{
-				{tc.label, "exact"}, {"zeta-alias", "alias"}, {"GITHUB:ZETA/PROVIDER", "provider_key"},
+				{tc.label, "exact"}, {strings.ToUpper(tc.label), "exact"}, {"Ünï Älias", "alias"}, {"zeta-alias", "alias"}, {"GITHUB:ZETA/PROVIDER", "provider_key"},
 			} {
 				resp, err := lookup.Find(ctx, unrestricted(org), directread.FindRequest{Query: probe.query, Kinds: []string{string(tc.kind)}})
 				require.NoError(t, err)
@@ -151,6 +152,24 @@ func TestLiveFindSubjectsNameLookupReachesBeyondTheScanWindow(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, seen.Subjects, 1)
 		require.Equal(t, "repository:zzzzzz", seen.Subjects[0].CanonicalID)
+	})
+
+	t.Run("a visible match behind many hidden matches is found", func(t *testing.T) {
+		org := newOrg("hidden-many")
+		hidden := directread.MaxFindScanNodes + 300
+		seeds := make([]nameSeed, 0, hidden+1)
+		for i := 0; i < hidden; i++ {
+			seeds = append(seeds, nameSeed{id: fmt.Sprintf("repository:h%06d", i), label: "Shared Name", slug: "acme/secret"})
+		}
+		seeds = append(seeds, nameSeed{id: "repository:zzzzzz", label: "Shared Name", slug: "acme/pub"})
+		projectNameSeeds(t, ctx, adapter, org, "hidden", contextfabric.SubjectRepository, seeds)
+		restricted := storage.Principal{OrgID: org, Subject: "user-r", CredentialID: "cred-r", RepositoryScopes: []string{"acme/pub"}}
+		resp, err := lookup.Find(ctx, restricted, directread.FindRequest{Query: "shared name", Kinds: []string{"repository"}})
+		require.NoError(t, err)
+		require.Len(t, resp.Subjects, 1, "%+v", resp)
+		require.Equal(t, "repository:zzzzzz", resp.Subjects[0].CanonicalID)
+		require.Equal(t, 1, resp.Population.TotalKnown, "admitted matches only")
+		require.False(t, resp.Population.Truncated)
 	})
 
 	t.Run("a name with more matches than the bound reports the cut", func(t *testing.T) {

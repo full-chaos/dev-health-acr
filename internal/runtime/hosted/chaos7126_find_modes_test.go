@@ -62,7 +62,7 @@ func (chaos7126Graph) OwnershipReachedRepositories(_ context.Context, _ storage.
 func (chaos7126Graph) ListSubjectsByKind(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, string, string, int) (directread.LookupPage, error) {
 	return directread.LookupPage{}, nil
 }
-func (chaos7126Graph) FindSubjectsByExactName(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, string, []string) (directread.LookupPage, error) {
+func (chaos7126Graph) FindSubjectsByExactName(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, string, string, string, int) (directread.LookupPage, error) {
 	return directread.LookupPage{}, nil
 }
 func (chaos7126Graph) ReadSubjectNodes(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, []contextfabric.SubjectRef) ([]directread.LookupNode, error) {

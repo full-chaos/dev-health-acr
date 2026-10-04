@@ -3,7 +3,6 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -78,26 +77,30 @@ func (a *Adapter) ListSubjectsByKind(ctx context.Context, principal storage.Prin
 }
 
 // FindSubjectsByExactName implements directread.SubjectGraph for find_subjects
-// mode name. Per requested kind it asks the store for the nodes whose label,
+// mode name. For one kind it asks the store for the nodes whose label,
 // alias or provider key equals query (the predicate is in the query, see
-// exactNameKindPool), bounded to exactNameCandidateQueryLimit matches per kind.
-// A match is found wherever it sorts; only a kind with more matches than the
-// bound is cut. The
-// equality rule is graphrank's own (label, alias, provider alias; case
-// folded, trimmed), so this arm agrees with the engine's exact-name arm.
-// Truncated is true when any kind had more matches than the bound. No embedding model is
+// exactNameKindPage), one keyset page in canonical-id order after
+// afterCanonicalID. The caller pages through the matches and applies the
+// subject gate to each page, so the bound on matches examined is the caller's
+// and a match is found wherever it sorts. The equality is trim and lower-case
+// (strings.ToLower), the same rule in the store query and in the Go check
+// here; a name that differs only by a case fold the store maps differently
+// (for example a final sigma) matches by exact case only. No embedding model is
 // touched: the vector arm is off (K6).
-func (a *Adapter) FindSubjectsByExactName(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, query string, kinds []string) (directread.LookupPage, error) {
+func (a *Adapter) FindSubjectsByExactName(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, query, kind, afterCanonicalID string, pageSize int) (directread.LookupPage, error) {
 	orgID := strings.TrimSpace(principal.OrgID)
 	if orgID == "" {
 		return directread.LookupPage{}, fmt.Errorf("%w: authenticated organization is required", contextfabric.ErrUnavailable)
+	}
+	if pageSize < 1 || pageSize > directread.MaxLookupPageSize {
+		return directread.LookupPage{}, fmt.Errorf("%w: lookup page size %d out of range", contextfabric.ErrUnavailable, pageSize)
 	}
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return directread.LookupPage{}, nil
 	}
-	if len(kinds) == 0 {
-		kinds = DefaultExactNameKinds()
+	if !contractsv1.ValidContextFabricSubjectKind(contractsv1.ContextFabricSubjectKind(kind)) {
+		return directread.LookupPage{}, fmt.Errorf("%w: unknown subject kind", contextfabric.ErrUnavailable)
 	}
 	key, err := a.effectiveKey(ctx, orgID, binding)
 	if err != nil {
@@ -105,59 +108,14 @@ func (a *Adapter) FindSubjectsByExactName(ctx context.Context, principal storage
 	}
 	now := a.now()
 	current := newTemporalFilter(contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &now})
-	var page directread.LookupPage
-	seenKinds := map[string]struct{}{}
-	for _, kind := range kinds {
-		if _, dup := seenKinds[kind]; dup {
-			continue
-		}
-		seenKinds[kind] = struct{}{}
-		if !contractsv1.ValidContextFabricSubjectKind(contractsv1.ContextFabricSubjectKind(kind)) {
-			return directread.LookupPage{}, fmt.Errorf("%w: unknown subject kind", contextfabric.ErrUnavailable)
-		}
-		candidates, truncated, err := a.exactNameKindPool(ctx, key, orgID, kind, query, current)
-		if err != nil {
-			return directread.LookupPage{}, err
-		}
-		page.Truncated = page.Truncated || truncated
-		for _, candidate := range candidates {
-			if match := exactNameMatchClass(query, candidate); match != "" {
-				page.Nodes = append(page.Nodes, lookupNodeFromCandidate(candidate, match))
-			}
-		}
-	}
-	sort.SliceStable(page.Nodes, func(i, j int) bool {
-		if page.Nodes[i].CanonicalID != page.Nodes[j].CanonicalID {
-			return page.Nodes[i].CanonicalID < page.Nodes[j].CanonicalID
-		}
-		return page.Nodes[i].Kind < page.Nodes[j].Kind
-	})
-	return page, nil
-}
-
-// exactNameKindPool reads the nodes of one kind whose label, alias or provider
-// alias equals term. The equality is pushed into the graph query, so the store
-// examines every node of the kind and the answer does not depend on where the
-// match sorts in canonical-id order. The result is bounded to
-// exactNameCandidateQueryLimit MATCHES (one more is requested to learn whether
-// the bound cut the answer), never to a window of the kind's nodes. The Go
-// equality in exactNameMatchClass still runs on every returned row, so the
-// query predicate only has to admit every true match: it carries the raw term
-// (case kept) next to the lower-cased one, so a term whose case folding the
-// store does not share still matches itself.
-func (a *Adapter) exactNameKindPool(ctx context.Context, key, orgID, kind, term string, temporal temporalFilter) ([]graphrank.CandidateNode, bool, error) {
-	cypher := fmt.Sprintf("MATCH (n:%[1]s) WHERE n.%[2]s = $org AND n.%[3]s = $kind%[4]s AND (%[5]s) RETURN n ORDER BY n.%[6]s LIMIT %[7]d",
-		labelSubject, propOrgID, propKind, temporal.predicate("n"), exactNamePredicate("n"), propCanonicalID, exactNameCandidateQueryLimit+1)
-	params := map[string]interface{}{"org": orgID, "kind": kind, "term": term, "termLower": strings.ToLower(term)}
-	rows, err := a.api.query(ctx, key, cypher, temporal.bind(params), true)
+	rows, err := a.exactNameKindPage(ctx, key, orgID, kind, query, afterCanonicalID, pageSize, current)
 	if err != nil {
-		return nil, false, graphNotProjectedError(safeDependencyError("find subjects by exact name", err))
+		return directread.LookupPage{}, err
 	}
-	truncated := len(rows) > exactNameCandidateQueryLimit
-	if truncated {
-		rows = rows[:exactNameCandidateQueryLimit]
+	page := directread.LookupPage{More: len(rows) > pageSize}
+	if page.More {
+		rows = rows[:pageSize]
 	}
-	out := make([]graphrank.CandidateNode, 0, len(rows))
 	for _, r := range rows {
 		n, ok := r["n"].(*node)
 		if !ok || n == nil {
@@ -166,9 +124,37 @@ func (a *Adapter) exactNameKindPool(ctx context.Context, key, orgID, kind, term 
 		if propStringValue(n.Properties[propOrgID]) != orgID || propStringValue(n.Properties[propKind]) != kind {
 			continue
 		}
-		out = append(out, toCandidateNode(n))
+		candidate := toCandidateNode(n)
+		page.After = propStringValue(n.Properties[propCanonicalID])
+		if match := exactNameMatchClass(query, candidate); match != "" {
+			page.Nodes = append(page.Nodes, lookupNodeFromCandidate(candidate, match))
+		}
 	}
-	return out, truncated, nil
+	return page, nil
+}
+
+// exactNameKindPage reads one keyset page (one row more than pageSize) of the
+// nodes of kind whose label, alias or provider alias equals term, ordered by
+// canonical id. The equality is pushed into the graph query, so the store
+// examines every node of the kinds and the answer does not depend on where a
+// match sorts. The predicate carries the raw term (case kept) next to the
+// lower-cased one, so an exact-case name always matches itself.
+func (a *Adapter) exactNameKindPage(ctx context.Context, key, orgID, kind, term, after string, pageSize int, temporal temporalFilter) ([]row, error) {
+	afterClause := ""
+	if after != "" {
+		afterClause = fmt.Sprintf(" AND n.%s > $after", propCanonicalID)
+	}
+	cypher := fmt.Sprintf("MATCH (n:%[1]s) WHERE n.%[2]s = $org AND n.%[3]s = $kind%[4]s%[5]s AND (%[6]s) RETURN n ORDER BY n.%[7]s LIMIT %[8]d",
+		labelSubject, propOrgID, propKind, temporal.predicate("n"), afterClause, exactNamePredicate("n"), propCanonicalID, pageSize+1)
+	params := map[string]interface{}{"org": orgID, "kind": kind, "term": term, "termLower": strings.ToLower(term)}
+	if after != "" {
+		params["after"] = after
+	}
+	rows, err := a.api.query(ctx, key, cypher, temporal.bind(params), true)
+	if err != nil {
+		return nil, graphNotProjectedError(safeDependencyError("find subjects by exact name", err))
+	}
+	return rows, nil
 }
 
 // exactNamePredicate is the label / alias / provider alias equality over node
@@ -183,22 +169,28 @@ func exactNamePredicate(v string) string {
 // exactNameMatchClass classifies how query equals the node: exact (label or
 // name), alias, provider_key, or "" for no equality. The order and the
 // equality (trim, case fold) are graphrank.exactNameMatches' own.
+// sameName is the one name equality: trimmed, lower-cased (strings.ToLower),
+// the rule the store query applies.
+func sameName(term, name string) bool {
+	return term == name || strings.ToLower(term) == strings.ToLower(strings.TrimSpace(name))
+}
+
 func exactNameMatchClass(query string, node graphrank.CandidateNode) string {
 	term := strings.TrimSpace(query)
 	if term == "" {
 		return ""
 	}
 	label := strings.TrimSpace(graphrank.StringAttribute(node.Attributes, propLabel))
-	if strings.EqualFold(term, node.Name) || strings.EqualFold(term, label) {
+	if sameName(term, node.Name) || sameName(term, label) {
 		return string(contractsv1.ContextFabricMatchExact)
 	}
 	for _, alias := range graphrank.AliasAttributes(node.Attributes) {
-		if strings.EqualFold(term, alias) {
+		if sameName(term, alias) {
 			return string(contractsv1.ContextFabricMatchAlias)
 		}
 	}
 	for _, alias := range graphrank.ProviderAliasAttributes(node.Attributes) {
-		if strings.EqualFold(term, alias) {
+		if sameName(term, alias) {
 			return string(contractsv1.ContextFabricMatchProviderKey)
 		}
 	}

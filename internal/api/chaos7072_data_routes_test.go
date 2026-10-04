@@ -81,13 +81,13 @@ func (c7072Graph) ListSubjectsByKind(_ context.Context, principal storage.Princi
 	return page, nil
 }
 
-func (c7072Graph) FindSubjectsByExactName(_ context.Context, principal storage.Principal, _ contextfabric.ResolvedGraphBinding, query string, kinds []string) (directread.LookupPage, error) {
+func (c7072Graph) FindSubjectsByExactName(_ context.Context, principal storage.Principal, _ contextfabric.ResolvedGraphBinding, query string, kind string, _ string, _ int) (directread.LookupPage, error) {
 	var page directread.LookupPage
 	if principal.OrgID != "org_1" {
 		return page, nil
 	}
 	for _, node := range c7072Nodes() {
-		for _, kind := range kinds {
+		{
 			if node.Kind == kind && strings.EqualFold(node.Label, query) {
 				node.Match = directread.MatchExact
 				page.Nodes = append(page.Nodes, node)

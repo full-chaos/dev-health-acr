@@ -3,7 +3,6 @@ package falkorgraph
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -92,7 +91,7 @@ func TestListSubjectsByKindNeverReturnsAnotherOrganizationsNode(t *testing.T) {
 	if err != nil || len(page.Nodes) != 1 || page.Nodes[0].CanonicalID != "repository:one" {
 		t.Fatalf("org-1 list = %+v, %v", page, err)
 	}
-	found, err := adapter.FindSubjectsByExactName(context.Background(), storage.Principal{OrgID: "org-1"}, lookupBinding, "two", []string{"repository"})
+	found, err := adapter.FindSubjectsByExactName(context.Background(), storage.Principal{OrgID: "org-1"}, lookupBinding, "two", "repository", "", directread.MaxLookupPageSize)
 	if err != nil || len(found.Nodes) != 0 {
 		t.Fatalf("org-1 name lookup of org-2's label = %+v, %v", found, err)
 	}
@@ -116,10 +115,10 @@ func TestListSubjectsByKindInputDomain(t *testing.T) {
 	if _, err := adapter.ListSubjectsByKind(ctx, principal, lookupBinding, "person", "", 5); err == nil {
 		t.Error("unknown kind accepted")
 	}
-	if _, err := adapter.FindSubjectsByExactName(ctx, principal, lookupBinding, "x", []string{"person"}); err == nil {
+	if _, err := adapter.FindSubjectsByExactName(ctx, principal, lookupBinding, "x", "person", "", directread.MaxLookupPageSize); err == nil {
 		t.Error("unknown kind accepted by name read")
 	}
-	if page, err := adapter.FindSubjectsByExactName(ctx, principal, lookupBinding, "  ", nil); err != nil || len(page.Nodes) != 0 {
+	if page, err := adapter.FindSubjectsByExactName(ctx, principal, lookupBinding, "  ", "repository", "", directread.MaxLookupPageSize); err != nil || len(page.Nodes) != 0 {
 		t.Errorf("blank query = %+v, %v", page, err)
 	}
 	failing := newFakeAdapter(t, &fakeConn{queryFunc: func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) {
@@ -128,68 +127,91 @@ func TestListSubjectsByKindInputDomain(t *testing.T) {
 	if _, err := failing.ListSubjectsByKind(ctx, principal, lookupBinding, "repository", "", 5); err == nil {
 		t.Error("store error swallowed by list")
 	}
-	if _, err := failing.FindSubjectsByExactName(ctx, principal, lookupBinding, "x", []string{"repository"}); err == nil {
+	if _, err := failing.FindSubjectsByExactName(ctx, principal, lookupBinding, "x", "repository", "", directread.MaxLookupPageSize); err == nil {
 		t.Error("store error swallowed by name read")
 	}
 }
 
-// Name read: the equality and its classes are graphrank's exact-name rule
-// (label, alias, provider key; trimmed and case folded); a near name is no
-// match; results come back ordered by canonical id with the stored id intact.
-func TestFindSubjectsByExactNameClassesAndOrder(t *testing.T) {
-	var queried []string
+// Name read: the equality and its classes are one rule (label, alias, provider
+// key; trimmed and lower-cased); a near name is no match; results come back
+// ordered as the store gave them with the stored id intact.
+func TestFindSubjectsByExactNameClasses(t *testing.T) {
 	fake := &fakeConn{queryFunc: func(_ context.Context, _, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
-		queried = append(queried, params["kind"].(string))
 		low := strings.ToLower(cypher)
 		if strings.Contains(low, "vector") || strings.Contains(low, "embedding") || strings.Contains(low, "fulltext") {
 			t.Fatalf("name read used a model or ranked arm: %s", cypher)
 		}
-		switch params["kind"] {
-		case "repository":
-			return []row{
-				lookupRow("org-1", "repository", "repository:z-label", "Acme/API", nil),
-				lookupRow("org-1", "repository", "repository:m-alias", "other", map[string]interface{}{propAliases: []string{"acme/api"}}),
-				lookupRow("org-1", "repository", "repository:a-prov", "another", map[string]interface{}{propProviderAliases: []string{"ACME/API"}}),
-				lookupRow("org-1", "repository", "repository:near", "acme/api-2", nil),
-			}, nil
-		case "project":
-			return []row{lookupRow("org-1", "project", "project.v2:p", "acme/api", nil)}, nil
+		if params["kind"] != "repository" {
+			t.Fatalf("kind param = %v", params["kind"])
 		}
-		return nil, nil
+		return []row{
+			lookupRow("org-1", "repository", "repository:a-prov", "another", map[string]interface{}{propProviderAliases: []string{"ACME/API"}}),
+			lookupRow("org-1", "repository", "repository:m-alias", "other", map[string]interface{}{propAliases: []string{"acme/api"}}),
+			lookupRow("org-1", "repository", "repository:near", "acme/api-2", nil),
+			lookupRow("org-1", "repository", "repository:z-label", "Acme/API", nil),
+		}, nil
 	}}
-	page, err := newFakeAdapter(t, fake).FindSubjectsByExactName(context.Background(), storage.Principal{OrgID: "org-1"}, lookupBinding, "  acme/API ", []string{"repository", "project", "repository"})
+	page, err := newFakeAdapter(t, fake).FindSubjectsByExactName(context.Background(), storage.Principal{OrgID: "org-1"}, lookupBinding, "  acme/API ", "repository", "", 10)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !slices.Equal(queried, []string{"repository", "project"}) {
-		t.Fatalf("queried kinds = %v (one bounded read per distinct kind)", queried)
 	}
 	type got struct{ id, match string }
 	var have []got
 	for _, node := range page.Nodes {
 		have = append(have, got{node.CanonicalID, node.Match})
 	}
-	want := []got{{"project.v2:p", "exact"}, {"repository:a-prov", "provider_key"}, {"repository:m-alias", "alias"}, {"repository:z-label", "exact"}}
-	if !slices.Equal(have, want) || page.Truncated {
-		t.Fatalf("nodes = %v truncated=%t, want %v", have, page.Truncated, want)
+	want := []got{{"repository:a-prov", "provider_key"}, {"repository:m-alias", "alias"}, {"repository:z-label", "exact"}}
+	if !slices.Equal(have, want) || page.More || page.After != "repository:z-label" {
+		t.Fatalf("nodes = %v more=%t after=%q, want %v", have, page.More, page.After, want)
 	}
 }
 
-// A kind pool past the census bound is disclosed as truncated.
-func TestFindSubjectsByExactNameDisclosesTruncation(t *testing.T) {
+// The name read is a keyset page: one row more than the page size says more
+// matches follow, After is the last id read, and a cursor reaches the query.
+func TestFindSubjectsByExactNameKeysetPage(t *testing.T) {
+	var cyphers []string
+	var afters []interface{}
 	fake := &fakeConn{queryFunc: func(_ context.Context, _, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
-		if !strings.Contains(cypher, fmt.Sprintf("LIMIT %d", exactNameCandidateQueryLimit+1)) {
-			t.Fatalf("pool is not bounded: %s", cypher)
-		}
-		rows := make([]row, 0, exactNameCandidateQueryLimit+1)
-		for index := 0; index <= exactNameCandidateQueryLimit; index++ {
-			rows = append(rows, lookupRow("org-1", "repository", fmt.Sprintf("repository:%05d", index), "n", nil))
+		cyphers = append(cyphers, cypher)
+		afters = append(afters, params["after"])
+		rows := make([]row, 0, 3)
+		for _, id := range []string{"repository:a", "repository:b", "repository:c"} {
+			if after, _ := params["after"].(string); id > after {
+				rows = append(rows, lookupRow("org-1", "repository", id, "n", nil))
+			}
 		}
 		return rows, nil
 	}}
-	page, err := newFakeAdapter(t, fake).FindSubjectsByExactName(context.Background(), storage.Principal{OrgID: "org-1"}, lookupBinding, "n", []string{"repository"})
-	if err != nil || !page.Truncated || len(page.Nodes) != exactNameCandidateQueryLimit {
-		t.Fatalf("truncated pool: %d nodes truncated=%t, %v", len(page.Nodes), page.Truncated, err)
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+	page, err := adapter.FindSubjectsByExactName(context.Background(), principal, lookupBinding, "n", "repository", "", 2)
+	if err != nil || !page.More || len(page.Nodes) != 2 || page.After != "repository:b" {
+		t.Fatalf("page 1 = %+v, %v", page, err)
+	}
+	if !strings.Contains(cyphers[0], "ORDER BY n.canonical_id LIMIT 3") || strings.Contains(cyphers[0], "$after") || afters[0] != nil {
+		t.Fatalf("first query = %s after=%v", cyphers[0], afters[0])
+	}
+	page, err = adapter.FindSubjectsByExactName(context.Background(), principal, lookupBinding, "n", "repository", page.After, 2)
+	if err != nil || page.More || len(page.Nodes) != 1 || page.Nodes[0].CanonicalID != "repository:c" {
+		t.Fatalf("page 2 = %+v, %v", page, err)
+	}
+	if !strings.Contains(cyphers[1], "n.canonical_id > $after") || afters[1] != "repository:b" {
+		t.Fatalf("second query = %s after=%v", cyphers[1], afters[1])
+	}
+}
+
+// The one name equality: trim and lower-case, in the query's own terms.
+func TestSameName(t *testing.T) {
+	for _, tc := range []struct {
+		term, name string
+		want       bool
+	}{
+		{"acme/api", "ACME/API", true}, {"acme/api", " Acme/Api ", true}, {"acme/api", "acme/api-2", false},
+		{"Ünï", "Ünï", true}, {"Σ", "ς", false},
+	} {
+		if got := sameName(tc.term, tc.name); got != tc.want {
+			t.Errorf("sameName(%q, %q) = %t, want %t", tc.term, tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -215,13 +237,13 @@ func TestFindSubjectsByExactNamePushesTheEqualityIntoTheQuery(t *testing.T) {
 		cypher, params = c, p
 		return nil, nil
 	}}
-	if _, err := newFakeAdapter(t, fake).FindSubjectsByExactName(context.Background(), storage.Principal{OrgID: "org-1"}, lookupBinding, "  Acme/API ", []string{"repository"}); err != nil {
+	if _, err := newFakeAdapter(t, fake).FindSubjectsByExactName(context.Background(), storage.Principal{OrgID: "org-1"}, lookupBinding, "  Acme/API ", "repository", "", 10); err != nil {
 		t.Fatal(err)
 	}
 	if params["term"] != "Acme/API" || params["termLower"] != "acme/api" {
 		t.Fatalf("params = %v", params)
 	}
-	for _, want := range []string{"$term", "$termLower", "n.label", "n.aliases", "n.provider_aliases", fmt.Sprintf("LIMIT %d", exactNameCandidateQueryLimit+1)} {
+	for _, want := range []string{"$term", "$termLower", "n.label", "n.aliases", "n.provider_aliases", "LIMIT 11"} {
 		if !strings.Contains(cypher, want) {
 			t.Fatalf("query lacks %q: %s", want, cypher)
 		}
