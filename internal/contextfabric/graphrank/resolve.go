@@ -4540,6 +4540,8 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 					// for a panic on the caller-hint short circuit's own
 					// call.
 					ShadowCallerHintShortCircuit: callerHintShortCircuit,
+					// CHAOS-8409: same trigger tag a normal-path event carries.
+					ShadowTrigger: evidenceRoundTrigger(resolution, callerHintShortCircuit),
 				})
 			}
 			// attestation stays its zero value -- see this function's own

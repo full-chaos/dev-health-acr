@@ -291,3 +291,30 @@ func TestResolveSubjects_RestrictedPrincipalNeverRunsTheHandleCensus(t *testing.
 		}
 	}
 }
+
+func TestResolveSubjects_ScopeAnchorRoundPanicRecoveryTagsTheTrigger(t *testing.T) {
+	t.Parallel()
+	backend := scopeAnchorBackend(true, -1)
+	deps := backend.deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+	deps.CensusFunc = func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
+		panic("simulated CensusFunc panic on the scope-anchor round")
+	}
+	request := testRequest()
+	request.Question = scopeAnchorQuestion
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, nil, namedScopeAnchorFrame(nil), "")
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v, want the panic isolated", err)
+	}
+	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != scopeAnchorRepoID {
+		t.Fatalf("committed = %v, want the scope anchor alone after a recovered panic", ids)
+	}
+	events := tracer.eventsForStage("evidence_round")
+	if len(events) != 1 || events[0].ShadowReason != string(ReasonProbeError) {
+		t.Fatalf("evidence_round events = %#v, want exactly 1 recovered probe_error event", events)
+	}
+	if events[0].ShadowTrigger != "committed_scope_anchor" {
+		t.Fatalf("recovered event ShadowTrigger = %q, want %q", events[0].ShadowTrigger, "committed_scope_anchor")
+	}
+}
