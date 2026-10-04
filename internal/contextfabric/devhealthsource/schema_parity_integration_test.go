@@ -40,7 +40,7 @@ var sourceSchemaTables = []string{
 	"repos", "work_items", "git_pull_requests", "git_pull_request_reviews",
 	"ci_pipeline_runs", "deployments", "operational_incidents",
 	"operational_service_repository_mappings", "work_item_dependencies",
-	"work_graph_deployment_incident_edges",
+	"work_graph_deployment_incident_edges", "work_graph_issue_pr",
 	// CHAOS-3802's producers read these four; assertTeamsProjectsSchemaParity
 	// runs against the same fixture rather than a second testcontainer.
 	// CHAOS-4193: project_membership_transitions is the TABLE the

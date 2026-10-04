@@ -168,10 +168,10 @@ func producerGrammars() []producerGrammar {
 		// work item, pull request, review, CI run, deployment: <repo>:<one id>.
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "concat/2", repoAnchored: true, sites: sites(
 			facts+"identity.go|ReadFacts*2", facts+"workitems.go|ReadFacts*3", source+"tables.go|queryWorkItems",
-			source+"teams_projects_edges.go|querySubjectProjectMemberships", "internal/contextfabric/work_item_payload.go|canonicalWorkItemEvidenceRef")},
+			source+"issue_pull_request_link.go|queryIssuePullRequestLinks", source+"teams_projects_edges.go|querySubjectProjectMemberships", "internal/contextfabric/work_item_payload.go|canonicalWorkItemEvidenceRef")},
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "sql/1", sites: sites(catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "concat/2", repoAnchored: true, sites: sites(
-			facts+"pullrequests.go|ReadFacts", source+"tables.go|queryPullRequests", source+"teams_projects_edges.go|querySubjectProjectMemberships")},
+			facts+"pullrequests.go|ReadFacts", source+"issue_pull_request_link.go|queryIssuePullRequestLinks", source+"tables.go|queryPullRequests", source+"teams_projects_edges.go|querySubjectProjectMemberships")},
 		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "sql/1", sites: sites(catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityReview, shape: "concat/2", repoAnchored: true, sites: sites(facts+"pullrequests.go|ReadFacts", source+"tables.go|queryPullRequestReviews")},
 		{kind: contractsv1.ContextFabricEvidenceEntityReview, shape: "sql/1", sites: sites(catalog)},
