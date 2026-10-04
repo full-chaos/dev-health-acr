@@ -275,8 +275,8 @@ func (e *Engine) saveTerminalResult(
 	// form is measured again after it is added. The callers already ran
 	// finalizeServed (completeness, authority, plan and the budget line) and the
 	// disclosure changes none of that, so only the budget is re-checked: silently
-	// when the document still fits, through assertFitsBudget (which records the
-	// overrun and returns the refusal) when it does not.
+	// when the document still fits, through finalizeServed (the only caller of the budget
+	// assertion: it records the overrun and returns the refusal) when it does not.
 	remeasure := func() error {
 		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricTerminalNotSavedLimitation})
 		degraded := *result
@@ -288,7 +288,8 @@ func (e *Engine) saveTerminalResult(
 				return stageError(StageValidation, err)
 			}
 			if measurement.Overrun(budget) != contractsv1.ContextFabricBudgetFits {
-				return e.assertFitsBudget(ctx, principal, site, degraded, budget)
+				_, err := e.finalizeServed(ctx, principal, site, degraded, plan, budget)
+				return err
 			}
 		}
 		if err := ValidateResult(degraded); err != nil {
