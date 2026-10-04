@@ -149,3 +149,34 @@ func TestServedStatusHeadKeepsTheAnswerInsideTheBudgetItIsMeasuredAgainst(t *tes
 		}
 	}
 }
+
+func TestRestateServedStatusHeadKeepsTheCountSentenceAtTheLengthBound(t *testing.T) {
+	t.Parallel()
+	count := cardinalityAnswerSentence(MembershipCardinality{Resolved: true, Kind: SubjectTeam, Served: 3, Declared: 3})
+	if count == "" {
+		t.Fatal("premise: no count sentence")
+	}
+	for _, row := range []struct {
+		name  string
+		maxes int
+		build func(status InvestigationStatus, filler string) string
+	}{
+		{"deterministic answer", deterministicAnswerMaxLength, func(status InvestigationStatus, filler string) string {
+			return appendCardinalitySentence(statusSentence(status, SubjectResolution{})+" Principal driver(s): "+filler+".", count)
+		}},
+	} {
+		for fill := row.maxes - 140; fill <= row.maxes; fill += 7 {
+			stale := row.build(InvestigationComplete, strings.Repeat("a", fill-100)+"; "+strings.Repeat("b", 60))
+			if len([]rune(stale)) > row.maxes {
+				t.Fatalf("%s: premise: stale head is %d runes, over %d", row.name, len([]rune(stale)), row.maxes)
+			}
+			got := restateHeadSentence(stale, statusSentence(InvestigationPartial, SubjectResolution{}), row.maxes)
+			if len([]rune(got)) > row.maxes {
+				t.Fatalf("%s fill %d: restated head is %d runes, over %d", row.name, fill, len([]rune(got)), row.maxes)
+			}
+			if !strings.HasPrefix(got, statusSentence(InvestigationPartial, SubjectResolution{})) || !strings.HasSuffix(got, count) {
+				t.Fatalf("%s fill %d: restated head lost the served sentence or the count sentence: %q ... %q", row.name, fill, got[:60], got[len(got)-80:])
+			}
+		}
+	}
+}

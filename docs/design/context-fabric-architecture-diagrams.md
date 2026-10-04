@@ -1788,6 +1788,16 @@ is here because that rule was applied to a surface nobody had counted as a
 narrowing stage; the next one will be found the same way if it is not
 declared.
 
+**Served-status head.** The first sentence of `direct_judgment` and
+`deterministic_answer` states the status the document is served with, not the
+status the model draft carried when the head was composed. `restateServedStatusHead`
+(`served_status_head.go`) swaps an opening complete/partial/degraded sentence for
+the served one and keeps the rest; it runs at the end of
+`ApplyServerCompletenessAuthority` (every serving path and the stored read route)
+and inside `servedMeasurementShape`, so each budget measurement and lever weighs
+the answer with its served-status head. A head with no such opening sentence
+(no_match, clarification, client-written text) is left alone. `QueryVersion` v58.
+
 ---
 
 ## 10 — The grouped cohort and the three-stage budget (CHAOS-4636 / S5), and stage 3's two decision arms (S7c)

@@ -1,6 +1,9 @@
 package contextfabric
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // restateServedStatusHead makes the first sentence of DirectJudgment and
 // DeterministicAnswer state result.Status, the status the document is served
@@ -37,8 +40,29 @@ func restateHeadSentence(head, want string, maxLength int) string {
 	for _, status := range []InvestigationStatus{InvestigationComplete, InvestigationPartial, InvestigationDegraded} {
 		stale, _ := modelPathStatusSentence(status)
 		if rest, found := strings.CutPrefix(head, stale); found {
-			return truncateAtSentenceBoundary(want+rest, maxLength)
+			return fitRestatedHead(want, rest, maxLength)
 		}
 	}
 	return head
+}
+
+var cardinalityTailPattern = regexp.MustCompile(` Counted (?:at least )?\d+ [^.]*\.$`)
+
+// fitRestatedHead joins the served sentence to the rest of the head inside
+// maxLength. The restated sentence can be longer than the one it replaced; when
+// the head is near its bound, the count sentence the server appended last is
+// the part that survives, as appendCardinalitySentence keeps it, and the earlier
+// prose is truncated to make room.
+func fitRestatedHead(want, rest string, maxLength int) string {
+	joined := want + rest
+	if len([]rune(joined)) <= maxLength {
+		return joined
+	}
+	if tail := cardinalityTailPattern.FindString(rest); tail != "" {
+		room := maxLength - len([]rune(tail))
+		if room > 0 {
+			return truncateAtSentenceBoundary(want+strings.TrimSuffix(rest, tail), room) + tail
+		}
+	}
+	return truncateAtSentenceBoundary(joined, maxLength)
 }
