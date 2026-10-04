@@ -432,9 +432,17 @@ func TestQueryVersionMovedPastTheUnfilteredWorkItemMembershipRead(t *testing.T) 
 	}
 }
 
+func TestQueryVersionMovedPastTheScopeAnchorHintShadow(t *testing.T) {
+	t.Parallel()
+	const versionBeforeAHintedAnchorStoppedShadowingAHandle = "devhealthfacts.clickhouse.v32"
+	if devhealthfacts.QueryVersion == versionBeforeAHintedAnchorStoppedShadowingAHandle {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when an exact repository hint shadowed a named pull request answers about the repository alone and must not be reused", devhealthfacts.QueryVersion, versionBeforeAHintedAnchorStoppedShadowingAHandle)
+	}
+}
+
 func TestQueryVersionMovedPastTheMemberReadWithoutAWindow(t *testing.T) {
 	t.Parallel()
-	const versionBeforeMembersCouldBeWindowed = "devhealthfacts.clickhouse.v32"
+	const versionBeforeMembersCouldBeWindowed = "devhealthfacts.clickhouse.v33"
 	if devhealthfacts.QueryVersion == versionBeforeMembersCouldBeWindowed {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- a stored work-item member refusal saved before the member read took a window must not be served as one", devhealthfacts.QueryVersion, versionBeforeMembersCouldBeWindowed)
 	}
