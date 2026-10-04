@@ -261,8 +261,168 @@ func TestACutMovesPagePositionToTheReturnedPage(t *testing.T) {
 		} else if d.PageInfo.EndCursor != nil {
 			t.Fatalf("%s: end cursor %v describes the upstream page", tc.name, *d.PageInfo.EndCursor)
 		}
-		if !strings.Contains(resp.Page.Cut, "totalCount is the count of the full read") || !strings.Contains(resp.Page.Cut, "no offset or cursor") {
+		if !strings.Contains(resp.Page.Cut, "totalCount is the count of the full read") || !strings.Contains(resp.Page.Cut, "pageInfo describes this page") {
 			t.Fatalf("%s: statement %q", tc.name, resp.Page.Cut)
 		}
+	}
+}
+
+func TestTheProdShapeMeasures33285BytesAfterTheAllowlist(t *testing.T) {
+	resp := runArtifacts(t, prodArtifactsBody(t, 200, 33285), 1)
+	if resp.Refusal == nil || resp.Refusal.Code != directread.RefusalResponseBudget || resp.Refusal.MeasuredBytes != 33285 {
+		t.Fatalf("%+v", resp.Refusal)
+	}
+}
+
+func TestTheCutPageIsExactlyTheLargestPrefixAndHoldsNoWithheldField(t *testing.T) {
+	body := prodArtifactsBody(t, 200, 33285)
+	var src struct {
+		Data struct {
+			W struct {
+				Rows []map[string]any `json:"rows"`
+			} `json:"workGraphArtifacts"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &src); err != nil {
+		t.Fatal(err)
+	}
+	rows := src.Data.W.Rows
+	for _, row := range rows {
+		delete(row, "evidence")
+	}
+	encode := func(n int) []byte {
+		out, _ := json.Marshal(map[string]any{"workGraphArtifacts": map[string]any{"rows": rows[:n], "degradedReason": nil, "__typename": "WorkGraphArtifactConnection"}})
+		return out
+	}
+	want := 0
+	for n := 1; n <= 200; n++ {
+		if len(encode(n)) <= 32768 {
+			want = n
+		}
+	}
+	resp := runArtifacts(t, body, 0)
+	if want < 1 || want >= 200 || resp.Page.RowsReturned != want || string(resp.Data) != string(encode(want)) {
+		t.Fatalf("want %d rows, got %d: %.200s", want, resp.Page.RowsReturned, resp.Data)
+	}
+	if strings.Contains(string(resp.Data), "evidence") {
+		t.Fatal("a withheld field reached the cut answer")
+	}
+}
+
+func TestACutKeepsTheLargestPrefixWhenEndCursorsVaryInLength(t *testing.T) {
+	cat, _ := directread.DefaultCatalogue()
+	op, refusal := cat.Lookup("capacityForecasts")
+	if refusal != nil {
+		t.Fatal(refusal)
+	}
+	// The first probe of a search over 300 rows is 150 rows: its end cursor
+	// is long, the next row's is short, so 150 rows do not fit and 151 do.
+	for _, maxBytes := range []int{4000, 4001, 4002, 4003, 4017, 4100, 9000, 20000, -151} {
+		edges := make([]map[string]any, 300)
+		for i := range edges {
+			pad := (i * 7) % 40
+			if maxBytes == -151 {
+				pad = 0
+				if i == 149 {
+					pad = 200
+				}
+			}
+			edges[i] = map[string]any{"node": map[string]any{"forecastId": fmt.Sprintf("f%d", i), "teamId": "t"}, "cursor": "c" + strings.Repeat("0", pad)}
+		}
+		page := func(n int) []byte {
+			info := map[string]any{"hasNextPage": true, "hasPreviousPage": false, "startCursor": "c", "endCursor": edges[n-1]["cursor"]}
+			out, _ := json.Marshal(map[string]any{"capacityForecasts": map[string]any{"edges": edges[:n], "totalCount": 300, "pageInfo": info}})
+			return out
+		}
+		if maxBytes == -151 {
+			maxBytes = len(page(151))
+			if len(page(150)) <= maxBytes {
+				t.Fatal("the planted case does not make 150 rows too big")
+			}
+		}
+		want := 0
+		for n := 1; n <= 300; n++ {
+			if len(page(n)) <= maxBytes {
+				want = n
+			}
+		}
+		raw, _ := json.Marshal(map[string]any{"data": map[string]any{"capacityForecasts": map[string]any{
+			"edges": edges, "totalCount": 300,
+			"pageInfo": map[string]any{"hasNextPage": false, "hasPreviousPage": false, "startCursor": "c", "endCursor": "x"},
+		}}})
+		h := newOpHarness(t, func(opRecorded) (int, string) { return 200, string(raw) }, opHarnessOptions{})
+		vars, _ := json.Marshal(opMinimalVariables(t, op))
+		resp, err := h.runner.Run(context.Background(), opUnrestricted(opOrgA), directread.OperationRequest{Operation: "capacityForecasts", Variables: vars, MaxBytes: maxBytes})
+		if err != nil || resp.Call != directread.CallServed || resp.Page.RowsReturned != want {
+			t.Fatalf("max_bytes %d: want %d rows, got %+v err %v", maxBytes, want, resp.Page, err)
+		}
+	}
+}
+
+func TestACompositeAnswerWithTwoListsIsCutOnBoth(t *testing.T) {
+	cat, _ := directread.DefaultCatalogue()
+	op, refusal := cat.Lookup("compoundingRisk")
+	if refusal != nil {
+		t.Fatal(refusal)
+	}
+	rows := make([]map[string]any, 40)
+	for i := range rows {
+		rows[i] = map[string]any{"day": "2026-09-01", "scope": "REPO", "scopeId": fmt.Sprintf("s%d", i), "scopeLabel": strings.Repeat("l", 1000), "score": 1.5, "severity": "HIGH"}
+	}
+	trend := make([]map[string]any, 300)
+	for i := range trend {
+		trend[i] = map[string]any{"day": fmt.Sprintf("2026-08-%02d", i%28+1), "score": 1.5, "severity": "HIGH"}
+	}
+	raw, _ := json.Marshal(map[string]any{"data": map[string]any{"compoundingRisk": map[string]any{"rows": rows, "trend": trend}}})
+	h := newOpHarness(t, func(opRecorded) (int, string) { return 200, string(raw) }, opHarnessOptions{})
+	resp := h.run(t, opUnrestricted(opOrgA), "compoundingRisk", opMinimalVariables(t, op))
+	if resp.Call != directread.CallServed || len(resp.Data) > 32768 || resp.Page.RowsRead != 340 || resp.Page.RowsReturned >= 340 {
+		out, _ := json.Marshal(resp)
+		t.Fatalf("%.500s", out)
+	}
+	if !strings.Contains(resp.Page.Cut, "compoundingRisk.rows") || !strings.Contains(resp.Page.Cut, "compoundingRisk.trend") {
+		t.Fatalf("statement %q", resp.Page.Cut)
+	}
+}
+
+func TestANestedListUnderAnObjectIsCut(t *testing.T) {
+	cat, _ := directread.DefaultCatalogue()
+	op, refusal := cat.Lookup("capacityCompletionDistribution")
+	if refusal != nil {
+		t.Fatal(refusal)
+	}
+	points := func() []map[string]any {
+		out := make([]map[string]any, 1500)
+		for i := range out {
+			out[i] = map[string]any{"value": i, "count": i % 9}
+		}
+		return out
+	}
+	raw, _ := json.Marshal(map[string]any{"data": map[string]any{"capacityForecast": map[string]any{"completionDistribution": map[string]any{"days": points(), "items": points()}}}})
+	h := newOpHarness(t, func(opRecorded) (int, string) { return 200, string(raw) }, opHarnessOptions{})
+	resp := h.run(t, opUnrestricted(opOrgA), "capacityCompletionDistribution", opMinimalVariables(t, op))
+	if resp.Call != directread.CallServed || len(resp.Data) > 32768 || resp.Page.RowsRead != 3000 || resp.Page.RowsReturned < 1 {
+		out, _ := json.Marshal(resp)
+		t.Fatalf("%.500s", out)
+	}
+	if !strings.Contains(resp.Page.Cut, "capacityForecast.completionDistribution.days") {
+		t.Fatalf("statement %q", resp.Page.Cut)
+	}
+}
+
+func TestAForeignRowBeyondTheReturnedPrefixStillRefusesTheWholeAnswer(t *testing.T) {
+	rows := make([]map[string]any, 300)
+	for i := range rows {
+		rows[i] = map[string]any{"filePath": strings.Repeat("p", 120), "repoId": opRepoA}
+	}
+	rows[299]["repoId"] = opRepoB
+	raw, _ := json.Marshal(map[string]any{"data": map[string]any{"hotspots": map[string]any{"rows": rows}}})
+	cat, _ := directread.DefaultCatalogue()
+	op, _ := cat.Lookup("hotspots")
+	h := newOpHarness(t, func(opRecorded) (int, string) { return 200, string(raw) }, opHarnessOptions{})
+	resp := h.run(t, opRestrictedA(), "hotspots", opMinimalVariables(t, op))
+	if resp.Call != directread.CallRefused || resp.Refusal == nil || resp.Refusal.Code != directread.RefusalRowOutsideGrant || len(resp.Data) != 0 {
+		out, _ := json.Marshal(resp)
+		t.Fatalf("%.400s", out)
 	}
 }

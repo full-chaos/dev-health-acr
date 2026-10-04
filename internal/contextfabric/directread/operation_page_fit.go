@@ -5,25 +5,80 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
-// pageCut describes a list answer cut to the largest whole-row page that
-// fits the response budget.
-type pageCut struct {
-	data         json.RawMessage
+// cutList is one row list of an answer that was cut.
+type cutList struct {
+	path         string
 	rowsReturned int
 	rowsRead     int
-	// fullBytes is the serialized size of the uncut data.
-	fullBytes int
-	// hasTotal is set when the answer carries a totalCount of the full read.
-	hasTotal bool
+	hasPageInfo  bool
+	hasTotal     bool
 }
 
-// fitListPage cuts the longest row list of an over-budget answer to the
-// largest whole-row prefix whose serialized data fits maxBytes. The lists
-// considered are the arrays directly under a root field's object, or the
-// root field itself when it is an array. It reports false when the answer
-// has no list, or when not even one row fits: such an answer stays refused.
+// pageCut describes an answer cut to the largest whole-row pages that fit
+// the response budget.
+type pageCut struct {
+	data  json.RawMessage
+	lists []cutList
+	// fullBytes is the serialized size of the uncut data.
+	fullBytes int
+}
+
+func (c pageCut) rowsReturned() int {
+	n := 0
+	for _, l := range c.lists {
+		n += l.rowsReturned
+	}
+	return n
+}
+
+func (c pageCut) rowsRead() int {
+	n := 0
+	for _, l := range c.lists {
+		n += l.rowsRead
+	}
+	return n
+}
+
+type listRef struct {
+	path   string
+	parent map[string]any
+	key    string
+	rows   []any
+}
+
+// collectLists finds every row list of the answer: each array of more than
+// one element reached through objects only (never through another list).
+func collectLists(prefix string, obj map[string]any, out *[]listRef) {
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		path := key
+		if prefix != "" {
+			path = prefix + "." + key
+		}
+		switch v := obj[key].(type) {
+		case []any:
+			if len(v) > 1 {
+				*out = append(*out, listRef{path: path, parent: obj, key: key, rows: v})
+			}
+		case map[string]any:
+			collectLists(path, v, out)
+		}
+	}
+}
+
+// fitListPage cuts the row lists of an over-budget answer, the longest first,
+// to whole-row prefixes: the longest list is cut to the largest prefix that
+// makes the serialized data fit maxBytes; when even one row of it is not
+// enough it is cut to one row and the next list is cut the same way. It
+// reports false when the answer has no list or does not fit with one row of
+// each list: such an answer stays refused.
 func fitListPage(data json.RawMessage, maxBytes int) (pageCut, bool) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
@@ -31,78 +86,101 @@ func fitListPage(data json.RawMessage, maxBytes int) (pageCut, bool) {
 	if err := dec.Decode(&root); err != nil || root == nil {
 		return pageCut{}, false
 	}
-	type listRef struct {
-		set    func(rows []any)
-		rows   []any
-		parent map[string]any
-	}
-	var best *listRef
-	consider := func(rows []any, parent map[string]any, set func([]any)) {
-		if len(rows) > 1 && (best == nil || len(rows) > len(best.rows)) {
-			best = &listRef{set: set, rows: rows, parent: parent}
-		}
-	}
-	fields := make([]string, 0, len(root))
-	for k := range root {
-		fields = append(fields, k)
-	}
-	sort.Strings(fields)
-	for _, field := range fields {
-		switch v := root[field].(type) {
-		case []any:
-			field := field
-			consider(v, nil, func(rows []any) { root[field] = rows })
-		case map[string]any:
-			keys := make([]string, 0, len(v))
-			for k := range v {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, key := range keys {
-				if rows, ok := v[key].([]any); ok {
-					v, key := v, key
-					consider(rows, v, func(rows []any) { v[key] = rows })
-				}
-			}
-		}
-	}
-	if best == nil {
+	var refs []listRef
+	collectLists("", root, &refs)
+	if len(refs) == 0 {
 		return pageCut{}, false
 	}
-	total := len(best.rows)
-	hasTotal := false
-	if best.parent != nil {
-		_, hasTotal = best.parent["totalCount"]
-	}
-	encode := func(n int) (json.RawMessage, bool) {
-		best.set(best.rows[:n])
-		describeReturnedPage(best.parent, best.rows[:n])
+	sort.SliceStable(refs, func(i, j int) bool { return len(refs[i].rows) > len(refs[j].rows) })
+
+	failed := false
+	size := func() int {
 		out, err := json.Marshal(root)
-		return out, err == nil
+		if err != nil {
+			failed = true
+			return 0
+		}
+		return len(out)
 	}
-	lo, hi := 0, total-1
-	var fitted json.RawMessage
-	for lo < hi {
-		mid := (lo + hi + 1) / 2
-		out, ok := encode(mid)
+	cutTo := func(r listRef, n int) {
+		r.parent[r.key] = r.rows[:n]
+		describeReturnedPage(r.parent, r.rows[:n])
+	}
+
+	var cuts []cutList
+	fits := false
+	for _, r := range refs {
+		total := len(r.rows)
+		cutTo(r, 1)
+		if size() > maxBytes {
+			cuts = append(cuts, cutListOf(r, 1))
+			continue
+		}
+		// Largest n in [1,total-1] that fits. The size is increasing in n
+		// except for the end cursor, whose length varies by at most spread
+		// bytes, so a search can stop up to spread/2 rows short: scan on.
+		lo, hi := 1, total-1
+		for lo < hi {
+			mid := (lo + hi + 1) / 2
+			cutTo(r, mid)
+			if size() <= maxBytes {
+				lo = mid
+			} else {
+				hi = mid - 1
+			}
+		}
+		for n := lo + 1; n < total && n <= lo+cursorSpread(r.rows)+1; n++ {
+			cutTo(r, n)
+			if size() <= maxBytes {
+				lo = n
+			}
+		}
+		cutTo(r, lo)
+		cuts = append(cuts, cutListOf(r, lo))
+		fits = true
+		break
+	}
+	if failed || !fits {
+		return pageCut{}, false
+	}
+	out, err := json.Marshal(root)
+	if err != nil || len(out) > maxBytes {
+		return pageCut{}, false
+	}
+	return pageCut{data: out, lists: cuts, fullBytes: len(data)}, true
+}
+
+func cutListOf(r listRef, n int) cutList {
+	l := cutList{path: r.path, rowsReturned: n, rowsRead: len(r.rows)}
+	_, l.hasPageInfo = r.parent["pageInfo"].(map[string]any)
+	_, l.hasTotal = r.parent["totalCount"]
+	return l
+}
+
+// cursorSpread is the largest difference in length between the cursors of
+// the rows of one list.
+func cursorSpread(rows []any) int {
+	lo, hi := -1, -1
+	for _, row := range rows {
+		m, ok := row.(map[string]any)
 		if !ok {
-			return pageCut{}, false
+			continue
 		}
-		if len(out) <= maxBytes {
-			lo, fitted = mid, out
-		} else {
-			hi = mid - 1
+		c, ok := m["cursor"].(string)
+		if !ok {
+			continue
+		}
+		if lo < 0 || len(c) < lo {
+			lo = len(c)
+		}
+		if len(c) > hi {
+			hi = len(c)
 		}
 	}
-	if lo < 1 {
-		return pageCut{}, false
+	if lo < 0 {
+		return 0
 	}
-	out, ok := encode(lo)
-	if !ok || len(out) > maxBytes {
-		return pageCut{}, false
-	}
-	fitted = out
-	return pageCut{data: fitted, rowsReturned: lo, rowsRead: total, fullBytes: len(data), hasTotal: hasTotal}, true
+	return hi - lo
 }
 
 // describeReturnedPage makes the page position fields of a cut answer
@@ -111,9 +189,6 @@ func fitListPage(data json.RawMessage, maxBytes int) (pageCut, bool) {
 // carry one, otherwise unknown (null). The start position is the first row's
 // and stays. totalCount is not touched: it counts the full read.
 func describeReturnedPage(parent map[string]any, rows []any) {
-	if parent == nil {
-		return
-	}
 	info, ok := parent["pageInfo"].(map[string]any)
 	if !ok {
 		return
@@ -131,20 +206,42 @@ func describeReturnedPage(parent map[string]any, rows []any) {
 	}
 }
 
-// statement is the plain statement of a cut. No operation has an offset or
-// a cursor variable, so the one way to the rest is the same call with a
-// larger max_bytes (the size of the uncut data, when it is within the
-// maximum), or a narrower scope or filters.
-func (c pageCut) statement(maxBytes int) string {
-	out := fmt.Sprintf("Returned %d of %d rows read: the answer was cut to the largest whole-row page that fits max_bytes (%d); the rest were left out.", c.rowsReturned, c.rowsRead, maxBytes)
-	if c.fullBytes <= MaxOperationMaxBytes {
-		out += fmt.Sprintf(" Repeat the same call with max_bytes of at least %d to receive all %d rows.", c.fullBytes, c.rowsRead)
-	} else {
-		out += fmt.Sprintf(" All %d rows do not fit the largest max_bytes (%d): narrow the scope or the filters.", c.rowsRead, MaxOperationMaxBytes)
+// statement is the plain statement of a cut. It offers only what exists: the
+// same call with a larger max_bytes, and a narrower request when the
+// operation has a variable the client can set. A continuation is not
+// offered: no operation takes an offset or a cursor.
+func (c pageCut) statement(maxBytes int, op *OperationPolicy) string {
+	parts := make([]string, 0, len(c.lists))
+	pageInfo, total := false, false
+	for _, l := range c.lists {
+		parts = append(parts, fmt.Sprintf("%s %d of %d", l.path, l.rowsReturned, l.rowsRead))
+		pageInfo = pageInfo || l.hasPageInfo
+		total = total || l.hasTotal
 	}
-	out += " This operation has no offset or cursor, so continuing from the end of this page is not possible; pageInfo describes this page (more rows exist)."
-	if c.hasTotal {
+	out := fmt.Sprintf("Returned %d of %d rows read (%s): the answer was cut to whole rows to fit max_bytes (%d); the rest were left out.", c.rowsReturned(), c.rowsRead(), strings.Join(parts, "; "), maxBytes)
+	switch {
+	case c.fullBytes <= MaxOperationMaxBytes:
+		out += fmt.Sprintf(" Repeat the same call with max_bytes of at least %d to receive every row.", c.fullBytes)
+	case op.hasClientVariable():
+		out += fmt.Sprintf(" The whole answer does not fit the largest max_bytes (%d): narrow the call with the operation's variables.", MaxOperationMaxBytes)
+	default:
+		out += fmt.Sprintf(" The whole answer does not fit the largest max_bytes (%d) and this operation has no variable to narrow it.", MaxOperationMaxBytes)
+	}
+	if pageInfo {
+		out += " pageInfo describes this page: more rows exist."
+	}
+	if total {
 		out += " totalCount is the count of the full read, not of this page."
 	}
 	return out
+}
+
+// hasClientVariable reports whether the client can set a scalar variable.
+func (op *OperationPolicy) hasClientVariable() bool {
+	for _, v := range op.Variables {
+		if v.Allowed && v.Source == SourceClient && v.Kind != "object" {
+			return true
+		}
+	}
+	return false
 }

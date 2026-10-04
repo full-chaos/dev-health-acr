@@ -597,9 +597,9 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 		if completeness == CompletenessDeclaredComplete {
 			completeness = CompletenessUnknown
 		}
-		x.resp.Page.RowsReturned = cut.rowsReturned
-		x.resp.Page.RowsRead = cut.rowsRead
-		x.resp.Page.Cut = cut.statement(maxBytes)
+		x.resp.Page.RowsReturned = cut.rowsReturned()
+		x.resp.Page.RowsRead = cut.rowsRead()
+		x.resp.Page.Cut = cut.statement(maxBytes, op)
 	}
 	x.resp.Call = CallServed
 	x.resp.Completeness = completeness
