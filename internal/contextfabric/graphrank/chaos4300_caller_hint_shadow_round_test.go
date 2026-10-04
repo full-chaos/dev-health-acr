@@ -362,4 +362,7 @@ func TestChaos4300_CallerHintShortCircuitPanicRecoveryTagsCallerHintShortCircuit
 	if !event.ShadowCallerHintShortCircuit {
 		t.Fatalf("event = %+v, want ShadowCallerHintShortCircuit=true -- the panic-recovery event must carry the same provenance a normal-path event on this call site would have", event)
 	}
+	if event.ShadowTrigger != "caller_hint" {
+		t.Fatalf("event.ShadowTrigger = %q, want %q", event.ShadowTrigger, "caller_hint")
+	}
 }

@@ -310,6 +310,9 @@ func TestResolveSubjects_ShadowEvidenceRoundPanicIsolation(t *testing.T) {
 	if len(events) != 1 || events[0].ShadowReason != string(ReasonProbeError) {
 		t.Fatalf("evidence_round events = %#v, want exactly 1 recovered probe_error event", events)
 	}
+	if events[0].ShadowTrigger != "stalled" {
+		t.Fatalf("recovered event ShadowTrigger = %q, want %q", events[0].ShadowTrigger, "stalled")
+	}
 }
 
 // TestResolveSubjects_ShadowEvidenceRoundSkipsNonStalledResolutions pins the
