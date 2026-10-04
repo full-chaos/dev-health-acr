@@ -431,3 +431,11 @@ func TestQueryVersionMovedPastTheUnfilteredWorkItemMembershipRead(t *testing.T) 
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- a stored work-item member answer saved before the member read took a status filter must not be served as one", devhealthfacts.QueryVersion, versionBeforeMembersCouldBeFilteredByStatus)
 	}
 }
+
+func TestQueryVersionMovedPastTheScopeAnchorHintShadow(t *testing.T) {
+	t.Parallel()
+	const versionBeforeAHintedAnchorStoppedShadowingAHandle = "devhealthfacts.clickhouse.v32"
+	if devhealthfacts.QueryVersion == versionBeforeAHintedAnchorStoppedShadowingAHandle {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when an exact repository hint shadowed a named pull request answers about the repository alone and must not be reused", devhealthfacts.QueryVersion, versionBeforeAHintedAnchorStoppedShadowingAHandle)
+	}
+}
