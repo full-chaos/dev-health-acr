@@ -505,6 +505,9 @@ func TestValuesClampedCountsOnlySurvivorsAtTheRealSurfaces(t *testing.T) {
 
 	app, token := newParityHostedAppWithBudget(t, investigator, store,
 		limits.ResourceBudget{MaxItems: 500, MaxTokens: 500_000, MaxBytes: 8 << 20})
+	// 100 narratives at the full length: the parity helper's 5 s wall-clock
+	// deadline must not decide this test on a slow -race runner.
+	app.config.RequestTimeout = time.Minute
 	server := httptest.NewTLSServer(app.Handler())
 	t.Cleanup(server.Close)
 	configureSidecarEnvironment(t, server, token)
