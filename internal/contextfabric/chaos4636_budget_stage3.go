@@ -319,6 +319,8 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		declined = RetryDeclinedNothingToNarrow
 	case retryCannotReduce:
 		declined = RetryDeclinedCannotReduceAxis
+	case params.Request.SuppliedSynthesis != nil:
+		declined = RetryDeclinedSuppliedSynthesis
 	case e.synthesisDeadlineReserve <= 0:
 		declined = RetryDeclinedNoReserve
 	case !e.retryDeadlineAvailable(ctx):
