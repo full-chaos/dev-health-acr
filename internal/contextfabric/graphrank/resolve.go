@@ -5209,10 +5209,10 @@ func callerNarrowingSatisfierFilter(principal storage.Principal, request context
 		for _, id := range canonicalIDs {
 			node, exists, err := deps.ExactHint(ctx, contextfabric.SubjectRef{Kind: kind, CanonicalID: id})
 			if err != nil {
-				return nil, false
+				continue
 			}
 			if !exists {
-				return nil, false
+				continue
 			}
 			if AuthorizedAttributes(principal, request.RequestedScope, node.Attributes) {
 				kept = append(kept, id)
