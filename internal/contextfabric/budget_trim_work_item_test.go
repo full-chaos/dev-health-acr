@@ -28,6 +28,8 @@ type budgetTrimShape struct {
 	findings    int
 	maxBytes    int64
 	noEvidence  bool
+	symmetric   bool
+	scoped      bool
 }
 
 var budgetTrimProdShape = budgetTrimShape{members: 14, claims: 28, maxItems: 30, reserve: time.Second, deadline: 50 * time.Millisecond}
@@ -35,7 +37,7 @@ var budgetTrimProdShape = budgetTrimShape{members: 14, claims: 28, maxItems: 30,
 func budgetTrimFindings(count int, ids []string) []Finding {
 	findings := []Finding{}
 	for index := 0; index < count; index++ {
-		findings = append(findings, Finding{FindingID: fmt.Sprintf("finding_%02d", index), Kind: "remaining_work", Summary: "work remains", Subjects: []SubjectRef{{Kind: SubjectWorkItem, CanonicalID: ids[index%len(ids)], Label: "Work item"}}, EvidenceRefIDs: []string{}, ClaimedFactIDs: []string{}})
+		findings = append(findings, Finding{FindingID: fmt.Sprintf("finding_%02d", index), Kind: "status", Summary: "work remains", Subjects: []SubjectRef{{Kind: SubjectWorkItem, CanonicalID: ids[index%len(ids)], Label: "Work item"}}, EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, "repo-1:work-00")}, ClaimedFactIDs: []string{"claim_00"}})
 	}
 	return findings
 }
@@ -105,11 +107,15 @@ func budgetTrimInvestigate(t *testing.T, shape budgetTrimShape) (InvestigationRe
 			}
 			return InvestigationResult{Status: InvestigationComplete, DirectJudgment: "Work items of the project.", CurrentState: "Work items of the project.", DeterministicAnswer: "Work items of the project.", StrongestPressures: []string{}, Drivers: drivers, RemainingWork: budgetTrimFindings(shape.findings, ids), ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{evidence}, ClaimedFacts: claims, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
 		}), Results: &staticResultStore{results: map[string]InvestigationResult{}}, Requirements: registryDeriver{},
-	}, EngineOptions{ServiceVersion: "test", MaxItems: shape.maxItems, MaxSerializedBytes: budgetTrimMaxBytes(shape), SynthesisDeadlineReserve: shape.reserve, NewResultID: func() string { return "result_budget_trim" }, Now: func() time.Time { return time.Unix(1000, 0).UTC() }})
+	}, EngineOptions{ServiceVersion: "test", MaxItems: shape.maxItems, MaxSerializedBytes: budgetTrimMaxBytes(shape), SynthesisDeadlineReserve: shape.reserve, ServerCompletenessAuthorityEnabled: shape.symmetric, ServerCompletenessAuthoritySymmetricEnabled: shape.symmetric, NewResultID: func() string { return "result_budget_trim" }, Now: func() time.Time { return time.Unix(1000, 0).UTC() }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
+	if shape.scoped {
+		ctx = WithWorkItemCensusRepositoryScopeRecorder(ctx)
+		RecordWorkItemCensusRepositoryScope(ctx)
+	}
 	if shape.deadline > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, shape.deadline)
@@ -329,5 +335,63 @@ func TestBudgetTrimRefusesWhenTheTrimmedAnswerDoesNotValidate(t *testing.T) {
 	var refusal AnswerBudgetRefusal
 	if !errors.As(err, &refusal) {
 		t.Fatalf("err=%v want a refusal: a trimmed document that fails validation must not be served", err)
+	}
+}
+
+func TestBudgetTrimServedUnderTheSymmetricAuthorityStaysPartialOrDegradedNeverComplete(t *testing.T) {
+	shape := budgetTrimProdShape
+	shape.symmetric = true
+	shape.scoped = true
+	result, _ := budgetTrimServed(t, shape)
+	if result.Status == InvestigationComplete || result.Completeness.State == contractsv1.ContextFabricAnswerCompletenessComplete {
+		t.Fatalf("status=%q completeness=%q: the authority switch must not rewrite a trimmed answer to complete", result.Status, result.Completeness.State)
+	}
+	if budgetTrimTrimLines(result) != 1 {
+		t.Fatalf("limitations=%v: the trim disclosure was lost", result.Limitations)
+	}
+	scope := 0
+	for _, limitation := range result.Limitations {
+		if contractsv1.IsContextFabricServiceAuthoredLimitation(limitation) && limitation == contractsv1.ContextFabricWorkItemCensusRepositoryScopeLimitation {
+			scope++
+		}
+	}
+	if scope != 1 {
+		t.Fatalf("repository scope limitation lines=%d", scope)
+	}
+}
+
+func TestBudgetTrimServesAnAnswerTrimmedToExactlyTheCeilingWithTheScopeLimitation(t *testing.T) {
+	shape := budgetTrimProdShape
+	shape.symmetric = true
+	shape.scoped = true
+	shape.findings = 13
+	shape.maxItems = 30
+	result, _ := budgetTrimServed(t, shape)
+	measurement, err := contractsv1.MeasureContextFabricResponse(result)
+	if err != nil || measurement.Items.Budgeted() != 30 || len(result.Cohort.Members) != 14 {
+		t.Fatalf("items=%d members=%d err=%v: want 14 members served at exactly the ceiling", measurement.Items.Budgeted(), len(result.Cohort.Members), err)
+	}
+	if budgetTrimTrimLines(result) != 1 {
+		t.Fatalf("limitations=%v", result.Limitations)
+	}
+}
+
+// The lever decides the fit on the document finalizeServed will serve, so a
+// byte ceiling that only the census repository-scope limitation breaks is
+// refused here, on the axis the first measurement saw, and not served and then
+// refused by the final assertion on bytes.
+func TestBudgetTrimDecidesTheFitOnTheScopedServedDocument(t *testing.T) {
+	plain, _ := budgetTrimServed(t, budgetTrimProdShape)
+	measurement, err := contractsv1.MeasureContextFabricResponse(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape := budgetTrimProdShape
+	shape.scoped = true
+	shape.maxBytes = measurement.Bytes + 20
+	_, err, _ = budgetTrimInvestigate(t, shape)
+	var refusal AnswerBudgetRefusal
+	if !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunItems {
+		t.Fatalf("err=%v refusal=%+v: want the items refusal the lever planned, not a byte refusal from the final assertion", err, refusal)
 	}
 }

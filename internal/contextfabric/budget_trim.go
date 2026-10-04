@@ -164,7 +164,7 @@ func (e *Engine) planBudgetTrim(
 		disclosed := cut
 		cut = e.finalizeResult(ctx, principal, disclosed, *plan, frame, facts, nil, pass, cardinality)
 		attempt.ClaimsAfter = served
-		trimmed, err := e.measureAssembledAttempt(ctx, principal, "budget_trim", measured.Allocation, cut, budget)
+		trimmed, err := e.measureAssembledAttempt(ctx, principal, "budget_trim", measured.Allocation, e.budgetTrimServedShape(ctx, cut), budget)
 		if err != nil {
 			if errors.Is(err, ErrItemAccounting) {
 				return attempt, err
@@ -189,4 +189,20 @@ func (e *Engine) planBudgetTrim(
 		return attempt, nil
 	}
 	return attempt, nil
+}
+
+// budgetTrimServedShape is the trimmed document in the state finalizeServed
+// will serve it: the server completeness correction applied, and the census
+// repository-scope limitation present when this call recorded one. Fitting
+// the budget is decided on that document, so the final route assertion cannot
+// refuse what this lever served. The correction only moves status and the
+// completeness block; it never adds a charged item.
+func (e *Engine) budgetTrimServedShape(ctx context.Context, result InvestigationResult) InvestigationResult {
+	if WorkItemCensusRepositoryScopeRecorded(ctx) {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricWorkItemCensusRepositoryScopeLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
+	result.Completeness = ComputeAnswerCompleteness(result)
+	return ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(result))
 }
