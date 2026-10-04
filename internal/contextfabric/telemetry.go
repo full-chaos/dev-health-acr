@@ -2808,6 +2808,7 @@ func (t SlogEngineTelemetry) RecordWorkItemTupleAdmission(ctx context.Context, p
 		"admitted", event.Admitted,
 		"stripped_obligations", obligationsLogValue(event.StrippedObligations),
 		"member_filter", SanitizeLogAttr(workItemMemberFilterLogValue(event.MemberFilter)),
+		"member_time_role", SanitizeLogAttr(workItemMemberTimeRoleLogValue(event.MemberTimeRole)),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric work item tuple admission settled", args...)

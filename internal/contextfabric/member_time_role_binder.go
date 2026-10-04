@@ -124,9 +124,11 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 	}
 	start, end := clauseBounds(question, window)
 	clause := question[start:end]
+	spanStart := window.SpanStart - start
 	var bound []BoundMemberTimeRole
 	seen := map[MemberTimeRole]bool{}
 	predicate := map[MemberTimeRole]bool{}
+	indeterminate := false
 	for _, entry := range memberTimeRoleRegistry {
 		for _, loc := range entry.pattern.FindAllStringIndex(clause, -1) {
 			if hyphenJoined(clause, loc[0], loc[1]) || wordRuneAdjacent(clause, loc[0], loc[1]) {
@@ -134,7 +136,11 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 			}
 			bound = append(bound, BoundMemberTimeRole{Role: entry.role, Grammar: entry.grammar, SpanStart: start + loc[0], SpanEnd: start + loc[1]})
 			seen[entry.role] = true
-			if !nounPhraseModifier(clause, loc[0], loc[1]) {
+			reading := copulaReading(clause, loc[0], loc[1], spanStart)
+			if reading == copulaIndeterminate {
+				indeterminate = true
+			}
+			if !nounPhraseModifier(clause, loc[0], loc[1]) && reading != copulaState {
 				predicate[entry.role] = true
 			}
 		}
@@ -148,6 +154,9 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 			}
 		}
 		bound = kept
+	}
+	if indeterminate {
+		return MemberTimeRoleOutcome{Reason: MemberTimeRoleAmbiguous, Bound: bound}
 	}
 	switch len(seen) {
 	case 0:
@@ -185,6 +194,62 @@ var nounPhraseOpening = regexp.MustCompile(`(?i)(?:^|\b(?:which|what|the|all|any
 // "closed issues in the last 30 days" still binds completed.
 func nounPhraseModifier(clause string, start, end int) bool {
 	return nounPhraseOpening.MatchString(clause[:start]) && workItemNounPhrase.MatchString(clause[end:])
+}
+
+// presentCopulaState matches what stands before a form that states the items'
+// present state: "is" or "are" (or "that's", "that're" and the like after a
+// relative pronoun), an optional adverb, then only coordinated forms ("are
+// created and closed").
+var presentCopulaState = regexp.MustCompile(`(?i)(?:\b(?:is|are)|\b(?:that|which|who)['’](?:s|re))\s+(?:(?:now|already|currently|still|all)\s+)?(?:(?:` + memberTimeRoleFormAlternation + `)\s+(?:(?:and|or)\s+)?)*$`)
+
+// leadsIntoWindow matches the text between a form and the window span when the
+// form governs the period: only coordinated forms, a preposition and a
+// determiner ("closed in the last 30 days", "created and closed in the").
+var leadsIntoWindow = regexp.MustCompile(`(?i)^(?:\s+(?:and|or)\s+(?:` + memberTimeRoleFormAlternation + `))*(?:\s+(?:in|within|during|over|for|from|since|across))?(?:\s+(?:the|this|these))?\s*$`)
+
+// followedByPredicate matches the text between a status form and the verb
+// that governs the period: only coordinated forms, then "was" or "were" and a
+// form ("closed were created", "created and closed were updated").
+var followedByPredicate = regexp.MustCompile(`(?i)^(?:\s+(?:and|or)\s+(?:` + memberTimeRoleFormAlternation + `))*(?:\s+and)?\s+(?:was|were)\s+(?:` + memberTimeRoleFormAlternation + `)\b`)
+
+// relativeMarker matches a word that opens a relative clause.
+var relativeMarker = regexp.MustCompile(`(?i)\b(?:that|which|who|whose)\b`)
+
+// interrogativeOpening matches a clause that opens with "which" or "what".
+var interrogativeOpening = regexp.MustCompile(`(?i)^\s*(?:which|what)\b`)
+
+type copulaFormReading uint8
+
+const (
+	// copulaNone: no present copula before the form, or the form leads into
+	// the period; the ordinary predicate and modifier rules decide it.
+	copulaNone copulaFormReading = iota
+	// copulaState: the form states the items' present status and the period
+	// belongs to the verb that follows it.
+	copulaState
+	// copulaIndeterminate: a present-copula form in any other shape. The
+	// binder does not guess its reading: the outcome is ambiguous.
+	copulaIndeterminate
+)
+
+// copulaReading reads a form after a present copula ("is/are closed") that
+// does not lead into the period. Only one shape is a status description: one
+// relative clause, the form, then "was/were" and the period's verb ("items
+// that are closed were created in the last 30 days"). Every other shape with a
+// present copula (an agent, an adverb after the form, a second relative
+// clause, an unlisted verb) fails closed as indeterminate.
+func copulaReading(clause string, start, end, spanStart int) copulaFormReading {
+	if end > spanStart || !presentCopulaState.MatchString(clause[:start]) || leadsIntoWindow.MatchString(clause[end:spanStart]) {
+		return copulaNone
+	}
+	markers := len(relativeMarker.FindAllStringIndex(clause[:start], -1))
+	if interrogativeOpening.MatchString(clause) {
+		markers--
+	}
+	if markers > 1 || !followedByPredicate.MatchString(clause[end:spanStart]) {
+		return copulaIndeterminate
+	}
+	return copulaState
 }
 
 func clauseBounds(question string, window BoundWindowSpan) (int, int) {
@@ -243,12 +308,17 @@ func isWordRune(r rune) bool {
 
 // memberTimeRoleClarificationLimitation is the one sentence that offers the
 // three readings of a period over work items. The answer is not guessed: the
-// caller names the reading and asks again.
-func memberTimeRoleClarificationLimitation() string {
+// caller names the reading and asks again. A question that named two readings
+// for the one period is told so; one that named none is told it did not say.
+func memberTimeRoleClarificationLimitation(reason MemberTimeRoleReason) string {
 	roles := MemberTimeRoleVocabulary()
 	names := make([]string, len(roles))
 	for i, role := range roles {
 		names[i] = string(role)
 	}
-	return "A period over work items can mean when they were " + strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1] + "; the question did not say which, so no members are listed. Ask again with one of those verbs, for example 'created in the last 30 days'."
+	finding := "the question did not say which"
+	if reason == MemberTimeRoleAmbiguous {
+		finding = "the question named more than one of them for the same period"
+	}
+	return "A period over work items can mean when they were " + strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1] + "; " + finding + ", so no members are listed. Ask again with one of those verbs, for example 'created in the last 30 days'."
 }

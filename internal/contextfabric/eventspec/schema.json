@@ -6626,6 +6626,19 @@
         ]
       },
       {
+        "key": "member_time_role",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_evaluated",
+          "no_verb",
+          "ambiguous",
+          "created",
+          "completed",
+          "updated"
+        ]
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",

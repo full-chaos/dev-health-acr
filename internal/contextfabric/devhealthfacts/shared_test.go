@@ -517,3 +517,12 @@ func TestQueryVersionMovedPastTheWithheldLabelNamedRepositoryCount(t *testing.T)
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when a count over a repository named by its label was withheld must not be reused", devhealthfacts.QueryVersion, versionBeforeTheLabelCount)
 	}
 }
+
+func TestQueryVersionMovedPastTheCopulaStatusMemberTimeRole(t *testing.T) {
+	t.Parallel()
+	for _, versionBeforeTheCopulaStatus := range []string{"devhealthfacts.clickhouse.v47", "devhealthfacts.clickhouse.v48", "devhealthfacts.clickhouse.v49", "devhealthfacts.clickhouse.v50", "devhealthfacts.clickhouse.v51", "devhealthfacts.clickhouse.v52", "devhealthfacts.clickhouse.v53"} {
+		if devhealthfacts.QueryVersion == versionBeforeTheCopulaStatus {
+			t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when a status after a present copula made the member time role ambiguous holds a refusal and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheCopulaStatus)
+		}
+	}
+}

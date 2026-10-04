@@ -307,7 +307,14 @@ import (
 // commit, an untruncated search and a complete alias lookup). A candidate
 // saved under v51 for such a question withholds the count and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v53"
+//
+// v53 -> v54: a work-item members period no longer reads a status stated after
+// a present copula ("items that are closed were created in the last 30 days")
+// as the period's time role, and a question that names two roles for one
+// period is told so, on a current frame as on a period frame. A candidate
+// saved under v53 for such a question holds a refusal or an unfiltered read and
+// must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v54"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

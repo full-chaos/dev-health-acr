@@ -3553,6 +3553,7 @@ type WorkItemTupleAdmissionFields struct {
 	Admitted            bool
 	StrippedObligations []string
 	MemberFilter        string
+	MemberTimeRole      string
 	RequestID           string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every WorkItemTupleAdmissionFields uniformly, set ONLY by NewWorkItemTupleAdmissionFields below. A caller
@@ -3567,7 +3568,7 @@ type WorkItemTupleAdmissionFields struct {
 
 // NewWorkItemTupleAdmissionFields is the generated constructor for WorkItemTupleAdmissionFields -- every
 // field WorkItemTupleAdmission.Fields declares is a required parameter.
-func NewWorkItemTupleAdmissionFields(orgID string, admitted bool, strippedObligations []string, memberFilter string, requestID string) WorkItemTupleAdmissionFields {
+func NewWorkItemTupleAdmissionFields(orgID string, admitted bool, strippedObligations []string, memberFilter string, memberTimeRole string, requestID string) WorkItemTupleAdmissionFields {
 	valid := true
 	if strippedObligations == nil {
 		valid = false
@@ -3577,6 +3578,7 @@ func NewWorkItemTupleAdmissionFields(orgID string, admitted bool, strippedObliga
 		Admitted:            admitted,
 		StrippedObligations: strippedObligations,
 		MemberFilter:        memberFilter,
+		MemberTimeRole:      memberTimeRole,
 		RequestID:           requestID,
 		constructed:         valid,
 	}
@@ -3599,6 +3601,7 @@ func (f WorkItemTupleAdmissionFields) SlogArgs() []any {
 		"admitted", f.Admitted,
 		"stripped_obligations", contextfabric.SanitizeLogStrings(f.StrippedObligations),
 		"member_filter", contextfabric.SanitizeLogAttr(f.MemberFilter),
+		"member_time_role", contextfabric.SanitizeLogAttr(f.MemberTimeRole),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
