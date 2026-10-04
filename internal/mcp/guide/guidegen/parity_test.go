@@ -144,7 +144,7 @@ func TestUnreachableFamiliesAreMarkedNotAnswerable(t *testing.T) {
 		if got := strings.Contains(section, "Not answerable today"); got != want && id != "Other tools" {
 			t.Errorf("family %s: not-answerable marker = %v, registry unreachable = %v", id, got, want)
 		}
-		if strings.Contains(section, "Tool: `investigate_question`") == want && id != "Other tools" {
+		if strings.Contains(section, "Tool: `investigate_question`") == want && id != "Other tools" && id != workItemMemberHeading {
 			t.Errorf("family %s: tool line disagrees with reachability", id)
 		}
 		seen++

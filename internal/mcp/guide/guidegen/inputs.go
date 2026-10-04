@@ -47,6 +47,10 @@ type Inputs struct {
 	Grammars          []GrammarRow
 	Windows           []string
 	Statuses          []string
+	// WorkItemStatuses is the closed work-item status set and MemberTimeRoles
+	// the closed time-role verbs a period over work-item members binds.
+	WorkItemStatuses []string
+	MemberTimeRoles  []contextfabric.MemberTimeRoleFormRow
 	// UnproducedRenderKinds are render kinds a family may name that no
 	// producer builds today.
 	UnproducedRenderKinds []string
@@ -116,6 +120,8 @@ func FromRegistries() Inputs {
 		string(contractsv1.ContextFabricInvestigationClarificationRequired),
 		string(contractsv1.ContextFabricInvestigationNoMatch),
 	}
+	in.WorkItemStatuses = contextfabric.WorkItemStatusVocabulary()
+	in.MemberTimeRoles = contextfabric.MemberTimeRoleFormRows()
 	in.DataOperations, in.DataNotServed = dataRegistryRows()
 	in.GraphQLRoots = dataGraphQLRoots()
 	for _, kind := range contractsv1.ContextFabricFactKindVocabulary() {

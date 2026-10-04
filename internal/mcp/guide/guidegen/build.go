@@ -128,6 +128,11 @@ func buildQuestions(in Inputs) (string, error) {
 		}
 		b.WriteString("\n")
 	}
+	section, err := workItemMemberSection(in)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(section)
 	b.WriteString("## Other tools\n\n")
 	b.WriteString("- `context_for_task`: an evidence-backed context packet for a coding task, scoped to a repository (see the tool schema). Use it for task context, not for organization, team, or project questions.\n")
 	b.WriteString("- `source_evidence`: expands one evidence reference from an answer. See `acr://guide/conversation`.\n")
