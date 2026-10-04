@@ -4073,7 +4073,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// know the former, so keying Save on the latter would reopen the
 		// same asymmetry from the other side.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
-		if err := e.saveResult(ctx, principal, BudgetAssertDecisive, result, reuseWatermarkSnapshot, reuseEpoch, RequestScopeTimeAxisKey(request, composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried))), binding.Epoch, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForDecisiveCapture, finalWorkItemTupleCensus(tupleCensus, result.Cohort)).withAnchorShadow(anchorShadow)); err != nil {
+		decisiveCapture := e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForDecisiveCapture, finalWorkItemTupleCensus(tupleCensus, result.Cohort)).withAnchorShadow(anchorShadow)
+		decisiveAxisKey := composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried))
+		if !workItemTupleSemanticState(decisiveCapture.Write.State) {
+			decisiveAxisKey = RequestScopeTimeAxisKey(request, decisiveAxisKey)
+		}
+		if err := e.saveResult(ctx, principal, BudgetAssertDecisive, result, reuseWatermarkSnapshot, reuseEpoch, decisiveAxisKey, binding.Epoch, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), decisiveCapture); err != nil {
 			// CHAOS-3927 P4 (design brief §2.1): a decisive result carrying
 			// confirmed structure can still lose the atomic (org,
 			// prior_result_id, member) supersession claim to a concurrent
