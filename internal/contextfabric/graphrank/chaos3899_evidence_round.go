@@ -1245,7 +1245,7 @@ func crossCheckFilteredCensus(ctx context.Context, narrow SatisfierNarrower, kin
 	kept, ok := narrow(ctx, kind, ids)
 	switch {
 	case !ok:
-		return ""
+		return "keyed_read_failed"
 	case len(kept) != len(ids):
 		return "outside_narrowing"
 	}
