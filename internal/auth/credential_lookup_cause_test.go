@@ -30,6 +30,9 @@ func TestCredentialLookupFailureNamesCauseAndFailsClosed(t *testing.T) {
 		{"canceled", fmt.Errorf("find credential: %w", context.Canceled), "INFO", "context_canceled", "caller_canceled"},
 		{"deadline", fmt.Errorf("find credential: %w", context.DeadlineExceeded), "ERROR", "deadline_exceeded", "credential_store"},
 		{"connection", connection, "ERROR", "connection_failure", "credential_store"},
+		{"connection exception", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08000", Class: "connection_exception"}), "ERROR", "connection_failure", "credential_store"},
+		{"connection does not exist", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08003", Class: "connection_does_not_exist"}), "ERROR", "connection_failure", "credential_store"},
+		{"non connection class", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "42501", Class: "insufficient_privilege"}), "ERROR", "other", "credential_store"},
 		{"other", errors.New("postgres://operator:secret@example"), "ERROR", "other", "credential_store"},
 	}
 	for _, tc := range cases {

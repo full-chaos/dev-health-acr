@@ -377,7 +377,7 @@ func credentialLookupCause(err error) string {
 		return credentialLookupCauseCanceled
 	case errors.Is(err, context.DeadlineExceeded):
 		return credentialLookupCauseDeadline
-	case errors.As(err, &class) && class.Class == "connection_failure":
+	case errors.As(err, &class) && (class.Class == "connection_failure" || strings.HasPrefix(class.SQLState, "08")):
 		return credentialLookupCauseConn
 	default:
 		return credentialLookupCauseOther
