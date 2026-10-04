@@ -276,7 +276,15 @@ import (
 // issues created last month") no longer competes with it. A candidate saved
 // under v46 for such a question holds a refusal or another role and must not
 // be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v47"
+//
+// v47 -> v48: canonical fact rows are served in one total order (a tie on
+// kind, subject and source is broken by the facts' own content, not by the
+// provider's row order), the readers' rows are sorted before facts are minted,
+// and the scalar shares of a theme mix are rounded to eleven significant digits.
+// A candidate saved under v47 carries facts in provider order and share values
+// with last-digit noise; its stored input no longer equals the input a fresh
+// read produces, so it must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v48"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

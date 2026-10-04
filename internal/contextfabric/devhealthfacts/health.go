@@ -392,7 +392,8 @@ FROM (
 	FROM compounding_risk_daily
 	WHERE org_id = {org_id:String} AND scope = '` + scope + `' AND scope_id IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
-WHERE rn = 1`)
+WHERE rn = 1
+ORDER BY scope_id`)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var scopeID, severity, computedAt, day string

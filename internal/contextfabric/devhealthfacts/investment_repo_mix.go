@@ -3,7 +3,9 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -166,7 +168,8 @@ FROM (
 	)
 	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
 )
-GROUP BY win, repo_uuid`)
+GROUP BY win, repo_uuid
+ORDER BY win, repo_uuid`)
 }
 
 // repoMixChunk bounds how many repositories one statement reads. Each
@@ -242,6 +245,31 @@ type repoThemeTotals struct {
 	// repos counts the repositories folded into a team total (0 for a
 	// single-repository total, where it is not meaningful).
 	repos int64
+}
+
+// mixEffortSignificantDigits is the declared precision of the shares an
+// investment mix serves as scalar fields (theme_*, theme_quality_bugfix and
+// the prior-window shares). ClickHouse sums Float64 in a thread-dependent
+// order, so the last digits of one persisted aggregate differ between two
+// reads of the same rows; served as-is they make the same question carry two
+// different inputs. The effort sums themselves (the theme_breakdown table,
+// which the client input does not carry) stay unrounded: the differential
+// oracle pins them to full precision. Eleven significant digits keeps a share
+// within 5e-11 relative of its exact value and far above the last-digit noise
+// (about 1e-16 relative): a rounding edge is crossed by noise with
+// probability near 1e-5 per value, never by a real change of the data.
+const mixEffortSignificantDigits = 11
+
+// roundMixEffort rounds v to mixEffortSignificantDigits significant digits.
+func roundMixEffort(v float64) float64 {
+	if v == 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return v
+	}
+	rounded, err := strconv.ParseFloat(strconv.FormatFloat(v, 'g', mixEffortSignificantDigits, 64), 64)
+	if err != nil {
+		return v
+	}
+	return rounded
 }
 
 func groupRepoMix(rows []repoMixRow) map[string]*repoThemeTotals {
@@ -322,9 +350,9 @@ func (p *InvestmentProvider) readRepositoryThemeMix(ctx context.Context, orgID s
 		}
 		fields := make(map[string]contextfabric.FactValue, 2*len(canonicalInvestmentThemes)+6)
 		for _, theme := range canonicalInvestmentThemes {
-			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(t.theme[theme] / total)
+			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(roundMixEffort(t.theme[theme] / total))
 		}
-		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(t.bugfix / total)
+		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(roundMixEffort(t.bugfix / total))
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(t.workUnits)
 		fields["mix_source"] = contextfabric.StringFactValue(repoMixSource)
 		fields["attribution_basis"] = contextfabric.StringFactValue(repoMixBasis)
@@ -384,7 +412,7 @@ func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string,
 // (ownedRepositoriesSource, CHAOS-7073 K11).
 func (p *InvestmentProvider) readTeamOwnedRepositories(ctx context.Context, orgID string, teamIDs []string, bound factTimeBound) (map[string][]string, error) {
 	statement := withRowLimit(`SELECT DISTINCT team_id, repo_key FROM ` +
-		ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)))
+		ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)) + "\nORDER BY team_id, repo_key")
 	extra := make([]readers.Binding, 0, 2)
 	for _, b := range bound.bindings() {
 		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
@@ -411,14 +439,16 @@ func sumOwnedRepoMix(owned map[string][]string, perRepo map[string]*repoThemeTot
 	for teamID, repos := range owned {
 		seen := map[string]bool{}
 		team := &repoThemeTotals{theme: map[string]float64{}}
-		for _, repoID := range repos {
+		orderedRepos := append([]string(nil), repos...)
+		sort.Strings(orderedRepos)
+		for _, repoID := range orderedRepos {
 			t, ok := perRepo[repoID]
 			if !ok || seen[repoID] {
 				continue
 			}
 			seen[repoID] = true
-			for theme, v := range t.theme {
-				team.theme[theme] += v
+			for _, theme := range canonicalInvestmentThemes {
+				team.theme[theme] += t.theme[theme]
 			}
 			team.bugfix += t.bugfix
 			team.repos++

@@ -133,6 +133,8 @@ type writeBackRouteRig struct {
 	facts     contextfabric.CanonicalFactBundle
 	outcome   contextfabric.StoredSubjectOutcome
 	factReads int
+	// delegate, when set, answers ReadFacts instead of the canned bundle.
+	delegate func(context.Context, storage.Principal, contextfabric.CanonicalFactRequest) (contextfabric.CanonicalFactBundle, error)
 }
 
 // now is the clock of the engine and of the graph's source observation. It
@@ -181,11 +183,15 @@ func (r *writeBackRouteRig) reads() int {
 	return r.factReads
 }
 
-func (r *writeBackRouteRig) ReadFacts(context.Context, storage.Principal, contextfabric.CanonicalFactRequest) (contextfabric.CanonicalFactBundle, error) {
+func (r *writeBackRouteRig) ReadFacts(ctx context.Context, principal storage.Principal, request contextfabric.CanonicalFactRequest) (contextfabric.CanonicalFactBundle, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.factReads++
-	return r.facts, nil
+	delegate, facts := r.delegate, r.facts
+	r.mu.Unlock()
+	if delegate != nil {
+		return delegate(ctx, principal, request)
+	}
+	return facts, nil
 }
 
 func newWriteBackRouteRig(t *testing.T) *writeBackRouteRig {
