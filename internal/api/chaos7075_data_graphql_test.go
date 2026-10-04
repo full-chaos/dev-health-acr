@@ -190,7 +190,7 @@ func TestChaos7075CatalogSchemaSectionPerCallerClass(t *testing.T) {
 		return out
 	}
 	u := section(unrestricted, h)
-	if u["available"] != true || len(roots(u)) != 14 || !strings.Contains(u["sdl"].(string), "type Query {") {
+	if u["available"] != true || len(roots(u)) != 13 || !strings.Contains(u["sdl"].(string), "type Query {") {
 		t.Fatalf("unrestricted: available=%v roots=%v", u["available"], roots(u))
 	}
 	if strings.Contains(u["sdl"].(string), "busFactor") || strings.Contains(u["sdl"].(string), "topMaintainers") {

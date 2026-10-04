@@ -287,7 +287,7 @@ func TestT13EveryPersonVariableRefusedAtTheEdge(t *testing.T) {
 
 // ---------------------------------------------------------------- T2
 
-// TestT2OrgIsolationEveryOperation: two organizations, all 19 operations.
+// TestT2OrgIsolationEveryOperation: two organizations, all 18 operations.
 // The orgId variable and X-DH-Internal-Org-Id are always the principal's
 // organization; the service never sees the other one.
 func TestT2OrgIsolationEveryOperation(t *testing.T) {

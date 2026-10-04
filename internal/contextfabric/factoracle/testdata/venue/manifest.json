@@ -779,54 +779,6 @@
       }
     },
     {
-      "shape": "securityAlerts/securityAlerts/all",
-      "variables": {
-        "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
-        },
-        "pagination": {
-          "first": 5
-        }
-      }
-    },
-    {
-      "shape": "securityAlerts/securityAlerts/branch:edges",
-      "variables": {
-        "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
-        },
-        "pagination": {
-          "first": 5
-        }
-      }
-    },
-    {
-      "shape": "securityAlerts/securityAlerts/branch:(root)",
-      "variables": {
-        "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
-        },
-        "pagination": {
-          "first": 5
-        }
-      }
-    },
-    {
-      "shape": "securityAlerts/securityAlerts/branch:pageInfo",
-      "variables": {
-        "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
-        },
-        "pagination": {
-          "first": 5
-        }
-      }
-    },
-    {
       "shape": "securityOverview/securityOverview/all",
       "variables": {
         "filters": {
@@ -1253,26 +1205,6 @@
       "code_read": [],
       "invalid": []
     },
-    "securityAlerts": {
-      "mode": "shape",
-      "listener": "operation_unavailable",
-      "shapes_run": 4,
-      "leaves": 0,
-      "compared": 0,
-      "matches": 0,
-      "by_class": {},
-      "findings": [],
-      "not_joined": [],
-      "run_operation": "served",
-      "operations_run": 1,
-      "operation_leaves": 97,
-      "cross_paths": 0,
-      "cross_matches": 0,
-      "differences": [],
-      "unmeasured": [],
-      "code_read": [],
-      "invalid": []
-    },
     "securityOverview": {
       "mode": "shape",
       "listener": "served",
@@ -1418,7 +1350,6 @@
     }
   },
   "listener_dark": [
-    "securityAlerts",
     "capacityForecast"
   ],
   "operation_dark": []
