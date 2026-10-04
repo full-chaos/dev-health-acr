@@ -655,7 +655,23 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricBudgetTrimLimitation(limitation) ||
 		IsContextFabricPathDropLimitation(limitation) ||
 		IsContextFabricWorkItemMemberFilterLimitation(limitation) ||
-		IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation)
+		IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation) ||
+		IsContextFabricStatedRangeConflictLimitation(limitation)
+}
+
+// ContextFabricStatedRangeConflictLimitation is served when a turn ran on the
+// period its question states while the interpretation carried a range that
+// differs from it. Dates are YYYY-MM-DD.
+func ContextFabricStatedRangeConflictLimitation(interpretedStart, interpretedEnd, statedStart, statedEnd string) string {
+	return "The interpretation sent with this question read its period as " + interpretedStart + " to " + interpretedEnd + ", which is not the period the question states; this answer uses the stated period, " + statedStart + " to " + statedEnd + "."
+}
+
+var statedRangeConflictLimitationPattern = regexp.MustCompile(`^The interpretation sent with this question read its period as \d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2}, which is not the period the question states; this answer uses the stated period, \d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2}\.$`)
+
+// IsContextFabricStatedRangeConflictLimitation reports whether one limitation
+// is that disclosure; it matches the whole sentence.
+func IsContextFabricStatedRangeConflictLimitation(limitation string) bool {
+	return statedRangeConflictLimitationPattern.MatchString(limitation)
 }
 
 // ContextFabricWorkItemCensusRepositoryScopeLimitation is served, in the same

@@ -315,9 +315,16 @@ import (
 // saved under v53 for such a question holds a refusal or an unfiltered read and
 // must not be reused.
 //
-// v54 -> v58: the first sentence of an answer states the status the answer is
+// v54 -> v55: on MCP, a question that states a trailing period ("in the last
+// 30 days") runs on the current axis with that question_stated window whatever
+// window class or range axis the interpretation carried, as the effective
+// window already committed it. A candidate saved under v54 for a supplied
+// range interpretation ran on the range axis with no window and must not be
+// reused.
+//
+// v55 -> v58: the first sentence of an answer states the status the answer is
 // served with, not the status the model draft carried. A candidate saved under
-// v54 can open with a stronger status than its own served status and must not
+// v55 can open with a stronger status than its own served status and must not
 // be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v58"
 
