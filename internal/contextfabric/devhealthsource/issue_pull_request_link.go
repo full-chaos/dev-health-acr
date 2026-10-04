@@ -150,7 +150,7 @@ WHERE l.org_id = {org_id:String}` + sincePredicate(cursor, "l.last_synced", rowK
 				IssuePullRequestLinkRankProperty: intScalar(rank),
 			},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-			Authorization: workItemAuthorization(issueRepoID, ""),
+			Authorization: repoAuthorization(prRepoSlug),
 			EvidenceRefIDs: []string{
 				contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, issueRepoID+":"+workItemID),
 				contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, prRepoID+":"+fmt.Sprint(number)),
