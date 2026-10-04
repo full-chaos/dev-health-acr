@@ -594,7 +594,9 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 	// 10: D.7 status.
 	completeness := op.Completeness(filtered.Data)
 	if cut != nil {
-		completeness = CompletenessDeclaredPartial
+		if completeness == CompletenessDeclaredComplete {
+			completeness = CompletenessUnknown
+		}
 		x.resp.Page.RowsReturned = cut.rowsReturned
 		x.resp.Page.RowsRead = cut.rowsRead
 		x.resp.Page.Cut = cut.statement(maxBytes)
