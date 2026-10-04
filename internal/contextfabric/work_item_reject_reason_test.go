@@ -61,20 +61,81 @@ func TestWorkItemTupleEveryValidatorRuleHasAToken(t *testing.T) {
 			}
 		case *ast.Ident:
 			if fun.Name == "workItemRuleErrorf" {
-				id, ok := call.Args[0].(*ast.Ident)
-				if !ok {
-					t.Errorf("rule argument at %v is not a declared constant", call.Pos())
-					return true
+				// The rule is a declared constant, or ruleForKind choosing between two.
+				candidates := []ast.Expr{call.Args[0]}
+				if pick, ok := call.Args[0].(*ast.CallExpr); ok {
+					if f, ok := pick.Fun.(*ast.Ident); !ok || f.Name != "ruleForKind" || len(pick.Args) != 3 {
+						t.Errorf("rule argument at %v is not a declared constant", call.Pos())
+						return true
+					}
+					candidates = pick.Args[1:]
 				}
-				value, ok := constNames[id.Name]
-				if !ok {
-					t.Errorf("rule %s at %v is not declared", id.Name, call.Pos())
+				for _, candidate := range candidates {
+					id, ok := candidate.(*ast.Ident)
+					if !ok {
+						t.Errorf("rule argument at %v is not a declared constant", call.Pos())
+						continue
+					}
+					value, ok := constNames[id.Name]
+					if !ok {
+						t.Errorf("rule %s at %v is not declared", id.Name, call.Pos())
+					}
+					used[value]++
 				}
-				used[value]++
 			}
 		}
 		return true
 	})
+	// Every error a validator function returns is nil, a rule error, or the
+	// error of another validator function of this file: a plain errors.New or
+	// an untyped helper cannot slip through as "unclassified".
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil || !(strings.HasPrefix(fn.Name.Name, "validateWorkItem") || fn.Name.Name == "ValidateWorkItemTuplePayload") {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.ReturnStmt:
+				for _, result := range node.Results {
+					switch expr := result.(type) {
+					case *ast.CallExpr:
+						if id, ok := expr.Fun.(*ast.Ident); ok && (id.Name == "workItemRuleErrorf" || id.Name == "workItemSubjectKey" || id.Name == "make" || strings.HasPrefix(id.Name, "validateWorkItem")) {
+							continue
+						}
+						if id, ok := expr.Fun.(*ast.Ident); ok && id.Name == "string" {
+							continue
+						}
+						if _, ok := expr.Fun.(*ast.SelectorExpr); ok {
+							continue // value-producing calls such as SubjectRef{}, maps
+						}
+						t.Errorf("%s returns the result of an untyped call at %v", fn.Name.Name, expr.Pos())
+					}
+				}
+			case *ast.AssignStmt:
+				for i, lhs := range node.Lhs {
+					id, ok := lhs.(*ast.Ident)
+					if !ok || id.Name != "err" || len(node.Rhs) == 0 {
+						continue
+					}
+					rhs := node.Rhs[0]
+					if len(node.Rhs) == len(node.Lhs) {
+						rhs = node.Rhs[i]
+					}
+					call, ok := rhs.(*ast.CallExpr)
+					fun, isIdent := ast.Expr(nil), false
+					if ok {
+						fun = call.Fun
+						_, isIdent = fun.(*ast.Ident)
+					}
+					if !ok || !isIdent || !strings.HasPrefix(fun.(*ast.Ident).Name, "validateWorkItem") {
+						t.Errorf("%s assigns err from something other than a validator function at %v", fn.Name.Name, node.Pos())
+					}
+				}
+			}
+			return true
+		})
+	}
 	for value := range declared {
 		if used[value] == 0 {
 			t.Errorf("rule token %q is declared but no validator rule produces it", value)
@@ -95,6 +156,8 @@ func TestWorkItemTupleRejectionNamesTheRule(t *testing.T) {
 		}, WorkItemRuleResultEvidenceOutsideMembers},
 		{"foreign label", func(r *InvestigationResult) { r.EvidenceRefLabels = map[string]string{"foreign": "x"} }, WorkItemRuleEvidenceLabelOutsideMembers},
 		{"no committed anchor", func(r *InvestigationResult) { r.SubjectResolution.Committed = nil }, WorkItemRuleAnchorCardinality},
+		{"driver without subject", func(r *InvestigationResult) { r.Drivers = []DriverJudgment{{}} }, WorkItemRuleDriverNoMemberSubject},
+		{"finding without subject", func(r *InvestigationResult) { r.RemainingWork = []Finding{{}} }, WorkItemRuleFindingNoMemberSubject},
 		{"relationship path", func(r *InvestigationResult) { r.Paths = []RelationshipPath{{}} }, WorkItemRuleRelationshipPaths},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

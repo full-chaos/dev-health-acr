@@ -265,13 +265,13 @@ func validateWorkItemClaims(claims []ClaimedFact, memberKeys map[string]struct{}
 		switch claim.Kind {
 		case FactStatus, FactWork:
 			if claim.Subject.Kind != SubjectWorkItem {
-				return nil, workItemRuleErrorf(WorkItemRuleClaimNotWorkItem, "work-item tuple %s claim is not about a retained work item", claim.Kind)
+				return nil, workItemRuleErrorf(ruleForKind(claim.Kind == FactStatus, WorkItemRuleStatusClaimNotWorkItem, WorkItemRuleWorkClaimNotWorkItem), "work-item tuple %s claim is not about a retained work item", claim.Kind)
 			}
 			if _, ok := memberKeys[workItemSubjectKey(claim.Subject)]; !ok {
-				return nil, workItemRuleErrorf(WorkItemRuleClaimOutsideMembers, "work-item tuple %s claim is outside retained members", claim.Kind)
+				return nil, workItemRuleErrorf(ruleForKind(claim.Kind == FactStatus, WorkItemRuleStatusClaimOutsideMembers, WorkItemRuleWorkClaimOutsideMembers), "work-item tuple %s claim is outside retained members", claim.Kind)
 			}
 			if workItemClaimCarriesTable(claim) {
-				return nil, workItemRuleErrorf(WorkItemRuleClaimTableData, "work-item tuple %s claim carries table data", claim.Kind)
+				return nil, workItemRuleErrorf(ruleForKind(claim.Kind == FactStatus, WorkItemRuleStatusClaimTableData, WorkItemRuleWorkClaimTableData), "work-item tuple %s claim carries table data", claim.Kind)
 			}
 			memberClaimIDs[claim.ClaimID] = struct{}{}
 		case contractsv1.ContextFabricFactCardinality:
@@ -304,21 +304,21 @@ func workItemClaimCarriesTable(claim ClaimedFact) bool {
 
 func validateWorkItemMemberReferences(subjects []SubjectRef, evidence, claims []string, memberKeys, memberEvidence, memberClaimIDs map[string]struct{}, kind string) error {
 	if len(subjects) == 0 {
-		return workItemRuleErrorf(WorkItemRuleReferenceNoMemberSubject, "work-item tuple %s has no retained member subject", kind)
+		return workItemRuleErrorf(ruleForKind(kind == "finding", WorkItemRuleFindingNoMemberSubject, WorkItemRuleDriverNoMemberSubject), "work-item tuple %s has no retained member subject", kind)
 	}
 	for _, subject := range subjects {
 		if _, ok := memberKeys[workItemSubjectKey(subject)]; !ok {
-			return workItemRuleErrorf(WorkItemRuleReferenceSubjectOutsideMembers, "work-item tuple %s names subject %q outside retained members", kind, subject.CanonicalID)
+			return workItemRuleErrorf(ruleForKind(kind == "finding", WorkItemRuleFindingSubjectOutsideMembers, WorkItemRuleDriverSubjectOutsideMembers), "work-item tuple %s names subject %q outside retained members", kind, subject.CanonicalID)
 		}
 	}
 	for _, ref := range evidence {
 		if _, ok := memberEvidence[ref]; !ok {
-			return workItemRuleErrorf(WorkItemRuleReferenceEvidenceOutsideMembers, "work-item tuple %s evidence reference %q is outside retained members", kind, ref)
+			return workItemRuleErrorf(ruleForKind(kind == "finding", WorkItemRuleFindingEvidenceOutsideMembers, WorkItemRuleDriverEvidenceOutsideMembers), "work-item tuple %s evidence reference %q is outside retained members", kind, ref)
 		}
 	}
 	for _, claimID := range claims {
 		if _, ok := memberClaimIDs[claimID]; !ok {
-			return workItemRuleErrorf(WorkItemRuleReferenceClaimOutsideMembers, "work-item tuple %s cites claim %q outside member FactStatus/FactWork claims", kind, claimID)
+			return workItemRuleErrorf(ruleForKind(kind == "finding", WorkItemRuleFindingClaimOutsideMembers, WorkItemRuleDriverClaimOutsideMembers), "work-item tuple %s cites claim %q outside member FactStatus/FactWork claims", kind, claimID)
 		}
 	}
 	return nil
@@ -355,19 +355,26 @@ const (
 	WorkItemRuleMemberEvidenceNotCanonical      WorkItemTupleRule = "member_evidence_not_canonical"
 	WorkItemRuleClaimWithoutId                  WorkItemTupleRule = "claim_without_id"
 	WorkItemRuleClaimRepeated                   WorkItemTupleRule = "claim_repeated"
-	WorkItemRuleClaimNotWorkItem                WorkItemTupleRule = "claim_not_work_item"
-	WorkItemRuleClaimOutsideMembers             WorkItemTupleRule = "claim_outside_members"
-	WorkItemRuleClaimTableData                  WorkItemTupleRule = "claim_table_data"
+	WorkItemRuleStatusClaimNotWorkItem          WorkItemTupleRule = "status_claim_not_work_item"
+	WorkItemRuleWorkClaimNotWorkItem            WorkItemTupleRule = "work_claim_not_work_item"
+	WorkItemRuleStatusClaimOutsideMembers       WorkItemTupleRule = "status_claim_outside_members"
+	WorkItemRuleWorkClaimOutsideMembers         WorkItemTupleRule = "work_claim_outside_members"
+	WorkItemRuleStatusClaimTableData            WorkItemTupleRule = "status_claim_table_data"
+	WorkItemRuleWorkClaimTableData              WorkItemTupleRule = "work_claim_table_data"
 	WorkItemRuleCardinalityClaimRepeated        WorkItemTupleRule = "cardinality_claim_repeated"
 	WorkItemRuleCardinalityClaimNoOrg           WorkItemTupleRule = "cardinality_claim_no_org"
 	WorkItemRuleCardinalityClaimNotAnchor       WorkItemTupleRule = "cardinality_claim_not_anchor"
 	WorkItemRuleCardinalityClaimValue           WorkItemTupleRule = "cardinality_claim_value"
 	WorkItemRuleCardinalityClaimTableData       WorkItemTupleRule = "cardinality_claim_table_data"
 	WorkItemRuleClaimKindUnsupported            WorkItemTupleRule = "claim_kind_unsupported"
-	WorkItemRuleReferenceNoMemberSubject        WorkItemTupleRule = "reference_no_member_subject"
-	WorkItemRuleReferenceSubjectOutsideMembers  WorkItemTupleRule = "reference_subject_outside_members"
-	WorkItemRuleReferenceEvidenceOutsideMembers WorkItemTupleRule = "reference_evidence_outside_members"
-	WorkItemRuleReferenceClaimOutsideMembers    WorkItemTupleRule = "reference_claim_outside_members"
+	WorkItemRuleFindingNoMemberSubject          WorkItemTupleRule = "finding_no_member_subject"
+	WorkItemRuleDriverNoMemberSubject           WorkItemTupleRule = "driver_no_member_subject"
+	WorkItemRuleFindingSubjectOutsideMembers    WorkItemTupleRule = "finding_subject_outside_members"
+	WorkItemRuleDriverSubjectOutsideMembers     WorkItemTupleRule = "driver_subject_outside_members"
+	WorkItemRuleFindingEvidenceOutsideMembers   WorkItemTupleRule = "finding_evidence_outside_members"
+	WorkItemRuleDriverEvidenceOutsideMembers    WorkItemTupleRule = "driver_evidence_outside_members"
+	WorkItemRuleFindingClaimOutsideMembers      WorkItemTupleRule = "finding_claim_outside_members"
+	WorkItemRuleDriverClaimOutsideMembers       WorkItemTupleRule = "driver_claim_outside_members"
 )
 
 // WorkItemTupleRuleNone is the persistence line's token beside a save that was
@@ -402,20 +409,37 @@ func WorkItemTupleRules() []WorkItemTupleRule {
 		WorkItemRuleMemberEvidenceNotCanonical,
 		WorkItemRuleClaimWithoutId,
 		WorkItemRuleClaimRepeated,
-		WorkItemRuleClaimNotWorkItem,
-		WorkItemRuleClaimOutsideMembers,
-		WorkItemRuleClaimTableData,
+		WorkItemRuleStatusClaimNotWorkItem,
+		WorkItemRuleWorkClaimNotWorkItem,
+		WorkItemRuleStatusClaimOutsideMembers,
+		WorkItemRuleWorkClaimOutsideMembers,
+		WorkItemRuleStatusClaimTableData,
+		WorkItemRuleWorkClaimTableData,
 		WorkItemRuleCardinalityClaimRepeated,
 		WorkItemRuleCardinalityClaimNoOrg,
 		WorkItemRuleCardinalityClaimNotAnchor,
 		WorkItemRuleCardinalityClaimValue,
 		WorkItemRuleCardinalityClaimTableData,
 		WorkItemRuleClaimKindUnsupported,
-		WorkItemRuleReferenceNoMemberSubject,
-		WorkItemRuleReferenceSubjectOutsideMembers,
-		WorkItemRuleReferenceEvidenceOutsideMembers,
-		WorkItemRuleReferenceClaimOutsideMembers,
+		WorkItemRuleFindingNoMemberSubject,
+		WorkItemRuleDriverNoMemberSubject,
+		WorkItemRuleFindingSubjectOutsideMembers,
+		WorkItemRuleDriverSubjectOutsideMembers,
+		WorkItemRuleFindingEvidenceOutsideMembers,
+		WorkItemRuleDriverEvidenceOutsideMembers,
+		WorkItemRuleFindingClaimOutsideMembers,
+		WorkItemRuleDriverClaimOutsideMembers,
 	}
+}
+
+// ruleForKind picks between the two rule tokens a shared check can fire as,
+// so the record names the output field (finding or driver) or the claim kind
+// (status or work) that was refused.
+func ruleForKind(first bool, a, b WorkItemTupleRule) WorkItemTupleRule {
+	if first {
+		return a
+	}
+	return b
 }
 
 // workItemRuleError is a validator rejection that names its rule.
