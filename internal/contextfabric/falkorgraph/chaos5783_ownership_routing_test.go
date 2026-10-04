@@ -96,6 +96,8 @@ func TestDiscoverContextRoutesRepositoryAnchoredTeamCohortThroughOwnership(t *te
 			nullCarrying := fakeSubjectNodeRow("team", "team:null", "No Ownership Signal")
 			nullCarrying["n"].(*node).Properties[propAuthzRepos] = []string{"acr-context-fabric:no-team-repository-ownership"}
 			return []row{inferredOwner, providerOwner, proximateNonOwner, nullCarrying}, nil
+		case isOwnershipEdgeRead(params):
+			return nil, nil
 		default:
 			t.Fatalf("hopWalk must not run for a repository anchor whose member kind is team -- ownership routing serves it instead; got cypher: %s", cypher)
 			return nil, nil
@@ -189,6 +191,8 @@ func TestDiscoverContextTruncatedOwnershipCensusMakesTheCohortIncomplete(t *test
 			return nil, nil
 		case strings.Contains(cypher, "$kinds"):
 			return overLimitRows, nil
+		case isOwnershipEdgeRead(params):
+			return nil, nil
 		default:
 			t.Fatal("hopWalk must not run for the routed anchor")
 			return nil, nil
@@ -510,6 +514,8 @@ func TestDiscoverContextOwnershipRoutingRecognizesACanonicalIDCommit(t *testing.
 			owner := fakeSubjectNodeRow("team", "team:CHAOS", "Fullchaos")
 			owner["n"].(*node).Properties[propAuthzRepos] = []string{"full-chaos/dev-health-acr"}
 			return []row{owner}, nil
+		case isOwnershipEdgeRead(params):
+			return nil, nil
 		default:
 			t.Fatalf("hopWalk must not run for a canonical-id-committed repository anchor -- ownership routing serves it exactly as it would a term-matched one; got cypher: %s", cypher)
 			return nil, nil
@@ -592,4 +598,10 @@ func TestDiscoverContextOwnershipRoutingUnboundCommitStillHopWalks(t *testing.T)
 	if result.CohortMemberSource != contextfabric.CohortMemberSourceHopWalk {
 		t.Fatalf("CohortMemberSource = %q, want %q", result.CohortMemberSource, contextfabric.CohortMemberSourceHopWalk)
 	}
+}
+
+// isOwnershipEdgeRead reports the read of a repository's ownership edges, the
+// one graph read ownership routing makes beside its census.
+func isOwnershipEdgeRead(params map[string]interface{}) bool {
+	return params["fromKind"] == string(contextfabric.SubjectRepository) && params["toKind"] == string(contextfabric.SubjectTeam)
 }

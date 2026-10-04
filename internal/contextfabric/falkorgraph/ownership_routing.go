@@ -1,6 +1,11 @@
 package falkorgraph
 
-import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+import (
+	"context"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
 
 // OwnershipRoutingOutcome is the closed outcome of one team-members discovery
 // over a named anchor with respect to ownership routing.
@@ -53,4 +58,25 @@ func ownershipRoutingOutcome(owners int, err error) OwnershipRoutingOutcome {
 	default:
 		return OwnershipRoutingNoOwner
 	}
+}
+
+// repositoryOwnersStep reads the teams a repository's ownership edges name.
+var repositoryOwnersStep = walkStep{
+	fromKind: contractsv1.ContextFabricSubjectRepository, toKind: contractsv1.ContextFabricSubjectTeam,
+	relation: contractsv1.ContextFabricRelationshipOwnedByTeam, direction: walkOut,
+}
+
+// repositoryOwningTeams returns the canonical ids of the teams the
+// repository's OWNED_BY_TEAM edges name, bounded as the ownership census is;
+// a cut read is reported.
+func (a *Adapter) repositoryOwningTeams(ctx context.Context, key, orgID, repositoryID string, temporal temporalFilter) (map[string]bool, bool, error) {
+	hits, cut, err := a.walkStepHits(ctx, key, orgID, []string{repositoryID}, repositoryOwnersStep, temporal, exactNameCandidateQueryLimit)
+	if err != nil {
+		return nil, false, err
+	}
+	owners := make(map[string]bool, len(hits))
+	for _, h := range hits {
+		owners[canonicalIDOf(h.to)] = true
+	}
+	return owners, cut, nil
 }

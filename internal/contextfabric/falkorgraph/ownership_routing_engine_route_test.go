@@ -83,3 +83,22 @@ func TestACrowdOfTeamsTheQuestionTextMatchesDoesNotCrowdOutTheOwner(t *testing.T
 		t.Fatalf("cohort = %+v, want a complete cohort", answer.result.Cohort)
 	}
 }
+
+// TestAnOwnerOverTheRepositoryListBoundIsServedThroughTheEngine: a team that
+// owns more repositories than its repository list can hold carries a sentinel
+// in place of the list; the repository's own ownership edge still names it.
+func TestAnOwnerOverTheRepositoryListBoundIsServedThroughTheEngine(t *testing.T) {
+	s := seedOwnedRepository()
+	s.nodes = append(s.nodes, seededNode{kind: "team", id: "team:large", label: "large", repos: []string{"acr-context-fabric:team-repository-ownership-over-bound"}})
+	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", routeOwnedRepository, "team", "team:large"})
+	answer := askOwningTeams(t, s, storage.Principal{OrgID: "org-1"})
+	if got := answer.members(); strings.Join(got, ",") != "team:large,team:owner" {
+		t.Fatalf("served %v, want both owners: the over-bound owner through the repository's ownership edge, the other through its list", got)
+	}
+	if !answer.result.Cohort.Complete {
+		t.Fatalf("cohort = %+v, want complete", answer.result.Cohort)
+	}
+	if len(answer.walkLines) != 1 || answer.walkLines[0]["owners"] != float64(2) {
+		t.Fatalf("ownership lines = %v, want one line with 2 owners", answer.walkLines)
+	}
+}

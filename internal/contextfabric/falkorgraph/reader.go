@@ -631,6 +631,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	shapeAnchorEligible, censusBasis := cohortExactNameCensusEligibility(request.Frame, request.ScopeAnchorResolved)
 	censusAdmitted := shapeAnchorEligible && len(request.Resolution.Committed) == 0
 	var ownershipRoutedRepoSlug string
+	var ownershipRoutedRepoID string
 	ownershipAnchorBasis := AnchorBasisNone
 	if declaredCohortKindForRouting == contextfabric.SubjectTeam {
 		for _, subject := range request.Resolution.Committed {
@@ -649,6 +650,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			// never route through ownership on that repository's account.
 			if subject.Kind == contextfabric.SubjectRepository && subject.Label != "" && frameAnchorBound(request.Frame, subject, request.Resolution, request.Bases) {
 				ownershipRoutedRepoSlug = subject.Label
+				ownershipRoutedRepoID = subject.CanonicalID
 				ownershipAnchorBasis = AnchorBasisBound
 				break
 			}
@@ -659,6 +661,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if ownershipRoutedRepoSlug == "" {
 			if anchor, ok := contextfabric.OwnershipCohortAnchor(request.Frame, request.Resolution, request.ScopeAnchorKind); ok {
 				ownershipRoutedRepoSlug = anchor.Label
+				ownershipRoutedRepoID = anchor.CanonicalID
 				ownershipAnchorBasis = AnchorBasisSoleCommit
 			}
 		}
@@ -803,9 +806,26 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	if ownershipRoutedRepoSlug != "" {
 		cohortMemberSource = contextfabric.CohortMemberSourceOwnership
 		ownershipNodes, truncated, ownershipErr := a.cohortKindCensusCandidates(ctx, key, principal.OrgID, []string{string(contextfabric.SubjectTeam)}, temporal)
+		// A team's repository list is bounded: a team that owns more
+		// repositories than the bound carries a sentinel in place of the
+		// list. The repository's own ownership edges name every owner, so a
+		// team either source names owns the repository.
+		var edgeOwners map[string]bool
+		if ownershipErr == nil {
+			var edgesCut bool
+			edgeOwners, edgesCut, ownershipErr = a.repositoryOwningTeams(ctx, key, principal.OrgID, ownershipRoutedRepoID, temporal)
+			truncated = truncated || edgesCut
+		}
+		ownsAnchor := func(n graphrank.CandidateNode) bool {
+			if graphrank.OwnsRepository(n.Attributes, ownershipRoutedRepoSlug) {
+				return true
+			}
+			subject, ok := graphrank.NodeSubject(n)
+			return ok && edgeOwners[subject.CanonicalID]
+		}
 		owners := 0
 		for _, n := range ownershipNodes {
-			if graphrank.OwnsRepository(n.Attributes, ownershipRoutedRepoSlug) {
+			if ownsAnchor(n) {
 				owners++
 			}
 		}
@@ -838,7 +858,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			// POOL-MEMBERSHIP question, answered once here from the node's
 			// own declared signal, independently of whatever the caller may
 			// additionally be authorized to see.
-			if !graphrank.OwnsRepository(n.Attributes, ownershipRoutedRepoSlug) {
+			if !ownsAnchor(n) {
 				continue
 			}
 			nk := graphrank.SubjectKey(subject)

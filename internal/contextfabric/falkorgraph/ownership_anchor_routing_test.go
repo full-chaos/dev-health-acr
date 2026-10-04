@@ -510,3 +510,59 @@ func TestAnOwnershipRoutedDiscoveryStillWalksTheEdgesOfWhatTheQuestionTextMatche
 		}
 	}
 }
+
+// ownershipEdgeConn answers the ownership census with census and the
+// repository's ownership edge read with edges teams (or err).
+func ownershipEdgeConn(census []row, edges int, err error) *fakeConn {
+	return &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "$kinds"):
+			return census, nil
+		case params["fromKind"] == string(contextfabric.SubjectRepository) && params["toKind"] == string(contextfabric.SubjectTeam):
+			if err != nil {
+				return nil, err
+			}
+			limit, _ := params["limit"].(int)
+			var rows []row
+			for i := 0; i < edges && i < limit; i++ {
+				rows = append(rows, row{
+					"id": ownedRepository().CanonicalID,
+					"b":  teamRow(fmt.Sprintf("team:edge-%04d", i), "acr-context-fabric:team-repository-ownership-over-bound")["n"],
+					"r":  &edge{Properties: map[string]interface{}{propRelationType: "OWNED_BY_TEAM", propRelationshipID: fmt.Sprintf("rel_%04d", i)}},
+				})
+			}
+			return rows, nil
+		}
+		return nil, nil
+	}}
+}
+
+// TestACutOwnershipEdgeReadIsACutCensus: owners past the edge read's bound may
+// exist, so the cohort does not read complete.
+func TestACutOwnershipEdgeReadIsACutCensus(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, ownershipEdgeConn([]row{teamRow("team:one", ownedSlug)}, exactNameCandidateQueryLimit+1, nil), telemetry)
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, namedByLabelRequest(contextfabric.SubjectRepository, true))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(telemetry.ownershipRoutings) != 1 || !telemetry.ownershipRoutings[0].Truncated {
+		t.Fatalf("decisions = %+v, want one decision recording the cut", telemetry.ownershipRoutings)
+	}
+	if result.Cohort == nil || result.Cohort.Complete {
+		t.Fatalf("cohort = %+v, want the owner in a cohort that does not read complete", result.Cohort)
+	}
+}
+
+// TestAFailedOwnershipEdgeReadFailsTheCall: the edge read is part of the
+// ownership read, so its failure is the read's.
+func TestAFailedOwnershipEdgeReadFailsTheCall(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, ownershipEdgeConn([]row{teamRow("team:one", ownedSlug)}, 0, errors.New("connection reset")), telemetry)
+	if _, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, namedByLabelRequest(contextfabric.SubjectRepository, true)); err == nil {
+		t.Fatal("DiscoverContext() error = nil, want the failed edge read")
+	}
+	if len(telemetry.ownershipRoutings) != 1 || telemetry.ownershipRoutings[0].Outcome != OwnershipRoutingReadFailed {
+		t.Fatalf("decisions = %+v, want one read_failed decision", telemetry.ownershipRoutings)
+	}
+}
