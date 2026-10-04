@@ -98,18 +98,6 @@ func admittedLinkTiers() []interface{} {
 	return out
 }
 
-// authorityLinkTiers are the admitted tiers whose link admits a
-// repository-less issue.
-func authorityLinkTiers() []interface{} {
-	out := []interface{}{}
-	for _, t := range linkTiers {
-		if t.grantsAuthority {
-			out = append(out, t.name)
-		}
-	}
-	return out
-}
-
 // linkTierOf reads the tier of a stored link edge: its row of the table, or
 // false when the edge has no tier or one the table does not list.
 func linkTierOf(rl *edge) (linkTier, bool) {
@@ -282,6 +270,11 @@ type treeWalkState struct {
 	principal    storage.Principal
 	scope        contextfabric.RequestedScope
 	collectLimit int
+	// reachable holds the repository-less issues of the link read whose
+	// current project reaches a granted repository through ownership
+	// (reachProjects). It is shared by reference between the copies of the
+	// state; nil when the walk reads no link.
+	reachable map[string]bool
 }
 
 func (s treeWalkState) authorized(n *node) bool {
@@ -291,12 +284,15 @@ func (s treeWalkState) authorized(n *node) bool {
 // admitted is the work-item rule at a position inside a link read: an issue
 // with a repository of its own is decided by that repository, through a link
 // of any tier. A repository-less issue is admitted by its link to a pull
-// request the caller is granted (the other end of the same row), and for a
-// repository-restricted caller only when that link's tier grants authority
-// (native). An unrestricted caller needs no authority from a link.
+// request the caller is granted (the other end of the same row). For a
+// repository-restricted caller that needs one of two grounds: the link's tier
+// grants authority (native), or the issue's own project is owned by a team
+// that owns a granted repository (reachable, the library's project-ownership
+// path). A link of a lower tier never grants by itself. An unrestricted caller
+// needs no authority from a link.
 func (s treeWalkState) admitted(position treePosition, n *node, tier linkTier) bool {
 	if position == treeIssue && repositoryLess(n) {
-		return tier.grantsAuthority || !s.narrowed()
+		return tier.grantsAuthority || !s.narrowed() || s.reachable[canonicalIDOf(n)]
 	}
 	return s.authorized(n)
 }
@@ -543,11 +539,13 @@ func newRepositoryGrants(scopes []string) repositoryGrants {
 // necessary condition of the rule the walk applies to each row (admitted), so
 // it drops no row the caller could see, and rows the caller cannot see do not
 // fill the pages before the ones it can. An issue with no repository is kept
-// only on a link of a tier that grants authority, as the per-row rule has it.
+// on a link of any tier: whether its link grants, or its project reaches a
+// granted repository, is decided per row (admitted), after the page's one
+// issue -> project read, so the pushdown never drops a row that rule admits.
 func (v treeNodeVar) grantClause() string {
 	clause := fmt.Sprintf("ANY(s IN %s.%s WHERE s IN $grantRaw OR toLower(trim(s)) IN $grantNorm OR ANY(o IN $grantOwners WHERE toLower(trim(s)) STARTS WITH o))", v.name, propAuthzRepos)
 	if v.position == treeIssue {
-		clause = fmt.Sprintf("(%s OR ($noRepository IN %s.%s AND rl.%s IN $authorityTiers))", clause, v.name, propAuthzRepos, propPropertyPrefix+linkTierProperty)
+		clause = fmt.Sprintf("(%s OR $noRepository IN %s.%s)", clause, v.name, propAuthzRepos)
 	}
 	return " AND " + clause
 }
@@ -624,7 +622,6 @@ func linkSegmentGrants(params map[string]interface{}, principal storage.Principa
 	grants := newRepositoryGrants(principal.RepositoryScopes)
 	params["grantRaw"], params["grantNorm"], params["grantOwners"] = grants.raw, grants.norm, grants.owners
 	params["noRepository"] = noRepositoryScope
-	params["authorityTiers"] = authorityLinkTiers()
 	return params
 }
 
@@ -669,6 +666,8 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	cypher := linkSegmentCypher(feed, link, temporal, restricted)
 	seen := map[string]bool{}
 	admitted := map[string]*node{}
+	state.reachable = map[string]bool{}
+	checked := map[string]bool{}
 	out.endTiers = map[string]string{}
 	// ends are the admitted far-side nodes in the read's order: strongest
 	// link tier first, so a cut keeps the higher tiers.
@@ -685,6 +684,11 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		rows, err := a.api.query(ctx, key, cypher, params, true)
 		if err != nil {
 			return nil, nil, safeDependencyError("walk the entity tree", err)
+		}
+		if restricted {
+			if err := a.reachProjects(ctx, key, orgID, state, rows, feed, link, checked, temporal); err != nil {
+				return nil, nil, err
+			}
 		}
 		for _, r := range rows {
 			near, _ := r["m"].(*node)
@@ -721,6 +725,62 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		}
 	}
 	return ends, admitted, nil
+}
+
+// issueProjectHop is the tree's own hop from an issue to its project.
+func issueProjectHop() treeHop {
+	for _, e := range entityTree {
+		if e.child == treeIssue && e.parent == treeProject {
+			return hopOf(e, treeIssue)
+		}
+	}
+	panic("falkorgraph: the entity tree has no issue -> project edge")
+}
+
+// reachProjects decides, for one page of link rows, which repository-less
+// issues on a row whose tier does not grant are reached through their current
+// project: ONE batched read of their BELONGS_TO_PROJECT hits (walkStepHits),
+// under the adapter clock, the presence edge's own view. A project node the
+// read returns carries its ownership reach in place of the "*" wildcard
+// (withProjectReach, project_reach.go), so the same predicate every project
+// walk applies (authorized) says whether the project meets the caller's
+// grants. An issue with any such project is marked in state.reachable. A
+// context with no reach leaves the wildcard, which the predicate denies.
+func (a *Adapter) reachProjects(ctx context.Context, key, orgID string, state treeWalkState, rows []row, feed, link treeHop, checked map[string]bool, temporal temporalFilter) error {
+	var ids []string
+	candidate := func(position treePosition, n *node, tier linkTier) {
+		if position != treeIssue || n == nil || tier.grantsAuthority || !repositoryLess(n) {
+			return
+		}
+		if id := canonicalIDOf(n); id != "" && !checked[id] {
+			checked[id] = true
+			ids = append(ids, id)
+		}
+	}
+	for _, r := range rows {
+		tier, isLink := linkTierOf(asEdge(r["rl"]))
+		if !isLink {
+			continue
+		}
+		near, _ := r["m"].(*node)
+		far, _ := r["b"].(*node)
+		candidate(feed.to, near, tier)
+		candidate(link.to, far, tier)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	sort.Strings(ids)
+	hits, _, err := a.walkStepHits(ctx, key, orgID, ids, issueProjectHop().step, currentOwnership(temporal, a.now()), 0)
+	if err != nil {
+		return err
+	}
+	for _, h := range hits {
+		if state.authorized(h.to) {
+			state.reachable[h.from] = true
+		}
+	}
+	return nil
 }
 
 // anchorDeploymentMembers returns the deployments a named anchor reaches on

@@ -100,19 +100,25 @@ type oracleException struct {
 	reason      string
 }
 
+const oracleReasonPresenceVsColumn = "PV presence vs own project column: the graph reads an issue's project from project_membership_presence, the library from work_items.project_id"
+
 // oracleExceptions are the DESIGNED differences between the two rules, by
 // principal name. Each is asserted exactly.
 var oracleExceptions = map[string]oracleException{
-	// E1 project ownership. The library authorizes a repository-less item
-	// through its project's owning team when that team owns a granted
-	// repository (path project_ownership). The graph walk admits a
-	// repository-less issue ONLY through a native link to a granted pull
-	// request (tree_walk.go admitted); it does not model that path. The item
-	// below is project-owned by a team owning acme/svc and linked to an acme/svc
-	// pull request by explicit_text only.
-	"[acme/svc]":   {libraryOnly: []string{"linear:CHAOS-14"}, reason: "E1 project ownership is a library authorization path the graph walk does not model"},
-	"[ACME/Svc]":   {libraryOnly: []string{"linear:CHAOS-14"}, reason: "E1 project ownership is a library authorization path the graph walk does not model"},
-	"[acme/*]":     {libraryOnly: []string{"linear:CHAOS-14"}, reason: "E1 project ownership is a library authorization path the graph walk does not model"},
+	// E1 (project ownership) is no longer a difference: the graph walk admits
+	// a repository-less issue through a project owned by a team that owns a
+	// granted repository, as the library does, so G equals L on linear:CHAOS-14.
+	//
+	// PV presence vs own project column. The graph reaches an issue's project
+	// over BELONGS_TO_PROJECT, which the producer reads from
+	// project_membership_presence (a transition history wins over the column);
+	// the library reads the item's own work_items.project_id. When the two
+	// name different projects the rules differ, in both directions:
+	//   linear:CHAOS-16: presence project is owned, own project_id is not (graph admits);
+	//   linear:CHAOS-17: own project_id is owned, presence project is not (library admits).
+	"[acme/svc]":   {graphOnly: []string{"linear:CHAOS-16"}, libraryOnly: []string{"linear:CHAOS-17"}, reason: oracleReasonPresenceVsColumn},
+	"[ACME/Svc]":   {graphOnly: []string{"linear:CHAOS-16"}, libraryOnly: []string{"linear:CHAOS-17"}, reason: oracleReasonPresenceVsColumn},
+	"[acme/*]":     {graphOnly: []string{"linear:CHAOS-16"}, libraryOnly: []string{"linear:CHAOS-17"}, reason: oracleReasonPresenceVsColumn},
 	"[acme/other]": {libraryOnly: []string{"gh:acme/other#4"}, reason: "E2 anchor gate: the graph walk requires the anchor repository and its pull request nodes to be authorized for the caller, so a caller without acme/svc gets nothing; the library has no anchor and authorizes the issue by its own repository acme/other"},
 	// E3 requested scope. The library ANDs the requested selector into every
 	// authorization path, and the requested selector needs the item's OWN
@@ -121,7 +127,7 @@ var oracleExceptions = map[string]oracleException{
 	// a requested scope, native link or not. The graph admits a repository-less
 	// issue through a native link to a pull request of the requested repository.
 	// STATIC READING: confirm on the first live run.
-	"unrestricted+requested[acme/svc]": {graphOnly: []string{"linear:CHAOS-10", "jira:PROJ-11"}, reason: "E3 requested scope: library requires the item's own repository to match the requested selector; the graph admits repository-less issues through a native link"},
+	"unrestricted+requested[acme/svc]": {graphOnly: []string{"linear:CHAOS-10", "jira:PROJ-11"}, reason: "E3 requested scope (removed by CHAOS-8694, which carries the requested scope into the walk): library requires the item's own repository to match the requested selector; the graph admits repository-less issues through a native link"},
 }
 
 func oracleCanonical(t *testing.T, repoID, workItemID string) string {
@@ -303,23 +309,27 @@ func TestChaos8667RepositoryWorkItemMembersGraphAgreesWithLibraryRule(t *testing
 	// proj-p1 (Linear) is owned by team-svc, which owns acme/svc.
 	exec("project", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'linear', NULL, 'P1', 1, 'started', '', ?)`, "proj-p1", oracleOrg, now)
 	exec("team project ownership", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'linear', 'team-svc', ?, NULL, 'native', ?, NULL, ?)`, oracleOrg, "proj-p1", created, now)
+	exec("project unowned", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'linear', NULL, 'Unowned', 1, 'started', '', ?)`, "proj-unowned", oracleOrg, now)
+	exec("team", `INSERT INTO teams (id, name, updated_at, org_id, provider, is_active) VALUES ('team-svc', 'Team Svc', ?, ?, 'linear', 1)`, now, oracleOrg)
 	exec("team repo ownership", `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'github', 'team-svc', ?, ?, 'exact', 'inferred', 0, 0, 0, ?, NULL, ?)`, oracleOrg, repoIDs["svc"], oracleAnchor, created, now)
 
 	items := []oracleItem{
-		{"gh:acme/svc#1", "svc", "github", "issue", ""},        // own repo, native
-		{"gh:acme/svc#2", "svc", "github", "issue", ""},        // own repo, heuristic
-		{"gh:acme/svc#8", "svc", "github", "issue", ""},        // own repo, explicit_text
-		{"gitlab:acme/gl-proj#3", "gl", "gitlab", "issue", ""}, // gitlab own repo, native
-		{"linear:CHAOS-10", "", "linear", "issue", ""},         // repository-less, native
-		{"jira:PROJ-11", "", "jira", "story", ""},              // repository-less, native
-		{"linear:CHAOS-12", "", "linear", "issue", ""},         // repository-less, explicit_text ONLY
-		{"jira:PROJ-13", "", "jira", "story", ""},              // repository-less, heuristic ONLY
-		{"gh:acme/other#4", "other", "github", "issue", ""},    // another repository's issue, native to an acme/svc PR
-		{"linear:CHAOS-14", "", "linear", "issue", "proj-p1"},  // repository-less, project-owned, explicit_text ONLY
-		{"gh:acme/svc#6", "svc", "github", "pr", ""},           // a pull request typed work item: never a member
-		{"gh:acme/svc#7", "svc", "github", "issue", ""},        // no link at all
-		{"gh:acme/other#9", "other", "github", "issue", ""},    // linked to a pull request of acme/other only
-		{"linear:CHAOS-15", "", "linear", "issue", ""},         // repository-less, native to a pull request of acme/other only
+		{"gh:acme/svc#1", "svc", "github", "issue", ""},            // own repo, native
+		{"gh:acme/svc#2", "svc", "github", "issue", ""},            // own repo, heuristic
+		{"gh:acme/svc#8", "svc", "github", "issue", ""},            // own repo, explicit_text
+		{"gitlab:acme/gl-proj#3", "gl", "gitlab", "issue", ""},     // gitlab own repo, native
+		{"linear:CHAOS-10", "", "linear", "issue", ""},             // repository-less, native
+		{"jira:PROJ-11", "", "jira", "story", ""},                  // repository-less, native
+		{"linear:CHAOS-12", "", "linear", "issue", ""},             // repository-less, explicit_text ONLY
+		{"jira:PROJ-13", "", "jira", "story", ""},                  // repository-less, heuristic ONLY
+		{"gh:acme/other#4", "other", "github", "issue", ""},        // another repository's issue, native to an acme/svc PR
+		{"linear:CHAOS-14", "", "linear", "issue", "proj-p1"},      // repository-less, project-owned, explicit_text ONLY
+		{"linear:CHAOS-16", "", "linear", "issue", "proj-unowned"}, // PV (i): own project unowned, presence project owned, explicit_text ONLY
+		{"linear:CHAOS-17", "", "linear", "issue", "proj-p1"},      // PV (ii): own project owned, presence project unowned, explicit_text ONLY
+		{"gh:acme/svc#6", "svc", "github", "pr", ""},               // a pull request typed work item: never a member
+		{"gh:acme/svc#7", "svc", "github", "issue", ""},            // no link at all
+		{"gh:acme/other#9", "other", "github", "issue", ""},        // linked to a pull request of acme/other only
+		{"linear:CHAOS-15", "", "linear", "issue", ""},             // repository-less, native to a pull request of acme/other only
 	}
 	itemRepo := map[string]string{}
 	for _, i := range items {
@@ -342,10 +352,19 @@ func TestChaos8667RepositoryWorkItemMembersGraphAgreesWithLibraryRule(t *testing
 		{"jira:PROJ-13", "svc", 2, "heuristic"},
 		{"gh:acme/other#4", "svc", 1, "native"},
 		{"linear:CHAOS-14", "svc", 1, "explicit_text"},
+		{"linear:CHAOS-16", "svc", 1, "explicit_text"},
+		{"linear:CHAOS-17", "svc", 2, "explicit_text"},
 		{"gh:acme/svc#6", "svc", 1, "native"},
 		{"linear:GHOST-1", "svc", 1, "native"}, // no work item row
 		{"gh:acme/other#9", "other", 1, "native"},
 		{"linear:CHAOS-15", "other", 1, "native"},
+	}
+	// Presence history that disagrees with the item's own project column
+	// (the presence view prefers the transition history for a subject that
+	// has one): CHAOS-16 joined the owned project, CHAOS-17 the unowned one.
+	for i, m := range []struct{ item, project string }{{"linear:CHAOS-16", "proj-p1"}, {"linear:CHAOS-17", "proj-unowned"}} {
+		exec(fmt.Sprintf("membership transition %d", i), `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id, ingested_at) VALUES (?, NULL, ?, 'work_item', ?, 'linear', '', ?, '', '', '', ?, ?, ?, ?)`,
+			oracleOrg, oracleZeroRepo, m.item, m.project, created, now, fmt.Sprintf("pv-%d", i), now)
 	}
 	for i, l := range links {
 		exec(fmt.Sprintf("link %d", i), `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -372,7 +391,7 @@ func TestChaos8667RepositoryWorkItemMembersGraphAgreesWithLibraryRule(t *testing
 	for _, c := range []struct {
 		table string
 		want  int
-	}{{"repos", 3}, {"git_pull_requests", len(pulls)}, {"work_items", len(items)}, {"work_graph_issue_pr", len(links)}, {"team_repo_ownership", 1}, {"team_project_ownership", 1}, {"projects", 1}} {
+	}{{"repos", 3}, {"git_pull_requests", len(pulls)}, {"work_items", len(items)}, {"work_graph_issue_pr", len(links)}, {"team_repo_ownership", 1}, {"team_project_ownership", 1}, {"projects", 2}, {"teams", 1}, {"project_membership_transitions", 2}} {
 		if got := count("SELECT count() FROM " + c.table + " FINAL WHERE org_id = ?"); got != uint64(c.want) {
 			t.Fatalf("seed: %s has %d rows, want %d", c.table, got, c.want)
 		}
@@ -537,6 +556,20 @@ WHERE w.org_id = {org_id:String}
 			if !results[name][0][id] || !results[name][1][id] {
 				t.Errorf("%s: native repository-less %s must be a member on both paths (G=%t L=%t)", name, id, results[name][0][id], results[name][1][id])
 			}
+		}
+	}
+	// E1 is gone: the project-owned, text-linked repository-less issue is a
+	// member on BOTH paths for every caller granted acme/svc.
+	for _, name := range []string{"[acme/svc]", "[ACME/Svc]", "[acme/*]"} {
+		id := "linear:CHAOS-14"
+		if !results[name][0][id] || !results[name][1][id] {
+			t.Errorf("%s: project-owned %s must be a member on both paths (G=%t L=%t)", name, id, results[name][0][id], results[name][1][id])
+		}
+		if !results[name][0]["linear:CHAOS-16"] || results[name][1]["linear:CHAOS-16"] {
+			t.Errorf("%s: PV (i) linear:CHAOS-16 must be graph-only (G=%t L=%t)", name, results[name][0]["linear:CHAOS-16"], results[name][1]["linear:CHAOS-16"])
+		}
+		if results[name][0]["linear:CHAOS-17"] || !results[name][1]["linear:CHAOS-17"] {
+			t.Errorf("%s: PV (ii) linear:CHAOS-17 must be library-only (G=%t L=%t)", name, results[name][0]["linear:CHAOS-17"], results[name][1]["linear:CHAOS-17"])
 		}
 	}
 }

@@ -130,17 +130,18 @@ func TestTheLinkReadAdmitsOnlyTheTiersOfTheTable(t *testing.T) {
 // TestARestrictedLinkReadKeepsOnlyLinksTheGrantsCanAdmit pins the grant clause
 // of a restricted caller's link read, and its absence for any other caller:
 // the pull request must meet the grants, and the issue must, or have no
-// repository and be linked by a tier that grants authority.
+// repository (any tier: the per-row rule decides by the link's tier or the
+// issue's project reach, so the pushdown never drops a row it admits).
 func TestARestrictedLinkReadKeepsOnlyLinksTheGrantsCanAdmit(t *testing.T) {
 	feed, link := projectLinkHops(t)
 	repos := func(v string) string {
 		return "ANY(s IN " + v + ".authorization_repositories WHERE s IN $grantRaw OR toLower(trim(s)) IN $grantNorm OR ANY(o IN $grantOwners WHERE toLower(trim(s)) STARTS WITH o))"
 	}
-	clause := repos("b") + " AND (" + repos("m") + " OR ($noRepository IN m.authorization_repositories AND rl.property_link_provenance IN $authorityTiers))"
+	clause := repos("b") + " AND (" + repos("m") + " OR $noRepository IN m.authorization_repositories)"
 	if got := linkSegmentCypher(feed, link, temporalFilter{}, true); !strings.Contains(got, clause) {
 		t.Errorf("restricted link read = %q, want the grant clause", got)
 	}
-	if got := linkSegmentCypher(feed, link, temporalFilter{}, false); strings.Contains(got, "$grant") || strings.Contains(got, "$authorityTiers") {
+	if got := linkSegmentCypher(feed, link, temporalFilter{}, false); strings.Contains(got, "$grant") || strings.Contains(got, "$noRepository") {
 		t.Errorf("unrestricted link read = %q, want no grant clause", got)
 	}
 }
