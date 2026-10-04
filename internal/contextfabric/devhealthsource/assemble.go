@@ -188,6 +188,7 @@ func (p sourcePlan) nextBatchPage(ctx context.Context, checkpoint contextfabric.
 		// From scratch (first run, or a rebuild's reset checkpoint): what
 		// this process emitted before describes a graph that is gone.
 		p.window.reset(p.windowScope)
+		p.ignored.flush(ctx, p.logger, p.source, orgID, "abandoned")
 		return p.fullSnapshot(ctx, orgID)
 	}
 	state, err := decodeCursor(checkpoint.Cursor)
@@ -202,6 +203,7 @@ func (p sourcePlan) nextBatchPage(ctx context.Context, checkpoint contextfabric.
 		// new space. Idempotent, and it recovers rows the old space skipped.
 		state = cursorState{}
 		p.window.reset(p.windowScope)
+		p.ignored.flush(ctx, p.logger, p.source, orgID, "abandoned")
 	}
 	p.window.settle(p.windowScope, state.Ack)
 	state.Ack = ""

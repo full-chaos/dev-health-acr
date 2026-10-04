@@ -560,7 +560,10 @@ func (l *ignoredLedger) add(orgID, relationshipType string, n int) {
 
 // flush logs and clears the org's totals when a call ends without publishing
 // a batch because the pass is over (caught up) or failed (an error). A
-// skip-page yield does not flush: the pass continues on the next tick. A count can repeat across
+// skip-page yield or an unfinished overlap walk does not flush: the pass
+// continues on the next tick. A from-scratch or position-space-reset call
+// flushes the pending count as "abandoned" before it re-reads, so a rebuild's
+// pass never inherits it and it is never silently dropped. A count can repeat across
 // an errored pass and its retry: it is rows read, not unique rows.
 func (l *ignoredLedger) flush(ctx context.Context, logger *slog.Logger, sourceName, orgID, passOutcome string) {
 	if l == nil || logger == nil {
