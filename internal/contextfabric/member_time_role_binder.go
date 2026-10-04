@@ -134,7 +134,7 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 			}
 			bound = append(bound, BoundMemberTimeRole{Role: entry.role, Grammar: entry.grammar, SpanStart: start + loc[0], SpanEnd: start + loc[1]})
 			seen[entry.role] = true
-			if !nounPhraseModifier(clause[loc[1]:]) {
+			if !nounPhraseModifier(clause, loc[0], loc[1]) {
 				predicate[entry.role] = true
 			}
 		}
@@ -158,25 +158,33 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 	return MemberTimeRoleOutcome{Reason: MemberTimeRoleAmbiguous, Bound: bound}
 }
 
-// workItemNounPhrase matches the head noun that directly follows a form which
-// then modifies it ("closed issues", "new work items"): the closed noun list.
-// Another form may sit between them ("new closed issues"), so a run of forms
-// before the noun is one noun phrase.
-var workItemNounPhrase = func() *regexp.Regexp {
+// The form list shared by the two noun-phrase checks.
+var memberTimeRoleFormAlternation = func() string {
 	var forms []string
 	for _, entry := range memberTimeRoleRegistry {
 		forms = append(forms, entry.forms...)
 	}
-	return regexp.MustCompile(`(?i)^(?:\s+(?:` + strings.Join(forms, "|") + `))*\s+(?:work\s+)?(?:items?|issues?|tickets?|tasks?|bugs?|stor(?:y|ies)|epics?)\b`)
+	return strings.Join(forms, "|")
 }()
 
-// nounPhraseModifier reports a form that sits in the noun phrase as its
-// pre-nominal modifier: it describes the items, it does not say when the
-// period applies. A modifier binds the role only when no predicate form in the
-// clause does, so "closed issues created in the last 30 days" binds created,
-// while a lone "closed issues in the last 30 days" still binds completed.
-func nounPhraseModifier(rest string) bool {
-	return workItemNounPhrase.MatchString(rest)
+// workItemNounPhrase matches what follows a pre-nominal modifier: the head
+// noun of the closed noun list, optionally after other forms ("new closed
+// issues") and "work".
+var workItemNounPhrase = regexp.MustCompile(`(?i)^(?:\s+(?:` + memberTimeRoleFormAlternation + `))*\s+(?:work\s+)?(?:items?|issues?|tickets?|tasks?|bugs?|stor(?:y|ies)|epics?)\b`)
+
+// nounPhraseOpening matches what must stand before a modifier: the start of
+// the clause or a word that opens a noun phrase, then only other forms. A form
+// after a verb or a noun ("items opened tickets", "created and closed issues")
+// is not at the opening of a noun phrase, so it is a predicate form.
+var nounPhraseOpening = regexp.MustCompile(`(?i)(?:^|\b(?:which|what|the|all|any|these|those|of|among|show|list|count|many|my|our|their|a|an)\s+)(?:(?:` + memberTimeRoleFormAlternation + `)\s+)*$`)
+
+// nounPhraseModifier reports a form that opens a noun phrase and modifies its
+// head noun: it describes the items, it does not say when the period applies.
+// A modifier binds the role only when no predicate form in the clause does, so
+// "closed issues created in the last 30 days" binds created, while a lone
+// "closed issues in the last 30 days" still binds completed.
+func nounPhraseModifier(clause string, start, end int) bool {
+	return nounPhraseOpening.MatchString(clause[:start]) && workItemNounPhrase.MatchString(clause[end:])
 }
 
 func clauseBounds(question string, window BoundWindowSpan) (int, int) {

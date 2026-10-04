@@ -490,8 +490,10 @@ func TestQueryVersionMovedPastTheProximityOwnershipTeams(t *testing.T) {
 
 func TestQueryVersionMovedPastTheClauseOnlyMemberTimeRole(t *testing.T) {
 	t.Parallel()
-	const versionBeforeTheNounPhraseRole = "devhealthfacts.clickhouse.v46"
-	if devhealthfacts.QueryVersion == versionBeforeTheNounPhraseRole {
+	for _, versionBeforeTheNounPhraseRole := range []string{"devhealthfacts.clickhouse.v44", "devhealthfacts.clickhouse.v45", "devhealthfacts.clickhouse.v46"} {
+		if devhealthfacts.QueryVersion != versionBeforeTheNounPhraseRole {
+			continue
+		}
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when a modifier of the item noun made the member time role ambiguous holds a refusal and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheNounPhraseRole)
 	}
 }

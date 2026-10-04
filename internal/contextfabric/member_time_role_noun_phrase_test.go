@@ -10,6 +10,7 @@ func TestMemberTimeRoleBinderReadsTheNounPhraseNotJustTheClause(t *testing.T) {
 	}{
 		{"Which closed issues were created in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCreated},
 		{"Which new work items were closed in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCompleted},
+		{"Show all the closed issues created in the last 30 days", MemberTimeRoleBound, MemberTimeRoleCreated},
 		{"Which done tickets were updated in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleUpdated},
 		{"Which updated issues were created in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCreated},
 		{"List the opened bugs closed in the last 30 days", MemberTimeRoleBound, MemberTimeRoleCompleted},
@@ -22,6 +23,10 @@ func TestMemberTimeRoleBinderReadsTheNounPhraseNotJustTheClause(t *testing.T) {
 		{"Which closed issues were created and updated in the last 30 days?", MemberTimeRoleAmbiguous, ""},
 		{"Which new closed issues exist in the last 30 days?", MemberTimeRoleAmbiguous, ""},
 		{"Which issues were created and closed in the last 30 days?", MemberTimeRoleAmbiguous, ""},
+		// a predicate verb with a work-item object is still a predicate
+		{"Which work items opened tickets and were updated in the last 30 days?", MemberTimeRoleAmbiguous, ""},
+		{"Which work items closed issues and were created in the last 30 days?", MemberTimeRoleAmbiguous, ""},
+		{"Which created and closed issues exist in the last 30 days?", MemberTimeRoleAmbiguous, ""},
 		// a form not directly before a noun is a verb, even beside a noun
 		{"Which issues were closed tickets in the last 30 days?", MemberTimeRoleBound, MemberTimeRoleCompleted},
 	}
