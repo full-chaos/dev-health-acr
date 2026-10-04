@@ -692,7 +692,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		var walkTruncated bool
 		var err error
 		if deploymentAnchor != nil && subject == *deploymentAnchor {
-			var walk projectDeploymentWalk
+			var walk treeWalk
 			walk, err = a.anchorDeploymentMembers(ctx, key, principal.OrgID, principal, scope, subject, collectLimit, temporal)
 			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
 			outcome := projectDeploymentWalkOutcome(walk, needsProjectReach(principal), err)
@@ -701,14 +701,14 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 				case ProjectDeploymentWalkDenied:
 					projectDeploymentsDenied = 0
 				case ProjectDeploymentWalkUnlinked:
-					projectDeploymentsUnlinked = walk.issues
+					projectDeploymentsUnlinked = walk.linkSources
 				}
 			}
 			if a.config.Telemetry != nil {
 				a.config.Telemetry.RecordProjectDeploymentWalk(ctx, principal.OrgID, ProjectDeploymentWalkDecision{
 					Outcome: outcome, AnchorKind: subject.Kind, AnchorBasis: deploymentAnchorBasis,
 					Committed: len(request.Resolution.Committed),
-					Issues:    walk.issues, LinkedPullRequests: walk.linkedPullRequests, Members: len(walk.nodes), Denied: walk.denied,
+					Issues:    walk.linkSources, LinkedPullRequests: walk.linkTargets, Members: len(walk.nodes), Denied: walk.denied,
 					Truncated: walk.truncated, Err: err,
 				})
 			}

@@ -91,13 +91,13 @@ func TestLiveAPullRequestWithoutATypeIsNotALinkOnTheProjectWalk(t *testing.T) {
 		t.Fatalf("effectiveKey() error = %v", err)
 	}
 	for windowName, temporal := range walkWindows(time.Now().UTC()) {
-		typed, err := adapter.projectDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, projects["typed"], 25, temporal)
-		if err != nil || len(typed.nodes) != 1 || typed.linkedPullRequests != 1 || typed.truncated {
-			t.Fatalf("%s, typed: walk = %d members, %d links, truncated %v, error %v; want 1 member, only the typed link, uncut", windowName, len(typed.nodes), typed.linkedPullRequests, typed.truncated, err)
+		typed, err := adapter.anchorDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, projects["typed"], 25, temporal)
+		if err != nil || len(typed.nodes) != 1 || typed.linkTargets != 1 || typed.truncated {
+			t.Fatalf("%s, typed: walk = %d members, %d links, truncated %v, error %v; want 1 member, only the typed link, uncut", windowName, len(typed.nodes), typed.linkTargets, typed.truncated, err)
 		}
-		typeless, err := adapter.projectDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, projects["typeless"], 25, temporal)
-		if err != nil || len(typeless.nodes) != 0 || typeless.linkedPullRequests != 0 || typeless.truncated {
-			t.Fatalf("%s, typeless: walk = %d members, %d links, truncated %v, error %v; want no member, no link, uncut", windowName, len(typeless.nodes), typeless.linkedPullRequests, typeless.truncated, err)
+		typeless, err := adapter.anchorDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, projects["typeless"], 25, temporal)
+		if err != nil || len(typeless.nodes) != 0 || typeless.linkTargets != 0 || typeless.truncated {
+			t.Fatalf("%s, typeless: walk = %d members, %d links, truncated %v, error %v; want no member, no link, uncut", windowName, len(typeless.nodes), typeless.linkTargets, typeless.truncated, err)
 		}
 		if outcome := projectDeploymentWalkOutcome(typeless, false, nil); outcome != ProjectDeploymentWalkUnlinked {
 			t.Fatalf("%s, typeless: outcome = %q, want unlinked", windowName, outcome)
