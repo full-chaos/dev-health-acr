@@ -290,7 +290,13 @@ import (
 // items than the census cap commits the one work item in the narrowed
 // repositories. A candidate saved under v48 for such a question is a
 // clarification and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v49"
+//
+// v49 -> v50: every LIMIT read of the fact store orders its rows by a total
+// order (newest first on the time column, then the natural key) before the
+// row limit cuts, so a question with more matching rows than the limit is
+// served the same rows on every call. A candidate saved under v49 may hold a
+// different arbitrary cut and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v50"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
