@@ -17,6 +17,9 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"fmt"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -205,4 +208,66 @@ func SemanticStatePersistenceLineVocabulary(key string) []string {
 	default:
 		return tokens(nil)
 	}
+}
+
+// TerminalSaveOutcome is the closed outcome of a terminal save that did not
+// reach storage.
+type TerminalSaveOutcome string
+
+// TerminalSaveSkippedPayloadRejected: the strict work-item tuple validator
+// refused the terminal's reading, so the answer is served and not stored.
+const TerminalSaveSkippedPayloadRejected TerminalSaveOutcome = "skipped_payload_rejected"
+
+// TerminalSaveOutcomeVocabulary is the closed outcome list the event spec reads.
+func TerminalSaveOutcomeVocabulary() []string {
+	return []string{string(TerminalSaveSkippedPayloadRejected), continuationTelemetryUnrecognised}
+}
+
+// TerminalSaveSkippedEvent records one terminal answer served without a stored copy.
+type TerminalSaveSkippedEvent struct {
+	ResultID string
+	Site     BudgetAssertStage
+	Outcome  TerminalSaveOutcome
+}
+
+// saveTerminalResult is saveResult for the exits that serve a terminal answer
+// (clarification, refusal, no match). A payload the strict work-item tuple
+// validator rejects loses only the stored copy: the answer was already
+// correct and measured, so it is served with a fixed disclosure that it was
+// not saved, and the skip is recorded at ERROR. The validator is not
+// weakened and every other save error (database, constraint, supersession)
+// still returns. A served answer with members never comes through here.
+func (e *Engine) saveTerminalResult(
+	ctx context.Context, principal storage.Principal, site BudgetAssertStage, result *InvestigationResult,
+	plan *AnswerPlan, budget ResponseBudget,
+	watermark SourceWatermarkSnapshot, epoch RebuildEpoch, timeAxisKey string, graphEpoch int64, parentResultID string,
+	capture semanticStateCapture,
+) error {
+	// The not-saved disclosure is bytes in the served document, so the served
+	// form is measured again after it is added (finalizeServed is the one
+	// measurement point). Declared before the save so the budget quantifier
+	// sees the measurement is not skipped on this path.
+	remeasure := func() error {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricTerminalNotSavedLimitation})
+		degraded := *result
+		degraded.Limitations = composed
+		degraded.LimitationsDisplaced += displaced
+		degraded, err := e.finalizeServed(ctx, principal, site, degraded, plan, budget)
+		if err != nil {
+			return err
+		}
+		if err := ValidateResult(degraded); err != nil {
+			return stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+		}
+		*result = degraded
+		return nil
+	}
+	err := e.saveResult(ctx, principal, site, *result, watermark, epoch, timeAxisKey, graphEpoch, parentResultID, capture)
+	if !errors.Is(err, errWorkItemTuplePayloadRejected) {
+		return err
+	}
+	if e.telemetry != nil {
+		e.telemetry.RecordTerminalSaveSkipped(ctx, principal, TerminalSaveSkippedEvent{ResultID: result.ResultID, Site: site, Outcome: TerminalSaveSkippedPayloadRejected})
+	}
+	return remeasure()
 }

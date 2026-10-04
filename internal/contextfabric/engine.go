@@ -998,6 +998,9 @@ type EngineTelemetry interface {
 	// per Save, from the engine's one Save site. Content-safe: closed
 	// values, slot ids and counts; never retrieval terms.
 	RecordSemanticStatePersistence(ctx context.Context, principal storage.Principal, event SemanticStatePersistenceEvent)
+	// RecordTerminalSaveSkipped reports a terminal answer served without a
+	// stored copy (saveTerminalResult), at ERROR.
+	RecordTerminalSaveSkipped(ctx context.Context, principal storage.Principal, event TerminalSaveSkippedEvent)
 	// RecordAnchorBindingTransition reports ONE shadow anchor binding
 	// decision: once per Save and once per reuse serve.
 	RecordAnchorBindingTransition(ctx context.Context, principal storage.Principal, event AnchorBindingTransitionEvent)

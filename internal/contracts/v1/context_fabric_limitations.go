@@ -566,6 +566,11 @@ const ContextFabricSubjectIdentityUnconfirmedLimitation = "This follow-up appear
 // a reader and no number: the counts are on the telemetry line.
 const ContextFabricSynthesisInputBoundedLimitation = "Only part of the facts read for this question was given to answer synthesis, because the full set is larger than the model input limit. The answer may not reflect every fact that was read."
 
+// ContextFabricTerminalNotSavedLimitation is the sentence a terminal answer
+// (clarification, refusal, no match) carries when the server could not store
+// its reading. The answer itself stands; what is lost is the stored copy.
+const ContextFabricTerminalNotSavedLimitation = "This answer could not be saved, so it cannot be fetched again by its result id and a follow-up cannot build on it. Ask the question again to continue."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -601,6 +606,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricOrganizationScopeUnsupportedLimitation,
 		ContextFabricSubjectIdentityUnconfirmedLimitation,
 		ContextFabricSynthesisInputBoundedLimitation,
+		ContextFabricTerminalNotSavedLimitation,
 	}
 }
 

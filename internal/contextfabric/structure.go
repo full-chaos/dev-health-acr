@@ -1442,7 +1442,7 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {
-		if err := e.saveResult(ctx, principal, BudgetAssertStructureVeto, result, nil, nil, TimeAxisKeyFor(request.TimeContext), binding.Epoch, ancestryParent, semantic); err != nil {
+		if err := e.saveTerminalResult(ctx, principal, BudgetAssertStructureVeto, &result, plan, e.effectiveResponseBudget(request), nil, nil, TimeAxisKeyFor(request.TimeContext), binding.Epoch, ancestryParent, semantic); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}
