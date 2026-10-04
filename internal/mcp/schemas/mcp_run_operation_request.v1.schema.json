@@ -37,7 +37,7 @@
     },
     "max_bytes": {
       "type": "integer",
-      "description": "Upper bound for the size of the returned data in bytes. 0 or absent means the default, 32768; the largest is 262144. A list answer over the bound is cut to whole rows that fit, and page.cut says how many rows were returned of how many were read and what size returns every row. An answer that does not fit with one row of each list is refused with response_budget: ask for less (a shorter window, a lower limit) instead.",
+      "description": "Upper bound for the size of the returned data in bytes. 0 or absent means the default, 32768; the largest is 262144. An operation with one list of rows and a limit variable is cut to the whole rows that fit, and page.cut says how many rows were returned of how many were read and what size returns every row. Any other data over the bound is refused with response_budget, never cut: ask for less (a shorter window, a lower limit) instead.",
       "minimum": 0,
       "maximum": 262144
     }

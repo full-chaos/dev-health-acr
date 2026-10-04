@@ -2,7 +2,7 @@
  "call": "served",
  "completeness": "unknown",
  "result": "data",
- "operation": "compoundingRisk",
+ "operation": "hotspots",
  "source": {
   "path": "graphql",
   "service": "dho query-api",
@@ -16,25 +16,42 @@
   "forced_by_grant": true
  },
  "data": {
-  "compoundingRisk": {
-   "breakout": "REPO",
+  "hotspots": {
    "rows": [
     {
-     "day": "2026-09-27",
-     "scope": "REPO",
-     "scopeId": "7b9583ee-1111-4222-8333-444455556666",
-     "scopeLabel": "acme/payments",
-     "score": 0.42,
-     "severity": "ELEVATED"
+     "filePath": "internal/billing/ledger.go",
+     "repoId": "7b9583ee-1111-4222-8333-444455556666",
+     "repoName": "acme/payments",
+     "churnLoc30d": 412,
+     "churnCommits30d": 19,
+     "cyclomaticTotal": 88,
+     "cyclomaticAvg": 6.3,
+     "blameConcentration": 0.61,
+     "riskScore": 0.74,
+     "evidenceUrl": null
+    },
+    {
+     "filePath": "internal/billing/invoice.go",
+     "repoId": "7b9583ee-1111-4222-8333-444455556666",
+     "repoName": "acme/payments",
+     "churnLoc30d": 233,
+     "churnCommits30d": 11,
+     "cyclomaticTotal": 54,
+     "cyclomaticAvg": 4.9,
+     "blameConcentration": 0.38,
+     "riskScore": 0.52,
+     "evidenceUrl": null
     }
-   ],
-   "trend": []
+   ]
   }
  },
  "errors": [],
  "page": {
-  "returned_bytes": 310,
-  "max_bytes": 32768
+  "returned_bytes": 542,
+  "max_bytes": 32768,
+  "rows_returned": 2,
+  "rows_read": 200,
+  "cut": "Returned 2 of 200 rows read (hotspots.rows): the answer was cut to whole rows to fit max_bytes (32768); the rest were left out. Repeat the same call with max_bytes of at least 41210 to receive every row."
  },
  "consistency": "best_effort",
  "untrusted_content": {
@@ -44,14 +61,11 @@
   ]
  },
  "request": {
-  "operation": "compoundingRisk",
+  "operation": "hotspots",
   "max_bytes": 32768,
   "variables": {
-   "filter": {
-    "breakout": "REPO",
-    "repoIds": [
-     "repository:7b9583ee-1111-4222-8333-444455556666"
-    ]
+   "input": {
+    "limit": 200
    }
   }
  }

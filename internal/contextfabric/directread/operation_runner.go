@@ -18,10 +18,11 @@ package directread
 //	    every row id must be in the grant, else the WHOLE answer is refused
 //	    (row_outside_grant), with an ERROR line and zero data
 //	9b  output allowlist (FilterResponse); removed paths = ERROR line
-//	9a' max_bytes on the serialized data; a list answer over it is cut to
-//	    the largest whole-row page that fits, with the cut stated in page;
-//	    any other answer over it, or a list whose first row does not fit,
-//	    is response_budget, never a half row
+//	9a' max_bytes on the serialized data; an operation with one primary list
+//	    (a row-limit variable and one top-level list) is cut to the largest
+//	    whole-row page that fits, with the cut stated in page; any other
+//	    answer over it, or a list whose first row does not fit, is
+//	    response_budget, never a half row
 //	10  D.7 status and the "context fabric operation read" event
 //
 // Constraints run before the gate (7e' above): they depend on the request
@@ -576,11 +577,13 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 	x.read.Bytes = measured
 	var cut *pageCut
 	if measured > maxBytes {
-		if fit, ok := fitListPage(filtered.Data, maxBytes); ok {
-			cut = &fit
-			filtered.Data = fit.data
-			measured = len(fit.data)
-			x.read.Bytes = measured
+		if listPath, has := op.PrimaryList(); has {
+			if fit, ok := fitListPage(filtered.Data, listPath, maxBytes); ok {
+				cut = &fit
+				filtered.Data = fit.data
+				measured = len(fit.data)
+				x.read.Bytes = measured
+			}
 		}
 	}
 	if measured > maxBytes {
@@ -597,8 +600,8 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 		if completeness == CompletenessDeclaredComplete {
 			completeness = CompletenessUnknown
 		}
-		x.resp.Page.RowsReturned = cut.rowsReturned()
-		x.resp.Page.RowsRead = cut.rowsRead()
+		x.resp.Page.RowsReturned = cut.rowsReturned
+		x.resp.Page.RowsRead = cut.rowsRead
 		x.resp.Page.Cut = cut.statement(maxBytes, op)
 	}
 	x.resp.Call = CallServed

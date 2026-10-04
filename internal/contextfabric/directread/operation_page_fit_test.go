@@ -113,6 +113,19 @@ func TestAnAnswerUnderTheBudgetIsServedUncut(t *testing.T) {
 	if resp.Call != directread.CallServed || resp.Page.Cut != "" || resp.Page.RowsReturned != 0 || resp.Page.RowsRead != 0 {
 		t.Fatalf("%+v", resp.Page)
 	}
+	var src struct {
+		Data json.RawMessage `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(body), &src)
+	var tree map[string]map[string]any
+	_ = json.Unmarshal(src.Data, &tree)
+	for _, row := range tree["workGraphArtifacts"]["rows"].([]any) {
+		delete(row.(map[string]any), "evidence")
+	}
+	want, _ := json.Marshal(tree)
+	if string(resp.Data) != string(want) || resp.Completeness != directread.CompletenessUnknown {
+		t.Fatalf("under-budget data differs from the allowlisted upstream data:\n%.200s\n%.200s", resp.Data, want)
+	}
 	out, _ := json.Marshal(resp.Page)
 	if strings.Contains(string(out), "cut") || strings.Contains(string(out), "rows_") {
 		t.Fatalf("page carries cut fields: %s", out)
@@ -359,7 +372,21 @@ func TestACutKeepsTheLargestPrefixWhenEndCursorsVaryInLength(t *testing.T) {
 	}
 }
 
-func TestACompositeAnswerWithTwoListsIsCutOnBoth(t *testing.T) {
+// Composite and nested shapes are out of scope by ruling: a refusal with a
+// reason is the intended behaviour there. The refusal below is the one main
+// gives: same code, same reason, the measured size of the whole answer.
+func requireMainBudgetRefusal(t *testing.T, resp directread.OperationResponse, wantMeasured int) {
+	t.Helper()
+	out, _ := json.Marshal(resp)
+	if resp.Call != directread.CallRefused || resp.Refusal == nil || resp.Refusal.Code != directread.RefusalResponseBudget ||
+		resp.Refusal.Reason != "the serialized data exceeds max_bytes; narrow the window, the scope or the limit variable" ||
+		resp.Refusal.MeasuredBytes != wantMeasured || resp.Refusal.MaxBytes != 32768 ||
+		resp.Data != nil || resp.Page.Cut != "" || resp.Page.RowsRead != 0 || resp.Page.RowsReturned != 0 || resp.Page.ReturnedBytes != 0 {
+		t.Fatalf("not main's refusal (measured want %d): %.500s", wantMeasured, out)
+	}
+}
+
+func TestATwoListOperationAboveTheBudgetRefusesAsOnMain(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
 	op, refusal := cat.Lookup("compoundingRisk")
 	if refusal != nil {
@@ -373,19 +400,13 @@ func TestACompositeAnswerWithTwoListsIsCutOnBoth(t *testing.T) {
 	for i := range trend {
 		trend[i] = map[string]any{"day": fmt.Sprintf("2026-08-%02d", i%28+1), "score": 1.5, "severity": "HIGH"}
 	}
-	raw, _ := json.Marshal(map[string]any{"data": map[string]any{"compoundingRisk": map[string]any{"rows": rows, "trend": trend}}})
+	data, _ := json.Marshal(map[string]any{"compoundingRisk": map[string]any{"rows": rows, "trend": trend}})
+	raw, _ := json.Marshal(map[string]any{"data": json.RawMessage(data)})
 	h := newOpHarness(t, func(opRecorded) (int, string) { return 200, string(raw) }, opHarnessOptions{})
-	resp := h.run(t, opUnrestricted(opOrgA), "compoundingRisk", opMinimalVariables(t, op))
-	if resp.Call != directread.CallServed || len(resp.Data) > 32768 || resp.Page.RowsRead != 340 || resp.Page.RowsReturned >= 340 {
-		out, _ := json.Marshal(resp)
-		t.Fatalf("%.500s", out)
-	}
-	if !strings.Contains(resp.Page.Cut, "compoundingRisk.rows") || !strings.Contains(resp.Page.Cut, "compoundingRisk.trend") {
-		t.Fatalf("statement %q", resp.Page.Cut)
-	}
+	requireMainBudgetRefusal(t, h.run(t, opUnrestricted(opOrgA), "compoundingRisk", opMinimalVariables(t, op)), len(data))
 }
 
-func TestANestedListUnderAnObjectIsCut(t *testing.T) {
+func TestANestedListOperationAboveTheBudgetRefusesAsOnMain(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
 	op, refusal := cat.Lookup("capacityCompletionDistribution")
 	if refusal != nil {
@@ -398,15 +419,52 @@ func TestANestedListUnderAnObjectIsCut(t *testing.T) {
 		}
 		return out
 	}
-	raw, _ := json.Marshal(map[string]any{"data": map[string]any{"capacityForecast": map[string]any{"completionDistribution": map[string]any{"days": points(), "items": points()}}}})
+	data, _ := json.Marshal(map[string]any{"capacityForecast": map[string]any{"completionDistribution": map[string]any{"days": points(), "items": points()}}})
+	raw, _ := json.Marshal(map[string]any{"data": json.RawMessage(data)})
 	h := newOpHarness(t, func(opRecorded) (int, string) { return 200, string(raw) }, opHarnessOptions{})
-	resp := h.run(t, opUnrestricted(opOrgA), "capacityCompletionDistribution", opMinimalVariables(t, op))
-	if resp.Call != directread.CallServed || len(resp.Data) > 32768 || resp.Page.RowsRead != 3000 || resp.Page.RowsReturned < 1 {
-		out, _ := json.Marshal(resp)
-		t.Fatalf("%.500s", out)
+	requireMainBudgetRefusal(t, h.run(t, opUnrestricted(opOrgA), "capacityCompletionDistribution", opMinimalVariables(t, op)), len(data))
+}
+
+// TestEveryOperationIsClassifiedForTheBudgetRule fails when an operation is
+// added or changes shape without being classified here: primary-list
+// operations are cut to the largest whole-row page, every other operation
+// keeps the response_budget refusal.
+func TestEveryOperationIsClassifiedForTheBudgetRule(t *testing.T) {
+	want := map[string]string{
+		"capacityForecasts":              "capacityForecasts.edges",
+		"complexityTimeseries":           "complexityTimeseries.points",
+		"hotspots":                       "hotspots.rows",
+		"workGraphArtifacts":             "workGraphArtifacts.rows",
+		"workGraphEdges":                 "workGraphEdges.edges",
+		"acrRepositoryScopes":            "",
+		"capacityCompletionDistribution": "",
+		"capacityForecast":               "",
+		"catalogValues":                  "",
+		"cognitiveLoad":                  "",
+		"compoundingRisk":                "",
+		"home":                           "",
+		"investmentBreakdown":            "",
+		"investmentFull":                 "",
+		"recommendations":                "",
+		"securityOverview":               "",
+		"throughputForecast":             "",
+		"workGraphFlow":                  "",
+		"workItemTeamAttributions":       "",
 	}
-	if !strings.Contains(resp.Page.Cut, "capacityForecast.completionDistribution.days") {
-		t.Fatalf("statement %q", resp.Page.Cut)
+	cat, _ := directread.DefaultCatalogue()
+	ops := cat.Operations(directread.CallerUnrestricted)
+	if len(ops) != len(want) {
+		t.Fatalf("%d operations served, %d classified", len(ops), len(want))
+	}
+	for _, op := range ops {
+		list, classified := want[op.Name]
+		if !classified {
+			t.Fatalf("%s is not classified for the budget rule", op.Name)
+		}
+		got, ok := op.PrimaryList()
+		if got != list || ok != (list != "") {
+			t.Fatalf("%s: primary list %q (%v), classified %q", op.Name, got, ok, list)
+		}
 	}
 }
 
