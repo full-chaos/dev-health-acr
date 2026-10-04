@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,13 @@ const (
 // RuntimeQuestionInterpreter: frame validation, the frame gate and family
 // resolution run on the frame as the interpreter returned it.
 func runInterpretedTupleCase(t *testing.T, path interpreterPath, question string, frame QuestionFrame, timeContext TimeContext) statusFilterRun {
+	t.Helper()
+	return runInterpretedTupleCaseWithCaveats(t, path, question, frame, timeContext, 0)
+}
+
+// runInterpretedTupleCaseWithCaveats is runInterpretedTupleCase with a
+// synthesis that writes caveats model limitations of its own.
+func runInterpretedTupleCaseWithCaveats(t *testing.T, path interpreterPath, question string, frame QuestionFrame, timeContext TimeContext, caveats int) statusFilterRun {
 	t.Helper()
 	var run statusFilterRun
 	payload := workItemTuplePayloadFixture(t)
@@ -75,7 +83,11 @@ func runInterpretedTupleCase(t *testing.T, path interpreterPath, question string
 			return CanonicalFactBundle{Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1"}, nil
 		}),
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
-			return InvestigationResult{Status: InvestigationComplete, DirectJudgment: "Available work items.", CurrentState: "Available work items.", DeterministicAnswer: "Available work items.", StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
+			limitations := []string{}
+			for i := 0; i < caveats; i++ {
+				limitations = append(limitations, fmt.Sprintf("Model caveat number %d about this answer.", i+1))
+			}
+			return InvestigationResult{Status: InvestigationComplete, DirectJudgment: "Available work items.", CurrentState: "Available work items.", DeterministicAnswer: "Available work items.", StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: limitations, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
 		}), Results: store, Requirements: registryDeriver{}, Telemetry: telemetry,
 	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_status_period_001" }})
 	if err != nil {
