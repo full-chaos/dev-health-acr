@@ -163,3 +163,57 @@ func TestACountOverALabelIsNotCertifiedWhenTheIdentityLookupWasIncomplete(t *tes
 		t.Fatalf("count claimed=%t outcome=%q after an incomplete identity lookup, want none certified", claimed, outcome)
 	}
 }
+
+// The same count question asked twice with answer reuse on is certified, or
+// not, the same way both times: a stored answer whose count the scope decision
+// would not state again is not reused and the question is answered fresh.
+func TestTheSameLabelNamedCountQuestionIsCertifiedTheSameWayWhenAskedTwice(t *testing.T) {
+	twinSeed := seedOwnedRepository()
+	const twin = "repository:gitlab:" + routeOwnedSlug
+	twinSeed.nodes = append(twinSeed.nodes, seededNode{kind: "repository", id: twin, label: routeOwnedSlug, repos: []string{routeOwnedSlug}})
+	twinSeed.text["repository|"+twin] = "acme alpha service"
+	for name, cell := range map[string]struct {
+		seed    routeSeed
+		certify bool
+	}{
+		"one match":   {seedOwnedRepository(), true},
+		"two matches": {twinSeed, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			interpreter := projectDeploymentsInterpreter{name: routeOwnedSlug, kind: contextfabric.SubjectRepository, member: contextfabric.SubjectTeam, count: true}
+			_, outcome, _ := interpreter.Interpret(context.Background(), storage.Principal{}, contextfabric.InvestigationRequest{})
+			store := &routeStore{frame: outcome.Frame, anchorKind: contextfabric.SubjectRepository}
+			type served struct {
+				value   int64
+				claimed bool
+				outcome contractsv1.ContextFabricPlanRequirementOutcome
+				members string
+			}
+			var turns []served
+			var reused []bool
+			for turn := 1; turn <= 2; turn++ {
+				adapter := newFakeAdapter(t, cell.seed.conn())
+				adapter.config.IdentityUniverse = func(context.Context, string) ([]graphrank.IdentityRow, time.Time, bool, error) {
+					return nil, time.Time{}, true, nil
+				}
+				answer := investigateAnchorReusing(t, adapter, storage.Principal{OrgID: "org-1"}, interpreter, "how many teams own repository "+routeOwnedSlug, routeOwnershipMessage, store)
+				value, claimed, outcome := servedCount(answer)
+				turns = append(turns, served{value, claimed, outcome, strings.Join(answer.members(), ",")})
+				reused = append(reused, answer.result.Reused)
+				t.Logf("turn %d: reused=%t claimed=%t value=%d outcome=%q members=%q", turn, answer.result.Reused, claimed, value, outcome, turns[turn-1].members)
+			}
+			if store.offers != 1 {
+				t.Fatalf("the stored answer was offered %d times, want once: the second turn must have reached the reuse decision", store.offers)
+			}
+			if cell.certify && reused[1] {
+				t.Fatalf("the stored label-named count was reused: its commit leaves no stored digest, so the second turn must be answered fresh")
+			}
+			if turns[0] != turns[1] {
+				t.Fatalf("asked twice: first %+v, second %+v, want the same certification", turns[0], turns[1])
+			}
+			if turns[0].claimed != cell.certify || (cell.certify && (turns[0].value != 1 || turns[0].outcome != contractsv1.ContextFabricRequirementSatisfied)) {
+				t.Fatalf("certified = %t value %d outcome %q, want certified=%t", turns[0].claimed, turns[0].value, turns[0].outcome, cell.certify)
+			}
+		})
+	}
+}

@@ -289,10 +289,17 @@ func investigateAnchorMembers(t *testing.T, adapter *Adapter, principal storage.
 // investigateAnchor drives Engine.Investigate with the given interpreter.
 func investigateAnchor(t *testing.T, adapter *Adapter, principal storage.Principal, interpreter projectDeploymentsInterpreter, question, lineMessage string) routeAnswer {
 	t.Helper()
+	return investigateAnchorReusing(t, adapter, principal, interpreter, question, lineMessage, nil)
+}
+
+// investigateAnchorReusing is investigateAnchor with answer reuse on, over the
+// given store, when it is not nil.
+func investigateAnchorReusing(t *testing.T, adapter *Adapter, principal storage.Principal, interpreter projectDeploymentsInterpreter, question, lineMessage string, store *routeStore) routeAnswer {
+	t.Helper()
 	var logs bytes.Buffer
 	adapter.config.Telemetry = SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))}
 	graph := &routeBasisRecorder{Adapter: adapter}
-	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
+	deps := contextfabric.EngineDependencies{
 		Interpreter: interpreter,
 		Graph:       graph,
 		Facts:       emptyFactReader{},
@@ -306,7 +313,15 @@ func investigateAnchor(t *testing.T, adapter *Adapter, principal storage.Princip
 		},
 		Results:      discardingResultStore{},
 		Requirements: productionRequirementDeriver{},
-	}, contextfabric.EngineOptions{ServiceVersion: "acr-test", NewResultID: func() string { return "result_83000001" }})
+	}
+	synthesisMode := contextfabric.SynthesisModeClient
+	if store != nil {
+		// A client-written answer is never stored as reusable, so a reuse
+		// drive uses the service-written answer.
+		deps.Results, deps.ReuseGate, deps.Synthesizer = store, store, countingSynthesizer{}
+		synthesisMode = ""
+	}
+	engine, err := contextfabric.NewEngine(deps, contextfabric.EngineOptions{ServiceVersion: "acr-test", NewResultID: func() string { return "result_83000001" }})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
@@ -314,7 +329,7 @@ func investigateAnchor(t *testing.T, adapter *Adapter, principal storage.Princip
 	result, err := engine.Investigate(ctx, principal, contextfabric.InvestigationRequest{
 		SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_83000001",
 		Question:      question,
-		SynthesisMode: contextfabric.SynthesisModeClient,
+		SynthesisMode: synthesisMode,
 		TimeContext: contextfabric.TimeContext{
 			Axis:           contextfabric.TemporalCurrent,
 			EvidenceWindow: &contextfabric.RequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing90D},
