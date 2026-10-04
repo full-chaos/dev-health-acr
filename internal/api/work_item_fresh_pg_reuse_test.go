@@ -52,8 +52,10 @@ func TestWorkItemFreshEnginePostgresReuseAcrossInstances(t *testing.T) {
 			if !reflect.DeepEqual(first.fixture.client.phases, []string{"s1", "status", "work"}) || first.interpreter.calls != 1 || first.synthesisCalls != 1 {
 				t.Fatalf("fresh phases=%v interpret=%d synthesize=%d", first.fixture.client.phases, first.interpreter.calls, first.synthesisCalls)
 			}
-			if first.lookup.calls != 1 || first.lookup.found != 0 {
-				t.Fatalf("first lookup calls=%d found=%d", first.lookup.calls, first.lookup.found)
+			// A scoped request looks up under its scope key and then under the
+			// unscoped key (the key a work-item tuple answer is saved under).
+			if first.lookup.calls != 2 || first.lookup.found != 0 {
+				t.Fatalf("first lookup calls=%d found=%d, want a scoped miss on both keys", first.lookup.calls, first.lookup.found)
 			}
 			if len(first.membership.measured) != 1 || first.membership.measured[0].Census.AuthorizedPopulation != 1 {
 				t.Fatal("fresh S1 did not measure the persisted population")
@@ -135,8 +137,12 @@ func TestWorkItemFreshEnginePostgresReuseAcrossInstances(t *testing.T) {
 			if err != nil {
 				t.Fatalf("second Engine: %v; phases=%v reuse=%v", err, second.fixture.client.phases, second.telemetry.decisions)
 			}
-			if second.lookup.calls != 1 || second.lookup.found != 1 {
-				t.Fatalf("actual PG FindReusable calls=%d found=%d reason=%s error=%v", second.lookup.calls, second.lookup.found, second.lookup.reason, second.lookup.err)
+			wantLookups := 2 // scope key misses, the unscoped key finds the tuple answer
+			if scenario == "requested_scope_changed" {
+				wantLookups = 1 // no scope: one lookup, under the unscoped key
+			}
+			if second.lookup.calls != wantLookups || second.lookup.found != 1 {
+				t.Fatalf("actual PG FindReusable calls=%d found=%d reason=%s error=%v, want %d lookups and one found", second.lookup.calls, second.lookup.found, second.lookup.reason, second.lookup.err, wantLookups)
 			}
 			assertResponseOwnerGateFree(t, gate)
 			if second.fixture.graph.discover != 0 {
