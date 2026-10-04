@@ -3709,13 +3709,13 @@
         "key": "issues",
         "type": "int",
         "presence": "conditional",
-        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed) and the anchor is a project"
       },
       {
         "key": "linked_pull_requests",
         "type": "int",
         "presence": "conditional",
-        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed) and the anchor is a project"
       },
       {
         "key": "members",

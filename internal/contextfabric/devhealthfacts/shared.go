@@ -241,7 +241,13 @@ import (
 // the read budget is served, and a project with no link is unlinked with its
 // exact issue count instead of cut. A candidate saved under v36 for such a
 // question holds a cut or empty answer and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v39"
+//
+// v39 -> v40: the deployments of a named team are read from the repositories
+// it owns and those of a named repository directly, not from the generic
+// two-hop walk whose budget the anchor's work items could spend first. A
+// candidate saved under v39 for such a question can hold an empty cohort and
+// must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v40"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

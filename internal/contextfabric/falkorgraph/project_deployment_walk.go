@@ -202,10 +202,12 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 
 // projectDeploymentWalk is the result of the project -> deployments read.
 type projectDeploymentWalk struct {
-	nodes     []graphrank.CandidateNode
-	edges     []graphrank.ResolvedEdge
-	filters   edgeFilterCounts
-	truncated bool
+	// anchorKind is the kind of the anchor the read started from.
+	anchorKind contextfabric.SubjectKind
+	nodes      []graphrank.CandidateNode
+	edges      []graphrank.ResolvedEdge
+	filters    edgeFilterCounts
+	truncated  bool
 	// issues is how many issues the project has and linkedPullRequests how
 	// many distinct pull-request work items the link read returned, both
 	// before authorization. Zero linked pull requests over an uncut read is
@@ -235,7 +237,7 @@ func canonicalIDOf(n *node) string { return propStringValue(n.Properties[propCan
 // own is decided by that repository; a repository-less issue (Linear, Jira) is
 // admitted by its native link to a pull request the caller is granted.
 func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, project contextfabric.SubjectRef, collectLimit int, temporal temporalFilter) (projectDeploymentWalk, error) {
-	var out projectDeploymentWalk
+	out := projectDeploymentWalk{anchorKind: contextfabric.SubjectProject}
 	authorized := func(n *node) bool {
 		return graphrank.AuthorizedAttributes(principal, scope, toCandidateNode(n).Attributes)
 	}
@@ -316,26 +318,110 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 		return out, err
 	}
 	out.truncated = out.truncated || reposCut
-	repositories := map[string]*node{}
+	repositories := map[string]contextfabric.SubjectRef{}
 	for _, h := range repoHits {
 		if !authorized(h.to) {
 			deny()
 			continue
 		}
-		repositories[canonicalIDOf(h.to)] = h.to
+		if repository, ok := graphrank.NodeSubject(toCandidateNode(h.to)); ok {
+			repositories[repository.CanonicalID] = repository
+		}
 	}
+	err = a.repositoryDeployments(ctx, key, orgID, repositories, &out, authorized, deny, cut, collectLimit, temporal)
+	return out, err
+}
+
+// teamRepositoriesStep reads the repositories a team owns: the repository's
+// OWNED_BY_TEAM edge points at the team.
+var teamRepositoriesStep = walkStep{
+	fromKind: contractsv1.ContextFabricSubjectTeam, toKind: contractsv1.ContextFabricSubjectRepository,
+	relation: contractsv1.ContextFabricRelationshipOwnedByTeam, direction: walkIn,
+}
+
+// anchorDeploymentMembers returns the deployments a named anchor reaches by a
+// read directed at deployments: a project through its issues' linked pull
+// requests, a team through the repositories it owns, a repository directly.
+// Each read has its own budget and every hop passes the caller's
+// authorization.
+func (a *Adapter) anchorDeploymentMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, collectLimit int, temporal temporalFilter) (projectDeploymentWalk, error) {
+	if anchor.Kind == contextfabric.SubjectProject {
+		return a.projectDeploymentMembers(ctx, key, orgID, principal, scope, anchor, collectLimit, temporal)
+	}
+	out := projectDeploymentWalk{anchorKind: anchor.Kind}
+	authorized := func(n *node) bool {
+		return graphrank.AuthorizedAttributes(principal, scope, toCandidateNode(n).Attributes)
+	}
+	cut := func(ids []string) []string {
+		sort.Strings(ids)
+		if collectLimit > 0 && len(ids) > collectLimit {
+			out.truncated = true
+			return ids[:collectLimit]
+		}
+		return ids
+	}
+	deny := func() {
+		out.filters.add(edgeFiltered, edgeFilterReasonAuthz)
+		out.denied++
+	}
+	repositories := map[string]contextfabric.SubjectRef{}
+	switch anchor.Kind {
+	case contextfabric.SubjectRepository:
+		repositories[anchor.CanonicalID] = anchor
+	case contextfabric.SubjectTeam:
+		hits, hitsCut, err := a.walkStepHits(ctx, key, orgID, []string{anchor.CanonicalID}, teamRepositoriesStep, temporal, collectLimit)
+		if err != nil {
+			return out, err
+		}
+		out.truncated = out.truncated || hitsCut
+		owned := map[string]walkHit{}
+		for _, h := range hits {
+			if !authorized(h.to) {
+				deny()
+				continue
+			}
+			owned[canonicalIDOf(h.to)] = h
+		}
+		// The step read is bounded by the budget and reports its own cut.
+		ids := make([]string, 0, len(owned))
+		for id := range owned {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			h := owned[id]
+			repository, ok := graphrank.NodeSubject(toCandidateNode(h.to))
+			if !ok {
+				continue
+			}
+			repositories[id] = repository
+			edgeCandidate := toCandidateEdge(h.rel, string(repository.Kind), repository.CanonicalID, string(anchor.Kind), anchor.CanonicalID)
+			out.edges = append(out.edges, graphrank.ResolvedEdge{
+				UUID: edgeCandidate.UUID, Name: edgeCandidate.Name, Fact: edgeCandidate.Fact, From: repository, To: anchor,
+				Attributes: edgeCandidate.Attributes, CreatedAt: edgeCandidate.CreatedAt, ValidAt: edgeCandidate.ValidAt, InvalidAt: edgeCandidate.InvalidAt,
+			})
+		}
+	default:
+		return out, nil
+	}
+	err := a.repositoryDeployments(ctx, key, orgID, repositories, &out, authorized, deny, cut, collectLimit, temporal)
+	return out, err
+}
+
+// repositoryDeployments adds to out the deployments of repositories, each
+// passing the caller's authorization, bounded by the budget.
+func (a *Adapter) repositoryDeployments(ctx context.Context, key, orgID string, repositories map[string]contextfabric.SubjectRef, out *projectDeploymentWalk, authorized func(*node) bool, deny func(), cut func([]string) []string, collectLimit int, temporal temporalFilter) error {
 	repositoryIDs := make([]string, 0, len(repositories))
 	for id := range repositories {
 		repositoryIDs = append(repositoryIDs, id)
 	}
 	repositoryIDs = cut(repositoryIDs)
 	if len(repositoryIDs) == 0 {
-		return out, nil
+		return nil
 	}
-
 	deploymentHits, deploymentsCut, err := a.walkStepHits(ctx, key, orgID, repositoryIDs, repositoryDeploymentsStep, temporal, collectLimit)
 	if err != nil {
-		return out, err
+		return err
 	}
 	out.truncated = out.truncated || deploymentsCut
 	seen := map[string]bool{}
@@ -356,7 +442,7 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 		candidate := toCandidateNode(h.to)
 		out.nodes = append(out.nodes, candidate)
 		deployment, okDeployment := graphrank.NodeSubject(candidate)
-		repository, okRepository := graphrank.NodeSubject(toCandidateNode(repositories[h.from]))
+		repository, okRepository := repositories[h.from]
 		if !okDeployment || !okRepository {
 			continue
 		}
@@ -367,7 +453,7 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 		})
 	}
 	sortCandidateNodesBySubjectKey(out.nodes)
-	return out, nil
+	return nil
 }
 
 // ProjectDeploymentWalkOutcome is the closed outcome of one deployment-members
@@ -439,7 +525,7 @@ func projectDeploymentWalkOutcome(walk projectDeploymentWalk, restricted bool, e
 		return ProjectDeploymentWalkDenied
 	case walk.truncated:
 		return ProjectDeploymentWalkTruncated
-	case walk.linkedPullRequests == 0:
+	case walk.anchorKind == contextfabric.SubjectProject && walk.linkedPullRequests == 0:
 		return ProjectDeploymentWalkUnlinked
 	default:
 		return ProjectDeploymentWalkNoDeployments

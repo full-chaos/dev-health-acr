@@ -211,7 +211,8 @@ func TestLiveNamedProjectsServeTheirOwnDeployments(t *testing.T) {
 }
 
 // TestLiveTheLinkReadFindsLinksPastTheBudgetAndCountsAnUnlinkedProject runs the
-// walk's link read and issue count on a real graph store: a project with more
+// walk's link read and issue count, and the team and repository reach, on a
+// real graph store: a project with more
 // issues than the read budget whose only link sorts last reaches its
 // deployments uncut, and a project with no link at all is unlinked with its
 // exact issue count.
@@ -256,6 +257,9 @@ func TestLiveTheLinkReadFindsLinksPastTheBudgetAndCountsAnUnlinkedProject(t *tes
 		entity(deployment, repository, "")
 		relate(fmt.Sprintf("deployment_%d", d), contractsv1.ContextFabricRelationshipBelongsToRepository, deployment, repo, repository)
 	}
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:kilo", Label: "kilo"}
+	entity(team, repository, "")
+	relate("ledger_owned_by_kilo", contractsv1.ContextFabricRelationshipOwnedByTeam, repo, team, repository)
 	projects := map[string]contextfabric.SubjectRef{}
 	for _, name := range []string{"gamma", "delta"} {
 		project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:linear:" + name, Label: name}
@@ -301,6 +305,12 @@ func TestLiveTheLinkReadFindsLinksPastTheBudgetAndCountsAnUnlinkedProject(t *tes
 		}
 		if outcome := projectDeploymentWalkOutcome(delta, false, nil); outcome != ProjectDeploymentWalkUnlinked {
 			t.Fatalf("%s, delta: outcome = %q, want unlinked", windowName, outcome)
+		}
+		for _, anchor := range []contextfabric.SubjectRef{team, repo} {
+			reach, err := adapter.anchorDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, anchor, 25, temporal)
+			if err != nil || len(reach.nodes) != 2 || reach.truncated {
+				t.Fatalf("%s, %s anchor: reach = %d members, truncated %v, error %v; want the ledger's 2 deployments, uncut", windowName, anchor.Kind, len(reach.nodes), reach.truncated, err)
+			}
 		}
 	}
 }

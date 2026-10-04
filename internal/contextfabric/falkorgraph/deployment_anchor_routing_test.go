@@ -128,6 +128,8 @@ func TestAProjectNamedByItsLabelRoutesTheWalk(t *testing.T) {
 
 // walkOutcomeFixture is one request and graph that ends on a named outcome.
 type walkOutcomeFixture struct {
+	// committed is how many subjects the request commits; zero reads as one.
+	committed int
 	principal storage.Principal
 	seed      func() ([]seededNode, []seededEdge)
 	request   func() contextfabric.GraphDiscoveryRequest
@@ -206,11 +208,14 @@ func walkOutcomeFixtures() map[ProjectDeploymentWalkOutcome]walkOutcomeFixture {
 		ProjectDeploymentWalkNotRouted: {
 			principal: open, seed: func() ([]seededNode, []seededEdge) { s := seedParentDeployments("team"); return s.nodes, s.edges },
 			request: func() contextfabric.GraphDiscoveryRequest {
-				return soleCommitRequest(contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:payments", Label: "payments"}, contextfabric.CommitBasisStatistical)
+				request := soleCommitRequest(contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:payments", Label: "payments"}, contextfabric.CommitBasisStatistical)
+				request.Resolution.Committed = append(request.Resolution.Committed, contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:other", Label: "acme/other"})
+				return request
 			},
+			committed: 2,
 			check: func(t *testing.T, d ProjectDeploymentWalkDecision) {
-				if d.AnchorKind != contextfabric.SubjectTeam || d.AnchorBasis != DeploymentAnchorSoleCommit || d.Members != 0 || d.Issues != 0 {
-					t.Errorf("not_routed decision = %+v, want the team anchor and no walk count", d)
+				if d.AnchorKind != "" || d.AnchorBasis != DeploymentAnchorNone || d.Members != 0 || d.Issues != 0 {
+					t.Errorf("not_routed decision = %+v, want no anchor and no walk count", d)
 				}
 			},
 		},
@@ -283,7 +288,7 @@ func TestEveryProjectDeploymentWalkOutcomeIsEmittedByTheRealProducer(t *testing.
 			}
 			if _, err := certify.Certify(log, certify.Assertion{
 				Event: eventspec.ProjectDeploymentWalk,
-				Want:  map[string]any{"org_id": "org-1", "outcome": string(outcome), "committed": 1},
+				Want:  map[string]any{"org_id": "org-1", "outcome": string(outcome), "committed": max(fixture.committed, 1)},
 			}); err != nil {
 				t.Fatalf("certify.Certify() error = %v", err)
 			}
@@ -293,6 +298,9 @@ func TestEveryProjectDeploymentWalkOutcomeIsEmittedByTheRealProducer(t *testing.
 			}
 			for _, key := range []string{"issues", "linked_pull_requests", "members", "denied", "truncated"} {
 				measured := outcome != ProjectDeploymentWalkNotRouted && outcome != ProjectDeploymentWalkReadFailed
+				if key == "issues" || key == "linked_pull_requests" {
+					measured = measured && decisions[0].AnchorKind == contextfabric.SubjectProject
+				}
 				if _, present := lines[0][key]; present != measured {
 					t.Errorf("line %v: %s present = %v; a walk count rides only on a walk that finished", lines[0], key, present)
 				}
@@ -446,34 +454,25 @@ func cutDetail(result contextfabric.GraphContext) *contextfabric.CoverageDetail 
 // anchor whose two-hop read was cut before it reached a deployment serves no
 // cohort, and the answer must say the read was cut.
 func TestAnAnchorWhoseCutReadReachedNoDeploymentIsPartial(t *testing.T) {
-	for _, kind := range []string{"repository", "team"} {
-		t.Run(kind, func(t *testing.T) {
-			s := projectSeed{served: map[string]string{}}
-			anchorID := kind + ":anchor"
-			s.nodes = append(s.nodes, seededNode{kind: kind, id: anchorID, label: "payments", repos: []string{"acme/anchor"}})
-			// More issues of the anchor than the read budget, each ranked
-			// ahead of the one deployment the anchor reaches.
-			for i := 0; i < 6; i++ {
-				id := fmt.Sprintf("work_item:gh:%d", i)
-				s.nodes = append(s.nodes, seededNode{kind: "work_item", id: id, label: id, repos: []string{"acme/anchor"}, workItemType: "issue"})
-				s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "work_item", id, kind, anchorID})
-			}
-			s.nodes = append(s.nodes, seededNode{kind: "deployment", id: "deployment:anchor:0", label: "deployment", repos: []string{"acme/anchor"}})
-			s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", "deployment:anchor:0", kind, anchorID})
-			adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
-			adapter.config.MaxResults = 3
-			anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectKind(kind), CanonicalID: anchorID, Label: "payments"}
-			result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, soleCommitRequest(anchor, contextfabric.CommitBasisStatistical))
-			if err != nil {
-				t.Fatalf("DiscoverContext() error = %v", err)
-			}
-			if result.Cohort != nil {
-				t.Fatalf("cohort = %+v, want none: the fixture must cut the read before the deployment", result.Cohort)
-			}
-			if !result.Coverage.Partial || cutDetail(result) == nil {
-				t.Fatalf("partial = %v, details = %+v, want partial coverage and the truncation detail", result.Coverage.Partial, result.Coverage.Details)
-			}
-		})
+	s := projectSeed{served: map[string]string{}}
+	s.nodes = append(s.nodes, seededNode{kind: "team", id: "team:anchor", label: "payments"})
+	// More owned repositories than the read budget, none with a deployment.
+	for i := 0; i < 6; i++ {
+		repoID := s.repository(fmt.Sprintf("acme/owned-%02d", i), 0)
+		s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", "team:anchor"})
+	}
+	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
+	adapter.config.MaxResults = 3
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:anchor", Label: "payments"}
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, soleCommitRequest(anchor, contextfabric.CommitBasisStatistical))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort != nil {
+		t.Fatalf("cohort = %+v, want none: no owned repository the read kept has a deployment", result.Cohort)
+	}
+	if !result.Coverage.Partial || cutDetail(result) == nil {
+		t.Fatalf("partial = %v, details = %+v, want partial coverage and the truncation detail", result.Coverage.Partial, result.Coverage.Details)
 	}
 }
 
@@ -582,5 +581,50 @@ func TestEachFailedProjectReadIsAReadFailure(t *testing.T) {
 				t.Fatalf("walk decisions = %+v, want one read_failed decision", telemetry.projectDeploymentWalks)
 			}
 		})
+	}
+}
+
+// TestATeamsReachAuthorizesTheOwnedRepositoryOnItsOwn: the owned repository
+// must pass the caller's grant even when a deployment under it would.
+func TestATeamsReachAuthorizesTheOwnedRepositoryOnItsOwn(t *testing.T) {
+	s := projectSeed{served: map[string]string{}}
+	s.nodes = append(s.nodes,
+		seededNode{kind: "team", id: "team:anchor", label: "payments", repos: []string{"acme/granted"}},
+		seededNode{kind: "repository", id: "repository:r", label: "r", repos: []string{"acme/hidden"}},
+		seededNode{kind: "deployment", id: "deployment:d", label: "d", repos: []string{"acme/granted"}})
+	s.edges = append(s.edges,
+		seededEdge{"OWNED_BY_TEAM", "repository", "repository:r", "team", "team:anchor"},
+		seededEdge{"BELONGS_TO_REPOSITORY", "deployment", "deployment:d", "repository", "repository:r"})
+	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
+	reach, err := adapter.anchorDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/granted"}}, contextfabric.RequestedScope{},
+		contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:anchor", Label: "payments"}, 50, newTemporalFilter(contextfabric.TimeContext{}))
+	if err != nil {
+		t.Fatalf("anchorDeploymentMembers() error = %v", err)
+	}
+	if len(reach.nodes) != 0 || len(reach.edges) != 0 || reach.denied == 0 {
+		t.Fatalf("reach = %d members, %d edges, %d denied; want nothing through a repository the caller is not granted", len(reach.nodes), len(reach.edges), reach.denied)
+	}
+}
+
+// TestAFailedTeamReadIsAReadFailure: the owned-repository read is a read of the
+// walk; its failure ends the call.
+func TestAFailedTeamReadIsAReadFailure(t *testing.T) {
+	s := seedParentDeployments("team")
+	conn := seededGraphConn(s.nodes, s.edges)
+	inner := conn.queryFunc
+	conn.queryFunc = func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if params["fromKind"] == string(contextfabric.SubjectTeam) {
+			return nil, errors.New("connection reset")
+		}
+		return inner(ctx, key, cypher, params, readOnly)
+	}
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, conn, telemetry)
+	request := soleCommitRequest(contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:payments", Label: "payments"}, contextfabric.CommitBasisStatistical)
+	if _, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request); err == nil {
+		t.Fatal("DiscoverContext() error = nil, want the failed read")
+	}
+	if len(telemetry.projectDeploymentWalks) != 1 || telemetry.projectDeploymentWalks[0].Outcome != ProjectDeploymentWalkReadFailed || telemetry.projectDeploymentWalks[0].AnchorKind != contextfabric.SubjectTeam {
+		t.Fatalf("walk decisions = %+v, want one read_failed decision for the team anchor", telemetry.projectDeploymentWalks)
 	}
 }
