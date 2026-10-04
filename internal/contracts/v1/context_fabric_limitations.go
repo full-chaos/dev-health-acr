@@ -582,9 +582,9 @@ const ContextFabricTerminalNotSavedLimitation = "This answer could not be saved,
 
 // ContextFabricSingleSubjectCountLimitation is the sentence an answer carries
 // when a count was asked about one named subject: the subject has no members
-// of its own kind, so no member count is stated, and no certified total of the
-// asked measure exists in the facts read.
-const ContextFabricSingleSubjectCountLimitation = "This question asks for a count about one named subject, which has no set of members to count, so no member count was stated. A certified total for the measure asked about was not available in the facts read; any values shown are the stored daily or period values for that subject."
+// of its own kind, so no member count is stated, and the values given are the
+// subject's own stored values, not a total.
+const ContextFabricSingleSubjectCountLimitation = "This question asks for a count about one named subject, which has no set of members to count, so no member count was stated. The values given are the stored daily or period values for that subject; this answer does not state a total of them."
 
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
