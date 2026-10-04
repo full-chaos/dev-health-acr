@@ -87,7 +87,7 @@ func queryIssuePullRequestLinks(ctx context.Context, client contextpacket.ClickH
 	statement := `SELECT l.work_item_id, toString(l.repo_id), l.pr_number, l.provenance, l.last_synced,
        toUInt8(ifNull(w.work_item_id, '') != ''), toString(w.repo_id), ifNull(w.type, ''),
        w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
-       toUInt8(ifNull(p.number, 0) > 0), ifNull(r.repo, ''),
+       toUInt8(ifNull(p.number, 0) >= 0), ifNull(r.repo, ''),
        p.created_at, ` + nullableTimestamp("coalesce(p.merged_at, p.closed_at)") + `
 FROM work_graph_issue_pr AS l FINAL
 LEFT JOIN work_items AS w FINAL ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id
