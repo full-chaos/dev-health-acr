@@ -102,6 +102,9 @@ type SemanticStatePersistenceEvent struct {
 	// member: whether it was written, and when it was, its state, the
 	// answered result it names and the chain depth.
 	CarriedParent carriedParentOutcome
+	// RejectReason is the closed token of the validator rule that refused the
+	// payload, "none" when the save was not payload-rejected.
+	RejectReason string
 }
 
 // saveResult is the engine's only Save. It persists, then emits the decision.
@@ -153,6 +156,7 @@ func (e *Engine) saveResult(
 			Bound:          capture.Bound,
 			State:          capture.Write.State,
 			CarriedParent:  carried,
+			RejectReason:   workItemTupleRuleOf(err),
 		})
 	}
 	if anchorEvent != nil {
@@ -196,6 +200,8 @@ func SemanticStatePersistenceLineVocabulary(key string) []string {
 			out = append(out, string(absence))
 		}
 		return append(out, continuationTelemetryUnrecognised)
+	case "reject_reason":
+		return append(WorkItemTupleRejectReasonVocabulary(), continuationTelemetryUnrecognised)
 	case "oversized_bound":
 		out := []string{"none"}
 		for _, bound := range semanticStateBounds() {

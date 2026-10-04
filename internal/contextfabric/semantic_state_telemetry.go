@@ -14,6 +14,7 @@ package contextfabric
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -206,6 +207,10 @@ func (t SlogEngineTelemetry) RecordSemanticStatePersistence(ctx context.Context,
 			bound = continuationTelemetryUnrecognised
 		}
 	}
+	rejectReason := event.RejectReason
+	if !slices.Contains(WorkItemTupleRejectReasonVocabulary(), rejectReason) {
+		rejectReason = continuationTelemetryUnrecognised
+	}
 	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"result_id", SanitizeLogAttr(event.ResultID),
@@ -214,6 +219,7 @@ func (t SlogEngineTelemetry) RecordSemanticStatePersistence(ctx context.Context,
 		"decision", SanitizeLogAttr(decision),
 		"absence", SanitizeLogAttr(absence),
 		"oversized_bound", SanitizeLogAttr(bound),
+		"reject_reason", SanitizeLogAttr(rejectReason),
 		"encoded_bytes", event.EncodedBytes,
 		"encoded_cap", SemanticStateMaxEncodedBytes,
 		semanticStateLogGroup("state", event.State),

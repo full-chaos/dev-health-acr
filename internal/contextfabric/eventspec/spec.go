@@ -1745,6 +1745,7 @@ var SemanticStatePersistence = Event{
 		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("decision")},
 		{Key: "absence", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("absence")},
 		{Key: "oversized_bound", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("oversized_bound")},
+		{Key: "reject_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("reject_reason")},
 		{Key: "encoded_bytes", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "encoded_cap", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "state", Type: FieldObject, Presence: PresenceRequired, Fields: semanticStateGroupFields},
