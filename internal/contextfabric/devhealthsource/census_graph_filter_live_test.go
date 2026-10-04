@@ -70,10 +70,10 @@ func TestHandleCensusGraphFilterOnRealStores(t *testing.T) {
 	census := devhealthsource.NewCensusFunc(query)
 	adapter := chaos7074FalkorAdapterWith(t, ctx, func(c *falkorgraph.Config) {
 		c.ResolutionTracer = tracer
-		// The hook lets one case cancel the request once the real census has
+		// The census itself never sees the cancellation. The hook lets one case cancel the request once the real census has
 		// answered, so the graph filter's next read fails on the real store.
 		c.CensusFunc = func(ctx context.Context, org string, kind graphrank.CensusKind, value string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorID string, anchorBound bool) (graphrank.CensusOutcome, error) {
-			outcome, err := census(ctx, org, kind, value, handleBound, anchorKind, anchorID, anchorBound)
+			outcome, err := census(context.WithoutCancel(ctx), org, kind, value, handleBound, anchorKind, anchorID, anchorBound)
 			if handleBound {
 				t.Logf("census kind=%s count=%d ids=%v closureMismatch=%t setClosureMismatch=%t err=%v", kind, outcome.Count, outcome.SatisfierCanonicalIDs, outcome.ClosureMismatch, outcome.SatisfierSetClosureMismatch, err)
 			}
