@@ -41,7 +41,9 @@ type TreeWorkItemWalk struct {
 	// and LinkedIssues how many distinct issues they link, both before
 	// authorization.
 	PullRequests, LinkedIssues int
-	// Denied counts the links and issues the caller's authorization hid.
+	// Denied counts the distinct linked issues no authorized link reached:
+	// issues, never link rows, so an issue admitted through one link is not
+	// denied for another.
 	Denied int
 	// Truncated: the walk was cut at the limit or at its read bound; Members
 	// is then a floor, not the population.

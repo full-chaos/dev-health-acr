@@ -55,8 +55,8 @@ func (a *Adapter) TreeWorkItemMembers(ctx context.Context, principal storage.Pri
 		return contextfabric.TreeWorkItemWalk{}, graphNotProjectedError(err)
 	}
 	out := contextfabric.TreeWorkItemWalk{
-		PullRequests: walk.linkSources, LinkedIssues: walk.linkTargets,
-		Denied: walk.denied, Truncated: walk.truncated,
+		PullRequests: walk.linkSources, LinkedIssues: max(walk.linkIssueTargets, 0),
+		Denied: walk.linkDeniedTargets, Truncated: walk.truncated,
 	}
 	for _, n := range walk.nodes {
 		subject, ok := graphrank.NodeSubject(n)

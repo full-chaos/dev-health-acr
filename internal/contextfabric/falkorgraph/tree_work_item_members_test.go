@@ -233,6 +233,36 @@ func TestRepositoryWorkItemCountsAreBeforeAuthorization(t *testing.T) {
 	}
 }
 
+// TestRepositoryWorkItemCountsHoldWithTheReadsGrantClause: the counts are the
+// same whether the read carries the grant clause or not. Linked issues are
+// counted before authorization, and denied counts distinct issues no
+// authorized link reached, never link rows: an issue admitted through a native
+// link and also text-linked is not denied.
+func TestRepositoryWorkItemCountsHoldWithTheReadsGrantClause(t *testing.T) {
+	s := newMemberSeed()
+	s.issue("work_item.v2:c:visible", []string{memberAnchorSlug})
+	s.issue("work_item.v2:c:secret", []string{"acme/secret"})
+	s.issue("work_item.v2:c:textonly", nil)
+	s.issue("work_item.v2:c:both", nil)
+	s.pullRequest("pull_request:c:1", memberAnchorSlug)
+	s.pullRequest("pull_request:c:2", memberAnchorSlug)
+	s.link("work_item.v2:c:visible", "pull_request:c:1", "heuristic")
+	s.link("work_item.v2:c:secret", "pull_request:c:1", "native")
+	s.link("work_item.v2:c:textonly", "pull_request:c:1", "explicit_text")
+	s.link("work_item.v2:c:both", "pull_request:c:1", "native")
+	s.link("work_item.v2:c:both", "pull_request:c:2", "explicit_text")
+	granted := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{memberAnchorSlug}}
+	for name, wrap := range map[string]func(*fakeConn){"pushdown and per-row": nil, "per-row only": perRowOnly} {
+		walk := s.walk(t, granted, contextfabric.RequestedScope{}, 25, wrap)
+		if got := memberTiers(walk); got != "work_item.v2:c:both=native,work_item.v2:c:visible=heuristic" {
+			t.Errorf("%s: members %s", name, got)
+		}
+		if walk.PullRequests != 2 || walk.LinkedIssues != 4 || walk.Denied != 2 {
+			t.Errorf("%s: pull requests %d, linked issues %d, denied %d; want 2, 4, 2 (secret and textonly)", name, walk.PullRequests, walk.LinkedIssues, walk.Denied)
+		}
+	}
+}
+
 // TestRepositoryWorkItemsFollowTheCallersAuthorization: with the read's grant
 // clause and with the walk's per-row rule alone.
 func TestRepositoryWorkItemsFollowTheCallersAuthorization(t *testing.T) {
