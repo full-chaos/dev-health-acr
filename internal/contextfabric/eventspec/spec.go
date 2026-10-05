@@ -3076,6 +3076,7 @@ var CountPopulationScope = Event{
 		{Key: "candidates", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "anchor_candidates", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "anchor_term_matches", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "anchor_identity_matches", Type: FieldInt, Presence: PresenceRequired},
 		// member_source (CHAOS-5783): which graph discovery arm served the
 		// resolved member set -- ownership (the anchor's own declared
 		// ownership signal) or hop_walk (bounded graph-proximity traversal),

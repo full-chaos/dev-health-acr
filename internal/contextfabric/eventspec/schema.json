@@ -1540,6 +1540,11 @@
         "presence": "required"
       },
       {
+        "key": "anchor_identity_matches",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "member_source",
         "type": "string",
         "presence": "required",
