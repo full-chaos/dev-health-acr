@@ -200,12 +200,12 @@ func TestRepositoryIssuesComeThroughItsPullRequestLinks(t *testing.T) {
 	}
 }
 
-// KNOWN DEFECT (ticket id of the walk cut to follow): the first world's repository has 20
+// KNOWN DEFECT (CHAOS-8752): the first world's repository has 20
 // issues linked through native links; the walk serves 14 of them (the 14 lowest ids), reports
 // the cohort truncated and blames a link tier cut that cannot have happened. The case asserts
 // the correct expectation inside a wrapper that passes only while the answer shows the
 // recorded defect exactly, and fails the moment it changes in any way, fixed or otherwise.
-func TestKnownDefectWalkCutsMembersBelowTheSeededCount(t *testing.T) {
+func TestKnownDefectCHAOS8752WalkCutsMembersBelowTheSeededCount(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
 	one, _ := slugs(t)
 	d, raw := walk(t, c, one)
