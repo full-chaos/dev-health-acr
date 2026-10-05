@@ -402,7 +402,13 @@ import (
 // scope; and a work item the link admitted has its own facts read without the
 // requested repository selector. A candidate saved under v71 or earlier for
 // such a question holds the old relation and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v73"
+//
+// v72 -> v73: an exact label match of a repository, project or team commits
+// only when the keyed identity read ran complete; a read that ran incomplete
+// leaves the label for a clarification, since a same-label subject the caller
+// can read may be missing from the pool. A candidate saved before v73 may hold
+// a commit that rule would refuse and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v74"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

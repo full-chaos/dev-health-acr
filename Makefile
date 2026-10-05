@@ -367,6 +367,12 @@ build:
 	go build -trimpath -o .tmp/acr-migrate ./cmd/acr-migrate
 	go build -trimpath -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-projector ./cmd/acr-projector
 
+fixture-graph-e2e:
+	bash scripts/e2e/fixture-graph.sh \
+		--compose "$(E2E_COMPOSE)" \
+		--overlay deploy/compose/acr.compose.yml \
+		--project "$(E2E_PROJECT)"
+
 verify: fmt-check vet test-split test-race-split crosscompile contract-test codegraph-contract shard-plan canonical-receipts fullstack-contract build
 
 container-contract:

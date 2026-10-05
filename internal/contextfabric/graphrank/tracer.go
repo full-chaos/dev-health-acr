@@ -86,7 +86,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// to Info.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: alias lookup",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
-			"complete", event.AliasLookupComplete, "matched_claimants", event.AliasLookupMatchedClaimants,
+			"complete", event.AliasLookupComplete, "identity_lookup", contextfabric.SanitizeLogAttr(event.IdentityLookup), "matched_claimants", event.AliasLookupMatchedClaimants,
 			"term_count", event.AliasLookupTermCount, "matched_kinds", contextfabric.SanitizeLogStrings(event.AliasLookupMatchedKinds))
 	case "kind_hint_search":
 		// CHAOS-4348: traceKindHintSearch's own event (chaos4348_reachability.go)
