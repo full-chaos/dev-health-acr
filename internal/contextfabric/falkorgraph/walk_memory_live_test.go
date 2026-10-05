@@ -323,6 +323,32 @@ func TestOneRepositoryWalkStaysSmallOnAWideLinkPopulation(t *testing.T) {
 	if len(walk.Members) != contextfabric.WorkItemMembershipCensusLimit+1 || !walk.Truncated {
 		t.Fatalf("members %d truncated %t, want the census bound plus one and a cut: the walk did not read the population", len(walk.Members), walk.Truncated)
 	}
+	t.Run("the same walk in series does not grow the live heap", func(t *testing.T) {
+		liveHeap := func() uint64 {
+			runtime.GC()
+			runtime.GC()
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			return m.HeapAlloc
+		}
+		const runs = 25
+		var first, last uint64
+		for i := 1; i <= runs; i++ {
+			if _, err := adapter.TreeWorkItemMembers(ctx, principal, binding, contextfabric.RequestedScope{}, anchor, contextfabric.WorkItemMembershipCensusLimit+1); err != nil {
+				t.Fatal(err)
+			}
+			switch i {
+			case 1:
+				first = liveHeap()
+			case runs:
+				last = liveHeap()
+			}
+		}
+		t.Logf("live heap after GC: %d KiB after walk 1, %d KiB after walk %d", first>>10, last>>10, runs)
+		if last > first+4<<20 {
+			t.Fatalf("the live heap grew from %d KiB to %d KiB over %d identical walks: something keeps each walk's memory", first>>10, last>>10, runs)
+		}
+	})
 	if allocated > walkMemoryBound || peak > walkMemoryBound {
 		t.Fatalf("one walk allocated %d MiB (peak live heap +%d MiB), want at most %d MiB: the walk holds whole nodes", allocated>>20, peak>>20, walkMemoryBound>>20)
 	}
