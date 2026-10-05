@@ -71,20 +71,22 @@ ORDER BY (least(w.completed_at, p.merged_at) > greatest(w.created_at, p.created_
 	t.Logf("PROBE PR %s current : %s", pr, edgeTable(read("pull_request", prID, nil)))
 	t.Logf("PROBE PR %s as_of A : %s", pr, edgeTable(prA))
 	t.Logf("PROBE PR %s as_of B : %s", pr, edgeTable(read("pull_request", prID, doc{"as_of": asOfPR})))
-	issueID := ""
-	for _, e := range list(prA, "edges") {
-		if str(e, "type") == "LINKS_PULL_REQUEST" && (str(e, "from", "label") == key || str(e, "to", "label") == key) {
-			issueID = str(e, "from", "canonical_id")
+	issueID, issueKey := "", ""
+	for _, e := range list(read("pull_request", prID, doc{"as_of": asOfPR}), "edges") {
+		if str(e, "type") == "LINKS_PULL_REQUEST" {
+			issueID, issueKey = str(e, "from", "canonical_id"), str(e, "from", "label")
 			if str(e, "from", "kind") != "work_item" {
-				issueID = str(e, "to", "canonical_id")
+				issueID, issueKey = str(e, "to", "canonical_id"), str(e, "to", "label")
 			}
+			break
 		}
 	}
 	if issueID == "" {
-		t.Logf("PROBE the issue %s is not among the as_of A edges of the pull request: %s", key, edgeTable(prA))
-		return
+		t.Fatal("PROBE no link edge at as_of B to take an issue from")
 	}
+	meta := ch(t, fmt.Sprintf("SELECT status, toString(created_at), toString(completed_at) FROM work_items FINAL WHERE org_id = %s AND work_item_id = %s", sqlStr(orgID(t)), sqlStr(issueKey)))
+	t.Logf("PROBE issue %s (status, created_at, completed_at) = %v", issueKey, meta)
 	t.Logf("PROBE issue current : %s", edgeTable(read("work_item", issueID, nil)))
-	t.Logf("PROBE issue as_of A : %s", edgeTable(read("work_item", issueID, doc{"as_of": asOfLink})))
 	t.Logf("PROBE issue as_of B : %s", edgeTable(read("work_item", issueID, doc{"as_of": asOfPR})))
+	t.Logf("PROBE issue as_of 2026-10-02T12:00:00Z : %s", edgeTable(read("work_item", issueID, doc{"as_of": "2026-10-02T12:00:00Z"})))
 }

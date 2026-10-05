@@ -182,6 +182,8 @@ raise_answer_ceiling() {
 }
 
 main() {
+  # falkordb is profile-gated: the profile must be active for up and for the teardown alike.
+  export COMPOSE_PROFILES=context-fabric-graph
   parse_args "$@"
   assert_project_unused
   prepare_state
