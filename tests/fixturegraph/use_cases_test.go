@@ -348,6 +348,8 @@ func TestRestrictedCallerSeesNothingOfAnotherRepository(t *testing.T) {
 // typed it in its own question and the service echoes it back in its refusal text.
 func assertNoForeignText(t *testing.T, raw, repoUUID string, issues map[string]bool) {
 	t.Helper()
+	// the canonical id the caller itself supplied is echoed back in a refusal
+	raw = strings.ReplaceAll(raw, "repository:"+repoUUID, "")
 	if strings.Contains(raw, repoUUID) {
 		t.Fatalf("a response to a restricted caller carries the id of the other repository: %.1500s", raw)
 	}

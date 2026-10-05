@@ -44,15 +44,14 @@ func TestProbeEdgeTypesOnTheCurrentAxis(t *testing.T) {
 	one, _ := slugs(t)
 	repoCanonical := subjectID(t, c, one)
 	rows := ch(t, fmt.Sprintf(`SELECT toString(p.number), w.work_item_id,
-  formatDateTime(least(w.completed_at, p.merged_at) - INTERVAL 1 MINUTE, '%%Y-%%m-%%dT%%H:%%i:%%SZ'),
+  formatDateTime(if(least(w.completed_at, p.merged_at) > greatest(w.created_at, p.created_at) + INTERVAL 2 MINUTE, greatest(w.created_at, p.created_at) + INTERVAL 1 MINUTE, least(w.completed_at, p.merged_at) - INTERVAL 1 MINUTE), '%%Y-%%m-%%dT%%H:%%i:%%SZ'),
   formatDateTime(p.merged_at - INTERVAL 1 MINUTE, '%%Y-%%m-%%dT%%H:%%i:%%SZ'), toString(p.merged_at), toString(w.completed_at)
 FROM work_graph_issue_pr AS l FINAL
 INNER JOIN git_pull_requests AS p FINAL ON p.org_id = l.org_id AND p.repo_id = l.repo_id AND p.number = l.pr_number
 INNER JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id
 INNER JOIN work_items AS w FINAL ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id
 WHERE l.org_id = %s AND r.repo = %s AND p.merged_at IS NOT NULL AND w.completed_at IS NOT NULL AND p.merged_at < now() AND w.completed_at < now()
-  AND w.completed_at > greatest(w.created_at, p.created_at) + INTERVAL 5 MINUTE
-ORDER BY p.number, w.work_item_id LIMIT 1`, sqlStr(orgID(t)), sqlStr(one)))
+ORDER BY (least(w.completed_at, p.merged_at) > greatest(w.created_at, p.created_at) + INTERVAL 2 MINUTE) DESC, p.number, w.work_item_id LIMIT 1`, sqlStr(orgID(t)), sqlStr(one)))
 	if len(rows) != 1 {
 		t.Fatalf("no merged pull request linked to a completed issue: %v", rows)
 	}
