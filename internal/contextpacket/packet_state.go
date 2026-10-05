@@ -108,22 +108,34 @@ type evidenceValidation struct {
 	quarantinedWatermarkSources []string
 }
 
-func validateEvidenceBundle(evidence []contractsv1.EvidenceRef) evidenceValidation {
+// evidenceRuleUnaddressable is the rule a store names for a row whose locator
+// cannot become a handle. It is validateEvidence's own text for a row without
+// a valid evidence_ref, so the disclosed code stays invalid_shape.
+const evidenceRuleUnaddressable = "invalid evidence_ref"
+
+func validateEvidenceBundle(evidence []contractsv1.EvidenceRef, dropped []storage.DroppedEvidence) evidenceValidation {
 	result := evidenceValidation{valid: make([]contractsv1.EvidenceRef, 0, len(evidence))}
+	for _, row := range dropped {
+		result.quarantine(row.SourceVersion, row.System, row.Rule)
+	}
 	for _, ref := range evidence {
 		if err := validateEvidence(ref); err != nil {
-			result.quarantined = append(result.quarantined, &evidenceRowError{SourceVersion: ref.SourceVersion, Rule: err.Error()})
-			if evidenceString(ref.Source.System, 1, 100) {
-				result.quarantinedWatermarkSources = append(result.quarantinedWatermarkSources, ref.Source.System)
-			}
-			if _, recognized := evidenceSourceCodes[ref.SourceVersion]; recognized {
-				result.quarantinedWatermarkSources = append(result.quarantinedWatermarkSources, ref.SourceVersion)
-			}
+			result.quarantine(ref.SourceVersion, ref.Source.System, err.Error())
 			continue
 		}
 		result.valid = append(result.valid, ref)
 	}
 	return result
+}
+
+func (v *evidenceValidation) quarantine(sourceVersion, system, rule string) {
+	v.quarantined = append(v.quarantined, &evidenceRowError{SourceVersion: sourceVersion, Rule: rule})
+	if evidenceString(system, 1, 100) {
+		v.quarantinedWatermarkSources = append(v.quarantinedWatermarkSources, system)
+	}
+	if _, recognized := evidenceSourceCodes[sourceVersion]; recognized {
+		v.quarantinedWatermarkSources = append(v.quarantinedWatermarkSources, sourceVersion)
+	}
 }
 func coverage(b storage.EvidenceBundle) contractsv1.Coverage {
 	considered, available := []string{}, []string{}

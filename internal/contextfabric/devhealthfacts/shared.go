@@ -376,7 +376,14 @@ import (
 // refused as a work-item population. A candidate saved before v68 for such a
 // question holds that refusal and must not be reused.
 //
-// v68 -> v70: an exact label match of a repository, project or team commits
+// v68 -> v69: a period total spans the N most recent completed UTC days for a
+// trailing window (the last 30 days is 30 days ending at today 00:00 UTC, not
+// 31 with partial edge days) and the whole days inside stated dates, and the
+// answer's server-composed text, with the count sentence and the period
+// total, is served on the answer. A candidate saved before v69 holds a total
+// summed over partial edge days and must not be reused.
+//
+// v69 -> v70: an exact label match of a repository, project or team commits
 // only when the keyed identity read ran complete; a read that ran incomplete
 // leaves the label for a clarification, since a same-label subject the caller
 // can read may be missing from the pool. A candidate saved before v70 may hold

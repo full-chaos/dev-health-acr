@@ -100,6 +100,17 @@ type EvidenceBundle struct {
 	// Warnings are non-fatal read disclosures surfaced verbatim in the packet.
 	Warnings     []string
 	QueryVersion string
+	// Dropped names every row the store read but left out of Evidence because
+	// it could not serve it. Evidence never holds such a row.
+	Dropped []DroppedEvidence
+}
+
+// DroppedEvidence is one evidence row a store left out. It carries no row
+// content: the source query, the source system, and a fixed rule text.
+type DroppedEvidence struct {
+	SourceVersion string
+	System        string
+	Rule          string
 }
 
 // EvidenceStore is read-only. Implementations may use ClickHouse now and a

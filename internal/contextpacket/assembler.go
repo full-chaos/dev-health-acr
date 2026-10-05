@@ -104,7 +104,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	if bundle.QueryVersion != "" {
 		packet.QueryVersion = bundle.QueryVersion
 	}
-	validation := validateEvidenceBundle(bundle.Evidence)
+	validation := validateEvidenceBundle(bundle.Evidence, bundle.Dropped)
 	bundle.Evidence = validation.valid
 	bundle.Watermarks = validatedEvidenceWatermarks(bundle.Watermarks, validation, packet.Freshness.AsOf)
 	visible, hidden := displayableEvidence(bundle.Evidence)
