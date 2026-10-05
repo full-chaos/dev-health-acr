@@ -333,6 +333,11 @@ type requestWindowCanonicalization struct {
 	// the question (MCP surface, current axis, no field window or receipt): the
 	// window was decided before the interpreter ran, from the engine's clock.
 	CalendarCommitted bool
+	// CalendarStart and CalendarEnd are the bounds the binder froze for that
+	// commitment. They outlive a withdrawal, so a series that reads the same
+	// calendar period never recomputes it on a later clock reading. Zero when
+	// no calendar period was read.
+	CalendarStart, CalendarEnd time.Time
 	// BinderProposal is the proposal-only temporal-expression binder's own
 	// verdict, computed over the verbatim question text -- carried forward
 	// to composeEffectiveWindow regardless of whether a request-side
@@ -491,6 +496,8 @@ func (e *Engine) commitBinderCalendarWindow(request InvestigationRequest, binder
 		KeyComponent:      windowKeyComponent(effective, windowKeyFrozen),
 		KeyEncoding:       windowKeyFrozen,
 		CalendarCommitted: true,
+		CalendarStart:     start,
+		CalendarEnd:       end,
 		BinderProposal:    binderProposal,
 	}
 }
@@ -830,8 +837,9 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 	// 2026-09-25) it is COMMITTED -- question_stated, never gated -- whatever
 	// window class the interpreter picked, so it is checked BEFORE the class
 	// table's "refuse to guess". A bare "last month/quarter/year" names a
-	// calendar period the closed grammar cannot bound (Trailing=false): it
-	// stays an inferred proposal below.
+	// calendar period the closed grammar cannot bound (Trailing=false): off the
+	// MCP surface it stays an inferred proposal below; on MCP the engine commits
+	// it before this runs (commitBinderCalendarWindow).
 	stated := binderProposal.Reason == WindowBindRoutedInferred && binderProposal.Trailing
 	if !ok && !stated {
 		// state_snapshot, or no class could be determined at all --
@@ -969,11 +977,14 @@ func statedPeriodRead(canon requestWindowCanonicalization, interpretation Interp
 		}
 		period = statedPeriod{Start: start, End: end, Origin: StatedWindowOriginQuestionPhrase, Conflict: detectStatedRangeConflict(binder, interpretation.TimeContext, now)}
 	case shape == periodShapeSeries && binder.Calendar != CalendarPeriodNone:
-		start, end, ok := calendarWindowBounds(binder.Calendar, now)
-		if !ok {
-			return nil
+		start, end := canon.CalendarStart, canon.CalendarEnd
+		if start.IsZero() || end.IsZero() {
+			var ok bool
+			if start, end, ok = calendarWindowBounds(binder.Calendar, now); !ok {
+				return nil
+			}
 		}
-		period = statedPeriod{Start: start, End: end, Origin: StatedWindowOriginQuestionPhrase}
+		period = statedPeriod{Start: start, End: end, Origin: StatedWindowOriginQuestionPhrase, Conflict: detectRangeConflictAgainst(start, end, interpretation.TimeContext)}
 	case binderNamesAPeriod(binder) && freshAnswerable && fresh.Axis == TemporalRange && fresh.Start != nil && fresh.End != nil && fresh.Start.Before(*fresh.End):
 		period = statedPeriod{Start: fresh.Start.UTC(), End: fresh.End.UTC(), Origin: StatedWindowOriginInterpreterRange}
 	default:
@@ -1022,11 +1033,18 @@ type statedRangeConflict struct {
 // question states, as of now. nil when the interpretation carried no range, or
 // a range within statedRangeTolerance of the stated period at both bounds.
 func detectStatedRangeConflict(binder WindowBindOutcome, interpreted TimeContext, now time.Time) *statedRangeConflict {
-	if interpreted.Axis != TemporalRange || interpreted.Start == nil || interpreted.End == nil {
-		return nil
-	}
 	start, end, ok := relativeWindowBounds(binder.RelativeID, now)
 	if !ok {
+		return nil
+	}
+	return detectRangeConflictAgainst(start, end, interpreted)
+}
+
+// detectRangeConflictAgainst compares the interpreted range with the stated
+// period's own bounds. nil when the interpretation carried no range, or a range
+// within statedRangeTolerance of the stated period at both bounds.
+func detectRangeConflictAgainst(start, end time.Time, interpreted TimeContext) *statedRangeConflict {
+	if interpreted.Axis != TemporalRange || interpreted.Start == nil || interpreted.End == nil {
 		return nil
 	}
 	if withinDuration(*interpreted.Start, start, statedRangeTolerance) && withinDuration(*interpreted.End, end, statedRangeTolerance) {

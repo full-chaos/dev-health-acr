@@ -290,25 +290,70 @@ func TestCalendarWindow_CalendarCommitIsRecorded(t *testing.T) {
 func TestCalendarWindow_APeriodShapeFrameLogsItsOwnWithdrawalToken(t *testing.T) {
 	t.Parallel()
 	for _, temporal := range []TemporalIntent{TemporalIntentTimeSeries, TemporalIntentPeriodComparison} {
-		cells := reachableFamilyCells(WindowClassExplicitWindow, true, temporal, periodShapeQuestion(temporal, periodQuestionNamed))
-		cell := cells[0]
-		cell.time = suppliedRangeEqual
-		cell.question = map[TemporalIntent]string{
-			TemporalIntentTimeSeries:       "How did the Ask Dev project's throughput change last month?",
-			TemporalIntentPeriodComparison: "How does the Ask Dev project's throughput compare with before, last month?",
-		}[temporal]
-		_, _, telemetry := runSuppliedRangeCellRig(t, cell, mcpSurface)
-		var tokens []StatedWindowAxisOutcome
-		for _, record := range telemetry.statedWindowAxes {
-			tokens = append(tokens, record.Outcome)
-		}
-		if len(tokens) == 0 || tokens[0] != StatedWindowAxisWithdrawnPeriodShape {
-			t.Fatalf("%s: stated window axis outcomes = %v, want %q first", temporal, tokens, StatedWindowAxisWithdrawnPeriodShape)
-		}
-		for _, token := range tokens {
-			if token == StatedWindowAxisWithdrawnPointInTime {
-				t.Fatalf("%s: the as-of token was logged for a period shape: %v", temporal, tokens)
+		for _, variant := range []suppliedTimeVariant{suppliedRangeEqual, suppliedRangeDifferent, suppliedRangeAbsent} {
+			cells := reachableFamilyCells(WindowClassExplicitWindow, true, temporal, periodShapeQuestion(temporal, periodQuestionNamed))
+			cell := cells[0]
+			cell.time = variant
+			cell.question = map[TemporalIntent]string{
+				TemporalIntentTimeSeries:       "How did the Ask Dev project's throughput change last month?",
+				TemporalIntentPeriodComparison: "How does the Ask Dev project's throughput compare with before, last month?",
+			}[temporal]
+			_, _, telemetry := runSuppliedRangeCellRig(t, cell, mcpSurface)
+			records := telemetry.statedWindowAxes
+			if len(records) == 0 || records[0].Outcome != StatedWindowAxisWithdrawnPeriodShape {
+				t.Fatalf("%s/%v: stated window axis records = %v, want %q first", temporal, variant, records, StatedWindowAxisWithdrawnPeriodShape)
+			}
+			wantExecuted := records[0].Interpreted
+			if temporal == TemporalIntentTimeSeries {
+				wantExecuted = TemporalRange
+			}
+			if records[0].Executed != wantExecuted {
+				t.Fatalf("%s/%v: withdrawal line executed axis %s, want %s", temporal, variant, records[0].Executed, wantExecuted)
+			}
+			for _, record := range records {
+				if record.Outcome == StatedWindowAxisWithdrawnPointInTime {
+					t.Fatalf("%s/%v: the as-of token was logged for a period shape: %v", temporal, variant, records)
+				}
 			}
 		}
+	}
+}
+
+// A sampled range that differs from the committed calendar month is disclosed
+// against the calendar month's own dates, not the trailing 30 days: an
+// interpreter range equal to the trailing 30 days is a conflict too.
+func TestCalendarWindow_ARangeDifferingFromTheCalendarMonthIsDisclosedAgainstItsDates(t *testing.T) {
+	t.Parallel()
+	wantStart, wantEnd := calendarPeriodOracle("last month", time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC))
+	const layout = "2006-01-02"
+	sampledStart, sampledEnd := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC), time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	trailing := bootstrapInterpretation()
+	trailing.TimeContext = TimeContext{Axis: TemporalRange, Start: &sampledStart, End: &sampledEnd}
+	run := runCalendarCase(t, "mcp", "Which repository carried the most operational/support work last month?", nil, TemporalCurrent, trailing)
+	want := contractsv1.ContextFabricStatedRangeConflictLimitation(sampledStart.Format(layout), sampledEnd.Format(layout), wantStart.Format(layout), wantEnd.Format(layout))
+	if !limitationsContain(run.result.Limitations, want) {
+		t.Fatalf("limitations = %q, want %q", run.result.Limitations, want)
+	}
+	matching := bootstrapInterpretation()
+	matching.TimeContext = TimeContext{Axis: TemporalRange, Start: &wantStart, End: &wantEnd}
+	run = runCalendarCase(t, "mcp", "Which repository carried the most operational/support work last month?", nil, TemporalCurrent, matching)
+	if limitationsContain(run.result.Limitations, "which is not the period the question states") {
+		t.Fatalf("a range equal to the calendar month was disclosed as a conflict: %q", run.result.Limitations)
+	}
+}
+
+// A series that reads the calendar period the binder froze keeps those bounds
+// when the clock has since crossed into the next month.
+func TestCalendarWindow_ASeriesKeepsTheBoundsTheBinderFroze(t *testing.T) {
+	t.Parallel()
+	frozenStart, frozenEnd := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	canon := requestWindowCanonicalization{
+		BinderProposal: WindowBindOutcome{Reason: WindowBindRoutedInferred, SpansBound: 1, Calendar: CalendarPeriodMonth},
+		CalendarStart:  frozenStart, CalendarEnd: frozenEnd,
+	}
+	later := time.Date(2026, 9, 1, 0, 0, 1, 0, time.UTC)
+	period := statedPeriodRead(canon, bootstrapInterpretation(), &QuestionFrame{Temporal: TemporalIntentTimeSeries}, TemporalCurrent, TimeContext{Axis: TemporalCurrent}, true, mcpSurface, later)
+	if period == nil || !period.Start.Equal(frozenStart) || !period.End.Equal(frozenEnd) {
+		t.Fatalf("period = %+v, want the frozen %v..%v", period, frozenStart, frozenEnd)
 	}
 }

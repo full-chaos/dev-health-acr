@@ -288,9 +288,10 @@ func TestCHAOS6557_TrailingPhraseCommitsTheTrailingBoundsOnMCP(t *testing.T) {
 
 // prod q2 (raw 04-q2.json), exact question: a bare "last month" is the
 // previous CALENDAR month (chris 2026-09-25), which the closed trailing
-// grammar cannot bound; the interpreter's calendar range becomes the committed
-// window -- exact bounds asserted, question_stated, current axis, never the
-// trailing 30 days.
+// grammar cannot bound; the binder's calendar month becomes the committed
+// window whatever range the interpreter sampled -- exact bounds asserted
+// against the independent date oracle, question_stated, current axis, never
+// the trailing 30 days.
 func TestCHAOS6557_BareLastMonthCommitsTheCalendarBoundsOnMCP(t *testing.T) {
 	t.Parallel()
 	// The first is prod q2 verbatim (its "and why" tail fails the role check; the
@@ -302,6 +303,9 @@ func TestCHAOS6557_BareLastMonthCommitsTheCalendarBoundsOnMCP(t *testing.T) {
 		"Which repository carried the most operational/support work last month?",
 	} {
 		interpretation := driftedInterpretation(contractsv1.ContextFabricTemporalRange)
+		sampledStart, sampledEnd := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+		interpretation.TimeContext.Start, interpretation.TimeContext.End = &sampledStart, &sampledEnd
+		wantStart, wantEnd := calendarPeriodOracle("last month", time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC))
 		run := runExplicitWindowCaseWith(t, "mcp", question, nil, interpretation)
 		result := run.result
 		if result.Status == InvestigationClarificationRequired || result.WindowClarification != nil {
@@ -309,8 +313,8 @@ func TestCHAOS6557_BareLastMonthCommitsTheCalendarBoundsOnMCP(t *testing.T) {
 		}
 		window := result.EffectiveEvidenceWindow
 		if window == nil || window.Provenance != WindowQuestionStated || window.RelativeID != "" || window.Start == nil || window.End == nil ||
-			!window.Start.Equal(*interpretation.TimeContext.Start) || !window.End.Equal(*interpretation.TimeContext.End) {
-			t.Fatalf("%q: EffectiveEvidenceWindow = %#v, want question_stated over the calendar %v..%v", question, window, interpretation.TimeContext.Start, interpretation.TimeContext.End)
+			!window.Start.Equal(wantStart) || !window.End.Equal(wantEnd) {
+			t.Fatalf("%q: EffectiveEvidenceWindow = %#v, want question_stated over the calendar %v..%v", question, window, wantStart, wantEnd)
 		}
 		if !run.factRead || run.factWindow == nil || run.factWindow.Start == nil || !run.factWindow.Start.Equal(*window.Start) || !run.factWindow.End.Equal(*window.End) {
 			t.Fatalf("%q: fact-read window = %#v, want the reported bounds", question, run.factWindow)
