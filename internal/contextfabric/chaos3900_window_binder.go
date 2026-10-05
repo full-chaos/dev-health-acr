@@ -246,15 +246,15 @@ type WindowBindOutcome struct {
 	// and the span states a TRAILING window ("in the last month", "past
 	// quarter", "last 30 days"): the caller's own words fix the bounds, so the
 	// engine may commit it. A bare "last month/quarter/year" (no preposition)
-	// names the previous CALENDAR period, whose bounds the interpreter -- not
-	// this closed grammar -- supplies; it stays a proposal.
+	// names the previous CALENDAR period, which this closed grammar does not
+	// bound as a trailing window: the Calendar field carries it instead.
 	Trailing bool
 	// PointInTime (CHAOS-6560) is set when the span is the object of an
 	// explicit point-in-time construction ("as of the end of last month"): the
 	// caller asked about a state at an instant, not a period of activity, so
 	// the span is never an evidence window.
 	PointInTime bool
-	// Calendar () is set when the question names the previous
+	// Calendar is set when the question names the previous
 	// CALENDAR month, quarter or year with a bare "last month|quarter|year"
 	// that states no trailing window. It is the binder's own deterministic
 	// reading of the phrase: the engine derives the bounds from its own clock,

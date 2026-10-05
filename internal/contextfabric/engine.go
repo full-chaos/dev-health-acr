@@ -2205,7 +2205,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// The fresh line above still reports what the interpreter proposed.
 	// : the binder committed a bare calendar phrase's window before
 	// the interpreter ran; the interpretation may only withdraw it (an as-of
-	// reading, a class with no window), never redefine it.
+	// reading, a series or comparison frame), never redefine it.
 	if withdrawn, reason, ok := withdrawCalendarCommit(windowCanon, interpretation, familyOutcome.Frame); ok {
 		windowCanon = withdrawn
 		if e.telemetry != nil {

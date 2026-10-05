@@ -554,7 +554,7 @@ func TestCHAOS6557_StatedWindowAxisLineCarriesItsOwnOutcomeVocabulary(t *testing
 	var buf bytes.Buffer
 	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	principal := storage.Principal{OrgID: "org_6560"}
-	for _, outcome := range []StatedWindowAxisOutcome{StatedWindowAxisAgreed, StatedWindowAxisOverridden, StatedWindowAxisVetoed} {
+	for _, outcome := range []StatedWindowAxisOutcome{StatedWindowAxisAgreed, StatedWindowAxisOverridden, StatedWindowAxisVetoed, StatedWindowAxisWithdrawnPointInTime, StatedWindowAxisWithdrawnPeriodShape} {
 		telemetry.RecordStatedWindowAxis(context.Background(), principal, "mcp", StatedWindowOriginInterpreterRange, TemporalRange, TemporalCurrent, outcome)
 	}
 	var outcomes []string
@@ -569,7 +569,7 @@ func TestCHAOS6557_StatedWindowAxisLineCarriesItsOwnOutcomeVocabulary(t *testing
 		}
 		outcomes = append(outcomes, got["outcome"].(string))
 	}
-	if want := []string{"agreed", "overridden_to_current", "vetoed"}; !reflect.DeepEqual(outcomes, want) {
+	if want := []string{"agreed", "overridden_to_current", "vetoed", "withdrawn_point_in_time", "withdrawn_period_shape"}; !reflect.DeepEqual(outcomes, want) {
 		t.Fatalf("outcomes = %v, want %v", outcomes, want)
 	}
 	for _, from := range []struct {

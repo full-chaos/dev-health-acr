@@ -328,7 +328,7 @@ type requestWindowCanonicalization struct {
 	// terminal WITHOUT reuse, WITHOUT interpretation, and WITHOUT any
 	// window inference substituted (see windowVetoReason).
 	Veto windowVetoReason
-	// CalendarCommitted () is set when Effective is the previous
+	// CalendarCommitted is set when Effective is the previous
 	// calendar period the BINDER read from a bare "last month|quarter|year" in
 	// the question (MCP surface, current axis, no field window or receipt): the
 	// window was decided before the interpreter ran, from the engine's clock.
@@ -467,15 +467,15 @@ func (e *Engine) canonicalizeEvidenceWindow(ctx context.Context, principal stora
 	}
 }
 
-// commitBinderCalendarWindow (, chris ruling 2026-09-25: a bare "last
+// commitBinderCalendarWindow (chris ruling 2026-09-25: a bare "last
 // month|quarter|year" is the previous calendar period, a window over current
 // state) commits that window HERE, before the interpreter runs, so it cannot
 // depend on what a sampled interpreter said: the same question at the same
 // instant yields the same window on every call. MCP surface only, like the rest
-// of the period-as-window rule (CHAOS-6557); every other surface keeps a bare
+// of the period-as-window rule; every other surface keeps a bare
 // calendar phrase as a proposal. The interpretation may still withdraw it
-// (withdrawCalendarCommit): a point-in-time reading or a class that carries no
-// window at all.
+// (withdrawCalendarCommit): a point-in-time reading, or a series or period
+// comparison frame. A window class never does.
 func (e *Engine) commitBinderCalendarWindow(request InvestigationRequest, binderProposal WindowBindOutcome) requestWindowCanonicalization {
 	plain := requestWindowCanonicalization{BinderProposal: binderProposal}
 	if strings.TrimSpace(request.Consumer.Surface) != mcpSurface {
