@@ -291,3 +291,20 @@ func IssuePullRequestLinkPageForTest(ctx context.Context, client contextpacket.C
 	}
 	return rows, more, nil
 }
+
+// ReadPullRequestPageForTest runs the pull request producer's own read
+// (queryPullRequests) for one page from a cursor position, so a live test can
+// drive the exact statement the projector sends at a chosen cursor: the
+// catch-up after a rebuild (a zero position) or a steady tick (a recent one).
+func ReadPullRequestPageForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, since time.Time, after string, limit int) (rows int, truncated bool, err error) {
+	candidates, truncated, err := queryPullRequests(ctx, client, orgID, cursorState{Since: since, After: after, Space: cursorSpaceIngest}, limit)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, c := range candidates {
+		if c.entity != nil {
+			rows++
+		}
+	}
+	return rows, truncated, nil
+}
