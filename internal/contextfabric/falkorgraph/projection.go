@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 const propRelationType = "relation_type"
@@ -360,6 +361,15 @@ func (a *Adapter) projectRelationship(ctx context.Context, key, orgID string, re
 	// itself still carries the window, below.
 	fromAttrs := subjectMergeAttrs(relationship.From, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, nil, nil, relationship.SourceVersion, nil, a.config.IncludeEmbedBodies)
 	toAttrs := subjectMergeAttrs(relationship.To, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, nil, nil, relationship.SourceVersion, nil, a.config.IncludeEmbedBodies)
+	if relationship.Type == contractsv1.ContextFabricRelationshipLinksPullRequest {
+		// The link edge carries the PULL REQUEST's repository scope, not the
+		// issue's. Relationships are written before entities, so an issue
+		// stub created by this edge would otherwise admit a caller scoped to
+		// the pull request's repository to the issue (a repository-less or
+		// other-repository one) until its own entity merges. The issue stub
+		// fails closed; the work item entity's write sets its real scope.
+		fromAttrs[propAuthzRepos] = []string{referencedEndpointStubSentinel}
+	}
 	edgeAttrs := map[string]interface{}{
 		propRelationshipID: relationship.RelationshipID, propRelationType: graphrank.NormalizeRelation(string(relationship.Type)),
 		"derivation": string(relationship.Derivation), "epistemic_status": string(relationship.EpistemicStatus),
