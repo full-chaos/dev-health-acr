@@ -457,7 +457,7 @@ func (e *Engine) planFactRowTruncation(
 			return InvestigationResult{}, served, tables, contractsv1.ContextFabricResponseMeasurement{}, false, nil
 		}
 		truncated = e.finalizeResult(ctx, principal, truncated, *plan, frame, facts, nil, pass, cardinality)
-		measurement, err := contractsv1.MeasureContextFabricResponse(servedMeasurementShape(truncated))
+		measurement, err := contractsv1.MeasureContextFabricResponse(e.servedMeasurementShape(ctx, truncated))
 		return truncated, served, tables, measurement, true, err
 	}
 

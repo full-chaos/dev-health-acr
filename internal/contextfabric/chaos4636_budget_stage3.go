@@ -74,6 +74,10 @@ type AnswerBudgetRefusal struct {
 	MeasuredBytes      int64
 	MaxItems           int
 	MaxSerializedBytes int64
+	// NothingLeftToCut is true when the answer, measured as it is sent,
+	// overran the byte ceiling and no row table held more than one row to cut:
+	// the refusal is final for this answer.
+	NothingLeftToCut bool
 	// Family is what was being answered.
 	Family QuestionFamily
 	// NarrowerContinuationAxis names the structural dimension a caller
