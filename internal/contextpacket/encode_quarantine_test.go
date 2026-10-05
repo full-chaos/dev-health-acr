@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 type emptyLocatorEvidenceClient struct{}
@@ -78,26 +80,41 @@ func TestAssemblerServesTheOtherRowsWhenOneEvidenceRowHasNoLocator(t *testing.T)
 	}
 }
 
-func TestClickHouseEvidenceStoreNeverServesARawLocatorItCouldNotEncode(t *testing.T) {
+func TestClickHouseEvidenceStoreLeavesOutAndNamesEveryRowItCannotEncode(t *testing.T) {
 	observed := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	good := testEvidence("acr:v1:ci:run-good", "ci", observed)
-	good.SourceVersion = "ci_pipeline_runs.v1"
+	first := testEvidence("acr:v1:ci:run-first", "ci", observed)
+	first.SourceVersion = "ci_pipeline_runs.v1"
+	noLocator := testEvidence("acr:v1:ci:run-no-locator", "ci", observed)
+	noLocator.SourceVersion, noLocator.EvidenceRefID = "ci_pipeline_runs.v1", ""
+	second := testEvidence("acr:v1:git:commit-second", "git", observed)
+	second.SourceVersion = "git_commits.v1"
 	unknownSource := testEvidence("acr:v1:ci:raw-locator-of-an-unknown-source", "ci", observed)
 	unknownSource.SourceVersion = "not_a_catalog_query.v1"
-	store, err := contextpacket.NewClickHouseEvidenceStoreWithOptions(&bundleRows{evidence: []contractsv1.EvidenceRef{good, unknownSource}}, contextpacket.EvidenceStoreOptions{Codec: fixtureEvidenceCodec(t)})
+	store, err := contextpacket.NewClickHouseEvidenceStoreWithOptions(&bundleRows{evidence: []contractsv1.EvidenceRef{first, noLocator, second, unknownSource}}, contextpacket.EvidenceStoreOptions{Codec: fixtureEvidenceCodec(t)})
 	if err != nil {
 		t.Fatalf("create evidence store: %v", err)
 	}
 
-	bundle, err := store.ContextForTask(context.Background(), fixturePrincipal(), fixtureRequest("req-unknown-source", "main", ""))
+	bundle, err := store.ContextForTask(context.Background(), fixturePrincipal(), fixtureRequest("req-unencodable-rows", "main", ""))
 
 	if err != nil {
-		t.Fatalf("ContextForTask error = %v, want the encodable row kept", err)
+		t.Fatalf("ContextForTask error = %v, want the encodable rows served", err)
 	}
-	if len(bundle.Evidence) != 2 || !strings.HasPrefix(bundle.Evidence[0].EvidenceRefID, "ev2_") {
-		t.Fatalf("bundle evidence = %#v, want the encodable row with a handle", bundle.Evidence)
+	served := map[string]bool{}
+	for _, ref := range bundle.Evidence {
+		if !strings.HasPrefix(ref.EvidenceRefID, "ev2_") {
+			t.Fatalf("served row %s has locator %q, want only encoded handles", ref.Source.EntityID, ref.EvidenceRefID)
+		}
+		served[ref.Source.EntityID] = true
 	}
-	if bundle.Evidence[1].EvidenceRefID != "" {
-		t.Fatalf("unencodable row kept locator %q, want none", bundle.Evidence[1].EvidenceRefID)
+	if len(bundle.Evidence) != 2 || !served[first.Source.EntityID] || !served[second.Source.EntityID] {
+		t.Fatalf("served rows = %v, want exactly the two encodable rows", served)
+	}
+	want := []storage.DroppedEvidence{
+		{SourceVersion: "ci_pipeline_runs.v1", System: "ci", Rule: "invalid evidence_ref"},
+		{SourceVersion: "not_a_catalog_query.v1", System: "ci", Rule: "invalid evidence_ref"},
+	}
+	if !reflect.DeepEqual(bundle.Dropped, want) {
+		t.Fatalf("dropped = %#v, want %#v", bundle.Dropped, want)
 	}
 }
