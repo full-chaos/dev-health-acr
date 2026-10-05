@@ -391,7 +391,11 @@ func walkReadsDecideAsWholeNodeReads(t *testing.T, ctx context.Context, adapter 
 		}
 		state := treeWalkState{out: &treeWalk{}, principal: c.principal, scope: c.scope, scopeFollowsLink: link.to == treeIssue}
 		rowsOf := func(cypher string) []row {
-			params := linkSegmentParams(orgID, anchor, feed, link, 0, 5000, temporalFilter{})
+			// 300 rows: every row of the small repositories, and the first
+			// 300 of acme/big, whose whole-node read of all 3000 rows (each
+			// with two 3072-wide embeddings) outlasts the request timeout
+			// under the race detector.
+			params := linkSegmentParams(orgID, anchor, feed, link, 0, 300, temporalFilter{})
 			if restricted {
 				params = linkSegmentGrants(params, c.principal)
 			}
