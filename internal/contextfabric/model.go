@@ -381,6 +381,15 @@ type CanonicalFactRequest struct {
 	// workItemTuple requires explicit retained-member requirements at the fact
 	// boundary; it is internal dispatch state, never a request or model field.
 	workItemTuple bool
+	// scopeSelectedWorkItems: every work-item subject of this request was
+	// admitted under the requested repository scope where it was selected
+	// (the graph walks, the scoped census, the resolver), by the rule that
+	// follows the link of record. A work item's own facts (status, title,
+	// completion) are then read under the caller's grants only: applying the
+	// requested scope again to the work item's own repository column would
+	// drop an issue the scope reached through its link. Internal dispatch
+	// state, set for an investigation's fact read only.
+	scopeSelectedWorkItems bool
 
 	Question     InterpretedQuestion `json:"question"`
 	Subjects     []SubjectRef        `json:"subjects"`

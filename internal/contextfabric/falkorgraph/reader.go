@@ -284,6 +284,11 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// round on "stalled resolution only" and adds the 3s deadline +
 		// panic recovery, so nothing extra is needed here.
 		CensusFunc: a.config.CensusFunc,
+		// The work items of a requested repository scope: the same
+		// repository-to-issue walk that serves a repository's work items.
+		LinkScopedWorkItems: func(ctx context.Context, scope contextfabric.RequestedScope) ([]string, bool, error) {
+			return a.linkScopedIssues(ctx, key, principal, scope, contextfabric.WorkItemMembershipCensusLimit)
+		},
 		// CHAOS-3972 P3: nil unless the composition root sets
 		// Config.HandleGrammarChecker -- see that field's own doc comment.
 		HandleGrammarChecker: a.config.HandleGrammarChecker,

@@ -231,6 +231,9 @@ func TestEngineCopiesRequestedRepositoryScopeIntoCanonicalFactRequest(t *testing
 	if !reflect.DeepEqual(observed.RequestedRepositoryScope, want) {
 		t.Fatalf("fact request scope = %#v, want %#v", observed.RequestedRepositoryScope, want)
 	}
+	if !observed.scopeSelectedWorkItems {
+		t.Fatal("an investigation's fact request does not say its work items were selected under the requested scope: their own facts would be filtered again on their own repository")
+	}
 	observed.RequestedRepositoryScope[0] = "fact-request-mutated"
 	if request.RequestedScope.RepositorySlugs[0] != "caller-mutated-after-investigate" {
 		t.Fatalf("fact request scope shares storage with the caller request: %#v", request.RequestedScope.RepositorySlugs)
@@ -262,6 +265,48 @@ func TestGroupedFactRequestCopiesRequestedRepositoryScope(t *testing.T) {
 		factRequest.RequestedRepositoryScope[0] = "recorded-request-mutated"
 		if request.RequestedScope.RepositorySlugs[0] != "caller-mutated-after-investigate" {
 			t.Fatalf("fact request %d scope shares storage with the caller request", index)
+		}
+	}
+}
+
+// TestAWorkItemsOwnFactsAreNotFilteredAgainOnItsOwnRepository: in an
+// investigation the requested repository scope selected the work items (by
+// the rule that follows the link), so a work item's own status, title and
+// completion are read under the caller's grants; every other read keeps the
+// requested scope.
+func TestAWorkItemsOwnFactsAreNotFilteredAgainOnItsOwnRepository(t *testing.T) {
+	t.Parallel()
+	work := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_item.v2:00000000-0000-0000-0000-000000000000:linear:ENG-1", Label: "ENG-1"}
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project.v2:linear:p-1", Label: "p-1"}
+	allowed := map[string]SubjectRef{canonicalFactSubjectKey(work): work, canonicalFactSubjectKey(project): project}
+	scope := []string{"acme/svc"}
+	for _, c := range []struct {
+		name     string
+		selected bool
+		kind     FactKind
+		subjects []SubjectRef
+		want     []string
+	}{
+		{"status of a work item", true, FactStatus, []SubjectRef{work}, nil},
+		{"title of a work item", true, FactWork, []SubjectRef{work}, nil},
+		{"completion of a work item", true, FactActualCompletion, []SubjectRef{work}, nil},
+		{"completion roll-up of a project", true, FactActualCompletion, []SubjectRef{work, project}, scope},
+		{"blockers of a work item", true, FactBlockers, []SubjectRef{work}, scope},
+		{"a read outside an investigation", false, FactStatus, []SubjectRef{work}, scope},
+	} {
+		capability := FactCapability{Kind: c.kind, SupportedSubjectKinds: []SubjectKind{SubjectWorkItem, SubjectProject}}
+		request := CanonicalFactRequest{
+			scopeSelectedWorkItems: c.selected,
+			Question:               InterpretedQuestion{TimeContext: TimeContext{Axis: TemporalCurrent}},
+			Subjects:               c.subjects, Requirements: []FactRequirement{{Kind: c.kind}},
+			RequestedRepositoryScope: scope,
+		}
+		query, err := buildFactQuery(request, FactRequirement{Kind: c.kind}, capability, allowed, c.subjects)
+		if err != nil {
+			t.Fatalf("%s: buildFactQuery() error = %v", c.name, err)
+		}
+		if !reflect.DeepEqual(query.RequestedRepositoryScope, c.want) {
+			t.Errorf("%s: requested scope %#v, want %#v", c.name, query.RequestedRepositoryScope, c.want)
 		}
 	}
 }

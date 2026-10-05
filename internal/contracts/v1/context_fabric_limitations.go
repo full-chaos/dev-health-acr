@@ -706,9 +706,10 @@ func IsContextFabricComparisonPeriodUnreadLimitation(limitation string) bool {
 
 // ContextFabricWorkItemCensusRepositoryScopeLimitation is served, in the same
 // words every time, when the caller's repository scope was applied to the
-// work item census: a work item with no repository of its own is outside a
-// named repository, so the census did not search it.
-const ContextFabricWorkItemCensusRepositoryScopeLimitation = "A repository scope was given: work items that have no repository of their own (for example tracker issues linked only through pull requests) were not searched."
+// work item census: a work item is in the scope when it is linked to a pull
+// request of a named repository (the entity tree), whatever its own
+// repository, and the links come from the last link build.
+const ContextFabricWorkItemCensusRepositoryScopeLimitation = "A repository scope was given: work items were searched through their links to the pull requests of the named repositories. The links come from the last link build and can lag behind the source."
 
 // IsContextFabricWorkItemCensusRepositoryScopeLimitation reports whether one
 // limitation is that disclosure; it matches the whole sentence.

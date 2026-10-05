@@ -661,6 +661,26 @@ repository's pull requests and filtered by the dev-health-go
 (project ownership, the anchor gate, requested scope) is a named exception in
 the test, asserted exactly.
 
+**A requested repository scope follows the link (CHAOS-8694).** An issue is in
+a requested repository scope when it is linked to a pull request of a named
+repository, whatever its own repository: the scope is tested on the pull
+request at the other end of the link, and the issue only against the caller's
+grants and the rest of the request (`graphrank.AuthorizedThroughLink`, the one
+predicate). It holds in every walk that crosses the link (the repository
+work-item walk and the project deployment walk) and in the work-item census
+under a requested repository scope: that census reads the handle's satisfiers
+over the whole organization and keeps those the repository -> issue walk
+reaches from each repository of the scope (`falkorgraph` `linkScopedIssues`,
+the same walk), and its cross-check and its commit test the issue with the same
+predicate. The census never filters a work item on its own repository column.
+A walk cut at its bound (more than 25 repositories in the scope, or more than
+the census bound of issues) is no census: the round reports it incomplete. A
+repository-less issue still needs a native link under a requested scope. In an
+investigation the requested scope selects the work items; a work item's own
+facts (status, title, completion) are then read under the caller's grants
+only, never filtered again on the work item's own repository column
+(`workItemOwnFact` in `fact_registry.go`).
+
 ---
 
 ## 4 — Fact data model

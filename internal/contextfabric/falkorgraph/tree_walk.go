@@ -294,12 +294,6 @@ type treeWalkState struct {
 	principal    storage.Principal
 	scope        contextfabric.RequestedScope
 	collectLimit int
-	// scopeFollowsLink (E3): a requested repository scope is tested on the
-	// link's pull request, not on the issue's own repository. Only the
-	// repository work-item walk (the issues are the members) applies it; the
-	// deployment walks keep the both-ends rule they were reviewed with
-	// (CHAOS-8694 takes it there).
-	scopeFollowsLink bool
 }
 
 func (s treeWalkState) authorized(n *node) bool {
@@ -312,18 +306,18 @@ func (s treeWalkState) authorized(n *node) bool {
 // request the caller is granted (the other end of the same row), and for a
 // repository-restricted caller only when that link's tier grants authority
 // (native). An unrestricted caller needs no authority from a link.
+//
+// A requested repository scope follows the link in every walk that crosses
+// it: the pull request at the other end of the row is tested against the
+// scope; the issue is tested against the caller's grants and the rest of the
+// request (graphrank.AuthorizedThroughLink), never against the scope by its
+// own repository.
 func (s treeWalkState) admitted(position treePosition, n *node, tier linkTier) bool {
 	if position == treeIssue && repositoryLess(n) {
 		return tier.grantsAuthority || !s.narrowed()
 	}
-	if position == treeIssue && s.scopeFollowsLink && len(s.scope.RepositorySlugs) > 0 {
-		// E3: a requested repository scope follows the link. The pull request
-		// at the other end of the row is tested against it; the issue is
-		// tested against the caller's grants only, never against the scope by
-		// its own repository.
-		linkScope := s.scope
-		linkScope.RepositorySlugs = nil
-		return graphrank.AuthorizedAttributes(s.principal, linkScope, toCandidateNode(n).Attributes)
+	if position == treeIssue {
+		return graphrank.AuthorizedThroughLink(s.principal, s.scope, toCandidateNode(n).Attributes)
 	}
 	return s.authorized(n)
 }
@@ -374,7 +368,7 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 	if !ok {
 		return out, nil
 	}
-	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit, scopeFollowsLink: member == treeIssue}
+	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit}
 	frontier := []string{anchor.CanonicalID}
 	subjects := map[string]contextfabric.SubjectRef{anchor.CanonicalID: anchor}
 	for k := 0; k < len(path); k++ {

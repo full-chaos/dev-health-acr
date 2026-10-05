@@ -375,7 +375,15 @@ import (
 // canonical facts of the walked members. Before it a repository anchor was
 // refused as a work-item population. A candidate saved before v68 for such a
 // question holds that refusal and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v68"
+//
+// v68 -> v69: a requested repository scope follows the link of record. A
+// work-item handle under a requested repository scope is counted among the
+// issues linked to a pull request of a named repository, not by the work
+// item's own repository, and a project's deployments under a requested scope
+// are reached through an issue of any repository linked to a pull request in
+// the scope. A candidate saved under v68 or earlier for such a question holds
+// the old relation and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v69"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -1351,12 +1351,16 @@ func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, c
 	for key, value := range requirement.Parameters {
 		parameters[key] = value
 	}
+	requested := copyRequestedRepositoryScope(request.RequestedRepositoryScope)
+	if request.scopeSelectedWorkItems && workItemOwnFact(requirement.Kind) && onlyWorkItems(subjects) {
+		requested = nil
+	}
 	return FactQuery{
 		Kind:                     requirement.Kind,
 		Subjects:                 append([]SubjectRef(nil), subjects...),
 		Cohort:                   request.Cohort,
 		Time:                     request.Question.TimeContext,
-		RequestedRepositoryScope: copyRequestedRepositoryScope(request.RequestedRepositoryScope),
+		RequestedRepositoryScope: requested,
 		Parameters:               parameters,
 	}, nil
 }
@@ -2083,4 +2087,23 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// workItemOwnFact reports whether a fact kind reads a work item's own row:
+// its status, its title, its completion. The requested repository scope
+// selected the work item; it does not filter the work item's own row again.
+func workItemOwnFact(kind FactKind) bool {
+	return kind == FactStatus || kind == FactWork || kind == FactActualCompletion
+}
+
+// onlyWorkItems reports whether every subject is a work item. A query that
+// also reads another kind (a project's completion roll-up) keeps the
+// requested scope.
+func onlyWorkItems(subjects []SubjectRef) bool {
+	for _, subject := range subjects {
+		if subject.Kind != SubjectWorkItem {
+			return false
+		}
+	}
+	return len(subjects) > 0
 }

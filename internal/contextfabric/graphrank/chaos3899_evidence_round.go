@@ -349,8 +349,13 @@ type ShadowEvidenceRoundInput struct {
 	// caller's own repository narrowing (an unrestricted principal's filter).
 	NarrowSatisfiers SatisfierNarrower
 	// CensusRepositories, set together with NarrowSatisfiers, is the slug list
-	// the census applies inside its query.
+	// the census applies inside its query. A work item is not scoped by it:
+	// its census reads the organization and keeps the satisfiers the scope's
+	// link walk reaches (workItemScope, withinLinkScope).
 	CensusRepositories []string
+	// workItemScope is the requested repository scope's work-item population,
+	// shared with NarrowSatisfiers; nil when no link walk is wired.
+	workItemScope *linkScope
 	// Trigger names why the round ran ("stalled", "committed_scope_anchor");
 	// a pure trace tag.
 	Trigger string
@@ -701,8 +706,19 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 			loopSurvivor = true
 			continue
 		}
-		outcome, err := input.CensusFunc(WithCensusRepositoryFilter(ctx, input.CensusRepositories), input.OrgID, kind,
+		// A work item is in a requested repository scope through its linked
+		// pull requests, never by its own repository: its census reads the
+		// organization and keeps the satisfiers the scope's link walk reaches.
+		linkScoped := kind == contextfabric.SubjectWorkItem && len(input.CensusRepositories) > 0
+		censusCtx := WithCensusRepositoryFilter(ctx, input.CensusRepositories)
+		if linkScoped {
+			censusCtx = ctx
+		}
+		outcome, err := input.CensusFunc(censusCtx, input.OrgID, kind,
 			valueOr(handleApplies, handle), handleApplies, anchor.Kind, anchor.CanonicalID, anchorApplies)
+		if err == nil && linkScoped {
+			outcome, err = withinLinkScope(ctx, input.workItemScope, outcome)
+		}
 		ka := KindAttestation{Kind: kind, Protocol: "aggregate_first", HandleApplied: handleApplies, AnchorApplied: anchorApplies}
 		narrowedEmpty := false
 		if err != nil {

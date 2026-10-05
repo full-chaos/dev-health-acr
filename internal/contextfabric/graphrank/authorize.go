@@ -113,6 +113,19 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 	return true
 }
 
+// AuthorizedThroughLink is the issue side of a link of record under a
+// requested scope: the requested repository scope follows the link (the
+// entity tree relates an issue to a repository only through its linked pull
+// requests), so it is tested on the pull request at the other end of the link,
+// never on the issue's own repository. The issue still meets the caller's
+// grants and every other part of the request. Every reader that admits an
+// issue through a link (the tree walks, the scoped work-item census and its
+// cross-check, the census commit) uses this one predicate.
+func AuthorizedThroughLink(principal storage.Principal, requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
+	requested.RepositorySlugs = nil
+	return AuthorizedAttributes(principal, requested, attributes)
+}
+
 // OwnsRepository reports whether a subject's own authorization_repositories
 // property names repoSlug -- the subject's DECLARED ownership signal, never
 // an authorization/visibility check against a principal or a caller-supplied
