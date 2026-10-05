@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -25,9 +26,14 @@ func investigateAtCap(t *testing.T, maxBytes int64, scopeRecorded bool) (Investi
 
 func investigateAtCapWithHook(t *testing.T, maxBytes int64, scopeRecorded bool, hook func(InvestigationResult) InvestigationResult) (InvestigationResult, error) {
 	t.Helper()
+	return investigateAtCapRecorded(t, maxBytes, scopeRecorded, hook, &recordingTelemetry{})
+}
+
+func investigateAtCapRecorded(t *testing.T, maxBytes int64, scopeRecorded bool, hook func(InvestigationResult) InvestigationResult, telemetry *recordingTelemetry) (InvestigationResult, error) {
+	t.Helper()
 	calls := 0
 	shape := chaos6558Shape{maxBytes: maxBytes}
-	engine := chaos6558Engine(t, &calls, &recordingTelemetry{}, shape)
+	engine := chaos6558Engine(t, &calls, telemetry, shape)
 	engine.servedLateHook = hook
 	ctx := context.Background()
 	if scopeRecorded {
@@ -143,5 +149,81 @@ func TestARefusalSaysWhenNothingWasLeftToCut(t *testing.T) {
 	}
 	if !refusal.NothingLeftToCut || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
 		t.Fatalf("refusal = %+v, want a bytes refusal that says nothing was left to cut", refusal)
+	}
+}
+
+// Each served-document event is emitted once per request, for the document
+// served: a candidate the fit cuts again leaves no completeness-authority,
+// outcome-transition or budget-assertion event behind.
+func TestTheServedDocumentEventsAreEmittedOnceWhenTheFitCutsAgain(t *testing.T) {
+	ceiling := seededNearCapCeiling(t)
+	baseline := &recordingTelemetry{}
+	if _, err := investigateAtCapRecorded(t, ceiling, false, nil, baseline); err != nil {
+		t.Fatal(err)
+	}
+	cut := &recordingTelemetry{}
+	if _, err := investigateAtCapRecorded(t, ceiling, false, lateBytes(400), cut); err != nil {
+		t.Fatal(err)
+	}
+	if len(cut.completenessAuthorities) != len(baseline.completenessAuthorities) ||
+		len(cut.budgetAssertions) != len(baseline.budgetAssertions) ||
+		len(cut.requirementOutcomeTransitions) != len(baseline.requirementOutcomeTransitions) {
+		t.Fatalf("events after a re-cut: authority %d/%d, budget assertion %d/%d, transitions %d/%d (re-cut / not re-cut): the discarded candidate emitted",
+			len(cut.completenessAuthorities), len(baseline.completenessAuthorities),
+			len(cut.budgetAssertions), len(baseline.budgetAssertions),
+			len(cut.requirementOutcomeTransitions), len(baseline.requirementOutcomeTransitions))
+	}
+	for _, event := range cut.budgetAssertions {
+		if event.Overrun != contractsv1.ContextFabricBudgetFits {
+			t.Fatalf("a budget assertion describes an overrun document that was not served: %+v", event)
+		}
+	}
+}
+
+// A path-drop outcome has the same row shape as the row-cut outcome. The re-cut
+// replaces the row the row cut wrote and nothing else, and its declared total is
+// the row total, never the path count.
+func TestARecutKeepsAPathDropOutcomeAndTheRowTotal(t *testing.T) {
+	rows := func(n int) []contractsv1.ContextFabricClaimedFactRow {
+		out := make([]contractsv1.ContextFabricClaimedFactRow, n)
+		for i := range out {
+			value := int64(i)
+			out[i] = contractsv1.ContextFabricClaimedFactRow{Fields: map[string]contractsv1.ContextFabricScalarValue{"n": {Integer: &value}}}
+		}
+		return out
+	}
+	result := InvestigationResult{ClaimedFacts: []ClaimedFact{{ClaimID: "claim_a", Rows: rows(10)}, {ClaimID: "claim_b", Rows: rows(10)}}}
+	result, _, _, cut := applyFactRowTruncation(result, 5, 20)
+	if !cut {
+		t.Fatal("the first cut cut nothing")
+	}
+	pathDrop := pathDropOutcomeRow(3, 50)
+	result.Completeness.Outcomes = appendOutcomeRows(result.Completeness.Outcomes, pathDrop)
+
+	recut, ok := recutFactRows(result, 4)
+	if !ok {
+		t.Fatal("the re-cut cut nothing")
+	}
+	if got, _ := claimedFactTableRowCounts(recut.ClaimedFacts); got != 8 {
+		t.Fatalf("rows after the re-cut = %d, want 8", got)
+	}
+	foundPathDrop, rowCuts := false, 0
+	for _, row := range recut.Completeness.Outcomes {
+		if reflect.DeepEqual(row, pathDrop) {
+			foundPathDrop = true
+		}
+		if reflect.DeepEqual(row, factRowTruncationOutcomeRow(8, 20)) {
+			rowCuts++
+		}
+		if reflect.DeepEqual(row, factRowTruncationOutcomeRow(10, 20)) {
+			t.Fatalf("the earlier row-cut outcome row is still there: %+v", row)
+		}
+	}
+	if !foundPathDrop || rowCuts != 1 {
+		t.Fatalf("path-drop row kept=%v, row-cut rows for 8 of 20 = %d: %+v", foundPathDrop, rowCuts, recut.Completeness.Outcomes)
+	}
+	want, _ := contractsv1.ContextFabricFactRowTruncationLimitation(8, 20, 4)
+	if len(recut.Limitations) != 1 || recut.Limitations[0] != want {
+		t.Fatalf("limitations = %q, want exactly %q (declared stays the row total 20)", recut.Limitations, want)
 	}
 }

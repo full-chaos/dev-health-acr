@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -210,8 +211,8 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 		// stage-three raise keeps, and built by the SAME constructor -- so
 		// the emitted line and the raised error can never disagree about
 		// the document they describe.
-		if e.telemetry != nil {
-			e.telemetry.RecordItemAccounting(ctx, principal,
+		if telemetry := e.servedTelemetry(ctx); telemetry != nil {
+			telemetry.RecordItemAccounting(ctx, principal,
 				itemAccountingEventFor(string(stage), ledger, budget.MaxItems))
 		}
 		return stageError(StageValidation, accounting)
@@ -237,8 +238,8 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 	certificate, capacity := contractsv1.CertifyContextFabricCapacity(ledger, budget)
 	event.CertifiedFit = certificate.Certified()
 	event.Capacity = capacity
-	if e.telemetry != nil {
-		e.telemetry.RecordBudgetAssertion(ctx, principal, event)
+	if telemetry := e.servedTelemetry(ctx); telemetry != nil {
+		telemetry.RecordBudgetAssertion(ctx, principal, event)
 	}
 	if event.Fits {
 		return nil
@@ -298,8 +299,8 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	if e.servedLateHook != nil {
 		result = e.servedLateHook(result)
 	}
-	if e.telemetry != nil {
-		e.telemetry.RecordCompletenessAuthority(ctx, principal, completenessAuthority)
+	if telemetry := e.servedTelemetry(ctx); telemetry != nil {
+		telemetry.RecordCompletenessAuthority(ctx, principal, completenessAuthority)
 	}
 	// CHAOS-5637: the answerability invariant, HERE for the same reason
 	// everything else in this function is here -- this is the one point
@@ -380,6 +381,19 @@ func (e *Engine) servedLateWriters(ctx context.Context, result InvestigationResu
 	return result, observation
 }
 
+type servedQuietKey struct{}
+
+// servedTelemetry is the engine's telemetry, or nil while a candidate document
+// of the final fit is being measured: only the document that is served (or the
+// last one refused) may emit the served-document events, so a candidate that
+// is cut again leaves no event describing a document that was never served.
+func (e *Engine) servedTelemetry(ctx context.Context) EngineTelemetry {
+	if ctx.Value(servedQuietKey{}) != nil {
+		return nil
+	}
+	return e.telemetry
+}
+
 // finalizeServedFitting is finalizeServed for the decisive path with the byte
 // fit made decisive. The stage-3 row cut fits the answer under the ceiling
 // before the late writers run; the document SENT is the one finalizeServed
@@ -389,48 +403,60 @@ func (e *Engine) servedLateWriters(ctx context.Context, result InvestigationResu
 // and measured again, in a loop bounded by the longest table. Whatever writes
 // to the document last, a smaller true answer is served instead of refused; the
 // refusal stands only when nothing is left to cut, and then it says so.
+//
+// Candidates are measured quietly. The document that ends the loop is
+// finalized once more with telemetry, so each served-document event is emitted
+// once, for the document served or the last one refused.
 func (e *Engine) finalizeServedFitting(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, result InvestigationResult, budget ResponseBudget) (InvestigationResult, error) {
+	quiet := context.WithValue(ctx, servedQuietKey{}, true)
 	current := result
 	for {
-		served, err := e.finalizeServed(ctx, principal, stage, current, nil, budget)
+		_, err := e.finalizeServed(quiet, principal, stage, current, nil, budget)
 		var refusal AnswerBudgetRefusal
 		if err == nil || !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
-			return served, err
+			return e.finalizeServed(ctx, principal, stage, current, nil, budget)
 		}
 		_, longest := claimedFactTableRowCounts(current.ClaimedFacts)
-		if longest <= 1 {
+		if longest > 1 {
+			if next, cut := recutFactRows(current, longest-1); cut {
+				current = next
+				continue
+			}
+		}
+		_, final := e.finalizeServed(ctx, principal, stage, current, nil, budget)
+		if errors.As(final, &refusal) {
 			refusal.NothingLeftToCut = true
 			return InvestigationResult{}, refusal
 		}
-		next, cut := recutFactRows(current, longest-1)
-		if !cut {
-			refusal.NothingLeftToCut = true
-			return InvestigationResult{}, refusal
-		}
-		current = next
+		return InvestigationResult{}, final
 	}
 }
 
 // recutFactRows cuts every row table to at most perTable rows and restates the
-// row-cut disclosure for the new cut: an earlier cut's limitation and outcome
-// row are replaced, never stacked, and the declared total stays the one the
-// earlier cut recorded.
+// row-cut disclosure for the new cut. It replaces exactly what the earlier cut
+// wrote -- the limitation sentence, parsed for its served, declared and per-table
+// numbers, and the one outcome row equal to the row that cut composed from them
+// -- and nothing else, so a path-drop outcome (the same row shape) is never
+// mistaken for it. The declared total is the earlier cut's own, never recounted.
 func recutFactRows(result InvestigationResult, perTable int) (InvestigationResult, bool) {
+	base := result
 	declared, _ := claimedFactTableRowCounts(result.ClaimedFacts)
-	kept := make([]RequirementOutcomeRow, 0, len(result.Completeness.Outcomes))
-	for _, row := range result.Completeness.Outcomes {
-		if row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult && row.Outcome == contractsv1.ContextFabricRequirementNarrowed &&
-			row.Impact == contractsv1.ContextFabricAnswerImpactDepth && row.CauseOverrun == contractsv1.ContextFabricBudgetOverrunBytes && row.CauseObserved {
-			if row.Declared > declared {
-				declared = row.Declared
-			}
+	for index, limitation := range result.Limitations {
+		priorServed, priorDeclared, _, ok := contractsv1.ParseContextFabricFactRowTruncationLimitation(limitation)
+		if !ok {
 			continue
 		}
-		kept = append(kept, row)
+		declared = priorDeclared
+		base.Limitations = slices.Delete(slices.Clone(result.Limitations), index, index+1)
+		prior := factRowTruncationOutcomeRow(priorServed, priorDeclared)
+		for rowIndex, row := range result.Completeness.Outcomes {
+			if reflect.DeepEqual(row, prior) {
+				base.Completeness.Outcomes = slices.Delete(slices.Clone(result.Completeness.Outcomes), rowIndex, rowIndex+1)
+				break
+			}
+		}
+		break
 	}
-	base := result
-	base.Completeness.Outcomes = kept
-	base.Limitations = slices.DeleteFunc(slices.Clone(result.Limitations), contractsv1.IsContextFabricFactRowTruncationLimitation)
 	cut, _, _, ok := applyFactRowTruncation(base, perTable, declared)
 	return cut, ok
 }

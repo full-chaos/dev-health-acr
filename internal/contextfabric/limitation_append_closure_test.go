@@ -52,9 +52,9 @@ type limitationAudit struct {
 }
 
 var auditedLimitationWrites = map[string]limitationAudit{
-	"recutFactRows#DeleteFunc#0": {
+	"recutFactRows#Delete#0": {
 		sameShapedTotal: 1,
-		reason:          "a DELETION, not an addition: it drops the earlier row-cut disclosure from a clone, so the list only shrinks, and the replacement disclosure is added by applyFactRowTruncation through the bounded appender",
+		reason:          "a DELETION, not an addition: it drops the one earlier row-cut disclosure (matched by parse) from a clone, so the list only shrinks, and the replacement disclosure is added by applyFactRowTruncation through the bounded appender",
 	},
 	"terminalResult#composite literal []string{limitation}#0": {
 		sameShapedTotal: 1,
