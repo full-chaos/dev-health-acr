@@ -52,6 +52,7 @@ var copiedBounds = []copiedBound{
 	{projection: "answer#properties.question", canonical: "result#properties.question"},
 	{projection: "answer#properties.direct_judgment", canonical: "result#properties.direct_judgment"},
 	{projection: "answer#properties.current_state", canonical: "result#properties.current_state"},
+	{projection: "answer#properties.deterministic_answer", canonical: "result#properties.deterministic_answer"},
 	{projection: "answer#properties.strongest_pressures", canonical: "result#properties.strongest_pressures"},
 	{projection: "answer#properties.evidence_ref_ids", canonical: "result#properties.evidence_ref_ids"},
 	{
