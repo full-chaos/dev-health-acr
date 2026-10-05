@@ -185,6 +185,12 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.oauth_authorization_requests T
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_device_grants FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.oauth_device_grants TO :"runtime_user";
 
+-- Used web-assertion ids (migration 0049), shared by every acr-api pod: one
+-- INSERT ... ON CONFLICT DO NOTHING per assertion, and the bounded expiry
+-- sweep (SELECT for its subquery, DELETE). Never updated.
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.web_assertion_replays FROM :"runtime_user";
+GRANT SELECT, INSERT, DELETE ON TABLE acr.web_assertion_replays TO :"runtime_user";
+
 -- CHAOS-3859 (sol review F1): the hosted runtime writes clarification-
 -- selection capture events through pgclarification.Sink -- INSERT only,
 -- mirroring audit_events immediately above exactly: this table has no
