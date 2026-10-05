@@ -86,16 +86,27 @@ var contextFabricFactRowTruncationPattern = func() *regexp.Regexp {
 // one ContextFabricFactRowTruncationLimitation could have composed: a parse,
 // then a re-composition compared for equality.
 func IsContextFabricFactRowTruncationLimitation(limitation string) bool {
+	_, _, _, ok := ParseContextFabricFactRowTruncationLimitation(limitation)
+	return ok
+}
+
+// ParseContextFabricFactRowTruncationLimitation returns the served, declared
+// and per-table numbers of a limitation ContextFabricFactRowTruncationLimitation
+// composed, and false for any other string.
+func ParseContextFabricFactRowTruncationLimitation(limitation string) (served, declared, perTable int, ok bool) {
 	match := contextFabricFactRowTruncationPattern.FindStringSubmatch(limitation)
 	if match == nil {
-		return false
+		return 0, 0, 0, false
 	}
 	served, errServed := strconv.Atoi(match[1])
 	declared, errDeclared := strconv.Atoi(match[2])
 	perTable, errPerTable := strconv.Atoi(match[3])
 	if errServed != nil || errDeclared != nil || errPerTable != nil {
-		return false
+		return 0, 0, 0, false
 	}
-	recomposed, ok := ContextFabricFactRowTruncationLimitation(served, declared, perTable)
-	return ok && recomposed == limitation
+	recomposed, composed := ContextFabricFactRowTruncationLimitation(served, declared, perTable)
+	if !composed || recomposed != limitation {
+		return 0, 0, 0, false
+	}
+	return served, declared, perTable, true
 }

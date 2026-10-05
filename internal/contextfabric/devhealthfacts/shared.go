@@ -389,12 +389,17 @@ import (
 // period on the range axis. A candidate saved before v70 holds a window taken
 // from a sampled range, or none, and must not be reused.
 //
-// v70 -> v71: an exact label match of a repository, project or team commits
+// v70 -> v71: the two-period disclosure tells a client to ask about one period
+// per call, and the row cut fits the answer against the document the route
+// sends, late writers included. A candidate saved before v71 carries the old
+// hint and a fit measured without the late writers and must not be reused.
+//
+// v71 -> v72: an exact label match of a repository, project or team commits
 // only when the keyed identity read ran complete; a read that ran incomplete
 // leaves the label for a clarification, since a same-label subject the caller
-// can read may be missing from the pool. A candidate saved before v71 may hold
+// can read may be missing from the pool. A candidate saved before v72 may hold
 // a commit that rule would refuse and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v71"
+const QueryVersion = "devhealthfacts.clickhouse.v72"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
