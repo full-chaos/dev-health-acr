@@ -227,7 +227,7 @@ func (c ContextFabricProjectedCohort) Validate() error {
 	if c.Total < len(c.Members) {
 		return fmt.Errorf("projected cohort total must not understate retained members")
 	}
-	if c.Population < 0 || (c.Population > 0 && c.Population < len(c.Members)) || (c.Population == 0 && c.PopulationLowerBound) {
+	if c.Population < 0 || (c.Population > 0 && (c.Population < len(c.Members) || c.Population < c.Total)) || (c.Population == 0 && c.PopulationLowerBound) {
 		return fmt.Errorf("projected cohort population violates v1 bounds")
 	}
 	if !stringLengthBetween(strings.TrimSpace(c.Rationale), 1, 4000) {

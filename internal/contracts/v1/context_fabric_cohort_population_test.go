@@ -1,6 +1,11 @@
 package v1
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
+)
 
 func TestCohortValidateEnforcesThePopulationInvariants(t *testing.T) {
 	t.Parallel()
@@ -23,5 +28,47 @@ func TestCohortValidateEnforcesThePopulationInvariants(t *testing.T) {
 		if err := c.Validate(); err == nil {
 			t.Errorf("%s: a malformed population was accepted", name)
 		}
+	}
+}
+
+func TestProjectedCohortRejectsAPopulationBelowTheTotal(t *testing.T) {
+	t.Parallel()
+	c := ContextFabricProjectedCohort{
+		Kind: ContextFabricSubjectWorkItem, Total: 20, Population: 14, Rationale: "walk",
+		Members: []ContextFabricProjectedCohortMember{{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectWorkItem, CanonicalID: "work_item:a", Label: "A"}, Rank: 1, InclusionReasons: []string{"linked"}}},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("a population below the canonical total was accepted")
+	}
+	c.Population = 20
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a population equal to the total was rejected: %v", err)
+	}
+}
+
+func TestTheProjectionSchemaRejectsALowerBoundWithNoPopulation(t *testing.T) {
+	t.Parallel()
+	fixture := loadFixture[map[string]any](t, "context_fabric_answer_projection.v1.json")
+	cohort, ok := fixture["cohort"].(map[string]any)
+	if !ok {
+		t.Fatal("the projection fixture has no cohort")
+	}
+	check := func(population any) error {
+		cohort["population_lower_bound"] = true
+		delete(cohort, "population")
+		if population != nil {
+			cohort["population"] = population
+		}
+		encoded, err := json.Marshal(fixture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return contractcheck.ValidateSerialized("", "context_fabric_answer_projection.v1.schema.json", encoded)
+	}
+	if err := check(nil); err == nil {
+		t.Fatal("a lower bound with no population is schema-valid")
+	}
+	if err := check(float64(5)); err != nil {
+		t.Fatalf("a lower bound with a population was rejected: %v", err)
 	}
 }

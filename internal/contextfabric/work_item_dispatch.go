@@ -479,6 +479,7 @@ func (e *Engine) recordRepositoryWorkItemWalk(ctx context.Context, principal sto
 	}
 	if measured {
 		event.PullRequests, event.LinkedIssues = membership.Census.RepositoryPullRequests, membership.Census.RepositoryLinkedIssues
+		event.LowerTierCut = membership.Census.LowerTierCut
 		event.Members, event.Population = members, membership.Census.AuthorizedPopulation
 		event.Truncated = membership.Census.PopulationIncomplete || membership.Census.State == WorkItemMembershipCensusFloor || members < event.Population
 		if !filtered {

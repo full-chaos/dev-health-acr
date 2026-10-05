@@ -701,6 +701,25 @@
         "rationale",
         "complete",
         "members"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "population_lower_bound"
+            ],
+            "properties": {
+              "population_lower_bound": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "population"
+            ]
+          }
+        }
       ]
     },
     "ProjectedDriver": {

@@ -2832,6 +2832,7 @@ func (t SlogEngineTelemetry) RecordRepositoryWorkItemWalk(ctx context.Context, p
 			"members", event.Members,
 			"population", event.Population,
 			"truncated", event.Truncated,
+			"lower_tier_cut", event.LowerTierCut,
 		)
 		if !event.Filtered {
 			args = append(args, "denied", event.Denied)

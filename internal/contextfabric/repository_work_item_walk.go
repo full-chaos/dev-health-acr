@@ -55,7 +55,10 @@ type RepositoryWorkItemWalkEvent struct {
 	Outcome                                                 RepositoryWorkItemWalkOutcome
 	PullRequests, LinkedIssues, Members, Population, Denied int
 	Truncated, Filtered, Restricted, Measured               bool
-	UnmeasuredReason                                        WorkItemMembershipUnmeasuredReason
+	// LowerTierCut: a member left out of the list has a weaker link tier than a
+	// listed member; it decides whether the answer carries the tier sentence.
+	LowerTierCut     bool
+	UnmeasuredReason WorkItemMembershipUnmeasuredReason
 }
 
 // repositoryWorkItemReading is what one measured read of a repository's work

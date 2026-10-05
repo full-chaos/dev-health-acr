@@ -1152,7 +1152,26 @@
             "complete",
             "members"
           ],
-          "type": "object"
+          "type": "object",
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "population_lower_bound"
+                ],
+                "properties": {
+                  "population_lower_bound": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "population"
+                ]
+              }
+            }
+          ]
         },
         "ProjectedCohortGroup": {
           "additionalProperties": false,
@@ -4537,6 +4556,23 @@
               "then": {
                 "required": [
                   "score_meaning"
+                ]
+              }
+            },
+            {
+              "if": {
+                "required": [
+                  "population_lower_bound"
+                ],
+                "properties": {
+                  "population_lower_bound": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "population"
                 ]
               }
             }

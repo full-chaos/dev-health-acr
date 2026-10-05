@@ -58,7 +58,7 @@ func TestASameTierCutListsNOfMWithoutTheTierSentence(t *testing.T) {
 	if got := listedSentence(run.result.Limitations); got != want {
 		t.Fatalf("listed sentence = %q, want %q", got, want)
 	}
-	if len(run.walks) != 1 || run.walks[0].Members != listed || run.walks[0].Population != 20 || !run.walks[0].Truncated {
+	if len(run.walks) != 1 || run.walks[0].Members != listed || run.walks[0].Population != 20 || !run.walks[0].Truncated || run.walks[0].LowerTierCut {
 		t.Fatalf("walk decision line = %+v, want members %d, population 20, truncated true", run.walks, listed)
 	}
 	cohort := projectedCohortOf(t, run.result)
@@ -84,6 +84,9 @@ func TestAMixedTierCutNamesTheTierOrderAndNOfM(t *testing.T) {
 	}
 	if listedSentence(run.result.Limitations) == "" {
 		t.Fatalf("a cut list carries no N of M sentence: %v", run.result.Limitations)
+	}
+	if len(run.walks) != 1 || !run.walks[0].LowerTierCut {
+		t.Fatalf("walk decision line = %+v, want lower_tier_cut true: the decision that put the tier sentence on the answer", run.walks)
 	}
 }
 
@@ -160,5 +163,26 @@ func TestReuseRefusesAStoredTierSentenceThatTheCutNoLongerSupports(t *testing.T)
 	}
 	if !workItemReuseMembershipEqual(stored(tier), census, current(true)) || !workItemReuseMembershipEqual(stored(), census, current(false)) {
 		t.Error("an answer whose tier sentence still holds was refused")
+	}
+}
+
+// A result stored before the population existed, with the partial-read limitation, read again:
+// the census does not persist that the read was partial, the stored limitation does.
+func TestAStoredPartialResultWithNoPopulationIsReadAgainAsALowerBound(t *testing.T) {
+	members := make([]CohortMember, 0, 5)
+	for i := 0; i < 5; i++ {
+		members = append(members, CohortMember{Subject: SubjectRef{Kind: SubjectWorkItem, CanonicalID: fmt.Sprintf("work_item:%02d", i), Label: fmt.Sprintf("W-%02d", i)}, Rank: i + 1})
+	}
+	stored := InvestigationResult{
+		Cohort:      &Cohort{Kind: SubjectWorkItem, Members: members},
+		Limitations: []string{contractsv1.ContextFabricWorkItemRepositoryPartialLimitation},
+	}
+	census := &WorkItemTupleCensus{State: WorkItemMembershipCensusExact, Value: 20, Retained: 5}
+	served := withWorkItemPopulation(stored, census)
+	if !served.Cohort.PopulationLowerBound || served.Cohort.Population != 20 {
+		t.Fatalf("population=%d lowerBound=%v, want 20 as a lower bound", served.Cohort.Population, served.Cohort.PopulationLowerBound)
+	}
+	if got := listedSentence(served.Limitations); !strings.Contains(got, " of at least 20 members") {
+		t.Fatalf("listed sentence = %q, want a lower bound stated as at least 20", got)
 	}
 }

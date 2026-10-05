@@ -1,6 +1,8 @@
 package contextfabric
 
 import (
+	"slices"
+
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -19,7 +21,11 @@ func withWorkItemPopulation(result InvestigationResult, census *WorkItemTupleCen
 		// stored result read again keeps it.
 		return result
 	}
-	lowerBound := census.State == WorkItemMembershipCensusFloor || census.incomplete
+	// The census does not persist that an exact read was partial; the answer's
+	// own partial-read limitation does, so a result stored before this field
+	// existed is read again with the bound it was served with.
+	lowerBound := census.State == WorkItemMembershipCensusFloor || census.incomplete ||
+		slices.Contains(result.Limitations, contractsv1.ContextFabricWorkItemRepositoryPartialLimitation)
 	cohort := *result.Cohort
 	cohort.Population = census.Value
 	cohort.PopulationLowerBound = lowerBound
