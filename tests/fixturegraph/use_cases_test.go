@@ -60,11 +60,23 @@ func walk(t *testing.T, c *client, slug string) (doc, string) {
 	// The fixture names a project and a repository alike, so the service asks which one was
 	// meant. A client answers by confirming the repository receipt of that answer.
 	var receipts []doc
-	for _, r := range list(structured(d), "subject_receipts") {
-		if str(r, "subject", "kind") == "repository" || str(r, "kind") == "repository" {
-			receipts = append(receipts, doc{"result_id": str(structured(d), "result_id"), "receipt_id": str(r, "receipt_id")})
+	var collect func(v any)
+	collect = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			if rid, ok := x["receipt_id"].(string); ok && str(x, "subject", "kind") == "repository" {
+				receipts = append(receipts, doc{"result_id": str(structured(d), "result_id"), "receipt_id": rid})
+			}
+			for _, child := range x {
+				collect(child)
+			}
+		case []any:
+			for _, child := range x {
+				collect(child)
+			}
 		}
 	}
+	collect(structured(d))
 	if len(receipts) != 1 {
 		t.Fatalf("clarification offered %d repository receipts, want 1: %.2000s", len(receipts), raw)
 	}
