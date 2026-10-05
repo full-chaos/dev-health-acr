@@ -288,19 +288,24 @@ func TestCHAOS6557_TrailingPhraseCommitsTheTrailingBoundsOnMCP(t *testing.T) {
 
 // prod q2 (raw 04-q2.json), exact question: a bare "last month" is the
 // previous CALENDAR month (chris 2026-09-25), which the closed trailing
-// grammar cannot bound; the interpreter's calendar range becomes the committed
-// window -- exact bounds asserted, question_stated, current axis, never the
-// trailing 30 days.
+// grammar cannot bound; the binder's calendar month becomes the committed
+// window whatever range the interpreter sampled -- exact bounds asserted
+// against the independent date oracle, question_stated, current axis, never
+// the trailing 30 days.
 func TestCHAOS6557_BareLastMonthCommitsTheCalendarBoundsOnMCP(t *testing.T) {
 	t.Parallel()
-	// The first is prod q2 verbatim (the binder refuses its "and why" tail); the
-	// second is bound by the binder as a bare, non-trailing "last month" -- the
-	// engine must still commit the interpreter's calendar bounds, not trailing_30d.
+	// The first is prod q2 verbatim (its "and why" tail fails the role check; the
+	// binder still reads the calendar period); the second passes the
+	// role check as a bare, non-trailing "last month" -- neither may commit
+	// trailing_30d.
 	for _, question := range []string{
 		"Which repository carried the most operational/support work last month and why?",
 		"Which repository carried the most operational/support work last month?",
 	} {
 		interpretation := driftedInterpretation(contractsv1.ContextFabricTemporalRange)
+		sampledStart, sampledEnd := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+		interpretation.TimeContext.Start, interpretation.TimeContext.End = &sampledStart, &sampledEnd
+		wantStart, wantEnd := calendarPeriodOracle("last month", time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC))
 		run := runExplicitWindowCaseWith(t, "mcp", question, nil, interpretation)
 		result := run.result
 		if result.Status == InvestigationClarificationRequired || result.WindowClarification != nil {
@@ -308,8 +313,8 @@ func TestCHAOS6557_BareLastMonthCommitsTheCalendarBoundsOnMCP(t *testing.T) {
 		}
 		window := result.EffectiveEvidenceWindow
 		if window == nil || window.Provenance != WindowQuestionStated || window.RelativeID != "" || window.Start == nil || window.End == nil ||
-			!window.Start.Equal(*interpretation.TimeContext.Start) || !window.End.Equal(*interpretation.TimeContext.End) {
-			t.Fatalf("%q: EffectiveEvidenceWindow = %#v, want question_stated over the calendar %v..%v", question, window, interpretation.TimeContext.Start, interpretation.TimeContext.End)
+			!window.Start.Equal(wantStart) || !window.End.Equal(wantEnd) {
+			t.Fatalf("%q: EffectiveEvidenceWindow = %#v, want question_stated over the calendar %v..%v", question, window, wantStart, wantEnd)
 		}
 		if !run.factRead || run.factWindow == nil || run.factWindow.Start == nil || !run.factWindow.Start.Equal(*window.Start) || !run.factWindow.End.Equal(*window.End) {
 			t.Fatalf("%q: fact-read window = %#v, want the reported bounds", question, run.factWindow)
@@ -318,14 +323,15 @@ func TestCHAOS6557_BareLastMonthCommitsTheCalendarBoundsOnMCP(t *testing.T) {
 	}
 }
 
-// A bare calendar phrase ("last quarter") the trailing grammar binds but does
-// not commit, that the interpreter reads as a calendar range. On MCP that range
-// IS the evidence window: committed (question_stated), bounds from the
-// interpreter, current axis, and the fact read receives the same bounds.
+// A period phrase the binder cannot place (mid-sentence "last quarter", which
+// fails the role check and names no calendar period of its own) that
+// the interpreter reads as a calendar range. On MCP that range IS the evidence
+// window: committed (question_stated), bounds from the interpreter, current
+// axis, and the fact read receives the same bounds.
 func TestCHAOS6557_InterpreterRangeBecomesTheCommittedWindowOnMCP(t *testing.T) {
 	t.Parallel()
 	interpretation := driftedInterpretation(contractsv1.ContextFabricTemporalRange)
-	run := runExplicitWindowCaseWith(t, "mcp", "Which repository carried the most operational/support work last quarter?", nil, interpretation)
+	run := runExplicitWindowCaseWith(t, "mcp", "How did last quarter treat the operational/support work of each repository?", nil, interpretation)
 	result := run.result
 	if result.Status == InvestigationClarificationRequired || result.WindowClarification != nil {
 		t.Fatalf("status=%q window_clarification=%v, want an answer: the caller stated the period", result.Status, result.WindowClarification != nil)
@@ -385,10 +391,10 @@ func TestCHAOS6557_StatedWindowAxisDecisionIsRecorded(t *testing.T) {
 			statedWindowAxisRecord{"mcp", StatedWindowOriginField, TemporalRange, TemporalCurrent, StatedWindowAxisOverridden}},
 		{"field agreed", "Which teams need attention?", &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}, contractsv1.ContextFabricTemporalCurrent,
 			statedWindowAxisRecord{"mcp", StatedWindowOriginField, TemporalCurrent, TemporalCurrent, StatedWindowAxisAgreed}},
-		{"interpreter range", "Which repository carried the most operational/support work last quarter?", nil, contractsv1.ContextFabricTemporalRange,
+		{"interpreter range", "How did last quarter treat the operational/support work of each repository?", nil, contractsv1.ContextFabricTemporalRange,
 			statedWindowAxisRecord{"mcp", StatedWindowOriginInterpreterRange, TemporalRange, TemporalCurrent, StatedWindowAxisOverridden}},
 		{"prod q2 bare last month", "Which repository carried the most operational/support work last month and why?", nil, contractsv1.ContextFabricTemporalRange,
-			statedWindowAxisRecord{"mcp", StatedWindowOriginInterpreterRange, TemporalRange, TemporalCurrent, StatedWindowAxisOverridden}},
+			statedWindowAxisRecord{"mcp", StatedWindowOriginQuestionPhrase, TemporalRange, TemporalCurrent, StatedWindowAxisOverridden}},
 		{"phrase drifted", "What is the team investment mix in the last month?", nil, contractsv1.ContextFabricTemporalRange,
 			statedWindowAxisRecord{"mcp", StatedWindowOriginQuestionPhrase, TemporalRange, TemporalCurrent, StatedWindowAxisOverridden}},
 	}
@@ -487,24 +493,24 @@ func TestCHAOS6557_StatedPhraseCommitsForEveryWindowClass(t *testing.T) {
 }
 
 // chris 2026-09-25: "in the last month" is a TRAILING window (committed); a
-// bare "last month" names the previous CALENDAR month, which the closed
-// trailing grammar cannot bound, so it is never committed as trailing_30d:
-// it stays an inferred proposal and the confirmation turn stands.
+// bare "last month" names the previous CALENDAR month. the binder
+// commits that calendar window itself, deterministically, so it is never
+// trailing_30d and never a confirmation turn (the interpreter is not consulted
+// for the bounds: see chaos6746_calendar_window_engine_test.go).
 func TestCHAOS6557_BareLastMonthIsNeverCommittedAsTrailing(t *testing.T) {
 	t.Parallel()
+	july := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	august := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	for _, question := range []string{
 		"Which repository carried the most operational/support work last month?",
 		"Last month, which repository carried the most operational/support work?",
-		"Which repository carried the most operational/support work last quarter?",
 		"What did the team ship for last month?",
 	} {
 		run := runExplicitWindowCase(t, "mcp", question, nil)
-		if run.result.Status != InvestigationClarificationRequired || run.result.WindowClarification == nil {
-			t.Fatalf("%q: status=%q window_clarification=%v, want the confirmation turn", question, run.result.Status, run.result.WindowClarification != nil)
+		if run.result.Status == InvestigationClarificationRequired || run.result.WindowClarification != nil {
+			t.Fatalf("%q: status=%q window_clarification=%v, want the committed calendar window", question, run.result.Status, run.result.WindowClarification != nil)
 		}
-		if w := run.result.EffectiveEvidenceWindow; w == nil || w.Provenance != WindowInferredDefault {
-			t.Fatalf("%q: EffectiveEvidenceWindow = %#v, want an inferred_default proposal", question, w)
-		}
+		assertCalendarWindow(t, question, run.result.EffectiveEvidenceWindow, july, august)
 	}
 	for _, question := range []string{
 		"Which repository carried the most operational/support work in the last month?",
@@ -552,7 +558,7 @@ func TestCHAOS6557_StatedWindowAxisLineCarriesItsOwnOutcomeVocabulary(t *testing
 	var buf bytes.Buffer
 	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	principal := storage.Principal{OrgID: "org_6560"}
-	for _, outcome := range []StatedWindowAxisOutcome{StatedWindowAxisAgreed, StatedWindowAxisOverridden, StatedWindowAxisVetoed} {
+	for _, outcome := range []StatedWindowAxisOutcome{StatedWindowAxisAgreed, StatedWindowAxisOverridden, StatedWindowAxisVetoed, StatedWindowAxisWithdrawnPointInTime, StatedWindowAxisWithdrawnPeriodShape} {
 		telemetry.RecordStatedWindowAxis(context.Background(), principal, "mcp", StatedWindowOriginInterpreterRange, TemporalRange, TemporalCurrent, outcome)
 	}
 	var outcomes []string
@@ -567,7 +573,7 @@ func TestCHAOS6557_StatedWindowAxisLineCarriesItsOwnOutcomeVocabulary(t *testing
 		}
 		outcomes = append(outcomes, got["outcome"].(string))
 	}
-	if want := []string{"agreed", "overridden_to_current", "vetoed"}; !reflect.DeepEqual(outcomes, want) {
+	if want := []string{"agreed", "overridden_to_current", "vetoed", "withdrawn_point_in_time", "withdrawn_period_shape"}; !reflect.DeepEqual(outcomes, want) {
 		t.Fatalf("outcomes = %v, want %v", outcomes, want)
 	}
 	for _, from := range []struct {
@@ -585,8 +591,11 @@ func TestCHAOS6557_StatedWindowAxisLineCarriesItsOwnOutcomeVocabulary(t *testing
 	}
 }
 
-// prod q2's pre-interpretation reuse lookup carries no window key, because the
-// period is committed only after interpretation. A stored answer that never
+// A stated period's pre-interpretation reuse lookup must not serve a stored
+// answer (a bare calendar phrase is committed by the binder before it, but the
+// interpretation can still withdraw that commitment: an as-of reading, a series
+// or comparison frame, so a cached current-state answer is not safe to serve).
+// A stored answer that never
 // applied the period (a pre-fix row saved as plain "current") must therefore
 // never be served to an MCP turn whose question names one: it is bypassed with
 // a loud reason and the turn is freshly windowed. An MCP question naming no
@@ -633,6 +642,7 @@ func TestCHAOS6557_MCPPeriodQuestionBypassesAnswerReuse(t *testing.T) {
 	t.Parallel()
 	for _, question := range []string{
 		"Which repository carried the most operational/support work last month and why?",
+		"How did last month treat the operational/support work of each repository?",
 		"What is the team investment mix over the last 30 days?",
 		"Which repository carried the most operational/support work last month?",
 	} {

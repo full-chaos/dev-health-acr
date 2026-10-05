@@ -377,8 +377,8 @@ func TestAPeriodTheQuestionNamesGivesOneInputDigestAcrossAMovingClock(t *testing
 		t.Fatal("a first call returned no synthesis input")
 	}
 	window := first.EffectiveEvidenceWindow
-	if window == nil || window.RelativeID != "" || window.Start == nil || !window.Start.Equal(time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)) || window.End == nil || !window.End.Before(time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("effective window = %+v: the turn did not take the period from the interpretation", window)
+	if window == nil || window.RelativeID != "" || window.Start == nil || !window.Start.Equal(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)) || window.End == nil || !window.End.Equal(time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("effective window = %+v: the turn did not take the previous calendar month from the binder", window)
 	}
 	if first.SynthesisInput.InputSHA256 != second.SynthesisInput.InputSHA256 {
 		t.Fatalf("input_sha256 differs:\n%s\n%s", first.SynthesisInput.Input, second.SynthesisInput.Input)
@@ -389,7 +389,7 @@ func TestAPeriodTheQuestionNamesGivesOneInputDigestAcrossAMovingClock(t *testing
 	if err := json.Unmarshal(first.SynthesisInput.Input, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.EvidenceWindow["start"] != "2026-08-01T00:00:00Z" || decoded.EvidenceWindow["end"] != nil {
-		t.Fatalf("evidence_window = %v, want the stated start and no end", decoded.EvidenceWindow)
+	if decoded.EvidenceWindow["start"] != "2026-07-01T00:00:00Z" || decoded.EvidenceWindow["end"] != "2026-08-01T00:00:00Z" {
+		t.Fatalf("evidence_window = %v, want the calendar month bounds", decoded.EvidenceWindow)
 	}
 }

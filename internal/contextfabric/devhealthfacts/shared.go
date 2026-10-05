@@ -382,7 +382,13 @@ import (
 // answer's server-composed text, with the count sentence and the period
 // total, is served on the answer. A candidate saved before v69 holds a total
 // summed over partial edge days and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v69"
+//
+// v69 -> v70: a bare calendar phrase ("last month", "last quarter", "last
+// year") on the MCP surface commits the previous calendar period as the
+// question's window whatever the interpreter sampled, and a series reads that
+// period on the range axis. A candidate saved before v70 holds a window taken
+// from a sampled range, or none, and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v70"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
