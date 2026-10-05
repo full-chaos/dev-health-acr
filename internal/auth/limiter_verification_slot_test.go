@@ -2,6 +2,7 @@ package auth
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -88,8 +89,8 @@ func TestSlotRejectionDecidedAfterWindowRolloverIsStillRefused(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		callFrom(handler, address, "Bearer junk")
 	}
-	done := make(chan int)
-	go func() { done <- callFrom(handler, address, "Bearer "+bad).Code }()
+	done := make(chan *httptest.ResponseRecorder)
+	go func() { done <- callFrom(handler, address, "Bearer "+bad) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if parked, _, _ := store.counts(); parked == 1 {
@@ -107,13 +108,42 @@ func TestSlotRejectionDecidedAfterWindowRolloverIsStillRefused(t *testing.T) {
 		t.Fatalf("malformed bearer in the new window = %d, want 401", code)
 	}
 	close(store.release)
-	if code := <-done; code != http.StatusTooManyRequests {
-		t.Fatalf("slot rejection decided after the window rolled over = %d, want 429", code)
+	if response := <-done; response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") != "60" {
+		t.Fatalf("slot rejection decided after the window rolled over = %d Retry-After %q, want 429 with 60 (the rest of the window it was decided in)", response.Code, response.Header().Get("Retry-After"))
 	}
 	if code := callFrom(handler, address, "Bearer junk").Code; code != http.StatusUnauthorized {
 		t.Fatalf("third failure of the new window = %d, want 401", code)
 	}
 	if code := callFrom(handler, address, "Bearer junk").Code; code != http.StatusTooManyRequests {
 		t.Fatalf("fourth failure of the new window = %d, want 429 (the slot rejection counted in the new window)", code)
+	}
+}
+
+// An address with an undecided attempt keeps a failure entry even when the
+// tracked-address table filled up while it was verifying: its rejection is
+// counted, so it cannot start a fresh, empty window later.
+func TestRejectionOfAnUndecidedAttemptIsCountedWhenTheTableIsFull(t *testing.T) {
+	t0 := time.Date(2026, 10, 5, 21, 0, 0, 0, time.UTC)
+	at := func(seconds int) time.Time { return t0.Add(time.Duration(seconds) * time.Second) }
+	limiter := NewBoundedMemoryLimiter(MemoryLimiterOptions{Window: time.Minute, FailureLimit: 1, MaxTrackedKeys: 2, MaxInFlight: 4})
+	limiter.RecordFailure("a", at(0))
+	release, slot := limiter.BeginVerification("a", at(10))
+	if !slot.Admitted() || !slot.OverBudget {
+		t.Fatalf("a in the over-budget slot = %+v", slot)
+	}
+	for _, other := range []string{"b", "c"} {
+		otherRelease, decision := limiter.BeginAttemptDecision(other, at(61))
+		if !decision.Admitted() {
+			t.Fatalf("%s admitted = %+v", other, decision)
+		}
+		limiter.RecordFailure(other, at(61))
+		otherRelease()
+	}
+	if overBudget, _ := limiter.RecordRejection("a", at(65)); overBudget {
+		t.Fatalf("a's rejection in its new window reported over budget before counting")
+	}
+	release()
+	if _, decision := limiter.BeginVerification("a", at(122)); !decision.OverBudget && decision.Admitted() {
+		t.Fatalf("a after b and c expired = %+v, want over budget (its rejection at 65 counts until 125)", decision)
 	}
 }

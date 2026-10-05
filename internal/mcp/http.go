@@ -536,12 +536,15 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 		line.gateReason = HTTPGateReasonNotCounted
 		if outcome == HTTPAuthInvalidCredential || outcome == HTTPAuthMalformedBearer {
 			line.gateReason = HTTPGateReasonRejectedCounted
-			if wasOverBudget, _ := auth.RecordRejection(h.gate.limiter, ip, now); wasOverBudget || overBudget {
+			// Counted at the moment it is decided: a verification that
+			// outlives the window is a failure of the window it ends in.
+			decided := h.now()
+			if wasOverBudget, _ := auth.RecordRejection(h.gate.limiter, ip, decided); wasOverBudget || overBudget {
 				// The same answer as a refusal before verification: a guess
 				// learns nothing from the slot it used.
 				line.gateDecision = HTTPGateFailureBudget
 				line.authOutcome = HTTPAuthRateLimited
-				outcome, retryAfter = HTTPAuthRateLimited, h.gate.retryAfter(ip, now)
+				outcome, retryAfter = HTTPAuthRateLimited, h.gate.retryAfter(ip, decided)
 			}
 		}
 		h.writeAuthRefusal(recorder, r.URL.Path, outcome, retryAfter)

@@ -262,9 +262,50 @@ func TestEdgeGateOverBudgetAddressVerifiesOneBearerAtATime(t *testing.T) {
 // window rolled over is still answered as an over-budget rejection (429).
 func TestEdgeGateSlotRejectionDecidedAfterWindowRolloverIsStillRefused(t *testing.T) {
 	hosted := newHostedAPI(t)
-	start := time.Now()
+	e, advance := newClockedEndpoint(t, hosted, 3)
+	const address = "203.0.113.60"
+	burst(t, e, 3, func(int) string { return "junk" }, func(int) string { return address })
+	guess := unknownWellFormedToken(t)
+	hold := newBearerHold(guess)
+	hosted.bearerHold.Store(hold)
+	done := make(chan answer)
+	go func() {
+		header := http.Header{}
+		header.Set("Authorization", "Bearer "+guess)
+		header.Set("X-Forwarded-For", address)
+		done <- readAnswer(postMCP(t, e, http.MethodPost, rawToolsList(), header))
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if parked, _, _ := hold.counts(); parked == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("slot verification never reached acr-api")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	advance(2 * time.Minute)
+	if status := gateStatus(t, e, "junk", address); status != http.StatusUnauthorized {
+		t.Fatalf("malformed bearer in the new window = %d, want 401", status)
+	}
+	close(hold.release)
+	if got := <-done; got.status != http.StatusTooManyRequests || got.header.Get("Retry-After") != "60" {
+		t.Fatalf("slot rejection decided after the window rolled over = %d Retry-After %q, want 429 with 60 (the rest of the window it was decided in)", got.status, got.header.Get("Retry-After"))
+	}
+}
+
+// newClockedEndpoint is the hosted MCP endpoint with an edge failure limit,
+// a one-minute window and a clock the test advances.
+func newClockedEndpoint(t *testing.T, hosted *hostedAPI, failureLimit int) (*endpoint, func(time.Duration)) {
+	t.Helper()
+	return newClockedEndpointWith(t, hosted, failureLimit, 5*time.Second)
+}
+
+func newClockedEndpointWith(t *testing.T, hosted *hostedAPI, failureLimit int, resolveTimeout time.Duration) (*endpoint, func(time.Duration)) {
+	t.Helper()
 	var clockMu sync.Mutex
-	clock := start
+	clock := time.Now()
 	now := func() time.Time {
 		clockMu.Lock()
 		defer clockMu.Unlock()
@@ -276,39 +317,17 @@ func TestEdgeGateSlotRejectionDecidedAfterWindowRolloverIsStillRefused(t *testin
 		t.Fatal(err)
 	}
 	handler, err := acrmcp.NewHTTPHandler(cfg, acrmcp.HTTPHandlerOptions{
-		BasePath: "/mcp", Identity: testIdentity, MaxRequestBodyBytes: 1 << 20, ResolveTimeout: 5 * time.Second, Now: now,
-		EdgeGate: acrmcp.EdgeGateOptions{FailureLimit: 3, Window: time.Minute, TrustedProxyCIDRs: loopbackProxies},
+		BasePath: "/mcp", Identity: testIdentity, MaxRequestBodyBytes: 1 << 20, ResolveTimeout: resolveTimeout, Now: now,
+		EdgeGate: acrmcp.EdgeGateOptions{FailureLimit: failureLimit, Window: time.Minute, TrustedProxyCIDRs: loopbackProxies},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := &endpoint{handler: handler, logs: logs, server: httptest.NewServer(handler)}
 	t.Cleanup(e.server.Close)
-	const address = "203.0.113.60"
-	burst(t, e, 3, func(int) string { return "junk" }, func(int) string { return address })
-	guess := unknownWellFormedToken(t)
-	hold := newBearerHold(guess)
-	hosted.bearerHold.Store(hold)
-	done := make(chan int)
-	go func() { done <- gateStatus(t, e, guess, address) }()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if parked, _, _ := hold.counts(); parked == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("slot verification never reached acr-api")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	clockMu.Lock()
-	clock = start.Add(2 * time.Minute)
-	clockMu.Unlock()
-	if status := gateStatus(t, e, "junk", address); status != http.StatusUnauthorized {
-		t.Fatalf("malformed bearer in the new window = %d, want 401", status)
-	}
-	close(hold.release)
-	if status := <-done; status != http.StatusTooManyRequests {
-		t.Fatalf("slot rejection decided after the window rolled over = %d, want 429", status)
+	return e, func(d time.Duration) {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		clock = clock.Add(d)
 	}
 }

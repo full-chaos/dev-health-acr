@@ -32,9 +32,10 @@ type EdgeGateOptions struct {
 // limit is verified in that address's one over-budget slot
 // (auth.OverBudgetVerificationSlots), which bounds the hosted API calls an
 // over-budget address can cause. State is in memory per process: with N
-// acr-mcp replicas an address can record about N x (FailureLimit +
-// MaxInFlight) failures per window (attempts admitted before the limit was
-// reached can still fail) and hold N over-budget slots.
+// acr-mcp replicas an address can reach the limit after about N x
+// (FailureLimit + MaxInFlight) failures in a window (attempts admitted before
+// the limit was reached can still fail); after that its slot rejections are
+// still counted one at a time, and it holds at most N over-budget slots.
 type edgeGate struct {
 	limiter  auth.AttemptLimiter
 	resolver auth.ClientIPResolver

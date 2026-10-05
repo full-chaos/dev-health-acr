@@ -351,7 +351,11 @@ func (l *MemoryLimiter) window(windows map[string]fixedWindow, key string, now t
 	if window, ok := windows[key]; ok {
 		return l.current(window, now), true
 	}
-	if len(windows) >= l.maxKeys {
+	// An address with an undecided attempt is always tracked, so the failure
+	// it is about to record is never dropped because other addresses filled
+	// the table meanwhile. Those addresses are themselves bounded by the
+	// in-flight table, so the map holds at most twice maxKeys entries.
+	if len(windows) >= l.maxKeys && l.inflight[key] == 0 {
 		return fixedWindow{}, false
 	}
 	return fixedWindow{Started: now}, true

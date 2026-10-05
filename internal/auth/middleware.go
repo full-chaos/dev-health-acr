@@ -221,14 +221,17 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 // a guess learns nothing from the slot it used, and it is logged as that
 // refusal (Info once per window, then Debug).
 func (a *Authenticator) rejectCredential(w http.ResponseWriter, r *http.Request, ip, reason string, credential *contractsv1.ClientCredential, decision AttemptDecision, now time.Time) {
-	overBudget, first := RecordRejection(a.limiter, ip, now)
+	// Counted at the moment it is decided: a verification that outlives the
+	// window is a failure of the window it ends in.
+	decided := a.now().UTC()
+	overBudget, first := RecordRejection(a.limiter, ip, decided)
 	overBudget = overBudget || decision.OverBudget
 	if credential != nil {
 		a.recordKnownDenialAudit(r, *credential, reason, now)
 	}
 	if overBudget {
 		a.logRefusal(r, RefusalFailureBudget, decision.InFlight, ip, first)
-		retryAfter := a.limiter.RetryAfter(ip, now)
+		retryAfter := a.limiter.RetryAfter(ip, decided)
 		if retryAfter <= 0 {
 			retryAfter = time.Second
 		}

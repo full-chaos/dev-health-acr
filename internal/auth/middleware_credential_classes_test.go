@@ -124,7 +124,8 @@ func sameHeaders(a, b http.Header) bool {
 	return true
 }
 
-// heldLookupStore parks every lookup of one token hash until released and
+// heldLookupStore parks every lookup of one token hash until released (then
+// answers it from the inner store) or until the request is abandoned, and
 // records how many were parked at once; other lookups pass through.
 type heldLookupStore struct {
 	storage.CredentialStore
@@ -145,14 +146,18 @@ func (s *heldLookupStore) FindByTokenHash(ctx context.Context, hash string) (con
 	s.arrivals++
 	s.maxSeen = max(s.maxSeen, s.parked)
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.parked--
+		s.mu.Unlock()
+	}()
 	select {
 	case <-s.release:
+	case <-ctx.Done():
+		return contractsv1.ClientCredential{}, ctx.Err()
 	case <-time.After(5 * time.Second):
 	}
-	s.mu.Lock()
-	s.parked--
-	s.mu.Unlock()
-	return contractsv1.ClientCredential{}, storage.ErrNotFound
+	return s.CredentialStore.FindByTokenHash(ctx, hash)
 }
 
 func (s *heldLookupStore) counts() (parked, maxSeen, arrivals int) {
