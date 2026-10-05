@@ -142,8 +142,8 @@ func TestFindSubjectsServesEverySeededRepository(t *testing.T) {
 	if len(got) != len(want) || diffSets(want, got) != diffSets(want, want) {
 		t.Fatalf("served repositories differ from seeded: %s", diffSets(want, got))
 	}
-	if cat, _ := c.call("data_catalog", doc{"sections": []string{"facts", "subjects", "relationships", "limits"}}); str(cat, "status") == "" && len(cat) == 0 {
-		t.Fatal("data_catalog returned nothing")
+	if _, rawCat := c.call("data_catalog", doc{"sections": []string{"relationships"}}); !strings.Contains(rawCat, "LINKS_PULL_REQUEST") {
+		t.Fatalf("data_catalog relationships section does not name LINKS_PULL_REQUEST: %.1500s", rawCat)
 	}
 }
 
@@ -164,8 +164,9 @@ func walkProblems(t *testing.T, slug string, d doc) []string {
 		problems = append(problems, fmt.Sprintf("members differ from the seeded link rows: %s", diff))
 	}
 	cohort := get(structured(d), "cohort")
-	if total, _ := get(cohort, "total").(float64); int(total) != len(got) || int(total) != len(want) {
-		problems = append(problems, fmt.Sprintf("census total=%v members=%d seeded=%d, want all equal", total, len(got), len(want)))
+	returned := len(list(structured(d), "cohort", "members"))
+	if total, _ := get(cohort, "total").(float64); int(total) != returned || returned != len(got) || int(total) != len(want) {
+		problems = append(problems, fmt.Sprintf("census total=%v members returned=%d distinct=%d seeded=%d, want all equal", total, returned, len(got), len(want)))
 	}
 	if complete, _ := get(cohort, "complete").(bool); !complete {
 		problems = append(problems, "the cohort is not complete")
@@ -235,7 +236,7 @@ func TestKnownDefectCHAOS8752WalkCutsMembersBelowTheSeededCount(t *testing.T) {
 			t.Fatalf("the defect changed: served %q is not a seeded issue of the repository", k)
 		}
 	}
-	if len(got) != 14 || len(want) != 20 || int(total) != 14 || !truncated || complete || !falseSentence {
+	if len(got) != 14 || len(got) >= len(want) || int(total) != 14 || !truncated || complete || !falseSentence {
 		t.Fatalf("the defect changed shape (served=%d seeded=%d total=%v truncated=%v complete=%v tierSentence=%v): %s", len(got), len(want), total, truncated, complete, falseSentence, strings.Join(problems, "; "))
 	}
 }
@@ -267,6 +268,10 @@ func TestReadRelationshipsServesTheLinkTier(t *testing.T) {
 			}
 		}
 		edges := list(rel, "edges")
+		if complete, _ := get(rel, "page", "complete").(bool); !complete {
+			t.Fatalf("PR %s: the relationship page is not complete: %.1500s", pr, raw)
+		}
+		seenIssue := map[string]bool{}
 		for _, e := range edges {
 			if str(e, "type") != "LINKS_PULL_REQUEST" {
 				t.Fatalf("PR %s: unexpected edge type in %.1500s", pr, raw)
@@ -274,6 +279,13 @@ func TestReadRelationshipsServesTheLinkTier(t *testing.T) {
 			label := str(e, "from", "label")
 			if str(e, "from", "kind") != "work_item" {
 				label = str(e, "to", "label")
+			}
+			if seenIssue[label] {
+				t.Fatalf("PR %s: the link to %q is served twice", pr, label)
+			}
+			seenIssue[label] = true
+			if str(e, "to", "canonical_id") != str(subs[0], "canonical_id") && str(e, "from", "canonical_id") != str(subs[0], "canonical_id") {
+				t.Fatalf("PR %s: an edge does not touch the pull request that was read: %.1500s", pr, raw)
 			}
 			want, seeded := wantTier[label]
 			if !seeded {
@@ -323,8 +335,9 @@ func TestRestrictedCallerSeesNothingOfAnotherRepository(t *testing.T) {
 
 	// subjects and edges of the other repository answer as not found, for every tool
 	subs, raw := scoped.call("find_subjects", doc{"kind": "repository", "limit": 200})
+	foreignUUID := repoID(t, two)
 	for _, s := range list(subs, "subjects") {
-		if str(s, "label") == two {
+		if str(s, "label") == two || strings.Contains(str(s, "canonical_id"), foreignUUID) {
 			t.Fatalf("find_subjects listed the other repository to a restricted caller: %s", raw)
 		}
 	}
@@ -366,7 +379,13 @@ func assertNoForeignText(t *testing.T, raw, repoUUID string, issues map[string]b
 func TestPeriodTotalStatesItsCoverage(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
 	c.requireTools("read_facts")
-	one, _ := slugs(t)
+	one, two := slugs(t)
+	periodTotal(t, c, one)
+	periodTotal(t, c, two)
+}
+
+func periodTotal(t *testing.T, c *client, one string) {
+	t.Helper()
 	id := subjectID(t, c, one)
 	rows := ch(t, fmt.Sprintf("SELECT toString(min(day)), toString(max(day)), toString(count()), toString(sum(commits_count)) FROM repo_metrics_daily FINAL WHERE org_id = %s AND repo_id = toUUID(%s)", sqlStr(orgID(t)), sqlStr(repoID(t, one))))
 	seededDays := rows[0][2]
@@ -377,8 +396,8 @@ func TestPeriodTotalStatesItsCoverage(t *testing.T) {
 	}
 	outcome := str(cov[0], "outcome")
 	if seededDays == "0" {
-		if outcome == "measured_zero" || outcome == "fact_served" {
-			t.Fatalf("no daily rows are seeded, yet coverage says %q: a missing period was served as measured: %.1500s", outcome, raw)
+		if outcome != "read_no_fact" {
+			t.Fatalf("%s: no daily rows are seeded, coverage says %q, want read_no_fact (a missing period is not measured): %.1500s", one, outcome, raw)
 		}
 		return
 	}
@@ -496,5 +515,27 @@ func TestCeilingRaisedServesEveryMember(t *testing.T) {
 	d, _ := walk(t, c, one)
 	if problems := walkProblems(t, one, d); len(problems) > 0 {
 		t.Fatalf("%s with the ceiling raised: %s\nanswer digest: %.3000s", one, strings.Join(problems, "; "), answerDigest(d))
+	}
+}
+
+// Use-case: the projects of the entity tree are projected and findable. The seeded projects
+// table is the expectation.
+func TestFindSubjectsServesEverySeededProject(t *testing.T) {
+	c := connect(t, "FG_ORG_TOKEN_FILE")
+	c.requireTools("find_subjects")
+	want := map[string]bool{}
+	for _, r := range ch(t, fmt.Sprintf("SELECT name FROM projects FINAL WHERE org_id = %s", sqlStr(orgID(t)))) {
+		want[r[0]] = true
+	}
+	if len(want) == 0 {
+		t.Fatal("no project is seeded")
+	}
+	d, raw := c.call("find_subjects", doc{"kind": "project", "limit": 200})
+	got := map[string]bool{}
+	for _, s := range list(d, "subjects") {
+		got[str(s, "label")] = true
+	}
+	if diffSets(want, got) != diffSets(want, want) {
+		t.Fatalf("served projects differ from seeded: %s\n%.1500s", diffSets(want, got), raw)
 	}
 }
