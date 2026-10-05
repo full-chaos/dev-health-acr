@@ -287,9 +287,9 @@ func reportTickReads(t *testing.T, ctx context.Context, admin clickhousedriver.C
 	rows, err := admin.Query(ctx, `SELECT extract(query, 'FROM ([a-z_]+)') AS producer_table, count() AS statements, max(read_bytes) AS max_read, countIf(exception_code = 307) AS refused
 FROM system.query_log
 WHERE current_database = ? AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing')
-  AND query_start_time_microseconds >= ? AND query_start_time_microseconds < ?
+  AND query_start_time_microseconds >= toDateTime64(?, 6, 'UTC') AND query_start_time_microseconds < toDateTime64(?, 6, 'UTC')
   AND query NOT LIKE '%system.query_log%' AND query NOT LIKE 'INSERT%' AND query NOT LIKE 'SYSTEM%'
-GROUP BY producer_table ORDER BY producer_table`, database, from, until)
+GROUP BY producer_table ORDER BY producer_table`, database, from.UTC().Format("2006-01-02 15:04:05.000000"), until.UTC().Format("2006-01-02 15:04:05.000000"))
 	if err != nil {
 		t.Fatalf("%s: read the query log: %v", phase, err)
 	}
