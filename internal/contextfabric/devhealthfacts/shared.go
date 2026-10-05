@@ -338,10 +338,21 @@ import (
 // with the cut stated, where it was refused with response_budget. A candidate
 // saved under v60 for such a question holds a refusal and must not be reused.
 //
-// v61 -> v65: a series or period-comparison question that states its period
+// v61 -> v62: a count about one named subject over a period is answered with
+// the total of the subject's stored daily rows of every additive daily count
+// column, with the days it rests on, where it was answered with the daily rows
+// and no total. A candidate saved under v61 for such a question must not be
+// reused.
+//
+// v62 -> v63: a period longer than the daily rows one read returns is answered
+// with a named reason where it was answered with none, and a period of exactly
+// that many days is totalled where it was refused as cut. A candidate saved
+// under v62 for such a question must not be reused.
+//
+// v63 -> v65: a series or period-comparison question that states its period
 // reads that period on the range axis, and a comparison names the period it is
 // compared with as not read, where both ran as one current-state window. A
-// candidate saved under v61 for such a question must not be reused.
+// candidate saved under v63 for such a question must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v65"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for

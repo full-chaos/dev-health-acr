@@ -63,6 +63,9 @@ type scopeCell struct {
 	anchorKind   SubjectKind
 	bases        CommitBasisSet
 	memberSource CohortMemberSource
+	// facts and now override the empty fact reader and the fixed clock.
+	facts CanonicalFactReader
+	now   time.Time
 
 	wantDecision  CountPopulationScopeDecision
 	wantCounted   bool
@@ -110,12 +113,7 @@ func newScopeEngine(t *testing.T, cell scopeCell, telemetry EngineTelemetry, gat
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			},
 		},
-		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
-			return CanonicalFactBundle{
-				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
-			}, nil
-		}),
+		Facts: scopeFactReader(cell),
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
 			return InvestigationResult{
 				Status: cell.status, DirectJudgment: "Answered.",
@@ -136,13 +134,30 @@ func newScopeEngine(t *testing.T, cell scopeCell, telemetry EngineTelemetry, gat
 		Requirements: registryDeriver{},
 	}, EngineOptions{
 		ServiceVersion: "acr-test",
-		Now:            func() time.Time { return time.Unix(500, 0).UTC() },
-		NewResultID:    func() string { return "result_57750001" },
+		Now: func() time.Time {
+			if !cell.now.IsZero() {
+				return cell.now
+			}
+			return time.Unix(500, 0).UTC()
+		},
+		NewResultID: func() string { return "result_57750001" },
 	})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
 	return engine
+}
+
+func scopeFactReader(cell scopeCell) CanonicalFactReader {
+	if cell.facts != nil {
+		return cell.facts
+	}
+	return factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+		return CanonicalFactBundle{
+			Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+			Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+		}, nil
+	})
 }
 
 func runScopeCell(t *testing.T, ctx context.Context, engine *Engine) InvestigationResult {

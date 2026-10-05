@@ -547,7 +547,7 @@ func TestQueryVersionMovedPastTheDraftStatusAnswerHead(t *testing.T) {
 
 func TestQueryVersionMovedPastTheOneWindowSeriesAndComparison(t *testing.T) {
 	t.Parallel()
-	for _, versionBeforeThePeriodShape := range []string{"devhealthfacts.clickhouse.v55", "devhealthfacts.clickhouse.v56", "devhealthfacts.clickhouse.v57", "devhealthfacts.clickhouse.v58", "devhealthfacts.clickhouse.v59", "devhealthfacts.clickhouse.v60", "devhealthfacts.clickhouse.v61"} {
+	for _, versionBeforeThePeriodShape := range []string{"devhealthfacts.clickhouse.v55", "devhealthfacts.clickhouse.v56", "devhealthfacts.clickhouse.v57", "devhealthfacts.clickhouse.v58", "devhealthfacts.clickhouse.v59", "devhealthfacts.clickhouse.v60", "devhealthfacts.clickhouse.v61", "devhealthfacts.clickhouse.v62", "devhealthfacts.clickhouse.v63"} {
 		if devhealthfacts.QueryVersion == versionBeforeThePeriodShape {
 			t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when a series or a period comparison ran as one current-state window must not be reused", devhealthfacts.QueryVersion, versionBeforeThePeriodShape)
 		}
