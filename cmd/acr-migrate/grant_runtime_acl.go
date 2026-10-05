@@ -116,6 +116,14 @@ func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, output 
 		)); err != nil {
 			return fmt.Errorf("grant DELETE on acr.device_authorizations to %s: %w", role, err)
 		}
+		// Used web-assertion ids shared by every acr-api pod: INSERT per
+		// assertion, SELECT and DELETE for the bounded expiry sweep.
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(
+			`GRANT SELECT, INSERT, DELETE ON TABLE acr.web_assertion_replays TO %s`,
+			quotedRole,
+		)); err != nil {
+			return fmt.Errorf("grant acr.web_assertion_replays privileges to %s: %w", role, err)
+		}
 	}
 	role := strings.Join(roles, ", ")
 	if _, err = fmt.Fprintf(output, "granted SELECT, INSERT on acr.oauth_device_grants to %s\n", role); err != nil {
@@ -124,6 +132,9 @@ func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, output 
 	if _, err = fmt.Fprintf(output, "granted DELETE on acr.oauth_clients, acr.oauth_authorization_requests to %s\n", role); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(output, "granted DELETE on acr.device_authorizations to %s\n", role)
+	if _, err = fmt.Fprintf(output, "granted DELETE on acr.device_authorizations to %s\n", role); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(output, "granted SELECT, INSERT, DELETE on acr.web_assertion_replays to %s\n", role)
 	return err
 }

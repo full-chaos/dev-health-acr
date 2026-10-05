@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -19,6 +20,10 @@ func (a *Authenticator) authenticateWebAssertion(w http.ResponseWriter, r *http.
 		if IsWebAssertionReplay(err) {
 			a.recordWebAssertionReplay(r, principal, now)
 			a.writeRateLimitError(w, r, time.Second)
+			return
+		}
+		if errors.Is(err, ErrWebAssertionStoreUnavailable) {
+			a.writeError(w, r, http.StatusServiceUnavailable, "temporarily_unavailable", "Web assertion could not be checked; retry", true, nil)
 			return
 		}
 		a.recordUnknownFailure(r, ip, "invalid_web_assertion", now)
