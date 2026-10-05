@@ -258,14 +258,14 @@ func seedScopedOrganization(t *testing.T, ctx context.Context, direct clickhouse
 
 	type item struct{ id, slug, provider, itemType, project, title string }
 	items := []item{
-		{"linear:CHAOS-10", "", "linear", "issue", "", "Retry the payment call"},         // repository-less, native to a GitHub pull request of acme/svc
-		{"jira:CHAOS-11", "", "jira", "story", "", "Index the ledger"},                   // repository-less, native to a GitLab merge request of acme/gl
-		{"linear:CHAOS-12", "", "linear", "issue", "", "Rename the queue"},               // repository-less, explicit_text only, to acme/svc
-		{"jira:CHAOS-13", "", "jira", "story", "", "Trim the logs"},                      // repository-less, native to a pull request of acme/other only
-		{"linear:CHAOS-14", "", "linear", "issue", "", "Split the job"},                  // two items share the key, both native to acme/svc
-		{"jira:CHAOS-14", "", "jira", "story", "", "Split the job again"},                //
+		{"linear:CHAOS-10", "", "linear", "issue", "", "Retry the payment call"},                  // repository-less, native to a GitHub pull request of acme/svc
+		{"jira:CHAOS-11", "", "jira", "story", "", "Index the ledger"},                            // repository-less, native to a GitLab merge request of acme/gl
+		{"linear:CHAOS-12", "", "linear", "issue", "", "Rename the queue"},                        // repository-less, explicit_text only, to acme/svc
+		{"jira:CHAOS-13", "", "jira", "story", "", "Trim the logs"},                               // repository-less, native to a pull request of acme/other only
+		{"linear:CHAOS-14", "", "linear", "issue", "", "Split the job"},                           // two items share the key, both native to acme/svc
+		{"jira:CHAOS-14", "", "jira", "story", "", "Split the job again"},                         //
 		{"gh:acme/other#5", "acme/other", "github", "issue", "ghprojv2:PVT_checkout", "Checkout"}, // own repository acme/other, in the project, native to acme/svc
-		{"gh:acme/svc#6", "acme/svc", "github", "issue", "", "Heuristic neighbour"},      // own repository acme/svc, heuristic to acme/svc
+		{"gh:acme/svc#6", "acme/svc", "github", "issue", "", "Heuristic neighbour"},               // own repository acme/svc, heuristic to acme/svc
 	}
 	// Fillers: work items the search for any of the keys finds, so the
 	// resolution stalls (more hits than the search returns) and the census
