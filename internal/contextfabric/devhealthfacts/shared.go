@@ -383,15 +383,21 @@ import (
 // total, is served on the answer. A candidate saved before v69 holds a total
 // summed over partial edge days and must not be reused.
 //
-// v69 -> v70: a requested repository scope follows the link of record. A
+// v69 -> v70: a bare calendar phrase ("last month", "last quarter", "last
+// year") on the MCP surface commits the previous calendar period as the
+// question's window whatever the interpreter sampled, and a series reads that
+// period on the range axis. A candidate saved before v70 holds a window taken
+// from a sampled range, or none, and must not be reused.
+//
+// v70 -> v71: a requested repository scope follows the link of record. A
 // work-item handle under a requested repository scope is counted among the
 // issues linked to a pull request of a named repository, not by the work
 // item's own repository; a project's deployments under a requested scope are
 // reached through an issue of any repository linked to a pull request in the
 // scope; and a work item the link admitted has its own facts read without the
-// requested repository selector. A candidate saved under v69 or earlier for
+// requested repository selector. A candidate saved under v70 or earlier for
 // such a question holds the old relation and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v70"
+const QueryVersion = "devhealthfacts.clickhouse.v71"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

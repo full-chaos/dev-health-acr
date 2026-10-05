@@ -440,10 +440,12 @@ func reuseBypassReason(request InvestigationRequest, structureCanon requestStruc
 // statedPeriodReuseBypass reports whether an MCP turn must skip answer reuse
 // because its period is only committed after interpretation (see
 // AnswerReuseBypassStatedPeriod): current-axis request, no window supplied or
-// confirmed, and the binder saw exactly one period span in the question.
+// confirmed, and the binder saw exactly one period span in the question. A
+// calendar period the binder committed counts too: the interpretation may still
+// withdraw it, so a stored current-state answer is not safe to serve.
 func statedPeriodReuseBypass(request InvestigationRequest, canon requestWindowCanonicalization) AnswerReuseBypassReason {
 	if strings.TrimSpace(request.Consumer.Surface) == mcpSurface && request.TimeContext.Axis == TemporalCurrent &&
-		canon.Effective == nil && canon.Veto == windowVetoNone && canon.BinderProposal.SpansBound == 1 {
+		(canon.Effective == nil || canon.CalendarCommitted) && canon.Veto == windowVetoNone && canon.BinderProposal.SpansBound == 1 {
 		return AnswerReuseBypassStatedPeriod
 	}
 	return ""
