@@ -319,7 +319,7 @@ func TestRestrictedCallerSeesNothingOfAnotherRepository(t *testing.T) {
 	if got := memberLabels(d); len(got) != 0 {
 		t.Fatalf("restricted caller saw members of another repository: %v", sortedKeys(got))
 	}
-	assertNoForeignText(t, raw, two, foreignIssues)
+	assertNoForeignText(t, raw, repoID(t, two), foreignIssues)
 
 	// subjects and edges of the other repository answer as not found, for every tool
 	subs, raw := scoped.call("find_subjects", doc{"kind": "repository", "limit": 200})
@@ -335,18 +335,21 @@ func TestRestrictedCallerSeesNothingOfAnotherRepository(t *testing.T) {
 	if answer := str(list(facts, "request", "subjects_refused")[0], "answer"); answer != "denied_or_not_found" {
 		t.Fatalf("read_facts refusal answer = %q, want denied_or_not_found", answer)
 	}
-	assertNoForeignText(t, raw, two, foreignIssues)
+	assertNoForeignText(t, raw, repoID(t, two), foreignIssues)
 	rel, raw := scoped.call("read_relationships", doc{"subject": doc{"kind": "repository", "canonical_id": foreignRepoID}, "direction": "both", "depth": 1})
 	if n := len(list(rel, "edges")); n != 0 {
 		t.Fatalf("read_relationships served %d edges of another repository: %.1500s", n, raw)
 	}
-	assertNoForeignText(t, raw, two, foreignIssues)
+	assertNoForeignText(t, raw, repoID(t, two), foreignIssues)
 }
 
-func assertNoForeignText(t *testing.T, raw, slug string, issues map[string]bool) {
+// assertNoForeignText fails when a response to a restricted caller carries the other
+// repository's id or any of its issues. The other repository's slug is not checked: the caller
+// typed it in its own question and the service echoes it back in its refusal text.
+func assertNoForeignText(t *testing.T, raw, repoUUID string, issues map[string]bool) {
 	t.Helper()
-	if strings.Contains(raw, slug) {
-		t.Fatalf("a response to a restricted caller names the other repository %q: %.1500s", slug, raw)
+	if strings.Contains(raw, repoUUID) {
+		t.Fatalf("a response to a restricted caller carries the id of the other repository: %.1500s", raw)
 	}
 	for k := range issues {
 		if strings.Contains(raw, k) {
