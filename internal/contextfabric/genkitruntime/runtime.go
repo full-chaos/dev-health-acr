@@ -843,6 +843,10 @@ func (g sdkGenerator) Interpret(ctx context.Context, request generationRequest) 
 type decodeSynthesisRejection struct {
 	output synthesisOutput
 	parsed bool
+	// digest is the digest of the response text itself, so two rejected draws
+	// that differ only in what the lenient parse drops still read as
+	// different draws.
+	digest string
 	cause  error
 }
 
@@ -877,7 +881,7 @@ func (g sdkGenerator) Synthesize(ctx context.Context, request generationRequest)
 	if err != nil {
 		var genkitErr *core.GenkitError
 		if errors.As(err, &genkitErr) && genkitErr.Status == core.INTERNAL && strings.HasPrefix(genkitErr.Message, genkitSchemaMismatchPrefix) {
-			rejection := &decodeSynthesisRejection{cause: err}
+			rejection := &decodeSynthesisRejection{cause: classifyModelError(err), digest: contextfabric.DigestModelValue([]byte(rawText))}
 			var lenient synthesisOutput
 			if json.Unmarshal([]byte(extractGenkitJSON(rawText)), &lenient) == nil {
 				rejection.output, rejection.parsed = lenient, true
@@ -2116,8 +2120,15 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// before deciding whether another draw remains, so every rejected
 		// draw is visible, not only the one this call ultimately reports.
 		rejectedBytes, _ := json.Marshal(output)
+		rejectedDigest, rejectedClaims := contextfabric.DigestModelValue(rejectedBytes), len(output.ClaimedFacts)
+		if localRejection != nil {
+			rejectedDigest = localRejection.digest
+			if !localRejection.parsed {
+				rejectedClaims = -1
+			}
+		}
 		clause, _ := contextfabric.SynthesisRejectionClauseOf(err)
-		draws = append(draws, synthesisDraw{Index: draw, Outcome: "invalid_output", OutputDigest: contextfabric.DigestModelValue(rejectedBytes), Claims: len(output.ClaimedFacts), Clause: clause})
+		draws = append(draws, synthesisDraw{Index: draw, Outcome: "invalid_output", OutputDigest: rejectedDigest, Claims: rejectedClaims, Clause: clause})
 	}
 	// A redraw that was rejected or failed in transport serves the valid
 	// zero-claim draft it followed: an honest degraded answer, never a failure
@@ -2610,10 +2621,15 @@ func formatSynthesisDrawClauses(draws []synthesisDraw) string {
 }
 
 // formatSynthesisDrawClaims renders "1:0,2:3", index-aligned with
-// formatSynthesisDraws: the claimed-fact count of each draw's raw output.
+// formatSynthesisDraws: the claimed-fact count of each draw's raw output, "?"
+// for a draw whose text never decoded.
 func formatSynthesisDrawClaims(draws []synthesisDraw) string {
 	parts := make([]string, 0, len(draws))
 	for _, draw := range draws {
+		if draw.Claims < 0 {
+			parts = append(parts, fmt.Sprintf("%d:?", draw.Index))
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("%d:%d", draw.Index, draw.Claims))
 	}
 	return strings.Join(parts, ",")

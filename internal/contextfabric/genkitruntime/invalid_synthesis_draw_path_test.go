@@ -13,6 +13,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -245,6 +246,90 @@ func TestFencedInvalidSynthesisDrawKeepsItsRejection(t *testing.T) {
 			rt, _, _ = scriptedSynthesisGenkitRuntime(t, []string{fmt.Sprintf(format, validSynthesisDrawText(t))})
 			if _, _, err := rt.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err != nil {
 				t.Fatalf("fenced valid draw refused: %v", err)
+			}
+		})
+	}
+}
+
+func synthesisInputLineAttr(t *testing.T, logger *captureLogger, key string) string {
+	t.Helper()
+	logger.mu.Lock()
+	defer logger.mu.Unlock()
+	for _, record := range logger.records {
+		if record.Message == eventspec.SynthesisInput.Msg {
+			return attrString(t, record.Attrs, key)
+		}
+	}
+	t.Fatal("no synthesis input line logged")
+	return ""
+}
+
+func synthesisDecisionAttr(t *testing.T, logger *captureLogger, key string) string {
+	t.Helper()
+	events := logger.decisionEvents()
+	if len(events) == 0 {
+		t.Fatal("no decision event logged")
+	}
+	return attrString(t, events[len(events)-1].Attrs, key)
+}
+
+// A rejected draw is identified by the text the model wrote, not by what the
+// lenient parse keeps: a draw that differs from the valid one only by a
+// schema-forbidden property has its own digest, and a draw that never decoded
+// reports an unknown claim count instead of zero.
+func TestRejectedSynthesisDrawsKeepTheirOwnDigestAndUnknownClaims(t *testing.T) {
+	extra := invalidSynthesisDrawText(t, drawSynthesisUnknownProperty)
+	valid := validSynthesisDrawText(t)
+	rt, logger, _ := scriptedSynthesisGenkitRuntime(t, []string{extra, valid})
+	if _, _, err := rt.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v", err)
+	}
+	want := fmt.Sprintf("1:%s,2:%s", contextfabric.DigestModelValue([]byte(extra)), contextfabric.DigestModelValue([]byte(valid)))
+	if got := synthesisDecisionAttr(t, logger, "draw_output_digests"); got != want {
+		t.Fatalf("draw_output_digests = %q, want %q", got, want)
+	}
+	if got := synthesisInputLineAttr(t, logger, "draw_claims"); got != "1:1,2:1" {
+		t.Fatalf("draw_claims = %q, want 1:1,2:1", got)
+	}
+
+	first, second := `{"status": "complete", `, `{"status": "partial", `
+	rt, logger, _ = scriptedSynthesisGenkitRuntime(t, []string{first, second, first})
+	_, _, err := rt.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if !errors.Is(err, contextfabric.ErrSynthesisRejected) {
+		t.Fatalf("err = %v, want the typed synthesis rejection", err)
+	}
+	digest := contextfabric.DigestModelValue
+	want = fmt.Sprintf("1:%s,2:%s,3:%s", digest([]byte(first)), digest([]byte(second)), digest([]byte(first)))
+	if got := synthesisDecisionAttr(t, logger, "draw_output_digests"); got != want {
+		t.Fatalf("draw_output_digests = %q, want %q", got, want)
+	}
+	if got := synthesisInputLineAttr(t, logger, "draw_claims"); got != "1:?,2:?,3:?" {
+		t.Fatalf("draw_claims = %q, want an unknown count for draws that never decoded", got)
+	}
+}
+
+// The error a refused draw returns names a class, never what the model wrote.
+func TestRejectedSynthesisDrawErrorDoesNotQuoteTheModelOutput(t *testing.T) {
+	out := validSynthesisOutput()
+	out.Status = "marker_status_from_the_model"
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra := strings.TrimSuffix(validSynthesisDrawText(t), "}") + `,"marker_status_from_the_model":1}`
+	for name, text := range map[string]string{
+		"out_of_enum":    string(encoded),
+		"malformed":      `{"status": "marker_status_from_the_model", `,
+		"extra_property": extra,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rt, _, _ := scriptedSynthesisGenkitRuntime(t, []string{text})
+			_, _, err := rt.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+			if !errors.Is(err, contextfabric.ErrSynthesisRejected) {
+				t.Fatalf("err = %v, want the typed synthesis rejection", err)
+			}
+			if strings.Contains(err.Error(), "marker_status_from_the_model") {
+				t.Fatalf("error quotes the model output: %v", err)
 			}
 		})
 	}
