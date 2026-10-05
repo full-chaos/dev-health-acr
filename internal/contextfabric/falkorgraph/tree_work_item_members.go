@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -58,11 +57,7 @@ func (a *Adapter) TreeWorkItemMembers(ctx context.Context, principal storage.Pri
 		PullRequests: walk.linkSources, LinkedIssues: max(walk.linkIssueTargets, 0),
 		Denied: walk.linkDeniedTargets, Truncated: walk.truncated,
 	}
-	for _, n := range walk.nodes {
-		subject, ok := graphrank.NodeSubject(n)
-		if !ok {
-			continue
-		}
+	for _, subject := range walk.linkSubjects {
 		out.Members = append(out.Members, contextfabric.TreeWorkItemMember{Subject: subject, Tier: walk.memberTiers[subject.CanonicalID]})
 	}
 	sort.Slice(out.Members, func(i, j int) bool { return out.Members[i].Subject.CanonicalID < out.Members[j].Subject.CanonicalID })
