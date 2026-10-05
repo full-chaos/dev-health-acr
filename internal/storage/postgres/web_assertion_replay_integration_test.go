@@ -155,15 +155,15 @@ func TestWebAssertionReplayStore_failedSweepNeverChangesTheDecision(t *testing.T
 	adminDB := stdlib.OpenDB(*admin)
 	t.Cleanup(func() { _ = adminDB.Close() })
 	for _, statement := range []string{
-		`CREATE ROLE replay_insert_only LOGIN PASSWORD 'replay-test'`,
-		`GRANT USAGE ON SCHEMA acr TO replay_insert_only`,
-		`GRANT INSERT ON acr.web_assertion_replays TO replay_insert_only`,
+		`CREATE ROLE replay_no_delete LOGIN PASSWORD 'replay-test'`,
+		`GRANT USAGE ON SCHEMA acr TO replay_no_delete`,
+		`GRANT SELECT, INSERT ON acr.web_assertion_replays TO replay_no_delete`,
 	} {
 		_, err := adminDB.ExecContext(ctx, statement)
 		require.NoError(t, err)
 	}
 	limited := *admin
-	limited.User, limited.Password = "replay_insert_only", "replay-test"
+	limited.User, limited.Password = "replay_no_delete", "replay-test"
 	limitedDB := stdlib.OpenDB(limited)
 	t.Cleanup(func() { _ = limitedDB.Close() })
 
