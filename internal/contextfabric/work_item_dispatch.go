@@ -53,7 +53,7 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	if err != nil {
 		return graph, nil, err
 	}
-	census := &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusUnmeasured, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), AuthorizationDigest: digest, memberFilter: filter}
+	census := &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusUnmeasured, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), AuthorizationDigest: digest, memberFilter: filter, measuredNow: true}
 	anchorKind := resolution.Committed[0].Kind
 	if anchorKind != SubjectRepository && e.workItemMembership == nil {
 		return graph, census, nil

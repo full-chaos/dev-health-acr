@@ -1,8 +1,6 @@
 package contextfabric
 
 import (
-	"slices"
-
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -11,7 +9,7 @@ import (
 // copied: the stored result is never edited in place. Nothing is set when the
 // census holds no population, so an unmeasured read does not claim one.
 func withWorkItemPopulation(result InvestigationResult, census *WorkItemTupleCensus) InvestigationResult {
-	if census == nil || result.Cohort == nil || result.Cohort.Kind != SubjectWorkItem || census.State == WorkItemMembershipCensusUnmeasured {
+	if census == nil || !census.measuredNow || result.Cohort == nil || result.Cohort.Kind != SubjectWorkItem || census.State == WorkItemMembershipCensusUnmeasured {
 		return result
 	}
 	listed := len(result.Cohort.Members)
@@ -21,11 +19,7 @@ func withWorkItemPopulation(result InvestigationResult, census *WorkItemTupleCen
 		// stored result read again keeps it.
 		return result
 	}
-	// The census does not persist that an exact read was partial; the answer's
-	// own partial-read limitation does, so a result stored before this field
-	// existed is read again with the bound it was served with.
-	lowerBound := census.State == WorkItemMembershipCensusFloor || census.incomplete ||
-		slices.Contains(result.Limitations, contractsv1.ContextFabricWorkItemRepositoryPartialLimitation)
+	lowerBound := census.State == WorkItemMembershipCensusFloor || census.incomplete
 	cohort := *result.Cohort
 	cohort.Population = census.Value
 	cohort.PopulationLowerBound = lowerBound

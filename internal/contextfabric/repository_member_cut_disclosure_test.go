@@ -166,23 +166,23 @@ func TestReuseRefusesAStoredTierSentenceThatTheCutNoLongerSupports(t *testing.T)
 	}
 }
 
-// A result stored before the population existed, with the partial-read limitation, read again:
-// the census does not persist that the read was partial, the stored limitation does.
-func TestAStoredPartialResultWithNoPopulationIsReadAgainAsALowerBound(t *testing.T) {
+// A result stored before the population existed is served by id exactly as it was stored: no
+// population, no N of M sentence, nothing computed from a re-read census (which does not carry
+// whether the read was partial), whatever limitations the stored result holds.
+func TestAResultStoredBeforeThePopulationExistedIsServedAsItWasStored(t *testing.T) {
 	members := make([]CohortMember, 0, 5)
 	for i := 0; i < 5; i++ {
 		members = append(members, CohortMember{Subject: SubjectRef{Kind: SubjectWorkItem, CanonicalID: fmt.Sprintf("work_item:%02d", i), Label: fmt.Sprintf("W-%02d", i)}, Rank: i + 1})
 	}
-	stored := InvestigationResult{
-		Cohort:      &Cohort{Kind: SubjectWorkItem, Members: members},
-		Limitations: []string{contractsv1.ContextFabricWorkItemRepositoryPartialLimitation},
-	}
-	census := &WorkItemTupleCensus{State: WorkItemMembershipCensusExact, Value: 20, Retained: 5}
-	served := withWorkItemPopulation(stored, census)
-	if !served.Cohort.PopulationLowerBound || served.Cohort.Population != 20 {
-		t.Fatalf("population=%d lowerBound=%v, want 20 as a lower bound", served.Cohort.Population, served.Cohort.PopulationLowerBound)
-	}
-	if got := listedSentence(served.Limitations); !strings.Contains(got, " of at least 20 members") {
-		t.Fatalf("listed sentence = %q, want a lower bound stated as at least 20", got)
+	for name, limitations := range map[string][]string{
+		"partial read":  {contractsv1.ContextFabricWorkItemRepositoryPartialLimitation},
+		"no limitation": {},
+	} {
+		stored := InvestigationResult{Cohort: &Cohort{Kind: SubjectWorkItem, Members: members}, Limitations: limitations}
+		census := &WorkItemTupleCensus{State: WorkItemMembershipCensusExact, Value: 20, Retained: 5}
+		served := withWorkItemPopulation(stored, census)
+		if served.Cohort.Population != 0 || served.Cohort.PopulationLowerBound || len(served.Limitations) != len(limitations) || listedSentence(served.Limitations) != "" {
+			t.Fatalf("%s: a legacy stored result was given population %d (lower bound %v) and limitations %v", name, served.Cohort.Population, served.Cohort.PopulationLowerBound, served.Limitations)
+		}
 	}
 }
