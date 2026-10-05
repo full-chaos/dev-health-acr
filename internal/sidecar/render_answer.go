@@ -174,8 +174,15 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 	displayedFacts := make(map[string]struct{})
 	if projection.Cohort != nil {
 		b.writeLine("")
+		size := strconv.Itoa(projection.Cohort.Total)
+		if projection.Cohort.Population > projection.Cohort.Total || projection.Cohort.PopulationLowerBound {
+			size = strconv.Itoa(max(projection.Cohort.Population, projection.Cohort.Total))
+			if projection.Cohort.PopulationLowerBound {
+				size = "at least " + size
+			}
+		}
 		if !b.writeLine(fmt.Sprintf("## Cohort (%s of %s shown)",
-			strconv.Itoa(len(projection.Cohort.Members)), strconv.Itoa(projection.Cohort.Total))) {
+			strconv.Itoa(len(projection.Cohort.Members)), size)) {
 			return b.finishWithTruncation()
 		}
 		if !b.writeLines(untrustedBlock("cohort_rationale", projection.Cohort.Rationale)) {

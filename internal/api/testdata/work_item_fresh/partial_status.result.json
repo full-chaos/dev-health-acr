@@ -151,7 +151,8 @@
     ],
     "rationale": "Work items are members of the resolved project within the authorized scope.",
     "complete": true,
-    "truncated": false
+    "truncated": false,
+    "population": 1
   },
   "direct_judgment": "This investigation is complete.",
   "current_state": "Current observed values: work.title=Implement the thing for Implement the thing.",

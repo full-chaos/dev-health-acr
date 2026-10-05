@@ -48,12 +48,17 @@ func RepositoryWorkItemWalkOutcomeVocabulary() []string {
 // distinct issues the link read returned that no authorized link reached, and
 // is
 // withheld (zero) on a filtered read, as the census line withholds it.
-// Truncated: the walk or the filter did not read every member.
+// Members is how many members the answer lists and Population how many the
+// caller may read; Truncated: the walk or the filter did not read every
+// member, or the list is shorter than the population.
 type RepositoryWorkItemWalkEvent struct {
-	Outcome                                     RepositoryWorkItemWalkOutcome
-	PullRequests, LinkedIssues, Members, Denied int
-	Truncated, Filtered, Restricted, Measured   bool
-	UnmeasuredReason                            WorkItemMembershipUnmeasuredReason
+	Outcome                                                 RepositoryWorkItemWalkOutcome
+	PullRequests, LinkedIssues, Members, Population, Denied int
+	Truncated, Filtered, Restricted, Measured               bool
+	// LowerTierCut: a member left out of the list has a weaker link tier than a
+	// listed member; it decides whether the answer carries the tier sentence.
+	LowerTierCut     bool
+	UnmeasuredReason WorkItemMembershipUnmeasuredReason
 }
 
 // repositoryWorkItemReading is what one measured read of a repository's work
@@ -65,6 +70,9 @@ type repositoryWorkItemReading struct {
 	Heuristic int
 	// Cut: the walk or the filter did not read every member.
 	Cut bool
+	// LowerTierCut: a member left out of the list has a weaker link tier
+	// than a listed member.
+	LowerTierCut bool
 }
 
 // treeLinkTierStrongerThanHeuristic reports whether a tier is one of the two
@@ -126,7 +134,7 @@ func withRepositoryWorkItemDisclosures(result InvestigationResult, census *WorkI
 	if census.incomplete {
 		additions = append(additions, contractsv1.ContextFabricWorkItemRepositoryPartialLimitation)
 	}
-	if census.Retained < census.Value {
+	if reading.LowerTierCut {
 		additions = append(additions, contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation)
 	}
 	switch reading.Outcome {

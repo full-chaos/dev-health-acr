@@ -157,6 +157,12 @@ func (c ContextFabricCohort) validateStored() error {
 }
 
 func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
+	// Population is the members the caller may read, counted before the list
+	// was cut: never negative, never below the members listed, and a lower
+	// bound is a statement about a population that is there.
+	if c.Population < 0 || (c.Population > 0 && c.Population < len(c.Members)) || (c.Population == 0 && c.PopulationLowerBound) {
+		return fmt.Errorf("cohort population violates v1 bounds")
+	}
 	// The cohort kind is bounded by the closed subject-kind vocabulary and
 	// nothing narrower.
 	//

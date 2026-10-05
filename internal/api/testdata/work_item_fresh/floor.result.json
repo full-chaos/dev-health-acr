@@ -157,7 +157,9 @@
     ],
     "rationale": "Work items are members of the resolved project within the authorized scope.",
     "complete": false,
-    "truncated": true
+    "truncated": true,
+    "population": 2000,
+    "population_lower_bound": true
   },
   "direct_judgment": "This investigation is complete.",
   "current_state": "Current observed values: status.status=open for Implement the thing; work.title=Implement the thing for Implement the thing.",
@@ -168,6 +170,7 @@
   "paths": [],
   "conflicts": [],
   "limitations": [
+    "Not every member is listed: 1 of at least 2000 members are listed, because the server limits how many items one answer carries.",
     "Members are the work items as of now; the period supplied with this request was not applied to the membership. Ask for work items created, completed or updated in that period to filter by one of those."
   ],
   "evidence_ref_ids": [

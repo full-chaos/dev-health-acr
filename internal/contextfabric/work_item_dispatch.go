@@ -53,7 +53,7 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	if err != nil {
 		return graph, nil, err
 	}
-	census := &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusUnmeasured, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), AuthorizationDigest: digest, memberFilter: filter}
+	census := &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusUnmeasured, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), AuthorizationDigest: digest, memberFilter: filter, measuredNow: true}
 	anchorKind := resolution.Committed[0].Kind
 	if anchorKind != SubjectRepository && e.workItemMembership == nil {
 		return graph, census, nil
@@ -155,6 +155,7 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 			Outcome:      repositoryWorkItemWalkOutcome(membership.Census, true, len(cohort.Members), restricted),
 			PullRequests: membership.Census.RepositoryPullRequests, LinkedIssues: membership.Census.RepositoryLinkedIssues,
 			Heuristic: heuristic, Cut: membership.Census.PopulationIncomplete || membership.Census.State == WorkItemMembershipCensusFloor,
+			LowerTierCut: membership.Census.LowerTierCut,
 		}
 	}
 	census.Retained = len(cohort.Members)
@@ -478,7 +479,9 @@ func (e *Engine) recordRepositoryWorkItemWalk(ctx context.Context, principal sto
 	}
 	if measured {
 		event.PullRequests, event.LinkedIssues = membership.Census.RepositoryPullRequests, membership.Census.RepositoryLinkedIssues
-		event.Members, event.Truncated = members, membership.Census.PopulationIncomplete || membership.Census.State == WorkItemMembershipCensusFloor
+		event.LowerTierCut = membership.Census.LowerTierCut
+		event.Members, event.Population = members, membership.Census.AuthorizedPopulation
+		event.Truncated = membership.Census.PopulationIncomplete || membership.Census.State == WorkItemMembershipCensusFloor || members < event.Population
 		if !filtered {
 			event.Denied = membership.Census.DeniedPopulation
 		}

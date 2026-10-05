@@ -208,6 +208,12 @@ func workItemReuseMembershipEqual(candidate InvestigationResult, census *WorkIte
 	if anchorKind != SubjectRepository {
 		return true
 	}
+	// The lower-tier sentence is a statement about which members the cut left
+	// out: a cut member whose link changed tier since the answer was stored
+	// can make the stored sentence wrong or missing.
+	if current.Census.LowerTierCut != slices.Contains(candidate.Limitations, contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation) {
+		return false
+	}
 	// A repository member's reason names the tier of its link: a stored member
 	// whose link is now of another tier is not the member the walk finds, and
 	// the heuristic count the stored answer states would be stale.

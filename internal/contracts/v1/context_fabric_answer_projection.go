@@ -253,6 +253,14 @@ type ContextFabricProjectedCohort struct {
 	// fields on ContextFabricProjectedCohortMember below.
 	ScoreMeaning     ContextFabricCohortScoreMeaning `json:"score_meaning,omitempty"`
 	JudgmentMismatch bool                            `json:"judgment_mismatch,omitempty"`
+	// Population is how many members the caller may read, counted before the
+	// answer item limit cut the list; Total stays the count the engine handed
+	// to the projection. Present on a work-item cohort only, and only when
+	// the read measured it. Mirrors the canonical cohort field.
+	Population int `json:"population,omitempty"`
+	// PopulationLowerBound: Population counts what was read and the real
+	// population can be larger.
+	PopulationLowerBound bool `json:"population_lower_bound,omitempty"`
 	// Groups (CHAOS-4636) is the group axis, projected. Absent on every flat
 	// cohort. Members are named by canonical id into Members above, exactly
 	// as on the canonical cohort, so the projection carries one member list

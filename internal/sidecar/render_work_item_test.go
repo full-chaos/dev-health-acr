@@ -194,3 +194,28 @@ func TestWorkItemMarkdownPlainDisplayDomain(t *testing.T) {
 		})
 	}
 }
+
+func TestTheCohortHeadingStatesALowerBoundEvenWhenEveryCountedMemberIsListed(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		total, pop int
+		lower      bool
+		want       string
+	}{
+		{"exact", 5, 5, false, "## Cohort (1 of 5 shown)"},
+		{"cut", 5, 20, false, "## Cohort (1 of 20 shown)"},
+		{"lower bound equal to the total", 5, 5, true, "## Cohort (1 of at least 5 shown)"},
+		{"lower bound above the total", 5, 20, true, "## Cohort (1 of at least 20 shown)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := v1.ContextFabricAnswerProjection{Cohort: &v1.ContextFabricProjectedCohort{
+				Kind: v1.ContextFabricSubjectWorkItem, Total: tc.total, Population: tc.pop, PopulationLowerBound: tc.lower, Rationale: "walk",
+				Members: []v1.ContextFabricProjectedCohortMember{{Rank: 1}},
+			}}
+			markdown, _ := RenderAnswerProjectionMarkdown(p, 32768)
+			if !strings.Contains(markdown, tc.want) {
+				t.Fatalf("markdown lacks %q:\n%s", tc.want, markdown)
+			}
+		})
+	}
+}

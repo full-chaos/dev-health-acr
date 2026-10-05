@@ -126,7 +126,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	cohort, cohortOmitted, cohortReasonsOmitted, cohortGroupsOmitted, cohortSelectionBasis := projectCohort(result, bounds, index, clamp, &facts)
 	factsOmitted := countProjectedFactsOmitted(result, facts)
 	clarification, candidatesOmitted, candidateReasonsOmitted := projectClarification(result, bounds, clamp)
-	limitations, limitationsOmitted := boundedLimitations(result.Limitations, clamp)
+	limitations, limitationsOmitted := boundedLimitations(restateWorkItemListed(result, cohort), clamp)
 	// The engine's own displacement counts too (CHAOS-3746 round-16).
 	// limitations_omitted means "limitations this investigation produced
 	// that you are not reading", and a caveat the engine dropped at the
@@ -611,8 +611,10 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		// ScoreMeaning/JudgmentMismatch (CHAOS-5774): copied verbatim, same
 		// "canonical states it, projection never recomputes it" discipline
 		// as every ranking field on the members above.
-		ScoreMeaning:     canonical.ScoreMeaning,
-		JudgmentMismatch: canonical.JudgmentMismatch,
+		ScoreMeaning:         canonical.ScoreMeaning,
+		JudgmentMismatch:     canonical.JudgmentMismatch,
+		Population:           canonical.Population,
+		PopulationLowerBound: canonical.PopulationLowerBound,
 	}, len(canonical.Members) - len(members), reasonsOmitted, groupsOmitted, selectionBasis
 }
 
@@ -1248,4 +1250,50 @@ func retainPastTheCut(kept, dropped []clampedNarrative, retain func(string) bool
 // scoped unranked work-item exception admitted with member evidence above.
 func projectionCarriesUncited(kind contractsv1.ContextFabricFactKind) bool {
 	return kind == contractsv1.ContextFabricFactCardinality
+}
+
+// restateWorkItemListed is the one writer of the N of M sentence a client
+// receives: it states how many members THIS projection lists, of the population
+// the result measured, and names what bounded the list. The engine wrote its
+// own sentence for the list it built; this response may list fewer (its member
+// and evidence reference limits), so the engine's sentence is replaced, never
+// copied beside a list it does not describe. Nothing changes for a cohort with
+// no measured population.
+func restateWorkItemListed(result contractsv1.ContextFabricInvestigationResult, cohort *contractsv1.ContextFabricProjectedCohort) []string {
+	if cohort == nil || cohort.Population == 0 || result.Cohort == nil {
+		return result.Limitations
+	}
+	listed := len(cohort.Members)
+	engineCut := len(result.Cohort.Members) < cohort.Population
+	responseCut := listed < len(result.Cohort.Members)
+	cut := contractsv1.ContextFabricWorkItemListCutServer
+	switch {
+	case engineCut && responseCut:
+		cut = contractsv1.ContextFabricWorkItemListCutBoth
+	case responseCut:
+		cut = contractsv1.ContextFabricWorkItemListCutResponse
+	}
+	sentence, cutList := contractsv1.ContextFabricWorkItemListedLimitation(listed, cohort.Population, cohort.PopulationLowerBound, cut)
+	limitations := make([]string, 0, len(result.Limitations)+1)
+	placed := false
+	for _, limitation := range result.Limitations {
+		// The tier sentence says which members the engine's cut left out, in
+		// tier order. A response that cut the list again, by id order, no
+		// longer lists the engine's strongest members, so it does not say it.
+		if responseCut && limitation == contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation {
+			continue
+		}
+		if !contractsv1.IsContextFabricWorkItemListedLimitation(limitation) {
+			limitations = append(limitations, limitation)
+		} else if cutList && !placed {
+			// In the engine sentence's own place, so a result read again
+			// carries its limitations in the order the fresh answer did.
+			limitations = append(limitations, sentence)
+			placed = true
+		}
+	}
+	if cutList && !placed {
+		limitations = append(limitations, sentence)
+	}
+	return limitations
 }
