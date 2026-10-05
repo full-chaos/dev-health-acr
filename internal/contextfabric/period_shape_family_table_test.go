@@ -133,8 +133,9 @@ func dayOffset(at, now time.Time) string {
 // periodShapeRuleRead is the rule written from its statement, not from the
 // production predicates: a series or a comparison frame with a period the
 // question states reads that period on the range axis. A bound trailing phrase
-// gives it from now (a different client range is disclosed); a period the
-// grammar cannot bound gives it through the client's range. A comparison
+// gives it from now (a different client range is disclosed); a bare calendar
+// period in a series is the previous calendar period whatever range the client
+// sent; one in a comparison comes through the client's range. A comparison
 // names the equal period before it as not read. ok false when the rule does
 // not decide the cell.
 func periodShapeRuleRead(c periodShapeTableCell, now time.Time) (start, end time.Time, conflict, unread, ok bool) {
@@ -149,6 +150,8 @@ func periodShapeRuleRead(c periodShapeTableCell, now time.Time) (start, end time
 	switch {
 	case c.kind == periodQuestionStated:
 		start, end, conflict = now.Add(-30*day), now, c.cell.time == suppliedRangeDifferent
+	case c.kind == periodQuestionNamed && !comparison:
+		start, end = calendarPeriodOracle("last month", now)
 	case c.kind == periodQuestionNamed && c.cell.time == suppliedRangeEqual:
 		start, end = now.Add(-30*day), now
 	case c.kind == periodQuestionNamed && c.cell.time == suppliedRangeDifferent:
@@ -187,6 +190,13 @@ func TestPeriodShapeFamilyTable(t *testing.T) {
 			w := result.EffectiveEvidenceWindow
 			if w == nil || w.Provenance != WindowQuestionStated || w.Start == nil || w.End == nil || !w.Start.Equal(wantStart) || !w.End.Equal(wantEnd) {
 				t.Errorf("%s: window %+v, want question_stated over the calendar month %s..%s", key, w, wantStart, wantEnd)
+			}
+		}
+		if c.kind == periodQuestionNamed && periodShapeOf(c.cell.frame) == periodShapeSeries {
+			wantStart, wantEnd := calendarPeriodOracle("last month", now)
+			read := result.Interpretation.TimeContext
+			if read.Axis != TemporalRange || read.Start == nil || read.End == nil || !read.Start.Equal(wantStart) || !read.End.Equal(wantEnd) {
+				t.Errorf("%s: read %+v, want the range axis over the calendar month %s..%s whatever axis the interpreter sampled", key, read, wantStart, wantEnd)
 			}
 		}
 		tc := result.Interpretation.TimeContext
@@ -378,21 +388,21 @@ var periodShapeServedOutcome = map[string]string{
 	"scoped_cohort_status|time_series|stated|current axis":            "no_match range -30d..0d no window",
 	"grouped_cohort_status|time_series|stated|current axis":           "complete range -30d..0d no window",
 	"explicit_comparison|time_series|stated|current axis":             "complete range -30d..0d no window",
-	"subject_investigation|time_series|named|range 30d":               "complete range -30d..0d no window",
-	"discovered_cohort_ranking|time_series|named|range 30d":           "complete range -30d..0d no window",
-	"scoped_cohort_status|time_series|named|range 30d":                "no_match range -30d..0d no window",
-	"grouped_cohort_status|time_series|named|range 30d":               "complete range -30d..0d no window",
-	"explicit_comparison|time_series|named|range 30d":                 "complete range -30d..0d no window",
-	"subject_investigation|time_series|named|range 7d":                "complete range -7d..0d no window",
-	"discovered_cohort_ranking|time_series|named|range 7d":            "complete range -7d..0d no window",
-	"scoped_cohort_status|time_series|named|range 7d":                 "no_match range -7d..0d no window",
-	"grouped_cohort_status|time_series|named|range 7d":                "complete range -7d..0d no window",
-	"explicit_comparison|time_series|named|range 7d":                  "complete range -7d..0d no window",
-	"subject_investigation|time_series|named|current axis":            "clarification_required current inferred_default trailing_30d class recent_activity_lookup",
-	"discovered_cohort_ranking|time_series|named|current axis":        "clarification_required current inferred_default trailing_30d class trend_assessment",
-	"scoped_cohort_status|time_series|named|current axis":             "no_match current no window",
-	"grouped_cohort_status|time_series|named|current axis":            "clarification_required current inferred_default trailing_30d class trend_assessment",
-	"explicit_comparison|time_series|named|current axis":              "complete current no window",
+	"subject_investigation|time_series|named|range 30d":               "complete range -31d..0d no window",
+	"discovered_cohort_ranking|time_series|named|range 30d":           "complete range -31d..0d no window",
+	"scoped_cohort_status|time_series|named|range 30d":                "no_match range -31d..0d no window",
+	"grouped_cohort_status|time_series|named|range 30d":               "complete range -31d..0d no window",
+	"explicit_comparison|time_series|named|range 30d":                 "complete range -31d..0d no window",
+	"subject_investigation|time_series|named|range 7d":                "complete range -31d..0d no window",
+	"discovered_cohort_ranking|time_series|named|range 7d":            "complete range -31d..0d no window",
+	"scoped_cohort_status|time_series|named|range 7d":                 "no_match range -31d..0d no window",
+	"grouped_cohort_status|time_series|named|range 7d":                "complete range -31d..0d no window",
+	"explicit_comparison|time_series|named|range 7d":                  "complete range -31d..0d no window",
+	"subject_investigation|time_series|named|current axis":            "complete range -31d..0d no window",
+	"discovered_cohort_ranking|time_series|named|current axis":        "complete range -31d..0d no window",
+	"scoped_cohort_status|time_series|named|current axis":             "no_match range -31d..0d no window",
+	"grouped_cohort_status|time_series|named|current axis":            "complete range -31d..0d no window",
+	"explicit_comparison|time_series|named|current axis":              "complete range -31d..0d no window",
 	"subject_investigation|time_series|none|range 30d":                "complete range -30d..0d no window",
 	"discovered_cohort_ranking|time_series|none|range 30d":            "complete range -30d..0d no window",
 	"scoped_cohort_status|time_series|none|range 30d":                 "no_match range -30d..0d no window",

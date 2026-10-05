@@ -947,8 +947,9 @@ type statedPeriod struct {
 // the question gives the length and position. A bound trailing phrase gives
 // the period from now (a supplied range that differs from it is disclosed); a
 // period the closed grammar cannot bound gives it through the interpreter's
-// range, as interpreterPeriodWindow reads one for a current-state frame. A
-// comparison reads its stated period and names the equal period just before
+// range, as interpreterPeriodWindow reads one for a current-state frame; a
+// series whose question names a bare calendar period reads the binder's own
+// calendar bounds whatever axis the interpreter sampled. A comparison reads its stated period and names the equal period just before
 // it as not read. nil for a current-state frame, an evidence window already
 // committed, a point-in-time phrase, or a question that states no
 // period the turn can bound. A veto never gets here: it ends the request
@@ -967,6 +968,12 @@ func statedPeriodRead(canon requestWindowCanonicalization, interpretation Interp
 			return nil
 		}
 		period = statedPeriod{Start: start, End: end, Origin: StatedWindowOriginQuestionPhrase, Conflict: detectStatedRangeConflict(binder, interpretation.TimeContext, now)}
+	case shape == periodShapeSeries && binder.Calendar != CalendarPeriodNone:
+		start, end, ok := calendarWindowBounds(binder.Calendar, now)
+		if !ok {
+			return nil
+		}
+		period = statedPeriod{Start: start, End: end, Origin: StatedWindowOriginQuestionPhrase}
 	case binderNamesAPeriod(binder) && freshAnswerable && fresh.Axis == TemporalRange && fresh.Start != nil && fresh.End != nil && fresh.Start.Before(*fresh.End):
 		period = statedPeriod{Start: fresh.Start.UTC(), End: fresh.End.UTC(), Origin: StatedWindowOriginInterpreterRange}
 	default:
