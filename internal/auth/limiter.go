@@ -98,9 +98,10 @@ type VerificationLimiter interface {
 	AttemptLimiter
 	BeginVerification(key string, now time.Time) (release func(), decision AttemptDecision)
 	// RecordRejection records one failed authentication and reports whether
-	// the address was already at or over its failure limit, and whether this
-	// is the first such report for the address in the window.
-	RecordRejection(key string, now time.Time) (overBudget, firstRefusal bool)
+	// it is answered as a refusal (the address was already at or over its
+	// failure limit, or the attempt was admitted over it) and whether that is
+	// the first refusal reported for the address in the window.
+	RecordRejection(key string, now time.Time, admittedOverBudget bool) (refused, firstRefusal bool)
 }
 
 // BeginVerificationDecision admits an attempt that presents a well-formed
@@ -114,11 +115,11 @@ func BeginVerificationDecision(limiter AttemptLimiter, key string, now time.Time
 }
 
 // RecordRejection records a rejected credential on any limiter. A limiter
-// that is not a VerificationLimiter never reports over budget: it refused
+// that is not a VerificationLimiter never reports a refusal: it refused
 // over-budget attempts before verification.
-func RecordRejection(limiter AttemptLimiter, key string, now time.Time) (overBudget, firstRefusal bool) {
+func RecordRejection(limiter AttemptLimiter, key string, now time.Time, admittedOverBudget bool) (refused, firstRefusal bool) {
 	if verifier, ok := limiter.(VerificationLimiter); ok {
-		return verifier.RecordRejection(key, now)
+		return verifier.RecordRejection(key, now, admittedOverBudget)
 	}
 	limiter.RecordFailure(key, now)
 	return false, false
@@ -283,17 +284,18 @@ func (l *MemoryLimiter) begin(key string, now time.Time, verification bool) (fun
 }
 
 // RecordRejection records one failed authentication of a verified-and-
-// rejected credential in the window where it was decided, and reports whether
-// the address was already at or over its failure limit there. The caller also
-// answers it as a refusal when the attempt was admitted over the limit.
-func (l *MemoryLimiter) RecordRejection(key string, now time.Time) (bool, bool) {
+// rejected credential in the window where it was decided. It is a refusal
+// when the address was already at or over its failure limit there, or when
+// the attempt was admitted over the limit (its window may have rolled over
+// since); a refusal claims the window's once-per-window first report.
+func (l *MemoryLimiter) RecordRejection(key string, now time.Time, admittedOverBudget bool) (bool, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	window, tracked := l.window(l.failures, key, now)
 	if !tracked {
 		return true, true
 	}
-	overBudget := l.FailureLimit > 0 && window.Count >= l.FailureLimit
+	overBudget := admittedOverBudget || (l.FailureLimit > 0 && window.Count >= l.FailureLimit)
 	first := false
 	if overBudget {
 		first = !window.RefusalLogged

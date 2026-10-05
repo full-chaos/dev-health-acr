@@ -18,7 +18,7 @@ func (a *Authenticator) authenticateWebAssertion(w http.ResponseWriter, r *http.
 	principal, err := a.webAssertions.Verify(r)
 	if err != nil {
 		if IsWebAssertionReplay(err) {
-			a.recordWebAssertionReplay(r, principal, now)
+			a.recordWebAssertionReplay(r, principal, a.now().UTC())
 			a.writeRateLimitError(w, r, time.Second)
 			return
 		}
@@ -26,7 +26,8 @@ func (a *Authenticator) authenticateWebAssertion(w http.ResponseWriter, r *http.
 			a.writeError(w, r, http.StatusServiceUnavailable, "temporarily_unavailable", "Web assertion could not be checked; retry", true, nil)
 			return
 		}
-		a.recordUnknownFailure(r, ip, "invalid_web_assertion", now)
+		// Counted when it is decided: Verify can outlive the window.
+		a.recordUnknownFailure(r, ip, "invalid_web_assertion", a.now().UTC())
 		a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 		return
 	}

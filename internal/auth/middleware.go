@@ -106,9 +106,10 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 		// credential is not one: it is answered 401, never counted and never
 		// gated (no store work is done for it). A success does not reset the
 		// count, so a guessing burst cannot be laundered through one valid
-		// token; but a credential that verifies is never refused by the
-		// failure budget: an over-budget address keeps one verification slot
-		// (OverBudgetVerificationSlots), which bounds its store lookups.
+		// token; but a well-formed bearer that verifies is never refused by
+		// the failure budget: an over-budget address keeps one verification
+		// slot (OverBudgetVerificationSlots), which bounds its store lookups.
+		// Web assertions keep the plain gate before verification.
 		webAssertion := len(r.Header.Values(WebAssertionHeader)) > 0
 		if !webAssertion && len(r.Header.Values("Authorization")) == 0 {
 			a.logger.DebugContext(r.Context(), "ACR authentication failed", "reason", "missing_bearer", "remote_ip", logsanitize.SanitizeLogAttr(ip), "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
@@ -224,8 +225,7 @@ func (a *Authenticator) rejectCredential(w http.ResponseWriter, r *http.Request,
 	// Counted at the moment it is decided: a verification that outlives the
 	// window is a failure of the window it ends in.
 	decided := a.now().UTC()
-	overBudget, first := RecordRejection(a.limiter, ip, decided)
-	overBudget = overBudget || decision.OverBudget
+	overBudget, first := RecordRejection(a.limiter, ip, decided, decision.OverBudget)
 	if credential != nil {
 		a.recordKnownDenialAudit(r, *credential, reason, now)
 	}

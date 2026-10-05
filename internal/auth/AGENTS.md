@@ -40,4 +40,4 @@ Owns ACR token lifecycle, repository-scope normalization, authentication middlew
 - Do not accept license artifacts or generic bearer strings as ACR tokens.
 - Do not expose lookup failure reasons or full token prefixes beyond the public metadata contract.
 - Do not make repository wildcard scope implicit; `*` must be explicit.
-- Do not look up a credential without an attempt reservation: every lookup is bounded by the per-address in-flight cap, and an address over its failure budget gets at most `OverBudgetVerificationSlots` concurrent lookups. A request with no credential is not a failed attempt and does no lookup; a credential that verifies is never refused by the failure budget.
+- Do not look up a credential without an attempt reservation: every lookup is bounded by the per-address in-flight cap, and an address over its failure budget gets at most `OverBudgetVerificationSlots` concurrent lookups. A request with no credential is not a failed attempt and does no lookup; a well-formed bearer that verifies is never refused by the failure budget (a busy over-budget slot can still answer 429; web assertions keep the plain per-address gate before verification).

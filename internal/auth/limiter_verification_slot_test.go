@@ -1,8 +1,13 @@
 package auth
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,7 +31,7 @@ func TestOverBudgetSlotWaitsForAttemptsAdmittedUnderBudget(t *testing.T) {
 		releases = append(releases, release)
 	}
 	for i := 0; i < 3; i++ {
-		limiter.RecordRejection("a", now)
+		limiter.RecordRejection("a", now, false)
 		releases[i]()
 	}
 	if _, decision := limiter.BeginVerification("a", now); decision.Refusal != RefusalVerificationSlot {
@@ -139,11 +144,179 @@ func TestRejectionOfAnUndecidedAttemptIsCountedWhenTheTableIsFull(t *testing.T) 
 		limiter.RecordFailure(other, at(61))
 		otherRelease()
 	}
-	if overBudget, _ := limiter.RecordRejection("a", at(65)); overBudget {
+	if refused, _ := limiter.RecordRejection("a", at(65), false); refused {
 		t.Fatalf("a's rejection in its new window reported over budget before counting")
 	}
 	release()
 	if _, decision := limiter.BeginVerification("a", at(122)); !decision.OverBudget && decision.Admitted() {
 		t.Fatalf("a after b and c expired = %+v, want over budget (its rejection at 65 counts until 125)", decision)
+	}
+}
+
+// The 429 of a slot rejection decided after a window rollover is the first
+// refusal of the new window, so it is logged at Info.
+func TestSlotRejectionAfterRolloverIsLoggedAtInfoOncePerWindow(t *testing.T) {
+	start := time.Date(2026, 10, 5, 21, 0, 0, 0, time.UTC)
+	var clockMu sync.Mutex
+	clock := start
+	now := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return clock
+	}
+	inner := newMemoryCredentialStoreAt(t, start.Add(-time.Hour), memory.NewAuditStore())
+	bad := TokenPrefix + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	store := &heldLookupStore{CredentialStore: inner, release: make(chan struct{}), held: HashToken(bad)}
+	var logs bytes.Buffer
+	var logMu sync.Mutex
+	logger := slog.New(slog.NewJSONHandler(lockedWriter{&logs, &logMu}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	authenticator, err := NewAuthenticator(store, memory.NewAuditStore(), AuthenticatorOptions{Now: now, Limiter: NewMemoryLimiter(time.Minute, 100, 3), Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = authenticator.Close() })
+	handler := authenticator.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	const address = "192.0.2.71:4000"
+	for i := 0; i < 3; i++ {
+		callFrom(handler, address, "Bearer junk")
+	}
+	done := make(chan int)
+	go func() { done <- callFrom(handler, address, "Bearer "+bad).Code }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if parked, _, _ := store.counts(); parked == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("slot lookup never started")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	clockMu.Lock()
+	clock = start.Add(2 * time.Minute)
+	clockMu.Unlock()
+	logMu.Lock()
+	logs.Reset()
+	logMu.Unlock()
+	close(store.release)
+	if code := <-done; code != http.StatusTooManyRequests {
+		t.Fatalf("slot rejection after rollover = %d, want 429", code)
+	}
+	logMu.Lock()
+	defer logMu.Unlock()
+	if n := strings.Count(logs.String(), `"level":"INFO","msg":"ACR authentication attempt refused","reason":"failure_budget"`); n != 1 {
+		t.Fatalf("Info failure_budget refusal lines for the first refusal of the new window = %d, want 1:\n%s", n, logs.String())
+	}
+}
+
+// An invalid web assertion decided after a window rollover is counted in the
+// window where it was decided.
+func TestWebAssertionFailureDecidedAfterRolloverIsCountedInTheNewWindow(t *testing.T) {
+	t0 := time.Date(2026, 10, 5, 21, 0, 0, 0, time.UTC)
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := NewWebAssertionVerifier(WebAssertionOptions{Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeTestJWKS(t, "current", public), Now: func() time.Time { return t0 }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The authenticator reads the clock at each request start and at each
+	// decision: the web-assertion request starts at t0 and is decided after
+	// the window rolled over.
+	var clockMu sync.Mutex
+	times := []time.Time{t0, t0, t0, t0.Add(2 * time.Minute)}
+	now := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		next := times[0]
+		if len(times) > 1 {
+			times = times[1:]
+		}
+		return next
+	}
+	authenticator, err := NewAuthenticator(newMemoryCredentialStore(t), memory.NewAuditStore(), AuthenticatorOptions{Now: now, Limiter: NewMemoryLimiter(time.Minute, 100, 3), WebAssertions: verifier})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = authenticator.Close() })
+	handler := authenticator.MiddlewareFor(true, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	const address = "192.0.2.72:4000"
+	callFrom(handler, address, "Bearer junk")
+	callFrom(handler, address, "Bearer junk")
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = address
+	request.Header.Set(WebAssertionHeader, "not-a-web-assertion")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid web assertion = %d, want 401", response.Code)
+	}
+	var codes []int
+	for i := 0; i < 3; i++ {
+		codes = append(codes, callFrom(handler, address, "Bearer junk").Code)
+	}
+	if codes[0] != http.StatusUnauthorized || codes[1] != http.StatusUnauthorized || codes[2] != http.StatusTooManyRequests {
+		t.Fatalf("failures in the new window after the web-assertion failure = %v, want 401, 401, 429 (the web-assertion failure counted there)", codes)
+	}
+}
+
+// A replayed web assertion decided after a window rollover is counted in the
+// window where it was decided.
+func TestWebAssertionReplayDecidedAfterRolloverIsCountedInTheNewWindow(t *testing.T) {
+	t0 := time.Date(2026, 10, 5, 21, 0, 0, 0, time.UTC)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := NewWebAssertionVerifier(WebAssertionOptions{Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeTestJWKS(t, "current", public), Now: func() time.Time { return t0 }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clockMu sync.Mutex
+	times := []time.Time{t0, t0, t0, t0, t0.Add(2 * time.Minute)}
+	now := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		next := times[0]
+		if len(times) > 1 {
+			times = times[1:]
+		}
+		return next
+	}
+	authenticator, err := NewAuthenticator(newMemoryCredentialStore(t), memory.NewAuditStore(), AuthenticatorOptions{Now: now, Limiter: NewMemoryLimiter(time.Minute, 100, 3), WebAssertions: verifier})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = authenticator.Close() })
+	handler := authenticator.MiddlewareFor(true, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	const address = "192.0.2.73:4000"
+	callFrom(handler, address, "Bearer junk")
+	callFrom(handler, address, "Bearer junk")
+	body := []byte(`{}`)
+	assertion := func() *http.Request {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/agent-context/context-packets", bytes.NewReader(body))
+		request.RemoteAddr = address
+		return request
+	}
+	first := assertion()
+	signed := signTestWebAssertion(t, private, "current", webAssertionClaims(t0, first, body))
+	first.Header.Set(WebAssertionHeader, signed)
+	if response := httptest.NewRecorder(); func() int { handler.ServeHTTP(response, first); return response.Code }() != http.StatusNoContent {
+		t.Fatalf("first use of the web assertion = %d, want 204", response.Code)
+	}
+	replay := assertion()
+	replay.Header.Set(WebAssertionHeader, signed)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, replay)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("replayed web assertion = %d, want 429", response.Code)
+	}
+	var codes []int
+	for i := 0; i < 3; i++ {
+		codes = append(codes, callFrom(handler, address, "Bearer junk").Code)
+	}
+	if codes[0] != http.StatusUnauthorized || codes[1] != http.StatusUnauthorized || codes[2] != http.StatusTooManyRequests {
+		t.Fatalf("failures in the new window after the replay = %v, want 401, 401, 429 (the replay counted there)", codes)
 	}
 }
