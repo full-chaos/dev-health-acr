@@ -2814,6 +2814,34 @@ func (t SlogEngineTelemetry) RecordWorkItemTupleAdmission(ctx context.Context, p
 	t.logger.InfoContext(ctx, "context fabric work item tuple admission settled", args...)
 }
 
+// RecordRepositoryWorkItemWalk logs one read of a repository's work items at
+// Info: which outcome it reached and the counts behind it. Counts and closed
+// values only; a filtered read carries no denied count.
+func (t SlogEngineTelemetry) RecordRepositoryWorkItemWalk(ctx context.Context, principal storage.Principal, event RepositoryWorkItemWalkEvent) {
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"outcome", SanitizeLogAttr(string(event.Outcome)),
+		"anchor_kind", string(SubjectRepository),
+		"filtered", event.Filtered,
+		"restricted", event.Restricted,
+	}
+	if event.Measured {
+		args = append(args,
+			"pull_requests", event.PullRequests,
+			"linked_issues", event.LinkedIssues,
+			"members", event.Members,
+			"truncated", event.Truncated,
+		)
+		if !event.Filtered {
+			args = append(args, "denied", event.Denied)
+		}
+	} else {
+		args = append(args, "reason", SanitizeLogAttr(sanitizeWorkItemMembershipReason(event.UnmeasuredReason)))
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context_fabric: repository work item walk", args...)
+}
+
 // RecordWorkItemAuthorizationGap logs the settled decision to disclose denied
 // work-item members: the census it read, the reason, and the shape served.
 func (t SlogEngineTelemetry) RecordWorkItemAuthorizationGap(ctx context.Context, principal storage.Principal, event WorkItemAuthorizationGapEvent) {

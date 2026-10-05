@@ -1479,7 +1479,7 @@ spec:
         - name: acr-projector
           image: <same digest as the projector Deployment>
           command: ["/usr/local/bin/acr-projector"]
-          args: ["rebuild", "--org", "<organization-id>"]   # prod org: c6a38355-dad6-42e4-8cc9-4c712450827d
+          args: ["rebuild", "--org", "<organization-id>"]
           envFrom: [{ configMapRef: { name: dev-health-acr-projector-config } }]
           # env: copy the projector Deployment's env block. Secrets stay
           # secretKeyRef (ACR_POSTGRES_DSN, ACR_CLICKHOUSE_DSN from

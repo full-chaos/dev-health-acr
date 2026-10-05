@@ -271,6 +271,19 @@ const (
 	// `graph_cohort_denied_by_authorization` is the nearest neighbour and
 	// would be a lie here: nothing was denied, nothing was found.
 	ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked ContextFabricCoverageDetailCode = "graph_project_deployments_unlinked"
+
+	// ContextFabricCoverageDetailWorkItemRepositoryUnlinked: a question asked
+	// for the work items of a named REPOSITORY, the repository has pull
+	// requests, and none of them links an issue, so no work item is
+	// reachable from it. Count is the number of the repository's pull
+	// requests the read examined.
+	//
+	// It names a gap in the LINK, not an empty result: the repository's
+	// work items are unknown, which is not the same as none (the link source
+	// may write no link from this repository's pull requests to an issue).
+	// `graph_cohort_denied_by_authorization` would be a lie here: nothing
+	// was denied, nothing was found.
+	ContextFabricCoverageDetailWorkItemRepositoryUnlinked ContextFabricCoverageDetailCode = "work_item_repository_unlinked"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -297,6 +310,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailFactReadOriginState,
 	ContextFabricCoverageDetailKindCensusTruncated,
 	ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked,
+	ContextFabricCoverageDetailWorkItemRepositoryUnlinked,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -559,6 +573,7 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailGraphCohortDeniedByAuthorization: {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailGraphUnknownRelationshipType:     {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked:  {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailWorkItemRepositoryUnlinked:       {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailGraphValidityUnbounded:           {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:       {requireCount: true, allowCount: true},
 	// No fact kind and NO COUNT. The count is the tempting one and it is

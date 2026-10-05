@@ -80,7 +80,7 @@ func TestWorkItemGuardMembershipAdmissionOutcomes(t *testing.T) {
 			if name == "no_port" {
 				engine.workItemMembership = nil
 			}
-			graph, census, err := engine.discoverWorkItemTuple(ctx, storage.Principal{OrgID: "org-1"}, InvestigationRequest{RequestedScope: RequestedScope{RepositorySlugs: []string{"org/b", "org/a", "org/a"}}}, payload.SubjectResolution, &AnswerPlan{}, workItemMemberFilter{})
+			graph, census, err := engine.discoverWorkItemTuple(ctx, storage.Principal{OrgID: "org-1"}, InvestigationRequest{RequestedScope: RequestedScope{RepositorySlugs: []string{"org/b", "org/a", "org/a"}}}, ResolvedGraphBinding{}, payload.SubjectResolution, &AnswerPlan{}, workItemMemberFilter{})
 			wantError := name == "cancelled" || name == "no_owner" || name == "completed_owner" || name == "invalid_identity" || name == "invalid_census"
 			if (err != nil) != wantError {
 				t.Fatalf("error=%v wantError=%v", err, wantError)

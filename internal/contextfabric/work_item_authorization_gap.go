@@ -9,26 +9,35 @@ import (
 )
 
 // workItemAuthorizationGapPrefix opens every authorization-gap limitation, so
-// a stored answer can be recognised without a second persisted field.
-const workItemAuthorizationGapPrefix = "Work items exist in this project that are outside this principal's authorized scope"
+// a stored answer can be recognised without a second persisted field. The
+// repository form names the anchor a repository-anchored answer was read on.
+const (
+	workItemAuthorizationGapPrefix           = "Work items exist in this project that are outside this principal's authorized scope"
+	workItemRepositoryAuthorizationGapPrefix = "Work items exist in this repository that are outside this principal's authorized scope"
+)
 
 // workItemAuthorizationGap is the measured S1 partition between the members
 // the principal may read and the members it may not. It is carried beside a
 // census for one request and is never persisted.
 type workItemAuthorizationGap struct {
+	AnchorKind SubjectKind
 	State      WorkItemMembershipCensusState
 	Observed   int
 	Authorized int
 	Denied     int
+	// Incomplete: the census did not read every member (a cut walk or an
+	// unread member below the bound), so the counts are lower bounds and the
+	// sentence says "at least", as a floor census does.
+	Incomplete bool
 }
 
 // workItemAuthorizationGapOf returns the gap for a measured census that has
 // denied members, and false when nothing was denied or nothing was measured.
-func workItemAuthorizationGapOf(census WorkItemMembershipCensus) (workItemAuthorizationGap, bool) {
+func workItemAuthorizationGapOf(census WorkItemMembershipCensus, anchorKind SubjectKind) (workItemAuthorizationGap, bool) {
 	if !census.PopulationMeasured || census.State == WorkItemMembershipCensusUnmeasured || census.DeniedPopulation <= 0 {
 		return workItemAuthorizationGap{}, false
 	}
-	return workItemAuthorizationGap{State: census.State, Observed: census.CappedPopulation, Authorized: census.AuthorizedPopulation, Denied: census.DeniedPopulation}, true
+	return workItemAuthorizationGap{AnchorKind: anchorKind, State: census.State, Observed: census.CappedPopulation, Authorized: census.AuthorizedPopulation, Denied: census.DeniedPopulation, Incomplete: census.PopulationIncomplete}, true
 }
 
 // NoneAuthorized reports the case where every observed member is denied.
@@ -36,18 +45,22 @@ func (g workItemAuthorizationGap) NoneAuthorized() bool { return g.Authorized ==
 
 // Limitation is the answer-facing disclosure of the partition.
 func (g workItemAuthorizationGap) Limitation() string {
+	prefix := workItemAuthorizationGapPrefix
+	if g.AnchorKind == SubjectRepository {
+		prefix = workItemRepositoryAuthorizationGapPrefix
+	}
 	if g.NoneAuthorized() {
-		return fmt.Sprintf("%s: %d work items were observed and none are authorized, so no work item can be listed or counted.", workItemAuthorizationGapPrefix, g.Denied)
+		return fmt.Sprintf("%s: %d work items were observed and none are authorized, so no work item can be listed or counted.", prefix, g.Denied)
 	}
-	if g.State == WorkItemMembershipCensusFloor {
-		return fmt.Sprintf("%s: the census stopped at its bound, with at least %d work items authorized and at least %d more denied and not counted.", workItemAuthorizationGapPrefix, g.Authorized, g.Denied)
+	if g.State == WorkItemMembershipCensusFloor || g.Incomplete {
+		return fmt.Sprintf("%s: the census stopped at its bound, with at least %d work items authorized and at least %d more denied and not counted.", prefix, g.Authorized, g.Denied)
 	}
-	return fmt.Sprintf("%s: %d work items are authorized and %d more are denied and are not counted.", workItemAuthorizationGapPrefix, g.Authorized, g.Denied)
+	return fmt.Sprintf("%s: %d work items are authorized and %d more are denied and are not counted.", prefix, g.Authorized, g.Denied)
 }
 
 func hasWorkItemAuthorizationGapLimitation(limitations []string) bool {
 	for _, limitation := range limitations {
-		if strings.HasPrefix(limitation, workItemAuthorizationGapPrefix) {
+		if strings.HasPrefix(limitation, workItemAuthorizationGapPrefix) || strings.HasPrefix(limitation, workItemRepositoryAuthorizationGapPrefix) {
 			return true
 		}
 	}

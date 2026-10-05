@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -13,19 +14,64 @@ import (
 
 const workItemMembershipRationale = "Work items are members of the resolved project within the authorized scope."
 
+// workItemMembershipRationaleFor is the cohort's inclusion rationale for
+// members read on an anchor of this kind.
+func workItemMembershipRationaleFor(anchor SubjectKind) string {
+	if anchor == SubjectRepository {
+		return contractsv1.ContextFabricWorkItemRepositoryMembershipRationale
+	}
+	return workItemMembershipRationale
+}
+
+// workItemMemberReason is one member's inclusion reason. On a repository
+// anchor it names the tier of the link that reached the member; a member linked
+// only by the heuristic tier is never presented as natively linked.
+func workItemMemberReason(anchor SubjectKind, member WorkItemMembershipMember) string {
+	if anchor == SubjectRepository {
+		return contractsv1.ContextFabricWorkItemRepositoryMembershipReason(member.LinkTier)
+	}
+	return workItemMembershipRationale
+}
+
+// beginWorkItemMembership opens the membership read of the anchor's kind: the
+// S1 read of a project, or the graph walk of a repository.
+func (e *Engine) beginWorkItemMembership(ctx context.Context, principal storage.Principal, scope RequestedScope, binding ResolvedGraphBinding, request WorkItemMembershipRequest) (*WorkItemMembershipLease, WorkItemMembershipResult, error) {
+	if request.Anchor.Subject.Kind == SubjectRepository {
+		return e.treeWorkItemMembership.Begin(ctx, principal, binding, scope, request)
+	}
+	if e.workItemMembership == nil {
+		return nil, WorkItemMembershipResult{}, errors.New("work item membership is not wired")
+	}
+	return e.workItemMembership.BeginWorkItemMembership(ctx, principal, request)
+}
+
 // discoverWorkItemTuple reads S1 under the response owner's existing lease
 // lifetime. It never reads the graph or expands the content subject set.
-func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Principal, request InvestigationRequest, resolution SubjectResolution, plan *AnswerPlan, filter workItemMemberFilter) (GraphContext, *WorkItemTupleCensus, error) {
+func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding, resolution SubjectResolution, plan *AnswerPlan, filter workItemMemberFilter) (GraphContext, *WorkItemTupleCensus, error) {
 	graph := GraphContext{Resolution: resolution, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, EvidenceRefIDs: []string{}, FactRequirements: []FactRequirement{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}}
 	digest, err := WorkItemAuthorizationDigest(principal, request.RequestedScope.RepositorySlugs)
 	if err != nil {
 		return graph, nil, err
 	}
 	census := &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusUnmeasured, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), AuthorizationDigest: digest, memberFilter: filter}
-	if e.workItemMembership == nil {
+	anchorKind := resolution.Committed[0].Kind
+	if anchorKind != SubjectRepository && e.workItemMembership == nil {
 		return graph, census, nil
 	}
-	lease, membership, readErr := e.workItemMembership.BeginWorkItemMembership(ctx, principal, WorkItemMembershipRequest{Anchor: WorkItemMembershipAnchor{Subject: resolution.Committed[0]}, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), PlanMaxMembers: plan.Budget.MaxMembers, RequestMaxMembers: request.Options.MaxCohortMembers, Status: filter.Status, TimeColumn: filter.timeColumn(), TimeStart: filter.Start, TimeEnd: filter.End})
+	var membership WorkItemMembershipResult
+	measured := false
+	restricted := false
+	if anchorKind == SubjectRepository {
+		restricted = workItemRepositoryRestricted(principal, request.RequestedScope.RepositorySlugs)
+		// Every repository answer states where its links come from, whatever
+		// the read reaches: the reading is replaced by the measured one below.
+		census.repository = &repositoryWorkItemReading{Outcome: RepositoryWorkItemWalkReadFailed}
+		// One decision line per walk, on every path out of this function.
+		defer func() {
+			e.recordRepositoryWorkItemWalk(ctx, principal, membership, measured, cohortMemberCount(graph.Cohort), filter.Active(), restricted)
+		}()
+	}
+	lease, read, readErr := e.beginWorkItemMembership(ctx, principal, request.RequestedScope, binding, WorkItemMembershipRequest{Anchor: WorkItemMembershipAnchor{Subject: resolution.Committed[0]}, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), PlanMaxMembers: plan.Budget.MaxMembers, RequestMaxMembers: request.Options.MaxCohortMembers, Status: filter.Status, TimeColumn: filter.timeColumn(), TimeStart: filter.Start, TimeEnd: filter.End})
 	if lease != nil {
 		owner, ok := WorkItemResponseOwnerFromContext(ctx)
 		if !ok {
@@ -39,14 +85,21 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	if ctx.Err() != nil {
 		return graph, census, ctx.Err()
 	}
+	membership = read
 	if readErr != nil || lease == nil || !membership.Census.PopulationMeasured || membership.Census.State == WorkItemMembershipCensusUnmeasured {
 		return graph, census, nil
 	}
+	measured = true
 	// A filtered read never measures the denied partition: its count would be
 	// the denied items' count for one status, a distribution the unfiltered
 	// read does not give. The filtered answer states one fixed exclusion
 	// instead (workItemStatusDeniedExclusion).
-	if gap, ok := workItemAuthorizationGapOf(membership.Census); ok && !filter.Active() {
+	//
+	// A repository-restricted caller with no member is served the neutral
+	// exclusion, not the measured partition, so the answer does not tell an
+	// unlinked repository from a hidden one.
+	neutralDenial := anchorKind == SubjectRepository && restricted && len(membership.Members) == 0
+	if gap, ok := workItemAuthorizationGapOf(membership.Census, anchorKind); ok && !filter.Active() && !neutralDenial {
 		census.gap = &gap
 		if gap.NoneAuthorized() {
 			// Members exist and none are authorized: the answer is a
@@ -73,7 +126,15 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	if len(members) > limit {
 		members = members[:limit]
 	}
-	cohort := &Cohort{Kind: SubjectWorkItem, Rationale: workItemMembershipRationale, Members: []CohortMember{}, Complete: census.State == WorkItemMembershipCensusExact && census.Value == len(members), Truncated: census.Value > len(members)}
+	// A repository read can be partial without being a floor: a filter that
+	// could not read every walked member, or a walk cut at its read bound. The
+	// census stays exact over what was read (a floor's value is pinned to the
+	// census limit), and the cohort is not complete.
+	partial := anchorKind == SubjectRepository && census.State == WorkItemMembershipCensusExact && membership.Census.PopulationIncomplete
+	census.incomplete = partial
+	rationale := workItemMembershipRationaleFor(anchorKind)
+	cohort := &Cohort{Kind: SubjectWorkItem, Rationale: rationale, Members: []CohortMember{}, Complete: census.State == WorkItemMembershipCensusExact && census.Value == len(members) && !partial, Truncated: census.Value > len(members)}
+	heuristic := 0
 	for index, member := range members {
 		subject := SubjectRef{Kind: SubjectWorkItem, CanonicalID: member.CanonicalID, Label: member.WorkItemID}
 		if subject.Label == "" {
@@ -83,8 +144,18 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 		if !ok {
 			return graph, nil, fmt.Errorf("work-item membership identity invalid")
 		}
-		cohort.Members = append(cohort.Members, CohortMember{Subject: subject, Rank: index + 1, InclusionReasons: []string{workItemMembershipRationale}, EvidenceRefIDs: []string{ref}})
+		if anchorKind == SubjectRepository && !treeLinkTierStrongerThanHeuristic(member.LinkTier) {
+			heuristic++
+		}
+		cohort.Members = append(cohort.Members, CohortMember{Subject: subject, Rank: index + 1, InclusionReasons: []string{workItemMemberReason(anchorKind, member)}, EvidenceRefIDs: []string{ref}})
 		graph.EvidenceRefIDs = append(graph.EvidenceRefIDs, ref)
+	}
+	if anchorKind == SubjectRepository {
+		census.repository = &repositoryWorkItemReading{
+			Outcome:      repositoryWorkItemWalkOutcome(membership.Census, true, len(cohort.Members), restricted),
+			PullRequests: membership.Census.RepositoryPullRequests, LinkedIssues: membership.Census.RepositoryLinkedIssues,
+			Heuristic: heuristic, Cut: membership.Census.PopulationIncomplete || membership.Census.State == WorkItemMembershipCensusFloor,
+		}
 	}
 	census.Retained = len(cohort.Members)
 	if ValidateWorkItemTupleCensus(census) != WorkItemTupleCensusReadAvailable {
@@ -129,7 +200,7 @@ func workItemTupleCardinality(census *WorkItemTupleCensus) MembershipCardinality
 	if census == nil || census.State == WorkItemMembershipCensusUnmeasured {
 		return MembershipCardinality{}
 	}
-	return MembershipCardinality{Resolved: true, Kind: SubjectWorkItem, Served: census.Value, Declared: census.Value, PopulationIncomplete: census.State == WorkItemMembershipCensusFloor}
+	return MembershipCardinality{Resolved: true, Kind: SubjectWorkItem, Served: census.Value, Declared: census.Value, PopulationIncomplete: census.State == WorkItemMembershipCensusFloor || census.incomplete}
 }
 
 func workItemTupleSelectionCap(planCap, requestCap int) int {
@@ -271,17 +342,29 @@ func workItemStatusFilterDisclosure(status string) string {
 // workItemStatusNoMatchDisclosure names the empty result. Zero matches is a
 // count of matching items, not a statement that the project is healthy.
 func workItemStatusNoMatchDisclosure(status string) string {
-	return contractsv1.ContextFabricWorkItemNoMatchLimitationPrefix + "currently has status " + status + contractsv1.ContextFabricWorkItemNoMatchLimitationSuffix
+	return workItemNoMatchDisclosure(SubjectProject, "currently has status "+status)
+}
+
+// workItemNoMatchDisclosure names the empty result for the anchor the members
+// were read on.
+func workItemNoMatchDisclosure(anchor SubjectKind, body string) string {
+	if anchor == SubjectRepository {
+		return contractsv1.ContextFabricWorkItemRepositoryNoMatchLimitationPrefix + body + contractsv1.ContextFabricWorkItemRepositoryNoMatchLimitationSuffix
+	}
+	return contractsv1.ContextFabricWorkItemNoMatchLimitationPrefix + body + contractsv1.ContextFabricWorkItemNoMatchLimitationSuffix
 }
 
 // workItemMemberFilter is what the member read applied: a status of the closed
 // set, and/or a half-open window on one bound time field. The zero value reads
 // every member.
 type workItemMemberFilter struct {
-	Status   string
-	TimeRole MemberTimeRole
-	Start    time.Time
-	End      time.Time
+	// AnchorKind is the kind of the subject the members were read on; the
+	// zero value is a project.
+	AnchorKind SubjectKind
+	Status     string
+	TimeRole   MemberTimeRole
+	Start      time.Time
+	End        time.Time
 	// WindowNotApplied marks a current read served although the request
 	// committed a window: the membership is as of now.
 	WindowNotApplied bool
@@ -313,7 +396,7 @@ func workItemMemberFilterNoMatchDisclosure(f workItemMemberFilter) string {
 	if f.Status != "" {
 		with = " and a current status of " + f.Status
 	}
-	return contractsv1.ContextFabricWorkItemNoMatchLimitationPrefix + "was " + field + " in that period" + with + contractsv1.ContextFabricWorkItemNoMatchLimitationSuffix
+	return workItemNoMatchDisclosure(f.AnchorKind, "was "+field+" in that period"+with)
 }
 
 // withWorkItemMemberFilterLimitations appends the filter disclosures, and the
@@ -342,11 +425,11 @@ func withWorkItemMemberFilterLimitations(result InvestigationResult, f workItemM
 		additions = append(additions, contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation)
 	}
 	additions = append(additions, workItemStatusDeniedExclusion)
-	if census != nil && census.State == WorkItemMembershipCensusExact && census.Value == 0 && census.gap == nil {
+	if census != nil && census.State == WorkItemMembershipCensusExact && census.Value == 0 && census.gap == nil && !census.incomplete {
 		if f.hasWindow() {
 			additions = append(additions, workItemMemberFilterNoMatchDisclosure(f))
 		} else {
-			additions = append(additions, workItemStatusNoMatchDisclosure(f.Status))
+			additions = append(additions, workItemNoMatchDisclosure(f.AnchorKind, "currently has status "+f.Status))
 		}
 	}
 	composed, displaced := appendBoundedLimitations(result.Limitations, additions)
@@ -381,4 +464,24 @@ func workItemWindowReadBounds(start, end time.Time) (time.Time, time.Time) {
 		end = start.Add(time.Microsecond)
 	}
 	return start, end
+}
+
+// recordRepositoryWorkItemWalk emits the decision line of one walk: the
+// outcome and the counts behind it, and no name or id.
+func (e *Engine) recordRepositoryWorkItemWalk(ctx context.Context, principal storage.Principal, membership WorkItemMembershipResult, measured bool, members int, filtered, restricted bool) {
+	if e.telemetry == nil {
+		return
+	}
+	event := RepositoryWorkItemWalkEvent{
+		Outcome:  repositoryWorkItemWalkOutcome(membership.Census, measured, members, restricted),
+		Filtered: filtered, Restricted: restricted, Measured: measured, UnmeasuredReason: membership.Census.UnmeasuredReason,
+	}
+	if measured {
+		event.PullRequests, event.LinkedIssues = membership.Census.RepositoryPullRequests, membership.Census.RepositoryLinkedIssues
+		event.Members, event.Truncated = members, membership.Census.PopulationIncomplete || membership.Census.State == WorkItemMembershipCensusFloor
+		if !filtered {
+			event.Denied = membership.Census.DeniedPopulation
+		}
+	}
+	e.telemetry.RecordRepositoryWorkItemWalk(ctx, principal, event)
 }

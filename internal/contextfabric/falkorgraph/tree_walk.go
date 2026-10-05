@@ -247,13 +247,45 @@ type treeWalk struct {
 	hasLink bool
 	// linkSources is how many nodes the hop that feeds the link reached (a
 	// project's issues), and linkTargets how many distinct nodes on the far
-	// side of the link the link read returned (their linked pull requests),
-	// both before authorization. Zero link targets over an uncut read is the
-	// unlinked terminal: the link read returns every link of the anchor.
+	// side of the link the link read returned (their linked pull requests).
+	// For a restricted caller the read carries the grant clause, so
+	// linkTargets counts what the grants can admit. Zero link targets over an
+	// uncut read is the unlinked terminal.
 	linkSources, linkTargets int
 	// denied counts the links and nodes the caller's authorization hid.
 	// Members unseen for that reason are not an unlinked anchor.
 	denied int
+	// linkDeniedTargets counts the distinct far-side nodes the link read
+	// returned that no authorized row reached: nodes, never link rows, so a
+	// node admitted through one link is not denied for another. Nodes the
+	// read's grant clause kept out are not read, so not counted.
+	linkDeniedTargets int
+	// linkIssueTargets is set when the far side of the link is the issue (a
+	// repository's work items): the distinct linked issues before
+	// authorization, for a restricted caller read by a bounded count with no
+	// grant clause (a count only, no id), otherwise what the read returned.
+	// -1 for any other walk.
+	linkIssueTargets int
+	// endTiers is, for each admitted far-side node of the link read, the
+	// strongest tier among its admitted link rows (linkSegment). It is
+	// recorded for every link read; memberTiers is its part that matters.
+	endTiers map[string]string
+	// memberTiers is set only when the link ends the path (linkMembers): the
+	// strongest admitted link tier of each member, by canonical id.
+	memberTiers map[string]string
+	// heuristicOnly counts the members whose strongest tier is heuristic.
+	heuristicOnly int
+}
+
+// tierRank is a tier's place in linkTiers: lower is stronger. A tier the
+// table does not list ranks last.
+func tierRank(name string) int {
+	for i, t := range linkTiers {
+		if t.name == name {
+			return i
+		}
+	}
+	return len(linkTiers)
 }
 
 // treeWalkState is the bookkeeping one walk shares between its hops.
@@ -262,6 +294,12 @@ type treeWalkState struct {
 	principal    storage.Principal
 	scope        contextfabric.RequestedScope
 	collectLimit int
+	// scopeFollowsLink (E3): a requested repository scope is tested on the
+	// link's pull request, not on the issue's own repository. Only the
+	// repository work-item walk (the issues are the members) applies it; the
+	// deployment walks keep the both-ends rule they were reviewed with
+	// (CHAOS-8694 takes it there).
+	scopeFollowsLink bool
 }
 
 func (s treeWalkState) authorized(n *node) bool {
@@ -277,6 +315,15 @@ func (s treeWalkState) authorized(n *node) bool {
 func (s treeWalkState) admitted(position treePosition, n *node, tier linkTier) bool {
 	if position == treeIssue && repositoryLess(n) {
 		return tier.grantsAuthority || !s.narrowed()
+	}
+	if position == treeIssue && s.scopeFollowsLink && len(s.scope.RepositorySlugs) > 0 {
+		// E3: a requested repository scope follows the link. The pull request
+		// at the other end of the row is tested against it; the issue is
+		// tested against the caller's grants only, never against the scope by
+		// its own repository.
+		linkScope := s.scope
+		linkScope.RepositorySlugs = nil
+		return graphrank.AuthorizedAttributes(s.principal, linkScope, toCandidateNode(n).Attributes)
 	}
 	return s.authorized(n)
 }
@@ -327,7 +374,7 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 	if !ok {
 		return out, nil
 	}
-	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit}
+	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit, scopeFollowsLink: member == treeIssue}
 	frontier := []string{anchor.CanonicalID}
 	subjects := map[string]contextfabric.SubjectRef{anchor.CanonicalID: anchor}
 	for k := 0; k < len(path); k++ {
@@ -439,8 +486,14 @@ func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]c
 // bounded by the budget. The link edges are not disclosed: the near side of a
 // link is not a member.
 func (s treeWalkState) linkMembers(ends []string, far map[string]*node) {
+	s.out.memberTiers = map[string]string{}
 	for _, id := range s.cutRanked(ends) {
 		s.out.nodes = append(s.out.nodes, toCandidateNode(far[id]))
+		tier := s.out.endTiers[id]
+		s.out.memberTiers[id] = tier
+		if tier == contextfabric.TreeLinkTierHeuristic {
+			s.out.heuristicOnly++
+		}
 	}
 	sortCandidateNodesBySubjectKey(s.out.nodes)
 }
@@ -602,6 +655,37 @@ func linkSegmentGrants(params map[string]interface{}, principal storage.Principa
 	return params
 }
 
+// linkTargetCountCypher counts the distinct far-side nodes of the anchor's
+// links of the admitted tiers, before authorization: the link read's pattern
+// with no grant clause. It returns one number, never an id.
+func linkTargetCountCypher(feed, link treeHop, temporal temporalFilter) string {
+	mid := treeNodeVar{name: "m", param: "mtypes", position: feed.to}
+	end := treeNodeVar{name: "b", param: "btypes", position: link.to}
+	return linkSegmentMatch(feed) + fmt.Sprintf(hopArrow(link.step.direction, "rl")+"(b:%[2]s {%[3]s:$org, %[4]s:$endKind}) ", labelRelation, labelSubject, propOrgID, propKind) +
+		fmt.Sprintf("WHERE ra.%[1]s = $feedRel AND rl.%[1]s = $linkRel AND rl.%[2]s IN $tiers", propRelationType, propPropertyPrefix+linkTierProperty) + mid.typeClause() + end.typeClause() +
+		temporal.predicate("ra") + temporal.predicate("m") + temporal.predicate("rl") + temporal.predicate("b") + " RETURN count(DISTINCT b) AS targets"
+}
+
+// linkTargetCount runs linkTargetCountCypher and reads its single number.
+func (a *Adapter) linkTargetCount(ctx context.Context, key, orgID string, anchor contextfabric.SubjectRef, feed, link treeHop, temporal temporalFilter) (int, error) {
+	rows, err := a.api.query(ctx, key, linkTargetCountCypher(feed, link, temporal), linkSegmentParams(orgID, anchor, feed, link, 0, 1, temporal), true)
+	if err != nil {
+		return 0, safeDependencyError("count link targets", err)
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	switch n := rows[0]["targets"].(type) {
+	case int64:
+		return int(n), nil
+	case int:
+		return n, nil
+	case float64:
+		return int(n), nil
+	}
+	return 0, nil
+}
+
 // linkSources reads how many near-side nodes the anchor's hop reaches, before
 // authorization.
 func (a *Adapter) linkSources(ctx context.Context, key, orgID string, anchor contextfabric.SubjectRef, feed, link treeHop, temporal temporalFilter) (int, error) {
@@ -640,9 +724,20 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		pageSize = state.collectLimit + 1
 	}
 	restricted := needsProjectReach(state.principal)
+	unfiltered := -1
+	out.linkIssueTargets = -1
+	if restricted && link.to == treeIssue {
+		// The read below keeps only rows the grants can admit; how many linked
+		// issues there are before authorization comes from the same pattern
+		// with no grant clause, as one bounded count.
+		if unfiltered, err = a.linkTargetCount(ctx, key, orgID, anchor, feed, link, temporal); err != nil {
+			return nil, nil, err
+		}
+	}
 	cypher := linkSegmentCypher(feed, link, temporal, restricted)
 	seen := map[string]bool{}
 	admitted := map[string]*node{}
+	out.endTiers = map[string]string{}
 	// ends are the admitted far-side nodes in the read's order: strongest
 	// link tier first, so a cut keeps the higher tiers.
 	var ends []string
@@ -668,10 +763,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 				continue
 			}
 			id := canonicalIDOf(far)
-			if !seen[id] {
-				seen[id] = true
-				out.linkTargets++
-			}
+			seen[id] = true
 			switch {
 			case !state.admitted(feed.to, near, tier):
 				state.deny()
@@ -682,11 +774,21 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 					ends = append(ends, id)
 				}
 				admitted[id] = far
+				// The strongest admitted tier wins; a later, weaker row
+				// never overwrites it.
+				if best, ok := out.endTiers[id]; !ok || tierRank(tier.name) < tierRank(best) {
+					out.endTiers[id] = tier.name
+				}
 			}
 		}
 		if len(rows) < pageSize || (state.collectLimit > 0 && len(admitted) > state.collectLimit) {
 			break
 		}
+	}
+	out.linkTargets = len(seen)
+	out.linkDeniedTargets = len(seen) - len(admitted)
+	if link.to == treeIssue {
+		out.linkIssueTargets = max(unfiltered, len(seen))
 	}
 	return ends, admitted, nil
 }

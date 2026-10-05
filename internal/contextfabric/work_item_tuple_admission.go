@@ -144,9 +144,10 @@ func workItemTupleOrderingRequested(frame *QuestionFrame) bool {
 }
 
 // anchorAnswerable is stage B's prospective kind match, not a committed or
-// authorized SubjectRef. A team-to-work-item relation is not membership.
+// authorized SubjectRef. A team-to-work-item relation is not membership. The
+// anchor kinds are a project and a repository (WorkItemTupleAnchorKind).
 func (admission workItemTupleAdmission) anchorAnswerable(kind SubjectKind) bool {
-	return admission == workItemTupleProspective && kind == SubjectProject
+	return admission == workItemTupleProspective && WorkItemTupleAnchorKind(kind)
 }
 
 // refusalBasis uses the shipped fallback until the proposed axis/filter

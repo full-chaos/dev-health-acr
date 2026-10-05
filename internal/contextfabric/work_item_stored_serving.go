@@ -60,6 +60,7 @@ func ServeWorkItemTupleCensus(candidate InvestigationResult, census *WorkItemTup
 		candidate = applyWorkItemAuthorizationGap(candidate, *census.gap)
 	}
 	candidate = withWorkItemMemberFilterLimitations(candidate, census.memberFilter, census)
+	candidate = withRepositoryWorkItemDisclosures(candidate, census)
 	return candidate
 }
 
@@ -245,4 +246,48 @@ func nextWorkItemCoverageDetailID(details []CoverageDetail) string {
 			return candidate
 		}
 	}
+}
+
+// withWorkItemRepositoryUnlinkedDetail adds the coverage detail of a
+// repository whose pull requests link no issue: its work items are unknown, not
+// none. The detail and its legacy reason are placed in the order the kind
+// census detail keeps, and are never added twice.
+func withWorkItemRepositoryUnlinkedDetail(candidate InvestigationResult, pullRequests int) InvestigationResult {
+	raw := fmt.Sprintf("work_item_repository_unlinked:%d", pullRequests)
+	for _, detail := range candidate.Coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailWorkItemRepositoryUnlinked {
+			return candidate
+		}
+	}
+	count := pullRequests
+	detail := CoverageDetail{Source: "context-fabric:graph", Code: contractsv1.ContextFabricCoverageDetailWorkItemRepositoryUnlinked, Degrading: true, Count: &count, Raw: raw}
+	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+	details := append([]CoverageDetail(nil), candidate.Coverage.Details...)
+	detail.DetailID = nextWorkItemCoverageDetailID(details)
+	detailIndex := len(details)
+	for index, existing := range details {
+		if !existing.Degrading || existing.Raw > raw {
+			detailIndex = index
+			break
+		}
+	}
+	details = append(details, CoverageDetail{})
+	copy(details[detailIndex+1:], details[detailIndex:])
+	details[detailIndex] = detail
+	candidate.Coverage.Details = details
+
+	reasons := append([]string(nil), candidate.Coverage.DegradedReasons...)
+	reasonIndex := len(reasons)
+	for index, reason := range reasons {
+		if reason > raw {
+			reasonIndex = index
+			break
+		}
+	}
+	reasons = append(reasons, "")
+	copy(reasons[reasonIndex+1:], reasons[reasonIndex:])
+	reasons[reasonIndex] = raw
+	candidate.Coverage.DegradedReasons = reasons
+	candidate.Coverage.Partial = true
+	return candidate
 }

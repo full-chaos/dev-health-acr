@@ -2,6 +2,7 @@ package v1
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -663,6 +664,7 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricBudgetTrimLimitation(limitation) ||
 		IsContextFabricPathDropLimitation(limitation) ||
 		IsContextFabricWorkItemMemberFilterLimitation(limitation) ||
+		IsContextFabricWorkItemRepositoryLimitation(limitation) ||
 		IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation) ||
 		IsContextFabricStatedRangeConflictLimitation(limitation) ||
 		IsContextFabricComparisonPeriodUnreadLimitation(limitation)
@@ -723,6 +725,17 @@ const (
 	ContextFabricWorkItemMemberFilterLimitationPrefix = "Members are the work items "
 	ContextFabricWorkItemNoMatchLimitationPrefix      = "No work item in this project within the authorized scope "
 	ContextFabricWorkItemNoMatchLimitationSuffix      = "; that is a count of matches, not a statement about the project's health."
+	// ContextFabricWorkItemRepositoryMembershipRationale is the inclusion
+	// reason of a work item read on a repository, without its link tier: an
+	// issue linked to a pull request of that repository. It is the cohort's
+	// own rationale; each member's reason adds the tier
+	// (ContextFabricWorkItemRepositoryMembershipReason).
+	ContextFabricWorkItemRepositoryMembershipRationale = "Issue linked to a pull request of the named repository."
+	// The no-match sentence for members read through a repository's pull
+	// requests. It states the relation: the members are issues LINKED to a
+	// pull request of the repository.
+	ContextFabricWorkItemRepositoryNoMatchLimitationPrefix = "No work item of this repository within the authorized scope "
+	ContextFabricWorkItemRepositoryNoMatchLimitationSuffix = "; that is a count of matches, not a statement about the repository's health."
 	// ContextFabricWorkItemDeniedScopeExclusionLimitation is the same words
 	// for every outcome, so it cannot tell a caller how many denied items hold
 	// a status or fall in a period.
@@ -736,7 +749,7 @@ const (
 var (
 	workItemStatusFilterLimitationPattern = regexp.MustCompile(`^Members are the work items whose current status is [a-z_]{1,32}; status is read as of now, over no period, and is not completion or readiness\.$`)
 	workItemWindowFilterLimitationPattern = regexp.MustCompile(`^Members are the work items (?:created|completed|last updated) from \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z to \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z \(the (?:created|completed|updated)_at field\); their status and every other fact is as of now, not as of the period\.$`)
-	workItemNoMatchLimitationPattern      = regexp.MustCompile(`^No work item in this project within the authorized scope (?:currently has status [a-z_]{1,32}|was (?:created|completed|last updated) in that period(?: and a current status of [a-z_]{1,32})?); that is a count of matches, not a statement about the project's health\.$`)
+	workItemNoMatchLimitationPattern      = regexp.MustCompile(`^(?:No work item in this project within the authorized scope (?:currently has status [a-z_]{1,32}|was (?:created|completed|last updated) in that period(?: and a current status of [a-z_]{1,32})?); that is a count of matches, not a statement about the project's health|No work item of this repository within the authorized scope (?:currently has status [a-z_]{1,32}|was (?:created|completed|last updated) in that period(?: and a current status of [a-z_]{1,32})?); that is a count of matches, not a statement about the repository's health)\.$`)
 )
 
 // IsContextFabricWorkItemMemberFilterLimitation reports whether one limitation
@@ -765,4 +778,77 @@ func HasContextFabricServiceAuthoredLimitation(limitations []string) bool {
 		}
 	}
 	return false
+}
+
+// The work items of a named repository are the issues linked to its pull
+// requests (the link of record, tiers native, explicit_text, heuristic). The
+// tier that linked a member is named in the member's inclusion reason, and the
+// sentences below disclose what the link source cannot promise. Each is fixed
+// (or fixed but for a count) so a recogniser can match it whole and no
+// composer displaces it.
+const (
+	ContextFabricWorkItemRepositoryTierNative       = "native"
+	ContextFabricWorkItemRepositoryTierExplicitText = "explicit_text"
+	ContextFabricWorkItemRepositoryTierHeuristic    = "heuristic"
+
+	// ContextFabricWorkItemRepositoryFreshnessLimitation is served on every
+	// repository work-item answer.
+	ContextFabricWorkItemRepositoryFreshnessLimitation = "The issue to pull request links come from the last link build and can lag behind the source."
+	// ContextFabricWorkItemRepositoryNoPullRequestsLimitation: no member, and
+	// the repository has no pull request in the graph.
+	ContextFabricWorkItemRepositoryNoPullRequestsLimitation = "No pull request of this repository is known, so no issue is linked to it; that is a count of linked issues, not a statement about the repository's health."
+	// ContextFabricWorkItemRepositoryUnlinkedLimitation: the repository has
+	// pull requests and none links an issue.
+	ContextFabricWorkItemRepositoryUnlinkedLimitation = "No pull request of this repository links an issue, so it has no linked work items; that is a count of links, not a statement about the repository's health."
+	// ContextFabricWorkItemRepositoryPartialLimitation: the read did not cover
+	// every issue linked to the repository (a member whose status or
+	// completion could not be read, or a walk cut at its read bound).
+	ContextFabricWorkItemRepositoryPartialLimitation = "Not every work item linked to this repository could be read, so this list can miss members."
+	// ContextFabricWorkItemRepositoryStrongestFirstLimitation: more members
+	// than the answer lists; the list keeps the strongest links.
+	ContextFabricWorkItemRepositoryStrongestFirstLimitation = "Not every member is listed: members are kept by the strength of their link (native, then stated in text, then heuristic), so members of the lower link tiers were cut first."
+	// ContextFabricWorkItemRepositoryPeriodRoleRefusalLimitation refuses a
+	// created or updated period over the work items of a repository.
+	ContextFabricWorkItemRepositoryPeriodRoleRefusalLimitation = "No canonical fact carries the created or last updated time of the work items linked to a repository, so a period on those times cannot be applied and no members are listed. Ask for work items completed in that period, or ask without a period."
+
+	contextFabricWorkItemRepositoryHeuristicPrefix = " of these members are linked only by a heuristic match "
+	contextFabricWorkItemRepositoryHeuristicSuffix = "(a pull request opened near the issue's last update in the issue's own repository)."
+)
+
+var workItemRepositoryHeuristicLimitationPattern = regexp.MustCompile(`^[1-9]\d{0,5} of these members are linked only by a heuristic match \(a pull request opened near the issue's last update in the issue's own repository\)\.$`)
+
+// ContextFabricWorkItemRepositoryMembershipReason is one member's inclusion
+// reason on a repository anchor: the tier of the strongest link that reached
+// it, in plain words. A tier outside the closed set is the heuristic reading
+// (the weakest), never the native one.
+func ContextFabricWorkItemRepositoryMembershipReason(tier string) string {
+	switch tier {
+	case ContextFabricWorkItemRepositoryTierNative:
+		return "Issue linked to a pull request of the named repository (native link)"
+	case ContextFabricWorkItemRepositoryTierExplicitText:
+		return "Issue linked to a pull request of the named repository (link stated in text)"
+	default:
+		return "Issue linked to a pull request of the named repository (heuristic match)"
+	}
+}
+
+// ContextFabricWorkItemRepositoryHeuristicLimitation states how many of the
+// listed members are linked only by the heuristic tier.
+func ContextFabricWorkItemRepositoryHeuristicLimitation(count int) string {
+	return strconv.Itoa(count) + contextFabricWorkItemRepositoryHeuristicPrefix + contextFabricWorkItemRepositoryHeuristicSuffix
+}
+
+// IsContextFabricWorkItemRepositoryLimitation reports whether one limitation
+// is a repository work-item disclosure. It matches each sentence whole.
+func IsContextFabricWorkItemRepositoryLimitation(limitation string) bool {
+	switch limitation {
+	case ContextFabricWorkItemRepositoryFreshnessLimitation,
+		ContextFabricWorkItemRepositoryNoPullRequestsLimitation,
+		ContextFabricWorkItemRepositoryUnlinkedLimitation,
+		ContextFabricWorkItemRepositoryPartialLimitation,
+		ContextFabricWorkItemRepositoryStrongestFirstLimitation,
+		ContextFabricWorkItemRepositoryPeriodRoleRefusalLimitation:
+		return true
+	}
+	return len(limitation) <= contextFabricWorkItemMemberFilterLimitationMaxRunes*4 && workItemRepositoryHeuristicLimitationPattern.MatchString(limitation)
 }

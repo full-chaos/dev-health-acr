@@ -224,8 +224,9 @@ func TestADeploymentOfTwoReachedRepositoriesIsOneMember(t *testing.T) {
 // the member, and the walk's own check of that end is the only thing keeping
 // an unseen issue out. The caller holds grants for both repositories, so the
 // link read's grant clause keeps every row; the request is narrowed to the
-// anchor's repository, which only the walk's check of each row applies. An
-// issue whose own repository is outside the request is not a member; a
+// anchor's repository. The scope follows the link (E3): an issue whose own
+// repository is outside the request is a member through its link to a pull
+// request inside it when the caller is granted that repository; a
 // repository-less issue is admitted by its link to the granted pull request.
 func TestALinkWhoseFarEndIsTheMemberAdmitsOnlyFarEndsTheCallerMaySee(t *testing.T) {
 	repo := "repository:github:acme/svc"
@@ -250,10 +251,10 @@ func TestALinkWhoseFarEndIsTheMemberAdmitsOnlyFarEndsTheCallerMaySee(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(walkMemberIDs(walk), ","); got != "work_item:gh:visible,work_item:linear:ENG-1" {
-		t.Fatalf("members %s, want the issue in the requested repository and the repository-less issue, never the issue of acme/secret", got)
+	if got := strings.Join(walkMemberIDs(walk), ","); got != "work_item:gh:secret,work_item:gh:visible,work_item:linear:ENG-1" {
+		t.Fatalf("members %s, want every issue linked to a pull request of the requested repository: the scope follows the link (E3), and the caller is granted acme/secret", got)
 	}
-	if walk.denied != 1 || walk.linkTargets != 3 || walk.linkSources != 3 {
-		t.Fatalf("denied %d, link targets %d, link sources %d; want 1 denied of 3 linked issues from 3 pull requests", walk.denied, walk.linkTargets, walk.linkSources)
+	if walk.denied != 0 || walk.linkTargets != 3 || walk.linkSources != 3 {
+		t.Fatalf("denied %d, link targets %d, link sources %d; want none denied of 3 linked issues from 3 pull requests", walk.denied, walk.linkTargets, walk.linkSources)
 	}
 }

@@ -242,6 +242,16 @@ type EngineDependencies struct {
 	CandidateVerifier CandidateVerifier
 	// WorkItemMembership performs the bounded tuple-only reuse census.
 	WorkItemMembership WorkItemMembershipPort
+	// TreeWorkItemGraph and TreeWorkItemFilter are the two ports behind the
+	// work items of a named repository: the issues linked to its pull
+	// requests, walked in the graph store, then qualified by status or
+	// completion on their canonical facts. TreeWorkItemGate is the bounded
+	// admission the repository read holds for the response, as the project
+	// read's own gate does. A repository anchor needs the graph and the gate;
+	// without them its read measures nothing and the answer says so.
+	TreeWorkItemGraph  TreeWorkItemGraph
+	TreeWorkItemFilter TreeWorkItemFilter
+	TreeWorkItemGate   *WorkItemMembershipGate
 	// StructureSelectionSink is optional (CHAOS-3927 P4, capture-only
 	// phase, mirroring ClarificationSelectionSink's own contract exactly).
 	// When set, Engine notifies it every time a caller's kindr_/ancr_/
@@ -336,6 +346,9 @@ type EngineTelemetry interface {
 	// FrameValidationEvent's PredictedStrippedObligations -- see
 	// WorkItemTupleAdmissionEvent's own doc comment.
 	RecordWorkItemTupleAdmission(context.Context, storage.Principal, WorkItemTupleAdmissionEvent)
+	// RecordRepositoryWorkItemWalk reports one read of a repository's work
+	// items (eventspec.RepositoryWorkItemWalk).
+	RecordRepositoryWorkItemWalk(context.Context, storage.Principal, RepositoryWorkItemWalkEvent)
 	// QuestionFamilyTelemetry (CHAOS-4632 §4.3) is EMBEDDED, not offered
 	// as a separate optional interface a caller might or might not
 	// implement.
@@ -1267,6 +1280,7 @@ type Engine struct {
 	anchorMembershipVerifier                    AnchorMembershipVerifier
 	candidateVerifier                           CandidateVerifier
 	workItemMembership                          WorkItemMembershipPort
+	treeWorkItemMembership                      *TreeWorkItemMembership
 	priorConsultant                             PriorConsultant
 	priorHandleGrammarChecker                   HandleGrammarChecker
 	offerPhraser                                OfferPhraser
@@ -1320,6 +1334,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		anchorMembershipVerifier:   dependencies.AnchorMembershipVerifier,
 		candidateVerifier:          dependencies.CandidateVerifier,
 		workItemMembership:         dependencies.WorkItemMembership,
+		treeWorkItemMembership:     NewTreeWorkItemMembership(dependencies.TreeWorkItemGraph, dependencies.TreeWorkItemFilter, dependencies.TreeWorkItemGate),
 		priorConsultant:            dependencies.PriorConsultant,
 		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
 		offerPhraser:               dependencies.OfferPhraser,
@@ -3147,7 +3162,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var graphContext GraphContext
 	var tupleCensus *WorkItemTupleCensus
 	if workItemTuple {
-		if len(resolution.Committed) != 1 || resolution.Committed[0].Kind != SubjectProject {
+		if len(resolution.Committed) != 1 || !WorkItemTupleAnchorKind(resolution.Committed[0].Kind) {
 			if len(resolution.Committed) > 0 {
 				familyOutcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectWorkItem}
 				resolution = withoutSubjects(resolution)
@@ -3156,7 +3171,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		authorized := false
 		if e.candidateVerifier != nil {
-			authorized, _ = e.candidateVerifier(ctx, principal, request.RequestedScope, binding, SubjectProject, resolution.Committed[0].CanonicalID)
+			authorized, _ = e.candidateVerifier(ctx, principal, request.RequestedScope, binding, resolution.Committed[0].Kind, resolution.Committed[0].CanonicalID)
 		}
 		if !authorized || ctx.Err() != nil {
 			resolution = withoutSubjects(resolution)
@@ -3165,7 +3180,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		resolution = restrictWorkItemTupleCandidate(resolution)
 		plan.MemberKind = SubjectWorkItem
 		plan.FactKinds = []FactKind{FactStatus, FactWork}
-		memberFilter := workItemMemberFilter{Status: workItemTupleStatusFilter(familyOutcome.Frame)}
+		memberFilter := workItemMemberFilter{AnchorKind: resolution.Committed[0].Kind, Status: workItemTupleStatusFilter(familyOutcome.Frame)}
 		memberFilter.WindowNotApplied = workItemCurrentFrameCarriesUnappliedWindow(familyOutcome.Frame, windowBasis)
 		if workItemTupleIsPeriodFrame(familyOutcome.Frame) {
 			// The read applies the window the answer discloses: the effective
@@ -3175,10 +3190,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				resolution = withoutSubjects(resolution)
 				return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
 			}
+			if memberFilter.AnchorKind == SubjectRepository && windowBasis.Role != MemberTimeRoleCompleted {
+				// No canonical fact carries the created or updated time of a
+				// walked member, so the period cannot be applied: refused, in
+				// a sentence that names why.
+				familyOutcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectWorkItem}
+				familyOutcome.RepositoryPeriodRoleRefused = true
+				resolution = withoutSubjects(resolution)
+				return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
+			}
 			readStart, readEnd := workItemWindowReadBounds(*effectiveWindow.Start, *effectiveWindow.End)
 			memberFilter.TimeRole, memberFilter.Start, memberFilter.End = windowBasis.Role, readStart, readEnd
 		}
-		graphContext, tupleCensus, err = e.discoverWorkItemTuple(ctx, principal, request, resolution, &plan, memberFilter)
+		graphContext, tupleCensus, err = e.discoverWorkItemTuple(ctx, principal, request, binding, resolution, &plan, memberFilter)
 		if err != nil {
 			return InvestigationResult{}, stageError(StageGraph, err)
 		}

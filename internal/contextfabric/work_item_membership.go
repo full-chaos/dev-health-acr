@@ -67,8 +67,10 @@ const (
 	WorkItemMembershipUnmeasuredIdentityOmitted        WorkItemMembershipUnmeasuredReason = "identity_omitted"
 )
 
-// WorkItemMembershipAnchor is the project subject that supplies the
-// provider-qualified project identity for the S1 join.
+// WorkItemMembershipAnchor is the committed subject the read is anchored on:
+// a project (its provider-qualified identity joins the S1 members) or a
+// repository (its members are walked in the graph; see
+// TreeWorkItemMembership).
 type WorkItemMembershipAnchor struct {
 	Subject SubjectRef
 }
@@ -117,6 +119,10 @@ type WorkItemMembershipMember struct {
 	RepoID      string
 	WorkItemID  string
 	RepoSlug    string
+	// LinkTier is the strongest tier of the issue to pull request link that
+	// reached the member, set only on a repository anchor (TreeLinkTier*).
+	// Empty for a project anchor.
+	LinkTier string
 }
 
 // WorkItemMembershipCensus is the server-side S1 measurement. Counts are
@@ -140,6 +146,16 @@ type WorkItemMembershipCensus struct {
 	TransitionAssertionCount int
 	UnmeasuredReason         WorkItemMembershipUnmeasuredReason
 	Limitation               string
+	// RepositoryPullRequests and RepositoryLinkedIssues describe a
+	// repository anchor when the population was measured: the repository's
+	// pull requests, and the distinct issues linked to them, before any
+	// member filter or authorization. They tell a repository with no pull
+	// request from one whose pull requests link no issue; a restricted
+	// caller's outcome is denied whatever they say, so they reach only the
+	// decision line, never its answer.
+	// Zero for a project anchor.
+	RepositoryPullRequests int
+	RepositoryLinkedIssues int
 }
 
 // WorkItemMembershipPathCensus is S1's per-path census over the same capped
@@ -370,6 +386,13 @@ var (
 // string. It does not mint a second limitation token for PR2.
 func WorkItemMembershipLimitation() string {
 	return factScopeUnexpandedLimitation
+}
+
+// WorkItemTupleAnchorKind reports whether a committed subject of this kind
+// anchors work-item members: a project, or a repository through the pull
+// requests its issues are linked to.
+func WorkItemTupleAnchorKind(kind SubjectKind) bool {
+	return kind == SubjectProject || kind == SubjectRepository
 }
 
 // WorkItemMembershipAnchorSegments validates and decodes an anchor without

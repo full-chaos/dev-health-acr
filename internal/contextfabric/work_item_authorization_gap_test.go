@@ -131,7 +131,7 @@ func TestWorkItemAuthorizationGapOfRequiresMeasuredDenied(t *testing.T) {
 		"state unmeasured": {WorkItemMembershipCensus{State: WorkItemMembershipCensusUnmeasured, PopulationMeasured: true, DeniedPopulation: 2}, false},
 	}
 	for name, tc := range cases {
-		if _, ok := workItemAuthorizationGapOf(tc.census); ok != tc.want {
+		if _, ok := workItemAuthorizationGapOf(tc.census, SubjectProject); ok != tc.want {
 			t.Errorf("%s: ok=%v want %v", name, ok, tc.want)
 		}
 	}

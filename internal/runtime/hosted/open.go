@@ -860,6 +860,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// Graph-only composition remains available when ClickHouse is absent.
 	// A tuple cannot reuse without this port; the engine then takes a miss.
 	var workItemMembership contextfabric.WorkItemMembershipPort
+	var treeWorkItemFilter contextfabric.TreeWorkItemFilter
 	if clickhouse.queryClient != nil {
 		reader, err := devhealthfacts.NewWorkItemMembershipReader(clickhouse.queryClient, devhealthfacts.WorkItemMembershipReaderOptions{
 			Telemetry: contextfabric.NewSlogWorkItemMembershipTelemetry(request.options.Logger),
@@ -868,6 +869,16 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize work item membership reader: %w", err)
 		}
 		workItemMembership = reader
+		// The status and completion qualifier of a repository's walked
+		// work items reads the same ClickHouse client the fact providers share.
+		treeWorkItemFilter = devhealthfacts.NewTreeWorkItemFilterReader(clickhouse.queryClient)
+	}
+	// The repository's work items are walked in the graph store, by the same
+	// adapter the engine reads the graph through, and held under a bounded
+	// admission as the project read's census is.
+	treeWorkItemGate, err := contextfabric.NewWorkItemMembershipGate(contextfabric.DefaultWorkItemMembershipMaxInFlight, contextfabric.DefaultWorkItemMembershipQueueCapacity)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize repository work item admission: %w", err)
 	}
 	questionInterpreter, err := newContextFabricQuestionInterpreter(modelRuntime, receiptSink, engineTelemetry, factRegistry, request.options.InterpretationEnsembleSize, request.options.Logger)
 	if err != nil {
@@ -881,6 +892,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	clientSynthesis.ParseDraft = suppliedSynthesizer.Parse
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		WorkItemMembership: workItemMembership,
+		TreeWorkItemGraph:  graphReader,
+		TreeWorkItemFilter: treeWorkItemFilter,
+		TreeWorkItemGate:   treeWorkItemGate,
 		// FrameTelemetry is wired here and NOT discovered by a type
 		// assertion, for the reason FamilyTelemetry beside it is: an
 		// optional telemetry interface that nothing implements in
