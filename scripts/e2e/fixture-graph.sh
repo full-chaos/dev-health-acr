@@ -22,6 +22,12 @@ FG_WORLD_TWO_SLUG='ci-metrics-executed-proof/repo'
 fg_note() { printf '[fixture-graph] %s\n' "$*" >&2; }
 fg_die() { printf '[fixture-graph] FAIL: %s\n' "$*" >&2; exit 1; }
 
+# The generator refuses a POSTGRES_URI (it writes analytics rows only), so it runs with the
+# ClickHouse DSN alone, unlike compose.sh's dho wrapper.
+dho_analytics() {
+  compose run --rm --no-deps -T -e "CLICKHOUSE_URI=${DHO_CLICKHOUSE_URI}" query-api "$@"
+}
+
 # One generator run per frozen world, both for the provisioned organization. The generator
 # writes its own repos row; nothing here inserts one by hand.
 seed_fixture_worlds() {
@@ -29,10 +35,10 @@ seed_fixture_worlds() {
   db="$(ops_clickhouse_database)"
   org_id="$(<"$STATE/org-id")"
   sink="clickhouse://default:ch@clickhouse:9000/${db}"
-  DHO_CLICKHOUSE_URI="$sink" dho fixtures generate --sink "$sink" --db-type clickhouse --org "$org_id" \
+  DHO_CLICKHOUSE_URI="$sink" dho_analytics fixtures generate --sink "$sink" --db-type clickhouse --org "$org_id" \
     --repo-name "$FG_WORLD_ONE_SLUG" --provider synthetic --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 \
     --seed 20260219 --with-metrics --with-work-graph >"$STATE/fixtures-world-one.json" || fg_die 'fixture world one did not load'
-  DHO_CLICKHOUSE_URI="$sink" dho fixtures generate --sink "$sink" --db-type clickhouse --org "$org_id" \
+  DHO_CLICKHOUSE_URI="$sink" dho_analytics fixtures generate --sink "$sink" --db-type clickhouse --org "$org_id" \
     --repo-name "$FG_WORLD_TWO_SLUG" --provider synthetic --repo-count 1 --days 7 --commits-per-day 5 --pr-count 20 --team-count 1 \
     --seed 4276 >"$STATE/fixtures-world-two.json" || fg_die 'fixture world two did not load'
   local slug count
