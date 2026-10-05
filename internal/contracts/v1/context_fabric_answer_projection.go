@@ -80,6 +80,14 @@ type ContextFabricAnswerProjection struct {
 	DirectJudgment     string   `json:"direct_judgment"`
 	CurrentState       string   `json:"current_state"`
 	StrongestPressures []string `json:"strongest_pressures"`
+	// DeterministicAnswer is the canonical result's server-composed answer
+	// text, copied verbatim and never reworded. It is written by the service
+	// from stored facts, not by a model: the status sentence, the count
+	// sentence, and the period total with the days it rests on and the days
+	// that have no stored row. It is served whether or not the model's
+	// synthesis succeeded or produced any claim. Optional: absent only when a
+	// stored result predates the field being projected.
+	DeterministicAnswer string `json:"deterministic_answer,omitempty"`
 	// CommittedSubjects mirrors SubjectResolution.Committed exactly. The
 	// differential parity check compares this across surfaces, so it is
 	// never truncated -- a surface that resolved a different set of

@@ -9,6 +9,7 @@
   "direct_judgment": "This investigation is complete.",
   "current_state": "Current observed values: status.status=open for Implement the thing; work.title=Implement the thing for Implement the thing.",
   "strongest_pressures": [],
+  "deterministic_answer": "This investigation is complete. Counted 1 work item.",
   "committed_subjects": [
     {
       "kind": "project",
