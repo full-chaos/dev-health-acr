@@ -75,6 +75,15 @@ func TestFixtureWorldsHoldTwoRepositoriesWithLinks(t *testing.T) {
 	if n := chScalar(t, fmt.Sprintf("SELECT count() FROM repos FINAL WHERE org_id = %s", sqlStr(orgID(t)))); n != "2" {
 		t.Fatalf("the organization holds %s repositories, want the 2 the two frozen worlds define", n)
 	}
+	for _, slug := range []string{one, two} {
+		sql := fmt.Sprintf(`SELECT uniqExact(l.work_item_id) - uniqExact(w.title) FROM work_graph_issue_pr AS l FINAL
+INNER JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id
+INNER JOIN work_items AS w FINAL ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id
+WHERE l.org_id = %s AND r.repo = %s`, sqlStr(orgID(t)), sqlStr(slug))
+		if d := chScalar(t, sql); d != "0" {
+			t.Fatalf("%s: linked issues share titles (%s collisions): the served label cannot identify an issue", slug, d)
+		}
+	}
 	a, b := issueSet(linkRows(t, one)), issueSet(linkRows(t, two))
 	if len(a) == 0 || len(b) == 0 {
 		t.Fatalf("a world holds no issue linked to a pull request: %s=%d %s=%d", one, len(a), two, len(b))
@@ -141,7 +150,7 @@ func TestReadRelationshipsServesTheLinkTier(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
 	c.requireTools("read_relationships", "find_subjects")
 	one, _ := slugs(t)
-	repoUUID := repoID(t, one)
+	repoCanonical := subjectID(t, c, one)
 	rows := linkRows(t, one)
 	checked := 0
 	seen := map[string]bool{}
@@ -150,7 +159,7 @@ func TestReadRelationshipsServesTheLinkTier(t *testing.T) {
 			continue
 		}
 		seen[r.pr] = true
-		d, _ := c.call("find_subjects", doc{"handle": "PR " + r.pr, "anchor": doc{"kind": "repository", "canonical_id": "repository:" + repoUUID}})
+		d, _ := c.call("find_subjects", doc{"handle": "PR " + r.pr, "anchor": doc{"kind": "repository", "id": repoCanonical}})
 		subs := list(d, "subjects")
 		if len(subs) != 1 {
 			t.Fatalf("find_subjects handle PR %s returned %d subjects: %v", r.pr, len(subs), d)
@@ -250,7 +259,7 @@ func TestPeriodTotalStatesItsCoverage(t *testing.T) {
 	id := subjectID(t, c, one)
 	rows := ch(t, fmt.Sprintf("SELECT toString(min(day)), toString(max(day)), toString(count()), toString(sum(commits_count)) FROM repo_metrics_daily FINAL WHERE org_id = %s AND repo_id = toUUID(%s)", sqlStr(orgID(t)), sqlStr(repoID(t, one))))
 	seededDays := rows[0][2]
-	d, raw := c.call("read_facts", doc{"kinds": []string{"metrics"}, "subjects": []doc{{"kind": "repository", "canonical_id": id}}, "tables": doc{"include": []string{"daily_metrics"}}, "window": doc{"mode": "trailing", "days": 60}})
+	d, raw := c.call("read_facts", doc{"kinds": []string{"metrics"}, "subjects": []doc{{"kind": "repository", "canonical_id": id}}, "tables": "include", "window": doc{"mode": "trailing", "days": 60}})
 	cov := list(d, "coverage")
 	if len(cov) != 1 {
 		t.Fatalf("want one coverage row for (metrics, repository), got %d: %.1500s", len(cov), raw)

@@ -221,7 +221,7 @@ func repoID(t testing.TB, slug string) string {
 	return chScalar(t, fmt.Sprintf("SELECT toString(id) FROM repos FINAL WHERE org_id = %s AND repo = %s", sqlStr(orgID(t)), sqlStr(slug)))
 }
 
-// linkRow is one issue-to-pull-request link of the entity tree for one repository.
+// linkRow (issue = the issue's title, which is the label the service serves) is one issue-to-pull-request link of the entity tree for one repository.
 type linkRow struct {
 	issue, tier string
 	pr          string
@@ -230,13 +230,13 @@ type linkRow struct {
 // linkRows reads the links of a repository the way the tree defines them: the issues linked
 // to the repository's pull requests through work_graph_issue_pr, never an issue's own repo.
 func linkRows(t testing.TB, slug string) []linkRow {
-	sql := fmt.Sprintf(`SELECT l.work_item_id, l.provenance, toString(l.pr_number)
+	sql := fmt.Sprintf(`SELECT w.title, l.provenance, toString(l.pr_number)
 FROM work_graph_issue_pr AS l FINAL
 INNER JOIN git_pull_requests AS p FINAL ON p.org_id = l.org_id AND p.repo_id = l.repo_id AND p.number = l.pr_number
 INNER JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id
 INNER JOIN work_items AS w FINAL ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id
 WHERE l.org_id = %s AND r.repo = %s AND l.provenance IN ('native','explicit_text','heuristic') AND lower(w.type) NOT IN ('pr','merge_request')
-ORDER BY l.work_item_id, l.pr_number`, sqlStr(orgID(t)), sqlStr(slug))
+ORDER BY w.title, l.pr_number`, sqlStr(orgID(t)), sqlStr(slug))
 	var out []linkRow
 	for _, r := range ch(t, sql) {
 		out = append(out, linkRow{issue: r[0], tier: r[1], pr: r[2]})
