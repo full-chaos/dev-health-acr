@@ -294,6 +294,12 @@ type treeWalkState struct {
 	principal    storage.Principal
 	scope        contextfabric.RequestedScope
 	collectLimit int
+	// scopeFollowsLink (E3): a requested repository scope is tested on the
+	// link's pull request, not on the issue's own repository. Only the
+	// repository work-item walk (the issues are the members) applies it; the
+	// deployment walks keep the both-ends rule they were reviewed with
+	// (CHAOS-8694 takes it there).
+	scopeFollowsLink bool
 }
 
 func (s treeWalkState) authorized(n *node) bool {
@@ -310,7 +316,7 @@ func (s treeWalkState) admitted(position treePosition, n *node, tier linkTier) b
 	if position == treeIssue && repositoryLess(n) {
 		return tier.grantsAuthority || !s.narrowed()
 	}
-	if position == treeIssue && len(s.scope.RepositorySlugs) > 0 {
+	if position == treeIssue && s.scopeFollowsLink && len(s.scope.RepositorySlugs) > 0 {
 		// E3: a requested repository scope follows the link. The pull request
 		// at the other end of the row is tested against it; the issue is
 		// tested against the caller's grants only, never against the scope by
@@ -368,7 +374,7 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 	if !ok {
 		return out, nil
 	}
-	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit}
+	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit, scopeFollowsLink: member == treeIssue}
 	frontier := []string{anchor.CanonicalID}
 	subjects := map[string]contextfabric.SubjectRef{anchor.CanonicalID: anchor}
 	for k := 0; k < len(path); k++ {
