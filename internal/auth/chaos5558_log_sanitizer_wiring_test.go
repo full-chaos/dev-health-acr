@@ -50,9 +50,8 @@ func TestMiddlewareSanitizesRequestIDOnCredentialLookupFailure(t *testing.T) {
 
 // TestMiddlewareSanitizesRequestIDOnAuthenticationFailure is the sibling
 // pin for middleware.go:214's WarnContext site (alert #7,
-// recordUnknownFailure) -- reached by an absent/malformed bearer token,
-// the class every anonymous caller can trigger without a valid credential
-// at all.
+// recordUnknownFailure) -- reached by a malformed bearer token, the class
+// every anonymous caller can trigger without a valid credential at all.
 func TestMiddlewareSanitizesRequestIDOnAuthenticationFailure(t *testing.T) {
 	now := time.Date(2026, 7, 10, 15, 0, 0, 0, time.UTC)
 	store := newMemoryCredentialStore(t)
@@ -63,7 +62,8 @@ func TestMiddlewareSanitizesRequestIDOnAuthenticationFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/", nil) // no Authorization header -- malformed bearer path
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Authorization", "Bearer junk") // malformed bearer path; a request with no credential is not a failed authentication and logs at Debug
 	request.Header.Set("X-Request-ID", "evil\nFAKE_LOG_LINE=injected\r\n")
 	response := httptest.NewRecorder()
 	authenticator.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -95,7 +95,8 @@ func TestMiddlewareSanitizesRemoteIPFromACustomClientIPResolver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/", nil) // no Authorization header -- malformed bearer path
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Authorization", "Bearer junk") // malformed bearer path; a request with no credential is not a failed authentication and logs at Debug
 	request.Header.Set("X-Real-IP", "evil\nFAKE_LOG_LINE=injected")
 	response := httptest.NewRecorder()
 	authenticator.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
