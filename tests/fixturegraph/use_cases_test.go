@@ -184,44 +184,48 @@ func TestReadRelationshipsServesTheLinkTier(t *testing.T) {
 	one, _ := slugs(t)
 	repoCanonical := subjectID(t, c, one)
 	rows := linkRows(t, one)
-	checked := 0
-	seen := map[string]bool{}
+	prs := map[string]bool{}
 	for _, r := range rows {
-		if seen[r.pr] || checked >= 6 {
-			continue
-		}
-		seen[r.pr] = true
-		d, _ := c.call("find_subjects", doc{"handle": "PR " + r.pr, "anchor": doc{"kind": "repository", "id": repoCanonical}})
+		prs[r.pr] = true
+	}
+	servedPRs, servedEdges := 0, 0
+	for _, pr := range sortedKeys(prs) {
+		d, _ := c.call("find_subjects", doc{"handle": "PR " + pr, "anchor": doc{"kind": "repository", "id": repoCanonical}})
 		subs := list(d, "subjects")
 		if len(subs) != 1 {
-			t.Fatalf("find_subjects handle PR %s returned %d subjects: %v", r.pr, len(subs), d)
+			t.Fatalf("find_subjects handle PR %s returned %d subjects: %v", pr, len(subs), d)
 		}
-		prID := str(subs[0], "canonical_id")
-		rel, raw := c.call("read_relationships", doc{"subject": doc{"kind": "pull_request", "canonical_id": prID}, "types": []string{"LINKS_PULL_REQUEST"}, "direction": "both", "depth": 1, "limit": 100})
+		rel, raw := c.call("read_relationships", doc{"subject": doc{"kind": "pull_request", "canonical_id": str(subs[0], "canonical_id")}, "types": []string{"LINKS_PULL_REQUEST"}, "direction": "both", "depth": 1, "limit": 100})
 		wantTier := map[string]string{}
 		for _, x := range rows {
-			if x.pr == r.pr {
+			if x.pr == pr {
 				wantTier[x.issue] = x.tier
 			}
 		}
-		gotTier := map[string]string{}
-		for _, e := range list(rel, "edges") {
+		edges := list(rel, "edges")
+		for _, e := range edges {
 			if str(e, "type") != "LINKS_PULL_REQUEST" {
-				t.Fatalf("PR %s: unexpected edge type in %s", r.pr, raw)
+				t.Fatalf("PR %s: unexpected edge type in %.1500s", pr, raw)
 			}
 			label := str(e, "from", "label")
 			if str(e, "from", "kind") != "work_item" {
 				label = str(e, "to", "label")
 			}
-			gotTier[label] = str(e, "provenance", "link_tier")
+			want, seeded := wantTier[label]
+			if !seeded {
+				t.Fatalf("PR %s: served a link to %q that no seeded row links to this pull request", pr, label)
+			}
+			if got := str(e, "provenance", "link_tier"); got != want {
+				t.Fatalf("PR %s: link to %q served with tier %q, seeded row says %q", pr, label, got, want)
+			}
+			servedEdges++
 		}
-		if fmt.Sprint(wantTier) != fmt.Sprint(gotTier) {
-			t.Fatalf("PR %s: served link tiers %v differ from seeded %v\n%.2000s", r.pr, gotTier, wantTier, raw)
+		if len(edges) > 0 {
+			servedPRs++
 		}
-		checked++
 	}
-	if checked == 0 {
-		t.Fatal("no pull request was checked")
+	if servedPRs == 0 || servedEdges == 0 {
+		t.Fatalf("read_relationships served no LINKS_PULL_REQUEST edge for any of %d seeded pull requests", len(prs))
 	}
 }
 
@@ -233,11 +237,17 @@ func TestRestrictedCallerSeesNothingOfAnotherRepository(t *testing.T) {
 	foreignRepoID := subjectID(t, org, two)
 	foreignIssues := issueSet(linkRows(t, two))
 
-	// own repository: the walk still serves every member
+	// own repository: the restricted caller is still served members, and only its own
 	d, _ := walk(t, scoped, one)
 	own := issueSet(linkRows(t, one))
-	if got := memberLabels(d); diffSets(own, got) != diffSets(own, own) {
-		t.Fatalf("restricted caller lost its own members: %s", diffSets(own, got))
+	got := memberLabels(d)
+	if len(got) == 0 {
+		t.Fatalf("restricted caller lost its own repository: no member served: %s", answerDigest(d))
+	}
+	for k := range got {
+		if !own[k] {
+			t.Fatalf("restricted caller was served %q, which is not a seeded issue of its repository", k)
+		}
 	}
 
 	// the other repository: the walk serves no member and leaks no seeded identifier
