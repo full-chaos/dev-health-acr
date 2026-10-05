@@ -2830,6 +2830,7 @@ func (t SlogEngineTelemetry) RecordRepositoryWorkItemWalk(ctx context.Context, p
 			"pull_requests", event.PullRequests,
 			"linked_issues", event.LinkedIssues,
 			"members", event.Members,
+			"population", event.Population,
 			"truncated", event.Truncated,
 		)
 		if !event.Filtered {

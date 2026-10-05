@@ -58,6 +58,9 @@ func TestASameTierCutListsNOfMWithoutTheTierSentence(t *testing.T) {
 	if got := listedSentence(run.result.Limitations); got != want {
 		t.Fatalf("listed sentence = %q, want %q", got, want)
 	}
+	if len(run.walks) != 1 || run.walks[0].Members != listed || run.walks[0].Population != 20 || !run.walks[0].Truncated {
+		t.Fatalf("walk decision line = %+v, want members %d, population 20, truncated true", run.walks, listed)
+	}
 	cohort := projectedCohortOf(t, run.result)
 	if cohort.Population != 20 || cohort.PopulationLowerBound || len(cohort.Members) != listed {
 		t.Fatalf("projected population = %d (lower bound %v), members = %d; want 20, false, %d", cohort.Population, cohort.PopulationLowerBound, len(cohort.Members), listed)

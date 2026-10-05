@@ -231,7 +231,7 @@ func TestARepositoryServesItsLinkedIssuesFromTheWalkWithEachTierNamed(t *testing
 	if err := ValidateWorkItemTuplePayload(run.result, storage.Principal{OrgID: "org-1"}); err != nil {
 		t.Fatalf("the served repository tuple is not a valid tuple payload: %v", err)
 	}
-	if len(run.walks) != 1 || run.walks[0] != (RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkMembers, PullRequests: 4, LinkedIssues: 3, Members: 3, Measured: true}) {
+	if len(run.walks) != 1 || run.walks[0] != (RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkMembers, PullRequests: 4, LinkedIssues: 3, Members: 3, Population: 3, Measured: true}) {
 		t.Fatalf("walk lines = %+v", run.walks)
 	}
 }
@@ -434,7 +434,7 @@ func TestEachRepositoryOutcomeIsOneDecisionLineWithItsOwnDisclosure(t *testing.T
 		unlinkedCode int
 	}{
 		{"members", repositoryTreeCase{walk: TreeWorkItemWalk{Members: one, PullRequests: 3, LinkedIssues: 1}},
-			RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkMembers, PullRequests: 3, LinkedIssues: 1, Members: 1, Measured: true}, "", -1},
+			RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkMembers, PullRequests: 3, LinkedIssues: 1, Members: 1, Population: 1, Measured: true}, "", -1},
 		{"no pull requests", repositoryTreeCase{walk: TreeWorkItemWalk{}},
 			RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkNoPullRequests, Measured: true}, contractsv1.ContextFabricWorkItemRepositoryNoPullRequestsLimitation, -1},
 		{"unlinked", repositoryTreeCase{walk: TreeWorkItemWalk{PullRequests: 4}},
@@ -616,9 +616,9 @@ func TestTheRepositoryWalkLineCarriesCountsOnlyWhenMeasured(t *testing.T) {
 		absent  []string
 	}{
 		{"measured unfiltered", RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkUnlinked, PullRequests: 4, Measured: true},
-			[]string{"outcome", "anchor_kind", "filtered", "restricted", "pull_requests", "linked_issues", "members", "truncated", "denied"}, []string{"reason"}},
+			[]string{"outcome", "anchor_kind", "filtered", "restricted", "pull_requests", "linked_issues", "members", "population", "truncated", "denied"}, []string{"reason"}},
 		{"measured filtered", RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkNoMatch, Filtered: true, Measured: true},
-			[]string{"pull_requests", "linked_issues", "members", "truncated"}, []string{"denied", "reason"}},
+			[]string{"pull_requests", "linked_issues", "members", "population", "truncated"}, []string{"denied", "reason"}},
 		{"read failed", RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkReadFailed, UnmeasuredReason: WorkItemMembershipUnmeasuredS1Error},
 			[]string{"outcome", "reason"}, []string{"pull_requests", "linked_issues", "members", "truncated", "denied"}},
 	} {

@@ -47,12 +47,14 @@ func RepositoryWorkItemWalkOutcomeVocabulary() []string {
 // distinct issues the link read returned that no authorized link reached, and
 // is
 // withheld (zero) on a filtered read, as the census line withholds it.
-// Truncated: the walk or the filter did not read every member.
+// Members is how many members the answer lists and Population how many the
+// caller may read; Truncated: the walk or the filter did not read every
+// member, or the list is shorter than the population.
 type RepositoryWorkItemWalkEvent struct {
-	Outcome                                     RepositoryWorkItemWalkOutcome
-	PullRequests, LinkedIssues, Members, Denied int
-	Truncated, Filtered, Restricted, Measured   bool
-	UnmeasuredReason                            WorkItemMembershipUnmeasuredReason
+	Outcome                                                 RepositoryWorkItemWalkOutcome
+	PullRequests, LinkedIssues, Members, Population, Denied int
+	Truncated, Filtered, Restricted, Measured               bool
+	UnmeasuredReason                                        WorkItemMembershipUnmeasuredReason
 }
 
 // repositoryWorkItemReading is what one measured read of a repository's work
