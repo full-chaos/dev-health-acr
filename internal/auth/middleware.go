@@ -102,23 +102,38 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 		now := a.now().UTC()
 		ip := a.clientIP(r)
 		// The per-address gate exists against credential guessing, so it
-		// counts FAILED authentications only. A request is never charged
-		// against the address up front: a valid credential does not consume
-		// the budget, and every refusal below reaches RecordFailure. A success
-		// does not reset the count either, so a guessing burst cannot be
-		// laundered through one valid token.
-		release, decision := BeginAttemptDecision(a.limiter, ip, now)
+		// counts FAILED authentications only, and a request that presents no
+		// credential is not one: it is answered 401, never counted and never
+		// gated (no store work is done for it). A success does not reset the
+		// count, so a guessing burst cannot be laundered through one valid
+		// token; but a well-formed bearer that verifies is never refused by
+		// the failure budget: an over-budget address keeps one verification
+		// slot (OverBudgetVerificationSlots), which bounds its store lookups.
+		// Web assertions keep the plain gate before verification.
+		webAssertion := len(r.Header.Values(WebAssertionHeader)) > 0
+		if !webAssertion && len(r.Header.Values("Authorization")) == 0 {
+			a.logger.DebugContext(r.Context(), "ACR authentication failed", "reason", "missing_bearer", "remote_ip", logsanitize.SanitizeLogAttr(ip), "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
+			a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+			return
+		}
+		raw := ""
+		if !webAssertion {
+			raw = extractBearer(r)
+		}
+		var release func()
+		var decision AttemptDecision
+		if !webAssertion && IsTokenShapeValid(raw) {
+			release, decision = BeginVerificationDecision(a.limiter, ip, now)
+		} else {
+			release, decision = BeginAttemptDecision(a.limiter, ip, now)
+		}
 		if !decision.Admitted() {
-			// Three different bounds answer with the same 429; the log line
-			// is where an operator tells them apart.
-			// Only the first failure_budget refusal per address per window is
-			// Info; the retries of a locked-out address are Debug so the
-			// retry rate does not set the Info volume.
-			level := slog.LevelInfo
-			if !decision.FirstRefusal {
-				level = slog.LevelDebug
-			}
-			a.logger.Log(r.Context(), level, "ACR authentication attempt refused", "reason", string(decision.Refusal), "in_flight", decision.InFlight, "remote_ip", logsanitize.SanitizeLogAttr(ip), "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
+			// Every bound answers with the same 429; the log line is where
+			// an operator tells them apart.
+			// Only the first failure_budget or verification_slot refusal per
+			// address per window is Info; the retries of a locked-out address
+			// are Debug so the retry rate does not set the Info volume.
+			a.logRefusal(r, decision.Refusal, decision.InFlight, ip, decision.FirstRefusal)
 			retryAfter := a.limiter.RetryAfter(ip, now)
 			if retryAfter <= 0 {
 				retryAfter = time.Second
@@ -130,11 +145,10 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 		// recorded before the deferred release runs); released before the
 		// wrapped handler so a long handler never occupies the budget.
 		defer release()
-		if len(r.Header.Values(WebAssertionHeader)) > 0 {
+		if webAssertion {
 			a.authenticateWebAssertion(w, r, ip, now, allowWebAssertions, release, next)
 			return
 		}
-		raw := extractBearer(r)
 		if !IsTokenShapeValid(raw) {
 			a.recordUnknownFailure(r, ip, "missing_or_malformed_bearer", now)
 			a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
@@ -143,8 +157,7 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 		credential, err := a.store.FindByTokenHash(r.Context(), HashToken(raw))
 		if err != nil {
 			if errors.Is(err, storage.ErrNotFound) {
-				a.recordUnknownFailure(r, ip, "unknown_token", now)
-				a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+				a.rejectCredential(w, r, ip, "unknown_token", nil, decision, now)
 				return
 			}
 			cause := credentialLookupCause(err)
@@ -157,19 +170,19 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 			return
 		}
 		if credential.RevokedAt != nil {
-			a.recordKnownFailure(r, credential, "revoked", now)
-			a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+			a.rejectCredential(w, r, ip, "revoked", &credential, decision, now)
 			return
 		}
 		if credential.ExpiresAt != nil && !credential.ExpiresAt.After(now) {
-			a.recordKnownFailure(r, credential, "expired", now)
-			a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+			a.rejectCredential(w, r, ip, "expired", &credential, decision, now)
 			return
 		}
 		if !resourceAdmitted(credential.Resource, r.Header.Values(ResourceHeader)) {
-			a.recordKnownFailure(r, credential, "resource_mismatch", now)
-			a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+			a.rejectCredential(w, r, ip, "resource_mismatch", &credential, decision, now)
 			return
+		}
+		if decision.OverBudget {
+			a.logger.DebugContext(r.Context(), "ACR authentication admitted over failure budget", "remote_ip", logsanitize.SanitizeLogAttr(ip), "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
 		}
 
 		// Subject is the credential's own ID for every ordinary credential,
@@ -200,6 +213,43 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 			})
 		}
 	})
+}
+
+// rejectCredential answers a well-formed credential the store rejected. It
+// is counted; when it was admitted over the failure limit, or the address is
+// at or over the limit when it is decided, it is
+// answered with the same 429 as an attempt refused before verification, so
+// a guess learns nothing from the slot it used, and it is logged as that
+// refusal (Info once per window, then Debug).
+func (a *Authenticator) rejectCredential(w http.ResponseWriter, r *http.Request, ip, reason string, credential *contractsv1.ClientCredential, decision AttemptDecision, now time.Time) {
+	// Counted at the moment it is decided: a verification that outlives the
+	// window is a failure of the window it ends in.
+	decided := a.now().UTC()
+	overBudget, first := RecordRejection(a.limiter, ip, decided, decision.OverBudget)
+	if credential != nil {
+		a.recordKnownDenialAudit(r, *credential, reason, now)
+	}
+	if overBudget {
+		a.logRefusal(r, RefusalFailureBudget, decision.InFlight, ip, first)
+		retryAfter := a.limiter.RetryAfter(ip, decided)
+		if retryAfter <= 0 {
+			retryAfter = time.Second
+		}
+		a.writeRateLimitError(w, r, retryAfter)
+		return
+	}
+	if credential == nil {
+		a.logger.WarnContext(r.Context(), "ACR authentication failed", "reason", reason, "remote_ip", logsanitize.SanitizeLogAttr(ip), "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
+	}
+	a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+}
+
+func (a *Authenticator) logRefusal(r *http.Request, refusal AttemptRefusal, inFlight int, ip string, first bool) {
+	level := slog.LevelInfo
+	if !first {
+		level = slog.LevelDebug
+	}
+	a.logger.Log(r.Context(), level, "ACR authentication attempt refused", "reason", string(refusal), "in_flight", inFlight, "remote_ip", logsanitize.SanitizeLogAttr(ip), "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
 }
 
 func (a *Authenticator) writeRateLimitError(w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
@@ -261,9 +311,7 @@ func (a *Authenticator) recordUnknownFailure(r *http.Request, ip, reason string,
 	a.logger.WarnContext(r.Context(), "ACR authentication failed", "reason", reason, "remote_ip", logsanitize.SanitizeLogAttr(ip), "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
 }
 
-func (a *Authenticator) recordKnownFailure(r *http.Request, credential contractsv1.ClientCredential, reason string, now time.Time) {
-	ip := a.clientIP(r)
-	a.limiter.RecordFailure(ip, now)
+func (a *Authenticator) recordKnownDenialAudit(r *http.Request, credential contractsv1.ClientCredential, reason string, now time.Time) {
 	a.recordDenialAudit(r, storage.AuditEvent{
 		OrgID: credential.OrgID, ActorType: "credential", ActorID: credential.CredentialID,
 		Action: "credential_auth_denied", ResourceType: "acr_credential", ResourceID: credential.CredentialID,

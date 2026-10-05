@@ -64,14 +64,17 @@ func TestInvalidTokenAttemptsAreLimitedPerAddress(t *testing.T) {
 			t.Fatalf("invalid attempt %d = %d, want %d (all %v)", i, codes[i], want, codes)
 		}
 	}
-	// Budget is per address and failure-only: it is not reset by a success,
-	// so a guessing burst cannot be laundered through one valid token.
-	if code := callWithToken(handler, token); code != http.StatusTooManyRequests {
-		t.Fatalf("valid token after exhausted failure budget = %d, want 429", code)
+	// A credential that verifies is served from an address over its budget;
+	// the budget is not reset by it, so the next guess is still refused.
+	if code := callWithToken(handler, token); code != http.StatusOK {
+		t.Fatalf("valid token after exhausted failure budget = %d, want 200", code)
+	}
+	if code := callWithToken(handler, bad); code != http.StatusTooManyRequests {
+		t.Fatalf("invalid attempt after the valid one = %d, want 429", code)
 	}
 }
 
-func TestLockedOutAddressIsRefusedBeforeAnyCredentialLookup(t *testing.T) {
+func TestLockedOutAddressLooksUpOnlyWellFormedCredentials(t *testing.T) {
 	now := time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC)
 	inner := newMemoryCredentialStoreAt(t, now.Add(-time.Hour), memory.NewAuditStore())
 	issued := issueForMiddleware(t, inner, memory.NewAuditStore(), now.Add(-time.Hour), []string{ScopeContextRead}, []string{"owner/repo"}, nil)
@@ -82,11 +85,20 @@ func TestLockedOutAddressIsRefusedBeforeAnyCredentialLookup(t *testing.T) {
 	callWithToken(handler, bad)
 	callWithToken(handler, bad)
 	before := store.lookups
-	if code := callWithToken(handler, issued.Token); code != http.StatusTooManyRequests {
-		t.Fatalf("locked-out address = %d, want 429", code)
+	if code := callWithToken(handler, "junk"); code != http.StatusTooManyRequests {
+		t.Fatalf("malformed bearer from a locked-out address = %d, want 429", code)
 	}
 	if store.lookups != before {
-		t.Fatalf("locked-out request hit the credential store: %d -> %d", before, store.lookups)
+		t.Fatalf("malformed bearer from a locked-out address hit the credential store: %d -> %d", before, store.lookups)
+	}
+	if code := callWithToken(handler, bad); code != http.StatusTooManyRequests {
+		t.Fatalf("unknown bearer from a locked-out address = %d, want 429", code)
+	}
+	if store.lookups != before+1 {
+		t.Fatalf("unknown bearer from a locked-out address: lookups %d -> %d, want exactly one", before, store.lookups)
+	}
+	if code := callWithToken(handler, issued.Token); code != http.StatusOK {
+		t.Fatalf("valid bearer from a locked-out address = %d, want 200", code)
 	}
 }
 
@@ -156,11 +168,13 @@ func TestConcurrentGuessesCannotCrossTheFailureCeiling(t *testing.T) {
 			limited++
 		}
 	}
-	if unauthorized != inflightCap || limited != burst-inflightCap {
-		t.Fatalf("concurrent guesses admitted to lookup = %d (in-flight cap %d), 429 = %d", unauthorized, inflightCap, limited)
+	// inflightCap lookups ran; the rejections past the failure limit are
+	// answered as refusals.
+	if unauthorized != limit || limited != burst-limit {
+		t.Fatalf("concurrent guesses: 401 = %d (failure limit %d), 429 = %d; lookups parked %d (in-flight cap %d)", unauthorized, limit, limited, inflightCap, inflightCap)
 	}
 	// Once the burst has resolved the address is over its failure limit: the
-	// next guess is refused before any credential lookup.
+	// next guess uses the one over-budget verification slot and is refused.
 	store.mu.Lock()
 	before := store.arrived
 	store.mu.Unlock()
@@ -170,8 +184,8 @@ func TestConcurrentGuessesCannotCrossTheFailureCeiling(t *testing.T) {
 	store.mu.Lock()
 	after := store.arrived
 	store.mu.Unlock()
-	if after != before {
-		t.Fatalf("locked-out guess reached the credential store: %d -> %d", before, after)
+	if after != before+1 {
+		t.Fatalf("locked-out guess lookups: %d -> %d, want exactly one", before, after)
 	}
 }
 
@@ -202,7 +216,7 @@ func TestSuccessDoesNotResetPriorFailures(t *testing.T) {
 	steps := []struct {
 		token string
 		want  int
-	}{{bad, 401}, {bad, 401}, {token, 200}, {bad, 401}, {token, 429}, {bad, 429}}
+	}{{bad, 401}, {bad, 401}, {token, 200}, {bad, 401}, {token, 200}, {bad, 429}}
 	for i, step := range steps {
 		if code := callWithToken(handler, step.token); code != step.want {
 			t.Fatalf("step %d = %d, want %d", i, code, step.want)

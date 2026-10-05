@@ -9269,6 +9269,20 @@
         ]
       },
       {
+        "key": "gate_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_credential_not_counted",
+          "rejected_counted",
+          "refused_unverified",
+          "verification_slot_busy",
+          "verified",
+          "verified_over_budget",
+          "not_counted"
+        ]
+      },
+      {
         "key": "auth_outcome",
         "type": "string",
         "presence": "required",
