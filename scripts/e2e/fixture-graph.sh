@@ -151,6 +151,8 @@ run_use_case_tests() {
     go test -tags fixturegraph -count=1 -timeout 20m -json ./tests/fixturegraph/ >"$json")
   local status=$?
   set -e
+  fg_note 'walk decision lines of the acr-api'
+  compose logs --no-color --no-log-prefix acr-api 2>&1 | grep 'repository work item walk' | redact_log >&2 || true
   grep -E '"Action":"(output)"' "$json" | jq -r 'select(.Output != null) | .Output' | sed -e 's/[[:space:]]*$//' | grep -v '^$' >&2 || true
   if [[ "$status" -ne 0 ]]; then graph_census; fg_die 'a use-case test failed'; fi
   passed="$(jq -r 'select((.Action == "pass" or .Action == "skip") and .Test != null and (.Test | contains("/") | not)) | .Test' "$json" | LC_ALL=C sort)"
