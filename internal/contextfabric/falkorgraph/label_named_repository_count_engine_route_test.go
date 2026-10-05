@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -164,45 +165,75 @@ func TestACountOverALabelIsNotCertifiedWhenTheIdentityLookupWasIncomplete(t *tes
 	}
 }
 
-func TestALabelNamedRepositoryKeepsTheExactLabelCommitOnlyWhenTheLookupDidNotRunForTheTimeAxis(t *testing.T) {
+func TestALabelNamedRepositoryExactLabelCommitFollowsTheIdentityLookupState(t *testing.T) {
 	start, end := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	for name, cell := range map[string]struct {
-		timeContext contextfabric.TimeContext
-		lookups     int
-		committed   bool
-	}{
-		"current axis, lookup ran incomplete": {contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, 1, false},
-		"range axis, lookup not run":          {contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, 0, true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			adapter := newFakeAdapter(t, seedOwnedRepository().conn())
-			lookups := 0
-			adapter.config.IdentityUniverse = func(context.Context, string) ([]graphrank.IdentityRow, time.Time, bool, error) {
-				lookups++
-				return []graphrank.IdentityRow{{Kind: contextfabric.SubjectRepository, CanonicalID: routeOwnedRepository, Label: routeOwnedSlug}}, time.Time{}, false, nil
-			}
-			interpreter := projectDeploymentsInterpreter{name: routeOwnedSlug, kind: contextfabric.SubjectRepository, member: contextfabric.SubjectTeam, count: true, timeContext: &cell.timeContext}
-			interpreted, outcome, err := interpreter.Interpret(context.Background(), storage.Principal{}, contextfabric.InvestigationRequest{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			request := fakeDiscoveryRequest(contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: routeOwnedRepository, Label: routeOwnedSlug}, 10).Request
-			request.Question = "how many teams own repository " + routeOwnedSlug
-			request.RequestedScope.SubjectHints = nil
-			request.TimeContext = cell.timeContext
-			resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, outcome.Frame, contextfabric.SubjectRepository)
-			if err != nil {
-				t.Fatalf("ResolveSubjects error = %v", err)
-			}
-			if lookups != cell.lookups {
-				t.Fatalf("identity universe read %d times, want %d", lookups, cell.lookups)
-			}
-			committed := len(resolution.Committed) == 1 && resolution.Committed[0].CanonicalID == routeOwnedRepository
-			if committed != cell.committed || (!cell.committed && len(resolution.Committed) != 0) {
-				t.Fatalf("committed %+v candidates %+v, want the exact-label repository committed=%t", resolution.Committed, resolution.Candidates, cell.committed)
-			}
-		})
+	current := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
+	named := graphrank.IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: routeOwnedRepository, Label: routeOwnedSlug}
+	notProjected := graphrank.IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:github:other/not-projected", Label: routeOwnedSlug}
+	resolve := func(t *testing.T, timeContext contextfabric.TimeContext, rows []graphrank.IdentityRow, complete bool) (contextfabric.SubjectResolution, int, []graphrank.ResolutionTraceEvent) {
+		t.Helper()
+		adapter := newFakeAdapter(t, seedOwnedRepository().conn())
+		lookups := 0
+		adapter.config.IdentityUniverse = func(context.Context, string) ([]graphrank.IdentityRow, time.Time, bool, error) {
+			lookups++
+			return rows, time.Time{}, complete, nil
+		}
+		tracer := &routeTraceRecorder{}
+		adapter.config.ResolutionTracer = tracer
+		interpreter := projectDeploymentsInterpreter{name: routeOwnedSlug, kind: contextfabric.SubjectRepository, member: contextfabric.SubjectTeam, count: true, timeContext: &timeContext}
+		interpreted, outcome, err := interpreter.Interpret(context.Background(), storage.Principal{}, contextfabric.InvestigationRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := fakeDiscoveryRequest(contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: routeOwnedRepository, Label: routeOwnedSlug}, 10).Request
+		request.Question = "how many teams own repository " + routeOwnedSlug
+		request.RequestedScope.SubjectHints = nil
+		request.TimeContext = timeContext
+		resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{routeOwnedSlug}}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, outcome.Frame, contextfabric.SubjectRepository)
+		if err != nil {
+			t.Fatalf("ResolveSubjects error = %v", err)
+		}
+		return resolution, lookups, tracer.events
 	}
+	committedNamed := func(resolution contextfabric.SubjectResolution) bool {
+		return len(resolution.Committed) == 1 && resolution.Committed[0].CanonicalID == routeOwnedRepository
+	}
+	lookupState := func(events []graphrank.ResolutionTraceEvent) string {
+		for _, event := range events {
+			if event.Stage == "alias_lookup" {
+				return event.IdentityLookup
+			}
+		}
+		return ""
+	}
+
+	unique, lookups, events := resolve(t, current, []graphrank.IdentityRow{named}, true)
+	if !committedNamed(unique) || lookups != 1 || lookupState(events) != "complete" {
+		t.Fatalf("complete read: committed %+v lookups %d state %q, want the repository, 1, complete", unique.Committed, lookups, lookupState(events))
+	}
+	incomplete, lookups, events := resolve(t, current, []graphrank.IdentityRow{named}, false)
+	if len(incomplete.Committed) != 0 || lookups != 1 || lookupState(events) != "incomplete" {
+		t.Fatalf("incomplete read: committed %+v lookups %d state %q, want nothing, 1, incomplete", incomplete.Committed, lookups, lookupState(events))
+	}
+	lagged, lookups, events := resolve(t, current, []graphrank.IdentityRow{named, notProjected}, true)
+	if !committedNamed(lagged) || lookups != 1 || lookupState(events) != "graph_lag" {
+		t.Fatalf("same-label claimant missing from the graph: committed %+v lookups %d state %q, want the repository, 1, graph_lag", lagged.Committed, lookups, lookupState(events))
+	}
+	if !reflect.DeepEqual(unique.Committed, lagged.Committed) || !reflect.DeepEqual(unique.Candidates, lagged.Candidates) {
+		t.Fatalf("a claimant no caller can read changed the answer:\nwithout: %+v %+v\nwith:    %+v %+v", unique.Committed, unique.Candidates, lagged.Committed, lagged.Candidates)
+	}
+	historical, lookups, _ := resolve(t, contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, []graphrank.IdentityRow{named}, false)
+	if !committedNamed(historical) || lookups != 0 {
+		t.Fatalf("range axis: committed %+v lookups %d, want the repository and no identity read", historical.Committed, lookups)
+	}
+}
+
+type routeTraceRecorder struct {
+	events []graphrank.ResolutionTraceEvent
+}
+
+func (r *routeTraceRecorder) Trace(event graphrank.ResolutionTraceEvent) {
+	r.events = append(r.events, event)
 }
 
 // The same count question asked twice with answer reuse on is certified, or

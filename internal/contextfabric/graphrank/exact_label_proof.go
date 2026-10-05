@@ -12,6 +12,14 @@ import (
 // read, exactly as before, and records the state as not_run_time_axis.
 var ErrIdentityLookupNotRunForTimeAxis = errors.New("graphrank: identity lookup not run for a historical time axis")
 
+// ErrIdentityLookupGraphLag is what an AliasLookup returns, beside its
+// claimants and complete=false, when the identity universe it read was
+// complete and the only gap is a matched claimant missing from the graph. It
+// is not a fault. Such a claimant has no node, so its authorization cannot be
+// read for any caller: the exact-label gate does not count it, and every
+// other gate still treats the read as incomplete.
+var ErrIdentityLookupGraphLag = errors.New("graphrank: identity lookup matched a claimant missing from the graph")
+
 // IdentityLookupState is what the keyed identity read (ResolveDeps.AliasLookup)
 // established for this resolution.
 type IdentityLookupState string
@@ -24,6 +32,9 @@ const (
 	// claimant (a kind over the row budget, or a claimant missing from the
 	// graph).
 	IdentityLookupIncomplete IdentityLookupState = "incomplete"
+	// IdentityLookupGraphLag: the identity universe was read complete, and a
+	// claimant it matched is not in the graph yet (projection lag).
+	IdentityLookupGraphLag IdentityLookupState = "graph_lag"
 	// IdentityLookupNotRunTimeAxis: the read did not run because the question
 	// is on a historical time axis.
 	IdentityLookupNotRunTimeAxis IdentityLookupState = "not_run_time_axis"
@@ -37,6 +48,8 @@ func identityLookupStateOf(complete bool, err error) (IdentityLookupState, error
 	switch {
 	case errors.Is(err, ErrIdentityLookupNotRunForTimeAxis):
 		return IdentityLookupNotRunTimeAxis, nil
+	case errors.Is(err, ErrIdentityLookupGraphLag):
+		return IdentityLookupGraphLag, nil
 	case err != nil:
 		return "", err
 	case complete:
@@ -64,7 +77,9 @@ func legacyIdentityLookupState(aliasIdentityComplete bool) IdentityLookupState {
 // caller can read may then be missing from the pool, so the term does not
 // prove one subject. Kinds outside the read keep the exact-label commit: no
 // proof exists for them. A read that did not run for the time axis keeps it
-// too.
+// too, and so does a read whose only gap is a claimant missing from the
+// graph: that claimant cannot be served or authorized for anyone, so counting
+// it would let a subject the caller may not read change the decision.
 func exactLabelUnproven(kind contextfabric.SubjectKind, lookup IdentityLookupState) bool {
 	return isAliasLookupScopedKind(kind) && lookup == IdentityLookupIncomplete
 }

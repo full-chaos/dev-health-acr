@@ -490,6 +490,9 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			// one the fast path may trust as exhaustive, the identical
 			// reasoning a truncated ordinary search already gets via
 			// searchTruncated.
+			if complete && graphMissing > 0 {
+				return claimantsByTerm, false, graphrank.ErrIdentityLookupGraphLag
+			}
 			return claimantsByTerm, complete && graphMissing == 0, nil
 		}
 	}

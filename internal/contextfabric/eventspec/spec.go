@@ -921,7 +921,7 @@ var AliasLookup = Event{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"alias_lookup"}},
 		{Key: "complete", Type: FieldBool, Presence: PresenceRequired},
-		{Key: "identity_lookup", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"complete", "incomplete", "not_run_time_axis"}},
+		{Key: "identity_lookup", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"complete", "incomplete", "graph_lag", "not_run_time_axis"}},
 		{Key: "matched_claimants", Type: FieldInt, Presence: PresenceRequired},
 	},
 }

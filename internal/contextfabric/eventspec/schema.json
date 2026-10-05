@@ -6800,6 +6800,7 @@
         "closed_vocabulary": [
           "complete",
           "incomplete",
+          "graph_lag",
           "not_run_time_axis"
         ]
       },

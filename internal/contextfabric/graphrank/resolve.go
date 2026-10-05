@@ -704,7 +704,8 @@ type ResolutionTraceEvent struct {
 	AliasLookupComplete         bool
 	AliasLookupMatchedClaimants int
 	// IdentityLookup (alias_lookup stage) is the IdentityLookupState token of
-	// the keyed identity read: complete, incomplete or not_run_time_axis.
+	// the keyed identity read: complete, incomplete, graph_lag or
+	// not_run_time_axis.
 	IdentityLookup string
 	// AliasLookupTermCount/AliasLookupMatchedKinds: how many terms the lookup
 	// was asked about and the distinct subject kinds of its claimants -- counts
