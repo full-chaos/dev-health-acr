@@ -348,7 +348,12 @@ import (
 // with a named reason where it was answered with none, and a period of exactly
 // that many days is totalled where it was refused as cut. A candidate saved
 // under v62 for such a question must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v63"
+//
+// v63 -> v65: a series or period-comparison question that states its period
+// reads that period on the range axis, and a comparison names the period it is
+// compared with as not read, where both ran as one current-state window. A
+// candidate saved under v63 for such a question must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v65"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -312,6 +312,10 @@ type requestWindowCanonicalization struct {
 	// question states while the interpretation carried a range that differs
 	// from it: the answer discloses both and says which one it used.
 	StatedRangeConflict *statedRangeConflict
+	// UnreadComparisonPeriod is set when a period-comparison turn read only
+	// the period the question states: the answer names the period it is
+	// compared with and says it was not read.
+	UnreadComparisonPeriod *comparisonPeriod
 	// ConfirmedMember (CHAOS-4003) is set only when resolveWindowReceipts
 	// redeemed a winr_ receipt (Effective.Provenance == clarification_confirmed)
 	// -- window's own confirmedStructureMember, in the EXACT shape
@@ -798,37 +802,117 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 }
 
 // questionStatesWindow reports whether the question itself states the
-// evidence window (CHAOS-6557): the binder bound exactly one role-checked
-// trailing span. It holds when the interpreted class carries a window (the
-// "refuse to guess" rule composeEffectiveWindow applies), and also, whatever
-// the class, for a frame that asks about current state or one bounded period:
-// the interpreter's range is then its reading of the stated phrase, not a
-// historical axis. A point-in-time phrase ("as of the start of the last 30
-// days") is never a stated evidence window on that second arm, and a series or
-// a period comparison keeps the range it was given.
+// current-state evidence window (CHAOS-6557): the binder bound exactly one
+// role-checked trailing span and the frame asks about current state (see
+// periodShapeOf). It then holds when the interpreted class carries a window
+// (the "refuse to guess" rule composeEffectiveWindow applies), and also,
+// whatever the class, when the phrase is not point-in-time: the interpreter's
+// range is then its reading of the stated phrase, not a historical axis. A
+// series or a period comparison reads its period on the range axis instead
+// (statedPeriodRead).
 func questionStatesWindow(interpretation InterpretedQuestion, frame *QuestionFrame, binderProposal WindowBindOutcome) bool {
 	if binderProposal.Reason != WindowBindRoutedInferred || !binderProposal.Trailing {
+		return false
+	}
+	if periodShapeOf(frame) != periodShapeCurrent {
 		return false
 	}
 	outcome := ClassifyWindow(interpretation, interpretation.WindowClass, interpretation.WindowConfidence)
 	if _, ok := DefaultRelativeID(outcome, windowDefaultPolicy); ok {
 		return true
 	}
-	return !binderProposal.PointInTime && frameTakesAStatedPeriod(frame)
+	return !binderProposal.PointInTime
 }
 
-// frameTakesAStatedPeriod reports a frame whose temporal intent a stated
-// trailing period serves as an evidence window: no frame, current state, or
-// one bounded window.
-func frameTakesAStatedPeriod(frame *QuestionFrame) bool {
+// periodShape is what a question asks of its period: the state over it, a
+// series across it, or a comparison of it with another period.
+type periodShape int
+
+const (
+	periodShapeCurrent periodShape = iota
+	periodShapeSeries
+	periodShapeComparison
+)
+
+// periodShapeOf reads the period shape from the frame alone. No frame, current
+// state and one bounded window ask for the state over the period.
+func periodShapeOf(frame *QuestionFrame) periodShape {
 	if frame == nil {
-		return true
+		return periodShapeCurrent
 	}
 	switch frame.Temporal {
-	case "", TemporalIntentCurrent, TemporalIntentBoundedWindow:
-		return true
+	case TemporalIntentTimeSeries:
+		return periodShapeSeries
+	case TemporalIntentPeriodComparison:
+		return periodShapeComparison
 	}
-	return false
+	return periodShapeCurrent
+}
+
+// statedPeriod is the period a series or comparison turn reads on the range
+// axis, where its bounds came from, and what the answer discloses about it.
+type statedPeriod struct {
+	Start, End time.Time
+	Origin     string
+	Conflict   *statedRangeConflict
+	Unread     *comparisonPeriod
+}
+
+// statedPeriodRead (MCP surface, current-axis request) is the period a series
+// or a period-comparison frame reads, as a range: the frame gives the shape,
+// the question gives the length and position. A bound trailing phrase gives
+// the period from now (a supplied range that differs from it is disclosed); a
+// period the closed grammar cannot bound gives it through the interpreter's
+// range, as interpreterPeriodWindow reads one for a current-state frame. A
+// comparison reads its stated period and names the equal period just before
+// it as not read. nil for a current-state frame, an evidence window already
+// committed, a point-in-time phrase, or a question that states no
+// period the turn can bound. A veto never gets here: it ends the request
+// before interpretation.
+func statedPeriodRead(canon requestWindowCanonicalization, interpretation InterpretedQuestion, frame *QuestionFrame, requestAxis TemporalAxis, fresh TimeContext, freshAnswerable bool, surface string, now time.Time) *statedPeriod {
+	shape := periodShapeOf(frame)
+	if strings.TrimSpace(surface) != mcpSurface || shape == periodShapeCurrent || canon.Effective != nil || requestAxis != TemporalCurrent {
+		return nil
+	}
+	binder := canon.BinderProposal
+	var period statedPeriod
+	switch {
+	case binder.Reason == WindowBindRoutedInferred && binder.Trailing && !binder.PointInTime:
+		start, end, ok := relativeWindowBounds(binder.RelativeID, now)
+		if !ok {
+			return nil
+		}
+		period = statedPeriod{Start: start, End: end, Origin: StatedWindowOriginQuestionPhrase, Conflict: detectStatedRangeConflict(binder, interpretation.TimeContext, now)}
+	case binderNamesAPeriod(binder) && freshAnswerable && fresh.Axis == TemporalRange && fresh.Start != nil && fresh.End != nil && fresh.Start.Before(*fresh.End):
+		period = statedPeriod{Start: fresh.Start.UTC(), End: fresh.End.UTC(), Origin: StatedWindowOriginInterpreterRange}
+	default:
+		return nil
+	}
+	if shape == periodShapeComparison {
+		length := period.End.Sub(period.Start)
+		period.Unread = &comparisonPeriod{StatedStart: period.Start, StatedEnd: period.End, Start: period.Start.Add(-length), End: period.Start}
+	}
+	return &period
+}
+
+// binderNamesAPeriod reports a question that names one period the closed
+// trailing grammar cannot bound: a bare calendar "last month|quarter|year"
+// (bound, not trailing), or one span refused only by its clause position.
+func binderNamesAPeriod(binder WindowBindOutcome) bool {
+	return binder.SpansBound == 1 && !binder.PointInTime && (binder.Reason == WindowBindSpanUnbound || (binder.Reason == WindowBindRoutedInferred && !binder.Trailing))
+}
+
+// comparisonPeriod is the period a comparison question compares its stated
+// period with, which the turn did not read.
+type comparisonPeriod struct {
+	StatedStart, StatedEnd time.Time
+	Start, End             time.Time
+}
+
+// limitation names the stated period read and the comparison period not read,
+// with the comparison bounds a second call sends as its evidence window.
+func (c *comparisonPeriod) limitation() string {
+	return contractsv1.ContextFabricComparisonPeriodUnreadLimitation(c.StatedStart.UTC().Format(time.RFC3339Nano), c.StatedEnd.UTC().Format(time.RFC3339Nano), c.Start.UTC().Format(time.RFC3339Nano), c.End.UTC().Format(time.RFC3339Nano))
 }
 
 // statedRangeTolerance is how far each bound of an interpreted range may sit
@@ -874,12 +958,18 @@ func (c *statedRangeConflict) limitation() string {
 	return contractsv1.ContextFabricStatedRangeConflictLimitation(c.InterpretedStart.Format(layout), c.InterpretedEnd.Format(layout), c.StatedStart.Format(layout), c.StatedEnd.Format(layout))
 }
 
-// statedRangeConflictLimitations is the conflict disclosure to append, if any.
-func statedRangeConflictLimitations(canon requestWindowCanonicalization) []string {
-	if canon.StatedRangeConflict == nil {
-		return nil
+// statedPeriodLimitations are the stated-period disclosures to append: a
+// supplied range that differs from the stated period, and a comparison period
+// that was not read.
+func statedPeriodLimitations(canon requestWindowCanonicalization) []string {
+	var out []string
+	if canon.StatedRangeConflict != nil {
+		out = append(out, canon.StatedRangeConflict.limitation())
 	}
-	return []string{canon.StatedRangeConflict.limitation()}
+	if canon.UnreadComparisonPeriod != nil {
+		out = append(out, canon.UnreadComparisonPeriod.limitation())
+	}
+	return out
 }
 
 // StatedWindowOrigin values (CHAOS-6557) name where a caller-supplied
@@ -899,6 +989,9 @@ const (
 	StatedWindowAxisAgreed     StatedWindowAxisOutcome = "agreed"
 	StatedWindowAxisOverridden StatedWindowAxisOutcome = "overridden_to_current"
 	StatedWindowAxisVetoed     StatedWindowAxisOutcome = "vetoed"
+	// StatedWindowAxisStatedRange: a series or comparison turn reads its
+	// stated period on the range axis.
+	StatedWindowAxisStatedRange StatedWindowAxisOutcome = "stated_range"
 )
 
 // statedWindowAxisOutcomeOf maps the shared axis rule's result onto the stated
@@ -958,10 +1051,8 @@ func statedWindowOrigin(canon requestWindowCanonicalization, interpretation Inte
 // invention, not something the caller stated, and is never committed. nil when
 // any of that does not hold (a historical axis the caller asked for, an as-of
 // instant, a range with no usable bounds, another surface).
-func interpreterPeriodWindow(canon requestWindowCanonicalization, requestAxis TemporalAxis, fresh TimeContext, freshAnswerable bool, surface string) *contractsv1.ContextFabricEffectiveEvidenceWindow {
-	binder := canon.BinderProposal
-	namesAPeriod := binder.SpansBound == 1 && !binder.PointInTime && (binder.Reason == WindowBindSpanUnbound || (binder.Reason == WindowBindRoutedInferred && !binder.Trailing))
-	if strings.TrimSpace(surface) != mcpSurface || !namesAPeriod || canon.Effective != nil || canon.Veto != windowVetoNone ||
+func interpreterPeriodWindow(canon requestWindowCanonicalization, frame *QuestionFrame, requestAxis TemporalAxis, fresh TimeContext, freshAnswerable bool, surface string) *contractsv1.ContextFabricEffectiveEvidenceWindow {
+	if strings.TrimSpace(surface) != mcpSurface || periodShapeOf(frame) != periodShapeCurrent || !binderNamesAPeriod(canon.BinderProposal) || canon.Effective != nil || canon.Veto != windowVetoNone ||
 		requestAxis != TemporalCurrent || !freshAnswerable || fresh.Axis != TemporalRange ||
 		fresh.Start == nil || fresh.End == nil || !fresh.Start.Before(*fresh.End) {
 		return nil
