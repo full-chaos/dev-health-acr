@@ -28,11 +28,46 @@ type chaos7074Fixture struct {
 	orgID   string
 	now     time.Time
 	// visible[principal class] = set of "rid|from" keys a current in-read of
-	// team T's OWNED_BY_TEAM edges must return.
+	// team T's OWNED_BY_TEAM edges must return, each computed from the seed
+	// windows by chaos7074CurrentRule; strictCurrent is the same read under
+	// the strict window (as_of, find_subjects owned_by).
 	allCurrent        map[string]bool
 	restrictedCurrent map[string]bool
-	expiredKey        string
-	deniedEdgeKey     string
+	strictCurrent     map[string]bool
+	// hopTwoRestricted: the hop-2 BELONGS_TO_REPOSITORY edges a current
+	// depth-2 read from T serves the restricted caller, by the same rule.
+	hopTwoRestricted map[string]bool
+	expiredKey       string
+	deniedEdgeKey    string
+	endedNodeKey     string
+	endedEarlyKey    string
+}
+
+// chaos7074CurrentRule is the current-axis rule of read_relationships: an
+// edge is current when it has no end, ends after at, or lasted at least until
+// the earlier of its end nodes ended. End nodes are not filtered by their end.
+// Every seeded start is in the past.
+func chaos7074CurrentRule(edgeTo, fromTo, toTo *time.Time, at time.Time) bool {
+	if edgeTo == nil || edgeTo.After(at) {
+		return true
+	}
+	for _, end := range []*time.Time{fromTo, toTo} {
+		if end != nil && !edgeTo.Before(*end) {
+			return true
+		}
+	}
+	return false
+}
+
+// chaos7074StrictRule is the strict window: the edge and both end nodes are
+// valid at at.
+func chaos7074StrictRule(edgeTo, fromTo, toTo *time.Time, at time.Time) bool {
+	for _, end := range []*time.Time{edgeTo, fromTo, toTo} {
+		if end != nil && !end.After(at) {
+			return false
+		}
+	}
+	return true
 }
 
 // seedChaos7074 projects, through the REAL ApplyProjectionBatch:
@@ -42,7 +77,10 @@ type chaos7074Fixture struct {
 //     each has a current OWNED_BY_TEAM edge to T, authorized to its slug;
 //   - 10 further edges in a second batch, with ids that sort between the
 //     first batch's ids (the keyset must interleave them);
-//   - one repository whose edge ENDED two hours ago (valid_to in the past);
+//   - one repository whose edge ENDED two hours ago while both nodes live;
+//   - one repository NODE that ended two hours ago with an open edge to T and
+//     an open edge from work item w2 (current), and one that ended two hours
+//     ago whose edge to T ended five hours ago, before the node (not current);
 //   - one acme/a repository whose edge to T is authorized to acme/b only
 //     (two visible nodes, an edge the restricted caller may not see: T15);
 //   - one work item in acme/a that BELONGS_TO_REPOSITORY r001 (depth 2).
@@ -50,7 +88,7 @@ func seedChaos7074(t *testing.T, ctx context.Context, adapter *falkorgraph.Adapt
 	t.Helper()
 	now := time.Now().UTC()
 	longAgo, ended := now.Add(-72*time.Hour), now.Add(-2*time.Hour)
-	fixture := &chaos7074Fixture{adapter: adapter, orgID: orgID, now: now, allCurrent: map[string]bool{}, restrictedCurrent: map[string]bool{}}
+	fixture := &chaos7074Fixture{adapter: adapter, orgID: orgID, now: now, allCurrent: map[string]bool{}, restrictedCurrent: map[string]bool{}, strictCurrent: map[string]bool{}, hopTwoRestricted: map[string]bool{}}
 	ref := func(kind contextfabric.SubjectKind, id string) contextfabric.SubjectRef {
 		return contextfabric.SubjectRef{Kind: kind, CanonicalID: id, Label: id}
 	}
@@ -72,6 +110,21 @@ func seedChaos7074(t *testing.T, ctx context.Context, adapter *falkorgraph.Adapt
 	}
 	entities := []contextfabric.EntityProjection{entity(team, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/a", "acme/b"}, TeamIDs: []string{"T"}})}
 	var first, second []contextfabric.RelationshipProjection
+	// expect files one OWNED_BY_TEAM edge into T (an open node) in the
+	// expected sets by the two rules; restricted: the caller granted acme/a
+	// sees the edge and its source node.
+	expect := func(rid string, from contextfabric.SubjectRef, edgeTo, fromTo *time.Time, restricted bool) {
+		key := rid + "|" + from.CanonicalID
+		if chaos7074CurrentRule(edgeTo, fromTo, nil, now) {
+			fixture.allCurrent[key] = true
+			if restricted {
+				fixture.restrictedCurrent[key] = true
+			}
+		}
+		if chaos7074StrictRule(edgeTo, fromTo, nil, now) {
+			fixture.strictCurrent[key] = true
+		}
+	}
 	slugOf := func(i int) string {
 		if i%6 == 0 {
 			return "acme/b"
@@ -83,47 +136,58 @@ func seedChaos7074(t *testing.T, ctx context.Context, adapter *falkorgraph.Adapt
 		entities = append(entities, entity(repo, contextfabric.AuthorizationScope{RepositorySlugs: []string{slugOf(i)}}))
 		rid := fmt.Sprintf("rel_own_%03d", (i*37)%120)
 		first = append(first, edge(rid, "OWNED_BY_TEAM", repo, team, slugOf(i), nil))
-		fixture.allCurrent[rid+"|"+repo.CanonicalID] = true
-		if slugOf(i) == "acme/a" {
-			fixture.restrictedCurrent[rid+"|"+repo.CanonicalID] = true
-		}
+		expect(rid, repo, nil, nil, slugOf(i) == "acme/a")
 	}
 	for i := 0; i < 10; i++ {
 		repo := ref(contextfabric.SubjectRepository, fmt.Sprintf("repository:d%02d", i))
 		entities = append(entities, entity(repo, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/a"}}))
 		rid := fmt.Sprintf("rel_own_%03d_b", i*11) // sorts right after rel_own_<i*11>
 		second = append(second, edge(rid, "OWNED_BY_TEAM", repo, team, "acme/a", nil))
-		fixture.allCurrent[rid+"|"+repo.CanonicalID] = true
-		fixture.restrictedCurrent[rid+"|"+repo.CanonicalID] = true
+		expect(rid, repo, nil, nil, true)
 	}
 	expiredRepo := ref(contextfabric.SubjectRepository, "repository:expired")
 	entities = append(entities, entity(expiredRepo, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/a"}}))
 	first = append(first, edge("rel_own_expired", "OWNED_BY_TEAM", expiredRepo, team, "acme/a", &ended))
+	expect("rel_own_expired", expiredRepo, &ended, nil, true)
 	fixture.expiredKey = "rel_own_expired|" + expiredRepo.CanonicalID
 	deniedRepo := ref(contextfabric.SubjectRepository, "repository:edge-denied")
 	entities = append(entities, entity(deniedRepo, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/a"}}))
 	first = append(first, edge("rel_own_edge_denied", "OWNED_BY_TEAM", deniedRepo, team, "acme/b", nil))
 	fixture.deniedEdgeKey = "rel_own_edge_denied|" + deniedRepo.CanonicalID
-	fixture.allCurrent[fixture.deniedEdgeKey] = true
-	// A repository NODE that ended two hours ago, with a current edge to T,
-	// and a current work item w2 whose edge points at it: neither edge is
-	// current, because an end node must be valid too (both node clauses).
+	expect("rel_own_edge_denied", deniedRepo, nil, nil, false)
+	// Current axis: an ended node keeps an edge that lasted until it ended
+	// (the two open edges here); an edge that ended before its node did is out.
 	endedNode := ref(contextfabric.SubjectRepository, "repository:ended-node")
 	endedEntity := entity(endedNode, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/a"}})
 	endedEntity.ValidTo = &ended
 	entities = append(entities, endedEntity)
 	first = append(first, edge("rel_own_ended_node", "OWNED_BY_TEAM", endedNode, team, "acme/a", nil))
+	expect("rel_own_ended_node", endedNode, nil, &ended, true)
 	work2 := ref(contextfabric.SubjectWorkItem, "work_item.v2:w2")
 	entities = append(entities, entity(work2, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/a"}}))
 	first = append(first, edge("rel_work2_ended_repo", "BELONGS_TO_REPOSITORY", work2, endedNode, "acme/a", nil))
+	fixture.endedNodeKey = "rel_work2_ended_repo|" + work2.CanonicalID
+	if chaos7074CurrentRule(nil, nil, &ended, now) {
+		fixture.hopTwoRestricted[fixture.endedNodeKey] = true
+	}
+	endedEarly := ref(contextfabric.SubjectRepository, "repository:ended-early-edge")
+	endedEarlyEntity := entity(endedEarly, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/a"}})
+	endedEarlyEntity.ValidTo = &ended
+	entities = append(entities, endedEarlyEntity)
+	edgeEndedEarly := now.Add(-5 * time.Hour)
+	first = append(first, edge("rel_own_ended_before_node", "OWNED_BY_TEAM", endedEarly, team, "acme/a", &edgeEndedEarly))
+	expect("rel_own_ended_before_node", endedEarly, &edgeEndedEarly, &ended, true)
+	fixture.endedEarlyKey = "rel_own_ended_before_node|" + endedEarly.CanonicalID
 	work := ref(contextfabric.SubjectWorkItem, "work_item.v2:w1")
 	entities = append(entities, entity(work, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/a"}}))
 	first = append(first, edge("rel_work_repo", "BELONGS_TO_REPOSITORY", work, ref(contextfabric.SubjectRepository, "repository:r001"), "acme/a", nil))
+	if chaos7074CurrentRule(nil, nil, nil, now) {
+		fixture.hopTwoRestricted["rel_work_repo|"+work.CanonicalID] = true
+	}
 	// A work-item TEAM ATTRIBUTION edge of the same type (CHAOS-7126: the
 	// owned_by end-kind filter must drop it).
 	first = append(first, edge("rel_own_attr_w1", "OWNED_BY_TEAM", work, team, "acme/a", nil))
-	fixture.allCurrent["rel_own_attr_w1|"+work.CanonicalID] = true
-	fixture.restrictedCurrent["rel_own_attr_w1|"+work.CanonicalID] = true
+	expect("rel_own_attr_w1", work, nil, nil, true)
 
 	for index, batch := range [][]contextfabric.RelationshipProjection{nil, first, second} {
 		b := contextfabric.ProjectionBatch{
@@ -275,14 +339,39 @@ func TestLiveChaos7074DirectEdges(t *testing.T) {
 			t.Fatalf("as_of read inside the window lost the edge: %v", got)
 		}
 	})
-	t.Run("ended end node is not current", func(t *testing.T) {
+	t.Run("edges of an ended node on the current axis", func(t *testing.T) {
 		out := directread.RelationshipsRequest{Subject: directread.RelationshipsSubject{Kind: "work_item", CanonicalID: "work_item.v2:w2"}, Direction: "out"}
-		if got, _ := chaos7074ReadAll(t, fixture.reader(), unrestricted, out); len(got) != 0 {
-			t.Fatalf("edge into an ended node served as current: %v", got)
+		got, _ := chaos7074ReadAll(t, fixture.reader(), unrestricted, out)
+		chaos7074AssertSet(t, got, map[string]bool{fixture.endedNodeKey: true})
+		early := directread.RelationshipsRequest{Subject: directread.RelationshipsSubject{Kind: "repository", CanonicalID: "repository:ended-early-edge"}}
+		if got, _ := chaos7074ReadAll(t, fixture.reader(), unrestricted, early); len(got) != 0 {
+			t.Fatalf("an edge that ended before its node ended is served as current: %v", got)
 		}
-		out.AsOf = fixture.now.Add(-3 * time.Hour).Format(time.RFC3339Nano)
-		if got, _ := chaos7074ReadAll(t, fixture.reader(), unrestricted, out); got["rel_work2_ended_repo|work_item.v2:w2"] != 1 {
-			t.Fatalf("as_of inside the node window lost the edge: %v", got)
+		early.AsOf = fixture.now.Add(-6 * time.Hour).Format(time.RFC3339Nano)
+		if got, _ := chaos7074ReadAll(t, fixture.reader(), unrestricted, early); got[fixture.endedEarlyKey] != 1 {
+			t.Fatalf("as_of inside the edge window lost the edge: %v", got)
+		}
+		// The strict window (as_of, find_subjects owned_by) keeps both node
+		// clauses: neither open edge into the ended node is read there.
+		binding, err := adapter.ResolveInvestigationBinding(ctx, unrestricted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, current := range []bool{false, true} {
+			page, err := adapter.DirectEdgePage(ctx, unrestricted, binding, directread.EdgePageQuery{
+				Origins:   []contextfabric.SubjectRef{{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:ended-node"}},
+				Direction: directread.EdgeDirectionBoth, Limit: 10, ValidAt: time.Now().UTC(), Current: current,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if current {
+				want = 2
+			}
+			if len(page.Edges) != want {
+				t.Fatalf("Current=%v: %d edges of the ended node, want %d: %+v", current, len(page.Edges), want, page.Edges)
+			}
 		}
 	})
 	t.Run("direction", func(t *testing.T) {
@@ -302,7 +391,10 @@ func TestLiveChaos7074DirectEdges(t *testing.T) {
 		if got["rel_work_repo|work_item.v2:w1"] != 1 {
 			t.Fatalf("hop-2 edge missing: pages=%d", len(pages))
 		}
-		want := map[string]bool{"rel_work_repo|work_item.v2:w1": true}
+		want := map[string]bool{}
+		for key := range fixture.hopTwoRestricted {
+			want[key] = true
+		}
 		for key := range fixture.restrictedCurrent {
 			want[key] = true
 		}
@@ -336,8 +428,9 @@ func TestLiveChaos7074DirectEdges(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(page.Edges) != len(fixture.allCurrent)-1 {
-				t.Fatalf("%s: %d edges, want %d", direction, len(page.Edges), len(fixture.allCurrent)-1)
+			// strict window; minus the work-item attribution edge
+			if len(page.Edges) != len(fixture.strictCurrent)-1 {
+				t.Fatalf("%s: %d edges, want %d", direction, len(page.Edges), len(fixture.strictCurrent)-1)
 			}
 			for _, e := range page.Edges {
 				if e.From.Subject.Kind != contextfabric.SubjectRepository {
@@ -394,8 +487,8 @@ func TestLiveChaos7074DirectEdges(t *testing.T) {
 			}
 			query.After = &key
 		}
-		if seen != len(fixture.allCurrent) {
-			t.Fatalf("raw walk saw %d edges, want %d", seen, len(fixture.allCurrent))
+		if seen != len(fixture.strictCurrent) {
+			t.Fatalf("raw walk saw %d edges, want %d", seen, len(fixture.strictCurrent))
 		}
 	})
 }
