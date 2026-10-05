@@ -4,6 +4,7 @@ package fixturegraph
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -158,7 +159,7 @@ func TestRepositoryIssuesComeThroughItsPullRequestLinks(t *testing.T) {
 			t.Fatalf("no seeded link for %s", slug)
 		}
 		if diffSets(want, got) != diffSets(want, want) {
-			t.Fatalf("%s: members differ from the seeded link rows: %s\nresponse: %.2000s", slug, diffSets(want, got), raw)
+			t.Fatalf("%s: members differ from the seeded link rows: %s\nseeded rows of the missing issues (title, type, status, provider, own repo, pr, tier):\n%s\nresponse: %.1500s", slug, diffSets(want, got), describeMissing(t, slug, want, got), raw)
 		}
 		cohort := get(structured(d), "cohort")
 		total, _ := get(cohort, "total").(float64)
@@ -325,4 +326,21 @@ func TestPeriodTotalStatesItsCoverage(t *testing.T) {
 	if fmt.Sprint(int64(sum)) != rows[0][3] {
 		t.Fatalf("served commits total %v != seeded sum %s", sum, rows[0][3])
 	}
+}
+
+func describeMissing(t *testing.T, slug string, want, got map[string]bool) string {
+	var out []string
+	for k := range want {
+		if got[k] {
+			continue
+		}
+		rows := ch(t, fmt.Sprintf(`SELECT w.title, w.type, w.status, w.provider, toString(w.repo_id), toString(l.pr_number), l.provenance
+FROM work_graph_issue_pr AS l FINAL INNER JOIN work_items AS w FINAL ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id
+WHERE l.org_id = %s AND w.title = %s`, sqlStr(orgID(t)), sqlStr(k)))
+		for _, r := range rows {
+			out = append(out, strings.Join(r, " | "))
+		}
+	}
+	sort.Strings(out)
+	return strings.Join(out, "\n")
 }
