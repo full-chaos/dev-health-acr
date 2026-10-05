@@ -60,10 +60,14 @@ const (
 	PeriodTotalAbsenceInconsistent = "rows_inconsistent"
 )
 
-// maxPeriodTotalDays bounds the period a total is stated over: a series is
-// read at most MaxFactValueRows days wide, so a longer period could never be
-// covered and would only produce a list of missing days.
-const maxPeriodTotalDays = MaxFactValueRows
+// maxPeriodDays is a sanity bound on the span listed for a period. A period
+// longer than MaxFactValueRows days is listed but never totalled: one read
+// returns at most that many daily rows, so it could not be covered.
+const maxPeriodDays = 3660
+
+// PeriodTotalAbsenceTooLong: the period has more days than one read returns
+// daily rows.
+const PeriodTotalAbsenceTooLong = "period_longer_than_row_cap"
 
 const dayLayout = "2006-01-02"
 
@@ -81,7 +85,7 @@ func PeriodDays(window *contractsv1.ContextFabricEffectiveEvidenceWindow) ([]str
 	days := make([]string, 0, int(end.Sub(start)/(24*time.Hour))+1)
 	for day := start; !day.After(end); day = day.AddDate(0, 0, 1) {
 		days = append(days, day.Format(dayLayout))
-		if len(days) > maxPeriodTotalDays {
+		if len(days) > maxPeriodDays {
 			return nil, false
 		}
 	}
@@ -132,13 +136,14 @@ func PeriodTotalsForSubject(capabilities []FactCapability, facts []CanonicalFact
 				absence(PeriodTotalAbsenceWithheld)
 				continue
 			}
-			rows := value.Table.Rows
-			if len(rows) >= MaxFactValueRows {
-				absence(PeriodTotalAbsenceTruncated)
+			if len(period) > MaxFactValueRows {
+				absence(PeriodTotalAbsenceTooLong)
 				continue
 			}
+			rows := value.Table.Rows
 			seen := map[string]FactValueRow{}
 			consistent := true
+			outside := 0
 			for _, row := range rows {
 				day, ok := rowDay(row)
 				if !ok {
@@ -146,6 +151,7 @@ func PeriodTotalsForSubject(capabilities []FactCapability, facts []CanonicalFact
 					break
 				}
 				if _, in := inPeriod[day]; !in {
+					outside++
 					continue
 				}
 				if _, dup := seen[day]; dup {
@@ -156,6 +162,14 @@ func PeriodTotalsForSubject(capabilities []FactCapability, facts []CanonicalFact
 			}
 			if !consistent {
 				absence(PeriodTotalAbsenceInconsistent)
+				continue
+			}
+			// A series holds at most MaxFactValueRows rows and drops the oldest
+			// beyond that. A full series whose rows all lie in the period is a
+			// complete period of that many days; a full series that also holds
+			// a day outside the period may have dropped days of the period.
+			if len(rows) >= MaxFactValueRows && outside > 0 {
+				absence(PeriodTotalAbsenceTruncated)
 				continue
 			}
 			if len(seen) == 0 {
@@ -263,7 +277,9 @@ func PeriodTotalSentences(totals []PeriodTotal, absences []PeriodTotalAbsence) [
 		case PeriodTotalAbsenceNoRows:
 			out = append(out, fmt.Sprintf("No stored %s row exists for any day of the period, so no total is stated.", table))
 		case PeriodTotalAbsenceTruncated:
-			out = append(out, fmt.Sprintf("The stored %s rows for the period were cut at the row limit, so no total is stated.", table))
+			out = append(out, fmt.Sprintf("The stored %s rows for the period reached the limit of %d rows one read returns and extend beyond the period, so some days of the period may be missing and no total is stated.", table, MaxFactValueRows))
+		case PeriodTotalAbsenceTooLong:
+			out = append(out, fmt.Sprintf("The period is longer than the %d daily rows one read returns, so no %s total is stated for it.", MaxFactValueRows, table))
 		case PeriodTotalAbsenceWithheld:
 			out = append(out, fmt.Sprintf("Some stored %s rows were withheld from this caller, so no total is stated.", table))
 		default:
