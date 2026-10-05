@@ -174,6 +174,9 @@ func (s *DeviceFlowService) Preview(ctx context.Context, request DeviceApprovalP
 		return DeviceApprovalPreview{}, ErrInvalidDeviceFlow
 	}
 	record, err := s.store.Preview(ctx, storage.HashUserCode(userCode))
+	if err == nil && record.State != storage.DeviceAuthorizationStatePending {
+		err = storage.ErrDeviceAuthorizationNotFound
+	}
 	if err != nil {
 		return DeviceApprovalPreview{}, fmt.Errorf("preview device authorization: %w", err)
 	}
