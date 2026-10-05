@@ -1,7 +1,7 @@
 {
   "contract": "acr.mcp.graphql_roots.v1",
   "generator": "cmd/operationpolicy",
-  "schema_digest": "sha256:fdff794c3fa3de956e07061645b7494cca33ed760f9405d405c912ae01d3e34b",
+  "schema_digest": "sha256:e931b3c76732183f508561100c42c8188d160e2bd0d1593e5087f9ebee8ce44c",
   "operations_source": "contracts/mcp/operations.v1.json",
   "limits": {
     "max_query_bytes": 8192,
@@ -204,6 +204,7 @@
     "aiRiskBreakdown",
     "aiWorkflowDrilldown",
     "busFactor",
+    "coverageBaselines",
     "dataHealth",
     "experiments",
     "featureFlagEvents",
@@ -220,6 +221,7 @@
     "savedReport",
     "savedReports",
     "securityAlerts",
+    "testopsJobFailures",
     "testopsRisk",
     "workItemTeamAttributions",
     "workUnitTeamAttributions"

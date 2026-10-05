@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "a42ff6572434e7a0398a8700555279b9a74adb45",
+    "commit": "a660b1337253e7354880cc74f1de94aa56060eb1",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },
@@ -192,6 +192,13 @@
       "document": "query GetConnectorsDataHealth($teamId: ID!) {\n  dataHealth(team: $teamId) {\n    connectors {\n      provider\n      scope\n      lastSyncAt\n      rowsIngested\n      lastFailure {\n        occurredAt\n        message\n        stage\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredConnectorsDataHealthDocument",
       "digest": "0e43d67d571539081b2006ae8b2148dd4ea31c959be22be1db9e927083060baa",
+      "kind": "query"
+    },
+    {
+      "operation": "coverageBaselines",
+      "document": "query CoverageBaselines($orgId: String!, $endDate: Date!, $repoIds: [String!], $teamIds: [String!]) {\n  coverageBaselines(\n    orgId: $orgId\n    endDate: $endDate\n    repoIds: $repoIds\n    teamIds: $teamIds\n  ) {\n    repoId\n    repoName\n    lineBaselinePct\n    lineDays\n    branchBaselinePct\n    branchDays\n    __typename\n  }\n}",
+      "const_name": "registeredCoverageBaselinesDocument",
+      "digest": "141ed14fc636739e1184716167148d7d17c35180a09a83dc9ef2b04bfb1dd638",
       "kind": "query"
     },
     {
@@ -426,6 +433,13 @@
       "document": "query TestOpsTest($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    timeseries {\n      dimension\n      dimensionValue\n      measure\n      buckets {\n        date\n        value\n        __typename\n      }\n      __typename\n    }\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredTestOpsTestDocument",
       "digest": "20eeea67bfc1cfa0f809188878476a0fe40565bc583009151e1f7c8cf2f3be5c",
+      "kind": "query"
+    },
+    {
+      "operation": "testopsJobFailures",
+      "document": "query TestOpsJobFailures($orgId: String!, $input: TestOpsJobFailuresInput!) {\n  testopsJobFailures(orgId: $orgId, input: $input) {\n    groups {\n      workflowName\n      jobName\n      provider\n      runs\n      failedRuns\n      failureRate\n      __typename\n    }\n    totalCount\n    truncated\n    __typename\n  }\n}",
+      "const_name": "registeredTestopsJobFailuresDocument",
+      "digest": "3966554a57e957978b5777cbb8b51bf6e0f41feb2181b89f7ad138e1c81c67c9",
       "kind": "query"
     },
     {
