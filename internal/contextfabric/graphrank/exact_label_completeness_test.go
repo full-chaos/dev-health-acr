@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -229,5 +230,90 @@ func TestAnUnprovenExactLabelHandsNoCommitToTheVectorMarginRescue(t *testing.T) 
 	}
 	if committed := resolve(IdentityLookupIncomplete).Committed; len(committed) != 0 {
 		t.Fatalf("incomplete lookup: Committed = %#v, want nothing: the refused exact label must not hand the commit to a neighbour by vector margin", committed)
+	}
+}
+
+func TestTheEvidenceCensusPassNeverCommitsARefusedExactLabel(t *testing.T) {
+	t.Parallel()
+	const prID = "pull_request:repo-1:532"
+	named := exactLabelNode(contextfabric.SubjectRepository, "repo_payments", "full-chaos/payments")
+	pr := candidateNode(contextfabric.SubjectPullRequest, prID, "PR #532", 0.50, "*")
+	cases := map[string]struct {
+		question   string
+		terms      []string
+		search     map[string][]CandidateNode
+		censusRead bool
+		roundCheck func(ResolutionTraceEvent) bool
+	}{
+		"label only": {
+			question: "who owns payments?",
+			terms:    []string{exactLabelCompletenessTerm},
+			search:   map[string][]CandidateNode{exactLabelCompletenessTerm: truncatedPaymentsSearch(named)},
+			roundCheck: func(event ResolutionTraceEvent) bool {
+				return event.ShadowOutcome == "would_clarify" && event.ShadowReason == "no_discriminators"
+			},
+		},
+		"label and a pull request handle": {
+			question:   "why did PR 532 fail in payments?",
+			terms:      []string{exactLabelCompletenessTerm, "PR 532"},
+			search:     map[string][]CandidateNode{exactLabelCompletenessTerm: truncatedPaymentsSearch(named), "PR 532": {pr}},
+			censusRead: true,
+			roundCheck: func(event ResolutionTraceEvent) bool {
+				return event.ShadowOutcome == "would_clarify" && event.ShadowNonCensusedSurvivor
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			backend := &fakeGraphBackend{
+				searchResults: tc.search, searchTruncated: true,
+				enableAliasLookup:    true,
+				aliasLookupClaimants: map[string][]CandidateNode{exactLabelCompletenessTerm: {exactLabelLookupClaimant("repo_payments", "full-chaos/payments")}},
+				aliasLookupComplete:  false,
+				exactHints: map[string]CandidateNode{
+					SubjectKey(contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: prID}):           pr,
+					SubjectKey(contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repo_payments"}): named,
+				},
+			}
+			deps := backend.deps()
+			tracer := &recordingTracer{}
+			deps.ResolutionTracer = tracer
+			var censusKinds []CensusKind
+			deps.CensusFunc = func(_ context.Context, _ string, kind CensusKind, _ string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
+				censusKinds = append(censusKinds, kind)
+				if kind == contextfabric.SubjectPullRequest {
+					return CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierCanonicalID: prID}, nil
+				}
+				return CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierCanonicalID: "repo_payments"}, nil
+			}
+			request := testRequest()
+			request.Question = tc.question
+
+			resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(tc.terms...), deps, nil, nil)
+
+			if err != nil {
+				t.Fatalf("ResolveSubjects error = %v", err)
+			}
+			for _, subject := range resolution.Committed {
+				if isAliasLookupScopedKind(subject.Kind) {
+					t.Fatalf("Committed = %#v, want no repository, project or team: the exact label was refused for an incomplete read", resolution.Committed)
+				}
+			}
+			if (len(censusKinds) > 0) != tc.censusRead {
+				t.Fatalf("census kinds read = %v, want read=%t: the row must reach the census pass it names", censusKinds, tc.censusRead)
+			}
+			rounds := tracedStage(tracer.events, "evidence_round")
+			if len(rounds) != 1 || !tc.roundCheck(rounds[0]) {
+				t.Fatalf("evidence_round events = %#v, want the census pass to clarify", rounds)
+			}
+			if len(resolution.Committed) == 0 && resolution.ClarificationPrompt == "" {
+				t.Fatal("nothing committed and no clarification")
+			}
+			for _, subject := range resolution.Committed {
+				if subject.CanonicalID != prID {
+					t.Fatalf("Committed = %#v, want at most the handle-named pull request", resolution.Committed)
+				}
+			}
+		})
 	}
 }
