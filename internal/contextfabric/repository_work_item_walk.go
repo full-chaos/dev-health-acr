@@ -64,6 +64,9 @@ type repositoryWorkItemReading struct {
 	Heuristic int
 	// Cut: the walk or the filter did not read every member.
 	Cut bool
+	// LowerTierCut: a member left out of the list has a weaker link tier
+	// than a listed member.
+	LowerTierCut bool
 }
 
 // treeLinkTierStrongerThanHeuristic reports whether a tier is one of the two
@@ -125,7 +128,7 @@ func withRepositoryWorkItemDisclosures(result InvestigationResult, census *WorkI
 	if census.incomplete {
 		additions = append(additions, contractsv1.ContextFabricWorkItemRepositoryPartialLimitation)
 	}
-	if census.Retained < census.Value {
+	if reading.LowerTierCut {
 		additions = append(additions, contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation)
 	}
 	switch reading.Outcome {

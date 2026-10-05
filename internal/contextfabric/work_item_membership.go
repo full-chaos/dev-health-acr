@@ -156,6 +156,10 @@ type WorkItemMembershipCensus struct {
 	// Zero for a project anchor.
 	RepositoryPullRequests int
 	RepositoryLinkedIssues int
+	// LowerTierCut: a repository read left out a member whose link tier is
+	// weaker than a served member's. False when the cut, if any, fell inside
+	// one tier. Zero for a project anchor.
+	LowerTierCut bool
 }
 
 // WorkItemMembershipPathCensus is S1's per-path census over the same capped

@@ -665,6 +665,7 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricPathDropLimitation(limitation) ||
 		IsContextFabricWorkItemMemberFilterLimitation(limitation) ||
 		IsContextFabricWorkItemRepositoryLimitation(limitation) ||
+		IsContextFabricWorkItemListedLimitation(limitation) ||
 		IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation) ||
 		IsContextFabricStatedRangeConflictLimitation(limitation) ||
 		IsContextFabricComparisonPeriodUnreadLimitation(limitation)
@@ -814,6 +815,41 @@ const (
 	contextFabricWorkItemRepositoryHeuristicPrefix = " of these members are linked only by a heuristic match "
 	contextFabricWorkItemRepositoryHeuristicSuffix = "(a pull request opened near the issue's last update in the issue's own repository)."
 )
+
+const (
+	contextFabricWorkItemListedPrefix  = "Not every member is listed: "
+	contextFabricWorkItemListedOf      = " of "
+	contextFabricWorkItemListedAtLeast = "at least "
+	contextFabricWorkItemListedSuffix  = " members are listed, because the server limits how many items one answer carries."
+)
+
+var workItemListedLimitationPattern = regexp.MustCompile(`^Not every member is listed: ([1-9]\d{0,8}) of (at least )?([1-9]\d{0,8}) members are listed, because the server limits how many items one answer carries\.$`)
+
+// ContextFabricWorkItemListedLimitation states how many of a work-item
+// cohort's members the answer lists, when the list is shorter than the
+// population. It returns false when the counts do not describe a cut list.
+func ContextFabricWorkItemListedLimitation(listed, population int, lowerBound bool) (string, bool) {
+	if listed < 1 || population <= listed || population > 999999999 {
+		return "", false
+	}
+	bound := ""
+	if lowerBound {
+		bound = contextFabricWorkItemListedAtLeast
+	}
+	return contextFabricWorkItemListedPrefix + strconv.Itoa(listed) + contextFabricWorkItemListedOf + bound + strconv.Itoa(population) + contextFabricWorkItemListedSuffix, true
+}
+
+// IsContextFabricWorkItemListedLimitation reports whether a limitation is one
+// ContextFabricWorkItemListedLimitation could have composed.
+func IsContextFabricWorkItemListedLimitation(limitation string) bool {
+	match := workItemListedLimitationPattern.FindStringSubmatch(limitation)
+	if match == nil {
+		return false
+	}
+	listed, _ := strconv.Atoi(match[1])
+	population, _ := strconv.Atoi(match[3])
+	return population > listed
+}
 
 var workItemRepositoryHeuristicLimitationPattern = regexp.MustCompile(`^[1-9]\d{0,5} of these members are linked only by a heuristic match \(a pull request opened near the issue's last update in the issue's own repository\)\.$`)
 

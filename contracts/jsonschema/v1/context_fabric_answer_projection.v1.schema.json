@@ -684,6 +684,14 @@
         "judgment_mismatch": {
           "description": "mirrors Cohort.judgment_mismatch verbatim.",
           "type": "boolean"
+        },
+        "population": {
+          "description": "how many members the caller may read, counted before the answer item limit cut the list. Present on a work-item cohort when the read measured it; members never exceed it.",
+          "type": "integer"
+        },
+        "population_lower_bound": {
+          "description": "true when population counts what was read and the real population can be larger.",
+          "type": "boolean"
         }
       },
       "required": [

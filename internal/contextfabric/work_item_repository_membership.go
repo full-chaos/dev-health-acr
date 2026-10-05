@@ -126,6 +126,7 @@ func (m *TreeWorkItemMembership) read(ctx context.Context, principal storage.Pri
 	// member read.
 	served := workItemTupleSelectionCap(request.PlanMaxMembers, request.RequestMaxMembers)
 	authorized := 0
+	servedTierRank, cutTierRank := -1, -1
 	out := WorkItemMembershipResult{Members: make([]WorkItemMembershipMember, 0, min(len(members), served))}
 	for _, member := range members {
 		segments, ok := identity.Segments(identity.KindWorkItem, member.Subject.CanonicalID)
@@ -139,7 +140,11 @@ func (m *TreeWorkItemMembership) read(ctx context.Context, principal storage.Pri
 		// issue, so none is invented.
 		authorized++
 		if len(out.Members) >= served {
+			cutTierRank = max(cutTierRank, treeLinkTierRank(member.Tier))
 			continue
+		}
+		if servedTierRank < 0 {
+			servedTierRank = treeLinkTierRank(member.Tier)
 		}
 		out.Members = append(out.Members, WorkItemMembershipMember{CanonicalID: member.Subject.CanonicalID, RepoID: segments[0], WorkItemID: segments[1], LinkTier: member.Tier})
 	}
@@ -150,6 +155,7 @@ func (m *TreeWorkItemMembership) read(ctx context.Context, principal storage.Pri
 		State: WorkItemMembershipCensusExact, PopulationMeasured: true, PopulationComplete: !incomplete && !overLimit, PopulationIncomplete: incomplete || overLimit,
 		AuthorizedPopulation: authorized, ServedMembers: len(out.Members), CensusLimit: WorkItemMembershipCensusLimit,
 		RepositoryPullRequests: walk.PullRequests, RepositoryLinkedIssues: walk.LinkedIssues,
+		LowerTierCut: cutTierRank > servedTierRank && servedTierRank >= 0,
 	}
 	if overLimit {
 		census.State = WorkItemMembershipCensusFloor

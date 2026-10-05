@@ -388,7 +388,7 @@ import (
 // question's window whatever the interpreter sampled, and a series reads that
 // period on the range axis. A candidate saved before v70 holds a window taken
 // from a sampled range, or none, and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v70"
+const QueryVersion = "devhealthfacts.clickhouse.v71"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

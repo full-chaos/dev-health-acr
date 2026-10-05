@@ -155,6 +155,7 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 			Outcome:      repositoryWorkItemWalkOutcome(membership.Census, true, len(cohort.Members), restricted),
 			PullRequests: membership.Census.RepositoryPullRequests, LinkedIssues: membership.Census.RepositoryLinkedIssues,
 			Heuristic: heuristic, Cut: membership.Census.PopulationIncomplete || membership.Census.State == WorkItemMembershipCensusFloor,
+			LowerTierCut: membership.Census.LowerTierCut,
 		}
 	}
 	census.Retained = len(cohort.Members)

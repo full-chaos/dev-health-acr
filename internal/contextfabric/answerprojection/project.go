@@ -611,8 +611,10 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		// ScoreMeaning/JudgmentMismatch (CHAOS-5774): copied verbatim, same
 		// "canonical states it, projection never recomputes it" discipline
 		// as every ranking field on the members above.
-		ScoreMeaning:     canonical.ScoreMeaning,
-		JudgmentMismatch: canonical.JudgmentMismatch,
+		ScoreMeaning:         canonical.ScoreMeaning,
+		JudgmentMismatch:     canonical.JudgmentMismatch,
+		Population:           canonical.Population,
+		PopulationLowerBound: canonical.PopulationLowerBound,
 	}, len(canonical.Members) - len(members), reasonsOmitted, groupsOmitted, selectionBasis
 }
 
