@@ -389,11 +389,7 @@ func (e *Engine) finalizeServedAs(ctx context.Context, principal storage.Princip
 // The pure part only: the authority observation is returned for the one caller
 // that records it, so a fit's candidate documents emit no telemetry.
 func (e *Engine) servedLateWriters(ctx context.Context, result InvestigationResult) (InvestigationResult, CompletenessAuthorityObservation) {
-	if WorkItemCensusRepositoryScopeRecorded(ctx) {
-		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricWorkItemCensusRepositoryScopeLimitation})
-		result.Limitations = composed
-		result.LimitationsDisplaced += displaced
-	}
+	result = withWorkItemCensusScopeDisclosures(ctx, result)
 	result.Completeness = ComputeAnswerCompleteness(result)
 	observation := DeriveCompletenessAuthority(result)
 	result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, observation)

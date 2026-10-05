@@ -382,3 +382,34 @@ func TestRepositoryWorkItemsAreServedForARepositoryAnchorOfAnOrganization(t *tes
 		t.Error("cancelled context: no error, want ctx.Err()")
 	}
 }
+
+// TestTheLinkScopedPopulationIsTheRepositoryWalksMembers: the work items of a
+// requested repository scope are the members the repository walk hands on,
+// with their tiers; a population read that found no member would make every
+// scoped census empty.
+func TestTheLinkScopedPopulationIsTheRepositoryWalksMembers(t *testing.T) {
+	s := newMemberSeed()
+	s.issue("work_item.v2:s:1", nil)
+	s.issue("work_item.v2:s:2", []string{"acme/other"})
+	s.pullRequest("pull_request:s:1", memberAnchorSlug)
+	s.link("work_item.v2:s:1", "pull_request:s:1", "native")
+	s.link("work_item.v2:s:2", "pull_request:s:1", "explicit_text")
+	conn := seededGraphConn(s.nodes, s.edges)
+	inner := conn.queryFunc
+	conn.queryFunc = func(ctx context.Context, key, cypher string, params map[string]interface{}, ro bool) ([]row, error) {
+		if strings.Contains(cypher, "$kinds") {
+			r := fakeSubjectNodeRow("repository", memberAnchorID, memberAnchorSlug)
+			r["n"].(*node).Properties[propAuthzRepos] = []string{memberAnchorSlug}
+			return []row{r}, nil
+		}
+		return inner(ctx, key, cypher, params, ro)
+	}
+	adapter := newFakeAdapter(t, conn)
+	population, complete, err := adapter.linkScopedIssues(context.Background(), "key", open(), contextfabric.RequestedScope{RepositorySlugs: []string{memberAnchorSlug}}, 25)
+	if err != nil || !complete {
+		t.Fatalf("complete %t err %v", complete, err)
+	}
+	if len(population) != 2 || population["work_item.v2:s:1"] != "native" || population["work_item.v2:s:2"] != "explicit_text" {
+		t.Fatalf("population %v, want both linked issues with their tiers", population)
+	}
+}

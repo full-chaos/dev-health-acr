@@ -389,7 +389,7 @@ func walkReadsDecideAsWholeNodeReads(t *testing.T, ctx context.Context, adapter 
 		if whole == projected {
 			t.Fatalf("%s: the link read has no projected return clause to compare", c.name)
 		}
-		state := treeWalkState{out: &treeWalk{}, principal: c.principal, scope: c.scope, scopeFollowsLink: link.to == treeIssue}
+		state := treeWalkState{out: &treeWalk{}, principal: c.principal, scope: c.scope}
 		rowsOf := func(cypher string) []row {
 			// 300 rows: every row of the small repositories, and the first
 			// 300 of acme/big, whose whole-node read of all 3000 rows (each

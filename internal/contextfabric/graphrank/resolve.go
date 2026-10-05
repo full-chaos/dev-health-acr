@@ -482,6 +482,12 @@ type ResolveDeps struct {
 	// RunShadowEvidenceRound's own doc comment for what runs when it is
 	// set, and why the round can never influence `resolution` regardless.
 	CensusFunc CensusFunc
+	// LinkScopedWorkItems returns the work items in a requested repository
+	// scope: the issues the repository-to-issue walk of the entity tree
+	// reaches from each repository the scope names. complete is false when
+	// the walk was cut. nil: a work-item census under a requested repository
+	// scope cannot be read, and the round says so (census incomplete).
+	LinkScopedWorkItems func(ctx context.Context, scope contextfabric.RequestedScope) (tiers map[string]string, complete bool, err error)
 	// HandleGrammarChecker (CHAOS-3972 P3) is contextfabric.Engine's own
 	// offer-time grammar dependency, threaded through unchanged so
 	// explicitHandleOfferMaterial (chaos3900_structure_offers.go) can
@@ -4454,7 +4460,16 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	// (shared by three other call sites with a different, established
 	// contract) -- see NodeCandidate's own doc comment for the exact
 	// conditions being mirrored.
+	// A work item the round scoped by the link walk is in the requested
+	// repository scope through its link: it is tested, and merged, with the
+	// issue side of that rule (AuthorizedThroughLink), never by its own
+	// repository.
+	mergeRequest := request
 	accepted := AuthorizedAttributes(principal, request.RequestedScope, node.Attributes)
+	if linkScopedSatisfier(attestation, kind) {
+		mergeRequest.RequestedScope = issueScopeOfLink(request.RequestedScope)
+		accepted = AuthorizedThroughLink(principal, request.RequestedScope, node.Attributes)
+	}
 	if accepted {
 		if nodeSubject, ok := NodeSubject(node); !ok || deps.IsInternal(nodeSubject) {
 			accepted = false
@@ -4476,7 +4491,7 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	// same accept decision on the SAME node/principal/scope inputs, so this
 	// call is never a second, independent authorization gate -- merely
 	// where the actual merge/insert into candidatesBySubject happens.
-	mergeSearchResults(ctx, principal, request, deps, censusProvenanceMarker, []CandidateNode{node}, candidatesBySubject, observationParentKey, observationBlocked, false, nil, identity, identityTerms, admission)
+	mergeSearchResults(ctx, principal, mergeRequest, deps, censusProvenanceMarker, []CandidateNode{node}, candidatesBySubject, observationParentKey, observationBlocked, false, nil, identity, identityTerms, admission)
 	// codex xhigh review finding (HIGH, confirmed and fixed): a candidate
 	// already sitting at exactly matchedTermsCap real terms overflows to
 	// matchedTermsCap+1 once censusProvenanceMarker unions in above --
@@ -4646,13 +4661,20 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 			}
 		}
 	}
+	// One link walk per round: the work-item census under a requested
+	// repository scope and its cross-check read the same population.
+	var workItemScope *linkScope
+	if callerNarrowingApplies(principal, request, deps) {
+		workItemScope = newLinkScope(deps, request.RequestedScope)
+	}
 	attestation = RunShadowEvidenceRound(roundCtx, ShadowEvidenceRoundInput{
 		RequestID: request.RequestID, Question: request.Question, OrgID: principal.OrgID,
 		PooledKinds: censusKinds, PooledSubjects: pooledSubjects, Trigger: evidenceRoundTrigger(resolution, callerHintShortCircuit), CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
 		UnscopedVisibility: unscopedVisibility, AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
 		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
-		NarrowSatisfiers:          callerNarrowingSatisfierFilter(principal, request, deps),
+		NarrowSatisfiers:          callerNarrowingSatisfierFilter(principal, request, deps, workItemScope),
 		CensusRepositories:        callerCensusRepositories(principal, request, deps),
+		workItemScope:             workItemScope,
 		PreNarrowingExplicitKinds: preNarrowingExplicitKinds,
 		ConfirmedAnchor:           confirmedAnchorInput,
 		ConfirmedHandle:           confirmedHandleInput,
@@ -5212,11 +5234,23 @@ func callerCensusRepositories(principal storage.Principal, request contextfabric
 // whose only visibility limit is the caller's own repository narrowing of an
 // unrestricted principal, and nil otherwise. A restricted principal never gets
 // one: its round does not run a census at all.
-func callerNarrowingSatisfierFilter(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) SatisfierNarrower {
+//
+// A work item is inside the narrowing when the scope's link walk reaches it
+// and its node passes AuthorizedThroughLink; every other kind when its node
+// passes AuthorizedAttributes. A work item with no walk to read is undecided.
+func callerNarrowingSatisfierFilter(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, workItemScope *linkScope) SatisfierNarrower {
 	if !callerNarrowingApplies(principal, request, deps) {
 		return nil
 	}
 	return func(ctx context.Context, kind CensusKind, canonicalIDs []string) ([]string, bool) {
+		var linked map[string]string
+		if kind == contextfabric.SubjectWorkItem {
+			members, err := workItemScope.population(ctx)
+			if err != nil {
+				return nil, false
+			}
+			linked = members
+		}
 		kept := make([]string, 0, len(canonicalIDs))
 		for _, id := range canonicalIDs {
 			node, exists, err := deps.ExactHint(ctx, contextfabric.SubjectRef{Kind: kind, CanonicalID: id})
@@ -5226,7 +5260,12 @@ func callerNarrowingSatisfierFilter(principal storage.Principal, request context
 			if !exists {
 				return nil, false
 			}
-			if AuthorizedAttributes(principal, request.RequestedScope, node.Attributes) {
+			admitted := AuthorizedAttributes(principal, request.RequestedScope, node.Attributes)
+			if kind == contextfabric.SubjectWorkItem {
+				_, walked := linked[id]
+				admitted = walked && AuthorizedThroughLink(principal, request.RequestedScope, node.Attributes)
+			}
+			if admitted {
 				kept = append(kept, id)
 			}
 		}

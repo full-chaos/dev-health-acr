@@ -3462,6 +3462,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	factRequest := CanonicalFactRequest{
 		workItemTuple:            workItemTuple,
+		LinkScopedSubjects:       linkScopedFactSubjects(ctx, request, subjects, tupleCensus),
 		Question:                 factReadQuestion(interpretation, effectiveWindow),
 		Subjects:                 subjects,
 		Cohort:                   graphContext.Cohort,
