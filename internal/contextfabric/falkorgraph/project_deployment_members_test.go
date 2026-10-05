@@ -314,6 +314,30 @@ func TestNoLinkedPullRequestIsUnlinkedOnlyForAnUnrestrictedCaller(t *testing.T) 
 	}
 }
 
+// TestARequestedScopeThatHidesTheLinkIsNotNoDeployments: a caller with no
+// repository grant but a requested repository scope is narrowed, so a
+// repository-less issue's text link grants no authority and is hidden. The
+// answer must say the cohort was hidden (partial coverage), never a complete
+// "no deployments".
+func TestARequestedScopeThatHidesTheLinkIsNotNoDeployments(t *testing.T) {
+	s := projectSeed{served: map[string]string{}}
+	s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
+	repoID := s.repository("acme/granted", 2)
+	s.link("row-1", "work_item:linear:1", nil, "pull_request:granted:1", "explicit_text", repoID, "acme/granted")
+	request := projectDeploymentsRequest()
+	request.Request.RequestedScope = contextfabric.RequestedScope{RepositorySlugs: []string{"acme/granted"}}
+	result, err := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges)).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort != nil && len(result.Cohort.Members) > 0 {
+		t.Fatalf("cohort = %+v, want none: the text link grants no authority under the scope", result.Cohort.Members)
+	}
+	if deniedDetail(result) == nil || !result.Coverage.Partial {
+		t.Fatalf("partial %v, details %+v: want the denied limitation and partial coverage, not a complete empty answer", result.Coverage.Partial, result.Coverage.Details)
+	}
+}
+
 func TestProjectDeploymentWalkAdmitsAnIssueByTheWorkItemRule(t *testing.T) {
 	build := func(issueRepos []string) projectSeed {
 		s := projectSeed{served: map[string]string{}}
