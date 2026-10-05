@@ -407,7 +407,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	// multi-pass callers in resolve.go's own resolveSubjects call the
 	// unexported form below directly, with the pass number their own
 	// control flow actually reached).
-	return resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, anchorReservedSlot{}, nil, 1)
+	return resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, legacyIdentityLookupState(aliasIdentityComplete), tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, anchorReservedSlot{}, nil, 1)
 }
 
 // resolveFromMergedCandidatesWithAnchorSlot carries the two extra inputs the
@@ -426,7 +426,8 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 // sites, in the fixed textual order those sites already run in. Every other
 // caller (including the exported wrapper above and every direct test call)
 // is single-shot and passes 1.
-func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, anchorSlot anchorReservedSlot, kindRescue *kindRescueLedger, pass int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, identityLookup IdentityLookupState, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, anchorSlot anchorReservedSlot, kindRescue *kindRescueLedger, pass int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+	aliasIdentityComplete := identityLookup == IdentityLookupComplete
 	bases := make(contextfabric.CommitBasisSet)
 	// digests (CHAOS-4087) records IN LOCKSTEP with bases above, at every
 	// SAME bases.Record call site -- see CommitDecisionDigest's own doc
@@ -686,6 +687,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// OBSERVABILITY -- it never feeds back into any commit decision
 	// itself.
 	identityTrustGateBlocked := false
+	exactLabelProofMissing := false
 	// tiedStatisticalTop (CHAOS-4085 observability, team-lead addition
 	// 2026-08-22): the TIE half of tiedStatisticalTopUnderTruncation's
 	// conjunct, captured for the decision-stage trace independently of
@@ -803,6 +805,13 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// -- a candidate with no rival recorded (the overwhelming common
 		// case, and every pre-existing exactIndex test) is completely
 		// unaffected, byte-identical to before this ticket.
+		// The duplicate label hidden behind the truncation boundary (above):
+		// for the kinds the keyed identity read enumerates, a read that ran
+		// incomplete leaves the label unproven, and that is a clarification
+		// whatever the search saw (exact_label_proof.go).
+		case len(exactIndex) == 1 && !identityCrossClassRivalClaimant(SubjectKey(candidates[exactIndex[0]].Subject), identity, identityTerms) && exactLabelUnproven(candidates[exactIndex[0]].Subject.Kind, identityLookup):
+			ambiguous = true
+			exactLabelProofMissing = true
 		case len(exactIndex) == 1 && !identityCrossClassRivalClaimant(SubjectKey(candidates[exactIndex[0]].Subject), identity, identityTerms):
 			committedIndex[exactIndex[0]] = true
 			candidates[exactIndex[0]].State = contextfabric.ResolutionCommitted
@@ -1193,7 +1202,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// information), and a truncated search with a strictly-separated
 		// top is untouched (the ranking did discriminate). Only the
 		// conjunction is refused.
-		if ambiguous && gateValid && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !retrievalDegraded &&
+		if ambiguous && gateValid && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !exactLabelProofMissing && !retrievalDegraded &&
 			calibratedTopK > 0 && effectiveSearchLimit >= 2 && effectiveSearchLimit <= calibratedTopK &&
 			unscopedVisibility && !tiedStatisticalTopUnderTruncation(candidates, commitIndex, searchTruncated) {
 			// CHAOS-3884 spot-check MEDIUM-C/item 1: identityCollision is
@@ -1804,7 +1813,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			}
 		case len(resolution.Committed) == 0 && ambiguous:
 			tracer.Trace(ResolutionTraceEvent{
-				RequestID: requestID, Stage: "decision", Outcome: "ambiguous",
+				RequestID: requestID, Stage: "decision", Outcome: "ambiguous", CommitGate: exactLabelRefusalGate(exactLabelProofMissing),
 				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
 				SearchTruncated: searchTruncated,
 				// CHAOS-4085: an ambiguous outcome carrying

@@ -156,11 +156,52 @@ func TestACountOverALabelIsNotCertifiedWhenTheSearchWasTruncated(t *testing.T) {
 // enough to certify a count.
 func TestACountOverALabelIsNotCertifiedWhenTheIdentityLookupWasIncomplete(t *testing.T) {
 	answer := askOwningTeamCountOver(t, seedOwnedRepository(), storage.Principal{OrgID: "org-1"}, false)
-	if len(answer.committed) != 1 || answer.committed[0].CanonicalID != routeOwnedRepository {
-		t.Fatalf("resolver committed %+v, want the exact-label repository", answer.committed)
+	if len(answer.committed) != 0 {
+		t.Fatalf("resolver committed %+v, want nothing: an incomplete identity lookup cannot prove the exact label names one repository", answer.committed)
 	}
 	if _, claimed, outcome := servedCount(answer); claimed || outcome == contractsv1.ContextFabricRequirementSatisfied {
 		t.Fatalf("count claimed=%t outcome=%q after an incomplete identity lookup, want none certified", claimed, outcome)
+	}
+}
+
+func TestALabelNamedRepositoryKeepsTheExactLabelCommitOnlyWhenTheLookupDidNotRunForTheTimeAxis(t *testing.T) {
+	start, end := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	for name, cell := range map[string]struct {
+		timeContext contextfabric.TimeContext
+		lookups     int
+		committed   bool
+	}{
+		"current axis, lookup ran incomplete": {contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, 1, false},
+		"range axis, lookup not run":          {contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, 0, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			adapter := newFakeAdapter(t, seedOwnedRepository().conn())
+			lookups := 0
+			adapter.config.IdentityUniverse = func(context.Context, string) ([]graphrank.IdentityRow, time.Time, bool, error) {
+				lookups++
+				return []graphrank.IdentityRow{{Kind: contextfabric.SubjectRepository, CanonicalID: routeOwnedRepository, Label: routeOwnedSlug}}, time.Time{}, false, nil
+			}
+			interpreter := projectDeploymentsInterpreter{name: routeOwnedSlug, kind: contextfabric.SubjectRepository, member: contextfabric.SubjectTeam, count: true, timeContext: &cell.timeContext}
+			interpreted, outcome, err := interpreter.Interpret(context.Background(), storage.Principal{}, contextfabric.InvestigationRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := fakeDiscoveryRequest(contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: routeOwnedRepository, Label: routeOwnedSlug}, 10).Request
+			request.Question = "how many teams own repository " + routeOwnedSlug
+			request.RequestedScope.SubjectHints = nil
+			request.TimeContext = cell.timeContext
+			resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, outcome.Frame, contextfabric.SubjectRepository)
+			if err != nil {
+				t.Fatalf("ResolveSubjects error = %v", err)
+			}
+			if lookups != cell.lookups {
+				t.Fatalf("identity universe read %d times, want %d", lookups, cell.lookups)
+			}
+			committed := len(resolution.Committed) == 1 && resolution.Committed[0].CanonicalID == routeOwnedRepository
+			if committed != cell.committed || (!cell.committed && len(resolution.Committed) != 0) {
+				t.Fatalf("committed %+v candidates %+v, want the exact-label repository committed=%t", resolution.Committed, resolution.Candidates, cell.committed)
+			}
+		})
 	}
 }
 

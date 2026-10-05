@@ -344,7 +344,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			// to skip a mechanism entirely on a historical axis rather
 			// than thread a rewritten predicate through a new query path.
 			if temporal.active {
-				return nil, false, nil
+				return nil, false, graphrank.ErrIdentityLookupNotRunForTimeAxis
 			}
 			rows, _, complete, err := a.config.IdentityUniverse(ctx, orgID)
 			if err != nil {

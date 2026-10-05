@@ -703,6 +703,9 @@ type ResolutionTraceEvent struct {
 	// proves it found a match (C2).
 	AliasLookupComplete         bool
 	AliasLookupMatchedClaimants int
+	// IdentityLookup (alias_lookup stage) is the IdentityLookupState token of
+	// the keyed identity read: complete, incomplete or not_run_time_axis.
+	IdentityLookup string
 	// AliasLookupTermCount/AliasLookupMatchedKinds: how many terms the lookup
 	// was asked about and the distinct subject kinds of its claimants -- counts
 	// and closed kinds only, never the terms themselves (they come from the
@@ -3182,6 +3185,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// stays false, byte-identical
 	// to every pre-CHAOS-3884 backend.
 	aliasIdentityComplete := false
+	identityLookup := IdentityLookupNotWired
 	// aliasClaimantsByTerm (CHAOS-3899, shadow-only) is deps.AliasLookup's
 	// own claimantsByTerm, retained past the block below so the shadow
 	// evidence round's anchor binding (BindAnchor) can reuse it rather than
@@ -3191,12 +3195,13 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	var aliasClaimantsByTerm map[string][]CandidateNode
 	if deps.AliasLookup != nil {
 		claimantsByTerm, complete, err := deps.AliasLookup(ctx, principal.OrgID, terms)
+		identityLookup, err = identityLookupStateOf(complete, err)
 		if err != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 		}
-		aliasIdentityComplete = complete
+		aliasIdentityComplete = identityLookup == IdentityLookupComplete
 		aliasClaimantsByTerm = claimantsByTerm
-		traceAliasLookup(deps, request.RequestID, complete, len(terms), claimantsByTerm)
+		traceAliasLookup(deps, request.RequestID, identityLookup, len(terms), claimantsByTerm)
 		for term, nodes := range claimantsByTerm {
 			// allowExactMatch=true: these are the SAME genuine
 			// caller-derived terms the per-term Search loop above already
@@ -3622,7 +3627,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// "this resolution's Nth finalization" depends on which of them
 	// actually ran, never on textual position alone.
 	pass := 1
-	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, kindRescue, pass)
+	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, kindRescue, pass)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -3798,7 +3803,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			scopedResolution, scopedBases, scopedDigests := resolveFromMergedCandidatesWithAnchorSlot(
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
-				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, aliasIdentityComplete,
+				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, identityLookup,
 				scopedDecisionTracer, request.RequestID, "", true, false, nil, anchorReservedSlot{}, kindRescue, pass,
 			)
 			if len(scopedResolution.Committed) > 0 {
@@ -3904,7 +3909,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 					commitCensusAttestedBesideScopeAnchor(&resolution, candidatesBySubject[attestedKey], request, deps, commitBases, commitDigests, searchTruncated, aliasIdentityComplete, effectiveSearchLimit, pass)
 				} else {
 					pass++
-					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, kindRescue, pass)
+					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, kindRescue, pass)
 					commitBases.ResetTo(censusBases)
 					commitDigests.ResetTo(censusDigests)
 					resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
@@ -5040,7 +5045,7 @@ func retrieveCandidatesForTerms(
 // traceAliasLookup emits the alias_lookup stage for one keyed identity read.
 // The event firing at all shows the read was invoked; a positive
 // matched-claimant count shows it found a match.
-func traceAliasLookup(deps ResolveDeps, requestID string, complete bool, termCount int, claimantsByTerm map[string][]CandidateNode) {
+func traceAliasLookup(deps ResolveDeps, requestID string, lookup IdentityLookupState, termCount int, claimantsByTerm map[string][]CandidateNode) {
 	if deps.ResolutionTracer == nil {
 		return
 	}
@@ -5061,7 +5066,7 @@ func traceAliasLookup(deps ResolveDeps, requestID string, complete bool, termCou
 	slices.Sort(kinds)
 	deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 		RequestID: requestID, Stage: "alias_lookup",
-		AliasLookupComplete: complete, AliasLookupMatchedClaimants: matched,
+		AliasLookupComplete: lookup == IdentityLookupComplete, IdentityLookup: string(lookup), AliasLookupMatchedClaimants: matched,
 		AliasLookupTermCount: termCount, AliasLookupMatchedKinds: kinds,
 	})
 }

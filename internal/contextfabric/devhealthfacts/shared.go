@@ -375,7 +375,13 @@ import (
 // canonical facts of the walked members. Before it a repository anchor was
 // refused as a work-item population. A candidate saved before v68 for such a
 // question holds that refusal and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v68"
+//
+// v68 -> v70: an exact label match of a repository, project or team commits
+// only when the keyed identity read ran complete; a read that ran incomplete
+// leaves the label for a clarification, since a same-label subject the caller
+// can read may be missing from the pool. A candidate saved before v70 may hold
+// a commit that rule would refuse and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v70"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

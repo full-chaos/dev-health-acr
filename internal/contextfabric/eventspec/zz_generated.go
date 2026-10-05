@@ -3695,6 +3695,7 @@ func (f WorkItemTupleAdmissionFields) SlogArgs() []any {
 type AliasLookupFields struct {
 	RequestID        string
 	Complete         bool
+	IdentityLookup   string
 	MatchedClaimants int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every AliasLookupFields uniformly, set ONLY by NewAliasLookupFields below. A caller
@@ -3709,10 +3710,11 @@ type AliasLookupFields struct {
 
 // NewAliasLookupFields is the generated constructor for AliasLookupFields -- every
 // field AliasLookup.Fields declares is a required parameter.
-func NewAliasLookupFields(requestID string, complete bool, matchedClaimants int) AliasLookupFields {
+func NewAliasLookupFields(requestID string, complete bool, identityLookup string, matchedClaimants int) AliasLookupFields {
 	return AliasLookupFields{
 		RequestID:        requestID,
 		Complete:         complete,
+		IdentityLookup:   identityLookup,
 		MatchedClaimants: matchedClaimants,
 		constructed:      true,
 	}
@@ -3734,6 +3736,7 @@ func (f AliasLookupFields) SlogArgs() []any {
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 		"stage", "alias_lookup",
 		"complete", f.Complete,
+		"identity_lookup", contextfabric.SanitizeLogAttr(f.IdentityLookup),
 		"matched_claimants", f.MatchedClaimants,
 	}
 }
