@@ -103,6 +103,12 @@ type sourcePlan struct {
 	// means cursorSpaceIngest.
 	space string
 
+	// readByteLimit is the client's max_bytes_to_read; every read of a pass
+	// (paged, snapshot, overlap window, and a peek) carries it in its context,
+	// so key-named reads size their statements from it. Zero: the client
+	// default.
+	readByteLimit uint64
+
 	// observeNormalization is called once per token per item repaired by
 	// producer-side normalization (item_normalization.go), with a closed
 	// reason token from a vocabulary DISJOINT from observeQuarantine's.
@@ -141,6 +147,7 @@ func logTableReadFailure(ctx context.Context, logger *slog.Logger, source, orgID
 }
 
 func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+	ctx = withReadByteLimit(ctx, p.readByteLimit)
 	yielded := false
 	p.yielded = &yielded
 	batch, available, err := p.nextBatchPage(ctx, checkpoint)

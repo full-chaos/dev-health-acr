@@ -383,6 +383,7 @@ func clickhouseBackedSources(client contextpacket.ClickHouseQueryClient, cfg con
 		return nil, nil, err
 	}
 	clickhouseSource.WithLogger(logger)
+	clickhouseSource.WithReadByteLimit(cfg.ClickHouseMaxBytesToRead)
 	if _, err := clickhouseSource.WithOverlap(cfg.Overlap); err != nil {
 		return nil, nil, err
 	}

@@ -170,6 +170,12 @@ type ClickHouseProjectionSource struct {
 	window      *windowMemo
 	windowPages int
 
+	// readByteLimit is the client's max_bytes_to_read
+	// (ACR_CLICKHOUSE_MAX_BYTES_TO_READ); a read that names rows by key sizes
+	// its statements from it (pullRequestWideReadRows). Zero means the
+	// dev-health-go client default.
+	readByteLimit uint64
+
 	// consumedMu guards consumed, which memoises the furthest cursor a
 	// NextProjectionBatch call proved holds nothing publishable, per
 	// organization. ConsumedWithoutPublishing hands it to the worker.
@@ -258,6 +264,10 @@ func (s *ClickHouseProjectionSource) WithOverlap(d time.Duration) (*ClickHousePr
 	return s, nil
 }
 
+// ReadByteLimit is the client max_bytes_to_read this source sizes its
+// key-named reads from; zero means the client default.
+func (s *ClickHouseProjectionSource) ReadByteLimit() uint64 { return s.readByteLimit }
+
 // Overlap is the trailing re-read window this source walks once caught up.
 func (s *ClickHouseProjectionSource) Overlap() time.Duration { return s.overlap }
 
@@ -274,6 +284,13 @@ func (s *ClickHouseProjectionSource) windowMemo() *windowMemo        { return s.
 // projectionrun.Coordinator's own Logger field works (a real logger from
 // the caller, slog.Default() otherwise). Returns s for chaining; a nil
 // logger is a no-op, not a panic.
+// WithReadByteLimit records the query client's max_bytes_to_read, so the
+// reads that name rows by key keep each statement under it.
+func (s *ClickHouseProjectionSource) WithReadByteLimit(limit uint64) *ClickHouseProjectionSource {
+	s.readByteLimit = limit
+	return s
+}
+
 func (s *ClickHouseProjectionSource) WithLogger(logger *slog.Logger) *ClickHouseProjectionSource {
 	if logger != nil {
 		s.logger = logger
@@ -411,6 +428,7 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 		observeNormalization: normalizationLogger(s.logger, SourceName),
 		recordConsumed:       s.recordConsumed(fromCursor),
 		dropConsumed:         s.forgetConsumed,
+		readByteLimit:        s.readByteLimit,
 	}
 }
 

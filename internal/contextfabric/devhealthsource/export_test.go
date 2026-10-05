@@ -291,3 +291,88 @@ func IssuePullRequestLinkPageForTest(ctx context.Context, client contextpacket.C
 	}
 	return rows, more, nil
 }
+
+// ReadPullRequestPageForTest runs the pull request producer's own read
+// (queryPullRequests) for one page from a cursor position, so a live test can
+// drive the exact statement the projector sends at a chosen cursor: the
+// catch-up after a rebuild (a zero position) or a steady tick (a recent one).
+func ReadPullRequestPageForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, since time.Time, after string, limit int) (rows int, truncated bool, err error) {
+	candidates, truncated, err := queryPullRequests(ctx, client, orgID, cursorState{Since: since, After: after, Space: cursorSpaceIngest}, limit)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, c := range candidates {
+		if c.entity != nil {
+			rows++
+		}
+	}
+	return rows, truncated, nil
+}
+
+// legacyPullRequestStatement is queryPullRequests' statement as it stood on
+// main before CHAOS-8683's keys-first read (main c994ba42), kept here only so
+// a live test can show the seed it runs reproduces the prod refusal.
+func legacyPullRequestStatement(cursor cursorState) string {
+	const rowKey = "concat(toString(p.repo_id), ':', toString(p.number))"
+	return `SELECT toString(p.repo_id), r.repo, p.number, ifNull(p.title, ''), ifNull(p.state, ''), p.last_synced,
+       p.created_at, ` + nullableTimestamp("coalesce(p.merged_at, p.closed_at)") + `,
+       ifNull(p.head_branch, ''), ifNull(p.body, '')
+FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id
+WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowKey) + orderBy("p.last_synced", rowKey)
+}
+
+// LegacyPullRequestReadForTest runs that statement for one page from a zero
+// cursor (the catch-up after a rebuild) and returns its error.
+func LegacyPullRequestReadForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, limit int) error {
+	cursor := cursorState{Space: cursorSpaceIngest}
+	rows, err := client.Query(ctx, legacyPullRequestStatement(cursor), rowLimitBindings(orgID, cursor, limit))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+	}
+	return rows.Err()
+}
+
+// SetPullRequestGranuleBytesForTest sets the granule size the pull request
+// wide read sizes its statements from, for a live test whose store cuts
+// granules smaller than ClickHouse's default; restored when the test ends.
+func SetPullRequestGranuleBytesForTest(t interface{ Cleanup(func()) }, granule uint64) {
+	previous := pullRequestGranuleBytes
+	pullRequestGranuleBytes = granule
+	t.Cleanup(func() { pullRequestGranuleBytes = previous })
+}
+
+// DrainPullRequestPagesForTest reads every pull request page of an
+// organization from a zero cursor, through main's single statement (legacy)
+// or the two-step read, and returns the rows read.
+func DrainPullRequestPagesForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, legacy bool, limit int) (int, error) {
+	cursor := cursorState{Space: cursorSpaceIngest}
+	rows := 0
+	for page := 0; page < 10000; page++ {
+		var candidates []candidate
+		var truncated bool
+		var err error
+		if legacy {
+			candidates, truncated, err = fetch(ctx, client, legacyPullRequestStatement(cursor), rowLimitBindings(orgID, cursor, limit), limit, scanPullRequestRow)
+		} else {
+			candidates, truncated, err = queryPullRequests(ctx, client, orgID, cursor, limit)
+		}
+		if err != nil {
+			return rows, err
+		}
+		var last *candidate
+		for i := range candidates {
+			if candidates[i].entity != nil {
+				rows++
+				last = &candidates[i]
+			}
+		}
+		if !truncated || last == nil {
+			return rows, nil
+		}
+		cursor = cursorState{Since: last.position(), After: last.sortKey, Space: cursorSpaceIngest}
+	}
+	return rows, fmt.Errorf("pull request pages did not end")
+}

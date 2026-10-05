@@ -36,3 +36,18 @@ func TestOverlapSettingReachesBothClickHouseBackedSources(t *testing.T) {
 		}
 	}
 }
+
+// TestReadByteLimitReachesTheClickHouseSource pins that the configured
+// ACR_CLICKHOUSE_MAX_BYTES_TO_READ reaches the ClickHouse source, which sizes
+// its key-named pull request reads from it (CHAOS-8683).
+func TestReadByteLimitReachesTheClickHouseSource(t *testing.T) {
+	t.Parallel()
+	const limit = 96 << 20
+	clickhouse, _, err := clickhouseBackedSources(unreachableClient{t: t}, config.ProjectorConfig{Overlap: time.Minute, ClickHouseMaxBytesToRead: limit}, discardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := clickhouse.ReadByteLimit(); got != limit {
+		t.Fatalf("the ClickHouse source sizes its reads from %d bytes, want the configured %d", got, limit)
+	}
+}
