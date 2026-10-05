@@ -41,7 +41,9 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 	applyProductionSchema(t, ctx, direct, "")
 	adapter := chaos7074FalkorAdapter(t, ctx)
 
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	// Whole seconds: git_pull_requests and team_project_ownership keep
+	// their times to the second.
+	now := time.Now().UTC().Truncate(time.Second)
 	day := 24 * time.Hour
 	ago := func(days int) time.Time { return now.Add(-time.Duration(days) * day) }
 	orgID := "13000000-0000-4000-8000-0000000000c1"
@@ -241,9 +243,9 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 				t.Fatal(err)
 			}
 			out.raw += string(raw)
-			if out.status == "" {
-				out.status = doc.Status
-			}
+			// A page before the last is partial by design (a cursor
+			// follows); the answer's status is the last page's.
+			out.status = doc.Status
 			out.withheld += doc.Withheld.EdgesNotVisible
 			for _, e := range doc.Edges {
 				key := edge(e.From.CanonicalID, e.To.CanonicalID)
