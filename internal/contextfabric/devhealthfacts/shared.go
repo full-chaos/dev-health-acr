@@ -343,7 +343,12 @@ import (
 // column, with the days it rests on, where it was answered with the daily rows
 // and no total. A candidate saved under v61 for such a question must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v62"
+//
+// v62 -> v63: a period longer than the daily rows one read returns is answered
+// with a named reason where it was answered with none, and a period of exactly
+// that many days is totalled where it was refused as cut. A candidate saved
+// under v62 for such a question must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v63"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

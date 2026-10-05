@@ -249,7 +249,7 @@ func TestAPeriodTotalIsNotStatedFromACutOrWithheldSeries(t *testing.T) {
 	period := []string{"2026-09-01"}
 	var many []dayRow
 	for i := 0; i < MaxFactValueRows; i++ {
-		many = append(many, dayRow{day: "2026-09-01", commits: 1})
+		many = append(many, dayRow{day: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -i).Format("2006-01-02"), commits: 1})
 	}
 	cut := metricsFactFor(subject, many)
 	totals, absences := PeriodTotalsForSubject(periodCapabilities(), []CanonicalFact{cut}, subject, period)
@@ -315,5 +315,70 @@ func TestPeriodCoverageRule(t *testing.T) {
 	}
 	if _, _, certified := PeriodCoverage(nil, nil); certified {
 		t.Error("an empty period was certified")
+	}
+}
+
+func TestAPeriodAtTheRowCapIsCompleteAndAboveItIsNamed(t *testing.T) {
+	t.Parallel()
+	subject := singleSubjectOf(SubjectRepository)
+	start := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	for _, days := range []int{MaxFactValueRows - 1, MaxFactValueRows, MaxFactValueRows + 1} {
+		var period []string
+		var rows []dayRow
+		var want int64
+		for i := 0; i < days; i++ {
+			day := start.AddDate(0, 0, i).Format("2006-01-02")
+			period = append(period, day)
+			if len(rows) < MaxFactValueRows {
+				rows = append(rows, dayRow{day: day, commits: int64(i + 1)})
+				want += int64(i + 1)
+			}
+		}
+		totals, absences := PeriodTotalsForSubject(periodCapabilities(), []CanonicalFact{metricsFactFor(subject, rows)}, subject, period)
+		if days > MaxFactValueRows {
+			if len(totals) != 0 || len(absences) != 1 || absences[0].Reason != PeriodTotalAbsenceTooLong {
+				t.Errorf("%d days: totals %+v absences %+v, want the too-long reason", days, totals, absences)
+			}
+			sentences := PeriodTotalSentences(totals, absences)
+			if len(sentences) != 1 || !strings.Contains(sentences[0], fmt.Sprintf("longer than the %d daily rows one read returns", MaxFactValueRows)) {
+				t.Errorf("%d days: sentences %q", days, sentences)
+			}
+			continue
+		}
+		var commits *PeriodTotal
+		for i := range totals {
+			if totals[i].Column == "commits_count" {
+				commits = &totals[i]
+			}
+		}
+		if len(absences) != 0 || commits == nil || commits.Sum != want || !commits.Certified || commits.DaysWithRow != days {
+			t.Errorf("%d days: totals %+v absences %+v, want a certified sum %d", days, totals, absences, want)
+		}
+	}
+}
+
+func TestASingleSubjectPeriodAboveTheRowCapNamesWhyNoTotalIsStated(t *testing.T) {
+	t.Parallel()
+	subject := singleSubjectOf(SubjectRepository)
+	cell := scopeCell{
+		frame: countingFrame(SubjectRepository), family: QuestionFamilyScopedCohortStatus,
+		resolution: SubjectResolution{Committed: []SubjectRef{subject}, Candidates: []SubjectCandidate{namedMatch(subject)}},
+		cohort:     kindCohort(SubjectRepository, 5), status: InvestigationComplete, now: periodTotalNow,
+		facts: periodFactReader{capabilities: periodCapabilities(), facts: []CanonicalFact{metricsFactFor(subject, []dayRow{{day: "2026-10-01", commits: 4}})}},
+	}
+	engine := newScopeEngine(t, cell, &recordingTelemetry{})
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
+	request.RequestID = "request_57750001"
+	request.Question = "how many commits in the last 90 days"
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !strings.Contains(result.DeterministicAnswer, fmt.Sprintf("The period is longer than the %d daily rows one read returns, so no metrics total is stated for it.", MaxFactValueRows)) {
+		t.Errorf("answer %q does not name why no total is stated", result.DeterministicAnswer)
+	}
+	if strings.Contains(result.DeterministicAnswer, "otal of commits") {
+		t.Errorf("a total is stated over a period the read cannot cover: %q", result.DeterministicAnswer)
 	}
 }
