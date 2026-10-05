@@ -173,3 +173,43 @@ func TestTerminalSaveSkippedLineIsErrorWithClosedTokens(t *testing.T) {
 		t.Errorf("line = %v", second)
 	}
 }
+
+func tupleSubjectlessTerminalEngine(t *testing.T, telemetry *recordingTelemetry, results *staticResultStore) *Engine {
+	t.Helper()
+	payload := workItemTuplePayloadFixture(t)
+	project := payload.SubjectResolution.Candidates[0]
+	project.State = ResolutionCommitted
+	project.Confidence = 0.9
+	project.EvidenceRefIDs = []string{"evidence:project:p1"}
+	repo := SubjectCandidate{ReceiptID: "receipt-2", Subject: SubjectRef{Kind: SubjectRepository, CanonicalID: "repo-1", Label: "Project"}, State: ResolutionAmbiguous, MatchedTerms: []string{"project"}, MatchReasons: []string{"exact"}, Confidence: 0.9, EvidenceRefIDs: []string{"evidence:repo:r1"}}
+	resolution := SubjectResolution{Candidates: []SubjectCandidate{project, repo}, Committed: []SubjectRef{}}
+	engine, err := NewEngine(EngineDependencies{
+		Telemetry:   telemetry,
+		Interpreter: familyInterpreter{interpreted: InterpretedQuestion{Shape: ShapeSingleSubject, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactHealth}}}, outcome: tupleFamilyOutcomeForTest(t)},
+		Graph:       &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: resolution}},
+		Facts:       failingFactReader{t: t},
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("a terminal answer must not reach the synthesizer")
+			return InvestigationResult{}, nil
+		}),
+		Results: results, Requirements: registryDeriver{},
+	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_terminal_site_tuple" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return engine
+}
+
+func TestTerminalSubjectlessClarificationWithTupleReadingIsServed(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	store := &staticResultStore{results: map[string]InvestigationResult{}}
+	engine := tupleSubjectlessTerminalEngine(t, telemetry, store)
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("a subjectless terminal must be served, got %v", err)
+	}
+	if len(result.SubjectResolution.Committed) != 0 {
+		t.Fatalf("not a subjectless terminal: committed %v", result.SubjectResolution.Committed)
+	}
+	assertTerminalNotSaved(t, result, telemetry, BudgetAssertSubjectlessTerminal)
+}
