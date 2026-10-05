@@ -106,16 +106,29 @@ func TestCalendarWindow_WithdrawCalendarCommit(t *testing.T) {
 	snapshot := bootstrapInterpretation()
 	snapshot.WindowClass = WindowClassStateSnapshot
 	snapshot.WindowConfidence = WindowConfidenceHigh
+	series := &QuestionFrame{Temporal: TemporalIntentTimeSeries}
+	comparison := &QuestionFrame{Temporal: TemporalIntentPeriodComparison}
+	currentFrame := &QuestionFrame{Temporal: TemporalIntentCurrent}
 	for name, tc := range map[string]struct {
-		in   InterpretedQuestion
-		want bool
-	}{"current": {current, false}, "range": {ranged, false}, "as of": {asOf, true}, "state snapshot": {snapshot, true}} {
-		got, withdrawn := withdrawCalendarCommit(committed, tc.in, nil)
-		if withdrawn != tc.want || (withdrawn && (got.Effective != nil || got.KeyComponent != "" || got.CalendarCommitted)) || (!withdrawn && got.Effective == nil) {
-			t.Errorf("%s: withdrawn=%v effective=%v, want withdrawn=%v", name, withdrawn, got.Effective, tc.want)
+		in     InterpretedQuestion
+		frame  *QuestionFrame
+		reason StatedWindowAxisOutcome
+	}{
+		"current":                {current, nil, ""},
+		"range":                  {ranged, nil, ""},
+		"state snapshot class":   {snapshot, nil, ""},
+		"current frame":          {current, currentFrame, ""},
+		"as of":                  {asOf, nil, StatedWindowAxisWithdrawnPointInTime},
+		"series frame":           {current, series, StatedWindowAxisWithdrawnPeriodShape},
+		"comparison frame":       {ranged, comparison, StatedWindowAxisWithdrawnPeriodShape},
+		"series frame and as of": {asOf, series, StatedWindowAxisWithdrawnPeriodShape},
+	} {
+		got, reason, withdrawn := withdrawCalendarCommit(committed, tc.in, tc.frame)
+		if reason != tc.reason || withdrawn != (tc.reason != "") || (withdrawn && (got.Effective != nil || got.KeyComponent != "" || got.CalendarCommitted)) || (!withdrawn && got.Effective == nil) {
+			t.Errorf("%s: reason=%q withdrawn=%v effective=%v, want reason %q", name, reason, withdrawn, got.Effective, tc.reason)
 		}
 	}
-	if _, withdrawn := withdrawCalendarCommit(requestWindowCanonicalization{}, asOf, nil); withdrawn {
+	if _, _, withdrawn := withdrawCalendarCommit(requestWindowCanonicalization{}, asOf, nil); withdrawn {
 		t.Error("a request with no calendar commitment reported a withdrawal")
 	}
 }

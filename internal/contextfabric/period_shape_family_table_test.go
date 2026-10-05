@@ -182,6 +182,13 @@ func TestPeriodShapeFamilyTable(t *testing.T) {
 		if want, ok := periodShapeServedOutcome[key]; !ok || got != want {
 			t.Errorf("%s: served %q, want %q (hand-pinned)", key, got, want)
 		}
+		if c.kind == periodQuestionNamed && periodShapeOf(c.cell.frame) == periodShapeCurrent {
+			wantStart, wantEnd := calendarPeriodOracle("last month", now)
+			w := result.EffectiveEvidenceWindow
+			if w == nil || w.Provenance != WindowQuestionStated || w.Start == nil || w.End == nil || !w.Start.Equal(wantStart) || !w.End.Equal(wantEnd) {
+				t.Errorf("%s: window %+v, want question_stated over the calendar month %s..%s", key, w, wantStart, wantEnd)
+			}
+		}
 		tc := result.Interpretation.TimeContext
 		start, end, conflict, unread, decided := periodShapeRuleRead(c, now)
 		if decided {
@@ -232,22 +239,22 @@ var periodShapeServedOutcome = map[string]string{
 	"unclassified|none|stated|current axis":                           "complete current question_stated trailing_30d class none",
 	"subject_investigation|none|named|range 30d":                      "complete current question_stated calendar class none",
 	"discovered_cohort_ranking|none|named|range 30d":                  "complete current question_stated calendar class none",
-	"scoped_cohort_status|none|named|range 30d":                       "complete range -30d..0d no window",
+	"scoped_cohort_status|none|named|range 30d":                       "complete current question_stated calendar class none",
 	"grouped_cohort_status|none|named|range 30d":                      "complete current question_stated calendar class none",
-	"explicit_comparison|none|named|range 30d":                        "complete range -30d..0d no window",
-	"unclassified|none|named|range 30d":                               "complete range -30d..0d no window",
+	"explicit_comparison|none|named|range 30d":                        "complete current question_stated calendar class none",
+	"unclassified|none|named|range 30d":                               "complete current question_stated calendar class none",
 	"subject_investigation|none|named|range 7d":                       "complete current question_stated calendar class none +conflict",
 	"discovered_cohort_ranking|none|named|range 7d":                   "complete current question_stated calendar class none +conflict",
-	"scoped_cohort_status|none|named|range 7d":                        "complete range -7d..0d no window",
+	"scoped_cohort_status|none|named|range 7d":                        "complete current question_stated calendar class none +conflict",
 	"grouped_cohort_status|none|named|range 7d":                       "complete current question_stated calendar class none +conflict",
-	"explicit_comparison|none|named|range 7d":                         "complete range -7d..0d no window",
-	"unclassified|none|named|range 7d":                                "complete range -7d..0d no window",
+	"explicit_comparison|none|named|range 7d":                         "complete current question_stated calendar class none +conflict",
+	"unclassified|none|named|range 7d":                                "complete current question_stated calendar class none +conflict",
 	"subject_investigation|none|named|current axis":                   "complete current question_stated calendar class none",
 	"discovered_cohort_ranking|none|named|current axis":               "complete current question_stated calendar class none",
-	"scoped_cohort_status|none|named|current axis":                    "complete current no window",
+	"scoped_cohort_status|none|named|current axis":                    "complete current question_stated calendar class none",
 	"grouped_cohort_status|none|named|current axis":                   "complete current question_stated calendar class none",
-	"explicit_comparison|none|named|current axis":                     "complete current no window",
-	"unclassified|none|named|current axis":                            "complete current no window",
+	"explicit_comparison|none|named|current axis":                     "complete current question_stated calendar class none",
+	"unclassified|none|named|current axis":                            "complete current question_stated calendar class none",
 	"subject_investigation|none|none|range 30d":                       "complete range -30d..0d no window",
 	"discovered_cohort_ranking|none|none|range 30d":                   "complete range -30d..0d no window",
 	"scoped_cohort_status|none|none|range 30d":                        "complete range -30d..0d no window",
@@ -283,19 +290,19 @@ var periodShapeServedOutcome = map[string]string{
 	"explicit_comparison|current|stated|current axis":                 "complete current question_stated trailing_30d class none",
 	"subject_investigation|current|named|range 30d":                   "complete current question_stated calendar class none",
 	"discovered_cohort_ranking|current|named|range 30d":               "complete current question_stated calendar class none",
-	"scoped_cohort_status|current|named|range 30d":                    "no_match range -30d..0d no window",
+	"scoped_cohort_status|current|named|range 30d":                    "no_match current question_stated calendar class none",
 	"grouped_cohort_status|current|named|range 30d":                   "complete current question_stated calendar class none",
-	"explicit_comparison|current|named|range 30d":                     "complete range -30d..0d no window",
+	"explicit_comparison|current|named|range 30d":                     "complete current question_stated calendar class none",
 	"subject_investigation|current|named|range 7d":                    "complete current question_stated calendar class none +conflict",
 	"discovered_cohort_ranking|current|named|range 7d":                "complete current question_stated calendar class none +conflict",
-	"scoped_cohort_status|current|named|range 7d":                     "no_match range -7d..0d no window",
+	"scoped_cohort_status|current|named|range 7d":                     "no_match current question_stated calendar class none +conflict",
 	"grouped_cohort_status|current|named|range 7d":                    "complete current question_stated calendar class none +conflict",
-	"explicit_comparison|current|named|range 7d":                      "complete range -7d..0d no window",
+	"explicit_comparison|current|named|range 7d":                      "complete current question_stated calendar class none +conflict",
 	"subject_investigation|current|named|current axis":                "complete current question_stated calendar class none",
 	"discovered_cohort_ranking|current|named|current axis":            "complete current question_stated calendar class none",
-	"scoped_cohort_status|current|named|current axis":                 "no_match current no window",
+	"scoped_cohort_status|current|named|current axis":                 "no_match current question_stated calendar class none",
 	"grouped_cohort_status|current|named|current axis":                "complete current question_stated calendar class none",
-	"explicit_comparison|current|named|current axis":                  "complete current no window",
+	"explicit_comparison|current|named|current axis":                  "complete current question_stated calendar class none",
 	"subject_investigation|current|none|range 30d":                    "complete range -30d..0d no window",
 	"discovered_cohort_ranking|current|none|range 30d":                "complete range -30d..0d no window",
 	"scoped_cohort_status|current|none|range 30d":                     "no_match range -30d..0d no window",
@@ -328,19 +335,19 @@ var periodShapeServedOutcome = map[string]string{
 	"explicit_comparison|bounded_window|stated|current axis":          "complete current question_stated trailing_30d class none",
 	"subject_investigation|bounded_window|named|range 30d":            "complete current question_stated calendar class none",
 	"discovered_cohort_ranking|bounded_window|named|range 30d":        "complete current question_stated calendar class none",
-	"scoped_cohort_status|bounded_window|named|range 30d":             "no_match range -30d..0d no window",
+	"scoped_cohort_status|bounded_window|named|range 30d":             "no_match current question_stated calendar class none",
 	"grouped_cohort_status|bounded_window|named|range 30d":            "complete current question_stated calendar class none",
-	"explicit_comparison|bounded_window|named|range 30d":              "complete range -30d..0d no window",
+	"explicit_comparison|bounded_window|named|range 30d":              "complete current question_stated calendar class none",
 	"subject_investigation|bounded_window|named|range 7d":             "complete current question_stated calendar class none +conflict",
 	"discovered_cohort_ranking|bounded_window|named|range 7d":         "complete current question_stated calendar class none +conflict",
-	"scoped_cohort_status|bounded_window|named|range 7d":              "no_match range -7d..0d no window",
+	"scoped_cohort_status|bounded_window|named|range 7d":              "no_match current question_stated calendar class none +conflict",
 	"grouped_cohort_status|bounded_window|named|range 7d":             "complete current question_stated calendar class none +conflict",
-	"explicit_comparison|bounded_window|named|range 7d":               "complete range -7d..0d no window",
+	"explicit_comparison|bounded_window|named|range 7d":               "complete current question_stated calendar class none +conflict",
 	"subject_investigation|bounded_window|named|current axis":         "complete current question_stated calendar class none",
 	"discovered_cohort_ranking|bounded_window|named|current axis":     "complete current question_stated calendar class none",
-	"scoped_cohort_status|bounded_window|named|current axis":          "no_match current no window",
+	"scoped_cohort_status|bounded_window|named|current axis":          "no_match current question_stated calendar class none",
 	"grouped_cohort_status|bounded_window|named|current axis":         "complete current question_stated calendar class none",
-	"explicit_comparison|bounded_window|named|current axis":           "complete current no window",
+	"explicit_comparison|bounded_window|named|current axis":           "complete current question_stated calendar class none",
 	"subject_investigation|bounded_window|none|range 30d":             "complete range -30d..0d no window",
 	"discovered_cohort_ranking|bounded_window|none|range 30d":         "complete range -30d..0d no window",
 	"scoped_cohort_status|bounded_window|none|range 30d":              "no_match range -30d..0d no window",
@@ -446,4 +453,55 @@ var periodShapeServedOutcome = map[string]string{
 	"scoped_cohort_status|period_comparison|none|current axis":        "no_match current no window",
 	"grouped_cohort_status|period_comparison|none|current axis":       "clarification_required current inferred_default trailing_90d class trend_assessment",
 	"explicit_comparison|period_comparison|none|current axis":         "complete current no window",
+}
+
+// calendarPeriodOracle states the rule by plain date arithmetic that calls
+// neither the binder nor any production window function: a bare "last
+// month|quarter|year" is the whole previous calendar period before the clock's
+// own, in UTC.
+func calendarPeriodOracle(phrase string, now time.Time) (start, end time.Time) {
+	now = now.UTC()
+	year, month := now.Year(), int(now.Month())
+	switch phrase {
+	case "last month":
+		endMonthIndex := year*12 + (month - 1)
+		start = time.Date((endMonthIndex-1)/12, time.Month((endMonthIndex-1)%12+1), 1, 0, 0, 0, 0, time.UTC)
+		end = time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+	case "last quarter":
+		quarterFirst := (month-1)/3*3 + 1
+		endMonthIndex := year*12 + (quarterFirst - 1)
+		start = time.Date((endMonthIndex-3)/12, time.Month((endMonthIndex-3)%12+1), 1, 0, 0, 0, 0, time.UTC)
+		end = time.Date(year, time.Month(quarterFirst), 1, 0, 0, 0, 0, time.UTC)
+	case "last year":
+		start = time.Date(year-1, time.January, 1, 0, 0, 0, 0, time.UTC)
+		end = time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)
+	default:
+		panic("calendarPeriodOracle: unknown phrase " + phrase)
+	}
+	return start, end
+}
+
+// The oracle must itself agree with hand-written dates at the edges (year
+// roll-back, quarter boundaries, leap February) before it can judge a row.
+func TestCalendarPeriodOracleAgreesWithHandWrittenDates(t *testing.T) {
+	day := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 12, 0, 0, 0, time.UTC) }
+	cases := []struct {
+		phrase     string
+		now        time.Time
+		start, end string
+	}{
+		{"last month", day(1970, 1, 1), "1969-12-01", "1970-01-01"},
+		{"last month", day(2026, 3, 31), "2026-02-01", "2026-03-01"},
+		{"last month", day(2024, 3, 1), "2024-02-01", "2024-03-01"},
+		{"last month", day(2026, 9, 14), "2026-08-01", "2026-09-01"},
+		{"last quarter", day(2026, 1, 5), "2025-10-01", "2026-01-01"},
+		{"last quarter", day(2026, 8, 12), "2026-04-01", "2026-07-01"},
+		{"last year", day(2026, 8, 12), "2025-01-01", "2026-01-01"},
+	}
+	for _, tc := range cases {
+		start, end := calendarPeriodOracle(tc.phrase, tc.now)
+		if got := start.Format("2006-01-02") + " " + end.Format("2006-01-02"); got != tc.start+" "+tc.end {
+			t.Errorf("%s at %s: %s, want %s %s", tc.phrase, tc.now.Format("2006-01-02"), got, tc.start, tc.end)
+		}
+	}
 }

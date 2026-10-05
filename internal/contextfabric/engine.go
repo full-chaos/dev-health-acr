@@ -2206,10 +2206,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// : the binder committed a bare calendar phrase's window before
 	// the interpreter ran; the interpretation may only withdraw it (an as-of
 	// reading, a class with no window), never redefine it.
-	if withdrawn, ok := withdrawCalendarCommit(windowCanon, interpretation, familyOutcome.Frame); ok {
+	if withdrawn, reason, ok := withdrawCalendarCommit(windowCanon, interpretation, familyOutcome.Frame); ok {
 		windowCanon = withdrawn
 		if e.telemetry != nil {
-			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, StatedWindowOriginQuestionPhrase, interpretedTimeBound.Bound.Axis, interpretedTimeBound.Bound.Axis, StatedWindowAxisWithdrawn)
+			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, StatedWindowOriginQuestionPhrase, interpretedTimeBound.Bound.Axis, interpretedTimeBound.Bound.Axis, reason)
 		}
 	}
 	var periodClamp ReadTimeClamp

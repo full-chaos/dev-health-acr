@@ -496,31 +496,28 @@ func (e *Engine) commitBinderCalendarWindow(request InvestigationRequest, binder
 }
 
 // withdrawCalendarCommit reports whether the binder's calendar commitment must
-// be given up once the interpretation is known, and returns canon without it.
-// A commitment is withdrawn when the interpreter read a point in time (an
-// explicit as-of is a genuine historical question: CHAOS-5582's fresh-axis rule
-// governs it) or the interpreted window class carries no window at all (the
-// same "refuse to guess" rule composeEffectiveWindow applies to a trailing
-// phrase), or the frame is a series or a period comparison, which read the
-// stated period on the range axis. A sampled range or current axis never
-// withdraws it.
-func withdrawCalendarCommit(canon requestWindowCanonicalization, interpretation InterpretedQuestion, frame *QuestionFrame) (requestWindowCanonicalization, bool) {
+// be given up once the interpretation is known, returns canon without it, and
+// names why. The period phrase is the caller's own statement, so no window
+// class and no sampled range or current axis withdraws it (as a trailing
+// phrase commits whatever the class). Two readings do: the interpreter read a
+// point in time (an explicit as-of is a genuine historical question; the
+// fresh-axis rule governs it), or the frame is a series or a period
+// comparison, which read the stated period on the range axis.
+func withdrawCalendarCommit(canon requestWindowCanonicalization, interpretation InterpretedQuestion, frame *QuestionFrame) (requestWindowCanonicalization, StatedWindowAxisOutcome, bool) {
 	if !canon.CalendarCommitted {
-		return canon, false
+		return canon, "", false
 	}
-	if periodShapeOf(frame) != periodShapeCurrent {
-		canon.Effective, canon.KeyComponent, canon.KeyEncoding, canon.CalendarCommitted = nil, "", 0, false
-		return canon, true
-	}
-	axis := interpretation.TimeContext.Axis
-	if axis == TemporalCurrent || axis == TemporalRange {
-		outcome := ClassifyWindow(interpretation, interpretation.WindowClass, interpretation.WindowConfidence)
-		if _, carriesWindow := DefaultRelativeID(outcome, windowDefaultPolicy); carriesWindow {
-			return canon, false
-		}
+	var reason StatedWindowAxisOutcome
+	switch axis := interpretation.TimeContext.Axis; {
+	case periodShapeOf(frame) != periodShapeCurrent:
+		reason = StatedWindowAxisWithdrawnPeriodShape
+	case axis == TemporalCurrent || axis == TemporalRange:
+		return canon, "", false
+	default:
+		reason = StatedWindowAxisWithdrawnPointInTime
 	}
 	canon.Effective, canon.KeyComponent, canon.KeyEncoding, canon.CalendarCommitted = nil, "", 0, false
-	return canon, true
+	return canon, reason, true
 }
 
 // deriveRequestedWindow canonicalizes a caller's explicit
@@ -1079,10 +1076,14 @@ const (
 	// StatedWindowAxisStatedRange: a series or comparison turn reads its
 	// stated period on the range axis.
 	StatedWindowAxisStatedRange StatedWindowAxisOutcome = "stated_range"
-	// StatedWindowAxisWithdrawn (): the binder's calendar commitment
-	// was given up because the interpreter read a point in time or a class that
-	// carries no window; the fresh axis governs and no window is reported.
-	StatedWindowAxisWithdrawn StatedWindowAxisOutcome = "withdrawn"
+	// StatedWindowAxisWithdrawnPointInTime: the binder's calendar commitment
+	// was given up because the interpreter read a point in time; the fresh axis
+	// governs and no window is reported.
+	StatedWindowAxisWithdrawnPointInTime StatedWindowAxisOutcome = "withdrawn_point_in_time"
+	// StatedWindowAxisWithdrawnPeriodShape: the calendar commitment was given
+	// up because the frame asks for a series or a period comparison, which read
+	// their stated period on the range axis.
+	StatedWindowAxisWithdrawnPeriodShape StatedWindowAxisOutcome = "withdrawn_period_shape"
 )
 
 // statedWindowAxisOutcomeOf maps the shared axis rule's result onto the stated

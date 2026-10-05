@@ -230,30 +230,25 @@ func TestCalendarWindow_CalendarPhraseWithAnAsOfReadingKeepsThePointInTime(t *te
 	}
 }
 
-// A class that carries no window at all (state_snapshot) refuses to guess a
-// window exactly as a trailing phrase does: the calendar commit is withdrawn.
-func TestCalendarWindow_StateSnapshotClassWithdrawsTheCalendarCommit(t *testing.T) {
+// A period the caller stated is not a guess: whatever window class the
+// interpreter picked (state_snapshot included), the calendar window commits on
+// every sample, as a trailing phrase does.
+func TestCalendarWindow_TheWindowClassNeverWithdrawsTheCalendarCommit(t *testing.T) {
 	t.Parallel()
-	interpretation := bootstrapInterpretation()
-	interpretation.WindowClass = WindowClassStateSnapshot
-	interpretation.WindowConfidence = WindowConfidenceHigh
-	run := runCalendarCase(t, "mcp", "What is the release state of Ask Dev, as it looked last month?", nil, TemporalCurrent, interpretation)
-	if w := run.result.EffectiveEvidenceWindow; w != nil {
-		t.Fatalf("window = %#v, want none for a state_snapshot question", w)
-	}
-}
-
-// A withdrawn calendar phrase is not the interpreter's to bound either: a
-// state_snapshot class with a sampled range reports no window (the binder
-// decides a bare calendar phrase, the interpreter's range never does).
-func TestCalendarWindow_WithdrawnCalendarPhraseIsNotBoundedByTheInterpreterRange(t *testing.T) {
-	t.Parallel()
-	interpretation := sampledInterpretations()[0]
-	interpretation.WindowClass = WindowClassStateSnapshot
-	interpretation.WindowConfidence = WindowConfidenceHigh
-	run := runCalendarCase(t, "mcp", "What is the release state of Ask Dev, as it looked last month?", nil, TemporalCurrent, interpretation)
-	if w := run.result.EffectiveEvidenceWindow; w != nil && w.Provenance == WindowQuestionStated {
-		t.Fatalf("window = %#v, want no committed window", w)
+	for _, class := range []WindowClass{WindowClassStateSnapshot, WindowClassTrendAssessment, ""} {
+		for i, sample := range sampledInterpretations() {
+			interpretation := sample
+			interpretation.WindowClass = class
+			if class != "" {
+				interpretation.WindowConfidence = WindowConfidenceHigh
+			}
+			run := runCalendarCase(t, "mcp", "Which repository carried the most operational/support work last month?", nil, TemporalCurrent, interpretation)
+			w := run.result.EffectiveEvidenceWindow
+			wantStart, wantEnd := calendarPeriodOracle("last month", time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC))
+			if w == nil || w.Provenance != WindowQuestionStated || w.Start == nil || w.End == nil || !w.Start.Equal(wantStart) || !w.End.Equal(wantEnd) {
+				t.Fatalf("class %q sample %d: window = %#v, want the calendar month %v..%v", class, i, w, wantStart, wantEnd)
+			}
+		}
 	}
 }
 
@@ -278,12 +273,42 @@ func TestCalendarWindow_CalendarCommitIsRecorded(t *testing.T) {
 	}{
 		{"range sample", sampledInterpretations()[0], statedWindowAxisRecord{"mcp", StatedWindowOriginQuestionPhrase, TemporalRange, TemporalCurrent, StatedWindowAxisOverridden}},
 		{"current sample", sampledInterpretations()[1], statedWindowAxisRecord{"mcp", StatedWindowOriginQuestionPhrase, TemporalCurrent, TemporalCurrent, StatedWindowAxisAgreed}},
-		{"as-of reading", driftedInterpretation(contractsv1.ContextFabricTemporalValidTime), statedWindowAxisRecord{"mcp", StatedWindowOriginQuestionPhrase, TemporalValidTime, TemporalValidTime, StatedWindowAxisWithdrawn}},
+		{"as-of reading", driftedInterpretation(contractsv1.ContextFabricTemporalValidTime), statedWindowAxisRecord{"mcp", StatedWindowOriginQuestionPhrase, TemporalValidTime, TemporalValidTime, StatedWindowAxisWithdrawnPointInTime}},
 	}
 	for _, tc := range cases {
 		run := runCalendarCase(t, "mcp", question, nil, TemporalCurrent, tc.in)
 		if len(run.telemetry.statedWindowAxes) != 1 || run.telemetry.statedWindowAxes[0] != tc.want {
 			t.Fatalf("%s: stated window axis records = %#v, want [%#v]", tc.name, run.telemetry.statedWindowAxes, tc.want)
+		}
+	}
+}
+
+// A series or a comparison frame gives up the binder's calendar commitment to
+// the range read of its stated period; the loud line names that decision with
+// its own token, apart from the as-of withdrawal, so a trace shows which
+// decision was taken.
+func TestCalendarWindow_APeriodShapeFrameLogsItsOwnWithdrawalToken(t *testing.T) {
+	t.Parallel()
+	for _, temporal := range []TemporalIntent{TemporalIntentTimeSeries, TemporalIntentPeriodComparison} {
+		cells := reachableFamilyCells(WindowClassExplicitWindow, true, temporal, periodShapeQuestion(temporal, periodQuestionNamed))
+		cell := cells[0]
+		cell.time = suppliedRangeEqual
+		cell.question = map[TemporalIntent]string{
+			TemporalIntentTimeSeries:       "How did the Ask Dev project's throughput change last month?",
+			TemporalIntentPeriodComparison: "How does the Ask Dev project's throughput compare with before, last month?",
+		}[temporal]
+		_, _, telemetry := runSuppliedRangeCellRig(t, cell, mcpSurface)
+		var tokens []StatedWindowAxisOutcome
+		for _, record := range telemetry.statedWindowAxes {
+			tokens = append(tokens, record.Outcome)
+		}
+		if len(tokens) == 0 || tokens[0] != StatedWindowAxisWithdrawnPeriodShape {
+			t.Fatalf("%s: stated window axis outcomes = %v, want %q first", temporal, tokens, StatedWindowAxisWithdrawnPeriodShape)
+		}
+		for _, token := range tokens {
+			if token == StatedWindowAxisWithdrawnPointInTime {
+				t.Fatalf("%s: the as-of token was logged for a period shape: %v", temporal, tokens)
+			}
 		}
 	}
 }
