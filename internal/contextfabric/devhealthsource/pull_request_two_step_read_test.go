@@ -94,12 +94,16 @@ func TestThePullRequestWideReadNamesAFewRowsFromTheChosenVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recorder.statements) != 3 {
-		t.Fatalf("%d wide statements for 9 rows, want 3 of at most %d rows", len(recorder.statements), pullRequestWideReadRows)
+	perStatement := pullRequestWideReadRows(context.Background())
+	if perStatement != 5 {
+		t.Fatalf("rows per wide statement under the 64 MiB client default and 10 MiB granules = %d, want 5", perStatement)
+	}
+	if len(recorder.statements) != 2 {
+		t.Fatalf("%d wide statements for 9 rows, want 2 of at most %d rows", len(recorder.statements), perStatement)
 	}
 	for i, statement := range recorder.statements {
-		if recorder.named[i] > pullRequestWideReadRows {
-			t.Errorf("statement %d names %d rows, want at most %d", i, recorder.named[i], pullRequestWideReadRows)
+		if recorder.named[i] > perStatement {
+			t.Errorf("statement %d names %d rows, want at most %d", i, recorder.named[i], perStatement)
 		}
 		if strings.Contains(statement, "FINAL") || !strings.Contains(statement, "p.last_synced = {v0:DateTime64(3, 'UTC')}") || !strings.Contains(statement, "PREWHERE") {
 			t.Errorf("statement %d does not read the chosen version without FINAL under PREWHERE:\n%s", i, statement)
@@ -123,5 +127,12 @@ func TestThePullRequestWideReadNamesAFewRowsFromTheChosenVersion(t *testing.T) {
 	}
 	if strings.Join(order, ",") != strings.Join(want, ",") {
 		t.Fatalf("rows %v, want %v (page order, row 5 left for the next page)", order, want)
+	}
+
+	// A recorded 3 MiB limit over 512 KiB granules allows 4 rows a statement.
+	defer func(granule uint64) { pullRequestGranuleBytes = granule }(pullRequestGranuleBytes)
+	pullRequestGranuleBytes = 512 << 10
+	if got := pullRequestWideReadRows(withReadByteLimit(context.Background(), 3<<20)); got != 4 {
+		t.Fatalf("rows per wide statement under 3 MiB and 512 KiB granules = %d, want 4", got)
 	}
 }

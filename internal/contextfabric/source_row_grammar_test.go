@@ -171,7 +171,7 @@ func producerGrammars() []producerGrammar {
 			source+"issue_pull_request_link.go|queryIssuePullRequestLinks", source+"teams_projects_edges.go|querySubjectProjectMemberships", "internal/contextfabric/work_item_payload.go|canonicalWorkItemEvidenceRef")},
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "sql/1", sites: sites(catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "concat/2", repoAnchored: true, sites: sites(
-			facts+"pullrequests.go|ReadFacts", source+"issue_pull_request_link.go|queryIssuePullRequestLinks", source+"tables.go|queryPullRequests", source+"teams_projects_edges.go|querySubjectProjectMemberships")},
+			facts+"pullrequests.go|ReadFacts", source+"issue_pull_request_link.go|queryIssuePullRequestLinks", source+"tables.go|scanPullRequestRow", source+"teams_projects_edges.go|querySubjectProjectMemberships")},
 		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "sql/1", sites: sites(catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityReview, shape: "concat/2", repoAnchored: true, sites: sites(facts+"pullrequests.go|ReadFacts", source+"tables.go|queryPullRequestReviews")},
 		{kind: contractsv1.ContextFabricEvidenceEntityReview, shape: "sql/1", sites: sites(catalog)},

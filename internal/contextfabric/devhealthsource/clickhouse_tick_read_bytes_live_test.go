@@ -113,6 +113,11 @@ func TestLiveWholeClickHouseSourceTickStaysUnderTheByteLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The source knows the reader's limit and the store's granule size, as
+	// the projector knows prod's: its key-named reads size their statements
+	// from them.
+	source.WithReadByteLimit(limit)
+	devhealthsource.SetPullRequestGranuleBytesForTest(t, tickGranuleBytes)
 	phaseStart := map[string]time.Time{}
 	phaseStart[tickPhaseCatchUp] = serverNow(t, ctx, admin)
 	cursor, pages := runSourceUntilCaughtUp(t, ctx, source, "", tickPhaseCatchUp)

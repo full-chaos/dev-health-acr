@@ -438,12 +438,37 @@ WHERE p.org_id = {org_id:String}`+sincePredicate(cursor, "p.last_synced", rowKey
 	return rows, truncated, nil
 }
 
-// pullRequestWideReadRows is how many rows one wide read names. Each row is
-// read from the one version the page chose, without FINAL, so a statement
-// reads at most this many granules of the wide columns (prod cuts a granule
-// at index_granularity_bytes, 10 MiB by default, under a 64 MiB
-// max_bytes_to_read).
-const pullRequestWideReadRows = 4
+// The wide read's size. ClickHouse reads whole granules: a granule of the
+// wide columns is the least one row's body costs, and it is cut at
+// index_granularity_bytes (the ClickHouse default, 10 MiB; the pull request
+// table sets no other). Each row is read from the one version the page chose,
+// without FINAL, so a statement naming n rows reads at most n granules of the
+// wide columns. pullRequestWideReadRows keeps n granules within four fifths of
+// the client's max_bytes_to_read, the fifth left for the narrow columns
+// PREWHERE reads: 5 rows under prod's 64 MiB.
+var pullRequestGranuleBytes uint64 = 10 << 20
+
+// defaultReadByteLimit is the dev-health-go client's own max_bytes_to_read,
+// what a source with no recorded limit reads under.
+const defaultReadByteLimit uint64 = 64 << 20
+
+type readByteLimitKey struct{}
+
+func withReadByteLimit(ctx context.Context, limit uint64) context.Context {
+	if limit == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, readByteLimitKey{}, limit)
+}
+
+func pullRequestWideReadRows(ctx context.Context) int {
+	limit, _ := ctx.Value(readByteLimitKey{}).(uint64)
+	if limit == 0 {
+		limit = defaultReadByteLimit
+	}
+	rows := int(limit / 5 * 4 / pullRequestGranuleBytes)
+	return max(rows, 1)
+}
 
 // pullRequestPageKey is one row of a pull request page: its key, its
 // repository's slug and the version (last_synced) the page chose.
@@ -489,8 +514,9 @@ func pullRequestPageKeys(ctx context.Context, client contextpacket.ClickHouseQue
 func readPullRequestRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, keys []pullRequestPageKey, scan func(contextpacket.ClickHouseRowScanner) ([]candidate, error)) ([]candidate, error) {
 	slugs := make(map[string]string, len(keys))
 	read := make(map[string][]candidate, len(keys))
-	for start := 0; start < len(keys); start += pullRequestWideReadRows {
-		chunk := keys[start:min(start+pullRequestWideReadRows, len(keys))]
+	perStatement := pullRequestWideReadRows(ctx)
+	for start := 0; start < len(keys); start += perStatement {
+		chunk := keys[start:min(start+perStatement, len(keys))]
 		bindings := []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}}
 		terms := make([]string, len(chunk))
 		for i, key := range chunk {
@@ -679,16 +705,20 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 // becomes a ProjectionTombstone.
 func queryIncidents(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const timestampExpr = "coalesce(i.started_at, i.source_event_at, i.observed_at)"
+	// Two reads (CHAOS-8683), as for pull requests: the page is read without
+	// the wide description (the statement selects an empty one in its place),
+	// then each page row's description is read from the version the page
+	// chose, a few incidents per statement (readIncidentDescriptions).
 	statement := `SELECT i.id, toString(m.repo_id) AS repo_id, r.repo AS repo_slug, ifNull(i.title, ''),
        ifNull(i.normalized_status, ifNull(i.raw_status, '')), ifNull(i.normalized_severity, ifNull(i.raw_severity, '')),
        ` + timestampExpr + `, i.is_deleted,
        ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `,
-       ifNull(i.description, ''), i.last_synced
+       '' AS description_read_later, i.last_synced
 FROM operational_incidents AS i FINAL
 INNER JOIN operational_service_repository_mappings AS m FINAL ON i.org_id = m.org_id AND i.service_id = m.service_id AND m.is_active = 1
 INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
 WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, "i.last_synced", "i.id") + orderBy("i.last_synced", "i.id")
-	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+	page, truncated, err := fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var incidentID, repoID, repoSlug, title, status, severity, description string
 		var observedAt, startedAt, endedAt time.Time
 		var isDeleted, hasStarted, hasEnded uint8
@@ -738,6 +768,77 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, "i.last_synced", "i.i
 			belongsToRepository(subject, repoSlug, repoID, observedAt, evidenceRefID, incidentID, validFrom, validTo),
 		}, nil
 	})
+	if err != nil {
+		return nil, false, err
+	}
+	if err := readIncidentDescriptions(ctx, client, orgID, page); err != nil {
+		return nil, false, err
+	}
+	return page, truncated, nil
+}
+
+// readIncidentDescriptions reads the description of the page's incidents, a
+// few per statement, each from the version the page chose (its ingest time),
+// without FINAL, and sets it on the page's incident entities. An incident
+// whose version moved between the reads keeps no description in this page;
+// its new version has a later ingest time, so a later page reads it whole.
+func readIncidentDescriptions(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, page []candidate) error {
+	type version struct {
+		id string
+		at time.Time
+	}
+	var versions []version
+	entities := map[string][]*contractsv1.ContextFabricEntityProjection{}
+	for i := range page {
+		entity := page[i].entity
+		if entity == nil || entity.Subject.Kind != contractsv1.ContextFabricSubjectIncident {
+			continue
+		}
+		id := page[i].sortKey
+		if _, seen := entities[id]; !seen {
+			versions = append(versions, version{id: id, at: page[i].position().UTC()})
+		}
+		entities[id] = append(entities[id], entity)
+	}
+	perStatement := pullRequestWideReadRows(ctx)
+	for start := 0; start < len(versions); start += perStatement {
+		chunk := versions[start:min(start+perStatement, len(versions))]
+		bindings := []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}}
+		terms := make([]string, len(chunk))
+		for i, v := range chunk {
+			// The version is bound as text with its microseconds: the
+			// client renders a time binding to the millisecond, and the
+			// incident's ingest time is DateTime64(6).
+			terms[i] = fmt.Sprintf("(i.id = {k%[1]d:String} AND i.last_synced = toDateTime64({v%[1]d:String}, 6, 'UTC'))", i)
+			bindings = append(bindings,
+				contextpacket.ClickHouseBinding{Name: fmt.Sprintf("k%d", i), Value: v.id},
+				contextpacket.ClickHouseBinding{Name: fmt.Sprintf("v%d", i), Value: v.at.Format("2006-01-02 15:04:05.000000")})
+		}
+		statement := `SELECT i.id AS description_incident_id, argMax(ifNull(i.description, ''), i.source_version_at)
+FROM operational_incidents AS i
+PREWHERE i.org_id = {org_id:String} AND (` + strings.Join(terms, " OR ") + `)
+GROUP BY i.id`
+		rows, err := client.Query(ctx, statement, bindings)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id, description string
+			if err := rows.Scan(&id, &description); err != nil {
+				rows.Close()
+				return err
+			}
+			for _, entity := range entities[id] {
+				setStringProperty(entity.Properties, "description", description, 800)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // queryWorkItemDependencies' natural key is (org, source, target,

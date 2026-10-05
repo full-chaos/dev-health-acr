@@ -87,6 +87,9 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 		// which is what every test that is not about ambiguity intends.
 		return &fakeScanner{}, nil
 	}
+	if strings.Contains(statement, "AS description_incident_id") {
+		return &fakeScanner{rows: c.incidentDescriptions(bindings)}, nil
+	}
 	if rows, served, err := c.pullRequestTwoStep(statement, bindings); served {
 		if err != nil {
 			return nil, err
@@ -106,6 +109,32 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 		}
 	}
 	return &fakeScanner{}, nil
+}
+
+// incidentDescriptions serves queryIncidents' description read (CHAOS-8683)
+// from the incident table's canned rows (id first, description thirteenth):
+// the description of each incident the bindings name.
+func (c *fakeClient) incidentDescriptions(bindings []contextpacket.ClickHouseBinding) [][]any {
+	named := map[any]bool{}
+	for _, binding := range bindings {
+		if strings.HasPrefix(binding.Name, "k") {
+			named[binding.Value] = true
+		}
+	}
+	var out [][]any
+	for _, table := range c.tables {
+		if !strings.Contains(table.match, "operational_incidents") {
+			continue
+		}
+		seen := map[any]bool{}
+		for _, row := range table.rows {
+			if len(row) > 12 && named[row[0]] && !seen[row[0]] {
+				seen[row[0]] = true
+				out = append(out, []any{row[0], row[12]})
+			}
+		}
+	}
+	return out
 }
 
 // pullRequestTwoStep serves queryPullRequests' two reads (CHAOS-8683) from the

@@ -334,3 +334,45 @@ func LegacyPullRequestReadForTest(ctx context.Context, client contextpacket.Clic
 	}
 	return rows.Err()
 }
+
+// SetPullRequestGranuleBytesForTest sets the granule size the pull request
+// wide read sizes its statements from, for a live test whose store cuts
+// granules smaller than ClickHouse's default; restored when the test ends.
+func SetPullRequestGranuleBytesForTest(t interface{ Cleanup(func()) }, granule uint64) {
+	previous := pullRequestGranuleBytes
+	pullRequestGranuleBytes = granule
+	t.Cleanup(func() { pullRequestGranuleBytes = previous })
+}
+
+// DrainPullRequestPagesForTest reads every pull request page of an
+// organization from a zero cursor, through main's single statement (legacy)
+// or the two-step read, and returns the rows read.
+func DrainPullRequestPagesForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, legacy bool, limit int) (int, error) {
+	cursor := cursorState{Space: cursorSpaceIngest}
+	rows := 0
+	for page := 0; page < 10000; page++ {
+		var candidates []candidate
+		var truncated bool
+		var err error
+		if legacy {
+			candidates, truncated, err = fetch(ctx, client, legacyPullRequestStatement(cursor), rowLimitBindings(orgID, cursor, limit), limit, scanPullRequestRow)
+		} else {
+			candidates, truncated, err = queryPullRequests(ctx, client, orgID, cursor, limit)
+		}
+		if err != nil {
+			return rows, err
+		}
+		var last *candidate
+		for i := range candidates {
+			if candidates[i].entity != nil {
+				rows++
+				last = &candidates[i]
+			}
+		}
+		if !truncated || last == nil {
+			return rows, nil
+		}
+		cursor = cursorState{Since: last.position(), After: last.sortKey, Space: cursorSpaceIngest}
+	}
+	return rows, fmt.Errorf("pull request pages did not end")
+}
