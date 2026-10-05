@@ -260,6 +260,12 @@ type treeWalk struct {
 	// node admitted through one link is not denied for another. Nodes the
 	// read's grant clause kept out are not read, so not counted.
 	linkDeniedTargets int
+	// linkIssueTargets is set when the far side of the link is the issue (a
+	// repository's work items): the distinct linked issues before
+	// authorization, for a restricted caller read by a bounded count with no
+	// grant clause (a count only, no id), otherwise what the read returned.
+	// -1 for any other walk.
+	linkIssueTargets int
 	// endTiers is, for each admitted far-side node of the link read, the
 	// strongest tier among its admitted link rows (linkSegment). It is
 	// recorded for every link read; memberTiers is its part that matters.
@@ -634,6 +640,37 @@ func linkSegmentGrants(params map[string]interface{}, principal storage.Principa
 	return params
 }
 
+// linkTargetCountCypher counts the distinct far-side nodes of the anchor's
+// links of the admitted tiers, before authorization: the link read's pattern
+// with no grant clause. It returns one number, never an id.
+func linkTargetCountCypher(feed, link treeHop, temporal temporalFilter) string {
+	mid := treeNodeVar{name: "m", param: "mtypes", position: feed.to}
+	end := treeNodeVar{name: "b", param: "btypes", position: link.to}
+	return linkSegmentMatch(feed) + fmt.Sprintf(hopArrow(link.step.direction, "rl")+"(b:%[2]s {%[3]s:$org, %[4]s:$endKind}) ", labelRelation, labelSubject, propOrgID, propKind) +
+		fmt.Sprintf("WHERE ra.%[1]s = $feedRel AND rl.%[1]s = $linkRel AND rl.%[2]s IN $tiers", propRelationType, propPropertyPrefix+linkTierProperty) + mid.typeClause() + end.typeClause() +
+		temporal.predicate("ra") + temporal.predicate("m") + temporal.predicate("rl") + temporal.predicate("b") + " RETURN count(DISTINCT b) AS targets"
+}
+
+// linkTargetCount runs linkTargetCountCypher and reads its single number.
+func (a *Adapter) linkTargetCount(ctx context.Context, key, orgID string, anchor contextfabric.SubjectRef, feed, link treeHop, temporal temporalFilter) (int, error) {
+	rows, err := a.api.query(ctx, key, linkTargetCountCypher(feed, link, temporal), linkSegmentParams(orgID, anchor, feed, link, 0, 1, temporal), true)
+	if err != nil {
+		return 0, safeDependencyError("count link targets", err)
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	switch n := rows[0]["targets"].(type) {
+	case int64:
+		return int(n), nil
+	case int:
+		return n, nil
+	case float64:
+		return int(n), nil
+	}
+	return 0, nil
+}
+
 // linkSources reads how many near-side nodes the anchor's hop reaches, before
 // authorization.
 func (a *Adapter) linkSources(ctx context.Context, key, orgID string, anchor contextfabric.SubjectRef, feed, link treeHop, temporal temporalFilter) (int, error) {
@@ -672,6 +709,16 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		pageSize = state.collectLimit + 1
 	}
 	restricted := needsProjectReach(state.principal)
+	unfiltered := -1
+	out.linkIssueTargets = -1
+	if restricted && link.to == treeIssue {
+		// The read below keeps only rows the grants can admit; how many linked
+		// issues there are before authorization comes from the same pattern
+		// with no grant clause, as one bounded count.
+		if unfiltered, err = a.linkTargetCount(ctx, key, orgID, anchor, feed, link, temporal); err != nil {
+			return nil, nil, err
+		}
+	}
 	cypher := linkSegmentCypher(feed, link, temporal, restricted)
 	seen := map[string]bool{}
 	admitted := map[string]*node{}
@@ -725,6 +772,9 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	}
 	out.linkTargets = len(seen)
 	out.linkDeniedTargets = len(seen) - len(admitted)
+	if link.to == treeIssue {
+		out.linkIssueTargets = max(unfiltered, len(seen))
+	}
 	return ends, admitted, nil
 }
 

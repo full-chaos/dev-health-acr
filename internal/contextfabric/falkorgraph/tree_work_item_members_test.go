@@ -236,8 +236,8 @@ func TestRepositoryWorkItemCountsAreBeforeAuthorization(t *testing.T) {
 // TestRepositoryWorkItemDeniedCountsIssuesNotLinkRows: denied counts the
 // distinct issues the link read returned that no authorized link reached:
 // issues, never link rows, so an issue admitted through a native link and also
-// text-linked is not denied. Linked issues are what the read returned: with
-// the read's grant clause, only what the grants can admit.
+// text-linked is not denied. Linked issues are counted before authorization
+// in both modes: with the read's grant clause by a bounded count with none.
 func TestRepositoryWorkItemDeniedCountsIssuesNotLinkRows(t *testing.T) {
 	s := newMemberSeed()
 	s.issue("work_item.v2:c:visible", []string{memberAnchorSlug})
@@ -256,9 +256,10 @@ func TestRepositoryWorkItemDeniedCountsIssuesNotLinkRows(t *testing.T) {
 		wrap           func(*fakeConn)
 		linked, denied int
 	}{
-		// The grant clause keeps secret and textonly out of the read: they are
-		// not returned, so neither linked nor denied.
-		"pushdown and per-row": {nil, 2, 0},
+		// The grant clause keeps secret and textonly out of the read: the
+		// count still sees four linked issues; the two never read are not
+		// denied (nothing served counts what the read did not return).
+		"pushdown and per-row": {nil, 4, 0},
 		// Every link row is returned; the per-row rule rejects secret and
 		// textonly; both is admitted through its native link.
 		"per-row only": {perRowOnly, 4, 2},

@@ -287,6 +287,13 @@ func seededProjectLinks(byKey map[string]seededNode, edges []seededEdge, cypher 
 			links = append(links, link{n, far, fmt.Sprintf("rel_%03d", i), e.tier})
 		}
 	}
+	if strings.Contains(cypher, "count(DISTINCT b) AS targets") {
+		far := map[string]bool{}
+		for _, l := range links {
+			far[l.far.id] = true
+		}
+		return []row{{"targets": int64(len(far))}}
+	}
 	byRank := strings.Contains(cypher, "ORDER BY rl."+propPropertyPrefix+linkRankProperty+" DESC")
 	sort.Slice(links, func(a, b int) bool {
 		if byRank && seededTierRank[links[a].tier] != seededTierRank[links[b].tier] {

@@ -37,11 +37,10 @@ type TreeWorkItemWalk struct {
 	// requested limit. When the walk is cut, the members kept are those of
 	// the strongest links first.
 	Members []TreeWorkItemMember
-	// PullRequests is how many pull requests of the anchor the walk reached,
-	// before authorization. LinkedIssues is how many distinct issues the link
-	// read returned: for a restricted caller only those its grants can admit
-	// (the read's grant clause), before the per-row check. It is not a
-	// pre-authorization count for such a caller.
+	// PullRequests is how many pull requests of the anchor the walk reached
+	// and LinkedIssues how many distinct issues they link, both before
+	// authorization (for a restricted caller LinkedIssues is a bounded count
+	// with no grant clause). Neither is served to a restricted caller.
 	PullRequests, LinkedIssues int
 	// Denied counts the distinct linked issues no authorized link reached:
 	// issues, never link rows, so an issue admitted through one link is not

@@ -42,11 +42,10 @@ func RepositoryWorkItemWalkOutcomeVocabulary() []string {
 }
 
 // RepositoryWorkItemWalkEvent is one decision line of the read: counts and
-// closed values only, never a name or an id. PullRequests are the
-// repository's, before any filter or authorization; LinkedIssues are the
-// distinct issues the link read returned, before any member filter (for a
-// restricted caller only those its grants can admit); Denied is the distinct
-// returned issues no authorized link reached, and is
+// closed values only, never a name or an id. PullRequests and LinkedIssues
+// are the repository's, before any filter or authorization; Denied is the
+// distinct issues the link read returned that no authorized link reached, and
+// is
 // withheld (zero) on a filtered read, as the census line withholds it.
 // Truncated: the walk or the filter did not read every member.
 type RepositoryWorkItemWalkEvent struct {
