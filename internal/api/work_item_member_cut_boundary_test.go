@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -70,9 +73,11 @@ func (m cutRepositoryModel) InterpretQuestion(ctx context.Context, p storage.Pri
 }
 
 type cutRig struct {
-	boot  *acrmcp.Bootstrap
-	store *memoryinvestigation.Store
-	graph *cutWalkGraph
+	server *httptest.Server
+	token  string
+	boot   *acrmcp.Bootstrap
+	store  *memoryinvestigation.Store
+	graph  *cutWalkGraph
 }
 
 func cutWalk(t *testing.T, count, denied int, tier func(i int) string) contextfabric.TreeWorkItemWalk {
@@ -130,7 +135,7 @@ func newCutRig(t *testing.T, walk contextfabric.TreeWorkItemWalk) *cutRig {
 	if err != nil {
 		t.Fatalf("real MCP bootstrap: %v", err)
 	}
-	return &cutRig{boot: boot, store: store, graph: graph}
+	return &cutRig{server: server, token: token, boot: boot, store: store, graph: graph}
 }
 
 func (r *cutRig) ask(t *testing.T) servedAnswer {
@@ -198,7 +203,7 @@ func TestACutRepositoryListReachesTheClientWithItsPopulation(t *testing.T) {
 	if got.Listed >= 20 || got.Listed == 0 {
 		t.Fatalf("listed = %d, want a list cut by the item ceiling", got.Listed)
 	}
-	want, _ := contractsv1.ContextFabricWorkItemListedLimitation(got.Listed, 20, false)
+	want, _ := contractsv1.ContextFabricWorkItemListedLimitation(got.Listed, 20, false, contractsv1.ContextFabricWorkItemListCutServer)
 	if got.Population != 20 || got.LowerBound || got.listedSentence() != want || got.tierSentence() {
 		t.Fatalf("served cohort = %+v, want population 20, sentence %q, no tier sentence", got, want)
 	}
@@ -287,4 +292,82 @@ func TestTheStoredResultKeepsALowerBoundCut(t *testing.T) {
 	if a.LowerBound != b.LowerBound || a.Population != b.Population || strings.Join(a.Sentences, "|") != strings.Join(b.Sentences, "|") {
 		t.Fatalf("stored differs from fresh:\nfresh  %+v\nstored %+v", a, b)
 	}
+}
+
+// viewByID reads the stored result through the hosted route's projection view with a
+// member limit of its own, the way a client reads a result again with another budget.
+func (r *cutRig) viewByID(t *testing.T, fresh servedAnswer, members int) servedCohort {
+	t.Helper()
+	var id struct {
+		Structured struct {
+			ResultID string `json:"result_id"`
+		} `json:"structured"`
+	}
+	if err := json.Unmarshal(fresh.structured, &id); err != nil || id.Structured.ResultID == "" {
+		t.Fatalf("fresh answer carries no result id: %v %s", err, fresh.structured)
+	}
+	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/v1/context-fabric/investigations/%s?view=projection&max_cohort_members=%d&max_evidence_refs=500", r.server.URL, id.Structured.ResultID, members), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+r.token)
+	request.Header.Set("X-ACR-Client-Version", "1.2.5")
+	response, err := r.server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("projection view: status %d err %v body %.500s", response.StatusCode, err, body)
+	}
+	return readServedCohort(t, servedAnswer{structured: json.RawMessage(`{"structured":` + string(body) + `}`)})
+}
+
+func (c servedCohort) listedSentences() []string {
+	var out []string
+	for _, s := range c.Sentences {
+		if contractsv1.IsContextFabricWorkItemListedLimitation(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func TestTheListedSentenceIsStatedForWhatTheResponseLists(t *testing.T) {
+	native := func(int) string { return contextfabric.TreeLinkTierNative }
+	sentenceFor := func(listed, population int, cut contractsv1.ContextFabricWorkItemListCut) string {
+		s, _ := contractsv1.ContextFabricWorkItemListedLimitation(listed, population, false, cut)
+		return s
+	}
+	t.Run("the engine cut only", func(t *testing.T) {
+		rig := newCutRig(t, cutWalk(t, 20, 0, native))
+		got := readServedCohort(t, rig.ask(t))
+		if want := sentenceFor(got.Listed, 20, contractsv1.ContextFabricWorkItemListCutServer); got.Listed != 14 || !slices.Equal(got.listedSentences(), []string{want}) {
+			t.Fatalf("served %+v, want 14 listed with %q", got, want)
+		}
+	})
+	t.Run("the response cut only", func(t *testing.T) {
+		rig := newCutRig(t, cutWalk(t, 12, 0, native))
+		fresh := rig.ask(t)
+		if f := readServedCohort(t, fresh); f.Listed != 12 || len(f.listedSentences()) != 0 {
+			t.Fatalf("fresh %+v, want all 12 listed and no cut sentence", f)
+		}
+		view := rig.viewByID(t, fresh, 3)
+		if want := sentenceFor(3, 12, contractsv1.ContextFabricWorkItemListCutResponse); view.Listed != 3 || !slices.Equal(view.listedSentences(), []string{want}) {
+			t.Fatalf("view with 3 members %+v, want 3 listed with %q", view, want)
+		}
+	})
+	t.Run("both cuts, and a read again with another limit", func(t *testing.T) {
+		rig := newCutRig(t, cutWalk(t, 20, 0, native))
+		fresh := rig.ask(t)
+		same := rig.viewByID(t, fresh, 25)
+		if f := readServedCohort(t, fresh); !slices.Equal(same.listedSentences(), f.listedSentences()) || same.Listed != f.Listed {
+			t.Fatalf("a read again with an equal limit differs from the fresh answer: fresh %+v view %+v", f, same)
+		}
+		view := rig.viewByID(t, fresh, 3)
+		if want := sentenceFor(3, 20, contractsv1.ContextFabricWorkItemListCutBoth); view.Listed != 3 || !slices.Equal(view.listedSentences(), []string{want}) {
+			t.Fatalf("view with 3 members %+v, want 3 listed with %q", view, want)
+		}
+	})
 }

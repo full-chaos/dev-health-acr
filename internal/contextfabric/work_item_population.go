@@ -24,7 +24,7 @@ func withWorkItemPopulation(result InvestigationResult, census *WorkItemTupleCen
 	cohort.Population = census.Value
 	cohort.PopulationLowerBound = lowerBound
 	result.Cohort = &cohort
-	if sentence, ok := contractsv1.ContextFabricWorkItemListedLimitation(listed, census.Value, lowerBound); ok {
+	if sentence, ok := contractsv1.ContextFabricWorkItemListedLimitation(listed, census.Value, lowerBound, contractsv1.ContextFabricWorkItemListCutServer); ok {
 		composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
 		result.Limitations = composed
 		result.LimitationsDisplaced += displaced

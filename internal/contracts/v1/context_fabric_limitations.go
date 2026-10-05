@@ -851,27 +851,53 @@ const (
 	contextFabricWorkItemRepositoryHeuristicSuffix = "(a pull request opened near the issue's last update in the issue's own repository)."
 )
 
+// ContextFabricWorkItemListCut is the closed vocabulary of what bounded a
+// work-item list shorter than its population.
+type ContextFabricWorkItemListCut string
+
+const (
+	// ContextFabricWorkItemListCutServer: the server's answer item limit cut
+	// the list before the response was built.
+	ContextFabricWorkItemListCutServer ContextFabricWorkItemListCut = "server"
+	// ContextFabricWorkItemListCutResponse: the limits of this response (its
+	// member and evidence reference limits) cut a list the server had built whole.
+	ContextFabricWorkItemListCutResponse ContextFabricWorkItemListCut = "response"
+	// ContextFabricWorkItemListCutBoth: the server cut the list and this
+	// response cut it further.
+	ContextFabricWorkItemListCutBoth ContextFabricWorkItemListCut = "both"
+)
+
+const contextFabricWorkItemResponseLimits = "this response lists at most the members its limits allow (raise max_cohort_members and max_evidence_refs to read more)"
+
+var contextFabricWorkItemListCutReasons = map[ContextFabricWorkItemListCut]string{
+	ContextFabricWorkItemListCutServer:   "the server limits how many items one answer carries",
+	ContextFabricWorkItemListCutResponse: contextFabricWorkItemResponseLimits,
+	ContextFabricWorkItemListCutBoth:     "the server limits how many items one answer carries and " + contextFabricWorkItemResponseLimits,
+}
+
 const (
 	contextFabricWorkItemListedPrefix  = "Not every member is listed: "
 	contextFabricWorkItemListedOf      = " of "
 	contextFabricWorkItemListedAtLeast = "at least "
-	contextFabricWorkItemListedSuffix  = " members are listed, because the server limits how many items one answer carries."
+	contextFabricWorkItemListedMid     = " members are listed, because "
 )
 
-var workItemListedLimitationPattern = regexp.MustCompile(`^Not every member is listed: ([1-9]\d{0,8}) of (at least )?([1-9]\d{0,8}) members are listed, because the server limits how many items one answer carries\.$`)
+var workItemListedLimitationPattern = regexp.MustCompile(`^Not every member is listed: ([1-9]\d{0,8}) of (at least )?([1-9]\d{0,8}) members are listed, because (the server limits how many items one answer carries|this response lists at most the members its limits allow \(raise max_cohort_members and max_evidence_refs to read more\)|the server limits how many items one answer carries and this response lists at most the members its limits allow \(raise max_cohort_members and max_evidence_refs to read more\))\.$`)
 
 // ContextFabricWorkItemListedLimitation states how many of a work-item
-// cohort's members the answer lists, when the list is shorter than the
-// population. It returns false when the counts do not describe a cut list.
-func ContextFabricWorkItemListedLimitation(listed, population int, lowerBound bool) (string, bool) {
-	if listed < 1 || population <= listed || population > 999999999 {
+// cohort's members a response lists, when the list is shorter than the
+// population, and what bounded it. It returns false when the counts or the
+// cause do not describe a cut list.
+func ContextFabricWorkItemListedLimitation(listed, population int, lowerBound bool, cut ContextFabricWorkItemListCut) (string, bool) {
+	reason, known := contextFabricWorkItemListCutReasons[cut]
+	if !known || listed < 1 || population <= listed || population > 999999999 {
 		return "", false
 	}
 	bound := ""
 	if lowerBound {
 		bound = contextFabricWorkItemListedAtLeast
 	}
-	return contextFabricWorkItemListedPrefix + strconv.Itoa(listed) + contextFabricWorkItemListedOf + bound + strconv.Itoa(population) + contextFabricWorkItemListedSuffix, true
+	return contextFabricWorkItemListedPrefix + strconv.Itoa(listed) + contextFabricWorkItemListedOf + bound + strconv.Itoa(population) + contextFabricWorkItemListedMid + reason + ".", true
 }
 
 // IsContextFabricWorkItemListedLimitation reports whether a limitation is one

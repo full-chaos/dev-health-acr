@@ -54,7 +54,7 @@ func TestASameTierCutListsNOfMWithoutTheTierSentence(t *testing.T) {
 	if limitationsContain(run.result.Limitations, contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation) {
 		t.Fatalf("a cut inside one tier says lower tiers were cut first: %v", run.result.Limitations)
 	}
-	want, _ := contractsv1.ContextFabricWorkItemListedLimitation(listed, 20, false)
+	want, _ := contractsv1.ContextFabricWorkItemListedLimitation(listed, 20, false, contractsv1.ContextFabricWorkItemListCutServer)
 	if got := listedSentence(run.result.Limitations); got != want {
 		t.Fatalf("listed sentence = %q, want %q", got, want)
 	}
