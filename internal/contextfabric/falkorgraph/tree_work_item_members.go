@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -106,11 +107,7 @@ func (a *Adapter) linkScopedIssues(ctx context.Context, key string, principal st
 			return nil, false, err
 		}
 		complete = complete && !walk.truncated
-		for _, n := range walk.nodes {
-			subject, ok := graphrank.NodeSubject(n)
-			if !ok {
-				continue
-			}
+		for _, subject := range walk.linkSubjects {
 			tier := walk.memberTiers[subject.CanonicalID]
 			if best, seen := members[subject.CanonicalID]; !seen || tierRank(tier) < tierRank(best) {
 				members[subject.CanonicalID] = tier
