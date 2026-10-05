@@ -95,6 +95,30 @@ type exactLabelRefusal struct {
 	// label names one subject (exactLabelUnproven); otherwise refused because a
 	// claimant of another identity class holds the same term.
 	unproven bool
+	// kind is the kind of the refused exact label match.
+	kind contextfabric.SubjectKind
+	// fromEarlierPass: the refusal was made by an earlier decision of the same
+	// resolution and carried into this one (a re-decision over a new pool, such
+	// as the confirmed-kind scoped pass): no subject of the refused kind may
+	// commit here.
+	fromEarlierPass bool
+}
+
+// carried is the refusal as a later decision of the same resolution sees it.
+func (r exactLabelRefusal) carried() exactLabelRefusal {
+	if !r.refused && !r.fromEarlierPass {
+		return exactLabelRefusal{}
+	}
+	return exactLabelRefusal{unproven: r.unproven, kind: r.kind, fromEarlierPass: true}
+}
+
+// with adds this decision's own refusal to a carried one.
+func (r exactLabelRefusal) with(own exactLabelRefusal) exactLabelRefusal {
+	if own.refused {
+		own.fromEarlierPass = r.fromEarlierPass
+		return own
+	}
+	return r
 }
 
 func refuseExactLabel(candidates []contextfabric.SubjectCandidate, exactIndex []int, lookup IdentityLookupState, identity identityClaimants, terms identityMatchTerms) exactLabelRefusal {
@@ -103,10 +127,10 @@ func refuseExactLabel(candidates []contextfabric.SubjectCandidate, exactIndex []
 	}
 	exact := candidates[exactIndex[0]]
 	if exactLabelUnproven(exact.Subject.Kind, lookup) {
-		return exactLabelRefusal{refused: true, unproven: true}
+		return exactLabelRefusal{refused: true, unproven: true, kind: exact.Subject.Kind}
 	}
 	if identityCrossClassRivalClaimant(SubjectKey(exact.Subject), identity, terms) {
-		return exactLabelRefusal{refused: true}
+		return exactLabelRefusal{refused: true, kind: exact.Subject.Kind}
 	}
 	return exactLabelRefusal{}
 }
@@ -122,16 +146,27 @@ const evidenceCensusCommitGate = "evidence_census"
 // and proven by the census, never by the refused label. Today that census
 // still clarifies while the refused candidate survives in the pool.
 func (r exactLabelRefusal) allows(gate string, kind contextfabric.SubjectKind) bool {
+	if r.fromEarlierPass && kind == r.kind {
+		return false
+	}
 	return !r.refused || (gate == evidenceCensusCommitGate && IsCensusKindRegistered(kind))
 }
 
-// exactLabelRefusalCommitGate names, on the ambiguous decision line, the
-// refusal for a missing completeness proof.
-const exactLabelRefusalCommitGate = "exact_index_unproven"
+// exactLabelRefusalCommitGate and exactLabelRivalCommitGate name, on the
+// ambiguous decision line, the refusal for a missing completeness proof and
+// the refusal for a same-term claimant of another identity class.
+const (
+	exactLabelRefusalCommitGate = "exact_index_unproven"
+	exactLabelRivalCommitGate   = "exact_index_rival"
+)
 
 func (r exactLabelRefusal) decisionGate() string {
-	if r.refused && r.unproven {
+	switch {
+	case !r.refused && !r.fromEarlierPass:
+		return ""
+	case r.unproven:
 		return exactLabelRefusalCommitGate
+	default:
+		return exactLabelRivalCommitGate
 	}
-	return ""
 }

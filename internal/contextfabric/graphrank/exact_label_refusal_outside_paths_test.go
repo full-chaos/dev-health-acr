@@ -135,3 +135,32 @@ func containsID(run outsidePathRun, id string) bool {
 	}
 	return false
 }
+
+func TestAConfirmedKindReDecisionCommitsNoNeighbourAfterAnExactLabelRefusal(t *testing.T) {
+	t.Parallel()
+	repo := exactLabelNode(contextfabric.SubjectRepository, outsidePathRepoID, "full-chaos/payments")
+	neighbour := candidateNode(contextfabric.SubjectRepository, "repo_payments_ledger_tool", "payments ledger tool", 0.9, []string{"full-chaos/payments"})
+	resolve := func(complete bool) (contextfabric.SubjectResolution, contextfabric.CommitDecisionDigestSet) {
+		backend := &fakeGraphBackend{
+			searchResults:        map[string][]CandidateNode{exactLabelCompletenessTerm: truncatedPaymentsSearch(repo)},
+			searchTruncated:      true,
+			enableAliasLookup:    true,
+			aliasLookupClaimants: map[string][]CandidateNode{exactLabelCompletenessTerm: {exactLabelLookupClaimant(outsidePathRepoID, "full-chaos/payments")}},
+			aliasLookupComplete:  complete,
+			enableSearchKind:     true,
+			searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+				exactLabelCompletenessTerm: {contextfabric.SubjectRepository: {neighbour}},
+			},
+		}
+		resolution, _, _, digests, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(exactLabelCompletenessTerm), backend.deps(), &contextfabric.ConfirmedExpectedKind{Kind: contextfabric.SubjectRepository}, nil, nil, "")
+		if err != nil {
+			t.Fatalf("ResolveSubjects error = %v", err)
+		}
+		return resolution, digests
+	}
+	refused, digests := resolve(false)
+	t.Logf("incomplete read: committed %v prompt %q", outsideCommittedIDs(outsidePathRun{resolution: refused, digests: digests}), refused.ClarificationPrompt)
+	if len(refused.Committed) != 0 {
+		t.Fatalf("incomplete read: committed %v, want nothing: the confirmed-kind re-decision must not commit a neighbour after the exact label was refused", outsideCommittedIDs(outsidePathRun{resolution: refused, digests: digests}))
+	}
+}

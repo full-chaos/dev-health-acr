@@ -832,7 +832,7 @@ func resolveOneOperandSlot(
 		retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK,
 		unscopedVisibilityFor(principal, request), gate, identity, identityTerms,
 		aliases.state(), deps.ResolutionTracer, request.RequestID, "", false, false,
-		[]contextfabric.SubjectKind{slot.Kind}, anchorReservedSlot{}, nil, pass,
+		[]contextfabric.SubjectKind{slot.Kind}, anchorReservedSlot{}, nil, nil, pass,
 	)
 
 	return operandSlotRun{

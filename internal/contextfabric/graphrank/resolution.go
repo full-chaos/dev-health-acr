@@ -407,7 +407,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	// multi-pass callers in resolve.go's own resolveSubjects call the
 	// unexported form below directly, with the pass number their own
 	// control flow actually reached).
-	return resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, legacyIdentityLookupState(aliasIdentityComplete), tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, anchorReservedSlot{}, nil, 1)
+	return resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, legacyIdentityLookupState(aliasIdentityComplete), tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, anchorReservedSlot{}, nil, nil, 1)
 }
 
 // resolveFromMergedCandidatesWithAnchorSlot carries the two extra inputs the
@@ -426,7 +426,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 // sites, in the fixed textual order those sites already run in. Every other
 // caller (including the exported wrapper above and every direct test call)
 // is single-shot and passes 1.
-func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, identityLookup IdentityLookupState, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, anchorSlot anchorReservedSlot, kindRescue *kindRescueLedger, pass int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, identityLookup IdentityLookupState, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, anchorSlot anchorReservedSlot, carry *exactLabelRefusal, kindRescue *kindRescueLedger, pass int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	aliasIdentityComplete := identityLookup == IdentityLookupComplete
 	bases := make(contextfabric.CommitBasisSet)
 	// digests (CHAOS-4087) records IN LOCKSTEP with bases above, at every
@@ -690,6 +690,9 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// refusal is the exact-label step's one refusal state; every later commit
 	// goes through commitAfterExactStep below, which consults it.
 	refusal := exactLabelRefusal{}
+	if carry != nil {
+		refusal = carry.carried()
+	}
 	// tiedStatisticalTop (CHAOS-4085 observability, team-lead addition
 	// 2026-08-22): the TIE half of tiedStatisticalTopUnderTruncation's
 	// conjunct, captured for the decision-stage trace independently of
@@ -796,9 +799,13 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// rule can never disagree about what "tied" means -- one definition,
 		// two readers.
 		tiedStatisticalTop = tiedStatisticalTopUnderTruncation(candidates, commitIndex, true)
-		refusal = refuseExactLabel(candidates, exactIndex, identityLookup, identity, identityTerms)
+		refusal = refusal.with(refuseExactLabel(candidates, exactIndex, identityLookup, identity, identityTerms))
+		if carry != nil {
+			*carry = refusal
+		}
 		commitAfterExactStep := func(index int, gate string, basis contextfabric.CommitBasis) bool {
 			if !refusal.allows(gate, candidates[index].Subject.Kind) {
+				ambiguous = true
 				return false
 			}
 			committedIndex[index] = true

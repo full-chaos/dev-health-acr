@@ -222,7 +222,7 @@ func TestAnUnprovenExactLabelHandsNoCommitToTheVectorMarginRescue(t *testing.T) 
 		resolution, _, _ := resolveFromMergedCandidatesWithAnchorSlot(
 			bySubject, map[string]string{}, map[string]bool{}, 10, true, true,
 			similarities, 0.25, false, 10, 20, true,
-			DefaultCommitGatePolicy(), nil, nil, lookup, nil, "", "", false, false, nil, anchorReservedSlot{}, nil, 1)
+			DefaultCommitGatePolicy(), nil, nil, lookup, nil, "", "", false, false, nil, anchorReservedSlot{}, nil, nil, 1)
 		return resolution
 	}
 	if committed := resolve(IdentityLookupComplete).Committed; len(committed) != 1 || committed[0].CanonicalID != "project_payments" {
@@ -330,7 +330,7 @@ func TestAnUnprovenExactLabelWithAVisibleRivalHandsNoCommitToTheVectorMarginResc
 		resolution, _, _ := resolveFromMergedCandidatesWithAnchorSlot(
 			identityBySubject(exact, rival, neighbour), map[string]string{}, map[string]bool{}, 10, true, true,
 			similarities, 0.25, false, 10, 20, true,
-			DefaultCommitGatePolicy(), identity, terms, lookup, nil, "", "", false, false, nil, anchorReservedSlot{}, nil, 1)
+			DefaultCommitGatePolicy(), identity, terms, lookup, nil, "", "", false, false, nil, anchorReservedSlot{}, nil, nil, 1)
 		return resolution
 	}
 	for _, lookup := range []IdentityLookupState{IdentityLookupIncomplete, IdentityLookupComplete} {

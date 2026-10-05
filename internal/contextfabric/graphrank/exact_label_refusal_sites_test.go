@@ -34,7 +34,7 @@ func TestEveryCommitSiteAfterTheExactStepHonoursTheRefusal(t *testing.T) {
 		resolution, _, digests := resolveFromMergedCandidatesWithAnchorSlot(
 			identityBySubject(r.pool...), map[string]string{}, map[string]bool{}, 10, true, r.truncated,
 			r.sims, 0.25, false, 10, 20, true,
-			DefaultCommitGatePolicy(), identity, terms, r.lookup, nil, "", r.census, false, false, nil, anchorReservedSlot{}, nil, 1)
+			DefaultCommitGatePolicy(), identity, terms, r.lookup, nil, "", r.census, false, false, nil, anchorReservedSlot{}, nil, nil, 1)
 		return resolution, digests
 	}
 	key := func(c contextfabric.SubjectCandidate) string { return SubjectKey(c.Subject) }
@@ -187,4 +187,22 @@ func TestEveryCoreCommitGoesThroughCommitAfterExactStep(t *testing.T) {
 func isResolutionCommitted(expr ast.Expr) bool {
 	sel, ok := expr.(*ast.SelectorExpr)
 	return ok && sel.Sel.Name == "ResolutionCommitted"
+}
+
+func TestTheDecisionLineNamesARivalRefusal(t *testing.T) {
+	t.Parallel()
+	exact := exactLabelCandidate(contextfabric.SubjectRepository, "repo_payments", exactLabelCompletenessTerm, exactLabelCompletenessTerm)
+	rival := repoAliasCandidate("repo_payments_ledger", exactLabelCompletenessTerm)
+	identity, terms := identitySideChannels(exact, rival)
+	for lookup, want := range map[IdentityLookupState]string{IdentityLookupComplete: exactLabelRivalCommitGate, IdentityLookupIncomplete: exactLabelRefusalCommitGate} {
+		tracer := &recordingTracer{}
+		resolveFromMergedCandidatesWithAnchorSlot(
+			identityBySubject(exact, rival), map[string]string{}, map[string]bool{}, 10, true, true,
+			nil, 0, false, 10, 20, true,
+			DefaultCommitGatePolicy(), identity, terms, lookup, tracer, "", "", false, false, nil, anchorReservedSlot{}, nil, nil, 1)
+		decisions := tracedStage(tracer.events, "decision")
+		if len(decisions) != 1 || decisions[0].Outcome != "ambiguous" || decisions[0].CommitGate != want {
+			t.Fatalf("lookup %s: decision events = %#v, want one ambiguous line naming %q", lookup, decisions, want)
+		}
+	}
 }
