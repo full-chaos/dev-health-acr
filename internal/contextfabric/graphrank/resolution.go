@@ -688,6 +688,10 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// itself.
 	identityTrustGateBlocked := false
 	exactLabelProofMissing := false
+	// exactLabelRefused: the one exact label match was refused (no
+	// completeness proof, or a same-term claimant of another identity class);
+	// no rescue may then hand the commit to another candidate.
+	exactLabelRefused := false
 	// tiedStatisticalTop (CHAOS-4085 observability, team-lead addition
 	// 2026-08-22): the TIE half of tiedStatisticalTopUnderTruncation's
 	// conjunct, captured for the decision-stage trace independently of
@@ -794,6 +798,8 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// rule can never disagree about what "tied" means -- one definition,
 		// two readers.
 		tiedStatisticalTop = tiedStatisticalTopUnderTruncation(candidates, commitIndex, true)
+		exactLabelProofMissing = len(exactIndex) == 1 && exactLabelUnproven(candidates[exactIndex[0]].Subject.Kind, identityLookup)
+		exactLabelRefused = exactLabelProofMissing || (len(exactIndex) == 1 && identityCrossClassRivalClaimant(SubjectKey(candidates[exactIndex[0]].Subject), identity, identityTerms))
 		switch {
 		// CHAOS-3917: exact alias != canonical identity -- an exact-label
 		// match alone must never suffice to commit when the identical
@@ -809,9 +815,8 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// for the kinds the keyed identity read enumerates, a read that ran
 		// incomplete leaves the label unproven, and that is a clarification
 		// whatever the search saw (exact_label_proof.go).
-		case len(exactIndex) == 1 && !identityCrossClassRivalClaimant(SubjectKey(candidates[exactIndex[0]].Subject), identity, identityTerms) && exactLabelUnproven(candidates[exactIndex[0]].Subject.Kind, identityLookup):
+		case exactLabelProofMissing:
 			ambiguous = true
-			exactLabelProofMissing = true
 		case len(exactIndex) == 1 && !identityCrossClassRivalClaimant(SubjectKey(candidates[exactIndex[0]].Subject), identity, identityTerms):
 			committedIndex[exactIndex[0]] = true
 			candidates[exactIndex[0]].State = contextfabric.ResolutionCommitted
@@ -1202,7 +1207,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// information), and a truncated search with a strictly-separated
 		// top is untouched (the ranking did discriminate). Only the
 		// conjunction is refused.
-		if ambiguous && gateValid && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !exactLabelProofMissing && !retrievalDegraded &&
+		if ambiguous && gateValid && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !exactLabelRefused && !retrievalDegraded &&
 			calibratedTopK > 0 && effectiveSearchLimit >= 2 && effectiveSearchLimit <= calibratedTopK &&
 			unscopedVisibility && !tiedStatisticalTopUnderTruncation(candidates, commitIndex, searchTruncated) {
 			// CHAOS-3884 spot-check MEDIUM-C/item 1: identityCollision is

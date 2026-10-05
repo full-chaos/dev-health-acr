@@ -317,3 +317,25 @@ func TestTheEvidenceCensusPassNeverCommitsARefusedExactLabel(t *testing.T) {
 		})
 	}
 }
+
+func TestAnUnprovenExactLabelWithAVisibleRivalHandsNoCommitToTheVectorMarginRescue(t *testing.T) {
+	t.Parallel()
+	exact := exactLabelCandidate(contextfabric.SubjectRepository, "repo_payments", exactLabelCompletenessTerm, exactLabelCompletenessTerm)
+	exact.MatchMechanisms = append(exact.MatchMechanisms, contextfabric.MatchVector)
+	rival := repoAliasCandidate("repo_payments_ledger", exactLabelCompletenessTerm)
+	neighbour := corroborationCandidate("project_payments_rollout", 0.5, contextfabric.MatchLexical, contextfabric.MatchVector)
+	identity, terms := identitySideChannels(exact, rival, neighbour)
+	similarities := map[string]float64{SubjectKey(exact.Subject): 0.40, SubjectKey(rival.Subject): 0.38, SubjectKey(neighbour.Subject): 0.95}
+	resolve := func(lookup IdentityLookupState) contextfabric.SubjectResolution {
+		resolution, _, _ := resolveFromMergedCandidatesWithAnchorSlot(
+			identityBySubject(exact, rival, neighbour), map[string]string{}, map[string]bool{}, 10, true, true,
+			similarities, 0.25, false, 10, 20, true,
+			DefaultCommitGatePolicy(), identity, terms, lookup, nil, "", "", false, false, nil, anchorReservedSlot{}, nil, 1)
+		return resolution
+	}
+	for _, lookup := range []IdentityLookupState{IdentityLookupIncomplete, IdentityLookupComplete} {
+		if committed := resolve(lookup).Committed; len(committed) != 0 {
+			t.Fatalf("lookup %s with a visible same-term rival: Committed = %#v, want nothing: the refused exact label must not hand the commit to a neighbour", lookup, committed)
+		}
+	}
+}
