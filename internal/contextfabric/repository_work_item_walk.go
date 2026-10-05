@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"context"
 	"slices"
 	"strings"
 
@@ -142,5 +143,54 @@ func withRepositoryWorkItemDisclosures(result InvestigationResult, census *WorkI
 	if reading.Outcome == RepositoryWorkItemWalkUnlinked && !reading.Cut {
 		result = withWorkItemRepositoryUnlinkedDetail(result, reading.PullRequests)
 	}
+	return result
+}
+
+// linkScopedFactSubjects are the work items of this request that its link
+// predicate admitted under the requested repository scope: every member of a
+// repository anchor's work-item walk, and every resolved work item the scoped
+// census admitted on this call (WorkItemCensusLinkedSatisfiers). Nothing when
+// the request names no repository scope.
+func linkScopedFactSubjects(ctx context.Context, request InvestigationRequest, subjects []SubjectRef, tuple *WorkItemTupleCensus) []SubjectRef {
+	if len(request.RequestedScope.RepositorySlugs) == 0 {
+		return nil
+	}
+	walked := tuple != nil && tuple.repository != nil
+	linked := WorkItemCensusLinkedSatisfiers(ctx)
+	var out []SubjectRef
+	for _, subject := range subjects {
+		if subject.Kind != SubjectWorkItem {
+			continue
+		}
+		if _, admitted := linked[subject.CanonicalID]; walked || admitted {
+			out = append(out, subject)
+		}
+	}
+	return out
+}
+
+// withWorkItemCensusScopeDisclosures adds what a census under the requested
+// repository scope owes the answer: that the census searched through the links
+// to the scoped repositories' pull requests, and, for each resolved work item
+// the census admitted through a text or heuristic link, which tier it was (a
+// text or heuristic link is never presented as native).
+func withWorkItemCensusScopeDisclosures(ctx context.Context, result InvestigationResult) InvestigationResult {
+	if !WorkItemCensusRepositoryScopeRecorded(ctx) {
+		return result
+	}
+	additions := []string{contractsv1.ContextFabricWorkItemCensusRepositoryScopeLimitation}
+	linked := WorkItemCensusLinkedSatisfiers(ctx)
+	for _, subject := range result.SubjectResolution.Committed {
+		tier, ok := linked[subject.CanonicalID]
+		if !ok || subject.Kind != SubjectWorkItem {
+			continue
+		}
+		if sentence := contractsv1.ContextFabricWorkItemCensusLinkTierLimitation(tier); sentence != "" && !slices.Contains(additions, sentence) {
+			additions = append(additions, sentence)
+		}
+	}
+	composed, displaced := appendBoundedLimitations(result.Limitations, additions)
+	result.Limitations = composed
+	result.LimitationsDisplaced += displaced
 	return result
 }

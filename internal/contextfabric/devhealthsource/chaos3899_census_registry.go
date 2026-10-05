@@ -62,12 +62,12 @@ type censusKindRegistryEntry struct {
 	// a silent join.
 	anchorColumns map[contextfabric.SubjectKind]string
 	// repositoryColumn is the base table's repo_id column the caller's
-	// repository narrowing is joined on (withRepositoryFilter). It is its own
-	// field because it is not an anchor column for every kind: a work item has
-	// no repository anchor (a repo-less item carries the zero repo id), yet
-	// the narrowing still has to apply to it, where a repo-less item is
-	// outside any named repository exactly as workItemAuthorization scopes it.
-	// Empty when the table has no repository column.
+	// repository narrowing is joined on (withRepositoryFilter). Empty when the
+	// narrowing does not apply to the row's own repository: a table with no
+	// repository column, and a work item, which the entity tree relates to a
+	// repository only through its linked pull requests (the census round
+	// scopes a work item by the repository-to-issue walk instead,
+	// graphrank withinLinkScope).
 	repositoryColumn string
 	// bridgeCanonicalID is CHAOS-3898 S3's hand-off to 3896 Slices B/C
 	// (design brief v4.1 §6 S3 row; 3896 brief v6 §1.4's precondition): it
@@ -366,7 +366,6 @@ var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry
 		anchorColumns: map[contextfabric.SubjectKind]string{
 			contextfabric.SubjectProject: "w.project_id",
 		},
-		repositoryColumn:  "w.repo_id",
 		bridgeCanonicalID: bridgeWorkItemSatisfier,
 	},
 	contractsv1.ContextFabricSubjectCIRun: {

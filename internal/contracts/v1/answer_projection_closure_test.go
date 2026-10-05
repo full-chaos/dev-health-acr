@@ -52,6 +52,7 @@ var copiedBounds = []copiedBound{
 	{projection: "answer#properties.question", canonical: "result#properties.question"},
 	{projection: "answer#properties.direct_judgment", canonical: "result#properties.direct_judgment"},
 	{projection: "answer#properties.current_state", canonical: "result#properties.current_state"},
+	{projection: "answer#properties.deterministic_answer", canonical: "result#properties.deterministic_answer"},
 	{projection: "answer#properties.strongest_pressures", canonical: "result#properties.strongest_pressures"},
 	{projection: "answer#properties.evidence_ref_ids", canonical: "result#properties.evidence_ref_ids"},
 	{
@@ -345,7 +346,10 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// judgment_mismatch is a bool and is not walked here.
 		// Trusted-because-closed: a fixed, server-minted enum, never model
 		// prose.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 242},
+		// deterministic_answer: 242 -> 243 -- the projection now serves the
+		// server-composed answer text; untrusted like direct_judgment because
+		// it names subjects by their graph labels.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 243},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).

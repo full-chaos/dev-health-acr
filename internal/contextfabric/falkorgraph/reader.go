@@ -284,6 +284,11 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// round on "stalled resolution only" and adds the 3s deadline +
 		// panic recovery, so nothing extra is needed here.
 		CensusFunc: a.config.CensusFunc,
+		// The work items of a requested repository scope: the same
+		// repository-to-issue walk that serves a repository's work items.
+		LinkScopedWorkItems: func(ctx context.Context, scope contextfabric.RequestedScope) (map[string]string, bool, error) {
+			return a.linkScopedIssues(ctx, key, principal, scope, contextfabric.WorkItemMembershipCensusLimit)
+		},
 		// CHAOS-3972 P3: nil unless the composition root sets
 		// Config.HandleGrammarChecker -- see that field's own doc comment.
 		HandleGrammarChecker: a.config.HandleGrammarChecker,
@@ -344,7 +349,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			// to skip a mechanism entirely on a historical axis rather
 			// than thread a rewritten predicate through a new query path.
 			if temporal.active {
-				return nil, false, nil
+				return nil, false, graphrank.ErrIdentityLookupNotRunForTimeAxis
 			}
 			rows, _, complete, err := a.config.IdentityUniverse(ctx, orgID)
 			if err != nil {
@@ -490,6 +495,9 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			// one the fast path may trust as exhaustive, the identical
 			// reasoning a truncated ordinary search already gets via
 			// searchTruncated.
+			if complete && graphMissing > 0 {
+				return claimantsByTerm, false, graphrank.ErrIdentityLookupGraphLag
+			}
 			return claimantsByTerm, complete && graphMissing == 0, nil
 		}
 	}

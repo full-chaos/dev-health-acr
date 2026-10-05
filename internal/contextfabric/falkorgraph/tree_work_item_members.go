@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -58,13 +59,66 @@ func (a *Adapter) TreeWorkItemMembers(ctx context.Context, principal storage.Pri
 		PullRequests: walk.linkSources, LinkedIssues: max(walk.linkIssueTargets, 0),
 		Denied: walk.linkDeniedTargets, Truncated: walk.truncated,
 	}
-	for _, n := range walk.nodes {
-		subject, ok := graphrank.NodeSubject(n)
-		if !ok {
-			continue
-		}
+	for _, subject := range walk.linkSubjects {
 		out.Members = append(out.Members, contextfabric.TreeWorkItemMember{Subject: subject, Tier: walk.memberTiers[subject.CanonicalID]})
 	}
 	sort.Slice(out.Members, func(i, j int) bool { return out.Members[i].Subject.CanonicalID < out.Members[j].Subject.CanonicalID })
 	return out, nil
+}
+
+// maxLinkScopedRepositories bounds the repositories one requested scope walks.
+// A scope that names more is read as cut.
+const maxLinkScopedRepositories = 25
+
+// linkScopedIssues returns the issues in a requested repository scope: the
+// issues linked to a pull request of a repository the scope names, found by
+// the same walk that serves a repository's work items (treeMembers, repository
+// to issue, the link rule of admitted). It is the union of that walk over
+// every repository of the scope the caller may see, each issue with the
+// strongest tier among its admitted links. complete is false when the
+// repositories or a walk were cut, or the union is larger than limit: the set
+// is then not the whole population.
+func (a *Adapter) linkScopedIssues(ctx context.Context, key string, principal storage.Principal, scope contextfabric.RequestedScope, limit int) (map[string]string, bool, error) {
+	if len(scope.RepositorySlugs) == 0 {
+		return nil, false, errors.New("a link-scoped issue read needs a requested repository scope")
+	}
+	repositories, cut, err := a.cohortKindCensusCandidates(ctx, key, principal.OrgID, []string{string(contextfabric.SubjectRepository)}, temporalFilter{})
+	if err != nil {
+		return nil, false, err
+	}
+	complete := !cut
+	walked := 0
+	members := map[string]string{}
+	for _, repository := range repositories {
+		if !graphrank.AuthorizedAttributes(principal, scope, repository.Attributes) {
+			continue
+		}
+		anchor, ok := graphrank.NodeSubject(repository)
+		if !ok || anchor.Kind != contextfabric.SubjectRepository {
+			continue
+		}
+		if walked == maxLinkScopedRepositories {
+			complete = false
+			break
+		}
+		walked++
+		walk, err := a.treeMembers(ctx, key, principal.OrgID, principal, scope, anchor, treeIssue, limit+1, temporalFilter{})
+		if err != nil {
+			return nil, false, err
+		}
+		complete = complete && !walk.truncated
+		for _, subject := range walk.linkSubjects {
+			tier := walk.memberTiers[subject.CanonicalID]
+			if best, seen := members[subject.CanonicalID]; !seen || tierRank(tier) < tierRank(best) {
+				members[subject.CanonicalID] = tier
+			}
+		}
+		if len(members) > limit {
+			complete = false
+			break
+		}
+	}
+	slog.DebugContext(ctx, "context fabric: link-scoped issues of a requested repository scope",
+		"repositories_walked", walked, "repositories_cut", cut, "issues", len(members), "complete", complete)
+	return members, complete, nil
 }

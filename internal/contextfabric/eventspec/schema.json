@@ -6794,6 +6794,17 @@
         "presence": "required"
       },
       {
+        "key": "identity_lookup",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "complete",
+          "incomplete",
+          "graph_lag",
+          "not_run_time_axis"
+        ]
+      },
+      {
         "key": "matched_claimants",
         "type": "int",
         "presence": "required"

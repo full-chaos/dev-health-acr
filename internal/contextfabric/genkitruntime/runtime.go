@@ -834,14 +834,60 @@ func (g sdkGenerator) Interpret(ctx context.Context, request generationRequest) 
 	return *output, modelUsage(response), nil
 }
 
+// decodeSynthesisRejection is decodeRejection's synthesize-side twin: the
+// error sdkGenerator.Synthesize returns when Genkit's own local output check
+// refused the draw, carrying what the model actually wrote (parsed
+// leniently, without the schema check) so the caller runs it through the
+// SAME toDomain/ValidateAgainst/redraw path an acr-detected invalid draw
+// takes; parsed is false when the text was not decodable JSON.
+type decodeSynthesisRejection struct {
+	output synthesisOutput
+	parsed bool
+	// digest is the digest of the response text itself, so two rejected draws
+	// that differ only in what the lenient parse drops still read as
+	// different draws.
+	digest string
+	cause  error
+}
+
+func (e *decodeSynthesisRejection) Error() string { return e.cause.Error() }
+func (e *decodeSynthesisRejection) Unwrap() error { return e.cause }
+
 func (g sdkGenerator) Synthesize(ctx context.Context, request generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
+	// Keep the raw model response: Genkit drops it when its local schema
+	// check fails, and the rejection path needs both the draw and its cost.
+	// Mirrors sdkGenerator.Interpret's own capture, above.
+	var rawText string
+	var rawUsage contextfabric.ModelUsage
+	capture := func(next ai.ModelFunc) ai.ModelFunc {
+		return func(callCtx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			resp, err := next(callCtx, req, cb)
+			if err == nil && resp != nil {
+				rawUsage = modelUsage(resp)
+				if resp.Message != nil {
+					rawText = resp.Message.Text()
+				}
+			}
+			return resp, err
+		}
+	}
 	output, response, err := genkit.GenerateData[synthesisOutput](ctx, g.genkit,
 		ai.WithModelName(request.Model),
 		ai.WithSystem(request.System),
 		ai.WithPrompt("%s", request.Prompt),
 		ai.WithCustomConstrainedOutput(),
+		ai.WithMiddleware(capture),
 	)
 	if err != nil {
+		var genkitErr *core.GenkitError
+		if errors.As(err, &genkitErr) && genkitErr.Status == core.INTERNAL && strings.HasPrefix(genkitErr.Message, genkitSchemaMismatchPrefix) {
+			rejection := &decodeSynthesisRejection{cause: classifyModelError(err), digest: contextfabric.DigestModelValue([]byte(rawText))}
+			var lenient synthesisOutput
+			if json.Unmarshal([]byte(extractGenkitJSON(rawText)), &lenient) == nil {
+				rejection.output, rejection.parsed = lenient, true
+			}
+			return rejection.output, rawUsage, rejection
+		}
 		return synthesisOutput{}, contextfabric.ModelUsage{}, err
 	}
 	if output == nil {
@@ -1759,6 +1805,36 @@ func sanitizeWindowOutput(output interpretationOutput) (contextfabric.WindowClas
 	return class, confidence, unrecognized
 }
 
+// synthesizeValidateDraw runs one drawn synthesisOutput through the SAME
+// toDomain/strip/ValidateAgainst sequence every draw takes on the way to a
+// verdict -- factored out so a draft Genkit's local schema
+// check refused, then recovered leniently, gets the identical scrutiny as
+// one Genkit accepted, rather than a second, drifting copy of the same
+// three calls.
+func synthesizeValidateDraw(ctx context.Context, r *Runtime, principal storage.Principal, output synthesisOutput, input contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, error) {
+	draft, err := output.toDomain()
+	if err != nil {
+		return draft, err
+	}
+	// CHAOS-4355 follow-up (tolerance): this is the production ModelRuntime's
+	// OWN ValidateAgainst call -- the actual live 422 source (see the
+	// matching comment on the classification below) -- so the strip belongs
+	// HERE, before that call, not only in
+	// RuntimeAnswerSynthesizer.Synthesize's defensive re-check, which never
+	// even runs when this call already rejects. Rows are attached
+	// server-side from the SAME canonical fact a claim cites
+	// (contextfabric.attachCanonicalRows), never from the model, so a
+	// model-authored Rows array here is pure noise: never a reason to reject
+	// an otherwise-valid answer, and never content this receipt/log line
+	// should reflect either way.
+	var stripped int
+	draft.ClaimedFacts, stripped = contextfabric.StripModelAuthoredClaimedFactTableContent(draft.ClaimedFacts)
+	if stripped > 0 && r.config.Telemetry != nil {
+		r.config.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
+	}
+	return draft, draft.ValidateAgainst(input)
+}
+
 func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Principal, input contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
 	// CHAOS-3889 (H6/H7/H8): see the matching comment in InterpretQuestion.
 	// grounding is set from whichever SynthesisDraft (primary or fallback)
@@ -1832,6 +1908,14 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// this call, from the closed eventspec vocabulary. It starts at
 		// "not_evaluated" and is only ever moved by a draw that validated.
 		zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawNotEvaluated
+		// schemaOnlyRejection (mirroring the interpret side's
+		// schemaOnlyRejection on the interpret side): true for the final
+		// draw's own outcome ONLY when Genkit's local schema check refused
+		// it and no OTHER rule (toDomain, ValidateAgainst) also caught the
+		// same draft -- so the final classification below can still name it
+		// a rejection even though this package's own validator never ran,
+		// or ran and passed, on content Genkit had already refused.
+		schemaOnlyRejection bool
 	)
 	defer func() {
 		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize, groundedBeyondFirst, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion, draws, budgetChecked, budgetRemainingMS, budgetReservedMS, budgetStopped)
@@ -1971,7 +2055,29 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		totalUsage.InputTokens += usage.InputTokens
 		totalUsage.OutputTokens += usage.OutputTokens
 		totalUsage.TotalTokens += usage.TotalTokens
-		if generationErr != nil {
+		schemaOnlyRejection = false
+		err = nil
+		var localRejection *decodeSynthesisRejection
+		if errors.As(generationErr, &localRejection) {
+			// Genkit's own local check refused this draw -- it is
+			// an invalid draw like any this package's own validator refuses,
+			// so it takes the same toDomain/ValidateAgainst, redraw and
+			// rejection path below, instead of ending the call after one
+			// call with zero redraws (see decodeSynthesisRejection's doc
+			// comment, and the matching interpret-side fix).
+			output, generationErr = localRejection.output, nil
+			if localRejection.parsed {
+				draft, err = synthesizeValidateDraw(ctx, r, principal, output, input)
+			}
+			if err == nil || !localRejection.parsed {
+				// Genkit already refused this draft: never let it through as
+				// a success only because it was never decoded, or because
+				// this package's own rules happen not to cover whatever
+				// Genkit's schema caught.
+				schemaOnlyRejection = true
+				err = localRejection.cause
+			}
+		} else if generationErr != nil {
 			// A TRANSPORT failure never reached a draft to judge -- withRetry
 			// already owns the transport-retry axis (MaxAttempts), so
 			// resending the same prompt again here would just be a second,
@@ -1979,26 +2085,8 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 			// drawing and fall through to the existing transport-failure
 			// handling below.
 			break
-		}
-		draft, err = output.toDomain()
-		if err == nil {
-			// CHAOS-4355 follow-up (tolerance): this is the production
-			// ModelRuntime's OWN ValidateAgainst call -- the actual live 422
-			// source (see the matching comment on the classification below) --
-			// so the strip belongs HERE, before that call, not only in
-			// RuntimeAnswerSynthesizer.Synthesize's defensive re-check, which
-			// never even runs when this call already rejects. Rows are
-			// attached server-side from the SAME canonical fact a claim
-			// cites (contextfabric.attachCanonicalRows), never from the
-			// model, so a model-authored Rows array here is pure noise: never
-			// a reason to reject an otherwise-valid answer, and never
-			// content this receipt/log line should reflect either way.
-			var stripped int
-			draft.ClaimedFacts, stripped = contextfabric.StripModelAuthoredClaimedFactTableContent(draft.ClaimedFacts)
-			if stripped > 0 && r.config.Telemetry != nil {
-				r.config.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
-			}
-			err = draft.ValidateAgainst(input)
+		} else {
+			draft, err = synthesizeValidateDraw(ctx, r, principal, output, input)
 		}
 		if err == nil {
 			outputBytes, _ := json.Marshal(output)
@@ -2032,8 +2120,15 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// before deciding whether another draw remains, so every rejected
 		// draw is visible, not only the one this call ultimately reports.
 		rejectedBytes, _ := json.Marshal(output)
+		rejectedDigest, rejectedClaims := contextfabric.DigestModelValue(rejectedBytes), len(output.ClaimedFacts)
+		if localRejection != nil {
+			rejectedDigest = localRejection.digest
+			if !localRejection.parsed {
+				rejectedClaims = -1
+			}
+		}
 		clause, _ := contextfabric.SynthesisRejectionClauseOf(err)
-		draws = append(draws, synthesisDraw{Index: draw, Outcome: "invalid_output", OutputDigest: contextfabric.DigestModelValue(rejectedBytes), Claims: len(output.ClaimedFacts), Clause: clause})
+		draws = append(draws, synthesisDraw{Index: draw, Outcome: "invalid_output", OutputDigest: rejectedDigest, Claims: rejectedClaims, Clause: clause})
 	}
 	// A redraw that was rejected or failed in transport serves the valid
 	// zero-claim draft it followed: an honest degraded answer, never a failure
@@ -2187,7 +2282,16 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// RuntimeAnswerSynthesizer.Synthesize's defensive re-check), so it
 		// must carry the same ErrSynthesisRejected/ModelBoundViolation
 		// classification -- see the matching comment in InterpretQuestion.
-		return contextfabric.SynthesisDraft{}, receipt, contextfabric.ClassifySynthesisRejection(draft, input, err)
+		rejection := contextfabric.ClassifySynthesisRejection(draft, input, err)
+		if schemaOnlyRejection {
+			// Genkit refused a draw this package's own rules
+			// have no clause for (or that never decoded): typed as a
+			// rejection, never as a bound violation that was not the one
+			// Genkit actually caught. Mirrors InterpretQuestion's identical
+			// override.
+			rejection = contextfabric.NewSynthesisRejection(contextfabric.RejectionReasonUnclassified, fmt.Errorf("%w: %w: %w", contextfabric.ErrSynthesisRejected, contextfabric.ErrModelOutput, err))
+		}
+		return contextfabric.SynthesisDraft{}, receipt, rejection
 	}
 	outputBytes, _ := json.Marshal(output)
 	receipt.OutputDigest = contextfabric.DigestModelValue(outputBytes)
@@ -2517,10 +2621,15 @@ func formatSynthesisDrawClauses(draws []synthesisDraw) string {
 }
 
 // formatSynthesisDrawClaims renders "1:0,2:3", index-aligned with
-// formatSynthesisDraws: the claimed-fact count of each draw's raw output.
+// formatSynthesisDraws: the claimed-fact count of each draw's raw output, "?"
+// for a draw whose text never decoded.
 func formatSynthesisDrawClaims(draws []synthesisDraw) string {
 	parts := make([]string, 0, len(draws))
 	for _, draw := range draws {
+		if draw.Claims < 0 {
+			parts = append(parts, fmt.Sprintf("%d:?", draw.Index))
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("%d:%d", draw.Index, draw.Claims))
 	}
 	return strings.Join(parts, ",")

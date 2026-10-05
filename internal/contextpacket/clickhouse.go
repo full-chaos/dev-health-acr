@@ -216,15 +216,21 @@ func (s *ClickHouseEvidenceStore) ContextForTask(ctx context.Context, p storage.
 	if err != nil {
 		return storage.EvidenceBundle{}, err
 	}
-	for index := range evidence {
-		repositoryWide, _ := evidence[index].Metadata["scope_breadth"].(string)
-		handle, encodeErr := s.codec.Encode(p.OrgID, scope.RepoID, evidence[index].SourceVersion, evidence[index].EvidenceRefID, repositoryWide == "repository-wide")
+	served := evidence[:0]
+	var dropped []storage.DroppedEvidence
+	for _, ref := range evidence {
+		repositoryWide, _ := ref.Metadata["scope_breadth"].(string)
+		handle, encodeErr := s.codec.Encode(p.OrgID, scope.RepoID, ref.SourceVersion, ref.EvidenceRefID, repositoryWide == "repository-wide")
 		if encodeErr != nil {
-			return storage.EvidenceBundle{}, fmt.Errorf("encode evidence handle: %w", encodeErr)
+			// Organization and repository were proven above, so the failure is
+			// this row's own: the row is left out and named.
+			dropped = append(dropped, storage.DroppedEvidence{SourceVersion: ref.SourceVersion, System: ref.Source.System, Rule: evidenceRuleUnaddressable})
+			continue
 		}
-		evidence[index].EvidenceRefID = handle
+		ref.EvidenceRefID = handle
+		served = append(served, ref)
 	}
-	return storage.EvidenceBundle{ResolvedScope: scope, Evidence: evidence, Watermarks: watermarks, Unavailable: unavailable, Warnings: catalogWarnings, QueryVersion: QueryVersionV1}, nil
+	return storage.EvidenceBundle{ResolvedScope: scope, Evidence: served, Watermarks: watermarks, Unavailable: unavailable, Warnings: catalogWarnings, QueryVersion: QueryVersionV1, Dropped: dropped}, nil
 }
 
 func unavailableCatalog(reason string) []contractsv1.UnavailableSource {

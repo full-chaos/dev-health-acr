@@ -687,15 +687,20 @@ func IsContextFabricStatedRangeConflictLimitation(limitation string) bool {
 
 // ContextFabricComparisonPeriodUnreadLimitation is served when a question
 // compares two periods and the turn read only the period it states. Bounds are
-// RFC 3339 in UTC, as an evidence window states them, so a client can send the
-// comparison period back as the evidence_window of a second call.
+// RFC 3339 in UTC, as an evidence window states them.
+//
+// The service does not compare two periods, and a second call that repeats the
+// comparison wording is refused the same way, so the sentence says what does
+// work: one period per call, asked in its single-period form, with the
+// comparison period as the evidence window, and the comparison made by the
+// client from the two answers.
 func ContextFabricComparisonPeriodUnreadLimitation(statedStart, statedEnd, comparisonStart, comparisonEnd string) string {
-	return "This question compares two periods; this answer read only the stated period, " + statedStart + " to " + statedEnd + ". The period it is compared with, " + comparisonStart + " to " + comparisonEnd + ", was not read; a second call with evidence_window start " + comparisonStart + " and end " + comparisonEnd + " reads it."
+	return "This question compares two periods; this answer read only the stated period, " + statedStart + " to " + statedEnd + ". The period it is compared with, " + comparisonStart + " to " + comparisonEnd + ", was not read. This service reads one period per call and does not compare two: ask about one period only, with the question in its single-period form without the comparison wording, and send evidence_window start " + comparisonStart + " and end " + comparisonEnd + "; then compare the two answers yourself."
 }
 
 const comparisonPeriodInstant = `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z`
 
-var comparisonPeriodUnreadLimitationPattern = regexp.MustCompile(`^This question compares two periods; this answer read only the stated period, ` + comparisonPeriodInstant + ` to ` + comparisonPeriodInstant + `\. The period it is compared with, (` + comparisonPeriodInstant + `) to (` + comparisonPeriodInstant + `), was not read; a second call with evidence_window start (` + comparisonPeriodInstant + `) and end (` + comparisonPeriodInstant + `) reads it\.$`)
+var comparisonPeriodUnreadLimitationPattern = regexp.MustCompile(`^This question compares two periods; this answer read only the stated period, ` + comparisonPeriodInstant + ` to ` + comparisonPeriodInstant + `\. The period it is compared with, (` + comparisonPeriodInstant + `) to (` + comparisonPeriodInstant + `), was not read\. This service reads one period per call and does not compare two: ask about one period only, with the question in its single-period form without the comparison wording, and send evidence_window start (` + comparisonPeriodInstant + `) and end (` + comparisonPeriodInstant + `); then compare the two answers yourself\.$`)
 
 // IsContextFabricComparisonPeriodUnreadLimitation reports whether one
 // limitation is that disclosure; it matches the whole sentence.
@@ -706,14 +711,44 @@ func IsContextFabricComparisonPeriodUnreadLimitation(limitation string) bool {
 
 // ContextFabricWorkItemCensusRepositoryScopeLimitation is served, in the same
 // words every time, when the caller's repository scope was applied to the
-// work item census: a work item with no repository of its own is outside a
-// named repository, so the census did not search it.
-const ContextFabricWorkItemCensusRepositoryScopeLimitation = "A repository scope was given: work items that have no repository of their own (for example tracker issues linked only through pull requests) were not searched."
+// work item census: a work item is in the scope when it is linked to a pull
+// request of a named repository (the entity tree), whatever its own
+// repository, and the links come from the last link build.
+const ContextFabricWorkItemCensusRepositoryScopeLimitation = "A repository scope was given: work items were searched through their links to the pull requests of the named repositories. The links come from the last link build and can lag behind the source."
+
+// The tier of the link that put a census-found work item in the requested
+// repository scope, when it is not native. A text or heuristic link is never
+// presented as a native one.
+const (
+	ContextFabricWorkItemCensusTextLinkLimitation      = "The work item is in the repository scope through a link stated in text, not a native link."
+	ContextFabricWorkItemCensusHeuristicLinkLimitation = "The work item is in the repository scope through a heuristic match (a pull request opened near the issue's last update in the issue's own repository), not a native link."
+)
+
+// ContextFabricWorkItemCensusLinkTierLimitation is the disclosure of the link
+// tier that put a census-found work item in the requested repository scope:
+// none for a native link, and the heuristic sentence for a tier outside the
+// closed set (the weakest reading, never the native one).
+func ContextFabricWorkItemCensusLinkTierLimitation(tier string) string {
+	switch tier {
+	case ContextFabricWorkItemRepositoryTierNative:
+		return ""
+	case ContextFabricWorkItemRepositoryTierExplicitText:
+		return ContextFabricWorkItemCensusTextLinkLimitation
+	}
+	return ContextFabricWorkItemCensusHeuristicLinkLimitation
+}
 
 // IsContextFabricWorkItemCensusRepositoryScopeLimitation reports whether one
-// limitation is that disclosure; it matches the whole sentence.
+// limitation is a census repository-scope disclosure; it matches each sentence
+// whole.
 func IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation string) bool {
-	return limitation == ContextFabricWorkItemCensusRepositoryScopeLimitation
+	switch limitation {
+	case ContextFabricWorkItemCensusRepositoryScopeLimitation,
+		ContextFabricWorkItemCensusTextLinkLimitation,
+		ContextFabricWorkItemCensusHeuristicLinkLimitation:
+		return true
+	}
+	return false
 }
 
 // The work-item member-filter disclosures. A filtered member answer states the

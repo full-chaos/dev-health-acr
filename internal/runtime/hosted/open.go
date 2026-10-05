@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 	"log/slog"
 	"os"
 	"reflect"
@@ -237,9 +238,18 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if workloadTokenExchange != nil {
 		workloadTokenExchanger = workloadTokenExchange
 	}
+	var webAssertionReplays auth.WebAssertionReplayStore
+	if postgres.db != nil {
+		replayStore, err := storagepostgres.NewWebAssertionReplayStore(postgres.db, request.options.Logger)
+		if err != nil {
+			return nil, closeAfterError(runtime, fmt.Errorf("initialize web assertion replay store: %w", err))
+		}
+		webAssertionReplays = replayStore
+	}
 	runtime.Dependencies = api.Dependencies{
 		Capabilities: capabilities, Now: request.options.Now, Observability: &hooks, Limits: manager, AuthAttempts: authAttempts,
 		EvidenceStoreFactory: clickhouse.factory, ClientIP: clientIP, UsageTelemetry: usageTelemetry,
+		WebAssertionReplays: webAssertionReplays,
 		Runtime: &api.RuntimeDependencies{
 			Credentials: postgres.credentials, Audit: postgres.audit, Entitlements: entitlement, Assembler: assembler,
 			Evidence: clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: livenessChecks, DataStoreChecks: dataStoreChecks,

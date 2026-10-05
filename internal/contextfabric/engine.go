@@ -1290,12 +1290,17 @@ type Engine struct {
 	anchorBindingShadowDisabled                 bool
 	serverCompletenessAuthorityEnabled          bool
 	serverCompletenessAuthoritySymmetricEnabled bool
-	maxItems                                    int
-	maxSerializedBytes                          int64
-	synthesisDeadlineReserve                    time.Duration
-	serviceVersion                              string
-	now                                         func() time.Time
-	newResultID                                 func() string
+	// servedLateHook is a test seam: a writer that adds bytes to the document
+	// after the stage-3 fit and the late writers, inside finalizeServed. Always
+	// nil in production. It lets a test prove the final fit does not depend on
+	// knowing which writers run last.
+	servedLateHook           func(InvestigationResult) InvestigationResult
+	maxItems                 int
+	maxSerializedBytes       int64
+	synthesisDeadlineReserve time.Duration
+	serviceVersion           string
+	now                      func() time.Time
+	newResultID              func() string
 }
 
 func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine, error) {
@@ -2203,6 +2208,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// Admission reads the carrier and decides nothing about the frame; the
 	// composition that does stays below, after the verdict, where it was.
 	// The fresh line above still reports what the interpreter proposed.
+	// The binder committed a bare calendar phrase's window before the
+	// interpreter ran; the interpretation may only withdraw it (an as-of
+	// reading, a series or comparison frame), never redefine it. A series
+	// reads the calendar period on the range axis next, so that is the axis
+	// the withdrawal line reports as executed.
+	if withdrawn, reason, ok := withdrawCalendarCommit(windowCanon, interpretation, familyOutcome.Frame); ok {
+		windowCanon = withdrawn
+		if e.telemetry != nil {
+			executed := interpretedTimeBound.Bound.Axis
+			if reason == StatedWindowAxisWithdrawnPeriodShape && periodShapeOf(familyOutcome.Frame) == periodShapeSeries {
+				executed = TemporalRange
+			}
+			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, StatedWindowOriginQuestionPhrase, interpretedTimeBound.Bound.Axis, executed, reason)
+		}
+	}
 	var periodClamp ReadTimeClamp
 	windowCommitted := windowCanon.Effective != nil
 	if continuation.Observed {
@@ -2252,7 +2272,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		if axisOutcome == ContinuationAxisOverriddenByReceipt {
 			if statedOrigin == StatedWindowOriginQuestionPhrase {
-				windowCanon.StatedRangeConflict = detectStatedRangeConflict(windowCanon.BinderProposal, interpretation.TimeContext, e.now())
+				if windowCanon.CalendarCommitted {
+					windowCanon.StatedRangeConflict = detectRangeConflictAgainst(windowCanon.CalendarStart, windowCanon.CalendarEnd, interpretation.TimeContext)
+				} else {
+					windowCanon.StatedRangeConflict = detectStatedRangeConflict(windowCanon.BinderProposal, interpretation.TimeContext, e.now())
+				}
 			}
 			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 		}
@@ -3438,6 +3462,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	factRequest := CanonicalFactRequest{
 		workItemTuple:            workItemTuple,
+		LinkScopedSubjects:       linkScopedFactSubjects(ctx, request, subjects, tupleCensus),
 		Question:                 factReadQuestion(interpretation, effectiveWindow),
 		Subjects:                 subjects,
 		Cohort:                   graphContext.Cohort,
@@ -4060,7 +4085,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			return InvestigationResult{}, stageError(StageValidation, err)
 		}
 	}
-	result, budgetErr := e.finalizeServed(ctx, principal, BudgetAssertDecisive, result, nil, ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes})
+	decisiveBudget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
+	result, budgetErr := e.finalizeServedFitting(ctx, principal, BudgetAssertDecisive, result, decisiveBudget)
 	if cover.disclosure != nil {
 		if budgetErr != nil {
 			cover.disclosureMeasured = refusalMeasurementOf(budgetErr)

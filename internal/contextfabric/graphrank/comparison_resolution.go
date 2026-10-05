@@ -831,8 +831,8 @@ func resolveOneOperandSlot(
 		searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold,
 		retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK,
 		unscopedVisibilityFor(principal, request), gate, identity, identityTerms,
-		aliases.complete, deps.ResolutionTracer, request.RequestID, "", false, false,
-		[]contextfabric.SubjectKind{slot.Kind}, anchorReservedSlot{}, nil, pass,
+		aliases.state(), deps.ResolutionTracer, request.RequestID, "", false, false,
+		[]contextfabric.SubjectKind{slot.Kind}, anchorReservedSlot{}, nil, nil, pass,
 	)
 
 	return operandSlotRun{
@@ -1018,6 +1018,16 @@ func matchingSlotsForReceipt(
 type comparisonAliasClaimants struct {
 	claimantsByTerm map[string][]CandidateNode
 	complete        bool
+	lookup          IdentityLookupState
+}
+
+// state is the read's IdentityLookupState; the zero value is a read that
+// never ran.
+func (a comparisonAliasClaimants) state() IdentityLookupState {
+	if a.lookup == "" {
+		return IdentityLookupNotWired
+	}
+	return a.lookup
 }
 
 // claimantsForTerm returns every claimant list keyed by a term that
@@ -1083,11 +1093,12 @@ func lookupComparisonAliasClaimants(ctx context.Context, principal storage.Princ
 		return comparisonAliasClaimants{}, nil
 	}
 	claimantsByTerm, complete, err := deps.AliasLookup(ctx, principal.OrgID, terms)
+	lookup, err := identityLookupStateOf(complete, err)
 	if err != nil {
 		return comparisonAliasClaimants{}, err
 	}
-	traceAliasLookup(deps, request.RequestID, complete, len(terms), claimantsByTerm)
-	return comparisonAliasClaimants{claimantsByTerm: claimantsByTerm, complete: complete}, nil
+	traceAliasLookup(deps, request.RequestID, lookup, len(terms), claimantsByTerm)
+	return comparisonAliasClaimants{claimantsByTerm: claimantsByTerm, complete: lookup == IdentityLookupComplete, lookup: lookup}, nil
 }
 
 // withSharedExactNameCandidates makes the exact-name population a

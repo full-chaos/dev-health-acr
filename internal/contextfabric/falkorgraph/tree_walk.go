@@ -273,6 +273,11 @@ type treeWalk struct {
 	// memberTiers is set only when the link ends the path (linkMembers): the
 	// strongest admitted link tier of each member, by canonical id.
 	memberTiers map[string]string
+	// linkSubjects are the members when the link ends the path. The link read
+	// returns projections of the walk properties (walk_projection.go), so
+	// these members are identities, a distinct type from nodes: a reader
+	// cannot ask them for a property the read did not return.
+	linkSubjects []contextfabric.SubjectRef
 	// heuristicOnly counts the members whose strongest tier is heuristic.
 	heuristicOnly int
 }
@@ -294,12 +299,6 @@ type treeWalkState struct {
 	principal    storage.Principal
 	scope        contextfabric.RequestedScope
 	collectLimit int
-	// scopeFollowsLink (E3): a requested repository scope is tested on the
-	// link's pull request, not on the issue's own repository. Only the
-	// repository work-item walk (the issues are the members) applies it; the
-	// deployment walks keep the both-ends rule they were reviewed with
-	// (CHAOS-8694 takes it there).
-	scopeFollowsLink bool
 }
 
 func (s treeWalkState) authorized(n *node) bool {
@@ -312,18 +311,18 @@ func (s treeWalkState) authorized(n *node) bool {
 // request the caller is granted (the other end of the same row), and for a
 // repository-restricted caller only when that link's tier grants authority
 // (native). An unrestricted caller needs no authority from a link.
+//
+// A requested repository scope follows the link in every walk that crosses
+// it: the pull request at the other end of the row is tested against the
+// scope; the issue is tested against the caller's grants and the rest of the
+// request (graphrank.AuthorizedThroughLink), never against the scope by its
+// own repository.
 func (s treeWalkState) admitted(position treePosition, n *node, tier linkTier) bool {
 	if position == treeIssue && repositoryLess(n) {
 		return tier.grantsAuthority || !s.narrowed()
 	}
-	if position == treeIssue && s.scopeFollowsLink && len(s.scope.RepositorySlugs) > 0 {
-		// E3: a requested repository scope follows the link. The pull request
-		// at the other end of the row is tested against it; the issue is
-		// tested against the caller's grants only, never against the scope by
-		// its own repository.
-		linkScope := s.scope
-		linkScope.RepositorySlugs = nil
-		return graphrank.AuthorizedAttributes(s.principal, linkScope, toCandidateNode(n).Attributes)
+	if position == treeIssue {
+		return graphrank.AuthorizedThroughLink(s.principal, s.scope, toCandidateNode(n).Attributes)
 	}
 	return s.authorized(n)
 }
@@ -374,7 +373,7 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 	if !ok {
 		return out, nil
 	}
-	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit, scopeFollowsLink: member == treeIssue}
+	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit}
 	frontier := []string{anchor.CanonicalID}
 	subjects := map[string]contextfabric.SubjectRef{anchor.CanonicalID: anchor}
 	for k := 0; k < len(path); k++ {
@@ -404,7 +403,11 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 		if hop.edge.ownership {
 			hopTemporal, budget = currentOwnership(temporal, a.now()), exactNameCandidateQueryLimit
 		}
-		hits, hitsCut, err := a.walkStepHits(ctx, key, orgID, frontier, hop.step, hopTemporal, budget)
+		step := hop.step
+		// A hop that only feeds the next one reads the walk properties of its
+		// nodes; the members' hop reads them whole.
+		step.projected = k < len(path)-1 && walkNodeProjected(hop.to)
+		hits, hitsCut, err := a.walkStepHits(ctx, key, orgID, frontier, step, hopTemporal, budget)
 		if err != nil {
 			return out, err
 		}
@@ -488,14 +491,20 @@ func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]c
 func (s treeWalkState) linkMembers(ends []string, far map[string]*node) {
 	s.out.memberTiers = map[string]string{}
 	for _, id := range s.cutRanked(ends) {
-		s.out.nodes = append(s.out.nodes, toCandidateNode(far[id]))
+		subject, ok := graphrank.NodeSubject(toCandidateNode(far[id]))
+		if !ok {
+			continue
+		}
+		s.out.linkSubjects = append(s.out.linkSubjects, subject)
 		tier := s.out.endTiers[id]
 		s.out.memberTiers[id] = tier
 		if tier == contextfabric.TreeLinkTierHeuristic {
 			s.out.heuristicOnly++
 		}
 	}
-	sortCandidateNodesBySubjectKey(s.out.nodes)
+	sort.Slice(s.out.linkSubjects, func(i, j int) bool {
+		return graphrank.SubjectKey(s.out.linkSubjects[i]) < graphrank.SubjectKey(s.out.linkSubjects[j])
+	})
 }
 
 // disclose adds the edge of one hit, oriented as projected: child -> parent.
@@ -614,7 +623,17 @@ func linkSegmentCypher(feed, link treeHop, temporal temporalFilter, restricted b
 	return linkSegmentMatch(feed) + fmt.Sprintf(hopArrow(link.step.direction, "rl")+"(b:%[2]s {%[3]s:$org, %[4]s:$endKind}) ", labelRelation, labelSubject, propOrgID, propKind) +
 		fmt.Sprintf("WHERE ra.%[1]s = $feedRel AND rl.%[1]s = $linkRel AND rl.%[2]s IN $tiers", propRelationType, propPropertyPrefix+linkTierProperty) + mid.typeClause() + end.typeClause() + grants +
 		temporal.predicate("ra") + temporal.predicate("m") + temporal.predicate("rl") + temporal.predicate("b") +
-		fmt.Sprintf(" RETURN m, b, rl ORDER BY %[2]sm.%[1]s, b.%[1]s, rl.%[3]s SKIP $skip LIMIT $limit", propCanonicalID, order, propRelationshipID)
+		fmt.Sprintf(" RETURN %[4]s, %[5]s, %[6]s ORDER BY %[2]sm.%[1]s, b.%[1]s, rl.%[3]s SKIP $skip LIMIT $limit", propCanonicalID, order, propRelationshipID,
+			linkSegmentColumn("m", feed.to, walkNodeProperties), linkSegmentColumn("b", link.to, walkNodeProperties), walkProjection("rl", walkLinkProperties))
+}
+
+// linkSegmentColumn is a node column of the link read: the walk properties of
+// the node, or the whole node at a position that is never projected.
+func linkSegmentColumn(variable string, position treePosition, properties []string) string {
+	if !walkNodeProjected(position) {
+		return variable
+	}
+	return walkProjection(variable, properties)
 }
 
 // linkSourceCountCypher counts the near-side nodes of the anchor's hop, before
@@ -755,9 +774,9 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 			return nil, nil, safeDependencyError("walk the entity tree", err)
 		}
 		for _, r := range rows {
-			near, _ := r["m"].(*node)
-			far, _ := r["b"].(*node)
-			tier, isLink := linkTierOf(asEdge(r["rl"]))
+			near := walkNode(r["m"])
+			far := walkNode(r["b"])
+			tier, isLink := linkTierOf(walkEdge(r["rl"]))
 			if near == nil || far == nil || !isLink {
 				// No row, or an edge with no tier the table lists: not a link.
 				continue
@@ -798,9 +817,4 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 // a team through the repositories it owns, a repository directly.
 func (a *Adapter) anchorDeploymentMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, collectLimit int, temporal temporalFilter) (treeWalk, error) {
 	return a.treeMembers(ctx, key, orgID, principal, scope, anchor, treeDeployment, collectLimit, temporal)
-}
-
-func asEdge(v interface{}) *edge {
-	e, _ := v.(*edge)
-	return e
 }

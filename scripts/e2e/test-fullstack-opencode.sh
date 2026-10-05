@@ -356,15 +356,15 @@ grep -Fq 'all current and future repositories in your organization' "$root/scrip
   || fail 'the live approval flow must assert current-and-future organization repository copy'
 grep -Fq 'deviceRequests[1].scopes[0] !== "*"' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the live approval flow must assert the submitted organization-wide scope'
-grep -Fq 'await requireDeviceSuccess(await replayPreview, "replay preview");' "$root/scripts/e2e/device-login-browser.mjs" \
-  || fail 'replay protection must not be asserted on the intentionally repeatable preview operation'
-grep -Fq 'if (replayApprovalResponse.status() !== 409)' "$root/scripts/e2e/device-login-browser.mjs" \
-  || fail 'the live approval flow must assert replay conflict on the second approval transition'
+grep -Fq 'if (replayPreviewResponse.status() !== 400)' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must refuse a preview of a decided code like an unknown code'
+grep -Fq 'actions.join(",") !== "preview,approve,preview"' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must stop at the refused replay preview'
 grep -Fq 'isDeviceResponseForAction(response, "approve")' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'device approval response waits must distinguish approval from preview responses'
 grep -Fq 'const replayBrowserErrorStart = browserErrors.length;' "$root/scripts/e2e/device-login-browser.mjs" \
-  || fail 'the browser must scope its expected conflict console error to the approval replay window'
-grep -Fq 'error.text.includes("the server responded with a status of 409")' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the browser must scope its expected refusal console error to the preview replay window'
+grep -Fq 'error.text.includes("the server responded with a status of 400")' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the browser must bind its console-error exemption to the expected replay status'
 grep -Fq 'expectedReplayErrors.length > 1' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the browser must reject duplicate replay-conflict console errors'
@@ -378,10 +378,8 @@ grep -Fq 'const deviceSurfaceFailureStart = failedRequests.length;' "$root/scrip
   || fail 'the browser must separate dashboard teardown from protected device-surface failures'
 grep -Fq 'const deviceSurfaceFailedRequests = failedRequests.slice(deviceSurfaceFailureStart);' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the browser must enforce request failures on the protected device surface'
-grep -Fq 'preview,approve,preview,approve' "$root/scripts/e2e/device-login-browser.mjs" \
-  || fail 'the live approval flow must retain the complete approval replay request sequence'
-if grep -Fq 'if ((await replay).status() !== 409)' "$root/scripts/e2e/device-login-browser.mjs"; then
-  fail 'preview is repeatable by contract; replay protection belongs to the approval transition'
+if grep -Fq 'requireDeviceSuccess(await replayPreview' "$root/scripts/e2e/device-login-browser.mjs"; then
+  fail 'a decided code must not be previewable; the replay preview must be refused'
 fi
 if grep -Eq 'getByLabel\(repository\)|getByRole\("checkbox"\)|\.isChecked\(\)|bounded repository was not selected' "$root/scripts/e2e/device-login-browser.mjs"; then
   fail 'the live approval flow must not restore the retired exact-repository checkbox expectation'

@@ -111,8 +111,9 @@ ACR_WEB_ASSERTION_JWKS_FILE
 The JWKS is local public key material. Rotate by publishing the new key in the
 JWKS, issuing assertions with its `kid`, observing successful verification,
 then removing the retired key. Removing a key takes effect on the next
-assertion because the file is reread. A process-local replay check is not a
-global replay-prevention service.
+assertion because the file is reread. Used assertion ids live in PostgreSQL
+(`acr.web_assertion_replays`), so every acr-api pod refuses a replay; the
+runtime role needs SELECT, INSERT and DELETE on it (`grant-runtime-acl`).
 
 ### Secrets and credentials
 

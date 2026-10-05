@@ -1351,12 +1351,16 @@ func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, c
 	for key, value := range requirement.Parameters {
 		parameters[key] = value
 	}
+	requested := copyRequestedRepositoryScope(request.RequestedRepositoryScope)
+	if workItemOwnFact(requirement.Kind) && onlyLinkScopedWorkItems(request, subjects) {
+		requested = nil
+	}
 	return FactQuery{
 		Kind:                     requirement.Kind,
 		Subjects:                 append([]SubjectRef(nil), subjects...),
 		Cohort:                   request.Cohort,
 		Time:                     request.Question.TimeContext,
-		RequestedRepositoryScope: copyRequestedRepositoryScope(request.RequestedRepositoryScope),
+		RequestedRepositoryScope: requested,
 		Parameters:               parameters,
 	}, nil
 }
@@ -2083,4 +2087,31 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// workItemOwnFact reports whether a fact kind reads a work item's own row:
+// its status, its title, its completion. The requested repository scope
+// selected the work item; it does not filter the work item's own row again.
+func workItemOwnFact(kind FactKind) bool {
+	return kind == FactStatus || kind == FactWork || kind == FactActualCompletion
+}
+
+// onlyLinkScopedWorkItems reports whether every subject is a work item this
+// request's link predicate admitted under the requested scope
+// (CanonicalFactRequest.LinkScopedSubjects). Any other subject in the query (a
+// work item selected by its own repository, a subject the fact scope derived,
+// another kind) keeps the requested scope on the whole query.
+func onlyLinkScopedWorkItems(request CanonicalFactRequest, subjects []SubjectRef) bool {
+	linked := make(map[string]bool, len(request.LinkScopedSubjects))
+	for _, subject := range request.LinkScopedSubjects {
+		if subject.Kind == SubjectWorkItem {
+			linked[canonicalFactSubjectKey(subject)] = true
+		}
+	}
+	for _, subject := range subjects {
+		if !linked[canonicalFactSubjectKey(subject)] {
+			return false
+		}
+	}
+	return len(subjects) > 0
 }

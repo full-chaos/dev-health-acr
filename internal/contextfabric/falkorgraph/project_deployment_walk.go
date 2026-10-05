@@ -29,6 +29,10 @@ type walkStep struct {
 	direction        walkDirection
 	toTypes          []interface{}
 	notToTypes       []interface{}
+	// projected: the read returns the walk properties of each reached node
+	// (walk_projection.go), not the whole node. Set for a hop that only feeds
+	// the next one; a hop whose nodes are members reads them whole.
+	projected bool
 }
 
 type walkHit struct {
@@ -57,9 +61,13 @@ func walkStepCypher(step walkStep, temporal temporalFilter) string {
 	case len(step.notToTypes) > 0:
 		typeClause = fmt.Sprintf(" AND (b.%s IS NULL OR NOT b.%s IN $btypes)", propWorkItemType, propWorkItemType)
 	}
-	return fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+arrow+"(b:%s {%s:$org, %s:$toKind}) WHERE r.%s = $rel%s%s%s RETURN id, b, r ORDER BY id, b.%s, r.%s LIMIT $limit",
+	column := "b"
+	if step.projected {
+		column = walkProjection("b", walkNodeProperties)
+	}
+	return fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+arrow+"(b:%s {%s:$org, %s:$toKind}) WHERE r.%s = $rel%s%s%s RETURN id, %s, r ORDER BY id, b.%s, r.%s LIMIT $limit",
 		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, propKind,
-		propRelationType, typeClause, temporal.predicate("r"), temporal.predicate("b"), propCanonicalID, propRelationshipID)
+		propRelationType, typeClause, temporal.predicate("r"), temporal.predicate("b"), column, propCanonicalID, propRelationshipID)
 }
 
 // walkStepParams binds one batch of a step read.
@@ -107,7 +115,7 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 		}
 		for _, r := range rows {
 			id, _ := r["id"].(string)
-			n, _ := r["b"].(*node)
+			n := walkNode(r["b"])
 			e, _ := r["r"].(*edge)
 			if id == "" || n == nil || e == nil {
 				continue

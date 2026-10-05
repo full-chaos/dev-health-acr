@@ -265,7 +265,7 @@ func (e *Engine) measureAssembledAttempt(
 	result InvestigationResult,
 	budget ResponseBudget,
 ) (MeasuredAttempt, error) {
-	attempt, err := MeasureAttempt(allocation, servedMeasurementShape(result), budget)
+	attempt, err := MeasureAttempt(allocation, e.servedMeasurementShape(ctx, result), budget)
 	if err != nil {
 		return MeasuredAttempt{}, stageError(StageValidation, fmt.Errorf("measure %s: %w", stage, err))
 	}
@@ -463,4 +463,13 @@ func servedMeasurementShape(result InvestigationResult) InvestigationResult {
 	capCoverageEntriesToWriteBound(&result)
 	applyCoverageDisplayLabels(&result)
 	return restateServedStatusHead(result)
+}
+
+// servedMeasurementShape is the document the route sends, for a fit to measure:
+// the shape above, then the late writers finalizeServed applies before its
+// final assertion. A fit that stopped at the shape above accepted a document
+// the assertion then measured 52 bytes larger and refused.
+func (e *Engine) servedMeasurementShape(ctx context.Context, result InvestigationResult) InvestigationResult {
+	shaped, _ := e.servedLateWriters(ctx, servedMeasurementShape(result))
+	return shaped
 }

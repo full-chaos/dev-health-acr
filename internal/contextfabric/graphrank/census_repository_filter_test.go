@@ -276,21 +276,27 @@ func TestResolveSubjects_CensusProbeTraceNamesWhetherTheRepositoryFilterWasAppli
 
 func TestRunShadowEvidenceRound_RecordsTheWorkItemCensusRepositoryScopeOnlyWhenItWasApplied(t *testing.T) {
 	t.Parallel()
+	walked := func(complete bool) *linkScope {
+		return &linkScope{read: func(context.Context) (map[string]string, bool, error) { return nil, complete, nil }}
+	}
 	for _, tc := range []struct {
 		name     string
 		question string
+		scope    *linkScope
 		applied  bool
 		want     bool
 	}{
-		{"work item, filter applied", "What is the state of CHAOS-77?", true, true},
-		{"work item, filter ignored", "What is the state of CHAOS-77?", false, false},
-		{"pull request, filter applied", "What is the state of pull request 747?", true, false},
+		{"work item, link walk read", "What is the state of CHAOS-77?", walked(true), false, true},
+		{"work item, link walk cut", "What is the state of CHAOS-77?", walked(false), false, false},
+		{"work item, no link walk", "What is the state of CHAOS-77?", nil, true, false},
+		{"pull request, filter applied", "What is the state of pull request 747?", nil, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			input := baseInput()
 			input.Question = tc.question
 			input.CensusRepositories = []string{filterRepo(1)}
+			input.workItemScope = tc.scope
 			input.NarrowSatisfiers = func(_ context.Context, _ CensusKind, ids []string) ([]string, bool) { return ids, true }
 			input.CensusFunc = func(_ context.Context, _ string, _ CensusKind, _ string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
 				return CensusOutcome{Count: 0, CensusReadAt: time.Now().UTC(), RepositoryFilterApplied: tc.applied}, nil

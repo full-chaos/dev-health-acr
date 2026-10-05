@@ -47,7 +47,10 @@ type Dependencies struct {
 	Runtime              *RuntimeDependencies
 	ClientIP             auth.ClientIPResolver
 	WebAssertions        *auth.WebAssertionVerifier
-	UsageTelemetry       *auth.UsageTelemetry
+	// WebAssertionReplays is the shared used-id record the hosted runtime
+	// provides; the web assertion verifier fails closed without it.
+	WebAssertionReplays auth.WebAssertionReplayStore
+	UsageTelemetry      *auth.UsageTelemetry
 }
 
 type App struct {

@@ -482,6 +482,12 @@ type ResolveDeps struct {
 	// RunShadowEvidenceRound's own doc comment for what runs when it is
 	// set, and why the round can never influence `resolution` regardless.
 	CensusFunc CensusFunc
+	// LinkScopedWorkItems returns the work items in a requested repository
+	// scope: the issues the repository-to-issue walk of the entity tree
+	// reaches from each repository the scope names. complete is false when
+	// the walk was cut. nil: a work-item census under a requested repository
+	// scope cannot be read, and the round says so (census incomplete).
+	LinkScopedWorkItems func(ctx context.Context, scope contextfabric.RequestedScope) (tiers map[string]string, complete bool, err error)
 	// HandleGrammarChecker (CHAOS-3972 P3) is contextfabric.Engine's own
 	// offer-time grammar dependency, threaded through unchanged so
 	// explicitHandleOfferMaterial (chaos3900_structure_offers.go) can
@@ -703,6 +709,10 @@ type ResolutionTraceEvent struct {
 	// proves it found a match (C2).
 	AliasLookupComplete         bool
 	AliasLookupMatchedClaimants int
+	// IdentityLookup (alias_lookup stage) is the IdentityLookupState token of
+	// the keyed identity read: complete, incomplete, graph_lag or
+	// not_run_time_axis.
+	IdentityLookup string
 	// AliasLookupTermCount/AliasLookupMatchedKinds: how many terms the lookup
 	// was asked about and the distinct subject kinds of its claimants -- counts
 	// and closed kinds only, never the terms themselves (they come from the
@@ -3182,6 +3192,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// stays false, byte-identical
 	// to every pre-CHAOS-3884 backend.
 	aliasIdentityComplete := false
+	identityLookup := IdentityLookupNotWired
 	// aliasClaimantsByTerm (CHAOS-3899, shadow-only) is deps.AliasLookup's
 	// own claimantsByTerm, retained past the block below so the shadow
 	// evidence round's anchor binding (BindAnchor) can reuse it rather than
@@ -3191,12 +3202,13 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	var aliasClaimantsByTerm map[string][]CandidateNode
 	if deps.AliasLookup != nil {
 		claimantsByTerm, complete, err := deps.AliasLookup(ctx, principal.OrgID, terms)
+		identityLookup, err = identityLookupStateOf(complete, err)
 		if err != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 		}
-		aliasIdentityComplete = complete
+		aliasIdentityComplete = identityLookup == IdentityLookupComplete
 		aliasClaimantsByTerm = claimantsByTerm
-		traceAliasLookup(deps, request.RequestID, complete, len(terms), claimantsByTerm)
+		traceAliasLookup(deps, request.RequestID, identityLookup, len(terms), claimantsByTerm)
 		for term, nodes := range claimantsByTerm {
 			// allowExactMatch=true: these are the SAME genuine
 			// caller-derived terms the per-term Search loop above already
@@ -3622,7 +3634,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// "this resolution's Nth finalization" depends on which of them
 	// actually ran, never on textual position alone.
 	pass := 1
-	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, kindRescue, pass)
+	// exactRefusal is the exact-label refusal of this resolution, carried into
+	// every later decision over a new pool (exact_label_proof.go).
+	var exactRefusal exactLabelRefusal
+	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -3798,8 +3813,8 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			scopedResolution, scopedBases, scopedDigests := resolveFromMergedCandidatesWithAnchorSlot(
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
-				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, aliasIdentityComplete,
-				scopedDecisionTracer, request.RequestID, "", true, false, nil, anchorReservedSlot{}, kindRescue, pass,
+				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, identityLookup,
+				scopedDecisionTracer, request.RequestID, "", true, false, nil, anchorReservedSlot{}, &exactRefusal, kindRescue, pass,
 			)
 			if len(scopedResolution.Committed) > 0 {
 				resolution = scopedResolution
@@ -3904,7 +3919,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 					commitCensusAttestedBesideScopeAnchor(&resolution, candidatesBySubject[attestedKey], request, deps, commitBases, commitDigests, searchTruncated, aliasIdentityComplete, effectiveSearchLimit, pass)
 				} else {
 					pass++
-					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, kindRescue, pass)
+					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, &exactRefusal, kindRescue, pass)
 					commitBases.ResetTo(censusBases)
 					commitDigests.ResetTo(censusDigests)
 					resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
@@ -4445,7 +4460,16 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	// (shared by three other call sites with a different, established
 	// contract) -- see NodeCandidate's own doc comment for the exact
 	// conditions being mirrored.
+	// A work item the round scoped by the link walk is in the requested
+	// repository scope through its link: it is tested, and merged, with the
+	// issue side of that rule (AuthorizedThroughLink), never by its own
+	// repository.
+	mergeRequest := request
 	accepted := AuthorizedAttributes(principal, request.RequestedScope, node.Attributes)
+	if linkScopedSatisfier(attestation, kind) {
+		mergeRequest.RequestedScope = issueScopeOfLink(request.RequestedScope)
+		accepted = AuthorizedThroughLink(principal, request.RequestedScope, node.Attributes)
+	}
 	if accepted {
 		if nodeSubject, ok := NodeSubject(node); !ok || deps.IsInternal(nodeSubject) {
 			accepted = false
@@ -4467,7 +4491,7 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	// same accept decision on the SAME node/principal/scope inputs, so this
 	// call is never a second, independent authorization gate -- merely
 	// where the actual merge/insert into candidatesBySubject happens.
-	mergeSearchResults(ctx, principal, request, deps, censusProvenanceMarker, []CandidateNode{node}, candidatesBySubject, observationParentKey, observationBlocked, false, nil, identity, identityTerms, admission)
+	mergeSearchResults(ctx, principal, mergeRequest, deps, censusProvenanceMarker, []CandidateNode{node}, candidatesBySubject, observationParentKey, observationBlocked, false, nil, identity, identityTerms, admission)
 	// codex xhigh review finding (HIGH, confirmed and fixed): a candidate
 	// already sitting at exactly matchedTermsCap real terms overflows to
 	// matchedTermsCap+1 once censusProvenanceMarker unions in above --
@@ -4637,13 +4661,20 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 			}
 		}
 	}
+	// One link walk per round: the work-item census under a requested
+	// repository scope and its cross-check read the same population.
+	var workItemScope *linkScope
+	if callerNarrowingApplies(principal, request, deps) {
+		workItemScope = newLinkScope(deps, request.RequestedScope)
+	}
 	attestation = RunShadowEvidenceRound(roundCtx, ShadowEvidenceRoundInput{
 		RequestID: request.RequestID, Question: request.Question, OrgID: principal.OrgID,
 		PooledKinds: censusKinds, PooledSubjects: pooledSubjects, Trigger: evidenceRoundTrigger(resolution, callerHintShortCircuit), CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
 		UnscopedVisibility: unscopedVisibility, AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
 		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
-		NarrowSatisfiers:          callerNarrowingSatisfierFilter(principal, request, deps),
+		NarrowSatisfiers:          callerNarrowingSatisfierFilter(principal, request, deps, workItemScope),
 		CensusRepositories:        callerCensusRepositories(principal, request, deps),
+		workItemScope:             workItemScope,
 		PreNarrowingExplicitKinds: preNarrowingExplicitKinds,
 		ConfirmedAnchor:           confirmedAnchorInput,
 		ConfirmedHandle:           confirmedHandleInput,
@@ -5040,7 +5071,7 @@ func retrieveCandidatesForTerms(
 // traceAliasLookup emits the alias_lookup stage for one keyed identity read.
 // The event firing at all shows the read was invoked; a positive
 // matched-claimant count shows it found a match.
-func traceAliasLookup(deps ResolveDeps, requestID string, complete bool, termCount int, claimantsByTerm map[string][]CandidateNode) {
+func traceAliasLookup(deps ResolveDeps, requestID string, lookup IdentityLookupState, termCount int, claimantsByTerm map[string][]CandidateNode) {
 	if deps.ResolutionTracer == nil {
 		return
 	}
@@ -5061,7 +5092,7 @@ func traceAliasLookup(deps ResolveDeps, requestID string, complete bool, termCou
 	slices.Sort(kinds)
 	deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 		RequestID: requestID, Stage: "alias_lookup",
-		AliasLookupComplete: complete, AliasLookupMatchedClaimants: matched,
+		AliasLookupComplete: lookup == IdentityLookupComplete, IdentityLookup: string(lookup), AliasLookupMatchedClaimants: matched,
 		AliasLookupTermCount: termCount, AliasLookupMatchedKinds: kinds,
 	})
 }
@@ -5203,11 +5234,23 @@ func callerCensusRepositories(principal storage.Principal, request contextfabric
 // whose only visibility limit is the caller's own repository narrowing of an
 // unrestricted principal, and nil otherwise. A restricted principal never gets
 // one: its round does not run a census at all.
-func callerNarrowingSatisfierFilter(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) SatisfierNarrower {
+//
+// A work item is inside the narrowing when the scope's link walk reaches it
+// and its node passes AuthorizedThroughLink; every other kind when its node
+// passes AuthorizedAttributes. A work item with no walk to read is undecided.
+func callerNarrowingSatisfierFilter(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, workItemScope *linkScope) SatisfierNarrower {
 	if !callerNarrowingApplies(principal, request, deps) {
 		return nil
 	}
 	return func(ctx context.Context, kind CensusKind, canonicalIDs []string) ([]string, bool) {
+		var linked map[string]string
+		if kind == contextfabric.SubjectWorkItem {
+			members, err := workItemScope.population(ctx)
+			if err != nil {
+				return nil, false
+			}
+			linked = members
+		}
 		kept := make([]string, 0, len(canonicalIDs))
 		for _, id := range canonicalIDs {
 			node, exists, err := deps.ExactHint(ctx, contextfabric.SubjectRef{Kind: kind, CanonicalID: id})
@@ -5217,7 +5260,12 @@ func callerNarrowingSatisfierFilter(principal storage.Principal, request context
 			if !exists {
 				return nil, false
 			}
-			if AuthorizedAttributes(principal, request.RequestedScope, node.Attributes) {
+			admitted := AuthorizedAttributes(principal, request.RequestedScope, node.Attributes)
+			if kind == contextfabric.SubjectWorkItem {
+				_, walked := linked[id]
+				admitted = walked && AuthorizedThroughLink(principal, request.RequestedScope, node.Attributes)
+			}
+			if admitted {
 				kept = append(kept, id)
 			}
 		}

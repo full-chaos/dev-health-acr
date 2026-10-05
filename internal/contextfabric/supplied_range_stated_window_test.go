@@ -131,6 +131,12 @@ func suppliedRangeInterpreted(cell suppliedRangeCell) InterpretedQuestion {
 
 func runSuppliedRangeCell(t *testing.T, cell suppliedRangeCell, surface string) (InvestigationResult, QuestionFamily) {
 	t.Helper()
+	result, family, _ := runSuppliedRangeCellRig(t, cell, surface)
+	return result, family
+}
+
+func runSuppliedRangeCellRig(t *testing.T, cell suppliedRangeCell, surface string) (InvestigationResult, QuestionFamily, *recordingTelemetry) {
+	t.Helper()
 	receipt := clientInterpretReceipt()
 	receipt.QuestionFamily = cell.family
 	receipt.GroupKind = cell.group
@@ -152,7 +158,7 @@ func runSuppliedRangeCell(t *testing.T, cell suppliedRangeCell, surface string) 
 	if len(spy.events) > 0 {
 		family = spy.events[len(spy.events)-1].Family
 	}
-	return result, family
+	return result, family, rig.telemetry
 }
 
 // familyFrame is a frame of the given temporal intent whose subject

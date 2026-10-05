@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -9,6 +10,10 @@ type webAssertionReplays struct {
 	mu       sync.Mutex
 	byJTI    map[string]time.Time
 	capacity int
+}
+
+func (r *webAssertionReplays) Observe(_ context.Context, _, jti string, expiresAt, now time.Time) (bool, error) {
+	return r.observe(jti, expiresAt, now), nil
 }
 
 func (r *webAssertionReplays) observe(jti string, expiresAt, now time.Time) bool {

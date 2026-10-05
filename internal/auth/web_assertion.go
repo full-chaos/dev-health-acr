@@ -1,10 +1,14 @@
 package auth
 
 import (
+	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -25,7 +29,17 @@ const (
 var (
 	ErrInvalidWebAssertion = errors.New("invalid web assertion")
 	ErrWebAssertionReplay  = errors.New("web assertion replay observed")
+	// ErrWebAssertionStoreUnavailable means the shared used-id record could not
+	// answer. The assertion is refused: fail closed.
+	ErrWebAssertionStoreUnavailable = errors.New("web assertion replay store unavailable")
 )
+
+// WebAssertionReplayStore records used web-assertion ids. Observe reports
+// replay=true when (issuer, jti) was already used; an error means the store
+// could not answer.
+type WebAssertionReplayStore interface {
+	Observe(ctx context.Context, issuer, jti string, expiresAt, now time.Time) (replay bool, err error)
+}
 
 type WebAssertionOptions struct {
 	Issuer       string
@@ -33,6 +47,10 @@ type WebAssertionOptions struct {
 	JWKSPath     string
 	Now          func() time.Time
 	MaxBodyBytes int64
+	// Replays is the shared used-id record. Nil uses a per-process record,
+	// which is only correct for a single instance.
+	Replays WebAssertionReplayStore
+	Logger  *slog.Logger
 }
 
 type WebAssertionVerifier struct {
@@ -41,7 +59,8 @@ type WebAssertionVerifier struct {
 	jwks         *authverify.Ed25519JWKSVerifier
 	now          func() time.Time
 	maxBodyBytes int64
-	replays      webAssertionReplays
+	replays      WebAssertionReplayStore
+	logger       *slog.Logger
 }
 
 type webAssertionHeader struct {
@@ -79,7 +98,10 @@ func NewWebAssertionVerifier(options WebAssertionOptions) (*WebAssertionVerifier
 	verifier := &WebAssertionVerifier{
 		issuer: strings.TrimSpace(options.Issuer), audience: strings.TrimSpace(options.Audience), jwks: authverify.NewEd25519JWKSVerifier(options.JWKSPath),
 		now: options.Now, maxBodyBytes: options.MaxBodyBytes,
-		replays: webAssertionReplays{byJTI: make(map[string]time.Time), capacity: defaultReplayCapacity},
+		replays: options.Replays, logger: options.Logger,
+	}
+	if verifier.replays == nil {
+		verifier.replays = &webAssertionReplays{byJTI: make(map[string]time.Time), capacity: defaultReplayCapacity}
 	}
 	if _, err := verifier.keys(); err != nil {
 		return nil, ErrInvalidWebAssertion
@@ -117,7 +139,15 @@ func (v *WebAssertionVerifier) Verify(r *http.Request) (storage.Principal, error
 		return storage.Principal{}, ErrInvalidWebAssertion
 	}
 	expiresAt, _ := claims.ExpiresAt.Int64()
-	if v.replays.observe(claims.JWTID, time.Unix(expiresAt, 0).UTC(), v.now().UTC()) {
+	replay, err := v.replays.Observe(r.Context(), v.issuer, claims.JWTID, time.Unix(expiresAt, 0).UTC(), v.now().UTC())
+	if err != nil {
+		if v.logger != nil {
+			digest := sha256.Sum256([]byte(claims.JWTID))
+			v.logger.ErrorContext(r.Context(), "web assertion replay store unavailable; assertion refused", "class", "web_assertion_store_unavailable", "jti_digest", hex.EncodeToString(digest[:6]))
+		}
+		return storage.Principal{}, ErrWebAssertionStoreUnavailable
+	}
+	if replay {
 		return storage.Principal{
 			AuthenticationMethod: WebAssertionAuthenticationMethod,
 			Subject:              claims.Subject,

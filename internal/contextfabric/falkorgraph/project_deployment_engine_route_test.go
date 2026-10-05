@@ -185,6 +185,9 @@ type projectDeploymentsInterpreter struct {
 	member contextfabric.SubjectKind
 	// count makes the question a count ("how many"), not a listing.
 	count bool
+	// timeContext, when set, is the question's time axis; nil reads as the
+	// current axis.
+	timeContext *contextfabric.TimeContext
 }
 
 func (i projectDeploymentsInterpreter) Interpret(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.QuestionFamilyOutcome, error) {
@@ -209,10 +212,14 @@ func (i projectDeploymentsInterpreter) Interpret(context.Context, storage.Princi
 		Temporal: contextfabric.TemporalIntentCurrent,
 		Version:  contextfabric.QuestionFrameVersion,
 	}, nil)
+	timeContext := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
+	if i.timeContext != nil {
+		timeContext = *i.timeContext
+	}
 	return contextfabric.InterpretedQuestion{
 		Shape: contextfabric.ShapeDiscoveredCohort, RequestedJudgment: string(member),
 		SubjectTerms:     []string{i.name},
-		TimeContext:      contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		TimeContext:      timeContext,
 		FactRequirements: []contextfabric.FactRequirement{},
 	}, contextfabric.QuestionFamilyOutcome{
 		Frame: &frame, FrameObligations: frame.Obligations,

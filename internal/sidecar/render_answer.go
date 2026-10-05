@@ -85,6 +85,16 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 	}
 
+	if projection.DeterministicAnswer != "" {
+		b.writeLine("")
+		if !b.writeLine(fmt.Sprintf("## Server-computed answer (%s; %s)", serverComputedNote, untrustedDataHeader)) {
+			return b.finishWithTruncation()
+		}
+		if !b.writeLines(untrustedBlock("deterministic_answer", projection.DeterministicAnswer)) {
+			return b.finishWithTruncation()
+		}
+	}
+
 	if len(projection.StrongestPressures) > 0 {
 		b.writeLine("")
 		if !b.writeLine(fmt.Sprintf("## Strongest pressures (%s)", untrustedDataHeader)) {
@@ -448,6 +458,10 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 	return b.finishWithTruncation()
 }
 
+// serverComputedNote says what the deterministic answer is: text the service
+// composed from stored facts, as opposed to the model's own wording.
+const serverComputedNote = "computed by the server from stored facts, not written by a model"
+
 // RenderInvestigationResultMarkdown renders the full canonical result as a
 // short header plus its judgment. It stays deliberately brief: a caller
 // reaching for the full result wants the STRUCTURED payload, and a
@@ -473,6 +487,15 @@ func RenderInvestigationResultMarkdown(result contractsv1.ContextFabricInvestiga
 			return b.finishWithTruncation()
 		}
 		if !b.writeLines(untrustedBlock("direct_judgment", result.DirectJudgment)) {
+			return b.finishWithTruncation()
+		}
+	}
+	if result.DeterministicAnswer != "" {
+		b.writeLine("")
+		if !b.writeLine(fmt.Sprintf("## Server-computed answer (%s; %s)", serverComputedNote, untrustedDataHeader)) {
+			return b.finishWithTruncation()
+		}
+		if !b.writeLines(untrustedBlock("deterministic_answer", result.DeterministicAnswer)) {
 			return b.finishWithTruncation()
 		}
 	}

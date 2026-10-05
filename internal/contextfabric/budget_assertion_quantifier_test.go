@@ -94,10 +94,11 @@ func TestLateWritersRunOnlyInsideTheFinalizer(t *testing.T) {
 	t.Parallel()
 	fset, files := parsePackageForQuantifier(t)
 
-	// Each late writer maps to the ONE function permitted to call it.
+	// Each late writer maps to the ONE function permitted to call it:
+	// finalizeServedAs, the single finalizer (finalizeServed is its serving-mode wrapper).
 	lateWriters := map[string]string{
-		"stampAnswerPlan":  "finalizeServed",
-		"assertFitsBudget": "finalizeServed",
+		"stampAnswerPlan":  "finalizeServedAs",
+		"assertFitsBudget": "finalizeServedAs",
 	}
 
 	seen := map[string]int{}

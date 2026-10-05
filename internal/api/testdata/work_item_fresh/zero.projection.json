@@ -9,6 +9,7 @@
   "direct_judgment": "This investigation is complete.",
   "current_state": "No canonical facts were observed to describe the current state.",
   "strongest_pressures": [],
+  "deterministic_answer": "This investigation is complete. Counted 0 work items.",
   "committed_subjects": [
     {
       "kind": "project",
