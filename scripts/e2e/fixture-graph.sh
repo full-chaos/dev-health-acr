@@ -98,6 +98,18 @@ wait_projector_caught_up() {
   fg_die 'the projector never reported a complete, ok tick for the organization'
 }
 
+# graph_census prints what the projector built: per graph, nodes by label and edges by type.
+graph_census() {
+  local g
+  for g in $(compose exec -T falkordb redis-cli GRAPH.LIST 2>/dev/null | tr -d '\r'); do
+    fg_note "graph ${g##*:}: nodes by label"
+    compose exec -T falkordb redis-cli GRAPH.QUERY "$g" 'MATCH (n) RETURN labels(n), count(*)' 2>&1 | head -40 >&2 || true
+    fg_note "graph ${g##*:}: edges by type"
+    compose exec -T falkordb redis-cli GRAPH.QUERY "$g" 'MATCH ()-[e]->() RETURN type(e), count(*)' 2>&1 | head -40 >&2 || true
+  done
+  compose logs --no-color --no-log-prefix acr-projector 2>&1 | redact_log | grep -v 'freshness summary' | tail -40 >&2 || true
+}
+
 # write_clickhouse_wrapper makes the one command the Go tests use to read the seeded rows:
 # SQL on stdin, tab-separated rows on stdout, run inside the isolated ClickHouse.
 write_clickhouse_wrapper() {
@@ -134,7 +146,7 @@ run_use_case_tests() {
   local status=$?
   set -e
   grep -E '"Action":"(output)"' "$json" | jq -r 'select(.Output != null) | .Output' | sed -e 's/[[:space:]]*$//' | grep -v '^$' >&2 || true
-  [[ "$status" -eq 0 ]] || fg_die 'a use-case test failed'
+  if [[ "$status" -ne 0 ]]; then graph_census; fg_die 'a use-case test failed'; fi
   passed="$(jq -r 'select((.Action == "pass" or .Action == "skip") and .Test != null and (.Test | contains("/") | not)) | .Test' "$json" | LC_ALL=C sort)"
   [[ "$passed" == "$declared" ]] || { printf 'declared:\n%s\npassed or skipped:\n%s\n' "$declared" "$passed" >&2; fg_die 'a declared use-case test did not run'; }
   local skipped_other

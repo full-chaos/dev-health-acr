@@ -46,13 +46,31 @@ func walkInterpretation(slug string) doc {
 func walk(t *testing.T, c *client, slug string) (doc, string) {
 	t.Helper()
 	c.requireTools("investigate_with_interpretation")
-	return c.call("investigate_with_interpretation", doc{
+	args := doc{
 		"question":       fmt.Sprintf("Which issues belong to repository %s?", slug),
 		"interpretation": walkInterpretation(slug),
 		"contract":       c.interpretContract(),
 		"synthesis":      "client",
 		"budget":         doc{"max_cohort_members": 100},
-	})
+	}
+	d, raw := c.call("investigate_with_interpretation", args)
+	if str(structured(d), "status") != "clarification_required" {
+		return d, raw
+	}
+	// The fixture names a project and a repository alike, so the service asks which one was
+	// meant. A client answers by confirming the repository receipt of that answer.
+	var receipts []doc
+	for _, r := range list(structured(d), "subject_receipts") {
+		if str(r, "subject", "kind") == "repository" || str(r, "kind") == "repository" {
+			receipts = append(receipts, doc{"result_id": str(structured(d), "result_id"), "receipt_id": str(r, "receipt_id")})
+		}
+	}
+	if len(receipts) != 1 {
+		t.Fatalf("clarification offered %d repository receipts, want 1: %.2000s", len(receipts), raw)
+	}
+	args["parent_result_id"] = str(structured(d), "result_id")
+	args["prior_subject_receipts"] = receipts
+	return c.call("investigate_with_interpretation", args)
 }
 
 func structured(d doc) any {
