@@ -105,10 +105,15 @@ FROM numbers(?)`, repoID, orgID, base, base, rows); err != nil {
 }
 
 // readEveryBody reads the body of every pull request of the organization
-// through the limited reader, draining the rows so a limit raised mid-read
-// surfaces too.
+// through the limited reader.
 func readEveryBody(ctx context.Context, reader contextpacket.ClickHouseQueryClient, orgID string) error {
-	rows, err := reader.Query(ctx, "SELECT sum(length(body)) FROM git_pull_requests WHERE org_id = {org_id:String}", []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
+	return drainQuery(ctx, reader, "SELECT sum(length(body)) FROM git_pull_requests WHERE org_id = {org_id:String}", orgID)
+}
+
+// drainQuery runs one statement bound to an organization through the limited
+// reader and drains its rows, so a limit raised mid-read surfaces too.
+func drainQuery(ctx context.Context, reader contextpacket.ClickHouseQueryClient, statement, orgID string) error {
+	rows, err := reader.Query(ctx, statement, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
 	if err != nil {
 		return err
 	}
