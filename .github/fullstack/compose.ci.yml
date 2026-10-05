@@ -24,14 +24,10 @@
 #
 # query-api is included because dev-health-ops serves Go-owned GraphQL
 # operations (catalog and the rest of the registry) only through it: the
-# Python resolvers were deleted, so without a query-api service and a
-# go_api_routing_state row the ops `api` raises GoServedOperationUnavailableError.
-# It is built from the SAME ./ops checkout as `api`, so both planes hash the
-# same schema SDL (a prebuilt image can drift from the checkout and
-# seed_go_api_routing refuses a digest mismatch). The envelope key
-# pair and the routing rows are per-run material created by
-# scripts/e2e/compose.sh (write_go_api_envelope_material,
-# seed_go_api_routing).
+# Python resolvers were deleted. It serves every registered catalog operation
+# without a routing row. It is built from the SAME ./ops checkout as `api`, so
+# both planes hash the same schema SDL. The envelope key pair is per-run
+# material created by scripts/e2e/compose.sh (write_go_api_envelope_material).
 #
 # Deliberately excluded (not needed to boot ACR + the two MCP tools + the
 # smoke/full task set): billing-edge, worker-*, beat, bugsink, mailpit,
@@ -272,8 +268,7 @@ services:
   # the standalone docker/query-api.Dockerfile was retired, CHAOS-6434), built
   # from the checked-out ./ops tree (multi-arch: the build runs natively on
   # amd64 and arm64). Distroless runtime: no shell, so no container healthcheck;
-  # scripts/e2e/compose.sh seed_go_api_routing proves reachability by reading
-  # this service's /registry before it writes the routing rows.
+  # scripts/e2e/compose.sh wait_go_api waits on the ops api internal listener.
   query-api:
     build:
       context: ./ops
