@@ -27,38 +27,34 @@ func (s *projectSeed) repository(slug string, deployments int) string {
 	for d := 0; d < deployments; d++ {
 		depID := fmt.Sprintf("deployment:%s:%d", slug, d)
 		s.nodes = append(s.nodes, seededNode{kind: "deployment", id: depID, label: depID, repos: []string{slug}})
-		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID})
+		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID, ""})
 	}
 	return repoID
 }
 
-// link seeds one issue of the project and its native pull-request link: the
-// pull-request work item relates to the issue (pull request is the edge
-// source) and belongs to its own repository.
-func (s *projectSeed) link(row, issueID string, issueRepos []string, prID, prType, repoID, slug string, issueIsSource bool) {
+// link seeds one issue of the project and its link of record: the
+// LINKS_PULL_REQUEST edge, issue -> pull request, with its provenance tier,
+// and the pull request node, which belongs to its own repository.
+func (s *projectSeed) link(row, issueID string, issueRepos []string, prID, tier, repoID, slug string) {
 	if issueRepos == nil {
 		issueRepos = []string{noRepositoryScope}
 	}
 	s.nodes = append(s.nodes,
 		seededNode{kind: "work_item", id: issueID, label: issueID, repos: issueRepos, workItemType: "issue"},
-		seededNode{kind: "work_item", id: prID, label: prID, repos: []string{slug}, workItemType: prType})
-	relation := seededEdge{"RELATES_TO", "work_item", prID, "work_item", issueID}
-	if issueIsSource {
-		relation = seededEdge{"RELATES_TO", "work_item", issueID, "work_item", prID}
-	}
+		seededNode{kind: "pull_request", id: prID, label: prID, repos: []string{slug}})
 	s.edges = append(s.edges,
-		seededEdge{"BELONGS_TO_PROJECT", "work_item", issueID, "project", projectAnchorID},
-		relation,
-		seededEdge{"BELONGS_TO_REPOSITORY", "work_item", prID, "repository", repoID})
+		seededEdge{"BELONGS_TO_PROJECT", "work_item", issueID, "project", projectAnchorID, ""},
+		linkEdge(issueID, prID, tier),
+		seededEdge{"BELONGS_TO_REPOSITORY", "pull_request", prID, "repository", repoID, ""})
 	for d := 0; d < 2; d++ {
 		s.served[fmt.Sprintf("deployment:%s:%d", slug, d)] = row
 	}
 }
 
 // seedProject builds a project whose issues reach three repositories through
-// the link shapes the ops writers produce (a github closing reference, a
-// linear attachment to a github pull request, a jira dev-status link to a
-// github pull request), beside the shapes that must NOT reach a repository.
+// the link tiers the ops link of record carries (a native link of an issue
+// that has a repository, a native link of a repository-less issue, a link
+// found in text), beside the shapes that must NOT reach a repository.
 func seedProject() projectSeed {
 	s := projectSeed{served: map[string]string{}}
 	s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
@@ -66,44 +62,61 @@ func seedProject() projectSeed {
 	githubRepo := s.repository("acme/github-linked", 2)
 	linearRepo := s.repository("acme/linear-linked", 2)
 	jiraRepo := s.repository("acme/jira-linked", 2)
-	s.link("github", "work_item:gh:1", []string{"acme/github-linked"}, "work_item:ghpr:1", "pr", githubRepo, "acme/github-linked", false)
-	s.link("linear", "work_item:linear:ENG-1", nil, "work_item:ghpr:2", "pr", linearRepo, "acme/linear-linked", false)
-	s.link("jira", "work_item:jira:PAY-1", nil, "work_item:ghpr:3", "pr", jiraRepo, "acme/jira-linked", true)
+	s.link("github", "work_item:gh:1", []string{"acme/github-linked"}, "pull_request:ghpr:1", "native", githubRepo, "acme/github-linked")
+	s.link("linear", "work_item:linear:ENG-1", nil, "pull_request:ghpr:2", "native", linearRepo, "acme/linear-linked")
+	s.link("jira", "work_item:jira:PAY-1", nil, "pull_request:ghpr:3", "explicit_text", jiraRepo, "acme/jira-linked")
 
 	// An issue's OWN repository is not a path to deployments.
 	ownRepo := s.repository("acme/issue-own", 1)
-	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "work_item", "work_item:gh:1", "repository", ownRepo})
+	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "work_item", "work_item:gh:1", "repository", ownRepo, ""})
 	// An issue related to another issue is not a pull-request link.
 	otherIssueRepo := s.repository("acme/issue-neighbour", 1)
 	s.nodes = append(s.nodes, seededNode{kind: "work_item", id: "work_item:gh:2", label: "gh:2", repos: []string{"acme/issue-neighbour"}, workItemType: "issue"})
 	s.edges = append(s.edges,
-		seededEdge{"RELATES_TO", "work_item", "work_item:gh:1", "work_item", "work_item:gh:2"},
-		seededEdge{"BELONGS_TO_REPOSITORY", "work_item", "work_item:gh:2", "repository", otherIssueRepo})
-	// A non pull-request work item linked to an issue does not count.
+		seededEdge{"RELATES_TO", "work_item", "work_item:gh:1", "work_item", "work_item:gh:2", ""},
+		seededEdge{"BELONGS_TO_REPOSITORY", "work_item", "work_item:gh:2", "repository", otherIssueRepo, ""})
+	// A non pull-request item an issue links does not count: a LINKS_PULL_REQUEST
+	// edge to a work item is no link to a pull request, and a plain relation
+	// from a task to the issue is no link at all.
 	taskRepo := s.repository("acme/task-linked", 1)
 	s.nodes = append(s.nodes, seededNode{kind: "work_item", id: "work_item:task:1", label: "task:1", repos: []string{"acme/task-linked"}, workItemType: "task"})
 	s.edges = append(s.edges,
-		seededEdge{"RELATES_TO", "work_item", "work_item:task:1", "work_item", "work_item:gh:1"},
-		seededEdge{"BELONGS_TO_REPOSITORY", "work_item", "work_item:task:1", "repository", taskRepo})
-	// A pull request that is itself a member of the project, linked to another
-	// pull request, is not an issue: the second pull request's repository is
-	// not reached.
+		seededEdge{"RELATES_TO", "work_item", "work_item:task:1", "work_item", "work_item:gh:1", ""},
+		seededEdge{"LINKS_PULL_REQUEST", "work_item", "work_item:gh:1", "work_item", "work_item:task:1", "native"},
+		seededEdge{"BELONGS_TO_REPOSITORY", "work_item", "work_item:task:1", "repository", taskRepo, ""})
+	// A pull request chained to a pull request: a work item typed as a pull
+	// request that belongs to the project is not an issue, so the link it
+	// holds is not followed, and a pull request node linked to a pull request
+	// node is no link either (the link starts at an issue).
 	chainRepo := s.repository("acme/pr-chain", 1)
 	s.nodes = append(s.nodes,
 		seededNode{kind: "work_item", id: "work_item:ghpr:member", label: "ghpr:member", repos: []string{"acme/github-linked"}, workItemType: "pr"},
-		seededNode{kind: "work_item", id: "work_item:ghpr:chained", label: "ghpr:chained", repos: []string{"acme/pr-chain"}, workItemType: "pr"})
+		seededNode{kind: "pull_request", id: "pull_request:ghpr:chained", label: "ghpr:chained", repos: []string{"acme/pr-chain"}},
+		seededNode{kind: "pull_request", id: "pull_request:ghpr:chained2", label: "ghpr:chained2", repos: []string{"acme/pr-chain"}})
 	s.edges = append(s.edges,
-		seededEdge{"BELONGS_TO_PROJECT", "work_item", "work_item:ghpr:member", "project", projectAnchorID},
-		seededEdge{"RELATES_TO", "work_item", "work_item:ghpr:chained", "work_item", "work_item:ghpr:member"},
-		seededEdge{"BELONGS_TO_REPOSITORY", "work_item", "work_item:ghpr:chained", "repository", chainRepo})
+		seededEdge{"BELONGS_TO_PROJECT", "work_item", "work_item:ghpr:member", "project", projectAnchorID, ""},
+		seededEdge{"LINKS_PULL_REQUEST", "work_item", "work_item:ghpr:member", "pull_request", "pull_request:ghpr:chained", "native"},
+		seededEdge{"LINKS_PULL_REQUEST", "pull_request", "pull_request:ghpr:1", "pull_request", "pull_request:ghpr:chained2", "native"},
+		seededEdge{"BELONGS_TO_REPOSITORY", "pull_request", "pull_request:ghpr:chained", "repository", chainRepo, ""},
+		seededEdge{"BELONGS_TO_REPOSITORY", "pull_request", "pull_request:ghpr:chained2", "repository", chainRepo, ""})
 	// A repository the project does not reach.
 	s.repository("acme/foreign", 1)
-	// A pull request linked by a non-RELATES_TO edge is not a link either.
+	// A pull request an issue relates to by another edge type is not a link:
+	// not BLOCKS, and not the RELATES_TO the walk read before the link of
+	// record existed.
 	blockRepo := s.repository("acme/blocks-linked", 1)
-	s.nodes = append(s.nodes, seededNode{kind: "work_item", id: "work_item:ghpr:9", label: "ghpr:9", repos: []string{"acme/blocks-linked"}, workItemType: "pr"})
+	s.nodes = append(s.nodes, seededNode{kind: "pull_request", id: "pull_request:ghpr:9", label: "ghpr:9", repos: []string{"acme/blocks-linked"}})
 	s.edges = append(s.edges,
-		seededEdge{"BLOCKS", "work_item", "work_item:ghpr:9", "work_item", "work_item:gh:1"},
-		seededEdge{"BELONGS_TO_REPOSITORY", "work_item", "work_item:ghpr:9", "repository", blockRepo})
+		seededEdge{"BLOCKS", "pull_request", "pull_request:ghpr:9", "work_item", "work_item:gh:1", ""},
+		seededEdge{"RELATES_TO", "work_item", "work_item:gh:1", "pull_request", "pull_request:ghpr:9", ""},
+		seededEdge{"BELONGS_TO_REPOSITORY", "pull_request", "pull_request:ghpr:9", "repository", blockRepo, ""})
+	// A link stored the wrong way round (pull request -> issue) is not the
+	// link of record, which is directed issue -> pull request.
+	reversedRepo := s.repository("acme/reversed", 1)
+	s.nodes = append(s.nodes, seededNode{kind: "pull_request", id: "pull_request:ghpr:10", label: "ghpr:10", repos: []string{"acme/reversed"}})
+	s.edges = append(s.edges,
+		seededEdge{"LINKS_PULL_REQUEST", "pull_request", "pull_request:ghpr:10", "work_item", "work_item:gh:1", "native"},
+		seededEdge{"BELONGS_TO_REPOSITORY", "pull_request", "pull_request:ghpr:10", "repository", reversedRepo, ""})
 	return s
 }
 
@@ -220,8 +233,8 @@ func unlinkedDetail(result contextfabric.GraphContext) *contextfabric.CoverageDe
 }
 
 func TestProjectWithoutALinkedPullRequestIsANamedLimitationNotAnEmptyCohort(t *testing.T) {
-	// A GitLab project: its issues carry no native pull-request link, and a
-	// merge request is a work item no issue relates to.
+	// A project whose issues carry no link of record, and a merge request
+	// that no issue links.
 	s := projectSeed{served: map[string]string{}}
 	s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
 	repoID := s.repository("acme/gitlab-repo", 2)
@@ -229,11 +242,11 @@ func TestProjectWithoutALinkedPullRequestIsANamedLimitationNotAnEmptyCohort(t *t
 		issue := fmt.Sprintf("work_item:gitlab:%d", i)
 		s.nodes = append(s.nodes, seededNode{kind: "work_item", id: issue, label: issue, repos: []string{"acme/gitlab-repo"}, workItemType: "issue"})
 		s.edges = append(s.edges,
-			seededEdge{"BELONGS_TO_PROJECT", "work_item", issue, "project", projectAnchorID},
-			seededEdge{"BELONGS_TO_REPOSITORY", "work_item", issue, "repository", repoID})
+			seededEdge{"BELONGS_TO_PROJECT", "work_item", issue, "project", projectAnchorID, ""},
+			seededEdge{"BELONGS_TO_REPOSITORY", "work_item", issue, "repository", repoID, ""})
 	}
-	s.nodes = append(s.nodes, seededNode{kind: "work_item", id: "work_item:gitlab:mr", label: "mr", repos: []string{"acme/gitlab-repo"}, workItemType: "merge_request"})
-	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "work_item", "work_item:gitlab:mr", "repository", repoID})
+	s.nodes = append(s.nodes, seededNode{kind: "pull_request", id: "pull_request:gitlab:mr", label: "mr", repos: []string{"acme/gitlab-repo"}})
+	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "pull_request", "pull_request:gitlab:mr", "repository", repoID, ""})
 
 	got, result := discoverProjectDeployments(t, s, storage.Principal{OrgID: "org-1"}, nil)
 	if len(got) != 0 {
@@ -290,7 +303,7 @@ func TestNoLinkedPullRequestIsUnlinkedOnlyForAnUnrestrictedCaller(t *testing.T) 
 	s.nodes = append(s.nodes,
 		seededNode{kind: "project", id: projectAnchorID, label: "payments"},
 		seededNode{kind: "work_item", id: "work_item:gh:1", label: "issue", repos: []string{"acme/x"}, workItemType: "issue"})
-	s.edges = append(s.edges, seededEdge{"BELONGS_TO_PROJECT", "work_item", "work_item:gh:1", "project", projectAnchorID})
+	s.edges = append(s.edges, seededEdge{"BELONGS_TO_PROJECT", "work_item", "work_item:gh:1", "project", projectAnchorID, ""})
 	_, open := discoverProjectDeployments(t, s, storage.Principal{OrgID: "org-1"}, nil)
 	if detail := unlinkedDetail(open); detail == nil || detail.Count == nil || *detail.Count != 1 || deniedDetail(open) != nil {
 		t.Fatalf("unrestricted: details = %+v, want only the unlinked limitation with 1 issue examined", open.Coverage.Details)
@@ -301,12 +314,36 @@ func TestNoLinkedPullRequestIsUnlinkedOnlyForAnUnrestrictedCaller(t *testing.T) 
 	}
 }
 
+// TestARequestedScopeThatHidesTheLinkIsNotNoDeployments: a caller with no
+// repository grant but a requested repository scope is narrowed, so a
+// repository-less issue's text link grants no authority and is hidden. The
+// answer must say the cohort was hidden (partial coverage), never a complete
+// "no deployments".
+func TestARequestedScopeThatHidesTheLinkIsNotNoDeployments(t *testing.T) {
+	s := projectSeed{served: map[string]string{}}
+	s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
+	repoID := s.repository("acme/granted", 2)
+	s.link("row-1", "work_item:linear:1", nil, "pull_request:granted:1", "explicit_text", repoID, "acme/granted")
+	request := projectDeploymentsRequest()
+	request.Request.RequestedScope = contextfabric.RequestedScope{RepositorySlugs: []string{"acme/granted"}}
+	result, err := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges)).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort != nil && len(result.Cohort.Members) > 0 {
+		t.Fatalf("cohort = %+v, want none: the text link grants no authority under the scope", result.Cohort.Members)
+	}
+	if deniedDetail(result) == nil || !result.Coverage.Partial {
+		t.Fatalf("partial %v, details %+v: want the denied limitation and partial coverage, not a complete empty answer", result.Coverage.Partial, result.Coverage.Details)
+	}
+}
+
 func TestProjectDeploymentWalkAdmitsAnIssueByTheWorkItemRule(t *testing.T) {
 	build := func(issueRepos []string) projectSeed {
 		s := projectSeed{served: map[string]string{}}
 		s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
 		repo := s.repository("acme/granted", 1)
-		s.link("row", "work_item:issue:1", issueRepos, "work_item:ghpr:1", "pr", repo, "acme/granted", false)
+		s.link("row", "work_item:issue:1", issueRepos, "pull_request:ghpr:1", "native", repo, "acme/granted")
 		return s
 	}
 	granted := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/granted"}}
@@ -349,14 +386,14 @@ func manyIssuesOneRepository(issues int) projectSeed {
 	s := projectSeed{served: map[string]string{}}
 	s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
 	repoID := s.repository("acme/one", 1)
-	s.nodes = append(s.nodes, seededNode{kind: "work_item", id: "work_item:ghpr:one", label: "pr", repos: []string{"acme/one"}, workItemType: "pr"})
-	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "work_item", "work_item:ghpr:one", "repository", repoID})
+	s.nodes = append(s.nodes, seededNode{kind: "pull_request", id: "pull_request:ghpr:one", label: "pr", repos: []string{"acme/one"}})
+	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "pull_request", "pull_request:ghpr:one", "repository", repoID, ""})
 	for i := 0; i < issues; i++ {
 		issue := fmt.Sprintf("work_item:gh:%02d", i)
 		s.nodes = append(s.nodes, seededNode{kind: "work_item", id: issue, label: issue, repos: []string{noRepositoryScope}, workItemType: "issue"})
 		s.edges = append(s.edges,
-			seededEdge{"BELONGS_TO_PROJECT", "work_item", issue, "project", projectAnchorID},
-			seededEdge{"RELATES_TO", "work_item", "work_item:ghpr:one", "work_item", issue})
+			seededEdge{"BELONGS_TO_PROJECT", "work_item", issue, "project", projectAnchorID, ""},
+			linkEdge(issue, "pull_request:ghpr:one", "native"))
 	}
 	return s
 }
@@ -369,7 +406,7 @@ func linkedIssues(issues, deployments int) projectSeed {
 	for i := 0; i < issues; i++ {
 		slug := fmt.Sprintf("acme/linked-%02d", i)
 		repoID := s.repository(slug, deployments)
-		s.link("github", fmt.Sprintf("work_item:gh:%02d", i), nil, fmt.Sprintf("work_item:ghpr:%02d", i), "pr", repoID, slug, false)
+		s.link("github", fmt.Sprintf("work_item:gh:%02d", i), nil, fmt.Sprintf("pull_request:ghpr:%02d", i), "native", repoID, slug)
 	}
 	return s
 }
@@ -412,14 +449,14 @@ func TestProjectDeploymentWalkAuthorizesEachDisclosedHop(t *testing.T) {
 		s.nodes = append(s.nodes,
 			seededNode{kind: "project", id: projectAnchorID, label: "payments"},
 			seededNode{kind: "work_item", id: "work_item:gh:1", label: "issue", repos: []string{noRepositoryScope}, workItemType: "issue"},
-			seededNode{kind: "work_item", id: "work_item:ghpr:1", label: "pr", repos: prRepos, workItemType: "pr"},
+			seededNode{kind: "pull_request", id: "pull_request:ghpr:1", label: "pr", repos: prRepos},
 			seededNode{kind: "repository", id: "repository:r", label: "r", repos: repoRepos},
 			seededNode{kind: "deployment", id: "deployment:d", label: "d", repos: deploymentRepos})
 		s.edges = append(s.edges,
-			seededEdge{"BELONGS_TO_PROJECT", "work_item", "work_item:gh:1", "project", projectAnchorID},
-			seededEdge{"RELATES_TO", "work_item", "work_item:ghpr:1", "work_item", "work_item:gh:1"},
-			seededEdge{"BELONGS_TO_REPOSITORY", "work_item", "work_item:ghpr:1", "repository", "repository:r"},
-			seededEdge{"BELONGS_TO_REPOSITORY", "deployment", "deployment:d", "repository", "repository:r"})
+			seededEdge{"BELONGS_TO_PROJECT", "work_item", "work_item:gh:1", "project", projectAnchorID, ""},
+			linkEdge("work_item:gh:1", "pull_request:ghpr:1", "native"),
+			seededEdge{"BELONGS_TO_REPOSITORY", "pull_request", "pull_request:ghpr:1", "repository", "repository:r", ""},
+			seededEdge{"BELONGS_TO_REPOSITORY", "deployment", "deployment:d", "repository", "repository:r", ""})
 		return s
 	}
 	granted := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/granted"}}
@@ -448,9 +485,9 @@ func linklessThenLinked(linkless int) projectSeed {
 	for i := 0; i < linkless; i++ {
 		issue := fmt.Sprintf("work_item:gh:%02d", i)
 		s.nodes = append(s.nodes, seededNode{kind: "work_item", id: issue, label: issue, repos: []string{noRepositoryScope}, workItemType: "issue"})
-		s.edges = append(s.edges, seededEdge{"BELONGS_TO_PROJECT", "work_item", issue, "project", projectAnchorID})
+		s.edges = append(s.edges, seededEdge{"BELONGS_TO_PROJECT", "work_item", issue, "project", projectAnchorID, ""})
 	}
-	s.link("late", "work_item:gh:zz", nil, "work_item:ghpr:late", "pr", repoID, "acme/one", false)
+	s.link("late", "work_item:gh:zz", nil, "pull_request:ghpr:late", "native", repoID, "acme/one")
 	return s
 }
 
@@ -521,7 +558,7 @@ func TestALexicallyMatchedRepositoryAddsNoDeploymentToThePaths(t *testing.T) {
 	s.nodes = append(s.nodes,
 		seededNode{kind: "repository", id: "repository:payments", label: "payments", repos: []string{"acme/payments"}},
 		seededNode{kind: "deployment", id: "deployment:payments:0", label: "payments deploy", repos: []string{"acme/payments"}})
-	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", "deployment:payments:0", "repository", "repository:payments"})
+	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", "deployment:payments:0", "repository", "repository:payments", ""})
 	got, result := discoverProjectDeployments(t, s, storage.Principal{OrgID: "org-1"}, func(c *fakeConn) {
 		inner := c.queryFunc
 		c.queryFunc = func(ctx context.Context, key, cypher string, params map[string]interface{}, ro bool) ([]row, error) {

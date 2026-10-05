@@ -18,7 +18,7 @@ import (
 func TestAHintedRepositoryDoesNotTakeOverAProjectAnchoredTeamQuestion(t *testing.T) {
 	s := seedOwnedRepository()
 	s.nodes = append(s.nodes, seededNode{kind: "team", id: "team:delivery", label: "delivery"})
-	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "project", routeProjectAlpha, "team", "team:delivery"})
+	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "project", routeProjectAlpha, "team", "team:delivery", ""})
 	telemetry := &recordingTelemetry{}
 	graph := &routeBasisRecorder{Adapter: newFakeAdapterWithTelemetry(t, s.conn(), telemetry)}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{

@@ -208,6 +208,11 @@ func projectDeploymentWalkOutcome(walk treeWalk, restricted bool, err error) Pro
 		return ProjectDeploymentWalkMembers
 	case restricted:
 		return ProjectDeploymentWalkDenied
+	case walk.denied > 0:
+		// Links were hidden (a requested repository scope admits a
+		// repository-less issue only through a native link): the empty
+		// cohort is not "no deployments".
+		return ProjectDeploymentWalkDenied
 	case walk.truncated:
 		return ProjectDeploymentWalkTruncated
 	case walk.hasLink && walk.linkTargets == 0:

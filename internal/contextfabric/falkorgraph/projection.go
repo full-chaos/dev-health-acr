@@ -21,7 +21,7 @@ const propRelationType = "relation_type"
 // edge, under the same property prefix nodes use: the LINKS_PULL_REQUEST
 // provenance tier and its rank. The names equal
 // devhealthsource.IssuePullRequestLinkTierProperty and ...RankProperty.
-var linkEdgePropertyNames = []string{"link_provenance", "link_provenance_rank"}
+var linkEdgePropertyNames = []string{linkTierProperty, linkRankProperty}
 
 // documentedByRelationType and hasEpisodeRelationType (CHAOS-3779 codex
 // round-1 finding L4) are the ONE place these two literal type strings are

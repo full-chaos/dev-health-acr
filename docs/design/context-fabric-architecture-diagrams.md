@@ -408,37 +408,37 @@ distinct Cypher relationship type per edge kind). The edge names below are
 `relation_type` values.
 
 The tree (ruled, every integration): **Repository <> Pull request <> Issue <>
-Project**. A pull request or merge request is itself a `work_item` (type `pr`
-or `merge_request`); an issue is a `work_item` of any other type.
+Project**. A pull request or merge request is the `pull_request` node
+(`git_pull_requests`); an issue is a `work_item` that is not typed as a pull
+request (`pr` or `merge_request`). The Issue <> Pull request hop is the link of
+record, `LINKS_PULL_REQUEST`, directed issue -> pull request.
 
 ```mermaid
 flowchart TB
   REPO["Repository<br/>repos"]
-  PR["Pull request / merge request<br/>work_item, type pr or merge_request"]
-  ISSUE["Issue<br/>work_item, any other type"]
+  PR["Pull request / merge request<br/>pull_request node, git_pull_requests"]
+  ISSUE["Issue<br/>work_item, not typed pr or merge_request"]
   PROJ["Project<br/>projects"]
   TEAM["Team<br/>teams"]
   DEP["Deployment<br/>deployments"]
-  PRN["pull_request node<br/>git_pull_requests<br/>(no edge to the PR work item)"]
+  PRW["pull-request work item<br/>work_item, type pr or merge_request<br/>(not in the tree)"]
 
-  PR ==>|"BELONGS_TO_REPOSITORY<br/>the PR row's work_items.repo_id<br/>queryWorkItems"| REPO
-  PR ==>|"RELATES_TO<br/>work_item_dependencies link row (PR = source)<br/>queryWorkItemDependencies"| ISSUE
+  PR ==>|"BELONGS_TO_REPOSITORY<br/>git_pull_requests.repo_id<br/>queryPullRequests"| REPO
+  ISSUE ==>|"LINKS_PULL_REQUEST<br/>link of record: work_graph_issue_pr<br/>tier on the edge: native 3 > explicit_text 2 > heuristic 1<br/>queryIssuePullRequestLinks"| PR
   ISSUE ==>|"BELONGS_TO_PROJECT<br/>project_membership_presence<br/>querySubjectProjectMemberships"| PROJ
   REPO -.->|"OWNED_BY_TEAM<br/>team_repo_ownership<br/>queryRepositoryTeams"| TEAM
   PROJ -.->|"OWNED_BY_TEAM<br/>team_project_ownership<br/>queryProjectTeams"| TEAM
   DEP -.->|"BELONGS_TO_REPOSITORY<br/>deployments.repo_id<br/>queryDeployments"| REPO
   REPO x-.-|"NOT tree: BELONGS_TO_REPOSITORY<br/>of the issue's own repo_id"| ISSUE
   ISSUE -.-x|"NOT ownership: OWNED_BY_TEAM<br/>work_item_team_attributions (attribution)"| TEAM
-  PRN -.->|"BELONGS_TO_REPOSITORY"| REPO
-  PRN ~~~ PR
-  ISSUE -.->|"LINKS_PULL_REQUEST<br/>link of record: work_graph_issue_pr<br/>tier on the edge: native 3 > explicit_text 2 > heuristic 1<br/>queryIssuePullRequestLinks<br/>projected; the walk does not read it yet"| PRN
+  PRW -.-x|"NOT a link: RELATES_TO<br/>work_item_dependencies<br/>(issue-to-issue relations only)"| ISSUE
 
   classDef tree fill:#14532d,stroke:#22c55e,color:#ffffff
   classDef leaf fill:#1e3a5f,stroke:#60a5fa,color:#ffffff
   classDef aside fill:#3f3f46,stroke:#a1a1aa,color:#ffffff
   class REPO,PR,ISSUE,PROJ tree
   class TEAM,DEP leaf
-  class PRN aside
+  class PRW aside
 ```
 
 **Legend.** Every integration (each issue tracker, each code host) writes these
@@ -446,8 +446,9 @@ same rows; no edge is provider-specific. Producers are in
 `internal/contextfabric/devhealthsource` (`tables.go`, `teams_projects_edges.go`).
 
 - Thick edges, green nodes: the ruled tree. Repository <- pull request (the
-  pull-request work item's own repository), pull request - issue (the link
-  row), issue -> project. Tree membership is found only by walking these edges.
+  `pull_request` node's own repository), issue -> pull request (the link of
+  record), issue -> project. Tree membership is found only by walking these
+  edges.
 - Dotted edges: hang off the tree. A team owns a repository or a project; a
   deployment belongs to a repository.
 - Crossed edges: exist in the graph but are never tree membership. An issue's
@@ -455,30 +456,40 @@ same rows; no edge is provider-specific. Producers are in
   attribution is not ownership.
 - `LINKS_PULL_REQUEST` (issue `work_item` -> `pull_request` node) is the link
   of record from the ops table `work_graph_issue_pr`
-  (`devhealthsource/issue_pull_request_link.go`). It carries the link's
-  provenance tier as the edge properties `link_provenance` and
-  `link_provenance_rank`: `native` (3) > `explicit_text` (2) > `heuristic` (1).
-  The issue end is the issue's own `work_items` row (its own `repo_id`); the
-  table's `repo_id` is the pull request's repository. A row is projected only
-  when the work item resolves and is not a pull request (`pr` or
+  (`devhealthsource/issue_pull_request_link.go`), and the one edge the tree's
+  Issue <> Pull request hop reads. It is directed, issue -> pull request. It
+  carries the link's provenance tier as the edge properties `link_provenance`
+  and `link_provenance_rank`: `native` (3) > `explicit_text` (2) > `heuristic`
+  (1). The issue end is the issue's own `work_items` row (its own `repo_id`);
+  the table's `repo_id` is the pull request's repository. A row is projected
+  only when the work item resolves and is not a pull request (`pr` or
   `merge_request`), the `pull_request` node exists and the tier is one of the
-  three; each skip is counted. It is projected but not yet read: the tree walk
-  (`falkorgraph/project_deployment_walk.go`) still reads `RELATES_TO` and
-  switches to this edge in a later change. `RELATES_TO` from
-  `work_item_dependencies` stays for issue-to-issue relations. One rebuild per
-  projected organization is needed to gain the edge (`ClickHouseSourceVersion`
-  v8).
-- The grey `pull_request` node is a second node for the same pull request,
-  projected from `git_pull_requests` (reviews and CI hang off it). No edge
-  joins it to the pull-request work item, so the tree does not pass through it.
+  three; each skip is counted. `RELATES_TO` from `work_item_dependencies`
+  stays for issue-to-issue relations and is no part of the tree. One rebuild
+  per projected organization is needed to gain the edge
+  (`ClickHouseSourceVersion` v8).
+- The tiers the walk admits are one table, `linkTiers` in
+  `falkorgraph/tree_walk.go`: all three. The link read keeps only edges whose
+  `link_provenance` is in it, orders the links by rank, highest first, and a
+  spent budget keeps the higher tiers first. An edge with no tier, or one the
+  table does not list, is not a link. To veto a tier, delete its row.
+- **A link grants authority only when native.** A repository-less issue is
+  admitted only through a native link to a pull request the caller is granted;
+  an `explicit_text` or `heuristic` link does not admit it. An issue authorized
+  by its own repository is admitted through a link of any tier. The rule binds
+  a repository-restricted caller; an unrestricted caller needs no authority
+  from a link.
+- The grey `PRW` node is the work item of a pull request (`pr` or
+  `merge_request`). It is not the pull-request position of the tree, the link
+  of record never targets it, and a pull-request work item that belongs to a
+  project is not an issue, so no link it holds is followed.
 
 **The two rules.**
 
-1. A link is an actual linked row: today a `work_item_dependencies` row whose
-   two ends are real work items (what the walk reads), and, once projected, a
-   `work_graph_issue_pr` row (`LINKS_PULL_REQUEST`, the link of record the walk
-   will switch to). Never an issue-key prefix, never an `extkey:`
-   stub, never an issue's own repository column.
+1. A link is an actual linked row: a `work_graph_issue_pr` row
+   (`LINKS_PULL_REQUEST`, the link of record, with its tier). Never an
+   issue-key prefix, never an `extkey:` stub, never an issue's own repository
+   column, never a `work_item_dependencies` relation.
 2. Team = ownership only (`team_repo_ownership`, `team_project_ownership`).
    Never person membership, never a computed attribution.
 
@@ -490,9 +501,20 @@ so a path never passes through them, and a pair with no path or two shortest
 paths is refused. The hop from the anchor that only feeds the issue <> pull
 request link is read fused with the link, paged and link-first, so issues or
 pull requests with no link do not spend the budget. Every disclosed node
-passes the caller's authorization; a repository-less issue is admitted by its
-link to a granted pull request. The project, team and repository deployment
-walks are instances of this one executor.
+passes the caller's authorization; a repository-less issue is admitted only by
+a native link to a granted pull request (see the tier rule above).
+
+A restricted caller's link read carries the caller's grants as a necessary
+condition of that per-row rule, and the condition follows
+`graphrank.ScopeMatch`: the grant `*` admits everything (the caller is then
+unrestricted and the read has no grant clause); the grant `owner/*` admits an
+entry whose normalized slug (`auth.NormalizeRepositorySlug`: lower-case, trimmed,
+`owner/name`) has that owner; any other grant admits an entry with the same
+normalized slug, or the same raw text when a side does not normalize. The read
+binds three lists computed in Go from the grants (raw, lower-cased and
+trimmed, and `owner/` prefixes) and tests each entry of a node's
+`authorization_repositories` against them. The project, team and repository
+deployment walks are instances of this one executor.
 
 **Code that does not yet follow the tree.** Some reads still reach a
 repository through a work item's own `repo_id`, as an activity proxy
@@ -2422,8 +2444,8 @@ and the interpretation declared no other anchor kind. A repository reaches its
 deployments in one hop and a team in two (through the repository's
 `OWNED_BY_TEAM` edge); a project has no repository edge, so the adapter runs a
 dedicated bounded read instead of a wider pool radius: project
-`<-BELONGS_TO_PROJECT-` issue `-RELATES_TO-` pull-request work item
-(`pr`/`merge_request`) `-BELONGS_TO_REPOSITORY->` repository
+`<-BELONGS_TO_PROJECT-` issue `-LINKS_PULL_REQUEST->` pull request
+`-BELONGS_TO_REPOSITORY->` repository
 `<-BELONGS_TO_REPOSITORY-` deployment (`falkorgraph/project_deployment_walk.go`).
 A project none of whose issues links a pull request is the named
 `graph_project_deployments_unlinked` limitation, never an empty cohort. The cohort then asks for the

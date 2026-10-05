@@ -76,11 +76,12 @@ func TestEveryWalkStepReadIsOnePathPattern(t *testing.T) {
 
 // TestTheProjectLinkReadIsOnePathPattern pins the grammar of the walk's link
 // read and source count: one path from the project through its issue to the
-// linked pull request, and one path from the project to its issue.
+// linked pull request (the link is directed, issue to pull request), and one
+// path from the project to its issue.
 func TestTheProjectLinkReadIsOnePathPattern(t *testing.T) {
 	feed, link := projectLinkHops(t)
 	node := `\((%s):Subject \{[^{}()]*\}\)`
-	linkPattern := regexp.MustCompile("^" + fmt.Sprintf(node, "a") + regexp.QuoteMeta("<-[ra:Relates]-") + fmt.Sprintf(node, "m") + regexp.QuoteMeta("-[rl:Relates]-") + fmt.Sprintf(node, "b") + "$")
+	linkPattern := regexp.MustCompile("^" + fmt.Sprintf(node, "a") + regexp.QuoteMeta("<-[ra:Relates]-") + fmt.Sprintf(node, "m") + regexp.QuoteMeta("-[rl:Relates]->") + fmt.Sprintf(node, "b") + "$")
 	count := regexp.MustCompile("^" + fmt.Sprintf(node, "a") + regexp.QuoteMeta("<-[ra:Relates]-") + fmt.Sprintf(node, "m") + "$")
 	for windowName, temporal := range walkWindows(time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)) {
 		for name, c := range map[string]struct {
@@ -106,17 +107,40 @@ func TestTheProjectLinkReadIsOnePathPattern(t *testing.T) {
 	}
 }
 
+// TestTheLinkReadAdmitsOnlyTheTiersOfTheTable pins the tier filter of every
+// link read, restricted or not, and the order that puts the strongest tier
+// first.
+func TestTheLinkReadAdmitsOnlyTheTiersOfTheTable(t *testing.T) {
+	feed, link := projectLinkHops(t)
+	for _, restricted := range []bool{false, true} {
+		got := linkSegmentCypher(feed, link, temporalFilter{}, restricted)
+		if !strings.Contains(got, "rl.property_link_provenance IN $tiers") {
+			t.Errorf("restricted=%t: link read = %q, want the tier filter", restricted, got)
+		}
+		if !strings.Contains(got, " ORDER BY rl.property_link_provenance_rank DESC, m.canonical_id, b.canonical_id, rl.") {
+			t.Errorf("restricted=%t: link read = %q, want the tier rank first", restricted, got)
+		}
+	}
+	params := linkSegmentParams("org-1", contextfabric.SubjectRef{CanonicalID: projectAnchorID}, feed, link, 0, 10, temporalFilter{})
+	if got := fmt.Sprint(params["tiers"]); got != "[native explicit_text heuristic]" {
+		t.Errorf("tiers = %s, want every tier of the table, strongest first", got)
+	}
+}
+
 // TestARestrictedLinkReadKeepsOnlyLinksTheGrantsCanAdmit pins the grant clause
 // of a restricted caller's link read, and its absence for any other caller:
-// the pull request must meet the grants, and the issue must or have no
-// repository.
+// the pull request must meet the grants, and the issue must, or have no
+// repository and be linked by a tier that grants authority.
 func TestARestrictedLinkReadKeepsOnlyLinksTheGrantsCanAdmit(t *testing.T) {
 	feed, link := projectLinkHops(t)
-	clause := "ANY(s IN b.authorization_repositories WHERE s IN $grants) AND (ANY(s IN m.authorization_repositories WHERE s IN $grants) OR $noRepository IN m.authorization_repositories)"
+	repos := func(v string) string {
+		return "ANY(s IN " + v + ".authorization_repositories WHERE s IN $grantRaw OR toLower(trim(s)) IN $grantNorm OR ANY(o IN $grantOwners WHERE toLower(trim(s)) STARTS WITH o))"
+	}
+	clause := repos("b") + " AND (" + repos("m") + " OR ($noRepository IN m.authorization_repositories AND rl.property_link_provenance IN $authorityTiers))"
 	if got := linkSegmentCypher(feed, link, temporalFilter{}, true); !strings.Contains(got, clause) {
 		t.Errorf("restricted link read = %q, want the grant clause", got)
 	}
-	if got := linkSegmentCypher(feed, link, temporalFilter{}, false); strings.Contains(got, "$grants") {
+	if got := linkSegmentCypher(feed, link, temporalFilter{}, false); strings.Contains(got, "$grant") || strings.Contains(got, "$authorityTiers") {
 		t.Errorf("unrestricted link read = %q, want no grant clause", got)
 	}
 }

@@ -27,20 +27,20 @@ func manyIssueProject(issues int, linked map[int]bool, issueRepos []string) rout
 	for i := 0; i < issues; i++ {
 		issueID := fmt.Sprintf("work_item:linear:alpha-%03d", i)
 		s.nodes = append(s.nodes, seededNode{kind: "work_item", id: issueID, label: issueID, repos: issueRepos, workItemType: "issue"})
-		s.edges = append(s.edges, seededEdge{"BELONGS_TO_PROJECT", "work_item", issueID, "project", routeProjectAlpha})
+		s.edges = append(s.edges, seededEdge{"BELONGS_TO_PROJECT", "work_item", issueID, "project", routeProjectAlpha, ""})
 		if !linked[i] {
 			continue
 		}
-		prID := fmt.Sprintf("work_item:ghpr:alpha-%03d", i)
-		s.nodes = append(s.nodes, seededNode{kind: "work_item", id: prID, label: prID, repos: []string{slug}, workItemType: "pr"})
+		prID := fmt.Sprintf("pull_request:ghpr:alpha-%03d", i)
+		s.nodes = append(s.nodes, seededNode{kind: "pull_request", id: prID, label: prID, repos: []string{slug}})
 		s.edges = append(s.edges,
-			seededEdge{"RELATES_TO", "work_item", prID, "work_item", issueID},
-			seededEdge{"BELONGS_TO_REPOSITORY", "work_item", prID, "repository", repoID})
+			linkEdge(issueID, prID, "native"),
+			seededEdge{"BELONGS_TO_REPOSITORY", "pull_request", prID, "repository", repoID, ""})
 	}
 	for d := 0; d < 2; d++ {
 		depID := fmt.Sprintf("deployment:%s:%d", slug, d)
 		s.nodes = append(s.nodes, seededNode{kind: "deployment", id: depID, label: depID, repos: []string{slug}})
-		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID})
+		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID, ""})
 		s.deployments[routeProjectAlpha] = append(s.deployments[routeProjectAlpha], depID)
 	}
 	return s
@@ -128,7 +128,7 @@ func TestManyHiddenLinksDoNotCrowdOutAVisibleLinkThroughTheEngine(t *testing.T) 
 	}
 	s := manyIssueProject(300, linked, nil)
 	for i := range s.nodes {
-		if s.nodes[i].workItemType == "pr" && !strings.HasSuffix(s.nodes[i].id, "-299") {
+		if s.nodes[i].kind == "pull_request" && !strings.HasSuffix(s.nodes[i].id, "-299") {
 			s.nodes[i].repos = []string{"acme/hidden"}
 		}
 	}
@@ -140,12 +140,13 @@ func TestManyHiddenLinksDoNotCrowdOutAVisibleLinkThroughTheEngine(t *testing.T) 
 	}
 }
 
-// TestAMergeRequestLinkIsALink: a merge request work item linked to an issue
-// reaches its repository's deployments as a pull request does.
-func TestAMergeRequestLinkIsALink(t *testing.T) {
+// TestAPullRequestsStoredTypeDecidesNothing: the pull-request position is the
+// pull_request node, so a link to one reaches its repository's deployments
+// whatever work-item type property the node carries (a merge request, or none).
+func TestAPullRequestsStoredTypeDecidesNothing(t *testing.T) {
 	s := manyIssueProject(1, map[int]bool{0: true}, nil)
 	for i := range s.nodes {
-		if s.nodes[i].workItemType == "pr" {
+		if s.nodes[i].kind == "pull_request" {
 			s.nodes[i].workItemType = "merge_request"
 		}
 	}

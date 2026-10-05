@@ -358,7 +358,17 @@ import (
 // repositories only share a word with is answered as a question about that one
 // repository, where it was left as an unresolved anchor. A candidate saved
 // under v65 for such a question must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v66"
+//
+// v66 -> v67: a named anchor's deployments (a
+// project's, and a repository's or team's issues) are walked over the link of
+// record (LINKS_PULL_REQUEST, issue to pull request, native, explicit_text or
+// heuristic tier) where the walk read the undirected RELATES_TO between work
+// items, a repository-less issue is admitted to a restricted caller only by a
+// native link, and a restricted caller's repository grants match as the
+// per-row rule does (owner wildcard, case-insensitive slug). A candidate saved
+// under v66 or earlier for such a question holds the deployments of the old
+// topology and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v67"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
