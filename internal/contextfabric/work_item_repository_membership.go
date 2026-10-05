@@ -72,7 +72,9 @@ func (m *TreeWorkItemMembership) read(ctx context.Context, principal storage.Pri
 		return WorkItemMembershipResult{}, err
 	}
 	overLimit := len(walk.Members) > WorkItemMembershipCensusLimit
-	walked := walk.Members
+	// Every cut below keeps the strongest links first, as the walk's own cut
+	// does: the members are ordered by tier, then canonical id, before any cut.
+	walked := strongestLinkFirst(walk.Members)
 	if overLimit {
 		walked = walked[:WorkItemMembershipCensusLimit]
 	}
@@ -114,12 +116,10 @@ func (m *TreeWorkItemMembership) read(ctx context.Context, principal storage.Pri
 		members = walked
 	}
 
-	// The members handed on are the serving cap's, in canonical id order, as
+	// The members handed on are the serving cap's strongest links (members is
+	// in strongest-link-first order here), then put in canonical id order, as
 	// the project read hands on its own; the census counts every authorized
 	// member read.
-	slices.SortFunc(members, func(a, b TreeWorkItemMember) int {
-		return strings.Compare(a.Subject.CanonicalID, b.Subject.CanonicalID)
-	})
 	served := workItemTupleSelectionCap(request.PlanMaxMembers, request.RequestMaxMembers)
 	authorized := 0
 	out := WorkItemMembershipResult{Members: make([]WorkItemMembershipMember, 0, min(len(members), served))}
@@ -139,6 +139,9 @@ func (m *TreeWorkItemMembership) read(ctx context.Context, principal storage.Pri
 		}
 		out.Members = append(out.Members, WorkItemMembershipMember{CanonicalID: member.Subject.CanonicalID, RepoID: segments[0], WorkItemID: segments[1], LinkTier: member.Tier})
 	}
+	slices.SortFunc(out.Members, func(a, b WorkItemMembershipMember) int {
+		return strings.Compare(a.CanonicalID, b.CanonicalID)
+	})
 	census := WorkItemMembershipCensus{
 		State: WorkItemMembershipCensusExact, PopulationMeasured: true, PopulationComplete: !incomplete && !overLimit, PopulationIncomplete: incomplete || overLimit,
 		AuthorizedPopulation: authorized, ServedMembers: len(out.Members), CensusLimit: WorkItemMembershipCensusLimit,
@@ -153,4 +156,31 @@ func (m *TreeWorkItemMembership) read(ctx context.Context, principal storage.Pri
 	census.CappedPopulation = census.AuthorizedPopulation + census.DeniedPopulation
 	out.Census = census
 	return out, nil
+}
+
+// treeLinkTierRank is a tier's place, strongest first. A tier outside the
+// closed set ranks last: it is never served ahead of a known tier.
+func treeLinkTierRank(tier string) int {
+	switch tier {
+	case TreeLinkTierNative:
+		return 0
+	case TreeLinkTierExplicitText:
+		return 1
+	case TreeLinkTierHeuristic:
+		return 2
+	}
+	return 3
+}
+
+// strongestLinkFirst returns the members ordered by link tier, strongest
+// first, then by canonical id, so a cut keeps the strongest links.
+func strongestLinkFirst(members []TreeWorkItemMember) []TreeWorkItemMember {
+	ordered := slices.Clone(members)
+	slices.SortStableFunc(ordered, func(a, b TreeWorkItemMember) int {
+		if ra, rb := treeLinkTierRank(a.Tier), treeLinkTierRank(b.Tier); ra != rb {
+			return ra - rb
+		}
+		return strings.Compare(a.Subject.CanonicalID, b.Subject.CanonicalID)
+	})
+	return ordered
 }

@@ -75,3 +75,46 @@ func TestTheTreeMembershipFailsLoudlyWhenItCannotMeasure(t *testing.T) {
 		t.Fatalf("an unservable identity was dropped silently: %+v", result)
 	}
 }
+
+// TestTheServingCapAndTheCensusCutKeepTheStrongestLinks: with more members
+// than the serving cap, the members served are the strongest links, never the
+// ones whose canonical ids sort first; they are still handed on in canonical
+// id order. The census bound cuts the same way.
+func TestTheServingCapAndTheCensusCutKeepTheStrongestLinks(t *testing.T) {
+	var members []TreeWorkItemMember
+	for i := 0; i < WorkItemMembershipServeLimit; i++ {
+		members = append(members, treeMember(t, fmt.Sprintf("A-%04d", i), TreeLinkTierHeuristic))
+	}
+	for i := 0; i < 50; i++ {
+		members = append(members, treeMember(t, fmt.Sprintf("Z-%04d", i), TreeLinkTierNative))
+	}
+	lease, result, err := beginTreeMembership(t, &treeGraphFake{walk: TreeWorkItemWalk{Members: members}}, nil, WorkItemMembershipRequest{})
+	if err != nil || lease == nil {
+		t.Fatalf("lease=%v err=%v", lease, err)
+	}
+	defer lease.Release()
+	native := 0
+	for i, m := range result.Members {
+		if m.LinkTier == TreeLinkTierNative {
+			native++
+		}
+		if i > 0 && result.Members[i-1].CanonicalID >= m.CanonicalID {
+			t.Fatalf("served members are not in canonical id order at %d", i)
+		}
+	}
+	if native != 50 || len(result.Members) != WorkItemMembershipServeLimit {
+		t.Fatalf("served %d members with %d native, want the cap with all 50 native members", len(result.Members), native)
+	}
+	// The census bound: one past it, the member cut is a heuristic one.
+	var over []TreeWorkItemMember
+	for i := 0; i < WorkItemMembershipCensusLimit; i++ {
+		over = append(over, treeMember(t, fmt.Sprintf("Z-%05d", i), TreeLinkTierNative))
+	}
+	over = append(over, treeMember(t, "A-00000", TreeLinkTierHeuristic))
+	walked := strongestLinkFirst(over)[:WorkItemMembershipCensusLimit]
+	for _, m := range walked {
+		if m.Tier != TreeLinkTierNative {
+			t.Fatalf("the census cut kept the heuristic member %s over a native one", m.Subject.CanonicalID)
+		}
+	}
+}
