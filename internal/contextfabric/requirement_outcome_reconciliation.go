@@ -459,8 +459,7 @@ func RequirementOutcomeTransitionLogArgs(event RequirementOutcomeTransitionEvent
 
 // recordRequirementOutcomeTransitions emits the served document's transitions
 // through the engine's own telemetry.
-func (e *Engine) recordRequirementOutcomeTransitions(ctx context.Context, principal storage.Principal, result InvestigationResult) {
-	telemetry := e.servedTelemetry(ctx)
+func (e *Engine) recordRequirementOutcomeTransitions(ctx context.Context, principal storage.Principal, telemetry EngineTelemetry, result InvestigationResult) {
 	if telemetry == nil {
 		return
 	}

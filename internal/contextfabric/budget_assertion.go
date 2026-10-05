@@ -183,7 +183,7 @@ type BudgetAssertionEvent struct {
 // A zero on either budget axis means unbounded on that axis
 // (ContextFabricResponseBudget's own doc comment), so an engine composed
 // without ceilings behaves exactly as it did before this change.
-func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, result InvestigationResult, budget ResponseBudget) error {
+func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Principal, telemetry EngineTelemetry, stage BudgetAssertStage, result InvestigationResult, budget ResponseBudget) error {
 	if budget.MaxItems <= 0 && budget.MaxSerializedBytes <= 0 {
 		return nil
 	}
@@ -211,7 +211,7 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 		// stage-three raise keeps, and built by the SAME constructor -- so
 		// the emitted line and the raised error can never disagree about
 		// the document they describe.
-		if telemetry := e.servedTelemetry(ctx); telemetry != nil {
+		if telemetry != nil {
 			telemetry.RecordItemAccounting(ctx, principal,
 				itemAccountingEventFor(string(stage), ledger, budget.MaxItems))
 		}
@@ -238,7 +238,7 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 	certificate, capacity := contractsv1.CertifyContextFabricCapacity(ledger, budget)
 	event.CertifiedFit = certificate.Certified()
 	event.Capacity = capacity
-	if telemetry := e.servedTelemetry(ctx); telemetry != nil {
+	if telemetry != nil {
 		telemetry.RecordBudgetAssertion(ctx, principal, event)
 	}
 	if event.Fits {
@@ -287,6 +287,25 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 // pre-interpret veto/gate exits run before an AnswerPlan exists. A nil plan
 // stamps nothing; it is not a missing value.
 func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, result InvestigationResult, plan *AnswerPlan, budget ResponseBudget) (InvestigationResult, error) {
+	return e.finalizeServedAs(ctx, principal, stage, result, plan, budget, servedModeServe)
+}
+
+// servedMode says what a finalization is for. Serve is the one that ends an
+// answer: it emits the served-document events. MeasureOnly runs every writer
+// and every guard and measures the same document, and emits nothing; the final
+// fit uses it for candidates that may be cut again.
+type servedMode int
+
+const (
+	servedModeServe servedMode = iota
+	servedModeMeasureOnly
+)
+
+func (e *Engine) finalizeServedAs(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, result InvestigationResult, plan *AnswerPlan, budget ResponseBudget, mode servedMode) (InvestigationResult, error) {
+	telemetry := e.telemetry
+	if mode == servedModeMeasureOnly {
+		telemetry = nil
+	}
 	if plan != nil {
 		result = stampAnswerPlan(result, *plan)
 	}
@@ -299,7 +318,7 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	if e.servedLateHook != nil {
 		result = e.servedLateHook(result)
 	}
-	if telemetry := e.servedTelemetry(ctx); telemetry != nil {
+	if telemetry != nil {
 		telemetry.RecordCompletenessAuthority(ctx, principal, completenessAuthority)
 	}
 	// CHAOS-5637: the answerability invariant, HERE for the same reason
@@ -338,8 +357,8 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	if err := AssertServedRequirementEvidence(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, err)
 	}
-	e.recordRequirementOutcomeTransitions(ctx, principal, result)
-	if err := e.assertFitsBudget(ctx, principal, stage, result, budget); err != nil {
+	e.recordRequirementOutcomeTransitions(ctx, principal, telemetry, result)
+	if err := e.assertFitsBudget(ctx, principal, telemetry, stage, result, budget); err != nil {
 		return InvestigationResult{}, err
 	}
 	return result, nil
@@ -381,19 +400,6 @@ func (e *Engine) servedLateWriters(ctx context.Context, result InvestigationResu
 	return result, observation
 }
 
-type servedQuietKey struct{}
-
-// servedTelemetry is the engine's telemetry, or nil while a candidate document
-// of the final fit is being measured: only the document that is served (or the
-// last one refused) may emit the served-document events, so a candidate that
-// is cut again leaves no event describing a document that was never served.
-func (e *Engine) servedTelemetry(ctx context.Context) EngineTelemetry {
-	if ctx.Value(servedQuietKey{}) != nil {
-		return nil
-	}
-	return e.telemetry
-}
-
 // finalizeServedFitting is finalizeServed for the decisive path with the byte
 // fit made decisive. The stage-3 row cut fits the answer under the ceiling
 // before the late writers run; the document SENT is the one finalizeServed
@@ -404,14 +410,13 @@ func (e *Engine) servedTelemetry(ctx context.Context) EngineTelemetry {
 // to the document last, a smaller true answer is served instead of refused; the
 // refusal stands only when nothing is left to cut, and then it says so.
 //
-// Candidates are measured quietly. The document that ends the loop is
-// finalized once more with telemetry, so each served-document event is emitted
-// once, for the document served or the last one refused.
+// Candidates are finalized in servedModeMeasureOnly. The document that ends the
+// loop is finalized once more in servedModeServe, so each served-document event
+// is emitted once, for the document served or the last one refused.
 func (e *Engine) finalizeServedFitting(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, result InvestigationResult, budget ResponseBudget) (InvestigationResult, error) {
-	quiet := context.WithValue(ctx, servedQuietKey{}, true)
 	current := result
 	for {
-		_, err := e.finalizeServed(quiet, principal, stage, current, nil, budget)
+		_, err := e.finalizeServedAs(ctx, principal, stage, current, nil, budget, servedModeMeasureOnly)
 		var refusal AnswerBudgetRefusal
 		if err == nil || !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
 			return e.finalizeServed(ctx, principal, stage, current, nil, budget)
