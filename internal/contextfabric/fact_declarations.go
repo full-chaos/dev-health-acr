@@ -141,6 +141,26 @@ func (d FactSubjectRefDeclaration) Resolve(row map[string]FactValue) (SubjectKin
 	return kind, form, true
 }
 
+// FactAdditivity classifies a numeric column of a daily series table: does the
+// sum of its daily values over a period equal the value for the period.
+type FactAdditivity string
+
+const (
+	// FactAdditive: a per-day count whose sum over days is the count over the
+	// period (commits made on the day).
+	FactAdditive FactAdditivity = "additive"
+	// FactNonAdditive: a ratio, an average, a percentile, a gauge, a distinct
+	// count or a state. Its daily values are never summed.
+	FactNonAdditive FactAdditivity = "non_additive"
+)
+
+func validFactAdditivity(additivity FactAdditivity) bool {
+	return additivity == FactAdditive || additivity == FactNonAdditive
+}
+
+// FactDayColumn is the column a daily series table keys its rows by.
+const FactDayColumn = "day"
+
 // FactColumnDeclaration declares one column of a declared table.
 type FactColumnDeclaration struct {
 	Name       string                     `json:"name"`
@@ -148,6 +168,9 @@ type FactColumnDeclaration struct {
 	Nullable   bool                       `json:"nullable,omitempty"`
 	Unit       string                     `json:"unit,omitempty"`
 	SubjectRef *FactSubjectRefDeclaration `json:"subject_ref,omitempty"`
+	// Additivity is set on every numeric column of a DailySeries table, and
+	// on no other column.
+	Additivity FactAdditivity `json:"additivity,omitempty"`
 }
 
 // FactFieldDeclaration declares one field of a fact of this kind.
@@ -178,8 +201,13 @@ type FactFieldDeclaration struct {
 	// the subject's whole population. It is served with a population-scope
 	// label, never unlabelled (CHAOS-7120 codex r1 P1). Mutually exclusive
 	// with Aggregate.
-	CallerScoped bool                    `json:"caller_scoped,omitempty"`
-	Columns      []FactColumnDeclaration `json:"columns,omitempty"`
+	CallerScoped bool `json:"caller_scoped,omitempty"`
+	// DailySeries marks a table field that is one row per day of one subject,
+	// keyed by the FactDayColumn column. Every numeric column of it is
+	// classified additive or non-additive, so a period total is stated only
+	// from a column the declaration itself calls additive.
+	DailySeries bool                    `json:"daily_series,omitempty"`
+	Columns     []FactColumnDeclaration `json:"columns,omitempty"`
 }
 
 // AppliesTo reports whether the declaration covers facts about kind.
@@ -305,6 +333,9 @@ func validateFieldDeclarations(capability FactCapability) error {
 			return fmt.Errorf("fact field %s names a drivers table but is not a score", field.Name)
 		}
 		if field.Type != FactFieldTable {
+			if field.DailySeries {
+				return fmt.Errorf("fact field %s is a daily series but not a table", field.Name)
+			}
 			if len(field.Columns) > 0 {
 				return fmt.Errorf("fact field %s is not a table but declares columns", field.Name)
 			}
@@ -312,6 +343,15 @@ func validateFieldDeclarations(capability FactCapability) error {
 		}
 		if len(field.Columns) == 0 {
 			return fmt.Errorf("fact table field %s declares no columns", field.Name)
+		}
+		if field.DailySeries {
+			hasDay := false
+			for _, column := range field.Columns {
+				hasDay = hasDay || (column.Name == FactDayColumn && column.Type == FactFieldString)
+			}
+			if !hasDay {
+				return fmt.Errorf("fact daily series %s declares no %s column", field.Name, FactDayColumn)
+			}
 		}
 		columns := map[string]struct{}{}
 		for _, column := range field.Columns {
@@ -324,6 +364,9 @@ func validateFieldDeclarations(capability FactCapability) error {
 			if !validFactFieldType(column.Type) || column.Type == FactFieldTable {
 				return fmt.Errorf("fact table field %s column %s type %q is invalid", field.Name, column.Name, column.Type)
 			}
+			if err := validateColumnAdditivity(field, column); err != nil {
+				return err
+			}
 			columns[column.Name] = struct{}{}
 		}
 		for _, column := range field.Columns {
@@ -331,6 +374,26 @@ func validateFieldDeclarations(capability FactCapability) error {
 				return fmt.Errorf("fact table field %s column %s: %w", field.Name, column.Name, err)
 			}
 		}
+	}
+	return nil
+}
+
+// validateColumnAdditivity makes an unclassified daily column unrepresentable:
+// a numeric column of a daily series table must say whether it is additive,
+// an additive column must be an integer count, and no other table carries one.
+func validateColumnAdditivity(field FactFieldDeclaration, column FactColumnDeclaration) error {
+	numeric := column.Type == FactFieldInteger || column.Type == FactFieldNumber
+	switch {
+	case column.Additivity != "" && !validFactAdditivity(column.Additivity):
+		return fmt.Errorf("fact table field %s column %s additivity %q is invalid", field.Name, column.Name, column.Additivity)
+	case !field.DailySeries && column.Additivity != "":
+		return fmt.Errorf("fact table field %s column %s declares additivity but the table is not a daily series", field.Name, column.Name)
+	case field.DailySeries && numeric && column.Additivity == "":
+		return fmt.Errorf("fact daily series %s column %s is not classified additive or non-additive", field.Name, column.Name)
+	case field.DailySeries && !numeric && column.Additivity != "":
+		return fmt.Errorf("fact daily series %s column %s is not numeric but declares additivity", field.Name, column.Name)
+	case column.Additivity == FactAdditive && column.Type != FactFieldInteger:
+		return fmt.Errorf("fact daily series %s column %s is additive but not an integer count", field.Name, column.Name)
 	}
 	return nil
 }

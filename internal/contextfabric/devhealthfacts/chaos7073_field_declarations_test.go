@@ -461,6 +461,9 @@ func t4Run(t *testing.T, cases []t4Case, capabilityOf func(contextfabric.FactKin
 				if decl.Type != contextfabric.FactFieldTable {
 					continue
 				}
+				if value.Table != nil && value.Table.Shape == contextfabric.FactTableTimeSeries && !decl.DailySeries {
+					report("%s %s fact (case %s): table %q is emitted as a time series but not declared a daily series, so no column of it is classified additive or non-additive", c.kind, subjectKind, c.name, name)
+				}
 				for _, row := range value.Rows {
 					for column, cell := range row.Fields {
 						columnDecl, ok := decl.Column(column)

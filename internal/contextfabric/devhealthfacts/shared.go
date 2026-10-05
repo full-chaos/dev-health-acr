@@ -337,7 +337,13 @@ import (
 // over the response budget, is served as the largest whole-row page that fits,
 // with the cut stated, where it was refused with response_budget. A candidate
 // saved under v60 for such a question holds a refusal and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v61"
+//
+// v61 -> v62: a count about one named subject over a period is answered with
+// the total of the subject's stored daily rows of every additive daily count
+// column, with the days it rests on, where it was answered with the daily rows
+// and no total. A candidate saved under v61 for such a question must not be
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v62"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
