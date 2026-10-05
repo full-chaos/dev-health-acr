@@ -254,7 +254,7 @@ func seedScopedOrganization(t *testing.T, ctx context.Context, direct clickhouse
 			s.repoIDs[slug], "dep-"+strings.TrimPrefix(slug, "acme/"), "success", "production", created, created, now, s.orgID)
 	}
 	// A GitHub project holding one issue of acme/other.
-	exec("project", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', NULL, 'Checkout', 1, 'open', '', ?)`, "PVT_checkout", s.orgID, now)
+	exec("project", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', NULL, 'Checkout', 1, 'open', '', ?)`, "ghprojv2:PVT_checkout", s.orgID, now)
 
 	type item struct{ id, slug, provider, itemType, project, title string }
 	items := []item{
@@ -264,7 +264,7 @@ func seedScopedOrganization(t *testing.T, ctx context.Context, direct clickhouse
 		{"jira:CHAOS-13", "", "jira", "story", "", "Trim the logs"},                      // repository-less, native to a pull request of acme/other only
 		{"linear:CHAOS-14", "", "linear", "issue", "", "Split the job"},                  // two items share the key, both native to acme/svc
 		{"jira:CHAOS-14", "", "jira", "story", "", "Split the job again"},                //
-		{"gh:acme/other#5", "acme/other", "github", "issue", "PVT_checkout", "Checkout"}, // own repository acme/other, in the project, native to acme/svc
+		{"gh:acme/other#5", "acme/other", "github", "issue", "ghprojv2:PVT_checkout", "Checkout"}, // own repository acme/other, in the project, native to acme/svc
 		{"gh:acme/svc#6", "acme/svc", "github", "issue", "", "Heuristic neighbour"},      // own repository acme/svc, heuristic to acme/svc
 	}
 	// Fillers: work items the search for any of the keys finds, so the
