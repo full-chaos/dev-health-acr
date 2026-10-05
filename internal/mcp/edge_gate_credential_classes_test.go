@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -254,5 +255,60 @@ func TestEdgeGateOverBudgetAddressVerifiesOneBearerAtATime(t *testing.T) {
 	}
 	if lines := requestLines(t, e, other); len(lines) != 1 || lines[0]["gate_reason"] != acrmcp.HTTPGateReasonVerified {
 		t.Fatalf("other address lines = %v, want one verified", lines)
+	}
+}
+
+// A bearer verified in the over-budget slot and rejected after the edge
+// window rolled over is still answered as an over-budget rejection (429).
+func TestEdgeGateSlotRejectionDecidedAfterWindowRolloverIsStillRefused(t *testing.T) {
+	hosted := newHostedAPI(t)
+	start := time.Now()
+	var clockMu sync.Mutex
+	clock := start
+	now := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return clock
+	}
+	logs := &syncBuffer{}
+	cfg, err := acrmcp.NewHTTPProcessConfig(hosted.sidecarConfig(), testIdentity, logs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := acrmcp.NewHTTPHandler(cfg, acrmcp.HTTPHandlerOptions{
+		BasePath: "/mcp", Identity: testIdentity, MaxRequestBodyBytes: 1 << 20, ResolveTimeout: 5 * time.Second, Now: now,
+		EdgeGate: acrmcp.EdgeGateOptions{FailureLimit: 3, Window: time.Minute, TrustedProxyCIDRs: loopbackProxies},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &endpoint{handler: handler, logs: logs, server: httptest.NewServer(handler)}
+	t.Cleanup(e.server.Close)
+	const address = "203.0.113.60"
+	burst(t, e, 3, func(int) string { return "junk" }, func(int) string { return address })
+	guess := unknownWellFormedToken(t)
+	hold := newBearerHold(guess)
+	hosted.bearerHold.Store(hold)
+	done := make(chan int)
+	go func() { done <- gateStatus(t, e, guess, address) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if parked, _, _ := hold.counts(); parked == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("slot verification never reached acr-api")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	clockMu.Lock()
+	clock = start.Add(2 * time.Minute)
+	clockMu.Unlock()
+	if status := gateStatus(t, e, "junk", address); status != http.StatusUnauthorized {
+		t.Fatalf("malformed bearer in the new window = %d, want 401", status)
+	}
+	close(hold.release)
+	if status := <-done; status != http.StatusTooManyRequests {
+		t.Fatalf("slot rejection decided after the window rolled over = %d, want 429", status)
 	}
 }

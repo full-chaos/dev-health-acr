@@ -41,12 +41,12 @@ const (
 	RefusalVerificationSlot AttemptRefusal = "verification_slot"
 )
 
-// OverBudgetVerificationSlots is how many attempts from an address that has
-// reached its failure limit may verify a well-formed credential at the same
-// time, per process. Verifying is the only way to tell a valid credential
-// from a guess, so an over-budget address keeps this one slot: a credential
-// that verifies in it is served, and the credential-store work of the
-// address stays bounded by one lookup at a time.
+// OverBudgetVerificationSlots is how many undecided attempts an address that
+// has reached its failure limit may have at once, per process, counting the
+// attempts it started while still under the limit. Verifying is the only way
+// to tell a valid credential from a guess, so an over-budget address keeps
+// this one slot: a credential that verifies in it is served, and the
+// credential-store work of the address stays bounded by one lookup at a time.
 const OverBudgetVerificationSlots = 1
 
 // AttemptDecision is what a limiter decided for one attempt: the refusal (if
@@ -62,7 +62,8 @@ type AttemptDecision struct {
 	// on the limiter's existing per-address window entry (no second map).
 	FirstRefusal bool
 	// OverBudget is set on an attempt admitted by BeginVerification while
-	// the address is at or over its failure limit (it holds the slot).
+	// the address is at or over its failure limit (it holds the slot); its
+	// rejection is answered as a refusal even if the window rolls over first.
 	OverBudget bool
 }
 
@@ -151,10 +152,6 @@ type MemoryLimiter struct {
 	attempts     map[string]fixedWindow
 	failures     map[string]fixedWindow
 	inflight     map[string]int
-	// verifying holds the over-budget verification slots in use. Every key
-	// in it also holds an in-flight reservation, so the in-flight table's
-	// tracked-key bound bounds it too.
-	verifying map[string]int
 }
 
 type MemoryLimiterOptions struct {
@@ -186,7 +183,6 @@ func NewBoundedMemoryLimiter(options MemoryLimiterOptions) *MemoryLimiter {
 		Window:      options.Window, AttemptLimit: options.AttemptLimit, FailureLimit: options.FailureLimit,
 		maxKeys:  options.MaxTrackedKeys,
 		attempts: make(map[string]fixedWindow), failures: make(map[string]fixedWindow), inflight: make(map[string]int),
-		verifying: make(map[string]int),
 	}
 }
 
@@ -229,9 +225,11 @@ func (l *MemoryLimiter) BeginAttemptDecision(key string, now time.Time) (func(),
 
 // BeginVerification admits an attempt that presents a well-formed
 // credential. Below the failure limit it is BeginAttemptDecision. At or over
-// it the attempt is admitted only to a free over-budget verification slot
-// (OverBudgetVerificationSlots per address); the in-flight and tracked-key
-// bounds apply as for every attempt.
+// it the attempt is admitted only while the address has fewer than
+// OverBudgetVerificationSlots undecided attempts (including those admitted
+// under the limit), so an over-budget address never verifies more than that
+// many credentials at once; the tracked-key bound applies as for every
+// attempt.
 func (l *MemoryLimiter) BeginVerification(key string, now time.Time) (func(), AttemptDecision) {
 	return l.begin(key, now, true)
 }
@@ -255,22 +253,19 @@ func (l *MemoryLimiter) begin(key string, now time.Time, verification bool) (fun
 	// are bounded like every other limiter map. Below the per-address bound a
 	// valid request is never refused, whatever the failure count.
 	current, tracking := l.inflight[key]
+	if overBudget && current >= OverBudgetVerificationSlots {
+		// A busy slot is refused at the retry rate of the address, so only
+		// the first refusal of the window is reported as first.
+		first := !window.RefusalLogged
+		window.RefusalLogged = true
+		l.failures[key] = window
+		return nil, AttemptDecision{Refusal: RefusalVerificationSlot, InFlight: current, FirstRefusal: first}
+	}
 	if current >= l.maxInflight {
 		return nil, AttemptDecision{Refusal: RefusalInFlight, InFlight: current, FirstRefusal: true}
 	}
 	if !tracking && len(l.inflight) >= l.maxKeys {
 		return nil, AttemptDecision{Refusal: RefusalTrackedKeys, InFlight: current, FirstRefusal: true}
-	}
-	if overBudget {
-		if l.verifying[key] >= OverBudgetVerificationSlots {
-			// A busy slot is refused at the retry rate of the address, so
-			// only the first refusal of the window is reported as first.
-			first := !window.RefusalLogged
-			window.RefusalLogged = true
-			l.failures[key] = window
-			return nil, AttemptDecision{Refusal: RefusalVerificationSlot, InFlight: current, FirstRefusal: first}
-		}
-		l.verifying[key]++
 	}
 	l.inflight[key]++
 	var once sync.Once
@@ -278,13 +273,6 @@ func (l *MemoryLimiter) begin(key string, now time.Time, verification bool) (fun
 		once.Do(func() {
 			l.mu.Lock()
 			defer l.mu.Unlock()
-			if overBudget {
-				if l.verifying[key] <= 1 {
-					delete(l.verifying, key)
-				} else {
-					l.verifying[key]--
-				}
-			}
 			if l.inflight[key] <= 1 {
 				delete(l.inflight, key)
 				return
@@ -295,8 +283,9 @@ func (l *MemoryLimiter) begin(key string, now time.Time, verification bool) (fun
 }
 
 // RecordRejection records one failed authentication of a verified-and-
-// rejected credential and reports whether the address was already at or over
-// its failure limit (the caller then answers it as a refusal).
+// rejected credential in the window where it was decided, and reports whether
+// the address was already at or over its failure limit there. The caller also
+// answers it as a refusal when the attempt was admitted over the limit.
 func (l *MemoryLimiter) RecordRejection(key string, now time.Time) (bool, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

@@ -156,7 +156,7 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 		credential, err := a.store.FindByTokenHash(r.Context(), HashToken(raw))
 		if err != nil {
 			if errors.Is(err, storage.ErrNotFound) {
-				a.rejectCredential(w, r, ip, "unknown_token", nil, decision.InFlight, now)
+				a.rejectCredential(w, r, ip, "unknown_token", nil, decision, now)
 				return
 			}
 			cause := credentialLookupCause(err)
@@ -169,15 +169,15 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 			return
 		}
 		if credential.RevokedAt != nil {
-			a.rejectCredential(w, r, ip, "revoked", &credential, decision.InFlight, now)
+			a.rejectCredential(w, r, ip, "revoked", &credential, decision, now)
 			return
 		}
 		if credential.ExpiresAt != nil && !credential.ExpiresAt.After(now) {
-			a.rejectCredential(w, r, ip, "expired", &credential, decision.InFlight, now)
+			a.rejectCredential(w, r, ip, "expired", &credential, decision, now)
 			return
 		}
 		if !resourceAdmitted(credential.Resource, r.Header.Values(ResourceHeader)) {
-			a.rejectCredential(w, r, ip, "resource_mismatch", &credential, decision.InFlight, now)
+			a.rejectCredential(w, r, ip, "resource_mismatch", &credential, decision, now)
 			return
 		}
 		if decision.OverBudget {
@@ -215,17 +215,19 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 }
 
 // rejectCredential answers a well-formed credential the store rejected. It
-// is counted; from an address already at or over its failure limit it is
+// is counted; when it was admitted over the failure limit, or the address is
+// at or over the limit when it is decided, it is
 // answered with the same 429 as an attempt refused before verification, so
 // a guess learns nothing from the slot it used, and it is logged as that
 // refusal (Info once per window, then Debug).
-func (a *Authenticator) rejectCredential(w http.ResponseWriter, r *http.Request, ip, reason string, credential *contractsv1.ClientCredential, inFlight int, now time.Time) {
+func (a *Authenticator) rejectCredential(w http.ResponseWriter, r *http.Request, ip, reason string, credential *contractsv1.ClientCredential, decision AttemptDecision, now time.Time) {
 	overBudget, first := RecordRejection(a.limiter, ip, now)
+	overBudget = overBudget || decision.OverBudget
 	if credential != nil {
 		a.recordKnownDenialAudit(r, *credential, reason, now)
 	}
 	if overBudget {
-		a.logRefusal(r, RefusalFailureBudget, inFlight, ip, first)
+		a.logRefusal(r, RefusalFailureBudget, decision.InFlight, ip, first)
 		retryAfter := a.limiter.RetryAfter(ip, now)
 		if retryAfter <= 0 {
 			retryAfter = time.Second
