@@ -60,6 +60,7 @@ services:
       ACR_CONTEXT_FABRIC_FALKOR_TLS: "false"
       ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE: "true"
       ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX: acr-cf
+${FG_ACR_MAX_ITEMS:+      ACR_MAX_ITEMS: ${FG_ACR_MAX_ITEMS}}
   acr-projector:
     environment:
       ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: "true"
@@ -138,28 +139,46 @@ create_credential() {
 }
 
 # A test run that executed nothing is a failure: the go test JSON stream must name every
-# top-level test the package declares as passed.
+# top-level test of the phase as passed or skipped, and only TestGap cases may skip.
+# Phase "main" runs everything but the TestCeilingRaised cases; phase "raised" runs only those,
+# against an acr-api restarted with a higher answer item ceiling.
 run_use_case_tests() {
-  local json="$STATE/fixturegraph-tests.json" declared passed
+  local phase="$1" json="$STATE/fixturegraph-tests-${1}.json" declared passed filter=()
   declared="$(cd "$REPO_ROOT" && go test -tags fixturegraph -list '^Test' ./tests/fixturegraph/ | grep '^Test' | LC_ALL=C sort)"
-  [[ -n "$declared" ]] || fg_die 'the use-case package declares no test'
+  if [[ "$phase" == raised ]]; then
+    declared="$(printf '%s\n' "$declared" | grep '^TestCeilingRaised' || true)"
+    filter=(-run '^TestCeilingRaised')
+  else
+    declared="$(printf '%s\n' "$declared" | grep -v '^TestCeilingRaised' || true)"
+    filter=(-skip '^TestCeilingRaised')
+  fi
+  [[ -n "$declared" ]] || fg_die "the ${phase} phase declares no test"
   set +e
   (cd "$REPO_ROOT" && FG_API_URL="https://localhost:${PORT}" FG_CA_FILE="$STATE/pki/ca.crt" \
     FG_ORG_TOKEN_FILE="$STATE/secrets/fg-org-token" FG_SCOPED_TOKEN_FILE="$STATE/secrets/fg-scoped-token" \
     FG_SCOPED_SLUG="$FG_WORLD_ONE_SLUG" FG_OTHER_SLUG="$FG_WORLD_TWO_SLUG" \
     FG_MCP_BIN="$STATE/acr-mcp" FG_CH_QUERY="$STATE/chq.sh" FG_ORG_ID="$(<"$STATE/org-id")" \
-    go test -tags fixturegraph -count=1 -timeout 20m -json ./tests/fixturegraph/ >"$json")
+    go test -tags fixturegraph -count=1 -timeout 20m -json "${filter[@]}" ./tests/fixturegraph/ >"$json")
   local status=$?
   set -e
-  fg_note 'walk decision lines of the acr-api'
+  fg_note "walk decision lines of the acr-api (${phase})"
   compose logs --no-color --no-log-prefix acr-api 2>&1 | grep 'repository work item walk' | redact_log >&2 || true
   grep -E '"Action":"(output)"' "$json" | jq -r 'select(.Output != null) | .Output' | sed -e 's/[[:space:]]*$//' | grep -v '^$' >&2 || true
-  if [[ "$status" -ne 0 ]]; then graph_census; fg_die 'a use-case test failed'; fi
+  if [[ "$status" -ne 0 ]]; then graph_census; fg_die "a use-case test failed in the ${phase} phase"; fi
   passed="$(jq -r 'select((.Action == "pass" or .Action == "skip") and .Test != null and (.Test | contains("/") | not)) | .Test' "$json" | LC_ALL=C sort)"
-  [[ "$passed" == "$declared" ]] || { printf 'declared:\n%s\npassed or skipped:\n%s\n' "$declared" "$passed" >&2; fg_die 'a declared use-case test did not run'; }
+  [[ "$passed" == "$declared" ]] || { printf 'declared:\n%s\npassed or skipped:\n%s\n' "$declared" "$passed" >&2; fg_die "a declared use-case test did not run in the ${phase} phase"; }
   local skipped_other
   skipped_other="$(jq -r 'select(.Action == "skip" and .Test != null and (.Test | contains("/") | not) and (.Test | startswith("TestGap") | not)) | .Test' "$json")"
   [[ -z "$skipped_other" ]] || fg_die "a use-case test was skipped: ${skipped_other}"
+}
+
+# raise_answer_ceiling restarts acr-api with a higher answer item ceiling (ACR_MAX_ITEMS, the
+# configured maximum) so one case can prove the member cut is that ceiling.
+raise_answer_ceiling() {
+  FG_ACR_MAX_ITEMS=50
+  write_graph_override
+  compose up -d --force-recreate acr-api acr-tls-proxy >/dev/null
+  wait_https_ready
 }
 
 main() {
@@ -184,7 +203,9 @@ main() {
   create_credential '*' fixture-graph-org "$STATE/secrets/fg-org-token"
   create_credential "$FG_WORLD_ONE_SLUG" fixture-graph-scoped "$STATE/secrets/fg-scoped-token"
   write_clickhouse_wrapper
-  run_use_case_tests
+  run_use_case_tests main
+  raise_answer_ceiling
+  run_use_case_tests raised
   note 'PASS: fixture-graph'
 }
 

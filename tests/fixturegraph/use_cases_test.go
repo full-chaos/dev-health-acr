@@ -200,7 +200,10 @@ func TestRepositoryIssuesComeThroughItsPullRequestLinks(t *testing.T) {
 	}
 }
 
-// KNOWN DEFECT (CHAOS-8752): the first world's repository has 20
+// KNOWN DEFECT (CHAOS-8752; cause, argued from code: the member list is cut by the answer item
+// ceiling ACR_MAX_ITEMS 30 minus a synthesis headroom of 16 = 14, whatever max_cohort_members the
+// client sends, and the tier sentence is added on any cut; TestCeilingRaisedServesEveryMember
+// proves it by execution): the first world's repository has 20
 // issues linked through native links; the walk serves 14 of them (the 14 lowest ids), reports
 // the cohort truncated and blames a link tier cut that cannot have happened. The case asserts
 // the correct expectation inside a wrapper that passes only while the answer shows the
@@ -432,13 +435,13 @@ func answerDigest(d doc) string {
 	return string(b)
 }
 
-// KNOWN DEFECT CANDIDATE (ticket id to follow): on the current axis read_relationships omits a
+// KNOWN DEFECT (CHAOS-8753): on the current axis read_relationships omits a
 // LINKS_PULL_REQUEST edge whose edge window has ended (the issue or the pull request ended: the
 // projector takes the intersection of both lifetimes), and answers complete with no edge and
 // nothing withheld, while the walk serves the same links. The case asserts the correct
 // expectation (every seeded link of the pull request is served) inside a wrapper that passes
 // only while the answer is exactly the recorded empty complete answer.
-func TestKnownDefectCurrentAxisDropsLinksOfEndedIssues(t *testing.T) {
+func TestKnownDefectCHAOS8753CurrentAxisDropsLinksOfEndedIssues(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
 	c.requireTools("read_relationships", "find_subjects")
 	one, _ := slugs(t)
@@ -476,5 +479,17 @@ HAVING countIf(w.completed_at IS NULL AND w.closed_at IS NULL) = 0 AND max(coale
 		if edges != 0 || str(rel, "status") != "complete" || withheld != 0 {
 			t.Fatalf("PR %s: the defect changed (edges=%d of %d seeded, status=%q, withheld=%v)", pr, edges, seeded, str(rel, "status"), withheld)
 		}
+	}
+}
+
+// TestCeilingRaisedServesEveryMember runs in the second phase, against an acr-api restarted
+// with a higher answer item ceiling: the same question serves every seeded member and no cut
+// sentence, which shows the cut of the known-defect case above is that ceiling.
+func TestCeilingRaisedServesEveryMember(t *testing.T) {
+	c := connect(t, "FG_ORG_TOKEN_FILE")
+	one, _ := slugs(t)
+	d, _ := walk(t, c, one)
+	if problems := walkProblems(t, one, d); len(problems) > 0 {
+		t.Fatalf("%s with the ceiling raised: %s\nanswer digest: %.3000s", one, strings.Join(problems, "; "), answerDigest(d))
 	}
 }
