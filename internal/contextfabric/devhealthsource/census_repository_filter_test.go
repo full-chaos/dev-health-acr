@@ -129,20 +129,19 @@ func TestCensusWithoutAFilterIsUnchanged(t *testing.T) {
 	}
 }
 
-func TestWorkItemCensusRepositoryFilterIsAppliedInEveryStatement(t *testing.T) {
+// TestAWorkItemCensusIsNeverFilteredOnItsOwnRepository: the entity tree
+// relates a work item to a repository only through its linked pull requests,
+// so a repository narrowing never reaches the work item's own repository
+// column; the census round scopes a work item by the link walk instead.
+func TestAWorkItemCensusIsNeverFilteredOnItsOwnRepository(t *testing.T) {
 	t.Parallel()
 	client, outcome := runFilteredCensus(t, contextfabric.SubjectWorkItem, "CHAOS-77", []string{"ACME/Repo-25", "acme/*"})
-	if !outcome.RepositoryFilterApplied {
-		t.Fatalf("RepositoryFilterApplied = false, want true")
-	}
-	if len(client.calls) != 2 {
-		t.Fatalf("statements = %d, want aggregate and satisfier set", len(client.calls))
+	if outcome.RepositoryFilterApplied {
+		t.Fatalf("RepositoryFilterApplied = true, want false: a work item is not scoped by its own repository")
 	}
 	for i, statement := range client.calls {
-		if !strings.Contains(statement, "toString(w.repo_id) IN (SELECT toString(id) FROM repos FINAL WHERE org_id = {census_org_id:String}") ||
-			!strings.Contains(statement, "lower(trimBoth(repo)) = {census_repo_0:String}") ||
-			!strings.Contains(statement, "startsWith(lower(trimBoth(repo)), {census_repo_1:String})") {
-			t.Fatalf("statement %d = %q, want the repository filter on w.repo_id inside it", i, statement)
+		if strings.Contains(statement, "FROM repos") || strings.Contains(statement, "w.repo_id) IN") {
+			t.Fatalf("statement %d = %q, want no filter on the work item's own repository", i, statement)
 		}
 	}
 }

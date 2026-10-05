@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -57,30 +58,79 @@ func RecordSubjectCandidatesAuthzDropped(ctx context.Context, count int) {
 
 type workItemCensusRepositoryScopeKey struct{}
 
+// workItemCensusScope is what the work item census of one call recorded under
+// a requested repository scope: that it ran there, and which satisfiers the
+// scope's link walk admitted, each with the tier of its strongest link. It
+// lives on the call's context only: nothing carries it to another call.
+type workItemCensusScope struct {
+	mu     sync.Mutex
+	scoped bool
+	linked map[string]string
+}
+
 // WithWorkItemCensusRepositoryScopeRecorder attaches a fresh cell to ctx that
 // RecordWorkItemCensusRepositoryScope sets. Investigate attaches it before any
 // resolution runs; finalizeServed reads it, so every serving path states the
 // scope exclusion beside the answer it composed.
 func WithWorkItemCensusRepositoryScopeRecorder(ctx context.Context) context.Context {
-	if _, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*bool); ok {
+	if _, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*workItemCensusScope); ok {
 		return ctx
 	}
-	return context.WithValue(ctx, workItemCensusRepositoryScopeKey{}, new(bool))
+	return context.WithValue(ctx, workItemCensusRepositoryScopeKey{}, &workItemCensusScope{})
 }
 
 // RecordWorkItemCensusRepositoryScope reports that the work item census ran
 // inside the caller's repository scope. A no-op when ctx carries no recorder.
 func RecordWorkItemCensusRepositoryScope(ctx context.Context) {
-	if cell, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*bool); ok {
-		*cell = true
+	if cell, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*workItemCensusScope); ok {
+		cell.mu.Lock()
+		cell.scoped = true
+		cell.mu.Unlock()
 	}
 }
 
 // WorkItemCensusRepositoryScopeRecorded reports whether the census ran inside
 // the caller's repository scope on this call.
 func WorkItemCensusRepositoryScopeRecorded(ctx context.Context) bool {
-	cell, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*bool)
-	return ok && *cell
+	cell, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*workItemCensusScope)
+	if !ok {
+		return false
+	}
+	cell.mu.Lock()
+	defer cell.mu.Unlock()
+	return cell.scoped
+}
+
+// RecordWorkItemCensusLinkedSatisfier records a census satisfier the requested
+// scope's link walk admitted on this call, with the tier of its strongest
+// link. A no-op when ctx carries no recorder.
+func RecordWorkItemCensusLinkedSatisfier(ctx context.Context, canonicalID, tier string) {
+	cell, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*workItemCensusScope)
+	if !ok {
+		return
+	}
+	cell.mu.Lock()
+	defer cell.mu.Unlock()
+	if cell.linked == nil {
+		cell.linked = map[string]string{}
+	}
+	cell.linked[canonicalID] = tier
+}
+
+// WorkItemCensusLinkedSatisfiers returns the satisfiers the requested scope's
+// link walk admitted on this call, by canonical id, with their link tier.
+func WorkItemCensusLinkedSatisfiers(ctx context.Context) map[string]string {
+	cell, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*workItemCensusScope)
+	if !ok {
+		return nil
+	}
+	cell.mu.Lock()
+	defer cell.mu.Unlock()
+	out := make(map[string]string, len(cell.linked))
+	for id, tier := range cell.linked {
+		out[id] = tier
+	}
+	return out
 }
 
 // ErrNoInvestigationSubjects (CHAOS-3810/CHAOS-3811) classifies the one

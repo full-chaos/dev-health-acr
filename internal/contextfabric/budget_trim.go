@@ -198,11 +198,7 @@ func (e *Engine) planBudgetTrim(
 // refuse what this lever served. The correction only moves status and the
 // completeness block; it never adds a charged item.
 func (e *Engine) budgetTrimServedShape(ctx context.Context, result InvestigationResult) InvestigationResult {
-	if WorkItemCensusRepositoryScopeRecorded(ctx) {
-		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricWorkItemCensusRepositoryScopeLimitation})
-		result.Limitations = composed
-		result.LimitationsDisplaced += displaced
-	}
+	result = withWorkItemCensusScopeDisclosures(ctx, result)
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(result))
 }
