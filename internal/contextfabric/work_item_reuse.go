@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -177,6 +178,13 @@ func workItemReuseMembershipEqual(candidate InvestigationResult, census *WorkIte
 		value = WorkItemMembershipCensusLimit
 	}
 	if !current.Census.PopulationMeasured || current.Census.State != census.State || value != census.Value {
+		return false
+	}
+	// A repository walk that became partial since the answer was stored (or
+	// complete again) is not the stored answer: the stored one carries, or
+	// lacks, the partial-list limitation the live read now owes.
+	partial := current.Census.State == WorkItemMembershipCensusExact && current.Census.PopulationIncomplete
+	if anchorKind == SubjectRepository && partial != slices.Contains(candidate.Limitations, contractsv1.ContextFabricWorkItemRepositoryPartialLimitation) {
 		return false
 	}
 	if current.Census.State == WorkItemMembershipCensusUnmeasured || len(current.Members) != census.Retained {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -116,5 +117,40 @@ func TestTheServingCapAndTheCensusCutKeepTheStrongestLinks(t *testing.T) {
 		if m.Tier != TreeLinkTierNative {
 			t.Fatalf("the census cut kept the heuristic member %s over a native one", m.Subject.CanonicalID)
 		}
+	}
+}
+
+// TestARequestedScopeIsNotAppliedAgainToTheIssuesOwnRepository: the walk
+// applied the requested repository scope to each member's link (E3); the fact
+// filter is not asked to apply it again to the issue's own repository.
+func TestARequestedScopeIsNotAppliedAgainToTheIssuesOwnRepository(t *testing.T) {
+	filter := &treeFilterFake{}
+	lease, _, err := beginTreeMembership(t, &treeGraphFake{walk: TreeWorkItemWalk{Members: []TreeWorkItemMember{treeMember(t, "ENG-1", TreeLinkTierNative)}, PullRequests: 1, LinkedIssues: 1}}, filter,
+		WorkItemMembershipRequest{Status: "todo", RequestedRepositoryScope: []string{"acme/svc"}})
+	if err != nil || lease == nil {
+		t.Fatalf("lease=%v err=%v", lease, err)
+	}
+	defer lease.Release()
+	if len(filter.requests) != 1 || len(filter.requests[0].RequestedRepositoryScope) != 0 {
+		t.Fatalf("filter requests %+v, want one with no requested repository scope", filter.requests)
+	}
+}
+
+// TestAnIncompleteCensusStatesItsAuthorizationGapAsLowerBounds: a census that
+// did not read every member (a cut walk) under the bound states the gap with
+// "at least", as a floor census does, never as exact counts.
+func TestAnIncompleteCensusStatesItsAuthorizationGapAsLowerBounds(t *testing.T) {
+	census := WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, PopulationIncomplete: true, AuthorizedPopulation: 1, DeniedPopulation: 2, CappedPopulation: 3}
+	gap, ok := workItemAuthorizationGapOf(census, SubjectRepository)
+	if !ok {
+		t.Fatal("no gap for a census with denied members")
+	}
+	if got := gap.Limitation(); !strings.Contains(got, "at least 1 work items authorized and at least 2 more denied") {
+		t.Fatalf("gap sentence %q, want the lower-bound form", got)
+	}
+	census.PopulationIncomplete = false
+	exact, _ := workItemAuthorizationGapOf(census, SubjectRepository)
+	if got := exact.Limitation(); strings.Contains(got, "at least") {
+		t.Fatalf("a complete census states its gap as %q, want exact counts", got)
 	}
 }

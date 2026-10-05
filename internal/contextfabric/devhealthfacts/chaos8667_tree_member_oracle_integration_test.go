@@ -118,10 +118,11 @@ var oracleExceptions = map[string]oracleException{
 	// authorization path, and the requested selector needs the item's OWN
 	// repository to match (renderRequestedRepositorySelectorSet requires a
 	// present, named repository), so a repository-less item never passes under
-	// a requested scope, native link or not. The graph admits a repository-less
-	// issue through a native link to a pull request of the requested repository.
-	// STATIC READING: confirm on the first live run.
-	"unrestricted+requested[acme/svc]": {graphOnly: []string{"linear:CHAOS-10", "jira:PROJ-11"}, reason: "E3 requested scope: library requires the item's own repository to match the requested selector; the graph admits repository-less issues through a native link"},
+	// a requested scope, native link or not. The graph applies the requested
+	// scope to the link's pull request (E3, the entity tree): it admits a
+	// repository-less issue through a native link to a pull request of the
+	// requested repository, and an issue of another repository linked to one.
+	"unrestricted+requested[acme/svc]": {graphOnly: []string{"gh:acme/other#4", "gitlab:acme/gl-proj#3", "jira:PROJ-11", "linear:CHAOS-10"}, reason: "E3 requested scope: library requires the item's own repository to match the requested selector; the graph tests the scope on the link's pull request"},
 }
 
 func oracleCanonical(t *testing.T, repoID, workItemID string) string {

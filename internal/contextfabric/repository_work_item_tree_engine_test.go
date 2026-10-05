@@ -744,6 +744,15 @@ func TestAStoredRepositoryTupleIsReusedOnlyAfterTheRepositoryIsReCheckedAndReWal
 	if hit {
 		t.Fatal("a stored repository tuple was reused after its member's link changed tier")
 	}
+
+	// The same members, but the walk is now cut below the census bound: the
+	// stored complete answer lacks the partial-list limitation the read owes.
+	partial := walk
+	partial.Truncated = true
+	hit, _, _, _ = reuseOnTheRepositoryWalk(t, principal, request, stored, partial, true)
+	if hit {
+		t.Fatal("a stored complete repository answer was reused after the live walk became partial")
+	}
 }
 
 func TestATupleWhoseCandidateAndAnchorDifferInKindIsNotATuple(t *testing.T) {

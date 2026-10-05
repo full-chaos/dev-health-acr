@@ -274,6 +274,28 @@ func TestRepositoryWorkItemDeniedCountsIssuesNotLinkRows(t *testing.T) {
 	}
 }
 
+// TestARequestedScopeFollowsTheLink: under a requested repository scope (E3)
+// an issue of another repository natively linked to a pull request of the
+// scoped repository is a member: the scope is tested on the link's pull
+// request, never on the issue's own repository. The caller's grants still
+// apply to the issue.
+func TestARequestedScopeFollowsTheLink(t *testing.T) {
+	s := newMemberSeed()
+	s.issue("work_item.v2:e:other", []string{"acme/other"})
+	s.pullRequest("pull_request:e:1", memberAnchorSlug)
+	s.link("work_item.v2:e:other", "pull_request:e:1", "native")
+	scoped := contextfabric.RequestedScope{RepositorySlugs: []string{memberAnchorSlug}}
+	for name, wrap := range map[string]func(*fakeConn){"pushdown and per-row": nil, "per-row only": perRowOnly} {
+		if got := memberTiers(s.walk(t, open(), scoped, 25, wrap)); got != "work_item.v2:e:other=native" {
+			t.Errorf("%s: requested scope %s: members %q, want the acme/other issue linked to an %s pull request", name, memberAnchorSlug, got, memberAnchorSlug)
+		}
+		granted := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{memberAnchorSlug}}
+		if got := s.walk(t, granted, scoped, 25, wrap); len(got.Members) != 0 {
+			t.Errorf("%s: a caller not granted acme/other sees %s, want none: the grants still apply to the issue", name, memberTiers(got))
+		}
+	}
+}
+
 // TestRepositoryWorkItemsFollowTheCallersAuthorization: with the read's grant
 // clause and with the walk's per-row rule alone.
 func TestRepositoryWorkItemsFollowTheCallersAuthorization(t *testing.T) {

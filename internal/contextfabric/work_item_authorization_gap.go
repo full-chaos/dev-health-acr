@@ -25,6 +25,10 @@ type workItemAuthorizationGap struct {
 	Observed   int
 	Authorized int
 	Denied     int
+	// Incomplete: the census did not read every member (a cut walk or an
+	// unread member below the bound), so the counts are lower bounds and the
+	// sentence says "at least", as a floor census does.
+	Incomplete bool
 }
 
 // workItemAuthorizationGapOf returns the gap for a measured census that has
@@ -33,7 +37,7 @@ func workItemAuthorizationGapOf(census WorkItemMembershipCensus, anchorKind Subj
 	if !census.PopulationMeasured || census.State == WorkItemMembershipCensusUnmeasured || census.DeniedPopulation <= 0 {
 		return workItemAuthorizationGap{}, false
 	}
-	return workItemAuthorizationGap{AnchorKind: anchorKind, State: census.State, Observed: census.CappedPopulation, Authorized: census.AuthorizedPopulation, Denied: census.DeniedPopulation}, true
+	return workItemAuthorizationGap{AnchorKind: anchorKind, State: census.State, Observed: census.CappedPopulation, Authorized: census.AuthorizedPopulation, Denied: census.DeniedPopulation, Incomplete: census.PopulationIncomplete}, true
 }
 
 // NoneAuthorized reports the case where every observed member is denied.
@@ -48,7 +52,7 @@ func (g workItemAuthorizationGap) Limitation() string {
 	if g.NoneAuthorized() {
 		return fmt.Sprintf("%s: %d work items were observed and none are authorized, so no work item can be listed or counted.", prefix, g.Denied)
 	}
-	if g.State == WorkItemMembershipCensusFloor {
+	if g.State == WorkItemMembershipCensusFloor || g.Incomplete {
 		return fmt.Sprintf("%s: the census stopped at its bound, with at least %d work items authorized and at least %d more denied and not counted.", prefix, g.Authorized, g.Denied)
 	}
 	return fmt.Sprintf("%s: %d work items are authorized and %d more are denied and are not counted.", prefix, g.Authorized, g.Denied)

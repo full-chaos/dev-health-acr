@@ -162,8 +162,9 @@ func walkMemberIDs(walk treeWalk) []string {
 // TestEachLinkRowIsAuthorizedAtBothEnds: a caller with no repository grant
 // but a requested repository scope gets no grant clause in the link read, so
 // the walk's own check of each row is what keeps a link out. A pull request
-// outside the scope is not followed, and neither is a link from an issue whose
-// own repository is outside it.
+// outside the scope is not followed. The scope follows the link (E3): an
+// issue whose own repository is outside the scope is followed through its
+// native link to a pull request inside it.
 func TestEachLinkRowIsAuthorizedAtBothEnds(t *testing.T) {
 	s := projectSeed{served: map[string]string{}}
 	s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
@@ -175,11 +176,11 @@ func TestEachLinkRowIsAuthorizedAtBothEnds(t *testing.T) {
 	s.link("near", "work_item:gh:9", []string{"acme/elsewhere"}, "pull_request:ghpr:3", "native", scopedOnly, "acme/scoped-only")
 	scope := contextfabric.RequestedScope{RepositorySlugs: []string{"acme/in-scope", "acme/scoped-only"}}
 	walk := walkTreeWithScope(t, s, contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: projectAnchorID}, scope, 25)
-	if got := walkMemberIDs(walk); strings.Join(got, ",") != "deployment:acme/in-scope:0" {
-		t.Fatalf("members %v, want only the deployment reached by the link whose issue and pull request are both in scope", got)
+	if got := walkMemberIDs(walk); strings.Join(got, ",") != "deployment:acme/in-scope:0,deployment:acme/scoped-only:0" {
+		t.Fatalf("members %v, want the deployments reached by the links whose pull request is in scope, whatever the issue's own repository", got)
 	}
-	if walk.denied != 2 {
-		t.Fatalf("denied %d, want the two links refused at one end each", walk.denied)
+	if walk.denied != 1 {
+		t.Fatalf("denied %d, want the one link whose pull request is outside the scope", walk.denied)
 	}
 }
 
@@ -224,8 +225,9 @@ func TestADeploymentOfTwoReachedRepositoriesIsOneMember(t *testing.T) {
 // the member, and the walk's own check of that end is the only thing keeping
 // an unseen issue out. The caller holds grants for both repositories, so the
 // link read's grant clause keeps every row; the request is narrowed to the
-// anchor's repository, which only the walk's check of each row applies. An
-// issue whose own repository is outside the request is not a member; a
+// anchor's repository. The scope follows the link (E3): an issue whose own
+// repository is outside the request is a member through its link to a pull
+// request inside it when the caller is granted that repository; a
 // repository-less issue is admitted by its link to the granted pull request.
 func TestALinkWhoseFarEndIsTheMemberAdmitsOnlyFarEndsTheCallerMaySee(t *testing.T) {
 	repo := "repository:github:acme/svc"
@@ -250,10 +252,10 @@ func TestALinkWhoseFarEndIsTheMemberAdmitsOnlyFarEndsTheCallerMaySee(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(walkMemberIDs(walk), ","); got != "work_item:gh:visible,work_item:linear:ENG-1" {
-		t.Fatalf("members %s, want the issue in the requested repository and the repository-less issue, never the issue of acme/secret", got)
+	if got := strings.Join(walkMemberIDs(walk), ","); got != "work_item:gh:secret,work_item:gh:visible,work_item:linear:ENG-1" {
+		t.Fatalf("members %s, want every issue linked to a pull request of the requested repository: the scope follows the link (E3), and the caller is granted acme/secret", got)
 	}
-	if walk.denied != 1 || walk.linkTargets != 3 || walk.linkSources != 3 {
-		t.Fatalf("denied %d, link targets %d, link sources %d; want 1 denied of 3 linked issues from 3 pull requests", walk.denied, walk.linkTargets, walk.linkSources)
+	if walk.denied != 0 || walk.linkTargets != 3 || walk.linkSources != 3 {
+		t.Fatalf("denied %d, link targets %d, link sources %d; want none denied of 3 linked issues from 3 pull requests", walk.denied, walk.linkTargets, walk.linkSources)
 	}
 }

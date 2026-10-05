@@ -310,6 +310,15 @@ func (s treeWalkState) admitted(position treePosition, n *node, tier linkTier) b
 	if position == treeIssue && repositoryLess(n) {
 		return tier.grantsAuthority || !s.narrowed()
 	}
+	if position == treeIssue && len(s.scope.RepositorySlugs) > 0 {
+		// E3: a requested repository scope follows the link. The pull request
+		// at the other end of the row is tested against it; the issue is
+		// tested against the caller's grants only, never against the scope by
+		// its own repository.
+		linkScope := s.scope
+		linkScope.RepositorySlugs = nil
+		return graphrank.AuthorizedAttributes(s.principal, linkScope, toCandidateNode(n).Attributes)
+	}
 	return s.authorized(n)
 }
 

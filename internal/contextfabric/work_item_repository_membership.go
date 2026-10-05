@@ -89,7 +89,11 @@ func (m *TreeWorkItemMembership) read(ctx context.Context, principal storage.Pri
 		if request.TimeColumn != "" && request.TimeColumn != "completed_at" {
 			return WorkItemMembershipResult{}, errors.New("repository work items are filtered on completion only")
 		}
-		filterRequest := TreeWorkItemFilterRequest{RequestedRepositoryScope: slices.Clone(request.RequestedRepositoryScope), Status: request.Status}
+		// E3: the walk applied the requested repository scope to each member's
+		// link; the fact read must not apply it again to the issue's own
+		// repository, which would drop an issue of another repository linked
+		// to a pull request in scope.
+		filterRequest := TreeWorkItemFilterRequest{Status: request.Status}
 		if request.TimeColumn == "completed_at" {
 			filterRequest.CompletedStart, filterRequest.CompletedEnd = request.TimeStart, request.TimeEnd
 		}
