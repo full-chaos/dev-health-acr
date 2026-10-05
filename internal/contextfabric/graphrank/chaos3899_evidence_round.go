@@ -719,7 +719,7 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		if err == nil && linkScoped {
 			if outcome, err = withinLinkScope(ctx, input.workItemScope, outcome); err != nil {
 				slog.WarnContext(ctx, "context fabric census: the work item census was not scoped by the link walk of the requested repository scope",
-					"request_id", contextfabric.SanitizeLogAttr(input.RequestID), "reason", linkScopeFailure(err))
+					"request_id", contextfabric.SanitizeLogAttr(input.RequestID), "reason", contextfabric.SanitizeLogAttr(linkScopeFailure(err)))
 			}
 		}
 		ka := KindAttestation{Kind: kind, Protocol: "aggregate_first", HandleApplied: handleApplies, AnchorApplied: anchorApplies}
