@@ -167,22 +167,57 @@ func TestInvalidSynthesisDrawTakesOneRejectionPath(t *testing.T) {
 // TestSynthesisSchemaOnlyRejectionDoesNotLeakIntoALaterValidatorRejection:
 // the reason of the terminal draw is that draw's own rule, mirroring
 // TestSchemaOnlyRejectionDoesNotLeakIntoALaterValidatorRejection on the
-// interpret side.
+// interpret side. Two schema-only draws are followed by a schema-valid draw
+// this package's own validator rejects; it ends with its own reason, not the
+// unclassified reason of the earlier schema-only draws.
 func TestSynthesisSchemaOnlyRejectionDoesNotLeakIntoALaterValidatorRejection(t *testing.T) {
+	ungrounded := validSynthesisOutput()
+	claim := groundedReadinessClaim(validSynthesisInput())
+	claim.Field = "field_no_fact_carries"
+	ungrounded.ClaimedFacts = []contextfabric.ClaimedFact{claim}
+	encoded, err := json.Marshal(ungrounded)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rt, _, calls := scriptedSynthesisGenkitRuntime(t, []string{
 		invalidSynthesisDrawText(t, drawSynthesisUnknownProperty),
 		invalidSynthesisDrawText(t, drawSynthesisUnknownProperty),
-		validSynthesisDrawText(t),
+		string(encoded),
 	})
-	_, receipt, err := rt.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	_, _, gotErr := rt.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if calls.Load() != invalidSynthesisDrawCeiling {
+		t.Fatalf("calls = %d, want %d", calls.Load(), invalidSynthesisDrawCeiling)
+	}
+	if got := contextfabric.SynthesisRejectionReasonOf(gotErr); got != contextfabric.RejectionReasonClaimFieldUnobserved {
+		t.Fatalf("reason = %q (err %v), want the validator's own rule for the terminal draw", got, gotErr)
+	}
+}
+
+// TestRejectedSynthesisDrawsServeADegradedAnswerThatSaysSo: when every draw is
+// refused, the answer layer serves the deterministic parts with a warning
+// naming the failed model call, never an error.
+func TestRejectedSynthesisDrawsServeADegradedAnswerThatSaysSo(t *testing.T) {
+	rt, _, calls := scriptedSynthesisGenkitRuntime(t, []string{invalidSynthesisDrawText(t, drawSynthesisOutOfEnumStatus)})
+	synthesizer := contextfabric.RuntimeAnswerSynthesizer{Runtime: rt}
+	principal := storage.Principal{OrgID: "org_1"}
+	input := validSynthesisInput()
+	_, err := synthesizer.Synthesize(context.Background(), principal, input)
+	var failure *contextfabric.SynthesisFailure
+	if !errors.As(err, &failure) || failure.Class != contextfabric.SynthesisFailureRejected {
+		t.Fatalf("err = %v, want a synthesis failure of class %s", err, contextfabric.SynthesisFailureRejected)
+	}
+	if calls.Load() != invalidSynthesisDrawCeiling {
+		t.Fatalf("calls = %d, want %d", calls.Load(), invalidSynthesisDrawCeiling)
+	}
+	result, err := synthesizer.ComposeDegraded(context.Background(), principal, input, failure)
 	if err != nil {
-		t.Fatalf("SynthesizeAnswer() error = %v, want the third draw to serve", err)
+		t.Fatalf("ComposeDegraded() error = %v", err)
 	}
-	if calls.Load() != 3 {
-		t.Fatalf("calls = %d, want 3", calls.Load())
+	if !contextfabric.IsSynthesisModelFailureAnswer(result) || result.Status != contextfabric.InvestigationDegraded {
+		t.Fatalf("result status %s warnings %v, want a degraded answer naming the model failure", result.Status, result.Warnings)
 	}
-	if receipt.Outcome != "success" {
-		t.Fatalf("receipt.Outcome = %q, want success", receipt.Outcome)
+	if len(result.ClaimedFacts) != 0 {
+		t.Fatalf("claimed facts = %d, want none from a refused draw", len(result.ClaimedFacts))
 	}
 }
 
