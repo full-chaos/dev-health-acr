@@ -687,11 +687,9 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// OBSERVABILITY -- it never feeds back into any commit decision
 	// itself.
 	identityTrustGateBlocked := false
-	exactLabelProofMissing := false
-	// exactLabelRefused: the one exact label match was refused (no
-	// completeness proof, or a same-term claimant of another identity class);
-	// no rescue may then hand the commit to another candidate.
-	exactLabelRefused := false
+	// refusal is the exact-label step's one refusal state; every later commit
+	// goes through commitAfterExactStep below, which consults it.
+	refusal := exactLabelRefusal{}
 	// tiedStatisticalTop (CHAOS-4085 observability, team-lead addition
 	// 2026-08-22): the TIE half of tiedStatisticalTopUnderTruncation's
 	// conjunct, captured for the decision-stage trace independently of
@@ -798,8 +796,22 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// rule can never disagree about what "tied" means -- one definition,
 		// two readers.
 		tiedStatisticalTop = tiedStatisticalTopUnderTruncation(candidates, commitIndex, true)
-		exactLabelProofMissing = len(exactIndex) == 1 && exactLabelUnproven(candidates[exactIndex[0]].Subject.Kind, identityLookup)
-		exactLabelRefused = exactLabelProofMissing || (len(exactIndex) == 1 && identityCrossClassRivalClaimant(SubjectKey(candidates[exactIndex[0]].Subject), identity, identityTerms))
+		refusal = refuseExactLabel(candidates, exactIndex, identityLookup, identity, identityTerms)
+		commitAfterExactStep := func(index int, gate string, basis contextfabric.CommitBasis) bool {
+			if !refusal.allows(gate, candidates[index].Subject.Kind) {
+				return false
+			}
+			committedIndex[index] = true
+			candidates[index].State = contextfabric.ResolutionCommitted
+			resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
+			commitGate = gate
+			bases.Record(candidates[index].Subject, basis)
+			digests.Record(candidates[index].Subject, contextfabric.CommitDecisionDigest{
+				CommitGate: gate, IdentityProven: basis.IdentityProven(),
+				SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
+			})
+			return true
+		}
 		switch {
 		// CHAOS-3917: exact alias != canonical identity -- an exact-label
 		// match alone must never suffice to commit when the identical
@@ -815,31 +827,10 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// for the kinds the keyed identity read enumerates, a read that ran
 		// incomplete leaves the label unproven, and that is a clarification
 		// whatever the search saw (exact_label_proof.go).
-		case exactLabelProofMissing:
+		case refusal.refused:
 			ambiguous = true
 		case len(exactIndex) == 1 && !identityCrossClassRivalClaimant(SubjectKey(candidates[exactIndex[0]].Subject), identity, identityTerms):
-			committedIndex[exactIndex[0]] = true
-			candidates[exactIndex[0]].State = contextfabric.ResolutionCommitted
-			resolution.Committed = []contextfabric.SubjectRef{candidates[exactIndex[0]].Subject}
-			commitGate = "exact_index"
-			// CHAOS-4085 (sol@xhigh change 2): STATISTICAL, deliberately,
-			// even though this tier stamps MatchExact and Confidence==1.
-			// This is LABEL equality, not identity: this branch's own doc
-			// comment above concedes the residual risk it cannot close ("a
-			// duplicate label hidden entirely behind the truncation
-			// boundary"), and the uniqueness it does check (len(exactIndex)
-			// == 1) is uniqueness within the RETAINED set, not within the
-			// corpus. A caller who means a specific subject under that
-			// hazard is told to name it by canonical id -- which is
-			// CommitBasisCallerCanonicalID, a different, genuinely proven
-			// basis. Nothing about the exact-label tier's own commit
-			// behavior changes here; only its standing before CHAOS-4085's
-			// affirmation gate does.
-			bases.Record(candidates[exactIndex[0]].Subject, contextfabric.CommitBasisStatistical)
-			digests.Record(candidates[exactIndex[0]].Subject, contextfabric.CommitDecisionDigest{
-				CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
-				SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
-			})
+			commitAfterExactStep(exactIndex[0], "exact_index", contextfabric.CommitBasisStatistical)
 		// CHAOS-3884: the identity fast path. Sits AFTER exactIndex
 		// (Finding 1's precedence: a candidate's own canonical label is a
 		// stronger identity claim than a derived alias/provider-key handle,
@@ -858,30 +849,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		case aliasIdentityComplete && len(identityIndex) == 1 &&
 			!identityCollision(SubjectKey(candidates[identityIndex[0]].Subject), identity, identityTerms) &&
 			!identityCrossClassRivalClaimant(SubjectKey(candidates[identityIndex[0]].Subject), identity, identityTerms):
-			committedIndex[identityIndex[0]] = true
-			candidates[identityIndex[0]].State = contextfabric.ResolutionCommitted
-			resolution.Committed = []contextfabric.SubjectRef{candidates[identityIndex[0]].Subject}
-			commitGate = "identity_fast_path"
-			// CHAOS-4085: the ONE branch that earns
-			// CommitBasisAuthoritativeIdentity, and it earns it from THIS
-			// case's own guard expression rather than from anything visible
-			// on the candidate -- aliasIdentityComplete (the identity
-			// universe was enumerated completely, so uniqueness is proven
-			// rather than an artifact of a truncated read), len(identityIndex)
-			// == 1 and !identityCollision (unique within the class), and
-			// !identityCrossClassRivalClaimant (unique across classes,
-			// CHAOS-3917). Existence and authorization come for free: the
-			// candidate is here because a keyed read of this org's graph
-			// returned it and NodeCandidate's authorization filter kept it.
-			// Drop ANY of those conjuncts and this same candidate would
-			// fall through to lone_floor/top_of_two and be recorded
-			// statistical below -- which is exactly the distinction the
-			// mechanism set alone cannot express.
-			bases.Record(candidates[identityIndex[0]].Subject, contextfabric.CommitBasisAuthoritativeIdentity)
-			digests.Record(candidates[identityIndex[0]].Subject, contextfabric.CommitDecisionDigest{
-				CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisAuthoritativeIdentity.IdentityProven(),
-				SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
-			})
+			commitAfterExactStep(identityIndex[0], "identity_fast_path", contextfabric.CommitBasisAuthoritativeIdentity)
 		case searchTruncated:
 			// Codex round-3 review of D11/AC-3778-0: truncation is a
 			// property of the RESOLUTION, not of any one candidate's
@@ -922,21 +890,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// pair cannot slip through this gate merely because neither
 		// individually reached its own dedicated fast path.
 		case len(commitIndex) == 1 && gateValid && !isVectorOnlyCandidate(candidates[commitIndex[0]].MatchMechanisms) && !identityCollision(SubjectKey(candidates[commitIndex[0]].Subject), identity, identityTerms) && !identityCrossClassRivalClaimant(SubjectKey(candidates[commitIndex[0]].Subject), identity, identityTerms) && !identityTrustUnproven(candidates[commitIndex[0]], aliasIdentityComplete) && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
-			committedIndex[commitIndex[0]] = true
-			candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
-			resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
-			commitGate = "lone_floor"
-			// CHAOS-4085: statistical. A confidence floor is a score
-			// comparison against a retrieved population, including for a
-			// Confidence==1 alias candidate that reached here BECAUSE
-			// aliasIdentityComplete was false -- the identity fast path
-			// above declined it for want of a completeness proof, so this
-			// gate must not launder it back into one.
-			bases.Record(candidates[commitIndex[0]].Subject, contextfabric.CommitBasisStatistical)
-			digests.Record(candidates[commitIndex[0]].Subject, contextfabric.CommitDecisionDigest{
-				CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
-				SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
-			})
+			commitAfterExactStep(commitIndex[0], "lone_floor", contextfabric.CommitBasisStatistical)
 		case len(commitIndex) >= 2 && gateValid:
 			top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
 			// CHAOS-3884 spot-check item 1: identityCollision applied here
@@ -961,16 +915,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			// identityCrossClassRivalClaimant (CHAOS-3917) applied here too, same
 			// rationale as LoneFloor above.
 			if gap := top.Confidence - second.Confidence; !isVectorOnlyCandidate(top.MatchMechanisms) && !identityCollision(SubjectKey(top.Subject), identity, identityTerms) && !identityCrossClassRivalClaimant(SubjectKey(top.Subject), identity, identityTerms) && !identityTrustUnproven(top, aliasIdentityComplete) && top.Confidence >= gate.TopFloor && gap >= gate.TopGap {
-				committedIndex[commitIndex[0]] = true
-				candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
-				resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
-				commitGate = "top_of_two"
-				// CHAOS-4085: statistical -- a gap between two scores.
-				bases.Record(candidates[commitIndex[0]].Subject, contextfabric.CommitBasisStatistical)
-				digests.Record(candidates[commitIndex[0]].Subject, contextfabric.CommitDecisionDigest{
-					CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
-					SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
-				})
+				commitAfterExactStep(commitIndex[0], "top_of_two", contextfabric.CommitBasisStatistical)
 			} else {
 				ambiguous = true
 			}
@@ -1207,7 +1152,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// information), and a truncated search with a strictly-separated
 		// top is untouched (the ranking did discriminate). Only the
 		// conjunction is refused.
-		if ambiguous && gateValid && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !exactLabelRefused && !retrievalDegraded &&
+		if ambiguous && gateValid && vectorMarginCommitThreshold > 0 && len(exactIndex) < 2 && !retrievalDegraded &&
 			calibratedTopK > 0 && effectiveSearchLimit >= 2 && effectiveSearchLimit <= calibratedTopK &&
 			unscopedVisibility && !tiedStatisticalTopUnderTruncation(candidates, commitIndex, searchTruncated) {
 			// CHAOS-3884 spot-check MEDIUM-C/item 1: identityCollision is
@@ -1243,19 +1188,8 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			// rested on.
 			// identityCrossClassRivalClaimant (CHAOS-3917) applied here too, same
 			// rationale identityCollision's own comment just above already gives.
-			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok && !identityCollision(SubjectKey(candidates[index].Subject), identity, identityTerms) && !identityCrossClassRivalClaimant(SubjectKey(candidates[index].Subject), identity, identityTerms) {
-				committedIndex[index] = true
-				candidates[index].State = contextfabric.ResolutionCommitted
-				resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
+			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok && !identityCollision(SubjectKey(candidates[index].Subject), identity, identityTerms) && !identityCrossClassRivalClaimant(SubjectKey(candidates[index].Subject), identity, identityTerms) && commitAfterExactStep(index, "vector_margin_rescue", contextfabric.CommitBasisStatistical) {
 				ambiguous = false
-				commitGate = "vector_margin_rescue"
-				// CHAOS-4085: statistical -- an embedding-similarity margin
-				// is the definitive score comparison.
-				bases.Record(candidates[index].Subject, contextfabric.CommitBasisStatistical)
-				digests.Record(candidates[index].Subject, contextfabric.CommitDecisionDigest{
-					CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
-					SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
-				})
 			}
 		}
 		// CHAOS-3896 Slice C (design brief v6 §1.4, R5's amendment): the
@@ -1323,23 +1257,9 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 				!isVectorOnlyCandidate(candidates[index].MatchMechanisms) &&
 				!identityCollision(evidenceCensusAttestedKey, identity, identityTerms) &&
 				!identityCrossClassRivalClaimant(evidenceCensusAttestedKey, identity, identityTerms) &&
-				evidenceStrength(rawBase[evidenceCensusAttestedKey]) >= gate.LoneFloor {
-				committedIndex[index] = true
-				candidates[index].State = contextfabric.ResolutionCommitted
-				resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
+				evidenceStrength(rawBase[evidenceCensusAttestedKey]) >= gate.LoneFloor &&
+				commitAfterExactStep(index, evidenceCensusCommitGate, contextfabric.CommitBasisStatistical) {
 				ambiguous = false
-				commitGate = "evidence_census"
-				// CHAOS-4085: statistical. A census witness lifts a raw
-				// base over LoneFloor through the corroborated-band
-				// arithmetic (evidenceStrength) -- it attests that SOME
-				// source satisfies the question, which is a strength
-				// signal, not a proof that this candidate is the subject
-				// the caller named.
-				bases.Record(candidates[index].Subject, contextfabric.CommitBasisStatistical)
-				digests.Record(candidates[index].Subject, contextfabric.CommitDecisionDigest{
-					CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
-					SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
-				})
 			}
 		}
 	}
@@ -1818,7 +1738,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			}
 		case len(resolution.Committed) == 0 && ambiguous:
 			tracer.Trace(ResolutionTraceEvent{
-				RequestID: requestID, Stage: "decision", Outcome: "ambiguous", CommitGate: exactLabelRefusalGate(exactLabelProofMissing),
+				RequestID: requestID, Stage: "decision", Outcome: "ambiguous", CommitGate: refusal.decisionGate(),
 				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
 				SearchTruncated: searchTruncated,
 				// CHAOS-4085: an ambiguous outcome carrying

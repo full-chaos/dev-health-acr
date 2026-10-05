@@ -84,12 +84,53 @@ func exactLabelUnproven(kind contextfabric.SubjectKind, lookup IdentityLookupSta
 	return isAliasLookupScopedKind(kind) && lookup == IdentityLookupIncomplete
 }
 
-// exactLabelRefusalCommitGate names, on the ambiguous decision line, the one
-// refusal exactLabelUnproven decided.
+// exactLabelRefusal is the exact-label step's one refusal state. It is set
+// where the step refuses the one exact label match and read by every commit the
+// resolution core makes after that step (commitAfterExactStep), so no later
+// gate or rescue can hand the commit to a subject the refusal was about, or to
+// another candidate in its place.
+type exactLabelRefusal struct {
+	refused bool
+	// unproven: refused because the keyed identity read could not prove the
+	// label names one subject (exactLabelUnproven); otherwise refused because a
+	// claimant of another identity class holds the same term.
+	unproven bool
+}
+
+func refuseExactLabel(candidates []contextfabric.SubjectCandidate, exactIndex []int, lookup IdentityLookupState, identity identityClaimants, terms identityMatchTerms) exactLabelRefusal {
+	if len(exactIndex) != 1 {
+		return exactLabelRefusal{}
+	}
+	exact := candidates[exactIndex[0]]
+	if exactLabelUnproven(exact.Subject.Kind, lookup) {
+		return exactLabelRefusal{refused: true, unproven: true}
+	}
+	if identityCrossClassRivalClaimant(SubjectKey(exact.Subject), identity, terms) {
+		return exactLabelRefusal{refused: true}
+	}
+	return exactLabelRefusal{}
+}
+
+// evidenceCensusCommitGate is the commit gate of the evidence-census
+// re-decision.
+const evidenceCensusCommitGate = "evidence_census"
+
+// allows reports whether a commit through gate of a subject of kind may be
+// made. With no refusal every commit may. After a refusal the one commit
+// allowed is an evidence-census commit of a census kind (pull request, work
+// item, CI run, review): such a subject is named by a handle in the question
+// and proven by the census, never by the refused label. Today that census
+// still clarifies while the refused candidate survives in the pool.
+func (r exactLabelRefusal) allows(gate string, kind contextfabric.SubjectKind) bool {
+	return !r.refused || (gate == evidenceCensusCommitGate && IsCensusKindRegistered(kind))
+}
+
+// exactLabelRefusalCommitGate names, on the ambiguous decision line, the
+// refusal for a missing completeness proof.
 const exactLabelRefusalCommitGate = "exact_index_unproven"
 
-func exactLabelRefusalGate(refused bool) string {
-	if refused {
+func (r exactLabelRefusal) decisionGate() string {
+	if r.refused && r.unproven {
 		return exactLabelRefusalCommitGate
 	}
 	return ""
