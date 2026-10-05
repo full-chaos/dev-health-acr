@@ -1134,6 +1134,15 @@
             "judgment_mismatch": {
               "description": "mirrors Cohort.judgment_mismatch verbatim.",
               "type": "boolean"
+            },
+            "population": {
+              "description": "how many members the caller may read, counted before the answer item limit cut the list. Present on a work-item cohort when the read measured it; members never exceed it.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "population_lower_bound": {
+              "description": "true when population counts what was read and the real population can be larger.",
+              "type": "boolean"
             }
           },
           "required": [
@@ -1143,7 +1152,26 @@
             "complete",
             "members"
           ],
-          "type": "object"
+          "type": "object",
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "population_lower_bound"
+                ],
+                "properties": {
+                  "population_lower_bound": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "population"
+                ]
+              }
+            }
+          ]
         },
         "ProjectedCohortGroup": {
           "additionalProperties": false,
@@ -4503,6 +4531,14 @@
             "judgment_mismatch": {
               "description": "server-computed, true when the investigation's requested judgment asked for a comparison score_meaning does not support. Never set without score_meaning also present.",
               "type": "boolean"
+            },
+            "population": {
+              "description": "how many members the caller may read, counted before the answer item limit cut the list. Present on a work-item cohort when the read measured it; members never exceed it.",
+              "type": "integer"
+            },
+            "population_lower_bound": {
+              "description": "true when population counts what was read and the real population can be larger.",
+              "type": "boolean"
             }
           },
           "allOf": [
@@ -4520,6 +4556,23 @@
               "then": {
                 "required": [
                   "score_meaning"
+                ]
+              }
+            },
+            {
+              "if": {
+                "required": [
+                  "population_lower_bound"
+                ],
+                "properties": {
+                  "population_lower_bound": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "population"
                 ]
               }
             }

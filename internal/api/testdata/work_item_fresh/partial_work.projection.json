@@ -37,7 +37,8 @@
           "acr:v1:work-item:repo-1:work-1"
         ]
       }
-    ]
+    ],
+    "population": 1
   },
   "principal_drivers": [],
   "key_facts": [

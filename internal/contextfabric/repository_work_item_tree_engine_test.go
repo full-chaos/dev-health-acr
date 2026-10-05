@@ -114,6 +114,7 @@ type repositoryTreeCase struct {
 	walkErr   error
 	filter    *treeFilterFake
 	resolve   SubjectResolution
+	maxItems  int
 }
 
 func runRepositoryTree(t *testing.T, c repositoryTreeCase) repositoryTreeRun {
@@ -160,7 +161,7 @@ func runRepositoryTree(t *testing.T, c repositoryTreeCase) repositoryTreeRun {
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
 			return InvestigationResult{Status: InvestigationComplete, DirectJudgment: "Available work items.", CurrentState: "Available work items.", DeterministicAnswer: "Available work items.", StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
 		}), Results: store, Requirements: registryDeriver{}, Telemetry: telemetry,
-	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_repository_tree_001" }})
+	}, EngineOptions{ServiceVersion: "test", MaxItems: c.maxItems, NewResultID: func() string { return "result_repository_tree_001" }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +231,7 @@ func TestARepositoryServesItsLinkedIssuesFromTheWalkWithEachTierNamed(t *testing
 	if err := ValidateWorkItemTuplePayload(run.result, storage.Principal{OrgID: "org-1"}); err != nil {
 		t.Fatalf("the served repository tuple is not a valid tuple payload: %v", err)
 	}
-	if len(run.walks) != 1 || run.walks[0] != (RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkMembers, PullRequests: 4, LinkedIssues: 3, Members: 3, Measured: true}) {
+	if len(run.walks) != 1 || run.walks[0] != (RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkMembers, PullRequests: 4, LinkedIssues: 3, Members: 3, Population: 3, Measured: true}) {
 		t.Fatalf("walk lines = %+v", run.walks)
 	}
 }
@@ -263,10 +264,11 @@ func TestAHeuristicOnlyMemberIsCountedInADisclosure(t *testing.T) {
 	}
 }
 
-// TestAListCutAtTheServeCapSaysLowerTiersWereCutFirst: more members than the
-// answer lists carries the sentence that the lower link tiers were cut first;
-// a list that holds every member does not.
-func TestAListCutAtTheServeCapSaysLowerTiersWereCutFirst(t *testing.T) {
+// TestAListCutAtTheServeCapNamesTheCutNotATierOrder: more members than the
+// answer lists, all of one tier, is a cut inside the tier: the answer says
+// how many are listed and says nothing of lower tiers; a list that holds
+// every member carries neither.
+func TestAListCutAtTheServeCapNamesTheCutNotATierOrder(t *testing.T) {
 	defer reportWorkItemMutationPanic(t)
 	var members []TreeWorkItemMember
 	for i := 0; i < WorkItemMembershipServeLimit+5; i++ {
@@ -276,11 +278,14 @@ func TestAListCutAtTheServeCapSaysLowerTiersWereCutFirst(t *testing.T) {
 	if over.err != nil {
 		t.Fatal(over.err)
 	}
-	if !limitationsContain(over.result.Limitations, contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation) {
-		t.Fatalf("a list cut at the serve cap does not say how it was cut: %v", over.result.Limitations)
+	if limitationsContain(over.result.Limitations, contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation) {
+		t.Fatalf("a cut inside one tier says lower tiers were cut: %v", over.result.Limitations)
+	}
+	if listedSentence(over.result.Limitations) == "" {
+		t.Fatalf("a list cut at the serve cap does not say how many are listed: %v", over.result.Limitations)
 	}
 	under := runRepositoryTree(t, repositoryTreeCase{walk: TreeWorkItemWalk{Members: members[:3], PullRequests: 1, LinkedIssues: 3}})
-	if limitationsContain(under.result.Limitations, contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation) {
+	if limitationsContain(under.result.Limitations, contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation) || listedSentence(under.result.Limitations) != "" {
 		t.Fatalf("a list holding every member says members were cut: %v", under.result.Limitations)
 	}
 }
@@ -429,7 +434,7 @@ func TestEachRepositoryOutcomeIsOneDecisionLineWithItsOwnDisclosure(t *testing.T
 		unlinkedCode int
 	}{
 		{"members", repositoryTreeCase{walk: TreeWorkItemWalk{Members: one, PullRequests: 3, LinkedIssues: 1}},
-			RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkMembers, PullRequests: 3, LinkedIssues: 1, Members: 1, Measured: true}, "", -1},
+			RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkMembers, PullRequests: 3, LinkedIssues: 1, Members: 1, Population: 1, Measured: true}, "", -1},
 		{"no pull requests", repositoryTreeCase{walk: TreeWorkItemWalk{}},
 			RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkNoPullRequests, Measured: true}, contractsv1.ContextFabricWorkItemRepositoryNoPullRequestsLimitation, -1},
 		{"unlinked", repositoryTreeCase{walk: TreeWorkItemWalk{PullRequests: 4}},
@@ -611,9 +616,9 @@ func TestTheRepositoryWalkLineCarriesCountsOnlyWhenMeasured(t *testing.T) {
 		absent  []string
 	}{
 		{"measured unfiltered", RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkUnlinked, PullRequests: 4, Measured: true},
-			[]string{"outcome", "anchor_kind", "filtered", "restricted", "pull_requests", "linked_issues", "members", "truncated", "denied"}, []string{"reason"}},
+			[]string{"outcome", "anchor_kind", "filtered", "restricted", "pull_requests", "linked_issues", "members", "population", "truncated", "lower_tier_cut", "denied"}, []string{"reason"}},
 		{"measured filtered", RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkNoMatch, Filtered: true, Measured: true},
-			[]string{"pull_requests", "linked_issues", "members", "truncated"}, []string{"denied", "reason"}},
+			[]string{"pull_requests", "linked_issues", "members", "population", "truncated", "lower_tier_cut"}, []string{"denied", "reason"}},
 		{"read failed", RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkReadFailed, UnmeasuredReason: WorkItemMembershipUnmeasuredS1Error},
 			[]string{"outcome", "reason"}, []string{"pull_requests", "linked_issues", "members", "truncated", "denied"}},
 	} {

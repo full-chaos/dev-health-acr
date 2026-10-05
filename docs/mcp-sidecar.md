@@ -566,6 +566,15 @@ projection through the same projection code this tool uses. `max_drivers`,
 `max_cohort_members`, and `max_evidence_refs` narrow that view. Because both
 surfaces run one projection function, an answer cannot differ between them.
 
+A work-item cohort (for example the issues of a repository) can be longer than
+the answer lists, because the server limits how many items one answer carries.
+`cohort.total` stays the count the answer was built from. `cohort.population`
+is how many members the caller may read, and `cohort.population_lower_bound` is
+true when that count is a floor. A cut list also carries one limitation, "Not
+every member is listed: N of M members are listed ...", and the sentence about
+lower link tiers only when a weaker-tier member was cut before a stronger one.
+Both fields are absent when the read did not measure a population.
+
 ### record_episode
 
 Defined in the MCP tool contract (`contracts/mcp/tools.v1.json`) as `disabled_by_default` and non-read-only. Enabled at runtime only when all four gates pass: (1) `ACR_ENABLE_WRITEBACK=true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; plain doctor (or `doctor --live`) diagnoses the hosted gates.

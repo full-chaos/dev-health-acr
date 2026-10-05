@@ -414,7 +414,7 @@ import (
 // lasted until its first end node ended is served with its stored window. A
 // candidate saved before v74 holds an edge set without those edges and must
 // not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v74"
+const QueryVersion = "devhealthfacts.clickhouse.v75"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

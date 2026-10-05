@@ -51,6 +51,12 @@ type WorkItemTupleCensus struct {
 	// pinned to the census limit. Never persisted.
 	incomplete bool
 
+	// measuredNow marks a census this request measured. Only such a census
+	// writes the population disclosure: a stored result is served with what it
+	// was stored with, and a result stored before the disclosure existed has
+	// none, whatever a re-read census could say. Never persisted.
+	measuredNow bool
+
 	// repository is what the read of a repository's work items measured, set
 	// on the request that measured it and never persisted: a stored answer
 	// already carries the disclosures it was served with.
