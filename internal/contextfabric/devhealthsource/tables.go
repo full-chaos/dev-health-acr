@@ -415,79 +415,200 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.last_synced", rowK
 // (canonicalID, label, sort key) is unchanged.
 func queryPullRequests(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "concat(toString(p.repo_id), ':', toString(p.number))"
-	// Keys first (CHAOS-8683, prod 307 after the v8 rebuild): the page is
-	// chosen on narrow columns only, then the wide ones (body above all) are
-	// read for that page's keys alone. git_pull_requests is keyed (org_id,
-	// repo_id, number) and its cursor column last_synced is the version, not
-	// part of the key, so a read that selects body under the cursor predicate
-	// reads the body of every row the predicate admits before the LIMIT
-	// applies: on the first ticks after a rebuild (a cursor days back) that is
-	// most of the organization, and the read crosses max_bytes_to_read. The
-	// IN set is the page's primary-key tuples, so the wide read touches only
-	// the granules that hold them. The page and its order are unchanged: the
-	// same predicate, order and limit choose it, and the outer read keeps
-	// them.
-	statement := `WITH page AS (
-SELECT p.org_id, p.repo_id, p.number
+	// Two reads (CHAOS-8683, prod 307 after the v8 rebuild). The page is
+	// chosen on narrow columns only (key, repository slug, version); the wide
+	// columns (body above all) are then read for the page's rows alone, a few
+	// rows per statement. git_pull_requests is keyed (org_id, repo_id,
+	// number) and its cursor column last_synced is the version, not part of
+	// the key: a statement that selects body under the cursor predicate reads
+	// the body of every granule holding a row the predicate admits, before
+	// the LIMIT applies, and each row's older versions in other parts too. On
+	// the first ticks after a rebuild (a cursor days back) that is the whole
+	// organization, and the read crosses max_bytes_to_read.
+	keys, truncated, err := pullRequestPageKeys(ctx, client, `SELECT toString(p.repo_id) AS page_repo_id, r.repo, p.number, p.last_synced
 FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id
-WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowKey) + orderBy("p.last_synced", rowKey) + `
-)
-SELECT toString(p.repo_id), r.repo, p.number, ifNull(p.title, ''), ifNull(p.state, ''), p.last_synced,
+WHERE p.org_id = {org_id:String}`+sincePredicate(cursor, "p.last_synced", rowKey)+orderBy("p.last_synced", rowKey), rowLimitBindings(orgID, cursor, limit), limit)
+	if err != nil {
+		return nil, false, err
+	}
+	rows, err := readPullRequestRows(ctx, client, orgID, keys, scanPullRequestRow)
+	if err != nil {
+		return nil, false, err
+	}
+	return rows, truncated, nil
+}
+
+// pullRequestWideReadRows is how many rows one wide read names. Each row is
+// read from the one version the page chose, without FINAL, so a statement
+// reads at most this many granules of the wide columns (prod cuts a granule
+// at index_granularity_bytes, 10 MiB by default, under a 64 MiB
+// max_bytes_to_read).
+const pullRequestWideReadRows = 4
+
+// pullRequestPageKey is one row of a pull request page: its key, its
+// repository's slug and the version (last_synced) the page chose.
+type pullRequestPageKey struct {
+	repoID, repoSlug string
+	number           uint32
+	version          time.Time
+}
+
+// pullRequestPageKeys runs the narrow page read: at most limit rows, and
+// whether more were available.
+func pullRequestPageKeys(ctx context.Context, client contextpacket.ClickHouseQueryClient, statement string, bindings []contextpacket.ClickHouseBinding, limit int) ([]pullRequestPageKey, bool, error) {
+	rows, err := client.Query(ctx, statement, bindings)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var keys []pullRequestPageKey
+	for rows.Next() {
+		var key pullRequestPageKey
+		if err := rows.Scan(&key.repoID, &key.repoSlug, &key.number, &key.version); err != nil {
+			return nil, false, err
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	// A pull request is one row per key, so the row past the limit never
+	// shares its keyset position with a kept one (fetch's tie rule).
+	truncated := len(keys) > limit
+	if truncated {
+		keys = keys[:limit]
+	}
+	return keys, truncated, nil
+}
+
+// readPullRequestRows reads the wide columns of the page's rows, a few per
+// statement, each from the exact version the page chose (no FINAL: the page
+// already resolved the final version, and the version names it), and returns
+// their candidates in page order. A row whose version changed between the two
+// reads is not in this page; the next page reads its new version.
+func readPullRequestRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, keys []pullRequestPageKey, scan func(contextpacket.ClickHouseRowScanner) ([]candidate, error)) ([]candidate, error) {
+	slugs := make(map[string]string, len(keys))
+	read := make(map[string][]candidate, len(keys))
+	for start := 0; start < len(keys); start += pullRequestWideReadRows {
+		chunk := keys[start:min(start+pullRequestWideReadRows, len(keys))]
+		bindings := []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}}
+		terms := make([]string, len(chunk))
+		for i, key := range chunk {
+			slugs[key.repoID] = key.repoSlug
+			terms[i] = fmt.Sprintf("(p.repo_id = toUUID({r%[1]d:String}) AND p.number = {n%[1]d:UInt32} AND p.last_synced = {v%[1]d:DateTime64(3, 'UTC')})", i)
+			bindings = append(bindings,
+				contextpacket.ClickHouseBinding{Name: fmt.Sprintf("r%d", i), Value: key.repoID},
+				contextpacket.ClickHouseBinding{Name: fmt.Sprintf("n%d", i), Value: key.number},
+				contextpacket.ClickHouseBinding{Name: fmt.Sprintf("v%d", i), Value: key.version.UTC()})
+		}
+		statement := `SELECT toString(p.repo_id) AS wide_repo_id, p.number, ifNull(p.title, ''), ifNull(p.state, ''), p.last_synced,
        p.created_at, ` + nullableTimestamp("coalesce(p.merged_at, p.closed_at)") + `,
        ifNull(p.head_branch, ''), ifNull(p.body, '')
-FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id
-WHERE p.org_id = {org_id:String} AND (p.org_id, p.repo_id, p.number) IN (SELECT org_id, repo_id, number FROM page)` + sincePredicate(cursor, "p.last_synced", rowKey) + orderBy("p.last_synced", rowKey)
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var repoID, repoSlug, state string
-		var rawNumber uint32
-		var title, headBranch, body string
-		var observedAt, createdAt, endedAt time.Time
-		var hasEnded uint8
-		if err := r.Scan(&repoID, &repoSlug, &rawNumber, &title, &state, &observedAt, &createdAt, &hasEnded, &endedAt,
-			&headBranch, &body); err != nil {
+FROM git_pull_requests AS p
+PREWHERE p.org_id = {org_id:String} AND (` + strings.Join(terms, " OR ") + `)`
+		rows, err := client.Query(ctx, statement, bindings)
+		if err != nil {
 			return nil, err
 		}
-		number := int64(rawNumber)
-		observedAt = observedAt.UTC()
-		// A pull request is valid from creation until it merged or
-		// closed; an open one has no end.
-		validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
-		canonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
-		rowSortKey := fmt.Sprintf("%s:%d", repoID, number)
-		// Raw title, trimmed and counted by item_normalization.go -- see
-		// queryWorkItems' note on why the trim does not happen here.
-		label := title
-		if strings.TrimSpace(label) == "" {
-			label = identity.PullRequestLabel(number)
+		for rows.Next() {
+			items, err := scan(slugScanner{ClickHouseRowScanner: rows, slugs: slugs})
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if len(items) > 0 {
+				if _, seen := read[items[0].sortKey]; !seen {
+					read[items[0].sortKey] = items
+				}
+			}
 		}
-		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: canonicalID, Label: label}
-		properties := map[string]contractsv1.ContextFabricScalarValue{}
-		if state != "" {
-			properties["state"] = stringScalar(state)
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
 		}
-		// CHAOS-3833 (embed-text spec §2): the pull_request template's
-		// fields. head_branch is a free alias carrier (ticket keys inside
-		// branch names, e.g. "feat/chaos-1725-..."). Only the BODY HEAD is
-		// persisted (first 1,200 runes -- the thesis-bearing part of a PR
-		// description, avg 4,485 runes live); whether it joins the
-		// composed text at all is the §3 provider-locality body gate's
-		// decision at composition time, not this producer's.
-		// author_name/author_email stay unread (person PII, spec §3).
-		properties["number"] = intScalar(number)
-		setStringProperty(properties, "repo", repoSlug, 0)
-		setStringProperty(properties, "branch", headBranch, 0)
-		setStringProperty(properties, "body", body, 1200)
-		evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, repoID+":"+fmt.Sprint(number))
-		entity := contractsv1.ContextFabricEntityProjection{
-			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
-			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
-		}
-		return []candidate{
-			{observedAt: observedAt, sortKey: rowSortKey, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, evidenceRefID, rowSortKey, validFrom, validTo),
-		}, nil
-	})
+	}
+	result := make([]candidate, 0, 2*len(keys))
+	for _, key := range keys {
+		result = append(result, read[fmt.Sprintf("%s:%d", key.repoID, key.number)]...)
+	}
+	return result, nil
+}
+
+// slugScanner reads a wide row, which carries no repository slug, into the
+// pull request scan's columns: the slug the page read is placed second.
+type slugScanner struct {
+	contextpacket.ClickHouseRowScanner
+	slugs map[string]string
+}
+
+func (s slugScanner) Scan(dest ...any) error {
+	if len(dest) < 2 {
+		return s.ClickHouseRowScanner.Scan(dest...)
+	}
+	if err := s.ClickHouseRowScanner.Scan(append([]any{dest[0]}, dest[2:]...)...); err != nil {
+		return err
+	}
+	repoID, ok := dest[0].(*string)
+	slug, okSlug := dest[1].(*string)
+	if ok && okSlug {
+		*slug = s.slugs[*repoID]
+	}
+	return nil
+}
+
+// scanPullRequestRow is the pull request row's scan: the entity and its
+// BELONGS_TO_REPOSITORY edge.
+func scanPullRequestRow(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+	var repoID, repoSlug, state string
+	var rawNumber uint32
+	var title, headBranch, body string
+	var observedAt, createdAt, endedAt time.Time
+	var hasEnded uint8
+	if err := r.Scan(&repoID, &repoSlug, &rawNumber, &title, &state, &observedAt, &createdAt, &hasEnded, &endedAt,
+		&headBranch, &body); err != nil {
+		return nil, err
+	}
+	number := int64(rawNumber)
+	observedAt = observedAt.UTC()
+	// A pull request is valid from creation until it merged or
+	// closed; an open one has no end.
+	validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
+	canonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
+	rowSortKey := fmt.Sprintf("%s:%d", repoID, number)
+	// Raw title, trimmed and counted by item_normalization.go -- see
+	// queryWorkItems' note on why the trim does not happen here.
+	label := title
+	if strings.TrimSpace(label) == "" {
+		label = identity.PullRequestLabel(number)
+	}
+	subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: canonicalID, Label: label}
+	properties := map[string]contractsv1.ContextFabricScalarValue{}
+	if state != "" {
+		properties["state"] = stringScalar(state)
+	}
+	// CHAOS-3833 (embed-text spec §2): the pull_request template's
+	// fields. head_branch is a free alias carrier (ticket keys inside
+	// branch names, e.g. "feat/chaos-1725-..."). Only the BODY HEAD is
+	// persisted (first 1,200 runes -- the thesis-bearing part of a PR
+	// description, avg 4,485 runes live); whether it joins the
+	// composed text at all is the §3 provider-locality body gate's
+	// decision at composition time, not this producer's.
+	// author_name/author_email stay unread (person PII, spec §3).
+	properties["number"] = intScalar(number)
+	setStringProperty(properties, "repo", repoSlug, 0)
+	setStringProperty(properties, "branch", headBranch, 0)
+	setStringProperty(properties, "body", body, 1200)
+	evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, repoID+":"+fmt.Sprint(number))
+	entity := contractsv1.ContextFabricEntityProjection{
+		Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
+		EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
+		ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
+	}
+	return []candidate{
+		{observedAt: observedAt, sortKey: rowSortKey, entity: &entity},
+		belongsToRepository(subject, repoSlug, repoID, observedAt, evidenceRefID, rowSortKey, validFrom, validTo),
+	}, nil
 }
 
 // queryDeployments mints deployment.v2:<repo_id>:<enc(deployment_id)>
