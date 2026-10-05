@@ -1355,7 +1355,8 @@ type ContextFabricCohort struct {
 	// Population is how many members the caller may read, counted before the
 	// answer item limit cut the list. Set on a work-item cohort when serving,
 	// after synthesis, so it never reaches the model; absent otherwise.
-	// Members holds at most Population entries.
+	// Members holds at most Population entries. Absent for an empty cohort
+	// (Members and the projected total say zero then).
 	Population int `json:"population,omitempty"`
 	// PopulationLowerBound: Population is a count of what was read and the
 	// real population can be larger.

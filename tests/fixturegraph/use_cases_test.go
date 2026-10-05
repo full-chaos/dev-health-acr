@@ -168,6 +168,9 @@ func walkProblems(t *testing.T, slug string, d doc) []string {
 	if total, _ := get(cohort, "total").(float64); int(total) != returned || returned != len(got) || int(total) != len(want) {
 		problems = append(problems, fmt.Sprintf("census total=%v members returned=%d distinct=%d seeded=%d, want all equal", total, returned, len(got), len(want)))
 	}
+	if population, _ := get(cohort, "population").(float64); int(population) != len(want) {
+		problems = append(problems, fmt.Sprintf("cohort population=%v, want the %d seeded issues", population, len(want)))
+	}
 	if complete, _ := get(cohort, "complete").(bool); !complete {
 		problems = append(problems, "the cohort is not complete")
 	}
@@ -190,8 +193,8 @@ func walkProblems(t *testing.T, slug string, d doc) []string {
 
 // Use-case: the issues of a repository come through its pull requests' link rows, and the
 // census of the walk equals the members returned. The first world holds more issues than the
-// walk serves today and is pinned as a known defect below; this case asserts the second world
-// strictly.
+// walk lists today (the answer item ceiling cuts it; TestACutMemberListStatesItsPopulationAndNoTierCut
+// asserts what that cut says); this case asserts the second world strictly.
 func TestRepositoryIssuesComeThroughItsPullRequestLinks(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
 	_, two := slugs(t)
@@ -201,43 +204,49 @@ func TestRepositoryIssuesComeThroughItsPullRequestLinks(t *testing.T) {
 	}
 }
 
-// KNOWN DEFECT (CHAOS-8752; cause, argued from code: the member list is cut by the answer item
-// ceiling ACR_MAX_ITEMS 30 minus a synthesis headroom of 16 = 14, whatever max_cohort_members the
-// client sends, and the tier sentence is added on any cut; TestCeilingRaisedServesEveryMember
-// proves it by execution): the first world's repository has 20
-// issues linked through native links; the walk serves 14 of them (the 14 lowest ids), reports
-// the cohort truncated and blames a link tier cut that cannot have happened. The case asserts
-// the correct expectation inside a wrapper that passes only while the answer shows the
-// recorded defect exactly, and fails the moment it changes in any way, fixed or otherwise.
-func TestKnownDefectCHAOS8752WalkCutsMembersBelowTheSeededCount(t *testing.T) {
+// Use-case: when the answer item ceiling cuts the member list of the first world's repository
+// (20 issues linked through native links; the ceiling ACR_MAX_ITEMS 30 minus a synthesis
+// headroom of 16 lists 14 of them, the 14 lowest ids), the answer says so truthfully: the
+// population is the seeded 20 as a field, an "N of M members are listed" sentence carries the
+// same numbers, the cohort is marked truncated, and no sentence blames a link tier cut, because
+// every seeded link has the same tier. TestCeilingRaisedServesEveryMember shows the cut is that
+// ceiling.
+func TestACutMemberListStatesItsPopulationAndNoTierCut(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
 	one, _ := slugs(t)
 	d, raw := walk(t, c, one)
-	t.Logf("RECORDED ANSWER %s: %s", one, answerDigest(d))
-	t.Logf("RECORDED MEMBERS %s: %v", one, sortedKeys(memberLabels(d)))
-	t.Logf("RECORDED RAW %.6000s", raw)
-	problems := walkProblems(t, one, d)
-	if len(problems) == 0 {
-		t.Fatal("the walk now serves every seeded member: the defect is fixed, replace this case with the strict assertion")
-	}
 	want := issueSet(linkRows(t, one))
 	got := memberLabels(d)
-	total, _ := get(get(structured(d), "cohort"), "total").(float64)
-	truncated, _ := get(get(structured(d), "cohort"), "truncated").(bool)
-	complete, _ := get(get(structured(d), "cohort"), "complete").(bool)
-	falseSentence := false
-	for _, l := range list(structured(d), "limitations") {
-		if s, _ := l.(string); strings.Contains(s, "lower link tiers were cut first") {
-			falseSentence = true
-		}
-	}
 	for k := range got {
 		if !want[k] {
-			t.Fatalf("the defect changed: served %q is not a seeded issue of the repository", k)
+			t.Fatalf("served %q is not a seeded issue of the repository: %.3000s", k, raw)
 		}
 	}
-	if len(got) != 14 || len(got) >= len(want) || int(total) != 14 || !truncated || complete || !falseSentence {
-		t.Fatalf("the defect changed shape (served=%d seeded=%d total=%v truncated=%v complete=%v tierSentence=%v): %s", len(got), len(want), total, truncated, complete, falseSentence, strings.Join(problems, "; "))
+	cohort := get(structured(d), "cohort")
+	total, _ := get(cohort, "total").(float64)
+	population, _ := get(cohort, "population").(float64)
+	truncated, _ := get(cohort, "truncated").(bool)
+	complete, _ := get(cohort, "complete").(bool)
+	if len(got) != 14 || len(got) >= len(want) {
+		t.Fatalf("served %d of %d seeded members, want the 14 the ceiling lists: %s", len(got), len(want), answerDigest(d))
+	}
+	if int(total) != len(got) || int(population) != len(want) || !truncated || complete {
+		t.Fatalf("cohort total=%v population=%v truncated=%v complete=%v, want total %d, population %d, truncated, not complete: %s", total, population, truncated, complete, len(got), len(want), answerDigest(d))
+	}
+	sentence := fmt.Sprintf("Not every member is listed: %d of %d members are listed", len(got), len(want))
+	tierSentence := false
+	listed := false
+	for _, l := range list(structured(d), "limitations") {
+		s, _ := l.(string)
+		if strings.Contains(s, "lower link tiers were cut first") {
+			tierSentence = true
+		}
+		if strings.HasPrefix(s, sentence) {
+			listed = true
+		}
+	}
+	if tierSentence || !listed {
+		t.Fatalf("limitations: tier sentence=%v, %q present=%v: %s", tierSentence, sentence, listed, answerDigest(d))
 	}
 }
 

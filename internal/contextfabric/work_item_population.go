@@ -13,7 +13,10 @@ func withWorkItemPopulation(result InvestigationResult, census *WorkItemTupleCen
 		return result
 	}
 	listed := len(result.Cohort.Members)
-	if census.Value < listed || census.Value == 0 {
+	if census.Value < listed || census.Value == 0 || result.Cohort.Population > 0 {
+		// A population already on the cohort was written when the answer was
+		// served, with the lower-bound reading only that request had; a
+		// stored result read again keeps it.
 		return result
 	}
 	lowerBound := census.State == WorkItemMembershipCensusFloor || census.incomplete

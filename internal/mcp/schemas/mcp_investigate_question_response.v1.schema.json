@@ -1137,7 +1137,8 @@
             },
             "population": {
               "description": "how many members the caller may read, counted before the answer item limit cut the list. Present on a work-item cohort when the read measured it; members never exceed it.",
-              "type": "integer"
+              "type": "integer",
+              "minimum": 1
             },
             "population_lower_bound": {
               "description": "true when population counts what was read and the real population can be larger.",

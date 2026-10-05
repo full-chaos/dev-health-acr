@@ -265,3 +265,26 @@ func (cutRepositoryGraph) AuthorizeStoredSubjects(_ context.Context, _ storage.P
 	}
 	return outcomes, nil
 }
+
+func TestTheStoredResultKeepsALowerBoundCut(t *testing.T) {
+	walk := cutWalk(t, 20, 0, func(int) string { return contextfabric.TreeLinkTierNative })
+	walk.Truncated = true
+	rig := newCutRig(t, walk)
+	fresh := rig.ask(t)
+	var id struct {
+		Structured struct {
+			ResultID string `json:"result_id"`
+		} `json:"structured"`
+	}
+	if err := json.Unmarshal(fresh.structured, &id); err != nil || id.Structured.ResultID == "" {
+		t.Fatalf("fresh answer carries no result id: %v %s", err, fresh.structured)
+	}
+	stored := callRealMCPTool(t, rig.boot, "investigation_result", contractsv1.MCPInvestigationResultRequest{ResultID: id.Structured.ResultID})
+	a, b := readServedCohort(t, fresh), readServedCohort(t, stored)
+	if !a.LowerBound || !strings.Contains(a.listedSentence(), " of at least 20 members") {
+		t.Fatalf("fresh = %+v, want a lower bound stated as at least 20", a)
+	}
+	if a.LowerBound != b.LowerBound || a.Population != b.Population || strings.Join(a.Sentences, "|") != strings.Join(b.Sentences, "|") {
+		t.Fatalf("stored differs from fresh:\nfresh  %+v\nstored %+v", a, b)
+	}
+}

@@ -175,8 +175,8 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 	if projection.Cohort != nil {
 		b.writeLine("")
 		size := strconv.Itoa(projection.Cohort.Total)
-		if projection.Cohort.Population > projection.Cohort.Total {
-			size = strconv.Itoa(projection.Cohort.Population)
+		if projection.Cohort.Population > projection.Cohort.Total || projection.Cohort.PopulationLowerBound {
+			size = strconv.Itoa(max(projection.Cohort.Population, projection.Cohort.Total))
 			if projection.Cohort.PopulationLowerBound {
 				size = "at least " + size
 			}
