@@ -305,6 +305,11 @@ func TestReadRelationshipsServesTheLinkTier(t *testing.T) {
 			}
 			servedEdges++
 		}
+		for label := range wantTier {
+			if !seenIssue[label] {
+				t.Fatalf("PR %s: the seeded link to %q is not served on the current axis: %.1500s", pr, label, raw)
+			}
+		}
 		if len(edges) > 0 {
 			servedPRs++
 		}
@@ -468,13 +473,10 @@ func answerDigest(d doc) string {
 	return string(b)
 }
 
-// KNOWN DEFECT (CHAOS-8753): on the current axis read_relationships omits a
-// LINKS_PULL_REQUEST edge whose edge window has ended (the issue or the pull request ended: the
-// projector takes the intersection of both lifetimes), and answers complete with no edge and
-// nothing withheld, while the walk serves the same links. The case asserts the correct
-// expectation (every seeded link of the pull request is served) inside a wrapper that passes
-// only while the answer is exactly the recorded empty complete answer.
-func TestKnownDefectCHAOS8753CurrentAxisDropsLinksOfEndedIssues(t *testing.T) {
+// Use-case: on the current axis read_relationships serves the links of a pull request whose
+// linked issues have all ended (completed or closed), each with the window it lived in: an
+// ended issue is still a subject, and the link stays a fact.
+func TestReadRelationshipsServesTheLinksOfEndedIssues(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
 	c.requireTools("read_relationships", "find_subjects")
 	one, _ := slugs(t)
@@ -489,6 +491,7 @@ HAVING countIf(w.completed_at IS NULL AND w.closed_at IS NULL) = 0 AND max(coale
 	if len(rows) == 0 {
 		t.Fatal("no seeded pull request has only ended issues: the premise of this case is gone, review it")
 	}
+	links := linkRows(t, one)
 	for _, r := range rows {
 		pr := r[0]
 		d, _ := c.call("find_subjects", doc{"handle": "PR " + pr, "anchor": doc{"kind": "repository", "id": repoCanonical}})
@@ -497,27 +500,38 @@ HAVING countIf(w.completed_at IS NULL AND w.closed_at IS NULL) = 0 AND max(coale
 			t.Fatalf("find_subjects handle PR %s returned %d subjects", pr, len(subs))
 		}
 		rel, raw := c.call("read_relationships", doc{"subject": doc{"kind": "pull_request", "canonical_id": str(subs[0], "canonical_id")}, "types": []string{"LINKS_PULL_REQUEST"}, "direction": "both", "depth": 1, "limit": 100})
-		t.Logf("RECORDED RELATIONSHIPS PR %s: %.1500s", pr, raw)
-		seeded := 0
-		for _, x := range linkRows(t, one) {
+		want := map[string]string{}
+		for _, x := range links {
 			if x.pr == pr {
-				seeded++
+				want[x.issue] = x.tier
 			}
 		}
-		edges := len(list(rel, "edges"))
-		if edges == seeded {
-			t.Fatalf("PR %s now serves all %d seeded links: the defect is fixed, replace this case with the strict assertion", pr, seeded)
+		if complete, _ := get(rel, "page", "complete").(bool); !complete || str(rel, "status") != "complete" {
+			t.Fatalf("PR %s: status %q, page complete %v, want a complete answer: %.1500s", pr, str(rel, "status"), complete, raw)
 		}
-		withheld, _ := get(rel, "withheld", "edges_not_visible").(float64)
-		if edges != 0 || str(rel, "status") != "complete" || withheld != 0 {
-			t.Fatalf("PR %s: the defect changed (edges=%d of %d seeded, status=%q, withheld=%v)", pr, edges, seeded, str(rel, "status"), withheld)
+		if withheld, _ := get(rel, "withheld", "edges_not_visible").(float64); withheld != 0 {
+			t.Fatalf("PR %s: %v edges withheld from the organization credential: %.1500s", pr, withheld, raw)
+		}
+		got := map[string]string{}
+		for _, e := range list(rel, "edges") {
+			label := str(e, "from", "label")
+			if str(e, "from", "kind") != "work_item" {
+				label = str(e, "to", "label")
+			}
+			got[label] = str(e, "provenance", "link_tier")
+			if get(e, "provenance", "valid_to") == nil {
+				t.Fatalf("PR %s: the link to %q has no end although its issue ended: %.1500s", pr, label, raw)
+			}
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("PR %s: served links (issue: tier) %v, seeded %v: %.1500s", pr, got, want, raw)
 		}
 	}
 }
 
 // TestCeilingRaisedServesEveryMember runs in the second phase, against an acr-api restarted
 // with a higher answer item ceiling: the same question serves every seeded member and no cut
-// sentence, which shows the cut of the known-defect case above is that ceiling.
+// sentence, which shows the cut of the known-defect walk case is that ceiling.
 func TestCeilingRaisedServesEveryMember(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
 	one, _ := slugs(t)

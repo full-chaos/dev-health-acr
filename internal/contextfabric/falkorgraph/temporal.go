@@ -110,6 +110,26 @@ func (f temporalFilter) predicate(alias string) string {
 	)
 }
 
+// currentEdgePredicate is the current-axis rule of read_relationships, for
+// an edge alias and its two end-node aliases (no " AND " prefix). Nodes are
+// not filtered by their end: an ended subject (a completed issue, a merged
+// pull request) still exists. The edge is read when it has no end, ends
+// after the instant, or lasted at least until the earlier of its two end
+// nodes ended (r.valid_to >= min(non-null end-node valid_to) is the same as
+// r.valid_to >= one of them). Every start must be at or before the instant.
+// It is computed from the three windows only, never from a relation type.
+func (f temporalFilter) currentEdgePredicate(edge, from, to string) string {
+	started := func(alias string) string {
+		return fmt.Sprintf("(%[1]s.%[2]s IS NULL OR %[1]s.%[2]s <= $%[3]s)", alias, propValidFromNs, temporalParamEnd)
+	}
+	return fmt.Sprintf(
+		"%[1]s AND %[2]s AND %[3]s AND (%[4]s.%[5]s IS NULL OR %[4]s.%[5]s > $%[6]s"+
+			" OR (%[7]s.%[5]s IS NOT NULL AND %[4]s.%[5]s >= %[7]s.%[5]s)"+
+			" OR (%[8]s.%[5]s IS NOT NULL AND %[4]s.%[5]s >= %[8]s.%[5]s))",
+		started(edge), started(from), started(to), edge, propValidToNs, temporalParamStart, from, to,
+	)
+}
+
 // bind adds the predicate's parameters to a query's parameter map. It is a
 // no-op when inactive, so no unused parameter is ever sent. The map is
 // mutated and returned for call-site brevity.

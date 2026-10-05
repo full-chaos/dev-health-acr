@@ -69,6 +69,17 @@ type EdgePageQuery struct {
 	// read passes the reader's clock, so an ENDED edge (an ownership whose
 	// valid_to is in the past) is never read as current.
 	ValidAt time.Time
+	// Current selects the current-axis rule of read_relationships (no
+	// as_of). An end node is not filtered by its lifetime: a completed
+	// issue or a merged pull request is still a subject, and its state says
+	// it ended. An edge is read when it did not end before its end nodes
+	// did: no valid_to, a valid_to after ValidAt, or a valid_to at or after
+	// the earlier valid_to of its two end nodes. An edge that ended while
+	// both end nodes were still valid (an ownership or a membership that
+	// stopped) is not read. valid_from <= ValidAt still holds for the edge
+	// and both nodes. False keeps the strict window on the edge and both
+	// nodes.
+	Current bool
 }
 
 // EdgeEnd is one end node of a candidate edge, as stored.
