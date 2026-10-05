@@ -205,7 +205,7 @@ func TestDataCatalogSectionsAndStaticParts(t *testing.T) {
 	if all.Facts == nil || all.Facts.Served || all.Facts.Note != CatalogFactsNote || len(all.Facts.Kinds) != 0 {
 		t.Fatalf("facts %+v", all.Facts)
 	}
-	if len(all.Relationships.Types) != 12 {
+	if len(all.Relationships.Types) != 13 {
 		t.Fatalf("relationships %d", len(all.Relationships.Types))
 	}
 	seen := map[string]bool{}

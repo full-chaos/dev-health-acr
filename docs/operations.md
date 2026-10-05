@@ -590,6 +590,17 @@ owned" arm (`valid_from <= now`) now applies to the edge too: future-dated
 assertions are no longer projected as edges. Already-projected team nodes keep
 the old raw list, and old future-dated edges remain, until a full rebuild.
 
+**A rebuild is REQUIRED after deploying the issue <> pull request link edge**
+(`ClickHouseSourceVersion` v7 → v8). `queryIssuePullRequestLinks` projects the
+ops link table of record `work_graph_issue_pr` as `LINKS_PULL_REQUEST`
+(work item → pull request, carrying `link_provenance` and
+`link_provenance_rank`). The shared cursor has already passed those rows in
+every projected organization, so incremental catch-up never reads them. Every
+projected organization needs one `acr-projector rebuild --org <id>`; until it
+runs, `ErrProjectionSourceVersionChanged` refuses the incremental tick. The
+tree walk still reads `RELATES_TO`; it switches to the new edge in a later
+change.
+
 **Projection cursor space (CHAOS-7263).** The shared projection cursor
 (`devhealthsource`) is positioned on each row's INGEST time (the `last_synced`
 / `computed_at` stamp ops writes when it normalizes the row), not on the row's

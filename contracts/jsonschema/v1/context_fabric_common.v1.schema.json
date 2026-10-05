@@ -2656,7 +2656,8 @@
             "RELATES_TO",
             "DUPLICATES",
             "BELONGS_TO_PROJECT",
-            "OWNED_BY_TEAM"
+            "OWNED_BY_TEAM",
+            "LINKS_PULL_REQUEST"
           ]
         },
         "from": {
@@ -3931,7 +3932,8 @@
             "RELATES_TO",
             "DUPLICATES",
             "BELONGS_TO_PROJECT",
-            "OWNED_BY_TEAM"
+            "OWNED_BY_TEAM",
+            "LINKS_PULL_REQUEST"
           ]
         },
         "from": {

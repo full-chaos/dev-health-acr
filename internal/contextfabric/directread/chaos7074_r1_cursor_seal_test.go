@@ -170,15 +170,15 @@ func TestChaos7074_CursorKeyringMustBeUsable(t *testing.T) {
 	}
 }
 
-// r1 P3: the published schema bounds types (at most 12, unique).
+// r1 P3: the published schema bounds types (at most 13, unique).
 func TestChaos7074_R1_TypesBoundedAndUnique(t *testing.T) {
 	reader, _ := newRelReader(&fakeEdgeGraph{fakeGraph: graphOfOrgA()}, nil)
 	base := RelationshipsSubject{Kind: "repository", CanonicalID: repoA.CanonicalID}
-	thirteen := make([]string, 13)
-	for i := range thirteen {
-		thirteen[i] = "OWNED_BY_TEAM"
+	fourteen := make([]string, 14)
+	for i := range fourteen {
+		fourteen[i] = "OWNED_BY_TEAM"
 	}
-	for name, types := range map[string][]string{"13 values": thirteen, "a duplicate": {"BLOCKS", "PART_OF", "BLOCKS"}} {
+	for name, types := range map[string][]string{"14 values": fourteen, "a duplicate": {"BLOCKS", "PART_OF", "BLOCKS"}} {
 		_, err := reader.Read(relCtx("types-"+name), unrestricted, RelationshipsRequest{Subject: base, Types: types})
 		var requestError *RelationshipsRequestError
 		if !errors.As(err, &requestError) {

@@ -58,6 +58,9 @@ var entityTables = []entityTable{
 	{name: "operational_incidents", query: queryIncidents, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectIncident}},
 	{name: "work_item_dependencies", query: queryWorkItemDependencies},
 	{name: "work_items_hierarchy", query: queryWorkItemHierarchy},
+	// The Issue <> Pull request link of record. Relationship-only: it
+	// projects LINKS_PULL_REQUEST between nodes other producers write.
+	{name: "work_graph_issue_pr", query: queryIssuePullRequestLinks},
 	// devhealthschema:not-a-production-replica registry TAIL -- the same producer list continues here,
 	// past the reach of the marker on the declaration above. Still a
 	// table-to-query pairing that mirrors no column type, engine or sort key.

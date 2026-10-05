@@ -14,7 +14,7 @@ import (
 // read_relationships bounds, mirrored from the hosted contract (the hosted
 // route is authoritative and re-validates every request).
 const (
-	readRelationshipsMaxTypes       = 12
+	readRelationshipsMaxTypes       = 13
 	readRelationshipsMaxDepth       = 2
 	readRelationshipsMaxLimit       = 100
 	readRelationshipsMaxFieldLength = 256
@@ -24,7 +24,7 @@ const (
 var readRelationshipsTypes = []string{
 	"BELONGS_TO_PROJECT", "BELONGS_TO_PULL_REQUEST", "BELONGS_TO_REPOSITORY", "BLOCKS",
 	"CORRELATED_WITH_INCIDENT", "DOCUMENTED_BY", "DUPLICATES", "HAS_EPISODE",
-	"OWNED_BY_TEAM", "PART_OF", "RELATED_TO", "RELATES_TO",
+	"LINKS_PULL_REQUEST", "OWNED_BY_TEAM", "PART_OF", "RELATED_TO", "RELATES_TO",
 }
 
 type readRelationshipsSubjectInput struct {

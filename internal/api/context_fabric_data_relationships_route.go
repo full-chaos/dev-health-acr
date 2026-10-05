@@ -11,7 +11,7 @@ import (
 )
 
 // contextFabricDataRelationshipsMaxRequestBytes bounds the read_relationships
-// request body: a subject, at most 12 types and a cursor fit far below it.
+// request body: a subject, at most 13 types and a cursor fit far below it.
 const contextFabricDataRelationshipsMaxRequestBytes = 16 << 10
 
 // directRelationships returns the composed read_relationships reader, or nil

@@ -327,7 +327,7 @@ type CatalogCallerView struct {
 	GrantClass CallerClass `json:"grant_class"`
 }
 
-// catalogRelationshipEnds declares the end kinds of the 12 relationship
+// catalogRelationshipEnds declares the end kinds of the 13 relationship
 // types. Sources: devhealthsource/clickhouse.go:119-135 (BELONGS_TO_*,
 // CORRELATED_WITH_INCIDENT, PART_OF and the work_item_dependencies types),
 // devhealthsource/tables.go:841 (PART_OF), devhealthsource/
@@ -347,6 +347,7 @@ var catalogRelationshipEnds = map[contractsv1.ContextFabricRelationshipType]Cata
 	contractsv1.ContextFabricRelationshipDuplicates:             {SourceKinds: []string{"work_item"}, TargetKinds: []string{"work_item"}, Produced: true},
 	contractsv1.ContextFabricRelationshipBelongsToProject:       {SourceKinds: []string{"pull_request", "work_item"}, TargetKinds: []string{"project"}, Produced: true},
 	contractsv1.ContextFabricRelationshipOwnedByTeam:            {SourceKinds: []string{"project", "repository", "work_item"}, TargetKinds: []string{"team"}, Produced: true},
+	contractsv1.ContextFabricRelationshipLinksPullRequest:       {SourceKinds: []string{"work_item"}, TargetKinds: []string{"pull_request"}, Produced: true},
 }
 
 // catalogRelationshipOrder is the wire order of the relationship types.
@@ -363,6 +364,7 @@ var catalogRelationshipOrder = []contractsv1.ContextFabricRelationshipType{
 	contractsv1.ContextFabricRelationshipDuplicates,
 	contractsv1.ContextFabricRelationshipBelongsToProject,
 	contractsv1.ContextFabricRelationshipOwnedByTeam,
+	contractsv1.ContextFabricRelationshipLinksPullRequest,
 }
 
 // CatalogRelationshipNote is the fixed meaning line of the relationships

@@ -29,6 +29,7 @@ var ingestCursorColumns = map[string]struct{ expr, writer string }{
 	"git_pull_requests":                    {"p.last_synced", "providersync/github_prs_route.go:394 (unchanged)"},
 	"deployments":                          {"d.last_synced", "providersync/github_deployments_route.go:303"},
 	"operational_incidents":                {"i.last_synced", "providersync/pagerduty_incidents_route.go:1009, gitlab_incidents_route.go:402"},
+	"work_graph_issue_pr":                  {"l.last_synced", "ops workgraph.build job (the link table's write stamp; version_rank folds it, so a tier upgrade re-stamps the row) -- UNSURE: ops file:line not verified from this repo"},
 	"work_item_dependencies":               {"d.last_synced", "providersync/github_work_items_direct_effects_clickhouse.go:466 (unchanged)"},
 	"work_graph_deployment_incident_edges": {"e.computed_at", "migrations/clickhouse/037_ai_workgraph.sql:122 DEFAULT now64()"},
 	"git_pull_request_reviews":             {"r.last_synced", "providersync/github_pr_reviews.go:58"},

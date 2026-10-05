@@ -46,8 +46,8 @@ func TestChaos7074_R1_HTTPRefusesInvalidTypesArray(t *testing.T) {
 	h := newChaos7071Harness(t, 100)
 	token := h.issue(t, []string{auth.ScopeContextRead}, nil).Token
 	setChaos7074Reader(h, chaos7074RouteGraph())
-	thirteen := strings.TrimSuffix(strings.Repeat(`"OWNED_BY_TEAM",`, 13), ",")
-	for _, types := range []string{thirteen, `"BLOCKS","BLOCKS"`} {
+	fourteen := strings.TrimSuffix(strings.Repeat(`"OWNED_BY_TEAM",`, 14), ",")
+	for _, types := range []string{fourteen, `"BLOCKS","BLOCKS"`} {
 		body := `{"subject":{"kind":"repository","canonical_id":"repository:a"},"types":[` + types + `]}`
 		assertErrorResponse(t, h.postRelationships(token, body), http.StatusBadRequest, "invalid_request")
 	}

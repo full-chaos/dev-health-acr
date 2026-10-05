@@ -176,6 +176,7 @@ func TestContextFabricRelationshipTypeRejectsUnknownValueLoudly(t *testing.T) {
 		ContextFabricRelationshipBlocks, ContextFabricRelationshipPartOf,
 		ContextFabricRelationshipRelatesTo, ContextFabricRelationshipDuplicates,
 		ContextFabricRelationshipBelongsToProject, ContextFabricRelationshipOwnedByTeam,
+		ContextFabricRelationshipLinksPullRequest,
 	}
 	for _, member := range members {
 		projection.Type = member

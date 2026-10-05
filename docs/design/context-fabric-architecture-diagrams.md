@@ -431,6 +431,7 @@ flowchart TB
   ISSUE -.-x|"NOT ownership: OWNED_BY_TEAM<br/>work_item_team_attributions (attribution)"| TEAM
   PRN -.->|"BELONGS_TO_REPOSITORY"| REPO
   PRN ~~~ PR
+  ISSUE -.->|"LINKS_PULL_REQUEST<br/>link of record: work_graph_issue_pr<br/>tier on the edge: native 3 > explicit_text 2 > heuristic 1<br/>queryIssuePullRequestLinks<br/>projected; the walk does not read it yet"| PRN
 
   classDef tree fill:#14532d,stroke:#22c55e,color:#ffffff
   classDef leaf fill:#1e3a5f,stroke:#60a5fa,color:#ffffff
@@ -452,14 +453,31 @@ same rows; no edge is provider-specific. Producers are in
 - Crossed edges: exist in the graph but are never tree membership. An issue's
   own `repo_id` is not its link to a repository, and a work item's team
   attribution is not ownership.
+- `LINKS_PULL_REQUEST` (issue `work_item` -> `pull_request` node) is the link
+  of record from the ops table `work_graph_issue_pr`
+  (`devhealthsource/issue_pull_request_link.go`). It carries the link's
+  provenance tier as the edge properties `link_provenance` and
+  `link_provenance_rank`: `native` (3) > `explicit_text` (2) > `heuristic` (1).
+  The issue end is the issue's own `work_items` row (its own `repo_id`); the
+  table's `repo_id` is the pull request's repository. A row is projected only
+  when the work item resolves and is not a pull request (`pr` or
+  `merge_request`), the `pull_request` node exists and the tier is one of the
+  three; each skip is counted. It is projected but not yet read: the tree walk
+  (`falkorgraph/project_deployment_walk.go`) still reads `RELATES_TO` and
+  switches to this edge in a later change. `RELATES_TO` from
+  `work_item_dependencies` stays for issue-to-issue relations. One rebuild per
+  projected organization is needed to gain the edge (`ClickHouseSourceVersion`
+  v8).
 - The grey `pull_request` node is a second node for the same pull request,
   projected from `git_pull_requests` (reviews and CI hang off it). No edge
   joins it to the pull-request work item, so the tree does not pass through it.
 
 **The two rules.**
 
-1. A link is an actual linked row: a `work_item_dependencies` row whose two
-   ends are real work items. Never an issue-key prefix, never an `extkey:`
+1. A link is an actual linked row: today a `work_item_dependencies` row whose
+   two ends are real work items (what the walk reads), and, once projected, a
+   `work_graph_issue_pr` row (`LINKS_PULL_REQUEST`, the link of record the walk
+   will switch to). Never an issue-key prefix, never an `extkey:`
    stub, never an issue's own repository column.
 2. Team = ownership only (`team_repo_ownership`, `team_project_ownership`).
    Never person membership, never a computed attribution.

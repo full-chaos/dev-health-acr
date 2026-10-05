@@ -963,7 +963,8 @@ func validContextFabricRelationshipType(value ContextFabricRelationshipType) boo
 		ContextFabricRelationshipDocumentedBy, ContextFabricRelationshipHasEpisode,
 		ContextFabricRelationshipBlocks, ContextFabricRelationshipPartOf,
 		ContextFabricRelationshipRelatesTo, ContextFabricRelationshipDuplicates,
-		ContextFabricRelationshipBelongsToProject, ContextFabricRelationshipOwnedByTeam:
+		ContextFabricRelationshipBelongsToProject, ContextFabricRelationshipOwnedByTeam,
+		ContextFabricRelationshipLinksPullRequest:
 		return true
 	default:
 		return false

@@ -93,7 +93,7 @@ func TestDirectRelationshipsReadLineCertifiesAgainstItsSpecification(t *testing.
 		"edges_examined": 3, "edges_returned": 1, "edges_not_visible": 2,
 		"edges_withheld_reasons":    []any{"edge_attributes", "source_not_visible"},
 		"edges_withheld_attributes": 1, "edges_withheld_source": 1, "edges_withheld_target": 0,
-		"evidence_refs_withheld": 0, "end_nodes_gated": 3, "end_nodes_refused": 1,
+		"evidence_refs_withheld": 0, "end_nodes_gated": 3, "end_nodes_refused": 1, "link_tier_unserved": 0,
 		"cursor_out": "issued", "request_id": "req_0123456789abcdef0123456789abcdef",
 	}}); err != nil {
 		t.Fatalf("certify: %v\n%s", err, buffer.String())

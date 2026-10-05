@@ -324,6 +324,15 @@ const (
 	// RELATED_TO, RELATES_TO and DUPLICATES are all absent from it too).
 	ContextFabricRelationshipBelongsToProject ContextFabricRelationshipType = "BELONGS_TO_PROJECT"
 	ContextFabricRelationshipOwnedByTeam      ContextFabricRelationshipType = "OWNED_BY_TEAM"
+	// ContextFabricRelationshipLinksPullRequest: work_item -> pull_request,
+	// the Issue <> Pull request hop of the entity tree, projected from the
+	// ops link table of record work_graph_issue_pr. It carries the link's
+	// provenance tier (native, explicit_text or heuristic) and that tier's
+	// rank as edge properties. Additive v1 member, same precedent as the
+	// members above. RELATES_TO from work_item_dependencies stays as it is
+	// for issue-to-issue relations. Like the other structural members it is
+	// not a graphrank driver signal.
+	ContextFabricRelationshipLinksPullRequest ContextFabricRelationshipType = "LINKS_PULL_REQUEST"
 )
 
 type ContextFabricSourceState string
