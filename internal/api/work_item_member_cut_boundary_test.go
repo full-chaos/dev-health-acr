@@ -371,3 +371,22 @@ func TestTheListedSentenceIsStatedForWhatTheResponseLists(t *testing.T) {
 		}
 	})
 }
+
+func TestTheTierSentenceIsOnlyStatedForTheListTheEngineBuilt(t *testing.T) {
+	rig := newCutRig(t, cutWalk(t, 20, 0, func(i int) string {
+		if i < 10 {
+			return contextfabric.TreeLinkTierNative
+		}
+		return contextfabric.TreeLinkTierHeuristic
+	}))
+	fresh := rig.ask(t)
+	if f := readServedCohort(t, fresh); !f.tierSentence() {
+		t.Fatalf("fresh %+v, want the tier sentence for the engine's cut", f)
+	}
+	if same := rig.viewByID(t, fresh, 25); !same.tierSentence() {
+		t.Fatalf("a read again with the same list %+v lost the tier sentence", same)
+	}
+	if narrower := rig.viewByID(t, fresh, 3); narrower.tierSentence() || narrower.Listed != 3 {
+		t.Fatalf("a read again that cuts the list by id order %+v, want 3 listed and no tier sentence", narrower)
+	}
+}

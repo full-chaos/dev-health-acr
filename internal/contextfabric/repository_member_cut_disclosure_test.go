@@ -142,3 +142,23 @@ func TestARestrictedCallersCutNamesOnlyWhatTheCallerMayRead(t *testing.T) {
 		t.Fatalf("population = %d, want the 20 the caller may read", none.Cohort.Population)
 	}
 }
+
+func TestReuseRefusesAStoredTierSentenceThatTheCutNoLongerSupports(t *testing.T) {
+	census := &WorkItemTupleCensus{State: WorkItemMembershipCensusExact}
+	stored := func(limitations ...string) InvestigationResult {
+		return InvestigationResult{Limitations: limitations, SubjectResolution: SubjectResolution{Committed: []SubjectRef{repositoryWorkItemAnchor}}}
+	}
+	current := func(lowerTierCut bool) WorkItemMembershipResult {
+		return WorkItemMembershipResult{Census: WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, LowerTierCut: lowerTierCut}}
+	}
+	tier := contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation
+	if workItemReuseMembershipEqual(stored(tier), census, current(false)) {
+		t.Error("a stored tier sentence was reused after the cut stopped dropping a weaker tier")
+	}
+	if workItemReuseMembershipEqual(stored(), census, current(true)) {
+		t.Error("an answer with no tier sentence was reused after the cut began dropping a weaker tier")
+	}
+	if !workItemReuseMembershipEqual(stored(tier), census, current(true)) || !workItemReuseMembershipEqual(stored(), census, current(false)) {
+		t.Error("an answer whose tier sentence still holds was refused")
+	}
+}

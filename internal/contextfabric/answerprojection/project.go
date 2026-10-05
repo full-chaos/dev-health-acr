@@ -1277,6 +1277,12 @@ func restateWorkItemListed(result contractsv1.ContextFabricInvestigationResult, 
 	limitations := make([]string, 0, len(result.Limitations)+1)
 	placed := false
 	for _, limitation := range result.Limitations {
+		// The tier sentence says which members the engine's cut left out, in
+		// tier order. A response that cut the list again, by id order, no
+		// longer lists the engine's strongest members, so it does not say it.
+		if responseCut && limitation == contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation {
+			continue
+		}
 		if !contractsv1.IsContextFabricWorkItemListedLimitation(limitation) {
 			limitations = append(limitations, limitation)
 		} else if cutList && !placed {
