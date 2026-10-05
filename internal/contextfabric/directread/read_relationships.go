@@ -453,7 +453,7 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 
 	query := EdgePageQuery{
 		Origins: []contextfabric.SubjectRef{plan.root}, Types: plan.types, Direction: plan.direction,
-		After: after, Limit: plan.limit, ValidAt: validAt,
+		After: after, Limit: plan.limit, ValidAt: validAt, Current: plan.asOf == nil,
 	}
 	if hop == 2 {
 		frontier, truncatedBy, scanErr := r.frontier(ctx, principal, binding, plan, validAt, &record)
@@ -569,7 +569,7 @@ func (r *RelationshipsReader) frontier(ctx context.Context, principal storage.Pr
 	for {
 		page, err := r.graph.DirectEdgePage(ctx, principal, binding, EdgePageQuery{
 			Origins: []contextfabric.SubjectRef{plan.root}, Types: plan.types, Direction: plan.direction,
-			After: after, Limit: MaxEdgePageLimit, ValidAt: validAt,
+			After: after, Limit: MaxEdgePageLimit, ValidAt: validAt, Current: plan.asOf == nil,
 		})
 		if err != nil {
 			record.FailureClass = gatevocab.RelationshipsFailureGraph

@@ -23,9 +23,10 @@ var _ directread.EdgeGraph = (*Adapter)(nil)
 //     list, and the arms follow Direction (out: origin is the stored start;
 //     in: origin is the stored end; both: the UNION of the two, which removes
 //     an edge both arms reach);
-//   - the valid-time predicate is ALWAYS applied, at query.ValidAt, to the
-//     edge and to both end nodes: a current read passes "now", so an ended
-//     edge (valid_to in the past) is never read as current;
+//   - the valid-time predicate is ALWAYS applied at query.ValidAt. Strict
+//     (as_of, owned_by): the edge and both end nodes must be valid then.
+//     Current (read_relationships without as_of): see
+//     temporalFilter.currentEdgePredicate;
 //   - the keyset is relationship_id, strict ">", and the outer ORDER BY is
 //     the same key (the CALL{} wrapper is what makes FalkorDB honor an
 //     ORDER BY over a UNION; see edgesOfNode). relationship_id carries a
@@ -112,8 +113,12 @@ func directEdgePageCypher(orgID string, query directread.EdgePageQuery) (string,
 	params := temporal.bind(map[string]interface{}{"org": orgID, "origins": origins, "lim": int64(query.Limit + 1)})
 
 	var filters []string
-	filters = append(filters, strings.TrimPrefix(temporal.predicate("r"), " AND "),
-		strings.TrimPrefix(temporal.predicate("a"), " AND "), strings.TrimPrefix(temporal.predicate("b"), " AND "))
+	if query.Current {
+		filters = append(filters, temporal.currentEdgePredicate("r", "a", "b"))
+	} else {
+		filters = append(filters, strings.TrimPrefix(temporal.predicate("r"), " AND "),
+			strings.TrimPrefix(temporal.predicate("a"), " AND "), strings.TrimPrefix(temporal.predicate("b"), " AND "))
+	}
 	if len(query.Types) > 0 {
 		types := make([]interface{}, 0, len(query.Types))
 		for _, t := range query.Types {

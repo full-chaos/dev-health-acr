@@ -758,3 +758,28 @@ missing the poisoned page and everything after it, never holding a bad window.
 Once the batch validates, the ordinary walk resumes from that held checkpoint
 and projects the pages it could not before. A bump would discard correct
 already-projected pages to re-derive them identically.
+
+## 15. read_relationships on the current axis — an ended subject is still a subject
+
+The projector gives every subject its lifetime as its window (a work item ends at completion or
+close, a pull request at merge or close) and most edges the overlap of their two end windows
+(`devhealthsource/validity.go` `edgeValidity`). read_relationships read every page at "now" with
+the strict window on the edge AND on both end nodes, so a completed issue or a merged pull request
+lost every edge on the current axis, open-ended ones (`BELONGS_TO_PROJECT`, `OWNED_BY_TEAM`)
+included, while the engine walk (`edgesOfNode`, inactive filter on the current axis) kept them.
+
+Rule (read side only; `falkorgraph/temporal.go` `currentEdgePredicate`, selected by
+`directread.EdgePageQuery.Current`, set by read_relationships when no `as_of` is sent, at every hop):
+
+- an end node is not filtered by its end; a not-yet-started node still is (`valid_from <= now`);
+- an edge is read when `valid_to` is null, or after now, or at or after the earlier `valid_to` of
+  its two end nodes (it lasted until the first end node ended); `valid_from <= now` holds;
+- an edge that ended while both end nodes were still valid (a membership or an ownership that
+  stopped) is not read;
+- no relation type is named: the rule is computed from the three windows. Served edges carry their
+  stored `valid_from` / `valid_to` unchanged.
+
+Not changed: the `as_of` axis (strict window on the edge and both nodes), find_subjects `owned_by`
+(strict), the walks, and the projector. A deleted subject is a tombstone (DETACH DELETE), never a
+window, so this rule cannot serve one. Live test:
+`devhealthsource/relationships_current_axis_live_test.go`.

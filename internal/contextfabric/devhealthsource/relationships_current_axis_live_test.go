@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -58,10 +59,24 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		exec("project "+p[0], `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES (?, ?, 'linear', ?, ?, 1, 'started', '', ?, ?)`,
 			p[0], orgID, p[1], "project "+p[1], ago(60), ago(60))
 	}
+	// A retired project: inactive, so its window closes at its updated_at
+	// (25 days ago). Its ownership by team TOWN and one item's membership
+	// both end 20 days ago, after it retired.
+	retired := ago(25)
+	exec("retired project", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES (?, ?, 'linear', ?, ?, 0, 'completed', '', ?, ?)`,
+		"P-ret", orgID, "RET", "project RET", retired, retired)
+	exec("team", `INSERT INTO teams (id, name, description, updated_at, last_synced, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"TOWN", "team TOWN", "", ago(60), ago(60), orgID, "linear", "TOWN", []string{}, uint8(1))
+	exec("team repository ownership", `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		orgID, "github", "TOWN", repoSvc, "acme/svc", "exact", "native", uint8(1), uint16(1), int32(1), ago(60), nil, ago(60))
+	ownershipEnded := ago(20)
+	exec("team project ownership", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at, last_synced) VALUES (?, 'linear', ?, ?, ?, 'native', ?, ?, ?, ?)`,
+		orgID, "TOWN", "P-ret", "RET", ago(60), ownershipEnded, ownershipEnded, ownershipEnded)
 
 	const (
 		linDone, linWip, linOpen     = "linear:DONE-1", "linear:WIP-1", "linear:OPEN-1"
 		linMovedOpen, linMovedDone   = "linear:MOVE-1", "linear:MOVE-2"
+		linMovedRetired              = "linear:MOVE-3"
 		ghDone                       = "gh:acme/svc#1"
 		prMerged, prOpen, prOtherNum = 11, 12, 21
 	)
@@ -73,12 +88,13 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 	}
 	done := ago(8)
 	items := map[string]seededItem{
-		linDone:      {zeroRepo, ago(30), &done, "linear", "done"},
-		linWip:       {zeroRepo, ago(30), nil, "linear", "in progress"},
-		linOpen:      {zeroRepo, ago(30), nil, "linear", "todo"},
-		linMovedOpen: {zeroRepo, ago(40), nil, "linear", "in progress"},
-		linMovedDone: {zeroRepo, ago(40), &done, "linear", "done"},
-		ghDone:       {repoSvc, ago(30), &done, "github", "closed"},
+		linDone:         {zeroRepo, ago(30), &done, "linear", "done"},
+		linWip:          {zeroRepo, ago(30), nil, "linear", "in progress"},
+		linOpen:         {zeroRepo, ago(30), nil, "linear", "todo"},
+		linMovedOpen:    {zeroRepo, ago(40), nil, "linear", "in progress"},
+		linMovedDone:    {zeroRepo, ago(40), &done, "linear", "done"},
+		linMovedRetired: {zeroRepo, ago(40), nil, "linear", "in progress"},
+		ghDone:          {repoSvc, ago(30), &done, "github", "closed"},
 	}
 	for id, item := range items {
 		if item.completed == nil {
@@ -125,6 +141,8 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		transition(id, "", "", "P-old", "OLD", "evt-add-"+id, ago(39))
 		transition(id, "P-old", "OLD", "P-new", "NEW", "evt-move-"+id, ago(20))
 	}
+	transition(linMovedRetired, "", "", "P-ret", "RET", "evt-add-retired", ago(39))
+	transition(linMovedRetired, "P-ret", "RET", "P-new", "NEW", "evt-move-retired", ownershipEnded)
 
 	mainSource, err := devhealthsource.NewClickHouseProjectionSource(query)
 	if err != nil {
@@ -153,7 +171,8 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 	}
 	prID := func(repo string, number int) string { return fmt.Sprintf("pull_request:%s:%d", repo, number) }
 	idPRMerged, idPROpen, idPROther := prID(repoSvc, prMerged), prID(repoSvc, prOpen), prID(repoOther, prOtherNum)
-	idPOld, idPNew := projectID("P-old"), projectID("P-new")
+	idPOld, idPNew, idPRet := projectID("P-old"), projectID("P-new"), projectID("P-ret")
+	idTeam, idRepoSvc := contextfabric.TeamCanonicalID("TOWN"), "repository:"+repoSvc
 	edge := func(from, to string) string { return from + " -> " + to }
 	link := func(issue, pr string) string { return edge(workItemID(issue), pr) }
 	member := func(issue, project string) string { return edge(workItemID(issue), project) }
@@ -265,7 +284,7 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		r.Depth = 2
 		return r
 	}
-	const links, belongs = "LINKS_PULL_REQUEST", "BELONGS_TO_PROJECT"
+	const links, belongs, owned = "LINKS_PULL_REQUEST", "BELONGS_TO_PROJECT", "OWNED_BY_TEAM"
 	keys := func(a answer) []string {
 		out := make([]string, 0, len(a.edges))
 		for k := range a.edges {
@@ -348,6 +367,12 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 				t.Fatalf("the ended membership's project is named: %s", a.raw)
 			}
 		})
+		t.Run("ownership and membership that lasted until their project retired", func(t *testing.T) {
+			a := read(t, unrestricted, request("project", idPRet, "both", owned, belongs))
+			expect(t, a, "complete", 0, edge(idPRet, idTeam)+" "+owned, member(linMovedRetired, idPRet)+" "+belongs)
+			sameTime(t, "ownership valid_to", at(t, a, edge(idPRet, idTeam)+" "+owned).validTo, ownershipEnded)
+			sameTime(t, "membership valid_to", at(t, a, member(linMovedRetired, idPRet)+" "+belongs).validTo, ownershipEnded)
+		})
 		t.Run("depth two from the merged pull request", func(t *testing.T) {
 			a := read(t, unrestricted, depth2(request("pull_request", idPRMerged, "both", links, belongs)))
 			expect(t, a, "complete", 0,
@@ -398,6 +423,19 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 			if strings.Contains(a.raw, idPROther) {
 				t.Fatalf("served document names %s, which the caller may not see", idPROther)
 			}
+		})
+		t.Run("an ended ownership grants nothing", func(t *testing.T) {
+			// The team is the caller's through its current acme/svc
+			// ownership. The retired project's ownership edge ended: the
+			// gate's ownership reach reads only current ownership, so the
+			// project is not admitted, the edge is withheld and counted,
+			// and the project is never named.
+			a := read(t, svcOnly, request("team", idTeam, "in", owned))
+			expect(t, a, "complete", 1, edge(idRepoSvc, idTeam)+" "+owned)
+			if strings.Contains(a.raw, idPRet) {
+				t.Fatalf("served document names %s, which the caller may not see", idPRet)
+			}
+			expect(t, read(t, svcOnly, request("project", idPRet, "both")), string(directread.RelationshipsDenied), 0)
 		})
 		t.Run("pull request of an ungranted repository is refused", func(t *testing.T) {
 			a := read(t, svcOnly, request("pull_request", idPROther, "in", links))
