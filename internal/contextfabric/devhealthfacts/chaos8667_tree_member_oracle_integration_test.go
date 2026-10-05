@@ -235,11 +235,11 @@ func oracleFalkor(t *testing.T, ctx context.Context) *falkorgraph.Adapter {
 	return adapter
 }
 
-func oracleDrain(t *testing.T, ctx context.Context, source contextfabric.ProjectionSource, adapter *falkorgraph.Adapter) {
+func oracleDrain(t *testing.T, ctx context.Context, source contextfabric.ProjectionSource, sourceName string, adapter *falkorgraph.Adapter) {
 	t.Helper()
 	cursor := ""
 	for page := 0; page < 200; page++ {
-		batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: oracleOrg, Source: devhealthsource.SourceName, Cursor: cursor})
+		batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: oracleOrg, Source: sourceName, Cursor: cursor})
 		if err != nil {
 			t.Fatalf("projection page %d: %v", page, err)
 		}
@@ -403,7 +403,15 @@ func TestChaos8667RepositoryWorkItemMembersGraphAgreesWithLibraryRule(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	oracleDrain(t, ctx, source, adapter)
+	oracleDrain(t, ctx, source, devhealthsource.SourceName, adapter)
+	// Projects, team ownership and the issue -> project presence edges come
+	// from the teams/projects source; without it the project reach (E1) has
+	// nothing to read.
+	teams, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracleDrain(t, ctx, teams, devhealthsource.TeamsProjectsSourceName, adapter)
 
 	// The projection must have produced the edges: one LINKS_PULL_REQUEST
 	// edge per link row whose issue exists, is not pull-request typed and
@@ -432,6 +440,22 @@ func TestChaos8667RepositoryWorkItemMembersGraphAgreesWithLibraryRule(t *testing
 	}
 	if page.More || len(page.Edges) != wantEdges {
 		t.Fatalf("projection produced %d LINKS_PULL_REQUEST edges (more=%t), want %d: the graph is not the seed", len(page.Edges), page.More, wantEdges)
+	}
+
+	// The project reach (E1) reads each repository-less issue's presence edge.
+	// A projection that wrote none would make every E1 row fail for the
+	// harness's reason, not the rule's: fail here, loudly, instead.
+	for _, id := range []string{"linear:CHAOS-14", "linear:CHAOS-16"} {
+		presence, err := adapter.DirectEdgePage(ctx, probe, binding, directread.EdgePageQuery{
+			Origins: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectWorkItem, CanonicalID: oracleCanonical(t, itemRepo[id], id)}},
+			Types:   []string{"BELONGS_TO_PROJECT"}, Direction: directread.EdgeDirectionOut, Limit: 10, ValidAt: now.Add(time.Minute),
+		})
+		if err != nil {
+			t.Fatalf("presence edges of %s: %v", id, err)
+		}
+		if len(presence.Edges) == 0 {
+			t.Fatalf("projection wrote no BELONGS_TO_PROJECT edge for %s: the project reach has nothing to read", id)
+		}
 	}
 
 	canonicalToID := map[string]string{}
