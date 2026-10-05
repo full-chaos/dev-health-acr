@@ -1803,7 +1803,7 @@ func sanitizeWindowOutput(output interpretationOutput) (contextfabric.WindowClas
 
 // synthesizeValidateDraw runs one drawn synthesisOutput through the SAME
 // toDomain/strip/ValidateAgainst sequence every draw takes on the way to a
-// verdict -- factored out (CHAOS-6741) so a draft Genkit's local schema
+// verdict -- factored out so a draft Genkit's local schema
 // check refused, then recovered leniently, gets the identical scrutiny as
 // one Genkit accepted, rather than a second, drifting copy of the same
 // three calls.
@@ -1904,7 +1904,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// this call, from the closed eventspec vocabulary. It starts at
 		// "not_evaluated" and is only ever moved by a draw that validated.
 		zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawNotEvaluated
-		// schemaOnlyRejection (CHAOS-6741, mirroring CHAOS-6072's
+		// schemaOnlyRejection (mirroring the interpret side's
 		// schemaOnlyRejection on the interpret side): true for the final
 		// draw's own outcome ONLY when Genkit's local schema check refused
 		// it and no OTHER rule (toDomain, ValidateAgainst) also caught the
@@ -2055,12 +2055,12 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		err = nil
 		var localRejection *decodeSynthesisRejection
 		if errors.As(generationErr, &localRejection) {
-			// CHAOS-6741: Genkit's own local check refused this draw -- it is
+			// Genkit's own local check refused this draw -- it is
 			// an invalid draw like any this package's own validator refuses,
 			// so it takes the same toDomain/ValidateAgainst, redraw and
 			// rejection path below, instead of ending the call after one
 			// call with zero redraws (see decodeSynthesisRejection's doc
-			// comment, and the matching interpret-side fix, CHAOS-6072).
+			// comment, and the matching interpret-side fix).
 			output, generationErr = localRejection.output, nil
 			if localRejection.parsed {
 				draft, err = synthesizeValidateDraw(ctx, r, principal, output, input)
@@ -2273,11 +2273,11 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// classification -- see the matching comment in InterpretQuestion.
 		rejection := contextfabric.ClassifySynthesisRejection(draft, input, err)
 		if schemaOnlyRejection {
-			// CHAOS-6741: Genkit refused a draw this package's own rules
+			// Genkit refused a draw this package's own rules
 			// have no clause for (or that never decoded): typed as a
 			// rejection, never as a bound violation that was not the one
 			// Genkit actually caught. Mirrors InterpretQuestion's identical
-			// override (CHAOS-6072).
+			// override.
 			rejection = contextfabric.NewSynthesisRejection(contextfabric.RejectionReasonUnclassified, fmt.Errorf("%w: %w: %w", contextfabric.ErrSynthesisRejected, contextfabric.ErrModelOutput, err))
 		}
 		return contextfabric.SynthesisDraft{}, receipt, rejection

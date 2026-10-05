@@ -38,7 +38,7 @@ func invalidSynthesisDrawText(t *testing.T, kind invalidSynthesisDrawKind) strin
 	out := validSynthesisOutput()
 	// ClaimedFacts is nil-valued (never set) on the fixture, which marshals
 	// as JSON null (the schema requires an array) AND, unclaimed, makes
-	// every "valid" comparison draw a zero-claim answer that CHAOS-5655's
+	// every "valid" comparison draw a zero-claim answer that 's
 	// own redraw heuristic holds for one extra draw -- a second axis of
 	// redraw this test is not exercising. A single grounded claim avoids
 	// both.
@@ -84,7 +84,7 @@ func scriptedSynthesisGenkitRuntime(t *testing.T, script []string) (*Runtime, *c
 	ctx := context.Background()
 	g := genkit.Init(ctx)
 	var calls atomic.Int32
-	name := "test/chaos-6741-" + strings.ReplaceAll(t.Name(), "/", "-")
+	name := "test/synthesis-redraw-" + strings.ReplaceAll(t.Name(), "/", "-")
 	genkit.DefineModel(g, name, &ai.ModelOptions{
 		Label: "scripted",
 		Supports: &ai.ModelSupports{
@@ -114,12 +114,12 @@ func scriptedSynthesisGenkitRuntime(t *testing.T, script []string) (*Runtime, *c
 }
 
 // TestInvalidSynthesisDrawTakesOneRejectionPath is the synthesize-side twin
-// of TestInvalidInterpretDrawTakesOneRejectionPath (CHAOS-6072): a draw
+// of TestInvalidInterpretDrawTakesOneRejectionPath: a draw
 // Genkit's local schema check refuses, whatever its violation, must redraw
 // while draws remain and end as the typed synthesis rejection (never a bare
 // ErrModelOutput / upstream_invalid_output) at the ceiling -- RED on the
 // unfixed baseline (0 redraws, bare ErrModelOutput after one call), GREEN
-// with the CHAOS-6741 fix.
+// with the fix.
 func TestInvalidSynthesisDrawTakesOneRejectionPath(t *testing.T) {
 	kinds := []struct {
 		name string
@@ -142,7 +142,7 @@ func TestInvalidSynthesisDrawTakesOneRejectionPath(t *testing.T) {
 			// receipt.Attempts is the FINAL draw's own attempt count (one
 			// withRetry call, MaxAttempts=1 here) -- SynthesizeAnswer's draw
 			// loop does not accumulate attempts ACROSS draws, only usage
-			// (CHAOS-5655's existing design, unchanged by this fix). calls
+			//. calls
 			// and Usage.TotalTokens are what prove the redraw ran.
 			if receipt.Outcome != "success" || receipt.Attempts != 1 || receipt.Usage.TotalTokens != 28 {
 				t.Fatalf("receipt = %+v, want success (1 attempt on the final draw, usage summed over 2 draws)", receipt)
