@@ -348,25 +348,19 @@ func servedMetricsFact(rows []servedDayRow) contextfabric.CanonicalFact {
 	}
 }
 
-// wholeDaysInside lists, independently of the production arithmetic, the UTC
-// days a reported window covers whole.
-func wholeDaysInside(t *testing.T, answer servedAnswer) []string {
+// completedDays lists, independently of the production arithmetic, the n most
+// recent completed UTC days before the day the reported window ends in.
+func completedDays(t *testing.T, answer servedAnswer, n int) []string {
 	t.Helper()
-	startText, _ := answer.field(t, "structured", "effective_evidence_window", "start").(string)
 	endText, _ := answer.field(t, "structured", "effective_evidence_window", "end").(string)
-	start, err := time.Parse(time.RFC3339Nano, startText)
-	if err != nil {
-		t.Fatalf("answer reports no window start: %q", startText)
-	}
 	end, err := time.Parse(time.RFC3339Nano, endText)
 	if err != nil {
 		t.Fatalf("answer reports no window end: %q", endText)
 	}
+	today := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, time.UTC)
 	var days []string
-	for day := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC); !day.Add(24 * time.Hour).After(end); day = day.Add(24 * time.Hour) {
-		if !day.Before(start) {
-			days = append(days, day.Format("2006-01-02"))
-		}
+	for i := n; i >= 1; i-- {
+		days = append(days, today.AddDate(0, 0, -i).Format("2006-01-02"))
 	}
 	return days
 }
@@ -394,10 +388,7 @@ func assertServed(t *testing.T, answer servedAnswer, want ...string) {
 
 func TestAClientReadsTheThirtyDayTotalOfOneRepositoryInTheMCPAnswer(t *testing.T) {
 	probe := newServedSentencesRig(t, repositoryCommitsScenario()).ask(t, "how many commits did repository named one have in the last 30 days", contractsv1.ContextFabricRelativeWindowTrailing30D)
-	period := wholeDaysInside(t, probe)
-	if len(period) != 29 {
-		t.Fatalf("the reported window holds %d whole days, want 29 for a 30 day window ending mid-day: %s", len(period), probe.structured)
-	}
+	period := completedDays(t, probe, 30)
 	var rows []servedDayRow
 	var want int64
 	for i, day := range period {
@@ -405,11 +396,16 @@ func TestAClientReadsTheThirtyDayTotalOfOneRepositoryInTheMCPAnswer(t *testing.T
 		rows = append(rows, row)
 		want += row.commits
 	}
+	if len(period) != 30 {
+		t.Fatalf("the last 30 days lists %d days", len(period))
+	}
+	// A row for today's partial day exists and is not in the total.
+	rows = append(rows, servedDayRow{day: "2026-10-04", commits: 1000, merged: 1})
 	rig := newServedSentencesRig(t, repositoryCommitsScenario(servedMetricsFact(rows)))
 	answer := rig.ask(t, "how many commits did repository named one have in the last 30 days", contractsv1.ContextFabricRelativeWindowTrailing30D)
 	assertServed(t, answer,
 		fmt.Sprintf("Total of commits count over the period: %d, summed from %d of %d days", want, len(period), len(period)),
-		fmt.Sprintf("The period is the %d whole days from %s to %s", len(period), period[0], period[len(period)-1]),
+		fmt.Sprintf("The period is the %d most recent completed UTC days, %s to %s; today's partial day is not in the total.", len(period), period[0], period[len(period)-1]),
 	)
 	if strings.Contains(answer.servedText(t), "Partial total") {
 		t.Errorf("a full period is stated as partial: %q", answer.servedText(t))
@@ -418,7 +414,7 @@ func TestAClientReadsTheThirtyDayTotalOfOneRepositoryInTheMCPAnswer(t *testing.T
 
 func TestAClientReadsAPartialTotalWithTheNamedMissingDays(t *testing.T) {
 	probe := newServedSentencesRig(t, repositoryCommitsScenario()).ask(t, "how many commits did repository named one have in the last 30 days", contractsv1.ContextFabricRelativeWindowTrailing30D)
-	period := wholeDaysInside(t, probe)
+	period := completedDays(t, probe, 30)
 	missing := map[int]bool{4: true, 11: true}
 	var rows []servedDayRow
 	var want int64
@@ -442,7 +438,7 @@ func TestAClientReadsWhyANinetyDayPeriodHasNoTotal(t *testing.T) {
 	scenario := repositoryCommitsScenario()
 	scenario.window = contractsv1.ContextFabricRelativeWindowTrailing90D
 	probe := newServedSentencesRig(t, scenario).ask(t, "how many commits did repository named one have in the last 90 days", contractsv1.ContextFabricRelativeWindowTrailing90D)
-	period := wholeDaysInside(t, probe)
+	period := completedDays(t, probe, 90)
 	var rows []servedDayRow
 	for _, day := range period {
 		rows = append(rows, servedDayRow{day: day, commits: 2, merged: 1})
@@ -458,7 +454,7 @@ func TestAClientReadsWhyANinetyDayPeriodHasNoTotal(t *testing.T) {
 func TestAClientReadsNoTotalSentenceForANonAdditiveSeries(t *testing.T) {
 	probe := newServedSentencesRig(t, repositoryCommitsScenario()).ask(t, "how many commits did repository named one have in the last 30 days", contractsv1.ContextFabricRelativeWindowTrailing30D)
 	var rows []contextfabric.FactValueRow
-	for _, day := range wholeDaysInside(t, probe) {
+	for _, day := range completedDays(t, probe, 30) {
 		rows = append(rows, contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{"day": contextfabric.StringFactValue(day), "compounding_risk": contextfabric.NumberFactValue(0.4)}})
 	}
 	health := contextfabric.CanonicalFact{
@@ -490,7 +486,7 @@ func TestAClientReadsTheCountSentenceOfAMemberSet(t *testing.T) {
 
 func TestAClientStillReadsTheTotalWhenTheAnswerModelFails(t *testing.T) {
 	probe := newServedSentencesRig(t, repositoryCommitsScenario()).ask(t, "how many commits did repository named one have in the last 30 days", contractsv1.ContextFabricRelativeWindowTrailing30D)
-	period := wholeDaysInside(t, probe)
+	period := completedDays(t, probe, 30)
 	var rows []servedDayRow
 	var want int64
 	for i, day := range period {
@@ -511,7 +507,7 @@ func TestAClientStillReadsTheTotalWhenTheAnswerModelFails(t *testing.T) {
 // markdown as well as the structured result.
 func TestAClientReadsTheTotalInTheStoredResultAndItsMarkdown(t *testing.T) {
 	probe := newServedSentencesRig(t, repositoryCommitsScenario()).ask(t, "how many commits did repository named one have in the last 30 days", contractsv1.ContextFabricRelativeWindowTrailing30D)
-	period := wholeDaysInside(t, probe)
+	period := completedDays(t, probe, 30)
 	var rows []servedDayRow
 	var want int64
 	for i, day := range period {

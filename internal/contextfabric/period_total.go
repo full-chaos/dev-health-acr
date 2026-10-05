@@ -71,22 +71,29 @@ const PeriodTotalAbsenceTooLong = "period_longer_than_row_cap"
 
 const dayLayout = "2006-01-02"
 
-// PeriodDays returns the whole UTC days inside an effective window, ascending,
-// or false when the window does not bound a period holding a whole day.
+// PeriodDays returns the UTC days a period total is summed over, ascending, or
+// false when the window does not bound a period holding a whole day. It is the
+// ONE place the rule lives.
 //
-// A day belongs to the period only when the window covers all of it: the first
-// day is the first midnight at or after the window start, and the last day is
-// the one that ends at or before the window end. "The last 30 days" ending
-// mid-day therefore spans 29 whole days, because the day it starts in and the
-// day it ends in are each covered in part. A daily row is the sum of its whole
-// day, so a partial day's row would put activity from outside the window into
-// the total, and the day count, the sum and the reported window would disagree.
+// A trailing window ("the last N days", a relative id) is the N most recent
+// COMPLETED UTC days: it ends at today 00:00 UTC, and today's partial day is
+// not counted because its row is not final. A client that asks for the last 30
+// days gets 30 days, whatever the hour it asks.
+//
+// Any other window (dates the caller stated) is every whole UTC day inside the
+// stated bounds: a bound that cuts a day excludes that day.
+//
+// The reported effective window stays what the window contract says; the scope
+// sentence names the days this rule chose so the two are not read as one.
 func PeriodDays(window *contractsv1.ContextFabricEffectiveEvidenceWindow) ([]string, bool) {
 	if window == nil || window.Start == nil || window.End == nil {
 		return nil, false
 	}
 	first := ceilToDay(*window.Start)
 	stop := truncateToDay(*window.End)
+	if duration, trailing := relativeWindowDurations[window.RelativeID]; trailing {
+		first = stop.Add(-duration)
+	}
 	if !first.Before(stop) {
 		return nil, false
 	}
@@ -101,12 +108,19 @@ func PeriodDays(window *contractsv1.ContextFabricEffectiveEvidenceWindow) ([]str
 }
 
 // PeriodScopeSentence says which days a period total rests on, so a total over
-// "the last 30 days" that spans fewer calendar days is not read as a shortfall.
-func PeriodScopeSentence(period []string) string {
+// "the last 30 days" is read against its named range and not against the
+// reported window.
+func PeriodScopeSentence(window *contractsv1.ContextFabricEffectiveEvidenceWindow, period []string) string {
 	if len(period) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("The period is the %d whole days from %s to %s inside the answer window; a partial day at either end of the window is not counted.",
+	if window != nil {
+		if _, trailing := relativeWindowDurations[window.RelativeID]; trailing {
+			return fmt.Sprintf("The period is the %d most recent completed UTC days, %s to %s; today's partial day is not in the total.",
+				len(period), period[0], period[len(period)-1])
+		}
+	}
+	return fmt.Sprintf("The period is the %d whole UTC days from %s to %s inside the stated range; a day the range cuts is not counted.",
 		len(period), period[0], period[len(period)-1])
 }
 
@@ -339,7 +353,7 @@ func (e *Engine) singleSubjectPeriodSentences(params synthesisAssemblyParams) []
 	if len(sentences) == 0 {
 		return nil
 	}
-	return append([]string{PeriodScopeSentence(period)}, sentences...)
+	return append([]string{PeriodScopeSentence(params.EffectiveWindow, period)}, sentences...)
 }
 
 // unreadDailySeriesAbsences names a daily series whose read completed for the

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -85,25 +86,29 @@ func metricsFactFor(subject SubjectRef, rows []dayRow) CanonicalFact {
 }
 
 // expectedDays is the period the engine resolved, listed independently of the
-// production day arithmetic: the UTC days the window covers whole.
-func expectedDays(start, end time.Time) []string {
+// production day arithmetic: the n most recent completed UTC days before end's
+// own day.
+func expectedDays(end time.Time, n int) []string {
+	today := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, time.UTC)
 	var days []string
-	for day := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC); !day.Add(24 * time.Hour).After(end); day = day.Add(24 * time.Hour) {
-		if day.Before(start) {
-			continue
-		}
-		days = append(days, day.Format("2006-01-02"))
+	for i := n; i >= 1; i-- {
+		days = append(days, today.AddDate(0, 0, -i).Format("2006-01-02"))
 	}
 	return days
 }
 
 func runPeriodCell(t *testing.T, kind SubjectKind, reader periodFactReader, subject SubjectRef) InvestigationResult {
 	t.Helper()
+	return runPeriodCellAt(t, kind, reader, subject, periodTotalNow)
+}
+
+func runPeriodCellAt(t *testing.T, kind SubjectKind, reader periodFactReader, subject SubjectRef, now time.Time) InvestigationResult {
+	t.Helper()
 	cell := scopeCell{
 		frame: countingFrame(kind), family: QuestionFamilyScopedCohortStatus,
 		resolution: SubjectResolution{Committed: []SubjectRef{subject}, Candidates: []SubjectCandidate{namedMatch(subject)}},
 		cohort:     kindCohort(kind, 5), status: InvestigationComplete,
-		facts: reader, now: periodTotalNow,
+		facts: reader, now: now,
 	}
 	engine := newScopeEngine(t, cell, &recordingTelemetry{})
 	request := validInvestigationRequestWithConfirmedWindow()
@@ -120,10 +125,48 @@ func runPeriodCell(t *testing.T, kind SubjectKind, reader periodFactReader, subj
 func periodOf(t *testing.T, result InvestigationResult) []string {
 	t.Helper()
 	window := result.EffectiveEvidenceWindow
-	if window == nil || window.Start == nil || window.End == nil {
-		t.Fatalf("result carries no bounded window: %+v", window)
+	if window == nil || window.End == nil || window.RelativeID != RelativeWindowTrailing30D {
+		t.Fatalf("result carries no trailing 30 day window: %+v", window)
 	}
-	return expectedDays(window.Start.UTC(), window.End.UTC())
+	return expectedDays(window.End.UTC(), 30)
+}
+
+// "The last 30 days" is 30 completed UTC days whatever the hour it is asked,
+// and the sentence names the same 30 dates.
+func TestTheLastThirtyDaysIsThirtyCompletedDaysAtAnyHour(t *testing.T) {
+	t.Parallel()
+	subject := singleSubjectOf(SubjectRepository)
+	for _, now := range []time.Time{
+		time.Date(2026, 10, 4, 0, 0, 1, 0, time.UTC),
+		time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 4, 23, 59, 59, 0, time.UTC),
+	} {
+		now := now
+		t.Run(now.Format("15:04:05"), func(t *testing.T) {
+			t.Parallel()
+			period := expectedDays(now, 30)
+			if len(period) != 30 || period[0] != "2026-09-04" || period[29] != "2026-10-03" {
+				t.Fatalf("independent period = %v", period)
+			}
+			var rows []dayRow
+			var want int64
+			for i, day := range period {
+				rows = append(rows, dayRow{day: day, commits: int64(2 + i%4), merged: 1})
+				want += int64(2 + i%4)
+			}
+			// A row for today's partial day exists and must not be counted.
+			rows = append(rows, dayRow{day: "2026-10-04", commits: 1000, merged: 1})
+			result := runPeriodCellAt(t, SubjectRepository, periodFactReader{capabilities: periodCapabilities(), facts: []CanonicalFact{metricsFactFor(subject, rows)}}, subject, now)
+			for _, sentence := range []string{
+				fmt.Sprintf("Total of commits count over the period: %d, summed from 30 of 30 days", want),
+				"The period is the 30 most recent completed UTC days, 2026-09-04 to 2026-10-03; today's partial day is not in the total.",
+			} {
+				if !strings.Contains(result.DeterministicAnswer, sentence) {
+					t.Errorf("answer %q lacks %q", result.DeterministicAnswer, sentence)
+				}
+			}
+		})
+	}
 }
 
 func TestASingleSubjectCountIsAnsweredWithThePeriodTotalOfItsDailyRows(t *testing.T) {
@@ -383,5 +426,31 @@ func TestASingleSubjectPeriodAboveTheRowCapNamesWhyNoTotalIsStated(t *testing.T)
 	}
 	if strings.Contains(result.DeterministicAnswer, "otal of commits") {
 		t.Errorf("a total is stated over a period the read cannot cover: %q", result.DeterministicAnswer)
+	}
+}
+
+// Dates the caller stated: every whole UTC day inside the bounds; a bound that
+// cuts a day excludes that day.
+func TestAStatedRangeIsTheWholeUTCDaysInsideIt(t *testing.T) {
+	t.Parallel()
+	at := func(day, hour int) *time.Time {
+		v := time.Date(2026, 9, day, hour, 0, 0, 0, time.UTC)
+		return &v
+	}
+	for _, tc := range []struct {
+		name       string
+		start, end *time.Time
+		want       []string
+	}{
+		{"aligned bounds", at(1, 0), at(4, 0), []string{"2026-09-01", "2026-09-02", "2026-09-03"}},
+		{"start cuts a day", at(1, 6), at(4, 0), []string{"2026-09-02", "2026-09-03"}},
+		{"end cuts a day", at(1, 0), at(4, 6), []string{"2026-09-01", "2026-09-02", "2026-09-03"}},
+		{"both cut", at(1, 6), at(4, 6), []string{"2026-09-02", "2026-09-03"}},
+		{"inside one day", at(1, 6), at(1, 18), nil},
+	} {
+		got, ok := PeriodDays(&contractsv1.ContextFabricEffectiveEvidenceWindow{Start: tc.start, End: tc.end, Provenance: contractsv1.ContextFabricWindowQuestionStated})
+		if ok != (tc.want != nil) || strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s: days %v ok=%v, want %v", tc.name, got, ok, tc.want)
+		}
 	}
 }

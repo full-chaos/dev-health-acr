@@ -376,8 +376,9 @@ import (
 // refused as a work-item population. A candidate saved before v68 for such a
 // question holds that refusal and must not be reused.
 //
-// v68 -> v69: a period total spans the whole UTC days inside the evidence
-// window (the last 30 days ending mid-day is 29 days, not 31), and the
+// v68 -> v69: a period total spans the N most recent completed UTC days for a
+// trailing window (the last 30 days is 30 days ending at today 00:00 UTC, not
+// 31 with partial edge days) and the whole days inside stated dates, and the
 // answer's server-composed text, with the count sentence and the period
 // total, is served on the answer. A candidate saved before v69 holds a total
 // summed over partial edge days and must not be reused.
