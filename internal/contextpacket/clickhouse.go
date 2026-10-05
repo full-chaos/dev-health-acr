@@ -220,7 +220,11 @@ func (s *ClickHouseEvidenceStore) ContextForTask(ctx context.Context, p storage.
 		repositoryWide, _ := evidence[index].Metadata["scope_breadth"].(string)
 		handle, encodeErr := s.codec.Encode(p.OrgID, scope.RepoID, evidence[index].SourceVersion, evidence[index].EvidenceRefID, repositoryWide == "repository-wide")
 		if encodeErr != nil {
-			return storage.EvidenceBundle{}, fmt.Errorf("encode evidence handle: %w", encodeErr)
+			// Organization and repository were proven above, so the failure is
+			// this row's own: it leaves with no locator and the assembler
+			// quarantines it like any other row without one.
+			evidence[index].EvidenceRefID = ""
+			continue
 		}
 		evidence[index].EvidenceRefID = handle
 	}
