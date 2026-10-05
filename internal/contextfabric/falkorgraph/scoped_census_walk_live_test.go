@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
@@ -23,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
@@ -555,6 +557,55 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 			if strings.Join(got, ",") != strings.Join(want, ",") {
 				t.Errorf("%s: deployments %v, want %v", c.name, got, want)
 			}
+		}
+	})
+
+	// The result-by-id read (api/context_fabric_result_routes.go): the
+	// store's row, then the stored-result gate on the caller's CURRENT grants,
+	// then its serving error. A result whose committed subject is a work item
+	// the scoped census admitted through its link is read back by its
+	// computing caller and by narrower callers. A denied read is the same
+	// classification as an unknown id.
+	t.Run("by id: a link-admitted work item is read back under the reader's current grants", func(t *testing.T) {
+		member := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: s.workItem(t, "linear:CHAOS-10"), Label: "CHAOS-10"}
+		stored := func(computedBy storage.Principal) contextfabric.StoredInvestigationResult {
+			return contextfabric.StoredInvestigationResult{
+				Result: contextfabric.InvestigationResult{
+					ResultID:          "result_scoped_census_by_id",
+					SubjectResolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{member}},
+				},
+				GrantDigest: contextfabric.StoredResultGrantDigest(computedBy),
+			}
+		}
+		gate := contextfabric.NewStoredResultGate(adapter)
+		restricted := func(grants ...string) storage.Principal {
+			return storage.Principal{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: grants}
+		}
+		for _, c := range []struct {
+			name       string
+			computedBy storage.Principal
+			readBy     storage.Principal
+			wantServed bool
+		}{
+			{"(a) the org-wide caller that computed it", org, org, true},
+			{"(a) a restricted caller that computed it: the gate tests the work item's own node, which has no repository", restricted("acme/svc", "acme/other"), restricted("acme/svc", "acme/other"), false},
+			{"(b) a narrower grant than the computing caller's", org, restricted("acme/svc"), false},
+			{"(c) a grant that no longer covers the linked pull request's repository", restricted("acme/svc", "acme/other"), restricted("acme/other"), false},
+		} {
+			decision := gate.Authorize(ctx, c.readBy, stored(c.computedBy), contextfabric.StoredResultSurfaceResultByID)
+			err := decision.ServingError()
+			if c.wantServed {
+				if err != nil {
+					t.Errorf("%s: %v (decision %s %s), want the stored result served as stored", c.name, err, decision.Decision, decision.Reason)
+				}
+				continue
+			}
+			if !errors.Is(err, contextfabric.ErrInvestigationResultNotFound) || err != contextfabric.ErrInvestigationResultNotFound {
+				t.Errorf("%s: %v (decision %s %s), want exactly the not-found an unknown id gets", c.name, err, decision.Decision, decision.Reason)
+			}
+		}
+		if _, err := memoryinvestigation.NewStore().Get(ctx, org, "result_never_saved"); !errors.Is(err, contextfabric.ErrInvestigationResultNotFound) {
+			t.Fatalf("unknown id: %v, want the not-found classification", err)
 		}
 	})
 }

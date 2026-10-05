@@ -219,3 +219,33 @@ func TestAReuseRecheckDoesNotCarryALinkAdmission(t *testing.T) {
 		}
 	}
 }
+
+// TestALinkWalkThatOutlastsTheRoundBudgetIsNoCensus: a link walk still
+// running when the evidence round's deadline passes is a census error, never
+// a smaller count: nothing is committed and the round says the census is
+// incomplete.
+func TestALinkWalkThatOutlastsTheRoundBudgetIsNoCensus(t *testing.T) {
+	t.Parallel()
+	walkOutlastsTheBudget := func(deps *ResolveDeps) {
+		deps.LinkScopedWorkItems = func(ctx context.Context, _ contextfabric.RequestedScope) (map[string]string, bool, error) {
+			if _, ok := ctx.Deadline(); !ok {
+				return nil, false, errors.New("the link walk ran without the round's deadline")
+			}
+			<-ctx.Done()
+			return map[string]string{linkScopeItem(0): "native"}, true, ctx.Err()
+		}
+	}
+	start := time.Now()
+	resolution, rounds, _ := resolveLinkScoped(t, storage.Principal{OrgID: "org_1"}, walkOutlastsTheBudget)
+	if elapsed := time.Since(start); elapsed > evidenceRoundDeadline+2*time.Second {
+		t.Fatalf("resolution took %s, want the round cut at its %s budget", elapsed, evidenceRoundDeadline)
+	}
+	for _, s := range resolution.Committed {
+		if s.Kind == contextfabric.SubjectWorkItem {
+			t.Fatalf("committed %s from a walk cut by the budget", s.CanonicalID)
+		}
+	}
+	if len(rounds) != 1 || rounds[0].ShadowOutcome != string(ShadowWouldClarify) || rounds[0].ShadowReason != string(ReasonCensusError) {
+		t.Fatalf("evidence_round = %#v, want one would_clarify census_error", rounds)
+	}
+}
