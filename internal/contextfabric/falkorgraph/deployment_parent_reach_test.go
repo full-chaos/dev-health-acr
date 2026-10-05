@@ -283,7 +283,7 @@ func seededProjectLinks(byKey map[string]seededNode, edges []seededEdge, cypher 
 		}
 		n, isNear := near[nearEnd[1]]
 		far, ok := byKey[farEnd[0]+"|"+farEnd[1]]
-		if isNear && nearEnd[0] == midKind && ok && farEnd[0] == endKind && typed("b", endTypes, far) && seededLinkGrantsAdmit(cypher, params, n, far) {
+		if isNear && nearEnd[0] == midKind && ok && farEnd[0] == endKind && typed("b", endTypes, far) && seededLinkGrantsAdmit(cypher, params, n, far, e.tier) {
 			links = append(links, link{n, far, fmt.Sprintf("rel_%03d", i), e.tier})
 		}
 	}
@@ -438,17 +438,23 @@ func grantsAdmitEntryBy(raw, norm, owners []interface{}, entry string, useNorm, 
 // seededLinkGrantsAdmit applies the restricted link read's grant clause to one
 // link when the read carries one, to each end by its kind: the pull request's
 // repositories meet the grants; the issue's do, or the issue has no
-// repository and the read's clause for that end keeps it (any tier).
-func seededLinkGrantsAdmit(cypher string, params map[string]interface{}, near, far seededNode) bool {
+// repository and the link's tier grants authority.
+func seededLinkGrantsAdmit(cypher string, params map[string]interface{}, near, far seededNode, tier string) bool {
 	if _, restricted := params["grantRaw"]; !restricted {
 		return true
 	}
 	raw, _ := params["grantRaw"].([]interface{})
 	norm, _ := params["grantNorm"].([]interface{})
 	owners, _ := params["grantOwners"].([]interface{})
+	authority := map[string]bool{}
+	if list, ok := params["authorityTiers"].([]interface{}); ok {
+		for _, v := range list {
+			authority[v.(string)] = true
+		}
+	}
 	useNorm := strings.Contains(cypher, "toLower(trim(s)) IN $grantNorm")
 	useOwners := strings.Contains(cypher, "toLower(trim(s)) STARTS WITH o")
-	admits := func(variable string, n seededNode) bool {
+	admits := func(n seededNode) bool {
 		for _, r := range n.repos {
 			if grantsAdmitEntryBy(raw, norm, owners, r, useNorm, useOwners) {
 				return true
@@ -456,12 +462,12 @@ func seededLinkGrantsAdmit(cypher string, params map[string]interface{}, near, f
 		}
 		if n.kind == "work_item" {
 			for _, r := range n.repos {
-				if r == noRepositoryScope && strings.Contains(cypher, "$noRepository IN "+variable+".") {
+				if r == noRepositoryScope && (authority[tier] || !strings.Contains(cypher, "rl."+propPropertyPrefix+linkTierProperty+" IN $authorityTiers")) {
 					return true
 				}
 			}
 		}
 		return false
 	}
-	return admits("m", near) && admits("b", far)
+	return admits(near) && admits(far)
 }
