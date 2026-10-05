@@ -2203,6 +2203,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// Admission reads the carrier and decides nothing about the frame; the
 	// composition that does stays below, after the verdict, where it was.
 	// The fresh line above still reports what the interpreter proposed.
+	// The binder committed a bare calendar phrase's window before the
+	// interpreter ran; the interpretation may only withdraw it (an as-of
+	// reading, a series or comparison frame), never redefine it. A series
+	// reads the calendar period on the range axis next, so that is the axis
+	// the withdrawal line reports as executed.
+	if withdrawn, reason, ok := withdrawCalendarCommit(windowCanon, interpretation, familyOutcome.Frame); ok {
+		windowCanon = withdrawn
+		if e.telemetry != nil {
+			executed := interpretedTimeBound.Bound.Axis
+			if reason == StatedWindowAxisWithdrawnPeriodShape && periodShapeOf(familyOutcome.Frame) == periodShapeSeries {
+				executed = TemporalRange
+			}
+			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, StatedWindowOriginQuestionPhrase, interpretedTimeBound.Bound.Axis, executed, reason)
+		}
+	}
 	var periodClamp ReadTimeClamp
 	windowCommitted := windowCanon.Effective != nil
 	if continuation.Observed {
@@ -2252,7 +2267,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		if axisOutcome == ContinuationAxisOverriddenByReceipt {
 			if statedOrigin == StatedWindowOriginQuestionPhrase {
-				windowCanon.StatedRangeConflict = detectStatedRangeConflict(windowCanon.BinderProposal, interpretation.TimeContext, e.now())
+				if windowCanon.CalendarCommitted {
+					windowCanon.StatedRangeConflict = detectRangeConflictAgainst(windowCanon.CalendarStart, windowCanon.CalendarEnd, interpretation.TimeContext)
+				} else {
+					windowCanon.StatedRangeConflict = detectStatedRangeConflict(windowCanon.BinderProposal, interpretation.TimeContext, e.now())
+				}
 			}
 			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 		}
