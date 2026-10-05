@@ -408,7 +408,13 @@ import (
 // leaves the label for a clarification, since a same-label subject the caller
 // can read may be missing from the pool. A candidate saved before v73 may hold
 // a commit that rule would refuse and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v73"
+//
+// v73 -> v74: read_relationships on the current axis no longer drops the edges
+// of an ended subject (a completed issue, a merged pull request); an edge that
+// lasted until its first end node ended is served with its stored window. A
+// candidate saved before v74 holds an edge set without those edges and must
+// not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v74"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

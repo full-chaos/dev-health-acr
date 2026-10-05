@@ -350,13 +350,16 @@ func planRelationships(request RelationshipsRequest) (relationshipsPlan, error) 
 	}
 	// The request digest binds a cursor to this walk. The limit is left out
 	// on purpose: a client may change the page size between pages, and the
-	// keyset position stays valid.
+	// keyset position stays valid. The tag names the edge rule: v2 is the
+	// current-axis rule that keeps the edges of ended subjects, so a cursor
+	// issued under the strict rule cannot continue (it would skip edges that
+	// sort before it and are now read).
 	asOfText := ""
 	if plan.asOf != nil {
 		asOfText = plan.asOf.Format(time.RFC3339Nano)
 	}
 	digest := sha256.Sum256([]byte(strings.Join([]string{
-		"read_relationships.v1", string(plan.root.Kind), plan.root.CanonicalID, strings.Join(plan.types, ","),
+		"read_relationships.v2", string(plan.root.Kind), plan.root.CanonicalID, strings.Join(plan.types, ","),
 		string(plan.direction), fmt.Sprint(plan.depth), asOfText,
 	}, "\x00")))
 	plan.digest = hex.EncodeToString(digest[:16])
@@ -453,7 +456,7 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 
 	query := EdgePageQuery{
 		Origins: []contextfabric.SubjectRef{plan.root}, Types: plan.types, Direction: plan.direction,
-		After: after, Limit: plan.limit, ValidAt: validAt,
+		After: after, Limit: plan.limit, ValidAt: validAt, Current: plan.asOf == nil,
 	}
 	if hop == 2 {
 		frontier, truncatedBy, scanErr := r.frontier(ctx, principal, binding, plan, validAt, &record)
@@ -569,7 +572,7 @@ func (r *RelationshipsReader) frontier(ctx context.Context, principal storage.Pr
 	for {
 		page, err := r.graph.DirectEdgePage(ctx, principal, binding, EdgePageQuery{
 			Origins: []contextfabric.SubjectRef{plan.root}, Types: plan.types, Direction: plan.direction,
-			After: after, Limit: MaxEdgePageLimit, ValidAt: validAt,
+			After: after, Limit: MaxEdgePageLimit, ValidAt: validAt, Current: plan.asOf == nil,
 		})
 		if err != nil {
 			record.FailureClass = gatevocab.RelationshipsFailureGraph
