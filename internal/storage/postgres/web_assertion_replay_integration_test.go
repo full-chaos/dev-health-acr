@@ -75,7 +75,7 @@ func TestWebAssertionReplayStore_concurrentFirstUseAcceptsExactlyOne(t *testing.
 
 	for round := 0; round < 100; round++ {
 		jti := "race-" + time.Now().Format("150405.000000000") + "-" + string(rune('a'+round%26)) + string(rune('A'+round/26))
-		var accepted atomic.Int32
+		var accepted, replays, failures atomic.Int32
 		var wg sync.WaitGroup
 		start := make(chan struct{})
 		for i := 0; i < 8; i++ {
@@ -84,7 +84,12 @@ func TestWebAssertionReplayStore_concurrentFirstUseAcceptsExactlyOne(t *testing.
 				defer wg.Done()
 				<-start
 				replay, err := store.Observe(ctx, "https://web.example.test", jti, exp, time.Now())
-				if err == nil && !replay {
+				switch {
+				case err != nil:
+					failures.Add(1)
+				case replay:
+					replays.Add(1)
+				default:
 					accepted.Add(1)
 				}
 			}(pods[i%2])
@@ -92,6 +97,8 @@ func TestWebAssertionReplayStore_concurrentFirstUseAcceptsExactlyOne(t *testing.
 		close(start)
 		wg.Wait()
 		require.EqualValues(t, 1, accepted.Load(), "round %d: exactly one concurrent first use is accepted", round)
+		require.EqualValues(t, 7, replays.Load(), "round %d: every other concurrent use is a replay", round)
+		require.Zero(t, failures.Load(), "round %d: a conflict is a replay, never a store error", round)
 	}
 }
 
