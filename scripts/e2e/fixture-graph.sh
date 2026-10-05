@@ -110,7 +110,8 @@ graph_census() {
     compose exec -T falkordb redis-cli GRAPH.QUERY "$g" "MATCH (a)-[e]->(b) WHERE e.relation_type = 'LINKS_PULL_REQUEST' RETURN properties(a), properties(e), properties(b) LIMIT 2" 2>&1 | head -60 >&2 || true
     fg_note "graph ${g##*:}: link edges per pull request, and the links of three issues the walk may omit"
     compose exec -T falkordb redis-cli GRAPH.QUERY "$g" "MATCH (w)-[e]->(p) WHERE e.relation_type = 'LINKS_PULL_REQUEST' RETURN p.canonical_id, count(*) ORDER BY p.canonical_id" 2>&1 | head -80 >&2 || true
-    compose exec -T falkordb redis-cli GRAPH.QUERY "$g" "MATCH (w)-[e]->(p) WHERE e.relation_type = 'LINKS_PULL_REQUEST' AND (w.label ENDS WITH 'task 22' OR w.label ENDS WITH 'story 25' OR w.label ENDS WITH 'task 24') RETURN w.label, w.canonical_id, p.canonical_id, e.authorization_repositories, w.valid_to, p.valid_to" 2>&1 | head -40 >&2 || true
+    fg_note "every link edge of the first world with its validity window (now: $(date -u +%FT%TZ))"
+    compose exec -T falkordb redis-cli GRAPH.QUERY "$g" "MATCH (w)-[e]->(p) WHERE e.relation_type = 'LINKS_PULL_REQUEST' AND p.property_repo = 'acme/live-e2e' RETURN w.label, p.canonical_id, e.valid_from, e.valid_to, w.valid_to, p.valid_to ORDER BY w.label" 2>&1 | head -260 | paste -sd' ' | sed -e 's/\[acme\/live-e2e\]/\n&/g' >&2 || true
   done
   compose logs --no-color --no-log-prefix acr-projector 2>&1 | redact_log | grep -v 'freshness summary' | tail -40 >&2 || true
 }
