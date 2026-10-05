@@ -323,13 +323,20 @@ func TestRejectedSynthesisDrawErrorDoesNotQuoteTheModelOutput(t *testing.T) {
 		"extra_property": extra,
 	} {
 		t.Run(name, func(t *testing.T) {
-			rt, _, _ := scriptedSynthesisGenkitRuntime(t, []string{text})
+			rt, logger, _ := scriptedSynthesisGenkitRuntime(t, []string{text})
 			_, _, err := rt.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
 			if !errors.Is(err, contextfabric.ErrSynthesisRejected) {
 				t.Fatalf("err = %v, want the typed synthesis rejection", err)
 			}
 			if strings.Contains(err.Error(), "marker_status_from_the_model") {
 				t.Fatalf("error quotes the model output: %v", err)
+			}
+			logger.mu.Lock()
+			defer logger.mu.Unlock()
+			for _, record := range logger.records {
+				if strings.Contains(fmt.Sprintf("%s %v", record.Message, record.Attrs), "marker_status_from_the_model") {
+					t.Fatalf("log line quotes the model output: %s %v", record.Message, record.Attrs)
+				}
 			}
 		})
 	}
