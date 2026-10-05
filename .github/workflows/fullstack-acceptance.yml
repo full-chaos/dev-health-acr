@@ -322,6 +322,60 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  fixture-graph:
+    name: fixture graph use-cases
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Free runner disk space
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h / | tail -1
+      - name: Enable the Docker containerd image store
+        run: |
+          echo '{"features": {"containerd-snapshotter": true}}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info --format '{{.DriverStatus}}'
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: dev-health-acr
+          persist-credentials: false
+      # actions/checkout v7.0.0 — public repo, no token needed.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: full-chaos/dev-health-ops
+          path: dev-health/ops
+          persist-credentials: false
+      # actions/checkout v7.0.0 — public repo, no token needed.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: full-chaos/dev-health-web
+          path: dev-health/web
+          persist-credentials: false
+      - name: Assemble the product-slice compose file
+        run: cp dev-health-acr/.github/fullstack/compose.ci.yml dev-health/compose.yml
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.0'
+          cache: false
+      - name: Seed the fixture worlds, project the graph, and assert the use-cases
+        working-directory: dev-health-acr
+        env:
+          DEV_HEALTH_ROOT: ${{ github.workspace }}/dev-health
+          E2E_PROJECT: acr-e2e-fg-${{ github.run_id }}
+        run: make fixture-graph-e2e
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: fixture-graph-${{ github.run_id }}
+          path: dev-health-acr/.tmp/e2e/
+          if-no-files-found: warn
+          retention-days: 7
+
   web-contract-changed:
     name: web agreement (contract paths)
     runs-on: ubuntu-24.04

@@ -54,6 +54,9 @@ compose_files() {
   if [[ -f "$STATE/svs.override.yml" ]]; then
     printf '%s\0' -f "$STATE/svs.override.yml"
   fi
+  if [[ -f "$STATE/graph.override.yml" ]]; then
+    printf '%s\0' -f "$STATE/graph.override.yml"
+  fi
 }
 
 compose() {
