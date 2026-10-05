@@ -376,14 +376,22 @@ import (
 // refused as a work-item population. A candidate saved before v68 for such a
 // question holds that refusal and must not be reused.
 //
-// v68 -> v69: a requested repository scope follows the link of record. A
+// v68 -> v69: a period total spans the N most recent completed UTC days for a
+// trailing window (the last 30 days is 30 days ending at today 00:00 UTC, not
+// 31 with partial edge days) and the whole days inside stated dates, and the
+// answer's server-composed text, with the count sentence and the period
+// total, is served on the answer. A candidate saved before v69 holds a total
+// summed over partial edge days and must not be reused.
+//
+// v69 -> v70: a requested repository scope follows the link of record. A
 // work-item handle under a requested repository scope is counted among the
 // issues linked to a pull request of a named repository, not by the work
-// item's own repository, and a project's deployments under a requested scope
-// are reached through an issue of any repository linked to a pull request in
-// the scope. A candidate saved under v68 or earlier for such a question holds
-// the old relation and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v69"
+// item's own repository; a project's deployments under a requested scope are
+// reached through an issue of any repository linked to a pull request in the
+// scope; and a work item the link admitted has its own facts read without the
+// requested repository selector. A candidate saved under v69 or earlier for
+// such a question holds the old relation and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v70"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -2889,6 +2889,11 @@
           "maxLength": 4000,
           "type": "string"
         },
+        "deterministic_answer": {
+          "description": "The service's own answer text, composed by the server from stored facts (not written by a model): the status sentence, the count sentence and the period total with the days it rests on and the days with no stored row. Served whether or not the model's synthesis succeeded. Mirrors the canonical result's deterministic_answer verbatim.",
+          "maxLength": 12000,
+          "type": "string"
+        },
         "direct_judgment": {
           "maxLength": 4000,
           "type": "string"

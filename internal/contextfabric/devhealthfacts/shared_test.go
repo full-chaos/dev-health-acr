@@ -574,7 +574,7 @@ func TestQueryVersionMovedPastTheRefusedRepositoryWorkItemAnchor(t *testing.T) {
 
 func TestQueryVersionMovedPastTheOwnRepositoryScope(t *testing.T) {
 	t.Parallel()
-	for _, versionBeforeTheScopeFollowedTheLink := range []string{"devhealthfacts.clickhouse.v66", "devhealthfacts.clickhouse.v67", "devhealthfacts.clickhouse.v68"} {
+	for _, versionBeforeTheScopeFollowedTheLink := range []string{"devhealthfacts.clickhouse.v66", "devhealthfacts.clickhouse.v67", "devhealthfacts.clickhouse.v68", "devhealthfacts.clickhouse.v69"} {
 		if devhealthfacts.QueryVersion == versionBeforeTheScopeFollowedTheLink {
 			t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when a requested repository scope was tested on a work item's own repository holds the old relation and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheScopeFollowedTheLink)
 		}
