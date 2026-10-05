@@ -122,8 +122,15 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 // issue through a link (the tree walks, the scoped work-item census and its
 // cross-check, the census commit) uses this one predicate.
 func AuthorizedThroughLink(principal storage.Principal, requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
+	return AuthorizedAttributes(principal, issueScopeOfLink(requested), attributes)
+}
+
+// issueScopeOfLink is the part of a requested scope an issue reached through
+// a link is tested against: everything but the repository slugs, which the
+// link's pull request is tested against.
+func issueScopeOfLink(requested contextfabric.RequestedScope) contextfabric.RequestedScope {
 	requested.RepositorySlugs = nil
-	return AuthorizedAttributes(principal, requested, attributes)
+	return requested
 }
 
 // OwnsRepository reports whether a subject's own authorization_repositories

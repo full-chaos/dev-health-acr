@@ -4456,10 +4456,11 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	// issue side of that rule (AuthorizedThroughLink), never by its own
 	// repository.
 	mergeRequest := request
+	accepted := AuthorizedAttributes(principal, request.RequestedScope, node.Attributes)
 	if linkScopedSatisfier(attestation, kind) {
-		mergeRequest.RequestedScope.RepositorySlugs = nil
+		mergeRequest.RequestedScope = issueScopeOfLink(request.RequestedScope)
+		accepted = AuthorizedThroughLink(principal, request.RequestedScope, node.Attributes)
 	}
-	accepted := AuthorizedAttributes(principal, mergeRequest.RequestedScope, node.Attributes)
 	if accepted {
 		if nodeSubject, ok := NodeSubject(node); !ok || deps.IsInternal(nodeSubject) {
 			accepted = false
