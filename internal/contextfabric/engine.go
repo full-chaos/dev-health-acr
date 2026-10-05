@@ -1290,12 +1290,17 @@ type Engine struct {
 	anchorBindingShadowDisabled                 bool
 	serverCompletenessAuthorityEnabled          bool
 	serverCompletenessAuthoritySymmetricEnabled bool
-	maxItems                                    int
-	maxSerializedBytes                          int64
-	synthesisDeadlineReserve                    time.Duration
-	serviceVersion                              string
-	now                                         func() time.Time
-	newResultID                                 func() string
+	// servedLateHook is a test seam: a writer that adds bytes to the document
+	// after the stage-3 fit and the late writers, inside finalizeServed. Always
+	// nil in production. It lets a test prove the final fit does not depend on
+	// knowing which writers run last.
+	servedLateHook           func(InvestigationResult) InvestigationResult
+	maxItems                 int
+	maxSerializedBytes       int64
+	synthesisDeadlineReserve time.Duration
+	serviceVersion           string
+	now                      func() time.Time
+	newResultID              func() string
 }
 
 func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine, error) {
@@ -4079,7 +4084,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			return InvestigationResult{}, stageError(StageValidation, err)
 		}
 	}
-	result, budgetErr := e.finalizeServed(ctx, principal, BudgetAssertDecisive, result, nil, ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes})
+	decisiveBudget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
+	result, budgetErr := e.finalizeServedFitting(ctx, principal, BudgetAssertDecisive, result, decisiveBudget)
 	if cover.disclosure != nil {
 		if budgetErr != nil {
 			cover.disclosureMeasured = refusalMeasurementOf(budgetErr)

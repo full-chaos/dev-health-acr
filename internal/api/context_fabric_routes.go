@@ -333,6 +333,11 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 			"question_family":      string(budgetRefusal.Family),
 			"retry_attempted":      budgetRefusal.RetryAttempted,
 		}
+		// Present only when true: the answer as sent overran the byte ceiling
+		// and no row table held more than one row left to cut.
+		if budgetRefusal.NothingLeftToCut {
+			details["nothing_left_to_cut"] = true
+		}
 		// OMITTED, not served as "none". A continuation is advice; when no
 		// axis could be named there is no advice, and an object saying
 		// `{"axis": "none"}` invites a consumer to render "narrow by: none".
