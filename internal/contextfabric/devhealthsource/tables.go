@@ -415,11 +415,28 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.last_synced", rowK
 // (canonicalID, label, sort key) is unchanged.
 func queryPullRequests(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "concat(toString(p.repo_id), ':', toString(p.number))"
-	statement := `SELECT toString(p.repo_id), r.repo, p.number, ifNull(p.title, ''), ifNull(p.state, ''), p.last_synced,
+	// Keys first (CHAOS-8683, prod 307 after the v8 rebuild): the page is
+	// chosen on narrow columns only, then the wide ones (body above all) are
+	// read for that page's keys alone. git_pull_requests is keyed (org_id,
+	// repo_id, number) and its cursor column last_synced is the version, not
+	// part of the key, so a read that selects body under the cursor predicate
+	// reads the body of every row the predicate admits before the LIMIT
+	// applies: on the first ticks after a rebuild (a cursor days back) that is
+	// most of the organization, and the read crosses max_bytes_to_read. The
+	// IN set is the page's primary-key tuples, so the wide read touches only
+	// the granules that hold them. The page and its order are unchanged: the
+	// same predicate, order and limit choose it, and the outer read keeps
+	// them.
+	statement := `WITH page AS (
+SELECT p.org_id, p.repo_id, p.number
+FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id
+WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowKey) + orderBy("p.last_synced", rowKey) + `
+)
+SELECT toString(p.repo_id), r.repo, p.number, ifNull(p.title, ''), ifNull(p.state, ''), p.last_synced,
        p.created_at, ` + nullableTimestamp("coalesce(p.merged_at, p.closed_at)") + `,
        ifNull(p.head_branch, ''), ifNull(p.body, '')
 FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id
-WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowKey) + orderBy("p.last_synced", rowKey)
+WHERE p.org_id = {org_id:String} AND (p.org_id, p.repo_id, p.number) IN (SELECT org_id, repo_id, number FROM page)` + sincePredicate(cursor, "p.last_synced", rowKey) + orderBy("p.last_synced", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var repoID, repoSlug, state string
 		var rawNumber uint32
