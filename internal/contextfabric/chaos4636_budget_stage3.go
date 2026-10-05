@@ -268,6 +268,30 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			}
 		}
 	}
+	// A work-item walk list over the byte ceiling is cut by its own lever: the
+	// trailing members nothing cites are dropped until the document fits, and
+	// the N of M sentence is restated with the size limit as its cause. The
+	// census-bearing tuple is left out of the row and path levers above; this
+	// is the one lever it has on bytes, and a smaller true answer is served
+	// instead of a refusal.
+	if overrun == contractsv1.ContextFabricBudgetOverrunBytes && params.WorkItemCensus != nil {
+		fitted, ok, fitErr := e.fitWalkListToBytes(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, cardinality)
+		if fitErr != nil {
+			return InvestigationResult{}, firstPass, fitErr
+		}
+		if ok {
+			// The decision line carries the listed counts (before and after the
+			// cut); the measurement stamps belong to the arms that fit a result by
+			// cutting what the model wrote, and this lever cuts only the list.
+			event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
+				cohortMemberCount(result.Cohort), cohortMemberCount(fitted.Cohort), grouped, false, overrun, params.GroupedNarrowingBasis)
+			event.PredictedItems = PredictedItemsForPlan(*plan, cohortMemberCount(params.Graph.Cohort))
+			event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+			event.OutcomeCompletenessState = fitted.Completeness.State
+			e.recordPlanNarrowing(ctx, principal, event)
+			return fitted, firstPass, nil
+		}
+	}
 	// CHAOS-6743 ALLOCATION, members before claims: on an ITEM overrun over a
 	// cohort, cut per-member claims (depth) to the largest per-member cap that
 	// fits BEFORE the cohort retry halves the members (scope). Prod served 5
@@ -576,6 +600,24 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	}
 	retryMeasurement := retryMeasured.Measurement
 	retryOverrun := retryMeasured.Overrun
+	// The retry narrowed what the model reads, and the served list was put back:
+	// when its bytes still overrun, the walk list is cut to fit as it is on the
+	// first pass, before the retry is declared a failure.
+	if retryOverrun == contractsv1.ContextFabricBudgetOverrunBytes && params.WorkItemCensus != nil {
+		fitted, ok, fitErr := e.fitWalkListToBytes(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, retryCardinality)
+		if fitErr != nil {
+			return InvestigationResult{}, retryPending, fitErr
+		}
+		if ok {
+			retried = fitted
+			fittedInput := ApplyServerCompletenessAuthority(retried, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(retried))
+			remeasured, remeasureErr := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", consumedRetryAllocation, fittedInput, budget)
+			if remeasureErr != nil {
+				return InvestigationResult{}, retryPending, remeasureErr
+			}
+			retryMeasured, retryMeasurement, retryOverrun = remeasured, remeasured.Measurement, remeasured.Overrun
+		}
+	}
 	// The outcome layer's attempt runs BEFORE this event is built, because
 	// the event's own `refusal_planned` field is a claim about what happens
 	// next. Emitting it first published refusal_planned=true for every
@@ -843,6 +885,9 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 		if narrowed {
 			cohort.Groups = groups
 		}
+	} else if params.WorkItemCensus != nil && params.WorkItemCensus.walkList != nil {
+		// The model keeps reading the strongest links of what it read.
+		kept, narrowed = params.WorkItemCensus.synthesisMembers(cohort, target)
 	} else {
 		kept, narrowed = NarrowFlatCohort(cohort, target)
 	}

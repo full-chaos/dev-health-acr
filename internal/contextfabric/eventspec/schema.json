@@ -931,7 +931,8 @@
           "canonical_id_lexical",
           "largest_group_round_robin",
           "attention_rank",
-          "overlap_aware_set_cover"
+          "overlap_aware_set_cover",
+          "link_strength_then_id"
         ]
       },
       {

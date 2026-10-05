@@ -220,6 +220,12 @@ const (
 	// the selection falls back to largest_group_round_robin untouched and
 	// reports that basis instead, never claiming an order it did not run.
 	ContextFabricNarrowingBasisOverlapAwareSetCover ContextFabricNarrowingBasis = "overlap_aware_set_cover"
+	// ContextFabricNarrowingBasisLinkStrengthThenID orders a repository's
+	// work-item walk by the strength of each issue's link to a pull request of
+	// the repository (native, then stated in text, then heuristic) and then by
+	// canonical id. The members the walk lists and the members the
+	// answer-writing model reads are both chosen in this order.
+	ContextFabricNarrowingBasisLinkStrengthThenID ContextFabricNarrowingBasis = "link_strength_then_id"
 )
 
 var contextFabricNarrowingBases = [...]ContextFabricNarrowingBasis{
@@ -227,6 +233,7 @@ var contextFabricNarrowingBases = [...]ContextFabricNarrowingBasis{
 	ContextFabricNarrowingBasisLargestGroupRoundRobin,
 	ContextFabricNarrowingBasisAttentionRank,
 	ContextFabricNarrowingBasisOverlapAwareSetCover,
+	ContextFabricNarrowingBasisLinkStrengthThenID,
 }
 
 // ContextFabricNarrowingBasisCount is the closed vocabulary's size.

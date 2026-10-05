@@ -71,7 +71,7 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 			e.recordRepositoryWorkItemWalk(ctx, principal, membership, measured, cohortMemberCount(graph.Cohort), filter.Active(), restricted)
 		}()
 	}
-	lease, read, readErr := e.beginWorkItemMembership(ctx, principal, request.RequestedScope, binding, WorkItemMembershipRequest{Anchor: WorkItemMembershipAnchor{Subject: resolution.Committed[0]}, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), PlanMaxMembers: plan.Budget.MaxMembers, RequestMaxMembers: request.Options.MaxCohortMembers, Status: filter.Status, TimeColumn: filter.timeColumn(), TimeStart: filter.Start, TimeEnd: filter.End})
+	lease, read, readErr := e.beginWorkItemMembership(ctx, principal, request.RequestedScope, binding, WorkItemMembershipRequest{Anchor: WorkItemMembershipAnchor{Subject: resolution.Committed[0]}, RequestedRepositoryScope: append([]string{}, request.RequestedScope.RepositorySlugs...), RequestMaxMembers: request.Options.MaxCohortMembers, Status: filter.Status, TimeColumn: filter.timeColumn(), TimeStart: filter.Start, TimeEnd: filter.End})
 	if lease != nil {
 		owner, ok := WorkItemResponseOwnerFromContext(ctx)
 		if !ok {
@@ -122,7 +122,11 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 		}
 		return 0
 	})
-	limit := workItemTupleSelectionCap(plan.Budget.MaxMembers, request.Options.MaxCohortMembers)
+	limit := workItemTupleSelectionCap(0, request.Options.MaxCohortMembers)
+	census.listCut = contractsv1.ContextFabricWorkItemListCutServer
+	if requested := request.Options.MaxCohortMembers; requested > 0 && requested < WorkItemMembershipServeLimit {
+		census.listCut = contractsv1.ContextFabricWorkItemListCutRequest
+	}
 	if len(members) > limit {
 		members = members[:limit]
 	}
@@ -147,6 +151,12 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 		if anchorKind == SubjectRepository && !treeLinkTierStrongerThanHeuristic(member.LinkTier) {
 			heuristic++
 		}
+		if anchorKind == SubjectRepository {
+			if census.linkTier == nil {
+				census.linkTier = map[string]string{}
+			}
+			census.linkTier[member.CanonicalID] = member.LinkTier
+		}
 		cohort.Members = append(cohort.Members, CohortMember{Subject: subject, Rank: index + 1, InclusionReasons: []string{workItemMemberReason(anchorKind, member)}, EvidenceRefIDs: []string{ref}})
 		graph.EvidenceRefIDs = append(graph.EvidenceRefIDs, ref)
 	}
@@ -162,6 +172,13 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	if ValidateWorkItemTupleCensus(census) != WorkItemTupleCensusReadAvailable {
 		return graph, nil, fmt.Errorf("work-item membership census invalid")
 	}
+	// The list is served up to the request cap. The fact reads cover all of it
+	// (titles label every listed member); what the model reads and writes about
+	// is bounded by the item ceiling: stage 2 narrows the synthesis input to the
+	// plan.Budget.MaxMembers members chosen strongest link first (a repository walk) and then by canonical id, and the full
+	// list is put back on the served result (ServeWorkItemTupleCensus).
+	census.walkList = cohort
+	census.anchorKind = anchorKind
 	graph.Cohort = cohort
 	graph.CohortPopulation = census.Value
 	return graph, census, nil
@@ -215,14 +232,16 @@ func workItemTupleSelectionCap(planCap, requestCap int) int {
 }
 
 func (e *Engine) workItemTupleNarrowing(ctx context.Context, principal storage.Principal, plan *AnswerPlan, requestCap int, census *WorkItemTupleCensus) {
-	limit := workItemTupleSelectionCap(plan.Budget.MaxMembers, requestCap)
-	if plan.Budget.MaxMembers > limit {
-		e.recordPlanNarrowingStep(plan, PlanNarrowing{Stage: contractsv1.ContextFabricPlanNarrowingCardinality, Basis: contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical, Before: plan.Budget.MaxMembers, After: limit})
-		e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingCardinality, plan.Budget.MaxMembers, limit, false, false, "", ""))
-	}
+	// The member budget of the plan bounds what the model reads (a synthesis_input
+	// step, recorded when it narrows), never the listed members: the list is
+	// bounded by the request's cap and the serve limit, and a cut there is this
+	// step, in the order the walk kept members in.
 	if census != nil && census.Value > census.Retained {
-		e.recordPlanNarrowingStep(plan, PlanNarrowing{Stage: contractsv1.ContextFabricPlanNarrowingCardinality, Basis: contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical, Before: census.Value, After: census.Retained})
-		e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingCardinality, census.Value, census.Retained, false, false, "", ""))
+		basis := census.walkBasis()
+		e.recordPlanNarrowingStep(plan, PlanNarrowing{Stage: contractsv1.ContextFabricPlanNarrowingCardinality, Basis: basis, Before: census.Value, After: census.Retained})
+		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingCardinality, census.Value, census.Retained, false, false, "", basis)
+		event.Basis = basis
+		e.recordPlanNarrowing(ctx, principal, event)
 	}
 }
 

@@ -16,8 +16,11 @@ import (
 )
 
 // Prod shape (helm 41): a work-item members question over a project. 14
-// members, a claimed-facts list of about 28 member-attributed facts, a spent
-// deadline so the narrowing retry is declined, and a 30-item ceiling.
+// members, a claimed-facts list of about 42 member-attributed facts, a spent
+// deadline so the narrowing retry is declined, and a 30-item ceiling. The
+// listed members are outside the ceiling (a walk list), so the claims alone
+// overrun it by the amount members plus claims overran it when members were
+// counted.
 type budgetTrimShape struct {
 	members     int
 	claims      int
@@ -32,7 +35,7 @@ type budgetTrimShape struct {
 	scoped      bool
 }
 
-var budgetTrimProdShape = budgetTrimShape{members: 14, claims: 28, maxItems: 30, reserve: time.Second, deadline: 50 * time.Millisecond}
+var budgetTrimProdShape = budgetTrimShape{members: 14, claims: 42, maxItems: 30, reserve: time.Second, deadline: 50 * time.Millisecond}
 
 func budgetTrimFindings(count int, ids []string) []Finding {
 	findings := []Finding{}
@@ -226,7 +229,7 @@ func TestBudgetTrimLeavesAnAnswerThatFitsUntouched(t *testing.T) {
 
 func TestBudgetTrimCutsCitedClaimsWhenTheUncitedOnesAreNotEnough(t *testing.T) {
 	shape := budgetTrimProdShape
-	shape.citedClaims = 20
+	shape.citedClaims = 36
 	result, _ := budgetTrimServed(t, shape)
 	if budgetTrimTrimLines(result) != 1 || len(result.Cohort.Members) != 14 {
 		t.Fatalf("limitations=%v members=%d", result.Limitations, len(result.Cohort.Members))
@@ -235,8 +238,8 @@ func TestBudgetTrimCutsCitedClaimsWhenTheUncitedOnesAreNotEnough(t *testing.T) {
 		t.Fatalf("claims=%d want the one anchor claim the driver keeps plus the census count", len(result.ClaimedFacts))
 	}
 	for _, row := range result.Completeness.Outcomes {
-		if row.Impact == contractsv1.ContextFabricAnswerImpactDepth && row.CauseOverrun == contractsv1.ContextFabricBudgetOverrunItems && (row.Served != 1 || row.Declared != 28) {
-			t.Fatalf("outcome row counts member claims %d of %d, want 1 of 28 (the census count is not a member claim)", row.Served, row.Declared)
+		if row.Impact == contractsv1.ContextFabricAnswerImpactDepth && row.CauseOverrun == contractsv1.ContextFabricBudgetOverrunItems && (row.Served != 1 || row.Declared != 42) {
+			t.Fatalf("outcome row counts member claims %d of %d, want 1 of 42 (the census count is not a member claim)", row.Served, row.Declared)
 		}
 	}
 	ids := map[string]bool{}
@@ -301,7 +304,7 @@ func TestBudgetTrimDisclosesTheCutAsANarrowedDepthOutcome(t *testing.T) {
 	result, _ := budgetTrimServed(t, budgetTrimProdShape)
 	found := false
 	for _, row := range result.Completeness.Outcomes {
-		if row.Outcome == contractsv1.ContextFabricRequirementNarrowed && row.Impact == contractsv1.ContextFabricAnswerImpactDepth && row.CauseOverrun == contractsv1.ContextFabricBudgetOverrunItems && row.Served == 0 && row.Declared == 28 {
+		if row.Outcome == contractsv1.ContextFabricRequirementNarrowed && row.Impact == contractsv1.ContextFabricAnswerImpactDepth && row.CauseOverrun == contractsv1.ContextFabricBudgetOverrunItems && row.Served == 0 && row.Declared == 42 {
 			found = true
 		}
 	}
@@ -369,7 +372,7 @@ func TestBudgetTrimServesAnAnswerTrimmedToExactlyTheCeilingWithTheScopeLimitatio
 	shape := budgetTrimProdShape
 	shape.symmetric = true
 	shape.scoped = true
-	shape.findings = 13
+	shape.findings = 27
 	shape.maxItems = 30
 	result, _ := budgetTrimServed(t, shape)
 	measurement, err := contractsv1.MeasureContextFabricResponse(result)

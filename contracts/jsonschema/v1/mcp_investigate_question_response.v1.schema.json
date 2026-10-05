@@ -2812,7 +2812,8 @@
                 "canonical_id_lexical",
                 "largest_group_round_robin",
                 "attention_rank",
-                "overlap_aware_set_cover"
+                "overlap_aware_set_cover",
+                "link_strength_then_id"
               ],
               "description": "The declared selection order that chose the survivors, when a selection ran. Absent when a ceiling forced the reduction and no order was consulted."
             },
@@ -6767,12 +6768,13 @@
           "type": "object"
         },
         "NarrowingBasis": {
-          "description": "The declared order a narrowing step takes members in. canonical_id_lexical is ARBITRARY and says so -- what a pre-read guard needs is stability, not relevance. attention_rank exists only after the fact read. overlap_aware_set_cover (CHAOS-4678) is an exact minimum set cover over a grouped narrowing's groups, used up to a small group-count guard; beyond it a grouped narrowing falls back to largest_group_round_robin and reports that basis instead.",
+          "description": "The declared order a narrowing step takes members in. canonical_id_lexical is ARBITRARY and says so -- what a pre-read guard needs is stability, not relevance. attention_rank exists only after the fact read. overlap_aware_set_cover (CHAOS-4678) is an exact minimum set cover over a grouped narrowing's groups, used up to a small group-count guard; beyond it a grouped narrowing falls back to largest_group_round_robin and reports that basis instead. link_strength_then_id orders a repository's work-item walk by the strength of each issue's link (native, then stated in text, then heuristic) and then by canonical id.",
           "enum": [
             "canonical_id_lexical",
             "largest_group_round_robin",
             "attention_rank",
-            "overlap_aware_set_cover"
+            "overlap_aware_set_cover",
+            "link_strength_then_id"
           ],
           "type": "string"
         },
@@ -6831,7 +6833,8 @@
                 "canonical_id_lexical",
                 "largest_group_round_robin",
                 "attention_rank",
-                "overlap_aware_set_cover"
+                "overlap_aware_set_cover",
+                "link_strength_then_id"
               ]
             },
             "overrun": {

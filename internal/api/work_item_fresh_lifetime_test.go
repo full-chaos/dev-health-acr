@@ -148,15 +148,22 @@ func (t *freshTupleBudgetTelemetry) RecordCohortRanked(context.Context, storage.
 	t.ranked++
 }
 
-// Both over-budget sites must preserve the sole project anchor. The actual
-// provider/synthesizer result contains 47 items against 46; the tuple is
-// served by cutting its member claims, never by removing its authority.
+// Both over-budget sites must preserve the sole project anchor. The listed members are outside
+// the item ceiling, so the overrun is the member claims: with 30 members the actual
+// provider/synthesizer result carries 61 claims against 46, and the retry narrows what the
+// model reads to 15 members while the answer still lists all 30 (and says the summary covers the
+// first 15); with 25 members and no time for a retry the claims are cut by the trim lever and the
+// answer is partial. Neither removes the anchor's authority.
 func TestWorkItemFreshRetryKeepsAuthorizedAnchor(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		members int
-		retry   bool
-	}{{"retry", 30, true}, {"no_reserve", 15, false}} {
+		name        string
+		members     int
+		retry       bool
+		wantStatus  string
+		wantTrim    int
+		wantSizes   []int
+		wantCovered bool
+	}{{"retry", 30, true, "complete", 0, []int{30, 15}, true}, {"no_reserve", 25, false, "partial", 1, []int{25}, false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFreshTupleProducerFixtureWithBudget(t, "", limits.ResourceBudget{MaxItems: 46, MaxTokens: 16000, MaxBytes: 1 << 20})
 			telemetry := &freshTupleBudgetTelemetry{EngineTelemetry: contextfabric.NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(io.Discard, nil)))}
@@ -210,7 +217,7 @@ func TestWorkItemFreshRetryKeepsAuthorizedAnchor(t *testing.T) {
 			if err := json.Unmarshal(recorder.Body.Bytes(), &served); err != nil {
 				t.Fatal(err)
 			}
-			if recorder.Code != http.StatusOK || f.engineErr != nil || served.Status != "partial" {
+			if recorder.Code != http.StatusOK || f.engineErr != nil || served.Status != tc.wantStatus {
 				t.Fatalf("over-budget outcome HTTP%d %s; engine=%v", recorder.Code, recorder.Body.String(), f.engineErr)
 			}
 			trimLines := 0
@@ -219,17 +226,22 @@ func TestWorkItemFreshRetryKeepsAuthorizedAnchor(t *testing.T) {
 					trimLines++
 				}
 			}
-			if trimLines != 1 || len(served.Cohort.Members) != 15 {
-				t.Errorf("trim lines=%d members=%d", trimLines, len(served.Cohort.Members))
+			if trimLines != tc.wantTrim || len(served.Cohort.Members) != tc.members {
+				t.Errorf("trim lines=%d members=%d, want %d lines and all %d members listed", trimLines, len(served.Cohort.Members), tc.wantTrim, tc.members)
+			}
+			covered := false
+			for _, limitation := range served.Limitations {
+				if contractsv1.IsContextFabricWorkItemSynthesisCoverageLimitation(limitation) {
+					covered = true
+				}
+			}
+			if covered != tc.wantCovered {
+				t.Errorf("synthesis coverage sentence present=%v, want %v: %v", covered, tc.wantCovered, served.Limitations)
 			}
 			if len(served.SubjectResolution.Candidates) != 1 || served.SubjectResolution.Candidates[0].Subject.CanonicalID != f.graph.projectID {
 				t.Errorf("served answer lost its authorized anchor: %+v", served.SubjectResolution)
 			}
-			wantSizes := []int{15}
-			if tc.retry {
-				wantSizes = []int{30, 15}
-			}
-			if !reflect.DeepEqual(sizes, wantSizes) || !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "work"}) {
+			if !reflect.DeepEqual(sizes, tc.wantSizes) || !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "work"}) {
 				t.Errorf("synthesis=%v phases=%v", sizes, f.client.phases)
 			}
 			for _, event := range telemetry.plans {

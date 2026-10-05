@@ -685,6 +685,7 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricWorkItemMemberFilterLimitation(limitation) ||
 		IsContextFabricWorkItemRepositoryLimitation(limitation) ||
 		IsContextFabricWorkItemListedLimitation(limitation) ||
+		IsContextFabricWorkItemSynthesisCoverageLimitation(limitation) ||
 		IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation) ||
 		IsContextFabricStatedRangeConflictLimitation(limitation) ||
 		IsContextFabricComparisonPeriodUnreadLimitation(limitation)
@@ -870,28 +871,48 @@ const (
 	contextFabricWorkItemRepositoryHeuristicSuffix = "(a pull request opened near the issue's last update in the issue's own repository)."
 )
 
-// ContextFabricWorkItemListCut is the closed vocabulary of what bounded a
-// work-item list shorter than its population.
+// ContextFabricWorkItemListCut is the closed vocabulary of what bounded the
+// list the server built for a work-item walk shorter than its population. The
+// empty value is "nothing": the server listed every member.
 type ContextFabricWorkItemListCut string
 
 const (
-	// ContextFabricWorkItemListCutServer: the server's answer item limit cut
-	// the list before the response was built.
+	// ContextFabricWorkItemListCutRequest: the request's max_cohort_members.
+	ContextFabricWorkItemListCutRequest ContextFabricWorkItemListCut = "request"
+	// ContextFabricWorkItemListCutServer: the server's own limit on the
+	// members of one answer.
 	ContextFabricWorkItemListCutServer ContextFabricWorkItemListCut = "server"
-	// ContextFabricWorkItemListCutResponse: the limits of this response (its
-	// member and evidence reference limits) cut a list the server had built whole.
-	ContextFabricWorkItemListCutResponse ContextFabricWorkItemListCut = "response"
-	// ContextFabricWorkItemListCutBoth: the server cut the list and this
-	// response cut it further.
-	ContextFabricWorkItemListCutBoth ContextFabricWorkItemListCut = "both"
+	// ContextFabricWorkItemListCutItems: the answer item limit, the cause a result
+	// stored before the list followed max_cohort_members names. A stored sentence
+	// is read and restated with it; a new list is never cut by it.
+	ContextFabricWorkItemListCutItems ContextFabricWorkItemListCut = "items"
+	// ContextFabricWorkItemListCutSize: the response size limit.
+	ContextFabricWorkItemListCutSize ContextFabricWorkItemListCut = "size"
 )
 
-const contextFabricWorkItemResponseLimits = "this response lists at most the members its limits allow (raise max_cohort_members and max_evidence_refs to read more)"
+// ContextFabricWorkItemResponseCut is the closed vocabulary of what bounded a
+// response's list shorter than the list the server built. The empty value is
+// "nothing": the response lists every member the server built.
+type ContextFabricWorkItemResponseCut string
+
+const (
+	// ContextFabricWorkItemResponseCutMembers: the response's max_cohort_members.
+	ContextFabricWorkItemResponseCutMembers ContextFabricWorkItemResponseCut = "members"
+	// ContextFabricWorkItemResponseCutEvidence: the response's max_evidence_refs;
+	// a member row uses one evidence reference.
+	ContextFabricWorkItemResponseCutEvidence ContextFabricWorkItemResponseCut = "evidence"
+)
+
+var contextFabricWorkItemResponseCutReasons = map[ContextFabricWorkItemResponseCut]string{
+	ContextFabricWorkItemResponseCutMembers:  "this response's max_cohort_members limits the list (raise it to read more)",
+	ContextFabricWorkItemResponseCutEvidence: "this response's max_evidence_refs limits the list, because a member row uses one evidence reference (raise it to read more)",
+}
 
 var contextFabricWorkItemListCutReasons = map[ContextFabricWorkItemListCut]string{
-	ContextFabricWorkItemListCutServer:   "the server limits how many items one answer carries",
-	ContextFabricWorkItemListCutResponse: contextFabricWorkItemResponseLimits,
-	ContextFabricWorkItemListCutBoth:     "the server limits how many items one answer carries and " + contextFabricWorkItemResponseLimits,
+	ContextFabricWorkItemListCutRequest: "the request's max_cohort_members limits the list",
+	ContextFabricWorkItemListCutServer:  "the server lists at most 200 members of one answer",
+	ContextFabricWorkItemListCutSize:    "the list was cut to fit the response size limit",
+	ContextFabricWorkItemListCutItems:   "the server limits how many items one answer carries",
 }
 
 const (
@@ -899,17 +920,40 @@ const (
 	contextFabricWorkItemListedOf      = " of "
 	contextFabricWorkItemListedAtLeast = "at least "
 	contextFabricWorkItemListedMid     = " members are listed, because "
+	contextFabricWorkItemListedAnd     = " and "
 )
 
-var workItemListedLimitationPattern = regexp.MustCompile(`^Not every member is listed: ([1-9]\d{0,8}) of (at least )?([1-9]\d{0,8}) members are listed, because (the server limits how many items one answer carries|this response lists at most the members its limits allow \(raise max_cohort_members and max_evidence_refs to read more\)|the server limits how many items one answer carries and this response lists at most the members its limits allow \(raise max_cohort_members and max_evidence_refs to read more\))\.$`)
+var workItemListedLimitationPattern = regexp.MustCompile(`^Not every member is listed: ([1-9]\d{0,8}) of (at least )?([1-9]\d{0,8}) members are listed, because (the request's max_cohort_members limits the list|the server lists at most 200 members of one answer|the list was cut to fit the response size limit|the server limits how many items one answer carries)?( and )?(this response's max_cohort_members limits the list \(raise it to read more\)|this response's max_evidence_refs limits the list, because a member row uses one evidence reference \(raise it to read more\)|this response lists at most the members its limits allow \(raise max_cohort_members and max_evidence_refs to read more\))?\.$`)
 
 // ContextFabricWorkItemListedLimitation states how many of a work-item
 // cohort's members a response lists, when the list is shorter than the
-// population, and what bounded it. It returns false when the counts or the
-// cause do not describe a cut list.
-func ContextFabricWorkItemListedLimitation(listed, population int, lowerBound bool, cut ContextFabricWorkItemListCut) (string, bool) {
-	reason, known := contextFabricWorkItemListCutReasons[cut]
-	if !known || listed < 1 || population <= listed || population > 999999999 {
+// population, and what bounded it: what cut the list the server built (engine,
+// empty when it listed every member) and whether this response cut it further
+// (response). It returns false when the counts or the causes do not
+// describe a cut list.
+func ContextFabricWorkItemListedLimitation(listed, population int, lowerBound bool, engine ContextFabricWorkItemListCut, response ContextFabricWorkItemResponseCut) (string, bool) {
+	if listed < 1 || population <= listed || population > 999999999 {
+		return "", false
+	}
+	reason := ""
+	if engine != "" {
+		known := false
+		reason, known = contextFabricWorkItemListCutReasons[engine]
+		if !known {
+			return "", false
+		}
+	}
+	if response != "" {
+		responseReason, known := contextFabricWorkItemResponseCutReasons[response]
+		if !known {
+			return "", false
+		}
+		if reason != "" {
+			reason += contextFabricWorkItemListedAnd
+		}
+		reason += responseReason
+	}
+	if reason == "" {
 		return "", false
 	}
 	bound := ""
@@ -917,6 +961,22 @@ func ContextFabricWorkItemListedLimitation(listed, population int, lowerBound bo
 		bound = contextFabricWorkItemListedAtLeast
 	}
 	return contextFabricWorkItemListedPrefix + strconv.Itoa(listed) + contextFabricWorkItemListedOf + bound + strconv.Itoa(population) + contextFabricWorkItemListedMid + reason + ".", true
+}
+
+// ContextFabricWorkItemListedEngineCut reads what cut the list the server
+// built out of a limitation ContextFabricWorkItemListedLimitation composed. The
+// empty value with true means this response alone cut the list.
+func ContextFabricWorkItemListedEngineCut(limitation string) (ContextFabricWorkItemListCut, bool) {
+	match := workItemListedLimitationPattern.FindStringSubmatch(limitation)
+	if match == nil {
+		return "", false
+	}
+	for cut, reason := range contextFabricWorkItemListCutReasons {
+		if match[4] == reason {
+			return cut, true
+		}
+	}
+	return "", true
 }
 
 // IsContextFabricWorkItemListedLimitation reports whether a limitation is one
@@ -928,7 +988,46 @@ func IsContextFabricWorkItemListedLimitation(limitation string) bool {
 	}
 	listed, _ := strconv.Atoi(match[1])
 	population, _ := strconv.Atoi(match[3])
-	return population > listed
+	// One reason or both joined by " and ", never neither and never "and" alone.
+	hasEngine, hasAnd, hasResponse := match[4] != "", match[5] != "", match[6] != ""
+	return population > listed && (hasEngine || hasResponse) && hasAnd == (hasEngine && hasResponse)
+}
+
+var workItemSynthesisCoverageLimitationPattern = regexp.MustCompile(`^The written summary and its claims were made from ([1-9]\d{0,8}) of the ([1-9]\d{0,8}) listed members, chosen by link strength where the walk has one and then by id; the other listed members were not read for it\.$`)
+
+// ContextFabricWorkItemSynthesisCoverageLimitation states that the written
+// summary covered only the first members of a longer list. It returns false
+// when the counts do not describe a shorter reading.
+func ContextFabricWorkItemSynthesisCoverageLimitation(read, listed int) (string, bool) {
+	if read < 1 || listed <= read || listed > 999999999 {
+		return "", false
+	}
+	return "The written summary and its claims were made from " + strconv.Itoa(read) + " of the " + strconv.Itoa(listed) + " listed members, chosen by link strength where the walk has one and then by id; the other listed members were not read for it.", true
+}
+
+// ContextFabricWorkItemSynthesisCoverageRead returns the number of listed
+// members the written summary read, from the sentence that states it.
+func ContextFabricWorkItemSynthesisCoverageRead(limitation string) (int, bool) {
+	match := workItemSynthesisCoverageLimitationPattern.FindStringSubmatch(limitation)
+	if match == nil {
+		return 0, false
+	}
+	read, _ := strconv.Atoi(match[1])
+	listed, _ := strconv.Atoi(match[2])
+	return read, listed > read
+}
+
+// IsContextFabricWorkItemSynthesisCoverageLimitation reports whether a
+// limitation is one ContextFabricWorkItemSynthesisCoverageLimitation could have
+// composed.
+func IsContextFabricWorkItemSynthesisCoverageLimitation(limitation string) bool {
+	match := workItemSynthesisCoverageLimitationPattern.FindStringSubmatch(limitation)
+	if match == nil {
+		return false
+	}
+	read, _ := strconv.Atoi(match[1])
+	listed, _ := strconv.Atoi(match[2])
+	return listed > read
 }
 
 var workItemRepositoryHeuristicLimitationPattern = regexp.MustCompile(`^[1-9]\d{0,5} of these members are linked only by a heuristic match \(a pull request opened near the issue's last update in the issue's own repository\)\.$`)

@@ -42,7 +42,8 @@ func TestWorkItemFreshRetryEmitsNoRankDecision(t *testing.T) {
 			})
 			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, validInvestigationRequestWithConfirmedWindow())
 			t.Logf("maxItems=%d calls=%d status=%s error=%v candidates=%d cohort=%d narrowing=%+v", maxItems, calls, result.Status, err, len(result.SubjectResolution.Candidates), cohortMemberCount(result.Cohort), telemetry.planNarrowings)
-			if err != nil || result.Status != InvestigationComplete || cohortMemberCount(result.Cohort) != 3 {
+			// The retry narrows what the model reads to 3 of the 6 members; the answer still lists all 6.
+			if err != nil || result.Status != InvestigationComplete || cohortMemberCount(result.Cohort) != 6 || synthesisCoverageSentence(result.Limitations) == "" {
 				t.Fatalf("fitting retry result=%+v err=%v", result, err)
 			}
 			if calls != 2 {
@@ -94,7 +95,8 @@ func TestWorkItemStatusFilterDisclosureSurvivesTheSynthesisRetry(t *testing.T) {
 			})
 			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, validInvestigationRequestWithConfirmedWindow())
 			t.Logf("maxItems=%d calls=%d status=%s error=%v candidates=%d cohort=%d narrowing=%+v", maxItems, calls, result.Status, err, len(result.SubjectResolution.Candidates), cohortMemberCount(result.Cohort), telemetry.planNarrowings)
-			if err != nil || result.Status != InvestigationComplete || cohortMemberCount(result.Cohort) != 3 {
+			// The retry narrows what the model reads to 3 of the 6 members; the answer still lists all 6.
+			if err != nil || result.Status != InvestigationComplete || cohortMemberCount(result.Cohort) != 6 || synthesisCoverageSentence(result.Limitations) == "" {
 				t.Fatalf("fitting retry result=%+v err=%v", result, err)
 			}
 			if calls != 2 {

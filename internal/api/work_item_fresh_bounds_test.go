@@ -186,7 +186,9 @@ func runFreshTupleCanonicalBound(t *testing.T, mode string) {
 			for _, binding := range query.bindings {
 				if binding.Name == "serve_limit" {
 					found = true
-					if binding.Value != uint32(n) {
+					// The list is read up to the request's cap and the serve limit,
+					// whatever the item ceiling's synthesis member budget is.
+					if binding.Value != uint32(200) {
 						t.Fatalf("S1 K=%v", binding.Value)
 					}
 				}
@@ -203,16 +205,17 @@ func runFreshTupleCanonicalBound(t *testing.T, mode string) {
 	census := stored.SemanticState.WorkItemCensus
 	wantRetained := n
 	if mode == "aligned_default" {
-		wantRetained = 17
-		if !reflect.DeepEqual(synthesisSizes, []int{34, 17}) {
+		// The listed members are outside the item ceiling, so 34 members and 35
+		// claims fit the ceiling of 50 on the first pass: no narrowing retry.
+		if !reflect.DeepEqual(synthesisSizes, []int{34}) {
 			t.Fatalf("aligned default synthesis sizes=%v", synthesisSizes)
 		}
-		if len(result.Cohort.Members) != 17 || len(result.ClaimedFacts) != 18 {
+		if len(result.Cohort.Members) != 34 || len(result.ClaimedFacts) != 35 {
 			t.Fatalf("aligned default served members/claims=%d/%d", len(result.Cohort.Members), len(result.ClaimedFacts))
 		}
 		for i, member := range result.Cohort.Members {
 			if member.Subject.CanonicalID != ids[i] {
-				t.Fatal("retry did not keep the canonical lexical prefix")
+				t.Fatal("the served list is not the canonical lexical set")
 			}
 		}
 	}
@@ -443,4 +446,37 @@ func TestWorkItemFreshAuthorizedAmbiguityPreservesAcceptedFrame(t *testing.T) {
 		t.Fatalf("accepted ambiguous frame/census=%+v", stored.SemanticState)
 	}
 	assertFreshTerminalStoredAuthorization(t, f, result)
+}
+
+// Every listed member is labelled with its title, including the members the
+// answer-writing model did not read (the item ceiling's member budget is 34 here):
+// the fact reads cover the whole list and only the synthesis input is narrowed.
+func TestWorkItemFreshListedMembersBeyondTheModelsReadAreLabelledWithTheirTitles(t *testing.T) {
+	f := newFreshTupleProducerFixture(t, "")
+	f.model.statusOnly = true
+	f.client.rowsByPhase = map[string][][]any{}
+	const n = 60
+	for i := 0; i < n; i++ {
+		workID := fmt.Sprintf("work-%03d", i)
+		id, _, err := identity.Derive(identity.KindWorkItem, []string{"repo-1", workID}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.client.rowsByPhase["s1"] = append(f.client.rowsByPhase["s1"], []any{id, "repo-1", workID, hostedTestRepository, uint8(1), uint64(n), uint64(n), uint64(0), uint64(0), uint64(0)})
+		f.client.rowsByPhase["status"] = append(f.client.rowsByPhase["status"], []any{workID, "open", "repo-1", ""})
+		f.client.rowsByPhase["work"] = append(f.client.rowsByPhase["work"], []any{workID, "Title " + workID, "repo-1"})
+	}
+	body := investigationRequestBody()
+	body.Question = "What is the state and count of this project's work items?"
+	body.Options.MaxCohortMembers = 100
+	body.TimeContext.EvidenceWindow = &contextfabric.RequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing90D}
+	result := serveFreshTupleRequest(t, f, body)
+	if len(result.Cohort.Members) != n {
+		t.Fatalf("listed %d members, want all %d", len(result.Cohort.Members), n)
+	}
+	for _, member := range result.Cohort.Members {
+		if !strings.HasPrefix(member.Subject.Label, "Title work-") {
+			t.Fatalf("a listed member is labelled %q, want its title", member.Subject.Label)
+		}
+	}
 }

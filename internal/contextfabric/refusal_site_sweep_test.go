@@ -284,19 +284,19 @@ func TestTheCandidateRescueEventPredictsTheCohortItServed(t *testing.T) {
 func TestWorkItemTupleNarrowingEventsKeepTheirCardinalitySources(t *testing.T) {
 	sink := &recordingTelemetry{}
 	engine := &Engine{telemetry: sink}
+	// The plan's member budget (234) bounds what the model reads, never the listed members, so
+	// only the cut of the population to the listed members is a cardinality step.
 	plan := AnswerPlan{Family: QuestionFamilyScopedCohortStatus, Budget: AnswerPlanBudget{MaxMembers: 234}}
-	census := &WorkItemTupleCensus{State: WorkItemMembershipCensusFloor, Value: 2000, Retained: 200}
+	census := &WorkItemTupleCensus{State: WorkItemMembershipCensusFloor, Value: 2000, Retained: 200, anchorKind: SubjectRepository}
 	engine.workItemTupleNarrowing(context.Background(), storage.Principal{OrgID: "org-1"}, &plan, 250, census)
-	if len(sink.planNarrowings) != 2 {
+	if len(sink.planNarrowings) != 1 {
 		t.Fatalf("cardinality events=%+v", sink.planNarrowings)
 	}
-	for i, counts := range [][2]int{{234, 200}, {2000, 200}} {
-		event := sink.planNarrowings[i]
-		if event.Stage != contractsv1.ContextFabricPlanNarrowingCardinality || event.Before != counts[0] || event.After != counts[1] || event.Basis != contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
-			t.Errorf("cardinality source %d: %+v", i, event)
-		}
-		if event.MeasuredItems != 0 || event.MeasuredBytes != 0 || event.PredictedItems != 0 || event.RefusalPlanned || event.Overrun != "" {
-			t.Errorf("cardinality event acquired a second document: %+v", event)
-		}
+	event := sink.planNarrowings[0]
+	if event.Stage != contractsv1.ContextFabricPlanNarrowingCardinality || event.Before != 2000 || event.After != 200 || event.Basis != contractsv1.ContextFabricNarrowingBasisLinkStrengthThenID {
+		t.Errorf("cardinality source: %+v", event)
+	}
+	if event.MeasuredItems != 0 || event.MeasuredBytes != 0 || event.PredictedItems != 0 || event.RefusalPlanned || event.Overrun != "" {
+		t.Errorf("cardinality event acquired a second document: %+v", event)
 	}
 }

@@ -424,6 +424,10 @@ func (e *Engine) finalizeServedFitting(ctx context.Context, principal storage.Pr
 				continue
 			}
 		}
+		if next, cut := cutWalkListMembers(current); cut {
+			current = next
+			continue
+		}
 		_, final := e.finalizeServed(ctx, principal, stage, current, nil, budget)
 		if errors.As(final, &refusal) {
 			refusal.NothingLeftToCut = true

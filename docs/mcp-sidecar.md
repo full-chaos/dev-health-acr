@@ -566,14 +566,24 @@ projection through the same projection code this tool uses. `max_drivers`,
 `max_cohort_members`, and `max_evidence_refs` narrow that view. Because both
 surfaces run one projection function, an answer cannot differ between them.
 
-A work-item cohort (for example the issues of a repository) can be longer than
-the answer lists, because the server limits how many items one answer carries.
-`cohort.total` stays the count the answer was built from. `cohort.population`
-is how many members the caller may read, and `cohort.population_lower_bound` is
-true when that count is a floor. A cut list also carries one limitation, "Not
-every member is listed: N of M members are listed ...", and the sentence about
-lower link tiers only when a weaker-tier member was cut before a stronger one.
-Both fields are absent when the read did not measure a population.
+A work-item cohort (for example the issues of a repository) is listed up to the
+request's `max_cohort_members` (at most 200). The server's answer item limit
+(`ACR_MAX_ITEMS`) does not cut that list: it bounds what the answer-writing
+model reads, so when the written summary covers only some of the members of a
+longer list the answer says so in one sentence. A member row cites one evidence
+reference, and this response keeps a member only when its reference fits
+`max_evidence_refs`, so a client that wants the whole list asks for
+`max_cohort_members` and `max_evidence_refs` of the same size (the tool's
+defaults are 20 members and 25 references). `cohort.total` is the count the
+answer was built from. `cohort.population` is how many members the caller may
+read, and `cohort.population_lower_bound` is true when that count is a floor. A
+list shorter than the population carries one limitation, "Not every member is
+listed: N of M members are listed, because ...", naming what bounded it (the
+request's limit, the server's limit of 200, the response size limit, or this
+response's own `max_cohort_members` or `max_evidence_refs`, which the sentence
+names), and the sentence about lower link tiers only when a
+weaker-tier member was cut before a stronger one. Both fields are absent when
+the read did not measure a population.
 
 ### record_episode
 

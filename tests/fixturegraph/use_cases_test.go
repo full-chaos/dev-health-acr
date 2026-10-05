@@ -191,62 +191,17 @@ func walkProblems(t *testing.T, slug string, d doc) []string {
 	return problems
 }
 
-// Use-case: the issues of a repository come through its pull requests' link rows, and the
-// census of the walk equals the members returned. The first world holds more issues than the
-// walk lists today (the answer item ceiling cuts it; TestACutMemberListStatesItsPopulationAndNoTierCut
-// asserts what that cut says); this case asserts the second world strictly.
+// Use-case: the issues of a repository come through its pull requests' link rows, every one
+// of them is listed (the list follows max_cohort_members, not the answer item ceiling), and the
+// census of the walk equals the members returned. Both worlds are asserted strictly.
 func TestRepositoryIssuesComeThroughItsPullRequestLinks(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
-	_, two := slugs(t)
-	d, _ := walk(t, c, two)
-	if problems := walkProblems(t, two, d); len(problems) > 0 {
-		t.Fatalf("%s: %s\nanswer digest: %.3000s", two, strings.Join(problems, "; "), answerDigest(d))
-	}
-}
-
-// Use-case: when the answer item ceiling cuts the member list of the first world's repository
-// (20 issues linked through native links; the ceiling ACR_MAX_ITEMS 30 minus a synthesis
-// headroom of 16 lists 14 of them, the 14 lowest ids), the answer says so truthfully: the
-// population is the seeded 20 as a field, an "N of M members are listed" sentence carries the
-// same numbers, the cohort is marked truncated, and no sentence blames a link tier cut, because
-// every seeded link has the same tier. TestCeilingRaisedServesEveryMember shows the cut is that
-// ceiling.
-func TestACutMemberListStatesItsPopulationAndNoTierCut(t *testing.T) {
-	c := connect(t, "FG_ORG_TOKEN_FILE")
-	one, _ := slugs(t)
-	d, raw := walk(t, c, one)
-	want := issueSet(linkRows(t, one))
-	got := memberLabels(d)
-	for k := range got {
-		if !want[k] {
-			t.Fatalf("served %q is not a seeded issue of the repository: %.3000s", k, raw)
+	one, two := slugs(t)
+	for _, slug := range []string{one, two} {
+		d, _ := walk(t, c, slug)
+		if problems := walkProblems(t, slug, d); len(problems) > 0 {
+			t.Fatalf("%s: %s\nanswer digest: %.3000s", slug, strings.Join(problems, "; "), answerDigest(d))
 		}
-	}
-	cohort := get(structured(d), "cohort")
-	total, _ := get(cohort, "total").(float64)
-	population, _ := get(cohort, "population").(float64)
-	truncated, _ := get(cohort, "truncated").(bool)
-	complete, _ := get(cohort, "complete").(bool)
-	if len(got) != 14 || len(got) >= len(want) {
-		t.Fatalf("served %d of %d seeded members, want the 14 the ceiling lists: %s", len(got), len(want), answerDigest(d))
-	}
-	if int(total) != len(got) || int(population) != len(want) || !truncated || complete {
-		t.Fatalf("cohort total=%v population=%v truncated=%v complete=%v, want total %d, population %d, truncated, not complete: %s", total, population, truncated, complete, len(got), len(want), answerDigest(d))
-	}
-	sentence := fmt.Sprintf("Not every member is listed: %d of %d members are listed", len(got), len(want))
-	tierSentence := false
-	listed := false
-	for _, l := range list(structured(d), "limitations") {
-		s, _ := l.(string)
-		if strings.Contains(s, "lower link tiers were cut first") {
-			tierSentence = true
-		}
-		if strings.HasPrefix(s, sentence) {
-			listed = true
-		}
-	}
-	if tierSentence || !listed {
-		t.Fatalf("limitations: tier sentence=%v, %q present=%v: %s", tierSentence, sentence, listed, answerDigest(d))
 	}
 }
 
@@ -526,18 +481,6 @@ HAVING countIf(w.completed_at IS NULL AND w.closed_at IS NULL) = 0 AND max(coale
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Fatalf("PR %s: served links (issue: tier) %v, seeded %v: %.1500s", pr, got, want, raw)
 		}
-	}
-}
-
-// TestCeilingRaisedServesEveryMember runs in the second phase, against an acr-api restarted
-// with a higher answer item ceiling: the same question serves every seeded member and no cut
-// sentence, which shows the cut of the known-defect walk case is that ceiling.
-func TestCeilingRaisedServesEveryMember(t *testing.T) {
-	c := connect(t, "FG_ORG_TOKEN_FILE")
-	one, _ := slugs(t)
-	d, _ := walk(t, c, one)
-	if problems := walkProblems(t, one, d); len(problems) > 0 {
-		t.Fatalf("%s with the ceiling raised: %s\nanswer digest: %.3000s", one, strings.Join(problems, "; "), answerDigest(d))
 	}
 }
 
