@@ -3,6 +3,7 @@
 package fixturegraph
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -153,13 +154,13 @@ func TestRepositoryIssuesComeThroughItsPullRequestLinks(t *testing.T) {
 	one, two := slugs(t)
 	for _, slug := range []string{one, two} {
 		want := issueSet(linkRows(t, slug))
-		d, raw := walk(t, c, slug)
+		d, _ := walk(t, c, slug)
 		got := memberLabels(d)
 		if len(want) == 0 {
 			t.Fatalf("no seeded link for %s", slug)
 		}
 		if diffSets(want, got) != diffSets(want, want) {
-			t.Fatalf("%s: members differ from the seeded link rows: %s\nseeded rows of the missing issues (title, type, status, provider, own repo, pr, tier):\n%s\nresponse: %.1500s", slug, diffSets(want, got), describeMissing(t, slug, want, got), raw)
+			t.Fatalf("%s: members differ from the seeded link rows: %s\nseeded rows of the missing issues (title, type, status, provider, own repo, pr, tier):\n%s\nanswer digest: %.3000s", slug, diffSets(want, got), describeMissing(t, slug, want, got), answerDigest(d))
 		}
 		cohort := get(structured(d), "cohort")
 		total, _ := get(cohort, "total").(float64)
@@ -343,4 +344,19 @@ WHERE l.org_id = %s AND w.title = %s`, sqlStr(orgID(t)), sqlStr(k)))
 	}
 	sort.Strings(out)
 	return strings.Join(out, "\n")
+}
+
+// answerDigest is the part of an answer that explains a short member list.
+func answerDigest(d doc) string {
+	st, _ := structured(d).(map[string]any)
+	cohort := map[string]any{}
+	if c, ok := st["cohort"].(map[string]any); ok {
+		for k, v := range c {
+			if k != "members" {
+				cohort[k] = v
+			}
+		}
+	}
+	b, _ := json.Marshal(doc{"status": st["status"], "cohort": cohort, "limitations": st["limitations"], "coverage_summary": st["coverage_summary"], "coverage_details": st["coverage_details"], "completeness": st["completeness"], "warnings": st["warnings"]})
+	return string(b)
 }
