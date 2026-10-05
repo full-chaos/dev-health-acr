@@ -902,29 +902,30 @@ func (f ConfirmedNeedLedgerFields) SlogArgs() []any {
 // CountPopulationScopeFields is contextfabric.count_population_scope's generated typed construction interface
 // (CHAOS-5516): one Go field per Field CountPopulationScope.Fields declares in spec.go.
 type CountPopulationScopeFields struct {
-	OrgID             string
-	ExpressionKind    string
-	MemberKind        string
-	Requirement       string
-	Committed         int
-	CommittedAnchors  int
-	CommittedUnbound  int
-	AnchorKind        string
-	AnchorID          string
-	Candidates        int
-	AnchorCandidates  int
-	AnchorTermMatches int
-	MemberSource      string
-	MemberSetResolved bool
-	Members           int
-	Decision          string
-	AssembledOutcome  string
-	Counted           bool
-	Served            int
-	Reused            bool
-	SubjectKind       string
-	SubjectID         string
-	RequestID         string
+	OrgID                 string
+	ExpressionKind        string
+	MemberKind            string
+	Requirement           string
+	Committed             int
+	CommittedAnchors      int
+	CommittedUnbound      int
+	AnchorKind            string
+	AnchorID              string
+	Candidates            int
+	AnchorCandidates      int
+	AnchorTermMatches     int
+	AnchorIdentityMatches int
+	MemberSource          string
+	MemberSetResolved     bool
+	Members               int
+	Decision              string
+	AssembledOutcome      string
+	Counted               bool
+	Served                int
+	Reused                bool
+	SubjectKind           string
+	SubjectID             string
+	RequestID             string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every CountPopulationScopeFields uniformly, set ONLY by NewCountPopulationScopeFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -938,32 +939,33 @@ type CountPopulationScopeFields struct {
 
 // NewCountPopulationScopeFields is the generated constructor for CountPopulationScopeFields -- every
 // field CountPopulationScope.Fields declares is a required parameter.
-func NewCountPopulationScopeFields(orgID string, expressionKind string, memberKind string, requirement string, committed int, committedAnchors int, committedUnbound int, anchorKind string, anchorID string, candidates int, anchorCandidates int, anchorTermMatches int, memberSource string, memberSetResolved bool, members int, decision string, assembledOutcome string, counted bool, served int, reused bool, subjectKind string, subjectID string, requestID string) CountPopulationScopeFields {
+func NewCountPopulationScopeFields(orgID string, expressionKind string, memberKind string, requirement string, committed int, committedAnchors int, committedUnbound int, anchorKind string, anchorID string, candidates int, anchorCandidates int, anchorTermMatches int, anchorIdentityMatches int, memberSource string, memberSetResolved bool, members int, decision string, assembledOutcome string, counted bool, served int, reused bool, subjectKind string, subjectID string, requestID string) CountPopulationScopeFields {
 	return CountPopulationScopeFields{
-		OrgID:             orgID,
-		ExpressionKind:    expressionKind,
-		MemberKind:        memberKind,
-		Requirement:       requirement,
-		Committed:         committed,
-		CommittedAnchors:  committedAnchors,
-		CommittedUnbound:  committedUnbound,
-		AnchorKind:        anchorKind,
-		AnchorID:          anchorID,
-		Candidates:        candidates,
-		AnchorCandidates:  anchorCandidates,
-		AnchorTermMatches: anchorTermMatches,
-		MemberSource:      memberSource,
-		MemberSetResolved: memberSetResolved,
-		Members:           members,
-		Decision:          decision,
-		AssembledOutcome:  assembledOutcome,
-		Counted:           counted,
-		Served:            served,
-		Reused:            reused,
-		SubjectKind:       subjectKind,
-		SubjectID:         subjectID,
-		RequestID:         requestID,
-		constructed:       true,
+		OrgID:                 orgID,
+		ExpressionKind:        expressionKind,
+		MemberKind:            memberKind,
+		Requirement:           requirement,
+		Committed:             committed,
+		CommittedAnchors:      committedAnchors,
+		CommittedUnbound:      committedUnbound,
+		AnchorKind:            anchorKind,
+		AnchorID:              anchorID,
+		Candidates:            candidates,
+		AnchorCandidates:      anchorCandidates,
+		AnchorTermMatches:     anchorTermMatches,
+		AnchorIdentityMatches: anchorIdentityMatches,
+		MemberSource:          memberSource,
+		MemberSetResolved:     memberSetResolved,
+		Members:               members,
+		Decision:              decision,
+		AssembledOutcome:      assembledOutcome,
+		Counted:               counted,
+		Served:                served,
+		Reused:                reused,
+		SubjectKind:           subjectKind,
+		SubjectID:             subjectID,
+		RequestID:             requestID,
+		constructed:           true,
 	}
 }
 
@@ -992,6 +994,7 @@ func (f CountPopulationScopeFields) SlogArgs() []any {
 		"candidates", f.Candidates,
 		"anchor_candidates", f.AnchorCandidates,
 		"anchor_term_matches", f.AnchorTermMatches,
+		"anchor_identity_matches", f.AnchorIdentityMatches,
 		"member_source", contextfabric.SanitizeLogAttr(f.MemberSource),
 		"member_set_resolved", f.MemberSetResolved,
 		"members", f.Members,

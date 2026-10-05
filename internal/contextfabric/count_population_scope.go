@@ -170,6 +170,11 @@ type CountPopulationScope struct {
 	// measure behind the single_subject decision's "no other candidate matched
 	// the label" clause, so the trace can rebuild that clause.
 	AnchorTermMatches int
+	// AnchorIdentityMatches is how many of those candidates matched the term
+	// by an identity mechanism (exact, alias or provider key), not only by
+	// lexical or vector retrieval. It is the measure behind the single_subject
+	// decision's competing-match clause.
+	AnchorIdentityMatches int
 	// MemberSource is which graph discovery arm served the resolved member
 	// set this decision rides on -- carried from GraphContext.CohortMemberSource
 	// (empty/not_applicable on reuse, which ran no live discovery).
@@ -225,6 +230,9 @@ func DecideCountPopulationScopeWithDigests(frame *QuestionFrame, sampleAnchorKin
 		if anchorTermMatched(frame, candidate.Subject, resolution) {
 			scope.AnchorTermMatches++
 		}
+		if anchorIdentityMatched(frame, candidate.Subject, resolution) {
+			scope.AnchorIdentityMatches++
+		}
 		if candidate.Subject.Kind == scope.MemberKind {
 			continue
 		}
@@ -274,7 +282,9 @@ func DecideCountPopulationScopeWithDigests(frame *QuestionFrame, sampleAnchorKin
 // singleNamedSubject reports whether a children_of_scope frame whose member
 // kind equals the kind of its only committed subject is really a question
 // about that subject: the subject matched the anchor term, no other candidate
-// matched it (an ambiguous label stays ambiguous), and no other subject was
+// matched it by an identity mechanism (an ambiguous label stays ambiguous; a
+// neighbour that retrieval only offered for a shared word is not a competing
+// match), and no other subject was
 // committed. Decided from the frame and the resolution's own record only; no
 // question text is read.
 func singleNamedSubject(frame *QuestionFrame, scope CountPopulationScope, resolution SubjectResolution) bool {
@@ -290,7 +300,7 @@ func singleNamedSubject(frame *QuestionFrame, scope CountPopulationScope, resolu
 		if other.Kind == subject.Kind && other.CanonicalID == subject.CanonicalID {
 			continue
 		}
-		if anchorTermMatched(frame, other, resolution) {
+		if anchorIdentityMatched(frame, other, resolution) {
 			return false
 		}
 	}
@@ -393,6 +403,27 @@ func labelUniqueAnchor(frame *QuestionFrame, anchorKind SubjectKind, subject Sub
 		}
 	}
 	return true
+}
+
+// anchorIdentityMatched reports whether one of the subject's own candidates
+// matched an anchor term AND carries an identity mechanism (exact, alias or
+// provider key). A candidate retrieved only lexically or by vector carries the
+// term that retrieved it (graphrank) and is not a claim on the name.
+func anchorIdentityMatched(frame *QuestionFrame, subject SubjectRef, resolution SubjectResolution) bool {
+	if !anchorTermMatched(frame, subject, resolution) {
+		return false
+	}
+	for _, candidate := range resolution.Candidates {
+		if candidate.Subject.Kind != subject.Kind || candidate.Subject.CanonicalID != subject.CanonicalID {
+			continue
+		}
+		for _, mechanism := range candidate.MatchMechanisms {
+			if mechanism == MatchExact || mechanism == MatchAlias || mechanism == MatchProviderKey {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // anchorTermMatched reports whether one of the subject's own candidates
@@ -577,6 +608,7 @@ func CountPopulationScopeLogArgs(event CountPopulationScopeEvent, orgID string) 
 		"candidates", SanitizeLogInt(int64(event.Scope.Candidates)),
 		"anchor_candidates", SanitizeLogInt(int64(event.Scope.AnchorCandidates)),
 		"anchor_term_matches", SanitizeLogInt(int64(event.Scope.AnchorTermMatches)),
+		"anchor_identity_matches", SanitizeLogInt(int64(event.Scope.AnchorIdentityMatches)),
 		"member_source", SanitizeLogAttr(string(event.Scope.MemberSource)),
 		"member_set_resolved", event.MemberSetResolved,
 		"members", SanitizeLogInt(int64(event.Members)),

@@ -353,7 +353,12 @@ import (
 // reads that period on the range axis, and a comparison names the period it is
 // compared with as not read, where both ran as one current-state window. A
 // candidate saved under v63 for such a question must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v65"
+//
+// v65 -> v66: a count about one named repository whose label other
+// repositories only share a word with is answered as a question about that one
+// repository, where it was left as an unresolved anchor. A candidate saved
+// under v65 for such a question must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v66"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
