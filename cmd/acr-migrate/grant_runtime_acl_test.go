@@ -120,6 +120,17 @@ func TestGrantRuntimeACL_deviceGrantsRoundTrip(t *testing.T) {
 		}
 	}
 
+	for _, privilege := range []string{"SELECT", "INSERT", "DELETE"} {
+		require.True(t, hasPrivilege("acr.web_assertion_replays", privilege), "acr.web_assertion_replays: grant-runtime-acl must give the runtime role %s for the shared web-assertion replay record", privilege)
+	}
+	for _, privilege := range []string{"UPDATE", "TRUNCATE"} {
+		require.False(t, hasPrivilege("acr.web_assertion_replays", privilege), "acr.web_assertion_replays: no %s", privilege)
+	}
+	_, err = runtimeDB.ExecContext(ctx, `INSERT INTO acr.web_assertion_replays (issuer, jti, expires_at) VALUES ('i', 'j', now() - interval '1 hour')`)
+	require.NoError(t, err)
+	_, err = runtimeDB.ExecContext(ctx, `DELETE FROM acr.web_assertion_replays WHERE ctid = ANY (ARRAY(SELECT ctid FROM acr.web_assertion_replays WHERE expires_at < now() LIMIT 1))`)
+	require.NoError(t, err, "the runtime role runs the exact sweep shape")
+
 	// GREEN: the SAME runtime-role connection can now INSERT and SELECT a
 	// real device grant row.
 	_, err = runtimeDB.ExecContext(ctx, insertDeviceGrant, deviceCodeHashA)

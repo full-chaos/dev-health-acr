@@ -58,16 +58,19 @@ the normal `Principal.RepositoryScopes` and still calls `AuthorizeRepository`.
 
 The verifier reads the local JWKS for every assertion, so removing a `kid`
 revokes future use immediately; the 30-second maximum lifetime bounds any
-already issued assertion. A duplicate `jti` is not claimed impossible: each ACR
-process observes it, writes a bounded replay-denial audit event keyed by the
-web subject, and returns `429`. This is request-bound replay mitigation, not a
-distributed single-use guarantee; deployments that require global replay
-coordination need a shared, separately operated replay store.
+already issued assertion. A duplicate `jti` is refused on every ACR pod: the
+first use of each (issuer, `jti`) is recorded in PostgreSQL
+(`acr.web_assertion_replays`) with one atomic insert, a conflict writes a
+bounded replay-denial audit event keyed by the web subject and returns `429`.
+When the record cannot answer, the assertion is refused with `503` and the log
+class `web_assertion_store_unavailable`; it never falls back to a per-process
+record. Rows are swept a minute after the assertion expires, a bounded batch at
+a time, by the writes themselves.
 
 The replay cache is intentionally not the device-approval idempotency mechanism.
 Device authorization records use durable compare-and-set transitions to make
-approval decisions idempotent; the replay cache remains bounded, per-process
-request-replay mitigation.
+approval decisions idempotent; the replay record is request-replay mitigation
+only.
 
 Authentication attempt limiting uses the direct peer address by default. A
 deployment behind shared reverse proxies must set `ACR_TRUSTED_PROXY_CIDRS`;

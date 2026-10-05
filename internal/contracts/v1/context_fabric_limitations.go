@@ -687,15 +687,20 @@ func IsContextFabricStatedRangeConflictLimitation(limitation string) bool {
 
 // ContextFabricComparisonPeriodUnreadLimitation is served when a question
 // compares two periods and the turn read only the period it states. Bounds are
-// RFC 3339 in UTC, as an evidence window states them, so a client can send the
-// comparison period back as the evidence_window of a second call.
+// RFC 3339 in UTC, as an evidence window states them.
+//
+// The service does not compare two periods, and a second call that repeats the
+// comparison wording is refused the same way, so the sentence says what does
+// work: one period per call, asked in its single-period form, with the
+// comparison period as the evidence window, and the comparison made by the
+// client from the two answers.
 func ContextFabricComparisonPeriodUnreadLimitation(statedStart, statedEnd, comparisonStart, comparisonEnd string) string {
-	return "This question compares two periods; this answer read only the stated period, " + statedStart + " to " + statedEnd + ". The period it is compared with, " + comparisonStart + " to " + comparisonEnd + ", was not read; a second call with evidence_window start " + comparisonStart + " and end " + comparisonEnd + " reads it."
+	return "This question compares two periods; this answer read only the stated period, " + statedStart + " to " + statedEnd + ". The period it is compared with, " + comparisonStart + " to " + comparisonEnd + ", was not read. This service reads one period per call and does not compare two: ask about one period only, with the question in its single-period form without the comparison wording, and send evidence_window start " + comparisonStart + " and end " + comparisonEnd + "; then compare the two answers yourself."
 }
 
 const comparisonPeriodInstant = `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z`
 
-var comparisonPeriodUnreadLimitationPattern = regexp.MustCompile(`^This question compares two periods; this answer read only the stated period, ` + comparisonPeriodInstant + ` to ` + comparisonPeriodInstant + `\. The period it is compared with, (` + comparisonPeriodInstant + `) to (` + comparisonPeriodInstant + `), was not read; a second call with evidence_window start (` + comparisonPeriodInstant + `) and end (` + comparisonPeriodInstant + `) reads it\.$`)
+var comparisonPeriodUnreadLimitationPattern = regexp.MustCompile(`^This question compares two periods; this answer read only the stated period, ` + comparisonPeriodInstant + ` to ` + comparisonPeriodInstant + `\. The period it is compared with, (` + comparisonPeriodInstant + `) to (` + comparisonPeriodInstant + `), was not read\. This service reads one period per call and does not compare two: ask about one period only, with the question in its single-period form without the comparison wording, and send evidence_window start (` + comparisonPeriodInstant + `) and end (` + comparisonPeriodInstant + `); then compare the two answers yourself\.$`)
 
 // IsContextFabricComparisonPeriodUnreadLimitation reports whether one
 // limitation is that disclosure; it matches the whole sentence.

@@ -45,7 +45,7 @@ func prepareServer(ctx context.Context, request serverBuildRequest) (serverRunne
 	if err != nil {
 		return nil, nil, err
 	}
-	webAssertions, err := webAssertionVerifier(request.config)
+	webAssertions, err := webAssertionVerifier(request.config, dependencies.WebAssertionReplays, request.logger)
 	if err != nil {
 		return nil, nil, closeBuildFailure(closeRuntime, fmt.Errorf("initialize web assertions: %w", err))
 	}
@@ -71,13 +71,17 @@ func prepareServer(ctx context.Context, request serverBuildRequest) (serverRunne
 	return server, closeApplication, nil
 }
 
-func webAssertionVerifier(cfg config.Config) (*auth.WebAssertionVerifier, error) {
+func webAssertionVerifier(cfg config.Config, replays auth.WebAssertionReplayStore, logger *slog.Logger) (*auth.WebAssertionVerifier, error) {
 	if cfg.WebAssertionJWKSFile == "" {
 		return nil, nil
+	}
+	if replays == nil && cfg.RequireBackingStores {
+		return nil, errors.New("web assertions require the shared replay store")
 	}
 	return auth.NewWebAssertionVerifier(auth.WebAssertionOptions{
 		Issuer: cfg.WebAssertionIssuer, Audience: cfg.WebAssertionAudience, JWKSPath: cfg.WebAssertionJWKSFile,
 		MaxBodyBytes: int64(cfg.MaxSerializedBytes),
+		Replays:      replays, Logger: logger,
 	})
 }
 

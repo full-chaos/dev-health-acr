@@ -2,6 +2,9 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
+	"reflect"
+	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -180,7 +183,7 @@ type BudgetAssertionEvent struct {
 // A zero on either budget axis means unbounded on that axis
 // (ContextFabricResponseBudget's own doc comment), so an engine composed
 // without ceilings behaves exactly as it did before this change.
-func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, result InvestigationResult, budget ResponseBudget) error {
+func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Principal, telemetry EngineTelemetry, stage BudgetAssertStage, result InvestigationResult, budget ResponseBudget) error {
 	if budget.MaxItems <= 0 && budget.MaxSerializedBytes <= 0 {
 		return nil
 	}
@@ -208,8 +211,8 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 		// stage-three raise keeps, and built by the SAME constructor -- so
 		// the emitted line and the raised error can never disagree about
 		// the document they describe.
-		if e.telemetry != nil {
-			e.telemetry.RecordItemAccounting(ctx, principal,
+		if telemetry != nil {
+			telemetry.RecordItemAccounting(ctx, principal,
 				itemAccountingEventFor(string(stage), ledger, budget.MaxItems))
 		}
 		return stageError(StageValidation, accounting)
@@ -235,8 +238,8 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 	certificate, capacity := contractsv1.CertifyContextFabricCapacity(ledger, budget)
 	event.CertifiedFit = certificate.Certified()
 	event.Capacity = capacity
-	if e.telemetry != nil {
-		e.telemetry.RecordBudgetAssertion(ctx, principal, event)
+	if telemetry != nil {
+		telemetry.RecordBudgetAssertion(ctx, principal, event)
 	}
 	if event.Fits {
 		return nil
@@ -284,60 +287,40 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 // pre-interpret veto/gate exits run before an AnswerPlan exists. A nil plan
 // stamps nothing; it is not a missing value.
 func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, result InvestigationResult, plan *AnswerPlan, budget ResponseBudget) (InvestigationResult, error) {
+	return e.finalizeServedAs(ctx, principal, stage, result, plan, budget, servedModeServe)
+}
+
+// servedMode says what a finalization is for. Serve is the one that ends an
+// answer: it emits the served-document events. MeasureOnly runs every writer
+// and every guard and measures the same document, and emits nothing; the final
+// fit uses it for candidates that may be cut again.
+type servedMode int
+
+const (
+	servedModeServe servedMode = iota
+	servedModeMeasureOnly
+)
+
+func (e *Engine) finalizeServedAs(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, result InvestigationResult, plan *AnswerPlan, budget ResponseBudget, mode servedMode) (InvestigationResult, error) {
+	telemetry := e.telemetry
+	if mode == servedModeMeasureOnly {
+		telemetry = nil
+	}
 	if plan != nil {
 		result = stampAnswerPlan(result, *plan)
 	}
-	// The caller's repository scope was applied to the work item census, through
-	// the links to the scoped repositories' pull requests. Stated on every
-	// serving path, before completeness is derived because a limitation moves
-	// the terminal reason, and before the budget because it is a served byte.
-	result = withWorkItemCensusScopeDisclosures(ctx, result)
-	// Re-derive completeness HERE, after the plan is on the result and before
-	// the budget is asserted.
-	//
-	// The veto exits call ComputeAnswerCompleteness themselves, but they call
-	// it BEFORE this function stamps the plan. Anything the derivation reads
-	// off the plan is therefore invisible to them -- which is how those exits
-	// came to serve, and save, a plan describing requirement rows that no
-	// outcome row accounted for. Re-deriving here is what makes this function
-	// the place the two published arrays are reconciled, rather than four
-	// places that each have to remember.
-	//
-	// BEFORE assertFitsBudget, deliberately: rows added by the re-derivation
-	// are bytes in the served document. Measuring first and completing the
-	// account afterwards would assert a budget against a document smaller
-	// than the one the route marshals -- the exact defect this function's
-	// header says it exists to prevent.
-	//
-	// Safe to run on the paths that already derived it: the derivation is
-	// pure and idempotent, so a second pass over an already-complete set
-	// returns the same set.
-	result.Completeness = ComputeAnswerCompleteness(result)
-	// The outcome-derivation completeness authority, HERE and not at any
-	// individual exit, for the identical reason the answerability invariant
-	// two paragraphs below is here: this is the one point every serving
-	// path is downstream of, INCLUDING the reuse path (a stored document
-	// carries its own outcome rows and deserves the same measurement a
-	// fresh one gets) and every veto/refusal/clarification exit (each of
-	// which must report `not_an_answer` rather than silently never being
-	// asked). See completeness_authority.go's own header for what the
-	// derivation itself does and does not touch.
-	//
-	// BEFORE the budget assertion below, not because of its position
-	// relative to the completeness re-derivation immediately above (a
-	// non-answer disposition never reads Outcomes at all, and an answer
-	// disposition's Outcomes are already fully accounted for by the stage
-	// that ran before this function, so DeriveCompletenessAuthority's own
-	// answer is the same either way): a flip changes result.Status, which
-	// changes the terminal reason ComputeAnswerCompleteness derives from
-	// it, which is bytes in the served document -- the budget below must
-	// measure the document actually served, not the one before this
-	// correction.
-	completenessAuthority := DeriveCompletenessAuthority(result)
-	if e.telemetry != nil {
-		e.telemetry.RecordCompletenessAuthority(ctx, principal, completenessAuthority)
+	// The late writers (the census scope limitation, the completeness
+	// re-derivation and the completeness authority) are ONE function, so that
+	// the stage-3 fit measures the document these writers produce and not the
+	// one before them. They stamp bytes after the plan is on the result and
+	// before the budget is asserted; see servedLateWriters.
+	result, completenessAuthority := e.servedLateWriters(ctx, result)
+	if e.servedLateHook != nil {
+		result = e.servedLateHook(result)
 	}
-	result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, completenessAuthority)
+	if telemetry != nil {
+		telemetry.RecordCompletenessAuthority(ctx, principal, completenessAuthority)
+	}
 	// CHAOS-5637: the answerability invariant, HERE for the same reason
 	// everything else in this function is here -- this is the one point
 	// every serving path is downstream of, and a guard that holds at some
@@ -374,9 +357,107 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	if err := AssertServedRequirementEvidence(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, err)
 	}
-	e.recordRequirementOutcomeTransitions(ctx, principal, result)
-	if err := e.assertFitsBudget(ctx, principal, stage, result, budget); err != nil {
+	e.recordRequirementOutcomeTransitions(ctx, principal, telemetry, result)
+	if err := e.assertFitsBudget(ctx, principal, telemetry, stage, result, budget); err != nil {
 		return InvestigationResult{}, err
 	}
 	return result, nil
+}
+
+// servedLateWriters applies, in the order finalizeServed always applied them,
+// the writers that change the document after the plan is stamped and before it
+// is measured:
+//
+//   - The caller's repository scope was applied to the work item census: a work
+//     item with no repository of its own was not searched. Stated on every
+//     serving path, before completeness is derived because a limitation moves
+//     the terminal reason, and before the budget because it is a served byte.
+//   - Completeness is re-derived after the plan is on the result and before the
+//     budget is asserted. The veto exits derive it before the plan is stamped,
+//     so anything the derivation reads off the plan is invisible to them.
+//   - The completeness authority may flip the status, which changes the
+//     terminal reason ComputeAnswerCompleteness derives from it: bytes in the
+//     served document.
+//
+// It exists as one function because the row cut and the other stage-3 levers
+// fit the answer under the byte ceiling, and a fit that measures the document
+// without these writers certifies a document the route does not send: prod
+// fitted 65,498 of 65,536 bytes, the document sent measured 65,550, and a
+// smaller true answer was refused with a 413. servedMeasurementShape applies
+// this function, so the fit and the final assertion measure one document.
+//
+// The pure part only: the authority observation is returned for the one caller
+// that records it, so a fit's candidate documents emit no telemetry.
+func (e *Engine) servedLateWriters(ctx context.Context, result InvestigationResult) (InvestigationResult, CompletenessAuthorityObservation) {
+	result = withWorkItemCensusScopeDisclosures(ctx, result)
+	result.Completeness = ComputeAnswerCompleteness(result)
+	observation := DeriveCompletenessAuthority(result)
+	result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, observation)
+	return result, observation
+}
+
+// finalizeServedFitting is finalizeServed for the decisive path with the byte
+// fit made decisive. The stage-3 row cut fits the answer under the ceiling
+// before the late writers run; the document SENT is the one finalizeServed
+// measures after every writer. When that measurement overruns on BYTES while
+// the answer still holds row tables of more than one row, the rows are cut one
+// step further (the longest table loses a row) and the document is finalized
+// and measured again, in a loop bounded by the longest table. Whatever writes
+// to the document last, a smaller true answer is served instead of refused; the
+// refusal stands only when nothing is left to cut, and then it says so.
+//
+// Candidates are finalized in servedModeMeasureOnly. The document that ends the
+// loop is finalized once more in servedModeServe, so each served-document event
+// is emitted once, for the document served or the last one refused.
+func (e *Engine) finalizeServedFitting(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, result InvestigationResult, budget ResponseBudget) (InvestigationResult, error) {
+	current := result
+	for {
+		_, err := e.finalizeServedAs(ctx, principal, stage, current, nil, budget, servedModeMeasureOnly)
+		var refusal AnswerBudgetRefusal
+		if err == nil || !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+			return e.finalizeServed(ctx, principal, stage, current, nil, budget)
+		}
+		_, longest := claimedFactTableRowCounts(current.ClaimedFacts)
+		if longest > 1 {
+			if next, cut := recutFactRows(current, longest-1); cut {
+				current = next
+				continue
+			}
+		}
+		_, final := e.finalizeServed(ctx, principal, stage, current, nil, budget)
+		if errors.As(final, &refusal) {
+			refusal.NothingLeftToCut = true
+			return InvestigationResult{}, refusal
+		}
+		return InvestigationResult{}, final
+	}
+}
+
+// recutFactRows cuts every row table to at most perTable rows and restates the
+// row-cut disclosure for the new cut. It replaces exactly what the earlier cut
+// wrote -- the limitation sentence, parsed for its served, declared and per-table
+// numbers, and the one outcome row equal to the row that cut composed from them
+// -- and nothing else, so a path-drop outcome (the same row shape) is never
+// mistaken for it. The declared total is the earlier cut's own, never recounted.
+func recutFactRows(result InvestigationResult, perTable int) (InvestigationResult, bool) {
+	base := result
+	declared, _ := claimedFactTableRowCounts(result.ClaimedFacts)
+	for index, limitation := range result.Limitations {
+		priorServed, priorDeclared, _, ok := contractsv1.ParseContextFabricFactRowTruncationLimitation(limitation)
+		if !ok {
+			continue
+		}
+		declared = priorDeclared
+		base.Limitations = slices.Delete(slices.Clone(result.Limitations), index, index+1)
+		prior := factRowTruncationOutcomeRow(priorServed, priorDeclared)
+		for rowIndex, row := range result.Completeness.Outcomes {
+			if reflect.DeepEqual(row, prior) {
+				base.Completeness.Outcomes = slices.Delete(slices.Clone(result.Completeness.Outcomes), rowIndex, rowIndex+1)
+				break
+			}
+		}
+		break
+	}
+	cut, _, _, ok := applyFactRowTruncation(base, perTable, declared)
+	return cut, ok
 }

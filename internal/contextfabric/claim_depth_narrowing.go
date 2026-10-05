@@ -244,7 +244,7 @@ func (e *Engine) planClaimDepthNarrowing(
 			return contractsv1.ContextFabricResponseMeasurement{}, false, nil
 		}
 		cut = e.finalizeResult(ctx, principal, cut, *plan, frame, facts, nil, pass, cardinality)
-		measurement, err := contractsv1.MeasureContextFabricResponse(servedMeasurementShape(cut))
+		measurement, err := contractsv1.MeasureContextFabricResponse(e.servedMeasurementShape(ctx, cut))
 		return measurement, err == nil && measurement.Overrun(budget) == contractsv1.ContextFabricBudgetFits, err
 	}
 	// Largest fitting cap in [1, longest-1]. Items fall monotonically with
