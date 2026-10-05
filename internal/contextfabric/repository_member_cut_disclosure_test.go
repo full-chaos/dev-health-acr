@@ -120,7 +120,7 @@ func TestACutOverAnIncompleteCensusSaysAtLeast(t *testing.T) {
 	}
 }
 
-func TestARestrictedCallersCutNamesOnlyWhatTheCallerMayRead(t *testing.T) {
+func TestARestrictedCallersPopulationAndListedSentenceCountOnlyWhatTheCallerMayRead(t *testing.T) {
 	defer reportWorkItemMutationPanic(t)
 	members := cutTestMembers(t, 20, func(int) string { return TreeLinkTierNative })
 	run := func(denied int) InvestigationResult {

@@ -149,7 +149,7 @@ func (r *cutRig) ask(t *testing.T) servedAnswer {
 type servedCohort struct {
 	Total, Population, Listed int
 	LowerBound                bool
-	Sentences                 []string
+	Sentences, Limitations    []string
 	Markdown                  string
 }
 
@@ -170,7 +170,7 @@ func readServedCohort(t *testing.T, answer servedAnswer) servedCohort {
 		t.Fatal(err)
 	}
 	c := node.Structured.Cohort
-	served := servedCohort{Total: c.Total, Population: c.Population, Listed: len(c.Members), LowerBound: c.PopulationLowerBound, Markdown: answer.markdown}
+	served := servedCohort{Limitations: node.Structured.Limitations, Total: c.Total, Population: c.Population, Listed: len(c.Members), LowerBound: c.PopulationLowerBound, Markdown: answer.markdown}
 	for _, limitation := range node.Structured.Limitations {
 		if contractsv1.IsContextFabricWorkItemListedLimitation(limitation) || limitation == contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation {
 			served.Sentences = append(served.Sentences, limitation)
@@ -228,11 +228,29 @@ func TestAMixedTierCutReachesTheClientWithBothSentences(t *testing.T) {
 	}
 }
 
-func TestHiddenMembersChangeNothingTheClientReceives(t *testing.T) {
+// What hidden members change in the answer: only the authorization-gap sentence that predates
+// this change (it states the denied count to a partially authorized caller). The population, the
+// total, the listed count and the N of M sentence this change adds are equal.
+func TestHiddenMembersDoNotChangeThePopulationOrTheListedSentence(t *testing.T) {
 	none := readServedCohort(t, newCutRig(t, cutWalk(t, 20, 0, func(int) string { return contextfabric.TreeLinkTierNative })).ask(t))
 	hidden := readServedCohort(t, newCutRig(t, cutWalk(t, 20, 7, func(int) string { return contextfabric.TreeLinkTierNative })).ask(t))
 	if none.Population != 20 || hidden.Population != 20 || none.listedSentence() != hidden.listedSentence() || none.Total != hidden.Total || none.Listed != hidden.Listed {
-		t.Fatalf("hidden members change the served answer: none=%+v hidden=%+v", none, hidden)
+		t.Fatalf("hidden members change what this change adds: none=%+v hidden=%+v", none, hidden)
+	}
+	gap := func(limitations []string) (rest []string, gaps int) {
+		for _, l := range limitations {
+			if strings.Contains(l, "outside this principal's authorized scope") {
+				gaps++
+				continue
+			}
+			rest = append(rest, l)
+		}
+		return rest, gaps
+	}
+	noneRest, noneGaps := gap(none.Limitations)
+	hiddenRest, hiddenGaps := gap(hidden.Limitations)
+	if noneGaps != 0 || hiddenGaps != 1 || !slices.Equal(noneRest, hiddenRest) {
+		t.Fatalf("the limitations differ by more than the pre-existing authorization-gap sentence: none=%v hidden=%v", none.Limitations, hidden.Limitations)
 	}
 }
 
