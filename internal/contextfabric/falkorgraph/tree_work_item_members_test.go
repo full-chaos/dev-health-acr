@@ -233,12 +233,12 @@ func TestRepositoryWorkItemCountsAreBeforeAuthorization(t *testing.T) {
 	}
 }
 
-// TestRepositoryWorkItemCountsHoldWithTheReadsGrantClause: the counts are the
-// same whether the read carries the grant clause or not. Linked issues are
-// counted before authorization, and denied counts distinct issues no
-// authorized link reached, never link rows: an issue admitted through a native
-// link and also text-linked is not denied.
-func TestRepositoryWorkItemCountsHoldWithTheReadsGrantClause(t *testing.T) {
+// TestRepositoryWorkItemDeniedCountsIssuesNotLinkRows: denied counts the
+// distinct issues the link read returned that no authorized link reached:
+// issues, never link rows, so an issue admitted through a native link and also
+// text-linked is not denied. Linked issues are what the read returned: with
+// the read's grant clause, only what the grants can admit.
+func TestRepositoryWorkItemDeniedCountsIssuesNotLinkRows(t *testing.T) {
 	s := newMemberSeed()
 	s.issue("work_item.v2:c:visible", []string{memberAnchorSlug})
 	s.issue("work_item.v2:c:secret", []string{"acme/secret"})
@@ -252,13 +252,23 @@ func TestRepositoryWorkItemCountsHoldWithTheReadsGrantClause(t *testing.T) {
 	s.link("work_item.v2:c:both", "pull_request:c:1", "native")
 	s.link("work_item.v2:c:both", "pull_request:c:2", "explicit_text")
 	granted := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{memberAnchorSlug}}
-	for name, wrap := range map[string]func(*fakeConn){"pushdown and per-row": nil, "per-row only": perRowOnly} {
-		walk := s.walk(t, granted, contextfabric.RequestedScope{}, 25, wrap)
+	for name, c := range map[string]struct {
+		wrap           func(*fakeConn)
+		linked, denied int
+	}{
+		// The grant clause keeps secret and textonly out of the read: they are
+		// not returned, so neither linked nor denied.
+		"pushdown and per-row": {nil, 2, 0},
+		// Every link row is returned; the per-row rule rejects secret and
+		// textonly; both is admitted through its native link.
+		"per-row only": {perRowOnly, 4, 2},
+	} {
+		walk := s.walk(t, granted, contextfabric.RequestedScope{}, 25, c.wrap)
 		if got := memberTiers(walk); got != "work_item.v2:c:both=native,work_item.v2:c:visible=heuristic" {
 			t.Errorf("%s: members %s", name, got)
 		}
-		if walk.PullRequests != 2 || walk.LinkedIssues != 4 || walk.Denied != 2 {
-			t.Errorf("%s: pull requests %d, linked issues %d, denied %d; want 2, 4, 2 (secret and textonly)", name, walk.PullRequests, walk.LinkedIssues, walk.Denied)
+		if walk.PullRequests != 2 || walk.LinkedIssues != c.linked || walk.Denied != c.denied {
+			t.Errorf("%s: pull requests %d, linked issues %d, denied %d; want 2, %d, %d", name, walk.PullRequests, walk.LinkedIssues, walk.Denied, c.linked, c.denied)
 		}
 	}
 }

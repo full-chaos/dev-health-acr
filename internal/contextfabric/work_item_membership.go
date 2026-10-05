@@ -148,9 +148,12 @@ type WorkItemMembershipCensus struct {
 	Limitation               string
 	// RepositoryPullRequests and RepositoryLinkedIssues describe a
 	// repository anchor when the population was measured: the repository's
-	// pull requests, and the issues linked to them, before any member filter
-	// or authorization. They tell a repository with no pull request from one
-	// whose pull requests link no issue. Zero for a project anchor.
+	// pull requests, before any member filter or authorization, and the
+	// distinct issues the link read returned for them, before any member
+	// filter (for a restricted caller only those its grants can admit). They
+	// tell a repository with no pull request from one whose pull requests link
+	// no issue; a restricted caller's outcome is denied whatever they say.
+	// Zero for a project anchor.
 	RepositoryPullRequests int
 	RepositoryLinkedIssues int
 }

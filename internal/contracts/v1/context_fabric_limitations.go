@@ -804,6 +804,9 @@ const (
 	// every issue linked to the repository (a member whose status or
 	// completion could not be read, or a walk cut at its read bound).
 	ContextFabricWorkItemRepositoryPartialLimitation = "Not every work item linked to this repository could be read, so this list can miss members."
+	// ContextFabricWorkItemRepositoryStrongestFirstLimitation: more members
+	// than the answer lists; the list keeps the strongest links.
+	ContextFabricWorkItemRepositoryStrongestFirstLimitation = "Not every member is listed: members are kept by the strength of their link (native, then stated in text, then heuristic), so members of the lower link tiers were cut first."
 	// ContextFabricWorkItemRepositoryPeriodRoleRefusalLimitation refuses a
 	// created or updated period over the work items of a repository.
 	ContextFabricWorkItemRepositoryPeriodRoleRefusalLimitation = "No canonical fact carries the created or last updated time of the work items linked to a repository, so a period on those times cannot be applied and no members are listed. Ask for work items completed in that period, or ask without a period."
@@ -843,6 +846,7 @@ func IsContextFabricWorkItemRepositoryLimitation(limitation string) bool {
 		ContextFabricWorkItemRepositoryNoPullRequestsLimitation,
 		ContextFabricWorkItemRepositoryUnlinkedLimitation,
 		ContextFabricWorkItemRepositoryPartialLimitation,
+		ContextFabricWorkItemRepositoryStrongestFirstLimitation,
 		ContextFabricWorkItemRepositoryPeriodRoleRefusalLimitation:
 		return true
 	}

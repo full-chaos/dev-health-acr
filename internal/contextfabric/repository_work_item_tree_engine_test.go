@@ -263,6 +263,28 @@ func TestAHeuristicOnlyMemberIsCountedInADisclosure(t *testing.T) {
 	}
 }
 
+// TestAListCutAtTheServeCapSaysLowerTiersWereCutFirst: more members than the
+// answer lists carries the sentence that the lower link tiers were cut first;
+// a list that holds every member does not.
+func TestAListCutAtTheServeCapSaysLowerTiersWereCutFirst(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	var members []TreeWorkItemMember
+	for i := 0; i < WorkItemMembershipServeLimit+5; i++ {
+		members = append(members, treeMember(t, fmt.Sprintf("ENG-%04d", i), TreeLinkTierNative))
+	}
+	over := runRepositoryTree(t, repositoryTreeCase{walk: TreeWorkItemWalk{Members: members, PullRequests: 1, LinkedIssues: len(members)}})
+	if over.err != nil {
+		t.Fatal(over.err)
+	}
+	if !limitationsContain(over.result.Limitations, contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation) {
+		t.Fatalf("a list cut at the serve cap does not say how it was cut: %v", over.result.Limitations)
+	}
+	under := runRepositoryTree(t, repositoryTreeCase{walk: TreeWorkItemWalk{Members: members[:3], PullRequests: 1, LinkedIssues: 3}})
+	if limitationsContain(under.result.Limitations, contractsv1.ContextFabricWorkItemRepositoryStrongestFirstLimitation) {
+		t.Fatalf("a list holding every member says members were cut: %v", under.result.Limitations)
+	}
+}
+
 func TestTheStatusAndCompletedWindowFilterTheWalkedMembersThroughTheFactFilter(t *testing.T) {
 	defer reportWorkItemMutationPanic(t)
 	a, b, c := treeMember(t, "ENG-1", TreeLinkTierNative), treeMember(t, "ENG-2", TreeLinkTierNative), treeMember(t, "ENG-3", TreeLinkTierExplicitText)

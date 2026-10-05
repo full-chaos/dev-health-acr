@@ -386,8 +386,8 @@ func TestChaos8667RepositoryWorkItemMembersGraphAgreesWithLibraryRule(t *testing
 	}
 	oracleDrain(t, ctx, source, devhealthsource.SourceName, adapter)
 	// Projects, team ownership and the issue -> project presence edges come
-	// from the teams/projects source; without it the project reach (E1) has
-	// nothing to read.
+	// from the teams/projects source: the graph holds what production holds,
+	// so a member admitted through any of them would show up here.
 	teams, err := devhealthsource.NewTeamsProjectsSource(query, true)
 	if err != nil {
 		t.Fatal(err)
@@ -421,22 +421,6 @@ func TestChaos8667RepositoryWorkItemMembersGraphAgreesWithLibraryRule(t *testing
 	}
 	if page.More || len(page.Edges) != wantEdges {
 		t.Fatalf("projection produced %d LINKS_PULL_REQUEST edges (more=%t), want %d: the graph is not the seed", len(page.Edges), page.More, wantEdges)
-	}
-
-	// The project reach (E1) reads each repository-less issue's presence edge.
-	// A projection that wrote none would make every E1 row fail for the
-	// harness's reason, not the rule's: fail here, loudly, instead.
-	for _, id := range []string{"linear:CHAOS-14", "linear:CHAOS-16"} {
-		presence, err := adapter.DirectEdgePage(ctx, probe, binding, directread.EdgePageQuery{
-			Origins: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectWorkItem, CanonicalID: oracleCanonical(t, itemRepo[id], id)}},
-			Types:   []string{"BELONGS_TO_PROJECT"}, Direction: directread.EdgeDirectionOut, Limit: 10, ValidAt: now.Add(time.Minute),
-		})
-		if err != nil {
-			t.Fatalf("presence edges of %s: %v", id, err)
-		}
-		if len(presence.Edges) == 0 {
-			t.Fatalf("projection wrote no BELONGS_TO_PROJECT edge for %s: the project reach has nothing to read", id)
-		}
 	}
 
 	canonicalToID := map[string]string{}

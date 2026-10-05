@@ -12,6 +12,7 @@ func TestTheRepositoryWorkItemSentencesAreRecognisedWholeAndOnlyWhole(t *testing
 		ContextFabricWorkItemRepositoryNoPullRequestsLimitation,
 		ContextFabricWorkItemRepositoryUnlinkedLimitation,
 		ContextFabricWorkItemRepositoryPartialLimitation,
+		ContextFabricWorkItemRepositoryStrongestFirstLimitation,
 		ContextFabricWorkItemRepositoryPeriodRoleRefusalLimitation,
 		ContextFabricWorkItemRepositoryHeuristicLimitation(1),
 		ContextFabricWorkItemRepositoryHeuristicLimitation(200),

@@ -2998,8 +2998,10 @@ var ProjectDeploymentWalk = Event{
 // neutral), or a read that failed or measured nothing (read_failed, with the
 // closed reason).
 //
-// pull_requests and linked_issues are the repository's, before any member
-// filter or authorization; truncated says the walk or the filter did not read
+// pull_requests are the repository's, before any member filter or
+// authorization; linked_issues are the distinct issues the link read returned,
+// before any member filter (for a restricted caller only those its grants can
+// admit); truncated says the walk or the filter did not read
 // every member; denied is withheld on a filtered read. Counts and closed
 // values only, never a subject name or id.
 var RepositoryWorkItemWalk = Event{
