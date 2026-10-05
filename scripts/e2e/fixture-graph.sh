@@ -108,7 +108,9 @@ graph_census() {
     compose exec -T falkordb redis-cli GRAPH.QUERY "$g" 'MATCH ()-[e]->() RETURN e.relation_type, e.link_provenance, count(*)' 2>&1 | head -40 >&2 || true
     fg_note "graph ${g##*:}: sample link edge, its ends, and a pull request node"
     compose exec -T falkordb redis-cli GRAPH.QUERY "$g" "MATCH (a)-[e]->(b) WHERE e.relation_type = 'LINKS_PULL_REQUEST' RETURN properties(a), properties(e), properties(b) LIMIT 2" 2>&1 | head -60 >&2 || true
-    compose exec -T falkordb redis-cli GRAPH.QUERY "$g" "MATCH (p:PullRequest) RETURN properties(p) LIMIT 1" 2>&1 | head -30 >&2 || true
+    fg_note "graph ${g##*:}: link edges per pull request, and the links of three issues the walk may omit"
+    compose exec -T falkordb redis-cli GRAPH.QUERY "$g" "MATCH (w)-[e]->(p) WHERE e.relation_type = 'LINKS_PULL_REQUEST' RETURN p.canonical_id, count(*) ORDER BY p.canonical_id" 2>&1 | head -80 >&2 || true
+    compose exec -T falkordb redis-cli GRAPH.QUERY "$g" "MATCH (w)-[e]->(p) WHERE e.relation_type = 'LINKS_PULL_REQUEST' AND (w.label ENDS WITH 'task 22' OR w.label ENDS WITH 'story 25' OR w.label ENDS WITH 'task 24') RETURN w.label, w.canonical_id, p.canonical_id, e.authorization_repositories, w.valid_to, p.valid_to" 2>&1 | head -40 >&2 || true
   done
   compose logs --no-color --no-log-prefix acr-projector 2>&1 | redact_log | grep -v 'freshness summary' | tail -40 >&2 || true
 }
