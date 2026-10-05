@@ -245,7 +245,7 @@ func buildVocabulary(in Inputs) (string, error) {
 	for _, window := range in.Windows {
 		fmt.Fprintf(&b, "- `%s`: %s\n", window, windowTexts[window])
 	}
-	b.WriteString("\nOr send both `start` and `end` (RFC 3339). The tool has no time-axis field: it always asks about current state. `evidence_window` sets which period of evidence is read. When the question itself asks how something moved over a period it states, or compares that period with another, that period is read as a range; a comparison reads only the stated period and names the other period as not read.\n")
+	b.WriteString("\nOr send both `start` and `end` (RFC 3339). The tool has no time-axis field. A question about current state is read as current state, and `evidence_window` sets which period of evidence is read. When the question itself asks how something moved over a period it states, or compares that period with another, that period is read as a range instead; a comparison reads only the stated period and names the other period as not read.\n")
 
 	b.WriteString("\n## Result statuses\n\n")
 	for _, status := range in.Statuses {
