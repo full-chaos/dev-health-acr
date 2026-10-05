@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
@@ -134,5 +135,65 @@ func TestThePullRequestWideReadNamesAFewRowsFromTheChosenVersion(t *testing.T) {
 	pullRequestGranuleBytes = 512 << 10
 	if got := pullRequestWideReadRows(withReadByteLimit(context.Background(), 3<<20)); got != 4 {
 		t.Fatalf("rows per wide statement under 3 MiB and 512 KiB granules = %d, want 4", got)
+	}
+}
+
+// pageAndWideClient answers queryPullRequests' page read with six keys and
+// records how many rows each wide read names; every other read is empty.
+type pageAndWideClient struct {
+	maxNamed int
+	wide     int
+}
+
+func (c *pageAndWideClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	switch {
+	case strings.Contains(statement, "AS page_repo_id"):
+		var rows [][]any
+		for n := uint32(1); n <= 6; n++ {
+			rows = append(rows, []any{"86830000-0000-4000-8000-000000000701", "acme/r01", n, base.Add(time.Duration(n) * time.Second)})
+		}
+		return &rowsScanner{rows: rows}, nil
+	case strings.Contains(statement, "AS wide_repo_id"):
+		named := 0
+		for _, b := range bindings {
+			if strings.HasPrefix(b.Name, "r") {
+				named++
+			}
+		}
+		c.wide++
+		c.maxNamed = max(c.maxNamed, named)
+	}
+	return &rowsScanner{}, nil
+}
+
+// TestEveryReadOfTheSourceSizesItsWideReadsFromTheConfiguredLimit: the
+// configured max_bytes_to_read reaches the pull request wide read on the
+// source's every path, the peek included (it reads the same tables).
+func TestEveryReadOfTheSourceSizesItsWideReadsFromTheConfiguredLimit(t *testing.T) {
+	for name, read := range map[string]func(*ClickHouseProjectionSource) error{
+		"next": func(s *ClickHouseProjectionSource) error {
+			_, _, err := s.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: SourceName})
+			return err
+		},
+		"peek": func(s *ClickHouseProjectionSource) error {
+			_, err := s.PeekProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: SourceName})
+			return err
+		},
+	} {
+		client := &pageAndWideClient{}
+		source, err := NewClickHouseProjectionSource(client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// 32 MiB over 10 MiB granules: 2 rows a statement (the default, 64 MiB, gives 5).
+		source.WithReadByteLimit(32 << 20)
+		_ = read(source)
+		if client.wide == 0 {
+			t.Fatalf("%s: no wide read ran", name)
+		}
+		if client.maxNamed != 2 {
+			t.Errorf("%s: a wide read named %d rows, want 2 under the configured 32 MiB", name, client.maxNamed)
+		}
 	}
 }

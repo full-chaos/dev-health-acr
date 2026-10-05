@@ -353,7 +353,6 @@ func (s *ClickHouseProjectionSource) NextProjectionBatch(ctx context.Context, ch
 	if s == nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: source is not configured")
 	}
-	ctx = withReadByteLimit(ctx, s.readByteLimit)
 	if checkpoint.Cursor == "" {
 		// A reset (first run, or what Coordinator.Rebuild leaves behind)
 		// invalidates any memo: it was derived from a cursor space that no
@@ -429,6 +428,7 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 		observeNormalization: normalizationLogger(s.logger, SourceName),
 		recordConsumed:       s.recordConsumed(fromCursor),
 		dropConsumed:         s.forgetConsumed,
+		readByteLimit:        s.readByteLimit,
 	}
 }
 
