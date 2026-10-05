@@ -1160,6 +1160,7 @@ var unsaturatedByDesign = map[string]string{
 	"result.Paths[0].Edges[0].EvidenceRefIDs":                           "path-edge evidence refs: 250 paths x 50 edges x 100 refs x 256 runes is ~320M runes of ids alone, which cannot be marshaled here. Disclosed in maximalPath's comment since it was written; round 3 showed the comment was not ENFORCED, because the probe never walked deep enough to reach it",
 	"result.AnswerPlan.Budget.MaxItems":                                 "int with no upper bound in the contract: there is no maximum to sit at",
 	"result.AnswerPlan.Budget.MaxMembers":                               "int with no upper bound in the contract",
+	"result.Cohort.Population":                                          "int with no upper bound in the contract",
 	"result.AnswerPlan.Budget.SynthesisHeadroom":                        "int with no upper bound in the contract",
 	"result.AnswerPlan.Narrowing[0].Before":                             "int with no upper bound in the contract",
 	"result.AnswerPlan.Narrowing[0].After":                              "int with no upper bound in the contract",
