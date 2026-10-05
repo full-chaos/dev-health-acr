@@ -698,7 +698,7 @@ The server lists three read-only guide resources and three prompts. They are sta
    }
    ```
 
-   The reply carries `structured.status` (`complete`, `partial`, `degraded`, `clarification_required`, `no_match`), `direct_judgment`, `principal_drivers`, `limitations`, `evidence_ref_ids`, `result_id`, and `subject_receipts`. On `clarification_required`, answer with a second `investigate_question` call that passes the returned `parent_result_id` and each receipt in the `prior_*_receipts` field its prefix names (see `acr://guide/conversation`).
+   The reply carries `structured.status` (`complete`, `partial`, `degraded`, `clarification_required`, `no_match`), `direct_judgment`, `deterministic_answer` (the sentences the service computed from stored facts, not model text: a count of a member set, and for one named subject the total of an additive daily series over the whole UTC days inside the evidence window, with the days it rests on and every day that has no stored row; it is served when the answer-writing model fails or writes no claim, and `investigation_result` carries it in its markdown too), `principal_drivers`, `limitations`, `evidence_ref_ids`, `result_id`, and `subject_receipts`. On `clarification_required`, answer with a second `investigate_question` call that passes the returned `parent_result_id` and each receipt in the `prior_*_receipts` field its prefix names (see `acr://guide/conversation`).
 
 2. **`investigation_result`** when the bounded answer omitted detail you need. Pass the `result_id` from step 1 exactly as returned.
 

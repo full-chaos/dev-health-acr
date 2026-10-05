@@ -39,6 +39,9 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	if !stringLengthBetween(p.DirectJudgment, 0, 4000) || !stringLengthBetween(p.CurrentState, 0, 4000) {
 		return fmt.Errorf("answer projection judgment text violates v1 bounds")
 	}
+	if !stringLengthBetween(p.DeterministicAnswer, 0, ContextFabricDeterministicAnswerMaxLength) {
+		return fmt.Errorf("answer projection deterministic answer violates v1 bounds")
+	}
 	if len(p.StrongestPressures) > ContextFabricProjectedPressuresMaxCount || !uniqueTrimmedStrings(p.StrongestPressures, 2000) {
 		return fmt.Errorf("answer projection strongest pressures violate v1 bounds")
 	}

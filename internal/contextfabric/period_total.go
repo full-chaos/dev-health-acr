@@ -71,25 +71,43 @@ const PeriodTotalAbsenceTooLong = "period_longer_than_row_cap"
 
 const dayLayout = "2006-01-02"
 
-// PeriodDays returns the calendar days of an effective window, both ends
-// included, or false when the window does not bound a period.
+// PeriodDays returns the whole UTC days inside an effective window, ascending,
+// or false when the window does not bound a period holding a whole day.
+//
+// A day belongs to the period only when the window covers all of it: the first
+// day is the first midnight at or after the window start, and the last day is
+// the one that ends at or before the window end. "The last 30 days" ending
+// mid-day therefore spans 29 whole days, because the day it starts in and the
+// day it ends in are each covered in part. A daily row is the sum of its whole
+// day, so a partial day's row would put activity from outside the window into
+// the total, and the day count, the sum and the reported window would disagree.
 func PeriodDays(window *contractsv1.ContextFabricEffectiveEvidenceWindow) ([]string, bool) {
 	if window == nil || window.Start == nil || window.End == nil {
 		return nil, false
 	}
-	start := window.Start.UTC().Truncate(24 * time.Hour)
-	end := window.End.UTC().Truncate(24 * time.Hour)
-	if end.Before(start) {
+	first := ceilToDay(*window.Start)
+	stop := truncateToDay(*window.End)
+	if !first.Before(stop) {
 		return nil, false
 	}
-	days := make([]string, 0, int(end.Sub(start)/(24*time.Hour))+1)
-	for day := start; !day.After(end); day = day.AddDate(0, 0, 1) {
+	days := make([]string, 0, int(stop.Sub(first)/(24*time.Hour)))
+	for day := first; day.Before(stop); day = day.AddDate(0, 0, 1) {
 		days = append(days, day.Format(dayLayout))
 		if len(days) > maxPeriodDays {
 			return nil, false
 		}
 	}
 	return days, true
+}
+
+// PeriodScopeSentence says which days a period total rests on, so a total over
+// "the last 30 days" that spans fewer calendar days is not read as a shortfall.
+func PeriodScopeSentence(period []string) string {
+	if len(period) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("The period is the %d whole days from %s to %s inside the answer window; a partial day at either end of the window is not counted.",
+		len(period), period[0], period[len(period)-1])
 }
 
 // PeriodTotalsForSubject totals every additive column of every daily series
@@ -317,7 +335,11 @@ func (e *Engine) singleSubjectPeriodSentences(params synthesisAssemblyParams) []
 	capabilities := source.Capabilities()
 	totals, absences := PeriodTotalsForSubject(capabilities, params.Facts.Facts, subject, period)
 	absences = append(absences, unreadDailySeriesAbsences(capabilities, params.Facts, subject)...)
-	return PeriodTotalSentences(totals, absences)
+	sentences := PeriodTotalSentences(totals, absences)
+	if len(sentences) == 0 {
+		return nil
+	}
+	return append([]string{PeriodScopeSentence(period)}, sentences...)
 }
 
 // unreadDailySeriesAbsences names a daily series whose read completed for the

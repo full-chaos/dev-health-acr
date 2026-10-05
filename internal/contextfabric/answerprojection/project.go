@@ -169,6 +169,10 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		DirectJudgment:     clamp.text(storedText(result.DirectJudgment), contractsv1.ContextFabricProjectedJudgmentMaxLength),
 		CurrentState:       clamp.text(storedText(result.CurrentState), contractsv1.ContextFabricProjectedJudgmentMaxLength),
 		StrongestPressures: distinctStrings(result.StrongestPressures),
+		// Server-composed, verbatim: the count sentence and the period total
+		// live ONLY here, so a projection that dropped it would hide them from
+		// every client.
+		DeterministicAnswer: clamp.text(storedText(result.DeterministicAnswer), contractsv1.ContextFabricDeterministicAnswerMaxLength),
 		// Never truncated: a surface that reported a different set of
 		// committed subjects answered a different question.
 		CommittedSubjects: append([]contractsv1.ContextFabricSubjectRef(nil), result.SubjectResolution.Committed...),

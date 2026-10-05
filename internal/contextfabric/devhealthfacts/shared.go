@@ -375,7 +375,13 @@ import (
 // canonical facts of the walked members. Before it a repository anchor was
 // refused as a work-item population. A candidate saved before v68 for such a
 // question holds that refusal and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v68"
+//
+// v68 -> v69: a period total spans the whole UTC days inside the evidence
+// window (the last 30 days ending mid-day is 29 days, not 31), and the
+// answer's server-composed text, with the count sentence and the period
+// total, is served on the answer. A candidate saved before v69 holds a total
+// summed over partial edge days and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v69"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -182,6 +182,9 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	"structured.question",
 	"structured.direct_judgment",
 	"structured.current_state",
+	// The service composes it from stored facts, but it names subjects by
+	// their graph labels, so it takes the same conservative treatment.
+	"structured.deterministic_answer",
 	"structured.strongest_pressures[]",
 	"structured.committed_subjects[].label",
 	"structured.clarification.prompt",

@@ -85,10 +85,13 @@ func metricsFactFor(subject SubjectRef, rows []dayRow) CanonicalFact {
 }
 
 // expectedDays is the period the engine resolved, listed independently of the
-// production day arithmetic: both ends included.
+// production day arithmetic: the UTC days the window covers whole.
 func expectedDays(start, end time.Time) []string {
 	var days []string
-	for day := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC); !day.After(end); day = day.Add(24 * time.Hour) {
+	for day := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC); !day.Add(24 * time.Hour).After(end); day = day.Add(24 * time.Hour) {
+		if day.Before(start) {
+			continue
+		}
 		days = append(days, day.Format("2006-01-02"))
 	}
 	return days

@@ -11,6 +11,7 @@
   "strongest_pressures": [
     "Release acceptance remains incomplete."
   ],
+  "deterministic_answer": "Ask Dev is not release-ready. The principal current driver is incomplete release acceptance, despite most tracked implementation work being closed.",
   "committed_subjects": [
     {
       "kind": "project",
