@@ -53,7 +53,7 @@ func walk(t *testing.T, c *client, slug string) (doc, string) {
 		"interpretation": walkInterpretation(slug),
 		"contract":       c.interpretContract(),
 		"synthesis":      "client",
-		"budget":         doc{"max_cohort_members": 100},
+		"budget":         doc{"max_cohort_members": 250, "max_evidence_refs": 500, "max_serialized_bytes": 1048576},
 	}
 	d, raw := c.call("investigate_with_interpretation", args)
 	if str(structured(d), "status") != "clarification_required" {
