@@ -389,7 +389,7 @@ func walkReadsDecideAsWholeNodeReads(t *testing.T, ctx context.Context, adapter 
 		if whole == projected {
 			t.Fatalf("%s: the link read has no projected return clause to compare", c.name)
 		}
-		state := treeWalkState{out: &treeWalk{}, principal: c.principal, scope: c.scope}
+		state := treeWalkState{out: &treeWalk{}, principal: c.principal, scope: c.scope, scopeFollowsLink: link.to == treeIssue}
 		rowsOf := func(cypher string) []row {
 			params := linkSegmentParams(orgID, anchor, feed, link, 0, 5000, temporalFilter{})
 			if restricted {

@@ -273,6 +273,11 @@ type treeWalk struct {
 	// memberTiers is set only when the link ends the path (linkMembers): the
 	// strongest admitted link tier of each member, by canonical id.
 	memberTiers map[string]string
+	// linkSubjects are the members when the link ends the path. The link read
+	// returns projections of the walk properties (walk_projection.go), so
+	// these members are identities, a distinct type from nodes: a reader
+	// cannot ask them for a property the read did not return.
+	linkSubjects []contextfabric.SubjectRef
 	// heuristicOnly counts the members whose strongest tier is heuristic.
 	heuristicOnly int
 }
@@ -492,14 +497,20 @@ func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]c
 func (s treeWalkState) linkMembers(ends []string, far map[string]*node) {
 	s.out.memberTiers = map[string]string{}
 	for _, id := range s.cutRanked(ends) {
-		s.out.nodes = append(s.out.nodes, toCandidateNode(far[id]))
+		subject, ok := graphrank.NodeSubject(toCandidateNode(far[id]))
+		if !ok {
+			continue
+		}
+		s.out.linkSubjects = append(s.out.linkSubjects, subject)
 		tier := s.out.endTiers[id]
 		s.out.memberTiers[id] = tier
 		if tier == contextfabric.TreeLinkTierHeuristic {
 			s.out.heuristicOnly++
 		}
 	}
-	sortCandidateNodesBySubjectKey(s.out.nodes)
+	sort.Slice(s.out.linkSubjects, func(i, j int) bool {
+		return graphrank.SubjectKey(s.out.linkSubjects[i]) < graphrank.SubjectKey(s.out.linkSubjects[j])
+	})
 }
 
 // disclose adds the edge of one hit, oriented as projected: child -> parent.

@@ -155,6 +155,9 @@ func walkMemberIDs(walk treeWalk) []string {
 			out = append(out, subject.CanonicalID)
 		}
 	}
+	for _, subject := range walk.linkSubjects {
+		out = append(out, subject.CanonicalID)
+	}
 	sort.Strings(out)
 	return out
 }

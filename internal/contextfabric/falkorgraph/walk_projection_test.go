@@ -1,6 +1,7 @@
 package falkorgraph
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -66,5 +67,25 @@ func TestAProjectedNodeReadsAsTheWholeNode(t *testing.T) {
 	tier, ok := linkTierOf(walkEdge(map[string]interface{}{propPropertyPrefix + linkTierProperty: "native"}))
 	if !ok || tier.name != "native" {
 		t.Fatalf("a projected link reads tier %v %t", tier, ok)
+	}
+}
+
+// TestAWalkTheLinkEndsServesIdentitiesNotProjectedNodes: when the link ends
+// the path its far side is read as a projection, so the members are handed
+// on as identities (linkSubjects), never as nodes a reader could ask for a
+// property the read did not return.
+func TestAWalkTheLinkEndsServesIdentitiesNotProjectedNodes(t *testing.T) {
+	s := newMemberSeed()
+	s.issue("work_item.v2:p:1", []string{memberAnchorSlug})
+	s.pullRequest("pull_request:p:1", memberAnchorSlug)
+	s.link("work_item.v2:p:1", "pull_request:p:1", "native")
+	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: memberAnchorID, Label: memberAnchorSlug}
+	walk, err := adapter.treeMembers(context.Background(), "key", "org-1", open(), contextfabric.RequestedScope{}, anchor, treeIssue, 25, temporalFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(walk.nodes) != 0 || len(walk.linkSubjects) != 1 || walk.linkSubjects[0].CanonicalID != "work_item.v2:p:1" {
+		t.Fatalf("nodes %d, link subjects %v: want the one member as an identity and no node", len(walk.nodes), walk.linkSubjects)
 	}
 }
