@@ -227,3 +227,45 @@ func TestARecutKeepsAPathDropOutcomeAndTheRowTotal(t *testing.T) {
 		t.Fatalf("limitations = %q, want exactly %q (declared stays the row total 20)", recut.Limitations, want)
 	}
 }
+
+// Outcome rows carry no identity beyond their content. When a path-drop row and
+// the earlier row-cut row are identical (8 of 20 on both), removing either one
+// leaves the other, and the other is exactly the row the path drop wrote: the
+// re-cut leaves the path-drop row once, the new row-cut row once, and no row
+// that describes the superseded cut.
+func TestARecutWhosePathDropRowEqualsTheEarlierRowCutRowKeepsBothAccounts(t *testing.T) {
+	rows := func(n int) []contractsv1.ContextFabricClaimedFactRow {
+		out := make([]contractsv1.ContextFabricClaimedFactRow, n)
+		for i := range out {
+			value := int64(i)
+			out[i] = contractsv1.ContextFabricClaimedFactRow{Fields: map[string]contractsv1.ContextFabricScalarValue{"n": {Integer: &value}}}
+		}
+		return out
+	}
+	result := InvestigationResult{ClaimedFacts: []ClaimedFact{{ClaimID: "claim_a", Rows: rows(10)}, {ClaimID: "claim_b", Rows: rows(10)}}}
+	pathDrop := pathDropOutcomeRow(8, 20)
+	result.Completeness.Outcomes = appendOutcomeRows(result.Completeness.Outcomes, pathDrop)
+	result, _, _, cut := applyFactRowTruncation(result, 4, 20)
+	if !cut {
+		t.Fatal("the first cut cut nothing")
+	}
+	if !reflect.DeepEqual(result.Completeness.Outcomes[1], pathDrop) {
+		t.Fatalf("the fixture does not make the two rows identical: %+v", result.Completeness.Outcomes)
+	}
+	recut, ok := recutFactRows(result, 3)
+	if !ok {
+		t.Fatal("the re-cut cut nothing")
+	}
+	paths, newCuts := 0, 0
+	for _, row := range recut.Completeness.Outcomes {
+		if reflect.DeepEqual(row, pathDrop) {
+			paths++
+		}
+		if reflect.DeepEqual(row, factRowTruncationOutcomeRow(6, 20)) {
+			newCuts++
+		}
+	}
+	if paths != 1 || newCuts != 1 || len(recut.Completeness.Outcomes) != 2 {
+		t.Fatalf("path-drop rows %d, new row-cut rows %d, total %d: want 1, 1, 2: %+v", paths, newCuts, len(recut.Completeness.Outcomes), recut.Completeness.Outcomes)
+	}
+}
