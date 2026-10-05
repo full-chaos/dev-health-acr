@@ -1,6 +1,10 @@
 package directread
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,5 +48,42 @@ func TestRelationshipsCurrentAxisRuleOnEveryPage(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A cursor issued under the strict current-axis rule (request digest tag v1)
+// does not continue a read under the current rule: it is refused as stale,
+// and the graph is not read. The forged cursor carries the digest the earlier
+// build computed for the same request.
+func TestRelationshipsCursorFromTheStrictRuleIsRefused(t *testing.T) {
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	graph := hubGraph()
+	reader, _ := newRelReader(graph, &now)
+	request := RelationshipsRequest{Subject: RelationshipsSubject{Kind: "team", CanonicalID: teamT.CanonicalID}, Direction: "in", Limit: 100}
+	first, err := reader.Read(relCtx("strict-p0"), unrestricted, request)
+	if err != nil || first.Page.NextCursor == "" {
+		t.Fatalf("first page: %v %+v", err, first.Page)
+	}
+	cursor := decodeCursorForTest(t, reader.sealer, first.Page.NextCursor)
+	old := sha256.Sum256([]byte(strings.Join([]string{
+		"read_relationships.v1", "team", teamT.CanonicalID, "", "in", "1", "",
+	}, "\x00")))
+	if cursor.RequestDigest == hex.EncodeToString(old[:16]) {
+		t.Fatal("the request digest still equals the strict rule's digest")
+	}
+	cursor.RequestDigest = hex.EncodeToString(old[:16])
+	token, err := encodeRelationshipsCursor(reader.sealer, cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := graph.pageCalls
+	request.Cursor = token
+	_, err = reader.Read(relCtx("strict-p1"), unrestricted, request)
+	var requestError *RelationshipsRequestError
+	if !errors.As(err, &requestError) || requestError.Reason != RelationshipsRefusalInvalidCursor || requestError.Cursor != CursorStale {
+		t.Fatalf("err = %v (%+v), want an invalid_cursor refusal with outcome stale", err, requestError)
+	}
+	if graph.pageCalls != calls {
+		t.Fatal("a refused cursor read the graph")
 	}
 }
