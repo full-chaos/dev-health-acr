@@ -33,6 +33,7 @@ func scopeAnchorMatch(subject SubjectRef, matched ...string) SubjectCandidate {
 	return SubjectCandidate{
 		ReceiptID: "receipt_scope_anchor", Subject: subject, State: ResolutionCommitted,
 		MatchedTerms: matched, MatchReasons: []string{"matched"}, Confidence: 1, EvidenceRefIDs: []string{},
+		MatchMechanisms: []MatchMechanism{MatchAlias, MatchLexical},
 	}
 }
 
@@ -1178,7 +1179,10 @@ func TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch
 		{"a project matched the term", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeAnchorMatch(project)}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorAmbiguous},
 		{"a project matched the term under a repository reading", SubjectRepository, SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeAnchorMatch(project)}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorCommitted},
 		{"a member-kind subject matched the term", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeAnchorMatch(team)}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorCommitted},
-		{"another repository only offered, no term match", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeCandidate(twin, "receipt_scope_02")}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorCommitted},
+		{"another repository offered for another term only", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), otherTermNeighbour(twin)}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorCommitted},
+		{"prod shape: four lexical neighbours of the named repository", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), lexicalNeighbour(SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:N1", Label: "n1"}, 0.75), lexicalNeighbour(SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:N2", Label: "n2"}, 0.75), lexicalNeighbour(SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:N3", Label: "n3"}, 0.667), lexicalNeighbour(project, 0.667)}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorCommitted},
+		{"prod shape: a project holds the same alias beside lexical neighbours", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), lexicalNeighbour(twin, 0.75), scopeAnchorMatch(project)}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorAmbiguous},
+		{"prod shape: two repositories with the same exact name", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{identityMatch(anchor, MatchExact), identityMatch(twin, MatchExact)}}, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorAmbiguous},
 		{"reading declares project", SubjectProject, matched, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorUnresolved},
 		{"committed anchor is a project", "", SubjectResolution{Committed: []SubjectRef{project}, Candidates: []SubjectCandidate{scopeAnchorMatch(project)}}, CommitDecisionDigestSet{SubjectMapKey(project): labelDigest}, CountPopulationScopeAnchorUnresolved},
 	}
@@ -1187,6 +1191,9 @@ func TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch
 		row := row
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
+			if fault := prodShapeFault(row.resolution); fault != "" {
+				t.Fatalf("candidate %s has no retrieving term or no mechanism: no retrieval pass builds that", fault)
+			}
 			bases := CommitBasisSet{}
 			for _, subject := range row.resolution.Committed {
 				bases.Record(subject, CommitBasisStatistical)
@@ -1214,6 +1221,14 @@ func TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch
 			}
 		})
 	}
+}
+
+// otherTermNeighbour is a candidate retrieved by a term that is not an anchor
+// term.
+func otherTermNeighbour(subject SubjectRef) SubjectCandidate {
+	candidate := lexicalNeighbour(subject, 0.5)
+	candidate.MatchedTerms = []string{"b"}
+	return candidate
 }
 
 // scopeCandidateMatching is an uncommitted candidate that matched the fixture

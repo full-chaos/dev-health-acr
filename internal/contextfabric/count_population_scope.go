@@ -372,7 +372,7 @@ func anchorBound(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRe
 // (read off the persisted digest, so reuse decides the same), the subject
 // matched an anchor term, and no other subject that could be the anchor
 // (not of the member kind, and of the reading's anchor kind when one is
-// stated) matched an anchor term, committed or not. A truncated or incomplete
+// stated) matched an anchor term by an identity mechanism, committed or not. A truncated or incomplete
 // lookup cannot rule out a second repository with the label, so it admits
 // nothing. No text is read and no repository is guessed from the question.
 func labelUniqueAnchor(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRef, resolution SubjectResolution, digests CommitDecisionDigestSet) bool {
@@ -398,7 +398,7 @@ func labelUniqueAnchor(frame *QuestionFrame, anchorKind SubjectKind, subject Sub
 		if other.Kind == memberKind || (anchorKind != "" && other.Kind != anchorKind) {
 			continue
 		}
-		if anchorTermMatched(frame, other, resolution) {
+		if anchorIdentityMatched(frame, other, resolution) {
 			return false
 		}
 	}

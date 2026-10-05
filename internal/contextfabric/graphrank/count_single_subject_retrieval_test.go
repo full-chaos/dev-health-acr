@@ -82,6 +82,21 @@ func TestOneNamedRepositoryWithNeighboursOfItsNamingFamilyIsOneSubject(t *testin
 			frameCopy.SubjectExpression.Scoped = &scoped
 
 			scope := contextfabric.DecideCountPopulationScope(&frameCopy, "", resolution, nil, contextfabric.CohortMemberSourceNotApplicable)
+			// The same resolution through the label-unique admission (a count of
+			// the teams that own the repository): the same competing-match rule.
+			digests := contextfabric.CommitDecisionDigestSet{contextfabric.SubjectMapKey(resolution.Committed[0]): {CommitGate: "exact_index", AliasLookupComplete: true}}
+			teamFrame := frameCopy
+			teamScoped := scoped
+			teamScoped.MemberKind = contextfabric.SubjectTeam
+			teamFrame.SubjectExpression.Scoped = &teamScoped
+			unique := contextfabric.DecideCountPopulationScopeWithDigests(&teamFrame, "", resolution, nil, digests, contextfabric.CohortMemberSourceNotApplicable)
+			wantUnique := contextfabric.CountPopulationScopeAnchorCommitted
+			if row.want != contextfabric.CountPopulationScopeSingleSubject {
+				wantUnique = contextfabric.CountPopulationScopeAnchorAmbiguous
+			}
+			if unique.Decision != wantUnique {
+				t.Fatalf("label-unique decision = %q, want %q (%+v)", unique.Decision, wantUnique, unique)
+			}
 			if scope.Decision != row.want || scope.AnchorTermMatches != row.terms || scope.AnchorIdentityMatches != row.ident {
 				t.Fatalf("decision=%q term_matches=%d identity_matches=%d, want %q %d %d", scope.Decision, scope.AnchorTermMatches, scope.AnchorIdentityMatches, row.want, row.terms, row.ident)
 			}
