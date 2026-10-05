@@ -779,6 +779,12 @@ Rule (read side only; `falkorgraph/temporal.go` `currentEdgePredicate`, selected
 - no relation type is named: the rule is computed from the three windows. Served edges carry their
   stored `valid_from` / `valid_to` unchanged.
 
+A zero-width window (two lifetimes that never overlapped, §14: an issue completed before the pull
+request that links it was opened, a review submitted after the merge) is a source fact: the current
+axis serves it with its stored window; the `as_of` axis never admits it (a known asymmetry).
+A relationships cursor binds the rule: the request digest tag is `read_relationships.v2`, so a cursor
+issued under the strict current-axis rule is refused once ("start again without a cursor").
+
 Not changed: the `as_of` axis (strict window on the edge and both nodes), find_subjects `owned_by`
 (strict), the walks, and the projector. A deleted subject is a tombstone (DETACH DELETE), never a
 window, so this rule cannot serve one. Live test:

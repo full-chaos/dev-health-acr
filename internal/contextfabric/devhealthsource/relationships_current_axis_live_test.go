@@ -79,6 +79,8 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		linDone, linWip, linOpen     = "linear:DONE-1", "linear:WIP-1", "linear:OPEN-1"
 		linMovedOpen, linMovedDone   = "linear:MOVE-1", "linear:MOVE-2"
 		linMovedRetired              = "linear:MOVE-3"
+		linEarly                     = "linear:EARLY-1"
+		prLate                       = 13
 		ghDone                       = "gh:acme/svc#1"
 		prMerged, prOpen, prOtherNum = 11, 12, 21
 	)
@@ -89,6 +91,10 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		provider, status string
 	}
 	done := ago(8)
+	// An issue completed before the pull request that links it was opened:
+	// the two lifetimes do not overlap, so the producer stores a zero-width
+	// window at the pull request's creation.
+	earlyDone := ago(30)
 	items := map[string]seededItem{
 		linDone:         {zeroRepo, ago(30), &done, "linear", "done"},
 		linWip:          {zeroRepo, ago(30), nil, "linear", "in progress"},
@@ -96,6 +102,7 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		linMovedOpen:    {zeroRepo, ago(40), nil, "linear", "in progress"},
 		linMovedDone:    {zeroRepo, ago(40), &done, "linear", "done"},
 		linMovedRetired: {zeroRepo, ago(40), nil, "linear", "in progress"},
+		linEarly:        {zeroRepo, ago(40), &earlyDone, "linear", "done"},
 		ghDone:          {repoSvc, ago(30), &done, "github", "closed"},
 	}
 	for id, item := range items {
@@ -112,6 +119,13 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		repoSvc, orgID, uint32(prMerged), "merged PR", "merged", ago(20), merged, merged, now)
 	exec("open pull request", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		repoSvc, orgID, uint32(prOpen), "open PR", "open", ago(20), now)
+	exec("late pull request", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, merged_at, closed_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		repoSvc, orgID, uint32(prLate), "late PR", "merged", ago(20), ago(15), ago(15), now)
+	// A review submitted after its pull request merged: zero-width window at
+	// the review's submission.
+	reviewAfterMerge := ago(9)
+	exec("review after merge", `INSERT INTO git_pull_request_reviews (repo_id, number, review_id, state, submitted_at, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		repoSvc, uint32(prMerged), "rv-after-merge", "APPROVED", reviewAfterMerge, now, orgID)
 	exec("other pull request", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, merged_at, closed_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		repoOther, orgID, uint32(prOtherNum), "other PR", "merged", ago(20), otherMerged, otherMerged, now)
 
@@ -126,6 +140,7 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		{linOpen, "native", repoSvc, prOpen},
 		{ghDone, "native", repoSvc, prMerged},
 		{ghDone, "explicit_text", repoOther, prOtherNum},
+		{linEarly, "native", repoSvc, prLate},
 	} {
 		exec(fmt.Sprintf("link %d", i), `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			l.prRepo, l.issue, l.number, float32(0.9), l.tier, "", now.Add(time.Duration(i)*time.Second), orgID)
@@ -173,6 +188,11 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 	}
 	prID := func(repo string, number int) string { return fmt.Sprintf("pull_request:%s:%d", repo, number) }
 	idPRMerged, idPROpen, idPROther := prID(repoSvc, prMerged), prID(repoSvc, prOpen), prID(repoOther, prOtherNum)
+	idPRLate := prID(repoSvc, prLate)
+	idReview, _, err := identity.Derive(identity.KindPullRequestReview, []string{repoSvc, fmt.Sprint(prMerged), "rv-after-merge"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	idPOld, idPNew, idPRet := projectID("P-old"), projectID("P-new"), projectID("P-ret")
 	idTeam, idRepoSvc := contextfabric.TeamCanonicalID("TOWN"), "repository:"+repoSvc
 	edge := func(from, to string) string { return from + " -> " + to }
@@ -286,7 +306,7 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		r.Depth = 2
 		return r
 	}
-	const links, belongs, owned = "LINKS_PULL_REQUEST", "BELONGS_TO_PROJECT", "OWNED_BY_TEAM"
+	const links, belongs, owned, reviews = "LINKS_PULL_REQUEST", "BELONGS_TO_PROJECT", "OWNED_BY_TEAM", "BELONGS_TO_PULL_REQUEST"
 	keys := func(a answer) []string {
 		out := make([]string, 0, len(a.edges))
 		for k := range a.edges {
@@ -375,6 +395,26 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 			sameTime(t, "ownership valid_to", at(t, a, edge(idPRet, idTeam)+" "+owned).validTo, ownershipEnded)
 			sameTime(t, "membership valid_to", at(t, a, member(linMovedRetired, idPRet)+" "+belongs).validTo, ownershipEnded)
 		})
+		// Zero-width windows (lifetimes that never overlapped) are source
+		// facts: served on the current axis with the stored window, never
+		// admitted on the as_of axis (below).
+		t.Run("link whose issue completed before its pull request was opened", func(t *testing.T) {
+			a := read(t, unrestricted, request("pull_request", idPRLate, "in", links))
+			expect(t, a, "complete", 0, link(linEarly, idPRLate)+" "+links)
+			e := at(t, a, link(linEarly, idPRLate)+" "+links)
+			if e.tier != "native" {
+				t.Fatalf("tier = %q, want native", e.tier)
+			}
+			sameTime(t, "valid_from", e.validFrom, ago(20))
+			sameTime(t, "valid_to", e.validTo, ago(20))
+		})
+		t.Run("review submitted after the merge", func(t *testing.T) {
+			a := read(t, unrestricted, request("pull_request", idPRMerged, "in", reviews))
+			expect(t, a, "complete", 0, edge(idReview, idPRMerged)+" "+reviews)
+			e := at(t, a, edge(idReview, idPRMerged)+" "+reviews)
+			sameTime(t, "valid_from", e.validFrom, reviewAfterMerge)
+			sameTime(t, "valid_to", e.validTo, reviewAfterMerge)
+		})
 		t.Run("depth two from the merged pull request", func(t *testing.T) {
 			a := read(t, unrestricted, depth2(request("pull_request", idPRMerged, "both", links, belongs)))
 			expect(t, a, "complete", 0,
@@ -402,6 +442,16 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		})
 		t.Run("after both ends ended", func(t *testing.T) {
 			expect(t, read(t, unrestricted, asOf(request("pull_request", idPRMerged, "in", links), ago(2))), "complete", 0)
+		})
+		t.Run("a zero-width link is never admitted", func(t *testing.T) {
+			for _, instant := range []time.Time{ago(25), ago(20), ago(18)} {
+				expect(t, read(t, unrestricted, asOf(request("pull_request", idPRLate, "in", links), instant)), "complete", 0)
+			}
+		})
+		t.Run("a review after the merge is never admitted", func(t *testing.T) {
+			for _, instant := range []time.Time{reviewAfterMerge, ago(5)} {
+				expect(t, read(t, unrestricted, asOf(request("pull_request", idPRMerged, "in", reviews), instant)), "complete", 0)
+			}
 		})
 		t.Run("the ended membership inside its own window", func(t *testing.T) {
 			expect(t, read(t, unrestricted, asOf(request("work_item", workItemID(linMovedDone), "out", belongs), ago(30))), "complete", 0,
