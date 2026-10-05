@@ -147,11 +147,8 @@ main() {
   render_override
   assert_safe_render
 
-  # No Go-API routing enablement: none of the tools this venue calls reads through it.
-  provision_ops_control_plane
-  provision_evidence_database
-  seed_fixture_worlds
-  grant_clickhouse_reader
+  ACR_E2E_SEED_HOOK=seed_fixture_worlds
+  bootstrap_ops
   write_graph_override
   compose up -d --wait falkordb >/dev/null || fg_die 'falkordb did not become healthy'
   prepare_acr_database
