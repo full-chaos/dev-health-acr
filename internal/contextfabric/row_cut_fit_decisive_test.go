@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -19,9 +20,15 @@ import (
 // census scope limitation added when the document is finalized.
 func investigateAtCap(t *testing.T, maxBytes int64, scopeRecorded bool) (InvestigationResult, error) {
 	t.Helper()
+	return investigateAtCapWithHook(t, maxBytes, scopeRecorded, nil)
+}
+
+func investigateAtCapWithHook(t *testing.T, maxBytes int64, scopeRecorded bool, hook func(InvestigationResult) InvestigationResult) (InvestigationResult, error) {
+	t.Helper()
 	calls := 0
 	shape := chaos6558Shape{maxBytes: maxBytes}
 	engine := chaos6558Engine(t, &calls, &recordingTelemetry{}, shape)
+	engine.servedLateHook = hook
 	ctx := context.Background()
 	if scopeRecorded {
 		ctx = WithWorkItemCensusRepositoryScopeRecorder(ctx)
@@ -80,5 +87,61 @@ func TestARowCutThatLandsNearTheCeilingIsNotRefusedByTheWritersAfterIt(t *testin
 	}
 	if !found {
 		t.Fatalf("the late writer's sentence is not in the served answer, so the case did not exercise it: %q", result.Limitations)
+	}
+}
+
+// A writer the fit has never heard of adds bytes after the fit, inside the
+// finalization the route's document comes out of. The answer sits within 100
+// bytes of the ceiling, so any late bytes overrun it. The decisive measure is
+// the document as sent: the engine cuts one more row and measures again until
+// it fits, so no named writer is needed for the answer to be served.
+func lateBytes(n int) func(InvestigationResult) InvestigationResult {
+	return func(result InvestigationResult) InvestigationResult {
+		result.Warnings = append(append([]string{}, result.Warnings...), strings.Repeat("w", n))
+		return result
+	}
+}
+
+func TestAnUnknownWriterAfterTheFitDoesNotMakeASmallerTrueAnswerRefused(t *testing.T) {
+	ceiling := seededNearCapCeiling(t)
+	const added = 400
+	result, err := investigateAtCapWithHook(t, ceiling, false, lateBytes(added))
+	if err != nil {
+		var refusal AnswerBudgetRefusal
+		if errors.As(err, &refusal) {
+			t.Fatalf("refused (%s) at %d bytes against %d after a writer added %d bytes past the fit: a smaller true answer exists", refusal.Overrun, refusal.MeasuredBytes, refusal.MaxSerializedBytes, added)
+		}
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if got := servedBytes(t, result); got > ceiling {
+		t.Fatalf("served %d bytes against a %d-byte ceiling", got, ceiling)
+	}
+	if len(result.ClaimedFacts) != chaos6558Facts {
+		t.Fatalf("served %d claims, want all %d: only rows are cut", len(result.ClaimedFacts), chaos6558Facts)
+	}
+	cuts := 0
+	for _, limitation := range result.Limitations {
+		if contractsv1.IsContextFabricFactRowTruncationLimitation(limitation) {
+			cuts++
+		}
+	}
+	if cuts != 1 {
+		t.Fatalf("the served answer carries %d row-cut disclosures, want exactly 1 stating the final cut: %q", cuts, result.Limitations)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("the re-cut answer is not a valid result: %v", err)
+	}
+}
+
+// When even one row per table does not fit the document as sent, the refusal
+// stands and says nothing was left to cut.
+func TestARefusalSaysWhenNothingWasLeftToCut(t *testing.T) {
+	_, err := investigateAtCapWithHook(t, chaos6558MaxBytes, false, lateBytes(60000))
+	var refusal AnswerBudgetRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("err = %v, want a budget refusal", err)
+	}
+	if !refusal.NothingLeftToCut || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+		t.Fatalf("refusal = %+v, want a bytes refusal that says nothing was left to cut", refusal)
 	}
 }

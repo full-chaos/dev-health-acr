@@ -70,3 +70,23 @@ func TestAClientThatFollowsTheComparisonHintLiterallyGetsTheOtherPeriod(t *testi
 		t.Errorf("the second call was refused or read as a comparison: status %s limitations %q", second.result.Status, second.result.Limitations)
 	}
 }
+
+// Why the hint says what it says: a second call that keeps the comparison
+// wording builds a compare frame over one named subject, and the frame
+// validation of the real engine (not a stub of it) refuses that frame before any
+// fact is read, with the window the old hint named.
+func TestARepeatedComparisonWordingIsRefusedByTheRealFrameValidation(t *testing.T) {
+	day := 24 * time.Hour
+	secondEnd := suppliedRangeRigNow.Add(-30 * day)
+	secondStart := secondEnd.Add(-30 * day)
+	interpreted, frame := periodShapeInterpreted([]InvestigationGoal{GoalCompare}, TemporalIntentPeriodComparison, []FactKind{FactFlow}, TimeContext{Axis: TemporalCurrent})
+	run := runPeriodShapeTurnWith(t, suppliedInterpretedPath, measureComparisonQuestion, interpreted, frame, periodShapeTurnOptions{request: func(r *InvestigationRequest) {
+		r.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{Start: &secondStart, End: &secondEnd}
+	}})
+	if len(run.factTimes) != 0 {
+		t.Fatalf("the compare frame read facts (%d reads): status %s limitations %q", len(run.factTimes), run.result.Status, run.result.Limitations)
+	}
+	if run.result.Status == InvestigationComplete || run.result.Status == InvestigationPartial {
+		t.Fatalf("status %s: the repeated comparison wording was answered", run.result.Status)
+	}
+}
