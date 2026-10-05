@@ -1,0 +1,87 @@
+//go:build fixturegraph
+
+package fixturegraph
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"testing"
+)
+
+func edgeTable(rel doc) string {
+	type agg struct {
+		n        int
+		from, to string
+	}
+	m := map[string]*agg{}
+	for _, e := range list(rel, "edges") {
+		ty := str(e, "type")
+		a := m[ty]
+		if a == nil {
+			a = &agg{from: str(e, "provenance", "valid_from"), to: fmt.Sprint(get(e, "provenance", "valid_to"))}
+			m[ty] = a
+		}
+		a.n++
+	}
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out []string
+	for _, k := range keys {
+		out = append(out, fmt.Sprintf("%s x%d (example valid_from=%s valid_to=%s)", k, m[k].n, m[k].from, m[k].to))
+	}
+	if len(out) == 0 {
+		return "(no edge) status=" + str(rel, "status")
+	}
+	return strings.Join(out, "; ")
+}
+
+func TestProbeEdgeTypesOnTheCurrentAxis(t *testing.T) {
+	c := connect(t, "FG_ORG_TOKEN_FILE")
+	one, _ := slugs(t)
+	repoCanonical := subjectID(t, c, one)
+	rows := ch(t, fmt.Sprintf(`SELECT toString(p.number), w.title, formatDateTime(greatest(w.created_at, p.created_at) + INTERVAL 1 MINUTE, '%%Y-%%m-%%dT%%H:%%i:%%SZ'), toString(p.merged_at), toString(w.completed_at)
+FROM work_graph_issue_pr AS l FINAL
+INNER JOIN git_pull_requests AS p FINAL ON p.org_id = l.org_id AND p.repo_id = l.repo_id AND p.number = l.pr_number
+INNER JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id
+INNER JOIN work_items AS w FINAL ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id
+WHERE l.org_id = %s AND r.repo = %s AND p.merged_at IS NOT NULL AND w.completed_at IS NOT NULL AND p.merged_at < now() AND w.completed_at < now()
+ORDER BY p.number, w.title LIMIT 1`, sqlStr(orgID(t)), sqlStr(one)))
+	if len(rows) != 1 {
+		t.Fatalf("no merged pull request linked to a completed issue: %v", rows)
+	}
+	pr, title, asOf := rows[0][0], rows[0][1], rows[0][2]
+	t.Logf("PROBE subjects: PR %s (merged_at=%s), issue %q (completed_at=%s), as_of inside both lifetimes %s", pr, rows[0][3], title, rows[0][4], asOf)
+	d, _ := c.call("find_subjects", doc{"handle": "PR " + pr, "anchor": doc{"kind": "repository", "id": repoCanonical}})
+	prID := str(list(d, "subjects")[0], "canonical_id")
+	read := func(kind, id string, extra doc) doc {
+		args := doc{"subject": doc{"kind": kind, "canonical_id": id}, "direction": "both", "depth": 1, "limit": 100}
+		for k, v := range extra {
+			args[k] = v
+		}
+		rel, _ := c.call("read_relationships", args)
+		return rel
+	}
+	prNow := read("pull_request", prID, nil)
+	prAsOf := read("pull_request", prID, doc{"as_of": asOf})
+	t.Logf("PROBE PR %s current : %s", pr, edgeTable(prNow))
+	t.Logf("PROBE PR %s as_of   : %s", pr, edgeTable(prAsOf))
+	issueID := ""
+	for _, e := range list(prAsOf, "edges") {
+		if str(e, "type") == "LINKS_PULL_REQUEST" && (str(e, "from", "label") == title || str(e, "to", "label") == title) {
+			issueID = str(e, "from", "canonical_id")
+			if str(e, "from", "kind") != "work_item" {
+				issueID = str(e, "to", "canonical_id")
+			}
+		}
+	}
+	if issueID == "" {
+		t.Logf("PROBE the issue %q is not among the as_of edges of the pull request", title)
+		return
+	}
+	t.Logf("PROBE issue current : %s", edgeTable(read("work_item", issueID, nil)))
+	t.Logf("PROBE issue as_of   : %s", edgeTable(read("work_item", issueID, doc{"as_of": asOf})))
+}
