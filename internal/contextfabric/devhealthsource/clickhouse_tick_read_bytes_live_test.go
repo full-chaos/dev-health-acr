@@ -18,14 +18,18 @@ import (
 // max_bytes_to_read (the dev-health-go client default) from tables whose
 // granules are cut at ClickHouse's default index_granularity_bytes of 10 MiB,
 // a ratio of 6.4. Here the limit is 3 MiB and granules are cut at 512 KiB, a
-// ratio of 6, and the wide text columns (a pull request's body, an incident's
-// description) together exceed the limit several times over.
+// ratio of 6. As on prod (about 6800 pull requests in 7 parts and 9 marks)
+// the wide tables are a few granules per part, every row has versions in
+// several unmerged parts, and the rows of many repositories are interleaved
+// in ingest order, so any page's keys spread over the whole key range. All
+// versions of the wide text (a pull request's body, an incident's
+// description) exceed the limit; one version of one page is far below it.
 const (
 	tickReadByteLimit              uint64 = 3 << 20
 	tickGranuleBytes                      = 512 << 10
 	tickRepositories                      = 20
-	tickWideRows                          = 3000
-	tickWideTextBytes                     = 2000
+	tickWideRows                          = 1500
+	tickWideTextBytes                     = 1000
 	tickNarrowRows                        = 1000
 	tickOrganization                      = "86830000-0000-4000-8000-0000000003b7"
 	tickPhaseCatchUp                      = "catch-up after a rebuild"
@@ -42,12 +46,6 @@ const (
 // synced rows. No read may be refused with ClickHouse 307. The read of every
 // statement is measured from the server's own query log and reported per
 // producer table against the limit.
-//
-// Rows are written the way the ops sync writes them: one repository's rows
-// after another, so ingest order follows the primary key within a
-// repository. A page the cursor chooses then holds rows of one or two
-// repositories; a page whose rows were spread over the whole table would
-// touch every granule (named in the PR's RISK-NOTES).
 //
 // Needs Docker (ClickHouse container). Written to be run by CI or by the lane
 // owner; not run in the authoring sandbox.
@@ -81,9 +79,17 @@ func TestLiveWholeClickHouseSourceTickStaysUnderTheByteLimit(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	// No merge runs during the test: the versions written below stay in
+	// their own parts, and FINAL has them to resolve, as on prod.
+	for _, stop := range []string{"SYSTEM STOP MERGES %s.git_pull_requests", "SYSTEM STOP MERGES %s.operational_incidents"} {
+		if err := direct.Exec(ctx, fmt.Sprintf(stop, database)); err != nil {
+			t.Fatalf("%s: %v", stop, err)
+		}
+	}
 
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	seedWholeTickStore(t, ctx, direct, base)
+	writeLaterVersions(t, ctx, direct, base)
 
 	// The limit bites at this size: reading every pull request body, or every
 	// incident description, is refused. Without this, a limit the store does
@@ -95,6 +101,12 @@ func TestLiveWholeClickHouseSourceTickStaysUnderTheByteLimit(t *testing.T) {
 		if err := drainQuery(ctx, reader, wide, tickOrganization); !isTooManyBytes(err) {
 			t.Fatalf("%q under the %d-byte limit returned %v, want ClickHouse 307: the limit does not bite at this size", wide, limit, err)
 		}
+	}
+
+	// The seed reproduces the prod fault: main's pull request read (before
+	// the keys-first read) is refused at the catch-up cursor.
+	if err := devhealthsource.LegacyPullRequestReadForTest(ctx, reader, tickOrganization, 200); !isTooManyBytes(err) {
+		t.Fatalf("main's pull request read at the catch-up cursor returned %v, want ClickHouse 307: this seed does not reproduce the prod fault", err)
 	}
 
 	source, err := devhealthsource.NewClickHouseProjectionSource(reader)
@@ -152,14 +164,14 @@ func seedWholeTickStore(t *testing.T, ctx context.Context, direct clickhousedriv
 		}
 	}
 	repoArray := "[toUUID('" + strings.Join(repoIDs, "'), toUUID('") + "')]"
-	// Row n of a table of `rows` rows belongs to repository n / (rows / R)
-	// and is the (n mod rows/R)+1-th of that repository; its ingest second
-	// is n, so a repository's rows are synced together, in key order.
+	// Row n belongs to repository n mod R and is the (n div R)+1-th of it;
+	// its ingest second is n, so the repositories are interleaved in ingest
+	// order and a page's keys spread over the whole key range.
 	repoOf := func(n string, rows int) string {
-		return fmt.Sprintf("arrayElement(%s, toUInt32(intDiv(%s, %d)) + 1)", repoArray, n, rows/tickRepositories)
+		return fmt.Sprintf("arrayElement(%s, toUInt32(%s %% %d) + 1)", repoArray, n, tickRepositories)
 	}
 	numberOf := func(n string, rows int) string {
-		return fmt.Sprintf("toUInt32(%s %% %d + 1)", n, rows/tickRepositories)
+		return fmt.Sprintf("toUInt32(intDiv(%s, %d) + 1)", n, tickRepositories)
 	}
 	spread := func(n string, rows int) string {
 		return fmt.Sprintf("toDateTime64('%s', 3, 'UTC') + toIntervalSecond(%s)", base.Format("2006-01-02 15:04:05"), n)
@@ -183,8 +195,8 @@ FROM numbers(%d)`, repoOf("number", tickWideRows), spread("number", tickWideRows
 			tickOrganization, base, fmt.Sprintf("map-%d", i), fmt.Sprintf("svc-%d", i), repoIDs[i])
 	}
 	exec("incidents", fmt.Sprintf(`INSERT INTO operational_incidents (org_id, source_version_at, id, observed_at, last_synced, service_id, title, description, started_at)
-SELECT ?, toDateTime64(?, 6, 'UTC'), concat('inc-', leftPad(toString(number), 6, '0')), toDateTime64(?, 6, 'UTC'), toDateTime64(%s, 6, 'UTC'), concat('svc-', toString(intDiv(number, %d))), concat('Incident ', toString(number)), %s, toDateTime64(?, 6, 'UTC')
-FROM numbers(%d)`, spread("number", tickWideRows), tickWideRows/tickRepositories, wide, tickWideRows), tickOrganization, base, base, base)
+SELECT ?, toDateTime64(?, 6, 'UTC'), concat('inc-', leftPad(toString(number), 6, '0')), toDateTime64(?, 6, 'UTC'), toDateTime64(%s, 6, 'UTC'), concat('svc-', toString(number %% %d)), concat('Incident ', toString(number)), %s, toDateTime64(?, 6, 'UTC')
+FROM numbers(%d)`, spread("number", tickWideRows), tickRepositories, wide, tickWideRows), tickOrganization, base, base, base)
 	exec("links", fmt.Sprintf(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
 SELECT %s, concat('jira:W-', leftPad(toString(number), 6, '0')), %s, 0.9, 'native', '', %s, ?
 FROM numbers(%d)`, repoOf("number", tickWideRows), numberOf("number", tickWideRows), spread("number", tickWideRows), tickWideRows), tickOrganization)
@@ -203,6 +215,31 @@ FROM numbers(%d)`, repoOf("number", tickNarrowRows), numberOf("number", tickNarr
 	exec("ci runs", fmt.Sprintf(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id, pipeline_name, branch)
 SELECT %s, concat('run-', toString(number)), 'success', toDateTime64(?, 3, 'UTC'), %s, ?, 'ci', 'main'
 FROM numbers(%d)`, repoOf("number", tickNarrowRows), spread("number", tickNarrowRows), tickNarrowRows), base, tickOrganization)
+}
+
+// writeLaterVersions writes two later versions of the wide tables' rows, each
+// in its own part: every row again a day later, and half the rows again two
+// days later. The ingest order of each version keeps the repositories
+// interleaved.
+func writeLaterVersions(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, base time.Time) {
+	t.Helper()
+	for _, v := range []struct {
+		days              int
+		pullRequestFilter string
+		incidentFilter    string
+	}{{1, "1 = 1", "1 = 1"}, {2, "number % 2 = 0", "cityHash64(id) % 2 = 0"}} {
+		shift := fmt.Sprintf("toIntervalDay(%d)", v.days)
+		if err := direct.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, body, created_at, last_synced, head_branch)
+SELECT repo_id, org_id, number, title, state, body, created_at, last_synced + `+shift+`, head_branch
+FROM git_pull_requests FINAL WHERE org_id = ? AND `+v.pullRequestFilter, tickOrganization); err != nil {
+			t.Fatalf("write pull request version +%dd: %v", v.days, err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO operational_incidents (org_id, source_version_at, id, observed_at, last_synced, service_id, title, description, started_at)
+SELECT org_id, source_version_at + `+shift+`, id, observed_at, last_synced + `+shift+`, service_id, title, description, started_at
+FROM operational_incidents FINAL WHERE org_id = ? AND `+v.incidentFilter, tickOrganization); err != nil {
+			t.Fatalf("write incident version +%dd: %v", v.days, err)
+		}
+	}
 }
 
 // runSourceUntilCaughtUp pulls batches from the source from cursor until it

@@ -308,3 +308,29 @@ func ReadPullRequestPageForTest(ctx context.Context, client contextpacket.ClickH
 	}
 	return rows, truncated, nil
 }
+
+// legacyPullRequestStatement is queryPullRequests' statement as it stood on
+// main before CHAOS-8683's keys-first read (main c994ba42), kept here only so
+// a live test can show the seed it runs reproduces the prod refusal.
+func legacyPullRequestStatement(cursor cursorState) string {
+	const rowKey = "concat(toString(p.repo_id), ':', toString(p.number))"
+	return `SELECT toString(p.repo_id), r.repo, p.number, ifNull(p.title, ''), ifNull(p.state, ''), p.last_synced,
+       p.created_at, ` + nullableTimestamp("coalesce(p.merged_at, p.closed_at)") + `,
+       ifNull(p.head_branch, ''), ifNull(p.body, '')
+FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id
+WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowKey) + orderBy("p.last_synced", rowKey)
+}
+
+// LegacyPullRequestReadForTest runs that statement for one page from a zero
+// cursor (the catch-up after a rebuild) and returns its error.
+func LegacyPullRequestReadForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, limit int) error {
+	cursor := cursorState{Space: cursorSpaceIngest}
+	rows, err := client.Query(ctx, legacyPullRequestStatement(cursor), rowLimitBindings(orgID, cursor, limit))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+	}
+	return rows.Err()
+}
