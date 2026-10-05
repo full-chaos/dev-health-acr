@@ -87,6 +87,7 @@ func TestAuthenticatorRateLimitsBeforeCredentialLookup(t *testing.T) {
 	request := func() *http.Request {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		r.RemoteAddr = "192.0.2.30:1234"
+		r.Header.Set("Authorization", "Bearer junk")
 		return r
 	}
 	first := httptest.NewRecorder()

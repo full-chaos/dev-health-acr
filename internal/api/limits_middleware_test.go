@@ -200,12 +200,15 @@ func TestAppAuthenticatedHandlerUsesInjectedAttemptLimiter(t *testing.T) {
 	// One failed authentication reaches the injected limiter's failure limit.
 	failed := httptest.NewRecorder()
 	handler.ServeHTTP(failed, request("not-a-token"))
-	// The address is now locked out, even for a valid credential.
+	// The address is now over its budget: a malformed bearer is refused
+	// unverified, and a credential that verifies is still served.
 	locked := httptest.NewRecorder()
-	handler.ServeHTTP(locked, request(token))
+	handler.ServeHTTP(locked, request("not-a-token"))
+	served := httptest.NewRecorder()
+	handler.ServeHTTP(served, request(token))
 
-	if valid.Code != http.StatusNoContent || failed.Code != http.StatusUnauthorized || locked.Code != http.StatusTooManyRequests {
-		t.Fatalf("statuses = %d, %d, %d", valid.Code, failed.Code, locked.Code)
+	if valid.Code != http.StatusNoContent || failed.Code != http.StatusUnauthorized || locked.Code != http.StatusTooManyRequests || served.Code != http.StatusNoContent {
+		t.Fatalf("statuses = %d, %d, %d, %d", valid.Code, failed.Code, locked.Code, served.Code)
 	}
 }
 

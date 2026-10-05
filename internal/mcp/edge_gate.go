@@ -26,10 +26,15 @@ type EdgeGateOptions struct {
 }
 
 // edgeGate counts failed authentications per client address BEFORE any hosted
-// API call, so missing and malformed bearers (which never reach acr-api) are
-// counted too. State is in memory per process: with N acr-mcp replicas an
-// address can record about N x (FailureLimit + MaxInFlight) failures per
-// window (attempts admitted before the limit was reached can still fail).
+// API call, so malformed bearers (which never reach acr-api) are counted too.
+// A request with no credential is not a failed authentication: it is never
+// counted or gated. A well-formed bearer from an address over its failure
+// limit is verified in that address's one over-budget slot
+// (auth.OverBudgetVerificationSlots), which bounds the hosted API calls an
+// over-budget address can cause. State is in memory per process: with N
+// acr-mcp replicas an address can record about N x (FailureLimit +
+// MaxInFlight) failures per window (attempts admitted before the limit was
+// reached can still fail) and hold N over-budget slots.
 type edgeGate struct {
 	limiter  auth.AttemptLimiter
 	resolver auth.ClientIPResolver
@@ -72,17 +77,34 @@ func (g *edgeGate) clientIP(r *http.Request) string { return g.resolver(r) }
 // begin admits one attempt and, when refused, names the bound that refused it.
 func (g *edgeGate) begin(ip string, now time.Time) (func(), string) {
 	release, decision := auth.BeginAttemptDecision(g.limiter, ip, now)
+	return release, gateDecision(decision)
+}
+
+// beginVerification admits one attempt that presents a well-formed bearer;
+// overBudget reports that it holds the address's over-budget slot.
+func (g *edgeGate) beginVerification(ip string, now time.Time) (release func(), decision string, reason string, overBudget bool) {
+	release, d := auth.BeginVerificationDecision(g.limiter, ip, now)
+	switch {
+	case d.Refusal == auth.RefusalVerificationSlot:
+		return nil, HTTPGateInFlight, HTTPGateReasonVerificationSlotBusy, false
+	case !d.Admitted():
+		return nil, gateDecision(d), HTTPGateReasonRefusedUnverified, false
+	}
+	return release, HTTPGateAdmitted, "", d.OverBudget
+}
+
+func gateDecision(decision auth.AttemptDecision) string {
 	switch decision.Refusal {
 	case auth.RefusalNone:
-		return release, HTTPGateAdmitted
+		return HTTPGateAdmitted
 	case auth.RefusalFailureBudget:
-		return nil, HTTPGateFailureBudget
-	case auth.RefusalInFlight:
-		return nil, HTTPGateInFlight
+		return HTTPGateFailureBudget
+	case auth.RefusalInFlight, auth.RefusalVerificationSlot:
+		return HTTPGateInFlight
 	case auth.RefusalTrackedKeys:
-		return nil, HTTPGateTrackedKeys
+		return HTTPGateTrackedKeys
 	}
-	return nil, HTTPGateUnspecified
+	return HTTPGateUnspecified
 }
 
 func (g *edgeGate) retryAfter(ip string, now time.Time) time.Duration {

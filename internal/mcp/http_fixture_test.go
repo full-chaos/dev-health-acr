@@ -60,6 +60,7 @@ type hostedAPI struct {
 	blocked      atomic.Bool
 	liveStatus   atomic.Int32
 	evidenceWait atomic.Pointer[barrier]
+	bearerHold   atomic.Pointer[bearerHold]
 
 	mu        sync.Mutex
 	seen      map[string][]string
@@ -84,8 +85,47 @@ func (h *hostedAPI) recordForwarded(next http.Handler) http.Handler {
 		h.forwarded = append(h.forwarded, r.Header.Get("X-Forwarded-For"))
 		h.calls = append(h.calls, forwardedCall{r.URL.Path, r.Header.Get("X-Forwarded-For")})
 		h.mu.Unlock()
+		if hold := h.bearerHold.Load(); hold != nil && r.Header.Get("Authorization") == "Bearer "+hold.token {
+			hold.wait()
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// bearerHold parks every acr-api request carrying one bearer until released,
+// recording how many were parked at once.
+type bearerHold struct {
+	token    string
+	release  chan struct{}
+	mu       sync.Mutex
+	parked   int
+	maxSeen  int
+	arrivals int
+}
+
+func newBearerHold(token string) *bearerHold {
+	return &bearerHold{token: token, release: make(chan struct{})}
+}
+
+func (b *bearerHold) wait() {
+	b.mu.Lock()
+	b.parked++
+	b.arrivals++
+	b.maxSeen = max(b.maxSeen, b.parked)
+	b.mu.Unlock()
+	select {
+	case <-b.release:
+	case <-time.After(10 * time.Second):
+	}
+	b.mu.Lock()
+	b.parked--
+	b.mu.Unlock()
+}
+
+func (b *bearerHold) counts() (parked, maxSeen, arrivals int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.parked, b.maxSeen, b.arrivals
 }
 
 func (h *hostedAPI) forwardedFor() []string {

@@ -50,6 +50,36 @@ func MCPHTTPGateDecisionVocabulary() []string {
 	return []string{MCPHTTPGateAdmitted, MCPHTTPGateFailureBudget, MCPHTTPGateInFlight, MCPHTTPGateTrackedKeys, MCPHTTPGateUnspecified}
 }
 
+// Gate reasons: which credential class the edge gate saw and how it treated
+// it. no_credential_not_counted: no Authorization header; answered 401 with
+// the discovery challenge, never counted and never gated.
+// rejected_counted: a presented credential was rejected and counted (a 429
+// when the address was already over its failure limit).
+// refused_unverified: refused by a gate bound before any verification.
+// verification_slot_busy: the address is over its failure limit and its one
+// over-budget verification slot is in use. verified: the credential was
+// verified with the address under its failure limit; verified_over_budget:
+// verified in the over-budget slot. not_counted: decided by the hosted API
+// but not a failed authentication (scope, entitlement, upstream).
+const (
+	MCPHTTPGateReasonNoCredential         = "no_credential_not_counted"
+	MCPHTTPGateReasonRejectedCounted      = "rejected_counted"
+	MCPHTTPGateReasonRefusedUnverified    = "refused_unverified"
+	MCPHTTPGateReasonVerificationSlotBusy = "verification_slot_busy"
+	MCPHTTPGateReasonVerified             = "verified"
+	MCPHTTPGateReasonVerifiedOverBudget   = "verified_over_budget"
+	MCPHTTPGateReasonNotCounted           = "not_counted"
+)
+
+// MCPHTTPGateReasonVocabulary lists every gate reason.
+func MCPHTTPGateReasonVocabulary() []string {
+	return []string{
+		MCPHTTPGateReasonNoCredential, MCPHTTPGateReasonRejectedCounted, MCPHTTPGateReasonRefusedUnverified,
+		MCPHTTPGateReasonVerificationSlotBusy, MCPHTTPGateReasonVerified, MCPHTTPGateReasonVerifiedOverBudget,
+		MCPHTTPGateReasonNotCounted,
+	}
+}
+
 // MCPHTTPAuthOutcomeVocabulary lists every auth outcome, admitted first.
 func MCPHTTPAuthOutcomeVocabulary() []string {
 	return []string{
@@ -190,6 +220,7 @@ var MCPHTTPRequest = Event{
 		{Key: "principal_ref", Type: FieldString, Presence: PresenceConditional, Applicability: "written when principal_class=bearer; an opaque per-process keyed digest, never the credential or its store hash"},
 		{Key: "client_ip", Type: FieldString, Presence: PresenceRequired},
 		{Key: "gate_decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: MCPHTTPGateDecisionVocabulary()},
+		{Key: "gate_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: MCPHTTPGateReasonVocabulary()},
 		{Key: "auth_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: MCPHTTPAuthOutcomeVocabulary()},
 		{Key: "result_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: MCPHTTPResultClassVocabulary()},
 		{Key: "status", Type: FieldInt, Presence: PresenceRequired},

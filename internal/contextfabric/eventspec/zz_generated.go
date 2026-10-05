@@ -6091,6 +6091,7 @@ type MCPHTTPRequestFields struct {
 	PrincipalRef     string
 	ClientIp         string
 	GateDecision     string
+	GateReason       string
 	AuthOutcome      string
 	ResultClass      string
 	Status           int
@@ -6109,7 +6110,7 @@ type MCPHTTPRequestFields struct {
 
 // NewMCPHTTPRequestFields is the generated constructor for MCPHTTPRequestFields -- every
 // field MCPHTTPRequest.Fields declares is a required parameter.
-func NewMCPHTTPRequestFields(requestID string, transport string, serverVersion string, serverCommit string, protocolRevision string, method string, tool string, principalClass string, principalRef string, clientIp string, gateDecision string, authOutcome string, resultClass string, status int, latencyMs int, inFlight int) MCPHTTPRequestFields {
+func NewMCPHTTPRequestFields(requestID string, transport string, serverVersion string, serverCommit string, protocolRevision string, method string, tool string, principalClass string, principalRef string, clientIp string, gateDecision string, gateReason string, authOutcome string, resultClass string, status int, latencyMs int, inFlight int) MCPHTTPRequestFields {
 	return MCPHTTPRequestFields{
 		RequestID:        requestID,
 		Transport:        transport,
@@ -6122,6 +6123,7 @@ func NewMCPHTTPRequestFields(requestID string, transport string, serverVersion s
 		PrincipalRef:     principalRef,
 		ClientIp:         clientIp,
 		GateDecision:     gateDecision,
+		GateReason:       gateReason,
 		AuthOutcome:      authOutcome,
 		ResultClass:      resultClass,
 		Status:           status,
@@ -6155,6 +6157,7 @@ func (f MCPHTTPRequestFields) SlogArgs() []any {
 		"principal_ref", contextfabric.SanitizeLogAttr(f.PrincipalRef),
 		"client_ip", contextfabric.SanitizeLogAttr(f.ClientIp),
 		"gate_decision", contextfabric.SanitizeLogAttr(f.GateDecision),
+		"gate_reason", contextfabric.SanitizeLogAttr(f.GateReason),
 		"auth_outcome", contextfabric.SanitizeLogAttr(f.AuthOutcome),
 		"result_class", contextfabric.SanitizeLogAttr(f.ResultClass),
 		"status", f.Status,

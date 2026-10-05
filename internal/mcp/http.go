@@ -61,6 +61,17 @@ const (
 	HTTPGateUnspecified   = eventspec.MCPHTTPGateUnspecified
 )
 
+// Gate reasons of the edge failure gate.
+const (
+	HTTPGateReasonNoCredential         = eventspec.MCPHTTPGateReasonNoCredential
+	HTTPGateReasonRejectedCounted      = eventspec.MCPHTTPGateReasonRejectedCounted
+	HTTPGateReasonRefusedUnverified    = eventspec.MCPHTTPGateReasonRefusedUnverified
+	HTTPGateReasonVerificationSlotBusy = eventspec.MCPHTTPGateReasonVerificationSlotBusy
+	HTTPGateReasonVerified             = eventspec.MCPHTTPGateReasonVerified
+	HTTPGateReasonVerifiedOverBudget   = eventspec.MCPHTTPGateReasonVerifiedOverBudget
+	HTTPGateReasonNotCounted           = eventspec.MCPHTTPGateReasonNotCounted
+)
+
 // HTTPAuthOutcomeVocabulary lists every auth outcome, admitted first.
 func HTTPAuthOutcomeVocabulary() []string { return eventspec.MCPHTTPAuthOutcomeVocabulary() }
 
@@ -469,38 +480,52 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 		h.emitRequestLine(r.Context(), line, record, r.Header.Get("Mcp-Protocol-Version"), r.Header.Get("Mcp-Method"))
 	}()
 
-	// The failure gate runs before the shape check so missing and malformed
-	// bearers are counted like every other failed authentication. The
-	// reservation is released the moment the credential is decided, never at
-	// the end of the response: MCP responses can be long-lived streams.
+	// A request with no credential is not a failed authentication: it gets
+	// its 401 and discovery challenge, and is never counted or gated. Every
+	// presented credential passes the failure gate first. A malformed one is
+	// refused unverified when the address is over its failure limit; a
+	// well-formed one is verified in the address's over-budget slot, so a
+	// bearer that verifies is served whatever the budget. The reservation is
+	// released the moment the credential is decided, never at the end of the
+	// response: MCP responses can be long-lived streams.
 	now := h.now()
 	ip := h.gate.clientIP(r)
 	line.clientIP = ip
-	release, gateDecision := h.gate.begin(ip, now)
+	line.gateDecision = HTTPGateAdmitted
+	bearer, presented := bearerFromRequest(r)
+	if !presented {
+		line.authOutcome = HTTPAuthMissingBearer
+		line.gateReason = HTTPGateReasonNoCredential
+		h.writeAuthRefusal(recorder, r.URL.Path, HTTPAuthMissingBearer, 0)
+		return
+	}
+	if !auth.IsTokenShapeValid(bearer) {
+		release, gateDecision := h.gate.begin(ip, now)
+		line.gateDecision = gateDecision
+		if gateDecision != HTTPGateAdmitted {
+			line.authOutcome = HTTPAuthRateLimited
+			line.gateReason = HTTPGateReasonRefusedUnverified
+			h.writeAuthRefusal(recorder, r.URL.Path, HTTPAuthRateLimited, h.gate.retryAfter(ip, now))
+			return
+		}
+		defer release()
+		h.gate.limiter.RecordFailure(ip, now)
+		line.authOutcome = HTTPAuthMalformedBearer
+		line.gateReason = HTTPGateReasonRejectedCounted
+		h.writeAuthRefusal(recorder, r.URL.Path, HTTPAuthMalformedBearer, 0)
+		return
+	}
+	line.principalClass = PrincipalClassBearer
+	line.principalRef = h.principalRef(bearer)
+	release, gateDecision, gateReason, overBudget := h.gate.beginVerification(ip, now)
 	line.gateDecision = gateDecision
 	if gateDecision != HTTPGateAdmitted {
 		line.authOutcome = HTTPAuthRateLimited
+		line.gateReason = gateReason
 		h.writeAuthRefusal(recorder, r.URL.Path, HTTPAuthRateLimited, h.gate.retryAfter(ip, now))
 		return
 	}
 	defer release()
-
-	bearer, presented := bearerFromRequest(r)
-	if presented && auth.IsTokenShapeValid(bearer) {
-		line.principalClass = PrincipalClassBearer
-		line.principalRef = h.principalRef(bearer)
-	}
-	switch {
-	case !presented:
-		line.authOutcome = HTTPAuthMissingBearer
-	case !auth.IsTokenShapeValid(bearer):
-		line.authOutcome = HTTPAuthMalformedBearer
-	}
-	if line.authOutcome != HTTPAuthAdmitted {
-		h.gate.limiter.RecordFailure(ip, now)
-		h.writeAuthRefusal(recorder, r.URL.Path, line.authOutcome, 0)
-		return
-	}
 
 	resolveCtx, cancel := context.WithTimeout(r.Context(), h.opts.ResolveTimeout)
 	caller, err := ResolveCaller(resolveCtx, h.cfg, CallerCredential{Bearer: bearer, ClientAddress: ip})
@@ -508,13 +533,25 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome, retryAfter := classifyResolveFailure(err)
 		line.authOutcome = outcome
+		line.gateReason = HTTPGateReasonNotCounted
 		if outcome == HTTPAuthInvalidCredential || outcome == HTTPAuthMalformedBearer {
-			h.gate.limiter.RecordFailure(ip, now)
+			line.gateReason = HTTPGateReasonRejectedCounted
+			if wasOverBudget, _ := auth.RecordRejection(h.gate.limiter, ip, now); wasOverBudget {
+				// The same answer as a refusal before verification: a guess
+				// learns nothing from the slot it used.
+				line.gateDecision = HTTPGateFailureBudget
+				line.authOutcome = HTTPAuthRateLimited
+				outcome, retryAfter = HTTPAuthRateLimited, h.gate.retryAfter(ip, now)
+			}
 		}
 		h.writeAuthRefusal(recorder, r.URL.Path, outcome, retryAfter)
 		return
 	}
 	release()
+	line.gateReason = HTTPGateReasonVerified
+	if overBudget {
+		line.gateReason = HTTPGateReasonVerifiedOverBudget
+	}
 
 	server := NewServerForCaller(h.cfg, caller, h.opts.Identity.Version)
 	server.AddReceivingMiddleware(recordMiddleware(record))
@@ -532,6 +569,7 @@ type requestLine struct {
 	inFlight       int64
 	clientIP       string
 	gateDecision   string
+	gateReason     string
 }
 
 // emitRequestLine writes the one line every MCP request produces, on every
@@ -586,6 +624,7 @@ func (h *HTTPHandler) emitRequestLine(ctx context.Context, line requestLine, rec
 	args = append(args,
 		"client_ip", line.clientIP,
 		"gate_decision", line.gateDecision,
+		"gate_reason", line.gateReason,
 		"auth_outcome", line.authOutcome,
 		"result_class", result,
 		"status", line.status,

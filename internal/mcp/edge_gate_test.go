@@ -59,11 +59,17 @@ func TestEdgeGateMalformedBearersAreCountedAndRefused(t *testing.T) {
 	}
 }
 
-func TestEdgeGateMissingBearersAreCountedAndRefused(t *testing.T) {
+// A request with no credential is the first step of authorization discovery,
+// not a failed authentication: it is never counted, so the address keeps its
+// whole failure budget.
+func TestEdgeGateMissingBearersAreNotCounted(t *testing.T) {
 	e := newEndpoint(t, newHostedAPI(t))
-	got := burst(t, e, 25, func(int) string { return "" }, noXFF)
+	if got := burst(t, e, 25, func(int) string { return "" }, noXFF); got[http.StatusUnauthorized] != 25 {
+		t.Fatalf("missing x25 = %v, want 25 x 401", got)
+	}
+	got := burst(t, e, 25, func(int) string { return "not-an-acr-bearer-token" }, noXFF)
 	if got[http.StatusUnauthorized] != 20 || got[http.StatusTooManyRequests] != 5 {
-		t.Fatalf("missing x25 = %v, want 20 x 401 then 5 x 429", got)
+		t.Fatalf("malformed x25 after 25 missing = %v, want 20 x 401 then 5 x 429", got)
 	}
 }
 
@@ -75,14 +81,16 @@ func TestEdgeGateWellFormedUnknownBearersAreCountedAndRefused(t *testing.T) {
 	}
 }
 
-// The failure is counted at the edge: the refusal at request 21 never reaches
-// acr-api, so the fixture API saw exactly 20 capability calls.
+// A malformed bearer is decided at the edge and never reaches acr-api. A
+// well-formed one from an address over its failure limit reaches acr-api only
+// through the address's one over-budget slot (pinned with concurrency in
+// TestEdgeGateOverBudgetAddressVerifiesOneBearerAtATime).
 func TestEdgeGateRefusalDoesNotReachTheHostedAPI(t *testing.T) {
 	hosted := newHostedAPI(t)
 	e := newEndpoint(t, hosted)
-	burst(t, e, 25, func(int) string { return unknownWellFormedToken(t) }, noXFF)
-	if n := len(hosted.forwardedFor()); n != 20 {
-		t.Fatalf("hosted API saw %d calls, want 20", n)
+	burst(t, e, 25, func(int) string { return "not-an-acr-bearer-token" }, noXFF)
+	if n := len(hosted.forwardedFor()); n != 0 {
+		t.Fatalf("hosted API saw %d calls for malformed bearers, want 0", n)
 	}
 }
 
@@ -101,8 +109,8 @@ func TestTwoAddressesHaveSeparateBucketsThroughTheMCPHop(t *testing.T) {
 	if got[http.StatusUnauthorized] != 20 || got[http.StatusTooManyRequests] != 5 {
 		t.Fatalf("A unknown x25 = %v, want 20 x 401 then 5 x 429 (acr-api gate keyed on A)", got)
 	}
-	if status := gateStatus(t, e, valid.token, a); status != http.StatusTooManyRequests {
-		t.Fatalf("valid token from locked-out A = %d, want 429", status)
+	if status := gateStatus(t, e, valid.token, a); status != http.StatusOK {
+		t.Fatalf("valid token from locked-out A = %d, want 200 (verified in A's over-budget slot)", status)
 	}
 	if status := gateStatus(t, e, valid.token, b); status != http.StatusOK {
 		t.Fatalf("valid token from B = %d, want 200: A's failures must not block B", status)
