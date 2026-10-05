@@ -162,8 +162,8 @@ func TestLiveNamedProjectsServeTheirOwnDeployments(t *testing.T) {
 		}
 		var frontier []string
 		for _, r := range rows {
-			issue, _ := r["m"].(*node)
-			pullRequest, _ := r["b"].(*node)
+			issue := walkNode(r["m"])
+			pullRequest := walkNode(r["b"])
 			if issue == nil || pullRequest == nil || canonicalIDOf(issue) != "work_item:linear:alpha-1" {
 				t.Fatalf("%s, link read: row %v, want the alpha issue and its pull request", windowName, r)
 			}
@@ -185,7 +185,7 @@ func TestLiveNamedProjectsServeTheirOwnDeployments(t *testing.T) {
 			}
 			frontier = frontier[:0]
 			for _, r := range rows {
-				if n, ok := r["b"].(*node); ok && n != nil {
+				if n := walkNode(r["b"]); n != nil {
 					frontier = append(frontier, canonicalIDOf(n))
 				}
 			}
