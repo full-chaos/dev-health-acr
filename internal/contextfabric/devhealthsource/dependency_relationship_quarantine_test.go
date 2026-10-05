@@ -18,7 +18,7 @@ import (
 
 // CHAOS-4874 / CHAOS-4571 regression suite.
 //
-// PROD INCIDENT this pins: org c6a38355 stalled with dev_health_clickhouse
+// PROD INCIDENT this pins: one organization stalled with dev_health_clickhouse
 // applying 61 batches and then failing every tick, deterministically, for
 // hours. work_item_dependencies carried relationship_type values outside the
 // 12-member v1 vocabulary -- EXTERNAL_ISSUE_KEY 1,296 rows, BLOCKED_BY 15,
