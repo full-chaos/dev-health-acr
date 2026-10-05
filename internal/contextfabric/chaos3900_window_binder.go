@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // CHAOS-3900 temporal-expression binder (design brief v5.2, §1.2(d)/D2 flow
@@ -391,7 +392,7 @@ func calendarPeriodOfSpan(question string, span BoundWindowSpan, roleOK bool) Ca
 	if spanStatesTrailingWindow(question, span) || spanIsPointInTime(question, span) {
 		return CalendarPeriodNone
 	}
-	if spanPrecededByDeterminer(question, span) {
+	if spanPrecededByDeterminer(question, span) || spanReadsAsAName(question, span) {
 		return CalendarPeriodNone
 	}
 	if roleOK || spanFollowedByConjunction(question, span) {
@@ -426,4 +427,15 @@ func spanPrecededByDeterminer(question string, span BoundWindowSpan) bool {
 		}
 	}
 	return false
+}
+
+// spanReadsAsAName reports a capitalised span that does not open the question
+// ("Which team owns Last Quarter?"): mid-question capitals read as a proper
+// name, so the binder does not commit a calendar period for it.
+func spanReadsAsAName(question string, span BoundWindowSpan) bool {
+	if span.SpanStart <= 0 || span.SpanStart >= len(question) {
+		return false
+	}
+	first, _ := utf8.DecodeRuneInString(question[span.SpanStart:])
+	return unicode.IsUpper(first)
 }

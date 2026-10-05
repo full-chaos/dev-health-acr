@@ -163,3 +163,19 @@ func TestCalendarWindow_CommittedCalendarWindowKeysReuseOnItsFrozenBounds(t *tes
 		t.Fatalf("no phrase: %#v, want no commitment", got)
 	}
 }
+
+// A capitalised "Last Quarter" in the middle of a question reads as a name, not
+// a period: the binder does not commit a calendar period for it.
+func TestCalendarWindow_ACapitalisedPhraseInTheMiddleOfAQuestionIsNotCommitted(t *testing.T) {
+	t.Parallel()
+	for question, want := range map[string]CalendarPeriod{
+		"Which team owns Last Quarter?":                      CalendarPeriodNone,
+		"Which team owns Last Month?":                        CalendarPeriodNone,
+		"Which repository carried the most work last month?": CalendarPeriodMonth,
+		"Which team owns the work from last quarter?":        CalendarPeriodQuarter,
+	} {
+		if got := ProposeWindowFromSpans(question).Calendar; got != want {
+			t.Errorf("%q: calendar = %q, want %q", question, got, want)
+		}
+	}
+}

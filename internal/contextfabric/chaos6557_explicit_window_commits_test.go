@@ -591,10 +591,11 @@ func TestCHAOS6557_StatedWindowAxisLineCarriesItsOwnOutcomeVocabulary(t *testing
 	}
 }
 
-// A trailing phrase's pre-interpretation reuse lookup carries no window key,
-// because that period is committed only after interpretation (a bare calendar
-// phrase is committed by the binder before it and keys on its own frozen
-// bounds). A stored answer that never
+// A stated period's pre-interpretation reuse lookup must not serve a stored
+// answer (a bare calendar phrase is committed by the binder before it, but the
+// interpretation can still withdraw that commitment: an as-of reading, a series
+// or comparison frame, so a cached current-state answer is not safe to serve).
+// A stored answer that never
 // applied the period (a pre-fix row saved as plain "current") must therefore
 // never be served to an MCP turn whose question names one: it is bypassed with
 // a loud reason and the turn is freshly windowed. An MCP question naming no
@@ -640,8 +641,10 @@ func runReuseGateCase(t *testing.T, surface, question string, field *contractsv1
 func TestCHAOS6557_MCPPeriodQuestionBypassesAnswerReuse(t *testing.T) {
 	t.Parallel()
 	for _, question := range []string{
+		"Which repository carried the most operational/support work last month and why?",
 		"How did last month treat the operational/support work of each repository?",
 		"What is the team investment mix over the last 30 days?",
+		"Which repository carried the most operational/support work last month?",
 	} {
 		result, gateCalls, bypasses, interpreted := runReuseGateCase(t, "mcp", question, nil)
 		if gateCalls != 0 || result.Reused || !interpreted {
@@ -661,7 +664,6 @@ func TestCHAOS6557_ReuseIsUntouchedWithoutAStatedPeriodOnMCPOrOffMCP(t *testing.
 	}{
 		{"mcp no period", "mcp", validInvestigationRequest().Question, nil},
 		{"workbench period", "workbench", "Which repository carried the most operational/support work last month and why?", nil},
-		{"mcp calendar phrase keeps its own frozen-window key", "mcp", "Which repository carried the most operational/support work last month and why?", nil},
 		{"mcp field window keeps its own key", "mcp", "Which teams need attention over the last 30 days?", &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}},
 	}
 	for _, tc := range cases {
