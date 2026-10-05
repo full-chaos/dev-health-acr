@@ -1352,7 +1352,7 @@ func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, c
 		parameters[key] = value
 	}
 	requested := copyRequestedRepositoryScope(request.RequestedRepositoryScope)
-	if request.scopeSelectedWorkItems && workItemOwnFact(requirement.Kind) && onlySelectedWorkItems(request, subjects) {
+	if workItemOwnFact(requirement.Kind) && onlyLinkScopedWorkItems(request, subjects) {
 		requested = nil
 	}
 	return FactQuery{
@@ -2096,18 +2096,20 @@ func workItemOwnFact(kind FactKind) bool {
 	return kind == FactStatus || kind == FactWork || kind == FactActualCompletion
 }
 
-// onlySelectedWorkItems reports whether every subject is a work item the
-// investigation selected (a resolved subject or a cohort member). A query that
-// also reads another kind (a project's completion roll-up), or a subject the
-// fact scope derived from another one (its children, its dependencies), keeps
-// the requested scope: no selection applied the scope to a derived subject.
-func onlySelectedWorkItems(request CanonicalFactRequest, subjects []SubjectRef) bool {
-	selected := map[string]bool{}
-	for _, subject := range investigationScopeSubjects(request) {
-		selected[canonicalFactSubjectKey(subject)] = true
+// onlyLinkScopedWorkItems reports whether every subject is a work item this
+// request's link predicate admitted under the requested scope
+// (CanonicalFactRequest.LinkScopedSubjects). Any other subject in the query (a
+// work item selected by its own repository, a subject the fact scope derived,
+// another kind) keeps the requested scope on the whole query.
+func onlyLinkScopedWorkItems(request CanonicalFactRequest, subjects []SubjectRef) bool {
+	linked := make(map[string]bool, len(request.LinkScopedSubjects))
+	for _, subject := range request.LinkScopedSubjects {
+		if subject.Kind == SubjectWorkItem {
+			linked[canonicalFactSubjectKey(subject)] = true
+		}
 	}
 	for _, subject := range subjects {
-		if subject.Kind != SubjectWorkItem || !selected[canonicalFactSubjectKey(subject)] {
+		if !linked[canonicalFactSubjectKey(subject)] {
 			return false
 		}
 	}

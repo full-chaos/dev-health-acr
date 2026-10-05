@@ -27,9 +27,9 @@ var (
 // linkScope is the work-item population of one requested repository scope,
 // read once per round and shared by the census and its cross-check.
 type linkScope struct {
-	read     func(ctx context.Context) ([]string, bool, error)
+	read     func(ctx context.Context) (map[string]string, bool, error)
 	once     sync.Once
-	members  map[string]bool
+	members  map[string]string
 	complete bool
 	err      error
 }
@@ -40,23 +40,24 @@ func newLinkScope(deps ResolveDeps, scope contextfabric.RequestedScope) *linkSco
 	if deps.LinkScopedWorkItems == nil || len(scope.RepositorySlugs) == 0 {
 		return nil
 	}
-	return &linkScope{read: func(ctx context.Context) ([]string, bool, error) {
+	return &linkScope{read: func(ctx context.Context) (map[string]string, bool, error) {
 		return deps.LinkScopedWorkItems(ctx, scope)
 	}}
 }
 
-// population is the scope's whole work-item population. A cut walk is an
-// error: a census inside a partial population is not a census.
-func (l *linkScope) population(ctx context.Context) (map[string]bool, error) {
+// population is the scope's whole work-item population, each issue with the
+// tier of its strongest admitted link. A cut walk is an error: a census inside
+// a partial population is not a census.
+func (l *linkScope) population(ctx context.Context) (map[string]string, error) {
 	if l == nil {
 		return nil, errLinkScopeUnavailable
 	}
 	l.once.Do(func() {
-		ids, complete, err := l.read(ctx)
+		tiers, complete, err := l.read(ctx)
 		l.complete, l.err = complete, err
-		l.members = make(map[string]bool, len(ids))
-		for _, id := range ids {
-			l.members[id] = true
+		l.members = make(map[string]string, len(tiers))
+		for id, tier := range tiers {
+			l.members[id] = tier
 		}
 	})
 	switch {
@@ -73,6 +74,9 @@ func (l *linkScope) population(ctx context.Context) (map[string]bool, error) {
 // the handle under the requested repository scope. The result carries
 // RepositoryFilterApplied, so the round cross-checks it as any filtered census.
 // A census that did not list its satisfiers cannot be scoped and is an error.
+// Each kept satisfier is recorded on the call's context with its link tier,
+// so the fact read and the disclosures of this call (and of no other) know
+// the walk admitted it.
 func withinLinkScope(ctx context.Context, scope *linkScope, outcome CensusOutcome) (CensusOutcome, error) {
 	members, err := scope.population(ctx)
 	if err != nil {
@@ -97,8 +101,9 @@ func withinLinkScope(ctx context.Context, scope *linkScope, outcome CensusOutcom
 	}
 	var kept []string
 	for _, id := range ids {
-		if members[id] {
+		if tier, ok := members[id]; ok {
 			kept = append(kept, id)
+			contextfabric.RecordWorkItemCensusLinkedSatisfier(ctx, id, tier)
 		}
 	}
 	outcome.Count, outcome.SatisfierCanonicalID, outcome.SatisfierCanonicalIDs = len(kept), "", nil

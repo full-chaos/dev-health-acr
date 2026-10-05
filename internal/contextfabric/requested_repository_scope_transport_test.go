@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -231,8 +234,8 @@ func TestEngineCopiesRequestedRepositoryScopeIntoCanonicalFactRequest(t *testing
 	if !reflect.DeepEqual(observed.RequestedRepositoryScope, want) {
 		t.Fatalf("fact request scope = %#v, want %#v", observed.RequestedRepositoryScope, want)
 	}
-	if !observed.scopeSelectedWorkItems {
-		t.Fatal("an investigation's fact request does not say its work items were selected under the requested scope: their own facts would be filtered again on their own repository")
+	if len(observed.LinkScopedSubjects) != 0 {
+		t.Fatalf("link-scoped subjects %v for a project no link predicate admitted: the requested scope must stay on its reads", observed.LinkScopedSubjects)
 	}
 	observed.RequestedRepositoryScope[0] = "fact-request-mutated"
 	if request.RequestedScope.RepositorySlugs[0] != "caller-mutated-after-investigate" {
@@ -269,39 +272,39 @@ func TestGroupedFactRequestCopiesRequestedRepositoryScope(t *testing.T) {
 	}
 }
 
-// TestAWorkItemsOwnFactsAreNotFilteredAgainOnItsOwnRepository: in an
-// investigation the requested repository scope selected the work items (by
-// the rule that follows the link), so a work item's own status, title and
-// completion are read under the caller's grants; every other read keeps the
-// requested scope.
+// TestAWorkItemsOwnFactsAreNotFilteredAgainOnItsOwnRepository: a work item
+// this request's link predicate admitted under the requested scope has its own
+// status, title and completion read without the requested repository
+// selector (its grants still apply); every other read keeps the selector.
 func TestAWorkItemsOwnFactsAreNotFilteredAgainOnItsOwnRepository(t *testing.T) {
 	t.Parallel()
 	work := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_item.v2:00000000-0000-0000-0000-000000000000:linear:ENG-1", Label: "ENG-1"}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project.v2:linear:p-1", Label: "p-1"}
-	child := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_item.v2:00000000-0000-0000-0000-000000000000:linear:ENG-2", Label: "ENG-2"}
-	allowed := map[string]SubjectRef{canonicalFactSubjectKey(work): work, canonicalFactSubjectKey(project): project, canonicalFactSubjectKey(child): child}
+	other := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_item.v2:00000000-0000-0000-0000-000000000000:linear:ENG-2", Label: "ENG-2"}
+	allowed := map[string]SubjectRef{canonicalFactSubjectKey(work): work, canonicalFactSubjectKey(project): project, canonicalFactSubjectKey(other): other}
 	scope := []string{"acme/svc"}
 	for _, c := range []struct {
 		name     string
-		selected bool
+		linked   []SubjectRef
 		kind     FactKind
 		subjects []SubjectRef
 		want     []string
 	}{
-		{"status of a work item", true, FactStatus, []SubjectRef{work}, nil},
-		{"title of a work item", true, FactWork, []SubjectRef{work}, nil},
-		{"completion of a work item", true, FactActualCompletion, []SubjectRef{work}, nil},
-		{"completion roll-up of a project", true, FactActualCompletion, []SubjectRef{work, project}, scope},
-		{"blockers of a work item", true, FactBlockers, []SubjectRef{work}, scope},
-		{"a read outside an investigation", false, FactStatus, []SubjectRef{work}, scope},
-		{"status of a work item the fact scope derived", true, FactStatus, []SubjectRef{work, child}, scope},
+		{"status of a link-admitted work item", []SubjectRef{work}, FactStatus, []SubjectRef{work}, nil},
+		{"title of a link-admitted work item", []SubjectRef{work}, FactWork, []SubjectRef{work}, nil},
+		{"completion of a link-admitted work item", []SubjectRef{work}, FactActualCompletion, []SubjectRef{work}, nil},
+		{"completion roll-up of a project", []SubjectRef{work}, FactActualCompletion, []SubjectRef{work, project}, scope},
+		{"blockers of a link-admitted work item", []SubjectRef{work}, FactBlockers, []SubjectRef{work}, scope},
+		{"a work item the link predicate did not admit", nil, FactStatus, []SubjectRef{work}, scope},
+		{"a query that also reads a work item the predicate did not admit", []SubjectRef{work}, FactStatus, []SubjectRef{work, other}, scope},
 	} {
 		capability := FactCapability{Kind: c.kind, SupportedSubjectKinds: []SubjectKind{SubjectWorkItem, SubjectProject}}
 		request := CanonicalFactRequest{
-			scopeSelectedWorkItems: c.selected,
-			Question:               InterpretedQuestion{TimeContext: TimeContext{Axis: TemporalCurrent}},
-			Subjects:               []SubjectRef{work, project}, Requirements: []FactRequirement{{Kind: c.kind}},
+			Question:                 InterpretedQuestion{TimeContext: TimeContext{Axis: TemporalCurrent}},
+			Subjects:                 []SubjectRef{work, project, other},
+			Requirements:             []FactRequirement{{Kind: c.kind}},
 			RequestedRepositoryScope: scope,
+			LinkScopedSubjects:       c.linked,
 		}
 		query, err := buildFactQuery(request, FactRequirement{Kind: c.kind}, capability, allowed, c.subjects)
 		if err != nil {
@@ -309,6 +312,72 @@ func TestAWorkItemsOwnFactsAreNotFilteredAgainOnItsOwnRepository(t *testing.T) {
 		}
 		if !reflect.DeepEqual(query.RequestedRepositoryScope, c.want) {
 			t.Errorf("%s: requested scope %#v, want %#v", c.name, query.RequestedRepositoryScope, c.want)
+		}
+	}
+}
+
+// TestOnlyThisRequestsLinkAdmittedWorkItemsAreLinkScoped: the work items whose
+// own facts drop the requested selector are those this call's link predicate
+// admitted: every member of a repository walk, and a resolved work item the
+// scoped census admitted on this call. Nothing without a requested scope, and
+// nothing recorded on another call.
+func TestOnlyThisRequestsLinkAdmittedWorkItemsAreLinkScoped(t *testing.T) {
+	t.Parallel()
+	admitted := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_item.v2:r:linear:ENG-1"}
+	other := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_item.v2:r:linear:ENG-2"}
+	repository := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:r"}
+	scoped := InvestigationRequest{RequestedScope: RequestedScope{RepositorySlugs: []string{"acme/svc"}}}
+	ids := func(subjects []SubjectRef) string {
+		out := make([]string, 0, len(subjects))
+		for _, s := range subjects {
+			out = append(out, s.CanonicalID)
+		}
+		return strings.Join(out, ",")
+	}
+	census := WithWorkItemCensusRepositoryScopeRecorder(context.Background())
+	RecordWorkItemCensusLinkedSatisfier(census, admitted.CanonicalID, TreeLinkTierExplicitText)
+	walk := &WorkItemTupleCensus{repository: &repositoryWorkItemReading{}}
+	for _, c := range []struct {
+		name     string
+		ctx      context.Context
+		request  InvestigationRequest
+		subjects []SubjectRef
+		tuple    *WorkItemTupleCensus
+		want     string
+	}{
+		{"census admitted one of two", census, scoped, []SubjectRef{repository, admitted, other}, nil, admitted.CanonicalID},
+		{"another call's context", WithWorkItemCensusRepositoryScopeRecorder(context.Background()), scoped, []SubjectRef{admitted}, nil, ""},
+		{"no requested scope", census, InvestigationRequest{}, []SubjectRef{admitted}, nil, ""},
+		{"every member of a repository walk", context.Background(), scoped, []SubjectRef{admitted, other}, walk, admitted.CanonicalID + "," + other.CanonicalID},
+		{"members of a project's member read", context.Background(), scoped, []SubjectRef{admitted, other}, &WorkItemTupleCensus{}, ""},
+	} {
+		if got := ids(linkScopedFactSubjects(c.ctx, c.request, c.subjects, c.tuple)); got != c.want {
+			t.Errorf("%s: link-scoped %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestACensusFoundWorkItemNamesItsLinkTier: a work item the scoped census
+// admitted through a text or heuristic link says so; a native one needs no
+// sentence; a satisfier that was not resolved adds nothing.
+func TestACensusFoundWorkItemNamesItsLinkTier(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		tier string
+		want []string
+	}{
+		{TreeLinkTierNative, []string{contractsv1.ContextFabricWorkItemCensusRepositoryScopeLimitation}},
+		{TreeLinkTierExplicitText, []string{contractsv1.ContextFabricWorkItemCensusRepositoryScopeLimitation, contractsv1.ContextFabricWorkItemCensusTextLinkLimitation}},
+		{TreeLinkTierHeuristic, []string{contractsv1.ContextFabricWorkItemCensusRepositoryScopeLimitation, contractsv1.ContextFabricWorkItemCensusHeuristicLinkLimitation}},
+		{"unknown", []string{contractsv1.ContextFabricWorkItemCensusRepositoryScopeLimitation, contractsv1.ContextFabricWorkItemCensusHeuristicLinkLimitation}},
+	} {
+		ctx := WithWorkItemCensusRepositoryScopeRecorder(context.Background())
+		RecordWorkItemCensusRepositoryScope(ctx)
+		RecordWorkItemCensusLinkedSatisfier(ctx, "work_item.v2:r:linear:ENG-1", c.tier)
+		RecordWorkItemCensusLinkedSatisfier(ctx, "work_item.v2:r:linear:ENG-9", TreeLinkTierHeuristic)
+		result := InvestigationResult{SubjectResolution: SubjectResolution{Committed: []SubjectRef{{Kind: SubjectWorkItem, CanonicalID: "work_item.v2:r:linear:ENG-1"}}}}
+		if got := withWorkItemCensusScopeDisclosures(ctx, result).Limitations; !reflect.DeepEqual(got, c.want) {
+			t.Errorf("tier %s: limitations %q, want %q", c.tier, got, c.want)
 		}
 	}
 }

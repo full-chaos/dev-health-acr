@@ -286,7 +286,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		CensusFunc: a.config.CensusFunc,
 		// The work items of a requested repository scope: the same
 		// repository-to-issue walk that serves a repository's work items.
-		LinkScopedWorkItems: func(ctx context.Context, scope contextfabric.RequestedScope) ([]string, bool, error) {
+		LinkScopedWorkItems: func(ctx context.Context, scope contextfabric.RequestedScope) (map[string]string, bool, error) {
 			return a.linkScopedIssues(ctx, key, principal, scope, contextfabric.WorkItemMembershipCensusLimit)
 		},
 		// CHAOS-3972 P3: nil unless the composition root sets

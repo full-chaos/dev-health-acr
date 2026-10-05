@@ -675,11 +675,17 @@ the same walk), and its cross-check and its commit test the issue with the same
 predicate. The census never filters a work item on its own repository column.
 A walk cut at its bound (more than 25 repositories in the scope, or more than
 the census bound of issues) is no census: the round reports it incomplete. A
-repository-less issue still needs a native link under a requested scope. In an
-investigation the requested scope selects the work items; a work item's own
-facts (status, title, completion) are then read under the caller's grants
-only, never filtered again on the work item's own repository column
-(`workItemOwnFact` in `fact_registry.go`).
+repository-less issue still needs a native link under a requested scope. The
+work items this request's link predicate admitted (every member of a repository
+walk, a resolved work item the scoped census admitted on this call) are passed
+to the fact read as `CanonicalFactRequest.LinkScopedSubjects`; their own facts
+(status, title, completion) are read without the requested repository
+selector, which would test their own repository column, and the caller's grants
+still apply in the library. Every other read keeps the selector. Nothing is
+carried to another request: a reused repository answer re-walks under the
+current grants and scope, and a reused answer of another shape rechecks its
+subjects with the requested scope. A work item the census admitted through a
+text or heuristic link says so in the answer; it is never shown as native.
 
 ---
 

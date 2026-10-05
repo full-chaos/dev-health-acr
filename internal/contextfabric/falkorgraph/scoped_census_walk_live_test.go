@@ -486,11 +486,16 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 			}
 			members := make([]string, 0, len(walk.Members))
 			for _, m := range walk.Members {
-				members = append(members, m.Subject.CanonicalID)
+				members = append(members, m.Subject.CanonicalID+"="+m.Tier)
 			}
 			sort.Strings(members)
-			if strings.Join(population, ",") != strings.Join(members, ",") || len(members) == 0 {
-				t.Errorf("grants %v: census population %v, repository walk members %v: want the same non-empty set", principal.RepositoryScopes, population, members)
+			walked := make([]string, 0, len(population))
+			for id, tier := range population {
+				walked = append(walked, id+"="+tier)
+			}
+			sort.Strings(walked)
+			if strings.Join(walked, ",") != strings.Join(members, ",") || len(members) == 0 {
+				t.Errorf("grants %v: census population %v, repository walk members %v: want the same non-empty set, with the same link tiers", principal.RepositoryScopes, walked, members)
 			}
 			// The census of the walk is the count of the members it returns.
 			gate, err := contextfabric.NewWorkItemMembershipGate(1, 1)

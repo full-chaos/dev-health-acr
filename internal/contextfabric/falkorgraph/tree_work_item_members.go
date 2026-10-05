@@ -78,10 +78,11 @@ const maxLinkScopedRepositories = 25
 // issues linked to a pull request of a repository the scope names, found by
 // the same walk that serves a repository's work items (treeMembers, repository
 // to issue, the link rule of admitted). It is the union of that walk over
-// every repository of the scope the caller may see. complete is false when the
+// every repository of the scope the caller may see, each issue with the
+// strongest tier among its admitted links. complete is false when the
 // repositories or a walk were cut, or the union is larger than limit: the set
 // is then not the whole population.
-func (a *Adapter) linkScopedIssues(ctx context.Context, key string, principal storage.Principal, scope contextfabric.RequestedScope, limit int) ([]string, bool, error) {
+func (a *Adapter) linkScopedIssues(ctx context.Context, key string, principal storage.Principal, scope contextfabric.RequestedScope, limit int) (map[string]string, bool, error) {
 	if len(scope.RepositorySlugs) == 0 {
 		return nil, false, errors.New("a link-scoped issue read needs a requested repository scope")
 	}
@@ -91,7 +92,7 @@ func (a *Adapter) linkScopedIssues(ctx context.Context, key string, principal st
 	}
 	complete := !cut
 	walked := 0
-	members := map[string]bool{}
+	members := map[string]string{}
 	for _, repository := range repositories {
 		if !graphrank.AuthorizedAttributes(principal, scope, repository.Attributes) {
 			continue
@@ -111,8 +112,13 @@ func (a *Adapter) linkScopedIssues(ctx context.Context, key string, principal st
 		}
 		complete = complete && !walk.truncated
 		for _, n := range walk.nodes {
-			if subject, ok := graphrank.NodeSubject(n); ok {
-				members[subject.CanonicalID] = true
+			subject, ok := graphrank.NodeSubject(n)
+			if !ok {
+				continue
+			}
+			tier := walk.memberTiers[subject.CanonicalID]
+			if best, seen := members[subject.CanonicalID]; !seen || tierRank(tier) < tierRank(best) {
+				members[subject.CanonicalID] = tier
 			}
 		}
 		if len(members) > limit {
@@ -120,12 +126,7 @@ func (a *Adapter) linkScopedIssues(ctx context.Context, key string, principal st
 			break
 		}
 	}
-	ids := make([]string, 0, len(members))
-	for id := range members {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
 	slog.DebugContext(ctx, "context fabric: link-scoped issues of a requested repository scope",
-		"repositories_walked", walked, "repositories_cut", cut, "issues", len(ids), "complete", complete)
-	return ids, complete, nil
+		"repositories_walked", walked, "repositories_cut", cut, "issues", len(members), "complete", complete)
+	return members, complete, nil
 }

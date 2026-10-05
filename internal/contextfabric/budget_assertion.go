@@ -287,15 +287,11 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	if plan != nil {
 		result = stampAnswerPlan(result, *plan)
 	}
-	// The caller's repository scope was applied to the work item census: a work
-	// item with no repository of its own was not searched. Stated on every
+	// The caller's repository scope was applied to the work item census, through
+	// the links to the scoped repositories' pull requests. Stated on every
 	// serving path, before completeness is derived because a limitation moves
 	// the terminal reason, and before the budget because it is a served byte.
-	if WorkItemCensusRepositoryScopeRecorded(ctx) {
-		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricWorkItemCensusRepositoryScopeLimitation})
-		result.Limitations = composed
-		result.LimitationsDisplaced += displaced
-	}
+	result = withWorkItemCensusScopeDisclosures(ctx, result)
 	// Re-derive completeness HERE, after the plan is on the result and before
 	// the budget is asserted.
 	//

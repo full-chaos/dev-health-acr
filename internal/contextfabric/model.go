@@ -381,15 +381,6 @@ type CanonicalFactRequest struct {
 	// workItemTuple requires explicit retained-member requirements at the fact
 	// boundary; it is internal dispatch state, never a request or model field.
 	workItemTuple bool
-	// scopeSelectedWorkItems: every work-item subject of this request was
-	// admitted under the requested repository scope where it was selected
-	// (the graph walks, the scoped census, the resolver), by the rule that
-	// follows the link of record. A work item's own facts (status, title,
-	// completion) are then read under the caller's grants only: applying the
-	// requested scope again to the work item's own repository column would
-	// drop an issue the scope reached through its link. Internal dispatch
-	// state, set for an investigation's fact read only.
-	scopeSelectedWorkItems bool
 
 	Question     InterpretedQuestion `json:"question"`
 	Subjects     []SubjectRef        `json:"subjects"`
@@ -412,6 +403,15 @@ type CanonicalFactRequest struct {
 	// requested selector, while a non-empty list that normalizes to no valid
 	// selector becomes an explicit zero (deny) selector.
 	RequestedRepositoryScope []string `json:"-"`
+	// LinkScopedSubjects are the work items this request's link predicate
+	// admitted under the requested repository scope (the repository walk's
+	// members, the satisfier the scoped census admitted): each is in the scope
+	// through a link to a pull request of a named repository. Their own facts
+	// (status, title, completion) are read without the requested repository
+	// selector, which would test their own repository column; the caller's
+	// grants still apply. Set by the engine for this request only, never
+	// stored, never carried to another request.
+	LinkScopedSubjects []SubjectRef `json:"-"`
 	// Scope is the FactReadScopeResolver's verdict for this request
 	// (CHAOS-4099): which derived subjects each requirement may additionally
 	// be READ for, and which requirements could not be reached at all.

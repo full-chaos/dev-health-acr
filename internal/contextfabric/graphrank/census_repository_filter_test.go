@@ -277,7 +277,7 @@ func TestResolveSubjects_CensusProbeTraceNamesWhetherTheRepositoryFilterWasAppli
 func TestRunShadowEvidenceRound_RecordsTheWorkItemCensusRepositoryScopeOnlyWhenItWasApplied(t *testing.T) {
 	t.Parallel()
 	walked := func(complete bool) *linkScope {
-		return &linkScope{read: func(context.Context) ([]string, bool, error) { return nil, complete, nil }}
+		return &linkScope{read: func(context.Context) (map[string]string, bool, error) { return nil, complete, nil }}
 	}
 	for _, tc := range []struct {
 		name     string

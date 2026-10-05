@@ -487,7 +487,7 @@ type ResolveDeps struct {
 	// reaches from each repository the scope names. complete is false when
 	// the walk was cut. nil: a work-item census under a requested repository
 	// scope cannot be read, and the round says so (census incomplete).
-	LinkScopedWorkItems func(ctx context.Context, scope contextfabric.RequestedScope) (canonicalIDs []string, complete bool, err error)
+	LinkScopedWorkItems func(ctx context.Context, scope contextfabric.RequestedScope) (tiers map[string]string, complete bool, err error)
 	// HandleGrammarChecker (CHAOS-3972 P3) is contextfabric.Engine's own
 	// offer-time grammar dependency, threaded through unchanged so
 	// explicitHandleOfferMaterial (chaos3900_structure_offers.go) can
@@ -5233,7 +5233,7 @@ func callerNarrowingSatisfierFilter(principal storage.Principal, request context
 		return nil
 	}
 	return func(ctx context.Context, kind CensusKind, canonicalIDs []string) ([]string, bool) {
-		var linked map[string]bool
+		var linked map[string]string
 		if kind == contextfabric.SubjectWorkItem {
 			members, err := workItemScope.population(ctx)
 			if err != nil {
@@ -5252,7 +5252,8 @@ func callerNarrowingSatisfierFilter(principal storage.Principal, request context
 			}
 			admitted := AuthorizedAttributes(principal, request.RequestedScope, node.Attributes)
 			if kind == contextfabric.SubjectWorkItem {
-				admitted = linked[id] && AuthorizedThroughLink(principal, request.RequestedScope, node.Attributes)
+				_, walked := linked[id]
+				admitted = walked && AuthorizedThroughLink(principal, request.RequestedScope, node.Attributes)
 			}
 			if admitted {
 				kept = append(kept, id)

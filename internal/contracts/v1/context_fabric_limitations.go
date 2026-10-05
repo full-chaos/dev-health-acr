@@ -711,10 +711,39 @@ func IsContextFabricComparisonPeriodUnreadLimitation(limitation string) bool {
 // repository, and the links come from the last link build.
 const ContextFabricWorkItemCensusRepositoryScopeLimitation = "A repository scope was given: work items were searched through their links to the pull requests of the named repositories. The links come from the last link build and can lag behind the source."
 
+// The tier of the link that put a census-found work item in the requested
+// repository scope, when it is not native. A text or heuristic link is never
+// presented as a native one.
+const (
+	ContextFabricWorkItemCensusTextLinkLimitation      = "The work item is in the repository scope through a link stated in text, not a native link."
+	ContextFabricWorkItemCensusHeuristicLinkLimitation = "The work item is in the repository scope through a heuristic match (a pull request opened near the issue's last update in the issue's own repository), not a native link."
+)
+
+// ContextFabricWorkItemCensusLinkTierLimitation is the disclosure of the link
+// tier that put a census-found work item in the requested repository scope:
+// none for a native link, and the heuristic sentence for a tier outside the
+// closed set (the weakest reading, never the native one).
+func ContextFabricWorkItemCensusLinkTierLimitation(tier string) string {
+	switch tier {
+	case ContextFabricWorkItemRepositoryTierNative:
+		return ""
+	case ContextFabricWorkItemRepositoryTierExplicitText:
+		return ContextFabricWorkItemCensusTextLinkLimitation
+	}
+	return ContextFabricWorkItemCensusHeuristicLinkLimitation
+}
+
 // IsContextFabricWorkItemCensusRepositoryScopeLimitation reports whether one
-// limitation is that disclosure; it matches the whole sentence.
+// limitation is a census repository-scope disclosure; it matches each sentence
+// whole.
 func IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation string) bool {
-	return limitation == ContextFabricWorkItemCensusRepositoryScopeLimitation
+	switch limitation {
+	case ContextFabricWorkItemCensusRepositoryScopeLimitation,
+		ContextFabricWorkItemCensusTextLinkLimitation,
+		ContextFabricWorkItemCensusHeuristicLinkLimitation:
+		return true
+	}
+	return false
 }
 
 // The work-item member-filter disclosures. A filtered member answer states the

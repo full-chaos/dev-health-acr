@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -72,11 +73,15 @@ func (p *linkScopeCensusProbe) census(ctx context.Context, _ string, kind Census
 
 func walkedPopulation(ids []string, complete bool, err error) func(*ResolveDeps) {
 	return func(deps *ResolveDeps) {
-		deps.LinkScopedWorkItems = func(_ context.Context, scope contextfabric.RequestedScope) ([]string, bool, error) {
+		deps.LinkScopedWorkItems = func(_ context.Context, scope contextfabric.RequestedScope) (map[string]string, bool, error) {
 			if len(scope.RepositorySlugs) != 1 || scope.RepositorySlugs[0] != linkScopeSlug {
 				return nil, false, fmt.Errorf("walked scope %v, want the request's", scope.RepositorySlugs)
 			}
-			return ids, complete, err
+			tiers := map[string]string{}
+			for _, id := range ids {
+				tiers[id] = "native"
+			}
+			return tiers, complete, err
 		}
 	}
 }
@@ -166,5 +171,51 @@ func TestALinkScopedSatisfierStillMeetsTheCallersGrants(t *testing.T) {
 	}
 	if AuthorizedThroughLink(storage.Principal{OrgID: "org_1"}, contextfabric.RequestedScope{RepositorySlugs: []string{linkScopeSlug}, ProjectIDs: []string{"p-1"}}, map[string]interface{}{"authorization_repositories": []string{"acme/other"}, "authorization_projects": []string{"p-2"}}) {
 		t.Fatal("an issue outside the requested project is admitted: only the repository part of the scope follows the link")
+	}
+}
+
+// TestTheScopedCensusRecordsItsAdmittedSatisfiersForThisCallOnly: the
+// satisfiers the link walk kept are recorded, with their tier, on the call's
+// context, and nowhere else.
+func TestTheScopedCensusRecordsItsAdmittedSatisfiersForThisCallOnly(t *testing.T) {
+	t.Parallel()
+	scope := &linkScope{read: func(context.Context) (map[string]string, bool, error) {
+		return map[string]string{"a": "explicit_text", "b": "native"}, true, nil
+	}}
+	ctx := contextfabric.WithWorkItemCensusRepositoryScopeRecorder(context.Background())
+	outcome, err := withinLinkScope(ctx, scope, CensusOutcome{Count: 2, SatisfierCanonicalIDs: []string{"a", "c"}})
+	if err != nil || outcome.Count != 1 || outcome.SatisfierCanonicalID != "a" || !outcome.RepositoryFilterApplied {
+		t.Fatalf("outcome %+v err %v, want the one walked satisfier", outcome, err)
+	}
+	if got := contextfabric.WorkItemCensusLinkedSatisfiers(ctx); len(got) != 1 || got["a"] != "explicit_text" {
+		t.Fatalf("recorded %v, want only the kept satisfier with its tier", got)
+	}
+	if got := contextfabric.WorkItemCensusLinkedSatisfiers(contextfabric.WithWorkItemCensusRepositoryScopeRecorder(context.Background())); len(got) != 0 {
+		t.Fatalf("another call's context holds %v", got)
+	}
+}
+
+// TestAReuseRecheckDoesNotCarryALinkAdmission: answer reuse rechecks a stored
+// answer's subjects as exact hints under the new request's scope. The hint
+// path tests a work item by its own node, so a work item the scoped census
+// admitted through its link is not re-admitted by the recheck: the stored
+// answer is not reused and the turn runs fresh, where the census and its link
+// walk run again. Nothing of the earlier admission is carried.
+func TestAReuseRecheckDoesNotCarryALinkAdmission(t *testing.T) {
+	t.Parallel()
+	deps := linkScopeBackend().deps()
+	walkedPopulation([]string{linkScopeItem(1)}, true, nil)(&deps)
+	request := testRequest()
+	request.Question = linkScopeQuestion
+	request.RequestedScope.RepositorySlugs = []string{linkScopeSlug}
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: contextfabric.SubjectWorkItem, ID: linkScopeItem(1), Source: string(hintsource.AnswerReuseAuthorizationRecheck)}}
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("CHAOS-77"), deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range resolution.Committed {
+		if s.CanonicalID == linkScopeItem(1) {
+			t.Fatalf("the recheck re-admitted %s by its hint: a link admission must be re-derived by the census, not carried", s.CanonicalID)
+		}
 	}
 }
