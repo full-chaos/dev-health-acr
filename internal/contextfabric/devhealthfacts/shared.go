@@ -393,7 +393,16 @@ import (
 // per call, and the row cut fits the answer against the document the route
 // sends, late writers included. A candidate saved before v71 carries the old
 // hint and a fit measured without the late writers and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v71"
+//
+// v71 -> v72: a requested repository scope follows the link of record. A
+// work-item handle under a requested repository scope is counted among the
+// issues linked to a pull request of a named repository, not by the work
+// item's own repository; a project's deployments under a requested scope are
+// reached through an issue of any repository linked to a pull request in the
+// scope; and a work item the link admitted has its own facts read without the
+// requested repository selector. A candidate saved under v71 or earlier for
+// such a question holds the old relation and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v72"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

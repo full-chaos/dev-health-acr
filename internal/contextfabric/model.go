@@ -403,6 +403,15 @@ type CanonicalFactRequest struct {
 	// requested selector, while a non-empty list that normalizes to no valid
 	// selector becomes an explicit zero (deny) selector.
 	RequestedRepositoryScope []string `json:"-"`
+	// LinkScopedSubjects are the work items this request's link predicate
+	// admitted under the requested repository scope (the repository walk's
+	// members, the satisfier the scoped census admitted): each is in the scope
+	// through a link to a pull request of a named repository. Their own facts
+	// (status, title, completion) are read without the requested repository
+	// selector, which would test their own repository column; the caller's
+	// grants still apply. Set by the engine for this request only, never
+	// stored, never carried to another request.
+	LinkScopedSubjects []SubjectRef `json:"-"`
 	// Scope is the FactReadScopeResolver's verdict for this request
 	// (CHAOS-4099): which derived subjects each requirement may additionally
 	// be READ for, and which requirements could not be reached at all.

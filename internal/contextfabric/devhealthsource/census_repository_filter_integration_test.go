@@ -113,7 +113,7 @@ func TestWorkItemCensusRepositoryFilterAgainstRealClickHouse(t *testing.T) {
 		}
 		insertItem(orgA, id, "jira:KEY-77")
 	}
-	// A repo-less item (a Linear-style row) is outside every named repository.
+	// A repo-less item (a Linear-style row).
 	insertItem(orgA, "00000000-0000-0000-0000-000000000000", "linear:KEY-77")
 	otherRepo := o3UUID(orgB + "-wi-repo")
 	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, otherRepo, orgB, "acme/repo-25", "github", now); err != nil {
@@ -130,6 +130,9 @@ func TestWorkItemCensusRepositoryFilterAgainstRealClickHouse(t *testing.T) {
 		}
 		return outcome
 	}
+	// The work item's own repository is never the relation to a repository
+	// (the entity tree): every narrowing reads the whole organization, and the
+	// census round scopes the satisfiers by the link walk.
 	cases := []struct {
 		name    string
 		slugs   []string
@@ -137,9 +140,9 @@ func TestWorkItemCensusRepositoryFilterAgainstRealClickHouse(t *testing.T) {
 		applied bool
 	}{
 		{"no filter", nil, repos + 1, false},
-		{"one repository, case-folded", []string{"ACME/Repo-25"}, 1, true},
-		{"owner wildcard", []string{"acme/*"}, repos, true},
-		{"unknown repository", []string{"acme/elsewhere"}, 0, true},
+		{"one repository, case-folded", []string{"ACME/Repo-25"}, repos + 1, false},
+		{"owner wildcard", []string{"acme/*"}, repos + 1, false},
+		{"unknown repository", []string{"acme/elsewhere"}, repos + 1, false},
 	}
 	for _, tc := range cases {
 		outcome := run(tc.slugs)
