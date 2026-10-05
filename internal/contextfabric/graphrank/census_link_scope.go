@@ -126,3 +126,17 @@ func linkScopedSatisfier(attestation Attestation, kind contextfabric.SubjectKind
 	}
 	return false
 }
+
+// linkScopeFailure names why a work item census could not be scoped by the
+// link walk, as a closed value for the log line.
+func linkScopeFailure(err error) string {
+	switch {
+	case errors.Is(err, errLinkScopeUnavailable):
+		return "walk_unavailable"
+	case errors.Is(err, errLinkScopeCut):
+		return "walk_cut"
+	case errors.Is(err, errLinkScopeUnlisted):
+		return "satisfiers_unlisted"
+	}
+	return "walk_failed"
+}

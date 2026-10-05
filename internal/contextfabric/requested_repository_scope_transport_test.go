@@ -278,7 +278,8 @@ func TestAWorkItemsOwnFactsAreNotFilteredAgainOnItsOwnRepository(t *testing.T) {
 	t.Parallel()
 	work := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_item.v2:00000000-0000-0000-0000-000000000000:linear:ENG-1", Label: "ENG-1"}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project.v2:linear:p-1", Label: "p-1"}
-	allowed := map[string]SubjectRef{canonicalFactSubjectKey(work): work, canonicalFactSubjectKey(project): project}
+	child := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_item.v2:00000000-0000-0000-0000-000000000000:linear:ENG-2", Label: "ENG-2"}
+	allowed := map[string]SubjectRef{canonicalFactSubjectKey(work): work, canonicalFactSubjectKey(project): project, canonicalFactSubjectKey(child): child}
 	scope := []string{"acme/svc"}
 	for _, c := range []struct {
 		name     string
@@ -293,12 +294,13 @@ func TestAWorkItemsOwnFactsAreNotFilteredAgainOnItsOwnRepository(t *testing.T) {
 		{"completion roll-up of a project", true, FactActualCompletion, []SubjectRef{work, project}, scope},
 		{"blockers of a work item", true, FactBlockers, []SubjectRef{work}, scope},
 		{"a read outside an investigation", false, FactStatus, []SubjectRef{work}, scope},
+		{"status of a work item the fact scope derived", true, FactStatus, []SubjectRef{work, child}, scope},
 	} {
 		capability := FactCapability{Kind: c.kind, SupportedSubjectKinds: []SubjectKind{SubjectWorkItem, SubjectProject}}
 		request := CanonicalFactRequest{
 			scopeSelectedWorkItems: c.selected,
 			Question:               InterpretedQuestion{TimeContext: TimeContext{Axis: TemporalCurrent}},
-			Subjects:               c.subjects, Requirements: []FactRequirement{{Kind: c.kind}},
+			Subjects:               []SubjectRef{work, project}, Requirements: []FactRequirement{{Kind: c.kind}},
 			RequestedRepositoryScope: scope,
 		}
 		query, err := buildFactQuery(request, FactRequirement{Kind: c.kind}, capability, allowed, c.subjects)

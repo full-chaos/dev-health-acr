@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -124,5 +125,7 @@ func (a *Adapter) linkScopedIssues(ctx context.Context, key string, principal st
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	slog.DebugContext(ctx, "context fabric: link-scoped issues of a requested repository scope",
+		"repositories_walked", walked, "repositories_cut", cut, "issues", len(ids), "complete", complete)
 	return ids, complete, nil
 }

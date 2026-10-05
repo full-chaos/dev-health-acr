@@ -1352,7 +1352,7 @@ func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, c
 		parameters[key] = value
 	}
 	requested := copyRequestedRepositoryScope(request.RequestedRepositoryScope)
-	if request.scopeSelectedWorkItems && workItemOwnFact(requirement.Kind) && onlyWorkItems(subjects) {
+	if request.scopeSelectedWorkItems && workItemOwnFact(requirement.Kind) && onlySelectedWorkItems(request, subjects) {
 		requested = nil
 	}
 	return FactQuery{
@@ -2096,12 +2096,18 @@ func workItemOwnFact(kind FactKind) bool {
 	return kind == FactStatus || kind == FactWork || kind == FactActualCompletion
 }
 
-// onlyWorkItems reports whether every subject is a work item. A query that
-// also reads another kind (a project's completion roll-up) keeps the
-// requested scope.
-func onlyWorkItems(subjects []SubjectRef) bool {
+// onlySelectedWorkItems reports whether every subject is a work item the
+// investigation selected (a resolved subject or a cohort member). A query that
+// also reads another kind (a project's completion roll-up), or a subject the
+// fact scope derived from another one (its children, its dependencies), keeps
+// the requested scope: no selection applied the scope to a derived subject.
+func onlySelectedWorkItems(request CanonicalFactRequest, subjects []SubjectRef) bool {
+	selected := map[string]bool{}
+	for _, subject := range investigationScopeSubjects(request) {
+		selected[canonicalFactSubjectKey(subject)] = true
+	}
 	for _, subject := range subjects {
-		if subject.Kind != SubjectWorkItem {
+		if subject.Kind != SubjectWorkItem || !selected[canonicalFactSubjectKey(subject)] {
 			return false
 		}
 	}

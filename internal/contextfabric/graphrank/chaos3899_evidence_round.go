@@ -717,7 +717,10 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		outcome, err := input.CensusFunc(censusCtx, input.OrgID, kind,
 			valueOr(handleApplies, handle), handleApplies, anchor.Kind, anchor.CanonicalID, anchorApplies)
 		if err == nil && linkScoped {
-			outcome, err = withinLinkScope(ctx, input.workItemScope, outcome)
+			if outcome, err = withinLinkScope(ctx, input.workItemScope, outcome); err != nil {
+				slog.WarnContext(ctx, "context fabric census: the work item census was not scoped by the link walk of the requested repository scope",
+					"request_id", contextfabric.SanitizeLogAttr(input.RequestID), "reason", linkScopeFailure(err))
+			}
 		}
 		ka := KindAttestation{Kind: kind, Protocol: "aggregate_first", HandleApplied: handleApplies, AnchorApplied: anchorApplies}
 		narrowedEmpty := false
