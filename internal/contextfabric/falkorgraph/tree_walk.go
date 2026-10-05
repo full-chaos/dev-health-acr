@@ -404,7 +404,11 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 		if hop.edge.ownership {
 			hopTemporal, budget = currentOwnership(temporal, a.now()), exactNameCandidateQueryLimit
 		}
-		hits, hitsCut, err := a.walkStepHits(ctx, key, orgID, frontier, hop.step, hopTemporal, budget)
+		step := hop.step
+		// A hop that only feeds the next one reads the walk properties of its
+		// nodes; the members' hop reads them whole.
+		step.projected = k < len(path)-1 && walkNodeProjected(hop.to)
+		hits, hitsCut, err := a.walkStepHits(ctx, key, orgID, frontier, step, hopTemporal, budget)
 		if err != nil {
 			return out, err
 		}
@@ -614,7 +618,17 @@ func linkSegmentCypher(feed, link treeHop, temporal temporalFilter, restricted b
 	return linkSegmentMatch(feed) + fmt.Sprintf(hopArrow(link.step.direction, "rl")+"(b:%[2]s {%[3]s:$org, %[4]s:$endKind}) ", labelRelation, labelSubject, propOrgID, propKind) +
 		fmt.Sprintf("WHERE ra.%[1]s = $feedRel AND rl.%[1]s = $linkRel AND rl.%[2]s IN $tiers", propRelationType, propPropertyPrefix+linkTierProperty) + mid.typeClause() + end.typeClause() + grants +
 		temporal.predicate("ra") + temporal.predicate("m") + temporal.predicate("rl") + temporal.predicate("b") +
-		fmt.Sprintf(" RETURN m, b, rl ORDER BY %[2]sm.%[1]s, b.%[1]s, rl.%[3]s SKIP $skip LIMIT $limit", propCanonicalID, order, propRelationshipID)
+		fmt.Sprintf(" RETURN %[4]s, %[5]s, %[6]s ORDER BY %[2]sm.%[1]s, b.%[1]s, rl.%[3]s SKIP $skip LIMIT $limit", propCanonicalID, order, propRelationshipID,
+			linkSegmentColumn("m", feed.to, walkNodeProperties), linkSegmentColumn("b", link.to, walkNodeProperties), walkProjection("rl", walkLinkProperties))
+}
+
+// linkSegmentColumn is a node column of the link read: the walk properties of
+// the node, or the whole node at a position that is never projected.
+func linkSegmentColumn(variable string, position treePosition, properties []string) string {
+	if !walkNodeProjected(position) {
+		return variable
+	}
+	return walkProjection(variable, properties)
 }
 
 // linkSourceCountCypher counts the near-side nodes of the anchor's hop, before
@@ -755,9 +769,9 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 			return nil, nil, safeDependencyError("walk the entity tree", err)
 		}
 		for _, r := range rows {
-			near, _ := r["m"].(*node)
-			far, _ := r["b"].(*node)
-			tier, isLink := linkTierOf(asEdge(r["rl"]))
+			near := walkNode(r["m"])
+			far := walkNode(r["b"])
+			tier, isLink := linkTierOf(walkEdge(r["rl"]))
 			if near == nil || far == nil || !isLink {
 				// No row, or an edge with no tier the table lists: not a link.
 				continue
@@ -798,9 +812,4 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 // a team through the repositories it owns, a repository directly.
 func (a *Adapter) anchorDeploymentMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, collectLimit int, temporal temporalFilter) (treeWalk, error) {
 	return a.treeMembers(ctx, key, orgID, principal, scope, anchor, treeDeployment, collectLimit, temporal)
-}
-
-func asEdge(v interface{}) *edge {
-	e, _ := v.(*edge)
-	return e
 }
