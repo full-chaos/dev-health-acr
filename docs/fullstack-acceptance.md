@@ -341,7 +341,7 @@ same credential must pass authorization for a same-organization future repositor
 absent from the analytics catalog, while a separately seeded foreign-OrgID canary must return
 no evidence. The lifecycle then exercises `doctor --live`, scope-preserving refresh, doctor,
 logout, and the expected post-logout failure. The consumed code is replayed through the
-browser and must return a conflict.
+browser preview and must get the answer an unknown code gets (HTTP 400 `invalid_request`).
 
 The browser retains connected screenshots for the pending, review, and success states at
 375px, 768px, and 1280px. Its network receipt fails on a bearer header, a query string, a

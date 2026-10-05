@@ -137,23 +137,20 @@ try {
     await captureState("success");
 
     await page.goto(`${baseUrl}/acr/device`, { waitUntil: "networkidle" });
+    const replayBrowserErrorStart = browserErrors.length;
     const replayPreview = page.waitForResponse((response) => isDeviceResponseForAction(response, "preview"));
     await page.getByLabel("Verification code").fill(code);
     await page.getByRole("button", { name: "Preview request" }).click();
-    await requireDeviceSuccess(await replayPreview, "replay preview");
-    await page.getByRole("heading", { name: "Review device access" }).waitFor();
-    const replayBrowserErrorStart = browserErrors.length;
-    const replayApproval = page.waitForResponse((response) => isDeviceResponseForAction(response, "approve"));
-    await page.getByRole("button", { name: "Confirm" }).click();
-    const replayApprovalResponse = await replayApproval;
-    if (replayApprovalResponse.status() !== 409) {
-        throw new Error(`replayed device approval did not fail closed: ${replayApprovalResponse.status()}`);
+    const replayPreviewResponse = await replayPreview;
+    if (replayPreviewResponse.status() !== 400) {
+        throw new Error(`replayed device preview did not fail closed: ${replayPreviewResponse.status()}`);
     }
-    await page.getByRole("heading", { name: "Request not approved" }).waitFor();
+    await page.getByText(/This code is no longer valid/).waitFor();
+    await page.getByRole("heading", { name: "Approve device access" }).waitFor();
 
     const replayBrowserErrors = browserErrors.slice(replayBrowserErrorStart);
     const expectedReplayErrors = replayBrowserErrors.filter((error) =>
-        error.text.includes("the server responded with a status of 409"),
+        error.text.includes("the server responded with a status of 400"),
     );
     const unexpectedBrowserErrors = [
         ...browserErrors.slice(0, replayBrowserErrorStart),
@@ -176,16 +173,11 @@ try {
     );
     if (responses.some((response) => response.status >= 500)) throw new Error("device route returned 5xx");
     const actions = deviceRequests.map((request) => request.action);
-    if (actions.join(",") !== "preview,approve,preview,approve") {
-        throw new Error("device route sequence was not preview then approve with approval replay rejection");
+    if (actions.join(",") !== "preview,approve,preview") {
+        throw new Error("device route sequence was not preview then approve with preview replay rejection");
     }
-    if (
-        deviceRequests[1].scopes.length !== 1 ||
-        deviceRequests[1].scopes[0] !== "*" ||
-        deviceRequests[3].scopes.length !== 1 ||
-        deviceRequests[3].scopes[0] !== "*"
-    ) {
-        throw new Error("initial or replayed approval scope was not organization-wide");
+    if (deviceRequests[1].scopes.length !== 1 || deviceRequests[1].scopes[0] !== "*") {
+        throw new Error("approval scope was not organization-wide");
     }
     await writeFile(
         resolve(artifacts, "device-login-network.json"),
