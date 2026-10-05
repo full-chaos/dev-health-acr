@@ -3,11 +3,11 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "a42ff6572434e7a0398a8700555279b9a74adb45",
+    "commit": "a660b1337253e7354880cc74f1de94aa56060eb1",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:fdff794c3fa3de956e07061645b7494cca33ed760f9405d405c912ae01d3e34b",
-    "registry_sha256": "b53f5e5e5e94fcf7032659d6b724bafda43a327f3257212c51c21bdcb6160ae1",
-    "registry_rows": 59
+    "schema_digest": "sha256:e931b3c76732183f508561100c42c8188d160e2bd0d1593e5087f9ebee8ce44c",
+    "registry_sha256": "abbdc201b1c2c73959d84c49bd4edd0f404156cf119b948acfee72786164ed64",
+    "registry_rows": 61
   },
   "person_name_tokens": [
     "actor",
@@ -6355,6 +6355,13 @@
       "reason": "operator or superuser view (design D.3)"
     },
     {
+      "name": "coverageBaselines",
+      "kind": "query",
+      "digest": "141ed14fc636739e1184716167148d7d17c35180a09a83dc9ef2b04bfb1dd638",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
+    },
+    {
       "name": "createSavedReport",
       "kind": "mutation",
       "digest": "2834bc84c1a065ef44dff96e02f6e5d2ca55608053f96a52366eac429aafc0f0",
@@ -6519,6 +6526,13 @@
       "name": "testOpsTest",
       "kind": "query",
       "digest": "20eeea67bfc1cfa0f809188878476a0fe40565bc583009151e1f7c8cf2f3be5c",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
+    },
+    {
+      "name": "testopsJobFailures",
+      "kind": "query",
+      "digest": "3966554a57e957978b5777cbb8b51bf6e0f41feb2181b89f7ad138e1c81c67c9",
       "code": "unknown_operation",
       "reason": "no scope rule or no honest status yet (design D.3)"
     },
