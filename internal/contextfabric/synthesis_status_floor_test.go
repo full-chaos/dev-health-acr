@@ -26,9 +26,18 @@ func cutEmptyCohortGraph() GraphContext {
 
 func scriptedStatusEngine(t *testing.T, modelStatus InvestigationStatus, graph GraphContext, committed bool, facts ...CanonicalFactBundle) (*Engine, InvestigationRequest) {
 	t.Helper()
+	return scriptedStatusEngineAsking(t, nil, modelStatus, graph, committed, facts...)
+}
+
+func scriptedStatusEngineAsking(t *testing.T, asked []FactKind, modelStatus InvestigationStatus, graph GraphContext, committed bool, facts ...CanonicalFactBundle) (*Engine, InvestigationRequest) {
+	t.Helper()
+	requirements := []FactRequirement{}
+	for _, kind := range asked {
+		requirements = append(requirements, FactRequirement{Kind: kind})
+	}
 	interpretation := InterpretedQuestion{
 		Shape: ShapeOpen, RequestedJudgment: "release_readiness_and_drivers",
-		TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{},
+		TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: requirements,
 	}
 	resolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
 	bases := CommitBasisSet{}
@@ -241,4 +250,34 @@ func TestApplyServerStatusFloorClauses(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestServedStatusFloorRequiresTheReadFactKindToBeAsked(t *testing.T) {
+	cases := []struct {
+		name  string
+		asked []FactKind
+		want  InvestigationStatus
+	}{
+		{"read kind is not an asked kind", []FactKind{FactMembership}, InvestigationNoMatch},
+		{"read kind is an asked kind", []FactKind{FactMembership, FactStatus}, InvestigationDegraded},
+		{"question names no kind", nil, InvestigationDegraded},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine, request := scriptedStatusEngineAsking(t, tc.asked, InvestigationNoMatch, emptyAffirmationGraph(), true, factsForSubject(affirmationSubject))
+			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+			if err != nil {
+				t.Fatalf("Investigate: %v", err)
+			}
+			if result.Status != tc.want {
+				t.Fatalf("status = %q, want %q", result.Status, tc.want)
+			}
+			if err := result.Validate(); err != nil {
+				t.Fatalf("served result invalid: %v", err)
+			}
+			if withheld := hasLimitation(result.Limitations, synthesisNarrativeWithheldLimitation); withheld != (tc.want != InvestigationNoMatch) {
+				t.Fatalf("withheld limitation present = %v for status %q", withheld, result.Status)
+			}
+		})
+	}
 }

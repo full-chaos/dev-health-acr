@@ -17,7 +17,8 @@ const synthesisNarrativeWithheldLimitation = contractsv1.ContextFabricSynthesisN
 const SynthesisStatusOverrideNoMatchOverCohortOutcome SynthesisStatusOverrideReason = "no_match_over_cohort_outcome"
 
 // SynthesisStatusOverrideNoMatchOverReadFacts: the model said no_match while
-// a canonical fact row was read for a committed subject.
+// a canonical fact row of a kind the question asked for was read for a
+// committed subject.
 const SynthesisStatusOverrideNoMatchOverReadFacts SynthesisStatusOverrideReason = "no_match_over_read_facts"
 
 func cohortTerminalCoverageCode(code contractsv1.ContextFabricCoverageDetailCode) bool {
@@ -33,9 +34,26 @@ func cohortTerminalCoverageCode(code contractsv1.ContextFabricCoverageDetailCode
 	return false
 }
 
-func committedFactRowRead(committed []SubjectRef, facts CanonicalFactBundle) bool {
+// askedFactKinds is the set of fact kinds the question asked for: the
+// interpretation's requirements and the graph's. Empty means the question named
+// no kind, and then any read row of a committed subject is relevant.
+func askedFactKinds(result *InvestigationResult, graph GraphContext) map[FactKind]bool {
+	asked := map[FactKind]bool{}
+	for _, requirement := range result.Interpretation.FactRequirements {
+		asked[requirement.Kind] = true
+	}
+	for _, requirement := range graph.FactRequirements {
+		asked[requirement.Kind] = true
+	}
+	return asked
+}
+
+func committedFactRowRead(committed []SubjectRef, facts CanonicalFactBundle, asked map[FactKind]bool) bool {
 	for _, fact := range facts.Facts {
 		if fact.SourceState != SourceAvailable && fact.SourceState != SourceStale {
+			continue
+		}
+		if len(asked) > 0 && !asked[fact.Kind] {
 			continue
 		}
 		for _, subject := range committed {
@@ -76,7 +94,7 @@ func applyServerStatusFloor(result *InvestigationResult, graph GraphContext, fac
 	case membersServed:
 		floor = InvestigationPartial
 	case terminal:
-	case committedFactRowRead(committed, facts):
+	case committedFactRowRead(committed, facts, askedFactKinds(result, graph)):
 		reason = SynthesisStatusOverrideNoMatchOverReadFacts
 	default:
 		return nil
@@ -84,6 +102,14 @@ func applyServerStatusFloor(result *InvestigationResult, graph GraphContext, fac
 	outcome := &SynthesisStatusOverrideOutcome{
 		From: result.Status, To: floor, Reason: reason, CommittedCount: len(committed),
 	}
+	floorNoMatchTo(result, floor)
+	return outcome
+}
+
+// floorNoMatchTo is the one status swap every no_match floor uses: it sets the
+// status, recomposes the two prose fields from it, and discloses that the
+// narrative was withheld.
+func floorNoMatchTo(result *InvestigationResult, floor InvestigationStatus) {
 	result.Status = floor
 	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
 	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
@@ -91,5 +117,4 @@ func applyServerStatusFloor(result *InvestigationResult, graph GraphContext, fac
 	result.Limitations = composed
 	result.LimitationsDisplaced += displaced
 	result.Coverage.Partial = true
-	return outcome
 }
