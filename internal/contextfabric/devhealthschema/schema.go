@@ -198,6 +198,7 @@ var ProductionColumns = map[string][]Column{
 		{Name: "org_id", Type: "String"},
 	},
 	"investment_metrics_daily": {
+		{Name: "repo_id", Type: "Nullable(UUID)"},
 		{Name: "day", Type: "Date"},
 		{Name: "team_id", Type: "LowCardinality(Nullable(String))"},
 		{Name: "investment_area", Type: "LowCardinality(String)"},

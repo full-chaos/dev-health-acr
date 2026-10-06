@@ -792,7 +792,12 @@ func investmentFields() []fieldDecl {
 		cInt("work_items_completed", "count"),
 		cInt("prs_merged", "count"),
 		cInt("churn_loc", "loc"),
-		cNum("cycle_p50_hours", "hours"),
+		// cycle_p50_hours is present only when one repository stands behind
+		// the row (an exact median). cycle_p50_hours_weighted_mean is an
+		// APPROXIMATION, not a median: the work-item-weighted mean of the
+		// per-repository medians.
+		cNullable(cNum("cycle_p50_hours", "hours")),
+		cNullable(cNum("cycle_p50_hours_weighted_mean", "hours")),
 		cNullable(cStr("investment_area")),
 		cNullable(cStr("project_stream")),
 	)
