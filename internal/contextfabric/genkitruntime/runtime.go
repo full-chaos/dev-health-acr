@@ -254,6 +254,11 @@ const (
 	// the words that map onto it, and the worked examples carry the value.
 	// A change to what the model is told, so the version bumps (same
 	// standing rule stated at v9 above).
+	// v21 -> v22: the status line of the fact-kind glossary lists all eight
+	// work_item status values with the enum's spelling (in_review and
+	// blocked were missing; in_progress was written "in progress"). A change
+	// to what the model is told, so the version bumps (same standing rule
+	// stated at v9 above).
 	DefaultInterpretationPromptVersion = interpretprompt.PromptVersion
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
