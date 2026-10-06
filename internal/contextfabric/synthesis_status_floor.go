@@ -141,6 +141,59 @@ func applyServerStatusFloor(result *InvestigationResult, graph GraphContext, fac
 	return outcome
 }
 
+const truncatedPopulationNoMemberLimitation = contractsv1.ContextFabricTruncatedPopulationNoMemberLimitation
+
+// applyPopulationOutcomeStatusFloor floors a no_match whose own outcome rows
+// say the retrieved population was truncated. The row exists only after
+// synthesis, so this runs at the serving point every path passes, not beside
+// applyServerStatusFloor. Truncation with served members is already floored
+// there to partial; this covers the truncated population that carried no
+// members, which is degraded: the service read a population it could not carry.
+// The guard keys on the row's attributes (narrowed, population_truncated, served
+// zero), not on an obligation: the count, read-population and ranking
+// evaluations all emit population_truncated rows.
+func applyPopulationOutcomeStatusFloor(result *InvestigationResult) {
+	if result == nil || result.Status != InvestigationNoMatch || result.RefusalBasis != "" {
+		return
+	}
+	if populationTruncatedNoMemberRowHolds(*result) {
+		floorNoMatchTo(result, InvestigationDegraded)
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{truncatedPopulationNoMemberLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
+}
+
+// populationTruncatedNoMemberRowHolds reports whether an assembled-result
+// outcome row says the population was truncated and no member of it was served.
+func populationTruncatedNoMemberRowHolds(result InvestigationResult) bool {
+	for _, row := range result.Completeness.Outcomes {
+		if row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult &&
+			row.Outcome == contractsv1.ContextFabricRequirementNarrowed &&
+			row.CauseCoverage == contractsv1.ContextFabricCoverageDetailPopulationTruncated &&
+			row.Served == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// ApplyServedStatusFloors is the one apply function of the served-status floors
+// that read only the finished document. Every serving point calls it: the
+// engine's late writers (fresh, reuse, vetoes) and the stored-result read
+// (by id, which the MCP investigation_result tool forwards). Completeness is
+// re-derived when a floor moved the status. The completeness authority is
+// ceilinged by the same floor (see applyServerCompletenessAuthority), so it
+// can never serve a status above it.
+func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
+	before := result.Status
+	applyPopulationOutcomeStatusFloor(&result)
+	if result.Status != before {
+		result.Completeness = ComputeAnswerCompleteness(result)
+	}
+	return result
+}
+
 // floorNoMatchTo is the one status swap every no_match floor uses: it sets the
 // status, recomposes the two prose fields from it, and discloses that the
 // narrative was withheld.

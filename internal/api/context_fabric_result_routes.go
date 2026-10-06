@@ -286,6 +286,10 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result could not be served", false, nil)
 			return
 		}
+		// The served-status floors, on the stored-result read like on every
+		// engine serving point: a row stored before a floor existed is floored
+		// here, and the authority below cannot lift it back.
+		result = contextfabric.ApplyServedStatusFloors(result)
 		completenessAuthority := contextfabric.DeriveCompletenessAuthority(result)
 		completenessAuthorityArgs := contextfabric.CompletenessAuthorityLogArgs(completenessAuthority, principal.OrgID)
 		completenessAuthorityArgs = append(completenessAuthorityArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))

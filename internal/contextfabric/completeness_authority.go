@@ -667,6 +667,11 @@ func applyServerCompletenessAuthority(result InvestigationResult, enabled bool, 
 		if !symmetricEnabled || mapped != InvestigationPartial {
 			return result
 		}
+		// A floor is a floor: a truncated population with no member served
+		// stays degraded; the authority never lifts the status above it.
+		if populationTruncatedNoMemberRowHolds(result) {
+			return result
+		}
 	default:
 		return result
 	}

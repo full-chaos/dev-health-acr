@@ -1746,7 +1746,7 @@ flowchart TD
         OC --> OSAT["satisfied"]
         OC --> ONAR["narrowed"]
         OC --> OUNA["unavailable"]
-        OC --> ONAT["not_attempted — UNREACHABLE in this slice"]
+        OC --> ONAT["not_attempted — considered, not evaluated; the cause says why"]
         OC --> ONAP["not_applicable — UNREACHABLE in this slice"]
         ROWS --> IC{"impact, closed ×4:<br/>what the reader LOSES"}
         IC --> INONE["none"]
@@ -1831,11 +1831,14 @@ flowchart TD
 
 4. **`not_derived` is a state, not a missing field.** No frame, or no
    deriver, and the answer says its outcomes were never derived rather than
-   that nothing was lost. The two unreachable outcome tokens
-   (`not_attempted`, `not_applicable`) are marked as such deliberately: both
-   need the post-resolution requirement-refinement step, which belongs to the
-   requirement-derivation seam, and a vocabulary member no producer can reach
-   is a promise rather than a member.
+   that nothing was lost. One outcome token is still unreachable
+   (`not_applicable`): it needs the post-resolution requirement-refinement
+   step, which belongs to the requirement-derivation seam, and a vocabulary
+   member no producer can reach is a promise rather than a member.
+   `not_attempted` is reachable: the read evaluator emits it (causes
+   `fact_pruned`, `requirement_not_evaluable`), and the gap builder emits it
+   for a turn that ended first. It means the requirement was not evaluated,
+   not that no read was made.
 
 5. **The stage vocabulary has FOUR members, and the fourth is the one that
    proves the rule.** `planning`, `assembled_result`, `projection`, `reuse`.

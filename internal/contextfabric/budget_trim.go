@@ -199,6 +199,7 @@ func (e *Engine) planBudgetTrim(
 // completeness block; it never adds a charged item.
 func (e *Engine) budgetTrimServedShape(ctx context.Context, result InvestigationResult) InvestigationResult {
 	result = withWorkItemCensusScopeDisclosures(ctx, result)
+	result = ApplyServedStatusFloors(result)
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(result))
 }

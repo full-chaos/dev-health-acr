@@ -631,6 +631,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricClientSynthesisCommitNotAffirmedLimitation,
 		ContextFabricSynthesisClarificationUnavailableLimitation,
 		ContextFabricSynthesisNarrativeWithheldLimitation,
+		ContextFabricTruncatedPopulationNoMemberLimitation,
 		ContextFabricFactScopeUnexpandedLimitation,
 		ContextFabricFactScopeActivityProxyLimitation,
 		ContextFabricFactScopeAttributedPrimaryTeamLimitation,
@@ -1067,3 +1068,8 @@ func IsContextFabricWorkItemRepositoryLimitation(limitation string) bool {
 	}
 	return len(limitation) <= contextFabricWorkItemMemberFilterLimitationMaxRunes*4 && workItemRepositoryHeuristicLimitationPattern.MatchString(limitation)
 }
+
+// ContextFabricTruncatedPopulationNoMemberLimitation discloses that a no_match
+// was floored to degraded because the retrieved population was truncated and
+// no member of it was served.
+const ContextFabricTruncatedPopulationNoMemberLimitation = "The population for this question was truncated and no member of it was served, so this answer shows none of it."
