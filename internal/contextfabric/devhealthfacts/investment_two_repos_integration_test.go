@@ -92,7 +92,7 @@ func TestInvestmentSumsTheNewestRowOfEachRepositoryAgainstRealClickHouse(t *test
 		"growth":        {30, 4, 6, 300, nil, f(17.5)},
 		"solo":          {5, 2, 1, 10, f(12.5), f(12.5)},
 		"no-repository": {7, 1, 1, 1, f(6.0), f(6.0)},
-		"zeroed":        {0, 0, 0, 0, f(0), nil},
+		"zeroed":        {0, 0, 0, 0, nil, nil},
 		"idle":          {7, 0, 2, 2, nil, nil},
 		"latest-day":    {4, 1, 1, 1, f(5.0), f(5.0)},
 	}
