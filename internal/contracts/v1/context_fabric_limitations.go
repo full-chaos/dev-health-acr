@@ -599,6 +599,11 @@ const ContextFabricSubjectTermsFromFrameLimitation = "The supplied interpretatio
 // name to search for, so the answer is not a search result.
 const ContextFabricSubjectTermsMissingLimitation = "The supplied interpretation named no subject: it has no subject_terms and its question_frame names none, so retrieval had nothing to search for. This is not a search result. Send subject_terms with the names of the subjects the question is about, and ask again."
 
+// ContextFabricSubjectTermsFrameOverBoundLimitation is the sentence a no_match
+// answer carries when the question_frame of a supplied interpretation named
+// more subjects than subject_terms may hold, so none were read from it.
+const ContextFabricSubjectTermsFrameOverBoundLimitation = "The supplied interpretation had no subject_terms, and its question_frame names more subjects than subject_terms may hold, so none were read from it. This is not a search result. Send subject_terms with at most 50 names and ask again."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -640,6 +645,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSingleSubjectCountLimitation,
 		ContextFabricSubjectTermsFromFrameLimitation,
 		ContextFabricSubjectTermsMissingLimitation,
+		ContextFabricSubjectTermsFrameOverBoundLimitation,
 	}
 }
 

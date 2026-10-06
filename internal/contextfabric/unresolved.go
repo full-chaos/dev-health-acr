@@ -458,8 +458,13 @@ func (e *Engine) terminalResult(
 	if limitation == noMatchLimitationOfferFloorEmptied {
 		limitation = noMatchLimitationSubjectNotFound(interpretation.SubjectTerms, effectiveSubjectFloor(structureMaterial).SearchedKinds)
 	}
-	if status == InvestigationNoMatch && limitation == noMatchLimitationUnproven && subjectTermsInputFrom(ctx) == SubjectTermsMissing {
-		limitation = contractsv1.ContextFabricSubjectTermsMissingLimitation
+	if status == InvestigationNoMatch && limitation == noMatchLimitationUnproven {
+		switch subjectTermsInputFrom(ctx) {
+		case SubjectTermsMissing:
+			limitation = contractsv1.ContextFabricSubjectTermsMissingLimitation
+		case SubjectTermsFrameOverBound:
+			limitation = contractsv1.ContextFabricSubjectTermsFrameOverBoundLimitation
+		}
 	}
 	// CHAOS-5442: a frame the gate refused gets its own disclosure, on
 	// both surfaces, decided from the ONE value that already holds the

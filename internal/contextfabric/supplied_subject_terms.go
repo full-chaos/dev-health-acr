@@ -3,6 +3,8 @@ package contextfabric
 import (
 	"context"
 	"strings"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // SubjectTermsInput names which input a supplied interpretation's subjects
@@ -19,6 +21,9 @@ const (
 	SubjectTermsFromFrame SubjectTermsInput = "question_frame"
 	// SubjectTermsMissing: no flat terms and the frame names none.
 	SubjectTermsMissing SubjectTermsInput = "missing"
+	// SubjectTermsFrameOverBound: the frame names more distinct subjects
+	// than subject_terms may hold; none are derived.
+	SubjectTermsFrameOverBound SubjectTermsInput = "frame_over_bound"
 )
 
 type subjectTermsInputKey struct{}
@@ -88,11 +93,14 @@ func deriveSuppliedSubjectTerms(request InvestigationRequest, interpreted Interp
 		}
 	}
 	for _, hint := range request.RequestedScope.SubjectHints {
-		if strings.TrimSpace(hint.Label) != "" {
+		if strings.TrimSpace(hint.Label) != "" || strings.TrimSpace(hint.ID) != "" {
 			return interpreted, SubjectTermsFlat
 		}
 	}
 	terms := FrameSubjectTerms(frame)
+	if len(terms) > contractsv1.ContextFabricSubjectTermsMaxCount {
+		return interpreted, SubjectTermsFrameOverBound
+	}
 	if len(terms) == 0 {
 		return interpreted, SubjectTermsMissing
 	}

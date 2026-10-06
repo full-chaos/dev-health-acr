@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -47,5 +48,32 @@ func TestDeriveSuppliedSubjectTermsLeavesFlatTermsAndHintsAlone(t *testing.T) {
 	}
 	if _, input := deriveSuppliedSubjectTerms(InvestigationRequest{}, InterpretedQuestion{}, nil); input != SubjectTermsMissing {
 		t.Fatalf("no frame: input = %q, want missing", input)
+	}
+}
+
+func TestDeriveSuppliedSubjectTermsTreatsAnIDOnlyHintAsPresent(t *testing.T) {
+	frame := &QuestionFrame{SubjectExpression: SubjectExpression{Named: &NamedSubjectExpression{Terms: []string{"Framed"}}}}
+	request := InvestigationRequest{}
+	request.RequestedScope.SubjectHints = []SubjectHint{{ID: "project_known"}}
+	if got, input := deriveSuppliedSubjectTerms(request, InterpretedQuestion{}, frame); input != SubjectTermsFlat || len(got.SubjectTerms) != 0 {
+		t.Fatalf("id-only hint: input = %q terms = %#v, want nothing derived", input, got.SubjectTerms)
+	}
+}
+
+func TestDeriveSuppliedSubjectTermsRefusesMoreThanTheTermBound(t *testing.T) {
+	operand := func(prefix string, n int) SubjectOperand {
+		terms := make([]string, n)
+		for i := range terms {
+			terms[i] = fmt.Sprintf("%s%d", prefix, i)
+		}
+		return SubjectOperand{Named: &NamedSubjectExpression{Terms: terms}}
+	}
+	over := &QuestionFrame{SubjectExpression: SubjectExpression{Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{operand("a", 26), operand("b", 25)}}}}
+	if got, input := deriveSuppliedSubjectTerms(InvestigationRequest{}, InterpretedQuestion{}, over); input != SubjectTermsFrameOverBound || len(got.SubjectTerms) != 0 {
+		t.Fatalf("51 terms: input = %q terms = %d, want over-bound and none derived", input, len(got.SubjectTerms))
+	}
+	atBound := &QuestionFrame{SubjectExpression: SubjectExpression{Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{operand("a", 25), operand("b", 25)}}}}
+	if got, input := deriveSuppliedSubjectTerms(InvestigationRequest{}, InterpretedQuestion{}, atBound); input != SubjectTermsFromFrame || len(got.SubjectTerms) != 50 {
+		t.Fatalf("50 terms: input = %q terms = %d, want all 50 derived", input, len(got.SubjectTerms))
 	}
 }
