@@ -417,7 +417,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// 351 -> 352 -- InterpretedQuestion's new requested_judgment_kind
 		// string leaf. answer_projection is unaffected: the projection
 		// carries no Interpretation at all.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 355},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 356},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)

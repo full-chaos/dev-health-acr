@@ -1168,6 +1168,9 @@ type ContextFabricSubjectRef struct {
 	Label       string                   `json:"label"`
 }
 
+// ContextFabricProviderMaxLength bounds the candidate provider cue in runes.
+const ContextFabricProviderMaxLength = 64
+
 type ContextFabricSubjectCandidate struct {
 	ReceiptID      string                       `json:"receipt_id"`
 	Subject        ContextFabricSubjectRef      `json:"subject"`

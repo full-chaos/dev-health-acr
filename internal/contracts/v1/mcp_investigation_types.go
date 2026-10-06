@@ -455,6 +455,7 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.remaining_work[].subjects[].label",
 	"structured.subject_resolution.candidates[].matched_terms[]",
 	"structured.subject_resolution.candidates[].subject.label",
+	"structured.subject_resolution.candidates[].provider",
 	"structured.subject_resolution.committed[].label",
 	// CHAOS-4087: CommitDecisionDigest.Subject is a SubjectRef, the SAME
 	// entity-display-label concern as every other .subject.label above --
