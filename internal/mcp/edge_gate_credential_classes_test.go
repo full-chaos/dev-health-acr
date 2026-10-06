@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -175,6 +176,25 @@ func reasonCounts(lines []map[string]any) map[string]int {
 	return counts
 }
 
+// awaitReasonCounts waits until the request lines of one address carry
+// exactly want. A request line is written after the client has its answer, so
+// the last answered request may not have a line yet; the counts must settle to
+// exactly want, never to anything else, before the deadline.
+func awaitReasonCounts(t *testing.T, e *endpoint, address string, want map[string]int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got := reasonCounts(requestLines(t, e, address))
+		if reflect.DeepEqual(got, want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("gate decision/reason counts = %v, want %v", got, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // An address over its edge failure limit verifies at most one well-formed
 // bearer at a time: a concurrent flood of guesses makes one acr-api call,
 // the rest are refused unverified, a valid bearer from another address is
@@ -255,7 +275,6 @@ func TestEdgeGateOverBudgetAddressVerifiesOneBearerAtATime(t *testing.T) {
 		t.Fatalf("no-credential request from the flooding address = %d, want 401", status)
 	}
 
-	got := reasonCounts(requestLines(t, e, attacker))
 	want := map[string]int{
 		"admitted/rejected_counted":          3,
 		"in_flight/verification_slot_busy":   flood - 1 + 1,
@@ -263,14 +282,7 @@ func TestEdgeGateOverBudgetAddressVerifiesOneBearerAtATime(t *testing.T) {
 		"admitted/verified_over_budget":      1,
 		"admitted/no_credential_not_counted": 1,
 	}
-	if len(got) != len(want) {
-		t.Fatalf("gate decision/reason counts = %v, want %v", got, want)
-	}
-	for key, n := range want {
-		if got[key] != n {
-			t.Fatalf("gate decision/reason counts = %v, want %v", got, want)
-		}
-	}
+	awaitReasonCounts(t, e, attacker, want)
 	if lines := requestLines(t, e, other); len(lines) != 1 || lines[0]["gate_reason"] != acrmcp.HTTPGateReasonVerified {
 		t.Fatalf("other address lines = %v, want one verified", lines)
 	}
