@@ -1571,13 +1571,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization, true, &deniedCount, cohortDeniedReason, "context-fabric:graph")
 	}
 	if anchoredCutEmpty {
-		cutReason := fmt.Sprintf("kind_census_truncated:%s:%d:%d", contextfabric.SubjectDeployment, 0, 0)
+		cutReason := fmt.Sprintf("walk_cut_before_member:%s", contextfabric.SubjectDeployment)
 		degradedReasons = append(degradedReasons, cutReason)
-		cutDeclared, cutServed := 0, 0
 		cutDetail := contextfabric.CoverageDetail{
 			DetailID: fmt.Sprintf("cov-graph-%02d", len(coverageDetails)+1), Source: "context-fabric:graph",
-			Code: contractsv1.ContextFabricCoverageDetailKindCensusTruncated, Degrading: true,
-			Kind: contextfabric.SubjectDeployment, Declared: &cutDeclared, Served: &cutServed, Raw: cutReason,
+			Code: contractsv1.ContextFabricCoverageDetailGraphWalkCutBeforeMember, Degrading: true,
+			Kind: contextfabric.SubjectDeployment, Raw: cutReason,
 		}
 		cutDetail.Label = contractsv1.ComposeCoverageDetailLabel(cutDetail)
 		coverageDetails = append(coverageDetails, cutDetail)
