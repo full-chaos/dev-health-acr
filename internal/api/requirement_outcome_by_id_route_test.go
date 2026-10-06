@@ -13,7 +13,7 @@ import (
 
 // servedRequirementTransitionResult is a stored result in the diagnosed shape:
 // the count predicted satisfied at planning, stated unavailable as
-// `fact_pruned` at assembly, with a model status of partial.
+// `computed_population_absent` at assembly, with a model status of partial.
 func servedRequirementTransitionResult() contractsv1.ContextFabricInvestigationResult {
 	result := validContextFabricInvestigationResult()
 	result.ResultID = "result_byid_transition01"
@@ -32,7 +32,7 @@ func servedRequirementTransitionResult() contractsv1.ContextFabricInvestigationR
 			Obligation:    "count",
 			Outcome:       contractsv1.ContextFabricRequirementUnavailable,
 			Impact:        contractsv1.ContextFabricAnswerImpactDimension,
-			CauseCoverage: contractsv1.ContextFabricCoverageDetailFactPruned,
+			CauseCoverage: contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent,
 			CauseObserved: true,
 		},
 	}

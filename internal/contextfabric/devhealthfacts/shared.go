@@ -425,7 +425,11 @@ import (
 // synthesis headroom, and says so with its own N of M and summary-coverage
 // sentences. A candidate saved before v78 holds the shorter list and the old
 // wording and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v79"
+//
+// v79 -> v80: a computed requirement with no member set to run over is served
+// with its own cause (computed_population_absent) in place of fact_pruned. A
+// candidate saved before v80 holds the old cause and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v80"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

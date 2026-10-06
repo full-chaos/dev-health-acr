@@ -20,9 +20,8 @@ import (
 // planning seed and the assembled_result row -- but nothing on the trace said
 // that the two disagree, so a requirement predicted served that ended
 // unavailable was visible only by reading the stored document. And the wire
-// cause `fact_pruned` is one code for two reasons (subject_kind_unsupported
-// at derivation, computed_population_absent at assembly), so even the stored
-// document could not say which one happened.
+// cause for a computed requirement without a member set used to be
+// `fact_pruned`, which it shared with subject_kind_unsupported.
 //
 // WHAT THIS FILE DOES, over the FINAL served document only:
 //
@@ -30,7 +29,7 @@ import (
 //     its assembled_result account and returns each pair whose outcome differs
 //     from the prediction -- an OBSERVED transition with its cause, never a
 //     silent flip.
-//  2. requirementAssemblyReason names the reason below a collapsed wire cause.
+//  2. requirementAssemblyReason names the reason assembly observed.
 //     The wire code is not changed here.
 //  3. assertSatisfiedRequirementsAreServed refuses a document whose
 //     assembled_result row says `satisfied` for a requirement that no served
@@ -65,7 +64,7 @@ func RequirementPredictionVocabulary() []RequirementPrediction {
 }
 
 // RequirementAssemblyReason names the reason assembly OBSERVED below a
-// collapsed wire cause. CLOSED.
+// wire cause. CLOSED.
 //
 // Its members reuse the derivation's own reason tokens rather than minting new
 // ones: a requirement whose member set did not resolve at assembly is
@@ -73,11 +72,9 @@ func RequirementPredictionVocabulary() []RequirementPrediction {
 // computed_population_absent, and a second token for the same fact would be a
 // second authority for it.
 //
-// ONLY THE REASONS AN ASSEMBLY WRITER CAN PRODUCE ARE MEMBERS. `fact_pruned`
-// reaches an assembled_result row from one writer only --
-// unresolvedMemberSetOutcomeRow -- because a read requirement skips a pruned
-// observation (evaluateReadRequirement) and a never-degrading code is never
-// carried as a cause. The other reasons that map to a collapsed wire code
+// ONLY THE REASONS AN ASSEMBLY WRITER CAN PRODUCE ARE MEMBERS.
+// `computed_population_absent` reaches an assembled_result row from one writer
+// only -- unresolvedMemberSetOutcomeRow. The other reasons that map to a collapsed wire code
 // (subject_kind_unsupported, no_declaring_producer, table_shape_undeclared)
 // are decided at derivation time and travel on the plan requirement, where
 // the transition reports them as PredictedReason.
@@ -89,7 +86,7 @@ const (
 	RequirementAssemblyReasonNone RequirementAssemblyReason = "none"
 	// RequirementAssemblyReasonComputedPopulationAbsent: a computed step that
 	// runs over the resolved member set found no member set on the served
-	// document. The wire code stays `fact_pruned`.
+	// document. The wire code is `computed_population_absent`.
 	RequirementAssemblyReasonComputedPopulationAbsent = RequirementAssemblyReason(RequirementReasonComputedPopulationAbsent)
 )
 
@@ -124,7 +121,7 @@ type RequirementOutcomeTransition struct {
 	CauseCoverage    contractsv1.ContextFabricCoverageDetailCode
 	CauseOverrun     contractsv1.ContextFabricBudgetOverrun
 	CauseNarrowing   contractsv1.ContextFabricNarrowingBasis
-	// AssemblyReason is the reason assembly observed below a collapsed wire
+	// AssemblyReason is the reason assembly observed for the wire
 	// cause -- the split.
 	AssemblyReason RequirementAssemblyReason
 
@@ -266,7 +263,7 @@ func outcomeLossRank(outcome RequirementOutcome) int {
 // row's wire cause.
 //
 // It asks the SAME three questions the one writer of an assembled
-// `fact_pruned` row asks before it writes one -- the outcome and code that
+// `computed_population_absent` row asks before it writes one -- the outcome and code that
 // writer sets, whether the obligation's step runs over the resolved member
 // set, and whether the served document resolved a member set -- through the
 // same predicates, so the reason and the row cannot come to describe different
