@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -217,11 +218,28 @@ func TestEdgeGateOverBudgetAddressVerifiesOneBearerAtATime(t *testing.T) {
 	if status := gateStatus(t, e, valid.token, other); status != http.StatusOK {
 		t.Fatalf("valid bearer from another address while the slot is held = %d, want 200", status)
 	}
-	if status := gateStatus(t, e, valid.token, attacker); status != http.StatusTooManyRequests {
-		t.Fatalf("valid bearer from the flooding address while its slot is held = %d, want 429", status)
+	busyHeader := http.Header{}
+	busyHeader.Set("Authorization", "Bearer "+valid.token)
+	busyHeader.Set("X-Forwarded-For", attacker)
+	busy := readAnswer(postMCP(t, e, http.MethodPost, rawToolsList(), busyHeader))
+	if busy.status != http.StatusTooManyRequests {
+		t.Fatalf("valid bearer from the flooding address while its slot is held = %d, want 429 (accepted residual)", busy.status)
+	}
+	if seconds, err := strconv.Atoi(busy.header.Get("Retry-After")); err != nil || seconds < 1 {
+		t.Fatalf("slot-busy refusal Retry-After = %q, want a positive number of seconds", busy.header.Get("Retry-After"))
 	}
 	close(hold.release)
 	wg.Wait()
+	// The held attempt's request line is written after its slot is released,
+	// so its presence means the slot is free; the clients see their answers
+	// before that.
+	settled := time.Now().Add(10 * time.Second)
+	for reasonCounts(requestLines(t, e, attacker))["failure_budget/rejected_counted"] != 1 {
+		if time.Now().After(settled) {
+			t.Fatal("held attempt never finished releasing its slot")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	for i, code := range codes {
 		if code != http.StatusTooManyRequests {
 			t.Fatalf("over-budget guess %d = %d, want 429", i, code)
