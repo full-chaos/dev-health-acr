@@ -149,6 +149,9 @@ const truncatedPopulationNoMemberLimitation = "The population for this question 
 // applyServerStatusFloor. Truncation with served members is already floored
 // there to partial; this covers the truncated population that carried no
 // members, which is degraded: the service read a population it could not carry.
+// The guard keys on the row's attributes (narrowed, population_truncated, served
+// zero), not on an obligation: the count, read-population and ranking
+// evaluations all emit population_truncated rows.
 func applyPopulationOutcomeStatusFloor(result *InvestigationResult) {
 	if result == nil || result.Status != InvestigationNoMatch || result.RefusalBasis != "" {
 		return
@@ -156,7 +159,8 @@ func applyPopulationOutcomeStatusFloor(result *InvestigationResult) {
 	for _, row := range result.Completeness.Outcomes {
 		if row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult &&
 			row.Outcome == contractsv1.ContextFabricRequirementNarrowed &&
-			row.CauseCoverage == contractsv1.ContextFabricCoverageDetailPopulationTruncated {
+			row.CauseCoverage == contractsv1.ContextFabricCoverageDetailPopulationTruncated &&
+			row.Served == 0 {
 			floorNoMatchTo(result, InvestigationDegraded)
 			composed, displaced := appendBoundedLimitations(result.Limitations, []string{truncatedPopulationNoMemberLimitation})
 			result.Limitations = composed

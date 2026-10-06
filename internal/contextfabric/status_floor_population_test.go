@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -49,6 +51,39 @@ func TestServedStatusOverTruncatedPopulationWhenModelSaysNoMatch(t *testing.T) {
 			}
 			if withheld := hasLimitation(result.Limitations, synthesisNarrativeWithheldLimitation); withheld != (tc.want != InvestigationNoMatch) {
 				t.Fatalf("withheld limitation present = %v for status %q", withheld, result.Status)
+			}
+		})
+	}
+}
+
+func TestPopulationOutcomeStatusFloorKeysOnRowAttributesNotObligation(t *testing.T) {
+	row := func(obligation string, outcome contractsv1.ContextFabricPlanRequirementOutcome, cause contractsv1.ContextFabricCoverageDetailCode, served int) RequirementOutcomeRow {
+		return RequirementOutcomeRow{
+			Obligation: obligation, Stage: contractsv1.ContextFabricOutcomeStageAssembledResult,
+			Outcome: outcome, CauseCoverage: cause, Served: served, Declared: served,
+		}
+	}
+	truncated := contractsv1.ContextFabricCoverageDetailPopulationTruncated
+	narrowed := contractsv1.ContextFabricRequirementNarrowed
+	cases := []struct {
+		name string
+		row  RequirementOutcomeRow
+		want InvestigationStatus
+	}{
+		{"count, zero served", row(string(ObligationCount), narrowed, truncated, 0), InvestigationDegraded},
+		{"read population, zero read", row("read_population", narrowed, truncated, 0), InvestigationDegraded},
+		{"read population, rows read", row("read_population", narrowed, truncated, 4), InvestigationNoMatch},
+		{"zero served, other cause", row(string(ObligationCount), narrowed, contractsv1.ContextFabricCoverageDetailFactNarrowed, 0), InvestigationNoMatch},
+		{"zero served, satisfied", row(string(ObligationCount), contractsv1.ContextFabricRequirementSatisfied, truncated, 0), InvestigationNoMatch},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := affirmationResult()
+			r.Status = InvestigationNoMatch
+			r.Completeness.Outcomes = []RequirementOutcomeRow{tc.row}
+			applyPopulationOutcomeStatusFloor(&r)
+			if r.Status != tc.want {
+				t.Fatalf("status = %q, want %q", r.Status, tc.want)
 			}
 		})
 	}
