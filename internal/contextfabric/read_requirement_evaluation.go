@@ -619,6 +619,7 @@ func appendReadRequirementEvaluationsWithCover(
 				"obligation", SanitizeLogAttr(requirement.Obligation),
 				"quantifier", SanitizeLogAttr(requirement.Quantifier))
 			added = append(added, notAttemptedReadRequirementRow(requirement, contractsv1.ContextFabricCoverageDetailRequirementNotEvaluable, false, 0))
+			events = append(events, *unrecognisedQuantifierCoverEvent(requirement, evaluateReadRequirement(requirement, coverage, populations.KindsWithFacts), populations.assignment))
 			continue
 		}
 		row, ok, cover := readRequirementOutcomeRow(requirement, threshold, evaluateReadRequirement(requirement, coverage, populations.KindsWithFacts), populations)
@@ -1347,6 +1348,16 @@ func readRequirementObservationCoverEvent(
 	}
 }
 
+// unrecognisedQuantifierCoverEvent is the cover line of a requirement whose
+// completion quantifier the evaluator does not recognise: it has no standard to
+// measure against, so the line states 0/0 and the outcome of the row it
+// publishes. The fresh path and the reuse path both build it here.
+func unrecognisedQuantifierCoverEvent(requirement contractsv1.ContextFabricPlanRequirement, evidence readEvidence, assignment observationKeyAssignment) *ReadRequirementObservationCoverEvent {
+	event := readRequirementObservationCoverEvent(requirement, 0, 0, 0, evidence, assignment)
+	event.Outcome = contractsv1.ContextFabricRequirementNotAttempted
+	return event
+}
+
 // readRequirementCoverDecision is the ONE place the cover decision for an
 // evaluated read requirement is computed: the served cover (after the
 // mixed-state taint), the published standard (the observed cover raised to the
@@ -1451,12 +1462,13 @@ func reusedObservationCoverEvents(result InvestigationResult, assignment observa
 		if requirement.Kind != string(ObligationKindRead) || !requirement.Served() {
 			continue
 		}
-		threshold, known := readQuantifierThreshold(requirement.Quantifier)
-		if !known {
-			continue
-		}
 		evidence := evaluateReadRequirement(requirement, result.Coverage, claimedFactKinds(result.ClaimedFacts))
-		_, _, event := readRequirementCoverDecision(requirement, threshold, evidence, assignment)
+		var event *ReadRequirementObservationCoverEvent
+		if threshold, known := readQuantifierThreshold(requirement.Quantifier); known {
+			_, _, event = readRequirementCoverDecision(requirement, threshold, evidence, assignment)
+		} else {
+			event = unrecognisedQuantifierCoverEvent(requirement, evidence, assignment)
+		}
 		if outcome, ok := evaluatedReadOutcome(result.Completeness.Outcomes, requirement.Requirement); ok {
 			event.Outcome = outcome
 		}

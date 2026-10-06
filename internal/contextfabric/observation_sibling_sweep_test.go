@@ -96,6 +96,11 @@ func TestTheSiblingSweepIsExecuted(t *testing.T) {
 	check("readRequirementOutcomeRow", "undeclared cause code",
 		published(single, codedCoverage(undeclared, health, health, SourceUnavailable), readPopulationEvidence{}), "rows=1 lines=1 withheld=none")
 
+	unknownQuantifier := readRequirement(CompletionQuantifierAtLeastOne)
+	unknownQuantifier.Quantifier = "quantifier_from_a_later_vocabulary"
+	check("readRequirementOutcomeRow", "unrecognised quantifier",
+		published(unknownQuantifier, factCoverage(health, SourceAvailable), readPopulationEvidence{}), "rows=1 lines=1 withheld=none")
+
 	flow := contractsv1.ContextFabricFactFlow
 	operand := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated, flow, health)
 	operandCoverage := factCoverage(flow, SourceAvailable, health, SourceAvailable)

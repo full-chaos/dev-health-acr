@@ -645,6 +645,12 @@ func TestAnUnrecognisedQuantifierEmitsANotAttemptedRow(t *testing.T) {
 	if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(got); err != nil {
 		t.Fatalf("the row does not validate: %v", err)
 	}
+	_, events, _ := appendReadRequirementEvaluationsWithCover(nil,
+		[]contractsv1.ContextFabricPlanRequirement{unrecognised}, coverage, readPopulationEvidence{})
+	if len(events) != 1 || events[0].Outcome != contractsv1.ContextFabricRequirementNotAttempted ||
+		events[0].RowWithheld != RowWithheldNone || events[0].Threshold != 0 || events[0].Declared != 0 {
+		t.Fatalf("the unrecognised-quantifier row has no cover line stating it: %+v", events)
+	}
 	if !strings.Contains(logs.String(), fmt.Sprintf("%q:%q", "quantifier", unrecognised.Quantifier)) {
 		t.Fatalf("the skip emitted no disclosure naming the quantifier: %s", logs.String())
 	}
