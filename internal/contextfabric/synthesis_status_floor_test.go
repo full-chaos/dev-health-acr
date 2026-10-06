@@ -265,6 +265,8 @@ func TestServedStatusFloorRequiresTheReadFactKindToBeAsked(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			engine, request := scriptedStatusEngineAsking(t, tc.asked, InvestigationNoMatch, emptyAffirmationGraph(), true, factsForSubject(affirmationSubject))
+			telemetry := &recordingTelemetry{}
+			engine.telemetry = telemetry
 			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
 			if err != nil {
 				t.Fatalf("Investigate: %v", err)
@@ -277,6 +279,15 @@ func TestServedStatusFloorRequiresTheReadFactKindToBeAsked(t *testing.T) {
 			}
 			if withheld := hasLimitation(result.Limitations, synthesisNarrativeWithheldLimitation); withheld != (tc.want != InvestigationNoMatch) {
 				t.Fatalf("withheld limitation present = %v for status %q", withheld, result.Status)
+			}
+			if tc.want == InvestigationNoMatch {
+				if len(telemetry.synthesisStatusOverrides) != 1 {
+					t.Fatalf("decision records = %d, want 1 naming the kept no_match", len(telemetry.synthesisStatusOverrides))
+				}
+				got := telemetry.synthesisStatusOverrides[0]
+				if got.Reason != SynthesisStatusOverrideNoMatchKeptUnaskedFactKinds || got.To != InvestigationNoMatch || got.UnaskedFactKinds != string(FactStatus) {
+					t.Fatalf("decision record = %+v, want kept no_match naming kind %q", got, FactStatus)
+				}
 			}
 		})
 	}
@@ -292,8 +303,9 @@ func TestApplyServerStatusFloorCountsAKindTheFactReadRanWith(t *testing.T) {
 	}
 	facts := factsForSubject(affirmationSubject)
 	r := build()
-	if applyServerStatusFloor(&r, emptyAffirmationGraph(), facts, nil) != nil || r.Status != InvestigationNoMatch {
-		t.Fatalf("a stored row of a kind nobody asked for or read floored: %q", r.Status)
+	kept := applyServerStatusFloor(&r, emptyAffirmationGraph(), facts, nil)
+	if r.Status != InvestigationNoMatch || kept == nil || kept.To != InvestigationNoMatch || kept.Reason != SynthesisStatusOverrideNoMatchKeptUnaskedFactKinds {
+		t.Fatalf("a stored row of a kind nobody asked for or read floored or left no decision record: status %q outcome %+v", r.Status, kept)
 	}
 	r = build()
 	if applyServerStatusFloor(&r, emptyAffirmationGraph(), facts, []FactRequirement{{Kind: FactStatus}}) == nil || r.Status != InvestigationDegraded {

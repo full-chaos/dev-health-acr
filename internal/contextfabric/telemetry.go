@@ -131,6 +131,7 @@ func (t SlogEngineTelemetry) RecordSynthesisStatusOverride(ctx context.Context, 
 		"to_status", SanitizeLogAttr(string(outcome.To)),
 		"reason", SanitizeLogAttr(string(outcome.Reason)),
 		"committed_count", outcome.CommittedCount,
+		"unasked_fact_kinds", SanitizeLogAttr(outcome.UnaskedFactKinds),
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.WarnContext(ctx, "context fabric synthesis status override", args...)
 }
