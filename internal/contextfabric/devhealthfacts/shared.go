@@ -425,7 +425,7 @@ import (
 // synthesis headroom, and says so with its own N of M and summary-coverage
 // sentences. A candidate saved before v78 holds the shorter list and the old
 // wording and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v78"
+const QueryVersion = "devhealthfacts.clickhouse.v79"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -632,10 +632,24 @@ func subjectIndex(subjects []contextfabric.SubjectRef, prefix string) (ids []str
 			rejected++
 			continue
 		}
+		if !bindingSafeKey(raw) {
+			rejected++
+			continue
+		}
 		bySubject[raw] = subject
 		ids = append(ids, raw)
 	}
 	return ids, bySubject, rejected
+}
+
+// bindingSafeKey reports whether key can travel inside the Array(String) "ids"
+// binding. The ClickHouse client refuses a backslash for the WHOLE batch
+// (ErrUnsafeBindingValue), which read as a store outage for every sibling id.
+// subjectIndex and v2Index, the only builders of that binding, drop such an id
+// alone and count it as rejected, so it is disclosed through
+// applySubjectShapeRejection while its siblings are still read.
+func bindingSafeKey(key string) bool {
+	return !strings.ContainsRune(key, '\\')
 }
 
 // v2Index recovers this package's ClickHouse lookup key for a CHAOS-3898
@@ -681,6 +695,10 @@ func v2Index(subjects []contextfabric.SubjectRef, kind string) (ids []string, by
 			continue
 		}
 		key := repoID + ":" + rawID
+		if !bindingSafeKey(key) {
+			rejected++
+			continue
+		}
 		bySubject[key] = subject
 		ids = append(ids, key)
 	}
