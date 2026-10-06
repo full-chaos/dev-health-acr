@@ -36,7 +36,7 @@ func TestProjectlessTeamChildrenOfScopeDoesNotAbortFactRead(t *testing.T) {
 		requirements []FactRequirement
 		wantReads    int
 	}{
-		{"no requirement from the interpretation and no cohort skips the read", nil, 0},
+		{"no requirement from the interpretation and no cohort", nil, 1},
 		{"a requirement from the interpretation still reads", []FactRequirement{{Kind: FactMembership}}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

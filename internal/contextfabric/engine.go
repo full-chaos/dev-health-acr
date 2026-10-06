@@ -3476,14 +3476,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			return terminal, terminalErr
 		}
 	}
-	// A turn whose interpretation named no fact kind and whose cohort never
-	// materialized (a requested member kind with zero members) has nothing to
-	// read: the registry refuses an empty requirement list, which used to end
-	// the turn as an unclassified read abort. The read is skipped instead and
-	// the requirement evaluator reports every derived requirement as never
-	// planned, so the answer says the population is empty rather than failing.
 	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements)
-	skipFactRead := !workItemTuple && len(mergedFactRequirements) == 0
 	factRequest := CanonicalFactRequest{
 		workItemTuple:            workItemTuple,
 		LinkScopedSubjects:       linkScopedFactSubjects(ctx, request, subjects, tupleCensus),
@@ -3502,9 +3495,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if workItemTuple {
 		facts.Version = nonEmptyVersion("", "")
 	}
-	if skipFactRead {
-		facts.Version = nonEmptyVersion("", "")
-	} else if !workItemTuple || len(subjects) > 0 {
+	if !workItemTuple || len(subjects) > 0 {
 		if len(factRequest.Subjects) == 0 {
 			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts", ErrNoInvestigationSubjects))
 		}
@@ -3521,6 +3512,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// bundle alongside its error so Scope survives; a nil Scope (an error
 		// raised before resolution ran) simply emits nothing.
 		e.recordFactScopeExpansion(ctx, principal, facts.Scope)
+		// A turn whose interpretation named no fact kind and whose cohort
+		// never materialized (a requested member kind with zero members) has
+		// nothing to read. The registry refuses that request with a named
+		// sentinel; it used to end the turn as a read abort. The read is
+		// treated as having returned nothing, and the requirement evaluator
+		// reports every derived requirement as never planned, so the answer
+		// says so instead of failing.
+		if errors.Is(err, ErrNoFactRequirements) && !workItemTuple {
+			err = nil
+			facts = CanonicalFactBundle{Version: nonEmptyVersion("", "")}
+		}
 		if err != nil {
 			subjectKinds := make([]string, 0, len(subjects))
 			seenSubjectKind := make(map[SubjectKind]struct{}, len(subjects))
