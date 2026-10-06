@@ -454,7 +454,13 @@ import (
 // repository, with cycle_p50_hours_weighted_mean as an approximation. A
 // candidate saved before v86 holds the one-repository figures and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v86"
+//
+// v86 -> v87: a team's metrics fact (and the per-team rows of a project's
+// metrics rollup) sums the newest row of every repository of the team per
+// day, drops the legacy empty-repository row beside real ones, and recomputes
+// the two ratios from the summed counts. A candidate saved before v87 holds
+// one repository's figures and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v87"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
