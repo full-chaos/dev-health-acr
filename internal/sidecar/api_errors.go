@@ -160,6 +160,11 @@ type APIError struct {
 	// It is never hosted free text: a value outside it is dropped, so no count, subject, id or
 	// name can ride through it.
 	Reason string
+	// Field is set only for an invalid_request whose Reason was surfaced and
+	// whose error.details.field has a closed identifier shape (letters,
+	// digits, underscore, dot; at most 64): the JSON path of the failing
+	// request field. Any other value is dropped.
+	Field string
 	// InterpretationContract is set only for a 409 invalid_request whose
 	// details carry a supplied-interpretation contract refusal that passes
 	// its own Validate: closed field names and the current contract values.
@@ -263,6 +268,9 @@ func (e *APIError) Error() string {
 	if e.Reason != "" {
 		base += " reason=" + e.Reason
 	}
+	if e.Field != "" {
+		base += " field=" + e.Field
+	}
 	if c := e.InterpretationContract; c != nil {
 		base += " interpretation_contract_mismatch=" + strings.Join(c.Mismatch, ",")
 	}
@@ -356,6 +364,9 @@ func newAPIError(status int, detail contractsv1.ErrorDetail, requestID, retryAft
 	}
 	if detail.Code == "invalid_request" {
 		apiErr.Reason = safeReasonToken(detail.Details)
+		if apiErr.Reason != "" {
+			apiErr.Field = safeFieldToken(detail.Details)
+		}
 	}
 	if detail.Code == "synthesis_rejected" && status == 422 {
 		apiErr.SynthesisRejectionReason = rejectionReasonToken(detail.Details)
@@ -629,4 +640,19 @@ func truncateUTF8(s string, maxBytes int) string {
 		cut--
 	}
 	return s[:cut]
+}
+
+// safeFieldToken returns error.details.field only when it has a closed
+// identifier shape; any other value is dropped.
+func safeFieldToken(details map[string]any) string {
+	field, ok := details["field"].(string)
+	if !ok || field == "" || len(field) > 64 {
+		return ""
+	}
+	for _, r := range field {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '.' {
+			return ""
+		}
+	}
+	return field
 }

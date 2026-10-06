@@ -15,6 +15,10 @@ var invalidRequestReasons = map[string]struct{}{
 	"invalid_cursor":       {}, // read_relationships cursor
 	"expired_cursor":       {}, // read_relationships cursor
 	"denied_or_not_found":  {}, // read_facts / read_relationships subject
+	"malformed_json":       {}, // body is not valid JSON
+	"schema_violation":     {}, // body decoded but a field has the wrong type or fails validation
+	"unknown_field":        {}, // body names a field the request does not declare
+	"trailing_json":        {}, // body holds more than one JSON value
 
 	ContextFabricSuppliedSynthesisReasonInputChanged:           {}, // supplied synthesis written from another input
 	ContextFabricSuppliedSynthesisReasonInterpretationRequired: {}, // supplied synthesis without a supplied interpretation

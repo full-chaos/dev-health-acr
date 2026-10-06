@@ -20,7 +20,7 @@ func (a *App) handleDeviceAuthorization(w http.ResponseWriter, r *http.Request) 
 	}
 	var request contractsv1.DeviceAuthorizationRequest
 	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil || request.Validate() != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device authorization request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device authorization request is invalid", false, invalidBodyDetails(err))
 		return
 	}
 	hints := auth.DeviceAuthorizationHints{}
@@ -131,7 +131,7 @@ func (a *App) handleDeviceCodeToken(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 	var request contractsv1.DeviceApprovalRequest
 	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, invalidBodyDetails(err))
 		return
 	}
 	if !a.allowDeviceApproval(w, r, storage.HashUserCode(request.UserCode)) {
@@ -194,7 +194,7 @@ func (a *App) writeDeviceApprovalError(w http.ResponseWriter, r *http.Request, e
 func (a *App) handleRotateSelfCredential(w http.ResponseWriter, r *http.Request) {
 	var request contractsv1.CredentialRotateRequest
 	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil || request.Validate() != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential rotation request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential rotation request is invalid", false, invalidBodyDetails(err))
 		return
 	}
 	principal, ok := auth.PrincipalFromContext(r.Context())
@@ -216,7 +216,7 @@ func (a *App) handleRotateSelfCredential(w http.ResponseWriter, r *http.Request)
 func (a *App) handleRevokeSelfCredential(w http.ResponseWriter, r *http.Request) {
 	var request contractsv1.CredentialRevokeRequest
 	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil || request.Validate() != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential revocation request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential revocation request is invalid", false, invalidBodyDetails(err))
 		return
 	}
 	principal, ok := auth.PrincipalFromContext(r.Context())

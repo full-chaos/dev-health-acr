@@ -123,11 +123,11 @@ func (a *App) ContextFabricOrgModelConfigPutHandler(store contextfabric.OrgModel
 			if errors.As(err, &tooLarge) {
 				status = http.StatusRequestEntityTooLarge
 			}
-			writeError(w, r, status, "invalid_request", "Context Fabric model configuration request is invalid", false, nil)
+			writeError(w, r, status, "invalid_request", "Context Fabric model configuration request is invalid", false, invalidBodyDetails(err))
 			return
 		}
 		if err := request.Validate(); err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric model configuration request is invalid", false, nil)
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric model configuration request is invalid", false, schemaViolationDetails())
 			return
 		}
 		principal, ok := auth.PrincipalFromContext(r.Context())

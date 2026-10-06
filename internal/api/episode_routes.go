@@ -27,12 +27,12 @@ func (a *App) handleEpisode(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &tooLarge) {
 			status = http.StatusRequestEntityTooLarge
 		}
-		writeError(w, r, status, "invalid_request", "Episode request is invalid", false, nil)
+		writeError(w, r, status, "invalid_request", "Episode request is invalid", false, invalidBodyDetails(err))
 		return
 	}
 	keys := r.Header.Values("Idempotency-Key")
 	if len(keys) != 1 || utf8.RuneCountInString(keys[0]) < 8 || utf8.RuneCountInString(keys[0]) > 256 || keys[0] != create.IdempotencyKey || create.Validate() != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Episode request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Episode request is invalid", false, schemaViolationDetails())
 		return
 	}
 	slug, err := auth.NormalizeRepositorySlug(create.Repository.Slug)
