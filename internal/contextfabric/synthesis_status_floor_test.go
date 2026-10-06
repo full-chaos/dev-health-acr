@@ -149,21 +149,21 @@ func TestApplyServerStatusFloorClauses(t *testing.T) {
 		graph := emptyAffirmationGraph()
 		graph.Cohort = members
 		r := base()
-		out := applyServerStatusFloor(&r, graph, emptyAffirmationFacts())
+		out := applyServerStatusFloor(&r, graph, emptyAffirmationFacts(), nil)
 		if out == nil || r.Status != InvestigationPartial || out.To != InvestigationPartial || out.Reason != SynthesisStatusOverrideNoMatchOverCohortOutcome || out.CommittedCount != 1 {
 			t.Fatalf("status %q outcome %#v", r.Status, out)
 		}
-		if again := applyServerStatusFloor(&r, graph, emptyAffirmationFacts()); again != nil {
+		if again := applyServerStatusFloor(&r, graph, emptyAffirmationFacts(), nil); again != nil {
 			t.Fatal("not idempotent")
 		}
 	})
 	t.Run("nil result and uncommitted result are left alone", func(t *testing.T) {
-		if applyServerStatusFloor(nil, cutEmptyCohortGraph(), emptyAffirmationFacts()) != nil {
+		if applyServerStatusFloor(nil, cutEmptyCohortGraph(), emptyAffirmationFacts(), nil) != nil {
 			t.Fatal("floored nil")
 		}
 		r := base()
 		r.SubjectResolution = SubjectResolution{}
-		if applyServerStatusFloor(&r, cutEmptyCohortGraph(), factsForSubject(affirmationSubject)) != nil || r.Status != InvestigationNoMatch {
+		if applyServerStatusFloor(&r, cutEmptyCohortGraph(), factsForSubject(affirmationSubject), nil) != nil || r.Status != InvestigationNoMatch {
 			t.Fatal("floored with nothing committed")
 		}
 	})
@@ -178,7 +178,7 @@ func TestApplyServerStatusFloorClauses(t *testing.T) {
 			graph.Coverage.Details[0].Code = code
 			r := base()
 			r.Coverage.Partial = false
-			if applyServerStatusFloor(&r, graph, emptyAffirmationFacts()) == nil || r.Status != InvestigationDegraded {
+			if applyServerStatusFloor(&r, graph, emptyAffirmationFacts(), nil) == nil || r.Status != InvestigationDegraded {
 				t.Fatalf("code %q did not floor", code)
 			}
 			if !r.Coverage.Partial || !hasLimitation(r.Limitations, synthesisNarrativeWithheldLimitation) {
@@ -190,7 +190,7 @@ func TestApplyServerStatusFloorClauses(t *testing.T) {
 		graph := cutEmptyCohortGraph()
 		graph.Coverage.Details[0].Degrading = false
 		r := base()
-		if applyServerStatusFloor(&r, graph, emptyAffirmationFacts()) != nil || r.Status != InvestigationNoMatch {
+		if applyServerStatusFloor(&r, graph, emptyAffirmationFacts(), nil) != nil || r.Status != InvestigationNoMatch {
 			t.Fatal("floored on a non-degrading detail")
 		}
 	})
@@ -198,7 +198,7 @@ func TestApplyServerStatusFloorClauses(t *testing.T) {
 		graph := cutEmptyCohortGraph()
 		graph.Coverage.Details[0].Code = contractsv1.ContextFabricCoverageDetailGraphValidityUnbounded
 		r := base()
-		if applyServerStatusFloor(&r, graph, emptyAffirmationFacts()) != nil {
+		if applyServerStatusFloor(&r, graph, emptyAffirmationFacts(), nil) != nil {
 			t.Fatal("floored on a non-terminal code")
 		}
 	})
@@ -206,7 +206,7 @@ func TestApplyServerStatusFloorClauses(t *testing.T) {
 		other := affirmationSubject
 		other.CanonicalID = other.CanonicalID + "-other"
 		r := base()
-		if applyServerStatusFloor(&r, emptyAffirmationGraph(), factsForSubject(other)) != nil {
+		if applyServerStatusFloor(&r, emptyAffirmationGraph(), factsForSubject(other), nil) != nil {
 			t.Fatal("floored on a fact of another subject")
 		}
 	})
@@ -214,7 +214,7 @@ func TestApplyServerStatusFloorClauses(t *testing.T) {
 		bundle := factsForSubject(affirmationSubject)
 		bundle.Facts[0].SourceState = SourceNoData
 		r := base()
-		if applyServerStatusFloor(&r, emptyAffirmationGraph(), bundle) != nil {
+		if applyServerStatusFloor(&r, emptyAffirmationGraph(), bundle, nil) != nil {
 			t.Fatal("floored on a no_data row")
 		}
 	})
@@ -222,7 +222,7 @@ func TestApplyServerStatusFloorClauses(t *testing.T) {
 		bundle := factsForSubject(affirmationSubject)
 		bundle.Facts[0].SourceState = SourceStale
 		r := base()
-		if applyServerStatusFloor(&r, emptyAffirmationGraph(), bundle) == nil || r.Status != InvestigationDegraded {
+		if applyServerStatusFloor(&r, emptyAffirmationGraph(), bundle, nil) == nil || r.Status != InvestigationDegraded {
 			t.Fatal("did not floor on a stale row")
 		}
 	})
@@ -230,14 +230,14 @@ func TestApplyServerStatusFloorClauses(t *testing.T) {
 		graph := cutEmptyCohortGraph()
 		graph.Coverage.Details[0].Code = contractsv1.ContextFabricCoverageDetailPopulationTruncated
 		r := base()
-		if applyServerStatusFloor(&r, graph, emptyAffirmationFacts()) != nil {
+		if applyServerStatusFloor(&r, graph, emptyAffirmationFacts(), nil) != nil {
 			t.Fatal("floored on population_truncated")
 		}
 	})
 	t.Run("refusal basis is left alone", func(t *testing.T) {
 		r := base()
 		r.RefusalBasis = "frame_invariant"
-		if applyServerStatusFloor(&r, cutEmptyCohortGraph(), emptyAffirmationFacts()) != nil {
+		if applyServerStatusFloor(&r, cutEmptyCohortGraph(), emptyAffirmationFacts(), nil) != nil {
 			t.Fatal("floored a refusal")
 		}
 	})
@@ -245,7 +245,7 @@ func TestApplyServerStatusFloorClauses(t *testing.T) {
 		for _, status := range []InvestigationStatus{InvestigationComplete, InvestigationPartial, InvestigationDegraded, InvestigationClarificationRequired} {
 			r := base()
 			r.Status = status
-			if applyServerStatusFloor(&r, cutEmptyCohortGraph(), emptyAffirmationFacts()) != nil || r.Status != status {
+			if applyServerStatusFloor(&r, cutEmptyCohortGraph(), emptyAffirmationFacts(), nil) != nil || r.Status != status {
 				t.Fatalf("touched %q", status)
 			}
 		}
@@ -279,5 +279,24 @@ func TestServedStatusFloorRequiresTheReadFactKindToBeAsked(t *testing.T) {
 				t.Fatalf("withheld limitation present = %v for status %q", withheld, result.Status)
 			}
 		})
+	}
+}
+
+func TestApplyServerStatusFloorCountsAKindTheFactReadRanWith(t *testing.T) {
+	build := func() InvestigationResult {
+		r := affirmationResult()
+		r.Status = InvestigationNoMatch
+		r.SubjectResolution = SubjectResolution{Committed: []SubjectRef{affirmationSubject}}
+		r.Interpretation.FactRequirements = []FactRequirement{{Kind: FactMembership}}
+		return r
+	}
+	facts := factsForSubject(affirmationSubject)
+	r := build()
+	if applyServerStatusFloor(&r, emptyAffirmationGraph(), facts, nil) != nil || r.Status != InvestigationNoMatch {
+		t.Fatalf("a stored row of a kind nobody asked for or read floored: %q", r.Status)
+	}
+	r = build()
+	if applyServerStatusFloor(&r, emptyAffirmationGraph(), facts, []FactRequirement{{Kind: FactStatus}}) == nil || r.Status != InvestigationDegraded {
+		t.Fatalf("a row of a kind the fact read ran with did not floor: %q", r.Status)
 	}
 }

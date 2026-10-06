@@ -35,14 +35,17 @@ func cohortTerminalCoverageCode(code contractsv1.ContextFabricCoverageDetailCode
 }
 
 // askedFactKinds is the set of fact kinds the question asked for: the
-// interpretation's requirements and the graph's. Empty means the question named
+// interpretation's requirements, the graph's and the ones the fact read ran with. Empty means the question named
 // no kind, and then any read row of a committed subject is relevant.
-func askedFactKinds(result *InvestigationResult, graph GraphContext) map[FactKind]bool {
+func askedFactKinds(result *InvestigationResult, graph GraphContext, read []FactRequirement) map[FactKind]bool {
 	asked := map[FactKind]bool{}
 	for _, requirement := range result.Interpretation.FactRequirements {
 		asked[requirement.Kind] = true
 	}
 	for _, requirement := range graph.FactRequirements {
+		asked[requirement.Kind] = true
+	}
+	for _, requirement := range read {
 		asked[requirement.Kind] = true
 	}
 	return asked
@@ -69,7 +72,7 @@ func committedFactRowRead(committed []SubjectRef, facts CanonicalFactBundle, ask
 // a subject is committed and the service holds a deterministic outcome. It
 // never promotes to complete, never touches the resolution, drivers or claims,
 // and is idempotent (the status is no longer no_match afterwards).
-func applyServerStatusFloor(result *InvestigationResult, graph GraphContext, facts CanonicalFactBundle) *SynthesisStatusOverrideOutcome {
+func applyServerStatusFloor(result *InvestigationResult, graph GraphContext, facts CanonicalFactBundle, read []FactRequirement) *SynthesisStatusOverrideOutcome {
 	if result == nil || result.Status != InvestigationNoMatch || result.RefusalBasis != "" {
 		return nil
 	}
@@ -94,7 +97,7 @@ func applyServerStatusFloor(result *InvestigationResult, graph GraphContext, fac
 	case membersServed:
 		floor = InvestigationPartial
 	case terminal:
-	case committedFactRowRead(committed, facts, askedFactKinds(result, graph)):
+	case committedFactRowRead(committed, facts, askedFactKinds(result, graph, read)):
 		reason = SynthesisStatusOverrideNoMatchOverReadFacts
 	default:
 		return nil
