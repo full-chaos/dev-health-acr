@@ -23,6 +23,7 @@ const SynthesisStatusOverrideNoMatchOverReadFacts SynthesisStatusOverrideReason 
 func cohortTerminalCoverageCode(code contractsv1.ContextFabricCoverageDetailCode) bool {
 	switch code {
 	case contractsv1.ContextFabricCoverageDetailKindCensusTruncated,
+		contractsv1.ContextFabricCoverageDetailGraphWalkCutBeforeMember,
 		contractsv1.ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked,
 		contractsv1.ContextFabricCoverageDetailWorkItemRepositoryUnlinked,
 		contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization,

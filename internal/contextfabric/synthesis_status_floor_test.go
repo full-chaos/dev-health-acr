@@ -11,12 +11,11 @@ import (
 
 func cutEmptyCohortGraph() GraphContext {
 	graph := emptyAffirmationGraph()
-	declared, served := 0, 0
 	detail := CoverageDetail{
 		DetailID: "cov-graph-01", Source: "context-fabric:graph",
-		Code: contractsv1.ContextFabricCoverageDetailKindCensusTruncated, Degrading: true,
-		Kind: SubjectDeployment, Declared: &declared, Served: &served,
-		Raw: "kind_census_truncated:deployment:0:0",
+		Code: contractsv1.ContextFabricCoverageDetailGraphWalkCutBeforeMember, Degrading: true,
+		Kind: SubjectDeployment,
+		Raw:  "walk_cut_before_member:deployment",
 	}
 	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
 	graph.Coverage.Partial = true

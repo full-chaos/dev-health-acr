@@ -284,6 +284,19 @@ const (
 	// `graph_cohort_denied_by_authorization` would be a lie here: nothing
 	// was denied, nothing was found.
 	ContextFabricCoverageDetailWorkItemRepositoryUnlinked ContextFabricCoverageDetailCode = "work_item_repository_unlinked"
+
+	// ContextFabricCoverageDetailGraphWalkCutBeforeMember: the walk that
+	// reads a named anchor's members of one subject kind (Kind) was cut by
+	// the server's read limits before it reached a single member, so the
+	// answer lists none and members may exist past the cut. Nothing was
+	// counted: the code carries Kind alone, never Declared or Served.
+	//
+	// It is not `kind_census_truncated`, which says a census listed at least
+	// Declared members and Served of them made the answer. A walk that listed
+	// nothing has no such count, and "at least 0 found" reads as a finished
+	// census with an empty result. It is not an empty result either: the
+	// members are unknown, not none.
+	ContextFabricCoverageDetailGraphWalkCutBeforeMember ContextFabricCoverageDetailCode = "graph_walk_cut_before_member"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -311,6 +324,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailKindCensusTruncated,
 	ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked,
 	ContextFabricCoverageDetailWorkItemRepositoryUnlinked,
+	ContextFabricCoverageDetailGraphWalkCutBeforeMember,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -574,8 +588,10 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailGraphUnknownRelationshipType:     {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked:  {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailWorkItemRepositoryUnlinked:       {requireCount: true, allowCount: true},
-	ContextFabricCoverageDetailGraphValidityUnbounded:           {requireCount: true, allowCount: true},
-	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:       {requireCount: true, allowCount: true},
+	// Kind alone: no count (nothing was counted), no Declared/Served.
+	ContextFabricCoverageDetailGraphWalkCutBeforeMember:   {requireKind: true},
+	ContextFabricCoverageDetailGraphValidityUnbounded:     {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped: {requireCount: true, allowCount: true},
 	// No fact kind and NO COUNT. The count is the tempting one and it is
 	// refused deliberately: the only number available here is the size of
 	// the set that WAS resolved, which the outcome row already carries as
