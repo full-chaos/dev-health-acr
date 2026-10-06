@@ -189,14 +189,10 @@ func TestWorkItemFreshEngineAgainstRealClickHouse(t *testing.T) {
 				t.Fatalf("D47 rows=%d want=%d", d47, wantD47)
 			}
 			if tc.cap == 234 {
-				found := false
 				for _, step := range result.AnswerPlan.Narrowing {
-					if step.Before == 234 && step.After == 200 && step.Basis == contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
-						found = true
+					if step.Before == 234 {
+						t.Errorf("the plan claims the cohort was narrowed from the request cap: %+v", step)
 					}
-				}
-				if !found {
-					t.Errorf("missing 234 to 200 lexical narrowing: %+v", result.AnswerPlan)
 				}
 			}
 			if fixture.membership.calls != 1 {

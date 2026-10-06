@@ -136,7 +136,8 @@ func TestWorkItemFinalCensusParticipatesInBudgetRetry(t *testing.T) {
 				if err := result.Validate(); err != nil {
 					t.Fatalf("final result invalid: %v", err)
 				}
-				if len(result.Cohort.Members) != tc.members/tc.calls {
+				// The retry narrows what the model reads to half the members; the answer lists all of them.
+				if len(result.Cohort.Members) != tc.members {
 					t.Fatalf("served members=%d", len(result.Cohort.Members))
 				}
 				if err := contextfabric.ValidateWorkItemTuplePayload(result, f.principal); err != nil {
@@ -251,6 +252,11 @@ func (p *finalCensusLateWriter) RecordPlanNarrowing(ctx context.Context, princip
 }
 
 func TestWorkItemFinalBudgetRefusalPreservesExecutionContext(t *testing.T) {
+	// Without a retry the answer lists the members the model read, so the fault injected into
+	// the model's cohort reaches the served document and the final guard refuses with its
+	// execution context. With a retry the served list is put back whole (a copy the model's
+	// cohort does not share), so the same bytes are met by the walk list's own fit: the answer
+	// is served, with fewer members listed and a sentence naming the size limit.
 	for _, retry := range []bool{false, true} {
 		t.Run(fmt.Sprintf("retry_%t", retry), func(t *testing.T) {
 			f, _, attempts := newFinalCensusBudgetFixture(t, true, true)
@@ -269,15 +275,32 @@ func TestWorkItemFinalBudgetRefusalPreservesExecutionContext(t *testing.T) {
 				body.Options.MaxCohortMembers = 6
 			}
 			response := roundTripFreshTupleRequest(t, f, body)
-			wantCalls := 1
 			if retry {
-				wantCalls = 2
+				var served struct {
+					Limitations []string `json:"limitations"`
+					Cohort      struct {
+						Members []json.RawMessage `json:"members"`
+					} `json:"cohort"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &served); err != nil {
+					t.Fatal(err)
+				}
+				sized := false
+				for _, limitation := range served.Limitations {
+					if contractsv1.IsContextFabricWorkItemListedLimitation(limitation) && strings.Contains(limitation, "response size limit") {
+						sized = true
+					}
+				}
+				if response.Code != http.StatusOK || len(*attempts) != 2 || !sized || len(served.Cohort.Members) >= 12 || response.Body.Len() > 21000 {
+					t.Fatalf("retry: HTTP%d calls%d members=%d size sentence=%v bytes=%d", response.Code, len(*attempts), len(served.Cohort.Members), sized, response.Body.Len())
+				}
+				return
 			}
 			var refusal contextfabric.AnswerBudgetRefusal
-			if !probe.injected || response.Code != http.StatusRequestEntityTooLarge || len(*attempts) != wantCalls || !errors.As(f.engineErr, &refusal) {
+			if !probe.injected || response.Code != http.StatusRequestEntityTooLarge || len(*attempts) != 1 || !errors.As(f.engineErr, &refusal) {
 				t.Fatalf("late assertion not reached: injected=%v HTTP%d calls%d error=%v", probe.injected, response.Code, len(*attempts), f.engineErr)
 			}
-			if refusal.Family != contextfabric.QuestionFamilyScopedCohortStatus || refusal.RetryAttempted != retry || refusal.NarrowerContinuationAxis == "" || refusal.MeasuredBytes <= int64(body.Options.MaxSerializedBytes) {
+			if refusal.Family != contextfabric.QuestionFamilyScopedCohortStatus || refusal.RetryAttempted || refusal.NarrowerContinuationAxis == "" || refusal.MeasuredBytes <= int64(body.Options.MaxSerializedBytes) {
 				t.Fatalf("final refusal lost execution context: %+v", refusal)
 			}
 			assertResponseOwnerGateFree(t, f.gate)

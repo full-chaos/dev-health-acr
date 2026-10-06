@@ -45,6 +45,14 @@ type ContextFabricResultItemCounts struct {
 	Conflicts     int `json:"conflicts"`
 	ClaimedFacts  int `json:"claimed_facts"`
 	CohortMembers int `json:"cohort_members"`
+	// WalkCohortMembers is the listed members of a work-item walk cohort (the
+	// issues of a repository or a project, with a measured population). They
+	// are charged to usage like every other item (Total), and are NOT charged
+	// to the item ceiling (Budgeted): that ceiling bounds what a model reads
+	// and writes, and a walk's list is data the server read, not content a
+	// model wrote. The list is bounded by the request's max_cohort_members,
+	// the server's list cap and the serialized byte ceiling instead.
+	WalkCohortMembers int `json:"walk_cohort_members"`
 	// NOT CHARGED, decided rather than defaulted (CHAOS-5405, D-d):
 	// ContextFabricInvestigationResult.FactScopeCensus.
 	//
@@ -74,14 +82,23 @@ type ContextFabricResultItemCounts struct {
 // accounting reports.
 func (c ContextFabricResultItemCounts) Total() int {
 	return c.Candidates + c.Drivers + c.Paths + c.RemainingWork + c.ReadinessGaps +
-		c.Conflicts + c.ClaimedFacts + c.CohortMembers
+		c.Conflicts + c.ClaimedFacts + c.CohortMembers + c.WalkCohortMembers
 }
 
-// Budgeted is Total minus Paths: graph-evidence relationship paths are
-// EXCLUDED from the item budget (CHAOS-4523). Keeping the exclusion here,
-// beside the count it excludes from, is why the engine and the route cannot
-// disagree about it.
-func (c ContextFabricResultItemCounts) Budgeted() int { return c.Total() - c.Paths }
+// Budgeted is Total minus Paths and minus the listed members of a work-item
+// walk: graph-evidence relationship paths are EXCLUDED from the item budget
+// (CHAOS-4523), and so is a walk's member list (see WalkCohortMembers). Keeping
+// the exclusions here, beside the counts they exclude from, is why the engine
+// and the route cannot disagree about them.
+func (c ContextFabricResultItemCounts) Budgeted() int {
+	return c.Total() - c.Paths - c.WalkCohortMembers
+}
+
+// ContextFabricCohortIsWalkList reports whether a cohort is the member list of
+// a work-item walk: work items, with a measured population, and no group axis.
+func ContextFabricCohortIsWalkList(cohort *ContextFabricCohort) bool {
+	return cohort != nil && cohort.Kind == ContextFabricSubjectWorkItem && cohort.Population > 0 && len(cohort.Groups) == 0
+}
 
 // CountContextFabricResultItems charges every collection the item budget
 // covers. It is total, not partial: a result whose Cohort is nil charges zero
@@ -97,7 +114,11 @@ func CountContextFabricResultItems(result ContextFabricInvestigationResult) Cont
 		ClaimedFacts:  len(result.ClaimedFacts),
 	}
 	if result.Cohort != nil {
-		counts.CohortMembers = len(result.Cohort.Members)
+		if ContextFabricCohortIsWalkList(result.Cohort) {
+			counts.WalkCohortMembers = len(result.Cohort.Members)
+		} else {
+			counts.CohortMembers = len(result.Cohort.Members)
+		}
 	}
 	return counts
 }
@@ -346,7 +367,7 @@ func AttributeContextFabricResultItems(result ContextFabricInvestigationResult) 
 
 	attribution := ContextFabricItemAttribution{}
 	// Cohort member rows: one item each, member-attributed by definition.
-	if result.Cohort != nil {
+	if result.Cohort != nil && !ContextFabricCohortIsWalkList(result.Cohort) {
 		attribution.Member += len(result.Cohort.Members)
 	}
 	// Resolution candidates belong to the ANSWER, never to a group: they

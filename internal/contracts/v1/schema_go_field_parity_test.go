@@ -355,8 +355,8 @@ var vocabularyAdmitsZeroValue = map[string]func(string) bool{
 // enumNarrowings is keyed by "<document>#<defName>.<propertyName>".
 var enumNarrowings = map[string]enumNarrowing{
 	"context_fabric_answer_projection.v1.schema.json#ProjectionBudget.cohort_member_selection_basis": {
-		excluded: []string{"canonical_id_lexical", "attention_rank"},
-		why:      "SelectGroupCoverMembers is the sole producer of this field and can only return the exact overlap-aware cover (within ContextFabricSetCoverGroupGuard) or the round-robin fallback beyond it. canonical_id_lexical is the FLAT narrowing's order, which by construction runs only where there is no group axis; attention_rank exists only after the fact read, later than any clamp. Admitting either would let a document claim a grouped clamp selected by an order with no code path (CHAOS-4809).",
+		excluded: []string{"canonical_id_lexical", "attention_rank", "link_strength_then_id"},
+		why:      "SelectGroupCoverMembers is the sole producer of this field and can only return the exact overlap-aware cover (within ContextFabricSetCoverGroupGuard) or the round-robin fallback beyond it. canonical_id_lexical is the FLAT narrowing's order, which by construction runs only where there is no group axis; attention_rank exists only after the fact read, later than any clamp. link_strength_then_id orders a repository's work-item walk, a flat list with no group axis. Admitting any of them would let a document claim a grouped clamp selected by an order with no code path (CHAOS-4809).",
 		accepts: func(value string) bool {
 			return ValidContextFabricCohortMemberSelectionBasis(ContextFabricNarrowingBasis(value))
 		},

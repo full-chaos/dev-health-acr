@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"testing"
 
-	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -131,19 +130,23 @@ func TestWorkItemGuardFloorFormattingPreservesOtherKinds(t *testing.T) {
 
 func TestWorkItemGuardCapNarrowingSeparateFromPopulation(t *testing.T) {
 	defer reportWorkItemMutationPanic(t)
-	for _, tc := range []struct{ plan, request, population, retained, after int }{{234, 250, 201, 200, 200}, {234, 250, 2000, 200, 200}, {234, 7, 201, 7, 7}, {234, 250, 1, 1, 200}} {
+	// The plan's member budget (234) bounds what the model reads: it is never a step on the
+	// listed members. The only cardinality step is the population cut to the listed members.
+	for _, tc := range []struct {
+		plan, request, population, retained int
+		want                                bool
+	}{{234, 250, 201, 200, true}, {234, 250, 2000, 200, true}, {234, 7, 201, 7, true}, {234, 250, 1, 1, false}} {
 		plan := &AnswerPlan{Budget: AnswerPlanBudget{MaxMembers: tc.plan}}
 		telemetry := &recordingTelemetry{}
 		engine := &Engine{telemetry: telemetry}
 		engine.workItemTupleNarrowing(context.Background(), storage.Principal{OrgID: "org-1"}, plan, tc.request, &WorkItemTupleCensus{Value: tc.population, Retained: tc.retained})
-		found := false
-		for _, step := range plan.Narrowing {
-			if step.Before == tc.plan && step.After == tc.after && step.Basis == contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
-				found = true
-			}
+		if got := len(plan.Narrowing) == 1 && plan.Narrowing[0].Before == tc.population && plan.Narrowing[0].After == tc.retained; got != tc.want || (!tc.want && len(plan.Narrowing) != 0) {
+			t.Errorf("population %d listed %d: steps %+v, want a population step=%v", tc.population, tc.retained, plan.Narrowing, tc.want)
 		}
-		if !found {
-			t.Errorf("cap %d to %d absent: %+v", tc.plan, tc.after, plan.Narrowing)
+		for _, step := range plan.Narrowing {
+			if step.Before == tc.plan {
+				t.Errorf("the plan's member budget %d appears as a step on the list: %+v", tc.plan, step)
+			}
 		}
 		if len(telemetry.planNarrowings) != len(plan.Narrowing) {
 			t.Errorf("cap telemetry=%d steps=%d", len(telemetry.planNarrowings), len(plan.Narrowing))

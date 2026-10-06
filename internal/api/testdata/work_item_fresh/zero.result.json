@@ -88,14 +88,6 @@
       "synthesis_headroom": 16,
       "narrowing_basis": "canonical_id_lexical"
     },
-    "narrowing": [
-      {
-        "stage": "cardinality",
-        "basis": "canonical_id_lexical",
-        "before": 50,
-        "after": 34
-      }
-    ],
     "requirements": [
       {
         "requirement": "count/member/work_item",

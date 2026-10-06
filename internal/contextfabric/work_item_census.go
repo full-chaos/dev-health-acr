@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // WorkItemTupleCensusVersion is the only census encoding this build writes
@@ -61,6 +63,20 @@ type WorkItemTupleCensus struct {
 	// on the request that measured it and never persisted: a stored answer
 	// already carries the disclosures it was served with.
 	repository *repositoryWorkItemReading
+
+	// walkList is the full member list of a walk. The synthesis input, the
+	// fact reads and the claims cover its first members (the item ceiling's
+	// member budget, or fewer after a fit narrowed the input again), and the
+	// served result carries the whole list. Set on the request that measured
+	// the census and never persisted: the stored result already carries the
+	// list it was served with.
+	walkList *Cohort
+	// anchorKind and linkTier record how the walk ordered its members: a
+	// repository's walk keeps and reads members strongest link first.
+	anchorKind SubjectKind
+	linkTier   map[string]string
+	// listCut is what bounded the list when it is shorter than the population.
+	listCut contractsv1.ContextFabricWorkItemListCut
 }
 
 // WorkItemTupleCensusReadStatus describes the independent status of the

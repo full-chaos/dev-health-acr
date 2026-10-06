@@ -52,6 +52,10 @@ type limitationAudit struct {
 }
 
 var auditedLimitationWrites = map[string]limitationAudit{
+	"cutWalkListMembers#DeleteFunc#0": {
+		sameShapedTotal: 1,
+		reason:          "a DELETION, not an addition: it drops the earlier N of M sentence (matched by parse) from a clone, so the list only shrinks, and the restated sentence is added through appendBoundedLimitations",
+	},
 	"recutFactRows#Delete#0": {
 		sameShapedTotal: 1,
 		reason:          "a DELETION, not an addition: it drops the one earlier row-cut disclosure (matched by parse) from a clone, so the list only shrinks, and the replacement disclosure is added by applyFactRowTruncation through the bounded appender",

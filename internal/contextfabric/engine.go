@@ -29,7 +29,12 @@ type EngineOptions struct {
 	DisableAnchorBindingShadow bool
 	// MaxItems (CHAOS-4636) is the SERVICE-configured item ceiling the
 	// investigation route's own 413 gate enforces (ACR_MAX_ITEMS, default
-	// 30). The engine needs it to measure its own assembled answer against
+	// 30). The listed members of a work-item walk are outside it
+	// (ContextFabricResultItemCounts.WalkCohortMembers): that list follows the
+	// request's max_cohort_members, the serve limit and the byte ceiling, and
+	// this ceiling's member budget (plan.Budget.MaxMembers) bounds only the
+	// strongest-linked members the answer-writing model reads. Every other answer shape is
+	// charged as before. The engine needs it to measure its own assembled answer against
 	// the same number the route will, which is stage 3 of the plan-time
 	// budget: an over-budget answer is re-synthesized once with a smaller
 	// input HERE, before validation and persistence, rather than 413'd
@@ -3165,13 +3170,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// narrowing the same way, and deciding it twice let the stored reading and
 	// the served plan disagree.
 	if clamped := plan.Budget.MaxMembers; clamped > 0 && (graphRequest.Options.MaxCohortMembers <= 0 || clamped < graphRequest.Options.MaxCohortMembers) {
-		e.recordPlanNarrowingStep(&plan, PlanNarrowing{
-			Stage:  contractsv1.ContextFabricPlanNarrowingCardinality,
-			Basis:  contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical,
-			Before: graphRequest.Options.MaxCohortMembers,
-			After:  clamped,
-		})
-		e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingCardinality, graphRequest.Options.MaxCohortMembers, clamped, false, false, "", ""))
+		// A work-item walk's list is not clamped here: the member budget bounds
+		// only what the model reads, and stage 2 records that as a
+		// synthesis_input step.
+		if !workItemTuple {
+			e.recordPlanNarrowingStep(&plan, PlanNarrowing{
+				Stage:  contractsv1.ContextFabricPlanNarrowingCardinality,
+				Basis:  contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical,
+				Before: graphRequest.Options.MaxCohortMembers,
+				After:  clamped,
+			})
+			e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingCardinality, graphRequest.Options.MaxCohortMembers, clamped, false, false, "", ""))
+		}
 		graphRequest.Options.MaxCohortMembers = clamped
 	}
 	// CHAOS-7080: the fact registry authorizes no subject, so every
@@ -3827,12 +3837,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		var kept []CohortMember
 		var narrowed bool
 		var basis contractsv1.ContextFabricNarrowingBasis
+		var stepBasis contractsv1.ContextFabricNarrowingBasis
 		if len(cohort.Groups) > 0 {
 			var narrowedGroups []contractsv1.ContextFabricCohortGroup
 			kept, narrowedGroups, narrowed, basis = NarrowGroupedCohort(&cohort, plan.Budget.MaxMembers)
 			if narrowed {
 				cohort.Groups = narrowedGroups
 			}
+		} else if workItemTuple && tupleCensus != nil && tupleCensus.walkList != nil {
+			// What the model reads is chosen the way the walk chose the list:
+			// strongest link first (a repository's walk), then canonical id.
+			kept, narrowed = tupleCensus.synthesisMembers(&cohort, plan.Budget.MaxMembers)
+			stepBasis = tupleCensus.walkBasis()
 		} else {
 			kept, narrowed = NarrowFlatCohort(&cohort, plan.Budget.MaxMembers)
 		}
@@ -3865,11 +3881,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			narrowedGroupAxis := len(cohort.Groups) > 0
 			e.recordPlanNarrowingStep(&plan, PlanNarrowing{
 				Stage:  contractsv1.ContextFabricPlanNarrowingSynthesisInput,
-				Basis:  planStageBasis(contractsv1.ContextFabricPlanNarrowingSynthesisInput, narrowedGroupAxis, basis),
+				Basis:  stepBasisOr(stepBasis, planStageBasis(contractsv1.ContextFabricPlanNarrowingSynthesisInput, narrowedGroupAxis, basis)),
 				Before: before,
 				After:  len(kept),
 			})
-			e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingSynthesisInput, before, len(kept), narrowedGroupAxis, false, "", basis))
+			synthesisEvent := PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingSynthesisInput, before, len(kept), narrowedGroupAxis, false, "", stepBasisOr(stepBasis, basis))
+			if stepBasis != "" {
+				synthesisEvent.Basis = stepBasis
+			}
+			e.recordPlanNarrowing(ctx, principal, synthesisEvent)
 			if narrowedGroupAxis {
 				stage2GroupedBasis = basis
 			}
