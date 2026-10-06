@@ -123,25 +123,29 @@ func newSuppliedRouteAppWithStore(t *testing.T, interpreter contextfabric.Runtim
 func newSuppliedRouteEngine(t *testing.T, interpreter contextfabric.RuntimeQuestionInterpreter, outcome contextfabric.StoredSubjectOutcome, synthesized *[]contextfabric.InterpretedQuestion, store contextfabric.InvestigationResultStore) *contextfabric.Engine {
 	t.Helper()
 	project := suppliedRouteProject()
-	results := 0
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter: interpreter,
 		Graph:       authorizingGraph{liveGraphReader: liveGraphReader{project: project}, outcome: outcome},
 		Facts:       liveFactReader{bundle: liveCanonicalFacts(project)},
 		Synthesizer: fixedAnswerSynthesizer{interpretations: synthesized},
 		Results:     store,
-	}, contextfabric.EngineOptions{
+	}, suppliedRouteEngineOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return engine
+}
+
+func suppliedRouteEngineOptions() contextfabric.EngineOptions {
+	results := 0
+	return contextfabric.EngineOptions{
 		ServiceVersion: "supplied-interpretation-route",
 		Now:            func() time.Time { return time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC) },
 		NewResultID: func() string {
 			results++
 			return fmt.Sprintf("result_supplied_route%02d", results)
 		},
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
-	return engine
 }
 
 func windowedInvestigationHTTPRequest(t *testing.T, token string, supplied *contractsv1.ContextFabricSuppliedInterpretation) *http.Request {
