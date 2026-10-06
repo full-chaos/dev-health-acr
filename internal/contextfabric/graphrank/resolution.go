@@ -2090,11 +2090,17 @@ func ClarificationPrompt(candidates []contextfabric.SubjectCandidate) string {
 		max = len(candidates)
 	}
 	labels := make([]string, 0, max)
-	for _, candidate := range candidates {
-		labels = append(labels, candidate.Subject.Label)
-		if len(labels) == 3 {
-			break
+	shown := candidates
+	if len(shown) > max {
+		shown = shown[:max]
+	}
+	colliding := collidingLabelKeys(shown)
+	for _, candidate := range shown {
+		label := candidate.Subject.Label
+		if candidate.Provider != "" && colliding[candidateLabelKey(candidate)] {
+			label += " (" + candidate.Provider + ")"
 		}
+		labels = append(labels, label)
 	}
 	if len(labels) == 0 {
 		// An empty candidate list has no subject to ask about, and the

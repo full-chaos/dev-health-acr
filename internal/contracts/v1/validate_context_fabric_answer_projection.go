@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode/utf8"
 )
 
 // Validate checks the wire-shape bounds and internal referential integrity
@@ -195,6 +196,9 @@ func (p ContextFabricAnswerProjection) validateClarification() error {
 	for _, candidate := range clarification.Candidates {
 		if !stringLengthBetween(candidate.ReceiptID, 8, 256) || !validResolutionState(candidate.State) {
 			return fmt.Errorf("answer projection clarification candidate violates v1 bounds")
+		}
+		if utf8.RuneCountInString(candidate.Provider) > ContextFabricProviderMaxLength {
+			return fmt.Errorf("answer projection clarification candidate provider violates v1 bounds")
 		}
 		if candidate.Confidence < 0 || candidate.Confidence > 1 {
 			return fmt.Errorf("answer projection clarification candidate confidence violates v1 bounds")

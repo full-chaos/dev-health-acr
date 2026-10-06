@@ -134,6 +134,9 @@ type FoundSubject struct {
 	CanonicalID string `json:"canonical_id"`
 	Label       string `json:"label"`
 	Match       string `json:"match"`
+	// Provider names the source provider when exactly one provider
+	// identifies the node; empty otherwise.
+	Provider string `json:"provider,omitempty"`
 }
 
 // FindPopulation counts ADMITTED nodes only.
@@ -538,7 +541,7 @@ func (l *SubjectLookup) gateNodes(ctx context.Context, principal storage.Princip
 			if match == "" {
 				match = MatchExact
 			}
-			out = append(out, FoundSubject{Kind: node.Kind, CanonicalID: strings.TrimSpace(node.CanonicalID), Label: node.Label, Match: match})
+			out = append(out, FoundSubject{Kind: node.Kind, CanonicalID: strings.TrimSpace(node.CanonicalID), Label: node.Label, Match: match, Provider: graphrank.ProviderAttribute(node.Attributes)})
 		}
 	}
 	return out, nil

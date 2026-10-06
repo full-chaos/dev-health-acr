@@ -1610,3 +1610,16 @@ func TestSubstitutionGuardReadsTheParentFromItsPayload(t *testing.T) {
 		})
 	}
 }
+
+func TestSubjectSubstitutionRememberedCandidateKeepsTheProviderThisTurnRecorded(t *testing.T) {
+	t.Parallel()
+	resolution := SubjectResolution{Candidates: []SubjectCandidate{{
+		ReceiptID: "receipt_original", Subject: substitutionRepoOne, State: contractsv1.ContextFabricResolutionAmbiguous,
+		MatchedTerms: []string{"service"}, MatchReasons: []string{"matched"}, Confidence: 1, EvidenceRefIDs: []string{}, Provider: "github",
+	}}}
+	decision := subjectSubstitutionDecision{Outcome: SubjectSubstitutionClarified, Parent: substitutionRepoOne, RememberedListed: true}
+	got := subjectSubstitutionResolution(resolution, decision, "result_parent_0001")
+	if got.Candidates[0].Provider != "github" {
+		t.Fatalf("remembered candidate provider = %q, want github", got.Candidates[0].Provider)
+	}
+}

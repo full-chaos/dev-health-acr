@@ -940,6 +940,7 @@ func subjectSubstitutionResolution(resolution SubjectResolution, decision subjec
 			MatchReasons:   []string{"the subject of the answer this follow-up continues"},
 			Confidence:     0,
 			EvidenceRefIDs: []string{},
+			Provider:       providerOfSubject(resolution.Candidates, decision.Parent),
 		})
 	}
 	seen := map[string]struct{}{}
@@ -962,4 +963,15 @@ func subjectSubstitutionResolution(resolution SubjectResolution, decision subjec
 	guarded.CommitDecisionDigests = nil
 	guarded.ClarificationPrompt = subjectSubstitutionPromptFor(decision.RememberedListed)
 	return guarded
+}
+
+// providerOfSubject returns the provider this turn's retrieval recorded for
+// subject, or "" when the turn did not retrieve it.
+func providerOfSubject(candidates []SubjectCandidate, subject SubjectRef) string {
+	for _, candidate := range candidates {
+		if candidate.Subject.Kind == subject.Kind && candidate.Subject.CanonicalID == subject.CanonicalID {
+			return candidate.Provider
+		}
+	}
+	return ""
 }
