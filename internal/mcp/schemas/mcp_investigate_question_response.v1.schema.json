@@ -1007,6 +1007,11 @@
               "minimum": 0,
               "type": "number"
             },
+            "provider": {
+              "type": "string",
+              "maxLength": 64,
+              "description": "Source provider of the subject, present when exactly one provider identifies it."
+            },
             "match_reasons": {
               "items": {
                 "maxLength": 1024,

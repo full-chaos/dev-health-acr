@@ -189,6 +189,7 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	"structured.committed_subjects[].label",
 	"structured.clarification.prompt",
 	"structured.clarification.candidates[].subject.label",
+	"structured.clarification.candidates[].provider",
 	"structured.clarification.candidates[].match_reasons[]",
 	"structured.cohort.rationale",
 	"structured.cohort.members[].subject.label",

@@ -231,6 +231,9 @@ type ContextFabricProjectedCandidate struct {
 	State        ContextFabricResolutionState `json:"state"`
 	Confidence   float64                      `json:"confidence"`
 	MatchReasons []string                     `json:"match_reasons"`
+	// Provider is the source provider when exactly one identifies the
+	// subject; it tells two same-label options apart.
+	Provider string `json:"provider,omitempty"`
 }
 
 // ContextFabricProjectedCohort summarises a subjectless cohort answer. Total
