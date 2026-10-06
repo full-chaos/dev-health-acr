@@ -241,13 +241,12 @@ func (v *edgePageCostVenue) medianMs(t *testing.T, ctx context.Context, text str
 	return sorted[2], runs, nil
 }
 
-func (v *edgePageCostVenue) profile(t *testing.T, ctx context.Context, text string) []string {
-	t.Helper()
+func (v *edgePageCostVenue) profile(ctx context.Context, text string) ([]string, error) {
 	reply, err := v.raw.Do(ctx, "GRAPH.PROFILE", v.key, text).Result()
 	if err != nil {
-		t.Fatalf("GRAPH.PROFILE: %v", err)
+		return nil, fmt.Errorf("GRAPH.PROFILE: %w", err)
 	}
-	return edgePageCostLines(reply)
+	return edgePageCostLines(reply), nil
 }
 
 var edgePageCostRecords = regexp.MustCompile(`^\s*(Node By Index Scan|Conditional Traverse|Node By Label Scan|All Node Scan)\b.*Records produced: (\d+)`)
@@ -365,14 +364,19 @@ func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		plan := v.profile(t, ctx, v.text(t, cypher, params))
+		plan, err := v.profile(ctx, v.text(t, cypher, params))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
 		scanned, traversed := edgePageCostReadWork(plan)
 		before, beforeRuns, legacyErr := v.medianMs(t, ctx, v.text(t, legacy, params))
 		legacyScanned, legacyTraversed := -1, -1
 		if legacyErr == nil {
-			legacyPlan := v.profile(t, ctx, v.text(t, legacy, params))
-			legacyScanned, legacyTraversed = edgePageCostReadWork(legacyPlan)
-			t.Logf("PROFILE before %s\n%s", c.name, strings.Join(legacyPlan, "\n"))
+			var legacyPlan []string
+			if legacyPlan, legacyErr = v.profile(ctx, v.text(t, legacy, params)); legacyErr == nil {
+				legacyScanned, legacyTraversed = edgePageCostReadWork(legacyPlan)
+				t.Logf("PROFILE before %s\n%s", c.name, strings.Join(legacyPlan, "\n"))
+			}
 		}
 		medians[c.name] = [2]float64{before, afterMs}
 		t.Logf("CASE %s rows=%d before_ms=%.2f %v (error %v) after_ms=%.2f %v | read work before scanned=%d traversed=%d, after scanned=%d traversed=%d (origins %d, origin degree %d)",
