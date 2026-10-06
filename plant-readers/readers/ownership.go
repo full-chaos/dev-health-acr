@@ -1,0 +1,435 @@
+package readers
+
+// Shared helpers for the project-rollup readers (metrics.go, investment.go,
+// workload.go, readiness.go): every one of those rolls a project up through
+// projects -> team_project_ownership -> a team-scoped daily table, using the
+// SAME join shape and the SAME slowly-changing-dimension validity predicate.
+// A single declaration here is what stops the join or the predicate drifting
+// between the four readers the way acr's own devhealthfacts/shared.go
+// comment warns about for its callers.
+//
+// Extracted from acr's internal/contextfabric/devhealthfacts/shared.go
+// (CHAOS-4377): projectOwnershipJoinSQL, ownershipValidityPredicate, and
+// dedupeTeamRow. Callers there passed acr's own factTimeBound; here they
+// take this package's TimeBound instead.
+
+// OwnershipValidityPredicate returns the valid_from/valid_to predicate a
+// slowly-changing ownership edge (team_project_ownership, team_repo_ownership
+// -- both carry the same valid_from/valid_to(DateTime64) shape) must satisfy
+// for the requested time context: "currently active" on the current axis,
+// "active AT THE END of the requested window" for a bounded historical
+// query -- the same convention TimeBound.AsOfExpression documents for every
+// other derived-state read. now64(3) is a literal ClickHouse function call,
+// never caller-supplied text, so it carries no injection surface.
+func OwnershipValidityPredicate(bound TimeBound) string {
+	if bound.Active {
+		return " AND valid_from <= {" + BoundEndParam + ":DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {" + BoundEndParam + ":DateTime64(6,'UTC')})"
+	}
+	return " AND valid_from <= now64(3) AND valid_to IS NULL"
+}
+
+// ProjectOwnershipJoinSQL returns the SQL join fragment resolving every
+// requested project subject (matched by "<provider>:<id>") to its owning
+// teams via projects -> team_project_ownership.
+//
+// The join is NOT team_project_ownership.project_id -- that column is not
+// projects.id for every provider (for gitlab rows it holds the project KEY).
+// A join on project_id would silently drop exactly the ownership edges a
+// project rollup exists to surface. This resolves the requested project's
+// project_key from `projects` FIRST (canonical id still comes from
+// `projects`), then joins team_project_ownership on (provider, project_key).
+//
+// Selects p.provider, p.id (so a caller can rebuild the "<provider>:<id>"
+// project subject key) and tpo.team_id (one row per currently- or
+// as-of-owning team; a team owning the project through more than one
+// `source` row still yields one row per source and must be deduped by the
+// caller with MarkSeen the same way ReadProjectMetrics does).
+//
+// CHAOS-4521b: the join moved OFF project_key and onto
+// ProjectOwnershipJoinColumn, resolved through the same
+// ProjectIdentityJoinSQL/ProjectIdentityMatchSQL pair the work-scope
+// readers use.
+//
+// The old form joined projects.project_key to
+// team_project_ownership.project_key, and could not survive either
+// direction of the CHAOS-4530 rework:
+//
+//   - TODAY it reaches no real Linear project at all. Every real Linear
+//     project carries project_key NULL, so `project_key != ”` dropped
+//     them before the ownership predicate ran; the only non-empty Linear
+//     key belongs to the `{org}:linear:<teamKey>` pseudo-project a
+//     team-key fallback writes.
+//   - AFTER CHAOS-4530 lands -- UUID-keyed ownership rows, the pseudo-
+//     project gone, project_key nulled on those rows and real Linear
+//     projects' project_key still nil -- a project_key join would match
+//     NOTHING, taking health/investment/landscape to zero on deploy.
+//
+// The two-armed identity match survives both: the SCOPE arm picks up the
+// UUID-keyed rows the moment they land, and the project_key arm keeps
+// matching the key-shaped GitLab rows that exist today (their
+// team_project_ownership.project_id holds `full.chaos/dev-health-ops`,
+// which IS projects.project_key for that row).
+func ProjectOwnershipJoinSQL(ownershipPredicate string) string {
+	return projectOwnershipJoinOver(ProjectIdentityJoinSQL(), ownershipPredicate)
+}
+
+// TeamRepositoryOwnershipSQL is the team -> repository hop one step past
+// ProjectOwnershipJoinSQL: one row per (team_id, repo_id) the team owns
+// under ownershipPredicate (OwnershipValidityPredicate), organization-scoped
+// through the caller's {org_id} binding. Rows with no repository id (a
+// pattern row not yet resolved to a repository, or the zero UUID) are
+// dropped: they name no repository to reach. Alias it in the caller's FROM.
+func TeamRepositoryOwnershipSQL(ownershipPredicate string) string {
+	return "(SELECT team_id, repo_id FROM team_repo_ownership FINAL WHERE org_id = {org_id:String} AND " + keyPresentSQL("repo_id", uuidKey) + ownershipPredicate + " GROUP BY team_id, repo_id)"
+}
+
+// ProjectOwnershipCatalogJoinSQL is ProjectOwnershipJoinSQL over the whole
+// organization's project catalog instead of a requested subject list. It
+// binds no `ids` parameter, for a caller that has no project subjects to
+// name -- the work-item authorization relation, which asks "which projects
+// does any team own" once per statement. Both forms share one body, so the
+// identity match and the ownership-row union cannot drift between them.
+func ProjectOwnershipCatalogJoinSQL(ownershipPredicate string) string {
+	return projectOwnershipJoinOver(ProjectIdentityCatalogSQL(), ownershipPredicate)
+}
+
+func projectOwnershipJoinOver(projects, ownershipPredicate string) string {
+	// ONE join against ONE copy of the identity expansion (CHAOS-4552).
+	//
+	// Before this, two arms each embedded a full copy of ProjectIdentityJoinSQL's
+	// text -- and that text itself scanned `projects FINAL` twice (id-row,
+	// key-row branches), so the rendered statement carried FOUR physical
+	// scans, measured (EXPLAIN PLAN, real ClickHouse 26.7.5.10, seeded
+	// data so the optimizer could not fold an empty table into
+	// ReadNothing): four `ReadFromMergeTree(default.projects)` nodes. This
+	// shape halved that to two. The remaining pair, the id-row/key-row
+	// doubling inside the identity expansion itself, is gone too
+	// (CHAOS-4751): that expansion now reads its row source once and fans
+	// the scope rows out with ARRAY JOIN, so the rendered statement here
+	// carries ONE scan. Both halves were separate changes on purpose --
+	// this one restructured the ownership side, that one the row
+	// expansion, and each carried its own equivalence proof.
+	//
+	// The two arms union at the OWNERSHIP side instead of the identity
+	// side, tagged with the scope-kind restriction each arm's column has
+	// always required:
+	//
+	//  - project_id rows carry requiredScopeKind = "" (any scope row). This
+	//    is the SCOPE arm's old behaviour, unchanged: project_id is not an
+	//    id column, it is whichever id space that row happens to use, and
+	//    today's GitLab rows hold a project KEY there. Restricting it to
+	//    scope_kind = 'id' would drop them -- the same arm has already been
+	//    dropped three separate times.
+	//  - project_key rows carry requiredScopeKind = "key". This is the KEY
+	//    arm's old restriction, unchanged: project_key must only match the
+	//    KEY scope row, never the id scope row.
+	//
+	// WHY THE TAG, not just `o.scope_value = p.scope`. Without it, one
+	// join serving both arms would let an ownership row's project_key
+	// happen to equal some OTHER project's id and cross-attribute through
+	// that project's id scope row -- a new match combination the old,
+	// separately-restricted arms could never produce (CHAOS-4552
+	// acceptance box 3, planted-failure tested). The tag is carried in the
+	// WHERE, not the ON -- 24.8 rejects an ON with anything but a plain
+	// column equality, and `o.provider = p.provider AND o.scope_value =
+	// p.scope` is exactly that; the scope-kind restriction, being an OR
+	// with a literal comparison, has to live in the WHERE regardless of
+	// engine.
+	//
+	// project_key rows are prefiltered to non-empty in this arm's own
+	// WHERE (`project_key != ''`), where the old ownershipByKey subquery
+	// left that filtering to the join (an empty-string project_key can
+	// never match a key scope row -- ProjectIdentityJoinSQL's own guard
+	// requires project_key != '' for one to exist -- so the row was always
+	// discarded, just one join later). Same output, fewer rows unioned.
+	//
+	// The outer GROUP BY is what makes the two arms safe to union at all.
+	// A team can match through both at once (during the CHAOS-4530
+	// transition it holds a legacy AND a UUID-keyed row), and it can hold
+	// several ownership rows per project because `source` and `valid_from`
+	// are in team_project_ownership's sorting key. Either would duplicate
+	// the team -- and a duplicate consumes DefaultRowLimit before the
+	// caller's MarkSeen dedup runs, silently truncating OTHER teams out of
+	// the answer. Collapsing at the grain the caller consumes, (provider,
+	// resolved project id, team), removes both at once -- unchanged from
+	// before this change.
+	ownership := `(
+		SELECT provider, ` + ProjectOwnershipJoinColumn + ` AS scope_value, team_id, '' AS required_scope_kind
+		FROM team_project_ownership FINAL
+		WHERE org_id = {org_id:String} AND ` + ProjectOwnershipJoinColumn + ` IS NOT NULL` + ownershipPredicate + `
+		GROUP BY provider, ` + ProjectOwnershipJoinColumn + `, team_id
+
+		UNION ALL
+
+		SELECT provider, ifNull(project_key, '') AS scope_value, team_id, 'key' AS required_scope_kind
+		FROM team_project_ownership FINAL
+		WHERE org_id = {org_id:String} AND project_key IS NOT NULL AND project_key != ''` + ownershipPredicate + `
+		GROUP BY provider, project_key, team_id
+	) AS o`
+	return `(
+	SELECT provider, id, team_id
+	FROM ` + projects + `
+	INNER JOIN ` + ownership + ` ON o.provider = p.provider AND o.scope_value = p.scope
+	WHERE o.required_scope_kind = '' OR p.scope_kind = o.required_scope_kind
+	GROUP BY provider, id, team_id
+) AS p`
+}
+
+// ProjectOwnershipJoinColumn names the team_project_ownership column that
+// carries the project's identity.
+//
+// A single named constant, by design: CHAOS-4530 is reworking the producer,
+// and if it renames or moves that column this is the ONE line that changes.
+// It is an internal Go string literal, never caller-supplied, so inlining
+// it into the statement carries no injection surface -- the same discipline
+// WithRowLimit's own limit literal follows.
+const ProjectOwnershipJoinColumn = "project_id"
+
+// MarkSeen reports whether key has already been seen in seen, recording it
+// if not. team_project_ownership's own ORDER BY key includes `source`, so
+// the SAME team can legitimately appear more than once for one project (a
+// native AND a manual ownership edge both current at once); every
+// project-rollup reader must dedupe by team id (or a (team, scope) tuple)
+// before aggregating, or a team owning a project through two sources would
+// be double-counted.
+func MarkSeen(seen map[string]bool, key string) bool {
+	if seen[key] {
+		return true
+	}
+	seen[key] = true
+	return false
+}
+
+// RepresentableInt64 converts an unsigned source value, reporting false
+// when it cannot be represented as a signed int64. Two ClickHouse columns
+// this package's readers scan (backfill_log.duration_ms,
+// investment_metrics_daily.churn_loc) are UInt64; wrapping them with
+// ClickHouse's own toInt64() silently turns a value above MaxInt64
+// negative, which is a wrong value, not a failed read (CHAOS-3781 round-3
+// F2). The caller must scan the raw uint64, check representability here,
+// and omit the row rather than report it wrong.
+func RepresentableInt64(value uint64) (int64, bool) {
+	const maxInt64 = 1<<63 - 1
+	if value > maxInt64 {
+		return 0, false
+	}
+	return int64(value), true
+}
+
+// ProjectIdentityJoinSQL resolves each requested project subject to the
+// identity values it answers to, ONE ROW PER VALUE, so a caller can join a
+// project-identity column on a plain equality against `p.scope`.
+//
+// WHY rows instead of an OR in the caller's ON clause (CHAOS-4521b,
+// executed): ClickHouse 24.8 -- which acr's fixtures pin deliberately,
+// asserting the server version prefix "24.8." -- rejects a JOIN ON
+// containing OR or a function call, under BOTH analyzer settings:
+//
+//	Code: 403. DB::Exception: Unsupported JOIN ON conditions.
+//
+// Prod runs 26.7 with the new analyzer, where the OR form is valid, which
+// is why it passed every local proof and only CI's pinned fixtures caught
+// it. Expanding the alternatives into rows and joining on equality is
+// portable across both engines and needs no analyzer setting.
+//
+// The two identity values, and why each exists:
+//
+//   - the canonical id: a Linear project UUID, and the space CHAOS-4530's
+//     ownership rows key on;
+//   - the project key: the GitLab shape, where work_scope_id and
+//     team_project_ownership.project_id both hold
+//     `full.chaos/dev-health-ops` while projects.id is
+//     `{org}:gitlab:<numeric>`.
+//
+// The key row is emitted only for a NON-EMPTY, UNAMBIGUOUS key: every real
+// Linear project carries project_key NULL (coalesced to ”), which must
+// never match a stray empty identity, and an ambiguous key must never
+// attribute one project's rows to another.
+//
+// The GROUP BY collapses id == project_key to a single scope row, so a
+// caller cannot double-count a project whose two identity values coincide.
+//
+// `provider` is carried but deliberately NOT compared by
+// ProjectIdentityMatchSQL -- see that function.
+func ProjectIdentityJoinSQL() string {
+	return projectIdentityExpansionSQL(projectIdentityRowsSQL)
+}
+
+// ProjectIdentityCatalogSQL is ProjectIdentityJoinSQL for a caller that
+// walks the WHOLE catalog rather than resolving a requested subject list
+// (CHAOS-4542).
+//
+// The distinction is not cosmetic. ProjectIdentityJoinSQL's row source ends
+// `WHERE concat(provider, ':', id) IN {ids:Array(String)}`, so a caller
+// that binds no `ids` parameter gets
+//
+//	Code: 456. DB::Exception: Substitution `ids` is not set.
+//
+// which is exactly how devhealthsource's queryProjectTeams failed when it
+// first tried to reuse the filtered form: it is a catalog producer paginating
+// by cursor, and has no subject list to bind. A design mismatch, not a syntax
+// error -- and one worth naming here, because "reuse the identity helper" is
+// the obvious instinct and it is wrong for that caller.
+//
+// Both forms are built from projectIdentityExpansionSQL over the same row
+// builder, so the two scope rows and their guards have ONE definition: the
+// filtered form is the catalog form plus the `ids` predicate, and neither
+// can drift in what an identity value means.
+func ProjectIdentityCatalogSQL() string {
+	return projectIdentityExpansionSQL(projectIdentityCatalogRowsSQL)
+}
+
+// projectIdentityExpansionSQL turns a project row source into one row per
+// (project, identity value it answers to) -- see ProjectIdentityJoinSQL for
+// why the alternatives are rows rather than an OR in the caller's ON.
+func projectIdentityExpansionSQL(rows string) string {
+	// ONE read of the row source, fanned out by ARRAY JOIN (CHAOS-4751).
+	//
+	// This was a UNION ALL of an id-row branch and a key-row branch, each
+	// spelling `rows` -- and so `projects FINAL` -- in full. Two textually
+	// independent subqueries are two physical scans: ClickHouse's planner
+	// does not share a read across them. Measured (EXPLAIN PLAN, real
+	// ClickHouse 26.7, seeded data so the optimizer could not fold an empty
+	// table into ReadNothing) as two `ReadFromMergeTree(default.projects)`
+	// nodes here, and four once ProjectOwnershipJoinSQL embedded the
+	// fragment on both sides of its join. CHAOS-4552 took the four to two by
+	// unioning the ownership side once; this takes the two to one.
+	//
+	// A CTE is not the fix on either engine this fragment must run on: 24.8
+	// substitutes WITH textually, so the scan count is unchanged, and the
+	// fragment is spliced into a caller's FROM, where a top-level WITH is
+	// not available to it anyway.
+	//
+	// The three fan-out arrays are ARRAY JOIN-ed together, so ClickHouse
+	// zips them element-wise and REQUIRES equal lengths per row. They are
+	// equal by construction -- one shared condition, two elements when the
+	// key scope row is emitted and one when it is not -- and a drift is a
+	// loud "Sizes of ARRAY-JOIN-ed arrays do not match", never a wrong
+	// answer. Plain ARRAY JOIN rather than LEFT is deliberate and safe: the
+	// id element is unconditional, so no array is ever empty and the fan-out
+	// cannot drop a project.
+	//
+	// key_resolution_count is emitted PER SCOPE ROW, not per project
+	// (CHAOS-4542) -- now as the two POSITIONS of one array rather than two
+	// UNION branches. The two rows answer different questions and conflating
+	// them cost a whole review round:
+	//
+	//   - the ID row is unambiguous BY CONSTRUCTION -- projects.id is
+	//     unique -- so its count is always the literal 1;
+	//   - the KEY row carries the key partition's count, which is what the
+	//     ambiguity guard is actually about.
+	//
+	// Emitting the project-level number on both looked harmless and was
+	// not. Every real Linear project has project_key NULL, they therefore
+	// all share the empty-key partition, and the count on their ID rows
+	// came back as "however many NULL-key projects this org has" -- 17 on
+	// the org this was measured against. A consumer that gates on
+	// key_resolution_count > 1 then discards a perfectly unambiguous
+	// project_id = projects.id match. devhealthsource's queryProjectTeams
+	// did exactly that and still emitted zero Linear edges after being
+	// "fixed"; no fixture caught it, because they all seed projects WITH
+	// keys.
+	//
+	// So the two numbers now carry two NAMES rather than one name and a
+	// warning: project_key_resolution_count is the PROJECT's key-partition
+	// count, readable only here to build the guard and the key row's value,
+	// and key_resolution_count is the SCOPE ROW's. One name for both is what
+	// made the confusion available in the first place.
+	//
+	// scope_kind is aggregated, NOT grouped by (codex R1 on this change).
+	// The GROUP BY below exists to collapse the two scope rows where they
+	// coincide -- a project whose id EQUALS its project_key fans out to one
+	// of each. Adding scope_kind to the grouping makes those rows differ, so
+	// they both survive, and the scope arm matches both: ReadProjectWorkload
+	// and ReadProjectReadiness have no outer GROUP BY of their own, so every
+	// matching source row comes back twice and burns DefaultRowLimit at
+	// double rate -- silently truncating OTHER projects out of the answer,
+	// which is the same failure mode the resolved-grain collapse in
+	// ProjectOwnershipJoinSQL exists to prevent.
+	//
+	// max() keeps the discriminator without splitting the identity: 'key'
+	// sorts above 'id', so a row reachable as BOTH is labelled 'key' and the
+	// key arm still matches it -- which is correct, since that key really
+	// does resolve to this project.
+	//
+	// The outer projection is a CROSS-REPO CONTRACT and is unchanged by this
+	// restructure, down to column order: acr's project-teams edge producer
+	// embeds the catalog form as `FROM (SELECT * FROM <this>) AS pi`, so
+	// adding, removing or reordering a column changes that producer's row
+	// shape with nothing in this repo to catch it.
+	//
+	// The parentheses around the key-scope condition are load-bearing:
+	// ClickHouse binds AS to the last operand of an unparenthesised AND
+	// chain, which would alias the comparison rather than the conjunction.
+	return `(
+	SELECT provider, id, project_key, key_resolution_count, scope, max(scope_kind) AS scope_kind
+	FROM (
+		SELECT provider, id, project_key,
+			key_resolution_count AS project_key_resolution_count,
+			(project_key != '' AND key_resolution_count = 1) AS key_scope_emitted
+		FROM (` + rows + `)
+	)
+	ARRAY JOIN
+		if(key_scope_emitted, [id, project_key], [id]) AS scope,
+		if(key_scope_emitted, ['id', 'key'], ['id']) AS scope_kind,
+		if(key_scope_emitted, [toUInt64(1), project_key_resolution_count], [toUInt64(1)]) AS key_resolution_count
+	GROUP BY provider, id, project_key, key_resolution_count, scope
+) AS p`
+}
+
+// projectIdentityRowsSQL resolves the REQUESTED project subjects out of
+// `projects`, carrying the ambiguity count the key row is guarded on. It is
+// the single place `projects` is read, so the two identity rows above
+// cannot drift in what they resolve.
+const projectIdentityRowsSQL = projectIdentityCatalogRowsSQL + `
+		WHERE concat(provider, ':', id) IN {ids:Array(String)}`
+
+// projectIdentityCatalogRowsSQL is every project in the organization, with
+// the ambiguity count the key row is guarded on.
+//
+// The window runs over the WHOLE org and is not narrowed by the subject
+// filter above -- that ordering is load-bearing in both forms:
+// key_resolution_count must count across every project sharing a
+// (provider, project_key), not just the requested ones, or an ambiguous key
+// stops being detected and the guard it feeds becomes decorative.
+const projectIdentityCatalogRowsSQL = `
+		SELECT id, provider, project_key, key_resolution_count
+		FROM (
+			SELECT id, provider, ifNull(project_key, '') AS project_key,
+				countIf(ifNull(project_key, '') != '') OVER (PARTITION BY provider, ifNull(project_key, '')) AS key_resolution_count
+			FROM projects FINAL
+			WHERE org_id = {org_id:String}
+		)`
+
+// ProjectIdentityMatchSQL returns the ON predicate pairing a column that
+// carries PROJECT IDENTITY -- a work_scope_id, or team_project_ownership's
+// own project column -- with the subject ProjectIdentityJoinSQL resolved.
+//
+// This is the SCOPE arm, and it matches scope rows of BOTH kinds on
+// purpose. The column it is given is not an id column: it is whichever id
+// space that row happens to use, and today's GitLab rows carry a project
+// KEY in project_id/work_scope_id. Never add a scope_kind restriction here
+// -- it would drop them, which is the same arm that has already been
+// dropped three separate times (CHAOS-4521b, CHAOS-4542).
+//
+// Leaving it unrestricted is safe only because an ambiguous key has no
+// scope row at all, so this arm cannot resolve one either. Only the arm
+// naming project_key carries scope_kind = 'key'.
+//
+// A plain column equality by construction: the alternatives live in
+// ProjectIdentityJoinSQL's rows, not in this predicate, because 24.8
+// rejects an ON containing OR or a function call outright.
+//
+// `provider` is not compared here. Cross-provider equal ids are ONE project
+// by design in this data model (Linear imports GitHub), so requiring
+// provider equality on a work-scope read would DROP legitimate rows rather
+// than prevent a leak -- and capacity_forecasts has no provider column at
+// all. ProjectOwnershipJoinSQL adds `o.provider = p.provider` itself,
+// because the ownership edge decides which TEAMS a project inherits and
+// already had that equality before CHAOS-4521b.
+//
+// alias and column are internal Go string literals at every call site,
+// never caller-supplied, so inlining them carries no injection surface.
+func ProjectIdentityMatchSQL(alias, column string) string {
+	return alias + "." + column + " = p.scope"
+}

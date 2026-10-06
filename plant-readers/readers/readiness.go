@@ -1,0 +1,169 @@
+package readers
+
+import "context"
+
+// ReadinessCoverageRow is one estimate_coverage_metrics_daily row for a
+// team, scanned verbatim off ReadTeamReadiness's query -- one row per
+// (team_id, work_scope_id, provider) triple: a team can have several
+// concurrent work scopes (e.g. sprints) tracked at once, and different
+// source providers can share a work_scope_id string.
+//
+// HasRatio is the raw toUInt8(isNotNull(ratio)) column; a caller checks it
+// before trusting Ratio, which is ifNull(ratio, 0) when HasRatio is 0.
+type ReadinessCoverageRow struct {
+	TeamID           string
+	WorkScopeID      string
+	Provider         string
+	Day              string
+	EstimatedCount   int64
+	UnestimatedCount int64
+	BacklogSize      int64
+	HasRatio         uint8
+	Ratio            float64
+}
+
+// ReadTeamReadiness reads estimate_coverage_metrics_daily for the given
+// team ids.
+//
+// estimate_coverage_metrics_daily's own sort key is (org_id, day, provider,
+// work_scope_id, team_id) -- two different source providers (live data:
+// gitlab, linear) can report against the same work_scope_id string, so
+// provider is part of this reader's partition key too, not folded away.
+// The table is ReplacingMergeTree(computed_at): FINAL collapses an
+// exact-key rerun, and row_number() ORDER BY day DESC, computed_at DESC
+// (not day alone) still resolves the case where FINAL has not yet merged a
+// same-day recompute.
+//
+// day/computed_at is still not a TOTAL order: estimate_coverage_metrics_daily
+// has no per-row unique id beyond this partition's own key, so two rows
+// could share both. cityHash64 of the value columns is the final
+// tiebreaker -- arbitrary among an exact tie, but stable. Its
+// ifNull(ratio, -1) sentinel is only unambiguous while -1 is outside
+// ratio's real domain: ratio is estimated_count/backlog_size, a fraction;
+// live data ranges [0, 1], never negative. There is no ClickHouse-level
+// CHECK constraint enforcing this -- it is a domain assumption, not a type
+// guarantee.
+func ReadTeamReadiness(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound) ([]ReadinessCoverageRow, error) {
+	statement := WithRowLimit(`SELECT team_id, work_scope_id, provider, toString(day), toInt64(estimated_count), toInt64(unestimated_count), toInt64(backlog_size), toUInt8(isNotNull(ratio)), toFloat64(ifNull(ratio, 0))
+FROM (
+	SELECT ifNull(team_id, '') AS team_id, work_scope_id, provider, day, estimated_count, unestimated_count, backlog_size, ratio,
+		row_number() OVER (PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC, computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size, ifNull(ratio, -1))) DESC) AS rn
+	FROM estimate_coverage_metrics_daily FINAL
+	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}`+timeBound.DayPredicate("day")+`
+)
+WHERE rn = 1
+ORDER BY day DESC, team_id, work_scope_id, provider`, DefaultRowLimit)
+	var rows []ReadinessCoverageRow
+	err := QueryOrgScopedNamed(ctx, client, "ReadTeamReadiness", statement, orgID, ids, func(row RowScanner) error {
+		var r ReadinessCoverageRow
+		if err := row.Scan(&r.TeamID, &r.WorkScopeID, &r.Provider, &r.Day, &r.EstimatedCount, &r.UnestimatedCount, &r.BacklogSize, &r.HasRatio, &r.Ratio); err != nil {
+			return err
+		}
+		rows = append(rows, r)
+		return nil
+	}, timeBound.Bindings()...)
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// ReadinessProjectRow is one (project, team, work_scope, provider) row
+// contributing to a project's readiness rollup, scanned verbatim off
+// ReadProjectReadiness's team_project_ownership join. Multiple rows can
+// share ProjectSubjectKey: estimate_coverage_metrics_daily partitions by
+// (team, work_scope_id, provider), so summing estimated_count/backlog_size
+// across teams that track DIFFERENT work scopes would mix unrelated
+// backlogs into one meaningless total -- every owning team's own latest
+// per-scope coverage row survives verbatim. Grouping/breakdown-table
+// construction is the caller's job.
+type ReadinessProjectRow struct {
+	ProjectSubjectKey string
+	// HasTeam distinguishes an UNATTRIBUTED row from one attributed to a
+	// team (CHAOS-4521b). estimate_coverage_metrics_daily.team_id is
+	// Nullable, and before the project reads keyed on work_scope_id the
+	// team always came from the ownership join, where it could not be
+	// null -- so the case was unreachable and TeamID alone was enough.
+	// Reading the daily row directly makes it reachable, and a coalesce to
+	// "" would report an unattributed row as a team with an empty id:
+	// counted in team_count, cited as `acr:v1:team:`. Missing is not the
+	// same as a team whose name happens to be blank.
+	HasTeam          uint8
+	TeamID           string
+	TeamName         string
+	WorkScopeID      string
+	Provider         string
+	Day              string
+	EstimatedCount   int64
+	UnestimatedCount int64
+	BacklogSize      int64
+	HasRatio         uint8
+	Ratio            float64
+}
+
+// ReadProjectReadiness rolls estimate_coverage_metrics_daily up for a
+// project through projects -> team_project_ownership ->
+// estimate_coverage_metrics_daily: every team owning the project
+// contributes its own latest per-(work_scope, provider) coverage row,
+// verbatim -- see ReadTeamReadiness's doc comment for why estimate/backlog
+// counts are never summed across teams here.
+func ReadProjectReadiness(ctx context.Context, client QueryClient, orgID string, ids []string, timeBound TimeBound) ([]ReadinessProjectRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	// CHAOS-4521b: the project's OWN estimate_coverage_metrics_daily rows,
+	// matched on work_scope_id, with no team-ownership hop. The team is
+	// still reported -- from the ROW's own team_id, which is the team that
+	// produced that coverage row, not "some team that owns this project".
+	//
+	// The rn partition KEEPS team_id (codex P1). An earlier revision of
+	// this change dropped it, reasoning that the question was now "the
+	// latest row per work scope" -- that was wrong. team_id is part of
+	// estimate_coverage_metrics_daily's own natural key and part of the
+	// row shape this reader returns, so partitioning without it makes
+	// row_number() keep ONE team's row and silently drop every other team
+	// that contributed to the same work scope. The org this was measured
+	// against has a single team, which is exactly why the defect was
+	// invisible there and would have shipped.
+	// The team is reported from the ROW's own team_id. That column is
+	// Nullable, so has_team travels beside it (CHAOS-4521b): a coalesce
+	// alone would report an UNATTRIBUTED row as a team with an empty id.
+	//
+	// The coalesced value is aliased team_key, NOT team_id, and that is
+	// load-bearing. ClickHouse resolves aliases within the same SELECT, so
+	// `toUInt8(isNotNull(team_id)) AS has_team, ifNull(team_id, '') AS
+	// team_id` binds the isNotNull to the ALIAS -- which is never null --
+	// and has_team comes back 1 for every row, including the unattributed
+	// ones. Measured on ClickHouse 24.8: both rows reported has_team = 1
+	// until the alias was renamed. No fake-client test can see this; only
+	// running the statement does.
+	//
+	// team_id is back in the ORDER BY as well. Several teams can contribute
+	// rows for one work scope, the caller preserves this order and caps the
+	// first rows, so without it identical reads can reorder the public
+	// table or truncate DIFFERENT teams. (scope, provider, team) is unique
+	// per project after rn = 1, so the ordering is total.
+	statement := WithRowLimit(`SELECT concat(p.provider, ':', p.id), ec.has_team, ec.team_key, ifNull(t.name, ''), ec.work_scope_id, ec.provider, toString(ec.day), toInt64(ec.estimated_count), toInt64(ec.unestimated_count), toInt64(ec.backlog_size), toUInt8(isNotNull(ec.ratio)), toFloat64(ifNull(ec.ratio, 0))
+FROM `+ProjectIdentityJoinSQL()+`
+INNER JOIN (
+	SELECT toUInt8(isNotNull(team_id)) AS has_team, ifNull(team_id, '') AS team_key, work_scope_id, provider, day, estimated_count, unestimated_count, backlog_size, ratio,
+		row_number() OVER (PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC, computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size, ifNull(ratio, -1))) DESC) AS rn
+	FROM estimate_coverage_metrics_daily
+	WHERE org_id = {org_id:String}`+timeBound.DayPredicate("day")+`
+) AS ec ON `+ProjectIdentityMatchSQL("ec", "work_scope_id")+`
+LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = ec.team_key
+ORDER BY p.id, p.provider, ec.work_scope_id, ec.provider, ec.team_key`, DefaultRowLimit)
+	var rows []ReadinessProjectRow
+	err := QueryOrgScopedNamed(ctx, client, "ReadProjectReadiness", statement, orgID, ids, func(row RowScanner) error {
+		var r ReadinessProjectRow
+		if err := row.Scan(&r.ProjectSubjectKey, &r.HasTeam, &r.TeamID, &r.TeamName, &r.WorkScopeID, &r.Provider, &r.Day, &r.EstimatedCount, &r.UnestimatedCount, &r.BacklogSize, &r.HasRatio, &r.Ratio); err != nil {
+			return err
+		}
+		rows = append(rows, r)
+		return nil
+	}, timeBound.Bindings()...)
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}

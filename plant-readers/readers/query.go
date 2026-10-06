@@ -1,0 +1,139 @@
+// Package readers holds neutral, column-level ClickHouse row readers over
+// the table contracts declared in package schema. A reader takes a
+// QueryClient, an org id, and a set of natural row keys ("ids"), and
+// returns plain Go structs scanned directly off the declared columns --
+// never a GraphQL response shape, a resolver type, or any consumer-specific
+// fact/adapter wrapper. Consumers (acr's devhealthfacts adapter, a future
+// query-api GraphQL resolver layer) each wrap these plain rows into their
+// own domain shape on top.
+//
+// Extracted from acr's internal/contextfabric/devhealthfacts package
+// (CHAOS-4377): that package's readXxx methods interleaved a neutral
+// SQL-scan with building an ACR-specific CanonicalFact per row. This
+// package carries only the SQL-scan half; the CanonicalFact-building half
+// stays in acr as its own adapter, calling into this package's readers.
+package readers
+
+import (
+	"context"
+	"errors"
+	"strconv"
+
+	"github.com/full-chaos/dev-health-go/clickhouse"
+)
+
+// Binding re-exports clickhouse.Binding so callers of this package do not
+// need a second import just to pass an extra bound parameter (e.g. a
+// TimeBound's Bindings()).
+type Binding = clickhouse.Binding
+
+// RowScanner re-exports clickhouse.RowScanner for the same reason.
+type RowScanner = clickhouse.RowScanner
+
+// QueryClient is the read-only ClickHouse query boundary every reader in
+// this package uses. *clickhouse.Client satisfies it directly.
+type QueryClient interface {
+	Query(ctx context.Context, statement string, bindings []Binding) (RowScanner, error)
+}
+
+// ErrQueryClientRequired is returned by QueryOrgScoped when client is nil.
+var ErrQueryClientRequired = errors.New("readers: clickhouse query client is required")
+
+// QueryOrgScoped runs statement scoped to orgID and ids, exactly like
+// QueryOrgScopedNamed, but reports through instrumentation with a generic
+// "unattributed" reader label instead of a specific one.
+//
+// This signature predates this package's instrumentation hook and is kept
+// unchanged (codex review: an exported function's signature is a public
+// contract package consumers pin tagged versions against -- Go has no
+// overload or default parameter, so widening it in place would break any
+// external caller on upgrade). Every reader in this package itself now
+// calls QueryOrgScopedNamed directly instead, since each already knows its
+// own name; QueryOrgScoped remains for a caller (in or out of this module)
+// that has no natural reader name to attribute a call to.
+func QueryOrgScoped(ctx context.Context, client QueryClient, statement, orgID string, ids []string, scan func(RowScanner) error, extra ...Binding) error {
+	return QueryOrgScopedNamed(ctx, client, "unattributed", statement, orgID, ids, scan, extra...)
+}
+
+// QueryOrgScopedNamed runs statement scoped to orgID and ids (bound as the
+// {org_id:String} and {ids:Array(String)} parameters every reader in this
+// package expects its statement to reference), invoking scan once per
+// returned row. extra carries any additional bound parameters a specific
+// reader's statement needs (e.g. a TimeBound's Bindings()). It never adds
+// its own timeout; ctx is propagated straight through to client.
+//
+// reader identifies the calling domain reader -- by convention, its
+// exported Go function name (e.g. "ReadRunStatus") -- for instrumentation
+// attribution; it has no effect on the query itself.
+//
+// Every call is instrumented (span, query counter, error counter, latency
+// histogram) through the Instrumentation wired into ctx via
+// ContextWithInstrumentation, or a no-op if none was wired in -- see
+// instrumentation.go. This is the single choke point where that
+// instrumentation is applied; individual readers do not instrument
+// themselves.
+//
+// Mirrors acr devhealthfacts's clickhouseFacts.query exactly, minus the
+// Fact-specific pieces (readFailure classification stays with the caller).
+func QueryOrgScopedNamed(ctx context.Context, client QueryClient, reader, statement, orgID string, ids []string, scan func(RowScanner) error, extra ...Binding) (err error) {
+	ctx, finish := instrumentationFromContext(ctx).StartQuery(ctx, reader, true)
+	defer func() { finish(err) }()
+
+	if client == nil {
+		err = ErrQueryClientRequired
+		return err
+	}
+	bindings := make([]Binding, 0, 2+len(extra))
+	bindings = append(bindings, Binding{Name: "org_id", Value: orgID}, Binding{Name: "ids", Value: ids})
+	bindings = append(bindings, extra...)
+	rows, qErr := client.Query(ctx, statement, bindings)
+	if qErr != nil {
+		err = qErr
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if sErr := scan(rows); sErr != nil {
+			err = sErr
+			return err
+		}
+	}
+	err = rows.Err()
+	return err
+}
+
+// DefaultRowLimit is the anti-fanout row bound most readers in this
+// package apply via WithRowLimit: a single query is generously bounded so
+// one pathological subject (e.g. a work item with thousands of dependency
+// rows) cannot return unbounded rows before a caller-side truncation check
+// runs. Mirrors acr devhealthfacts's maxFactRowsPerQuery. A specific reader
+// may pass a different limit to WithRowLimit if its own shape warrants it.
+const DefaultRowLimit = 200
+
+// WithRowLimit appends a LIMIT clause bounding statement to limit rows.
+// limit must be an internal caller-controlled constant, never a value
+// derived from a request -- mirroring acr devhealthfacts's withRowLimit,
+// which inlines its own fixed maxFactRowsPerQuery the same way.
+func WithRowLimit(statement string, limit int) string {
+	return statement + "\nLIMIT " + strconv.Itoa(limit)
+}
+
+// ProbeRowLimit is DefaultRowLimit PLUS ONE, and it exists because reading
+// exactly N rows under `LIMIT N` cannot distinguish "there were exactly N"
+// from "there were more and we stopped".
+//
+// A caller that bounds its OUTPUT at DefaultRowLimit and wants an honest
+// truncation flag must read one row MORE than it will ever serve: the extra
+// row is EVIDENCE, never content. Marking a full page truncated -- which is
+// what a caller-side `len(rows) >= DefaultRowLimit` check does under
+// `LIMIT DefaultRowLimit` -- degrades an answer that was in fact complete,
+// and is the defect acr CHAOS-5438 names.
+//
+// This is the same limit+1 discipline acr's own fact-scope expander already
+// applies one layer up (its FactScopeExpansionRequest.Limit doc comment:
+// "read up to Limit+1 rows and return ALL of them" so the caller can confirm
+// truncation from the extra row rather than trusting a flag).
+//
+// Readers keep DefaultRowLimit as their own default. A caller opts into the
+// probe explicitly, via the `...WithRowLimit` variant beside each reader.
+const ProbeRowLimit = DefaultRowLimit + 1

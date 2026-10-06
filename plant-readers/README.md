@@ -1,0 +1,204 @@
+# dev-health-go
+
+Shared Go store/contract library, extracted from `acr` under CHAOS-4377
+(Wave 0 of the Go API epic, CHAOS-4352). It exists so `acr` and the new
+`query-api` do not each hand-roll ClickHouse column reads against the same
+production tables and drift, the way `devhealthsource` and `devhealthfacts`
+independently did before (CHAOS-3789/CHAOS-3781).
+
+## Scope
+
+Store/contract layer only. No resolver/response shapes, no GraphQL types,
+no consumer principal type.
+
+| Package     | Contents                                                              | Extracted from (acr)                          |
+| ----------- | ---------------------------------------------------------------------| ---------------------------------------------- |
+| `clickhouse`| Read-only ClickHouse query client, statement/TLS guards, bindings    | `internal/runtime/clickhouse`                  |
+| `schema`    | Declared ClickHouse column-type contracts                            | `internal/contextfabric/devhealthschema`       |
+| `readers`   | Neutral, column-level ClickHouse row readers over `schema` types, plus a store-level OTel instrumentation hook (see [Boundary corrections](#boundary-corrections-vs-plan-36)) | beneath `internal/contextfabric/devhealthfacts` |
+| `authverify`| JWKS, k8s TokenReview, workload-token-exchange verification mechanisms| `internal/auth` (mechanism subset)             |
+
+There is no `contracts` package in this repo -- see [Boundary corrections](#boundary-corrections-vs-plan-36).
+
+Excluded, and staying in each consumer as its own adapter layer:
+`FactQuery`/`FactProviderResult`/`CanonicalFact`/`fact_registry` (acr),
+GraphQL resolver/response types (query-api), and any principal/claim shape
+(each consumer defines its own on top of `authverify`'s mechanisms).
+
+## Boundary corrections vs plan §3/§6
+
+The Go API epic plan (§3/§6) got a few acr package attributions wrong.
+Corrections, verified against acr's actual tree:
+
+- **Plan said the ClickHouse client and org-scoping/reader-dedup
+  primitives lived in acr's `internal/storage`.** They did not.
+  `internal/storage` is acr's own auth/credential/audit domain
+  (`Principal`, `CredentialStore`, `DeviceAuthorizationStore`,
+  `EvidenceBundle`) and was not extracted into this repo. The ClickHouse
+  client actually lived in `internal/runtime/clickhouse` (extracted here as
+  `clickhouse`). Org-scoping/isolation for ClickHouse reads was never a
+  separate `internal/storage` primitive either -- it lived in acr's
+  `internal/contextfabric/devhealthsource` (see that package's
+  `clickhouse_org_isolation_integration_test.go`). This repo's
+  `readers.QueryOrgScoped` generalizes that pattern.
+- **`internal/contracts` and `internal/contractcheck` were inspected and
+  explicitly excluded.** Both are entirely ACR wire-contract/API-shaped:
+  `ContextPacket`, MCP/OpenAPI generation, ACR's own JSON-Schema
+  validators, and a CI-time repo-validation tool. There is no store-level
+  subset of either that's reusable without ACR/GraphQL/MCP knowledge, so no
+  `contracts` package exists in this repo.
+- **`internal/observability` was inspected and explicitly excluded as a
+  standalone extracted package.** It's ACR's packet-assembly telemetry
+  (`ContextPacket`/episode-assembly), not generic store-level
+  instrumentation. acr's `devhealthfacts` (the `readers` package's origin)
+  made zero OTel instrumentation calls prior to this extraction -- that's a
+  gap being closed here, not a preserved baseline, so `readers` ships its
+  own store-level OTel instrumentation hook (`readers.Instrumentation`,
+  wired through `readers.QueryOrgScoped`, the funnel every reader calls
+  through) in this same PR. It stays store-level only -- no ACR-specific or
+  query-api-specific naming -- so each consumer wires its own
+  `TracerProvider`/`MeterProvider` in via `readers.ContextWithInstrumentation`
+  (a ready-made `readers.OTelInstrumentation` adapter is provided; a
+  context that never wires one in behaves as a no-op, unchanged from
+  before this hook existed).
+
+## Module boundary
+
+```mermaid
+flowchart TB
+    subgraph acr["acr (github.com/full-chaos/dev-health-acr)"]
+        acrFacts["devhealthfacts\n(FactQuery / FactProviderResult / CanonicalFact adapter)"]
+        acrAuth["ACR principal shape\n(web_assertion claim schema)"]
+    end
+
+    subgraph queryapi["query-api (new, ops/cmd/query-api)"]
+        qaResolvers["GraphQL resolvers / response shapes"]
+        qaAuth["query-api claim schema + verifier"]
+    end
+
+    subgraph libgo["dev-health-go (this repo)"]
+        ch["clickhouse\nquery client"]
+        sch["schema\ncolumn contracts"]
+        rd["readers\nneutral row reads +\nOTel instrumentation hook"]
+        av["authverify\nJWKS / token-exchange / TokenReview"]
+    end
+
+    acrFacts --> rd
+    qaResolvers --> rd
+    rd --> sch
+    rd --> ch
+    acrAuth --> av
+    qaAuth --> av
+
+    classDef lib fill:#e8f0fe,stroke:#4285f4;
+    class ch,sch,rd,av lib;
+```
+
+## Gates
+
+```bash
+make fmt-check   # gofmt
+make vet         # go vet ./...
+make test        # go test ./...
+make verify      # all of the above + build
+```
+
+CI (`.github/workflows/ci.yml`) runs the same on every PR and push to `main`.
+
+## Consuming this module
+
+```go
+require github.com/full-chaos/dev-health-go v0.1.0
+```
+
+During development, a consumer may point a `replace` directive at a local
+checkout of this repo; that directive must be removed before the consumer's
+PR merges.
+
+### Release notes
+
+**v0.8.0 — optional query thread control and Settings source migration.**
+
+`readers.Settings.MaxThreads` requests a per-statement ClickHouse thread
+setting. Zero omits `max_threads` and preserves prior query behavior. The
+setting does not promise an exact worker count.
+
+This pre-v1 release changes the `Settings` struct shape: four-value positional
+literals from v0.7.0 no longer compile. Use named fields. Existing keyed
+literals need no change unless they opt into a thread limit:
+
+```go
+// Replace readers.Settings{seconds, rows, memory, resultRows} with:
+readers.Settings{
+	MaxExecutionTimeSeconds: seconds,
+	MaxRowsToRead:           rows,
+	MaxMemoryUsage:          memory,
+	MaxResultRows:           resultRows,
+}
+```
+
+This form works before and after the release. Omit `MaxThreads` to retain
+prior behavior. Do not append a fifth positional zero: `MaxThreads` precedes
+`MaxResultRows`, so that can assign the old result limit to the thread setting.
+
+**v0.5.4 — do not pin. Superseded by v0.5.5.**
+
+It regresses ambiguous-key attribution, and the failure is a
+**misattribution** rather than a missing row — strictly worse than the bug
+it fixed. Two projects sharing one `project_key`, plus an ownership row
+carrying that key and a `project_id` correlating with nothing, resolve the
+owning team onto **both** projects. acr's
+`TestCHAOS4347WideningAgainstRealClickHouse` is green on v0.5.3 and red on
+v0.5.4 with no other change.
+
+v0.5.4 was right that `key_resolution_count` is a per-scope-row property:
+an id match is unambiguous by construction, so its count is 1. What it
+missed is that a second reader was consulting the same column for a
+different question. The ownership key arm joined `o.project_key =
+p.project_key` — a column every scope row carries — and guarded itself with
+`p.key_resolution_count = 1`, meaning "this key names exactly one project".
+Once id rows reported 1, an id row satisfied that guard. Under v0.5.3 the
+id row happened to carry the project-level count and blocked it:
+accidentally correct, for a reason nobody had written down.
+
+**v0.5.5 stops asking one column two questions.** The expansion labels each
+scope row with `scope_kind` (`'id'` or `'key'`), the ambiguity filter moves
+INSIDE the expansion so an ambiguous key has **no scope row at all**, and
+the key arm matches that row (`o.project_key = p.scope` with
+`p.scope_kind = 'key'`). `key_resolution_count` survives as telemetry and is
+never a join or guard input. A consumer can no longer join an ambiguous key
+by forgetting a guard, because there is nothing to join.
+
+**v0.5.0 — do not pin. Superseded by v0.5.1.**
+
+Its project-ownership `JOIN ... ON` carries the identity arms as an `OR`.
+That is valid on prod (ClickHouse 26.7, `allow_experimental_analyzer` ON)
+but **not portable to the old analyzer**: ClickHouse 24.8 — which acr's
+container fixtures pin deliberately, asserting the server version prefix
+`"24.8."` — rejects it under both analyzer settings with
+`Code: 403 … Unsupported JOIN ON conditions`. acr's `chaos4347` and
+`chaos4363` fixtures fail against it.
+
+v0.5.1 expresses the same arms as equality-joined SELECTs `UNION ALL`-ed
+with a resolved-grain `GROUP BY`, which is analyzer-independent and passes
+on both 24.8 and 26.7. It also restores the key-to-key arm and adds the
+resolved-grain dedup.
+
+### SQL portability
+
+Readers in this module run against ClickHouse engines spanning **24.8**
+(acr's pinned test fixtures) to **26.7** (prod, compose, the kiac trial
+plane). The oldest of those is the real constraint, and it is stricter than
+the newest in ways that reject queries outright rather than mis-answering
+them.
+
+Concretely: **every `JOIN ... ON` must be a plain column equality.** No
+`OR`, no function call, no expression — 24.8 raises `Code: 403 Unsupported
+JOIN ON conditions` for those, whatever `allow_experimental_analyzer` is
+set to. Express alternatives as separate equality-joined SELECTs combined
+with `UNION ALL`, and put guards in `WHERE` rather than in the `ON`.
+
+**Proving a SQL change on a local plane is not sufficient**, because
+compose and kiac both run a far newer engine than the fixtures do. See
+CHAOS-4549 for the standing question about which version should be the
+floor.
