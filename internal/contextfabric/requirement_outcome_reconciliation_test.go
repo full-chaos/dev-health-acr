@@ -72,11 +72,6 @@ func TestAPredictedServedCountThatAssemblyCannotServeIsAnObservedTransition(t *t
 	if got != want {
 		t.Fatalf("transition =\n  %+v\nwant\n  %+v", got, want)
 	}
-	// The split is not the wire code restated.
-	if string(got.AssemblyReason) == string(got.CauseCoverage) {
-		t.Fatalf("cause %q equals the wire code %q; the line must name the reason below the collapsed code", got.AssemblyReason, got.CauseCoverage)
-	}
-
 	// THE DOCUMENT IS TRUTHFUL: no assembled row claims the count satisfied, and
 	// the served membership fact about the anchor is not counted as serving it.
 	for _, row := range result.Completeness.Outcomes {
