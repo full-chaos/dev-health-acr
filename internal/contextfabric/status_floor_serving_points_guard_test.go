@@ -9,11 +9,11 @@ import (
 
 // Every non-test file that serves a document through the completeness
 // authority also applies the served-status floors. A new serving point that
-// calls the authority and skips the floors fails here. The measurement-only
-// shapes below measure documents built by servedLateWriters, which applies both.
+// calls the authority and skips the floors fails here. The byte-fit measurement
+// copies are covered too: they must measure the document that is served.
 func TestEveryAuthorityServingPointAppliesTheServedStatusFloors(t *testing.T) {
 	measureOnly := map[string]bool{
-		"completeness_authority.go": true, "budget_trim.go": true, "chaos4636_budget_stage3.go": true,
+		"completeness_authority.go": true,
 	}
 	roots := []string{".", filepath.Join("..", "api")}
 	for _, root := range roots {

@@ -34,3 +34,23 @@ func TestServedLateWritersKeepPopulationFloorUnderEveryAuthorityFlag(t *testing.
 		}
 	}
 }
+
+// The byte fit measures the document the route serves: the budget-trim shape
+// carries the same floor.
+func TestBudgetTrimServedShapeCarriesPopulationFloor(t *testing.T) {
+	engine := completenessAuthorityTestEngine(t, EngineDependencies{}, true, true)
+	shaped := engine.budgetTrimServedShape(context.Background(), truncatedPopulationNoMemberResult())
+	if shaped.Status != InvestigationDegraded || !hasLimitation(shaped.Limitations, truncatedPopulationNoMemberLimitation) {
+		t.Fatalf("trim shape status %q, limitation present %v", shaped.Status, hasLimitation(shaped.Limitations, truncatedPopulationNoMemberLimitation))
+	}
+}
+
+// The limitation is service-authored, so a bounded projection keeps it.
+func TestTruncatedPopulationLimitationIsServiceAuthored(t *testing.T) {
+	for _, known := range contractsv1.ContextFabricServiceAuthoredLimitations() {
+		if known == truncatedPopulationNoMemberLimitation {
+			return
+		}
+	}
+	t.Fatal("truncated-population limitation is not in ContextFabricServiceAuthoredLimitations")
+}

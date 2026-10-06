@@ -141,7 +141,7 @@ func applyServerStatusFloor(result *InvestigationResult, graph GraphContext, fac
 	return outcome
 }
 
-const truncatedPopulationNoMemberLimitation = "The population for this question was truncated and no member of it was served, so this answer shows none of it."
+const truncatedPopulationNoMemberLimitation = contractsv1.ContextFabricTruncatedPopulationNoMemberLimitation
 
 // applyPopulationOutcomeStatusFloor floors a no_match whose own outcome rows
 // say the retrieved population was truncated. The row exists only after
