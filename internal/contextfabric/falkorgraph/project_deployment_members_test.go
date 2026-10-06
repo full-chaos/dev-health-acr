@@ -624,7 +624,7 @@ func TestACutFrontierWithNoMemberIsPartialAndNamesTheTruncation(t *testing.T) {
 	}
 	var cut *contextfabric.CoverageDetail
 	for i := range result.Coverage.Details {
-		if result.Coverage.Details[i].Code == contractsv1.ContextFabricCoverageDetailKindCensusTruncated {
+		if result.Coverage.Details[i].Code == contractsv1.ContextFabricCoverageDetailGraphWalkCutBeforeMember {
 			cut = &result.Coverage.Details[i]
 		}
 	}
