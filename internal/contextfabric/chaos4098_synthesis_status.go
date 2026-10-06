@@ -133,6 +133,11 @@ type SynthesisStatusOverrideOutcome struct {
 	// never asked to trust Reason's derivation without the number that
 	// produced it.
 	CommittedCount int
+	// UnaskedFactKinds names, sorted, deduplicated and comma-joined, the kinds of read rows
+	// of a committed subject that the status floor skipped because no
+	// requirement asked for them. Closed fact-kind vocabulary; empty for every
+	// other override. No subject identifier.
+	UnaskedFactKinds string
 }
 
 // applySynthesisStatusOverride rewrites result IN PLACE when the synthesis
