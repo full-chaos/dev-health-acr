@@ -45,7 +45,7 @@ type dataSubjectsResponse struct {
 // dataSubjectsUntrustedFields are the members that carry graph or client
 // text: a subject label is a provider name, the query is the client's.
 // Every echoed caller-supplied string is listed (CHAOS-7126 r1 P2).
-var dataSubjectsUntrustedFields = []string{"subjects[].label", "request.kind", "request.query", "request.kinds", "request.cursor", "request.owned_by", "request.handle", "request.anchor"}
+var dataSubjectsUntrustedFields = []string{"subjects[].label", "subjects[].provider", "request.kind", "request.query", "request.kinds", "request.cursor", "request.owned_by", "request.handle", "request.anchor"}
 
 // contextFabricDataSubjectsHandler serves find_subjects (CHAOS-7072, S1a;
 // design C.4). Every returned subject passed the S0 subject gate for this

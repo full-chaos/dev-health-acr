@@ -183,7 +183,7 @@ func (l *SubjectLookup) scanOwnedBy(ctx context.Context, principal storage.Princ
 			}
 			seen[key] = true
 			end := servedEnd(owned)
-			out = append(out, FoundSubject{Kind: end.Kind, CanonicalID: end.CanonicalID, Label: end.Label, Match: ""})
+			out = append(out, FoundSubject{Kind: end.Kind, CanonicalID: end.CanonicalID, Label: end.Label, Match: "", Provider: graphrank.ProviderAttribute(owned.Attributes)})
 		}
 		if !page.More || len(page.Edges) == 0 {
 			return out, false, nil

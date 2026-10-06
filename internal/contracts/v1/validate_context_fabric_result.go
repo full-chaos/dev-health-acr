@@ -37,6 +37,9 @@ func (c ContextFabricSubjectCandidate) validate(bounds contextFabricBounds) erro
 	if len(c.MatchedTerms) > bounds.matchedTerms || len(c.MatchReasons) < 1 || len(c.MatchReasons) > bounds.matchReasons || !uniqueTrimmedStrings(c.MatchedTerms, bounds.matchedTermLength) || !uniqueTrimmedStrings(c.MatchReasons, bounds.matchReasonLength) {
 		return fmt.Errorf("subject candidate match metadata violates v1 bounds")
 	}
+	if utf8.RuneCountInString(c.Provider) > ContextFabricProviderMaxLength {
+		return fmt.Errorf("subject candidate provider violates v1 bounds")
+	}
 	if !validMatchMechanisms(c.MatchMechanisms) {
 		return fmt.Errorf("subject candidate match mechanisms violate v1 bounds")
 	}

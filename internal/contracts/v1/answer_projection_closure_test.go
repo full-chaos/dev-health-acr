@@ -87,6 +87,7 @@ var copiedBounds = []copiedBound{
 	{projection: "answer#$defs.ProjectedCoverage.properties.reason", canonical: "common#$defs.SourceObservation.properties.reason"},
 	{projection: "answer#$defs.ProjectedCandidate.properties.receipt_id", canonical: "common#$defs.SubjectCandidate.properties.receipt_id"},
 	{projection: "answer#$defs.ProjectedCandidate.properties.match_reasons", canonical: "common#$defs.SubjectCandidate.properties.match_reasons"},
+	{projection: "answer#$defs.ProjectedCandidate.properties.provider", canonical: "common#$defs.SubjectCandidate.properties.provider"},
 	{
 		projection: "answer#$defs.ProjectedClarification.properties.candidates", canonical: "common#$defs.SubjectResolution.properties.candidates",
 		narrowedBy: "candidates_omitted",
@@ -349,7 +350,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// deterministic_answer: 242 -> 243 -- the projection now serves the
 		// server-composed answer text; untrusted like direct_judgment because
 		// it names subjects by their graph labels.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 243},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 244},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -417,7 +418,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// 351 -> 352 -- InterpretedQuestion's new requested_judgment_kind
 		// string leaf. answer_projection is unaffected: the projection
 		// carries no Interpretation at all.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 355},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 356},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
