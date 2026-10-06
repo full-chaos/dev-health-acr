@@ -23,11 +23,11 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// The cost of the read_relationships edge page on a hub: one team owning
-// edgePageCostItems work items (80% ended) and edgePageCostRepos
-// repositories, plus as many edges again that never touch the team. Written
-// through the real ApplyProjectionBatch into a real FalkorDB. Needs Docker;
-// run by CI.
+// The cost of the read_relationships edge page on a hub: two teams, each
+// owning half of edgePageCostItems work items (80% ended); the first also
+// owns edgePageCostRepos repositories. Two thirds of the edges never touch
+// a team. Written through the real ApplyProjectionBatch into a real
+// FalkorDB. Needs Docker; run by CI.
 const (
 	edgePageCostItems = 12000
 	edgePageCostRepos = 200
@@ -89,12 +89,12 @@ func edgePageCostRID(prefix string, i int) string {
 	return "rel_" + hex.EncodeToString(sum[:8])
 }
 
-// seed: team T owns edgePageCostRepos repositories and edgePageCostItems work
-// items (a work item's OWNED_BY_TEAM edge carries no window, as the producer
-// writes it); 80% of the work items ended in the past; every work item
-// BELONGS_TO_REPOSITORY one repository with the item's own window and
-// RELATES_TO the next work item (no window). Only the OWNED_BY_TEAM edges
-// touch T.
+// seed: team T owns edgePageCostRepos repositories and every even work item,
+// team U every odd one (a work item's OWNED_BY_TEAM edge carries no window,
+// as the producer writes it); 80% of the work items ended in the past; every
+// work item BELONGS_TO_REPOSITORY one repository with the item's own window
+// and RELATES_TO the next work item (no window). Only OWNED_BY_TEAM edges
+// touch a team.
 func (v *edgePageCostVenue) seed(t *testing.T, ctx context.Context) {
 	t.Helper()
 	v.orgID = "live-edge-page-cost-" + time.Now().UTC().Format("20060102T150405.000000000")
@@ -117,7 +117,8 @@ func (v *edgePageCostVenue) seed(t *testing.T, ctx context.Context) {
 			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: "v1",
 		}
 	}
-	entities := []contextfabric.EntityProjection{entity(v.team, &start, nil)}
+	other := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:U", Label: "U"}
+	entities := []contextfabric.EntityProjection{entity(v.team, &start, nil), entity(other, &start, nil)}
 	var relationships []contextfabric.RelationshipProjection
 	for i := 0; i < edgePageCostRepos; i++ {
 		repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: fmt.Sprintf("repository:r%04d", i), Label: fmt.Sprintf("acme/r%04d", i)}
@@ -138,9 +139,13 @@ func (v *edgePageCostVenue) seed(t *testing.T, ctx context.Context) {
 			}
 			ended = &e
 		}
+		owner := v.team
+		if i%2 == 1 {
+			owner = other
+		}
 		entities = append(entities, entity(item(i), &created, ended))
 		relationships = append(relationships,
-			relation(edgePageCostRID("own-item", i), "OWNED_BY_TEAM", item(i), v.team, nil, nil),
+			relation(edgePageCostRID("own-item", i), "OWNED_BY_TEAM", item(i), owner, nil, nil),
 			relation(edgePageCostRID("item-repo", i), "BELONGS_TO_REPOSITORY", item(i), v.repos[i%len(v.repos)], &created, ended),
 			relation(edgePageCostRID("item-item", i), "RELATES_TO", item(i), item((i+1)%edgePageCostItems), nil, nil))
 	}
@@ -333,8 +338,8 @@ func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 	asOf := v.now.Add(-250 * 24 * time.Hour)
 	hub := []contextfabric.SubjectRef{v.team}
 	frontier := append([]contextfabric.SubjectRef(nil), v.repos[:20]...)
-	after := &directread.EdgeKey{RelationshipID: edgePageCostRID("own-item", 7)}
-	hubDegree := edgePageCostItems + edgePageCostRepos
+	after := &directread.EdgeKey{RelationshipID: edgePageCostRID("own-item", 8)}
+	hubDegree := edgePageCostItems/2 + edgePageCostRepos
 	frontierDegree := 20 + 20*(edgePageCostItems/edgePageCostRepos)
 	cases := []struct {
 		name   string
@@ -389,7 +394,7 @@ func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 			t.Errorf("%s: the page read beyond the origins: scanned %d nodes for %d origins, traversed %d edges for origin degree %d", c.name, scanned, len(c.query.Origins), traversed, c.degree)
 		}
 	}
-	for _, pair := range [][2]string{{"current", "as_of"}, {"current_in_owned", "as_of_in_owned"}, {"current_after_limit100", "as_of_after_limit100"}, {"current_frontier", "as_of_frontier"}} {
+	for _, pair := range [][2]string{{"current", "as_of"}, {"current", "strict_now"}, {"current_in_owned", "as_of_in_owned"}, {"current_after_limit100", "as_of_after_limit100"}, {"current_frontier", "as_of_frontier"}} {
 		c, a := medians[pair[0]], medians[pair[1]]
 		t.Logf("RATIO %s/%s before=%.2f after=%.2f (as_of before %.2f ms, after %.2f ms)", pair[0], pair[1], c[0]/a[0], c[1]/a[1], a[0], a[1])
 	}
