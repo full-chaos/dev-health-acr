@@ -317,18 +317,16 @@ func TestTheWireObligationVocabularyMirrorsTheDomainInBothDirections(t *testing.
 // fail here instead of joining a list nobody maintains.
 func TestEveryOutcomeTokenIsProducedOrDeclaredUnreachable(t *testing.T) {
 	t.Parallel()
-	// not_attempted is UNREACHABLE in this slice, and that is a fact about
-	// the code rather than an omission. It names a requirement a declared
-	// cap prevented the engine from ever attempting, and the step that
-	// refines requirement rows after subject resolution -- the only place
-	// the pre-read cardinality clamp could be attached to a requirement --
-	// is owned by the requirement-derivation seam and has not landed. The
-	// token ships now because the vocabulary is closed and a later addition
-	// to a closed enum is the expensive kind of change; it is asserted
-	// unreachable so that the day it becomes reachable, this line fails and
-	// a person decides.
+	// not_attempted is PRODUCED by the read evaluator (every kind pruned, an
+	// unrecognised quantifier, an undeclared code) and by the gap-row builder.
+	// not_applicable is UNREACHABLE in this slice: it needs a requirement the
+	// question did not ask for, which only the post-resolution refinement step
+	// -- owned by the requirement-derivation seam, not landed -- can
+	// distinguish from one it did. The token ships now because the vocabulary
+	// is closed and a later addition to a closed enum is the expensive kind of
+	// change; it is asserted unreachable so the day it becomes reachable this
+	// line fails and a person decides.
 	unreachable := map[contractsv1.ContextFabricPlanRequirementOutcome]string{
-		contractsv1.ContextFabricRequirementNotAttempted:  "needs the post-resolution requirement refinement step, which is another seam's to build",
 		contractsv1.ContextFabricRequirementNotApplicable: "needs a requirement the question did not ask for, which only the refinement step can distinguish from one it did",
 	}
 
@@ -348,6 +346,10 @@ func TestEveryOutcomeTokenIsProducedOrDeclaredUnreachable(t *testing.T) {
 			produced[row.Outcome] = true
 		}
 	}
+	// not_attempted is what the read evaluator publishes for a requirement it
+	// considered and did not evaluate.
+	produced[notAttemptedReadRequirementRow(readRequirement(CompletionQuantifierAtLeastOne),
+		contractsv1.ContextFabricCoverageDetailFactPruned, true, 1).Outcome] = true
 	// narrowed is what the assembly-stage reduction produces.
 	produced[candidateNarrowingOutcomeRow(
 		candidateNarrowing{Served: 1, Declared: 2, Narrowed: true},

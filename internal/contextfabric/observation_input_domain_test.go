@@ -374,6 +374,9 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 				parts = append(parts, "NOT-REUSED-SHAPE")
 				continue
 			}
+			if event.RowWithheld == RowWithheldStoredWithoutRow && event.Outcome != "" {
+				parts = append(parts, "OUTCOME-WITHOUT-ROW")
+			}
 			parts = append(parts, fmt.Sprintf("%s:%s:%d/%d", event.Requirement, event.RowWithheld, event.ServedCover, event.Declared))
 		}
 		got := strings.Join(parts, ",")
@@ -414,10 +417,11 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 	reuseCell("plan with no requirements", stored(nil, available), "none")
 	reuseCell("a computed requirement (not a read)", stored([]contractsv1.ContextFabricPlanRequirement{computed}, available, computed.Requirement), "none")
 	reuseCell("an unserved read requirement", stored([]contractsv1.ContextFabricPlanRequirement{unserved}, available), "none")
-	reuseCell("quantifier out of vocabulary", stored([]contractsv1.ContextFabricPlanRequirement{unknownQuantifier}, available, unknownQuantifier.Requirement), "none")
+	reuseCell("quantifier out of vocabulary, the stored row is present", stored([]contractsv1.ContextFabricPlanRequirement{unknownQuantifier}, available, unknownQuantifier.Requirement), "state/subject/team:none:0/0")
+	reuseCell("quantifier out of vocabulary, stored without a row", stored([]contractsv1.ContextFabricPlanRequirement{unknownQuantifier}, available), "state/subject/team:stored_without_row:0/0")
 	reuseCell("canonical: the stored row is present", stored([]contractsv1.ContextFabricPlanRequirement{storedRead}, available, storedRead.Requirement), "state/subject/team:none:1/1")
-	reuseCell("every declared kind pruned", stored([]contractsv1.ContextFabricPlanRequirement{storedRead}, factCoverage(healthKind, SourcePruned, contractsv1.ContextFabricFactWorkload, SourcePruned)), "state/subject/team:all_pruned:0/1")
-	reuseCell("an undeclared cause code, no row", stored([]contractsv1.ContextFabricPlanRequirement{storedRead}, codedCoverage(contractsv1.ContextFabricCoverageDetailCode("fact_invented_by_a_future_producer"), healthKind, healthKind, SourceUnavailable)), "state/subject/team:undeclared_cause:0/1")
+	reuseCell("every declared kind pruned", stored([]contractsv1.ContextFabricPlanRequirement{storedRead}, factCoverage(healthKind, SourcePruned, contractsv1.ContextFabricFactWorkload, SourcePruned)), "state/subject/team:stored_without_row:0/1")
+	reuseCell("an undeclared cause code, no row", stored([]contractsv1.ContextFabricPlanRequirement{storedRead}, codedCoverage(contractsv1.ContextFabricCoverageDetailCode("fact_invented_by_a_future_producer"), healthKind, healthKind, SourceUnavailable)), "state/subject/team:stored_without_row:0/1")
 	reuseCell("observed, but stored without a row", stored([]contractsv1.ContextFabricPlanRequirement{storedRead}, available), "state/subject/team:stored_without_row:1/1")
 	reuseCell("two requirements, one line each", stored([]contractsv1.ContextFabricPlanRequirement{storedRead, second}, available, storedRead.Requirement, second.Requirement), "state/subject/team:none:1/1,state/subject/team#2:none:1/1")
 	// claimedFactKinds' own domain: a truncated kind's Served credit on

@@ -310,6 +310,20 @@ const (
 	// a READ requirement owed to a distributive scope; a computed step reads
 	// nothing of its own. Nothing was counted, so it carries no numbers.
 	ContextFabricCoverageDetailComputedPopulationAbsent ContextFabricCoverageDetailCode = "computed_population_absent"
+	// ContextFabricCoverageDetailRequirementNotEvaluable: the evaluator
+	// declined to evaluate a READ requirement because its own input fell
+	// outside a closed vocabulary -- a completion quantifier it does not
+	// recognise, or a coverage code nobody declared. The requirement was
+	// planned and, in either case, its source may have been read; what is missing is an
+	// account of it that can be stated without inventing a standard or a
+	// cause.
+	//
+	// It is not `requirement_read_not_planned` (the turn DID plan it), not
+	// `fact_provider_reported` (the provider's reason is exactly the thing
+	// that cannot be repeated on the wire) and not `fact_pruned` (nothing was
+	// proved about a source). A row naming this code says only that the
+	// requirement was considered and not evaluated.
+	ContextFabricCoverageDetailRequirementNotEvaluable ContextFabricCoverageDetailCode = "requirement_not_evaluable"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -339,6 +353,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailWorkItemRepositoryUnlinked,
 	ContextFabricCoverageDetailGraphWalkCutBeforeMember,
 	ContextFabricCoverageDetailComputedPopulationAbsent,
+	ContextFabricCoverageDetailRequirementNotEvaluable,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -630,6 +645,9 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	//
 	// A source state is refused for the same reason: no source produced one.
 	ContextFabricCoverageDetailRequirementReadNotPlanned: {},
+	// No fact kind, no count, no source state: the code says the evaluator
+	// could not state an account, so it carries nothing about any one read.
+	ContextFabricCoverageDetailRequirementNotEvaluable: {},
 	// Kind, state and origin, all three REQUIRED, and nothing else: the row
 	// says "this kind, read for this population, came back in this state".
 	// No count (the row is per read, not per subject), no scope fields (the

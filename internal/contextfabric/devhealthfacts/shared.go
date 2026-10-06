@@ -439,7 +439,16 @@ import (
 // fact row only when the row's kind is one the question asked for. A candidate
 // saved before v83 holds a degraded answer floored on an unasked kind and must
 // not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v83"
+//
+// v83 -> v84: a read requirement every declared kind of which was pruned, and
+// one the evaluator cannot evaluate (an undeclared cause code or an
+// unrecognised quantifier), now carry a not_attempted assembled-result row.
+// A candidate saved before v84 lacks that row and must not be reused.
+//
+// v84 -> v85: a model no_match whose own outcome rows record a truncated
+// population that served nothing is served degraded. A candidate saved before
+// v85 holds the no_match and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v85"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
