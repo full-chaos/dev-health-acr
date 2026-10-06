@@ -1083,6 +1083,49 @@
       "gaps": []
     },
     {
+      "id": "POST /api/v1/auth/credentials/self/ack [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/auth/credentials/self/ack",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 109
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange"
+      ],
+      "primary_validator": {
+        "description": "Same selfLifecycleHandler as rotate and revoke -- bearer only, no explicit scope requirement.",
+        "anchor": {
+          "path": "internal/api/device_routes.go",
+          "line": 261,
+          "line_end": 261,
+          "note": "func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "auth.credentials.self.ack",
+      "resource_resolver": "principal.CredentialID; the request credential_id must equal the caller's own credential.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "writeSelfLifecycleError() closed shape.",
+      "gaps": []
+    },
+    {
       "surface_kind": "rest",
       "graphql_field_name": null,
       "service": "dev-health-acr-api",

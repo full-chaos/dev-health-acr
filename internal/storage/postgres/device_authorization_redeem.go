@@ -11,6 +11,14 @@ import (
 )
 
 func (s *DeviceAuthorizationStore) Redeem(ctx context.Context, hash storage.DeviceCodeHash, input storage.CredentialCreateInput) (contractsv1.ClientCredential, error) {
+	return s.redeem(ctx, hash, input, false)
+}
+
+func (s *DeviceAuthorizationStore) RedeemAckable(ctx context.Context, hash storage.DeviceCodeHash, input storage.CredentialCreateInput) (contractsv1.ClientCredential, error) {
+	return s.redeem(ctx, hash, input, true)
+}
+
+func (s *DeviceAuthorizationStore) redeem(ctx context.Context, hash storage.DeviceCodeHash, input storage.CredentialCreateInput, ackable bool) (contractsv1.ClientCredential, error) {
 	if err := s.readyDeviceAuthorization(ctx); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
@@ -35,7 +43,17 @@ FROM acr.device_authorizations WHERE device_code_hash = $1 FOR UPDATE`, hash.Str
 	if record.State == storage.DeviceAuthorizationStateExpired {
 		return contractsv1.ClientCredential{}, storage.NewDeviceAuthorizationError(storage.DeviceAuthorizationErrorExpired, record.State, 0)
 	}
-	if record.State != storage.DeviceAuthorizationStateApproved {
+	replacing := ""
+	switch {
+	case record.State == storage.DeviceAuthorizationStateApproved:
+	case ackable && record.CredentialUnacknowledged():
+		if !record.AckWindowOpen(now) {
+			return contractsv1.ClientCredential{}, storage.NewDeviceAuthorizationConflict(record.State, storage.DeviceConflictAckWindowElapsed)
+		}
+		replacing = record.RedeemedCredentialID
+	case record.State == storage.DeviceAuthorizationStateRedeemed:
+		return contractsv1.ClientCredential{}, storage.NewDeviceAuthorizationConflict(record.State, storage.RedeemedConflictReason(record))
+	default:
 		return contractsv1.ClientCredential{}, storage.NewDeviceAuthorizationError(storage.DeviceAuthorizationErrorConflict, record.State, 0)
 	}
 	input.IssuanceProvenance = storage.CredentialIssuanceProvenanceDeviceAuthorization
@@ -47,6 +65,11 @@ FROM acr.device_authorizations WHERE device_code_hash = $1 FOR UPDATE`, hash.Str
 	}
 	if input.ExpiresAt != nil && !input.ExpiresAt.After(now) {
 		return contractsv1.ClientCredential{}, storage.ErrInvalidCredentialInput
+	}
+	if replacing != "" {
+		if err := s.revokeUnacknowledgedTx(ctx, tx, record.AuthorizedOrgID, replacing, now); err != nil {
+			return contractsv1.ClientCredential{}, err
+		}
 	}
 	credential := credentialFromCreate(input, now)
 	credentialRecord := storage.CredentialRecord{
@@ -61,9 +84,12 @@ FROM acr.device_authorizations WHERE device_code_hash = $1 FOR UPDATE`, hash.Str
 	}
 	result, err := tx.ExecContext(ctx, `
 UPDATE acr.device_authorizations
-SET state = 'redeemed', redeemed_at = $2, redeemed_credential_id = $3
-WHERE device_code_hash = $1 AND state = 'approved' AND expires_at > $2`,
-		hash.String(), now, credential.CredentialID,
+SET state = 'redeemed', redeemed_at = $2, redeemed_credential_id = $3,
+    ack_required = $4, credential_acked_at = NULL
+WHERE device_code_hash = $1
+  AND ((state = 'approved' AND expires_at > $2)
+    OR (state = 'redeemed' AND ack_required AND credential_acked_at IS NULL AND redeemed_credential_id = $5))`,
+		hash.String(), now, credential.CredentialID, ackable, nullableText(replacing),
 	)
 	if err != nil {
 		return contractsv1.ClientCredential{}, fmt.Errorf("redeem device authorization: %w", sanitizeDatabaseError(err))

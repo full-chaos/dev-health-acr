@@ -75,7 +75,7 @@ func TestForwardedClientIsSentOnEveryClientCall(t *testing.T) {
 	// reached from a hosted request).
 	notCallerScoped := map[string]bool{
 		"WithCredentialSource": true, "WithForwardedClient": true, "Reachable": true,
-		"RotateOwnCredential": true, "RevokeOwnCredential": true, "RollbackOwnCredential": true,
+		"RotateOwnCredential": true, "RevokeOwnCredential": true, "RollbackOwnCredential": true, "AcknowledgeOwnCredential": true,
 	}
 	var unlisted []string
 	clientType := reflect.TypeOf(client)

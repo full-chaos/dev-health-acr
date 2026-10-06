@@ -253,6 +253,10 @@ func runDeviceLoginAttempt(ctx context.Context, session *sidecar.CredentialLifec
 				fmt.Fprintln(os.Stderr, "login: credential was issued but could not be stored securely")
 				return deviceLoginFailed
 			}
+			if !acknowledgeIssuedCredential(ctx, cfg, response.AccessToken, response.Credential.CredentialID) {
+				fmt.Fprintln(os.Stderr, "login: credential was stored but the server did not confirm it; the server revokes an unconfirmed credential, so run login again")
+				return deviceLoginFailed
+			}
 			fmt.Fprintln(os.Stdout, "login successful")
 			return deviceLoginSucceeded
 		}
@@ -299,24 +303,40 @@ func runDeviceLoginAttempt(ctx context.Context, session *sidecar.CredentialLifec
 			if outcome, terminal := reportGrantInterruption(pollCtx); terminal {
 				return outcome
 			}
-			return reportAmbiguousDevicePoll()
+			// A lost response is recoverable: the server replaces a credential
+			// this client has not acknowledged, so the next poll is safe.
+			continue
 		}
 		if errors.Is(err, sidecar.ErrTransportUnavailable) {
-			return reportAmbiguousDevicePoll()
+			continue
 		}
 		fmt.Fprintln(os.Stderr, "login: device authorization could not be completed")
 		return deviceLoginFailed
 	}
 }
 
-// reportAmbiguousDevicePoll refuses to restart a device flow after a poll
-// request's result was lost. The server may have committed redemption before
-// the response was interrupted; a new authorization would orphan a live
-// credential that this client can neither persist nor revoke.
-func reportAmbiguousDevicePoll() deviceLoginAttemptOutcome {
-	fmt.Fprintln(os.Stderr, "login: a device authorization may have been redeemed but its result was lost; a credential may exist that this client cannot revoke — revoke it in the dashboard")
-	return deviceLoginFailed
+// acknowledgeIssuedCredential confirms to the server that the credential was
+// stored. Without it the server revokes the credential after its ack window,
+// so a failure here is reported, never ignored.
+func acknowledgeIssuedCredential(ctx context.Context, cfg sidecar.Config, token, credentialID string) bool {
+	client, err := sidecar.NewClient(cfg, func() (sidecar.CredentialResult, error) {
+		return sidecar.CredentialResult{Token: token, Source: "issued"}, nil
+	})
+	if err != nil {
+		return false
+	}
+	for attempt := range deviceAckAttempts {
+		if attempt > 0 && lifecycleWait(ctx, time.Second) != nil {
+			return false
+		}
+		if _, err := client.AcknowledgeOwnCredential(ctx, credentialID); err == nil {
+			return true
+		}
+	}
+	return false
 }
+
+const deviceAckAttempts = 3
 
 // deviceAuthorizationContext bounds polling by the validated grant lifetime.
 // expiresIn comes from a response the contract already validated, so a

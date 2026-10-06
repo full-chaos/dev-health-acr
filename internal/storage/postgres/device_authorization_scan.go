@@ -14,7 +14,7 @@ const deviceAuthorizationColumns = `device_code_hash, user_code_hash, state,
 	       organization_id_hint, repository_hints, authorized_org_id, authorized_repository_scopes, authorized_scopes,
        approving_subject, approving_authentication_method, created_at, expires_at,
        poll_interval_seconds, last_poll_at, approved_at, redeemed_at,
-       redeemed_credential_id, issuance_provenance`
+       redeemed_credential_id, issuance_provenance, ack_required, credential_acked_at`
 
 func scanDeviceAuthorization(row scanner) (storage.DeviceAuthorization, error) {
 	var (
@@ -23,14 +23,15 @@ func scanDeviceAuthorization(row scanner) (storage.DeviceAuthorization, error) {
 		repositoryHintsJSON, repositoryJSON, scopeJSON                         []byte
 		createdAt, expiresAt                                                   time.Time
 		intervalSeconds                                                        int64
-		lastPollAt, approvedAt, redeemedAt                                     sql.NullTime
+		lastPollAt, approvedAt, redeemedAt, ackedAt                            sql.NullTime
+		ackRequired                                                            bool
 	)
 	if err := row.Scan(
 		&deviceHashText, &userHashText, &stateText,
 		&organizationIDHint, &repositoryHintsJSON, &orgID, &repositoryJSON, &scopeJSON,
 		&subject, &authenticationMethod, &createdAt, &expiresAt,
 		&intervalSeconds, &lastPollAt, &approvedAt, &redeemedAt,
-		&credentialID, &provenanceText,
+		&credentialID, &provenanceText, &ackRequired, &ackedAt,
 	); err != nil {
 		return storage.DeviceAuthorization{}, err
 	}
@@ -76,6 +77,7 @@ func scanDeviceAuthorization(row scanner) (storage.DeviceAuthorization, error) {
 		PollInterval:                  time.Duration(intervalSeconds) * time.Second,
 		RedeemedCredentialID:          credentialID.String,
 		IssuanceProvenance:            provenance,
+		AckRequired:                   ackRequired,
 	}
 	if lastPollAt.Valid {
 		record.LastPollAt = cloneTime(&lastPollAt.Time)
@@ -85,6 +87,9 @@ func scanDeviceAuthorization(row scanner) (storage.DeviceAuthorization, error) {
 	}
 	if redeemedAt.Valid {
 		record.RedeemedAt = cloneTime(&redeemedAt.Time)
+	}
+	if ackedAt.Valid {
+		record.CredentialAckedAt = cloneTime(&ackedAt.Time)
 	}
 	return record, nil
 }

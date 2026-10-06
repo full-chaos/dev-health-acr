@@ -206,7 +206,8 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 	// under /api/v1/context-fabric/data/ (catalog, subjects, facts,
 	// operations), and (27 = 18 / 9) the protected read_relationships route
 	// CHAOS-7074 adds there, and (28 = 19 / 9) the protected graphql_query
-	// route CHAOS-7075 adds there. A different number is a finding to
+	// route CHAOS-7075 adds there, and (29 = 20 / 9) the protected
+	// credentials/self/ack route. A different number is a finding to
 	// reconcile, not an adjustment.
 	root := repoRoot(t)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
@@ -215,8 +216,8 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := asArray(inventory["rows"])
-	if len(rows) != 28 {
-		t.Fatalf("expected 28 rows, got %d", len(rows))
+	if len(rows) != 29 {
+		t.Fatalf("expected 29 rows, got %d", len(rows))
 	}
 	var protected, public int
 	for _, r := range rows {
@@ -228,8 +229,8 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 			public++
 		}
 	}
-	if protected != 19 {
-		t.Errorf("expected 19 protected rows, got %d", protected)
+	if protected != 20 {
+		t.Errorf("expected 20 protected rows, got %d", protected)
 	}
 	if public != 9 {
 		t.Errorf("expected 9 public rows, got %d", public)

@@ -130,19 +130,25 @@ func (s *DeviceFlowService) Poll(ctx context.Context, deviceCode string) (Issued
 	case storage.DeviceAuthorizationStatePending:
 		return IssuedCredential{}, newDevicePollError(DevicePollAuthorizationPending, 0)
 	case storage.DeviceAuthorizationStateApproved:
-		return s.redeem(ctx, record, "", nil)
+		return s.redeem(ctx, record, "", nil, true)
 	case storage.DeviceAuthorizationStateDenied:
 		return IssuedCredential{}, newDevicePollError(DevicePollAccessDenied, 0)
 	case storage.DeviceAuthorizationStateExpired:
 		return IssuedCredential{}, newDevicePollError(DevicePollExpiredToken, 0)
 	case storage.DeviceAuthorizationStateRedeemed:
+		// The response carrying the credential may have been lost: while the
+		// client has not acknowledged it, the store decides (inside its own
+		// transaction and clock) whether this retry replaces it.
+		if record.CredentialUnacknowledged() {
+			return s.redeem(ctx, record, "", nil, true)
+		}
 		return IssuedCredential{}, newDevicePollError(DevicePollInvalidGrant, 0)
 	default:
 		return IssuedCredential{}, ErrInvalidDeviceFlow
 	}
 }
 
-func (s *DeviceFlowService) redeem(ctx context.Context, record storage.DeviceAuthorization, resource string, scopes []string) (IssuedCredential, error) {
+func (s *DeviceFlowService) redeem(ctx context.Context, record storage.DeviceAuthorization, resource string, scopes []string, ackable bool) (IssuedCredential, error) {
 	if scopes == nil {
 		scopes = []string{ScopeContextRead, ScopeEvidenceRead}
 	}
@@ -159,7 +165,11 @@ func (s *DeviceFlowService) redeem(ctx context.Context, record storage.DeviceAut
 	if err != nil {
 		return IssuedCredential{}, fmt.Errorf("prepare device credential: %w", err)
 	}
-	credential, err := s.store.Redeem(ctx, record.DeviceCodeHash, prepared.StorageInput())
+	storeRedeem := s.store.Redeem
+	if ackable {
+		storeRedeem = s.store.RedeemAckable
+	}
+	credential, err := storeRedeem(ctx, record.DeviceCodeHash, prepared.StorageInput())
 	if err != nil {
 		return IssuedCredential{}, mapDeviceRedemptionStoreError(err)
 	}
@@ -220,4 +230,28 @@ func newDevicePollError(kind DevicePollErrorKind, retryAfter time.Duration) erro
 		retryAfter = 0
 	}
 	return &DevicePollError{Kind: kind, RetryAfter: retryAfter}
+}
+
+// ErrDeviceCredentialAckRejected is returned when an acknowledgement does not
+// name the caller's own credential or no unacknowledged redemption exists.
+var ErrDeviceCredentialAckRejected = errors.New("device credential acknowledgement rejected")
+
+// AcknowledgeCredential records that the caller stored the credential it
+// authenticated with. The caller can acknowledge only its own credential: the
+// bearer proves possession, and the id in the body must match it.
+func (s *DeviceFlowService) AcknowledgeCredential(ctx context.Context, principal storage.Principal, credentialID string) (time.Time, error) {
+	if err := s.ready(ctx); err != nil {
+		return time.Time{}, err
+	}
+	if principal.AuthenticationMethod != storage.AuthenticationMethodCredential || principal.CredentialID == "" || principal.CredentialID != credentialID {
+		return time.Time{}, ErrDeviceCredentialAckRejected
+	}
+	ackedAt, err := s.store.AcknowledgeCredential(ctx, principal.OrgID, credentialID)
+	if errors.Is(err, storage.ErrDeviceAuthorizationNotFound) {
+		return time.Time{}, ErrDeviceCredentialAckRejected
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("acknowledge device credential: %w", err)
+	}
+	return ackedAt, nil
 }

@@ -115,6 +115,8 @@ var schemaRootTypes = map[string]string{
 	"context_packet.v1.schema.json":                                "ContextPacket",
 	"context_packet_item.v1.schema.json":                           "ContextPacketItem",
 	"context_packet_request.v1.schema.json":                        "ContextPacketRequest",
+	"credential_ack_request.v1.schema.json":                        "CredentialAckRequest",
+	"credential_ack_response.v1.schema.json":                       "CredentialAckResponse",
 	"credential_revoke_request.v1.schema.json":                     "CredentialRevokeRequest",
 	"credential_revoke_response.v1.schema.json":                    "CredentialRevokeResponse",
 	"credential_rotate_request.v1.schema.json":                     "CredentialRotateRequest",

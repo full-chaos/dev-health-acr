@@ -262,6 +262,8 @@ func TestDeviceContractValidators_match_schema(t *testing.T) {
 		{schema: "credential_rotate_request.v1.schema.json", value: CredentialRotateRequest{SchemaVersion: CredentialRotateRequestSchema}},
 		{schema: "credential_rotate_response.v1.schema.json", value: CredentialRotateResponse{SchemaVersion: CredentialRotateResponseSchema, AccessToken: "[REDACTED]", Credential: credential, Receipt: CredentialRotationReceipt{SourceCredentialID: "credential-0001", ReplacementCredentialID: "credential-0002", RollbackUntil: createdAt.Add(15 * time.Minute)}}},
 		{schema: "credential_revoke_request.v1.schema.json", value: CredentialRevokeRequest{SchemaVersion: CredentialRevokeRequestSchema}},
+		{schema: "credential_ack_request.v1.schema.json", value: CredentialAckRequest{SchemaVersion: CredentialAckRequestSchema, CredentialID: "credential-0001"}},
+		{schema: "credential_ack_response.v1.schema.json", value: CredentialAckResponse{SchemaVersion: CredentialAckResponseSchema, CredentialID: "credential-0001", AcknowledgedAt: createdAt}},
 		{schema: "oauth_device_error.v1.schema.json", value: OAuthDeviceErrorResponse{SchemaVersion: OAuthDeviceErrorSchema, Error: OAuthDeviceErrorAuthorizationPending}},
 	}
 	for _, test := range tests {
@@ -303,6 +305,8 @@ func TestDeviceContractFixtures_validate(t *testing.T) {
 		{name: "credential rotate response", value: loadFixture[CredentialRotateResponse](t, "credential_rotate_response.v1.json")},
 		{name: "credential revoke request", value: loadFixture[CredentialRevokeRequest](t, "credential_revoke_request.v1.json")},
 		{name: "credential revoke response", value: loadFixture[CredentialRevokeResponse](t, "credential_revoke_response.v1.json")},
+		{name: "credential ack request", value: loadFixture[CredentialAckRequest](t, "credential_ack_request.v1.json")},
+		{name: "credential ack response", value: loadFixture[CredentialAckResponse](t, "credential_ack_response.v1.json")},
 		{name: "OAuth device error", value: loadFixture[OAuthDeviceErrorResponse](t, "oauth_device_error.v1.json")},
 	}
 	for _, test := range tests {
@@ -333,5 +337,47 @@ func TestChaos7106PreviewResponseRequestedScopesBounds(t *testing.T) {
 		if err := response.Validate(); (err == nil) != tc.ok {
 			t.Errorf("%s: Validate() = %v, want ok=%v", name, err, tc.ok)
 		}
+	}
+}
+
+func TestCredentialAckValidate_rejectsEachField(t *testing.T) {
+	at := time.Date(2026, 7, 11, 14, 0, 0, 0, time.UTC)
+	okReq := CredentialAckRequest{SchemaVersion: CredentialAckRequestSchema, CredentialID: "credential-0001"}
+	okResp := CredentialAckResponse{SchemaVersion: CredentialAckResponseSchema, CredentialID: "credential-0001", AcknowledgedAt: at}
+	if err := okReq.Validate(); err != nil {
+		t.Fatalf("valid request rejected: %v", err)
+	}
+	if err := okResp.Validate(); err != nil {
+		t.Fatalf("valid response rejected: %v", err)
+	}
+	reqCases := map[string]func(*CredentialAckRequest){
+		"wrong schema": func(r *CredentialAckRequest) { r.SchemaVersion = "credential_ack_request.v2" },
+		"empty id":     func(r *CredentialAckRequest) { r.CredentialID = "" },
+		"short id":     func(r *CredentialAckRequest) { r.CredentialID = "short" },
+		"oversized id": func(r *CredentialAckRequest) { r.CredentialID = strings.Repeat("c", 257) },
+	}
+	for name, mutate := range reqCases {
+		t.Run("request "+name, func(t *testing.T) {
+			r := okReq
+			mutate(&r)
+			if r.Validate() == nil {
+				t.Fatal("expected rejection")
+			}
+		})
+	}
+	respCases := map[string]func(*CredentialAckResponse){
+		"wrong schema": func(r *CredentialAckResponse) { r.SchemaVersion = "credential_ack_request.v1" },
+		"empty id":     func(r *CredentialAckResponse) { r.CredentialID = "" },
+		"short id":     func(r *CredentialAckResponse) { r.CredentialID = "short" },
+		"zero time":    func(r *CredentialAckResponse) { r.AcknowledgedAt = time.Time{} },
+	}
+	for name, mutate := range respCases {
+		t.Run("response "+name, func(t *testing.T) {
+			r := okResp
+			mutate(&r)
+			if r.Validate() == nil {
+				t.Fatal("expected rejection")
+			}
+		})
 	}
 }

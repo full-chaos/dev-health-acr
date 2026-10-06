@@ -258,6 +258,38 @@ func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {
 	})
 }
 
+// handleAcknowledgeSelfCredential records that the caller stored the credential
+// it authenticated with. Without an acknowledgement the credential a device
+// poll issued is revoked after storage.DeviceCredentialAckWindow.
+func (a *App) handleAcknowledgeSelfCredential(w http.ResponseWriter, r *http.Request) {
+	var request contractsv1.CredentialAckRequest
+	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil || request.Validate() != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential acknowledgement request is invalid", false, invalidBodyDetails(err))
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+		return
+	}
+	if a.deviceFlow == nil {
+		a.handleRuntimeUnavailable(w, r)
+		return
+	}
+	ackedAt, err := a.deviceFlow.AcknowledgeCredential(r.Context(), principal, request.CredentialID)
+	if errors.Is(err, auth.ErrDeviceCredentialAckRejected) {
+		writeError(w, r, http.StatusNotFound, "not_found", "No credential is awaiting acknowledgement", false, nil)
+		return
+	}
+	if err != nil {
+		a.writeDeviceDependencyError(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, contractsv1.CredentialAckResponse{
+		SchemaVersion: contractsv1.CredentialAckResponseSchema, CredentialID: request.CredentialID, AcknowledgedAt: ackedAt,
+	})
+}
+
 func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {
 	if a.runtime == nil || a.authenticator == nil {
 		return http.HandlerFunc(a.handleRuntimeUnavailable)

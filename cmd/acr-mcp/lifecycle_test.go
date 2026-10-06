@@ -128,6 +128,8 @@ func TestLoginReplacesPersistedCredentialInOneRunWhenHostedAPIRejectsIt(t *testi
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/api/v1/auth/credentials/self/ack":
+			serveLifecycleAck(t, state, w, r, replacementToken, "credential-replacement")
 		case "/api/v1/agent-context/capabilities":
 			state.countCapabilities()
 			if r.Header.Get("Authorization") != "Bearer "+staleToken {
@@ -187,6 +189,9 @@ func TestLoginReplacesPersistedCredentialInOneRunWhenHostedAPIRejectsIt(t *testi
 	authorizations, polls, revocations, capabilities := state.counts()
 	if authorizations != 1 || polls != 1 || revocations != 0 || capabilities != 1 {
 		t.Fatalf("HTTP counts = auth %d poll %d revoke %d capabilities %d, want 1 1 0 1", authorizations, polls, revocations, capabilities)
+	}
+	if got := state.ackCount(); got != 1 {
+		t.Fatalf("acknowledgements = %d, want 1", got)
 	}
 }
 
@@ -516,24 +521,25 @@ func TestLoginFails_when_deviceAuthorizationIsDeniedOrExpired(t *testing.T) {
 	}
 }
 
-func TestLoginRestartsDeviceAuthorizationOnlyForInvalidGrants(t *testing.T) {
+func TestLoginRestartsDeviceAuthorizationOnlyForInvalidGrantsAndRetriesLostResponses(t *testing.T) {
 	tests := []struct {
 		name         string
 		polls        []string
 		wantCode     int
 		wantTerminal string
 		wantStored   bool
+		wantAcks     int
 	}{
-		{name: "invalid_then_success", polls: []string{"invalid_grant", "success"}, wantCode: 0, wantStored: true},
+		{name: "invalid_then_success", polls: []string{"invalid_grant", "success"}, wantCode: 0, wantStored: true, wantAcks: 1},
 		{name: "invalid_then_invalid", polls: []string{"invalid_grant", "invalid_grant"}, wantCode: lifecycleExitFailure, wantTerminal: "device authorization was invalidated twice"},
-		{name: "transport_fails_without_restart", polls: []string{"transport"}, wantCode: lifecycleExitFailure, wantTerminal: "may have been redeemed but its result was lost"},
-		{name: "invalid_then_transport_fails_without_another_restart", polls: []string{"invalid_grant", "transport"}, wantCode: lifecycleExitFailure, wantTerminal: "may have been redeemed but its result was lost"},
+		{name: "transport_then_success_polls_again_without_restart", polls: []string{"transport", "success"}, wantCode: 0, wantStored: true, wantAcks: 1},
+		{name: "invalid_then_transport_then_success_polls_again_without_another_restart", polls: []string{"invalid_grant", "transport", "success"}, wantCode: 0, wantStored: true, wantAcks: 1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			token := validDoctorToken(71)
 			var trace deviceAuthorizationTrace
-			server := newLifecycleRetryServer(t, token, tc.polls, &trace)
+			server, fixture := newLifecycleRetryServerWithState(t, token, tc.polls, &trace)
 			defer server.Close()
 			path := filepath.Join(t.TempDir(), "token")
 			t.Setenv(sidecar.APIURLEnvironment, server.URL)
@@ -582,10 +588,19 @@ func TestLoginRestartsDeviceAuthorizationOnlyForInvalidGrants(t *testing.T) {
 			if len(polled) != len(tc.polls) {
 				t.Fatalf("redeemed device codes = %v, want one per scripted poll (%d)", polled, len(tc.polls))
 			}
+			// Only invalid_grant starts a new authorization; a lost response
+			// polls the same code again.
+			authorization := 0
 			for index, code := range polled {
-				if code != issued[index] {
-					t.Fatalf("poll %d redeemed %q, want the code issued by authorization %d (%q)", index+1, code, index+1, issued[index])
+				if code != issued[authorization] {
+					t.Fatalf("poll %d redeemed %q, want the code issued by authorization %d (%q)", index+1, code, authorization+1, issued[authorization])
 				}
+				if tc.polls[index] == "invalid_grant" && authorization+1 < len(issued) {
+					authorization++
+				}
+			}
+			if got := fixture.ackCount(); got != tc.wantAcks {
+				t.Fatalf("acknowledgements = %d, want %d", got, tc.wantAcks)
 			}
 			_, statErr := os.Stat(path)
 			if tc.wantStored && statErr != nil {
@@ -593,6 +608,92 @@ func TestLoginRestartsDeviceAuthorizationOnlyForInvalidGrants(t *testing.T) {
 			}
 			if !tc.wantStored && !errors.Is(statErr, os.ErrNotExist) {
 				t.Fatalf("credential persisted after terminal failure: %v", statErr)
+			}
+		})
+	}
+}
+
+// A poll response lost in transit may have left an issued but unacknowledged
+// credential on the server; the server replaces it, so login polls again. The
+// credential from the second response is the one stored and acknowledged.
+func TestLoginPollsAgainAfterALostResponse_andAcknowledgesTheSecondCredential(t *testing.T) {
+	// Given
+	token := validDoctorToken(133)
+	var trace deviceAuthorizationTrace
+	server, state := newLifecycleRetryServerWithState(t, token, []string{"transport", "success"}, &trace)
+	path := filepath.Join(t.TempDir(), "token")
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	withImmediateDevicePoll(t)
+
+	// When
+	code, stderr := captureStderr(t, func() int { return runCLI([]string{"login", "--no-browser"}) })
+
+	// Then
+	if code != 0 {
+		t.Fatalf("login exit code = %d, want 0; stderr=%s", code, stderr)
+	}
+	authorizations, polls, revocations, _ := state.counts()
+	if authorizations != 1 || polls != 2 || revocations != 0 {
+		t.Fatalf("HTTP counts = auth %d poll %d revoke %d, want 1 2 0", authorizations, polls, revocations)
+	}
+	if got := state.ackCount(); got != 1 {
+		t.Fatalf("acknowledgements = %d, want 1", got)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("credential missing after login: %v", err)
+	}
+	if string(contents) != token+"\n" {
+		t.Fatal("persisted credential is not the token from the second poll response")
+	}
+}
+
+// Without the acknowledgement the server revokes the credential after its ack
+// window, so a stored-but-unconfirmed credential must be reported as a failure
+// rather than as "login successful". The local credential stays: the server
+// owns the revocation.
+func TestLoginFails_whenTheServerNeverConfirmsTheIssuedCredential(t *testing.T) {
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusNotFound} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			// Given
+			token := validDoctorToken(134)
+			server, state := newLifecycleServerWithState(t, token, []string{"success"}, nil)
+			state.failAcks(status)
+			path := filepath.Join(t.TempDir(), "token")
+			t.Setenv(sidecar.APIURLEnvironment, server.URL)
+			t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+			t.Setenv(sidecar.TokenEnvironment, "")
+			t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+			t.Setenv(sidecar.TokenFileEnvironment, path)
+			withImmediateDevicePoll(t)
+
+			// When
+			var stdout string
+			code, stderr := captureStderr(t, func() int {
+				c, out := captureStdout(t, func() int { return runCLI([]string{"login", "--no-browser"}) })
+				stdout = out
+				return c
+			})
+
+			// Then
+			if code != lifecycleExitFailure {
+				t.Fatalf("login exit code = %d, want %d", code, lifecycleExitFailure)
+			}
+			if !strings.Contains(stderr, "did not confirm") {
+				t.Fatalf("login stderr = %q, want the missing confirmation named", stderr)
+			}
+			if strings.Contains(stdout, "login successful") {
+				t.Fatalf("login stdout = %q, want no success message", stdout)
+			}
+			if got := state.ackCount(); got != deviceAckAttempts {
+				t.Fatalf("acknowledgement attempts = %d, want %d", got, deviceAckAttempts)
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("local credential removed after an unconfirmed login: %v", err)
 			}
 		})
 	}

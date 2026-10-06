@@ -17,6 +17,10 @@ import (
 const (
 	DeviceAuthorizationTTL          = 10 * time.Minute
 	DeviceAuthorizationPollInterval = 5 * time.Second
+	// DeviceCredentialAckWindow is how long a device-poll credential may stay
+	// unacknowledged. Inside it a poll retry replaces the credential; past it
+	// the purge loop revokes the credential.
+	DeviceCredentialAckWindow = 120 * time.Second
 )
 
 type DeviceAuthorizationState string
@@ -127,6 +131,20 @@ type DeviceAuthorization struct {
 	RedeemedAt                    *time.Time
 	RedeemedCredentialID          string
 	IssuanceProvenance            CredentialIssuanceProvenance
+	AckRequired                   bool
+	CredentialAckedAt             *time.Time
+}
+
+// CredentialUnacknowledged reports a redeemed record whose credential must be
+// acknowledged by the client and has not been.
+func (r DeviceAuthorization) CredentialUnacknowledged() bool {
+	return r.State == DeviceAuthorizationStateRedeemed && r.AckRequired && r.CredentialAckedAt == nil && r.RedeemedCredentialID != ""
+}
+
+// AckWindowOpen reports whether an unacknowledged credential may still be
+// replaced by a poll retry at now.
+func (r DeviceAuthorization) AckWindowOpen(now time.Time) bool {
+	return r.CredentialUnacknowledged() && r.RedeemedAt != nil && now.Before(r.RedeemedAt.Add(DeviceCredentialAckWindow))
 }
 
 type DeviceAuthorizationCreateInput struct {
@@ -153,6 +171,18 @@ type DeviceAuthorizationStore interface {
 	Approve(context.Context, UserCodeHash, DeviceAuthorizationGrant) (DeviceAuthorization, error)
 	Deny(context.Context, UserCodeHash) (DeviceAuthorization, error)
 	Redeem(context.Context, DeviceCodeHash, CredentialCreateInput) (contractsv1.ClientCredential, error)
+	// RedeemAckable redeems like Redeem but marks the credential as one the
+	// client must acknowledge. A retry for a record whose credential is still
+	// unacknowledged inside DeviceCredentialAckWindow revokes that credential
+	// and mints the replacement in one transaction.
+	RedeemAckable(context.Context, DeviceCodeHash, CredentialCreateInput) (contractsv1.ClientCredential, error)
+	// AcknowledgeCredential records the client's acknowledgement of the
+	// credential. An unknown id, or one not awaiting acknowledgement, is
+	// ErrDeviceAuthorizationNotFound. Repeating an acknowledgement is not an error.
+	AcknowledgeCredential(ctx context.Context, orgID, credentialID string) (time.Time, error)
+	// RevokeUnacknowledged revokes up to limit credentials whose ack window
+	// has elapsed and returns how many it revoked.
+	RevokeUnacknowledged(ctx context.Context, limit int) (int, error)
 }
 
 type DeviceAuthorizationErrorKind string
@@ -168,6 +198,33 @@ type DeviceAuthorizationError struct {
 	Kind       DeviceAuthorizationErrorKind
 	State      DeviceAuthorizationState
 	RetryAfter time.Duration
+	// Reason names why a redeemed record could not be redeemed again.
+	Reason DeviceAuthorizationConflictReason
+}
+
+type DeviceAuthorizationConflictReason string
+
+const (
+	DeviceConflictAckWindowElapsed DeviceAuthorizationConflictReason = "ack_window_elapsed"
+	DeviceConflictAcknowledged     DeviceAuthorizationConflictReason = "credential_acknowledged"
+	DeviceConflictNotAckable       DeviceAuthorizationConflictReason = "not_ackable"
+)
+
+// NewDeviceAuthorizationConflict is the conflict error with a reason.
+func NewDeviceAuthorizationConflict(state DeviceAuthorizationState, reason DeviceAuthorizationConflictReason) error {
+	return &DeviceAuthorizationError{Kind: DeviceAuthorizationErrorConflict, State: state, Reason: reason}
+}
+
+// RedeemedConflictReason says why a redeemed record cannot be redeemed again.
+func RedeemedConflictReason(record DeviceAuthorization) DeviceAuthorizationConflictReason {
+	switch {
+	case !record.AckRequired:
+		return DeviceConflictNotAckable
+	case record.CredentialAckedAt != nil:
+		return DeviceConflictAcknowledged
+	default:
+		return DeviceConflictAckWindowElapsed
+	}
 }
 
 func (e *DeviceAuthorizationError) Error() string {

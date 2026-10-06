@@ -42,6 +42,10 @@ type lifecycleFixtureState struct {
 	polls          int
 	revocations    int
 	capabilities   int
+	acks           int
+	// ackFailStatus, when nonzero, makes the acknowledgement endpoint refuse
+	// every request with that status (after counting it).
+	ackFailStatus int
 }
 
 func (state *lifecycleFixtureState) recordProblem(format string, args ...any) {
@@ -83,6 +87,56 @@ func (state *lifecycleFixtureState) countCapabilities() {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.capabilities++
+}
+
+func (state *lifecycleFixtureState) countAck() {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.acks++
+}
+
+// ackCount exposes how many acknowledgement requests the server received.
+func (state *lifecycleFixtureState) ackCount() int {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.acks
+}
+
+func (state *lifecycleFixtureState) failAcks(status int) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.ackFailStatus = status
+}
+
+// serveLifecycleAck answers POST /api/v1/auth/credentials/self/ack. It requires
+// the issued token as bearer and the credential id the fixture issued, so a
+// client acknowledging the wrong credential (or with the wrong identity) is a
+// named fixture problem rather than a silent pass.
+func serveLifecycleAck(t *testing.T, state *lifecycleFixtureState, w http.ResponseWriter, r *http.Request, token, credentialID string) {
+	t.Helper()
+	state.countAck()
+	if r.Header.Get("Authorization") != "Bearer "+token {
+		state.recordProblem("credential acknowledgement did not use the issued credential as bearer")
+		writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
+		return
+	}
+	var request contractsv1.CredentialAckRequest
+	if !decodeStrictLifecycleFixtureRequest(t, state, w, r, &request) {
+		return
+	}
+	if request.CredentialID != credentialID {
+		state.recordProblem("acknowledged credential_id = %q, want %q", request.CredentialID, credentialID)
+		writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
+		return
+	}
+	state.mu.Lock()
+	failStatus := state.ackFailStatus
+	state.mu.Unlock()
+	if failStatus != 0 {
+		writeLifecycleFixtureRefusal(t, w, failStatus)
+		return
+	}
+	writeLifecycleJSON(t, w, contractsv1.CredentialAckResponse{SchemaVersion: contractsv1.CredentialAckResponseSchema, CredentialID: credentialID, AcknowledgedAt: time.Now().UTC().Truncate(time.Second)})
 }
 
 // counts exposes the observed HTTP activity so a test can assert what the
@@ -271,6 +325,8 @@ func newLifecycleServerWithState(t *testing.T, token string, polls []string, wan
 			}
 			expiresAt := createdAt.Add(30 * 24 * time.Hour)
 			writeLifecycleJSON(t, w, contractsv1.DeviceTokenResponse{SchemaVersion: contractsv1.DeviceTokenResponseSchema, AccessToken: token, TokenType: "Bearer", ExpiresIn: 30 * 24 * 60 * 60, Credential: deviceLoginCredential(createdAt, "credential-1", &expiresAt)})
+		case "/api/v1/auth/credentials/self/ack":
+			serveLifecycleAck(t, state, w, r, token, "credential-1")
 		case "/api/v1/agent-context/capabilities":
 			state.countCapabilities()
 			if r.Header.Get("Authorization") != "Bearer "+token {
@@ -394,6 +450,8 @@ func newLifecycleRetryServerWithState(t *testing.T, token string, polls []string
 			credential := deviceLoginCredential(createdAt, "credential-1", nil)
 			credential.ExpiresAt = &expiresAt
 			writeLifecycleJSON(t, w, contractsv1.DeviceTokenResponse{SchemaVersion: contractsv1.DeviceTokenResponseSchema, AccessToken: token, TokenType: "Bearer", ExpiresIn: 30 * 24 * 60 * 60, Credential: credential})
+		case "/api/v1/auth/credentials/self/ack":
+			serveLifecycleAck(t, state, w, r, token, "credential-1")
 		default:
 			state.recordProblem("unexpected retry fixture request path %q", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)

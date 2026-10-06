@@ -323,6 +323,7 @@ func TestDeviceFlow_Poll_returnsTypedProtocolStatesAndOneThirtyDayCredential(t *
 
 	// When
 	issued, redeemErr := fixture.flow.Poll(context.Background(), pending.DeviceCode)
+	fixture.now = fixture.now.Add(storage.DeviceCredentialAckWindow)
 	_, repeatedErr := fixture.flow.Poll(context.Background(), pending.DeviceCode)
 
 	// Then

@@ -106,6 +106,7 @@ func (a *App) Handler() http.Handler {
 		mux.HandleFunc("POST "+OAuthRegisterPath, a.handleOAuthRegister)
 		mux.HandleFunc("POST "+OAuthDeviceAuthorizationPath, a.handleOAuthDeviceAuthorization)
 	}
+	mux.Handle("POST /api/v1/auth/credentials/self/ack", a.selfLifecycleHandler(http.HandlerFunc(a.handleAcknowledgeSelfCredential)))
 	// RouteNamer names the OTel server span (when export is on) by the matched
 	// route: InstrumentedHandler's middleware sits between the exporter's
 	// handler and this mux.
