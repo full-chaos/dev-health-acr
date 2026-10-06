@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -3475,13 +3476,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			return terminal, terminalErr
 		}
 	}
+	// A turn whose interpretation named no fact kind and whose cohort never
+	// materialized (a requested member kind with zero members) has nothing to
+	// read: the registry refuses an empty requirement list, which used to end
+	// the turn as an unclassified read abort. The read is skipped instead and
+	// the requirement evaluator reports every derived requirement as never
+	// planned, so the answer says the population is empty rather than failing.
+	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements)
+	skipFactRead := !workItemTuple && len(mergedFactRequirements) == 0
 	factRequest := CanonicalFactRequest{
 		workItemTuple:            workItemTuple,
 		LinkScopedSubjects:       linkScopedFactSubjects(ctx, request, subjects, tupleCensus),
 		Question:                 factReadQuestion(interpretation, effectiveWindow),
 		Subjects:                 subjects,
 		Cohort:                   graphContext.Cohort,
-		Requirements:             mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements),
+		Requirements:             mergedFactRequirements,
 		RequestedRepositoryScope: copyRequestedRepositoryScope(request.RequestedScope.RepositorySlugs),
 	}
 	// The invariant, asserted rather than assumed (CHAOS-3810). The guard
@@ -3493,7 +3502,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if workItemTuple {
 		facts.Version = nonEmptyVersion("", "")
 	}
-	if !workItemTuple || len(subjects) > 0 {
+	if skipFactRead {
+		facts.Version = nonEmptyVersion("", "")
+	} else if !workItemTuple || len(subjects) > 0 {
 		if len(factRequest.Subjects) == 0 {
 			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts", ErrNoInvestigationSubjects))
 		}
@@ -3511,7 +3522,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// raised before resolution ran) simply emits nothing.
 		e.recordFactScopeExpansion(ctx, principal, facts.Scope)
 		if err != nil {
-			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts: %w", ErrFactReadAborted, err))
+			subjectKinds := make([]string, 0, len(subjects))
+			seenSubjectKind := make(map[SubjectKind]struct{}, len(subjects))
+			for _, subject := range subjects {
+				if _, seen := seenSubjectKind[subject.Kind]; !seen {
+					seenSubjectKind[subject.Kind] = struct{}{}
+					subjectKinds = append(subjectKinds, string(subject.Kind))
+				}
+			}
+			sort.Strings(subjectKinds)
+			detail := &FactReadAbortDetail{RequirementCount: len(factRequest.Requirements), SubjectKinds: subjectKinds, MemberKind: string(plan.MemberKind), Err: err}
+			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts: %w", ErrFactReadAborted, detail))
 		}
 
 	}

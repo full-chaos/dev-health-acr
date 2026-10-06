@@ -707,6 +707,15 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	if errors.Is(err, contextfabric.ErrInvalidResult) {
 		fields = append(fields, "validation_rule", contextFabricValidationRule(err))
 	}
+	var factReadAbort *contextfabric.FactReadAbortDetail
+	if errors.As(err, &factReadAbort) {
+		fields = append(fields,
+			"fact_read_error", contextfabric.SanitizeLogAttr(factReadAbort.Error()),
+			"fact_read_requirement_count", factReadAbort.RequirementCount,
+			"fact_read_subject_kinds", factReadAbort.SubjectKinds,
+			"fact_read_member_kind", contextfabric.SanitizeLogAttr(factReadAbort.MemberKind),
+		)
+	}
 	var overflow *contextfabric.ModelInputOverflow
 	if errors.As(err, &overflow) {
 		fields = append(fields, "input_bytes", overflow.Bytes, "max_input_bytes", overflow.MaxBytes)
