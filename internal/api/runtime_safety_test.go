@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -290,6 +291,18 @@ func (*typedNilDeviceAuthorizationStore) Approve(context.Context, storage.UserCo
 func (*typedNilDeviceAuthorizationStore) Deny(context.Context, storage.UserCodeHash) (storage.DeviceAuthorization, error) {
 	return storage.DeviceAuthorization{}, nil
 }
+func (*typedNilDeviceAuthorizationStore) RedeemAckable(context.Context, storage.DeviceCodeHash, storage.CredentialCreateInput) (contractsv1.ClientCredential, error) {
+	panic("typed nil device store used")
+}
+
+func (*typedNilDeviceAuthorizationStore) AcknowledgeCredential(context.Context, string, string) (time.Time, error) {
+	panic("typed nil device store used")
+}
+
+func (*typedNilDeviceAuthorizationStore) RevokeUnacknowledged(context.Context, int) (int, error) {
+	panic("typed nil device store used")
+}
+
 func (*typedNilDeviceAuthorizationStore) Redeem(context.Context, storage.DeviceCodeHash, storage.CredentialCreateInput) (contractsv1.ClientCredential, error) {
 	return contractsv1.ClientCredential{}, nil
 }

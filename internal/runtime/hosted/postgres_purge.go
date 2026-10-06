@@ -200,3 +200,32 @@ func packetPurgeSlogObserver(logger *slog.Logger) packetPurgeFailureObserver {
 		logger.WarnContext(ctx, message)
 	}
 }
+
+const (
+	// The ack window is two minutes, so the sweep runs well inside it: a lost
+	// credential is revoked within window + interval.
+	defaultDeviceCredentialSweepInterval   = 30 * time.Second
+	defaultDeviceCredentialSweepBatchLimit = 100
+	deviceCredentialSweepFailureMessage    = "device credential ack sweep tick failed; retrying on next tick"
+)
+
+// deviceCredentialRevoker is *storagepostgres.DeviceAuthorizationStore's sweep.
+type deviceCredentialRevoker interface {
+	RevokeUnacknowledged(ctx context.Context, limit int) (int, error)
+}
+
+// startDeviceCredentialSweep revokes device-poll credentials whose client did
+// not acknowledge them inside storage.DeviceCredentialAckWindow. It runs in
+// every acr-api pod (the purge loops' home); the store's SKIP LOCKED batch
+// keeps pods from revoking the same row twice. A tick that revoked anything
+// logs one line with the count only.
+func startDeviceCredentialSweep(ctx context.Context, revoker deviceCredentialRevoker, logger *slog.Logger, observe packetPurgeFailureObserver) (func() error, error) {
+	purge := func(ctx context.Context, _ time.Time, limit int) (int, error) {
+		revoked, err := revoker.RevokeUnacknowledged(ctx, limit)
+		if revoked > 0 && logger != nil {
+			logger.InfoContext(ctx, "device credential ack sweep", "revoked", revoked)
+		}
+		return revoked, err
+	}
+	return startBoundedPurgeLoop(ctx, purge, nil, observe, defaultDeviceCredentialSweepInterval, defaultDeviceCredentialSweepBatchLimit, deviceCredentialSweepFailureMessage)
+}

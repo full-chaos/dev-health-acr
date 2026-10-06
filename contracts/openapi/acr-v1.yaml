@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 51a76ecee45159db648fc7b09f6f69b707613fbf61f06404d9df6a57e5037084
+# canonical-content-sha256: 4d19dad252c8e4f790c88216c97a706e9a98db59db48d587fc42b5bb9020d1bb
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -250,6 +250,39 @@ paths:
           webAssertionAuth: []
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "evidence:read"
+  "/api/v1/auth/credentials/self/ack":
+    post:
+      operationId: "acknowledgeOwnCredential"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/credential_ack_request.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/credential_ack_response.v1.schema.json"
+          description: "Current credential acknowledged"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
   "/api/v1/auth/credentials/self/revoke":
     post:
       operationId: "revokeOwnCredential"

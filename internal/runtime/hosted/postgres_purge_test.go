@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 )
 
@@ -495,5 +496,56 @@ func TestOAuthPurgeFunc_failedProbeFailsTheTick(t *testing.T) {
 	line := strings.TrimSpace(logs.String())
 	if !strings.Contains(line, "requests=2 clients=1 device_authorizations=1") || strings.Contains(line, "remaining") {
 		t.Fatalf("line = %q, want the deleted counts and no remaining", line)
+	}
+}
+
+type stubDeviceCredentialRevoker struct {
+	mu     sync.Mutex
+	limits []int
+	result int
+	err    error
+}
+
+func (s *stubDeviceCredentialRevoker) RevokeUnacknowledged(_ context.Context, limit int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.limits = append(s.limits, limit)
+	return s.result, s.err
+}
+
+func TestStartDeviceCredentialSweep_runsABoundedSweepAtStartupAndLogsOnlyTheCount(t *testing.T) {
+	revoker := &stubDeviceCredentialRevoker{result: 2}
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	closeLoop, err := startDeviceCredentialSweep(context.Background(), revoker, logger, nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closeLoop() })
+	revoker.mu.Lock()
+	defer revoker.mu.Unlock()
+	if len(revoker.limits) != 1 || revoker.limits[0] != defaultDeviceCredentialSweepBatchLimit {
+		t.Fatalf("sweep limits = %v, want one bounded call", revoker.limits)
+	}
+	if !strings.Contains(logs.String(), "revoked=2") {
+		t.Fatalf("log = %q, want the revoked count", logs.String())
+	}
+}
+
+func TestStartDeviceCredentialSweep_failsStartupWhenTheFirstSweepFails(t *testing.T) {
+	revoker := &stubDeviceCredentialRevoker{err: errors.New("permission denied")}
+
+	closeLoop, err := startDeviceCredentialSweep(context.Background(), revoker, nil, nil)
+
+	if err == nil || closeLoop != nil {
+		t.Fatalf("startDeviceCredentialSweep() = (%v, %v), want a startup failure", closeLoop != nil, err)
+	}
+}
+
+func TestDeviceCredentialSweepIntervalIsInsideTheAckWindow(t *testing.T) {
+	if defaultDeviceCredentialSweepInterval*2 > storage.DeviceCredentialAckWindow {
+		t.Fatalf("sweep interval %v is too long for ack window %v", defaultDeviceCredentialSweepInterval, storage.DeviceCredentialAckWindow)
 	}
 }

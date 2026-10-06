@@ -258,6 +258,46 @@ func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {
 	})
 }
 
+// handleAcknowledgeSelfCredential records that the caller stored the credential
+// it authenticated with. Without an acknowledgement the credential a device
+// poll issued is revoked after storage.DeviceCredentialAckWindow.
+func (a *App) handleAcknowledgeSelfCredential(w http.ResponseWriter, r *http.Request) {
+	var request contractsv1.CredentialAckRequest
+	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil || request.Validate() != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential acknowledgement request is invalid", false, invalidBodyDetails(err))
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+		return
+	}
+	if a.deviceFlow == nil {
+		a.handleRuntimeUnavailable(w, r)
+		return
+	}
+	requested := ""
+	if request.CredentialID != nil {
+		requested = *request.CredentialID
+	}
+	ackedAt, err := a.deviceFlow.AcknowledgeCredential(r.Context(), principal, requested)
+	if errors.Is(err, auth.ErrDeviceCredentialAckRejected) {
+		writeError(w, r, http.StatusNotFound, "not_found", "No credential is awaiting acknowledgement", false, nil)
+		return
+	}
+	if errors.Is(err, auth.ErrDeviceCredentialAckWindowClosed) {
+		writeError(w, r, http.StatusConflict, "credential_lifecycle_conflict", "The acknowledgement window closed; the credential is revoked or about to be", false, nil)
+		return
+	}
+	if err != nil {
+		a.writeDeviceDependencyError(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, contractsv1.CredentialAckResponse{
+		SchemaVersion: contractsv1.CredentialAckResponseSchema, CredentialID: principal.CredentialID, AcknowledgedAt: ackedAt,
+	})
+}
+
 func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {
 	if a.runtime == nil || a.authenticator == nil {
 		return http.HandlerFunc(a.handleRuntimeUnavailable)

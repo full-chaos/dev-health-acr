@@ -20,6 +20,7 @@ const (
 	deviceTokenPath         = "/api/v1/oauth/token"
 	credentialRotatePath    = "/api/v1/auth/credentials/self/rotate"
 	credentialRevokePath    = "/api/v1/auth/credentials/self/revoke"
+	credentialAckPath       = "/api/v1/auth/credentials/self/ack"
 )
 
 // LifecycleClient is the hardened unauthenticated portion of the ACR device
@@ -162,6 +163,31 @@ func (c *Client) revokeOwnCredential(ctx context.Context, receipt *contractsv1.C
 	}
 	if err := response.Validate(); err != nil {
 		return contractsv1.CredentialRevokeResponse{}, fmt.Errorf("%w: credential revocation response: %w", ErrInvalidResponse, err)
+	}
+	return response, nil
+}
+
+// AcknowledgeOwnCredential tells the server this client stored the credential
+// it authenticates with. A device-poll credential that is not acknowledged is
+// revoked by the server after a short window.
+func (c *Client) AcknowledgeOwnCredential(ctx context.Context, credentialID string) (contractsv1.CredentialAckResponse, error) {
+	request := contractsv1.CredentialAckRequest{SchemaVersion: contractsv1.CredentialAckRequestSchema}
+	if credentialID != "" {
+		request.CredentialID = &credentialID
+	}
+	if err := request.Validate(); err != nil {
+		return contractsv1.CredentialAckResponse{}, fmt.Errorf("encode credential acknowledgement request: %w", err)
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return contractsv1.CredentialAckResponse{}, fmt.Errorf("encode credential acknowledgement request: %w", err)
+	}
+	response := contractsv1.CredentialAckResponse{}
+	if err := c.call(ctx, http.MethodPost, credentialAckPath, payload, &response); err != nil {
+		return contractsv1.CredentialAckResponse{}, fmt.Errorf("acknowledge current credential: %w", err)
+	}
+	if err := response.Validate(); err != nil || (credentialID != "" && response.CredentialID != credentialID) {
+		return contractsv1.CredentialAckResponse{}, fmt.Errorf("%w: credential acknowledgement response", ErrInvalidResponse)
 	}
 	return response, nil
 }

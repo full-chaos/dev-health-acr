@@ -205,7 +205,7 @@ func (s *DeviceFlowService) RedeemForResource(ctx context.Context, hash storage.
 	if record.State != storage.DeviceAuthorizationStateApproved || !record.ExpiresAt.After(s.now().UTC()) {
 		return IssuedCredential{}, ErrOAuthDeviceNotApproved
 	}
-	issued, err := s.redeem(ctx, record, resource, scopes)
+	issued, err := s.redeem(ctx, record, resource, scopes, false)
 	if err != nil {
 		var pollError *DevicePollError
 		if errors.As(err, &pollError) {
@@ -291,7 +291,7 @@ func (s *DeviceFlowService) PollDeviceGrant(ctx context.Context, hash storage.De
 	case storage.DeviceAuthorizationStatePending:
 		return IssuedCredential{}, newDevicePollError(DevicePollAuthorizationPending, 0)
 	case storage.DeviceAuthorizationStateApproved:
-		return s.redeem(ctx, record, resource, scopes)
+		return s.redeem(ctx, record, resource, scopes, false)
 	case storage.DeviceAuthorizationStateDenied:
 		return IssuedCredential{}, newDevicePollError(DevicePollAccessDenied, 0)
 	case storage.DeviceAuthorizationStateExpired:

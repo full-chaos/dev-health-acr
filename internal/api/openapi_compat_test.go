@@ -55,6 +55,7 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 		{path: "/api/v1/oauth/token", method: "post", operation: "exchangeDeviceToken", statuses: []string{"200", "400", "429", "500", "503"}},
 		{path: "/api/v1/oauth/device_approval", method: "post", operation: "approveDeviceAuthorization", statuses: []string{"200", "400", "401", "403", "409", "429", "500", "503"}},
 		{path: "/api/v1/auth/credentials/self/rotate", method: "post", operation: "rotateOwnCredential", statuses: []string{"200", "400", "401", "409", "429", "500", "503"}},
+		{path: "/api/v1/auth/credentials/self/ack", method: "post", operation: "acknowledgeOwnCredential", statuses: []string{"200", "400", "401", "404", "409", "429", "500", "503"}},
 		{path: "/api/v1/auth/credentials/self/revoke", method: "post", operation: "revokeOwnCredential", statuses: []string{"200", "400", "401", "409", "429", "500", "503"}},
 	}
 	for _, test := range tests {
