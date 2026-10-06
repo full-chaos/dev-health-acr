@@ -134,8 +134,8 @@ type FoundSubject struct {
 	CanonicalID string `json:"canonical_id"`
 	Label       string `json:"label"`
 	Match       string `json:"match"`
-	// Provider names the source provider; set only when another subject of
-	// the same kind in the answer has the same label.
+	// Provider names the source provider when exactly one provider
+	// identifies the node; empty otherwise.
 	Provider string `json:"provider,omitempty"`
 }
 
@@ -561,7 +561,6 @@ func buildFindResponse(plan findPlan, admitted []FoundSubject, truncated bool) F
 		}
 		return admitted[i].Kind < admitted[j].Kind
 	})
-	stripUncollidedFoundProviders(admitted)
 	total := len(admitted)
 	after := admitted
 	if plan.cursor != "" {
@@ -682,23 +681,4 @@ func (r *SlogFindRecorder) RecordFindSubjects(ctx context.Context, principal sto
 		args = append(args, "request_id", contextfabric.SanitizeLogAttr(string(requestID)))
 	}
 	r.logger.InfoContext(ctx, DirectReadLogMessage, args...)
-}
-
-// stripUncollidedFoundProviders keeps the provider cue only on subjects whose
-// kind and label are shared by another subject of the answer.
-func stripUncollidedFoundProviders(subjects []FoundSubject) {
-	owners := map[string]map[string]struct{}{}
-	keyOf := func(f FoundSubject) string { return f.Kind + "\x00" + strings.ToLower(strings.TrimSpace(f.Label)) }
-	for _, f := range subjects {
-		k := keyOf(f)
-		if owners[k] == nil {
-			owners[k] = map[string]struct{}{}
-		}
-		owners[k][f.CanonicalID] = struct{}{}
-	}
-	for i := range subjects {
-		if len(owners[keyOf(subjects[i])]) < 2 {
-			subjects[i].Provider = ""
-		}
-	}
 }

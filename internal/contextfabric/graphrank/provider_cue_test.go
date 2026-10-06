@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func projectWithProvider(id, label, provider string) contextfabric.SubjectCandidate {
@@ -41,10 +42,13 @@ func TestNodeCandidateCarriesSingleProviderOnly(t *testing.T) {
 	}
 }
 
-func TestStripUncollidedProvidersKeepsOnlyCollidingCues(t *testing.T) {
-	c := []contextfabric.SubjectCandidate{projectWithProvider("a", "CHAOS", "jira"), projectWithProvider("b", "CHAOS", "linear"), projectWithProvider("c", "Solo", "github")}
-	stripUncollidedProviders(c)
-	if c[0].Provider != "jira" || c[1].Provider != "linear" || c[2].Provider != "" {
-		t.Fatalf("providers = %q %q %q", c[0].Provider, c[1].Provider, c[2].Provider)
+func TestNodeCandidateFormsProviderOnTheCandidate(t *testing.T) {
+	node := CandidateNode{UUID: "u", Name: "CHAOS", Attributes: map[string]interface{}{
+		"subject_kind": "project", "canonical_id": "project.v2:a", "label": "CHAOS",
+		"aliases": []string{"chaos"}, "provider_jira": "10", "authorization_repositories": "*",
+	}}
+	c, ok := NodeCandidate(storage.Principal{OrgID: "org_1"}, contextfabric.RequestedScope{}, "chaos", node, func(contextfabric.SubjectRef) bool { return false }, true, nil, "")
+	if !ok || c.Provider != "jira" {
+		t.Fatalf("candidate = %+v ok=%v, want provider jira", c, ok)
 	}
 }

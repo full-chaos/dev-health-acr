@@ -52,7 +52,7 @@
           },
           "provider": {
             "type": "string",
-            "description": "Source provider of the subject. Present only when another subject of the same kind in the answer has the same label."
+            "description": "Source provider of the subject. Present when exactly one provider identifies the subject; use it to tell same-label subjects apart."
           },
           "match": {
             "type": "string",

@@ -2211,7 +2211,6 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 	admission := newContestAdmission(decideContestScope(frame, confirmedKind,
 		decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)))
 	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind, admission)
-	stripUncollidedProviders(resolution.Candidates)
 	// THE DISCLOSURE, emitted on EVERY successful pass through this call,
 	// explicit zero included, so a question that refused nothing and a build
 	// where the refusal stopped happening can never read alike. Deliberately

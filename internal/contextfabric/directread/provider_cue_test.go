@@ -26,11 +26,11 @@ func TestFindNameNamesProviderWhenSameKindLabelsCollide(t *testing.T) {
 	}
 }
 
-func TestFindNameLeavesProviderOffWhenLabelsDiffer(t *testing.T) {
+func TestFindNameNamesProviderOfALoneLabel(t *testing.T) {
 	a := providerProject("project.v2:a", "CHAOS", "jira")
 	graph := &lookupFakeGraph{orgs: map[string]*lookupOrgGraph{orgA: {nodes: []LookupNode{a}}}}
 	got, err := newLookup(graph, nil).Find(context.Background(), lookupPrincipal(orgA), FindRequest{Query: "CHAOS"})
-	if err != nil || len(got.Subjects) != 1 || got.Subjects[0].Provider != "" {
-		t.Fatalf("find = %+v, %v; want no provider on a lone label", got, err)
+	if err != nil || len(got.Subjects) != 1 || got.Subjects[0].Provider != "jira" {
+		t.Fatalf("find = %+v, %v; want the single provider named", got, err)
 	}
 }

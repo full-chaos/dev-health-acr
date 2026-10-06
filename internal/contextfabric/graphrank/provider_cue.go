@@ -52,15 +52,3 @@ func collidingLabelKeys(candidates []contextfabric.SubjectCandidate) map[string]
 	}
 	return out
 }
-
-// stripUncollidedProviders clears the provider cue on every candidate whose
-// label is not shared with another candidate, so the cue is served only
-// where it tells two same-label subjects apart.
-func stripUncollidedProviders(candidates []contextfabric.SubjectCandidate) {
-	colliding := collidingLabelKeys(candidates)
-	for i := range candidates {
-		if !colliding[candidateLabelKey(candidates[i])] {
-			candidates[i].Provider = ""
-		}
-	}
-}

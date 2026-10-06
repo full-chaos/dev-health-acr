@@ -7932,7 +7932,7 @@
             "provider": {
               "type": "string",
               "maxLength": 64,
-              "description": "Source provider of the subject. Present only when another candidate of the same kind has the same label."
+              "description": "Source provider of the subject. Present when exactly one provider identifies the subject."
             },
             "match_mechanisms": {
               "items": {
