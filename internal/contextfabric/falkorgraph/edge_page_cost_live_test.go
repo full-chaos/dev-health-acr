@@ -202,38 +202,43 @@ func edgePageCostLines(reply interface{}) []string {
 	return out
 }
 
-// internalMs runs one read and returns the server's internal execution time.
-func (v *edgePageCostVenue) internalMs(t *testing.T, ctx context.Context, text string) float64 {
+// internalMs runs one read under a server-side timeout and returns the
+// server's internal execution time.
+func (v *edgePageCostVenue) internalMs(t *testing.T, ctx context.Context, text string) (float64, error) {
 	t.Helper()
-	reply, err := v.raw.Do(ctx, "GRAPH.RO_QUERY", v.key, text).Result()
+	reply, err := v.raw.Do(ctx, "GRAPH.RO_QUERY", v.key, text, "TIMEOUT", edgePageCostServerTimeoutMs).Result()
 	if err != nil {
-		t.Fatalf("GRAPH.RO_QUERY: %v", err)
+		return 0, err
 	}
 	parts, _ := reply.([]interface{})
 	for _, line := range edgePageCostLines(parts[len(parts)-1]) {
 		if rest, ok := strings.CutPrefix(line, "Query internal execution time:"); ok {
-			ms, err := strconv.ParseFloat(strings.Fields(rest)[0], 64)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return ms
+			return strconv.ParseFloat(strings.Fields(rest)[0], 64)
 		}
 	}
-	t.Fatalf("no internal execution time in %v", reply)
-	return 0
+	return 0, fmt.Errorf("no internal execution time in %v", reply)
 }
 
-// medianMs: one warm-up read, then five measured reads.
-func (v *edgePageCostVenue) medianMs(t *testing.T, ctx context.Context, text string) (float64, []float64) {
+const edgePageCostServerTimeoutMs = 10000
+
+// medianMs: one warm-up read, then five measured reads. A read the server
+// stops at edgePageCostServerTimeoutMs returns the error.
+func (v *edgePageCostVenue) medianMs(t *testing.T, ctx context.Context, text string) (float64, []float64, error) {
 	t.Helper()
-	v.internalMs(t, ctx, text)
+	if _, err := v.internalMs(t, ctx, text); err != nil {
+		return 0, nil, err
+	}
 	runs := make([]float64, 0, 5)
 	for i := 0; i < 5; i++ {
-		runs = append(runs, v.internalMs(t, ctx, text))
+		ms, err := v.internalMs(t, ctx, text)
+		if err != nil {
+			return 0, nil, err
+		}
+		runs = append(runs, ms)
 	}
 	sorted := append([]float64(nil), runs...)
 	sort.Float64s(sorted)
-	return sorted[2], runs
+	return sorted[2], runs, nil
 }
 
 func (v *edgePageCostVenue) profile(t *testing.T, ctx context.Context, text string) []string {
@@ -265,14 +270,36 @@ func edgePageCostReadWork(lines []string) (scanned, traversed int) {
 	return scanned, traversed
 }
 
-// edgePageCostLegacyInArm rewrites the in arm to the pattern order it had
-// before it named the origin first: (a:other)-[r]->(b:origin). Same aliases,
-// same direction, same predicates. A statement whose in arm is already in
-// that order is returned as it is.
+// edgePageCostLegacyInArm rewrites the in arm to its single-pattern form
+// (a:other)-[r]->(b:origin): same aliases, same direction, same predicates.
+// A statement already in that form is returned as it is.
 func edgePageCostLegacyInArm(cypher string) string {
 	origin := fmt.Sprintf("(b:%s {%s:$org, %s:o.k, %s:o.i})", labelSubject, propOrgID, propKind, propCanonicalID)
 	other := fmt.Sprintf("(a:%s {%s:$org})", labelSubject, propOrgID)
-	return strings.Replace(cypher, origin+"<-[r:"+labelRelation+"]-"+other, other+"-[r:"+labelRelation+"]->"+origin, 1)
+	return strings.Replace(cypher, "MATCH "+origin+" WITH b MATCH "+other+"-[r:"+labelRelation+"]->(b)", "MATCH "+other+"-[r:"+labelRelation+"]->"+origin, 1)
+}
+
+// edgePageCostReference is the page the single-pattern statement serves,
+// built one origin at a time (a one-origin statement stays fast in either
+// form) and merged in Go: union by relationship id, ordered by it, cut at
+// Limit+1.
+func (v *edgePageCostVenue) edgePageCostReference(t *testing.T, ctx context.Context, query directread.EdgePageQuery) []edgePageCostRow {
+	t.Helper()
+	seen := map[string]bool{}
+	var all []edgePageCostRow
+	for _, origin := range query.Origins {
+		one := query
+		one.Origins = []contextfabric.SubjectRef{origin}
+		cypher, params := directEdgePageCypher(v.orgID, one)
+		for _, row := range v.page(t, ctx, edgePageCostLegacyInArm(cypher), params) {
+			if !seen[row.rid] {
+				seen[row.rid] = true
+				all = append(all, row)
+			}
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].rid < all[j].rid })
+	return all[:min(len(all), query.Limit+1)]
 }
 
 type edgePageCostRow struct {
@@ -330,20 +357,26 @@ func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 	for _, c := range cases {
 		cypher, params := directEdgePageCypher(v.orgID, c.query)
 		legacy := edgePageCostLegacyInArm(cypher)
-		got, want := v.page(t, ctx, cypher, params), v.page(t, ctx, legacy, params)
+		got, want := v.page(t, ctx, cypher, params), v.edgePageCostReference(t, ctx, c.query)
 		if len(got) == 0 || fmt.Sprint(got) != fmt.Sprint(want) {
-			t.Errorf("%s: anchored page %v, pattern-order-only rewrite %v", c.name, got, want)
+			t.Errorf("%s: page %v, single-pattern reference %v", c.name, got, want)
 		}
-		before, beforeRuns := v.medianMs(t, ctx, v.text(t, legacy, params))
-		afterMs, afterRuns := v.medianMs(t, ctx, v.text(t, cypher, params))
-		medians[c.name] = [2]float64{before, afterMs}
+		afterMs, afterRuns, err := v.medianMs(t, ctx, v.text(t, cypher, params))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
 		plan := v.profile(t, ctx, v.text(t, cypher, params))
-		legacyPlan := v.profile(t, ctx, v.text(t, legacy, params))
 		scanned, traversed := edgePageCostReadWork(plan)
-		legacyScanned, legacyTraversed := edgePageCostReadWork(legacyPlan)
-		t.Logf("CASE %s rows=%d before_ms=%.2f %v after_ms=%.2f %v | read work before scanned=%d traversed=%d, after scanned=%d traversed=%d (origins %d, origin degree %d)",
-			c.name, len(got), before, beforeRuns, afterMs, afterRuns, legacyScanned, legacyTraversed, scanned, traversed, len(c.query.Origins), c.degree)
-		t.Logf("PROFILE before %s\n%s", c.name, strings.Join(legacyPlan, "\n"))
+		before, beforeRuns, legacyErr := v.medianMs(t, ctx, v.text(t, legacy, params))
+		legacyScanned, legacyTraversed := -1, -1
+		if legacyErr == nil {
+			legacyPlan := v.profile(t, ctx, v.text(t, legacy, params))
+			legacyScanned, legacyTraversed = edgePageCostReadWork(legacyPlan)
+			t.Logf("PROFILE before %s\n%s", c.name, strings.Join(legacyPlan, "\n"))
+		}
+		medians[c.name] = [2]float64{before, afterMs}
+		t.Logf("CASE %s rows=%d before_ms=%.2f %v (error %v) after_ms=%.2f %v | read work before scanned=%d traversed=%d, after scanned=%d traversed=%d (origins %d, origin degree %d)",
+			c.name, len(got), before, beforeRuns, legacyErr, afterMs, afterRuns, legacyScanned, legacyTraversed, scanned, traversed, len(c.query.Origins), c.degree)
 		t.Logf("PROFILE after %s\n%s", c.name, strings.Join(plan, "\n"))
 		// Each arm scans the origins only and traverses only their own edges:
 		// at most two origin lookups per origin (one per arm) and at most two
