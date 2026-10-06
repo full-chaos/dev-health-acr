@@ -28,10 +28,17 @@ import (
 // owns edgePageCostRepos repositories. Two thirds of the edges never touch
 // a team. Written through the real ApplyProjectionBatch into a real
 // FalkorDB. Needs Docker; run by CI.
-const (
-	edgePageCostItems = 12000
-	edgePageCostRepos = 200
-)
+const edgePageCostRepos = 200
+
+// edgePageCostItems: under the race detector the seed is a tenth and nothing
+// is timed (the read-work bound and the page equality still run); the race
+// shard has a wall budget and its times say nothing about production.
+var edgePageCostItems = func() int {
+	if raceDetectorEnabled {
+		return 1200
+	}
+	return 12000
+}()
 
 type edgePageCostVenue struct {
 	adapter *Adapter
@@ -338,7 +345,7 @@ func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 	asOf := v.now.Add(-250 * 24 * time.Hour)
 	hub := []contextfabric.SubjectRef{v.team}
 	frontier := append([]contextfabric.SubjectRef(nil), v.repos[:20]...)
-	after := &directread.EdgeKey{RelationshipID: edgePageCostRID("own-item", 8)}
+	after := &directread.EdgeKey{RelationshipID: edgePageCostRID("own-item", 20)}
 	hubDegree := edgePageCostItems/2 + edgePageCostRepos
 	frontierDegree := 20 + 20*(edgePageCostItems/edgePageCostRepos)
 	cases := []struct {
@@ -369,28 +376,31 @@ func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 		if len(got) == 0 || fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Errorf("%s: page %v, single-pattern reference %v", c.name, got, want)
 		}
-		afterMs, afterRuns, err := v.medianMs(t, ctx, v.text(t, cypher, params))
-		if err != nil {
-			t.Fatalf("%s: %v", c.name, err)
-		}
 		plan, err := v.profile(ctx, v.text(t, cypher, params))
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		scanned, traversed := edgePageCostReadWork(plan)
-		before, beforeRuns, legacyErr := v.medianMs(t, ctx, v.text(t, legacy, params))
-		legacyScanned, legacyTraversed := -1, -1
-		if legacyErr == nil {
-			var legacyPlan []string
-			if legacyPlan, legacyErr = v.profile(ctx, v.text(t, legacy, params)); legacyErr == nil {
-				legacyScanned, legacyTraversed = edgePageCostReadWork(legacyPlan)
-				t.Logf("PROFILE before %s\n%s", c.name, strings.Join(legacyPlan, "\n"))
+		t.Logf("CASE %s rows=%d read work scanned=%d traversed=%d (origins %d, origin degree %d)\nPROFILE after %s\n%s",
+			c.name, len(got), scanned, traversed, len(c.query.Origins), c.degree, c.name, strings.Join(plan, "\n"))
+		if !raceDetectorEnabled {
+			afterMs, afterRuns, err := v.medianMs(t, ctx, v.text(t, cypher, params))
+			if err != nil {
+				t.Fatalf("%s: %v", c.name, err)
 			}
+			before, beforeRuns, legacyErr := v.medianMs(t, ctx, v.text(t, legacy, params))
+			legacyScanned, legacyTraversed := -1, -1
+			if legacyErr == nil {
+				var legacyPlan []string
+				if legacyPlan, legacyErr = v.profile(ctx, v.text(t, legacy, params)); legacyErr == nil {
+					legacyScanned, legacyTraversed = edgePageCostReadWork(legacyPlan)
+					t.Logf("PROFILE before %s\n%s", c.name, strings.Join(legacyPlan, "\n"))
+				}
+			}
+			medians[c.name] = [2]float64{before, afterMs}
+			t.Logf("TIMES %s before_ms=%.2f %v (single-pattern error %v, read work scanned=%d traversed=%d) after_ms=%.2f %v",
+				c.name, before, beforeRuns, legacyErr, legacyScanned, legacyTraversed, afterMs, afterRuns)
 		}
-		medians[c.name] = [2]float64{before, afterMs}
-		t.Logf("CASE %s rows=%d before_ms=%.2f %v (error %v) after_ms=%.2f %v | read work before scanned=%d traversed=%d, after scanned=%d traversed=%d (origins %d, origin degree %d)",
-			c.name, len(got), before, beforeRuns, legacyErr, afterMs, afterRuns, legacyScanned, legacyTraversed, scanned, traversed, len(c.query.Origins), c.degree)
-		t.Logf("PROFILE after %s\n%s", c.name, strings.Join(plan, "\n"))
 		// Each arm scans the origins only and traverses only their own edges:
 		// at most two origin lookups per origin (one per arm) and at most two
 		// passes over the origins' edges.
@@ -404,9 +414,11 @@ func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 			t.Errorf("%s: the page read beyond the origins: scanned %d nodes for %d origins, traversed %d edges for origin degree %d", c.name, scanned, len(c.query.Origins), traversed, c.degree)
 		}
 	}
-	for _, pair := range [][2]string{{"current", "as_of"}, {"current", "strict_now"}, {"current_in_owned", "as_of_in_owned"}, {"current_after_limit100", "as_of_after_limit100"}, {"current_frontier", "as_of_frontier"}} {
-		c, a := medians[pair[0]], medians[pair[1]]
-		t.Logf("RATIO %s/%s before=%.2f after=%.2f (as_of before %.2f ms, after %.2f ms)", pair[0], pair[1], c[0]/a[0], c[1]/a[1], a[0], a[1])
+	if !raceDetectorEnabled {
+		for _, pair := range [][2]string{{"current", "as_of"}, {"current", "strict_now"}, {"current_in_owned", "as_of_in_owned"}, {"current_after_limit100", "as_of_after_limit100"}, {"current_frontier", "as_of_frontier"}} {
+			c, a := medians[pair[0]], medians[pair[1]]
+			t.Logf("RATIO %s/%s before=%.2f after=%.2f (%s before %.2f ms, after %.2f ms)", pair[0], pair[1], c[0]/a[0], c[1]/a[1], pair[1], a[0], a[1])
+		}
 	}
 
 	deadline := v.newAdapter(t, time.Second)
