@@ -39,8 +39,9 @@ func TestDailyTablesServeOnlyTheNewestRowPerKeyAgainstRealClickHouse(t *testing.
 			t.Fatalf("seed investment_metrics_daily: %v", err)
 		}
 	}
-	insertInvestment(7, 30)
 	insertInvestment(5, 99)
+	insertInvestment(7, 30)
+	insertInvestment(3, 77)
 
 	insertCoverage := func(computedHour int, estimated uint32) {
 		t.Helper()
@@ -49,8 +50,9 @@ func TestDailyTablesServeOnlyTheNewestRowPerKeyAgainstRealClickHouse(t *testing.
 			t.Fatalf("seed estimate_coverage_metrics_daily: %v", err)
 		}
 	}
-	insertCoverage(7, 18)
 	insertCoverage(5, 50)
+	insertCoverage(7, 18)
+	insertCoverage(3, 40)
 
 	read := func(kind contextfabric.FactKind) contextfabric.CanonicalFact {
 		t.Helper()
@@ -70,7 +72,7 @@ func TestDailyTablesServeOnlyTheNewestRowPerKeyAgainstRealClickHouse(t *testing.
 			t.Fatalf("team_breakdown rows = %d, want 1 (one row per team, area, stream)", len(rows))
 		}
 		if got := rows[0].Fields["delivery_units"].Integer; got == nil || *got != 30 {
-			t.Fatalf("delivery_units = %v, want 30 (the newest computed_at row)", got)
+			t.Fatalf("delivery_units = %v, want 30 (the newest computed_at row)", intPtr(got))
 		}
 	})
 
@@ -80,7 +82,14 @@ func TestDailyTablesServeOnlyTheNewestRowPerKeyAgainstRealClickHouse(t *testing.
 			t.Fatalf("team_breakdown rows = %d, want 1", len(rows))
 		}
 		if got := rows[0].Fields["estimated_count"].Integer; got == nil || *got != 18 {
-			t.Fatalf("estimated_count = %v, want 18 (the newest computed_at row, not 68)", got)
+			t.Fatalf("estimated_count = %v, want 18 (the newest computed_at row)", intPtr(got))
 		}
 	})
+}
+
+func intPtr(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
 }
