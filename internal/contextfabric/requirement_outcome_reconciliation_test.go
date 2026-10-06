@@ -48,8 +48,8 @@ func TestAPredictedServedCountThatAssemblyCannotServeIsAnObservedTransition(t *t
 		t.Fatalf("the plan predicts %q unavailable (%q); the fixture must predict it served", reconciliationCountRequirement, planned.Unavailable)
 	}
 	assembled := assembledRowFor(t, result.Completeness.Outcomes, reconciliationCountRequirement)
-	if assembled.Outcome != contractsv1.ContextFabricRequirementUnavailable || assembled.CauseCoverage != contractsv1.ContextFabricCoverageDetailFactPruned {
-		t.Fatalf("assembled row = %s/%s, want unavailable/fact_pruned", assembled.Outcome, assembled.CauseCoverage)
+	if assembled.Outcome != contractsv1.ContextFabricRequirementUnavailable || assembled.CauseCoverage != contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent {
+		t.Fatalf("assembled row = %s/%s, want unavailable/computed_population_absent", assembled.Outcome, assembled.CauseCoverage)
 	}
 
 	// THE HARM: the transition is on the trace, with the split cause.
@@ -63,7 +63,7 @@ func TestAPredictedServedCountThatAssemblyCannotServeIsAnObservedTransition(t *t
 			Role: string(SubjectRoleMember), Subject: SubjectTeam,
 			Predicted: RequirementPredictedServed, PredictedReason: "",
 			AssembledOutcome: contractsv1.ContextFabricRequirementUnavailable,
-			CauseCoverage:    contractsv1.ContextFabricCoverageDetailFactPruned,
+			CauseCoverage:    contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent,
 			AssemblyReason:   RequirementAssemblyReasonComputedPopulationAbsent,
 			Served:           0, Declared: 0, ServedFactCount: 0, MemberSetResolved: false,
 		},
@@ -361,19 +361,16 @@ func TestEveryServingExitStatesTheTransitionsItsDocumentCarries(t *testing.T) {
 }
 
 // TestTheAssemblyReasonNeedsEveryConditionOfItsOneWriter isolates each of the
-// four conditions requirementAssemblyReason reads: one cell per condition,
-// differing from the canonical cell in that condition alone. The engine-level
-// fixtures cannot tell the conditions apart, because the one writer of an
-// assembled `fact_pruned` row always sets all four together.
+// conditions requirementAssemblyReason reads (outcome and code): one cell per
+// condition, differing from the canonical cell in that condition alone.
 func TestTheAssemblyReasonNeedsEveryConditionOfItsOneWriter(t *testing.T) {
 	t.Parallel()
 	canonical := RequirementOutcomeRow{
 		Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: reconciliationCountRequirement,
 		Obligation: string(ObligationCount), Outcome: contractsv1.ContextFabricRequirementUnavailable,
-		CauseCoverage: contractsv1.ContextFabricCoverageDetailFactPruned,
+		CauseCoverage: contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent,
 	}
 	absent := InvestigationResult{}
-	resolved := InvestigationResult{Cohort: countingCohort(SubjectTeam, 2)}
 	for _, cell := range []struct {
 		name   string
 		row    func(RequirementOutcomeRow) RequirementOutcomeRow
@@ -389,11 +386,6 @@ func TestTheAssemblyReasonNeedsEveryConditionOfItsOneWriter(t *testing.T) {
 			r.CauseCoverage = contractsv1.ContextFabricCoverageDetailFactUnconfigured
 			return r
 		}, absent, RequirementAssemblyReasonNone},
-		{"read obligation", func(r RequirementOutcomeRow) RequirementOutcomeRow {
-			r.Obligation, r.Requirement = string(ObligationState), "state/member/team"
-			return r
-		}, absent, RequirementAssemblyReasonNone},
-		{"member set resolved", func(r RequirementOutcomeRow) RequirementOutcomeRow { return r }, resolved, RequirementAssemblyReasonNone},
 	} {
 		cell := cell
 		t.Run(cell.name, func(t *testing.T) {

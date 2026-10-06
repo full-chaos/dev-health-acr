@@ -251,9 +251,9 @@ func TestTheTwoFactPrunedReasonsAreToldApartOnTheLine(t *testing.T) {
 	count := transitionFor(t, classB.requirementOutcomeTransitions, reconciliationCountRequirement)
 	state := transitionFor(t, unsupported.requirementOutcomeTransitions, narrowedStateRequirement)
 
-	pruned := contractsv1.ContextFabricCoverageDetailFactPruned
-	if count.CauseCoverage != pruned || unavailableRequirementCause(state.PredictedReason) != pruned {
-		t.Fatalf("both reasons must reach the wire as %q: count=%q state seed=%q", pruned, count.CauseCoverage, unavailableRequirementCause(state.PredictedReason))
+	if count.CauseCoverage != contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent ||
+		unavailableRequirementCause(state.PredictedReason) != contractsv1.ContextFabricCoverageDetailFactPruned {
+		t.Fatalf("wire causes: count=%q state seed=%q", count.CauseCoverage, unavailableRequirementCause(state.PredictedReason))
 	}
 	if count.AssemblyReason != RequirementAssemblyReasonComputedPopulationAbsent {
 		t.Fatalf("count line cause = %q, want computed_population_absent", count.AssemblyReason)

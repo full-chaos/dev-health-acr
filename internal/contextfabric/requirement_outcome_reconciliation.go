@@ -20,9 +20,8 @@ import (
 // planning seed and the assembled_result row -- but nothing on the trace said
 // that the two disagree, so a requirement predicted served that ended
 // unavailable was visible only by reading the stored document. And the wire
-// cause `fact_pruned` is one code for two reasons (subject_kind_unsupported
-// at derivation, computed_population_absent at assembly), so even the stored
-// document could not say which one happened.
+// cause for a computed requirement without a member set used to be
+// `fact_pruned`, which it shared with subject_kind_unsupported.
 //
 // WHAT THIS FILE DOES, over the FINAL served document only:
 //
@@ -73,11 +72,9 @@ func RequirementPredictionVocabulary() []RequirementPrediction {
 // computed_population_absent, and a second token for the same fact would be a
 // second authority for it.
 //
-// ONLY THE REASONS AN ASSEMBLY WRITER CAN PRODUCE ARE MEMBERS. `fact_pruned`
-// reaches an assembled_result row from one writer only --
-// unresolvedMemberSetOutcomeRow -- because a read requirement skips a pruned
-// observation (evaluateReadRequirement) and a never-degrading code is never
-// carried as a cause. The other reasons that map to a collapsed wire code
+// ONLY THE REASONS AN ASSEMBLY WRITER CAN PRODUCE ARE MEMBERS.
+// `computed_population_absent` reaches an assembled_result row from one writer
+// only -- unresolvedMemberSetOutcomeRow. The other reasons that map to a collapsed wire code
 // (subject_kind_unsupported, no_declaring_producer, table_shape_undeclared)
 // are decided at derivation time and travel on the plan requirement, where
 // the transition reports them as PredictedReason.
@@ -89,7 +86,7 @@ const (
 	RequirementAssemblyReasonNone RequirementAssemblyReason = "none"
 	// RequirementAssemblyReasonComputedPopulationAbsent: a computed step that
 	// runs over the resolved member set found no member set on the served
-	// document. The wire code stays `fact_pruned`.
+	// document. The wire code is `computed_population_absent`.
 	RequirementAssemblyReasonComputedPopulationAbsent = RequirementAssemblyReason(RequirementReasonComputedPopulationAbsent)
 )
 
@@ -265,17 +262,11 @@ func outcomeLossRank(outcome RequirementOutcome) int {
 // requirementAssemblyReason names the reason assembly observed below the
 // row's wire cause.
 //
-// It asks the SAME three questions the one writer of an assembled
-// `fact_pruned` row asks before it writes one -- the outcome and code that
-// writer sets, whether the obligation's step runs over the resolved member
-// set, and whether the served document resolved a member set -- through the
-// same predicates, so the reason and the row cannot come to describe different
-// conditions.
+// The wire cause `computed_population_absent` is written for that one reason
+// only, so the outcome and the code are the whole question.
 func requirementAssemblyReason(row RequirementOutcomeRow, result InvestigationResult) RequirementAssemblyReason {
 	if row.Outcome == contractsv1.ContextFabricRequirementUnavailable &&
-		row.CauseCoverage == unavailableRequirementCause(RequirementReasonComputedPopulationAbsent) &&
-		stepRunsOverResolvedMemberSet(AnswerObligation(row.Obligation)) &&
-		!memberSetResolved(result.Cohort) {
+		row.CauseCoverage == unavailableRequirementCause(RequirementReasonComputedPopulationAbsent) {
 		return RequirementAssemblyReasonComputedPopulationAbsent
 	}
 	return RequirementAssemblyReasonNone

@@ -59,7 +59,7 @@ func TestTheRequirementOutcomeTransitionLineCertifiesAgainstItsSpecification(t *
 		{"class_b", "count/member/team", map[string]any{
 			"org_id": "org_1", "obligation": "count", "role": "member", "subject_kind": "team",
 			"predicted": "served", "predicted_reason": "none", "assembled_outcome": "unavailable",
-			"cause": "computed_population_absent", "cause_coverage": "fact_pruned", "cause_overrun": "none", "cause_narrowing": "none",
+			"cause": "computed_population_absent", "cause_coverage": "computed_population_absent", "cause_overrun": "none", "cause_narrowing": "none",
 			"served": 0, "declared": 0, "served_fact_count": 0, "member_set_resolved": false, "total": 1,
 		}},
 		{"narrowed_count", "count/member/team", map[string]any{
