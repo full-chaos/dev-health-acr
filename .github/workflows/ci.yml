@@ -818,8 +818,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # actions/checkout v7.0.0
+      # Full history and tags: the required-field baseline step below
+      # resolves the previous release tag from git.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with: {persist-credentials: false}
+        with: {persist-credentials: false, fetch-depth: 0, fetch-tags: true}
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
@@ -832,6 +834,12 @@ jobs:
         run: make canonical-receipts
       - name: Verify wire contracts
         run: make contract-test
+      # A field becomes required only in the release after the one that
+      # introduced it as optional. Pull requests only: the baseline is the
+      # previous release tag, so the check has nothing to say about main.
+      - name: Verify required fields against the previous release tag
+        if: github.event_name == 'pull_request'
+        run: go run ./cmd/contractcheck -required-baseline
       - name: Verify CodeGraph contract
         run: make codegraph-contract
       # CHAOS-4100. Runs HERE, not only in `make verify`: this job is what

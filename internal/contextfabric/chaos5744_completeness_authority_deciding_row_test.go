@@ -26,17 +26,13 @@ func TestUnavailableRequirementCauseNamesEachReasonDistinctly(t *testing.T) {
 		{RequirementReasonSubjectKindUnsupported, contractsv1.ContextFabricCoverageDetailFactPruned},
 		{RequirementReasonNoDeclaringProducer, contractsv1.ContextFabricCoverageDetailFactNoDeclaringProducer},
 		{RequirementReasonTableShapeUndeclared, contractsv1.ContextFabricCoverageDetailFactTableShapeUndeclared},
-		{RequirementReasonComputedPopulationAbsent, contractsv1.ContextFabricCoverageDetailFactPruned},
+		{RequirementReasonComputedPopulationAbsent, contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent},
 	} {
 		if got := unavailableRequirementCause(tc.reason); got != tc.want {
 			t.Errorf("unavailableRequirementCause(%q) = %q, want %q", tc.reason, got, tc.want)
 		}
 	}
-	// No two of the four reasons may collapse onto the same code, except
-	// the two the design deliberately shares (subject_kind_unsupported and
-	// computed_population_absent both name fact_pruned -- neither is
-	// actionable by a declaration or query change, so a shared code loses
-	// nothing there).
+	// No two of the four reasons may collapse onto the same code.
 	if unavailableRequirementCause(RequirementReasonNoDeclaringProducer) == unavailableRequirementCause(RequirementReasonTableShapeUndeclared) {
 		t.Fatal("no_declaring_producer and table_shape_undeclared still collapse onto one wire code")
 	}

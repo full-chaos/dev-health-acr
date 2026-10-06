@@ -244,7 +244,7 @@ func unavailableRequirementCause(reason RequirementUnavailableReason) contractsv
 	case RequirementReasonTableShapeUndeclared:
 		return contractsv1.ContextFabricCoverageDetailFactTableShapeUndeclared
 	case RequirementReasonComputedPopulationAbsent:
-		return contractsv1.ContextFabricCoverageDetailFactPruned
+		return contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent
 	default:
 		return ""
 	}

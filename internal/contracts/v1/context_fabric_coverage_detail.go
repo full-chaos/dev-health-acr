@@ -297,6 +297,19 @@ const (
 	// census with an empty result. It is not an empty result either: the
 	// members are unknown, not none.
 	ContextFabricCoverageDetailGraphWalkCutBeforeMember ContextFabricCoverageDetailCode = "graph_walk_cut_before_member"
+
+	// ContextFabricCoverageDetailComputedPopulationAbsent: a COMPUTED
+	// requirement (a ranking or a count the server runs over a member set)
+	// could not run because no member set was produced for it, so the answer
+	// carries no ordering or count for that requirement.
+	//
+	// It names the missing INPUT of a server-side step. No source was
+	// proved unable to contribute, so it is not `fact_pruned`, which says
+	// the planner proved no resolved subject kind fits a capability and
+	// never ran it. It is not `read_population_unverified`, which belongs to
+	// a READ requirement owed to a distributive scope; a computed step reads
+	// nothing of its own. Nothing was counted, so it carries no numbers.
+	ContextFabricCoverageDetailComputedPopulationAbsent ContextFabricCoverageDetailCode = "computed_population_absent"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -325,6 +338,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked,
 	ContextFabricCoverageDetailWorkItemRepositoryUnlinked,
 	ContextFabricCoverageDetailGraphWalkCutBeforeMember,
+	ContextFabricCoverageDetailComputedPopulationAbsent,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -603,6 +617,8 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	// No fact kind and no count: this code is about the POPULATION being
 	// unknowable, not about any one fact or any countable set.
 	ContextFabricCoverageDetailReadPopulationUnverified: {},
+	// No fact kind, no count: nothing was read and nothing was counted.
+	ContextFabricCoverageDetailComputedPopulationAbsent: {},
 	// No fact kind, no count, no source state -- every allowance off.
 	//
 	// The FACT KIND is the tempting one here and it is refused for the same

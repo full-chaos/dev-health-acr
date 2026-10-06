@@ -179,7 +179,7 @@
         "obligation": "count",
         "outcome": "unavailable",
         "impact": "dimension",
-        "cause_coverage": "fact_pruned",
+        "cause_coverage": "computed_population_absent",
         "cause_observed": true,
         "served": 0,
         "declared": 0

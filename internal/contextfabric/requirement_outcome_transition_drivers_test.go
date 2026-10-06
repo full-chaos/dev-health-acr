@@ -238,9 +238,9 @@ func TestAServedReadThatAssemblyFoundUnreadCountsTheClaimsOfItsKind(t *testing.T
 }
 
 // TestTheTwoFactPrunedReasonsAreToldApartOnTheLine is the split-cause driver
-// for both `fact_pruned` seeds: subject_kind_unsupported (a derivation reason)
-// and computed_population_absent (an assembly reason) reach the wire as the
-// same code, and the line names them as different reasons.
+// for the two reasons that once shared `fact_pruned`: subject_kind_unsupported
+// (a derivation reason, still `fact_pruned`) and computed_population_absent (an
+// assembly reason, now its own code); the line names them as different reasons.
 func TestTheTwoFactPrunedReasonsAreToldApartOnTheLine(t *testing.T) {
 	t.Parallel()
 	classB := &recordingTelemetry{}
@@ -251,9 +251,9 @@ func TestTheTwoFactPrunedReasonsAreToldApartOnTheLine(t *testing.T) {
 	count := transitionFor(t, classB.requirementOutcomeTransitions, reconciliationCountRequirement)
 	state := transitionFor(t, unsupported.requirementOutcomeTransitions, narrowedStateRequirement)
 
-	pruned := contractsv1.ContextFabricCoverageDetailFactPruned
-	if count.CauseCoverage != pruned || unavailableRequirementCause(state.PredictedReason) != pruned {
-		t.Fatalf("both reasons must reach the wire as %q: count=%q state seed=%q", pruned, count.CauseCoverage, unavailableRequirementCause(state.PredictedReason))
+	if count.CauseCoverage != contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent ||
+		unavailableRequirementCause(state.PredictedReason) != contractsv1.ContextFabricCoverageDetailFactPruned {
+		t.Fatalf("wire causes: count=%q state seed=%q", count.CauseCoverage, unavailableRequirementCause(state.PredictedReason))
 	}
 	if count.AssemblyReason != RequirementAssemblyReasonComputedPopulationAbsent {
 		t.Fatalf("count line cause = %q, want computed_population_absent", count.AssemblyReason)
