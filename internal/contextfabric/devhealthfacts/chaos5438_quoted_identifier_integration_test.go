@@ -44,6 +44,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,7 +134,7 @@ func TestChaos5438_QuotedAndEscapedIdentifiersSurviveTheArrayBinding(t *testing.
 	// the error, not on emptiness -- a silent empty read here would be
 	// indistinguishable from a work item that genuinely has no data, which is
 	// exactly the failure the upstream guard exists to prevent.
-	t.Run("backslash_fails_closed_rather_than_silently", func(t *testing.T) {
+	t.Run("backslash_is_rejected_alone_and_disclosed", func(t *testing.T) {
 		backslashSubject := workItemSubject(repoID, chaos5438BackslashWorkItemID)
 		provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactStatus)
 		result, err := provider.ReadFacts(ctx, principal, contextfabric.FactQuery{
@@ -141,12 +142,14 @@ func TestChaos5438_QuotedAndEscapedIdentifiersSurviveTheArrayBinding(t *testing.
 			Kind:     contextfabric.FactStatus,
 			Subjects: []contextfabric.SubjectRef{backslashSubject},
 		})
-		if err == nil {
-			t.Fatalf("a backslash-bearing id was ACCEPTED (facts=%d) -- v0.6.6 fails closed on it precisely because a doubled backslash can silently drop bytes; accepting it means the guard is gone",
-				len(result.Facts))
+		if err != nil {
+			t.Fatalf("a backslash-bearing id must be rejected alone, not fail the read: %v", err)
 		}
 		if len(result.Facts) != 0 {
-			t.Fatalf("a refused read still returned %d fact(s)", len(result.Facts))
+			t.Fatalf("a refused id still returned %d fact(s)", len(result.Facts))
+		}
+		if result.State != contextfabric.SourceTruncated || result.OmittedCount != 1 || !strings.Contains(result.Reason, "subject_id_shape_rejected") {
+			t.Fatalf("State=%q Omitted=%d Reason=%q, want a disclosed rejection of the one id", result.State, result.OmittedCount, result.Reason)
 		}
 	})
 
