@@ -238,9 +238,9 @@ func TestAServedReadThatAssemblyFoundUnreadCountsTheClaimsOfItsKind(t *testing.T
 }
 
 // TestTheTwoFactPrunedReasonsAreToldApartOnTheLine is the split-cause driver
-// for both `fact_pruned` seeds: subject_kind_unsupported (a derivation reason)
-// and computed_population_absent (an assembly reason) reach the wire as the
-// same code, and the line names them as different reasons.
+// for the two reasons that once shared `fact_pruned`: subject_kind_unsupported
+// (a derivation reason, still `fact_pruned`) and computed_population_absent (an
+// assembly reason, now its own code); the line names them as different reasons.
 func TestTheTwoFactPrunedReasonsAreToldApartOnTheLine(t *testing.T) {
 	t.Parallel()
 	classB := &recordingTelemetry{}

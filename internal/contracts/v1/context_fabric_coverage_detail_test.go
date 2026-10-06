@@ -113,6 +113,27 @@ func TestCoverageDetailEveryCodeHasValidFixtureRuleAndLabel(t *testing.T) {
 	}
 }
 
+// TestComputedPopulationAbsentCarriesNothingButItsSource pins the field rule
+// and the label meaning of the computed-population-absent code.
+func TestComputedPopulationAbsentCarriesNothingButItsSource(t *testing.T) {
+	code := ContextFabricCoverageDetailComputedPopulationAbsent
+	for name, mutate := range map[string]func(*ContextFabricCoverageDetail){
+		"count":     func(d *ContextFabricCoverageDetail) { n := 3; d.Count = &n },
+		"fact kind": func(d *ContextFabricCoverageDetail) { d.FactKind = ContextFabricFactHealth },
+		"kind":      func(d *ContextFabricCoverageDetail) { d.Kind = ContextFabricSubjectTeam },
+	} {
+		d := validDetailForCode(code)
+		mutate(&d)
+		if err := d.Validate(); err == nil {
+			t.Errorf("%s: a detail with %s was accepted", code, name)
+		}
+	}
+	label := ComposeCoverageDetailLabel(validDetailForCode(code))
+	if !strings.Contains(label, "member set") || !strings.Contains(label, "not computed") {
+		t.Errorf("label %q does not say no member set was produced and nothing was computed", label)
+	}
+}
+
 // TestCoverageDetailPlantedDefects observes each validation clause fail on
 // the exact defect it exists to catch (dev-health AGENTS.md verification
 // rule 2).

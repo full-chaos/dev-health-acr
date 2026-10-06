@@ -6,7 +6,7 @@ package contextfabric
 // over a repository anchor declares team members and a count goal, so the
 // derivation predicts `count/member/team` served. Retrieval then resolves no
 // member set, assembly states the count unavailable with the wire cause
-// `fact_pruned`, and synthesis serves one membership fact about the anchor
+// `computed_population_absent`, and synthesis serves one membership fact about the anchor
 // repository with status `partial`. No question text is used; the frame is
 // built through the shipped derivation.
 //
@@ -378,6 +378,10 @@ func TestTheAssemblyReasonNeedsEveryConditionOfItsOneWriter(t *testing.T) {
 		{"canonical", func(r RequirementOutcomeRow) RequirementOutcomeRow { return r }, absent, RequirementAssemblyReasonComputedPopulationAbsent},
 		{"outcome narrowed", func(r RequirementOutcomeRow) RequirementOutcomeRow {
 			r.Outcome = contractsv1.ContextFabricRequirementNarrowed
+			return r
+		}, absent, RequirementAssemblyReasonNone},
+		{"former code fact_pruned", func(r RequirementOutcomeRow) RequirementOutcomeRow {
+			r.CauseCoverage = contractsv1.ContextFabricCoverageDetailFactPruned
 			return r
 		}, absent, RequirementAssemblyReasonNone},
 		{"code fact_unconfigured", func(r RequirementOutcomeRow) RequirementOutcomeRow {

@@ -29,7 +29,7 @@ import (
 //     its assembled_result account and returns each pair whose outcome differs
 //     from the prediction -- an OBSERVED transition with its cause, never a
 //     silent flip.
-//  2. requirementAssemblyReason names the reason below a collapsed wire cause.
+//  2. requirementAssemblyReason names the reason assembly observed.
 //     The wire code is not changed here.
 //  3. assertSatisfiedRequirementsAreServed refuses a document whose
 //     assembled_result row says `satisfied` for a requirement that no served
@@ -64,7 +64,7 @@ func RequirementPredictionVocabulary() []RequirementPrediction {
 }
 
 // RequirementAssemblyReason names the reason assembly OBSERVED below a
-// collapsed wire cause. CLOSED.
+// wire cause. CLOSED.
 //
 // Its members reuse the derivation's own reason tokens rather than minting new
 // ones: a requirement whose member set did not resolve at assembly is
@@ -121,7 +121,7 @@ type RequirementOutcomeTransition struct {
 	CauseCoverage    contractsv1.ContextFabricCoverageDetailCode
 	CauseOverrun     contractsv1.ContextFabricBudgetOverrun
 	CauseNarrowing   contractsv1.ContextFabricNarrowingBasis
-	// AssemblyReason is the reason assembly observed below a collapsed wire
+	// AssemblyReason is the reason assembly observed for the wire
 	// cause -- the split.
 	AssemblyReason RequirementAssemblyReason
 

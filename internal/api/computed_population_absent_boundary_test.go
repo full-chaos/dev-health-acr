@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -79,7 +78,7 @@ func TestACountWithNoMemberSetReachesTheClientWithItsOwnCause(t *testing.T) {
 	found := false
 	for _, row := range node.Structured.Completeness.Outcomes {
 		seen = append(seen, row.Requirement+"="+row.Outcome+"/"+row.Cause)
-		if strings.HasPrefix(row.Requirement, "count/") && row.Outcome == "unavailable" {
+		if row.Requirement == "count/member/deployment" && row.Outcome == "unavailable" {
 			found = true
 			if row.Cause != "computed_population_absent" {
 				t.Fatalf("count row cause = %q, want computed_population_absent (a pruned fact is a different claim)", row.Cause)
@@ -87,7 +86,7 @@ func TestACountWithNoMemberSetReachesTheClientWithItsOwnCause(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("no unavailable count row served: %v", seen)
+		t.Fatalf("no unavailable count/member/deployment row served: %v", seen)
 	}
 }
 

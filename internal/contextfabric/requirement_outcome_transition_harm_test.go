@@ -183,9 +183,9 @@ func reconciliationLines(t *testing.T, log *bytes.Buffer, msg string) []map[stri
 
 // TestTheClassBServeLogsItsRequirementTransition carries the observability
 // harm. The diagnosed row's shape by frame: the derivation predicts the team
-// count served, assembly states it unavailable as `fact_pruned`, and the turn
+// count served, assembly states it unavailable as `computed_population_absent`, and the turn
 // serves an unrelated membership fact about the anchor with status partial.
-// The trace must say so, with the reason below the collapsed wire code.
+// The trace must say so, with the reason.
 func TestTheClassBServeLogsItsRequirementTransition(t *testing.T) {
 	t.Parallel()
 	result, log, requestID := runReconciliationLogged(t, nil, InvestigationPartial, []ClaimedFact{reconciliationAnchorMembershipClaim()}, 0)
