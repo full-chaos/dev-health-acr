@@ -390,6 +390,7 @@ func (e *Engine) finalizeServedAs(ctx context.Context, principal storage.Princip
 // that records it, so a fit's candidate documents emit no telemetry.
 func (e *Engine) servedLateWriters(ctx context.Context, result InvestigationResult) (InvestigationResult, CompletenessAuthorityObservation) {
 	result = withWorkItemCensusScopeDisclosures(ctx, result)
+	applyPopulationOutcomeStatusFloor(&result)
 	result.Completeness = ComputeAnswerCompleteness(result)
 	observation := DeriveCompletenessAuthority(result)
 	result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, observation)

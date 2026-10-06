@@ -106,6 +106,26 @@ func applyServerStatusFloor(result *InvestigationResult, graph GraphContext, fac
 	return outcome
 }
 
+// applyPopulationOutcomeStatusFloor floors a no_match whose own outcome rows
+// say the retrieved population was truncated. The row exists only after
+// synthesis, so this runs at the serving point every path passes, not beside
+// applyServerStatusFloor. Truncation with served members is already floored
+// there to partial; this covers the truncated population that carried no
+// members, which is degraded: the service read a population it could not carry.
+func applyPopulationOutcomeStatusFloor(result *InvestigationResult) {
+	if result == nil || result.Status != InvestigationNoMatch || result.RefusalBasis != "" {
+		return
+	}
+	for _, row := range result.Completeness.Outcomes {
+		if row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult &&
+			row.Outcome == contractsv1.ContextFabricRequirementNarrowed &&
+			row.CauseCoverage == contractsv1.ContextFabricCoverageDetailPopulationTruncated {
+			floorNoMatchTo(result, InvestigationDegraded)
+			return
+		}
+	}
+}
+
 // floorNoMatchTo is the one status swap every no_match floor uses: it sets the
 // status, recomposes the two prose fields from it, and discloses that the
 // narrative was withheld.
