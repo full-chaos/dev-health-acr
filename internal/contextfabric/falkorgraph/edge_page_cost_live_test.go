@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,11 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// The cost of the read_relationships edge page on a hub: one team owning
+// edgePageCostItems work items (80% ended) and edgePageCostRepos
+// repositories, plus as many edges again that never touch the team. Written
+// through the real ApplyProjectionBatch into a real FalkorDB. Needs Docker;
+// run by CI.
 const (
 	edgePageCostItems = 12000
 	edgePageCostRepos = 200
@@ -29,11 +35,13 @@ const (
 
 type edgePageCostVenue struct {
 	adapter *Adapter
+	addr    string
 	raw     *redis.Client
 	key     string
 	orgID   string
 	now     time.Time
 	team    contextfabric.SubjectRef
+	repos   []contextfabric.SubjectRef
 }
 
 func edgePageCostStart(t *testing.T, ctx context.Context) *edgePageCostVenue {
@@ -57,17 +65,23 @@ func edgePageCostStart(t *testing.T, ctx context.Context) *edgePageCostVenue {
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := host + ":" + port.Port()
+	v := &edgePageCostVenue{addr: host + ":" + port.Port()}
+	v.adapter = v.newAdapter(t, 30*time.Second)
+	v.raw = redis.NewClient(&redis.Options{Addr: v.addr, ReadTimeout: 60 * time.Second})
+	t.Cleanup(func() { _ = v.raw.Close() })
+	return v
+}
+
+func (v *edgePageCostVenue) newAdapter(t *testing.T, timeout time.Duration) *Adapter {
+	t.Helper()
 	adapter, err := New(Config{
-		Addr: addr, GraphPrefix: "acr-cf-edge-page-cost", RequestTimeout: 30 * time.Second,
+		Addr: v.addr, GraphPrefix: "acr-cf-edge-page-cost", RequestTimeout: timeout,
 		MaxAttempts: 1, MaxResults: 25, PoolSize: 10, AllowInsecure: true, TLS: false,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	raw := redis.NewClient(&redis.Options{Addr: addr, ReadTimeout: 60 * time.Second})
-	t.Cleanup(func() { _ = raw.Close() })
-	return &edgePageCostVenue{adapter: adapter, raw: raw}
+	return adapter
 }
 
 func edgePageCostRID(prefix string, i int) string {
@@ -75,11 +89,12 @@ func edgePageCostRID(prefix string, i int) string {
 	return "rel_" + hex.EncodeToString(sum[:8])
 }
 
-// seed: one team hub owning edgePageCostRepos repositories and
-// edgePageCostItems work items (work-item OWNED_BY_TEAM edges carry no
-// window, as the producer writes them); 80% of the work items ended in the
-// past; every work item BELONGS_TO_REPOSITORY one repository with the item's
-// own window. Written through the real ApplyProjectionBatch.
+// seed: team T owns edgePageCostRepos repositories and edgePageCostItems work
+// items (a work item's OWNED_BY_TEAM edge carries no window, as the producer
+// writes it); 80% of the work items ended in the past; every work item
+// BELONGS_TO_REPOSITORY one repository with the item's own window and
+// RELATES_TO the next work item (no window). Only the OWNED_BY_TEAM edges
+// touch T.
 func (v *edgePageCostVenue) seed(t *testing.T, ctx context.Context) {
 	t.Helper()
 	v.orgID = "live-edge-page-cost-" + time.Now().UTC().Format("20060102T150405.000000000")
@@ -104,15 +119,16 @@ func (v *edgePageCostVenue) seed(t *testing.T, ctx context.Context) {
 	}
 	entities := []contextfabric.EntityProjection{entity(v.team, &start, nil)}
 	var relationships []contextfabric.RelationshipProjection
-	repos := make([]contextfabric.SubjectRef, 0, edgePageCostRepos)
 	for i := 0; i < edgePageCostRepos; i++ {
 		repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: fmt.Sprintf("repository:r%04d", i), Label: fmt.Sprintf("acme/r%04d", i)}
-		repos = append(repos, repo)
+		v.repos = append(v.repos, repo)
 		entities = append(entities, entity(repo, &start, nil))
 		relationships = append(relationships, relation(edgePageCostRID("own-repo", i), "OWNED_BY_TEAM", repo, v.team, &start, nil))
 	}
+	item := func(i int) contextfabric.SubjectRef {
+		return contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: fmt.Sprintf("work_item.v2:w%05d", i), Label: fmt.Sprintf("Work item %d", i)}
+	}
 	for i := 0; i < edgePageCostItems; i++ {
-		item := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: fmt.Sprintf("work_item.v2:w%05d", i), Label: fmt.Sprintf("Work item %d", i)}
 		created := v.now.Add(-time.Duration(i%500+5) * 24 * time.Hour)
 		var ended *time.Time
 		if i%5 != 0 {
@@ -122,10 +138,11 @@ func (v *edgePageCostVenue) seed(t *testing.T, ctx context.Context) {
 			}
 			ended = &e
 		}
-		entities = append(entities, entity(item, &created, ended))
+		entities = append(entities, entity(item(i), &created, ended))
 		relationships = append(relationships,
-			relation(edgePageCostRID("own-item", i), "OWNED_BY_TEAM", item, v.team, nil, nil),
-			relation(edgePageCostRID("item-repo", i), "BELONGS_TO_REPOSITORY", item, repos[i%len(repos)], &created, ended))
+			relation(edgePageCostRID("own-item", i), "OWNED_BY_TEAM", item(i), v.team, nil, nil),
+			relation(edgePageCostRID("item-repo", i), "BELONGS_TO_REPOSITORY", item(i), v.repos[i%len(v.repos)], &created, ended),
+			relation(edgePageCostRID("item-item", i), "RELATES_TO", item(i), item((i+1)%edgePageCostItems), nil, nil))
 	}
 	apply := func(index int, entities []contextfabric.EntityProjection, relationships []contextfabric.RelationshipProjection) {
 		b := contextfabric.ProjectionBatch{
@@ -185,134 +202,184 @@ func edgePageCostLines(reply interface{}) []string {
 	return out
 }
 
-// internalMs runs one read and returns the server's internal execution time
-// and the row count.
-func (v *edgePageCostVenue) internalMs(t *testing.T, ctx context.Context, text string) (float64, int) {
+// internalMs runs one read and returns the server's internal execution time.
+func (v *edgePageCostVenue) internalMs(t *testing.T, ctx context.Context, text string) float64 {
 	t.Helper()
 	reply, err := v.raw.Do(ctx, "GRAPH.RO_QUERY", v.key, text).Result()
 	if err != nil {
-		t.Fatalf("GRAPH.RO_QUERY: %v\n%s", err, text)
+		t.Fatalf("GRAPH.RO_QUERY: %v", err)
 	}
 	parts, _ := reply.([]interface{})
-	rows := 0
-	if len(parts) == 3 {
-		if list, ok := parts[1].([]interface{}); ok {
-			rows = len(list)
-		}
-	}
 	for _, line := range edgePageCostLines(parts[len(parts)-1]) {
-		if strings.HasPrefix(line, "Query internal execution time:") {
-			field := strings.Fields(strings.TrimPrefix(line, "Query internal execution time:"))
-			ms, _ := strconv.ParseFloat(field[0], 64)
-			return ms, rows
+		if rest, ok := strings.CutPrefix(line, "Query internal execution time:"); ok {
+			ms, err := strconv.ParseFloat(strings.Fields(rest)[0], 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return ms
 		}
 	}
 	t.Fatalf("no internal execution time in %v", reply)
-	return 0, 0
+	return 0
 }
 
-func (v *edgePageCostVenue) plan(t *testing.T, ctx context.Context, command, text string) string {
+// medianMs: one warm-up read, then five measured reads.
+func (v *edgePageCostVenue) medianMs(t *testing.T, ctx context.Context, text string) (float64, []float64) {
 	t.Helper()
-	reply, err := v.raw.Do(ctx, command, v.key, text).Result()
-	if err != nil {
-		return fmt.Sprintf("%s error: %v", command, err)
+	v.internalMs(t, ctx, text)
+	runs := make([]float64, 0, 5)
+	for i := 0; i < 5; i++ {
+		runs = append(runs, v.internalMs(t, ctx, text))
 	}
-	return strings.Join(edgePageCostLines(reply), "\n")
+	sorted := append([]float64(nil), runs...)
+	sort.Float64s(sorted)
+	return sorted[2], runs
 }
 
-func edgePageCostPerArmLimit(cypher string) string {
-	order := fmt.Sprintf(" ORDER BY r.%s ASC LIMIT $lim", propRelationshipID)
-	cypher = strings.Replace(cypher, "RETURN r, a, b UNION", "RETURN r, a, b"+order+" UNION", 1)
-	return strings.Replace(cypher, "RETURN r, a, b } RETURN", "RETURN r, a, b"+order+" } RETURN", 1)
+func (v *edgePageCostVenue) profile(t *testing.T, ctx context.Context, text string) []string {
+	t.Helper()
+	reply, err := v.raw.Do(ctx, "GRAPH.PROFILE", v.key, text).Result()
+	if err != nil {
+		t.Fatalf("GRAPH.PROFILE: %v", err)
+	}
+	return edgePageCostLines(reply)
 }
 
-func edgePageCostCount(cypher string) string {
-	cut := strings.LastIndex(cypher, "} RETURN")
-	return cypher[:cut] + "} RETURN count(r) AS n"
+var edgePageCostRecords = regexp.MustCompile(`^\s*(Node By Index Scan|Conditional Traverse|Node By Label Scan|All Node Scan)\b.*Records produced: (\d+)`)
+
+// readWork sums the records the scans and the traversals of a profile
+// produced: what the plan read before any filter could drop a row.
+func edgePageCostReadWork(lines []string) (scanned, traversed int) {
+	for _, line := range lines {
+		m := edgePageCostRecords.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		n, _ := strconv.Atoi(m[2])
+		if m[1] == "Conditional Traverse" {
+			traversed += n
+		} else {
+			scanned += n
+		}
+	}
+	return scanned, traversed
 }
 
-func TestEdgePageCostProfile(t *testing.T) {
+// edgePageCostLegacyInArm rewrites the in arm to the pattern order it had
+// before it named the origin first: (a:other)-[r]->(b:origin). Same aliases,
+// same direction, same predicates. A statement whose in arm is already in
+// that order is returned as it is.
+func edgePageCostLegacyInArm(cypher string) string {
+	origin := fmt.Sprintf("(b:%s {%s:$org, %s:o.k, %s:o.i})", labelSubject, propOrgID, propKind, propCanonicalID)
+	other := fmt.Sprintf("(a:%s {%s:$org})", labelSubject, propOrgID)
+	return strings.Replace(cypher, origin+"<-[r:"+labelRelation+"]-"+other, other+"-[r:"+labelRelation+"]->"+origin, 1)
+}
+
+type edgePageCostRow struct {
+	rid, from, to string
+}
+
+func (v *edgePageCostVenue) page(t *testing.T, ctx context.Context, cypher string, params map[string]interface{}) []edgePageCostRow {
+	t.Helper()
+	rows, err := v.adapter.api.query(ctx, v.key, cypher, params, true)
+	if err != nil {
+		t.Fatalf("page: %v", err)
+	}
+	out := make([]edgePageCostRow, 0, len(rows))
+	for _, r := range rows {
+		e, eok := r["r"].(*edge)
+		a, aok := r["a"].(*node)
+		b, bok := r["b"].(*node)
+		if !eok || !aok || !bok {
+			t.Fatalf("row without an edge and two nodes: %v", r)
+		}
+		out = append(out, edgePageCostRow{propStringValue(e.Properties[propRelationshipID]), propStringValue(a.Properties[propCanonicalID]), propStringValue(b.Properties[propCanonicalID])})
+	}
+	return out
+}
+
+func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 	ctx := context.Background()
 	v := edgePageCostStart(t, ctx)
 	began := time.Now()
 	v.seed(t, ctx)
-	t.Logf("seeded %d work items, %d repositories, %d edges in %s", edgePageCostItems, edgePageCostRepos, 2*edgePageCostItems+edgePageCostRepos, time.Since(began))
+	t.Logf("seeded %d work items, %d repositories, %d edges in %s", edgePageCostItems, edgePageCostRepos, 3*edgePageCostItems+edgePageCostRepos, time.Since(began))
 	asOf := v.now.Add(-250 * 24 * time.Hour)
-	origin := []contextfabric.SubjectRef{v.team}
+	hub := []contextfabric.SubjectRef{v.team}
+	frontier := append([]contextfabric.SubjectRef(nil), v.repos[:20]...)
+	after := &directread.EdgeKey{RelationshipID: edgePageCostRID("own-item", 7)}
+	hubDegree := edgePageCostItems + edgePageCostRepos
+	frontierDegree := 20 + 20*(edgePageCostItems/edgePageCostRepos)
 	cases := []struct {
-		name  string
-		query directread.EdgePageQuery
-		mod   func(string) string
+		name   string
+		query  directread.EdgePageQuery
+		degree int
 	}{
-		{"current", directread.EdgePageQuery{Origins: origin, Limit: 5, ValidAt: v.now, Current: true}, nil},
-		{"as_of_past", directread.EdgePageQuery{Origins: origin, Limit: 5, ValidAt: asOf}, nil},
-		{"strict_now", directread.EdgePageQuery{Origins: origin, Limit: 5, ValidAt: v.now}, nil},
-		{"current_per_arm_limit", directread.EdgePageQuery{Origins: origin, Limit: 5, ValidAt: v.now, Current: true}, edgePageCostPerArmLimit},
-		{"as_of_past_per_arm_limit", directread.EdgePageQuery{Origins: origin, Limit: 5, ValidAt: asOf}, edgePageCostPerArmLimit},
-		{"current_in_types", directread.EdgePageQuery{Origins: origin, Limit: 5, ValidAt: v.now, Current: true, Direction: directread.EdgeDirectionIn, Types: []string{"OWNED_BY_TEAM"}}, nil},
-		{"as_of_past_in_types", directread.EdgePageQuery{Origins: origin, Limit: 5, ValidAt: asOf, Direction: directread.EdgeDirectionIn, Types: []string{"OWNED_BY_TEAM"}}, nil},
-		{"current_limit100", directread.EdgePageQuery{Origins: origin, Limit: 100, ValidAt: v.now, Current: true}, nil},
-		{"current_limit100_per_arm", directread.EdgePageQuery{Origins: origin, Limit: 100, ValidAt: v.now, Current: true}, edgePageCostPerArmLimit},
+		{"current", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now, Current: true}, hubDegree},
+		{"as_of", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: asOf}, hubDegree},
+		{"strict_now", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now}, hubDegree},
+		{"current_in_owned", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now, Current: true, Direction: directread.EdgeDirectionIn, Types: []string{"OWNED_BY_TEAM"}}, hubDegree},
+		{"as_of_in_owned", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: asOf, Direction: directread.EdgeDirectionIn, Types: []string{"OWNED_BY_TEAM"}}, hubDegree},
+		{"current_after_limit100", directread.EdgePageQuery{Origins: hub, Limit: 100, ValidAt: v.now, Current: true, After: after}, hubDegree},
+		{"as_of_after_limit100", directread.EdgePageQuery{Origins: hub, Limit: 100, ValidAt: asOf, After: after}, hubDegree},
+		{"current_frontier", directread.EdgePageQuery{Origins: frontier, Limit: directread.MaxEdgePageLimit, ValidAt: v.now, Current: true, Exclude: &v.team}, frontierDegree},
+		{"as_of_frontier", directread.EdgePageQuery{Origins: frontier, Limit: directread.MaxEdgePageLimit, ValidAt: asOf, Exclude: &v.team}, frontierDegree},
+		{"current_end_kinds", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now, Current: true, EndKinds: []string{string(contextfabric.SubjectRepository)}}, hubDegree},
 	}
-	pages := map[string][]string{}
+	medians := map[string][2]float64{}
 	for _, c := range cases {
 		cypher, params := directEdgePageCypher(v.orgID, c.query)
-		if c.mod != nil {
-			cypher = c.mod(cypher)
+		legacy := edgePageCostLegacyInArm(cypher)
+		got, want := v.page(t, ctx, cypher, params), v.page(t, ctx, legacy, params)
+		if len(got) == 0 || fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("%s: anchored page %v, pattern-order-only rewrite %v", c.name, got, want)
 		}
-		text := v.text(t, cypher, params)
-		_, n := v.internalMs(t, ctx, v.text(t, edgePageCostCount(cypher), params))
-		countReply, _ := v.raw.Do(ctx, "GRAPH.RO_QUERY", v.key, v.text(t, edgePageCostCount(cypher), params)).Result()
-		var times []float64
-		var rows int
-		for run := 0; run < 6; run++ {
-			ms, got := v.internalMs(t, ctx, text)
-			if run > 0 {
-				times = append(times, ms)
-			}
-			rows = got
+		before, beforeRuns := v.medianMs(t, ctx, v.text(t, legacy, params))
+		afterMs, afterRuns := v.medianMs(t, ctx, v.text(t, cypher, params))
+		medians[c.name] = [2]float64{before, afterMs}
+		plan := v.profile(t, ctx, v.text(t, cypher, params))
+		legacyPlan := v.profile(t, ctx, v.text(t, legacy, params))
+		scanned, traversed := edgePageCostReadWork(plan)
+		legacyScanned, legacyTraversed := edgePageCostReadWork(legacyPlan)
+		t.Logf("CASE %s rows=%d before_ms=%.2f %v after_ms=%.2f %v | read work before scanned=%d traversed=%d, after scanned=%d traversed=%d (origins %d, origin degree %d)",
+			c.name, len(got), before, beforeRuns, afterMs, afterRuns, legacyScanned, legacyTraversed, scanned, traversed, len(c.query.Origins), c.degree)
+		t.Logf("PROFILE before %s\n%s", c.name, strings.Join(legacyPlan, "\n"))
+		t.Logf("PROFILE after %s\n%s", c.name, strings.Join(plan, "\n"))
+		// Each arm scans the origins only and traverses only their own edges:
+		// at most two origin lookups per origin (one per arm) and at most two
+		// passes over the origins' edges.
+		if scanned > 2*len(c.query.Origins) || traversed > 2*c.degree {
+			t.Errorf("%s: the page read beyond the origins: scanned %d nodes for %d origins, traversed %d edges for origin degree %d", c.name, scanned, len(c.query.Origins), traversed, c.degree)
 		}
-		sort.Float64s(times)
-		t.Logf("CASE %s rows=%d count_reply=%v (n=%d) internal_ms sorted=%v median=%.2f\nCYPHER %s", c.name, rows, edgePageCostLines(countReply), n, times, times[len(times)/2], cypher)
-		t.Logf("EXPLAIN %s\n%s", c.name, v.plan(t, ctx, "GRAPH.EXPLAIN", text))
-		t.Logf("PROFILE %s\n%s", c.name, v.plan(t, ctx, "GRAPH.PROFILE", text))
-		rowsOut, err := v.adapter.api.query(ctx, v.key, cypher, params, true)
+	}
+	for _, pair := range [][2]string{{"current", "as_of"}, {"current_in_owned", "as_of_in_owned"}, {"current_after_limit100", "as_of_after_limit100"}, {"current_frontier", "as_of_frontier"}} {
+		c, a := medians[pair[0]], medians[pair[1]]
+		t.Logf("RATIO %s/%s before=%.2f after=%.2f (as_of before %.2f ms, after %.2f ms)", pair[0], pair[1], c[0]/a[0], c[1]/a[1], a[0], a[1])
+	}
+
+	deadline := v.newAdapter(t, time.Second)
+	principal := storage.Principal{OrgID: v.orgID, Subject: "u", CredentialID: "c"}
+	binding, err := deadline.ResolveInvestigationBinding(ctx, principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, 4)
+	walls := make([]time.Duration, 4)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			began := time.Now()
+			_, errs[i] = deadline.DirectEdgePage(ctx, principal, binding, directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: time.Now().UTC(), Current: true})
+			walls[i] = time.Since(began)
+		}(i)
+	}
+	wg.Wait()
+	t.Logf("PARALLEL 4 current-axis pages under a 1 s request deadline: walls=%v", walls)
+	for i, err := range errs {
 		if err != nil {
-			t.Fatalf("%s: %v", c.name, err)
-		}
-		for _, r := range rowsOut {
-			if e, ok := r["r"].(*edge); ok {
-				pages[c.name] = append(pages[c.name], propStringValue(e.Properties[propRelationshipID]))
-			}
-		}
-		t.Logf("PAGE %s %v", c.name, pages[c.name])
-	}
-	for _, pair := range [][2]string{{"current", "current_per_arm_limit"}, {"as_of_past", "as_of_past_per_arm_limit"}, {"current_limit100", "current_limit100_per_arm"}} {
-		if strings.Join(pages[pair[0]], ",") != strings.Join(pages[pair[1]], ",") {
-			t.Errorf("page %s != %s", pair[0], pair[1])
-		}
-	}
-	for _, parallel := range []int{1, 4} {
-		cypher, params := directEdgePageCypher(v.orgID, directread.EdgePageQuery{Origins: origin, Limit: 5, ValidAt: v.now, Current: true})
-		for _, variant := range []struct {
-			name string
-			text string
-		}{{"current", v.text(t, cypher, params)}, {"current_per_arm_limit", v.text(t, edgePageCostPerArmLimit(cypher), params)}} {
-			var wg sync.WaitGroup
-			walls := make([]time.Duration, parallel)
-			for i := 0; i < parallel; i++ {
-				wg.Add(1)
-				go func(i int) {
-					defer wg.Done()
-					began := time.Now()
-					if err := v.raw.Do(ctx, "GRAPH.RO_QUERY", v.key, variant.text).Err(); err != nil {
-						t.Errorf("parallel %s: %v", variant.name, err)
-					}
-					walls[i] = time.Since(began)
-				}(i)
-			}
-			wg.Wait()
-			t.Logf("PARALLEL %d %s walls=%v", parallel, variant.name, walls)
+			t.Errorf("parallel page %d: %v", i, err)
 		}
 	}
 }
