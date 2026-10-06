@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -418,6 +419,18 @@ func TestClarificationCandidatesCarryProviderToTellSameLabelsApart(t *testing.T)
 	}
 	if err := projection.Validate(); err != nil {
 		t.Fatalf("projection failed validation: %v", err)
+	}
+}
+
+func TestProjectedCandidateProviderBoundIsValidated(t *testing.T) {
+	result := richResult()
+	result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+	result.SubjectResolution.ClarificationPrompt = "Which one?"
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	projection := Project(result, Budget{})
+	projection.Clarification.Candidates[0].Provider = strings.Repeat("p", contractsv1.ContextFabricProviderMaxLength+1)
+	if err := projection.Validate(); err == nil {
+		t.Fatal("projection with a 65-rune provider validated; the schema caps it at 64")
 	}
 }
 

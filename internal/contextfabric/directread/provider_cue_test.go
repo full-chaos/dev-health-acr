@@ -34,3 +34,25 @@ func TestFindNameNamesProviderOfALoneLabel(t *testing.T) {
 		t.Fatalf("find = %+v, %v; want the single provider named", got, err)
 	}
 }
+
+func TestOwnedByRowsCarryTheOwnedSubjectProvider(t *testing.T) {
+	g := ownershipGraph()
+	for i := range g.edges {
+		if g.edges[i].From.Subject == projectQ {
+			g.edges[i].From.Attributes = map[string]interface{}{"provider_jira": "10"}
+		}
+	}
+	response, err := newModesLookup(g, nil).Find(relCtx("owned-provider"), unrestricted, FindRequest{OwnedBy: teamT.CanonicalID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range response.Subjects {
+		want := ""
+		if s.CanonicalID == projectQ.CanonicalID {
+			want = "jira"
+		}
+		if s.Provider != want {
+			t.Fatalf("%s provider = %q, want %q", s.CanonicalID, s.Provider, want)
+		}
+	}
+}
