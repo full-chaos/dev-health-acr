@@ -676,9 +676,9 @@ func TestAnUnrecognisedQuantifierEmitsANotAttemptedRow(t *testing.T) {
 //
 // A cause code outside the closed vocabulary must not reach the wire, and it
 // must not be REMAPPED onto a declared one either -- a remap is how a code
-// nobody declared becomes a code somebody did. So the requirement emits no row
-// and keeps its planning seed, which derives `partial`: the state stays honest
-// and only the cause is lost.
+// nobody declared becomes a code somebody did. So the requirement emits a
+// `not_attempted` row naming `requirement_not_evaluable`, which derives
+// `partial`: the state stays honest and the account is complete.
 //
 // The COMPLEMENT is asserted in the same run. Without it this test would pass
 // on an evaluator that had stopped emitting rows altogether, which is the
@@ -1813,5 +1813,69 @@ func TestTwoServedKindsSharingOneObservationDoNotCorroborate(t *testing.T) {
 	if state != contractsv1.ContextFabricAnswerCompletenessPartial {
 		t.Fatalf("answer state = %q, want partial -- one narrowed row beside an otherwise-satisfied "+
 			"set derives partial, never complete", state)
+	}
+}
+
+// TestAnUnrecognisedQuantifierRowOverReadEvidenceStatesTheReadAndNoStandard
+// pins the two facts that make "no read was made" the wrong meaning for
+// `not_attempted`: the source WAS read (observed kinds on the cover line), and
+// the cover line must not claim a standard was met when none exists.
+func TestAnUnrecognisedQuantifierRowOverReadEvidenceStatesTheReadAndNoStandard(t *testing.T) {
+	health := contractsv1.ContextFabricFactHealth
+	unrecognised := readRequirement(CompletionQuantifierAtLeastOne)
+	unrecognised.Quantifier = "quantifier_from_a_later_vocabulary"
+
+	rows, events, _ := appendReadRequirementEvaluationsWithCover(nil,
+		[]contractsv1.ContextFabricPlanRequirement{unrecognised},
+		factCoverage(health, SourceAvailable), readPopulationEvidence{})
+	if len(rows) != 1 || rows[0].Outcome != contractsv1.ContextFabricRequirementNotAttempted ||
+		rows[0].CauseCoverage != contractsv1.ContextFabricCoverageDetailRequirementNotEvaluable {
+		t.Fatalf("rows = %+v, want one not_attempted/requirement_not_evaluable row", rows)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want one", events)
+	}
+	if events[0].ObservedKinds != 1 {
+		t.Fatalf("ObservedKinds = %d, want 1: the source was read", events[0].ObservedKinds)
+	}
+	if events[0].MeetsThreshold {
+		t.Fatalf("MeetsThreshold = true on a 0/0 cover: no threshold exists, so none can be met")
+	}
+}
+
+// TestAnUndeclaredCauseCodeWithoutAnObservationStillEmitsTheNotEvaluableRow:
+// the no-observation branches must not short-circuit the undeclared-code
+// handling, or the code is neither logged nor accounted for.
+func TestAnUndeclaredCauseCodeWithoutAnObservationStillEmitsTheNotEvaluableRow(t *testing.T) {
+	const undeclared = contractsv1.ContextFabricCoverageDetailCode("fact_invented_by_a_future_producer")
+	health := contractsv1.ContextFabricFactHealth
+	requirement := readRequirement(CompletionQuantifierAtLeastOne)
+
+	logs := captureDefaultJSONLogger(t)
+	// A coded detail for a kind with NO source observation at all.
+	coverage := codedCoverage(undeclared, health)
+	rows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, coverage, readPopulationEvidence{})
+	if len(rows) != 1 || rows[0].Outcome != contractsv1.ContextFabricRequirementNotAttempted ||
+		rows[0].CauseCoverage != contractsv1.ContextFabricCoverageDetailRequirementNotEvaluable {
+		t.Fatalf("rows = %+v, want one not_attempted/requirement_not_evaluable row", rows)
+	}
+	if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(rows[0]); err != nil {
+		t.Fatalf("row does not validate: %v", err)
+	}
+	if !strings.Contains(logs.String(), fmt.Sprintf("%q:%q", "undeclared_code", string(undeclared))) {
+		t.Fatalf("the undeclared code was not logged: %s", logs.String())
+	}
+
+	// Same with every declared kind pruned.
+	logs = captureDefaultJSONLogger(t)
+	pruned := codedCoverage(undeclared, health, health, SourcePruned, contractsv1.ContextFabricFactWorkload, SourcePruned)
+	rows = appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, pruned, readPopulationEvidence{})
+	if len(rows) != 1 || rows[0].CauseCoverage != contractsv1.ContextFabricCoverageDetailRequirementNotEvaluable {
+		t.Fatalf("pruned + undeclared rows = %+v, want requirement_not_evaluable", rows)
+	}
+	if !strings.Contains(logs.String(), string(undeclared)) {
+		t.Fatalf("the undeclared code was not logged: %s", logs.String())
 	}
 }

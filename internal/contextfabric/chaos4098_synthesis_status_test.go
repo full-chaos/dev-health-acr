@@ -500,7 +500,7 @@ func TestChaos4098_OverrideTelemetryLeaksNoIdentityAndStaysAtWarn(t *testing.T) 
 	permitted := map[string]struct{}{
 		"time": {}, "level": {}, "msg": {},
 		"org_id": {}, "from_status": {}, "to_status": {}, "reason": {},
-		"committed_count": {}, "request_id": {},
+		"committed_count": {}, "unasked_fact_kinds": {}, "request_id": {},
 	}
 	for key := range record {
 		if _, ok := permitted[key]; !ok {

@@ -233,8 +233,8 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 	// vocabulary rather than hand-listed, so it cannot fall behind it. An
 	// undeclared code is NOT remapped onto a declared one -- a remap is how a
 	// code nobody declared becomes a code somebody did -- it is refused, and
-	// the requirement emits no row at all (see readRequirementOutcomeRow). A
-	// reach probe fails if that branch ever executes.
+	// the requirement publishes a `not_attempted` row naming
+	// `requirement_not_evaluable` (see readRequirementOutcomeRow).
 	declaredCodes := map[contractsv1.ContextFabricCoverageDetailCode]bool{}
 	for _, code := range contractsv1.ContextFabricCoverageDetailCodeVocabulary() {
 		declaredCodes[code] = true
@@ -306,7 +306,7 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 		// of a loss that came from somewhere else).
 		//
 		// A requirement whose every declared kind was pruned therefore
-		// reaches no row at all and keeps only its planning seed, which the
+		// publishes a `not_attempted` row naming `fact_pruned`, which the
 		// completeness derivation reads as `partial`. That is the honest
 		// floor: nothing was read, and nothing was lost either.
 		if state == SourcePruned {
@@ -888,8 +888,7 @@ func notAttemptedReadRequirementRow(requirement contractsv1.ContextFabricPlanReq
 //
 // readRequirementOutcomeRow's third return is the observation-cover
 // diagnostic for the row it built, or nil when no row-building reached the
-// point that computes one (every early return above the cover computation,
-// and the guard branches that emit no row at all). It is a PURE VALUE, never
+// point that computes one (every early return above the cover computation). It is a PURE VALUE, never
 // logged here -- see ReadRequirementObservationCoverEvent's own doc comment
 // for why the decision has to be reconstructible from a trace at all, and
 // finalizeResult for where it is actually emitted through e.telemetry.
@@ -903,7 +902,7 @@ func readRequirementOutcomeRow(
 	//
 	// This arm was the one hole in the change: a requirement none of whose
 	// declared kinds was read at all had no truthful cause in the shipped
-	// vocabulary, so it emitted no row and kept only its planning seed. The
+	// vocabulary, so it published no row and kept only its planning seed. The
 	// STATE was honest either way -- a planning-only READ identity derives
 	// `partial` -- but the CAUSE was lost, and a reader was left with an
 	// answer that was less than complete for a reason nothing named.
@@ -948,6 +947,42 @@ func readRequirementOutcomeRow(
 	// evaluation that never ran.
 	servedCover, declared, cover := readRequirementCoverDecision(requirement, threshold, evidence, populations.assignment)
 
+	// AN UNDECLARED CAUSE CODE IS ACCOUNTED FOR, NOT NAMED.
+	//
+	// A code outside the closed vocabulary must not reach the wire, and it
+	// must not be REMAPPED onto a declared one either -- a remap is precisely
+	// how a code nobody declared becomes a code somebody did. So the
+	// requirement publishes a `not_attempted` row naming
+	// `requirement_not_evaluable`, which says only that it was considered and
+	// not evaluated. The state is unchanged (`not_attempted` derives
+	// `partial`, as the planning seed alone did) and the account is complete.
+	//
+	// NOT REACHED BY THE FACT REGISTRY TODAY, which mints declared codes only.
+	// TestAnUndeclaredCauseCodeEmitsANotAttemptedRow is the reach probe that
+	// fails if the branch stops being the one that handles it.
+	//
+	// THIS ARM IS BEFORE THE NO-OBSERVATION ARMS, because a code that arrives
+	// with no corroborating observation (or with every kind pruned) is still an
+	// undeclared code, and reaching those arms first would drop it unlogged.
+	//
+	// IT LOGS, and that is not optional: the row cannot carry the code, so the
+	// line is the only place the producer that minted it can be found. It
+	// names the requirement and the code (a VOCABULARY TOKEN, not corpus
+	// content).
+	//
+	// slog.Default() rather than a threaded logger, matching this package's
+	// existing convention for a nil logger; the evaluator is a pure function
+	// on the finalization path and has no engine handle to take one from.
+	if evidence.UndeclaredCause {
+		slog.Default().Warn("context fabric read requirement carried an undeclared coverage code",
+			"requirement", SanitizeLogAttr(requirement.Requirement),
+			"obligation", SanitizeLogAttr(requirement.Obligation),
+			"undeclared_code", SanitizeLogAttr(string(evidence.UndeclaredCode)),
+			"observed_kinds", evidence.Observed)
+		cover.Outcome = contractsv1.ContextFabricRequirementNotAttempted
+		return notAttemptedReadRequirementRow(requirement, contractsv1.ContextFabricCoverageDetailRequirementNotEvaluable, false, threshold), true, cover
+	}
+
 	if evidence.Observed == 0 && evidence.Pruned > 0 {
 		cover.Outcome = contractsv1.ContextFabricRequirementNotAttempted
 		return notAttemptedReadRequirementRow(requirement, contractsv1.ContextFabricCoverageDetailFactPruned, true, threshold), true, cover
@@ -972,38 +1007,6 @@ func readRequirementOutcomeRow(
 			Served:        0,
 			Declared:      threshold,
 		}, true, cover
-	}
-
-	// AN UNDECLARED CAUSE CODE IS ACCOUNTED FOR, NOT NAMED.
-	//
-	// A code outside the closed vocabulary must not reach the wire, and it
-	// must not be REMAPPED onto a declared one either -- a remap is precisely
-	// how a code nobody declared becomes a code somebody did. So the
-	// requirement publishes a `not_attempted` row naming
-	// `requirement_not_evaluable`, which says only that it was considered and
-	// not evaluated. The state is unchanged (`not_attempted` derives
-	// `partial`, as the planning seed alone did) and the account is complete.
-	//
-	// UNREACHABLE TODAY. The fact registry mints declared codes only.
-	// TestAnUndeclaredCauseCodeEmitsANotAttemptedRow is the reach probe that
-	// fails if the branch stops being the one that handles it.
-	//
-	// IT LOGS, and that is not optional: the row cannot carry the code, so the
-	// line is the only place the producer that minted it can be found. It
-	// names the requirement and the code (a VOCABULARY TOKEN, not corpus
-	// content).
-	//
-	// slog.Default() rather than a threaded logger, matching this package's
-	// existing convention for a nil logger; the evaluator is a pure function
-	// on the finalization path and has no engine handle to take one from.
-	if evidence.UndeclaredCause {
-		slog.Default().Warn("context fabric read requirement carried an undeclared coverage code",
-			"requirement", SanitizeLogAttr(requirement.Requirement),
-			"obligation", SanitizeLogAttr(requirement.Obligation),
-			"undeclared_code", SanitizeLogAttr(string(evidence.UndeclaredCode)),
-			"observed_kinds", evidence.Observed)
-		cover.Outcome = contractsv1.ContextFabricRequirementNotAttempted
-		return notAttemptedReadRequirementRow(requirement, contractsv1.ContextFabricCoverageDetailRequirementNotEvaluable, false, threshold), true, cover
 	}
 
 	// THE SNAPSHOT, read off `populations` -- the SAME snapshot the caller
@@ -1355,6 +1358,9 @@ func readRequirementObservationCoverEvent(
 func unrecognisedQuantifierCoverEvent(requirement contractsv1.ContextFabricPlanRequirement, evidence readEvidence, assignment observationKeyAssignment) *ReadRequirementObservationCoverEvent {
 	event := readRequirementObservationCoverEvent(requirement, 0, 0, 0, evidence, assignment)
 	event.Outcome = contractsv1.ContextFabricRequirementNotAttempted
+	// No threshold exists, so none can be met: the shared builder's
+	// `servedCover >= threshold` is true for 0/0 and must not reach the trace.
+	event.MeetsThreshold = false
 	return event
 }
 
@@ -1368,7 +1374,7 @@ func unrecognisedQuantifierCoverEvent(requirement contractsv1.ContextFabricPlanR
 //
 // Nothing observed -- every declared kind pruned, or none planned -- serves
 // nothing against the threshold as its standard; the all-pruned case is marked
-// on the event because it publishes no row.
+// on the event because its row is `not_attempted`.
 func readRequirementCoverDecision(
 	requirement contractsv1.ContextFabricPlanRequirement,
 	threshold int,

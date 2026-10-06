@@ -61,10 +61,12 @@ const (
 	// healthy" forbids.
 	ContextFabricRequirementNotApplicable ContextFabricPlanRequirementOutcome = "not_applicable"
 	// ContextFabricRequirementNotAttempted: the requirement was considered
-	// and no read was made for it -- a declared cap prevented the attempt,
-	// the turn ended first, every declared kind was pruned by the planner, or
-	// the evaluator could not state an account without inventing a standard
-	// or a cause (`requirement_not_evaluable`). The row names which.
+	// and was not evaluated; the cause says why. Either no
+	// read was made for it -- a declared cap prevented the attempt, the turn
+	// ended first, every declared kind was pruned by the planner -- or a read
+	// was made and could not be applied to it, because the evaluator could not
+	// state an account without inventing a standard or a cause
+	// (`requirement_not_evaluable`). The row names which.
 	//
 	// Distinct from both neighbours, and the distinction is not
 	// decorative. Reporting a never-attempted read as `unavailable` would
@@ -975,8 +977,8 @@ func validateContextFabricRequirementRefinements(row ContextFabricPlanRequiremen
 	// The vocabulary's own doc comments say why for each of the others --
 	// `satisfied` and `not_applicable` lost nothing; `unavailable` "could not
 	// be served at all", so there is no surviving population to have shrunk;
-	// `not_attempted` was stopped BEFORE any read, so there was never a
-	// Before to reduce from.
+	// `not_attempted` was not evaluated, so there is no served
+	// population and never a Before to reduce from.
 	//
 	// It was previously a deny-list naming `satisfied` and `not_applicable`.
 	// That let `unavailable` and `not_attempted` carry a reduction chain

@@ -314,7 +314,7 @@ const (
 	// declined to evaluate a READ requirement because its own input fell
 	// outside a closed vocabulary -- a completion quantifier it does not
 	// recognise, or a coverage code nobody declared. The requirement was
-	// planned and, for the second case, was read; what is missing is an
+	// planned and, in either case, its source may have been read; what is missing is an
 	// account of it that can be stated without inventing a standard or a
 	// cause.
 	//

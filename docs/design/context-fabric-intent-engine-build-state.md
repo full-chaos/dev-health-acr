@@ -402,7 +402,7 @@ population they never served — declared 4, served 1, chain 4 → 1 reconciles,
 >
 > A refinement says this requirement was served over a population that shrank from before to after,
 > and that sentence is only true of `narrowed`: the vocabulary's own comments say the other members
-> lost nothing, could not be served at all, or were stopped before any read. An allow-list rather
+> lost nothing, could not be served at all, or were not evaluated. An allow-list rather
 > than a longer deny-list, **because the vocabulary is CLOSED and a deny-list permits its next
 > member by default.** Both tests iterate the vocabulary, so a sixth outcome is covered the day it
 > is added, and each case first asserts the same row validates *without* the refinement, so a
