@@ -6,7 +6,7 @@ package contextfabric
 // over a repository anchor declares team members and a count goal, so the
 // derivation predicts `count/member/team` served. Retrieval then resolves no
 // member set, assembly states the count unavailable with the wire cause
-// `fact_pruned`, and synthesis serves one membership fact about the anchor
+// `computed_population_absent`, and synthesis serves one membership fact about the anchor
 // repository with status `partial`. No question text is used; the frame is
 // built through the shipped derivation.
 //
@@ -48,8 +48,8 @@ func TestAPredictedServedCountThatAssemblyCannotServeIsAnObservedTransition(t *t
 		t.Fatalf("the plan predicts %q unavailable (%q); the fixture must predict it served", reconciliationCountRequirement, planned.Unavailable)
 	}
 	assembled := assembledRowFor(t, result.Completeness.Outcomes, reconciliationCountRequirement)
-	if assembled.Outcome != contractsv1.ContextFabricRequirementUnavailable || assembled.CauseCoverage != contractsv1.ContextFabricCoverageDetailFactPruned {
-		t.Fatalf("assembled row = %s/%s, want unavailable/fact_pruned", assembled.Outcome, assembled.CauseCoverage)
+	if assembled.Outcome != contractsv1.ContextFabricRequirementUnavailable || assembled.CauseCoverage != contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent {
+		t.Fatalf("assembled row = %s/%s, want unavailable/computed_population_absent", assembled.Outcome, assembled.CauseCoverage)
 	}
 
 	// THE HARM: the transition is on the trace, with the split cause.
@@ -63,7 +63,7 @@ func TestAPredictedServedCountThatAssemblyCannotServeIsAnObservedTransition(t *t
 			Role: string(SubjectRoleMember), Subject: SubjectTeam,
 			Predicted: RequirementPredictedServed, PredictedReason: "",
 			AssembledOutcome: contractsv1.ContextFabricRequirementUnavailable,
-			CauseCoverage:    contractsv1.ContextFabricCoverageDetailFactPruned,
+			CauseCoverage:    contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent,
 			AssemblyReason:   RequirementAssemblyReasonComputedPopulationAbsent,
 			Served:           0, Declared: 0, ServedFactCount: 0, MemberSetResolved: false,
 		},
@@ -72,11 +72,6 @@ func TestAPredictedServedCountThatAssemblyCannotServeIsAnObservedTransition(t *t
 	if got != want {
 		t.Fatalf("transition =\n  %+v\nwant\n  %+v", got, want)
 	}
-	// The split is not the wire code restated.
-	if string(got.AssemblyReason) == string(got.CauseCoverage) {
-		t.Fatalf("cause %q equals the wire code %q; the line must name the reason below the collapsed code", got.AssemblyReason, got.CauseCoverage)
-	}
-
 	// THE DOCUMENT IS TRUTHFUL: no assembled row claims the count satisfied, and
 	// the served membership fact about the anchor is not counted as serving it.
 	for _, row := range result.Completeness.Outcomes {
@@ -364,13 +359,13 @@ func TestEveryServingExitStatesTheTransitionsItsDocumentCarries(t *testing.T) {
 // four conditions requirementAssemblyReason reads: one cell per condition,
 // differing from the canonical cell in that condition alone. The engine-level
 // fixtures cannot tell the conditions apart, because the one writer of an
-// assembled `fact_pruned` row always sets all four together.
+// assembled `computed_population_absent` row always sets all four together.
 func TestTheAssemblyReasonNeedsEveryConditionOfItsOneWriter(t *testing.T) {
 	t.Parallel()
 	canonical := RequirementOutcomeRow{
 		Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: reconciliationCountRequirement,
 		Obligation: string(ObligationCount), Outcome: contractsv1.ContextFabricRequirementUnavailable,
-		CauseCoverage: contractsv1.ContextFabricCoverageDetailFactPruned,
+		CauseCoverage: contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent,
 	}
 	absent := InvestigationResult{}
 	resolved := InvestigationResult{Cohort: countingCohort(SubjectTeam, 2)}
@@ -383,6 +378,10 @@ func TestTheAssemblyReasonNeedsEveryConditionOfItsOneWriter(t *testing.T) {
 		{"canonical", func(r RequirementOutcomeRow) RequirementOutcomeRow { return r }, absent, RequirementAssemblyReasonComputedPopulationAbsent},
 		{"outcome narrowed", func(r RequirementOutcomeRow) RequirementOutcomeRow {
 			r.Outcome = contractsv1.ContextFabricRequirementNarrowed
+			return r
+		}, absent, RequirementAssemblyReasonNone},
+		{"former code fact_pruned", func(r RequirementOutcomeRow) RequirementOutcomeRow {
+			r.CauseCoverage = contractsv1.ContextFabricCoverageDetailFactPruned
 			return r
 		}, absent, RequirementAssemblyReasonNone},
 		{"code fact_unconfigured", func(r RequirementOutcomeRow) RequirementOutcomeRow {

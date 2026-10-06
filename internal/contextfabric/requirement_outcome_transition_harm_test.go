@@ -183,9 +183,9 @@ func reconciliationLines(t *testing.T, log *bytes.Buffer, msg string) []map[stri
 
 // TestTheClassBServeLogsItsRequirementTransition carries the observability
 // harm. The diagnosed row's shape by frame: the derivation predicts the team
-// count served, assembly states it unavailable as `fact_pruned`, and the turn
+// count served, assembly states it unavailable as `computed_population_absent`, and the turn
 // serves an unrelated membership fact about the anchor with status partial.
-// The trace must say so, with the reason below the collapsed wire code.
+// The trace must say so, with the reason.
 func TestTheClassBServeLogsItsRequirementTransition(t *testing.T) {
 	t.Parallel()
 	result, log, requestID := runReconciliationLogged(t, nil, InvestigationPartial, []ClaimedFact{reconciliationAnchorMembershipClaim()}, 0)
@@ -207,8 +207,8 @@ func TestTheClassBServeLogsItsRequirementTransition(t *testing.T) {
 			}
 		case contractsv1.ContextFabricOutcomeStageAssembledResult:
 			assembled++
-			if row.Outcome != contractsv1.ContextFabricRequirementUnavailable || row.CauseCoverage != contractsv1.ContextFabricCoverageDetailFactPruned {
-				t.Fatalf("assembled row = %s/%s, want unavailable/fact_pruned", row.Outcome, row.CauseCoverage)
+			if row.Outcome != contractsv1.ContextFabricRequirementUnavailable || row.CauseCoverage != contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent {
+				t.Fatalf("assembled row = %s/%s, want unavailable/computed_population_absent", row.Outcome, row.CauseCoverage)
 			}
 		default:
 			if row.Outcome == contractsv1.ContextFabricRequirementSatisfied {
@@ -230,7 +230,7 @@ func TestTheClassBServeLogsItsRequirementTransition(t *testing.T) {
 		"predicted": "served", "predicted_reason": "none",
 		"assembled_outcome": "unavailable",
 		"cause":             "computed_population_absent",
-		"cause_coverage":    "fact_pruned", "cause_overrun": "none", "cause_narrowing": "none",
+		"cause_coverage":    "computed_population_absent", "cause_overrun": "none", "cause_narrowing": "none",
 		"served": float64(0), "declared": float64(0), "served_fact_count": float64(0),
 		"member_set_resolved": false,
 		"index":               float64(1), "total": float64(1),

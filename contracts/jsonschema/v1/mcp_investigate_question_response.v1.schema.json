@@ -630,6 +630,7 @@
                 "fact_read_origin_state",
                 "kind_census_truncated",
                 "graph_walk_cut_before_member",
+                "computed_population_absent",
                 "requirement_not_evaluable"
               ],
               "type": "string"
@@ -5701,6 +5702,7 @@
                 "fact_read_origin_state",
                 "kind_census_truncated",
                 "graph_walk_cut_before_member",
+                "computed_population_absent",
                 "requirement_not_evaluable"
               ],
               "type": "string"

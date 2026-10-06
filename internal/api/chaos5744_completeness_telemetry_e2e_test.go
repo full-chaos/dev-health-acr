@@ -63,8 +63,8 @@ func TestCompletenessTelemetryReachesTheTraceOnARealInvestigateCall(t *testing.T
 	if authority["deciding_requirement"] != "count/member/work_item" {
 		t.Errorf("completeness authority line: deciding_requirement = %v, want count/member/work_item (the first unavailable row in the outcome set)", authority["deciding_requirement"])
 	}
-	if authority["deciding_cause_coverage"] != "fact_pruned" {
-		t.Errorf("completeness authority line: deciding_cause_coverage = %v, want fact_pruned", authority["deciding_cause_coverage"])
+	if authority["deciding_cause_coverage"] != "computed_population_absent" {
+		t.Errorf("completeness authority line: deciding_cause_coverage = %v, want computed_population_absent", authority["deciding_cause_coverage"])
 	}
 	if authority["outcome_rows_unavailable"].(float64) == 0 {
 		t.Errorf("completeness authority line: outcome_rows_unavailable = %v, want > 0 -- the health/member/work_item row (no_declaring_producer) is also unavailable, absorbed but still counted in the digest", authority["outcome_rows_unavailable"])
