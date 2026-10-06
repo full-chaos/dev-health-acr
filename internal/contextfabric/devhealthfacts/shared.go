@@ -430,11 +430,16 @@ import (
 // with its own cause (computed_population_absent) in place of fact_pruned. A
 // candidate saved before v80 holds the old cause and must not be reused.
 //
-// v80 -> v81: a read requirement every declared kind of which was pruned, and
+// v80 -> v81: a clarification candidate and a find_subjects row name their
+// provider when exactly one provider identifies the node. A candidate saved
+// before v81 holds a clarification whose candidates read the same and must not
+// be reused.
+//
+// v81 -> v82: a read requirement every declared kind of which was pruned, and
 // one the evaluator cannot evaluate (an undeclared cause code or an
 // unrecognised quantifier), now carry a not_attempted assembled-result row.
-// A candidate saved before v81 lacks that row and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v81"
+// A candidate saved before v82 lacks that row and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v82"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

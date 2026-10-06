@@ -1168,6 +1168,9 @@ type ContextFabricSubjectRef struct {
 	Label       string                   `json:"label"`
 }
 
+// ContextFabricProviderMaxLength bounds the candidate provider cue in runes.
+const ContextFabricProviderMaxLength = 64
+
 type ContextFabricSubjectCandidate struct {
 	ReceiptID      string                       `json:"receipt_id"`
 	Subject        ContextFabricSubjectRef      `json:"subject"`
@@ -1176,6 +1179,10 @@ type ContextFabricSubjectCandidate struct {
 	MatchReasons   []string                     `json:"match_reasons"`
 	Confidence     float64                      `json:"confidence"`
 	EvidenceRefIDs []string                     `json:"evidence_ref_ids,omitempty"`
+	// Provider names the source provider of the subject when exactly one
+	// provider identifies the node, so a caller can tell two same-label
+	// subjects apart; absent otherwise.
+	Provider string `json:"provider,omitempty"`
 	// MatchMechanisms records WHICH retrieval mechanisms proposed this
 	// candidate (CHAOS-3778 / AC-3778-6). Additive and optional in v1: every
 	// InvestigationResult persisted before CHAOS-3778 was serialized without

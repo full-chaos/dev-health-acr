@@ -244,6 +244,7 @@ func RenderFindSubjectsSummary(raw json.RawMessage, max int) string {
 			CanonicalID string `json:"canonical_id"`
 			Label       string `json:"label"`
 			Match       string `json:"match"`
+			Provider    string `json:"provider"`
 		} `json:"subjects"`
 		Population struct {
 			Returned   int  `json:"returned"`
@@ -288,10 +289,10 @@ func RenderFindSubjectsSummary(raw json.RawMessage, max int) string {
 	count := len(view.Subjects)
 	if count > 0 {
 		for k := min(count, 50); k > 0; k-- {
-			lines := []string{"Subjects (first " + fmt.Sprint(k) + " of " + fmt.Sprint(count) + "): kind | canonical_id | label | match"}
+			lines := []string{"Subjects (first " + fmt.Sprint(k) + " of " + fmt.Sprint(count) + "): kind | canonical_id | label | match | provider"}
 			rows := make([]string, 0, k)
 			for _, s := range view.Subjects[:k] {
-				rows = append(rows, s.Kind+" | "+s.CanonicalID+" | "+s.Label+" | "+s.Match)
+				rows = append(rows, s.Kind+" | "+s.CanonicalID+" | "+s.Label+" | "+s.Match+" | "+s.Provider)
 			}
 			lines = append(lines, untrustedBlock("subject ids and labels", strings.Join(rows, "\n"))...)
 			if t.block(lines) {

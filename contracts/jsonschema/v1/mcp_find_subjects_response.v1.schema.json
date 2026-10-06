@@ -50,6 +50,10 @@
             "type": "string",
             "description": "Provider name of the subject. Untrusted text."
           },
+          "provider": {
+            "type": "string",
+            "description": "Source provider of the subject. Present when exactly one provider identifies the subject; use it to tell same-label subjects apart."
+          },
           "match": {
             "type": "string",
             "description": "How the subject matched: exact, alias or provider_key (name mode; handle mode is provider_key). Empty in list and owned_by modes.",

@@ -1009,6 +1009,11 @@
               "minimum": 0,
               "type": "number"
             },
+            "provider": {
+              "type": "string",
+              "maxLength": 64,
+              "description": "Source provider of the subject, present when exactly one provider identifies it."
+            },
             "match_reasons": {
               "items": {
                 "maxLength": 1024,
@@ -7932,6 +7937,11 @@
               "maxItems": 100,
               "type": "array",
               "uniqueItems": true
+            },
+            "provider": {
+              "type": "string",
+              "maxLength": 64,
+              "description": "Source provider of the subject. Present when exactly one provider identifies the subject."
             },
             "match_mechanisms": {
               "items": {
