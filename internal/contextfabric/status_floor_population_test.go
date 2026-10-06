@@ -44,6 +44,9 @@ func TestServedStatusOverTruncatedPopulationWhenModelSaysNoMatch(t *testing.T) {
 			if result.Completeness.TerminalStatus != result.Status {
 				t.Fatalf("completeness terminal status %q does not follow served status %q", result.Completeness.TerminalStatus, result.Status)
 			}
+			if said := hasLimitation(result.Limitations, truncatedPopulationNoMemberLimitation); said != (tc.want == InvestigationDegraded) {
+				t.Fatalf("truncated-population limitation present = %v for status %q", said, result.Status)
+			}
 			if withheld := hasLimitation(result.Limitations, synthesisNarrativeWithheldLimitation); withheld != (tc.want != InvestigationNoMatch) {
 				t.Fatalf("withheld limitation present = %v for status %q", withheld, result.Status)
 			}

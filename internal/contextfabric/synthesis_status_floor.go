@@ -106,6 +106,8 @@ func applyServerStatusFloor(result *InvestigationResult, graph GraphContext, fac
 	return outcome
 }
 
+const truncatedPopulationNoMemberLimitation = "The population for this question was truncated and no member of it was served, so this answer shows none of it."
+
 // applyPopulationOutcomeStatusFloor floors a no_match whose own outcome rows
 // say the retrieved population was truncated. The row exists only after
 // synthesis, so this runs at the serving point every path passes, not beside
@@ -121,6 +123,9 @@ func applyPopulationOutcomeStatusFloor(result *InvestigationResult) {
 			row.Outcome == contractsv1.ContextFabricRequirementNarrowed &&
 			row.CauseCoverage == contractsv1.ContextFabricCoverageDetailPopulationTruncated {
 			floorNoMatchTo(result, InvestigationDegraded)
+			composed, displaced := appendBoundedLimitations(result.Limitations, []string{truncatedPopulationNoMemberLimitation})
+			result.Limitations = composed
+			result.LimitationsDisplaced += displaced
 			return
 		}
 	}
