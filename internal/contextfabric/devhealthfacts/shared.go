@@ -449,6 +449,18 @@ import (
 // population that served nothing is served degraded. A candidate saved before
 // v85 holds the no_match and must not be reused.
 //
+// v85 -> v86: a project investment row sums the newest row of every repository
+// of its (team, area, stream) and serves cycle_p50_hours only for a single
+// repository, with cycle_p50_hours_weighted_mean as an approximation. A
+// candidate saved before v86 holds the one-repository figures and must not be
+// reused.
+//
+// v86 -> v87: a team's metrics fact (and the per-team rows of a project's
+// metrics rollup) sums the newest row of every repository of the team per
+// day, drops the legacy empty-repository row beside real ones, and recomputes
+// the two ratios from the summed counts. A candidate saved before v87 holds
+// one repository's figures and must not be reused.
+//
 // v87 -> v88: a question for the members of one kind under an anchor that found
 // none, with no fact kind planned, is served with a degrading
 // graph_no_member_found row in place of an internal error. A candidate saved

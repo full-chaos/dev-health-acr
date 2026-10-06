@@ -15,7 +15,7 @@ import (
 func investmentRow(teamID string) []any {
 	// churn_loc is uint64, matching the production column -- the reader
 	// scans it raw and range-checks rather than wrapping it in SQL.
-	return []any{teamID, "product", "growth", "2026-02-22", int64(30), int64(12), int64(4), uint64(850), float64(18.5)}
+	return []any{teamID, "product", "growth", "2026-02-22", int64(30), int64(12), int64(4), uint64(850), float64(18.5), uint8(1), float64(18.5), uint8(1)}
 }
 
 func teamMixTables(teamID string) []fakeTable {
@@ -148,7 +148,7 @@ func TestInvestmentProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
 // day, delivery_units, work_items_completed, prs_merged, churn_loc,
 // cycle_p50_hours).
 func investmentProjectRollupRow(provider, projectID, teamID, teamName, area, stream string, deliveryUnits, workItemsCompleted, prsMerged int64, churnLOC uint64, cycleP50Hours float64) []any {
-	return []any{provider + ":" + projectID, teamID, teamName, area, stream, "2026-02-22", deliveryUnits, workItemsCompleted, prsMerged, churnLOC, cycleP50Hours}
+	return []any{provider + ":" + projectID, teamID, teamName, area, stream, "2026-02-22", deliveryUnits, workItemsCompleted, prsMerged, churnLOC, cycleP50Hours, uint8(1), cycleP50Hours, uint8(1)}
 }
 
 // TestInvestmentProviderProjectRollupBreaksDownByTeamNeverSums pins CHAOS-4363's
