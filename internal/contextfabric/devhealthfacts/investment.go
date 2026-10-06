@@ -313,8 +313,9 @@ func investmentMixUnavailableReason(unavailable, requested int, watermark string
 // verbatim, into one renderable team_breakdown table. The query itself now
 // lives in readers.ReadProjectInvestment; this adapter does the Go-side
 // grouping/breakdown-table construction the reader deliberately leaves to
-// its caller. See this file's package-level doc comment for why counts are
-// never summed across teams here (unlike metrics.go's commit counts).
+// its caller. The reader sums the newest row of each repository inside one
+// (team, area, stream) key. See this file's package-level doc comment for why
+// counts are never summed across teams here (unlike metrics.go's commit counts).
 func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount, omittedUnrepresentableCount, rejected int, breakdownTruncated bool, err error) {
 	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
@@ -374,8 +375,17 @@ func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID st
 				"work_items_completed": contextfabric.IntegerFactValue(r.WorkItemsCompleted),
 				"prs_merged":           contextfabric.IntegerFactValue(r.PRsMerged),
 				"churn_loc":            contextfabric.IntegerFactValue(churnLOC),
-				"cycle_p50_hours":      contextfabric.NumberFactValue(r.CycleP50Hours),
 				"investment_area":      stringOrNull(r.InvestmentArea),
+			}
+			// A key spanning several repositories has no exact median: the
+			// reader marks cycle_p50_hours known only for a single repository,
+			// and the weighted mean is an approximation served under its own
+			// name. An unknown value is an absent cell, never 0.
+			if r.CycleP50Known {
+				rowFields["cycle_p50_hours"] = contextfabric.NumberFactValue(r.CycleP50Hours)
+			}
+			if r.CycleP50HoursWeightedMeanKnown {
+				rowFields["cycle_p50_hours_weighted_mean"] = contextfabric.NumberFactValue(r.CycleP50HoursWeightedMean)
 			}
 			// CHAOS-4633: normalized to always-present (null when absent)
 			// rather than conditionally omitted -- project_stream is part
@@ -415,7 +425,7 @@ func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID st
 					Key:   []string{"team_id", "team_name", "day", "investment_area", "project_stream"},
 					Measures: []string{
 						"delivery_units", "work_items_completed", "prs_merged",
-						"churn_loc", "cycle_p50_hours",
+						"churn_loc", "cycle_p50_hours", "cycle_p50_hours_weighted_mean",
 					},
 					Grain: timeBound.effectiveGrain(grainDaily),
 					Rows:  teamRows,
