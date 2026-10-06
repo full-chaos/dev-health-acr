@@ -343,6 +343,9 @@ func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 	v.seed(t, ctx)
 	t.Logf("seeded %d work items, %d repositories, %d edges in %s", edgePageCostItems, edgePageCostRepos, 3*edgePageCostItems+edgePageCostRepos, time.Since(began))
 	asOf := v.now.Add(-250 * 24 * time.Hour)
+	// Before any work item began: only the 200 repositories are valid then,
+	// so the strict filter on the non-origin end keeps 200 of 12,201 nodes.
+	sparse := v.now.Add(-590 * 24 * time.Hour)
 	hub := []contextfabric.SubjectRef{v.team}
 	frontier := append([]contextfabric.SubjectRef(nil), v.repos[:20]...)
 	after := &directread.EdgeKey{RelationshipID: edgePageCostRID("own-item", 20)}
@@ -364,6 +367,7 @@ func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 		{"as_of_in_owned", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: asOf, Direction: directread.EdgeDirectionIn, Types: []string{"OWNED_BY_TEAM"}}, hubDegree, false},
 		{"current_after_limit100", directread.EdgePageQuery{Origins: hub, Limit: 100, ValidAt: v.now, Current: true, After: after}, hubDegree, false},
 		{"as_of_after_limit100", directread.EdgePageQuery{Origins: hub, Limit: 100, ValidAt: asOf, After: after}, hubDegree, false},
+		{"as_of_sparse", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: sparse}, hubDegree, false},
 		{"current_frontier", directread.EdgePageQuery{Origins: frontier, Limit: directread.MaxEdgePageLimit, ValidAt: v.now, Current: true, Exclude: &v.team}, frontierDegree, false},
 		{"as_of_frontier", directread.EdgePageQuery{Origins: frontier, Limit: directread.MaxEdgePageLimit, ValidAt: asOf, Exclude: &v.team}, frontierDegree, false},
 		{"owned_by_end_kinds", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now, Direction: directread.EdgeDirectionIn, EndKinds: []string{string(contextfabric.SubjectRepository)}}, hubDegree, true},
@@ -405,17 +409,20 @@ func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 		// at most two origin lookups per origin (one per arm) and at most two
 		// passes over the origins' edges.
 		if c.kindIndexed {
-			if legacy != cypher || scanned > edgePageCostRepos || traversed > edgePageCostRepos {
+			if legacy != cypher || scanned == 0 || traversed == 0 || scanned > edgePageCostRepos || traversed > edgePageCostRepos {
 				t.Errorf("%s: the end-kind page changed its statement or read beyond the %d nodes of its kind: scanned %d, traversed %d", c.name, edgePageCostRepos, scanned, traversed)
 			}
 			continue
+		}
+		if scanned == 0 || traversed == 0 {
+			t.Errorf("%s: the profile named no scan or no traverse (scanned %d, traversed %d): the bound measured nothing\n%s", c.name, scanned, traversed, strings.Join(plan, "\n"))
 		}
 		if scanned > 2*len(c.query.Origins) || traversed > 2*c.degree {
 			t.Errorf("%s: the page read beyond the origins: scanned %d nodes for %d origins, traversed %d edges for origin degree %d", c.name, scanned, len(c.query.Origins), traversed, c.degree)
 		}
 	}
 	if !raceDetectorEnabled {
-		for _, pair := range [][2]string{{"current", "as_of"}, {"current", "strict_now"}, {"current_in_owned", "as_of_in_owned"}, {"current_after_limit100", "as_of_after_limit100"}, {"current_frontier", "as_of_frontier"}} {
+		for _, pair := range [][2]string{{"current", "as_of"}, {"current", "strict_now"}, {"current", "as_of_sparse"}, {"current_in_owned", "as_of_in_owned"}, {"current_after_limit100", "as_of_after_limit100"}, {"current_frontier", "as_of_frontier"}} {
 			c, a := medians[pair[0]], medians[pair[1]]
 			t.Logf("RATIO %s/%s before=%.2f after=%.2f (%s before %.2f ms, after %.2f ms)", pair[0], pair[1], c[0]/a[0], c[1]/a[1], pair[1], a[0], a[1])
 		}
