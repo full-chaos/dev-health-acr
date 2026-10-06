@@ -458,6 +458,9 @@ func (e *Engine) terminalResult(
 	if limitation == noMatchLimitationOfferFloorEmptied {
 		limitation = noMatchLimitationSubjectNotFound(interpretation.SubjectTerms, effectiveSubjectFloor(structureMaterial).SearchedKinds)
 	}
+	if status == InvestigationNoMatch && limitation == noMatchLimitationUnproven && subjectTermsInputFrom(ctx) == SubjectTermsMissing {
+		limitation = contractsv1.ContextFabricSubjectTermsMissingLimitation
+	}
 	// CHAOS-5442: a frame the gate refused gets its own disclosure, on
 	// both surfaces, decided from the ONE value that already holds the
 	// verdict.
@@ -569,6 +572,11 @@ func (e *Engine) terminalResult(
 	temporallyLimited, temporalDisplaced := appendTemporalLimitations(limitations, interpretation)
 	limitations = temporallyLimited
 	limitations, conflictDisplaced := appendBoundedLimitations(limitations, statedPeriodLimitations(windowCanon))
+	if subjectTermsInputFrom(ctx) == SubjectTermsFromFrame {
+		var termsDisplaced int
+		limitations, termsDisplaced = appendBoundedLimitations(limitations, []string{contractsv1.ContextFabricSubjectTermsFromFrameLimitation})
+		conflictDisplaced += termsDisplaced
+	}
 	answer := statusSentence(status, resolution)
 	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
 		answer += " " + resolution.ClarificationPrompt
