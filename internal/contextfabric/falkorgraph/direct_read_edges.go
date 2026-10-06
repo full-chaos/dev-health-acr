@@ -164,11 +164,19 @@ func directEdgePageCypher(orgID string, query directread.EdgePageQuery) (string,
 	// Written as one pattern, (a:other)-[r]->(b:origin), FalkorDB starts at
 	// a: it scans every node of the organization, traverses every edge of the
 	// graph and only then keeps the edges into the origin (GRAPH.PROFILE on a
-	// 12k-node hub: 36200 edges traversed for a page of 5). The as_of
-	// predicate hid it by filtering a before the traverse; the current axis
-	// does not filter a by its end. With b bound first, the page reads only
-	// the origin's own in-edges. a is still the stored start, b the end.
+	// 12k-node seed: 36200 edges traversed for a page of 5, 724020 for a
+	// 20-origin frontier). The strict predicate hides part of it by filtering
+	// a before the traverse; the current axis does not filter a by its end.
+	// With b bound first, the page reads only the origins' own in-edges. a is
+	// still the stored start, b the stored end.
+	//
+	// With EndKinds the single pattern stays: there FalkorDB starts at the few
+	// nodes of those kinds through the subject_kind index, which reads less
+	// than every in-edge of a hub (measured on the same seed).
 	inArm := fmt.Sprintf("UNWIND $origins AS o MATCH (b:%s) WITH b MATCH (a:%s)-[r:%s]->(b) WHERE %s RETURN r, a, b", originNode, otherNode, labelRelation, inWhere)
+	if len(query.EndKinds) > 0 {
+		inArm = fmt.Sprintf("UNWIND $origins AS o MATCH (a:%s)-[r:%s]->(b:%s) WHERE %s RETURN r, a, b", otherNode, labelRelation, originNode, inWhere)
+	}
 	var inner string
 	switch query.Direction {
 	case directread.EdgeDirectionOut:

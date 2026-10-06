@@ -345,17 +345,21 @@ func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 		name   string
 		query  directread.EdgePageQuery
 		degree int
+		// kindIndexed: the statement keeps its single pattern (EndKinds), so
+		// its read work is bounded by the nodes of those kinds, not by the
+		// origins.
+		kindIndexed bool
 	}{
-		{"current", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now, Current: true}, hubDegree},
-		{"as_of", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: asOf}, hubDegree},
-		{"strict_now", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now}, hubDegree},
-		{"current_in_owned", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now, Current: true, Direction: directread.EdgeDirectionIn, Types: []string{"OWNED_BY_TEAM"}}, hubDegree},
-		{"as_of_in_owned", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: asOf, Direction: directread.EdgeDirectionIn, Types: []string{"OWNED_BY_TEAM"}}, hubDegree},
-		{"current_after_limit100", directread.EdgePageQuery{Origins: hub, Limit: 100, ValidAt: v.now, Current: true, After: after}, hubDegree},
-		{"as_of_after_limit100", directread.EdgePageQuery{Origins: hub, Limit: 100, ValidAt: asOf, After: after}, hubDegree},
-		{"current_frontier", directread.EdgePageQuery{Origins: frontier, Limit: directread.MaxEdgePageLimit, ValidAt: v.now, Current: true, Exclude: &v.team}, frontierDegree},
-		{"as_of_frontier", directread.EdgePageQuery{Origins: frontier, Limit: directread.MaxEdgePageLimit, ValidAt: asOf, Exclude: &v.team}, frontierDegree},
-		{"current_end_kinds", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now, Current: true, EndKinds: []string{string(contextfabric.SubjectRepository)}}, hubDegree},
+		{"current", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now, Current: true}, hubDegree, false},
+		{"as_of", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: asOf}, hubDegree, false},
+		{"strict_now", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now}, hubDegree, false},
+		{"current_in_owned", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now, Current: true, Direction: directread.EdgeDirectionIn, Types: []string{"OWNED_BY_TEAM"}}, hubDegree, false},
+		{"as_of_in_owned", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: asOf, Direction: directread.EdgeDirectionIn, Types: []string{"OWNED_BY_TEAM"}}, hubDegree, false},
+		{"current_after_limit100", directread.EdgePageQuery{Origins: hub, Limit: 100, ValidAt: v.now, Current: true, After: after}, hubDegree, false},
+		{"as_of_after_limit100", directread.EdgePageQuery{Origins: hub, Limit: 100, ValidAt: asOf, After: after}, hubDegree, false},
+		{"current_frontier", directread.EdgePageQuery{Origins: frontier, Limit: directread.MaxEdgePageLimit, ValidAt: v.now, Current: true, Exclude: &v.team}, frontierDegree, false},
+		{"as_of_frontier", directread.EdgePageQuery{Origins: frontier, Limit: directread.MaxEdgePageLimit, ValidAt: asOf, Exclude: &v.team}, frontierDegree, false},
+		{"owned_by_end_kinds", directread.EdgePageQuery{Origins: hub, Limit: 5, ValidAt: v.now, Direction: directread.EdgeDirectionIn, EndKinds: []string{string(contextfabric.SubjectRepository)}}, hubDegree, true},
 	}
 	medians := map[string][2]float64{}
 	for _, c := range cases {
@@ -390,6 +394,12 @@ func TestEdgePageReadsOnlyTheOriginsEdges(t *testing.T) {
 		// Each arm scans the origins only and traverses only their own edges:
 		// at most two origin lookups per origin (one per arm) and at most two
 		// passes over the origins' edges.
+		if c.kindIndexed {
+			if legacy != cypher || scanned > edgePageCostRepos || traversed > edgePageCostRepos {
+				t.Errorf("%s: the end-kind page changed its statement or read beyond the %d nodes of its kind: scanned %d, traversed %d", c.name, edgePageCostRepos, scanned, traversed)
+			}
+			continue
+		}
 		if scanned > 2*len(c.query.Origins) || traversed > 2*c.degree {
 			t.Errorf("%s: the page read beyond the origins: scanned %d nodes for %d origins, traversed %d edges for origin degree %d", c.name, scanned, len(c.query.Origins), traversed, c.degree)
 		}
