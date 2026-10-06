@@ -374,6 +374,9 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 				parts = append(parts, "NOT-REUSED-SHAPE")
 				continue
 			}
+			if event.RowWithheld == RowWithheldStoredWithoutRow && event.Outcome != "" {
+				parts = append(parts, "OUTCOME-WITHOUT-ROW")
+			}
 			parts = append(parts, fmt.Sprintf("%s:%s:%d/%d", event.Requirement, event.RowWithheld, event.ServedCover, event.Declared))
 		}
 		got := strings.Join(parts, ",")

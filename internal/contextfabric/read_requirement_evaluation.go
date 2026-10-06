@@ -252,8 +252,12 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 			continue
 		}
 		if !declaredCodes[detail.Code] {
-			evidence.UndeclaredCause = true
-			evidence.UndeclaredCode = detail.Code
+			// Scoped to the kinds THIS requirement reads: a code on another
+			// requirement's kind is that requirement's evidence, not this one's.
+			if requirementReadsKind(requirement, detail.FactKind) {
+				evidence.UndeclaredCause = true
+				evidence.UndeclaredCode = detail.Code
+			}
 			continue
 		}
 		// A DISCLOSURE IS NOT A CAUSE. `carriedCause` answers "what
@@ -914,8 +918,9 @@ func readRequirementOutcomeRow(
 	//
 	// `unavailable` with impact `dimension`: the reader asked for this cell
 	// and gets none of it. Not `narrowed`, which claims a reduction of
-	// something that was there, and not `not_attempted`, which belongs to the
-	// gap-row builder for a turn that ENDED before reaching the requirement.
+	// something that was there, and not `not_attempted`, which says the
+	// requirement was considered and not evaluated (every kind pruned, an
+	// unevaluable standard or cause, or a turn that ENDED before reaching it).
 	// This turn ran to completion and never planned the cell.
 	//
 	// CauseObserved is FALSE, and that is not a technicality. Nothing
@@ -957,7 +962,11 @@ func readRequirementOutcomeRow(
 	// not evaluated. The state is unchanged (`not_attempted` derives
 	// `partial`, as the planning seed alone did) and the account is complete.
 	//
-	// NOT REACHED BY THE FACT REGISTRY TODAY, which mints declared codes only.
+	// UNREACHABLE WHILE RESULT VALIDATION REFUSES UNDECLARED CODES (a fresh
+	// result carrying one fails Validate, see
+	// TestAFreshResultCarryingAnUndeclaredCoverageCodeIsRefusedByValidation),
+	// and the fact registry mints declared codes only. The arm is kept so a
+	// relaxed validator cannot drop the row silently.
 	// TestAnUndeclaredCauseCodeEmitsANotAttemptedRow is the reach probe that
 	// fails if the branch stops being the one that handles it.
 	//
@@ -1482,12 +1491,25 @@ func reusedObservationCoverEvents(result InvestigationResult, assignment observa
 		case hasEvaluatedReadOutcome(result.Completeness.Outcomes, requirement.Requirement):
 			event.RowWithheld = RowWithheldNone
 		default:
+			// No stored row, so no outcome to state: the line must not claim
+			// one for a row it says is absent.
+			event.Outcome = ""
 			event.RowWithheld = RowWithheldStoredWithoutRow
 		}
 		event.Reused = true
 		out = append(out, *event)
 	}
 	return out
+}
+
+// requirementReadsKind reports whether the requirement declares the kind.
+func requirementReadsKind(requirement contractsv1.ContextFabricPlanRequirement, kind FactKind) bool {
+	for _, declared := range requirement.FactKinds {
+		if declared == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // distinctFactKindCount is the number of distinct kinds in a list.

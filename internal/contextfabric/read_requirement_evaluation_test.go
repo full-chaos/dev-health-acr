@@ -1879,3 +1879,61 @@ func TestAnUndeclaredCauseCodeWithoutAnObservationStillEmitsTheNotEvaluableRow(t
 		t.Fatalf("the undeclared code was not logged: %s", logs.String())
 	}
 }
+
+// An undeclared code on a kind the requirement does not read is not that
+// requirement's evidence: the scan must be scoped to the requirement's kinds.
+func TestAnUndeclaredCauseCodeOnAnotherRequirementsKindDoesNotMarkThisOne(t *testing.T) {
+	const undeclared = contractsv1.ContextFabricCoverageDetailCode("fact_invented_by_a_future_producer")
+	health := contractsv1.ContextFabricFactHealth
+	other := contractsv1.ContextFabricFactIncidents
+	requirement := readRequirement(CompletionQuantifierAtLeastOne)
+	for _, kind := range requirement.FactKinds {
+		if kind == other {
+			t.Fatalf("fixture kind %q is one the requirement reads", other)
+		}
+	}
+	coverage := codedCoverage(undeclared, other, health, SourceAvailable, other, SourceAvailable)
+
+	logs := captureDefaultJSONLogger(t)
+	rows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, coverage, readPopulationEvidence{})
+	if len(rows) != 1 || rows[0].CauseCoverage == contractsv1.ContextFabricCoverageDetailRequirementNotEvaluable ||
+		rows[0].Outcome == contractsv1.ContextFabricRequirementNotAttempted {
+		t.Fatalf("rows = %+v: a code on a kind this requirement does not read must not mark it not_attempted", rows)
+	}
+	if strings.Contains(logs.String(), string(undeclared)) {
+		t.Fatalf("the unrelated code was logged against this requirement: %s", logs.String())
+	}
+
+	// COMPLEMENT: the same code on a kind the requirement DOES read marks it.
+	own := codedCoverage(undeclared, health, health, SourceAvailable)
+	rows = appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, own, readPopulationEvidence{})
+	if len(rows) != 1 || rows[0].CauseCoverage != contractsv1.ContextFabricCoverageDetailRequirementNotEvaluable {
+		t.Fatalf("rows = %+v, want requirement_not_evaluable for the requirement's own kind", rows)
+	}
+}
+
+// A fresh result carrying an undeclared coverage code is refused by result
+// validation, so the evaluator's undeclared-code row cannot be served while
+// that validator stands.
+func TestAFreshResultCarryingAnUndeclaredCoverageCodeIsRefusedByValidation(t *testing.T) {
+	const undeclared = contractsv1.ContextFabricCoverageDetailCode("fact_invented_by_a_future_producer")
+	result := validInvestigationResult()
+	if err := result.Validate(); err != nil {
+		t.Fatalf("the baseline result does not validate: %v", err)
+	}
+	declared := contractsv1.ContextFabricCoverageDetailFactPruned
+	for _, code := range []contractsv1.ContextFabricCoverageDetailCode{declared, undeclared} {
+		candidate := validInvestigationResult()
+		candidate.Coverage.Details = append(candidate.Coverage.Details, contractsv1.ContextFabricCoverageDetail{
+			DetailID: "detail_x", Source: canonicalFactSourcePrefix + string(contractsv1.ContextFabricFactHealth),
+			Code: code, FactKind: contractsv1.ContextFabricFactHealth, Label: "coded",
+		})
+		err := candidate.Validate()
+		t.Logf("code %q -> validation error: %v", code, err)
+		if code == undeclared && err == nil {
+			t.Fatalf("a result carrying the undeclared code %q validated", undeclared)
+		}
+	}
+}
