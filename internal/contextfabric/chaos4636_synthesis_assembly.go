@@ -409,6 +409,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.Limitations = composed
 		result.LimitationsDisplaced += displaced
 	}
+	if subjectTermsInputFrom(ctx) == SubjectTermsFromFrame {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricSubjectTermsFromFrameLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
 	if result.Cohort == nil || params.WorkItemCensus != nil {
 		result.Cohort = graphContext.Cohort
 	}
