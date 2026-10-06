@@ -67,6 +67,10 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		// never attempted. No source state: no source produced one. No count:
 		// nothing was read, so there is nothing to count.
 		d.Source = "context-fabric:answer-plan"
+	case ContextFabricCoverageDetailRequirementNotEvaluable:
+		// Source only, matching the field rule: the evaluator declined to
+		// account for the requirement, so no kind, state or count applies.
+		d.Source = "context-fabric:answer-plan"
 	case ContextFabricCoverageDetailFactReadOriginState:
 		// Kind, state and origin, all required, nothing else: one read's
 		// outcome for one kind, named by the population the read was for.
