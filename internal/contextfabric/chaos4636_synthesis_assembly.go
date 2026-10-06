@@ -66,9 +66,13 @@ import (
 // Investigate's scope. It is a struct rather than a parameter list so that
 // adding an input is a visible change to this stage's contract.
 type synthesisAssemblyParams struct {
-	WorkItemCensus *WorkItemTupleCensus
-	Request        InvestigationRequest
-	Interpretation InterpretedQuestion
+	// ReadRequirements is the requirement list the fact read ran with: what
+	// the planner read for this question. Read-only; the status floor's
+	// asked-kind set includes it.
+	ReadRequirements []FactRequirement
+	WorkItemCensus   *WorkItemTupleCensus
+	Request          InvestigationRequest
+	Interpretation   InterpretedQuestion
 	// Frame is this turn's validated QuestionFrame, nil when none
 	// validated. CARRIED (CHAOS-4736 bar 5), never re-derived: the retry
 	// pass finalizes through the same render-shape selection the first
@@ -510,7 +514,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// pass; only the RECORDING is deferred.
 	pending.SynthesisStatusOverride = applySynthesisStatusOverride(&result)
 	if pending.SynthesisStatusOverride == nil {
-		pending.SynthesisStatusOverride = applyServerStatusFloor(&result, graphContext, facts)
+		pending.SynthesisStatusOverride = applyServerStatusFloor(&result, graphContext, facts, params.ReadRequirements)
 	}
 	// CHAOS-4099: the answer's own statement that some requested evidence
 	// was never reachable. Placed alongside the other post-synthesis

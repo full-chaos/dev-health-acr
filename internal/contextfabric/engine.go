@@ -3927,7 +3927,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Plan:       plan,
 		Allocation: AllocateItems(plan, groupCountOf(graphContext.Cohort), cohortMemberCount(graphContext.Cohort)),
 		Request:    request, Interpretation: interpretation, Frame: requirementFrame, ScopeAnchorKind: familyOutcome.WinningSample.ScopeAnchorKind,
-		Graph: graphContext, Facts: facts,
+		Graph: graphContext, Facts: facts, ReadRequirements: factRequest.Requirements,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarried: windowCarried,
 		ReadTimeClamp:  readTimeClamp,
