@@ -415,11 +415,11 @@ import (
 // candidate saved before v74 holds an edge set without those edges and must
 // not be reused.
 //
-// v75 -> v76: a deployment walk cut before it reached any member is served
+// v76 -> v77: a deployment walk cut before it reached any member is served
 // with its own coverage code (graph_walk_cut_before_member) in place of
-// kind_census_truncated. A candidate saved before v76 holds the old code and
+// kind_census_truncated. A candidate saved before v77 holds the old code and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v76"
+const QueryVersion = "devhealthfacts.clickhouse.v77"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

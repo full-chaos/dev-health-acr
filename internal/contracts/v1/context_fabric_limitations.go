@@ -588,6 +588,22 @@ const ContextFabricTerminalNotSavedLimitation = "This answer could not be saved,
 // stated separately where there is one.
 const ContextFabricSingleSubjectCountLimitation = "This question asks for a count about one named subject, which has no set of members to count, so no member count was stated. The values given are the stored daily or period values for that subject. A total of those daily values over the stated period is stated in the answer, with the days it rests on, only where the stored values can be added; where none is stated, none was computed. A day with no stored row is either a day with no activity or a day that was not computed, and the server cannot tell which, so such a day is named and never counted as zero."
 
+// ContextFabricSubjectTermsFromFrameLimitation is the sentence an answer
+// carries when the supplied interpretation had no subject_terms and the
+// subjects were read from the subject expression of its question_frame.
+const ContextFabricSubjectTermsFromFrameLimitation = "The supplied interpretation had no subject_terms, so the subjects were read from the subject expression of its question_frame. Send subject_terms to name the subjects directly."
+
+// ContextFabricSubjectTermsMissingLimitation is the sentence a no_match
+// answer carries when the supplied interpretation named no subject at all:
+// no subject_terms, and no subject in its question_frame. Retrieval had no
+// name to search for, so the answer is not a search result.
+const ContextFabricSubjectTermsMissingLimitation = "The supplied interpretation named no subject: it has no subject_terms and its question_frame names none, so retrieval had nothing to search for. This is not a search result. Send subject_terms with the names of the subjects the question is about, and ask again."
+
+// ContextFabricSubjectTermsFrameOverBoundLimitation is the sentence a no_match
+// answer carries when the question_frame of a supplied interpretation named
+// more subjects than subject_terms may hold, so none were read from it.
+const ContextFabricSubjectTermsFrameOverBoundLimitation = "The supplied interpretation had no subject_terms, and its question_frame names more subjects than subject_terms may hold, so none were read from it. This is not a search result. Send subject_terms with at most 50 names and ask again."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -627,6 +643,9 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricTerminalNotSavedLimitation,
 		ContextFabricBudgetTrimClaimedFactsLimitation,
 		ContextFabricSingleSubjectCountLimitation,
+		ContextFabricSubjectTermsFromFrameLimitation,
+		ContextFabricSubjectTermsMissingLimitation,
+		ContextFabricSubjectTermsFrameOverBoundLimitation,
 	}
 }
 
