@@ -454,7 +454,7 @@ import (
 // repository, with cycle_p50_hours_weighted_mean as an approximation. A
 // candidate saved before v86 holds the one-repository figures and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v86"
+const QueryVersion = "devhealthfacts.clickhouse.v87"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
