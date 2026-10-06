@@ -440,7 +440,12 @@ import (
 // saved before v83 holds a degraded answer floored on an unasked kind and must
 // not be reused.
 //
-// v83 -> v85: a model no_match whose own outcome rows record a truncated
+// v83 -> v84: a read requirement every declared kind of which was pruned, and
+// one the evaluator cannot evaluate (an undeclared cause code or an
+// unrecognised quantifier), now carry a not_attempted assembled-result row.
+// A candidate saved before v84 lacks that row and must not be reused.
+//
+// v84 -> v85: a model no_match whose own outcome rows record a truncated
 // population that served nothing is served degraded. A candidate saved before
 // v85 holds the no_match and must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v85"
