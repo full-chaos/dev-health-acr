@@ -160,7 +160,14 @@ func directEdgePageCypher(orgID string, query directread.EdgePageQuery) (string,
 	originNode := fmt.Sprintf("%s {%s:$org, %s:o.k, %s:o.i}", labelSubject, propOrgID, propKind, propCanonicalID)
 	otherNode := fmt.Sprintf("%s {%s:$org}", labelSubject, propOrgID)
 	outArm := fmt.Sprintf("UNWIND $origins AS o MATCH (a:%s)-[r:%s]->(b:%s) WHERE %s RETURN r, a, b", originNode, labelRelation, otherNode, outWhere)
-	inArm := fmt.Sprintf("UNWIND $origins AS o MATCH (a:%s)-[r:%s]->(b:%s) WHERE %s RETURN r, a, b", otherNode, labelRelation, originNode, inWhere)
+	// The in arm names the origin FIRST: FalkorDB starts the plan at the
+	// first node of the pattern, so (a:other)-[r]->(b:origin) scanned every
+	// node of the organization, traversed every edge of the graph and only
+	// then kept the edges into the origin. Measured on a 12k-node hub seed:
+	// 24200 edges traversed for a page; anchored, only the origin's own
+	// in-edges are read. The stored direction and the aliases are unchanged:
+	// a is still the stored start and b the stored end.
+	inArm := fmt.Sprintf("UNWIND $origins AS o MATCH (b:%s)<-[r:%s]-(a:%s) WHERE %s RETURN r, a, b", originNode, labelRelation, otherNode, inWhere)
 	var inner string
 	switch query.Direction {
 	case directread.EdgeDirectionOut:
