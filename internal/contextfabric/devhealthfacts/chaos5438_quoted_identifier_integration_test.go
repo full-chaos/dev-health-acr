@@ -32,11 +32,14 @@ package devhealthfacts_test
 //                      error. A value that round-trips shorter than it was
 //                      sent is a worse failure than a refusal.
 //
-// So a backslash-bearing work-item id that this repository previously read
-// (possibly wrongly) now makes the fact read ERROR. That is a real, inherited
-// behaviour change, it is the safer direction, and it is LOUD -- which is the
-// property this test pins, because the alternative a reader would assume is a
-// silent empty read indistinguishable from a work item with no data.
+// So a backslash-bearing work-item id would make the whole batched read fail,
+// for every sibling id too. The providers now guard the binding themselves:
+// that id alone is rejected before the query runs and disclosed through the
+// subject-shape rejection (truncated, one omitted, reason
+// subject_id_shape_rejected), and its siblings are read. It is never read
+// with a mangled escape and never a silent empty read indistinguishable from
+// a work item with no data, which is the property the backslash arm pins
+// against a real server.
 //
 // VENUE: bigboy, with the acr mirror prefixes exported --
 //	TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX=ghcr.io/full-chaos/dev-health-acr
@@ -130,10 +133,9 @@ func TestChaos5438_QuotedAndEscapedIdentifiersSurviveTheArrayBinding(t *testing.
 		})
 	}
 
-	// The BACKSLASH half: refused, and refused LOUDLY. The assertion is on
-	// the error, not on emptiness -- a silent empty read here would be
-	// indistinguishable from a work item that genuinely has no data, which is
-	// exactly the failure the upstream guard exists to prevent.
+	// The BACKSLASH half: rejected alone and disclosed. The assertion is on
+	// the disclosed rejection, not on emptiness -- a silent empty read here
+	// would be indistinguishable from a work item that genuinely has no data.
 	t.Run("backslash_is_rejected_alone_and_disclosed", func(t *testing.T) {
 		backslashSubject := workItemSubject(repoID, chaos5438BackslashWorkItemID)
 		provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactStatus)
