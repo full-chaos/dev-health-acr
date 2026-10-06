@@ -1347,13 +1347,14 @@ func TestFactBearingAgreesWithTheRegistrysOwnRule(t *testing.T) {
 				factCoverage(health, state), readPopulationEvidence{})
 
 			// A PRUNE IS ITS OWN CASE and the two layers still agree: the
-			// registry says it contributes no facts, and this evaluator emits
-			// no row at all rather than an `unavailable` one, because a prune
-			// is not a loss. Asserted here so the prune cannot quietly rejoin
-			// the unavailable set.
+			// registry says it contributes no facts, and this evaluator
+			// publishes `not_attempted` naming `fact_pruned` rather than an
+			// `unavailable` row, because a prune is not a loss. Asserted here
+			// so the prune cannot quietly rejoin the unavailable set.
 			if state == SourcePruned {
-				if len(rows) != 0 {
-					t.Fatalf("a pruned observation produced %d rows: %+v", len(rows), rows)
+				if len(rows) != 1 || rows[0].Outcome != contractsv1.ContextFabricRequirementNotAttempted ||
+					rows[0].CauseCoverage != contractsv1.ContextFabricCoverageDetailFactPruned {
+					t.Fatalf("a pruned observation produced %+v, want one not_attempted/fact_pruned row", rows)
 				}
 				return
 			}
@@ -1521,9 +1522,10 @@ func TestAPartialCoverageDetailDoesNotSuppressTheRow(t *testing.T) {
 	}
 
 	// COMPLEMENT, in the same run: the same shape with BOTH fields filled and
-	// the same bad code DOES suppress the row. Without it the two cases above
-	// would pass on an evaluator whose stop path had been deleted outright --
-	// the opposite defect, and the more dangerous one.
+	// the same bad code reaches the stop path, which publishes the
+	// `not_attempted` / `requirement_not_evaluable` row. Without it the two
+	// cases above would pass on an evaluator whose stop path had been deleted
+	// outright -- the opposite defect, and the more dangerous one.
 	poisoned := appendReadRequirementEvaluations(nil,
 		[]contractsv1.ContextFabricPlanRequirement{requirement},
 		withDetail(contractsv1.ContextFabricCoverageDetail{
@@ -1533,9 +1535,11 @@ func TestAPartialCoverageDetailDoesNotSuppressTheRow(t *testing.T) {
 			FactKind: health,
 			Label:    "poison",
 		}), readPopulationEvidence{})
-	if len(poisoned) != 0 {
-		t.Fatalf("a detail naming BOTH a kind and an undeclared code produced %d rows, want 0 -- "+
-			"the cases above show the guards are NARROW only while the stop path still fires", len(poisoned))
+	if len(poisoned) != 1 || poisoned[0].Outcome != contractsv1.ContextFabricRequirementNotAttempted ||
+		poisoned[0].CauseCoverage != contractsv1.ContextFabricCoverageDetailRequirementNotEvaluable {
+		t.Fatalf("a detail naming BOTH a kind and an undeclared code produced %+v, want one not_attempted/"+
+			"requirement_not_evaluable row -- the cases above show the guards are NARROW only while the "+
+			"stop path still fires", poisoned)
 	}
 }
 
