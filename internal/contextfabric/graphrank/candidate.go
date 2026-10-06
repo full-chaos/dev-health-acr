@@ -196,6 +196,7 @@ func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 		Subject:   subject, State: contextfabric.ResolutionProposed,
 		MatchedTerms: []string{term}, MatchReasons: []string{reason}, Confidence: confidence,
 		EvidenceRefIDs: EvidenceRefs(node.Attributes), MatchMechanisms: mechanisms,
+		Provider: ProviderAttribute(node.Attributes),
 	}, true
 }
 
