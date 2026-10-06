@@ -6,7 +6,9 @@ import (
 )
 
 func TestFrameSubjectTermsReadsEveryNamingVariantAndNoOther(t *testing.T) {
-	frame := func(expression SubjectExpression) *QuestionFrame { return &QuestionFrame{SubjectExpression: expression} }
+	frame := func(expression SubjectExpression) *QuestionFrame {
+		return &QuestionFrame{SubjectExpression: expression}
+	}
 	cases := []struct {
 		name  string
 		frame *QuestionFrame
