@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "a660b1337253e7354880cc74f1de94aa56060eb1",
+    "commit": "562bcb38e9c02fd87df7a7a890c737d1e9ea01ff",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },
@@ -200,6 +200,21 @@
       "const_name": "registeredCoverageBaselinesDocument",
       "digest": "141ed14fc636739e1184716167148d7d17c35180a09a83dc9ef2b04bfb1dd638",
       "kind": "query"
+    },
+    {
+      "operation": "coverageScopeBaseline",
+      "document": "query CoverageScopeBaseline($orgId: String!, $endDate: Date!, $repoIds: [String!], $teamIds: [String!]) {\n  coverageScopeBaseline(\n    orgId: $orgId\n    endDate: $endDate\n    repoIds: $repoIds\n    teamIds: $teamIds\n  ) {\n    lineBaselinePct\n    lineDays\n    __typename\n  }\n}",
+      "const_name": "registeredCoverageScopeBaselineDocument",
+      "digest": "071c15a21f584816f94d86c48268b41638e2a66f1e6e8fd96b9047f48fa0a7ca",
+      "kind": "query"
+    },
+    {
+      "operation": "coverageScopeBaseline",
+      "document": "query CoverageScopeBaseline($orgId: String!, $endDate: Date!) {\n  coverageScopeBaseline(orgId: $orgId, endDate: $endDate) {\n    lineBaselinePct\n    lineDays\n    __typename\n  }\n}",
+      "const_name": "registeredCoverageScopeBaselineV1Document",
+      "digest": "2badf6b15232c05fb72f06c74a5da54a6037ba0a69e400aaba346dee5633dc5f",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "createSavedReport",
