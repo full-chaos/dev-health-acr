@@ -100,3 +100,11 @@ func TestFindSummaryTellsEmptyIsNotProofAndAmbiguousNeedsAChoice(t *testing.T) {
 		t.Errorf("ambiguous summary:\n%s", ambiguous)
 	}
 }
+
+func TestFindSubjectsSummaryKeepsTheProviderColumn(t *testing.T) {
+	find := json.RawMessage(`{"status":"ambiguous","subjects":[{"kind":"project","canonical_id":"project.v2:a","label":"CHAOS","match":"alias","provider":"jira"},{"kind":"project","canonical_id":"project.v2:b","label":"CHAOS","match":"alias","provider":"linear"}],"population":{"returned":2,"total_known":2,"truncated":false},"page":{"returned":2,"complete":true},"request":{"mode":"name"}}`)
+	text := RenderFindSubjectsSummary(find, DataTextMaxBytes)
+	if !strings.Contains(text, "| jira") || !strings.Contains(text, "| linear") {
+		t.Fatalf("summary lost the provider column:\n%s", text)
+	}
+}

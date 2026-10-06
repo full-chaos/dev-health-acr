@@ -283,6 +283,8 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		label = "No pull request of this repository links an issue, so its work items could not be reached (" + countPhrase(d.Count, "pull request", "pull requests") + " checked)"
 	case ContextFabricCoverageDetailGraphWalkCutBeforeMember:
 		label = "The read was cut before it reached any " + humanizeVocabularyToken(string(d.Kind)) + ", so some may exist that were not read"
+	case ContextFabricCoverageDetailComputedPopulationAbsent:
+		label = "No member set could be produced for this, so it was not computed"
 	case ContextFabricCoverageDetailGraphUnknownRelationshipType:
 		label = countPhrase(d.Count, "relationship edge", "relationship edges") + " of an unrecognized type dropped"
 	case ContextFabricCoverageDetailGraphValidityUnbounded:

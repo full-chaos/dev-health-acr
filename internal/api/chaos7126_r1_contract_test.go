@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -82,5 +83,11 @@ func TestChaos7126_R1_EveryEchoedCallerStringIsUntrusted(t *testing.T) {
 		if !declared["request."+name] {
 			t.Errorf("request.%s is echoed but not declared untrusted", name)
 		}
+	}
+}
+
+func TestFindSubjectsDeclaresProviderUntrusted(t *testing.T) {
+	if !slices.Contains(dataSubjectsUntrustedFields, "subjects[].provider") {
+		t.Fatal("subjects[].provider is served from graph attributes but not declared untrusted")
 	}
 }

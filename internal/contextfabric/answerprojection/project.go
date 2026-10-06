@@ -725,6 +725,7 @@ func projectClarification(result contractsv1.ContextFabricInvestigationResult, b
 			State:        candidate.State,
 			Confidence:   candidate.Confidence,
 			MatchReasons: reasons,
+			Provider:     candidate.Provider,
 		})
 	}
 	return &contractsv1.ContextFabricProjectedClarification{

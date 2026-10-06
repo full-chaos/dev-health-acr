@@ -83,7 +83,7 @@ func TestByIDRoute_StatesTheRequirementTransitionItServes(t *testing.T) {
 		Obligation:    contractsv1.ContextFabricAnswerObligationCount,
 		Outcome:       contractsv1.ContextFabricRequirementUnavailable,
 		Impact:        contractsv1.ContextFabricAnswerImpactDimension,
-		CauseCoverage: contractsv1.ContextFabricCoverageDetailFactPruned,
+		CauseCoverage: contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent,
 		CauseObserved: true,
 	}, nil)
 	app, token, logs := newCompletenessAuthorityTestApp(t, legacyResultStore{result: stored}, false)

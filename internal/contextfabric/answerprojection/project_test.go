@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -392,6 +393,44 @@ func TestClarificationAppearsOnlyWhenTheEngineAskedForIt(t *testing.T) {
 	}
 	if err := projection.Validate(); err != nil {
 		t.Fatalf("clarification projection failed validation: %v", err)
+	}
+}
+
+// TestClarificationCandidatesCarryProviderToTellSameLabelsApart is the row an
+// agent reads: two options with one label differ only by provider.
+func TestClarificationCandidatesCarryProviderToTellSameLabelsApart(t *testing.T) {
+	result := richResult()
+	result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+	result.SubjectResolution.ClarificationPrompt = "Which subject did you mean: CHAOS (jira), CHAOS (linear)?"
+	result.SubjectResolution.Candidates = result.SubjectResolution.Candidates[:2]
+	for i, provider := range []string{"jira", "linear"} {
+		result.SubjectResolution.Candidates[i].Subject.Kind = contractsv1.ContextFabricSubjectProject
+		result.SubjectResolution.Candidates[i].Subject.Label = "CHAOS"
+		result.SubjectResolution.Candidates[i].Provider = provider
+	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	projection := Project(result, Budget{})
+	if projection.Clarification == nil || len(projection.Clarification.Candidates) != 2 {
+		t.Fatalf("clarification = %+v, want two candidates", projection.Clarification)
+	}
+	a, b := projection.Clarification.Candidates[0], projection.Clarification.Candidates[1]
+	if a.Subject.Label != b.Subject.Label || a.Provider != "jira" || b.Provider != "linear" {
+		t.Fatalf("candidates = %+v / %+v, want one label and providers jira, linear", a, b)
+	}
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("projection failed validation: %v", err)
+	}
+}
+
+func TestProjectedCandidateProviderBoundIsValidated(t *testing.T) {
+	result := richResult()
+	result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+	result.SubjectResolution.ClarificationPrompt = "Which one?"
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	projection := Project(result, Budget{})
+	projection.Clarification.Candidates[0].Provider = strings.Repeat("p", contractsv1.ContextFabricProviderMaxLength+1)
+	if err := projection.Validate(); err == nil {
+		t.Fatal("projection with a 65-rune provider validated; the schema caps it at 64")
 	}
 }
 

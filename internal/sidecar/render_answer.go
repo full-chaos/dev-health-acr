@@ -124,6 +124,9 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 			line := fmt.Sprintf("- %s `%s` (receipt `%s`, confidence %.2f)",
 				safeInline(string(candidate.Subject.Kind)), untrustedInline(candidate.Subject.Label),
 				safeInline(candidate.ReceiptID), candidate.Confidence)
+			if candidate.Provider != "" {
+				line += fmt.Sprintf(" provider %s", untrustedInline(candidate.Provider))
+			}
 			if !b.writeLine(line) {
 				return b.finishWithTruncation()
 			}

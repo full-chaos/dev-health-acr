@@ -629,7 +629,8 @@
                 "read_population_unverified",
                 "fact_read_origin_state",
                 "kind_census_truncated",
-                "graph_walk_cut_before_member"
+                "graph_walk_cut_before_member",
+                "computed_population_absent"
               ],
               "type": "string"
             },
@@ -1006,6 +1007,11 @@
               "maximum": 1,
               "minimum": 0,
               "type": "number"
+            },
+            "provider": {
+              "type": "string",
+              "maxLength": 64,
+              "description": "Source provider of the subject, present when exactly one provider identifies it."
             },
             "match_reasons": {
               "items": {
@@ -5699,7 +5705,8 @@
                 "read_population_unverified",
                 "fact_read_origin_state",
                 "kind_census_truncated",
-                "graph_walk_cut_before_member"
+                "graph_walk_cut_before_member",
+                "computed_population_absent"
               ],
               "type": "string"
             },
@@ -7928,6 +7935,11 @@
               "maxItems": 100,
               "type": "array",
               "uniqueItems": true
+            },
+            "provider": {
+              "type": "string",
+              "maxLength": 64,
+              "description": "Source provider of the subject. Present when exactly one provider identifies the subject."
             },
             "match_mechanisms": {
               "items": {

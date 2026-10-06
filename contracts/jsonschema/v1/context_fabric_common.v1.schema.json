@@ -1813,6 +1813,11 @@
           "minimum": 0,
           "maximum": 1
         },
+        "provider": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Source provider of the subject. Present when exactly one provider identifies the subject."
+        },
         "match_mechanisms": {
           "type": "array",
           "items": {
@@ -5109,7 +5114,8 @@
             "read_population_unverified",
             "fact_read_origin_state",
             "kind_census_truncated",
-            "graph_walk_cut_before_member"
+            "graph_walk_cut_before_member",
+            "computed_population_absent"
           ]
         },
         "degrading": {

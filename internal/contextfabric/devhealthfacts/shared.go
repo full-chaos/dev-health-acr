@@ -425,7 +425,21 @@ import (
 // synthesis headroom, and says so with its own N of M and summary-coverage
 // sentences. A candidate saved before v78 holds the shorter list and the old
 // wording and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v78"
+//
+// v79 -> v80: a computed requirement with no member set to run over is served
+// with its own cause (computed_population_absent) in place of fact_pruned. A
+// candidate saved before v80 holds the old cause and must not be reused.
+//
+// v80 -> v81: a clarification candidate and a find_subjects row name their
+// provider when exactly one provider identifies the node. A candidate saved
+// before v81 holds a clarification whose candidates read the same and must not
+// be reused.
+//
+// v81 -> v83: a model no_match over a committed subject is floored on a read
+// fact row only when the row's kind is one the question asked for. A candidate
+// saved before v83 holds a degraded answer floored on an unasked kind and must
+// not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v83"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -632,10 +646,24 @@ func subjectIndex(subjects []contextfabric.SubjectRef, prefix string) (ids []str
 			rejected++
 			continue
 		}
+		if !bindingSafeKey(raw) {
+			rejected++
+			continue
+		}
 		bySubject[raw] = subject
 		ids = append(ids, raw)
 	}
 	return ids, bySubject, rejected
+}
+
+// bindingSafeKey reports whether key can travel inside the Array(String) "ids"
+// binding. The ClickHouse client refuses a backslash for the WHOLE batch
+// (ErrUnsafeBindingValue), which read as a store outage for every sibling id.
+// subjectIndex and v2Index, the only builders of that binding, drop such an id
+// alone and count it as rejected, so it is disclosed through
+// applySubjectShapeRejection while its siblings are still read.
+func bindingSafeKey(key string) bool {
+	return !strings.ContainsRune(key, '\\')
 }
 
 // v2Index recovers this package's ClickHouse lookup key for a CHAOS-3898
@@ -681,6 +709,10 @@ func v2Index(subjects []contextfabric.SubjectRef, kind string) (ids []string, by
 			continue
 		}
 		key := repoID + ":" + rawID
+		if !bindingSafeKey(key) {
+			rejected++
+			continue
+		}
 		bySubject[key] = subject
 		ids = append(ids, key)
 	}

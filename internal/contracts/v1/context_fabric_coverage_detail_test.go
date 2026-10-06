@@ -77,6 +77,8 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		// No count: the population size is precisely the quantity nothing
 		// could enumerate, and a number here would claim one was measured.
 		d.Source = "context-fabric:read-population"
+	case ContextFabricCoverageDetailComputedPopulationAbsent:
+		d.Source = "context-fabric:requirements"
 	case ContextFabricCoverageDetailGraphWalkCutBeforeMember:
 		d.Source, d.Degrading, d.Kind = "context-fabric:graph", true, ContextFabricSubjectDeployment
 	case ContextFabricCoverageDetailKindCensusTruncated:
@@ -108,6 +110,27 @@ func TestCoverageDetailEveryCodeHasValidFixtureRuleAndLabel(t *testing.T) {
 		if len([]rune(label)) > ContextFabricCoverageDetailLabelMaxLength {
 			t.Errorf("%s: composed label exceeds the bound", code)
 		}
+	}
+}
+
+// TestComputedPopulationAbsentCarriesNothingButItsSource pins the field rule
+// and the label meaning of the computed-population-absent code.
+func TestComputedPopulationAbsentCarriesNothingButItsSource(t *testing.T) {
+	code := ContextFabricCoverageDetailComputedPopulationAbsent
+	for name, mutate := range map[string]func(*ContextFabricCoverageDetail){
+		"count":     func(d *ContextFabricCoverageDetail) { n := 3; d.Count = &n },
+		"fact kind": func(d *ContextFabricCoverageDetail) { d.FactKind = ContextFabricFactHealth },
+		"kind":      func(d *ContextFabricCoverageDetail) { d.Kind = ContextFabricSubjectTeam },
+	} {
+		d := validDetailForCode(code)
+		mutate(&d)
+		if err := d.Validate(); err == nil {
+			t.Errorf("%s: a detail with %s was accepted", code, name)
+		}
+	}
+	label := ComposeCoverageDetailLabel(validDetailForCode(code))
+	if !strings.Contains(label, "member set") || !strings.Contains(label, "not computed") {
+		t.Errorf("label %q does not say no member set was produced and nothing was computed", label)
 	}
 }
 

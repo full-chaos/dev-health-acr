@@ -478,7 +478,8 @@ const irreducibleAnswerBytes = 1023
 //
 // 521162181 -> 521162209 (+28): the version set carries the synthesis
 // source.
-const maximalAnswerBytes = 521162209
+// 521162209 -> 521166109 (+3900): the candidate provider cue, 64 runes on 50 candidates and the field name.
+const maximalAnswerBytes = 521166109
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
