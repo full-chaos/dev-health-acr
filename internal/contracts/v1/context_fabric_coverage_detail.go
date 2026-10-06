@@ -324,6 +324,17 @@ const (
 	// proved about a source). A row naming this code says only that the
 	// requirement was considered and not evaluated.
 	ContextFabricCoverageDetailRequirementNotEvaluable ContextFabricCoverageDetailCode = "requirement_not_evaluable"
+
+	// ContextFabricCoverageDetailGraphNoMemberFound: the question asked for the
+	// members of one subject kind (Kind) under a named anchor, the anchor
+	// resolved, and the search found no member of that kind. Nothing was
+	// counted: the code carries Kind alone.
+	//
+	// It is not `graph_walk_cut_before_member`, which says the read was cut
+	// before it could look. It is not a healthy answer either: the search
+	// found none, which is not a proof that none exist, so the row degrades
+	// and the answer says so rather than reading as complete.
+	ContextFabricCoverageDetailGraphNoMemberFound ContextFabricCoverageDetailCode = "graph_no_member_found"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -354,6 +365,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailGraphWalkCutBeforeMember,
 	ContextFabricCoverageDetailComputedPopulationAbsent,
 	ContextFabricCoverageDetailRequirementNotEvaluable,
+	ContextFabricCoverageDetailGraphNoMemberFound,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -648,6 +660,8 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	// No fact kind, no count, no source state: the code says the evaluator
 	// could not state an account, so it carries nothing about any one read.
 	ContextFabricCoverageDetailRequirementNotEvaluable: {},
+	// Kind alone: no count (nothing was counted), no Declared/Served.
+	ContextFabricCoverageDetailGraphNoMemberFound: {requireKind: true},
 	// Kind, state and origin, all three REQUIRED, and nothing else: the row
 	// says "this kind, read for this population, came back in this state".
 	// No count (the row is per read, not per subject), no scope fields (the

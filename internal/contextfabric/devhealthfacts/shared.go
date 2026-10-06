@@ -448,7 +448,12 @@ import (
 // v84 -> v85: a model no_match whose own outcome rows record a truncated
 // population that served nothing is served degraded. A candidate saved before
 // v85 holds the no_match and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v85"
+//
+// v87 -> v88: a question for the members of one kind under an anchor that found
+// none, with no fact kind planned, is served with a degrading
+// graph_no_member_found row in place of an internal error. A candidate saved
+// before v88 holds no such row and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v88"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

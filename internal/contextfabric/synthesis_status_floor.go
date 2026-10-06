@@ -34,6 +34,7 @@ func cohortTerminalCoverageCode(code contractsv1.ContextFabricCoverageDetailCode
 	switch code {
 	case contractsv1.ContextFabricCoverageDetailKindCensusTruncated,
 		contractsv1.ContextFabricCoverageDetailGraphWalkCutBeforeMember,
+		contractsv1.ContextFabricCoverageDetailGraphNoMemberFound,
 		contractsv1.ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked,
 		contractsv1.ContextFabricCoverageDetailWorkItemRepositoryUnlinked,
 		contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization,
@@ -164,6 +165,26 @@ func applyPopulationOutcomeStatusFloor(result *InvestigationResult) {
 	}
 }
 
+// applyEmptyMemberSearchStatusFloor floors a complete answer whose coverage
+// carries the degrading graph_no_member_found row and whose cohort served no
+// member. The anchor resolved and the search found no member of the asked
+// kind; that is not a proof that none exist, so the answer is partial rather
+// than complete.
+func applyEmptyMemberSearchStatusFloor(result *InvestigationResult) {
+	if result == nil || result.Status != InvestigationComplete || result.RefusalBasis != "" {
+		return
+	}
+	if result.Cohort != nil && len(result.Cohort.Members) > 0 {
+		return
+	}
+	for _, detail := range result.Coverage.Details {
+		if detail.Degrading && detail.Code == contractsv1.ContextFabricCoverageDetailGraphNoMemberFound {
+			floorNoMatchTo(result, InvestigationPartial)
+			return
+		}
+	}
+}
+
 // populationTruncatedNoMemberRowHolds reports whether an assembled-result
 // outcome row says the population was truncated and no member of it was served.
 func populationTruncatedNoMemberRowHolds(result InvestigationResult) bool {
@@ -188,6 +209,7 @@ func populationTruncatedNoMemberRowHolds(result InvestigationResult) bool {
 func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
 	before := result.Status
 	applyPopulationOutcomeStatusFloor(&result)
+	applyEmptyMemberSearchStatusFloor(&result)
 	if result.Status != before {
 		result.Completeness = ComputeAnswerCompleteness(result)
 	}

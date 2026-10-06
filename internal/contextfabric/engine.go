@@ -3521,7 +3521,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// says so instead of failing.
 		if errors.Is(err, ErrNoFactRequirements) && !workItemTuple {
 			err = nil
-			facts = CanonicalFactBundle{Version: nonEmptyVersion("", "")}
+			facts = emptyFactReadBundle(familyOutcome.Frame)
 		}
 		if err != nil {
 			subjectKinds := make([]string, 0, len(subjects))
