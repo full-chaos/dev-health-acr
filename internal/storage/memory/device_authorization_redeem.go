@@ -90,6 +90,13 @@ func (s *DeviceAuthorizationStore) AcknowledgeCredential(ctx context.Context, or
 			return *record.CredentialAckedAt, nil
 		}
 		now := s.now().UTC()
+		if record.RedeemedAt == nil || !now.Before(record.RedeemedAt.Add(storage.DeviceCredentialAckWindow)) {
+			return time.Time{}, storage.ErrDeviceAuthorizationNotFound
+		}
+		credential, err := s.credentials.GetByID(ctx, orgID, credentialID)
+		if err != nil || credential.RevokedAt != nil {
+			return time.Time{}, storage.ErrDeviceAuthorizationNotFound
+		}
 		record.CredentialAckedAt = ptrTime(now)
 		s.byDevice[hash] = cloneDeviceAuthorization(record)
 		return now, nil

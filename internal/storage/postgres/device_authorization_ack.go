@@ -17,8 +17,10 @@ func nullableText(value string) sql.NullString {
 }
 
 // AcknowledgeCredential marks the credential of an ackable device redemption
-// as received by the client. The row update is the only place the flag moves,
-// so any pod, and the revoke sweep, see the same answer.
+// as received by the client. It takes the authorization row lock first, so it
+// and the revoke sweep serialize on the same row: an acknowledgement is
+// accepted only while the credential is still live and inside the ack window,
+// and an acknowledgement that was already recorded is returned unchanged.
 func (s *DeviceAuthorizationStore) AcknowledgeCredential(ctx context.Context, orgID, credentialID string) (time.Time, error) {
 	if err := s.readyDeviceAuthorization(ctx); err != nil {
 		return time.Time{}, err
@@ -26,21 +28,45 @@ func (s *DeviceAuthorizationStore) AcknowledgeCredential(ctx context.Context, or
 	if !uuidPattern.MatchString(orgID) || credentialID == "" {
 		return time.Time{}, storage.ErrInvalidDeviceAuthorization
 	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("begin device credential acknowledgement: %w", sanitizeDatabaseError(err))
+	}
+	defer func() { _ = tx.Rollback() }()
 	now := s.now().UTC()
-	var ackedAt time.Time
-	err := s.DB.QueryRowContext(ctx, `
-UPDATE acr.device_authorizations
-SET credential_acked_at = COALESCE(credential_acked_at, $3)
+	var redeemedAt time.Time
+	var ackedAt sql.NullTime
+	err = tx.QueryRowContext(ctx, `
+SELECT redeemed_at, credential_acked_at FROM acr.device_authorizations
 WHERE redeemed_credential_id = $2 AND authorized_org_id = $1::uuid
   AND state = 'redeemed' AND ack_required
-RETURNING credential_acked_at`, orgID, credentialID, now).Scan(&ackedAt)
+FOR UPDATE`, orgID, credentialID).Scan(&redeemedAt, &ackedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, storage.ErrDeviceAuthorizationNotFound
 	}
 	if err != nil {
+		return time.Time{}, fmt.Errorf("lock device authorization for acknowledgement: %w", sanitizeDatabaseError(err))
+	}
+	if ackedAt.Valid {
+		return ackedAt.Time.UTC(), nil
+	}
+	if !now.Before(redeemedAt.Add(storage.DeviceCredentialAckWindow)) {
+		return time.Time{}, storage.ErrDeviceAuthorizationNotFound
+	}
+	var revokedAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT revoked_at FROM acr.client_credentials WHERE org_id = $1 AND credential_id = $2`, orgID, credentialID).Scan(&revokedAt); err != nil {
+		return time.Time{}, fmt.Errorf("read credential for acknowledgement: %w", sanitizeDatabaseError(err))
+	}
+	if revokedAt.Valid {
+		return time.Time{}, storage.ErrDeviceAuthorizationNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE acr.device_authorizations SET credential_acked_at = $2 WHERE redeemed_credential_id = $1`, credentialID, now); err != nil {
 		return time.Time{}, fmt.Errorf("acknowledge device credential: %w", sanitizeDatabaseError(err))
 	}
-	return ackedAt.UTC(), nil
+	if err := tx.Commit(); err != nil {
+		return time.Time{}, fmt.Errorf("commit device credential acknowledgement: %w", sanitizeDatabaseError(err))
+	}
+	return now, nil
 }
 
 // RevokeUnacknowledged revokes the credentials whose ack window has elapsed.

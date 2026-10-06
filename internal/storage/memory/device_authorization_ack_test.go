@@ -189,3 +189,33 @@ func TestDeviceCredentialAck_concurrentRetriesLeaveOneLiveCredential(t *testing.
 
 	require.Len(t, f.liveCredentials(t), 1)
 }
+
+func TestDeviceCredentialAck_lateOrPostSweepAcknowledgementIsRefused(t *testing.T) {
+	f := newApprovedAckFixture(t)
+	id, err := f.redeemAckable(t)
+	require.NoError(t, err)
+
+	f.now = f.now.Add(storage.DeviceCredentialAckWindow)
+	_, err = f.store.AcknowledgeCredential(context.Background(), f.grant.OrgID, id)
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound, "the window is closed even before the sweep runs")
+	revoked, err := f.store.RevokeUnacknowledged(context.Background(), 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, revoked, "the refused acknowledgement did not rescue the credential")
+	_, err = f.store.AcknowledgeCredential(context.Background(), f.grant.OrgID, id)
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound)
+	require.Empty(t, f.liveCredentials(t))
+}
+
+func TestDeviceCredentialAck_repeatedAcknowledgementAfterTheWindowReturnsTheFirst(t *testing.T) {
+	f := newApprovedAckFixture(t)
+	id, err := f.redeemAckable(t)
+	require.NoError(t, err)
+	first, err := f.store.AcknowledgeCredential(context.Background(), f.grant.OrgID, id)
+	require.NoError(t, err)
+
+	f.now = f.now.Add(storage.DeviceCredentialAckWindow + time.Hour)
+	again, err := f.store.AcknowledgeCredential(context.Background(), f.grant.OrgID, id)
+
+	require.NoError(t, err)
+	require.Equal(t, first, again)
+}

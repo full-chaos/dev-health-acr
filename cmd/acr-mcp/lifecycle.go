@@ -254,7 +254,18 @@ func runDeviceLoginAttempt(ctx context.Context, session *sidecar.CredentialLifec
 				return deviceLoginFailed
 			}
 			if !acknowledgeIssuedCredential(ctx, cfg, response.AccessToken, response.Credential.CredentialID) {
-				fmt.Fprintln(os.Stderr, "login: credential was stored but the server did not confirm it; the server revokes an unconfirmed credential, so run login again")
+				// The server revokes a credential it never saw acknowledged, so
+				// the stored copy is already dead or about to be, and a later
+				// plain login that finds it would verify it and report success
+				// without acknowledging it. Remove the local copy now (revoking
+				// is best effort: the server's own sweep revokes it either way)
+				// so the next login starts a fresh device flow.
+				_ = revokeIssuedCredential(ctx, cfg, response.AccessToken)
+				if purgeErr := session.PurgeCredentialMaterial(persisted); purgeErr != nil {
+					fmt.Fprintln(os.Stderr, "login: the server did not confirm the credential and local cleanup requires operator action at "+describeCleanupLocations(purgeErr))
+					return deviceLoginFailed
+				}
+				fmt.Fprintln(os.Stderr, "login: the server did not confirm the issued credential and it was removed; run login again")
 				return deviceLoginFailed
 			}
 			fmt.Fprintln(os.Stdout, "login successful")

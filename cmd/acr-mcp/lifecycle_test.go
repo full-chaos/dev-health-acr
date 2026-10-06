@@ -692,8 +692,8 @@ func TestLoginFails_whenTheServerNeverConfirmsTheIssuedCredential(t *testing.T) 
 			if got := state.ackCount(); got != deviceAckAttempts {
 				t.Fatalf("acknowledgement attempts = %d, want %d", got, deviceAckAttempts)
 			}
-			if _, err := os.Stat(path); err != nil {
-				t.Fatalf("local credential removed after an unconfirmed login: %v", err)
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("local credential kept after an unconfirmed login (a plain login would then skip the acknowledgement): %v", err)
 			}
 		})
 	}

@@ -223,3 +223,21 @@ func TestDeviceCredentialAckStore_sweepSplitsABatchBetweenConcurrentPods(t *test
 	require.NotContains(t, f.liveCredentialIDs(t), id)
 	require.Equal(t, 1, f.revokedAuditCount(t))
 }
+
+func TestDeviceCredentialAckStore_lateOrPostSweepAcknowledgementIsRefused(t *testing.T) {
+	f := newPostgresAckFixture(t)
+	id, err := f.redeemAckable(t)
+	require.NoError(t, err)
+
+	f.now = f.now.Add(storage.DeviceCredentialAckWindow)
+	_, err = f.store.AcknowledgeCredential(f.ctx, f.grant.OrgID, id)
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound, "the window is closed even before the sweep runs")
+	revoked, err := f.store.RevokeUnacknowledged(f.ctx, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, revoked)
+	_, err = f.store.AcknowledgeCredential(f.ctx, f.grant.OrgID, id)
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound)
+	var acked sql.NullTime
+	require.NoError(t, f.db.QueryRowContext(f.ctx, "SELECT credential_acked_at FROM acr.device_authorizations WHERE device_code_hash = $1", f.hash.String()).Scan(&acked))
+	require.False(t, acked.Valid, "a refused acknowledgement records nothing")
+}

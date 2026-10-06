@@ -129,12 +129,16 @@ rules follow:
   Acknowledging twice is not an error. A credential that is not awaiting
   acknowledgement, or an id that is not the bearer's own, answers `404`.
 
-If `login` cannot acknowledge (three attempts), it exits with a failure and
-keeps the stored credential; the server revokes it, and the next `login` finds
-it inactive and starts a fresh device flow. The RFC 8628 device grant
-(`POST /device_authorization`) and the authorization-code flow issue credentials
-to third-party OAuth clients that have no acknowledgement call; those
-credentials are not subject to this window. The acknowledgement route and the
+If `login` cannot acknowledge (three attempts), it tries to revoke the
+credential, removes the local copy, and exits with a failure, so the next
+`login` starts a fresh device flow instead of finding a credential that was
+never acknowledged. An acknowledgement is accepted only while the credential is
+live and less than 120 seconds old (a repeat of an accepted one is returned
+unchanged); a late one answers `404` even before the sweep has run. The RFC 8628
+device grant (`POST /device_authorization`) and the authorization-code flow
+issue credentials to third-party OAuth clients that have no acknowledgement
+call; those credentials are not subject to this window, so a lost response
+there still strands the credential (the client starts a new grant). The acknowledgement route and the
 client roll out together: a client that never acknowledges loses its credential
 after 120 seconds.
 
