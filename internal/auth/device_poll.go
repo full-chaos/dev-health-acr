@@ -235,19 +235,28 @@ func newDevicePollError(kind DevicePollErrorKind, retryAfter time.Duration) erro
 // name the caller's own credential or no unacknowledged redemption exists.
 var ErrDeviceCredentialAckRejected = errors.New("device credential acknowledgement rejected")
 
+// ErrDeviceCredentialAckWindowClosed is returned when the credential awaited an
+// acknowledgement but the window closed (or the credential was revoked) first:
+// the server revokes or has revoked it, and the caller must not rely on it.
+var ErrDeviceCredentialAckWindowClosed = errors.New("device credential acknowledgement window closed")
+
 // AcknowledgeCredential records that the caller stored the credential it
 // authenticated with. The caller can acknowledge only its own credential: the
-// bearer proves possession, and the id in the body must match it.
+// bearer proves possession, and an id that is supplied must match it (an empty
+// id means the bearer's own).
 func (s *DeviceFlowService) AcknowledgeCredential(ctx context.Context, principal storage.Principal, credentialID string) (time.Time, error) {
 	if err := s.ready(ctx); err != nil {
 		return time.Time{}, err
 	}
-	if principal.AuthenticationMethod != storage.AuthenticationMethodCredential || principal.CredentialID == "" || principal.CredentialID != credentialID {
+	if principal.AuthenticationMethod != storage.AuthenticationMethodCredential || principal.CredentialID == "" || (credentialID != "" && principal.CredentialID != credentialID) {
 		return time.Time{}, ErrDeviceCredentialAckRejected
 	}
-	ackedAt, err := s.store.AcknowledgeCredential(ctx, principal.OrgID, credentialID)
+	ackedAt, err := s.store.AcknowledgeCredential(ctx, principal.OrgID, principal.CredentialID)
 	if errors.Is(err, storage.ErrDeviceAuthorizationNotFound) {
 		return time.Time{}, ErrDeviceCredentialAckRejected
+	}
+	if errors.Is(err, storage.ErrDeviceAuthorizationConflict) {
+		return time.Time{}, ErrDeviceCredentialAckWindowClosed
 	}
 	if err != nil {
 		return time.Time{}, fmt.Errorf("acknowledge device credential: %w", err)

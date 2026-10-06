@@ -276,9 +276,17 @@ func (a *App) handleAcknowledgeSelfCredential(w http.ResponseWriter, r *http.Req
 		a.handleRuntimeUnavailable(w, r)
 		return
 	}
-	ackedAt, err := a.deviceFlow.AcknowledgeCredential(r.Context(), principal, request.CredentialID)
+	requested := ""
+	if request.CredentialID != nil {
+		requested = *request.CredentialID
+	}
+	ackedAt, err := a.deviceFlow.AcknowledgeCredential(r.Context(), principal, requested)
 	if errors.Is(err, auth.ErrDeviceCredentialAckRejected) {
 		writeError(w, r, http.StatusNotFound, "not_found", "No credential is awaiting acknowledgement", false, nil)
+		return
+	}
+	if errors.Is(err, auth.ErrDeviceCredentialAckWindowClosed) {
+		writeError(w, r, http.StatusConflict, "credential_lifecycle_conflict", "The acknowledgement window closed; the credential is revoked or about to be", false, nil)
 		return
 	}
 	if err != nil {
@@ -286,7 +294,7 @@ func (a *App) handleAcknowledgeSelfCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusOK, contractsv1.CredentialAckResponse{
-		SchemaVersion: contractsv1.CredentialAckResponseSchema, CredentialID: request.CredentialID, AcknowledgedAt: ackedAt,
+		SchemaVersion: contractsv1.CredentialAckResponseSchema, CredentialID: principal.CredentialID, AcknowledgedAt: ackedAt,
 	})
 }
 

@@ -197,13 +197,28 @@ func TestDeviceCredentialAck_lateOrPostSweepAcknowledgementIsRefused(t *testing.
 
 	f.now = f.now.Add(storage.DeviceCredentialAckWindow)
 	_, err = f.store.AcknowledgeCredential(context.Background(), f.grant.OrgID, id)
-	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound, "the window is closed even before the sweep runs")
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationConflict, "the window is closed even before the sweep runs")
 	revoked, err := f.store.RevokeUnacknowledged(context.Background(), 10)
 	require.NoError(t, err)
 	require.Equal(t, 1, revoked, "the refused acknowledgement did not rescue the credential")
 	_, err = f.store.AcknowledgeCredential(context.Background(), f.grant.OrgID, id)
-	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound)
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationConflict)
 	require.Empty(t, f.liveCredentials(t))
+}
+
+func TestDeviceCredentialAck_retryAfterTheCredentialWasRevokedInsideTheWindowIsRefused(t *testing.T) {
+	f := newApprovedAckFixture(t)
+	first, err := f.redeemAckable(t)
+	require.NoError(t, err)
+	_, err = f.credentials.RevokeCredential(context.Background(), storage.CredentialRevocationInput{OrgID: f.grant.OrgID, CredentialID: first, ActorID: "operator"})
+	require.NoError(t, err)
+
+	_, err = f.redeemAckable(t)
+
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationConflict)
+	require.Empty(t, f.liveCredentials(t), "no replacement is minted for a credential that was already revoked")
+	_, err = f.store.AcknowledgeCredential(context.Background(), f.grant.OrgID, first)
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationConflict)
 }
 
 func TestDeviceCredentialAck_repeatedAcknowledgementAfterTheWindowReturnsTheFirst(t *testing.T) {

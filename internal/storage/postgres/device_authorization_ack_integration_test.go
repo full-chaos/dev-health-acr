@@ -17,6 +17,7 @@ type postgresAckFixture struct {
 	db      *sql.DB
 	store   *DeviceAuthorizationStore
 	service *auth.Service
+	clock   sync.Mutex
 	now     time.Time
 	hash    storage.DeviceCodeHash
 	grant   storage.DeviceAuthorizationGrant
@@ -30,7 +31,7 @@ func newPostgresAckFixture(t *testing.T) *postgresAckFixture {
 	require.NoError(t, err)
 	credentials, err := NewCredentialStore(f.db, audit)
 	require.NoError(t, err)
-	clock := func() time.Time { return f.now }
+	clock := func() time.Time { f.clock.Lock(); defer f.clock.Unlock(); return f.now }
 	f.service, err = auth.NewService(credentials, auth.ServiceOptions{Now: clock})
 	require.NoError(t, err)
 	f.store, err = NewDeviceAuthorizationStoreWithOptions(f.db, audit, DeviceAuthorizationStoreOptions{Now: clock})
@@ -231,13 +232,61 @@ func TestDeviceCredentialAckStore_lateOrPostSweepAcknowledgementIsRefused(t *tes
 
 	f.now = f.now.Add(storage.DeviceCredentialAckWindow)
 	_, err = f.store.AcknowledgeCredential(f.ctx, f.grant.OrgID, id)
-	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound, "the window is closed even before the sweep runs")
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationConflict, "the window is closed even before the sweep runs")
 	revoked, err := f.store.RevokeUnacknowledged(f.ctx, 10)
 	require.NoError(t, err)
 	require.Equal(t, 1, revoked)
 	_, err = f.store.AcknowledgeCredential(f.ctx, f.grant.OrgID, id)
-	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound)
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationConflict)
 	var acked sql.NullTime
 	require.NoError(t, f.db.QueryRowContext(f.ctx, "SELECT credential_acked_at FROM acr.device_authorizations WHERE device_code_hash = $1", f.hash.String()).Scan(&acked))
 	require.False(t, acked.Valid, "a refused acknowledgement records nothing")
+}
+
+func (f *postgresAckFixture) setNow(value time.Time) {
+	f.clock.Lock()
+	defer f.clock.Unlock()
+	f.now = value
+}
+
+// A retry that read its clock before it blocked on the row lock must not mint a
+// replacement when the sweep revoked the credential while it waited.
+func TestDeviceCredentialAckStore_retryThatWaitedOnTheRowLockWhileTheSweepRevokedIsRefused(t *testing.T) {
+	f := newPostgresAckFixture(t)
+	first, err := f.redeemAckable(t)
+	require.NoError(t, err)
+	input := f.input(t)
+	holder, err := f.db.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback() }()
+	_, err = holder.ExecContext(f.ctx, "SELECT 1 FROM acr.device_authorizations WHERE device_code_hash = $1 FOR UPDATE", f.hash.String())
+	require.NoError(t, err)
+
+	type result struct {
+		id  string
+		err error
+	}
+	done := make(chan result, 1)
+	f.setNow(f.now.Add(time.Second))
+	go func() {
+		credential, redeemErr := f.store.RedeemAckable(f.ctx, f.hash, input)
+		done <- result{credential.CredentialID, redeemErr}
+	}()
+	require.Eventually(t, func() bool {
+		var waiting int
+		require.NoError(t, f.db.QueryRowContext(f.ctx, "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()").Scan(&waiting))
+		return waiting > 0
+	}, 10*time.Second, 50*time.Millisecond, "the retry never blocked on the row lock")
+
+	f.setNow(f.now.Add(storage.DeviceCredentialAckWindow))
+	_, err = holder.ExecContext(f.ctx, "UPDATE acr.client_credentials SET revoked_at = $2 WHERE credential_id = $1", first, f.now)
+	require.NoError(t, err)
+	require.NoError(t, holder.Commit())
+
+	got := <-done
+	require.ErrorIs(t, got.err, storage.ErrDeviceAuthorizationConflict, "a replacement was minted after the sweep revoked the credential")
+	require.Empty(t, f.liveCredentialIDs(t))
+	var total int
+	require.NoError(t, f.db.QueryRowContext(f.ctx, "SELECT count(*) FROM acr.client_credentials WHERE org_id = $1", f.grant.OrgID).Scan(&total))
+	require.Equal(t, 1, total, "no second credential row exists")
 }

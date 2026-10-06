@@ -37,6 +37,13 @@ func (s *DeviceAuthorizationStore) redeem(ctx context.Context, hash storage.Devi
 		if !record.AckWindowOpen(now) {
 			return contractsv1.ClientCredential{}, storage.NewDeviceAuthorizationConflict(record.State, storage.DeviceConflictAckWindowElapsed)
 		}
+		old, getErr := s.credentials.GetByID(ctx, record.AuthorizedOrgID, record.RedeemedCredentialID)
+		if getErr != nil {
+			return contractsv1.ClientCredential{}, getErr
+		}
+		if old.RevokedAt != nil {
+			return contractsv1.ClientCredential{}, storage.NewDeviceAuthorizationConflict(record.State, storage.DeviceConflictAckWindowElapsed)
+		}
 		replacing = record.RedeemedCredentialID
 	case record.State == storage.DeviceAuthorizationStateRedeemed:
 		return contractsv1.ClientCredential{}, storage.NewDeviceAuthorizationConflict(record.State, storage.RedeemedConflictReason(record))
@@ -91,11 +98,11 @@ func (s *DeviceAuthorizationStore) AcknowledgeCredential(ctx context.Context, or
 		}
 		now := s.now().UTC()
 		if record.RedeemedAt == nil || !now.Before(record.RedeemedAt.Add(storage.DeviceCredentialAckWindow)) {
-			return time.Time{}, storage.ErrDeviceAuthorizationNotFound
+			return time.Time{}, storage.NewDeviceAuthorizationConflict(storage.DeviceAuthorizationStateRedeemed, storage.DeviceConflictAckWindowElapsed)
 		}
 		credential, err := s.credentials.GetByID(ctx, orgID, credentialID)
 		if err != nil || credential.RevokedAt != nil {
-			return time.Time{}, storage.ErrDeviceAuthorizationNotFound
+			return time.Time{}, storage.NewDeviceAuthorizationConflict(storage.DeviceAuthorizationStateRedeemed, storage.DeviceConflictAckWindowElapsed)
 		}
 		record.CredentialAckedAt = ptrTime(now)
 		s.byDevice[hash] = cloneDeviceAuthorization(record)

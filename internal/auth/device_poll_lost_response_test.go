@@ -121,3 +121,22 @@ func TestDeviceFlow_oauthDeviceGrantCredentialNeedsNoAcknowledgement(t *testing.
 	require.Zero(t, revoked)
 	require.Equal(t, []string{issued.Credential.CredentialID}, liveCredentialIDs(t, fixture))
 }
+
+func TestDeviceFlow_AcknowledgeCredential_emptyIDMeansTheCallersOwnAndALateOneIsClosed(t *testing.T) {
+	fixture := newDeviceFlowFixture(t, deviceFlowRandom(65))
+	issued, err := fixture.flow.Poll(context.Background(), approvedDeviceCode(t, fixture))
+	require.NoError(t, err)
+	principal := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential, OrgID: deviceFlowTestOrgID, CredentialID: issued.Credential.CredentialID}
+
+	fixture.now = fixture.now.Add(storage.DeviceCredentialAckWindow)
+	_, err = fixture.flow.AcknowledgeCredential(context.Background(), principal, "")
+	require.ErrorIs(t, err, ErrDeviceCredentialAckWindowClosed)
+
+	other := newDeviceFlowFixture(t, deviceFlowRandom(66))
+	own, err := other.flow.Poll(context.Background(), approvedDeviceCode(t, other))
+	require.NoError(t, err)
+	ownPrincipal := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential, OrgID: deviceFlowTestOrgID, CredentialID: own.Credential.CredentialID}
+	ackedAt, err := other.flow.AcknowledgeCredential(context.Background(), ownPrincipal, "")
+	require.NoError(t, err)
+	require.False(t, ackedAt.IsZero())
+}

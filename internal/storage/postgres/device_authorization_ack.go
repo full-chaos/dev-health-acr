@@ -51,14 +51,14 @@ FOR UPDATE`, orgID, credentialID).Scan(&redeemedAt, &ackedAt)
 		return ackedAt.Time.UTC(), nil
 	}
 	if !now.Before(redeemedAt.Add(storage.DeviceCredentialAckWindow)) {
-		return time.Time{}, storage.ErrDeviceAuthorizationNotFound
+		return time.Time{}, storage.NewDeviceAuthorizationConflict(storage.DeviceAuthorizationStateRedeemed, storage.DeviceConflictAckWindowElapsed)
 	}
 	var revokedAt sql.NullTime
 	if err := tx.QueryRowContext(ctx, `SELECT revoked_at FROM acr.client_credentials WHERE org_id = $1 AND credential_id = $2`, orgID, credentialID).Scan(&revokedAt); err != nil {
 		return time.Time{}, fmt.Errorf("read credential for acknowledgement: %w", sanitizeDatabaseError(err))
 	}
 	if revokedAt.Valid {
-		return time.Time{}, storage.ErrDeviceAuthorizationNotFound
+		return time.Time{}, storage.NewDeviceAuthorizationConflict(storage.DeviceAuthorizationStateRedeemed, storage.DeviceConflictAckWindowElapsed)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE acr.device_authorizations SET credential_acked_at = $2 WHERE redeemed_credential_id = $1`, credentialID, now); err != nil {
 		return time.Time{}, fmt.Errorf("acknowledge device credential: %w", sanitizeDatabaseError(err))
@@ -116,7 +116,7 @@ FOR UPDATE OF d SKIP LOCKED`, now.Add(-storage.DeviceCredentialAckWindow), limit
 		return 0, fmt.Errorf("close unacknowledged device credentials: %w", sanitizeDatabaseError(err))
 	}
 	for _, t := range targets {
-		if err := s.revokeUnacknowledgedTx(ctx, tx, t.orgID, t.credentialID, now); err != nil {
+		if _, err := s.revokeUnacknowledgedTx(ctx, tx, t.orgID, t.credentialID, now); err != nil {
 			return 0, err
 		}
 	}
@@ -126,23 +126,28 @@ FOR UPDATE OF d SKIP LOCKED`, now.Add(-storage.DeviceCredentialAckWindow), limit
 	return len(targets), nil
 }
 
-func (s *DeviceAuthorizationStore) revokeUnacknowledgedTx(ctx context.Context, tx *sql.Tx, orgID, credentialID string, now time.Time) error {
+// revokeUnacknowledgedTx revokes the credential and reports whether this call
+// did; false means it was already revoked.
+func (s *DeviceAuthorizationStore) revokeUnacknowledgedTx(ctx context.Context, tx *sql.Tx, orgID, credentialID string, now time.Time) (bool, error) {
 	credential, err := lockedCredential(ctx, tx, orgID, credentialID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if credential.RevokedAt != nil {
-		return nil
+		return false, nil
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE acr.client_credentials SET revoked_at = $3
 WHERE org_id = $1 AND credential_id = $2 AND revoked_at IS NULL`, orgID, credentialID, now); err != nil {
-		return fmt.Errorf("revoke unacknowledged device credential: %w", sanitizeDatabaseError(err))
+		return false, fmt.Errorf("revoke unacknowledged device credential: %w", sanitizeDatabaseError(err))
 	}
 	credential.RevokedAt = cloneTime(&now)
 	input := storage.CredentialRevocationInput{
 		OrgID: orgID, CredentialID: credentialID, ActorID: deviceAckRevokeActor,
 		ActorType: "system", Reason: "device credential not acknowledged",
 	}
-	return s.audit.record(ctx, tx, withRevocationDetails(credentialRevokedEvent(credential, deviceAckRevokeActor, now), input))
+	if err := s.audit.record(ctx, tx, withRevocationDetails(credentialRevokedEvent(credential, deviceAckRevokeActor, now), input)); err != nil {
+		return false, err
+	}
+	return true, nil
 }

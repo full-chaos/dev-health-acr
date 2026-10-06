@@ -76,6 +76,8 @@ func TestLoginIsIdempotentWhenPersistedCredentialIsAccepted(t *testing.T) {
 				return
 			}
 			writeLifecycleCapabilities(t, w)
+		case "/api/v1/auth/credentials/self/ack":
+			serveLifecycleAck(t, state, w, r, token, "credential-1")
 		case "/api/v1/oauth/device_authorization":
 			state.countAuthorization()
 			state.recordProblem("idempotent login started a new device authorization")
@@ -111,6 +113,9 @@ func TestLoginIsIdempotentWhenPersistedCredentialIsAccepted(t *testing.T) {
 	authorizations, polls, revocations, capabilities := state.counts()
 	if authorizations != 0 || polls != 0 || revocations != 0 || capabilities != 1 {
 		t.Fatalf("HTTP counts = auth %d poll %d revoke %d capabilities %d, want 0 0 0 1", authorizations, polls, revocations, capabilities)
+	}
+	if got := state.ackCount(); got != 1 {
+		t.Fatalf("acknowledgements = %d, want 1 (a stored credential is acknowledged without an id)", got)
 	}
 }
 
@@ -654,8 +659,8 @@ func TestLoginPollsAgainAfterALostResponse_andAcknowledgesTheSecondCredential(t 
 
 // Without the acknowledgement the server revokes the credential after its ack
 // window, so a stored-but-unconfirmed credential must be reported as a failure
-// rather than as "login successful". The local credential stays: the server
-// owns the revocation.
+// rather than as "login successful". The local credential is kept (never
+// revoked or purged here): the next login acknowledges it again.
 func TestLoginFails_whenTheServerNeverConfirmsTheIssuedCredential(t *testing.T) {
 	for _, status := range []int{http.StatusServiceUnavailable, http.StatusNotFound} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
@@ -689,11 +694,23 @@ func TestLoginFails_whenTheServerNeverConfirmsTheIssuedCredential(t *testing.T) 
 			if strings.Contains(stdout, "login successful") {
 				t.Fatalf("login stdout = %q, want no success message", stdout)
 			}
-			if got := state.ackCount(); got != deviceAckAttempts {
-				t.Fatalf("acknowledgement attempts = %d, want %d", got, deviceAckAttempts)
+			// A definite 404 ends the attempts at once; anything else is retried.
+			wantAttempts := deviceAckAttempts
+			if status == http.StatusNotFound {
+				wantAttempts = 1
 			}
-			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("local credential kept after an unconfirmed login (a plain login would then skip the acknowledgement): %v", err)
+			if got := state.ackCount(); got != wantAttempts {
+				t.Fatalf("acknowledgement attempts = %d, want %d", got, wantAttempts)
+			}
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("local credential must be kept after an unconfirmed login: %v", err)
+			}
+			if string(contents) != token+"\n" {
+				t.Fatal("kept credential changed")
+			}
+			if _, _, revocations, _ := state.counts(); revocations != 0 {
+				t.Fatalf("revocation requests = %d, want 0 (the credential is kept, not revoked)", revocations)
 			}
 		})
 	}

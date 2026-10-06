@@ -446,7 +446,7 @@ func assertOAuthDeviceError(t *testing.T, response *httptest.ResponseRecorder, w
 func ackRequest(t *testing.T, token, credentialID string) *http.Request {
 	t.Helper()
 	request := deviceRequest(t, http.MethodPost, "/api/v1/auth/credentials/self/ack", contractsv1.CredentialAckRequest{
-		SchemaVersion: contractsv1.CredentialAckRequestSchema, CredentialID: credentialID,
+		SchemaVersion: contractsv1.CredentialAckRequestSchema, CredentialID: ackIDOrNil(credentialID),
 	})
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
@@ -507,7 +507,19 @@ func TestDeviceRoutes_pollRetryAfterLostResponseReplacesTheCredential(t *testing
 	if retriedAck.Code != http.StatusOK {
 		t.Fatalf("replacement ack status = %d body=%s", retriedAck.Code, retriedAck.Body.String())
 	}
+	omitted := httptest.NewRecorder()
+	app.Handler().ServeHTTP(omitted, ackRequest(t, retried.AccessToken, ""))
+	if omitted.Code != http.StatusOK {
+		t.Fatalf("ack without a credential id status = %d body=%s", omitted.Code, omitted.Body.String())
+	}
 	noBearer := httptest.NewRecorder()
 	app.Handler().ServeHTTP(noBearer, ackRequest(t, "", retried.Credential.CredentialID))
 	assertErrorResponse(t, noBearer, http.StatusUnauthorized, "invalid_token")
+}
+
+func ackIDOrNil(id string) *string {
+	if id == "" {
+		return nil
+	}
+	return &id
 }

@@ -171,7 +171,10 @@ func (c *Client) revokeOwnCredential(ctx context.Context, receipt *contractsv1.C
 // it authenticates with. A device-poll credential that is not acknowledged is
 // revoked by the server after a short window.
 func (c *Client) AcknowledgeOwnCredential(ctx context.Context, credentialID string) (contractsv1.CredentialAckResponse, error) {
-	request := contractsv1.CredentialAckRequest{SchemaVersion: contractsv1.CredentialAckRequestSchema, CredentialID: credentialID}
+	request := contractsv1.CredentialAckRequest{SchemaVersion: contractsv1.CredentialAckRequestSchema}
+	if credentialID != "" {
+		request.CredentialID = &credentialID
+	}
 	if err := request.Validate(); err != nil {
 		return contractsv1.CredentialAckResponse{}, fmt.Errorf("encode credential acknowledgement request: %w", err)
 	}
@@ -183,7 +186,7 @@ func (c *Client) AcknowledgeOwnCredential(ctx context.Context, credentialID stri
 	if err := c.call(ctx, http.MethodPost, credentialAckPath, payload, &response); err != nil {
 		return contractsv1.CredentialAckResponse{}, fmt.Errorf("acknowledge current credential: %w", err)
 	}
-	if err := response.Validate(); err != nil || response.CredentialID != credentialID {
+	if err := response.Validate(); err != nil || (credentialID != "" && response.CredentialID != credentialID) {
 		return contractsv1.CredentialAckResponse{}, fmt.Errorf("%w: credential acknowledgement response", ErrInvalidResponse)
 	}
 	return response, nil

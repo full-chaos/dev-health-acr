@@ -124,8 +124,10 @@ func serveLifecycleAck(t *testing.T, state *lifecycleFixtureState, w http.Respon
 	if !decodeStrictLifecycleFixtureRequest(t, state, w, r, &request) {
 		return
 	}
-	if request.CredentialID != credentialID {
-		state.recordProblem("acknowledged credential_id = %q, want %q", request.CredentialID, credentialID)
+	// credential_id is optional: it is sent after a poll (a known id) and
+	// omitted when the client acknowledges a credential found in storage.
+	if request.CredentialID != nil && *request.CredentialID != credentialID {
+		state.recordProblem("acknowledged credential_id = %q, want %q", *request.CredentialID, credentialID)
 		writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
 		return
 	}

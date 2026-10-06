@@ -262,7 +262,7 @@ func TestDeviceContractValidators_match_schema(t *testing.T) {
 		{schema: "credential_rotate_request.v1.schema.json", value: CredentialRotateRequest{SchemaVersion: CredentialRotateRequestSchema}},
 		{schema: "credential_rotate_response.v1.schema.json", value: CredentialRotateResponse{SchemaVersion: CredentialRotateResponseSchema, AccessToken: "[REDACTED]", Credential: credential, Receipt: CredentialRotationReceipt{SourceCredentialID: "credential-0001", ReplacementCredentialID: "credential-0002", RollbackUntil: createdAt.Add(15 * time.Minute)}}},
 		{schema: "credential_revoke_request.v1.schema.json", value: CredentialRevokeRequest{SchemaVersion: CredentialRevokeRequestSchema}},
-		{schema: "credential_ack_request.v1.schema.json", value: CredentialAckRequest{SchemaVersion: CredentialAckRequestSchema, CredentialID: "credential-0001"}},
+		{schema: "credential_ack_request.v1.schema.json", value: CredentialAckRequest{SchemaVersion: CredentialAckRequestSchema, CredentialID: ackIDPtr("credential-0001")}},
 		{schema: "credential_ack_response.v1.schema.json", value: CredentialAckResponse{SchemaVersion: CredentialAckResponseSchema, CredentialID: "credential-0001", AcknowledgedAt: createdAt}},
 		{schema: "oauth_device_error.v1.schema.json", value: OAuthDeviceErrorResponse{SchemaVersion: OAuthDeviceErrorSchema, Error: OAuthDeviceErrorAuthorizationPending}},
 	}
@@ -342,7 +342,7 @@ func TestChaos7106PreviewResponseRequestedScopesBounds(t *testing.T) {
 
 func TestCredentialAckValidate_rejectsEachField(t *testing.T) {
 	at := time.Date(2026, 7, 11, 14, 0, 0, 0, time.UTC)
-	okReq := CredentialAckRequest{SchemaVersion: CredentialAckRequestSchema, CredentialID: "credential-0001"}
+	okReq := CredentialAckRequest{SchemaVersion: CredentialAckRequestSchema, CredentialID: ackIDPtr("credential-0001")}
 	okResp := CredentialAckResponse{SchemaVersion: CredentialAckResponseSchema, CredentialID: "credential-0001", AcknowledgedAt: at}
 	if err := okReq.Validate(); err != nil {
 		t.Fatalf("valid request rejected: %v", err)
@@ -352,9 +352,9 @@ func TestCredentialAckValidate_rejectsEachField(t *testing.T) {
 	}
 	reqCases := map[string]func(*CredentialAckRequest){
 		"wrong schema": func(r *CredentialAckRequest) { r.SchemaVersion = "credential_ack_request.v2" },
-		"empty id":     func(r *CredentialAckRequest) { r.CredentialID = "" },
-		"short id":     func(r *CredentialAckRequest) { r.CredentialID = "short" },
-		"oversized id": func(r *CredentialAckRequest) { r.CredentialID = strings.Repeat("c", 257) },
+		"empty id":     func(r *CredentialAckRequest) { r.CredentialID = ackIDPtr("") },
+		"short id":     func(r *CredentialAckRequest) { r.CredentialID = ackIDPtr("short") },
+		"oversized id": func(r *CredentialAckRequest) { r.CredentialID = ackIDPtr(strings.Repeat("c", 257)) },
 	}
 	for name, mutate := range reqCases {
 		t.Run("request "+name, func(t *testing.T) {
@@ -379,5 +379,13 @@ func TestCredentialAckValidate_rejectsEachField(t *testing.T) {
 				t.Fatal("expected rejection")
 			}
 		})
+	}
+}
+
+func ackIDPtr(value string) *string { return &value }
+
+func TestCredentialAckRequestAcceptsAnOmittedCredentialID(t *testing.T) {
+	if err := (CredentialAckRequest{SchemaVersion: CredentialAckRequestSchema}).Validate(); err != nil {
+		t.Fatalf("an acknowledgement without a credential id must be valid: %v", err)
 	}
 }

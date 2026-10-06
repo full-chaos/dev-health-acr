@@ -174,9 +174,12 @@ type CredentialRevokeResponse struct {
 	Credential    ClientCredential `json:"credential"`
 }
 
+// CredentialAckRequest acknowledges the bearer's own credential. CredentialID
+// is optional: a client that did not keep the id can still acknowledge, and an
+// id that is sent must be the bearer's own.
 type CredentialAckRequest struct {
-	SchemaVersion string `json:"schema_version"`
-	CredentialID  string `json:"credential_id"`
+	SchemaVersion string  `json:"schema_version"`
+	CredentialID  *string `json:"credential_id,omitempty"`
 }
 
 type CredentialAckResponse struct {

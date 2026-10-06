@@ -67,7 +67,7 @@ FROM acr.device_authorizations WHERE device_code_hash = $1 FOR UPDATE`, hash.Str
 		return contractsv1.ClientCredential{}, storage.ErrInvalidCredentialInput
 	}
 	if replacing != "" {
-		if err := s.revokeUnacknowledgedTx(ctx, tx, record.AuthorizedOrgID, replacing, now); err != nil {
+		if _, err := s.revokeUnacknowledgedTx(ctx, tx, record.AuthorizedOrgID, replacing, now); err != nil {
 			return contractsv1.ClientCredential{}, err
 		}
 	}

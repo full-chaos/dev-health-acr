@@ -143,7 +143,7 @@ func (r CredentialRevokeResponse) Validate() error {
 }
 
 func (r CredentialAckRequest) Validate() error {
-	if r.SchemaVersion != CredentialAckRequestSchema || !stringLengthBetween(r.CredentialID, 8, 256) {
+	if r.SchemaVersion != CredentialAckRequestSchema || (r.CredentialID != nil && !stringLengthBetween(*r.CredentialID, 8, 256)) {
 		return fmt.Errorf("credential acknowledgement request violates v1 bounds")
 	}
 	return nil

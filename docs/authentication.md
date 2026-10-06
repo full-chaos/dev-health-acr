@@ -129,12 +129,22 @@ rules follow:
   Acknowledging twice is not an error. A credential that is not awaiting
   acknowledgement, or an id that is not the bearer's own, answers `404`.
 
-If `login` cannot acknowledge (three attempts), it tries to revoke the
-credential, removes the local copy, and exits with a failure, so the next
-`login` starts a fresh device flow instead of finding a credential that was
-never acknowledged. An acknowledgement is accepted only while the credential is
-live and less than 120 seconds old (a repeat of an accepted one is returned
-unchanged); a late one answers `404` even before the sweep has run. The RFC 8628
+The request body may omit `credential_id`; when it is sent it must be the
+bearer's own. An acknowledgement is accepted only while the credential is live
+and less than 120 seconds old (a repeat of an accepted one returns the first
+time). A credential that is not owed an acknowledgement answers `404`; one whose
+window closed, or that was revoked, answers `409` even before the sweep has run.
+
+If `login` cannot confirm the acknowledgement (three attempts), it keeps the
+stored credential and exits with a failure: the response may have been lost
+after the server recorded it, so the only local copy is never deleted on that
+evidence. Every `login` that finds a stored credential, and verifies it against
+the server, acknowledges it first (without an id): `200` or `404` reports
+"already logged in" (a crash between storing and acknowledging heals here);
+`409` means the server is revoking it, so `login` revokes it, removes the local
+copy only after the revocation succeeds (or the server says it is already
+inactive), and starts a fresh device flow; any other answer keeps the credential
+and fails without starting a new flow. The RFC 8628
 device grant (`POST /device_authorization`) and the authorization-code flow
 issue credentials to third-party OAuth clients that have no acknowledgement
 call; those credentials are not subject to this window, so a lost response
