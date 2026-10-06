@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -126,5 +127,16 @@ func TestInterpretationPromptTimeRulesStatedOnce(t *testing.T) {
 		if strings.Contains(interpretationSystemPrompt, gone) {
 			t.Errorf("prompt still tells the model to infer the time context: %q", gone)
 		}
+	}
+}
+
+func TestInterpretationPromptGlossaryStatusListsTheWholeStatusEnum(t *testing.T) {
+	t.Parallel()
+	values := contextfabric.WorkItemStatusVocabulary()
+	n := len(values)
+	want := "- status: the status column of one work item: " +
+		strings.Join(values[:n-1], ", ") + " or " + values[n-1] + " (work_item). Not completion."
+	if got := strings.Count(interpretationFactKindGlossary, want+"\n"); got != 1 {
+		t.Errorf("glossary status line is not %q: found %d times", want, got)
 	}
 }

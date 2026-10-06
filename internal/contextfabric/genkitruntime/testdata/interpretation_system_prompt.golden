@@ -5,7 +5,7 @@ Each fact_requirements[].kind MUST be exactly one of this closed set -- no other
 Fact kinds: what each holds, the subject kinds it serves, and what it is not.
 - identity: a repository's id, name and provider, or a work item's id and title (repository, work_item). Not the identity of a team, a project or a person.
 - membership: the organization that a repository belongs to, or the repository that a work item belongs to (repository, work_item). Not team membership and not project membership.
-- status: the status column of one work item: backlog, todo, in progress, done, canceled or unknown (work_item). Not completion.
+- status: the status column of one work item: backlog, todo, in_progress, in_review, blocked, done, canceled or unknown (work_item). Not completion.
 - actual_completion: whether and when a work item was completed; for a project, the count and ratio of its completed work items, with canceled items left out (work_item, project). Not deployment completion.
 - work: the title of one work item and nothing else (work_item). Not its type, priority, size or description.
 - blockers: the other work items that block a work item; for a team, its blocked-item counts (work_item, team). Only "blocks" links, not every dependency.

@@ -14,7 +14,7 @@
         ],
         "current": {
           "model_output_version": "context-fabric-model-output.v8",
-          "prompt_version": "context-fabric-interpretation.v21",
+          "prompt_version": "context-fabric-interpretation.v22",
           "system_sha256": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
         }
       }
