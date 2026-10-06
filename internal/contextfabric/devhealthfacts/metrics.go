@@ -115,8 +115,10 @@ const MetricsSeriesPerRepositoryRowCap = 200
 // updated accordingly: FactMetrics is the one capability that answers for
 // a project directly, by a real join, and that is deliberate.
 //
-// repo_metrics_daily and team_metrics_daily are both plain, append-only
-// MergeTree tables: live data shows up to 85-86 rows sharing one
+// repo_metrics_daily is a plain, append-only MergeTree table and
+// team_metrics_daily is a ReplacingMergeTree(computed_at) keyed
+// (org_id, team_id, repo_id, day), whose unmerged parts still hold several
+// rows per key: live data shows up to 85-86 rows sharing one
 // (repo_id|team_id, day) key (intraday reruns), and those reruns carry
 // genuinely different values, not no-op repeats (Codex finding F2,
 // confirmed against real ClickHouse data for repo_metrics_daily;
