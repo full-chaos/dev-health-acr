@@ -356,8 +356,10 @@ func TestEveryServingExitStatesTheTransitionsItsDocumentCarries(t *testing.T) {
 }
 
 // TestTheAssemblyReasonNeedsEveryConditionOfItsOneWriter isolates each of the
-// conditions requirementAssemblyReason reads (outcome and code): one cell per
-// condition, differing from the canonical cell in that condition alone.
+// four conditions requirementAssemblyReason reads: one cell per condition,
+// differing from the canonical cell in that condition alone. The engine-level
+// fixtures cannot tell the conditions apart, because the one writer of an
+// assembled `computed_population_absent` row always sets all four together.
 func TestTheAssemblyReasonNeedsEveryConditionOfItsOneWriter(t *testing.T) {
 	t.Parallel()
 	canonical := RequirementOutcomeRow{
@@ -366,6 +368,7 @@ func TestTheAssemblyReasonNeedsEveryConditionOfItsOneWriter(t *testing.T) {
 		CauseCoverage: contractsv1.ContextFabricCoverageDetailComputedPopulationAbsent,
 	}
 	absent := InvestigationResult{}
+	resolved := InvestigationResult{Cohort: countingCohort(SubjectTeam, 2)}
 	for _, cell := range []struct {
 		name   string
 		row    func(RequirementOutcomeRow) RequirementOutcomeRow
@@ -381,6 +384,11 @@ func TestTheAssemblyReasonNeedsEveryConditionOfItsOneWriter(t *testing.T) {
 			r.CauseCoverage = contractsv1.ContextFabricCoverageDetailFactUnconfigured
 			return r
 		}, absent, RequirementAssemblyReasonNone},
+		{"read obligation", func(r RequirementOutcomeRow) RequirementOutcomeRow {
+			r.Obligation, r.Requirement = string(ObligationState), "state/member/team"
+			return r
+		}, absent, RequirementAssemblyReasonNone},
+		{"member set resolved", func(r RequirementOutcomeRow) RequirementOutcomeRow { return r }, resolved, RequirementAssemblyReasonNone},
 	} {
 		cell := cell
 		t.Run(cell.name, func(t *testing.T) {

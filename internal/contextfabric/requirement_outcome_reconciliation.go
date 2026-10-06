@@ -262,11 +262,17 @@ func outcomeLossRank(outcome RequirementOutcome) int {
 // requirementAssemblyReason names the reason assembly observed below the
 // row's wire cause.
 //
-// The wire cause `computed_population_absent` is written for that one reason
-// only, so the outcome and the code are the whole question.
+// It asks the SAME three questions the one writer of an assembled
+// `computed_population_absent` row asks before it writes one -- the outcome and code that
+// writer sets, whether the obligation's step runs over the resolved member
+// set, and whether the served document resolved a member set -- through the
+// same predicates, so the reason and the row cannot come to describe different
+// conditions.
 func requirementAssemblyReason(row RequirementOutcomeRow, result InvestigationResult) RequirementAssemblyReason {
 	if row.Outcome == contractsv1.ContextFabricRequirementUnavailable &&
-		row.CauseCoverage == unavailableRequirementCause(RequirementReasonComputedPopulationAbsent) {
+		row.CauseCoverage == unavailableRequirementCause(RequirementReasonComputedPopulationAbsent) &&
+		stepRunsOverResolvedMemberSet(AnswerObligation(row.Obligation)) &&
+		!memberSetResolved(result.Cohort) {
 		return RequirementAssemblyReasonComputedPopulationAbsent
 	}
 	return RequirementAssemblyReasonNone
