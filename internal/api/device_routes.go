@@ -20,7 +20,7 @@ func (a *App) handleDeviceAuthorization(w http.ResponseWriter, r *http.Request) 
 	}
 	var request contractsv1.DeviceAuthorizationRequest
 	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil || request.Validate() != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device authorization request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device authorization request is invalid", false, invalidBodyDetails(err))
 		return
 	}
 	hints := auth.DeviceAuthorizationHints{}
@@ -131,7 +131,7 @@ func (a *App) handleDeviceCodeToken(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 	var request contractsv1.DeviceApprovalRequest
 	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, invalidBodyDetails(err))
 		return
 	}
 	if !a.allowDeviceApproval(w, r, storage.HashUserCode(request.UserCode)) {
@@ -144,12 +144,12 @@ func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.SchemaVersion == contractsv1.DeviceApprovalPreviewRequestSchema {
 		if request.RepositoryScopes != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, bodyFieldDetails("repository_scopes"))
 			return
 		}
 		previewRequest := contractsv1.DeviceApprovalPreviewRequest{SchemaVersion: request.SchemaVersion, UserCode: request.UserCode}
 		if err := previewRequest.Validate(); err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, schemaViolationDetails())
 			return
 		}
 		preview, err := a.deviceFlow.Preview(r.Context(), auth.DeviceApprovalPreviewRequest{Principal: principal, UserCode: previewRequest.UserCode})
@@ -167,7 +167,7 @@ func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := request.Validate(); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, schemaViolationDetails())
 		return
 	}
 	if _, err := a.deviceFlow.Approve(r.Context(), auth.DeviceApprovalRequest{
@@ -194,7 +194,7 @@ func (a *App) writeDeviceApprovalError(w http.ResponseWriter, r *http.Request, e
 func (a *App) handleRotateSelfCredential(w http.ResponseWriter, r *http.Request) {
 	var request contractsv1.CredentialRotateRequest
 	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil || request.Validate() != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential rotation request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential rotation request is invalid", false, invalidBodyDetails(err))
 		return
 	}
 	principal, ok := auth.PrincipalFromContext(r.Context())
@@ -216,7 +216,7 @@ func (a *App) handleRotateSelfCredential(w http.ResponseWriter, r *http.Request)
 func (a *App) handleRevokeSelfCredential(w http.ResponseWriter, r *http.Request) {
 	var request contractsv1.CredentialRevokeRequest
 	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil || request.Validate() != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential revocation request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential revocation request is invalid", false, invalidBodyDetails(err))
 		return
 	}
 	principal, ok := auth.PrincipalFromContext(r.Context())
