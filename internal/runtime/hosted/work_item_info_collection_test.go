@@ -172,10 +172,17 @@ func TestWorkItemHostedInfoCollection(t *testing.T) {
 			// Count both synthesis attempts, then require the retry and terminal
 			// budget decisions, including the measured cause for selecting retry.
 			requireInfoLine(t, parsed, "context fabric resolution trace: decision summary", map[string]any{"request_id": infoRequestID, "committed_count": 1})
-			requireInfoLine(t, parsed, "context fabric plan narrowing", map[string]any{"request_id": infoRequestID, "stage": "cardinality", "before": 250, "after": 34, "basis": "canonical_id_lexical"})
+			// The item ceiling's member budget (34) bounds what the model reads, not the listed
+			// members: no plan step says the cohort was cut from the request's cap to it.
+			for _, line := range parsed.LinesWithMsg("context fabric plan narrowing") {
+				if line["stage"] == "cardinality" && fmt.Sprint(line["before"]) == "250" {
+					t.Errorf("a cardinality step narrows the request's cap to the member budget: %v", line)
+				}
+			}
 			reads := parsed.LinesWithMsg("context fabric fact read")
 			sharedReads := parsed.LinesWithMsg("readers.query_org_scoped")
-			wantReads, wantSubjects, wantItems, wantAttempts := 2, 1, 4, 1
+			// The listed member is outside the item ceiling: the answer is a candidate and two claims.
+			wantReads, wantSubjects, wantItems, wantAttempts := 2, 1, 3, 1
 			if scenario == "zero" {
 				wantReads = 0
 				wantItems = 2
@@ -317,7 +324,9 @@ func runWorkItemInfoChild(t *testing.T, scenario string) {
 			client.rowsByPhase["work"] = append(client.rowsByPhase["work"], []any{workID, "Title " + workID, "repo-1"})
 		}
 	}
-	model := &infoTupleModel{statusOnly: true, frame: contextfabric.QuestionFrame{Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState, contextfabric.GoalCountOrAggregate}, SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionChildrenOfScope, Scoped: &contextfabric.ScopedSetExpression{AnchorTerms: []string{"Project Alpha"}, MemberKind: contextfabric.SubjectWorkItem}}, Temporal: contextfabric.TemporalIntentCurrent}}
+	// The retry scenario writes a status and a title claim per member: the claims alone overrun
+	// the ceiling (the listed members are outside it), so the retry still happens.
+	model := &infoTupleModel{statusOnly: scenario != "retry", frame: contextfabric.QuestionFrame{Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState, contextfabric.GoalCountOrAggregate}, SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionChildrenOfScope, Scoped: &contextfabric.ScopedSetExpression{AnchorTerms: []string{"Project Alpha"}, MemberKind: contextfabric.SubjectWorkItem}}, Temporal: contextfabric.TemporalIntentCurrent}}
 	sizes := []int{}
 	model.observe = func(input contextfabric.SynthesisInput) {
 		if input.Graph.Cohort != nil {
@@ -357,7 +366,7 @@ func runWorkItemInfoChild(t *testing.T, scenario string) {
 		wantClaims = 0
 	}
 	if scenario == "retry" {
-		wantClaims = 18
+		wantClaims = 35
 	}
 	if len(result.ClaimedFacts) != wantClaims {
 		t.Fatalf("served claims=%d want=%d", len(result.ClaimedFacts), wantClaims)

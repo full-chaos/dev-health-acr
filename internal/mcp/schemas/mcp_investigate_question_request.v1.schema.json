@@ -363,7 +363,7 @@
         },
         "max_cohort_members": {
           "type": "integer",
-          "description": "Maximum number of members to list when the answer is about a cohort, 1 to 250. 0 means not set (the default applies).",
+          "description": "Maximum number of members to list when the answer is about a cohort, 1 to 250. 0 means not set (the default applies). A listed member uses one evidence reference, so a client that wants every member also raises max_evidence_refs.",
           "minimum": 0,
           "maximum": 250
         },

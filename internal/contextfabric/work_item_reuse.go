@@ -80,14 +80,10 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	if !owned {
 		return InvestigationResult{}, false, nil
 	}
-	planCap := 0
-	if candidate.AnswerPlan != nil {
-		planCap = candidate.AnswerPlan.Budget.MaxMembers
-	}
 	lease, current, err := e.beginWorkItemMembership(ctx, principal, request.RequestedScope, binding, WorkItemMembershipRequest{
 		Anchor:                   WorkItemMembershipAnchor{Subject: anchor},
 		RequestedRepositoryScope: append([]string(nil), request.RequestedScope.RepositorySlugs...),
-		PlanMaxMembers:           planCap, RequestMaxMembers: request.Options.MaxCohortMembers,
+		RequestMaxMembers:        request.Options.MaxCohortMembers,
 	})
 	if anchor.Kind == SubjectRepository {
 		// A re-walk is a walk: it owes its decision line too.

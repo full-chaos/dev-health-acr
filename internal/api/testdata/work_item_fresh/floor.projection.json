@@ -116,7 +116,7 @@
   },
   "coverage_partial": true,
   "limitations": [
-    "Not every member is listed: 1 of at least 2000 members are listed, because the server limits how many items one answer carries.",
+    "Not every member is listed: 1 of at least 2000 members are listed, because the request's max_cohort_members limits the list.",
     "Members are the work items as of now; the period supplied with this request was not applied to the membership. Ask for work items created, completed or updated in that period to filter by one of those."
   ],
   "warnings": [],
