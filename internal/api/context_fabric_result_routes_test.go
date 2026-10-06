@@ -294,3 +294,43 @@ func withOwnGrant(stored contextfabric.StoredInvestigationResult, reader storage
 	stored.GrantDigest = contextfabric.StoredResultGrantDigest(reader)
 	return stored
 }
+
+// A result stored before the population floor existed holds a no_match with a
+// truncated, zero-served population row. The by-id read is a serving point and
+// floors it like the engine does; the MCP investigation_result tool forwards
+// this response.
+func TestContextFabricInvestigationResultRouteFloorsStoredNoMatchOverTruncatedPopulation(t *testing.T) {
+	store := memoryinvestigation.NewStore()
+	stored := validContextFabricInvestigationResult()
+	stored.ResultID = "result_route_floor1"
+	stored.Status = contractsv1.ContextFabricInvestigationNoMatch
+	stored.Completeness.Outcomes = []contextfabric.RequirementOutcomeRow{{
+		Requirement: "count/subject/team", Obligation: "count", Impact: contractsv1.ContextFabricAnswerImpactDimension, CauseObserved: true,
+		Stage:         contractsv1.ContextFabricOutcomeStageAssembledResult,
+		Outcome:       contractsv1.ContextFabricRequirementNarrowed,
+		CauseCoverage: contractsv1.ContextFabricCoverageDetailPopulationTruncated,
+	}}
+	stored.Completeness = contextfabric.ComputeAnswerCompleteness(stored)
+	if err := store.Save(context.Background(), seedPrincipal(callerOrgID), stored, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
+		t.Fatalf("seed result: %v", err)
+	}
+	app, token := newContextFabricTestAppWithResults(t, nil, store)
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, investigationResultRequest(t, token, stored.ResultID))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d (body %s)", recorder.Code, recorder.Body.String())
+	}
+	var got contractsv1.ContextFabricInvestigationResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Status != contractsv1.ContextFabricInvestigationDegraded {
+		t.Fatalf("by-id status = %q, want degraded", got.Status)
+	}
+	if got.Completeness.TerminalStatus != got.Status {
+		t.Fatalf("terminal status %q != status %q", got.Completeness.TerminalStatus, got.Status)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("served result invalid: %v", err)
+	}
+}

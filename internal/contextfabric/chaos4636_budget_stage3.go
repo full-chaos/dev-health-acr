@@ -167,7 +167,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// costs nothing structurally and mutates nothing the caller holds.
 	measurementInput := result
 	if params.WorkItemCensus != nil {
-		measurementInput = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(result))
+		measurementInput = ApplyServerCompletenessAuthority(ApplyServedStatusFloors(result), e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(ApplyServedStatusFloors(result)))
 	}
 	measured, err := e.measureAssembledAttempt(ctx, principal, "assembled_result", allocation, measurementInput, budget)
 	if err != nil {
@@ -592,7 +592,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// that the producer RETURNS what it consumed and the guard measures that.
 	retryMeasurementInput := retried
 	if params.WorkItemCensus != nil {
-		retryMeasurementInput = ApplyServerCompletenessAuthority(retried, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(retried))
+		retryMeasurementInput = ApplyServerCompletenessAuthority(ApplyServedStatusFloors(retried), e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(ApplyServedStatusFloors(retried)))
 	}
 	retryMeasured, err := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", consumedRetryAllocation, retryMeasurementInput, budget)
 	if err != nil {
@@ -610,7 +610,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		}
 		if ok {
 			retried = fitted
-			fittedInput := ApplyServerCompletenessAuthority(retried, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(retried))
+			fittedInput := ApplyServerCompletenessAuthority(ApplyServedStatusFloors(retried), e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(ApplyServedStatusFloors(retried)))
 			remeasured, remeasureErr := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", consumedRetryAllocation, fittedInput, budget)
 			if remeasureErr != nil {
 				return InvestigationResult{}, retryPending, remeasureErr
