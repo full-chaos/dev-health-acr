@@ -142,7 +142,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		// silently under-report every response that carries any Paths, the
 		// same false-accounting defect CompleteWithBudget's own doc
 		// comment warns against. What changes is the CEILING: override's
-		// MaxItems is widened by itemCounts.Paths, so the gate condition
+		// MaxItems is widened by itemCounts.Paths and itemCounts.WalkCohortMembers, so the gate condition
 		// `total <= MaxItems+Paths` is exactly `budgeted <= MaxItems` --
 		// Paths stops binding the gate without the recorded usage ever
 		// diverging from what was actually served.
@@ -152,7 +152,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			Bytes:  measuredBytes,
 		}
 		override := limits.ResourceBudget{
-			MaxItems: int64(a.config.MaxItems) + int64(itemCounts.Paths), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
+			MaxItems: int64(a.config.MaxItems) + int64(itemCounts.Paths) + int64(itemCounts.WalkCohortMembers), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
 		}
 		if err := CompleteUsageWithBudget(r.Context(), usage, override); err != nil {
 			a.logContextFabricResponseBudgetExceeded(r, "items", measuredBytes, maximumBytes, estimatedTokens, itemCounts)

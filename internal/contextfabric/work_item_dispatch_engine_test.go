@@ -536,7 +536,9 @@ func TestWorkItemTupleFactRequestFailsClosedForEmptyAndForeignSubjects(t *testin
 
 func TestWorkItemFreshMembershipCapsAreLexicalAndCensusIndependent(t *testing.T) {
 	defer reportWorkItemMutationPanic(t)
-	for _, caps := range []struct{ plan, request, want int }{{0, 0, 200}, {201, 240, 200}, {7, 240, 7}, {240, 9, 9}, {7, 9, 7}, {9, 7, 7}} {
+	// plan is the synthesis member budget: it bounds what the model reads, never the
+	// listed members, which the request cap and the serve limit bound.
+	for _, caps := range []struct{ plan, request, want, synthesis int }{{0, 0, 200, 200}, {201, 240, 200, 200}, {7, 240, 200, 7}, {240, 9, 9, 9}, {7, 9, 9, 7}, {9, 7, 7, 7}} {
 		t.Run(fmt.Sprintf("%d_%d", caps.plan, caps.request), func(t *testing.T) {
 			defer reportWorkItemMutationPanic(t)
 			gate, _ := NewWorkItemMembershipGate(1, 0)
@@ -549,7 +551,7 @@ func TestWorkItemFreshMembershipCapsAreLexicalAndCensusIndependent(t *testing.T)
 				members = append(members, WorkItemMembershipMember{CanonicalID: id, WorkItemID: fmt.Sprintf("work-%03d", i)})
 			}
 			engine := &Engine{workItemMembership: tupleMembershipFunc(func(ctx context.Context, _ storage.Principal, request WorkItemMembershipRequest) (*WorkItemMembershipLease, WorkItemMembershipResult, error) {
-				if request.PlanMaxMembers != caps.plan || request.RequestMaxMembers != caps.request {
+				if request.PlanMaxMembers != 0 || request.RequestMaxMembers != caps.request {
 					t.Errorf("port caps=%+v", request)
 				}
 				lease, err := gate.Acquire(ctx)
@@ -564,6 +566,13 @@ func TestWorkItemFreshMembershipCapsAreLexicalAndCensusIndependent(t *testing.T)
 			}
 			if len(graph.Cohort.Members) != caps.want || census.Value != 205 || census.Retained != caps.want {
 				t.Fatalf("members=%d census=%+v", len(graph.Cohort.Members), census)
+			}
+			listed := graph.Cohort
+			if census.walkList != nil {
+				listed = census.walkList
+			}
+			if len(listed.Members) != caps.want || census.walkList == nil {
+				t.Fatalf("listed=%d want %d walkList=%v", len(listed.Members), caps.want, census.walkList != nil)
 			}
 			for i, m := range graph.Cohort.Members {
 				if m.Subject.CanonicalID != members[len(members)-i-1].CanonicalID {

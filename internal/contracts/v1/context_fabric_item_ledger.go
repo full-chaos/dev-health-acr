@@ -351,7 +351,7 @@ func ReconcileContextFabricResultItems(result ContextFabricInvestigationResult) 
 	}
 	// Cohort member ROWS: member-attributed by definition, and the charge an
 	// allocator must commit before it grants anything discretionary.
-	if result.Cohort != nil {
+	if result.Cohort != nil && !ContextFabricCohortIsWalkList(result.Cohort) {
 		for ordinal, member := range result.Cohort.Members {
 			ledger.Debits = append(ledger.Debits, ContextFabricItemDebit{
 				Collection: ContextFabricChargedCohortMembers,
@@ -639,6 +639,11 @@ var contextFabricCensusExcludedFields = map[string]string{
 	// mint no debit either. Charging them here would make the ledger and the
 	// budget describe different answers.
 	"Paths": "excluded from Budgeted() by CHAOS-4523",
+	// A work-item walk's listed members are bounded by the request cap, the
+	// server's list cap and the byte ceiling, not by the item ceiling
+	// (ContextFabricResultItemCounts.WalkCohortMembers). They mint no debit
+	// either: the ledger and the budget describe the same answer.
+	"WalkCohortMembers": "excluded from Budgeted(): a work-item walk list is bounded by the request cap, the list cap and bytes",
 }
 
 // ContextFabricCapacityVerdict is the CLOSED vocabulary of what a capacity

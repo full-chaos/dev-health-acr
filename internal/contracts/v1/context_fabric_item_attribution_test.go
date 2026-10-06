@@ -271,6 +271,9 @@ type chargedCollectionRow struct {
 	// from Budgeted), so they must move Total() and move neither
 	// Budgeted() nor the split.
 	budgeted bool
+	// prepare, when set, runs on the base and the probed result alike before
+	// anything is counted.
+	prepare func(*ContextFabricInvestigationResult)
 }
 
 func chargedCollections() map[string]chargedCollectionRow {
@@ -300,6 +303,13 @@ func chargedCollections() map[string]chargedCollectionRow {
 				r.ClaimedFacts = append(r.ClaimedFacts, ContextFabricClaimedFact{ClaimID: "probe_claim", Subject: s})
 			}},
 		"CohortMembers": {budgeted: true, bucket: ContextFabricItemBucketMember,
+			add: func(r *ContextFabricInvestigationResult, s ContextFabricSubjectRef) {
+				r.Cohort.Members = append(r.Cohort.Members, ContextFabricCohortMember{Subject: s})
+			}},
+		"WalkCohortMembers": {budgeted: false,
+			prepare: func(r *ContextFabricInvestigationResult) {
+				r.Cohort.Kind, r.Cohort.Population, r.Cohort.Groups = ContextFabricSubjectWorkItem, 100, nil
+			},
 			add: func(r *ContextFabricInvestigationResult, s ContextFabricSubjectRef) {
 				r.Cohort.Members = append(r.Cohort.Members, ContextFabricCohortMember{Subject: s})
 			}},
@@ -351,10 +361,16 @@ func TestEveryChargedCollectionMovesTheSplit(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			base, _ := attributionFixture()
+			if row.prepare != nil {
+				row.prepare(&base)
+			}
 			beforeCounts := CountContextFabricResultItems(base)
 			beforeSplit := AttributeContextFabricResultItems(base)
 
 			probed, _ := attributionFixture()
+			if row.prepare != nil {
+				row.prepare(&probed)
+			}
 			row.add(&probed, stranger)
 			afterCounts := CountContextFabricResultItems(probed)
 			afterSplit := AttributeContextFabricResultItems(probed)

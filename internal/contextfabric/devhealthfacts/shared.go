@@ -419,7 +419,13 @@ import (
 // with its own coverage code (graph_walk_cut_before_member) in place of
 // kind_census_truncated. A candidate saved before v77 holds the old code and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v77"
+//
+// v77 -> v78: a work-item walk lists its members up to the request's
+// max_cohort_members (at most 200) instead of the answer item ceiling less the
+// synthesis headroom, and says so with its own N of M and summary-coverage
+// sentences. A candidate saved before v78 holds the shorter list and the old
+// wording and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v78"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

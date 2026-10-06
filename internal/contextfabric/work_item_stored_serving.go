@@ -39,6 +39,9 @@ func ServeWorkItemTupleCensus(candidate InvestigationResult, census *WorkItemTup
 	if census == nil || ValidateWorkItemTupleCensus(census) != WorkItemTupleCensusReadAvailable {
 		return candidate
 	}
+	// The list the answer serves is put back first: the census counts below (the
+	// kind census detail's served count) describe the members the answer lists.
+	candidate = withWorkItemWalkList(candidate, census)
 	candidate.Coverage.Details = append([]CoverageDetail(nil), candidate.Coverage.Details...)
 	candidate.Coverage.DegradedReasons = append([]string(nil), candidate.Coverage.DegradedReasons...)
 	switch census.State {

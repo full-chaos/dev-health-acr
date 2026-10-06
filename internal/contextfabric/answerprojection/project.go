@@ -126,7 +126,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	cohort, cohortOmitted, cohortReasonsOmitted, cohortGroupsOmitted, cohortSelectionBasis := projectCohort(result, bounds, index, clamp, &facts)
 	factsOmitted := countProjectedFactsOmitted(result, facts)
 	clarification, candidatesOmitted, candidateReasonsOmitted := projectClarification(result, bounds, clamp)
-	limitations, limitationsOmitted := boundedLimitations(restateWorkItemListed(result, cohort), clamp)
+	limitations, limitationsOmitted := boundedLimitations(restateWorkItemListed(result, cohort, bounds), clamp)
 	// The engine's own displacement counts too (CHAOS-3746 round-16).
 	// limitations_omitted means "limitations this investigation produced
 	// that you are not reading", and a caveat the engine dropped at the
@@ -1259,21 +1259,37 @@ func projectionCarriesUncited(kind contractsv1.ContextFabricFactKind) bool {
 // and evidence reference limits), so the engine's sentence is replaced, never
 // copied beside a list it does not describe. Nothing changes for a cohort with
 // no measured population.
-func restateWorkItemListed(result contractsv1.ContextFabricInvestigationResult, cohort *contractsv1.ContextFabricProjectedCohort) []string {
+func restateWorkItemListed(result contractsv1.ContextFabricInvestigationResult, cohort *contractsv1.ContextFabricProjectedCohort, bounds Budget) []string {
 	if cohort == nil || cohort.Population == 0 || result.Cohort == nil {
 		return result.Limitations
 	}
 	listed := len(cohort.Members)
 	engineCut := len(result.Cohort.Members) < cohort.Population
 	responseCut := listed < len(result.Cohort.Members)
-	cut := contractsv1.ContextFabricWorkItemListCutServer
-	switch {
-	case engineCut && responseCut:
-		cut = contractsv1.ContextFabricWorkItemListCutBoth
-	case responseCut:
-		cut = contractsv1.ContextFabricWorkItemListCutResponse
+	// What cut the list the server built is read from the sentence it stored
+	// with it; a list the server built whole has none.
+	var engine contractsv1.ContextFabricWorkItemListCut
+	if engineCut {
+		engine = contractsv1.ContextFabricWorkItemListCutServer
+		for _, limitation := range result.Limitations {
+			if stored, ok := contractsv1.ContextFabricWorkItemListedEngineCut(limitation); ok && stored != "" {
+				engine = stored
+				break
+			}
+		}
 	}
-	sentence, cutList := contractsv1.ContextFabricWorkItemListedLimitation(listed, cohort.Population, cohort.PopulationLowerBound, cut)
+	// The bound that stopped this response's list: the member limit when the list
+	// is as long as it allows, otherwise the evidence reference limit (every
+	// member row cites one reference and a member whose reference does not fit
+	// is not kept).
+	var response contractsv1.ContextFabricWorkItemResponseCut
+	if responseCut {
+		response = contractsv1.ContextFabricWorkItemResponseCutEvidence
+		if listed >= bounds.MaxCohortMembers {
+			response = contractsv1.ContextFabricWorkItemResponseCutMembers
+		}
+	}
+	sentence, cutList := contractsv1.ContextFabricWorkItemListedLimitation(listed, cohort.Population, cohort.PopulationLowerBound, engine, response)
 	limitations := make([]string, 0, len(result.Limitations)+1)
 	placed := false
 	for _, limitation := range result.Limitations {

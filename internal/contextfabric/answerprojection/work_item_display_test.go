@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	v1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -175,5 +176,45 @@ func TestWorkItemDisplayRetainsMultipleObservationsAndDeduplicatesDrivers(t *tes
 	}
 	if len(p.Cohort.Members) != 1 || p.ProjectionBudget.FactsOmitted != 0 {
 		t.Error("driver dedup falsely omitted member/fact")
+	}
+}
+
+// A result stored before the list followed max_cohort_members carries the old
+// wording of the N of M sentence. The projection replaces it with one sentence,
+// never keeps it beside the new one, and states the item limit the old text named.
+func TestProjectionReplacesTheLegacyListedSentenceOfAStoredResult(t *testing.T) {
+	const itemLimit = "the server limits how many items one answer carries"
+	const responseLimits = "this response lists at most the members its limits allow (raise max_cohort_members and max_evidence_refs to read more)"
+	for name, tc := range map[string]struct {
+		reason    string
+		wantLimit bool
+	}{
+		"server only":   {itemLimit, true},
+		"both":          {itemLimit + " and " + responseLimits, true},
+		"response only": {responseLimits, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := displayTuple(14)
+			result.Cohort.Population = 20
+			result.Cohort.Complete, result.Cohort.Truncated = false, true
+			legacy := "Not every member is listed: 14 of 20 members are listed, because " + tc.reason + "."
+			if !v1.IsContextFabricWorkItemListedLimitation(legacy) {
+				t.Fatalf("the legacy sentence is not recognised: %q", legacy)
+			}
+			result.Limitations = []string{legacy}
+			projection := Project(result, DefaultBudget)
+			sentences := []string{}
+			for _, limitation := range projection.Limitations {
+				if v1.IsContextFabricWorkItemListedLimitation(limitation) {
+					sentences = append(sentences, limitation)
+				}
+			}
+			if len(sentences) != 1 {
+				t.Fatalf("limitations %q carry %d N of M sentences, want exactly one", projection.Limitations, len(sentences))
+			}
+			if tc.wantLimit != strings.Contains(sentences[0], itemLimit) {
+				t.Fatalf("sentence %q, want the item limit named = %v", sentences[0], tc.wantLimit)
+			}
+		})
 	}
 }
