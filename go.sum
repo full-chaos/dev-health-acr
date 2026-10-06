@@ -75,6 +75,8 @@ github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeO
 github.com/felixge/httpsnoop v1.1.0/go.mod h1:Zqxgdd+1Rkcz8euOqdr7lqgCRJztwr5hp9vDSi5UZCE=
 github.com/firebase/genkit/go v1.11.0 h1:dmf219fDGP6IcKwPkJoTnXpcTEya7o5Bi+z5iP+FuTk=
 github.com/firebase/genkit/go v1.11.0/go.mod h1:x9h3TsbMLiuK1hgbwnkUmKQ9bmTNPORHaqG9XQhI0K8=
+github.com/full-chaos/dev-health-go v0.15.0 h1:l3/ezIhZVwVcv60/dFVC93OJxnyhRLhLdmQKSHraluQ=
+github.com/full-chaos/dev-health-go v0.15.0/go.mod h1:vk7pO0dVR4HSrA5Ehf3KJcVFin5oNQwt0FVfcxtckBY=
 github.com/full-chaos/dev-health-go v0.15.1 h1:DmY6VK6j2t7y4xfg6bU9a1W8y5qbzF0NO0zzt+7Jv+Y=
 github.com/full-chaos/dev-health-go v0.15.1/go.mod h1:vk7pO0dVR4HSrA5Ehf3KJcVFin5oNQwt0FVfcxtckBY=
 github.com/go-faster/city v1.0.1 h1:4WAxSZ3V2Ws4QRDrscLEDcibJY8uf41H6AhXDrNDcGw=
