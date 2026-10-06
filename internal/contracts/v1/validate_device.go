@@ -142,6 +142,20 @@ func (r CredentialRevokeResponse) Validate() error {
 	return validateCredentialMetadata(r.Credential)
 }
 
+func (r CredentialAckRequest) Validate() error {
+	if r.SchemaVersion != CredentialAckRequestSchema || (r.CredentialID != nil && !stringLengthBetween(*r.CredentialID, 8, 256)) {
+		return fmt.Errorf("credential acknowledgement request violates v1 bounds")
+	}
+	return nil
+}
+
+func (r CredentialAckResponse) Validate() error {
+	if r.SchemaVersion != CredentialAckResponseSchema || !stringLengthBetween(r.CredentialID, 8, 256) || r.AcknowledgedAt.IsZero() {
+		return fmt.Errorf("credential acknowledgement response violates v1 bounds")
+	}
+	return nil
+}
+
 func (r OAuthDeviceErrorResponse) Validate() error {
 	if r.SchemaVersion != OAuthDeviceErrorSchema || !validOAuthDeviceError(r.Error) {
 		return fmt.Errorf("OAuth device error violates v1 bounds")

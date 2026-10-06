@@ -21,6 +21,8 @@ const (
 	CredentialRotateResponseSchema      = "credential_rotate_response.v1"
 	CredentialRevokeRequestSchema       = "credential_revoke_request.v1"
 	CredentialRevokeResponseSchema      = "credential_revoke_response.v1"
+	CredentialAckRequestSchema          = "credential_ack_request.v1"
+	CredentialAckResponseSchema         = "credential_ack_response.v1"
 	OAuthDeviceErrorSchema              = "oauth_device_error.v1"
 	DeviceCodeGrantType                 = "urn:ietf:params:oauth:grant-type:device_code"
 	DeviceUserCodeAlphabet              = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
@@ -170,6 +172,20 @@ type CredentialRevokeRequest struct {
 type CredentialRevokeResponse struct {
 	SchemaVersion string           `json:"schema_version"`
 	Credential    ClientCredential `json:"credential"`
+}
+
+// CredentialAckRequest acknowledges the bearer's own credential. CredentialID
+// is optional: a client that did not keep the id can still acknowledge, and an
+// id that is sent must be the bearer's own.
+type CredentialAckRequest struct {
+	SchemaVersion string  `json:"schema_version"`
+	CredentialID  *string `json:"credential_id,omitempty"`
+}
+
+type CredentialAckResponse struct {
+	SchemaVersion  string    `json:"schema_version"`
+	CredentialID   string    `json:"credential_id"`
+	AcknowledgedAt time.Time `json:"acknowledged_at"`
 }
 
 type OAuthDeviceErrorCode string

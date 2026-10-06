@@ -79,6 +79,23 @@ func TestDeviceRoutes_HTTPFlowApprovesAndRedeemsOnlyOnce(t *testing.T) {
 		t.Fatalf("duplicate approval conflict violates error.v1: %v\nbody=%s", err, duplicateApprovalResponse.Body.String())
 	}
 
+	wrongAck := ackRequest(t, issued.AccessToken, "cred_not_the_callers_own")
+	wrongAckResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(wrongAckResponse, wrongAck)
+	assertErrorResponse(t, wrongAckResponse, http.StatusNotFound, "not_found")
+	ackResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(ackResponse, ackRequest(t, issued.AccessToken, issued.Credential.CredentialID))
+	if ackResponse.Code != http.StatusOK {
+		t.Fatalf("ack status = %d body=%s", ackResponse.Code, ackResponse.Body.String())
+	}
+	var acked contractsv1.CredentialAckResponse
+	if err := json.NewDecoder(ackResponse.Body).Decode(&acked); err != nil {
+		t.Fatal(err)
+	}
+	if err := acked.Validate(); err != nil || acked.CredentialID != issued.Credential.CredentialID {
+		t.Fatalf("ack response = %+v err=%v", acked, err)
+	}
+
 	againResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(againResponse, deviceTokenRequest(t, authorization.DeviceCode))
 	assertOAuthDeviceError(t, againResponse, contractsv1.OAuthDeviceErrorInvalidGrant)
@@ -424,4 +441,85 @@ func assertOAuthDeviceError(t *testing.T, response *httptest.ResponseRecorder, w
 	if err := actual.Validate(); err != nil || actual.Error != want {
 		t.Fatalf("OAuth error = %#v validation=%v want=%q", actual, err, want)
 	}
+}
+
+func ackRequest(t *testing.T, token, credentialID string) *http.Request {
+	t.Helper()
+	request := deviceRequest(t, http.MethodPost, "/api/v1/auth/credentials/self/ack", contractsv1.CredentialAckRequest{
+		SchemaVersion: contractsv1.CredentialAckRequestSchema, CredentialID: ackIDOrNil(credentialID),
+	})
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	return request
+}
+
+func TestDeviceRoutes_pollRetryAfterLostResponseReplacesTheCredential(t *testing.T) {
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := auth.NewWebAssertionVerifier(auth.WebAssertionOptions{
+		Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeAPIJWKS(t, public), Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, _ := newHostedTestAppWithWebAssertions(t, nil, nil, nil, nil, nil, verifier)
+	createdResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(createdResponse, deviceRequest(t, http.MethodPost, "/api/v1/oauth/device_authorization", contractsv1.DeviceAuthorizationRequest{SchemaVersion: contractsv1.DeviceAuthorizationRequestSchema}))
+	var authorization contractsv1.DeviceAuthorizationResponse
+	if err := json.NewDecoder(createdResponse.Body).Decode(&authorization); err != nil {
+		t.Fatal(err)
+	}
+	approval := contractsv1.DeviceApprovalRequest{SchemaVersion: contractsv1.DeviceApprovalRequestSchema, UserCode: authorization.UserCode, RepositoryScopes: []string{"*"}}
+	approvalResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(approvalResponse, deviceApprovalRequest(t, now, private, approval, "approval_lost"))
+	if approvalResponse.Code != http.StatusOK {
+		t.Fatalf("approval status = %d body=%s", approvalResponse.Code, approvalResponse.Body.String())
+	}
+	poll := func() contractsv1.DeviceTokenResponse {
+		t.Helper()
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, deviceTokenRequest(t, authorization.DeviceCode))
+		if response.Code != http.StatusOK {
+			t.Fatalf("poll status = %d body=%s", response.Code, response.Body.String())
+		}
+		var issued contractsv1.DeviceTokenResponse
+		if err := json.NewDecoder(response.Body).Decode(&issued); err != nil {
+			t.Fatal(err)
+		}
+		return issued
+	}
+
+	lost := poll()
+	retried := poll()
+
+	if lost.AccessToken == retried.AccessToken || lost.Credential.CredentialID == retried.Credential.CredentialID {
+		t.Fatal("retry returned the lost credential instead of a replacement")
+	}
+	lostAck := httptest.NewRecorder()
+	app.Handler().ServeHTTP(lostAck, ackRequest(t, lost.AccessToken, lost.Credential.CredentialID))
+	assertErrorResponse(t, lostAck, http.StatusUnauthorized, "invalid_token")
+	retriedAck := httptest.NewRecorder()
+	app.Handler().ServeHTTP(retriedAck, ackRequest(t, retried.AccessToken, retried.Credential.CredentialID))
+	if retriedAck.Code != http.StatusOK {
+		t.Fatalf("replacement ack status = %d body=%s", retriedAck.Code, retriedAck.Body.String())
+	}
+	omitted := httptest.NewRecorder()
+	app.Handler().ServeHTTP(omitted, ackRequest(t, retried.AccessToken, ""))
+	if omitted.Code != http.StatusOK {
+		t.Fatalf("ack without a credential id status = %d body=%s", omitted.Code, omitted.Body.String())
+	}
+	noBearer := httptest.NewRecorder()
+	app.Handler().ServeHTTP(noBearer, ackRequest(t, "", retried.Credential.CredentialID))
+	assertErrorResponse(t, noBearer, http.StatusUnauthorized, "invalid_token")
+}
+
+func ackIDOrNil(id string) *string {
+	if id == "" {
+		return nil
+	}
+	return &id
 }

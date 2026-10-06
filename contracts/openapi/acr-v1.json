@@ -945,6 +945,59 @@
         }
       }
     },
+    "/api/v1/auth/credentials/self/ack": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "acknowledgeOwnCredential",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../jsonschema/v1/credential_ack_request.v1.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Current credential acknowledged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../jsonschema/v1/credential_ack_response.v1.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/context-fabric/model-config": {
       "get": {
         "operationId": "getContextFabricOrgModelConfig",

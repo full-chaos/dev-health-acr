@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -92,8 +93,30 @@ func runDeviceLogin(parsed loginArgs) int {
 		validationErr := validateExistingCredential(context.Background(), cfg, credential)
 		switch {
 		case validationErr == nil:
-			fmt.Fprintln(os.Stdout, "login: already logged in; the current credential is valid")
-			return 0
+			// A credential stored by an earlier login that stopped before its
+			// acknowledgement (a crash, a lost response) is acknowledged now;
+			// a credential that is not owed one answers not-applicable.
+			switch acknowledgeStoredCredential(context.Background(), cfg, credential.Token, "") {
+			case ackConfirmed, ackNotApplicable:
+				fmt.Fprintln(os.Stdout, "login: already logged in; the current credential is valid")
+				return 0
+			case ackWindowClosed:
+				// The server is revoking this credential. Remove the local copy
+				// only after the revocation is confirmed (or the server says it
+				// is already inactive).
+				if revokeErr := revokeCredentialToken(context.Background(), cfg, credential.Token); revokeErr != nil {
+					fmt.Fprintln(os.Stderr, "login: the saved credential was never confirmed and could not be revoked; it was retained")
+					return lifecycleExitFailure
+				}
+				if purgeErr := session.PurgeCredentialMaterial(credential); purgeErr != nil {
+					fmt.Fprintln(os.Stderr, "login: the saved credential was revoked, but local cleanup requires operator action at "+describeCleanupLocations(purgeErr))
+					return lifecycleExitFailure
+				}
+				fmt.Fprintln(os.Stdout, "login: the saved credential was never confirmed and is revoked; starting a new login")
+			default:
+				fmt.Fprintln(os.Stderr, "login: the saved credential could not be confirmed with the server; it was retained and no new login was started")
+				return lifecycleExitFailure
+			}
 		case errors.Is(validationErr, sidecar.ErrInvalidToken):
 			// A typed invalid_token response is definitive server-side proof that
 			// this exact credential is inactive. Purge only the material captured
@@ -253,6 +276,16 @@ func runDeviceLoginAttempt(ctx context.Context, session *sidecar.CredentialLifec
 				fmt.Fprintln(os.Stderr, "login: credential was issued but could not be stored securely")
 				return deviceLoginFailed
 			}
+			if acknowledgeStoredCredential(ctx, cfg, response.AccessToken, response.Credential.CredentialID) != ackConfirmed {
+				// The credential is stored and may still be live (an
+				// acknowledgement the server committed can have lost its
+				// response), so the only copy is never deleted here. The next
+				// `login` acknowledges again from this stored credential, or,
+				// once the server's window has closed, revokes it and starts a
+				// fresh device flow.
+				fmt.Fprintln(os.Stderr, "login: the server did not confirm the issued credential; it was kept; run login again within two minutes")
+				return deviceLoginFailed
+			}
 			fmt.Fprintln(os.Stdout, "login successful")
 			return deviceLoginSucceeded
 		}
@@ -299,24 +332,66 @@ func runDeviceLoginAttempt(ctx context.Context, session *sidecar.CredentialLifec
 			if outcome, terminal := reportGrantInterruption(pollCtx); terminal {
 				return outcome
 			}
-			return reportAmbiguousDevicePoll()
+			// A lost response is recoverable: the server replaces a credential
+			// this client has not acknowledged, so the next poll is safe.
+			continue
 		}
 		if errors.Is(err, sidecar.ErrTransportUnavailable) {
-			return reportAmbiguousDevicePoll()
+			continue
 		}
 		fmt.Fprintln(os.Stderr, "login: device authorization could not be completed")
 		return deviceLoginFailed
 	}
 }
 
-// reportAmbiguousDevicePoll refuses to restart a device flow after a poll
-// request's result was lost. The server may have committed redemption before
-// the response was interrupted; a new authorization would orphan a live
-// credential that this client can neither persist nor revoke.
-func reportAmbiguousDevicePoll() deviceLoginAttemptOutcome {
-	fmt.Fprintln(os.Stderr, "login: a device authorization may have been redeemed but its result was lost; a credential may exist that this client cannot revoke — revoke it in the dashboard")
-	return deviceLoginFailed
+type credentialAckOutcome int
+
+const (
+	// ackConfirmed: the server recorded the acknowledgement (or had it).
+	ackConfirmed credentialAckOutcome = iota
+	// ackNotApplicable: the server knows no acknowledgement owed for this
+	// credential (an operator-issued or rotated credential, for example).
+	ackNotApplicable
+	// ackWindowClosed: the credential was owed an acknowledgement and the
+	// window closed; the server revokes it or already has.
+	ackWindowClosed
+	// ackUnknown: no definite answer after every attempt.
+	ackUnknown
+)
+
+// acknowledgeStoredCredential tells the server this client holds the credential.
+// credentialID may be empty: the server then means the bearer's own. Only a
+// definite 404 or 409 stops the attempts early; anything else is retried and,
+// if it never resolves, reported as unknown.
+func acknowledgeStoredCredential(ctx context.Context, cfg sidecar.Config, token, credentialID string) credentialAckOutcome {
+	client, err := sidecar.NewClient(cfg, func() (sidecar.CredentialResult, error) {
+		return sidecar.CredentialResult{Token: token, Source: "issued"}, nil
+	})
+	if err != nil {
+		return ackUnknown
+	}
+	for attempt := range deviceAckAttempts {
+		if attempt > 0 && lifecycleWait(ctx, time.Second) != nil {
+			return ackUnknown
+		}
+		_, err := client.AcknowledgeOwnCredential(ctx, credentialID)
+		if err == nil {
+			return ackConfirmed
+		}
+		var apiErr *sidecar.APIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.HTTPStatus {
+			case http.StatusNotFound:
+				return ackNotApplicable
+			case http.StatusConflict:
+				return ackWindowClosed
+			}
+		}
+	}
+	return ackUnknown
 }
+
+const deviceAckAttempts = 3
 
 // deviceAuthorizationContext bounds polling by the validated grant lifetime.
 // expiresIn comes from a response the contract already validated, so a

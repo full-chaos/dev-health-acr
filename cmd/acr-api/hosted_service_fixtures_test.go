@@ -94,6 +94,7 @@ func newPostgresFixtureWithAccess(t *testing.T, ctx context.Context, access post
 		`GRANT SELECT, UPDATE ON acr.client_credentials TO acr_runtime`,
 		`GRANT SELECT, INSERT ON acr.agent_episodes TO acr_runtime`,
 		`GRANT INSERT ON acr.audit_events TO acr_runtime`,
+		`GRANT SELECT, INSERT, UPDATE ON acr.device_authorizations TO acr_runtime`,
 	}
 	if access == postgresRuntimeAccessMissingPacketInsert {
 		grants = append(grants, `GRANT SELECT ON acr.context_packet_snapshots TO acr_runtime`)

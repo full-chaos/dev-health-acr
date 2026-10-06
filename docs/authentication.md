@@ -106,6 +106,52 @@ parent shell.
 authorization, so a platform without secure persistence never causes the server
 to mint a one-time credential that has nowhere to live.
 
+The device-code poll that `login` uses issues a credential the client must
+acknowledge. After `login` has stored the credential and verified it can be read
+back, it calls `POST /api/v1/auth/credentials/self/ack` with that credential as
+the bearer and the credential id in the body (never the secret). The server
+keeps the state in `acr.device_authorizations` (`ack_required`,
+`credential_acked_at`), so every acr-api pod gives the same answer. Three
+rules follow:
+
+- A poll response can be lost on the wire after the server minted the
+  credential. While the credential is unacknowledged and less than 120 seconds
+  old, a poll retry for the same device code revokes that credential and mints
+  a replacement in one transaction, so exactly one credential is live at any
+  instant. `login` retries the poll after a lost response or a request timeout.
+- After 120 seconds without an acknowledgement the retry is refused (the poll
+  answers `invalid_grant`, which makes `login` start a new device
+  authorization), and acr-api revokes the credential: every pod runs a sweep
+  every 30 seconds, with no new process and no setting, and revocation
+  is written to the audit log as `credential_revoked` by actor
+  `device-credential-ack`.
+- An acknowledged credential is never revoked or replaced by this path.
+  Acknowledging twice is not an error. A credential that is not awaiting
+  acknowledgement, or an id that is not the bearer's own, answers `404`.
+
+The request body may omit `credential_id`; when it is sent it must be the
+bearer's own. An acknowledgement is accepted only while the credential is live
+and less than 120 seconds old (a repeat of an accepted one returns the first
+time). A credential that is not owed an acknowledgement answers `404`; one whose
+window closed, or that was revoked, answers `409` even before the sweep has run.
+
+If `login` cannot confirm the acknowledgement (three attempts), it keeps the
+stored credential and exits with a failure: the response may have been lost
+after the server recorded it, so the only local copy is never deleted on that
+evidence. Every `login` that finds a stored credential, and verifies it against
+the server, acknowledges it first (without an id): `200` or `404` reports
+"already logged in" (a crash between storing and acknowledging heals here);
+`409` means the server is revoking it, so `login` revokes it, removes the local
+copy only after the revocation succeeds (or the server says it is already
+inactive), and starts a fresh device flow; any other answer keeps the credential
+and fails without starting a new flow. The RFC 8628
+device grant (`POST /device_authorization`) and the authorization-code flow
+issue credentials to third-party OAuth clients that have no acknowledgement
+call; those credentials are not subject to this window, so a lost response
+there still strands the credential (the client starts a new grant). The acknowledgement route and the
+client roll out together: a client that never acknowledges loses its credential
+after 120 seconds.
+
 Plain `login` is idempotent. If a shape-valid credential already exists, the
 sidecar verifies that exact captured credential against the hosted capabilities
 endpoint while holding the lifecycle lock. A valid credential returns success

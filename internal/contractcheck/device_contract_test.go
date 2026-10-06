@@ -31,6 +31,7 @@ func TestOpenAPI_includes_canonical_device_and_credential_operations(t *testing.
 		"/api/v1/oauth/device_approval":        "approveDeviceAuthorization",
 		"/api/v1/auth/credentials/self/rotate": "rotateOwnCredential",
 		"/api/v1/auth/credentials/self/revoke": "revokeOwnCredential",
+		"/api/v1/auth/credentials/self/ack":    "acknowledgeOwnCredential",
 	}
 
 	// When / Then
