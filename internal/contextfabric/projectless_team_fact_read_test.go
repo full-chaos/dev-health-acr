@@ -85,3 +85,21 @@ func TestEmptyFactRequirementsAreClassifiedAndLogged(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNoFactRequirements", err)
 	}
 }
+
+func TestAnOversizedFactPlanIsNotAnEmptyOne(t *testing.T) {
+	registry, err := NewFactCapabilityRegistry(nil, FactRegistryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirements := make([]FactRequirement, 65)
+	for i := range requirements {
+		requirements[i] = FactRequirement{Kind: FactMembership}
+	}
+	_, err = registry.ReadFacts(context.Background(), acceptancePrincipal(), CanonicalFactRequest{
+		Subjects:     []SubjectRef{{Kind: SubjectTeam, CanonicalID: "team:x", Label: "x"}},
+		Requirements: requirements,
+	})
+	if err == nil || errors.Is(err, ErrNoFactRequirements) {
+		t.Fatalf("err = %v, want a refusal that is not ErrNoFactRequirements", err)
+	}
+}

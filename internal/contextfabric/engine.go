@@ -3521,7 +3521,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// says so instead of failing.
 		if errors.Is(err, ErrNoFactRequirements) && !workItemTuple {
 			err = nil
-			facts = emptyFactReadBundle(familyOutcome.Frame)
+			facts = emptyFactReadBundle(familyOutcome.Frame, graphContext.Coverage)
 		}
 		if err != nil {
 			subjectKinds := make([]string, 0, len(subjects))

@@ -166,8 +166,8 @@ func applyPopulationOutcomeStatusFloor(result *InvestigationResult) {
 }
 
 // applyEmptyMemberSearchStatusFloor floors a complete answer whose coverage
-// carries the degrading graph_no_member_found row and whose cohort served no
-// member. The anchor resolved and the search found no member of the asked
+// carries the degrading graph_no_member_found row (or the not-planned row an
+// empty fact read files) and whose cohort served no member. The anchor resolved and the search found no member of the asked
 // kind; that is not a proof that none exist, so the answer is partial rather
 // than complete.
 func applyEmptyMemberSearchStatusFloor(result *InvestigationResult) {
@@ -178,7 +178,11 @@ func applyEmptyMemberSearchStatusFloor(result *InvestigationResult) {
 		return
 	}
 	for _, detail := range result.Coverage.Details {
-		if detail.Degrading && detail.Code == contractsv1.ContextFabricCoverageDetailGraphNoMemberFound {
+		if !detail.Degrading {
+			continue
+		}
+		if detail.Code == contractsv1.ContextFabricCoverageDetailGraphNoMemberFound ||
+			(detail.Code == contractsv1.ContextFabricCoverageDetailRequirementReadNotPlanned && detail.Raw == emptyFactReadNotPlannedRaw) {
 			floorNoMatchTo(result, InvestigationPartial)
 			return
 		}

@@ -1798,8 +1798,11 @@ func validateCanonicalFactRequest(request CanonicalFactRequest) error {
 			return err
 		}
 	}
-	if len(request.Requirements) == 0 || len(request.Requirements) > 64 {
-		return fmt.Errorf("%w: %d requirements", ErrNoFactRequirements, len(request.Requirements))
+	if len(request.Requirements) == 0 {
+		return ErrNoFactRequirements
+	}
+	if len(request.Requirements) > 64 {
+		return fmt.Errorf("canonical fact request requires bounded fact requirements: %d requirements", len(request.Requirements))
 	}
 	allowed := investigationScopeSubjectSet(request)
 	if len(allowed) == 0 {
