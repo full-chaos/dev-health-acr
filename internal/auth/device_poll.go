@@ -130,7 +130,6 @@ func (s *DeviceFlowService) Poll(ctx context.Context, deviceCode string) (Issued
 	case storage.DeviceAuthorizationStatePending:
 		return IssuedCredential{}, newDevicePollError(DevicePollAuthorizationPending, 0)
 	case storage.DeviceAuthorizationStateApproved:
-		return s.redeem(ctx, record, "", nil, true)
 	case storage.DeviceAuthorizationStateDenied:
 		return IssuedCredential{}, newDevicePollError(DevicePollAccessDenied, 0)
 	case storage.DeviceAuthorizationStateExpired:
@@ -139,13 +138,13 @@ func (s *DeviceFlowService) Poll(ctx context.Context, deviceCode string) (Issued
 		// The response carrying the credential may have been lost: while the
 		// client has not acknowledged it, the store decides (inside its own
 		// transaction and clock) whether this retry replaces it.
-		if record.CredentialUnacknowledged() {
-			return s.redeem(ctx, record, "", nil, true)
+		if !record.CredentialUnacknowledged() {
+			return IssuedCredential{}, newDevicePollError(DevicePollInvalidGrant, 0)
 		}
-		return IssuedCredential{}, newDevicePollError(DevicePollInvalidGrant, 0)
 	default:
 		return IssuedCredential{}, ErrInvalidDeviceFlow
 	}
+	return s.redeem(ctx, record, "", nil, true)
 }
 
 func (s *DeviceFlowService) redeem(ctx context.Context, record storage.DeviceAuthorization, resource string, scopes []string, ackable bool) (IssuedCredential, error) {

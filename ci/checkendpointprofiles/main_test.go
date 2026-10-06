@@ -2274,7 +2274,7 @@ func TestRealTreeRejectsAMintCallMovedIntoAnUncalledFuncLiteral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := "return s.redeem(ctx, record, \"\", nil)"
+	call := "return s.redeem(ctx, record, \"\", nil, true)"
 	mutated := strings.Replace(string(raw), call, "_ = func() (IssuedCredential, error) { "+call+" }\n\t\treturn IssuedCredential{}, nil", 1)
 	if mutated == string(raw) {
 		t.Fatal("the mint call was not found in the real device_poll.go; the fixture for this proof is stale")
