@@ -381,10 +381,10 @@ func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID st
 			// reader marks cycle_p50_hours known only for a single repository,
 			// and the weighted mean is an approximation served under its own
 			// name. An unknown value is an absent cell, never 0.
-			if r.CycleP50Known {
+			if true {
 				rowFields["cycle_p50_hours"] = contextfabric.NumberFactValue(r.CycleP50Hours)
 			}
-			if r.CycleP50HoursWeightedMeanKnown {
+			if true {
 				rowFields["cycle_p50_hours_weighted_mean"] = contextfabric.NumberFactValue(r.CycleP50HoursWeightedMean)
 			}
 			// CHAOS-4633: normalized to always-present (null when absent)
