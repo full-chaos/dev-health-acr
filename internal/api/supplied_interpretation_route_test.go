@@ -33,7 +33,7 @@ func suppliedInvestigationHTTPRequest(t *testing.T, token string, supplied contr
 func validSuppliedInterpretation() contractsv1.ContextFabricSuppliedInterpretation {
 	return contractsv1.ContextFabricSuppliedInterpretation{
 		Output:             json.RawMessage(`{"shape":"open","requested_judgment":"status","time_context":{"axis":"current"},"fact_requirements":[],"clarification_needed":false}`),
-		ModelOutputVersion: "context-fabric-model-output.v8", PromptVersion: "context-fabric-interpretation.v21",
+		ModelOutputVersion: "context-fabric-model-output.v8", PromptVersion: "context-fabric-interpretation.v22",
 		ClientModel: "claude-test",
 	}
 }

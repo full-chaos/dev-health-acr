@@ -11,7 +11,7 @@ func validSuppliedInterpretationFixture() ContextFabricSuppliedInterpretation {
 	return ContextFabricSuppliedInterpretation{
 		Output:             json.RawMessage(`{"shape":"open"}`),
 		ModelOutputVersion: "context-fabric-model-output.v8",
-		PromptVersion:      "context-fabric-interpretation.v21",
+		PromptVersion:      "context-fabric-interpretation.v22",
 		SystemSHA256:       strings.Repeat("a", 64),
 		ClientModel:        "anthropic/claude-test:1.0_a-b",
 	}
@@ -148,7 +148,7 @@ func TestInterpretationContractRefusalValidate(t *testing.T) {
 		return ContextFabricInterpretationContractRefusal{
 			Mismatch: []string{ContextFabricInterpretationContractFieldPromptVersion},
 			Current: ContextFabricInterpretationContract{
-				ModelOutputVersion: "context-fabric-model-output.v8", PromptVersion: "context-fabric-interpretation.v21",
+				ModelOutputVersion: "context-fabric-model-output.v8", PromptVersion: "context-fabric-interpretation.v22",
 				SystemSHA256: strings.Repeat("a", 64),
 			},
 		}
@@ -191,7 +191,7 @@ func TestInvestigateWithInterpretationRequestDecodesFlatAndStrict(t *testing.T) 
 		err := decoder.Decode(&request)
 		return request, err
 	}
-	const arguments = `{"question":"What is the status of Ask Dev?","parent_result_id":"result_12345678","interpretation":{"shape":"open"},"contract":{"model_output_version":"context-fabric-model-output.v8","prompt_version":"context-fabric-interpretation.v21","system_sha256":"0000000000000000000000000000000000000000000000000000000000000000"},"client_model":"claude-test"}`
+	const arguments = `{"question":"What is the status of Ask Dev?","parent_result_id":"result_12345678","interpretation":{"shape":"open"},"contract":{"model_output_version":"context-fabric-model-output.v8","prompt_version":"context-fabric-interpretation.v22","system_sha256":"0000000000000000000000000000000000000000000000000000000000000000"},"client_model":"claude-test"}`
 	request, err := decode(arguments)
 	if err != nil {
 		t.Fatalf("decode error = %v", err)
@@ -203,7 +203,7 @@ func TestInvestigateWithInterpretationRequestDecodesFlatAndStrict(t *testing.T) 
 		t.Fatalf("Validate() error = %v", err)
 	}
 	supplied := request.Supplied()
-	if string(supplied.Output) != `{"shape":"open"}` || supplied.ClientModel != "claude-test" || supplied.PromptVersion != "context-fabric-interpretation.v21" {
+	if string(supplied.Output) != `{"shape":"open"}` || supplied.ClientModel != "claude-test" || supplied.PromptVersion != "context-fabric-interpretation.v22" {
 		t.Fatalf("Supplied() = %#v, want the tool's interpretation arguments", supplied)
 	}
 	if _, err := decode(strings.Replace(arguments, `"client_model"`, `"service_version":"x","client_model"`, 1)); err == nil {
