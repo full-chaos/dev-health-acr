@@ -82,7 +82,7 @@ func TestDeviceCredentialAck_lostResponseRetryInsideWindowReplacesTheCredential(
 	require.NoError(t, err)
 	require.Equal(t, second, record.RedeemedCredentialID)
 	_, err = f.store.AcknowledgeCredential(context.Background(), f.grant.OrgID, first)
-	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound, "the replaced credential can no longer be acknowledged")
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationConflict, "the replaced credential can no longer be acknowledged")
 	_, err = f.store.AcknowledgeCredential(context.Background(), f.grant.OrgID, second)
 	require.NoError(t, err)
 }
@@ -233,4 +233,33 @@ func TestDeviceCredentialAck_repeatedAcknowledgementAfterTheWindowReturnsTheFirs
 
 	require.NoError(t, err)
 	require.Equal(t, first, again)
+}
+
+func TestDeviceCredentialAck_acknowledgingAReplacedCredentialIsAClosedWindowNotNothingOwed(t *testing.T) {
+	f := newApprovedAckFixture(t)
+	first, err := f.redeemAckable(t)
+	require.NoError(t, err)
+	_, err = f.redeemAckable(t)
+	require.NoError(t, err)
+
+	_, err = f.store.AcknowledgeCredential(context.Background(), f.grant.OrgID, first)
+
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationConflict)
+	_, err = f.store.AcknowledgeCredential(context.Background(), f.grant.OrgID, "cred_never_issued")
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound)
+}
+
+func TestDeviceCredentialAck_aFailedReplacementMintLeavesTheOriginalLive(t *testing.T) {
+	f := newApprovedAckFixture(t)
+	first, err := f.redeemAckable(t)
+	require.NoError(t, err)
+	bad := f.prepareCredential(t, f.grant).StorageInput()
+	bad.ExpiresAt = pointerTime(f.now.Add(-time.Hour))
+
+	_, err = f.store.RedeemAckable(context.Background(), f.hash, bad)
+
+	require.Error(t, err)
+	require.Equal(t, []string{first}, f.liveCredentials(t), "a mint that failed must not cost the client its credential")
+	_, err = f.store.AcknowledgeCredential(context.Background(), f.grant.OrgID, first)
+	require.NoError(t, err)
 }

@@ -54,14 +54,25 @@ func (s *DeviceAuthorizationStore) redeem(ctx context.Context, hash storage.Devi
 		return contractsv1.ClientCredential{}, storage.ErrInvalidDeviceAuthorization
 	}
 	input.IssuanceProvenance = storage.CredentialIssuanceProvenanceDeviceAuthorization
-	if replacing != "" {
-		if err := s.revokeUnackedLocked(ctx, record); err != nil {
-			return contractsv1.ClientCredential{}, err
-		}
-	}
+	// Mint first so a failed mint leaves the old credential live, then revoke
+	// the old one; a revocation that fails (including one that lost to an
+	// external revoke) takes the new credential back, so a replacement is
+	// never left live beside, or after, a revoked original.
 	credential, err := s.credentials.CreateCredential(ctx, input)
 	if err != nil {
 		return contractsv1.ClientCredential{}, err
+	}
+	if replacing != "" {
+		if revokeErr := s.revokeUnackedLocked(ctx, record); revokeErr != nil {
+			_, _ = s.credentials.RevokeCredential(ctx, storage.CredentialRevocationInput{
+				OrgID: record.AuthorizedOrgID, CredentialID: credential.CredentialID,
+				ActorID: deviceAckRevokeActor, ActorType: "system", Reason: "device credential replacement abandoned",
+			})
+			if errors.Is(revokeErr, storage.ErrConflict) {
+				return contractsv1.ClientCredential{}, storage.NewDeviceAuthorizationConflict(record.State, storage.DeviceConflictAckWindowElapsed)
+			}
+			return contractsv1.ClientCredential{}, revokeErr
+		}
 	}
 	record.State = storage.DeviceAuthorizationStateRedeemed
 	record.RedeemedAt = ptrTime(now)
@@ -77,10 +88,7 @@ func (s *DeviceAuthorizationStore) revokeUnackedLocked(ctx context.Context, reco
 		OrgID: record.AuthorizedOrgID, CredentialID: record.RedeemedCredentialID,
 		ActorID: deviceAckRevokeActor, ActorType: "system", Reason: "device credential not acknowledged",
 	})
-	if err != nil && !errors.Is(err, storage.ErrConflict) {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (s *DeviceAuthorizationStore) AcknowledgeCredential(ctx context.Context, orgID, credentialID string) (time.Time, error) {
@@ -107,6 +115,9 @@ func (s *DeviceAuthorizationStore) AcknowledgeCredential(ctx context.Context, or
 		record.CredentialAckedAt = ptrTime(now)
 		s.byDevice[hash] = cloneDeviceAuthorization(record)
 		return now, nil
+	}
+	if credential, err := s.credentials.GetByID(ctx, orgID, credentialID); err == nil && credential.RevokedAt != nil {
+		return time.Time{}, storage.NewDeviceAuthorizationConflict(storage.DeviceAuthorizationStateRedeemed, storage.DeviceConflictAckWindowElapsed)
 	}
 	return time.Time{}, storage.ErrDeviceAuthorizationNotFound
 }
@@ -137,6 +148,9 @@ func (s *DeviceAuthorizationStore) RevokeUnacknowledged(ctx context.Context, lim
 			continue
 		}
 		if err := s.revokeUnackedLocked(ctx, record); err != nil {
+			if errors.Is(err, storage.ErrConflict) {
+				continue
+			}
 			return revoked, err
 		}
 		revoked++

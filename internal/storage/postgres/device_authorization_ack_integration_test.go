@@ -290,3 +290,57 @@ func TestDeviceCredentialAckStore_retryThatWaitedOnTheRowLockWhileTheSweepRevoke
 	require.NoError(t, f.db.QueryRowContext(f.ctx, "SELECT count(*) FROM acr.client_credentials WHERE org_id = $1", f.grant.OrgID).Scan(&total))
 	require.Equal(t, 1, total, "no second credential row exists")
 }
+
+func (f *postgresAckFixture) waitForALockWaiter(t *testing.T) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var waiting int
+		require.NoError(t, f.db.QueryRowContext(f.ctx, "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()").Scan(&waiting))
+		return waiting > 0
+	}, 10*time.Second, 50*time.Millisecond, "the request never blocked on the row lock")
+}
+
+// An acknowledgement that read its clock before it blocked on the row lock
+// must not be accepted after the window closed while it waited.
+func TestDeviceCredentialAckStore_acknowledgementThatWaitedOnTheRowLockPastTheWindowIsRefused(t *testing.T) {
+	f := newPostgresAckFixture(t)
+	id, err := f.redeemAckable(t)
+	require.NoError(t, err)
+	holder, err := f.db.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback() }()
+	_, err = holder.ExecContext(f.ctx, "SELECT 1 FROM acr.device_authorizations WHERE device_code_hash = $1 FOR UPDATE", f.hash.String())
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	f.setNow(f.now.Add(time.Second))
+	go func() {
+		_, ackErr := f.store.AcknowledgeCredential(f.ctx, f.grant.OrgID, id)
+		done <- ackErr
+	}()
+	f.waitForALockWaiter(t)
+	f.setNow(f.now.Add(storage.DeviceCredentialAckWindow))
+	require.NoError(t, holder.Commit())
+
+	require.ErrorIs(t, <-done, storage.ErrDeviceAuthorizationConflict, "an acknowledgement was accepted after the window closed")
+	var acked sql.NullTime
+	require.NoError(t, f.db.QueryRowContext(f.ctx, "SELECT credential_acked_at FROM acr.device_authorizations WHERE device_code_hash = $1", f.hash.String()).Scan(&acked))
+	require.False(t, acked.Valid)
+	revoked, err := f.store.RevokeUnacknowledged(f.ctx, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, revoked, "the late acknowledgement did not shield the credential from the sweep")
+}
+
+func TestDeviceCredentialAckStore_acknowledgingAReplacedCredentialIsAClosedWindowNotNothingOwed(t *testing.T) {
+	f := newPostgresAckFixture(t)
+	first, err := f.redeemAckable(t)
+	require.NoError(t, err)
+	_, err = f.redeemAckable(t)
+	require.NoError(t, err)
+
+	_, err = f.store.AcknowledgeCredential(f.ctx, f.grant.OrgID, first)
+
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationConflict)
+	_, err = f.store.AcknowledgeCredential(f.ctx, f.grant.OrgID, "cred_never_issued")
+	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound)
+}

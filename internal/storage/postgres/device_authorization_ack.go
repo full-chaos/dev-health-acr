@@ -33,7 +33,6 @@ func (s *DeviceAuthorizationStore) AcknowledgeCredential(ctx context.Context, or
 		return time.Time{}, fmt.Errorf("begin device credential acknowledgement: %w", sanitizeDatabaseError(err))
 	}
 	defer func() { _ = tx.Rollback() }()
-	now := s.now().UTC()
 	var redeemedAt time.Time
 	var ackedAt sql.NullTime
 	err = tx.QueryRowContext(ctx, `
@@ -42,11 +41,22 @@ WHERE redeemed_credential_id = $2 AND authorized_org_id = $1::uuid
   AND state = 'redeemed' AND ack_required
 FOR UPDATE`, orgID, credentialID).Scan(&redeemedAt, &ackedAt)
 	if errors.Is(err, sql.ErrNoRows) {
+		// A credential that no authorization row names any more may have been
+		// replaced by a poll retry (it is revoked): that is a closed window,
+		// not "nothing was owed", and the caller must not rely on it.
+		var revoked sql.NullTime
+		credentialErr := tx.QueryRowContext(ctx, `SELECT revoked_at FROM acr.client_credentials WHERE org_id = $1 AND credential_id = $2`, orgID, credentialID).Scan(&revoked)
+		if credentialErr == nil && revoked.Valid {
+			return time.Time{}, storage.NewDeviceAuthorizationConflict(storage.DeviceAuthorizationStateRedeemed, storage.DeviceConflictAckWindowElapsed)
+		}
 		return time.Time{}, storage.ErrDeviceAuthorizationNotFound
 	}
 	if err != nil {
 		return time.Time{}, fmt.Errorf("lock device authorization for acknowledgement: %w", sanitizeDatabaseError(err))
 	}
+	// The clock is read after the row lock: a read taken before it can predate
+	// the window's close while this transaction waited for the lock.
+	now := s.now().UTC()
 	if ackedAt.Valid {
 		return ackedAt.Time.UTC(), nil
 	}
@@ -115,15 +125,20 @@ FOR UPDATE OF d SKIP LOCKED`, now.Add(-storage.DeviceCredentialAckWindow), limit
 	if err := rows.Close(); err != nil {
 		return 0, fmt.Errorf("close unacknowledged device credentials: %w", sanitizeDatabaseError(err))
 	}
+	revokedCount := 0
 	for _, t := range targets {
-		if _, err := s.revokeUnacknowledgedTx(ctx, tx, t.orgID, t.credentialID, now); err != nil {
+		revokedNow, err := s.revokeUnacknowledgedTx(ctx, tx, t.orgID, t.credentialID, now)
+		if err != nil {
 			return 0, err
+		}
+		if revokedNow {
+			revokedCount++
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit device credential revoke sweep: %w", sanitizeDatabaseError(err))
 	}
-	return len(targets), nil
+	return revokedCount, nil
 }
 
 // revokeUnacknowledgedTx revokes the credential and reports whether this call
