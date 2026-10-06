@@ -380,8 +380,9 @@ func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID st
 			// A key spanning several repositories has no exact median: the
 			// reader marks cycle_p50_hours known only for a single repository,
 			// and the weighted mean is an approximation served under its own
-			// name. An unknown value is an absent cell, never 0.
-			if r.CycleP50Known {
+			// name. A row with no completed work item has no median, so an
+			// unknown value is an absent cell, never 0.
+			if r.CycleP50Known && r.WorkItemsCompleted > 0 {
 				rowFields["cycle_p50_hours"] = contextfabric.NumberFactValue(r.CycleP50Hours)
 			}
 			if r.CycleP50HoursWeightedMeanKnown {
