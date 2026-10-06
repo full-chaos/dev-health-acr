@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -20,8 +21,8 @@ type RequiredBaselineOptions struct {
 }
 
 // CheckRequiredAgainstTag fails when a published schema lists a field in
-// `required` that the same schema did not require at the previous release
-// tag. A field is optional for one release first; it may become required in
+// `required` that the same schema did not require at the previous prod roll
+// tag (prod-rev<N>, else v*). A field is optional for one release first; it may become required in
 // the next. With no tag the check passes and says so.
 func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 	root, err := findRoot(options.Root)
@@ -37,7 +38,7 @@ func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 		return err
 	}
 	if tag == "" {
-		fmt.Fprintln(out, "contractcheck required-baseline: NO RELEASE TAG found (v* reachable from HEAD, not at HEAD); nothing compared, passing. Fetch tags in CI.")
+		fmt.Fprintln(out, "contractcheck required-baseline: NO RELEASE TAG found (prod-rev* or v* reachable from HEAD, not at HEAD); nothing compared, passing. Fetch tags in CI.")
 		return nil
 	}
 	files, err := gitOutput(root, "ls-tree", "-r", "--name-only", tag, "--", publishedSchemaDir)
@@ -140,19 +141,42 @@ func pathOrRoot(path string) string {
 	return path
 }
 
-// previousReleaseTag returns the newest v* tag reachable from HEAD that does
-// not point at HEAD's commit, or "" when there is none.
+// previousReleaseTag returns the baseline tag reachable from HEAD that does
+// not point at HEAD's commit: the prod-rev<N> tag with the highest N, else the
+// newest v* tag, else "".
 func previousReleaseTag(root string) (string, error) {
 	head, err := gitOutput(root, "rev-parse", "HEAD")
 	if err != nil {
 		return "", err
 	}
 	head = strings.TrimSpace(head)
-	tags, err := gitOutput(root, "tag", "--merged", "HEAD", "--list", "v*", "--sort=-creatordate")
+	prodTags, err := gitOutput(root, "tag", "--merged", "HEAD", "--list", "prod-rev*")
 	if err != nil {
 		return "", err
 	}
-	for _, tag := range strings.Fields(tags) {
+	type revTag struct {
+		name string
+		n    int
+	}
+	var revs []revTag
+	for _, tag := range strings.Fields(prodTags) {
+		n, err := strconv.Atoi(strings.TrimPrefix(tag, "prod-rev"))
+		if err != nil || n < 0 {
+			continue
+		}
+		revs = append(revs, revTag{tag, n})
+	}
+	sort.Slice(revs, func(i, j int) bool { return revs[i].n > revs[j].n })
+	var ordered []string
+	for _, r := range revs {
+		ordered = append(ordered, r.name)
+	}
+	versionTags, err := gitOutput(root, "tag", "--merged", "HEAD", "--list", "v*", "--sort=-creatordate")
+	if err != nil {
+		return "", err
+	}
+	ordered = append(ordered, strings.Fields(versionTags)...)
+	for _, tag := range ordered {
 		commit, err := gitOutput(root, "rev-parse", tag+"^{commit}")
 		if err != nil {
 			return "", err

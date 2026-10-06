@@ -129,7 +129,7 @@ Any externally visible field or endpoint change must update, in the same change:
 
 `contracts/openapi/acr-v1.json` is canonical; never hand-edit its YAML mirror. Run `make contract-write`, then `make contract-test`.
 
-**Expand, then contract:** a field is optional for one release first; it may be listed in a schema's `required` only in the next release. `go run ./cmd/contractcheck -required-baseline` enforces it on pull requests (CI step "Verify required fields against the previous release tag"): it diffs every published schema's `required` lists against the newest `v*` tag reachable from HEAD and fails on a newly required field; with no tag it passes and says so.
+**Expand, then contract:** a field is optional for one release first; it may be listed in a schema's `required` only in the next release. `go run ./cmd/contractcheck -required-baseline` enforces it on pull requests (CI step "Verify required fields against the previous release tag"): it diffs every published schema's `required` lists against the baseline tag reachable from HEAD, the last prod roll tag `prod-rev<N>` (highest N; fallback the newest `v*` tag), and fails on a newly required field; with no tag it passes and says so.
 
 ## CONVENTIONS
 

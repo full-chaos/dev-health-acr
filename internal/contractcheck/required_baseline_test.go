@@ -121,3 +121,38 @@ func TestRequiredBaselineSkipsTagAtHead(t *testing.T) {
 		t.Fatalf("expected comparison against v1.0.0, got %v", err)
 	}
 }
+
+func TestRequiredBaselineProdRevTagBeatsVersionTag(t *testing.T) {
+	dir := baselineRepo(t, schemaOneRequired)
+	runGit(t, dir, "tag", "v1.0.0")
+	commitSchema(t, dir, strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","b"]`, 1))
+	runGit(t, dir, "tag", "prod-rev3")
+	commitSchema(t, dir, strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","b","c"]`, 1))
+	var out bytes.Buffer
+	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir, Out: &out})
+	if err == nil || !strings.Contains(err.Error(), "prod-rev3") || strings.Contains(err.Error(), `"b"`) {
+		t.Fatalf("expected failure on c only against prod-rev3, got %v", err)
+	}
+}
+
+func TestRequiredBaselinePicksHighestProdRevNumber(t *testing.T) {
+	dir := baselineRepo(t, schemaOneRequired)
+	runGit(t, dir, "tag", "prod-rev9")
+	commitSchema(t, dir, strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","b"]`, 1))
+	runGit(t, dir, "tag", "prod-rev10")
+	commitSchema(t, dir, strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","b","c"]`, 1))
+	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
+	if err == nil || !strings.Contains(err.Error(), "prod-rev10") || strings.Contains(err.Error(), `"b"`) {
+		t.Fatalf("expected prod-rev10 baseline, got %v", err)
+	}
+}
+
+func TestRequiredBaselineFallsBackToVersionTagWithoutProdRev(t *testing.T) {
+	dir := baselineRepo(t, schemaOneRequired)
+	runGit(t, dir, "tag", "v1.0.0")
+	commitSchema(t, dir, strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","b"]`, 1))
+	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
+	if err == nil || !strings.Contains(err.Error(), "v1.0.0") {
+		t.Fatalf("expected v1.0.0 fallback, got %v", err)
+	}
+}
