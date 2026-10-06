@@ -430,15 +430,15 @@ import (
 // with its own cause (computed_population_absent) in place of fact_pruned. A
 // candidate saved before v80 holds the old cause and must not be reused.
 //
-// v80 -> v81: a model no_match over a committed subject is floored on a read
+// v82 -> v83: a model no_match over a committed subject is floored on a read
 // fact row only when the row's kind is one the question asked for. A candidate
-// saved before v81 holds a degraded answer floored on an unasked kind and must
+// saved before v83 holds a degraded answer floored on an unasked kind and must
 // not be reused.
 //
-// v81 -> v82: a model no_match whose own outcome rows record a truncated
-// population is served degraded. A candidate saved before v82 holds the
+// v83 -> v84: a model no_match whose own outcome rows record a truncated
+// population is served degraded. A candidate saved before v84 holds the
 // no_match and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v82"
+const QueryVersion = "devhealthfacts.clickhouse.v84"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
