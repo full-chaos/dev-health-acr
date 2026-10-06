@@ -425,7 +425,12 @@ import (
 // synthesis headroom, and says so with its own N of M and summary-coverage
 // sentences. A candidate saved before v78 holds the shorter list and the old
 // wording and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v78"
+//
+// v78 -> v79: a read requirement every declared kind of which was pruned, and
+// one the evaluator cannot evaluate (an undeclared cause code or an
+// unrecognised quantifier), now carry a not_attempted assembled-result row.
+// A candidate saved before v79 lacks that row and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v79"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

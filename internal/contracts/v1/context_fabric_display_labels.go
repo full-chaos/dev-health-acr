@@ -326,6 +326,11 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		// -- the same rule as `answer_terminated_before_attempt` above, for
 		// the same reason.
 		label = "This was not looked at for this question"
+	case ContextFabricCoverageDetailRequirementNotEvaluable:
+		// Says the answer did not EVALUATE this, not that a source failed:
+		// there is no broken provider to check. No count phrasing: the field
+		// rule for this code allows none.
+		label = "This was considered but could not be evaluated"
 	case ContextFabricCoverageDetailFactReadOriginState:
 		// Names the POPULATION the read was for, then its state, in the
 		// state registry's own words. No count and no "could not": the row

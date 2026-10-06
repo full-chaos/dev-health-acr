@@ -439,12 +439,16 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 		},
 		{
 			// EVERY declared kind pruned. No kind is observed at all, so the
-			// evaluator emits nothing and the requirement keeps its planning
-			// seed -- which the completeness derivation reads as `partial`.
-			// That is the honest floor: nothing was read, and nothing was lost.
-			name: "every declared kind pruned emits no row", quantifier: CompletionQuantifierAtLeastOne,
+			// requirement was considered and never read: a `not_attempted`
+			// row naming the planner's own prune. That derives `partial`, the
+			// same state the planning seed alone gave, so nothing is lost or
+			// re-degraded and the account now says it was considered.
+			name: "every declared kind pruned emits a not_attempted row", quantifier: CompletionQuantifierAtLeastOne,
 			coverage: factCoverage(health, SourcePruned, workload, SourcePruned),
-			wantRow:  false,
+			wantRow:  true, wantOutcome: contractsv1.ContextFabricRequirementNotAttempted,
+			wantImpact:   contractsv1.ContextFabricAnswerImpactDimension,
+			wantCause:    contractsv1.ContextFabricCoverageDetailFactPruned,
+			wantObserved: true, wantServed: 0, wantDeclared: 1,
 		},
 		{
 			// Was "emits no row while the cause vocabulary is the other
@@ -595,7 +599,7 @@ func TestTheSeedIsNeverTheLastRowForAServedReadRequirement(t *testing.T) {
 	}
 }
 
-// TestAnUnrecognisedQuantifierEmitsNoRow closes the gap a surviving mutant
+// TestAnUnrecognisedQuantifierEmitsANotAttemptedRow closes the gap a surviving mutant
 // named: deleting the `if !known` guard changed no test result, because every
 // fixture used a recognised quantifier.
 //
@@ -608,8 +612,7 @@ func TestTheSeedIsNeverTheLastRowForAServedReadRequirement(t *testing.T) {
 //
 // The COMPLEMENT is asserted in the same run, because "no row" is exactly the
 // assertion that passes on an evaluator emitting nothing at all.
-func TestAnUnrecognisedQuantifierEmitsNoRow(t *testing.T) {
-	t.Parallel()
+func TestAnUnrecognisedQuantifierEmitsANotAttemptedRow(t *testing.T) {
 	health := contractsv1.ContextFabricFactHealth
 	coverage := factCoverage(health, SourceAvailable)
 
@@ -623,24 +626,45 @@ func TestAnUnrecognisedQuantifierEmitsNoRow(t *testing.T) {
 			unrecognised.Quantifier)
 	}
 
+	logs := captureDefaultJSONLogger(t)
 	rows := appendReadRequirementEvaluations(nil,
 		[]contractsv1.ContextFabricPlanRequirement{unrecognised}, coverage, readPopulationEvidence{})
-	if len(rows) != 0 {
-		t.Fatalf("an unrecognised quantifier produced %d rows: %+v -- evaluating against a defaulted "+
-			"threshold silently lowers the standard the requirement declared", len(rows), rows)
+	if len(rows) != 1 {
+		t.Fatalf("an unrecognised quantifier produced %d rows: %+v, want exactly one not_attempted row", len(rows), rows)
+	}
+	got := rows[0]
+	if got.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult ||
+		got.Requirement != unrecognised.Requirement || got.Obligation != unrecognised.Obligation ||
+		got.Outcome != contractsv1.ContextFabricRequirementNotAttempted ||
+		got.Impact != contractsv1.ContextFabricAnswerImpactDimension ||
+		got.CauseCoverage != contractsv1.ContextFabricCoverageDetailRequirementNotEvaluable ||
+		got.CauseObserved || got.Served != 0 || got.Declared != 0 {
+		t.Fatalf("the unrecognised-quantifier row is wrong: %+v -- it must be not_attempted/dimension/"+
+			"requirement_not_evaluable, inferred, 0/0 (no standard exists to declare)", got)
+	}
+	if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(got); err != nil {
+		t.Fatalf("the row does not validate: %v", err)
+	}
+	if !strings.Contains(logs.String(), fmt.Sprintf("%q:%q", "quantifier", unrecognised.Quantifier)) {
+		t.Fatalf("the skip emitted no disclosure naming the quantifier: %s", logs.String())
 	}
 
 	// COMPLEMENT: the same fixture with a RECOGNISED quantifier does emit.
 	recognised := readRequirement(CompletionQuantifierAtLeastOne)
-	got := appendReadRequirementEvaluations(nil,
+	complement := appendReadRequirementEvaluations(nil,
 		[]contractsv1.ContextFabricPlanRequirement{recognised}, coverage, readPopulationEvidence{})
-	if len(got) != 1 {
+	if len(complement) != 1 {
 		t.Fatalf("the same fixture with a recognised quantifier produced %d rows, want 1 -- the "+
-			"assertion above would pass on an evaluator that emitted nothing at all", len(got))
+			"assertion above would pass on an evaluator that emitted nothing at all", len(complement))
+	}
+	if complement[0].Outcome != contractsv1.ContextFabricRequirementSatisfied ||
+		complement[0].CauseCoverage == contractsv1.ContextFabricCoverageDetailRequirementNotEvaluable {
+		t.Fatalf("a recognised quantifier produced %+v, want an ordinary satisfied row -- the assertion "+
+			"above would pass on an evaluator that answered every requirement not_attempted", complement[0])
 	}
 }
 
-// TestAnUndeclaredCauseCodeEmitsNoRow is the REACH PROBE for the stop path, and
+// TestAnUndeclaredCauseCodeEmitsANotAttemptedRow is the REACH PROBE for the stop path, and
 // it is written to fail loudly if that path ever becomes reachable in
 // production rather than only in a fixture.
 //
@@ -653,7 +677,7 @@ func TestAnUnrecognisedQuantifierEmitsNoRow(t *testing.T) {
 // The COMPLEMENT is asserted in the same run. Without it this test would pass
 // on an evaluator that had stopped emitting rows altogether, which is the
 // failure mode a "no row" assertion invites.
-func TestAnUndeclaredCauseCodeEmitsNoRow(t *testing.T) {
+func TestAnUndeclaredCauseCodeEmitsANotAttemptedRow(t *testing.T) {
 	// NOT PARALLEL, and that is the assertion this test needs rather than a
 	// convenience it gives up.
 	//
@@ -692,12 +716,23 @@ func TestAnUndeclaredCauseCodeEmitsNoRow(t *testing.T) {
 	rows := appendReadRequirementEvaluations(nil,
 		[]contractsv1.ContextFabricPlanRequirement{requirement},
 		codedCoverage(undeclared, health, health, SourceUnavailable), readPopulationEvidence{})
-	if len(rows) != 0 {
-		t.Fatalf("an undeclared cause code produced %d rows: %+v -- it must reach the wire "+
-			"neither as itself nor remapped onto a declared code", len(rows), rows)
+	if len(rows) != 1 {
+		t.Fatalf("an undeclared cause code produced %d rows: %+v, want exactly one not_attempted row", len(rows), rows)
+	}
+	if got := rows[0]; got.Outcome != contractsv1.ContextFabricRequirementNotAttempted ||
+		got.Impact != contractsv1.ContextFabricAnswerImpactDimension ||
+		got.CauseCoverage != contractsv1.ContextFabricCoverageDetailRequirementNotEvaluable ||
+		got.CauseObserved || got.Served != 0 || got.Declared != 1 ||
+		got.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult ||
+		got.Requirement != requirement.Requirement {
+		t.Fatalf("the undeclared-cause row is wrong: %+v -- it must reach the wire neither as the "+
+			"undeclared code nor remapped onto a declared fact cause", got)
+	}
+	if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(rows[0]); err != nil {
+		t.Fatalf("the row does not validate: %v", err)
 	}
 
-	const line = "context fabric read requirement dropped for an undeclared coverage code"
+	const line = "context fabric read requirement carried an undeclared coverage code"
 	if !strings.Contains(logs.String(), line) {
 		t.Fatalf("the drop emitted no disclosure; a silently dropped row is a swallowed signal. logs: %s", logs.String())
 	}
@@ -1405,7 +1440,7 @@ func TestAPartialCoverageDetailDoesNotSuppressTheRow(t *testing.T) {
 	//
 	// The complement below drives the undeclared-code stop path, and that path
 	// DISCLOSES through the process-global `slog.Default()`. A sibling test,
-	// TestAnUndeclaredCauseCodeEmitsNoRow, swaps that global for its own buffer
+	// TestAnUndeclaredCauseCodeEmitsANotAttemptedRow, swaps that global for its own buffer
 	// and asserts an EXACT count of one drop line on it. Run in parallel, this
 	// test's warning lands in the sibling's buffer and fails it at two -- and
 	// the two tests write the same buffer concurrently, which `-race` reports.

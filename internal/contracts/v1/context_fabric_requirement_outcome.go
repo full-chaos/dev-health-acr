@@ -60,8 +60,11 @@ const (
 	// and one token standing for both is the shape "missing is not
 	// healthy" forbids.
 	ContextFabricRequirementNotApplicable ContextFabricPlanRequirementOutcome = "not_applicable"
-	// ContextFabricRequirementNotAttempted: a declared cap prevented the
-	// attempt BEFORE any read.
+	// ContextFabricRequirementNotAttempted: the requirement was considered
+	// and no read was made for it -- a declared cap prevented the attempt,
+	// the turn ended first, every declared kind was pruned by the planner, or
+	// the evaluator could not state an account without inventing a standard
+	// or a cause (`requirement_not_evaluable`). The row names which.
 	//
 	// Distinct from both neighbours, and the distinction is not
 	// decorative. Reporting a never-attempted read as `unavailable` would

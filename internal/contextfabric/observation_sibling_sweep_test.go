@@ -91,10 +91,10 @@ func TestTheSiblingSweepIsExecuted(t *testing.T) {
 	check("readRequirementOutcomeRow", "kinds observed and served",
 		published(single, factCoverage(health, SourceAvailable), readPopulationEvidence{}), "rows=1 lines=1 withheld=none")
 	check("readRequirementOutcomeRow", "every declared kind pruned",
-		published(single, factCoverage(health, SourcePruned, workload, SourcePruned), readPopulationEvidence{}), "rows=0 lines=1 withheld=all_pruned")
+		published(single, factCoverage(health, SourcePruned, workload, SourcePruned), readPopulationEvidence{}), "rows=1 lines=1 withheld=none")
 	const undeclared = contractsv1.ContextFabricCoverageDetailCode("fact_invented_by_a_future_producer")
 	check("readRequirementOutcomeRow", "undeclared cause code",
-		published(single, codedCoverage(undeclared, health, health, SourceUnavailable), readPopulationEvidence{}), "rows=0 lines=1 withheld=undeclared_cause")
+		published(single, codedCoverage(undeclared, health, health, SourceUnavailable), readPopulationEvidence{}), "rows=1 lines=1 withheld=none")
 
 	flow := contractsv1.ContextFabricFactFlow
 	operand := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated, flow, health)
@@ -154,7 +154,7 @@ func TestTheSiblingSweepIsExecuted(t *testing.T) {
 	}
 	// The WARN-logging branches must still say why they dropped the row.
 	for _, line := range []string{
-		"context fabric read requirement dropped for an undeclared coverage code",
+		"context fabric read requirement carried an undeclared coverage code",
 		"context fabric distributive read requirement reached the evaluator with no population evidence",
 		"context fabric distributive read requirement has no population owner",
 	} {
