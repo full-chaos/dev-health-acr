@@ -429,7 +429,12 @@ import (
 // v79 -> v80: a computed requirement with no member set to run over is served
 // with its own cause (computed_population_absent) in place of fact_pruned. A
 // candidate saved before v80 holds the old cause and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v80"
+//
+// v80 -> v81: a clarification candidate and a find_subjects row name their
+// provider when exactly one provider identifies the node. A candidate saved
+// before v81 holds a clarification whose candidates read the same and must not
+// be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v81"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

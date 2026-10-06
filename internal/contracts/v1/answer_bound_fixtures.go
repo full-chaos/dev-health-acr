@@ -574,6 +574,7 @@ func maximalCandidate(i int) ContextFabricSubjectCandidate {
 		Subject:        distinctSubject(i),
 		MatchedTerms:   repeatStrings(matchedTermsMaxCount, ContextFabricSubjectOrComparisonTermMaxLength),
 		MatchReasons:   repeatStrings(matchReasonsMaxCount, matchReasonMaxRunes),
+		Provider:       strings.Repeat("p", ContextFabricProviderMaxLength),
 	}
 }
 
