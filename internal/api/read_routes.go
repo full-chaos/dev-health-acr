@@ -30,7 +30,7 @@ func (a *App) handleContextPacket(w http.ResponseWriter, r *http.Request) {
 	}
 	slug, err := auth.NormalizeRepositorySlug(request.Repository.Slug)
 	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Context packet request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Context packet request is invalid", false, bodyFieldDetails("repository.slug"))
 		return
 	}
 	request.RequestID = RequestID(r.Context())

@@ -144,12 +144,12 @@ func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.SchemaVersion == contractsv1.DeviceApprovalPreviewRequestSchema {
 		if request.RepositoryScopes != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, bodyFieldDetails("repository_scopes"))
 			return
 		}
 		previewRequest := contractsv1.DeviceApprovalPreviewRequest{SchemaVersion: request.SchemaVersion, UserCode: request.UserCode}
 		if err := previewRequest.Validate(); err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, schemaViolationDetails())
 			return
 		}
 		preview, err := a.deviceFlow.Preview(r.Context(), auth.DeviceApprovalPreviewRequest{Principal: principal, UserCode: previewRequest.UserCode})
@@ -167,7 +167,7 @@ func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := request.Validate(); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, schemaViolationDetails())
 		return
 	}
 	if _, err := a.deviceFlow.Approve(r.Context(), auth.DeviceApprovalRequest{

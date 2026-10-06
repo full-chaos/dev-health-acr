@@ -31,13 +31,17 @@ func (a *App) handleEpisode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	keys := r.Header.Values("Idempotency-Key")
-	if len(keys) != 1 || utf8.RuneCountInString(keys[0]) < 8 || utf8.RuneCountInString(keys[0]) > 256 || keys[0] != create.IdempotencyKey || create.Validate() != nil {
+	if len(keys) != 1 || utf8.RuneCountInString(keys[0]) < 8 || utf8.RuneCountInString(keys[0]) > 256 || keys[0] != create.IdempotencyKey {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Episode request is invalid", false, map[string]any{"reason": bodyReasonInvalidIdempotencyKey})
+		return
+	}
+	if create.Validate() != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "Episode request is invalid", false, schemaViolationDetails())
 		return
 	}
 	slug, err := auth.NormalizeRepositorySlug(create.Repository.Slug)
 	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Episode request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Episode request is invalid", false, bodyFieldDetails("repository.slug"))
 		return
 	}
 	principal, ok := auth.PrincipalFromContext(r.Context())

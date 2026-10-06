@@ -61,7 +61,19 @@
         },
         "details": {
           "type": "object",
-          "description": "Closed safe keys only. For a 400 invalid_request about the request body, details.reason is malformed_json, schema_violation, unknown_field or trailing_json, and details.field, when present, is the JSON path of the failing field.",
+          "description": "Closed safe keys only. For a 400 invalid_request about the request body, details.reason is malformed_json, schema_violation, unknown_field, trailing_json or body_too_large, and details.field, when present, is the JSON path of the failing field.",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "pattern": "^[a-z0-9_]+$",
+              "maxLength": 64
+            },
+            "field": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.]+$",
+              "maxLength": 64
+            }
+          },
           "additionalProperties": true
         }
       }

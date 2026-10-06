@@ -50,12 +50,14 @@ func writeEncodedJSON(w http.ResponseWriter, status int, encoded []byte) {
 }
 
 const (
-	bodyReasonMalformedJSON  = "malformed_json"
-	bodyReasonSchemaViolated = "schema_violation"
-	bodyReasonUnknownField   = "unknown_field"
-	bodyReasonTrailingJSON   = "trailing_json"
-	bodyDetailField          = "field"
-	bodyFieldMaxLength       = 64
+	bodyReasonMalformedJSON         = "malformed_json"
+	bodyReasonSchemaViolated        = "schema_violation"
+	bodyReasonUnknownField          = "unknown_field"
+	bodyReasonTrailingJSON          = "trailing_json"
+	bodyReasonTooLarge              = "body_too_large"
+	bodyReasonInvalidIdempotencyKey = "invalid_idempotency_key"
+	bodyDetailField                 = "field"
+	bodyFieldMaxLength              = 64
 )
 
 // invalidBodyDetails classifies an error from decodeJSONBody into the closed
@@ -68,7 +70,10 @@ func invalidBodyDetails(err error) map[string]any {
 	}
 	var syntaxErr *json.SyntaxError
 	var typeErr *json.UnmarshalTypeError
+	var tooLarge *http.MaxBytesError
 	switch {
+	case errors.As(err, &tooLarge):
+		return map[string]any{"reason": bodyReasonTooLarge}
 	case errors.Is(err, errTrailingJSON):
 		return map[string]any{"reason": bodyReasonTrailingJSON}
 	case errors.As(err, &syntaxErr), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
@@ -94,6 +99,10 @@ func invalidBodyDetails(err error) map[string]any {
 
 // schemaViolationDetails is the details of a body that decoded but failed its
 // shape or bounds check.
+func bodyFieldDetails(field string) map[string]any {
+	return map[string]any{"reason": bodyReasonSchemaViolated, bodyDetailField: field}
+}
+
 func schemaViolationDetails() map[string]any {
 	return map[string]any{"reason": bodyReasonSchemaViolated}
 }
