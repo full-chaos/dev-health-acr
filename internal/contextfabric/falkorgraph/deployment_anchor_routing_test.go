@@ -454,7 +454,7 @@ func TestARestrictedCallerWithACutFrontierStillGetsTheNeutralReason(t *testing.T
 
 func cutDetail(result contextfabric.GraphContext) *contextfabric.CoverageDetail {
 	for i := range result.Coverage.Details {
-		if result.Coverage.Details[i].Code == contractsv1.ContextFabricCoverageDetailKindCensusTruncated {
+		if result.Coverage.Details[i].Code == contractsv1.ContextFabricCoverageDetailGraphWalkCutBeforeMember {
 			return &result.Coverage.Details[i]
 		}
 	}

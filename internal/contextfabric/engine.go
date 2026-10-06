@@ -2150,6 +2150,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, stageError(StageInterpretation, fmt.Errorf("interpret question: %w", err))
 	}
 	ctx = withInterpretationStamp(ctx, familyOutcome.Interpretation)
+	if request.SuppliedInterpretation != nil {
+		var termsInput SubjectTermsInput
+		interpretation, termsInput = deriveSuppliedSubjectTerms(request, interpretation, familyOutcome.Frame)
+		ctx = withSubjectTermsInput(ctx, termsInput)
+	}
 	// Bound the INTERPRETED question too, not just the wire request
 	// (CHAOS-3755 codex delta review, P2).
 	//

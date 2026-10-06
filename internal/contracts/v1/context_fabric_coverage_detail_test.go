@@ -77,6 +77,8 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		// No count: the population size is precisely the quantity nothing
 		// could enumerate, and a number here would claim one was measured.
 		d.Source = "context-fabric:read-population"
+	case ContextFabricCoverageDetailGraphWalkCutBeforeMember:
+		d.Source, d.Degrading, d.Kind = "context-fabric:graph", true, ContextFabricSubjectDeployment
 	case ContextFabricCoverageDetailKindCensusTruncated:
 		// Kind, Declared and Served, all required together, nothing else:
 		// the census figure this call observed, and how many of that kind
