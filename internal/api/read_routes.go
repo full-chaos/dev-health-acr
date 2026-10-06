@@ -21,16 +21,16 @@ func (a *App) handleContextPacket(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &tooLarge) {
 			status = http.StatusRequestEntityTooLarge
 		}
-		writeError(w, r, status, "invalid_request", "Context packet request is invalid", false, nil)
+		writeError(w, r, status, "invalid_request", "Context packet request is invalid", false, invalidBodyDetails(err))
 		return
 	}
 	if err := request.Validate(); err != nil || !a.requestWithinLimits(request) {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Context packet request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Context packet request is invalid", false, schemaViolationDetails())
 		return
 	}
 	slug, err := auth.NormalizeRepositorySlug(request.Repository.Slug)
 	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Context packet request is invalid", false, nil)
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Context packet request is invalid", false, bodyFieldDetails("repository.slug"))
 		return
 	}
 	request.RequestID = RequestID(r.Context())

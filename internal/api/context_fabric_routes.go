@@ -63,12 +63,12 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			if errors.As(err, &tooLarge) {
 				status = http.StatusRequestEntityTooLarge
 			}
-			writeError(w, r, status, "invalid_request", "Context Fabric investigation request is invalid", false, nil)
+			writeError(w, r, status, "invalid_request", "Context Fabric investigation request is invalid", false, invalidBodyDetails(err))
 			return
 		}
 		request.RequestID = RequestID(r.Context())
 		if err := request.Validate(); err != nil || request.Options.MaxSerializedBytes > a.config.MaxSerializedBytes {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation request is invalid", false, nil)
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation request is invalid", false, schemaViolationDetails())
 			return
 		}
 		principal, ok := auth.PrincipalFromContext(r.Context())
