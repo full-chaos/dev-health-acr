@@ -78,9 +78,15 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		}
 		investigateCtx, collectedSynthesisInput := contextfabric.WithSynthesisInputCollector(r.Context())
 		investigationStarted := a.now()
+		// The latency is recorded once, when the request ends, under the
+		// status of the answer it delivered; every earlier exit (a failure,
+		// or a response-size gate that refuses the answer) is "error".
+		deliveredStatus := "error"
+		defer func() {
+			a.metrics.InvestigationLatency(r.Context(), deliveredStatus, a.now().Sub(investigationStarted))
+		}()
 		result, err := investigateRecovered(investigateCtx, investigator, principal, request)
 		if err != nil {
-			a.metrics.InvestigationLatency(r.Context(), "error", a.now().Sub(investigationStarted))
 			if request.SuppliedSynthesis != nil && errors.Is(err, contextfabric.ErrSynthesisRejected) {
 				a.writeSuppliedSynthesisRejection(w, r, err)
 				return
@@ -88,7 +94,6 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			a.writeContextFabricError(w, r, err)
 			return
 		}
-		a.metrics.InvestigationLatency(r.Context(), string(result.Status), a.now().Sub(investigationStarted))
 		maximumBytes := min(int64(a.config.MaxSerializedBytes), int64(request.Options.MaxSerializedBytes))
 		itemCounts := contextFabricResultItemCounts(result)
 		encoded, measuredBytes, sizeErr := marshalContextFabricResponse(result)
@@ -187,6 +192,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		}
 		a.logContextFabricResponseBudgetMeasured(r, measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes)
 		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_completed", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
+		deliveredStatus = string(result.Status)
 		writeEncodedJSON(w, http.StatusOK, encoded)
 	})
 	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
@@ -1001,6 +1007,7 @@ func (a *App) logContextFabricResponseBudgetExceeded(r *http.Request, reason str
 		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_response_budget", "reason", reason,
 	}, contextFabricResponseBudgetFields(a.config.MaxItems, measuredBytes, maximumBytes, estimatedTokens, counts)...)
 	a.logger.WarnContext(r.Context(), "context fabric response exceeded service limits", fields...)
+	a.metrics.BudgetRefusal(r.Context())
 }
 
 // logContextFabricResponseBudgetMeasured (CHAOS-4540) is the exceed line's

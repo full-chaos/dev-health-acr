@@ -52,11 +52,11 @@ log line that already certifies the outcome, never on a second path.
 | `acr_mcp_tool_calls_total` | counter | `tool`, `result_class`, `status` (HTTP status class) | acr-mcp request line (`tools/call` only) |
 | `acr_mcp_tool_latency_seconds` | histogram | `tool` | acr-mcp request line (`tools/call` only) |
 | `acr_answers_total` | counter | `status`, `tool` | acr-mcp answer display (`investigate_question`, `investigate_with_interpretation`) |
-| `acr_budget_refusals_total` | counter | none | acr-api investigation failure line, class `budget_refusal` |
+| `acr_budget_refusals_total` | counter | none | acr-api investigation failure line (class `budget_refusal`) and the response-budget exceed line (`context fabric response exceeded service limits`, 413), on both the investigation and the stored-result route |
 | `acr_answer_reuse_total` | counter | `outcome` | acr-api answer reuse outcome line |
-| `acr_requirement_outcomes_total` | counter | `outcome` | acr-api completeness authority line (one count per outcome row) |
+| `acr_requirement_outcomes_total` | counter | `outcome` | acr-api completeness authority line (one count per outcome row; an investigation without a plan adds no rows) |
 | `acr_fact_read_aborts_total` | counter | `cause` | acr-api investigation failure line, fact read abort |
-| `acr_investigation_latency_seconds` | histogram | `status` (`error` when no answer) | acr-api investigation route |
+| `acr_investigation_latency_seconds` | histogram | `status` (`error` when no answer was delivered, including a 413 from a response-size gate) | acr-api investigation route |
 
 Both histograms use explicit boundaries (seconds): 0.05, 0.1, 0.25, 0.5, 1, 2.5,
 5, 10, 20, 30, 45, 60, 90, 120, 180, 300. They reach 300 s because the observed
