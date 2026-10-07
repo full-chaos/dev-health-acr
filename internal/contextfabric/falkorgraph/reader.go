@@ -1425,7 +1425,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// other servable kind the kind-scoped census is the census, and a cut one
 	// cannot show that the denied members were all there was.
 	cohortKindCensusedExhaustively := (ranExhaustiveCensus && !exactNameTruncated && exactNameCensusCoversKind(declaredCohortKind)) ||
-		(kindCensusRan && !kindCensusTruncated)
+		(kindCensusRan && !kindCensusTruncated) ||
+		(ownershipRoutedRepoSlug != "" && !ownershipCensusTruncated)
 	cohortCutByAuthz := cohortKindScopedAuthzDropped > 0 && (cohort != nil || cohortKindCensusedExhaustively)
 	if a.config.Telemetry != nil {
 		if edgeFilters.Authz > 0 || edgeFilters.TemporalWindow > 0 || admission.DroppedSelfLoopCount > 0 {
@@ -1552,11 +1553,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		coverageDetails = append(coverageDetails, kindCensusDetail)
 	}
 	if cohortCutByAuthz {
-		// CHAOS-4577: the discovered_cohort request found candidate members,
-		// but AuthorizedAttributes denied every one of them (the shape an
-		// org's team_repo_ownership being empty produces via the CHAOS-4390
-		// sentinel) -- the resulting empty Cohort must not read the same as
-		// "no such teams exist". degradedReasons is the same free-text
+		// CHAOS-4577: AuthorizedAttributes denied candidate members of the
+		// requested kind -- every one (the shape an org's team_repo_ownership
+		// being empty produces via the CHAOS-4390 sentinel, an empty Cohort
+		// that must not read as "no such teams exist") or only some (the
+		// surviving members are served beside the count). degradedReasons is the same free-text
 		// vocabulary endpoint_lookup_failed/unknown_relationship_type
 		// already use above; no new wire field. Count is the KIND-SCOPED
 		// denial count (only candidates matching this cohort's requested

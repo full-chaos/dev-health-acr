@@ -175,18 +175,18 @@ func discoverCohortWithDenied(t *testing.T, served, denied int) (contextfabric.G
 func assertCohortDeniedRow(t *testing.T, coverage contextfabric.Coverage, count int, label string) {
 	t.Helper()
 	wantReason := fmt.Sprintf("cohort_denied_by_authorization:%d", count)
-	found := false
+	rowCount := 0
 	for _, detail := range coverage.Details {
 		if detail.Code != contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization {
 			continue
 		}
-		found = true
+		rowCount++
 		if !detail.Degrading || detail.Count == nil || *detail.Count != count || detail.Label != label || detail.Raw != wantReason {
 			t.Fatalf("denied row = %#v, want degrading count %d label %q raw %q", detail, count, label, wantReason)
 		}
 	}
-	if !found {
-		t.Fatalf("no cohort_denied_by_authorization row in %#v", coverage.Details)
+	if rowCount != 1 {
+		t.Fatalf("cohort_denied_by_authorization rows = %d, want 1 in %#v", rowCount, coverage.Details)
 	}
 	reasons := 0
 	for _, reason := range coverage.DegradedReasons {
@@ -419,4 +419,83 @@ func TestDiscoverContextExplicitCohortPartlyCutByAuthorizationIsPartial(t *testi
 		t.Fatal("Coverage.Partial = false, want true: a named member was cut by authorization")
 	}
 	assertCohortDeniedRow(t, result.Coverage, 1, "1 group member excluded by authorization")
+}
+
+// A repository-anchored team cohort is served from the ownership census, which
+// is exhaustive when untruncated: every owner denied is a full denial, not an
+// empty answer.
+func TestDiscoverContextOwnershipCensusWhollyDeniedByAuthorizationIsPartial(t *testing.T) {
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acr", Label: "full-chaos/dev-health-acr"}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			var rows []row
+			for _, id := range []string{"team:denied_owner_1", "team:denied_owner_2"} {
+				owner := fakeSubjectNodeRow("team", id, id)
+				owner["n"].(*node).Properties[propAuthzRepos] = []string{"full-chaos/dev-health-acr"}
+				rows = append(rows, owner)
+			}
+			nonOwner := fakeSubjectNodeRow("team", "team:non_owner", "Non Owner")
+			nonOwner["n"].(*node).Properties[propAuthzRepos] = []string{"full-chaos/some-other-repo"}
+			return append(rows, nonOwner), nil
+		case isOwnershipEdgeRead(params):
+			return nil, nil
+		default:
+			t.Fatalf("unexpected query: %s", cypher)
+			return nil, nil
+		}
+	}}
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/unrelated"}}
+	result, err := adapter.DiscoverContext(context.Background(), principal, ownershipRoutingRequest(repositoryAnchorFrame(), anchor))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort != nil {
+		t.Fatalf("Cohort = %#v, want nil: every owner was denied", result.Cohort)
+	}
+	if !result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = false, want true: the exhaustive ownership census found owners and authorization denied all of them")
+	}
+	assertCohortDeniedRow(t, result.Coverage, 2, "2 group members excluded by authorization")
+}
+
+func TestDiscoverContextTruncatedOwnershipCensusFilesNoWhollyDeniedRow(t *testing.T) {
+	overLimitRows := make([]row, exactNameCandidateQueryLimit+1)
+	for i := range overLimitRows {
+		id := fmt.Sprintf("team:over_%d", i)
+		overLimitRows[i] = fakeSubjectNodeRow("team", id, id)
+		overLimitRows[i]["n"].(*node).Properties[propAuthzRepos] = []string{"full-chaos/dev-health-acr"}
+	}
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acr", Label: "full-chaos/dev-health-acr"}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			return overLimitRows, nil
+		case isOwnershipEdgeRead(params):
+			return nil, nil
+		default:
+			t.Fatalf("unexpected query: %s", cypher)
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/unrelated"}}
+	result, err := adapter.DiscoverContext(context.Background(), principal, ownershipRoutingRequest(repositoryAnchorFrame(), anchor))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort != nil {
+		t.Fatalf("Cohort = %#v, want nil: every owner was denied", result.Cohort)
+	}
+	for _, detail := range result.Coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization {
+			t.Fatalf("a truncated census cannot show every owner was denied: %#v", detail)
+		}
+	}
 }

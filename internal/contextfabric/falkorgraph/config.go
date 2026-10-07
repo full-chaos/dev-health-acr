@@ -856,7 +856,7 @@ func (t SlogTelemetry) RecordEdgesFilteredByReason(_ context.Context, orgID stri
 // from no such teams" failure mode -- an operator should be able to find this
 // without already suspecting it.
 func (t SlogTelemetry) RecordCohortDeniedByAuthorization(_ context.Context, orgID string, count int) {
-	t.logger().Warn("context_fabric: entire discovered cohort denied by authorization",
+	t.logger().Warn("context_fabric: cohort members denied by authorization",
 		"org_id", contextfabric.SanitizeLogAttr(orgID), "count", count)
 }
 
