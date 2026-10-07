@@ -88,3 +88,30 @@ func ScopeAnchorRetrievalKind(frame *QuestionFrame, anchorKind SubjectKind) Subj
 	}
 	return anchorKind
 }
+
+// ScopeAnchorTeams is the committed team subjects that are the question's
+// scope anchor: the ones a candidate matched an anchor term for or, when none
+// did, the one committed team. Empty when the frame's anchor is not a team or
+// the commit holds several teams and none was matched by an anchor term.
+func ScopeAnchorTeams(frame *QuestionFrame, anchorKind SubjectKind, resolution SubjectResolution) []SubjectRef {
+	if ScopeAnchorRetrievalKind(frame, anchorKind) != SubjectTeam {
+		return nil
+	}
+	var teams, matched []SubjectRef
+	for _, subject := range resolution.Committed {
+		if subject.Kind != SubjectTeam {
+			continue
+		}
+		teams = append(teams, subject)
+		if anchorTermMatched(frame, subject, resolution) {
+			matched = append(matched, subject)
+		}
+	}
+	if len(matched) > 0 {
+		return matched
+	}
+	if len(teams) == 1 {
+		return teams
+	}
+	return nil
+}

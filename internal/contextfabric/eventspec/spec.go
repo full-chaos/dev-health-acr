@@ -2817,7 +2817,7 @@ func frameValidationRequirementDerivationFields() []Field {
 // by TestCohortKindFulltextDecisionClosedVocabularyMatchesEventspec, the same
 // cross-package parity discipline CohortKindCensusDecision already proves for
 // its own sibling arm).
-var cohortKindFulltextDecision = []string{"ran", "read_failed"}
+var cohortKindFulltextDecision = []string{"ran", "read_failed", "team_anchor_reach"}
 
 // CohortKindFulltext is the Info line for falkorgraph's kind-scoped lexical
 // arm on one DiscoverContext call: whether a cohort's own declared member
@@ -2871,7 +2871,7 @@ var CohortKindFulltext = Event{
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrOnePerRequest,
 	Attribution:        []string{"org_id"},
-	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind, the census is not already admitted for it, and no named anchor holds the deployment member set",
+	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind, the census is not already admitted for it, and no named anchor holds the member set (a deployment anchor reports no line; a committed team asked for its projects reports decision=team_anchor_reach)",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: cohortKindFulltextDecision},
