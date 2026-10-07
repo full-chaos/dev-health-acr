@@ -484,7 +484,11 @@ import (
 // v93 -> v94: a cohort cut by authorization, wholly or in part, is served
 // partial with one count row. A candidate saved before v94 holds a complete
 // answer over a cut cohort and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v94"
+//
+// v94 -> v95: synthesis free text that states a calendar day the input does
+// not hold is rejected. A candidate saved before v95 may hold such text and
+// must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v95"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

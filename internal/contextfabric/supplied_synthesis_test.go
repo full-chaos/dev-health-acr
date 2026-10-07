@@ -466,6 +466,9 @@ func TestSuppliedSynthesisThatFailsValidationIsRejectedAndNothingIsSaved(t *test
 		"a driver naming a subject outside the input": {func(w *writeBackRig) {
 			w.parse.draft.Drivers[0].AffectedSubjects = []SubjectRef{outside}
 		}, RejectionReasonDriverSubjectOutOfScope, "invalid_output", 1},
+		"free text stating a day the input does not hold": {func(w *writeBackRig) {
+			w.parse.draft.CurrentState = "The window opened on 2031-03-04."
+		}, RejectionReasonFreeTextInstantUngrounded, "invalid_output", 1},
 		"output that is not the schema": {func(w *writeBackRig) {
 			w.parse.draft, w.parse.err = SynthesisDraft{}, errors.New("unknown field")
 		}, RejectionReasonOutputSchemaMismatch, "invalid_output", 1},
