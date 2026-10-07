@@ -476,7 +476,7 @@ import (
 // variable path. A candidate saved before v90 holds the old shape and must not
 // be reused.
 //
-// v91 -> v93: a team named as the scope anchor that resolution left
+// v92 -> v93: a team named as the scope anchor that resolution left
 // uncommitted is served as a clarification naming its candidates, not as an
 // organization-level project cohort. A candidate saved before v93 may hold that
 // cohort answer and must not be reused.
