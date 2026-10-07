@@ -364,6 +364,38 @@ func membershipIntervalsSQL(ingestExpr string, ingested bool) string {
 )`
 }
 
+// columnSupersededSource labels the rows that retract a column-arm edge.
+const columnSupersededSource = "column_superseded"
+
+// supersededColumnsSubquery is every work item that still carries a project in
+// work_items but also has transition history. The presence view drops such a
+// work item's column row (subjects_with_history), so the producer never sees it
+// again and its column-arm edge would stay open beside the transition edges.
+// The predicate on provider and project is the view's own column arm, so each
+// row names exactly the project whose column edge was projected.
+// observed_at / ingest_at carry the newer of the work item's own stamp and its
+// history's, so the row re-enters the cursor when either side changes.
+func supersededColumnsSubquery(ingest bool) string {
+	historyStamp, workItemStamp := "occurred_at", "w.updated_at"
+	if ingest {
+		historyStamp, workItemStamp = "ingested_at", "w.ingested_at"
+	}
+	return `(
+  SELECT w.org_id AS org_id, w.repo_id AS repo_id, w.work_item_id AS subject_id, w.provider AS provider, w.project_id AS project_id,
+    greatest(w.updated_at, h.latest_occurred) AS observed_at, greatest(` + workItemStamp + `, h.latest_stamp) AS ingest_at
+  FROM (SELECT * FROM work_items FINAL WHERE org_id = {org_id:String}) AS w
+  INNER JOIN (
+    SELECT org_id, repo_id, subject_id, max(occurred_at) AS latest_occurred, max(` + historyStamp + `) AS latest_stamp
+    FROM ` + devhealthschema.DedupedMembershipTransitions(ingest) + `
+    WHERE subject_kind = 'work_item'
+    GROUP BY org_id, repo_id, subject_id
+  ) AS h ON h.org_id = w.org_id AND h.repo_id = w.repo_id AND h.subject_id = w.work_item_id
+  WHERE w.org_id = {org_id:String} AND w.project_id != ''
+    AND w.provider != 'gitlab'
+    AND (w.provider != 'github' OR startsWith(w.project_id, 'ghprojv2:'))
+)`
+}
+
 func subjectProjectMembershipsQuery(telemetry *presenceTelemetryLedger, ingest bool) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
 	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 		return querySubjectProjectMemberships(ctx, client, orgID, cursor, limit, telemetry, ingest)
@@ -386,10 +418,10 @@ func querySubjectProjectMemberships(ctx context.Context, client contextpacket.Cl
 	// ingest: the cursor pages on the ingest stamp (the transitions'
 	// ingested_at, folded with the adjacent touches, and the presence view's
 	// last_synced) selected as the LAST column; otherwise on observed_at.
-	cursorColumn, ingestSelect, transitionIngest, columnIngest := "observed_at", "", "", ""
+	cursorColumn, ingestSelect, transitionIngest, columnIngest, supersededIngest := "observed_at", "", "", "", ""
 	if ingest {
 		cursorColumn, ingestSelect = "ingest_at", ", ingest_at"
-		transitionIngest, columnIngest = ", m.ingest_at AS ingest_at", ", m.last_synced AS ingest_at"
+		transitionIngest, columnIngest, supersededIngest = ", m.ingest_at AS ingest_at", ", m.last_synced AS ingest_at", ", m.ingest_at AS ingest_at"
 	}
 	statement := `SELECT subject_kind, repo_id_str, subject_id, repo_slug, observed_at, event_id, source, provider, project_id, resolved_project_id, key_resolution_count, valid_to_present, valid_to_value, is_malformed, is_duplicate_add` + ingestSelect + `
 FROM (
@@ -407,6 +439,13 @@ FROM (
   LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
   WHERE m.org_id = {org_id:String} AND m.source = 'work_item_column'
+  UNION ALL
+  SELECT 'work_item' AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
+    m.observed_at AS observed_at, '' AS event_id, 'column_superseded' AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
+    0 AS valid_to_present, toDateTime64(0, 3, 'UTC') AS valid_to_value, 0 AS is_malformed, 0 AS is_duplicate_add` + supersededIngest + `
+  FROM ` + supersededColumnsSubquery(ingest) + ` AS m
+  LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
+  LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
 )
 WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColumn, rowKey)
 	fetchRows := fetch
@@ -452,10 +491,16 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 		}
 		switch {
 		case keyResolutionCount == 0:
-			telemetry.recordUnresolved(provider, projectID)
+			// A superseded column row that resolves to no project never
+			// projected an edge, so there is nothing to retract.
+			if source != columnSupersededSource {
+				telemetry.recordUnresolved(provider, projectID)
+			}
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		case keyResolutionCount > 1:
-			telemetry.recordAmbiguous(provider, projectID)
+			if source != columnSupersededSource {
+				telemetry.recordAmbiguous(provider, projectID)
+			}
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		// The canonical id is always derived from the JOINED project row's
@@ -525,7 +570,7 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 			// own column-arm literal): {work_item, pull_request}. An
 			// unrecognized value is schema drift this producer must not
 			// silently misroute.
-			return nil, &ProducerRejection{Reason: fmt.Sprintf("project_membership_presence returned unknown subject_kind %q", subjectKind)}
+			return nil, &ProducerRejection{Reason: fmt.Sprintf("project_membership_presence returned unknown subject_kind %q (source %q, repo %q, subject %q, project %q)", subjectKind, source, repoID, subjectID, projectID)}
 		}
 
 		// source is a closed vocabulary too ({transition, work_item_column})
@@ -567,6 +612,18 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 			relationshipIDIntervalSuffix = ":" + observedAt.Format(time.RFC3339Nano) + ":" + eventID
 		case "work_item_column":
 			// No interval: a plain canonical-column passthrough, presence only.
+		case columnSupersededSource:
+			// The subject has transition history, so its column project no
+			// longer owns it: retract the column-arm edge. A no-op for an edge
+			// never projected.
+			tombstone := contractsv1.ContextFabricProjectionTombstone{
+				Kind:          "relationship",
+				CanonicalID:   projectMembershipRelationshipID(fromSubject.CanonicalID, projectCanonicalID, ""),
+				Reason:        "superseded_by_transition_history",
+				EffectiveAt:   observedAt,
+				SourceVersion: TeamsProjectsSourceVersion,
+			}
+			return []candidate{{observedAt: observedAt, sortKey: rowSortKey, tombstone: &tombstone}}, nil
 		default:
 			return nil, &ProducerRejection{Reason: fmt.Sprintf("project_membership_presence returned unknown source %q", source)}
 		}

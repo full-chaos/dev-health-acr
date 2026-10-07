@@ -142,10 +142,10 @@ func TestMembershipColumnArmDrainsEveryRowAtASharedIngestStamp(t *testing.T) {
 	}
 
 	summaries := membershipLogLines(t, &logs, "devhealthsource project membership read drained")
-	if len(summaries) != 2 {
+	if len(summaries) != 3 {
 		t.Fatalf("%d drained summary lines, want one per arm", len(summaries))
 	}
-	want := map[string]int{"work_item_column": column, "transition": transitions}
+	want := map[string]int{"work_item_column": column, "transition": transitions, "column_superseded": transitions}
 	for _, line := range summaries {
 		arm, _ := line["arm"].(string)
 		total, _ := line["rows_total"].(float64)

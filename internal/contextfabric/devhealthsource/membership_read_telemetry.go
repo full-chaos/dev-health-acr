@@ -24,7 +24,7 @@ import (
 // membershipTable is the entityTable name of the membership producer.
 const membershipTable = "project_membership_presence"
 
-var membershipArms = []string{"transition", "work_item_column"}
+var membershipArms = []string{"transition", "work_item_column", columnSupersededSource}
 
 type membershipArmPage struct {
 	statementRows int

@@ -33,9 +33,10 @@ SELECT concat(?, leftPad(toString(number), 4, '0')), ?, ?, 'issue', 'open', '', 
 }
 
 // plantTransitions seeds n subjects prefix0000.. with one ADD each, all on one
-// ingest stamp.
+// ingest stamp. The subjects carry no work_items row, so the read holds no
+// column-superseded rows and the page counts below stay those of the transition
+// and column arms.
 func plantTransitions(f *ingestColumnsFixture, prefix string, project string, at time.Time, n int) {
-	plantColumnRows(f, prefix, project, at, n)
 	mustExec(f.t, f.ctx, f.h.direct, `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id, ingested_at)
 SELECT ?, NULL, ?, 'work_item', concat(?, leftPad(toString(number), 4, '0')), 'linear', '', ?, '', '', '', ?, ?, concat('linear:', toString(generateUUIDv4())), `+pageCutStamp+` FROM numbers(?)`,
 		f.h.orgID, zeroUUID, prefix, project, f.old, f.old, at.UnixMilli(), uint64(n))
