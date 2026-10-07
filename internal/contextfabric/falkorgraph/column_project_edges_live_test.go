@@ -79,7 +79,7 @@ func TestLiveColumnProjectEdgesKeepOneOpenEdgePerWorkItem(t *testing.T) {
 	}
 
 	t1 := t0.Add(time.Minute)
-	apply("batch-0002", t1, []contextfabric.RelationshipProjection{columnEdge("rel-w1-B", wi, projB, t1, nil)}, []contextfabric.ProjectionTombstone{})
+	apply("batch-0002", t1, []contextfabric.RelationshipProjection{columnEdge("rel-w1-B", wi, projB, t1, nil), columnEdge("rel-pr-A", pr, projA, t1, nil)}, []contextfabric.ProjectionTombstone{})
 	if got := openEdgeIDs(t, ctx, adapter, key, org, wi); fmt.Sprint(got) != "[rel-w1-B]" {
 		t.Fatalf("column project changed A to B: open edges %v, want only rel-w1-B", got)
 	}

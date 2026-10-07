@@ -885,21 +885,21 @@ func (a *Adapter) retractColumnProjectEdges(ctx context.Context, key string, bat
 	var keeps, drops []interface{}
 	for _, relationship := range batch.Relationships {
 		if relationship.Type == contractsv1.ContextFabricRelationshipBelongsToProject && relationship.ValidFrom == nil && relationship.From.Kind == contextfabric.SubjectWorkItem {
-			keeps = append(keeps, map[string]interface{}{"sid": relationship.From.CanonicalID, "rid": relationship.RelationshipID, "ns": nsTimestamp(relationship.ObservedAt)})
+			keeps = append(keeps, map[string]interface{}{"kind": string(relationship.From.Kind), "sid": relationship.From.CanonicalID, "rid": relationship.RelationshipID, "ns": nsTimestamp(relationship.ObservedAt)})
 		}
 	}
 	for _, tombstone := range batch.Tombstones {
 		if tombstone.Kind == contextfabric.TombstoneKindColumnProjectEdges {
-			drops = append(drops, map[string]interface{}{"sid": tombstone.CanonicalID, "rid": "", "ns": nsTimestamp(tombstone.EffectiveAt)})
+			drops = append(drops, map[string]interface{}{"kind": string(contextfabric.SubjectWorkItem), "sid": tombstone.CanonicalID, "rid": "", "ns": nsTimestamp(tombstone.EffectiveAt)})
 		}
 	}
-	statement := fmt.Sprintf("UNWIND $rows AS row MATCH (a:%s {%s:$org, %s:$kind, %s:row.sid})-[r:%s]->() WHERE r.%s = $rel AND r.%s IS NULL AND r.%s <> row.rid AND (r.%s IS NULL OR r.%s <= row.ns) DELETE r",
+	statement := fmt.Sprintf("UNWIND $rows AS row MATCH (a:%s {%s:$org, %s:row.kind, %s:row.sid})-[r:%s]->() WHERE r.%s = $rel AND r.%s IS NULL AND r.%s <> row.rid AND (r.%s IS NULL OR r.%s <= row.ns) DELETE r",
 		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, propRelationType, propValidFromNs, propRelationshipID, propObservedAtNs, propObservedAtNs)
 	for _, rows := range [][]interface{}{keeps, drops} {
 		if len(rows) == 0 {
 			continue
 		}
-		params := map[string]interface{}{"rows": rows, "org": batch.OrgID, "kind": string(contextfabric.SubjectWorkItem), "rel": graphrank.NormalizeRelation(string(contractsv1.ContextFabricRelationshipBelongsToProject))}
+		params := map[string]interface{}{"rows": rows, "org": batch.OrgID, "rel": graphrank.NormalizeRelation(string(contractsv1.ContextFabricRelationshipBelongsToProject))}
 		if _, err := a.api.query(ctx, key, statement, params, false); err != nil {
 			return classifyProjectionError("retract column project edges", err)
 		}
