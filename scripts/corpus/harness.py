@@ -74,6 +74,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import corpus as _corpus_module  # noqa: E402
 from corpus import CORPUS, REQUESTED_KIND, ANCHOR_KIND  # noqa: E402
 import conversation as _conversation  # noqa: E402
+import expectations as _expectations  # noqa: E402
 from validators import validate_attempt, validate_response  # noqa: E402
 # CHAOS-5380 review round 2: the producer and every reader SHARE these values rather than
 # a pin deriving one from the other -- a derived oracle was measured hollowing out
@@ -822,6 +823,10 @@ def main():
     try:
         require_base()
     except MissingCorpusBase as e:
+        sys.exit(str(e))
+    try:
+        _expectations.require_expectation_bearing(CORPUS)
+    except _expectations.VacuousCorpus as e:
         sys.exit(str(e))
     ids, EXPECTED_BUILD, want_check_only = _parse_argv(sys.argv[1:])
     if want_check_only:

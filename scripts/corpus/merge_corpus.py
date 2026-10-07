@@ -646,6 +646,11 @@ def main():
     ap.add_argument("--baseline", help="a prior verdict.json to diff against")
     args = ap.parse_args()
 
+    try:
+        expectations.require_expectation_bearing(CORPUS)
+    except expectations.VacuousCorpus as e:
+        sys.exit(str(e))
+
     rows, shards = load_run(args.indir)
 
     problems = check_coverage(rows)
