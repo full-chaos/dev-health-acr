@@ -1,7 +1,9 @@
 package devhealthsource_test
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -88,7 +90,8 @@ func TestColumnArmEdgeIsKeptWithoutTransitionHistory(t *testing.T) {
 // the whole projection), and every column edge id is retracted.
 func TestColumnArmRetractionIsOnePerSubjectAcrossPageCuts(t *testing.T) {
 	const subjects = 450
-	f := newIngestColumnsFixture(t, "76790000-0000-4000-8000-000000000004", nil, nil)
+	var logs bytes.Buffer
+	f := newIngestColumnsFixture(t, "76790000-0000-4000-8000-000000000004", nil, slog.New(slog.NewJSONHandler(&logs, nil)))
 	for _, id := range []string{"P-a", "P-b", "P-c"} {
 		f.project(id, "K-"+id, f.old, f.old)
 	}
@@ -122,6 +125,11 @@ SELECT ?, NULL, ?, 'work_item', concat('WS-', leftPad(toString(number), 4, '0'))
 			}
 			want[tombstone.CanonicalID] = true
 		}
+	}
+	// The read itself yields one row per subject: the assembly engine would
+	// otherwise drop the repeats as duplicates within a batch and log each one.
+	if dropped := membershipLogLines(t, &logs, "context_fabric: projection item quarantined; the item is dropped and the batch continues"); len(dropped) != 0 {
+		t.Fatalf("%d items were dropped as duplicates or otherwise quarantined; the superseded-column read must emit one row per subject: %v", len(dropped), dropped[0])
 	}
 	if len(d.batches) < 3 {
 		t.Fatalf("%d batches: the read no longer crosses page cuts", len(d.batches))
