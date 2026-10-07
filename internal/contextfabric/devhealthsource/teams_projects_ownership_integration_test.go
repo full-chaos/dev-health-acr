@@ -461,7 +461,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"a projected edge is retracted when its ambiguous key arrives via project_ref", "30000000-0000-4000-8000-000000000015", subRetractsAnEdgeWhoseAmbiguousKeyArrivesViaProjectRef},
 		{"a projected edge is retracted when its identity starts conflicting", "30000000-0000-4000-8000-000000000010", subRetractsAnEdgeWhoseIdentityStartsConflicting},
 		{"retraction is idempotent across a re-run", "30000000-0000-4000-8000-000000000011", subRetractionIsIdempotentAcrossAReRun},
-		{"retraction only follows max-raising project writes", "30000000-0000-4000-8000-000000000012", subRetractionOnlyFollowsMaxRaisingProjectWrites},
+		{"retraction follows a project inserted below the key partition max", "30000000-0000-4000-8000-000000000012", subRetractionFollowsAProjectInsertedBelowTheKeyPartitionMax},
 		{"the row-key SQL agrees with Go byte for byte", "30000000-0000-4000-8000-000000000013", subRowKeySQLAgreesWithGoByteForByte},
 		{"two groups sharing a project id get distinct cursor keys", "30000000-0000-4000-8000-000000000014", subTwoGroupsSharingAProjectIDGetDistinctCursorKeys},
 		{"a repository->team edge is re-emitted when its repos row arrives", "30000000-0000-4000-8000-000000000016", subRepositoryTeamEdgeReemittedWhenReposRowArrives},
@@ -1470,102 +1470,30 @@ func subRetractionIsIdempotentAcrossAReRun(t *testing.T, ctx context.Context, fi
 	}
 }
 
-// subRetractionOnlyFollowsMaxRaisingProjectWrites PINS A BOUND, and it is
-// deliberately not written as a success story (CHAOS-4565, codex round 2 P1,
-// reproduced by this lane before being accepted).
-//
-// The retraction watermark is greatest(o.updated_at, max(project_updated_at)
-// OVER the ownership row's identity partition), and the keyset filter is
-// STRICT on it. A max over a MUTABLE SET only detects changes that RAISE the
-// max. So a project inserted into a key partition with an updated_at BELOW the
-// partition's existing maximum -- a backfill, a replayed sync, or a partition
-// already dominated by a future-dated row -- creates an ambiguity that does
-// not bring its group back over the cursor, and the previously projected edge
-// survives until some later max-raising write.
-//
-// WHERE THE FUTURE TIMESTAMP ACTUALLY BITES, because it is not this producer.
-// The projection cursor is SHARED by every table in this source, and
-// queryProjects (teams_projects.go, `const rowKey = "concat(provider, ':', id)"`,
-// ordered on projects.updated_at) is untouched by CHAOS-4565. It is what puts
-// the future timestamp into the cursor in the first place -- the decoded
-// cursor in the failing repro was
-// {"since":"2031-...","after":"github:ZZZ-WATERMARK"}, a projects-ENTITY row
-// key. So this class predates the retraction work; what changed is that the
-// ownership producer now shares the cursor's fate instead of being immune to
-// projects-side changes entirely. It is NOT a regression, and it is NOT a
-// promise this producer can currently keep.
-//
-// The bound is therefore asserted in BOTH directions. Half one proves the
-// documented limitation really is the behaviour, so nobody reads the design
-// note's claim as unconditional. Half two proves the limitation is exactly
-// "max-raising", not "broken": a later write that DOES raise the max retracts
-// the edge. Without half two this test would be indistinguishable from the
-// mechanism simply not working.
-//
-// Widening the cursor to catch non-max-raising changes needs a durable record
-// of key-partition membership, which is not derivable from current state --
-// tracked separately, together with the symmetric membership-LEAVING case.
-func subRetractionOnlyFollowsMaxRaisingProjectWrites(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+// subRetractionFollowsAProjectInsertedBelowTheKeyPartitionMax: a project with a
+// future-dated updated_at holds a key's partition maximum on the provider time
+// axis, and a colliding project is inserted afterwards with a normal
+// updated_at. The cursor pages on the server insert stamp (last_synced), which
+// the colliding insert raises, so the ambiguity is retracted on the next tick.
+// Both inserts carry the stamp a real sync writes: insert time, not the
+// provider's updated_at.
+func subRetractionFollowsAProjectInsertedBelowTheKeyPartitionMax(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	at := ownershipLaterAssertion.Add(72 * time.Hour)
 	future := at.AddDate(5, 0, 0)
-	// The future-dated project pins the SOURCE-WIDE cursor five years ahead,
-	// through queryProjects, before this producer is even consulted.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'zzz', 1, 'started', '', ?)`,
-		"ZZZ-WATERMARK", fixture.orgID, "WM-KEY", future)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
-		fixture.orgID, "WM-KEY", "WM-KEY", ownershipFirstSeen, at)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES (?, ?, 'github', ?, 'zzz', 1, 'started', '', ?, ?)`,
+		"ZZZ-WATERMARK", fixture.orgID, "WM-KEY", future, at)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at, last_synced) VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?, ?)`,
+		fixture.orgID, "WM-KEY", "WM-KEY", ownershipFirstSeen, at, at)
 
 	edge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "ZZZ-WATERMARK", "TEAM-GITHUB", "native")
 	cursor, ok := drainUntil(t, ctx, fixture, "", func(b contextfabric.ProjectionBatch) bool { return hasRelationship(b, edge) })
 	if !ok {
-		t.Fatalf("%q was never projected -- with no edge in place both halves below would pass vacuously", edge)
+		t.Fatalf("%q was never projected -- the retraction below would pass vacuously", edge)
 	}
-
-	// HALF ONE: a colliding project whose updated_at does NOT raise the
-	// partition max. The ambiguity is real; the retraction does not happen.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'aaa', 1, 'started', '', ?)`,
-		"AAA-WATERMARK", fixture.orgID, "WM-KEY", at.Add(time.Hour))
-	// The colliding project creates a NEW group behind the cursor whose only
-	// output is a no-op tombstone (its edge was never projected). The overlap
-	// walk emits it once without moving the cursor position; once acknowledged
-	// (its NextCursor, as the worker persists it) it must not repeat, so the
-	// source is quiet again within three ticks.
-	quiet, tombstoneBatches := false, 0
-	for tick := 0; tick < 3 && !quiet; tick++ {
-		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
-			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
-		})
-		if err != nil {
-			t.Fatalf("tick %d: %v", tick, err)
-		}
-		if !available {
-			quiet = true
-			break
-		}
-		if keysetPosition(t, batch.NextCursor) != keysetPosition(t, cursor) || len(batch.Entities) != 0 || len(batch.Relationships) != 0 || hasTombstone(batch, edge) {
-			t.Fatalf("tick %d: want only a non-advancing batch of no-op tombstones, got next=%q entities=%d relationships=%d tombstones=%d", tick, batch.NextCursor, len(batch.Entities), len(batch.Relationships), len(batch.Tombstones))
-		}
-		cursor = batch.NextCursor
-		tombstoneBatches++
-	}
-	if tombstoneBatches == 0 {
-		t.Fatal("the overlap walk never re-read the colliding project's new group: this case no longer exercises a tombstone-only overlap batch")
-	}
-	if !quiet {
-		t.Fatal("the tombstone-only overlap batch kept coming back: the walk did not go quiet within 3 ticks")
-	}
-	afterLowWrite, retracted := drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) })
-	if retracted {
-		t.Fatalf("%q WAS retracted after a projects-side write below the partition max. That is better than documented -- but the design note, this comment and the follow-up ticket all say it cannot happen, and a limitation that has silently been fixed is a lie in the documentation. Re-check the watermark and update all three.", edge)
-	}
-
-	// HALF TWO: a write that DOES raise the max. The same ambiguity, still
-	// present, must now be retracted -- otherwise half one is measuring a
-	// broken mechanism rather than a known bound.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'aaa', 1, 'started', '', ?)`,
-		"AAA-WATERMARK", fixture.orgID, "WM-KEY", future.Add(time.Hour))
-	if _, ok := drainUntil(t, ctx, fixture, afterLowWrite, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) }); !ok {
-		t.Fatalf("%q was not retracted even after a projects-side write that RAISES the partition max -- then the bound is not 'max-raising only', the retraction is simply not working for this shape", edge)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES (?, ?, 'github', ?, 'aaa', 1, 'started', '', ?, ?)`,
+		"AAA-WATERMARK", fixture.orgID, "WM-KEY", at.Add(time.Hour), at.Add(time.Hour))
+	if _, retracted := drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) }); !retracted {
+		t.Fatalf("%q was not retracted after a colliding project was inserted below the partition's updated_at maximum", edge)
 	}
 }
 
