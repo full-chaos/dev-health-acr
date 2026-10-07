@@ -488,7 +488,12 @@ import (
 // v94 -> v95: synthesis free text that states a calendar day the input does
 // not hold is rejected. A candidate saved before v95 may hold such text and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v95"
+//
+// v95 -> v96: a work-item walk list cut to fit the byte ceiling keeps every
+// member whose evidence the answer cites and carries only the kept members'
+// evidence. A candidate saved before v96 may hold evidence of cut members and
+// must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v96"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

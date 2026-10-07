@@ -114,6 +114,11 @@ func TestContextFabricInvestigationFailuresCarryStageAndClassification(t *testin
 			wantStage: "validation", wantClassified: "invalid_result", wantLevel: "ERROR",
 		},
 		{
+			name: "a work-item payload rule fired at validation is named", wantStatus: http.StatusInternalServerError,
+			err:       staged(contextfabric.StageValidation, contextfabric.ValidateWorkItemTuplePayload(contextfabric.InvestigationResult{}, storage.Principal{})),
+			wantStage: "validation", wantClassified: "served_shape_invariant", wantLevel: "ERROR",
+		},
+		{
 			name: "model output invalid at synthesis", wantStatus: http.StatusBadGateway,
 			err:       staged(contextfabric.StageSynthesis, fmt.Errorf("synthesize investigation: %w", contextfabric.ErrModelOutput)),
 			wantStage: "synthesis", wantClassified: "model_output_invalid", wantLevel: "ERROR",
@@ -379,5 +384,25 @@ func TestContextFabricInvestigationPanicUnderAnExceededDeadlineIsNotReportedAsAT
 	}
 	if !strings.Contains(response.Body.String(), "internal_error") {
 		t.Fatalf("body = %s, want the internal_error envelope, not a timeout envelope", response.Body.String())
+	}
+}
+
+func TestContextFabricWorkItemPayloadRuleFailureNamesTheRule(t *testing.T) {
+	ruleErr := contextfabric.ValidateWorkItemTuplePayload(contextfabric.InvestigationResult{}, storage.Principal{})
+	want, fired := contextfabric.WorkItemTupleRuleFiredBy(ruleErr)
+	if !fired {
+		t.Fatalf("validator error carries no rule: %v", ruleErr)
+	}
+	app, token, logs := newContextFabricTestAppWithLogs(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		return contextfabric.InvestigationResult{}, &contextfabric.StageError{Stage: contextfabric.StageValidation, Err: ruleErr}
+	}))
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+	entry := decodeFailureLog(t, logs.String())
+	if entry["failure_rule"] != want || want == "" {
+		t.Fatalf("failure_rule = %v, want %q", entry["failure_rule"], want)
+	}
+	if _, present := entry["failure_error_type"]; present {
+		t.Fatalf("a classified failure carries failure_error_type")
 	}
 }

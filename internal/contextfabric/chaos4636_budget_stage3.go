@@ -288,6 +288,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			event.PredictedItems = PredictedItemsForPlan(*plan, cohortMemberCount(params.Graph.Cohort))
 			event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 			event.OutcomeCompletenessState = fitted.Completeness.State
+			event.EvidencePinnedMembers = walkListEvidencePinnedOnly(fitted)
 			e.recordPlanNarrowing(ctx, principal, event)
 			return fitted, firstPass, nil
 		}

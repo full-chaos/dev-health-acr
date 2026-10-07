@@ -41,6 +41,7 @@ import (
 //	fitAssembledResult retry PATH DROP served   retryMeasured       none         n/a
 //	recordCandidateNarrowing         (:315,:643) served attempt      none         n/a
 //	cardinality / synthesis_input    (engine.go) no measurement      none         n/a
+//	recordServedWalkListCut          (budget_assertion.go) no measurement none     n/a
 
 // decisionEventFunctions are the functions that emit a narrowing event about a
 // decision. A new one is not forbidden -- it must simply be added here
@@ -70,6 +71,10 @@ var decisionEventFunctions = []string{
 	// with no response measurement or prediction. The behavioral control
 	// below pins both sources and the absence of a second document.
 	"workItemTupleNarrowing",
+	// Emits one event for a walk-list cut of the served document: listed
+	// counts and the pinned-member count only, no measurement and no
+	// prediction, so it holds one document and cannot describe two.
+	"recordServedWalkListCut",
 }
 
 // TestEveryRefusalSitePairsOneDocument pins the enumeration.

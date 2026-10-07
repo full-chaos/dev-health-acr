@@ -412,10 +412,13 @@ func (e *Engine) servedLateWriters(ctx context.Context, result InvestigationResu
 // is emitted once, for the document served or the last one refused.
 func (e *Engine) finalizeServedFitting(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, result InvestigationResult, budget ResponseBudget) (InvestigationResult, error) {
 	current := result
+	listedBefore := cohortMemberCount(result.Cohort)
+	walkCut := false
 	for {
 		_, err := e.finalizeServedAs(ctx, principal, stage, current, nil, budget, servedModeMeasureOnly)
 		var refusal AnswerBudgetRefusal
 		if err == nil || !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+			e.recordServedWalkListCut(ctx, principal, current, listedBefore, walkCut)
 			return e.finalizeServed(ctx, principal, stage, current, nil, budget)
 		}
 		_, longest := claimedFactTableRowCounts(current.ClaimedFacts)
@@ -427,6 +430,7 @@ func (e *Engine) finalizeServedFitting(ctx context.Context, principal storage.Pr
 		}
 		if next, cut := cutWalkListMembers(current); cut {
 			current = next
+			walkCut = true
 			continue
 		}
 		_, final := e.finalizeServed(ctx, principal, stage, current, nil, budget)
@@ -465,4 +469,16 @@ func recutFactRows(result InvestigationResult, perTable int) (InvestigationResul
 	}
 	cut, _, _, ok := applyFactRowTruncation(base, perTable, declared)
 	return cut, ok
+}
+
+// recordServedWalkListCut records the walk-list cut the decisive budget fit
+// made, with how many listed members cited evidence kept.
+func (e *Engine) recordServedWalkListCut(ctx context.Context, principal storage.Principal, served InvestigationResult, listedBefore int, cut bool) {
+	if !cut || served.AnswerPlan == nil {
+		return
+	}
+	event := PlanNarrowingEventFrom(*served.AnswerPlan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
+		listedBefore, cohortMemberCount(served.Cohort), false, false, contractsv1.ContextFabricBudgetOverrunBytes, "")
+	event.EvidencePinnedMembers = walkListEvidencePinnedOnly(served)
+	e.recordPlanNarrowing(ctx, principal, event)
 }

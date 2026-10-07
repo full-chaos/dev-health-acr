@@ -85,21 +85,9 @@ func cutWalkListMembers(result InvestigationResult) (InvestigationResult, bool) 
 	if !contractsv1.ContextFabricCohortIsWalkList(result.Cohort) || len(result.Cohort.Members) < 2 {
 		return result, false
 	}
-	cited := map[string]bool{}
-	for _, claim := range result.ClaimedFacts {
-		cited[claim.Subject.CanonicalID] = true
-	}
-	for _, driver := range result.Drivers {
-		for _, subject := range driver.AffectedSubjects {
-			cited[subject.CanonicalID] = true
-		}
-	}
-	for _, findings := range [][]Finding{result.RemainingWork, result.ReadinessGaps, result.Conflicts} {
-		for _, finding := range findings {
-			for _, subject := range finding.Subjects {
-				cited[subject.CanonicalID] = true
-			}
-		}
+	cited := walkListSubjectCited(result)
+	for id := range walkListEvidencePinned(result) {
+		cited[id] = true
 	}
 	// The members the written summary read stay listed too: the coverage
 	// sentence names how many listed members it read, and a cut that removed
@@ -158,7 +146,74 @@ func cutWalkListMembers(result InvestigationResult) (InvestigationResult, bool) 
 		result.LimitationsDisplaced += displaced
 	}
 	result.Limitations = limitations
-	return result, true
+	return restrictWorkItemTupleEvidence(result), true
+}
+
+// walkListSubjectCited is the members a claim, a driver or a finding names as
+// a subject.
+func walkListSubjectCited(result InvestigationResult) map[string]bool {
+	cited := map[string]bool{}
+	for _, claim := range result.ClaimedFacts {
+		cited[claim.Subject.CanonicalID] = true
+	}
+	for _, driver := range result.Drivers {
+		for _, subject := range driver.AffectedSubjects {
+			cited[subject.CanonicalID] = true
+		}
+	}
+	for _, findings := range [][]Finding{result.RemainingWork, result.ReadinessGaps, result.Conflicts} {
+		for _, finding := range findings {
+			for _, subject := range finding.Subjects {
+				cited[subject.CanonicalID] = true
+			}
+		}
+	}
+	return cited
+}
+
+// walkListEvidencePinned is the listed members whose evidence the result, a
+// driver or a finding cites. A member the answer cites by evidence stays
+// listed: a cut that dropped it would orphan that citation.
+func walkListEvidencePinned(result InvestigationResult) map[string]bool {
+	citedEvidence := map[string]bool{}
+	for _, ref := range result.EvidenceRefIDs {
+		citedEvidence[ref] = true
+	}
+	for _, driver := range result.Drivers {
+		for _, ref := range driver.EvidenceRefIDs {
+			citedEvidence[ref] = true
+		}
+	}
+	for _, findings := range [][]Finding{result.RemainingWork, result.ReadinessGaps, result.Conflicts} {
+		for _, finding := range findings {
+			for _, ref := range finding.EvidenceRefIDs {
+				citedEvidence[ref] = true
+			}
+		}
+	}
+	pinned := map[string]bool{}
+	if result.Cohort == nil {
+		return pinned
+	}
+	for _, member := range result.Cohort.Members {
+		if ref, ok := canonicalWorkItemEvidenceRef(member.Subject); ok && citedEvidence[ref] {
+			pinned[member.Subject.CanonicalID] = true
+		}
+	}
+	return pinned
+}
+
+// walkListEvidencePinnedOnly counts the listed members kept only because
+// cited evidence pins them: no claim, driver or finding names them as a subject.
+func walkListEvidencePinnedOnly(result InvestigationResult) int {
+	subjects := walkListSubjectCited(result)
+	count := 0
+	for id := range walkListEvidencePinned(result) {
+		if !subjects[id] {
+			count++
+		}
+	}
+	return count
 }
 
 // walkReadSet is the members the written summary read out of a listed walk:

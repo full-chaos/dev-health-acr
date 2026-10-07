@@ -1,0 +1,194 @@
+package contextfabric
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"slices"
+	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+func TestWalkListCutKeepsTheTuplePayloadValid(t *testing.T) {
+	result := workItemTuplePayloadFixture(t)
+	members := []CohortMember{result.Cohort.Members[0]}
+	refs := []string{result.Cohort.Members[0].EvidenceRefIDs[0]}
+	for i := 2; i < 21; i++ {
+		id, _, err := identity.Derive(identity.KindWorkItem, []string{"repo-1", fmt.Sprintf("work-%d", i)}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, fmt.Sprintf("repo-1:work-%d", i))
+		members = append(members, CohortMember{Subject: SubjectRef{Kind: SubjectWorkItem, CanonicalID: id}, EvidenceRefIDs: []string{ref}})
+		refs = append(refs, ref)
+		result.EvidenceRefLabels[ref] = "member"
+	}
+	result.Cohort.Members = members
+	result.Cohort.Population = 2000
+	result.Cohort.Complete = true
+	result.EvidenceRefIDs = refs[:5]
+	result.SubjectResolution.Candidates[0].EvidenceRefIDs = refs
+	if err := ValidateWorkItemTuplePayload(result, storage.Principal{OrgID: "org-1"}); err != nil {
+		t.Fatalf("precondition: uncut payload invalid: %v", err)
+	}
+	cut, ok := cutWalkListMembers(result)
+	if !ok {
+		t.Fatal("expected a cut")
+	}
+	if err := ValidateWorkItemTuplePayload(cut, storage.Principal{OrgID: "org-1"}); err != nil {
+		t.Fatalf("payload after the walk-list cut is invalid: %v", err)
+	}
+}
+
+func TestAByteFitCutOfAWalkListServesAValidPayloadInsteadOfFailingValidation(t *testing.T) {
+	shape := budgetTrimShape{members: 60, claims: 2, maxItems: 120, findings: 1, evidenceMembers: 5}
+	full, err, _ := budgetTrimInvestigate(t, shape)
+	if err != nil {
+		t.Fatalf("uncut probe: %v", err)
+	}
+	measured, err := contractsv1.MeasureContextFabricResponse(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape.maxBytes = measured.Bytes - measured.Bytes/5
+	shape.telemetry = &recordingTelemetry{}
+	cutResult, err, _ := budgetTrimInvestigate(t, shape)
+	if err != nil {
+		t.Fatalf("the byte fit cut failed the investigation: %v", err)
+	}
+	if len(cutResult.Cohort.Members) >= len(full.Cohort.Members) {
+		t.Fatalf("members %d of %d: the byte fit did not cut, the row does not exercise the lever", len(cutResult.Cohort.Members), len(full.Cohort.Members))
+	}
+	if err := ValidateWorkItemTuplePayload(cutResult, storage.Principal{OrgID: "org-1"}); err != nil {
+		t.Fatalf("served payload invalid: %v", err)
+	}
+	pinned := 0
+	for _, event := range shape.telemetry.planNarrowings {
+		pinned = max(pinned, event.EvidencePinnedMembers)
+	}
+	if want := walkListEvidencePinnedOnly(cutResult); want == 0 || pinned != want {
+		t.Fatalf("evidence_pinned_members on the narrowing event = %d, want %d (members kept only by cited evidence)", pinned, want)
+	}
+	for _, ref := range full.EvidenceRefIDs {
+		if !slices.Contains(cutResult.EvidenceRefIDs, ref) {
+			t.Fatalf("the cut dropped cited evidence %q", ref)
+		}
+	}
+}
+
+func TestWalkListCutKeepsAMemberWhoseEvidenceAFindingCites(t *testing.T) {
+	result := workItemTuplePayloadFixture(t)
+	members := []CohortMember{result.Cohort.Members[0]}
+	var refs []string
+	for i := 2; i < 12; i++ {
+		id, _, err := identity.Derive(identity.KindWorkItem, []string{"repo-1", fmt.Sprintf("work-%d", i)}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, fmt.Sprintf("repo-1:work-%d", i))
+		members = append(members, CohortMember{Subject: SubjectRef{Kind: SubjectWorkItem, CanonicalID: id}, EvidenceRefIDs: []string{ref}})
+		refs = append(refs, ref)
+	}
+	last := refs[len(refs)-1]
+	result.Cohort.Members = members
+	result.Cohort.Population = 100
+	result.Cohort.Complete = true
+	result.EvidenceRefLabels = map[string]string{}
+	result.SubjectResolution.Candidates[0].EvidenceRefIDs = nil
+	result.RemainingWork[0].EvidenceRefIDs = append(result.RemainingWork[0].EvidenceRefIDs, last)
+	result.Drivers = []DriverJudgment{{
+		DriverID: "driver_status01", Standing: DriverPrincipal, Category: "status", Title: "Work item status",
+		Summary: "The work items appear open.", AffectedSubjects: []SubjectRef{members[0].Subject},
+		EvidenceRefIDs: []string{refs[len(refs)-2]}, ClaimedFactIDs: []string{"claim-status"},
+		Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.9, Current: true,
+	}}
+	if err := ValidateWorkItemTuplePayload(result, storage.Principal{OrgID: "org-1"}); err != nil {
+		t.Fatalf("precondition: %v", err)
+	}
+	cut, ok := cutWalkListMembers(result)
+	if !ok {
+		t.Fatal("expected a cut")
+	}
+	if err := ValidateWorkItemTuplePayload(cut, storage.Principal{OrgID: "org-1"}); err != nil {
+		t.Fatalf("payload after the cut is invalid: %v", err)
+	}
+	for _, want := range []string{last, refs[len(refs)-2]} {
+		kept := false
+		for _, member := range cut.Cohort.Members {
+			kept = kept || slices.Contains(member.EvidenceRefIDs, want)
+		}
+		if !kept {
+			t.Fatalf("the member whose evidence %q a finding or driver cites was cut", want)
+		}
+	}
+}
+
+func TestTheServedFitCutOfAWalkListKeepsTheCitedEvidenceAndAValidPayload(t *testing.T) {
+	shape := budgetTrimShape{members: 60, claims: 2, maxItems: 120, findings: 1, evidenceMembers: 5}
+	full, err, _ := budgetTrimInvestigate(t, shape)
+	if err != nil {
+		t.Fatalf("uncut probe: %v", err)
+	}
+	measured, err := contractsv1.MeasureContextFabricResponse(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry := &recordingTelemetry{}
+	engine := &Engine{telemetry: telemetry}
+	budget := ResponseBudget{MaxItems: 1000, MaxSerializedBytes: measured.Bytes - measured.Bytes/5}
+	served, err := engine.finalizeServedFitting(context.Background(), storage.Principal{OrgID: "org-1"}, BudgetAssertDecisive, full, budget)
+	if err != nil {
+		t.Fatalf("served fit: %v", err)
+	}
+	if len(served.Cohort.Members) >= len(full.Cohort.Members) {
+		t.Fatalf("members %d of %d: the served fit did not cut", len(served.Cohort.Members), len(full.Cohort.Members))
+	}
+	if err := ValidateWorkItemTuplePayload(served, storage.Principal{OrgID: "org-1"}); err != nil {
+		t.Fatalf("served payload invalid after the served-fit cut: %v", err)
+	}
+	if len(telemetry.planNarrowings) != 1 || telemetry.planNarrowings[0].EvidencePinnedMembers != walkListEvidencePinnedOnly(served) || walkListEvidencePinnedOnly(served) == 0 {
+		t.Fatalf("served-fit narrowing events = %+v, want one carrying the pinned count %d", telemetry.planNarrowings, walkListEvidencePinnedOnly(served))
+	}
+}
+
+func TestAWalkListWhoseEveryMemberIsCitedAndOverrunsTheCeilingIsRefusedNotServedOver(t *testing.T) {
+	shape := budgetTrimShape{members: 60, claims: 2, maxItems: 120, findings: 1, evidenceMembers: 60}
+	full, err, _ := budgetTrimInvestigate(t, shape)
+	if err != nil {
+		t.Fatalf("uncut probe: %v", err)
+	}
+	measured, err := contractsv1.MeasureContextFabricResponse(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape.maxBytes = measured.Bytes - measured.Bytes/5
+	_, err = func() (InvestigationResult, error) { r, e, _ := budgetTrimInvestigate(t, shape); return r, e }()
+	var refusal AnswerBudgetRefusal
+	if !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+		t.Fatalf("err = %v, want a typed bytes budget refusal", err)
+	}
+	if _, fired := WorkItemTupleRuleFiredBy(err); fired {
+		t.Fatalf("the refusal carries a payload rule: %v", err)
+	}
+}
+
+func TestPlanNarrowingLineCarriesEvidencePinnedMembers(t *testing.T) {
+	event := PlanNarrowingEvent{
+		Family: QuestionFamilyScopedCohortStatus, Stage: contractsv1.ContextFabricPlanNarrowingAssembledResult,
+		Before: 50, After: 34, EvidencePinnedMembers: 7,
+	}
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordPlanNarrowing(context.Background(), storage.Principal{OrgID: "org-1"}, event)
+	})
+	if len(records) != 1 {
+		t.Fatalf("emitted %d records, want 1", len(records))
+	}
+	got, ok := records[0]["evidence_pinned_members"]
+	if !ok || int(got.(float64)) != 7 {
+		t.Fatalf("evidence_pinned_members = %v (present %v), want 7", got, ok)
+	}
+}
