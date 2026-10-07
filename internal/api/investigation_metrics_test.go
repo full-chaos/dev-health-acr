@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -70,5 +71,35 @@ func TestInvestigationRouteRecordsLatencyByTerminalStatus(t *testing.T) {
 	got := runInvestigationWithMetrics(t, contextfabric.InvestigationResult{Status: contractsv1.ContextFabricInvestigationPartial}, nil)
 	if got["acr_investigation_latency_seconds{status=partial}"] != 1 {
 		t.Fatalf("cells %v, want one partial latency sample", got)
+	}
+}
+
+// A 413 from a response-size gate refuses the answer: it is a budget refusal,
+// and its latency is "error", not the status of the answer it did not deliver.
+func TestInvestigationRouteResponseSizeRefusalIsCountedAsRefusalAndError(t *testing.T) {
+	result := twelveRollupResult("result_metrics_over")
+	result.Status = contractsv1.ContextFabricInvestigationComplete
+	instruments, read := hostedmetricstest.New(t, hostedmetrics.Vocabularies{})
+	app, token, _ := newContextFabricTestAppWithProductionLimitsAndLogs(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		return result, nil
+	}))
+	app.metrics = instruments
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body=%s", response.Code, response.Body.String())
+	}
+	want := map[string]int64{
+		"acr_budget_refusals_total{}":                     1,
+		"acr_investigation_latency_seconds{status=error}": 1,
+	}
+	got := read()
+	if len(got) != len(want) {
+		t.Fatalf("cells %v, want %v", got, want)
+	}
+	for cell, value := range want {
+		if got[cell] != value {
+			t.Errorf("%s = %d, want %d (all %v)", cell, got[cell], value, got)
+		}
 	}
 }
