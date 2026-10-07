@@ -59,9 +59,29 @@ func TestEmptyMemberSearchRowIsFiledOnlyFromAnEmptyServableCensus(t *testing.T) 
 }
 
 func TestEmptyMemberSearchRowIsNotFiledTwice(t *testing.T) {
-	bundle := emptyFactReadBundle(scopedMemberFrame(SubjectProject), Coverage{})
+	bundle := emptyFactReadBundle(scopedMemberFrame(SubjectProject), Coverage{}, 0)
 	recordEmptyMemberSearch(&bundle, scopedMemberFrame(SubjectProject), Coverage{}, nil, 0)
 	if got := noneFoundRows(bundle); got != 1 {
 		t.Fatalf("none-found rows = %d, want 1", got)
+	}
+}
+
+func TestEmptyPlanRowUsesTheSameGuard(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		frame      *QuestionFrame
+		population int
+		wantCode   contractsv1.ContextFabricCoverageDetailCode
+	}{
+		{"servable, zero population", scopedMemberFrame(SubjectProject), 0, contractsv1.ContextFabricCoverageDetailGraphNoMemberFound},
+		{"members counted but not carried", scopedMemberFrame(SubjectProject), 3, contractsv1.ContextFabricCoverageDetailRequirementReadNotPlanned},
+		{"member kind the graph cannot list", scopedMemberFrame(SubjectWorkItem), 0, contractsv1.ContextFabricCoverageDetailRequirementReadNotPlanned},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bundle := emptyFactReadBundle(tc.frame, Coverage{}, tc.population)
+			if len(bundle.Coverage.Details) != 1 || bundle.Coverage.Details[0].Code != tc.wantCode {
+				t.Fatalf("details = %+v, want one %s row", bundle.Coverage.Details, tc.wantCode)
+			}
+		})
 	}
 }
