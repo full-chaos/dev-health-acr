@@ -168,6 +168,14 @@ func (a *App) credentialLifecycleLine(step string, next http.Handler) http.Handl
 		marker := &credentialLifecycleMarker{}
 		r = r.WithContext(context.WithValue(r.Context(), credentialLifecycleMarkerKey{}, marker))
 		recorder := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		// A panic still writes the line (as the 500 the recovery middleware
+		// answers with) and then continues to that middleware.
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				a.emitOAuthStep(r, step, oauthvocab.OutcomeUnavailable, "", http.StatusInternalServerError)
+				panic(recovered)
+			}
+		}()
 		next.ServeHTTP(recorder, r)
 		outcome := marker.outcome
 		if outcome == "" {

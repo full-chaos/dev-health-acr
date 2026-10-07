@@ -103,3 +103,23 @@ func TestCredentialLifecycleLineTakesTheOutcomeAHandlerNames(t *testing.T) {
 		t.Fatalf("line %s, want step credential_ack outcome expired", logs.String())
 	}
 }
+
+// A handler that panics still writes its one line, as the 500 the recovery
+// middleware answers with, and the panic continues to that middleware.
+func TestCredentialLifecycleLineSurvivesAPanic(t *testing.T) {
+	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
+	logs := &bytes.Buffer{}
+	app.logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	handler := app.credentialLifecycleLine(oauthvocab.StepCredentialRotate, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}))
+	defer func() {
+		if recover() == nil {
+			t.Fatal("the panic did not continue to the recovery middleware")
+		}
+		if strings.Count(logs.String(), `"msg":"acr-api oauth step"`) != 1 || !strings.Contains(logs.String(), `"outcome":"unavailable"`) || !strings.Contains(logs.String(), `"status":500`) {
+			t.Fatalf("lines %s, want one step line with outcome unavailable status 500", logs.String())
+		}
+	}()
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/auth/credentials/self/rotate", nil))
+}
