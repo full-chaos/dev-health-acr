@@ -493,7 +493,12 @@ import (
 // member whose evidence the answer cites and carries only the kept members'
 // evidence. A candidate saved before v96 may hold evidence of cut members and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v96"
+//
+// v96 -> v97: a daily series day whose row holds no non-null declared measure
+// counts as missing, not returned: returned_points excludes it and
+// missing_instants names it. A candidate saved before v97 may count such a day
+// as returned and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v97"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
