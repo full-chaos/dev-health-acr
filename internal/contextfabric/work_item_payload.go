@@ -467,6 +467,16 @@ func workItemTupleRuleOf(err error) string {
 	return WorkItemTupleRuleUnclassified
 }
 
+// WorkItemTupleRuleFiredBy reads the closed rule token off a validator
+// rejection anywhere in err's chain.
+func WorkItemTupleRuleFiredBy(err error) (string, bool) {
+	var ruleErr *workItemRuleError
+	if errors.As(err, &ruleErr) {
+		return string(ruleErr.rule), true
+	}
+	return "", false
+}
+
 // WorkItemTupleRejectReasonVocabulary is the persistence line's reject_reason vocabulary.
 func WorkItemTupleRejectReasonVocabulary() []string {
 	out := []string{WorkItemTupleRuleNone, WorkItemTupleRuleUnclassified}

@@ -279,6 +279,15 @@ func restrictWorkItemTupleEvidence(result InvestigationResult) InvestigationResu
 		}
 	}
 	result.EvidenceRefLabels = labels
+	if result.EvidenceRefIDs != nil {
+		refs := []string{}
+		for _, ref := range result.EvidenceRefIDs {
+			if allowed[ref] {
+				refs = append(refs, ref)
+			}
+		}
+		result.EvidenceRefIDs = refs
+	}
 	return result
 }
 

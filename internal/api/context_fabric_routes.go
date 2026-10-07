@@ -256,6 +256,7 @@ const (
 	contextFabricClassModelReceipt      = "model_receipt_unrecorded"
 	contextFabricClassSynthesisAborted  = "synthesis_aborted"
 	contextFabricClassPanic             = "panic"
+	contextFabricClassServedShape       = "served_shape_invariant"
 	// contextFabricClassBudgetRefusal (CHAOS-4636) is decision D5's PLANNED
 	// refusal: the engine measured its own assembled answer, re-synthesized
 	// once with a smaller input, and it still did not fit. It is a distinct
@@ -524,6 +525,10 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 		a.writeContextFabricFailure(w, r, err, contextFabricClassNoSubjects, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
 		return
 	}
+	if _, fired := contextfabric.WorkItemTupleRuleFiredBy(err); fired {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassServedShape, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+		return
+	}
 	if errors.Is(err, contextfabric.ErrInvalidResult) {
 		a.writeContextFabricFailure(w, r, err, contextFabricClassInvalidResult, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
 		return
@@ -642,6 +647,9 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	// fixed identifier chosen at the rejecting statement, never model
 	// output. Emitted only for a rejection error, so an unrelated failure
 	// never carries a meaningless "unclassified".
+	if rule, fired := contextfabric.WorkItemTupleRuleFiredBy(err); fired {
+		fields = append(fields, "failure_rule", rule)
+	}
 	var rejection *contextfabric.SynthesisRejection
 	if errors.As(err, &rejection) {
 		fields = append(fields, "rejection_reason", string(contextfabric.SynthesisRejectionReasonOf(err)))

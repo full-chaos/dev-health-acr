@@ -33,6 +33,8 @@ type budgetTrimShape struct {
 	noEvidence  bool
 	symmetric   bool
 	scoped      bool
+	// evidenceMembers makes the synthesis cite the evidence of the first N members it read.
+	evidenceMembers int
 }
 
 var budgetTrimProdShape = budgetTrimShape{members: 14, claims: 42, maxItems: 30, reserve: time.Second, deadline: 50 * time.Millisecond}
@@ -108,7 +110,13 @@ func budgetTrimInvestigate(t *testing.T, shape budgetTrimShape) (InvestigationRe
 					Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.9, Current: true,
 				})
 			}
-			return InvestigationResult{Status: InvestigationComplete, DirectJudgment: "Work items of the project.", CurrentState: "Work items of the project.", DeterministicAnswer: "Work items of the project.", StrongestPressures: []string{}, Drivers: drivers, RemainingWork: budgetTrimFindings(shape.findings, ids), ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{evidence}, ClaimedFacts: claims, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
+			resultEvidence := []string{evidence}
+			for index := 0; index < shape.evidenceMembers && index < len(served); index++ {
+				if ref, ok := canonicalWorkItemEvidenceRef(SubjectRef{Kind: SubjectWorkItem, CanonicalID: served[index]}); ok && ref != evidence {
+					resultEvidence = append(resultEvidence, ref)
+				}
+			}
+			return InvestigationResult{Status: InvestigationComplete, DirectJudgment: "Work items of the project.", CurrentState: "Work items of the project.", DeterministicAnswer: "Work items of the project.", StrongestPressures: []string{}, Drivers: drivers, RemainingWork: budgetTrimFindings(shape.findings, ids), ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: resultEvidence, ClaimedFacts: claims, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
 		}), Results: &staticResultStore{results: map[string]InvestigationResult{}}, Requirements: registryDeriver{},
 	}, EngineOptions{ServiceVersion: "test", MaxItems: shape.maxItems, MaxSerializedBytes: budgetTrimMaxBytes(shape), SynthesisDeadlineReserve: shape.reserve, ServerCompletenessAuthorityEnabled: shape.symmetric, ServerCompletenessAuthoritySymmetricEnabled: shape.symmetric, NewResultID: func() string { return "result_budget_trim" }, Now: func() time.Time { return time.Unix(1000, 0).UTC() }})
 	if err != nil {

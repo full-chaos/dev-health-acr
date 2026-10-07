@@ -158,7 +158,7 @@ func cutWalkListMembers(result InvestigationResult) (InvestigationResult, bool) 
 		result.LimitationsDisplaced += displaced
 	}
 	result.Limitations = limitations
-	return result, true
+	return restrictWorkItemTupleEvidence(result), true
 }
 
 // walkReadSet is the members the written summary read out of a listed walk:
