@@ -51,6 +51,7 @@ import attempt_classes  # noqa: E402
 from attempt_order import order_attempts, parse_attempt_name  # noqa: E402
 from validators import load_attempt  # noqa: E402
 from corpus import CORPUS  # noqa: E402
+import expectations  # noqa: E402
 from shard_plan import plan  # noqa: E402
 
 BY_ID = {row["id"]: row for row in CORPUS}
@@ -259,6 +260,10 @@ def detail_for(outdir, qid, row, r, dt, rep):
 def main():
     if len(sys.argv) != 4:
         sys.exit("usage: run_shard.py <shard-index> <shard-count> <rep>")
+    try:
+        expectations.require_expectation_bearing(CORPUS)
+    except expectations.VacuousCorpus as e:
+        sys.exit(str(e))
     # CHAOS-5562: fail before planning a single row. A lane invoking this script
     # directly (not through run_corpus_sequential.sh / run_corpus_parallel.sh,
     # which already export CORPUS_BASE themselves) must not silently inherit
