@@ -2,8 +2,6 @@ package graphrank
 
 import (
 	"strings"
-
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 const providerAttributePrefix = "provider_"
@@ -27,28 +25,4 @@ func ProviderAttribute(attributes map[string]interface{}) string {
 		found = name
 	}
 	return found
-}
-
-func candidateLabelKey(c contextfabric.SubjectCandidate) string {
-	return string(c.Subject.Kind) + "\x00" + strings.ToLower(strings.TrimSpace(c.Subject.Label))
-}
-
-// collidingLabelKeys returns the kind+label keys held by two or more
-// distinct subjects.
-func collidingLabelKeys(candidates []contextfabric.SubjectCandidate) map[string]bool {
-	owners := map[string]map[string]struct{}{}
-	for _, c := range candidates {
-		key := candidateLabelKey(c)
-		if owners[key] == nil {
-			owners[key] = map[string]struct{}{}
-		}
-		owners[key][c.Subject.CanonicalID] = struct{}{}
-	}
-	out := map[string]bool{}
-	for key, ids := range owners {
-		if len(ids) > 1 {
-			out[key] = true
-		}
-	}
-	return out
 }
