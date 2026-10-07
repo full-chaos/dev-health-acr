@@ -1433,6 +1433,16 @@ func projectTeamsStatementFor(cursor cursorState, ingest bool) string {
 		cursorWatermark = projectTeamsIngestWatermark
 	}
 	const identityPartition = " OVER (PARTITION BY provider, ownership_ref, ownership_key, retraction_only)"
+	// The provider-wide project stamp widens WHICH groups a cursor revisits. It
+	// belongs in the cursor position only: observed_at is the edge's own
+	// ObservedAt and a tombstone's EffectiveAt, which an unrelated project's
+	// write must not move. On the ingest cursor the position is row_ingest, so
+	// observed_at stays free of it; the legacy cursor's position IS observed_at,
+	// so there it carries the term.
+	legacyProviderTerm := ""
+	if !ingest {
+		legacyProviderTerm = ", max(provider_updated_at)" + identityPartition
+	}
 	return `SELECT o.project_id, o.team_id, o.source_name,
        minIf(o.valid_from, o.unassertable = 0) AS first_valid_from,
        argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.unassertable = 0).1 IS NULL AS latest_is_open,
@@ -1443,7 +1453,7 @@ func projectTeamsStatementFor(cursor cursorState, ingest bool) string {
        toUInt8(countIf(o.unassertable = 1 AND o.retraction_only = 0) > 0) AS conflicting_identity_present` + ingestStampSQL(ingest, projectTeamsIngestWatermark+" AS ingest_at") + `
 FROM (
 	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, valid_from, valid_to, retraction_only,
-	       greatest(updated_at, max(project_updated_at)` + identityPartition + `, max(provider_updated_at)` + identityPartition + `) AS row_watermark,` + ingestStampSQL(ingest, " greatest(ingest_at, max(project_ingest_at)"+identityPartition+", max(provider_ingest_at)"+identityPartition+") AS row_ingest,") + `
+	       greatest(updated_at, max(project_updated_at)` + identityPartition + legacyProviderTerm + `) AS row_watermark,` + ingestStampSQL(ingest, " greatest(ingest_at, max(project_ingest_at)"+identityPartition+", max(provider_ingest_at)"+identityPartition+") AS row_ingest,") + `
 	       toUInt8(retraction_only = 1 OR min(project_id)` + identityPartition + ` != max(project_id)` + identityPartition + `) AS unassertable
 	FROM (` + strings.Join(projectTeamsArmsFor(ingest), "\n\n\t\tUNION ALL\n") + `
 	)
