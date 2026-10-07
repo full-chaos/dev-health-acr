@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	"github.com/full-chaos/dev-health-acr/internal/mcp"
 )
 
 // The acr://guide/data resource (CHAOS-7072, design H). The operation list is
@@ -98,7 +99,10 @@ var DataRules = []string{
 	"When you derive a number, say it is yours and show its inputs. State the measure you rank by.",
 	"Use \"appears\", \"leans\", \"suggests\" for derived statements.",
 	"\"last month\" = the previous calendar month. \"in the last month\" = the trailing 30 days.",
-	"A team = the repositories and projects it owns. `find_subjects` with `owned_by` lists them.",
+	mcp.GuidanceTeamOwnership,
+	mcp.GuidanceProjectRepository,
+	mcp.GuidanceHomeRunOperation,
+	mcp.GuidanceInvestmentScopes,
 	"A project is visible when a team that owns it owns one of your repositories; its edges may still all be withheld.",
 	"A subject row of `find_subjects` and a candidate of an ambiguous answer (`clarification.candidates[]`) carry `provider` when exactly one provider identifies the node; with none or several it is absent. Two subjects of one kind with the same label differ by `provider` and `canonical_id`; a clarification names the provider beside a label only when two shown labels collide.",
 	"A `find_subjects` `handle` can match subjects you may not read. Those are neither returned nor counted, so `total_known` and `ambiguous` count only what you may read. A credential restricted to repositories has a handle looked up only inside its own repositories; with more than 50 of them, or for a work item key of any prefix, known or not (work items are not tied to one repository), handle mode answers `invalid_request` with reason `scope_required`. Other tools count what they withhold (`rows_withheld`, `edges_not_visible`) because they answer about a subject you may read; a handle count would reveal subjects you may not.",
@@ -153,18 +157,18 @@ var DataExamples = []DataExample{
 	},
 	{
 		Title: "Where does the organization put its effort, by theme?",
-		Note:  "Investment is served here only org-wide, by theme, subcategory or work type. A team or repository investment shape is refused with `basis_dependent_shape`: use `read_facts` if your `tools/list` offers it (the `facts` section of `data_catalog` lists its kinds). Do not work around the refusal.",
+		Note:  "Via `run_operation`, `investmentBreakdown` serves the organization only, by theme, subcategory or work type; a team or repository shape is refused with `basis_dependent_shape`: use `read_facts` if your `tools/list` offers it (the `facts` section of `data_catalog` lists its kinds). Do not work around the refusal.",
 		Calls: []DataExampleCall{
 			{Tool: "run_operation", Args: `{"operation":"catalogValues","variables":{"dimension":"THEME"}}`, Comment: "the theme values that exist"},
 			{Tool: "run_operation", Args: `{"operation":"investmentBreakdown","variables":{"batch":{"breakdowns":[{"dimension":"THEME","measure":"COUNT","dateRange":{"startDate":"2026-06-29","endDate":"2026-09-28"},"topN":10}]}}}`, Comment: "the org-wide mix by theme"},
-			{Tool: "run_operation", Args: `{"operation":"investmentBreakdown","variables":{"batch":{"breakdowns":[{"dimension":"TEAM","measure":"COUNT","dateRange":{"startDate":"2026-06-29","endDate":"2026-09-28"},"topN":10}]}}}`, Refused: "basis_dependent_shape", Comment: "refused: a team shape is not served here"},
+			{Tool: "run_operation", Args: `{"operation":"investmentBreakdown","variables":{"batch":{"breakdowns":[{"dimension":"TEAM","measure":"COUNT","dateRange":{"startDate":"2026-06-29","endDate":"2026-09-28"},"topN":10}]}}}`, Refused: "basis_dependent_shape", Comment: "refused: run_operation serves no team shape"},
 		},
 	},
 	{
 		Title: "What capacity forecasts are stored for a team?",
 		Note:  "A stored list, one row per forecast run: a log, not one current answer. Read the dates and `insufficientHistory` before you quote a forecast, and say which run you quote.",
 		Calls: []DataExampleCall{
-			{Tool: "find_subjects", Args: `{"kind":"team"}`, Comment: "list the teams; a team is the repositories and projects it owns"},
+			{Tool: "find_subjects", Args: `{"kind":"team"}`, Comment: "list the teams; a team owns repositories and projects"},
 			{Tool: "run_operation", Args: `{"operation":"capacityForecasts","variables":{"filters":{"teamId":"` + sampleTeamID + `","fromDate":"2026-07-01","toDate":"2026-09-28","limit":10}}}`, Comment: "the stored forecasts of that team; the window must be given and is at most 90 days"},
 		},
 	},
