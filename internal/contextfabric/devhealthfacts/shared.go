@@ -475,7 +475,11 @@ import (
 // document selects more fields and the investment operations gain a person
 // variable path. A candidate saved before v90 holds the old shape and must not
 // be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v92"
+//
+// v92 -> v94: a cohort cut by authorization, wholly or in part, is served
+// partial with one count row. A candidate saved before v94 holds a complete
+// answer over a cut cohort and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v94"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
