@@ -52,7 +52,8 @@ func TestCountRowsBesideCutMembersGuards(t *testing.T) {
 			continue
 		}
 		for _, row := range got {
-			if row.Requirement != "r" || row.Served != 20 || row.Declared != 25 || row.Stage != contractsv1.ContextFabricOutcomeStageProjection || row.Outcome != narrowed {
+			if row.Requirement != "r" || row.Served != 20 || row.Declared != 25 || row.Stage != contractsv1.ContextFabricOutcomeStageProjection || row.Outcome != narrowed ||
+				row.Impact != contractsv1.ContextFabricAnswerImpactScope || row.CauseOverrun != contractsv1.ContextFabricBudgetOverrunBytes || !row.CauseObserved || len(row.Refinements) != 1 {
 				t.Errorf("%s: row = %+v", tc.name, row)
 			}
 		}

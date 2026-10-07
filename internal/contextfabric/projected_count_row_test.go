@@ -42,6 +42,9 @@ func TestProjectedCountRowDoesNotOverstateTheServedMemberSet(t *testing.T) {
 	if projection.Completeness.State != contractsv1.ContextFabricAnswerCompletenessPartial {
 		t.Errorf("state = %q, want partial", projection.Completeness.State)
 	}
+	if effective.Impact != contractsv1.ContextFabricAnswerImpactScope || effective.CauseOverrun != contractsv1.ContextFabricBudgetOverrunBytes || !effective.CauseObserved || len(effective.Refinements) != 1 {
+		t.Errorf("effective count row cause/refinement = %+v", effective)
+	}
 	if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(effective); err != nil {
 		t.Errorf("effective row invalid: %v", err)
 	}

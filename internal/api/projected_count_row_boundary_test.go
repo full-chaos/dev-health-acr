@@ -23,6 +23,12 @@ type servedCountOutcomes struct {
 				Outcome     string `json:"outcome"`
 				Served      int    `json:"served"`
 				Declared    int    `json:"declared"`
+				Impact      string `json:"impact"`
+				Cause       string `json:"cause_overrun"`
+				Observed    bool   `json:"cause_observed"`
+				Refinements []struct {
+					Stage string `json:"stage"`
+				} `json:"refinements"`
 			} `json:"outcomes"`
 		} `json:"completeness"`
 	} `json:"structured"`
@@ -69,7 +75,8 @@ func TestACountBesideACutMemberSetReachesTheClientAsTheServedCount(t *testing.T)
 		t.Fatalf("no count row served: %+v", node.Structured.Completeness.Outcomes)
 	}
 	last := node.Structured.Completeness.Outcomes[count[len(count)-1]]
-	if last.Stage != "projection" || last.Outcome != "narrowed" || last.Served != served || last.Declared != canonical || last.Requirement == "" {
+	if last.Stage != "projection" || last.Outcome != "narrowed" || last.Served != served || last.Declared != canonical || last.Requirement == "" ||
+		last.Impact != "scope" || last.Cause != "bytes" || !last.Observed || len(last.Refinements) != 1 {
 		t.Errorf("effective count row = %+v, want projection-stage narrowed %d/%d", last, served, canonical)
 	}
 	if node.Structured.Completeness.State != "partial" {
