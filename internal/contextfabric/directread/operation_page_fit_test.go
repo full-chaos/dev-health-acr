@@ -89,7 +89,7 @@ func TestAdvertisedDefaultLimitAnswersWithTheLargestWholeRowPage(t *testing.T) {
 	if n < 150 || n >= 200 || resp.Page.RowsReturned != n || resp.Page.RowsRead != 200 {
 		t.Fatalf("rows %d, page %+v", n, resp.Page)
 	}
-	if !strings.Contains(resp.Page.Cut, fmt.Sprintf("%d of 200", n)) || resp.Completeness != directread.CompletenessUnknown {
+	if !strings.Contains(resp.Page.Cut, fmt.Sprintf("%d of 200", n)) || resp.Completeness != directread.CompletenessDeclaredPartial || resp.CompletenessReason != directread.ReasonPageCut {
 		t.Fatalf("cut statement %q completeness %s", resp.Page.Cut, resp.Completeness)
 	}
 	// Largest: one more row would not fit.
@@ -123,7 +123,7 @@ func TestAnAnswerUnderTheBudgetIsServedUncut(t *testing.T) {
 		delete(row.(map[string]any), "evidence")
 	}
 	want, _ := json.Marshal(tree)
-	if string(resp.Data) != string(want) || resp.Completeness != directread.CompletenessUnknown {
+	if string(resp.Data) != string(want) || resp.Completeness != directread.CompletenessDeclaredComplete || resp.CompletenessReason != "" {
 		t.Fatalf("under-budget data differs from the allowlisted upstream data:\n%.200s\n%.200s", resp.Data, want)
 	}
 	out, _ := json.Marshal(resp.Page)

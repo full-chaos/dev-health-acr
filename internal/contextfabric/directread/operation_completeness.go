@@ -140,7 +140,7 @@ func (op *OperationPolicy) capReached(root any, vars map[string]any, c capSpec) 
 		if v, ok := lookupScalarPath(holder, path); ok && v != nil {
 			return numberToInt(v)
 		}
-		return numberToInt(json.Number(rule.Default))
+		return numberToInt(json.Number(rule.EffectiveDefault()))
 	}
 	if !indexed {
 		list, ok := lookupListPath(root, c.ListPath)
