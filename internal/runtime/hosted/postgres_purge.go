@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 )
 
@@ -223,7 +224,7 @@ func startDeviceCredentialSweep(ctx context.Context, revoker deviceCredentialRev
 	purge := func(ctx context.Context, _ time.Time, limit int) (int, error) {
 		revoked, err := revoker.RevokeUnacknowledged(ctx, limit)
 		if revoked > 0 && logger != nil {
-			logger.InfoContext(ctx, "device credential ack sweep", "revoked", revoked)
+			logger.InfoContext(ctx, "device credential ack sweep", "oauth_step", oauthvocab.StepCredentialRevoke, "source", "sweep", "revoked", revoked)
 		}
 		return revoked, err
 	}

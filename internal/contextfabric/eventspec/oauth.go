@@ -18,6 +18,10 @@ const (
 	// OAuthStepDeviceAuthorization is RFC 8628's device_authorization
 	// endpoint.
 	OAuthStepDeviceAuthorization = oauthvocab.StepDeviceAuthorization
+	// The self-credential lifecycle routes.
+	OAuthStepCredentialAck    = oauthvocab.StepCredentialAck
+	OAuthStepCredentialRotate = oauthvocab.StepCredentialRotate
+	OAuthStepCredentialRevoke = oauthvocab.StepCredentialRevoke
 )
 
 // OAuthStepVocabulary lists every step.
@@ -48,7 +52,7 @@ var OAuthStep = Event{
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityExactlyOnePerRequest,
 	Attribution:        []string{"request_id"},
-	BoundedAggregation: "exactly one line per request to /register, /authorize, /authorize/consent, /device_authorization or /token; metadata routes emit none",
+	BoundedAggregation: "exactly one line per request to /register, /authorize, /authorize/consent, /device_authorization, /token or the self-credential routes (/api/v1/auth/credentials/self/ack, /rotate, /revoke), including POSTs refused by the authenticator or limiter before their handler (a method the router rejects with 405 never reaches the route and writes none); metadata routes emit none. On a credential step the outcome reads: ok = done; invalid_request = malformed body; unauthenticated = no valid credential; invalid_grant = nothing to act on or a state conflict (no credential awaiting acknowledgement, stale credential, rotation conflict); expired = the acknowledgement window closed; rate_limited; unavailable = the credential service or runtime could not answer. The credential id and the token never reach the line",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "step", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: OAuthStepVocabulary()},

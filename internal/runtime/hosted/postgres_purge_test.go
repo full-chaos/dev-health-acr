@@ -532,6 +532,11 @@ func TestStartDeviceCredentialSweep_runsABoundedSweepAtStartupAndLogsOnlyTheCoun
 	if !strings.Contains(logs.String(), "revoked=2") {
 		t.Fatalf("log = %q, want the revoked count", logs.String())
 	}
+	for _, field := range []string{"oauth_step=credential_revoke", "source=sweep"} {
+		if !strings.Contains(logs.String(), field) {
+			t.Fatalf("log = %q, want %s so one query on oauth_step finds every revoke", logs.String(), field)
+		}
+	}
 }
 
 func TestStartDeviceCredentialSweep_failsStartupWhenTheFirstSweepFails(t *testing.T) {
