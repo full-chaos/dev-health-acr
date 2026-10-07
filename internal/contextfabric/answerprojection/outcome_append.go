@@ -87,6 +87,7 @@ func appendProjectionOutcomes(projection contractsv1.ContextFabricAnswerProjecti
 		// reduction, and a bare count cannot show that it was.
 		rows = append(rows, projectionOutcomeRow(omission.Impact, omission.Count))
 	}
+	rows = append(rows, countRowsBesideCutMembers(projection)...)
 	projection.Completeness.Outcomes = rows
 	// DERIVED LAST, over the whole set. This is the line that makes the
 	// served answer's completeness true of the served document.
@@ -110,4 +111,44 @@ func projectionOutcomeRow(impact contractsv1.ContextFabricAnswerImpactKind, decl
 	// is zero -- a projection that dropped nothing has no step to record, and
 	// a zero-length step is not a refinement.
 	return contractsv1.ContextFabricWithReductionRefinement(row)
+}
+
+// countRowsBesideCutMembers appends, for each assembled-result `count` row
+// that states more members than the projection serves, a projection-stage row
+// carrying that row's own requirement identity and the served member count.
+//
+// The identity is copied from the count row, not inferred: a count is
+// membership-bound, so a cut member set is a reduction of exactly that
+// requirement. The unattributed omission rows above stay unattributed.
+// Nothing canonical is rewritten; the later row is the requirement's
+// effective account.
+func countRowsBesideCutMembers(projection contractsv1.ContextFabricAnswerProjection) []contractsv1.ContextFabricPlanRequirementOutcomeRow {
+	if projection.ProjectionBudget.CohortMembersOmitted <= 0 || projection.Cohort == nil {
+		return nil
+	}
+	served := len(projection.Cohort.Members)
+	var appended []contractsv1.ContextFabricPlanRequirementOutcomeRow
+	for _, row := range projection.Completeness.Outcomes {
+		if row.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult || row.Obligation != string(contractsv1.ContextFabricAnswerObligationCount) || row.Requirement == "" {
+			continue
+		}
+		if row.Outcome != contractsv1.ContextFabricRequirementSatisfied && row.Outcome != contractsv1.ContextFabricRequirementNarrowed {
+			continue
+		}
+		if row.Served <= served {
+			continue
+		}
+		appended = append(appended, contractsv1.ContextFabricWithReductionRefinement(contractsv1.ContextFabricPlanRequirementOutcomeRow{
+			Stage:         contractsv1.ContextFabricOutcomeStageProjection,
+			Requirement:   row.Requirement,
+			Obligation:    row.Obligation,
+			Outcome:       contractsv1.ContextFabricRequirementNarrowed,
+			Impact:        contractsv1.ContextFabricAnswerImpactScope,
+			CauseOverrun:  contractsv1.ContextFabricBudgetOverrunBytes,
+			CauseObserved: true,
+			Served:        served,
+			Declared:      row.Served,
+		}))
+	}
+	return appended
 }

@@ -2435,7 +2435,7 @@
         "outcomes": {
           "type": "array",
           "maxItems": 200,
-          "description": "The ONE authority for what this answer was supposed to contain and what became of it. Every narrowing stage between planning and the served document APPENDS to it; no stage rewrites or removes another stage's row, and state above is derived from the whole set at the surface that serves the answer. That ordering is what makes it impossible to measure completeness and then shrink the document somewhere the measurement cannot see.",
+          "description": "The ONE authority for what this answer was supposed to contain and what became of it. Every narrowing stage between planning and the served document APPENDS to it; no stage rewrites or removes another stage's row, and state above is derived from the whole set at the surface that serves the answer. That ordering is what makes it impossible to measure completeness and then shrink the document somewhere the measurement cannot see. Rows are in stage order and a later stage supersedes an earlier one: the effective account of a requirement is its last row.",
           "items": {
             "$ref": "#/$defs/PlanRequirementOutcomeRow"
           }
