@@ -381,14 +381,15 @@ func supersededColumnsSubquery(ingest bool) string {
 		historyStamp, workItemStamp = "ingested_at", "w.ingested_at"
 	}
 	return `(
-  SELECT w.org_id AS org_id, 'work_item' AS subject_kind, w.repo_id AS repo_id, w.work_item_id AS subject_id, w.provider AS provider, w.project_id AS project_id,
+  SELECT w.org_id AS org_id, w.repo_id AS repo_id, w.work_item_id AS subject_id, w.provider AS provider, w.project_id AS project_id,
     greatest(w.updated_at, h.latest_occurred) AS observed_at, greatest(` + workItemStamp + `, h.latest_stamp) AS ingest_at
   FROM (SELECT * FROM work_items FINAL WHERE org_id = {org_id:String}) AS w
   INNER JOIN (
-    SELECT org_id, subject_kind, repo_id, subject_id, max(occurred_at) AS latest_occurred, max(` + historyStamp + `) AS latest_stamp
+    SELECT org_id, repo_id, subject_id, max(occurred_at) AS latest_occurred, max(` + historyStamp + `) AS latest_stamp
     FROM ` + devhealthschema.DedupedMembershipTransitions(ingest) + `
-    GROUP BY org_id, subject_kind, repo_id, subject_id
-  ) AS h ON h.org_id = w.org_id AND h.subject_kind = 'work_item' AND h.repo_id = w.repo_id AND h.subject_id = w.work_item_id
+    WHERE subject_kind = 'work_item'
+    GROUP BY org_id, repo_id, subject_id
+  ) AS h ON h.org_id = w.org_id AND h.repo_id = w.repo_id AND h.subject_id = w.work_item_id
   WHERE w.org_id = {org_id:String} AND w.project_id != ''
     AND w.provider != 'gitlab'
     AND (w.provider != 'github' OR startsWith(w.project_id, 'ghprojv2:'))
@@ -439,7 +440,7 @@ FROM (
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
   WHERE m.org_id = {org_id:String} AND m.source = 'work_item_column'
   UNION ALL
-  SELECT m.subject_kind AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
+  SELECT 'work_item' AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
     m.observed_at AS observed_at, '' AS event_id, 'column_superseded' AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
     0 AS valid_to_present, toDateTime64(0, 3, 'UTC') AS valid_to_value, 0 AS is_malformed, 0 AS is_duplicate_add` + supersededIngest + `
   FROM ` + supersededColumnsSubquery(ingest) + ` AS m
