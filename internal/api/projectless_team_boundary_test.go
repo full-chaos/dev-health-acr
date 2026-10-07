@@ -29,6 +29,8 @@ var projectlessTeam = contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, 
 type projectlessTeamGraph struct {
 	cutDeploymentsGraph
 	denied bool
+	// cohortServed: one project member served beside the denial row (a cohort partly cut by authorization)
+	cohortServed bool
 }
 
 func (projectlessTeamGraph) ResolveSubjects(context.Context, storage.Principal, contextfabric.InvestigationRequest, contextfabric.InterpretedQuestion, contextfabric.ResolvedGraphBinding, *contextfabric.ConfirmedExpectedKind, *contextfabric.ConfirmedAnchorSelection, *contextfabric.QuestionFrame, contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
@@ -48,7 +50,10 @@ func (g projectlessTeamGraph) DiscoverContext(context.Context, storage.Principal
 	coverage := contextfabric.Coverage{Sources: []contextfabric.SourceObservation{{Source: "context-fabric:graph", State: contextfabric.SourceAvailable, ObservedAt: ptrTimeCut(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))}}}
 	if g.denied {
 		count := 2
-		raw := "cohort_denied_by_authorization:2"
+		if g.cohortServed {
+			count = 1
+		}
+		raw := fmt.Sprintf("cohort_denied_by_authorization:%d", count)
 		detail := contextfabric.CoverageDetail{
 			DetailID: "cov-graph-01", Source: "context-fabric:graph",
 			Code: contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization, Degrading: true, Count: &count, Raw: raw,
@@ -56,8 +61,19 @@ func (g projectlessTeamGraph) DiscoverContext(context.Context, storage.Principal
 		detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
 		coverage.Partial, coverage.DegradedReasons, coverage.Details = true, []string{raw}, []contextfabric.CoverageDetail{detail}
 	}
+	var cohort *contextfabric.Cohort
+	if g.cohortServed {
+		cohort = &contextfabric.Cohort{
+			Kind: contextfabric.SubjectProject, Rationale: "partly cut", Complete: false,
+			Members: []contextfabric.CohortMember{{
+				Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project:7d1c2a90-5b3e-4f68-8a01-2c9e4b6d1f33", Label: "served project"},
+				Rank:    1, InclusionReasons: []string{"served"},
+			}},
+		}
+	}
 	return contextfabric.GraphContext{
-		Paths: []contextfabric.RelationshipPath{}, DriverCandidates: []contextfabric.DriverJudgment{},
+		Cohort: cohort,
+		Paths:  []contextfabric.RelationshipPath{}, DriverCandidates: []contextfabric.DriverJudgment{},
 		FactRequirements: []contextfabric.FactRequirement{}, EvidenceRefIDs: []string{},
 		Coverage: coverage,
 	}, nil
@@ -65,12 +81,13 @@ func (g projectlessTeamGraph) DiscoverContext(context.Context, storage.Principal
 
 type projectlessTeamModel struct {
 	freshTupleModel
+	anchorKind   contextfabric.SubjectKind
 	requirements []contextfabric.FactRequirement
 }
 
 func (m projectlessTeamModel) InterpretQuestion(ctx context.Context, p storage.Principal, r contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
 	interpreted, receipt, err := m.freshTupleModel.InterpretQuestion(ctx, p, r)
-	receipt.ScopeAnchorKind = contextfabric.SubjectTeam
+	receipt.ScopeAnchorKind = m.anchorKind
 	receipt.ScopeAnchorTerm = "platform"
 	receipt.RequestedSubjectKind = contextfabric.SubjectProject
 	interpreted.SubjectTerms = []string{"platform"}
@@ -160,7 +177,21 @@ func TestAProjectlessTeamWithAPlannedFactReadWhoseCohortWasDeniedIsNotServedAsNo
 
 type projectlessTeamNode struct {
 	Structured struct {
-		Status  string `json:"status"`
+		Status        string `json:"status"`
+		Clarification *struct {
+			Prompt     string `json:"prompt"`
+			Candidates []struct {
+				Subject struct {
+					Kind  string `json:"kind"`
+					Label string `json:"label"`
+				} `json:"subject"`
+				Provider string `json:"provider"`
+			} `json:"candidates"`
+		} `json:"clarification"`
+		Cohort *struct {
+			Kind  string `json:"kind"`
+			Total int    `json:"total"`
+		} `json:"cohort"`
 		Details []struct {
 			Code      string `json:"code"`
 			Kind      string `json:"kind"`
@@ -175,6 +206,16 @@ type projectlessTeamNode struct {
 }
 
 func askProjectlessTeam(t *testing.T, denied bool, requirements ...contextfabric.FactRequirement) projectlessTeamNode {
+	t.Helper()
+	return askTeamOwnership(t, projectlessTeamGraph{denied: denied}, requirements...)
+}
+
+func askTeamOwnership(t *testing.T, graph contextfabric.GraphReader, requirements ...contextfabric.FactRequirement) projectlessTeamNode {
+	t.Helper()
+	return askOwnershipAnchoredOn(t, graph, contextfabric.SubjectTeam, requirements...)
+}
+
+func askOwnershipAnchoredOn(t *testing.T, graph contextfabric.GraphReader, anchorKind contextfabric.SubjectKind, requirements ...contextfabric.FactRequirement) projectlessTeamNode {
 	t.Helper()
 	fixture := newFreshTupleProducerFixtureWithBudget(t, "", limits.ResourceBudget{MaxItems: 30, MaxTokens: 16000, MaxBytes: 1 << 20})
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(fixture.client), contextfabric.FactRegistryOptions{})
@@ -193,8 +234,8 @@ func askProjectlessTeam(t *testing.T, denied bool, requirements ...contextfabric
 		Temporal: contextfabric.TemporalIntentCurrent,
 		Version:  contextfabric.QuestionFrameVersion,
 	}
-	dependencies.Interpreter = contextfabric.RuntimeQuestionInterpreter{Runtime: projectlessTeamModel{freshTupleModel: model, requirements: requirements}, Requirements: registry}
-	dependencies.Graph = projectlessTeamGraph{denied: denied}
+	dependencies.Interpreter = contextfabric.RuntimeQuestionInterpreter{Runtime: projectlessTeamModel{freshTupleModel: model, anchorKind: anchorKind, requirements: requirements}, Requirements: registry}
+	dependencies.Graph = graph
 	dependencies.Results = store
 	options := fixture.engineOptions
 	options.MaxItems = 30
@@ -283,5 +324,27 @@ func TestAPlannedFactReadOverADeniedCohortIsNotServedComplete(t *testing.T) {
 	}
 	if node.Structured.Status != "partial" {
 		t.Fatalf("status = %q, want partial over a denied cohort: %+v", node.Structured.Status, node.Structured.Details)
+	}
+}
+
+func TestACohortPartlyCutByAuthorizationIsServedPartialWithTheCountRow(t *testing.T) {
+	node := askTeamOwnership(t, projectlessTeamGraph{denied: true, cohortServed: true}, contextfabric.FactRequirement{Kind: contextfabric.FactMembership})
+	rows := 0
+	for _, d := range node.Structured.Details {
+		if d.Code == "graph_cohort_denied_by_authorization" {
+			rows++
+			if !d.Degrading || d.Label != "1 group member excluded by authorization" {
+				t.Fatalf("detail = %+v", d)
+			}
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("denial rows = %d, want 1: %+v", rows, node.Structured.Details)
+	}
+	if node.Structured.Status != "partial" {
+		t.Fatalf("status = %q, want partial", node.Structured.Status)
+	}
+	if node.byID.Status != "partial" {
+		t.Fatalf("by-id status = %q, want partial", node.byID.Status)
 	}
 }
