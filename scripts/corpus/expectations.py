@@ -276,6 +276,35 @@ def expectation_for(row):
     }
 
 
+class VacuousCorpus(Exception):
+    """The corpus scores nothing: a run against it would report every row unscored."""
+
+
+def require_expectation_bearing(rows):
+    """Fail loudly when no row carries a valid declared expectation.
+
+    A corpus whose rows are all unscored or invalid produces a verdict of
+    `unscored` for every row, which reads as a score but measured nothing.
+    """
+    rows = list(rows or [])
+    bearing = 0
+    invalid = 0
+    for row in rows:
+        exp = expectation_for(row)["expectation"]
+        if exp == INVALID:
+            invalid += 1
+        elif exp != UNSCORED:
+            bearing += 1
+    if bearing == 0:
+        raise VacuousCorpus(
+            f"corpus has 0 expectation-bearing rows out of {len(rows)} "
+            f"({invalid} invalid): every row would score unscored -- refusing to "
+            "measure. Supply a corpus whose rows declare expect/anchor/basis "
+            "(see scripts/corpus/README.md, 'Supplying a corpus')."
+        )
+    return bearing
+
+
 def score(expectation, bucket, subject_substitution=False,
           identity_state="read", terminal_status=None, disclosed_basis=None):
     """Total function. Agreement is granted only where VERDICTS names it.
