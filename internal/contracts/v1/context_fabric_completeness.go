@@ -151,6 +151,10 @@ type ContextFabricAnswerCompleteness struct {
 	// for. A projected surface appends its own cuts as rows and re-derives
 	// State; it never edits a canonical row, so the two surfaces cannot
 	// disagree about what the investigation established.
+	//
+	// READER RULE. Rows are in stage order and a later stage supersedes an
+	// earlier one: the EFFECTIVE account of a requirement is its LAST row.
+	// Earlier rows stay as the account at the stage that wrote them.
 	Outcomes []ContextFabricPlanRequirementOutcomeRow `json:"outcomes,omitempty"`
 }
 
