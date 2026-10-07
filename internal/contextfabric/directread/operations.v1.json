@@ -3,10 +3,10 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "9832234172cf900fca78a559386efd941c6a68dd",
+    "commit": "ddb2e75ded46aa5390e2fc8cd6e8606c78e4f5f1",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:358ec58640bd6df4e202fc67e958029f67dc0f943cf1957a96c7afef458b4210",
-    "registry_sha256": "650127d11a7fb454a0d7ba3efb9917cd991162729daf529bf08e00d789bc5679",
+    "schema_digest": "sha256:4870fac23a76a01dba146dc05ad9aadbd0efcc64e81b8a402ab7b962e256d6fa",
+    "registry_sha256": "131737b45cfd961a67f5b9c60edb2aeb0b5c629e1303eed020d272313b38b055",
     "registry_rows": 63
   },
   "person_name_tokens": [
@@ -6626,7 +6626,7 @@
     {
       "name": "operatingReview",
       "kind": "query",
-      "digest": "d26e965931987ac4bdf607f43f542e2bd3f49f91561400287014a161371726e9",
+      "digest": "fef895a373f536846afdb3bb93ef12dd03d8af8d23f3663b290c350e622ed8c3",
       "code": "unknown_operation",
       "reason": "its investment part reads investment_metrics_daily, neither the acr basis nor the canonical mix ([ops] operatingreview/operatingreview.go:840; K14 ruling, table K14-A)"
     },
