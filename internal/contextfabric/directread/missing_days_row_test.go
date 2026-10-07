@@ -55,14 +55,14 @@ func TestServeTableNullValuedDayIsMissingNotReturned(t *testing.T) {
 	}
 }
 
-func TestServeTableSeverityOnlyDayIsMissingButRowStays(t *testing.T) {
+func TestServeTableSeverityOnlyDayIsReturnedAndRowStays(t *testing.T) {
 	table := serveDaily(t, 3, func(i int) map[string]contextfabric.FactValue {
 		if i == 1 {
 			return map[string]contextfabric.FactValue{"severity": contextfabric.StringFactValue("high")}
 		}
 		return map[string]contextfabric.FactValue{"compounding_risk": contextfabric.NumberFactValue(0.2)}
 	})
-	if *table.ReturnedPoints != 2 || len(table.MissingInstants) != 1 || table.MissingInstants[0] != "2026-03-02" {
+	if *table.ReturnedPoints != 3 || len(table.MissingInstants) != 0 {
 		t.Fatalf("got %d missing=%v", *table.ReturnedPoints, table.MissingInstants)
 	}
 	if table.RowsReturned != 3 {
@@ -94,9 +94,47 @@ func TestServeTableNonFiniteMeasureDayIsMissing(t *testing.T) {
 	}
 }
 
-func TestRowCarriesMeasureWithoutDeclaredMeasuresKeepsRowPresence(t *testing.T) {
+func TestRowCarriesValueWithoutDeclaredMeasuresKeepsRowPresence(t *testing.T) {
 	row := contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{"day": contextfabric.StringFactValue("2026-03-01")}}
-	if !rowCarriesMeasure(row, nil) {
+	if !rowCarriesValue(row, nil) {
 		t.Fatal("no declared measures must keep row presence")
+	}
+}
+
+func TestServeTableOutOfRangeInstantCountsNeitherAndIsNotServed(t *testing.T) {
+	table := serveDaily(t, 3, func(i int) map[string]contextfabric.FactValue {
+		return map[string]contextfabric.FactValue{"compounding_risk": contextfabric.NumberFactValue(0.3)}
+	})
+	if *table.ReturnedPoints != 3 {
+		t.Fatalf("baseline returned=%d", *table.ReturnedPoints)
+	}
+	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 2)
+	row := func(day string) contextfabric.FactValueRow {
+		return contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{"day": contextfabric.StringFactValue(day), "compounding_risk": contextfabric.NumberFactValue(1)}}
+	}
+	value := contextfabric.TableFactValue(contextfabric.FactTable{
+		Shape: contextfabric.FactTableTimeSeries, Key: []string{"day"}, Measures: []string{"compounding_risk"},
+		Grain: contextfabric.GrainDay, Rows: []contextfabric.FactValueRow{row("2026-02-27"), row("2026-03-01"), row("2026-03-02"), row("2026-03-09")},
+	})
+	decl := contextfabric.FactFieldDeclaration{Name: "daily_health", Columns: []contextfabric.FactColumnDeclaration{
+		{Name: "day", Type: contextfabric.FactFieldString},
+		{Name: "compounding_risk", Type: contextfabric.FactFieldNumber, Nullable: true},
+	}}
+	plan := readPlan{time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}}
+	got := serveTable("daily_health", decl, value, GatedFact{}, plan, nil)
+	if *got.ReturnedPoints != 2 || *got.ExpectedPoints != 2 || len(got.MissingInstants) != 0 {
+		t.Fatalf("returned=%d expected=%d missing=%v", *got.ReturnedPoints, *got.ExpectedPoints, got.MissingInstants)
+	}
+	if got.RowsReturned != 2 {
+		t.Fatalf("out-of-range rows served: %d", got.RowsReturned)
+	}
+}
+
+func TestInstantInWindowKeepsUnparsableKey(t *testing.T) {
+	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	row := contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{"day": contextfabric.StringFactValue("not-a-day")}}
+	if !instantInWindow(row, "day", start, start.AddDate(0, 0, 1)) {
+		t.Fatal("unparsable key must be kept")
 	}
 }
