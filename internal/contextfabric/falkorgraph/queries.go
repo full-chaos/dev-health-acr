@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -1197,7 +1198,12 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 			}
 			resolved, resolution, reason, resolveErr := a.resolveEdge(ctx, key, orgID, principal, scope, ce, temporal)
 			filterCounts.add(resolution, reason)
-			if resolution == edgeFiltered && reason == edgeFilterReasonAuthz {
+			// Only an ownership edge of the anchor itself names a
+			// member the caller was denied; a denied edge elsewhere in the
+			// walk says nothing about the anchor's members.
+			ownedFromOrigin := ce.Name == string(contractsv1.ContextFabricRelationshipOwnedByTeam) &&
+				(ce.SourceNodeUUID == originUUID || ce.TargetNodeUUID == originUUID)
+			if resolution == edgeFiltered && reason == edgeFilterReasonAuthz && ownedFromOrigin {
 				for _, endpoint := range []string{ce.SourceNodeUUID, ce.TargetNodeUUID} {
 					if endpoint == originUUID {
 						continue

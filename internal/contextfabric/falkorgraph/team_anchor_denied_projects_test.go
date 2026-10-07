@@ -39,7 +39,7 @@ func TestDiscoverContextTeamAnchorWhollyDeniedProjectsFilesTheDeniedCountRow(t *
 			for _, id := range []string{"p1", "p2", "p3"} {
 				rows = append(rows, row{
 					"r": &edge{Properties: map[string]interface{}{
-						propRelationType: "OWNS", propRelationshipID: "rel_" + id,
+						propRelationType: "OWNED_BY_TEAM", propRelationshipID: "rel_" + id,
 						"authorization_repositories": allowed,
 					}},
 					"srcKind": "team", "srcId": "team:chaos", "dstKind": "project", "dstId": id,

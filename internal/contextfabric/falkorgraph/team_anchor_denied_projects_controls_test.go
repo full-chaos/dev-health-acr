@@ -13,6 +13,10 @@ import (
 type reachEdge struct {
 	id, dstKind, dstID string
 	edgeAuthz          []string
+	// relation is the edge type; empty means the ownership edge.
+	relation string
+	// from is the source node id; empty means the anchor.
+	from string
 }
 
 var (
@@ -28,21 +32,25 @@ func reachFixture(edges []reachEdge, nodeAuthz map[string][]string) *fakeConn {
 		case strings.Contains(cypher, "fulltext"):
 			return nil, nil
 		case strings.Contains(cypher, "UNION"):
-			if params["id"] != "team:chaos" {
-				return nil, nil
-			}
 			var rows []row
 			for _, e := range edges {
+				src := e.from
+				if src == "" {
+					src = "team:chaos"
+				}
+				if params["id"] != src {
+					continue
+				}
 				authz := e.edgeAuthz
 				if authz == nil {
 					authz = reachAllowed
 				}
 				rows = append(rows, row{
 					"r": &edge{Properties: map[string]interface{}{
-						propRelationType: "OWNS", propRelationshipID: "rel_" + e.id,
+						propRelationType: relationOr(e.relation), propRelationshipID: "rel_" + e.id,
 						"authorization_repositories": authz,
 					}},
-					"srcKind": "team", "srcId": "team:chaos", "dstKind": e.dstKind, "dstId": e.dstID,
+					"srcKind": srcKindOf(src), "srcId": src, "dstKind": e.dstKind, "dstId": e.dstID,
 				})
 			}
 			return rows, nil
@@ -234,4 +242,64 @@ func (n graphrankNodes) nodes() []graphrank.CandidateNode {
 		}}))
 	}
 	return out
+}
+
+func relationOr(relation string) string {
+	if relation == "" {
+		return "OWNED_BY_TEAM"
+	}
+	return relation
+}
+
+func srcKindOf(id string) string {
+	if id == "team:chaos" {
+		return "team"
+	}
+	return "project"
+}
+
+// A denied project reached only through an unrelated denied edge of the
+// anchor is not a denied member.
+func TestDiscoverContextTeamAnchorDeniedProjectOverAnUnrelatedEdgeFilesNoRow(t *testing.T) {
+	result, _ := discoverReach(t, reachFixture(
+		[]reachEdge{{id: "a", dstKind: "project", dstID: "p-no", edgeAuthz: reachDenied, relation: "BLOCKS"}},
+		map[string][]string{"p-no": reachDenied}))
+	if got := deniedReasonCount(result); got != "" {
+		t.Fatalf("denied reason = %q, want none over an unrelated edge (reasons %v)", got, result.Coverage.DegradedReasons)
+	}
+}
+
+// A denied project one hop past a served project is not the anchor's member.
+func TestDiscoverContextTeamAnchorDeniedProjectOnTheSecondHopFilesNoRow(t *testing.T) {
+	result, _ := discoverReach(t, reachFixture(
+		[]reachEdge{
+			{id: "a", dstKind: "project", dstID: "p-ok"},
+			{id: "b", dstKind: "project", dstID: "p-far", from: "p-ok", edgeAuthz: reachDenied},
+		},
+		map[string][]string{"p-ok": reachAllowed, "p-far": reachDenied}))
+	if got := deniedReasonCount(result); got != "" {
+		t.Fatalf("denied reason = %q, want none for a second-hop project (reasons %v)", got, result.Coverage.DegradedReasons)
+	}
+}
+
+// The ownership edge may point from the member to the anchor.
+func TestDiscoverContextTeamAnchorDeniedOwnershipEdgeIntoTheAnchorCounts(t *testing.T) {
+	fake := reachFixture(nil, map[string][]string{"p-no": reachDenied})
+	inner := fake.queryFunc
+	fake.queryFunc = func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "UNION") && params["id"] == "team:chaos" {
+			return []row{{
+				"r": &edge{Properties: map[string]interface{}{
+					propRelationType: "OWNED_BY_TEAM", propRelationshipID: "rel_in",
+					"authorization_repositories": reachDenied,
+				}},
+				"srcKind": "project", "srcId": "p-no", "dstKind": "team", "dstId": "team:chaos",
+			}}, nil
+		}
+		return inner(ctx, graphKey, cypher, params, readOnly)
+	}
+	result, _ := discoverReach(t, fake)
+	if got := deniedReasonCount(result); got != "cohort_denied_by_authorization:1" {
+		t.Fatalf("denied reason = %q, want cohort_denied_by_authorization:1 (reasons %v)", got, result.Coverage.DegradedReasons)
+	}
 }
