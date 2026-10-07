@@ -286,6 +286,7 @@ func (a *App) handleAcknowledgeSelfCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if errors.Is(err, auth.ErrDeviceCredentialAckWindowClosed) {
+		setCredentialLifecycleOutcome(r, oauthvocab.OutcomeExpired)
 		writeError(w, r, http.StatusConflict, "credential_lifecycle_conflict", "The acknowledgement window closed; the credential is revoked or about to be", false, nil)
 		return
 	}

@@ -130,7 +130,7 @@ func (a *App) oauthConsentLine(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		marker := &oauthLineMarker{}
 		r = r.WithContext(context.WithValue(r.Context(), oauthLineMarkerKey{}, marker))
-		recorder := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		recorder := newLineStatusWriter(w)
 		next.ServeHTTP(recorder, r)
 		if marker.emitted {
 			return
@@ -146,6 +146,102 @@ func (a *App) oauthConsentLine(next http.Handler) http.Handler {
 		}
 		a.emitOAuthStep(r, oauthvocab.StepConsent, outcome, "", recorder.status)
 	})
+}
+
+// credentialLifecycleMarker lets a self-credential handler name the one
+// outcome its status alone cannot (the acknowledgement window closing).
+type credentialLifecycleMarker struct{ outcome string }
+
+type credentialLifecycleMarkerKey struct{}
+
+func setCredentialLifecycleOutcome(r *http.Request, outcome string) {
+	if marker, ok := r.Context().Value(credentialLifecycleMarkerKey{}).(*credentialLifecycleMarker); ok {
+		marker.outcome = outcome
+	}
+}
+
+// credentialLifecycleLine writes the one OAuth step line of a self-credential
+// request, whatever stopped it: refused by the authenticator or the limiter
+// before the handler, or answered by the handler.
+func (a *App) credentialLifecycleLine(step string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		marker := &credentialLifecycleMarker{}
+		r = r.WithContext(context.WithValue(r.Context(), credentialLifecycleMarkerKey{}, marker))
+		recorder := newLineStatusWriter(w)
+		// A panic still writes the line and then continues to the recovery
+		// middleware: as the 500 it answers with, unless the handler had
+		// already committed a status, which the response keeps.
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				status := http.StatusInternalServerError
+				if recorder.committed {
+					status = recorder.status
+				}
+				outcome := credentialLifecycleOutcome(status)
+				if !recorder.committed {
+					outcome = oauthvocab.OutcomeUnavailable
+				}
+				a.emitOAuthStep(r, step, outcome, "", status)
+				panic(recovered)
+			}
+		}()
+		next.ServeHTTP(recorder, r)
+		outcome := marker.outcome
+		if outcome == "" {
+			outcome = credentialLifecycleOutcome(recorder.status)
+		}
+		a.emitOAuthStep(r, step, outcome, "", recorder.status)
+	})
+}
+
+// lineStatusWriter records the status a handler committed for an OAuth line
+// and hands everything a wrapped writer must keep to the writer it wraps: the
+// denial class the access log reads, and the underlying writer for
+// http.ResponseController.
+type lineStatusWriter struct {
+	*statusWriter
+	outer     http.ResponseWriter
+	committed bool
+}
+
+func newLineStatusWriter(w http.ResponseWriter) *lineStatusWriter {
+	return &lineStatusWriter{statusWriter: &statusWriter{ResponseWriter: w, status: http.StatusOK}, outer: w}
+}
+
+func (w *lineStatusWriter) WriteHeader(status int) {
+	w.committed = true
+	w.statusWriter.WriteHeader(status)
+}
+
+func (w *lineStatusWriter) Write(p []byte) (int, error) {
+	w.committed = true
+	return w.statusWriter.Write(p)
+}
+
+func (w *lineStatusWriter) SetDenialCode(code string) {
+	w.statusWriter.SetDenialCode(code)
+	if outer, ok := w.outer.(interface{ SetDenialCode(string) }); ok {
+		outer.SetDenialCode(code)
+	}
+}
+
+func (w *lineStatusWriter) Unwrap() http.ResponseWriter { return w.outer }
+
+func credentialLifecycleOutcome(status int) string {
+	switch {
+	case status >= http.StatusOK && status < http.StatusMultipleChoices:
+		return oauthvocab.OutcomeOK
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return oauthvocab.OutcomeUnauthenticated
+	case status == http.StatusNotFound || status == http.StatusConflict:
+		return oauthvocab.OutcomeInvalidGrant
+	case status == http.StatusTooManyRequests:
+		return oauthvocab.OutcomeRateLimited
+	case status >= http.StatusInternalServerError:
+		return oauthvocab.OutcomeUnavailable
+	default:
+		return oauthvocab.OutcomeInvalidRequest
+	}
 }
 
 // oauthOutcome maps a service error to its telemetry outcome and OAuth code.
