@@ -3,11 +3,11 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "562bcb38e9c02fd87df7a7a890c737d1e9ea01ff",
+    "commit": "9832234172cf900fca78a559386efd941c6a68dd",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:ef3d81523579ddd2a2ac68b5a6052baa599f08ef20e4ef0116038e28fd59d3a8",
-    "registry_sha256": "505d4182dadc5e9ee46188c735c19707df1b02c2f29d1a4763f94a6d13622777",
-    "registry_rows": 62
+    "schema_digest": "sha256:358ec58640bd6df4e202fc67e958029f67dc0f943cf1957a96c7afef458b4210",
+    "registry_sha256": "650127d11a7fb454a0d7ba3efb9917cd991162729daf529bf08e00d789bc5679",
+    "registry_rows": 63
   },
   "person_name_tokens": [
     "actor",
@@ -1631,8 +1631,8 @@
       "name": "home",
       "document_operation_name": "Home",
       "kind": "query",
-      "digest": "9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554",
-      "document_text": "query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {\n  home(orgId: $orgId, filters: $filters, window: $window) {\n    freshness {\n      lastIngestedAt\n      latestSuccessfulSyncAt\n      sources {\n        provider\n        status\n        __typename\n      }\n      coverage {\n        reposCoveredPct\n        prsLinkedToIssuesPct\n        issuesWithCycleStatesPct\n        __typename\n      }\n      __typename\n    }\n    deltas {\n      metric\n      label\n      value\n      unit\n      deltaPct\n      spark {\n        ts\n        value\n        __typename\n      }\n      __typename\n    }\n    reworkThemeAllocation {\n      theme\n      label\n      allocation\n      allocationPct\n      prsMerged\n      churnLoc\n      __typename\n    }\n    summary {\n      id\n      text\n      evidenceLink\n      __typename\n    }\n    tiles {\n      key\n      value {\n        title\n        subtitle\n        link\n        __typename\n      }\n      __typename\n    }\n    constraint {\n      title\n      claim\n      evidence {\n        label\n        link\n        __typename\n      }\n      experiments\n      __typename\n    }\n    events {\n      ts\n      type\n      text\n      link\n      __typename\n    }\n    healthState {\n      status\n      headline\n      summary\n      asOf\n      __typename\n    }\n    signals {\n      id\n      title\n      metric\n      currentValue\n      priorValue\n      delta\n      direction\n      severity\n      confidence\n      affectedScope\n      evidenceCount\n      whyItMatters\n      recommendedAction\n      evidenceRef\n      category\n      scopeEntity {\n        id\n        displayName\n        __typename\n      }\n      __typename\n    }\n    limitingFactor {\n      claim\n      whyItMatters\n      recommendedAction\n      confidence\n      evidenceRef\n      __typename\n    }\n    dataConfidence {\n      level\n      coveragePct\n      connectedSources\n      missingSources\n      caveats\n      __typename\n    }\n    __typename\n  }\n}",
+      "digest": "f920722d8e56ae44b85ce535ab0364ab10eb6baf70da1b49cc60a1f915abe7a1",
+      "document_text": "query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {\n  home(orgId: $orgId, filters: $filters, window: $window) {\n    freshness {\n      lastIngestedAt\n      latestSuccessfulSyncAt\n      sources {\n        provider\n        status\n        __typename\n      }\n      coverage {\n        reposCoveredPct\n        prsLinkedToIssuesPct\n        issuesWithCycleStatesPct\n        __typename\n      }\n      __typename\n    }\n    deltas {\n      metric\n      label\n      value\n      unit\n      deltaPct\n      hasData\n      hasPriorData\n      spark {\n        ts\n        value\n        __typename\n      }\n      __typename\n    }\n    reworkThemeAllocation {\n      theme\n      label\n      allocation\n      allocationPct\n      prsMerged\n      churnLoc\n      __typename\n    }\n    summary {\n      id\n      text\n      evidenceLink\n      __typename\n    }\n    tiles {\n      key\n      value {\n        title\n        subtitle\n        link\n        __typename\n      }\n      __typename\n    }\n    constraint {\n      title\n      claim\n      evidence {\n        label\n        link\n        __typename\n      }\n      experiments\n      __typename\n    }\n    events {\n      ts\n      type\n      text\n      link\n      __typename\n    }\n    healthState {\n      status\n      headline\n      summary\n      asOf\n      __typename\n    }\n    signals {\n      id\n      title\n      metric\n      currentValue\n      priorValue\n      delta\n      direction\n      severity\n      confidence\n      affectedScope\n      evidenceCount\n      whyItMatters\n      recommendedAction\n      evidenceRef\n      category\n      scopeEntity {\n        id\n        displayName\n        __typename\n      }\n      attribution {\n        items\n        sources {\n          source\n          items\n          share\n          __typename\n        }\n        confidence {\n          confidence\n          items\n          share\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    limitingFactor {\n      claim\n      whyItMatters\n      recommendedAction\n      confidence\n      evidenceRef\n      __typename\n    }\n    dataConfidence {\n      level\n      coveragePct\n      connectedSources\n      missingSources\n      caveats\n      __typename\n    }\n    scopeDataConfidence {\n      level\n      coveragePct\n      lastIngestedAt\n      caveats\n      __typename\n    }\n    __typename\n  }\n}",
       "cost_class": "series",
       "deadline_seconds": 30,
       "variables": [
@@ -1942,17 +1942,17 @@
         },
         {
           "path": "home.freshness.coverage.reposCoveredPct",
-          "type": "Float!",
+          "type": "Float",
           "leaf": "scalar"
         },
         {
           "path": "home.freshness.coverage.prsLinkedToIssuesPct",
-          "type": "Float!",
+          "type": "Float",
           "leaf": "scalar"
         },
         {
           "path": "home.freshness.coverage.issuesWithCycleStatesPct",
-          "type": "Float!",
+          "type": "Float",
           "leaf": "scalar"
         },
         {
@@ -1988,6 +1988,16 @@
         {
           "path": "home.deltas[*].deltaPct",
           "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].hasData",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].hasPriorData",
+          "type": "Boolean!",
           "leaf": "scalar"
         },
         {
@@ -2271,6 +2281,56 @@
           "leaf": "typename"
         },
         {
+          "path": "home.signals[*].attribution.items",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].attribution.sources[*].source",
+          "type": "TeamAttributionSource!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].attribution.sources[*].items",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].attribution.sources[*].share",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].attribution.sources[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.signals[*].attribution.confidence[*].confidence",
+          "type": "TeamAttributionConfidence!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].attribution.confidence[*].items",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].attribution.confidence[*].share",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].attribution.confidence[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.signals[*].attribution.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
           "path": "home.signals[*].__typename",
           "type": "String",
           "leaf": "typename"
@@ -2338,6 +2398,31 @@
         },
         {
           "path": "home.dataConfidence.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.scopeDataConfidence.level",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.scopeDataConfidence.coveragePct",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.scopeDataConfidence.lastIngestedAt",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.scopeDataConfidence.caveats[*]",
+          "type": "[String!]!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.scopeDataConfidence.__typename",
           "type": "String",
           "leaf": "typename"
         },
@@ -2796,6 +2881,18 @@
           "max": 100
         },
         {
+          "path": "batch.breakdowns[*].keys",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentBreakdown"
+          }
+        },
+        {
           "path": "batch.sankey",
           "type": "SankeyRequestInput",
           "kind": "object",
@@ -3275,6 +3372,33 @@
             "code": "variable_not_allowed",
             "reason": "the ops resolver does not apply this variable: flowStage, [ops] analytics/filtertranslation.go:151-158 (RM §8-9)"
           }
+        },
+        {
+          "path": "batch.evidenceQualityGroupBy",
+          "type": "DimensionInput",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentBreakdown"
+          }
         }
       ],
       "person_variables": [
@@ -3300,6 +3424,10 @@
         },
         {
           "path": "batch.filters.who.developers"
+        },
+        {
+          "path": "batch.evidenceQualityGroupBy",
+          "value": "AUTHOR"
         }
       ],
       "constraints": [
@@ -3692,6 +3820,18 @@
           "max": 100
         },
         {
+          "path": "batch.breakdowns[*].keys",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentFull"
+          }
+        },
+        {
           "path": "batch.sankey",
           "type": "SankeyRequestInput",
           "kind": "object",
@@ -4171,6 +4311,33 @@
             "code": "variable_not_allowed",
             "reason": "the ops resolver does not apply this variable: flowStage, [ops] analytics/filtertranslation.go:151-158 (RM §8-9)"
           }
+        },
+        {
+          "path": "batch.evidenceQualityGroupBy",
+          "type": "DimensionInput",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentFull"
+          }
         }
       ],
       "person_variables": [
@@ -4196,6 +4363,10 @@
         },
         {
           "path": "batch.filters.who.developers"
+        },
+        {
+          "path": "batch.evidenceQualityGroupBy",
+          "value": "AUTHOR"
         }
       ],
       "constraints": [
@@ -6430,6 +6601,13 @@
       "digest": "645f285412fb2c9517238aabca7e1204f530b66748893b748c0e5160cccf35c4",
       "code": "unknown_operation",
       "reason": "not in slice 1: no resolver path read in step 0 (default REFUSED, design D.4)"
+    },
+    {
+      "name": "investmentEvidenceQuality",
+      "kind": "query",
+      "digest": "5e31cdbd14dde65165c635a8a3f02fb03f85fae0ef9c21eeb39808c199323c2a",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
     },
     {
       "name": "mappingCoverageHealth",

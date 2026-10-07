@@ -25,6 +25,12 @@ const captureSchemaDigest = "sha256:330d0ebf0ea59fce8d0b1bb14887cad8e5b3f6971ad0
 // the capture was taken at. A build that pins another SDL may replay the
 // capture only for the operations whose contract is still the one below; an
 // operation that changed or is new belongs to a root in notRecordedRoots.
+// investmentBreakdown and investmentFull are re-pinned at ops 98322341: their
+// document, outputs and allowed variables are the captured ones, and the only
+// difference is refused variables (batch.evidenceQualityGroupBy,
+// batch.breakdowns[*].keys), so the recorded replies still hold. home changed
+// in its document but belongs to no graphql_query root, so no recorded shape
+// of it is replayed.
 var contractsAtCapture = map[string]string{
 	"acrRepositoryScopes":      "sha256:43fa66efd5d4c5dfc3699253378000be29e86dee1640f22dff19f40a0eb68c6a",
 	"capacityForecast":         "sha256:a4f248d9f964db5d669f8f1e906dec90babe7b4752824318d4b1b92f0f6d3052",
@@ -35,8 +41,8 @@ var contractsAtCapture = map[string]string{
 	"compoundingRisk":          "sha256:77ac36ec578a347763cf97ea1946219d43481774b06878514f34c2f166042525",
 	"home":                     "sha256:baf84f2d080ae0816080a4b434ac85686de90d345ab88db28d16ad7fcf9658fc",
 	"hotspots":                 "sha256:ce8c2b910621109693743b85571b3fbc62a133d62c61aae79394b10af2ae7994",
-	"investmentBreakdown":      "sha256:3a14bb9a88a77de7cb694a347bdb08931ff38fdc76c2b86ce84a913e5bfb8f71",
-	"investmentFull":           "sha256:676c5f47d8f1181a80e78eaa2795ef74235cc37a200633fde3ab8903458153b2",
+	"investmentBreakdown":      "sha256:8742ea2b7d3c3014c7a429a115108e167caf8a250230f5e59c16e3332f7b1749",
+	"investmentFull":           "sha256:179a09e19ce83802c67b1b40fe4c2c1b3c003617d4b49acca225146db3737111",
 	"recommendations":          "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
 	"securityOverview":         "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",
 	"throughputForecast":       "sha256:ad5d774fa899197d84842001d2f9fcee48155c5356a27238e1d726e1aff4db51",

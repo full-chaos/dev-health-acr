@@ -63,7 +63,10 @@ func (g projectlessTeamGraph) DiscoverContext(context.Context, storage.Principal
 	}, nil
 }
 
-type projectlessTeamModel struct{ freshTupleModel }
+type projectlessTeamModel struct {
+	freshTupleModel
+	requirements []contextfabric.FactRequirement
+}
 
 func (m projectlessTeamModel) InterpretQuestion(ctx context.Context, p storage.Principal, r contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
 	interpreted, receipt, err := m.freshTupleModel.InterpretQuestion(ctx, p, r)
@@ -71,7 +74,7 @@ func (m projectlessTeamModel) InterpretQuestion(ctx context.Context, p storage.P
 	receipt.ScopeAnchorTerm = "platform"
 	receipt.RequestedSubjectKind = contextfabric.SubjectProject
 	interpreted.SubjectTerms = []string{"platform"}
-	interpreted.FactRequirements = []contextfabric.FactRequirement{}
+	interpreted.FactRequirements = append([]contextfabric.FactRequirement{}, m.requirements...)
 	return interpreted, receipt, err
 }
 
@@ -117,6 +120,44 @@ func TestAProjectlessTeamWhoseCohortWasDeniedIsNotServedAsNoneFound(t *testing.T
 	}
 }
 
+// The same team asked with a plan that carries a fact requirement: the cohort
+// census is still empty, so the none-found row and the partial floor must be
+// served exactly as on the empty-plan path.
+func TestAProjectlessTeamWithAPlannedFactReadIsServedAsNoneFound(t *testing.T) {
+	node := askProjectlessTeam(t, false, contextfabric.FactRequirement{Kind: contextfabric.FactMembership})
+	if node.Structured.Status != "partial" {
+		t.Fatalf("status = %q, want partial", node.Structured.Status)
+	}
+	rows := 0
+	for _, d := range node.Structured.Details {
+		if d.Code == "graph_no_member_found" {
+			rows++
+			if d.Kind != "project" || !d.Degrading || !strings.Contains(d.Label, "No project was found under the named subject") {
+				t.Fatalf("detail = %+v", d)
+			}
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("graph_no_member_found rows = %d, want 1: %+v", rows, node.Structured.Details)
+	}
+}
+
+func TestAProjectlessTeamWithAPlannedFactReadWhoseCohortWasDeniedIsNotServedAsNoneFound(t *testing.T) {
+	node := askProjectlessTeam(t, true, contextfabric.FactRequirement{Kind: contextfabric.FactMembership})
+	denied := false
+	for _, d := range node.Structured.Details {
+		if d.Code == "graph_no_member_found" {
+			t.Fatalf("served graph_no_member_found beside an authorization denial: %+v", node.Structured.Details)
+		}
+		if d.Code == "graph_cohort_denied_by_authorization" {
+			denied = true
+		}
+	}
+	if !denied {
+		t.Fatalf("denial row lost: %+v", node.Structured.Details)
+	}
+}
+
 type projectlessTeamNode struct {
 	Structured struct {
 		Status  string `json:"status"`
@@ -129,7 +170,7 @@ type projectlessTeamNode struct {
 	} `json:"structured"`
 }
 
-func askProjectlessTeam(t *testing.T, denied bool) projectlessTeamNode {
+func askProjectlessTeam(t *testing.T, denied bool, requirements ...contextfabric.FactRequirement) projectlessTeamNode {
 	t.Helper()
 	fixture := newFreshTupleProducerFixtureWithBudget(t, "", limits.ResourceBudget{MaxItems: 30, MaxTokens: 16000, MaxBytes: 1 << 20})
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(fixture.client), contextfabric.FactRegistryOptions{})
@@ -148,7 +189,7 @@ func askProjectlessTeam(t *testing.T, denied bool) projectlessTeamNode {
 		Temporal: contextfabric.TemporalIntentCurrent,
 		Version:  contextfabric.QuestionFrameVersion,
 	}
-	dependencies.Interpreter = contextfabric.RuntimeQuestionInterpreter{Runtime: projectlessTeamModel{freshTupleModel: model}, Requirements: registry}
+	dependencies.Interpreter = contextfabric.RuntimeQuestionInterpreter{Runtime: projectlessTeamModel{freshTupleModel: model, requirements: requirements}, Requirements: registry}
 	dependencies.Graph = projectlessTeamGraph{denied: denied}
 	dependencies.Results = store
 	options := fixture.engineOptions
