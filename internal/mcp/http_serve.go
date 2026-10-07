@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"io"
 	"log/slog"
 	"net"
@@ -286,6 +287,15 @@ func serveHTTPOn(ctx context.Context, listener net.Listener, cfg *ProcessConfig,
 		cfg.diagnostics = slog.New(opts.Telemetry.LogHandler(cfg.diagnostics.Handler()))
 	}
 	logger := cfg.Diagnostics()
+	metrics, err := hostedmetrics.New(opts.Telemetry.Meter(), hostedmetrics.Vocabularies{
+		Tools: HTTPToolVocabulary(), ResultClasses: HTTPResultClassVocabulary(),
+	})
+	if err != nil {
+		_ = listener.Close()
+		logger.ErrorContext(ctx, "acr-mcp http startup failed", "failure_class", "metrics")
+		return err
+	}
+	cfg.metrics = metrics
 	opts.Telemetry.LogStart(ctx, logger)
 	handler, err := NewHTTPHandler(cfg, serveHandlerOptions(cfg, identity, opts))
 	if err != nil {
