@@ -1,6 +1,8 @@
 package contextfabric
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -113,5 +115,50 @@ func TestWalkListCutKeepsAMemberWhoseEvidenceAFindingCites(t *testing.T) {
 		if !kept {
 			t.Fatalf("the member whose evidence %q a finding or driver cites was cut", want)
 		}
+	}
+}
+
+func TestTheServedFitCutOfAWalkListKeepsTheCitedEvidenceAndAValidPayload(t *testing.T) {
+	shape := budgetTrimShape{members: 60, claims: 2, maxItems: 120, findings: 1, evidenceMembers: 5}
+	full, err, _ := budgetTrimInvestigate(t, shape)
+	if err != nil {
+		t.Fatalf("uncut probe: %v", err)
+	}
+	measured, err := contractsv1.MeasureContextFabricResponse(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := &Engine{}
+	budget := ResponseBudget{MaxItems: 1000, MaxSerializedBytes: measured.Bytes - measured.Bytes/5}
+	served, err := engine.finalizeServedFitting(context.Background(), storage.Principal{OrgID: "org-1"}, BudgetAssertDecisive, full, budget)
+	if err != nil {
+		t.Fatalf("served fit: %v", err)
+	}
+	if len(served.Cohort.Members) >= len(full.Cohort.Members) {
+		t.Fatalf("members %d of %d: the served fit did not cut", len(served.Cohort.Members), len(full.Cohort.Members))
+	}
+	if err := ValidateWorkItemTuplePayload(served, storage.Principal{OrgID: "org-1"}); err != nil {
+		t.Fatalf("served payload invalid after the served-fit cut: %v", err)
+	}
+}
+
+func TestAWalkListWhoseEveryMemberIsCitedAndOverrunsTheCeilingIsRefusedNotServedOver(t *testing.T) {
+	shape := budgetTrimShape{members: 60, claims: 2, maxItems: 120, findings: 1, evidenceMembers: 60}
+	full, err, _ := budgetTrimInvestigate(t, shape)
+	if err != nil {
+		t.Fatalf("uncut probe: %v", err)
+	}
+	measured, err := contractsv1.MeasureContextFabricResponse(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape.maxBytes = measured.Bytes - measured.Bytes/5
+	_, err = func() (InvestigationResult, error) { r, e, _ := budgetTrimInvestigate(t, shape); return r, e }()
+	var refusal AnswerBudgetRefusal
+	if !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+		t.Fatalf("err = %v, want a typed bytes budget refusal", err)
+	}
+	if _, fired := WorkItemTupleRuleFiredBy(err); fired {
+		t.Fatalf("the refusal carries a payload rule: %v", err)
 	}
 }
