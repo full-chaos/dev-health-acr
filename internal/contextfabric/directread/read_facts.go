@@ -745,7 +745,16 @@ func serveTable(name string, declaration contextfabric.FactFieldDeclaration, val
 	for _, column := range declaration.Columns {
 		types[column.Name] = column.Type
 	}
-	for _, row := range value.Rows {
+	sourceRows := value.Rows
+	if table.Shape == string(contextfabric.FactTableTimeSeries) && len(table.Key) == 1 && plan.time.Axis == contextfabric.TemporalRange && plan.time.Start != nil && plan.time.End != nil && table.Grain != string(contextfabric.GrainInstant) {
+		sourceRows = nil
+		for _, row := range value.Rows {
+			if instantInWindow(row, table.Key[0], *plan.time.Start, *plan.time.End) {
+				sourceRows = append(sourceRows, row)
+			}
+		}
+	}
+	for _, row := range sourceRows {
 		cells := make([]any, len(table.Columns))
 		for index, column := range table.Columns {
 			cell, ok := row.Fields[column]
@@ -764,9 +773,13 @@ func serveTable(name string, declaration contextfabric.FactFieldDeclaration, val
 	}
 	if table.Shape == string(contextfabric.FactTableTimeSeries) && len(table.Key) == 1 {
 		instants := map[string]bool{}
-		for _, row := range value.Rows {
+		measured := map[string]bool{}
+		for _, row := range sourceRows {
 			if cell, ok := row.Fields[table.Key[0]]; ok && cell.String != nil {
 				instants[*cell.String] = true
+				if day, ok := seriesKeyDay(*cell.String); ok && rowCarriesValue(row, table.Measures) {
+					measured[day.Format("2006-01-02")] = true
+				}
 			}
 		}
 		sorted := make([]string, 0, len(instants))
@@ -783,16 +796,64 @@ func serveTable(name string, declaration contextfabric.FactFieldDeclaration, val
 			for day := plan.time.Start.UTC().Truncate(24 * time.Hour); day.Before(*plan.time.End); day = day.Add(24 * time.Hour) {
 				expected++
 				label := day.Format("2006-01-02")
-				if !instants[label] && !instants[day.Format(time.RFC3339)] {
+				if !measured[label] {
 					missing = append(missing, label)
 				}
 			}
-			returned := len(sorted)
+			returned := expected - len(missing)
 			table.ExpectedPoints, table.ReturnedPoints = &expected, &returned
 			table.MissingInstants = missing
 		}
 	}
 	return table
+}
+
+// seriesKeyDay maps a series key (a calendar day or an RFC3339 instant, any
+// offset) to its UTC day. It is the one place a key is parsed.
+func seriesKeyDay(key string) (time.Time, bool) {
+	instant, err := time.Parse("2006-01-02", key)
+	if err != nil {
+		instant, err = time.Parse(time.RFC3339, key)
+		if err != nil {
+			return time.Time{}, false
+		}
+	}
+	return instant.UTC().Truncate(24 * time.Hour), true
+}
+
+// instantInWindow reports whether a series row's key falls in the requested
+// range, on the same UTC day boundaries the expected-points walk uses. A key
+// that does not parse is kept.
+func instantInWindow(row contextfabric.FactValueRow, key string, start, end time.Time) bool {
+	cell, ok := row.Fields[key]
+	if !ok || cell.String == nil {
+		return true
+	}
+	day, ok := seriesKeyDay(*cell.String)
+	if !ok {
+		return true
+	}
+	return !day.Before(start.UTC().Truncate(24*time.Hour)) && day.Before(end)
+}
+
+// rowCarriesValue reports whether a series row holds at least one non-null
+// declared measure. A day whose row exists but carries none (an observation
+// such as severity does not count) is a missing day, not a returned one. A
+// table that declares no measures keeps the row-presence rule.
+func rowCarriesValue(row contextfabric.FactValueRow, names []string) bool {
+	if len(names) == 0 {
+		return true
+	}
+	for _, name := range names {
+		cell := row.Fields[name]
+		if cell.Number != nil && (math.IsNaN(*cell.Number) || math.IsInf(*cell.Number, 0)) {
+			continue
+		}
+		if cell.String != nil || cell.Integer != nil || cell.Number != nil || cell.Boolean != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // wireScalar renders a leaf value. Integers go as strings so no JSON number
