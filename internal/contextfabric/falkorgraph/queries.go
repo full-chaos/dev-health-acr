@@ -935,6 +935,20 @@ const (
 type edgeFilterCounts struct {
 	Authz          int
 	TemporalWindow int
+	// ReachDenied names the subjects an anchor's walk reached only through an
+	// edge or endpoint authorization denied, keyed by subject uuid. A subject
+	// the walk also reached through an admitted edge is not in it.
+	ReachDenied map[string]struct{}
+}
+
+// mergeReachDenied folds another walk's denied reach into c.
+func (c *edgeFilterCounts) mergeReachDenied(other map[string]struct{}) {
+	for uuid := range other {
+		if c.ReachDenied == nil {
+			c.ReachDenied = make(map[string]struct{})
+		}
+		c.ReachDenied[uuid] = struct{}{}
+	}
 }
 
 // add folds one resolveEdge call's (resolution, reason) outcome into c.
@@ -1152,6 +1166,7 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	var filterCounts edgeFilterCounts
 	frontier := []string{originUUID}
 	truncated := false
+	var deniedReach map[string]struct{}
 	for hop := 0; hop < maxHops && len(frontier) > 0 && (collectLimit <= 0 || len(edges) < collectLimit); hop++ {
 		var hopCandidates []graphrank.CandidateEdge
 		for _, uuid := range frontier {
@@ -1182,6 +1197,17 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 			}
 			resolved, resolution, reason, resolveErr := a.resolveEdge(ctx, key, orgID, principal, scope, ce, temporal)
 			filterCounts.add(resolution, reason)
+			if resolution == edgeFiltered && reason == edgeFilterReasonAuthz {
+				for _, endpoint := range []string{ce.SourceNodeUUID, ce.TargetNodeUUID} {
+					if endpoint == originUUID {
+						continue
+					}
+					if deniedReach == nil {
+						deniedReach = make(map[string]struct{})
+					}
+					deniedReach[endpoint] = struct{}{}
+				}
+			}
 			switch resolution {
 			case edgeLookupFailed:
 				failedLookups++
@@ -1284,6 +1310,12 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	if len(frontier) > 0 && collectLimit > 0 && len(edges) >= collectLimit {
 		truncated = true
 	}
+	for uuid := range deniedReach {
+		if _, reached := visited[uuid]; reached {
+			delete(deniedReach, uuid)
+		}
+	}
+	filterCounts.ReachDenied = deniedReach
 	sortCandidateNodesBySubjectKey(nodes)
 	return nodes, edges, failedLookups, filterCounts, truncated, nil
 }
