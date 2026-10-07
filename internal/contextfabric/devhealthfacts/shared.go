@@ -470,7 +470,12 @@ import (
 // did read a fact kind, so a project-less team asked with a planned fact read
 // is served with it too. A candidate saved before v89 holds no such row and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v89"
+//
+// v89 -> v90: the vendored ops registry moves to ops 98322341: the served home
+// document selects more fields and the investment operations gain a person
+// variable path. A candidate saved before v90 holds the old shape and must not
+// be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v90"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
