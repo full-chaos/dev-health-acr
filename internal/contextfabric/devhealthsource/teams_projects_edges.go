@@ -402,10 +402,17 @@ func supersededColumnsSubquery(ingest bool) string {
 // supersedes both retract every open column edge of the work item, whichever
 // project it names. A resolved column row needs nothing here: the sink keeps
 // only the edge it asserts. A pull request can belong to several boards, so
-// only work items are covered. extra rides along with the retraction (the
-// retraction of the named edge) and replaces the bare progress row.
-func columnProjectRetractions(subjectKind, repoID, subjectID, source string, observedAt time.Time, sortKey string, extra ...candidate) ([]candidate, error) {
-	out := extra
+// only work items are covered. One candidate per row, so the page cut counts
+// rows as before.
+func columnRetractionReason(source string) string {
+	if source == columnSupersededSource {
+		return "superseded_by_transition_history"
+	}
+	return "column_project_unresolved"
+}
+
+func columnProjectRetractions(subjectKind, repoID, subjectID, source string, observedAt time.Time, sortKey string) ([]candidate, error) {
+	var out []candidate
 	if subjectKind == "work_item" && (source == "work_item_column" || source == columnSupersededSource) {
 		canonicalID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, subjectID}, nil)
 		if err != nil {
@@ -415,7 +422,7 @@ func columnProjectRetractions(subjectKind, repoID, subjectID, source string, obs
 			tombstone := contractsv1.ContextFabricProjectionTombstone{
 				Kind:          contextfabric.TombstoneKindColumnProjectEdges,
 				CanonicalID:   canonicalID,
-				Reason:        "column_project_changed",
+				Reason:        columnRetractionReason(source),
 				EffectiveAt:   observedAt,
 				SourceVersion: TeamsProjectsSourceVersion,
 			}
@@ -643,17 +650,9 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 		case "work_item_column":
 			// No interval: a plain canonical-column passthrough, presence only.
 		case columnSupersededSource:
-			// The subject has transition history, so its column project no
-			// longer owns it: retract the column-arm edge. A no-op for an edge
-			// never projected.
-			tombstone := contractsv1.ContextFabricProjectionTombstone{
-				Kind:          "relationship",
-				CanonicalID:   projectMembershipRelationshipID(fromSubject.CanonicalID, projectCanonicalID, ""),
-				Reason:        "superseded_by_transition_history",
-				EffectiveAt:   observedAt,
-				SourceVersion: TeamsProjectsSourceVersion,
-			}
-			return columnProjectRetractions(subjectKind, repoID, subjectID, source, observedAt, rowSortKey, candidate{observedAt: observedAt, sortKey: rowSortKey, tombstone: &tombstone})
+			// The subject has transition history, so no column project owns it
+			// any more: retract every open column-arm edge of the work item.
+			return columnProjectRetractions(subjectKind, repoID, subjectID, source, observedAt, rowSortKey)
 		default:
 			return nil, &ProducerRejection{Reason: fmt.Sprintf("project_membership_presence returned unknown source %q", source)}
 		}

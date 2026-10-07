@@ -68,7 +68,7 @@ func TestLiveColumnProjectEdgesKeepOneOpenEdgePerWorkItem(t *testing.T) {
 		return contextfabric.ProjectionTombstone{Kind: contextfabric.TombstoneKindColumnProjectEdges, CanonicalID: wi.CanonicalID, Reason: "column_project_changed", EffectiveAt: observed, SourceVersion: "v1"}
 	}
 
-	apply("batch-1", t0, []contextfabric.RelationshipProjection{
+	apply("batch-0001", t0, []contextfabric.RelationshipProjection{
 		columnEdge("rel-w1-A", wi, projA, t0, nil),
 		columnEdge("rel-w1-A-interval", wi, projA, t0, &from),
 		columnEdge("rel-pr-A", pr, projA, t0, nil),
@@ -79,7 +79,7 @@ func TestLiveColumnProjectEdgesKeepOneOpenEdgePerWorkItem(t *testing.T) {
 	}
 
 	t1 := t0.Add(time.Minute)
-	apply("batch-2", t1, []contextfabric.RelationshipProjection{columnEdge("rel-w1-B", wi, projB, t1, nil)}, []contextfabric.ProjectionTombstone{})
+	apply("batch-0002", t1, []contextfabric.RelationshipProjection{columnEdge("rel-w1-B", wi, projB, t1, nil)}, []contextfabric.ProjectionTombstone{})
 	if got := openEdgeIDs(t, ctx, adapter, key, org, wi); fmt.Sprint(got) != "[rel-w1-B]" {
 		t.Fatalf("column project changed A to B: open edges %v, want only rel-w1-B", got)
 	}
@@ -97,14 +97,14 @@ func TestLiveColumnProjectEdgesKeepOneOpenEdgePerWorkItem(t *testing.T) {
 	}
 
 	// A stored edge newer than the row that retires it stays.
-	apply("batch-3", t1, []contextfabric.RelationshipProjection{columnEdge("rel-w1-A", wi, projA, t1.Add(time.Hour), nil)}, []contextfabric.ProjectionTombstone{})
-	apply("batch-4", t1, []contextfabric.RelationshipProjection{columnEdge("rel-w1-B", wi, projB, t1, nil)}, []contextfabric.ProjectionTombstone{})
+	apply("batch-0003", t1, []contextfabric.RelationshipProjection{columnEdge("rel-w1-A", wi, projA, t1.Add(time.Hour), nil)}, []contextfabric.ProjectionTombstone{})
+	apply("batch-0004", t1, []contextfabric.RelationshipProjection{columnEdge("rel-w1-B", wi, projB, t1, nil)}, []contextfabric.ProjectionTombstone{})
 	if got := openEdgeIDs(t, ctx, adapter, key, org, wi); fmt.Sprint(got) != "[rel-w1-A rel-w1-B]" {
 		t.Fatalf("an edge observed after the retiring row was deleted: %v", got)
 	}
 
 	t2 := t1.Add(2 * time.Hour)
-	apply("batch-5", t2, []contextfabric.RelationshipProjection{}, []contextfabric.ProjectionTombstone{retract(t2)})
+	apply("batch-0005", t2, []contextfabric.RelationshipProjection{}, []contextfabric.ProjectionTombstone{retract(t2)})
 	if got := openEdgeIDs(t, ctx, adapter, key, org, wi); len(got) != 0 {
 		t.Fatalf("column project unresolved or superseded: open edges %v, want none", got)
 	}
