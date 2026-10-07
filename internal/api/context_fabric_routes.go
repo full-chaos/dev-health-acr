@@ -77,8 +77,10 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			return
 		}
 		investigateCtx, collectedSynthesisInput := contextfabric.WithSynthesisInputCollector(r.Context())
+		investigationStarted := a.now()
 		result, err := investigateRecovered(investigateCtx, investigator, principal, request)
 		if err != nil {
+			a.metrics.InvestigationLatency(r.Context(), "error", a.now().Sub(investigationStarted))
 			if request.SuppliedSynthesis != nil && errors.Is(err, contextfabric.ErrSynthesisRejected) {
 				a.writeSuppliedSynthesisRejection(w, r, err)
 				return
@@ -86,6 +88,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			a.writeContextFabricError(w, r, err)
 			return
 		}
+		a.metrics.InvestigationLatency(r.Context(), string(result.Status), a.now().Sub(investigationStarted))
 		maximumBytes := min(int64(a.config.MaxSerializedBytes), int64(request.Options.MaxSerializedBytes))
 		itemCounts := contextFabricResultItemCounts(result)
 		encoded, measuredBytes, sizeErr := marshalContextFabricResponse(result)
@@ -707,8 +710,12 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	if errors.Is(err, contextfabric.ErrInvalidResult) {
 		fields = append(fields, "validation_rule", contextFabricValidationRule(err))
 	}
+	if classification == contextFabricClassBudgetRefusal {
+		a.metrics.BudgetRefusal(r.Context())
+	}
 	var factReadAbort *contextfabric.FactReadAbortDetail
 	if errors.As(err, &factReadAbort) {
+		a.metrics.FactReadAbort(r.Context(), factReadAbortCause(factReadAbort.Err))
 		fields = append(fields,
 			"fact_read_cause", factReadAbortCause(factReadAbort.Err),
 			"fact_read_requirement_count", factReadAbort.RequirementCount,

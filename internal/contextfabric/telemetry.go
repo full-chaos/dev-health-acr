@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -47,7 +48,28 @@ func requestIDLogAttrs(ctx context.Context) []any {
 // diagnosable from this one stream; see RecordAnswerReuse's doc comment
 // on EngineTelemetry.
 type SlogEngineTelemetry struct {
-	logger *slog.Logger
+	logger  *slog.Logger
+	metrics *hostedmetrics.Instruments
+}
+
+// WithMetrics returns t that also counts, at the site of each certified line
+// below, the outcomes it names: answer reuse (RecordAnswerReuse) and the
+// requirement outcome rows of the served investigation
+// (RecordCompletenessAuthority). A nil instruments leaves the sink log-only.
+func (t SlogEngineTelemetry) WithMetrics(metrics *hostedmetrics.Instruments) SlogEngineTelemetry {
+	t.metrics = metrics
+	return t
+}
+
+// AnswerReuseOutcomeVocabulary lists every reuse outcome the line records.
+func AnswerReuseOutcomeVocabulary() []string {
+	return []string{
+		string(AnswerReuseHit), string(AnswerReuseMissNoCandidate), string(AnswerReuseMissAuthorization),
+		string(AnswerReuseMissEvidenceContainment), string(AnswerReuseMissStaleGraphEpoch),
+		string(AnswerReuseMissGraphNotProjected), string(AnswerReuseHitDegraded),
+		string(AnswerReuseMissRecheckUnavailable), string(AnswerReuseMissDegradeInvalid),
+		string(AnswerReuseMissCountScope), string(AnswerReuseMissHintNotCommitted),
+	}
 }
 
 // NewSlogEngineTelemetry builds a SlogEngineTelemetry. A nil logger falls
@@ -142,6 +164,7 @@ func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal st
 		"ownership_routing_version", SanitizeLogAttr(ownershipRoutingVersion),
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)
+	t.metrics.AnswerReuse(ctx, string(outcome))
 }
 
 // RecordAnswerReuseBypass (CHAOS-4998) logs at Info under its OWN message,
@@ -1266,6 +1289,9 @@ func (t SlogEngineTelemetry) RecordCompletenessAuthority(ctx context.Context, pr
 	args := CompletenessAuthorityLogArgs(event, principal.OrgID)
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric completeness authority", args...)
+	for index, token := range contractsv1.ContextFabricPlanRequirementOutcomeVocabulary() {
+		t.metrics.RequirementOutcome(ctx, string(token), event.OutcomeRowsByKind[index])
+	}
 }
 
 // RecordFrameValidation (CHAOS-4452 stage 2, §13.6) logs at Info, once per

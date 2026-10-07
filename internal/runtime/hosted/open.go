@@ -404,7 +404,7 @@ func contextFabricEngineTelemetry(options Options) contextfabric.EngineTelemetry
 	if options.EngineTelemetry != nil {
 		return options.EngineTelemetry
 	}
-	return contextfabric.NewSlogEngineTelemetry(options.Logger)
+	return contextfabric.NewSlogEngineTelemetry(options.Logger).WithMetrics(options.Metrics)
 }
 
 // buildGraphLifecycleResolver returns the CHAOS-3898 S2a-2 read-side
