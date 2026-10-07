@@ -475,7 +475,12 @@ import (
 // document selects more fields and the investment operations gain a person
 // variable path. A candidate saved before v90 holds the old shape and must not
 // be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v91"
+//
+// v91 -> v93: a team named as the scope anchor that resolution left
+// uncommitted is served as a clarification naming its candidates, not as an
+// organization-level project cohort. A candidate saved before v93 may hold that
+// cohort answer and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v93"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
