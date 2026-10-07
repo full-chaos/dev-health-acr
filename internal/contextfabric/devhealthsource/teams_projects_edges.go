@@ -385,10 +385,9 @@ func supersededColumnsSubquery(ingest bool) string {
     greatest(w.updated_at, h.latest_occurred) AS observed_at, greatest(` + workItemStamp + `, h.latest_stamp) AS ingest_at
   FROM (SELECT * FROM work_items FINAL WHERE org_id = {org_id:String}) AS w
   INNER JOIN (
-    SELECT org_id, repo_id, subject_id, max(occurred_at) AS latest_occurred, max(` + historyStamp + `) AS latest_stamp
+    SELECT org_id, repo_id, subject_id, occurred_at AS latest_occurred, ` + historyStamp + ` AS latest_stamp
     FROM ` + devhealthschema.DedupedMembershipTransitions(ingest) + `
     WHERE subject_kind = 'work_item'
-    GROUP BY org_id, repo_id, subject_id
   ) AS h ON h.org_id = w.org_id AND h.repo_id = w.repo_id AND h.subject_id = w.work_item_id
   WHERE w.org_id = {org_id:String} AND w.project_id != ''
     AND w.provider != 'gitlab'
