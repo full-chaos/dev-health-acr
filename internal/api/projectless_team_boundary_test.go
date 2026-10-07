@@ -246,3 +246,10 @@ func TestAFactReadAbortLogCarriesNoErrorText(t *testing.T) {
 		t.Fatalf("abort shape missing from the log: %v", entry)
 	}
 }
+
+func TestAPlannedFactReadOverADeniedCohortIsNotServedComplete(t *testing.T) {
+	node := askProjectlessTeam(t, true, contextfabric.FactRequirement{Kind: contextfabric.FactMembership})
+	if node.Structured.Status != "partial" {
+		t.Fatalf("status = %q, want partial over a denied cohort: %+v", node.Structured.Status, node.Structured.Details)
+	}
+}

@@ -189,6 +189,22 @@ func applyEmptyMemberSearchStatusFloor(result *InvestigationResult) {
 	}
 }
 
+// applyDeniedCohortStatusFloor floors a complete answer whose coverage carries
+// the degrading graph_cohort_denied_by_authorization row. A requested member set
+// that authorization cut cannot be a complete answer, whatever shape the plan
+// had.
+func applyDeniedCohortStatusFloor(result *InvestigationResult) {
+	if result == nil || result.Status != InvestigationComplete || result.RefusalBasis != "" {
+		return
+	}
+	for _, detail := range result.Coverage.Details {
+		if detail.Degrading && detail.Code == contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization {
+			floorNoMatchTo(result, InvestigationPartial)
+			return
+		}
+	}
+}
+
 // populationTruncatedNoMemberRowHolds reports whether an assembled-result
 // outcome row says the population was truncated and no member of it was served.
 func populationTruncatedNoMemberRowHolds(result InvestigationResult) bool {
@@ -214,6 +230,7 @@ func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
 	before := result.Status
 	applyPopulationOutcomeStatusFloor(&result)
 	applyEmptyMemberSearchStatusFloor(&result)
+	applyDeniedCohortStatusFloor(&result)
 	if result.Status != before {
 		result.Completeness = ComputeAnswerCompleteness(result)
 	}
