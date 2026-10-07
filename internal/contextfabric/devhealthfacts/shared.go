@@ -480,7 +480,11 @@ import (
 // uncommitted is served as a clarification naming its candidates, not as an
 // organization-level project cohort. A candidate saved before v93 may hold that
 // cohort answer and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v93"
+//
+// v93 -> v94: a cohort cut by authorization, wholly or in part, is served
+// partial with one count row. A candidate saved before v94 holds a complete
+// answer over a cut cohort and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v94"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
