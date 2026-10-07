@@ -1407,7 +1407,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// manufacture the row for a teams question (codex round-1 P2). See
 	// graphrank.DiscoveredCohort's own doc comment.
 	//
-	// Also requires ranExhaustiveCensus && !exactNameTruncated (codex
+	// The exhaustive-census gate below applies to an EMPTY cohort only (codex
 	// round-2 P2): ShapeExplicitCohort and a discovered_cohort request with
 	// an already-committed subject never run the org-wide census at all --
 	// their bounded fulltext/hopWalk candidates can contain one denied
@@ -1426,7 +1426,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// cannot show that the denied members were all there was.
 	cohortKindCensusedExhaustively := (ranExhaustiveCensus && !exactNameTruncated && exactNameCensusCoversKind(declaredCohortKind)) ||
 		(kindCensusRan && !kindCensusTruncated)
-	cohortCutByAuthz := cohortKindScopedAuthzDropped > 0 && cohortKindCensusedExhaustively
+	cohortCutByAuthz := cohortKindScopedAuthzDropped > 0 && (cohort != nil || cohortKindCensusedExhaustively)
 	if a.config.Telemetry != nil {
 		if edgeFilters.Authz > 0 || edgeFilters.TemporalWindow > 0 || admission.DroppedSelfLoopCount > 0 {
 			a.config.Telemetry.RecordEdgesFilteredByReason(ctx, principal.OrgID, edgeFilters.Authz, edgeFilters.TemporalWindow, admission.DroppedSelfLoopCount)

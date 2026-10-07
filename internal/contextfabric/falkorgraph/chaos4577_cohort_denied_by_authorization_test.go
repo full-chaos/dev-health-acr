@@ -384,3 +384,39 @@ func TestDiscoverContextDoesNotSignalCohortDeniedWhenExactNameCensusTruncated(t 
 		t.Fatalf("cohortDeniedByAuthorization telemetry = %d, want 0 -- the census was truncated", telemetry.cohortDeniedByAuthorization)
 	}
 }
+
+// An explicit cohort never runs the exhaustive census, so one denied hit
+// cannot prove the whole named cohort was denied; but a member that was
+// found and cut is a cut member, and the count row is served beside the
+// surviving member.
+func TestDiscoverContextExplicitCohortPartlyCutByAuthorizationIsPartial(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			served := &node{Properties: map[string]interface{}{propKind: "team", propCanonicalID: "team_served", propLabel: "Served"}}
+			served.Properties["authorization_repositories"] = []string{"full-chaos/dev-health-acr"}
+			denied := &node{Properties: map[string]interface{}{propKind: "team", propCanonicalID: "team_denied", propLabel: "Denied"}}
+			denied.Properties["authorization_repositories"] = []string{"acr-context-fabric:no-team-repository-ownership"}
+			return []row{{"node": served, "score": 2.0}, {"node": denied, "score": 1.0}}, nil
+		case strings.Contains(cypher, "$kinds"):
+			t.Fatal("exact-name census must not run for an explicit cohort with a resolved scope anchor")
+			return nil, nil
+		default:
+			return nil, nil
+		}
+	}}
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+	result, err := adapter.DiscoverContext(context.Background(), principal, cohortDiscoveryRequestWithScopeAnchor(contextfabric.ShapeExplicitCohort, true))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != 1 {
+		t.Fatalf("Cohort = %#v, want exactly one surviving member", result.Cohort)
+	}
+	if !result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = false, want true: a named member was cut by authorization")
+	}
+	assertCohortDeniedRow(t, result.Coverage, 1, "1 group member excluded by authorization")
+}
