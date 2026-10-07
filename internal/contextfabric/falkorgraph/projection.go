@@ -107,9 +107,15 @@ func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.
 		}
 	}
 	for _, tombstone := range batch.Tombstones {
+		if tombstone.Kind == contextfabric.TombstoneKindColumnProjectEdges {
+			continue
+		}
 		if err := a.applyTombstone(ctx, key, batch.OrgID, tombstone); err != nil {
 			return contextfabric.ProjectionReceipt{}, err
 		}
+	}
+	if err := a.retractColumnProjectEdges(ctx, key, batch); err != nil {
+		return contextfabric.ProjectionReceipt{}, err
 	}
 	// CHAOS-3778: attach vectors AFTER every node write in this batch, so a
 	// vector only ever lands on a node that already carries the search text
@@ -865,4 +871,38 @@ func classifyProjectionError(operation string, err error) error {
 		return err
 	}
 	return safeDependencyError(operation, err)
+}
+
+// retractColumnProjectEdges keeps one open column-arm BELONGS_TO_PROJECT edge
+// per work item. A work item's edge id names its project, so a column project
+// that changes writes a new id and leaves the old edge open. Two statements per
+// batch, whatever its size: the work items whose column edge the batch
+// asserts lose every other open column edge, and the work items the batch
+// retracts (a column project that is unresolved or ambiguous, or history that
+// supersedes the column) lose all of them. A stored edge newer than the row
+// that retires it stays, as for every tombstone.
+func (a *Adapter) retractColumnProjectEdges(ctx context.Context, key string, batch contextfabric.ProjectionBatch) error {
+	var keeps, drops []interface{}
+	for _, relationship := range batch.Relationships {
+		if relationship.Type == contractsv1.ContextFabricRelationshipBelongsToProject && relationship.ValidFrom == nil && relationship.From.Kind == contextfabric.SubjectWorkItem {
+			keeps = append(keeps, map[string]interface{}{"sid": relationship.From.CanonicalID, "rid": relationship.RelationshipID, "ns": nsTimestamp(relationship.ObservedAt)})
+		}
+	}
+	for _, tombstone := range batch.Tombstones {
+		if tombstone.Kind == contextfabric.TombstoneKindColumnProjectEdges {
+			drops = append(drops, map[string]interface{}{"sid": tombstone.CanonicalID, "rid": "", "ns": nsTimestamp(tombstone.EffectiveAt)})
+		}
+	}
+	statement := fmt.Sprintf("UNWIND $rows AS row MATCH (a:%s {%s:$org, %s:$kind, %s:row.sid})-[r:%s]->() WHERE r.%s = $rel AND r.%s IS NULL AND r.%s <> row.rid AND (r.%s IS NULL OR r.%s <= row.ns) DELETE r",
+		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, propRelationType, propValidFromNs, propRelationshipID, propObservedAtNs, propObservedAtNs)
+	for _, rows := range [][]interface{}{keeps, drops} {
+		if len(rows) == 0 {
+			continue
+		}
+		params := map[string]interface{}{"rows": rows, "org": batch.OrgID, "kind": string(contextfabric.SubjectWorkItem), "rel": graphrank.NormalizeRelation(string(contractsv1.ContextFabricRelationshipBelongsToProject))}
+		if _, err := a.api.query(ctx, key, statement, params, false); err != nil {
+			return classifyProjectionError("retract column project edges", err)
+		}
+	}
+	return nil
 }

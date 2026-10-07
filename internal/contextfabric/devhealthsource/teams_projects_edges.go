@@ -396,6 +396,38 @@ func supersededColumnsSubquery(ingest bool) string {
 )`
 }
 
+// columnProjectRetractions is the one guard that keeps a work item's open
+// column-arm edges to the project its column names now: a column row whose
+// project resolves to nothing (or to several) and a work item that history
+// supersedes both retract every open column edge of the work item, whichever
+// project it names. A resolved column row needs nothing here: the sink keeps
+// only the edge it asserts. A pull request can belong to several boards, so
+// only work items are covered. extra rides along with the retraction (the
+// retraction of the named edge) and replaces the bare progress row.
+func columnProjectRetractions(subjectKind, repoID, subjectID, source string, observedAt time.Time, sortKey string, extra ...candidate) ([]candidate, error) {
+	out := extra
+	if subjectKind == "work_item" && (source == "work_item_column" || source == columnSupersededSource) {
+		canonicalID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, subjectID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		if !omitted {
+			tombstone := contractsv1.ContextFabricProjectionTombstone{
+				Kind:          contextfabric.TombstoneKindColumnProjectEdges,
+				CanonicalID:   canonicalID,
+				Reason:        "column_project_changed",
+				EffectiveAt:   observedAt,
+				SourceVersion: TeamsProjectsSourceVersion,
+			}
+			out = append(out, candidate{observedAt: observedAt, sortKey: sortKey, tombstone: &tombstone})
+		}
+	}
+	if len(out) == 0 {
+		out = []candidate{progressCandidate(observedAt, sortKey)}
+	}
+	return out, nil
+}
+
 func subjectProjectMembershipsQuery(telemetry *presenceTelemetryLedger, ingest bool) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
 	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 		return querySubjectProjectMemberships(ctx, client, orgID, cursor, limit, telemetry, ingest)
@@ -491,17 +523,15 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 		}
 		switch {
 		case keyResolutionCount == 0:
-			// A superseded column row that resolves to no project never
-			// projected an edge, so there is nothing to retract.
 			if source != columnSupersededSource {
 				telemetry.recordUnresolved(provider, projectID)
 			}
-			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+			return columnProjectRetractions(subjectKind, repoID, subjectID, source, observedAt, rowSortKey)
 		case keyResolutionCount > 1:
 			if source != columnSupersededSource {
 				telemetry.recordAmbiguous(provider, projectID)
 			}
-			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+			return columnProjectRetractions(subjectKind, repoID, subjectID, source, observedAt, rowSortKey)
 		}
 		// The canonical id is always derived from the JOINED project row's
 		// own (provider, id) -- resolvedProjectID (p.id) -- never from
@@ -623,7 +653,7 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 				EffectiveAt:   observedAt,
 				SourceVersion: TeamsProjectsSourceVersion,
 			}
-			return []candidate{{observedAt: observedAt, sortKey: rowSortKey, tombstone: &tombstone}}, nil
+			return columnProjectRetractions(subjectKind, repoID, subjectID, source, observedAt, rowSortKey, candidate{observedAt: observedAt, sortKey: rowSortKey, tombstone: &tombstone})
 		default:
 			return nil, &ProducerRejection{Reason: fmt.Sprintf("project_membership_presence returned unknown source %q", source)}
 		}
