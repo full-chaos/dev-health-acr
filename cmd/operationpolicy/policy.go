@@ -556,6 +556,7 @@ func notServed() map[string]notServedDecl {
 		"releaseImpact":                     {noScope},
 		"coverageBaselines":                 {noScope},
 		"coverageScopeBaseline":             {noScope},
+		"investmentEvidenceQuality":         {noScope},
 		"testOpsCoverage":                   {noScope},
 		"testopsJobFailures":                {noScope},
 		"testOpsPipeline":                   {noScope},

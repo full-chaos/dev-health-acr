@@ -38,6 +38,8 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/metric"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -336,6 +338,15 @@ func (e *Exporter) ForceFlush(ctx context.Context) error {
 // enabled reports whether e holds live providers.
 func (e *Exporter) enabled() bool {
 	return e != nil && e.traces != nil
+}
+
+// Meter returns a meter on this Exporter's own MeterProvider. A disabled or
+// nil Exporter returns a no-op meter.
+func (e *Exporter) Meter() metric.Meter {
+	if !e.enabled() {
+		return metricnoop.NewMeterProvider().Meter(instrumentationScope)
+	}
+	return e.metrics.Meter(instrumentationScope)
 }
 
 // Tracer returns a tracer on this Exporter's own TracerProvider, for work

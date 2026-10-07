@@ -12,6 +12,10 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
 	"github.com/full-chaos/dev-health-acr/internal/version"
@@ -95,8 +99,16 @@ func serve(args []string) error {
 	}, cfg.SafeAttributes()...)...)
 	exporter.LogStart(ctx, logger)
 
+	metrics, err := hostedmetrics.New(exporter.Meter(), hostedmetrics.Vocabularies{
+		Tools:               eventspec.MCPHTTPToolVocabulary(),
+		ReuseOutcomes:       contextfabric.AnswerReuseOutcomeVocabulary(),
+		RequirementOutcomes: requirementOutcomeVocabulary(),
+	})
+	if err != nil {
+		return fmt.Errorf("initialize metrics: %w", err)
+	}
 	server, closeRuntime, err := prepareServer(ctx, serverBuildRequest{
-		config: cfg, logger: logger, serviceVersion: info.Version,
+		config: cfg, logger: logger, serviceVersion: info.Version, metrics: metrics,
 		wrapHandler: exporter.HTTPHandler,
 		openRuntime: func(ctx context.Context, options hosted.Options) (*hosted.Runtime, error) {
 			return hosted.Open(ctx, cfg, options)
@@ -122,4 +134,13 @@ func shutdownExporter(exporter *otelexport.Exporter) {
 	if err := exporter.Shutdown(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "acr-api: otel export shutdown incomplete:", err)
 	}
+}
+
+func requirementOutcomeVocabulary() []string {
+	members := contractsv1.ContextFabricPlanRequirementOutcomeVocabulary()
+	values := make([]string, 0, len(members))
+	for _, member := range members {
+		values = append(values, string(member))
+	}
+	return values
 }

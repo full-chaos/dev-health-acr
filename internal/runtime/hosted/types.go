@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgclarification"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgstructureselection"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -85,6 +86,10 @@ type Options struct {
 	// value here changes nothing (the SlogEngineTelemetry default still
 	// wires exactly as before).
 	EngineTelemetry contextfabric.EngineTelemetry
+	// Metrics, when set, makes the default engine telemetry also count the
+	// outcomes it certifies (answer reuse, requirement outcome rows). nil
+	// leaves the sink log-only.
+	Metrics *hostedmetrics.Instruments
 }
 
 type Runtime struct {

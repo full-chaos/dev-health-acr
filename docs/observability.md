@@ -42,20 +42,29 @@ diagnosed without expanding the service's metric cardinality.
 
 ## Metric mapping
 
-The hosting telemetry backend should derive these metrics from snapshots:
+Each process exports these OpenTelemetry instruments on its own meter provider
+(`OTEL_ENABLED=true`). Every label is a closed vocabulary; a value outside its
+vocabulary is recorded as `other`. Each instrument is recorded at the site of the
+log line that already certifies the outcome, never on a second path.
 
-| Metric | Type | Labels |
-| --- | --- | --- |
-| `acr_observations_total` | counter | `kind`, `operation`, `http_status_class`, `outcome`, `packet_status`, `compatibility`, `source_coverage`, `store_query_class`, `source_fallback`, `query_version`, `ranking_version`, `denial_class` |
-| `acr_observation_duration_seconds` | histogram | same bounded labels as `acr_observations_total` |
-| `acr_packet_size_bytes` | histogram | `packet_status` |
-| `acr_packet_tokens` | histogram | `packet_status` |
-| `acr_packet_items` | histogram | `packet_status` |
-| `acr_packet_empty_total` | counter | none; derived from `packet_status=empty` |
-| `acr_packet_source_state_total` | counter | `packet_status`, `source_coverage`; values come from bounded stale/unavailable counts |
-| `acr_packet_version_mismatch_total` | counter | `compatibility` |
-| `acr_store_query_timeout_total` | counter | `store_query_class`, `store_backend` |
-| `acr_episode_outcomes_total` | counter | `episode_outcome`, `audit_delivery` |
+| Metric | Type | Labels | Recorded at |
+| --- | --- | --- | --- |
+| `acr_mcp_tool_calls_total` | counter | `tool`, `result_class`, `status` (HTTP status class) | acr-mcp request line (`tools/call` only) |
+| `acr_mcp_tool_latency_seconds` | histogram | `tool` | acr-mcp request line (`tools/call` only) |
+| `acr_answers_total` | counter | `status`, `tool` | acr-mcp answer display (`investigate_question`, `investigate_with_interpretation`) |
+| `acr_budget_refusals_total` | counter | none | acr-api investigation failure line (class `budget_refusal`) and the response-budget exceed line (`context fabric response exceeded service limits`, 413), on both the investigation and the stored-result route |
+| `acr_answer_reuse_total` | counter | `outcome` | acr-api answer reuse outcome line |
+| `acr_requirement_outcomes_total` | counter | `outcome` | acr-api completeness authority line (one count per outcome row; an investigation without a plan adds no rows) |
+| `acr_fact_read_aborts_total` | counter | `cause` | acr-api investigation failure line, fact read abort |
+| `acr_investigation_latency_seconds` | histogram | `status` (`error` when no answer was delivered, including a 413 from a response-size gate) | acr-api investigation route |
+
+Both histograms use explicit boundaries (seconds): 0.05, 0.1, 0.25, 0.5, 1, 2.5,
+5, 10, 20, 30, 45, 60, 90, 120, 180, 300. They reach 300 s because the observed
+p99 is about 125 s for an MCP request and about 21 s for an investigation.
+
+The server span of every MCP request carries `acr.tool` and `acr.result_class`;
+a delivered investigation answer also sets `acr.query_version` (the build's
+query version, never a caller value).
 
 `request_id` is a correlation field only: it MUST NOT be a metric label. Missing
 dimensions use `unknown`; no backend-specific dynamic label may be added.
@@ -63,6 +72,10 @@ Per-organization and per-credential request/resource totals come from the bounde
 `internal/limits.Manager.Usage` interface and are not emitted as metric labels.
 
 ## SLOs and alerts
+
+The measurements below name snapshot-derived series (`acr_observation_*`,
+`acr_packet_*`); no instrument of those names is exported. They are computed from
+the `observability snapshot` log lines until an instrument exists.
 
 All windows below are rolling, production-only, and require at least 100 relevant
 requests in the evaluated window. API availability is exactly

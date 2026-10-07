@@ -9238,6 +9238,10 @@
           "read_facts",
           "read_relationships",
           "record_episode",
+          "data_catalog",
+          "find_subjects",
+          "run_operation",
+          "graphql_query",
           "other"
         ]
       },

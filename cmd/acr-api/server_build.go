@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
@@ -32,6 +33,9 @@ type serverBuildRequest struct {
 	// is built (the OTel server span and metrics). nil serves the handler
 	// unwrapped.
 	wrapHandler func(http.Handler) http.Handler
+	// metrics counts the outcomes the investigation route and the engine
+	// certify. nil records nothing.
+	metrics *hostedmetrics.Instruments
 }
 
 func prepareServer(ctx context.Context, request serverBuildRequest) (serverRunner, func() error, error) {
@@ -97,6 +101,7 @@ func applicationDependencies(ctx context.Context, request serverBuildRequest) (a
 			ServiceVersion:             request.serviceVersion,
 			Logger:                     request.logger,
 			InterpretationEnsembleSize: hosted.InterpretationEnsembleSizeFromEnv(os.LookupEnv, request.logger),
+			Metrics:                    request.metrics,
 		})
 		if err != nil {
 			return api.Dependencies{}, nil, fmt.Errorf("initialize hosted runtime: %w", err)
@@ -108,9 +113,11 @@ func applicationDependencies(ctx context.Context, request serverBuildRequest) (a
 			}
 			return api.Dependencies{}, nil, incomplete
 		}
+		runtime.Dependencies.Metrics = request.metrics
 		return runtime.Dependencies, runtime.Close, nil
 	}
 	dependencies, err := developmentDependencies(request.config, request.serviceVersion, request.logger)
+	dependencies.Metrics = request.metrics
 	return dependencies, nil, err
 }
 
