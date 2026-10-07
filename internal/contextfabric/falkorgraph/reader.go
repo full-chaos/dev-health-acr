@@ -777,6 +777,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			}
 		}
 		for _, e := range edges {
+			if teamAnchoredProjects && !isTeamAnchor && (e.From.Kind == contextfabric.SubjectProject || e.To.Kind == contextfabric.SubjectProject) {
+				continue
+			}
 			if deploymentAnchor != nil && subject != *deploymentAnchor && (e.From.Kind == contextfabric.SubjectDeployment || e.To.Kind == contextfabric.SubjectDeployment) {
 				continue
 			}
@@ -1356,6 +1359,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			cohort.Members[i].InclusionReasons = []string{reason}
 		}
 		cohort.Rationale = anchoredDeploymentCohortRationale
+	}
+	if cohort != nil && teamAnchoredProjects {
+		for i := range cohort.Members {
+			cohort.Members[i].InclusionReasons = []string{teamAnchorInclusionReason}
+		}
+		cohort.Rationale = teamAnchorCohortRationale
 	}
 	if cohort != nil && ownershipRoutedRepoSlug != "" {
 		for i := range cohort.Members {

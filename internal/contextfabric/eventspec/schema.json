@@ -684,7 +684,7 @@
     "attribution": [
       "org_id"
     ],
-    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind, the census is not already admitted for it, and no named anchor holds the deployment member set",
+    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind, the census is not already admitted for it, and no named anchor holds the member set (a deployment anchor reports no line; a committed team asked for its projects reports decision=team_anchor_reach)",
     "fields": [
       {
         "key": "org_id",

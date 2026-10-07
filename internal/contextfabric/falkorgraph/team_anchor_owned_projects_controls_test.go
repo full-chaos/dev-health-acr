@@ -97,6 +97,11 @@ func TestDiscoverContextNonTeamAnchorKeepsTextMatchedProjects(t *testing.T) {
 	if !cohortIDs(result.Cohort)["project:text-only"] {
 		t.Fatalf("members = %v, want the text-matched project kept for a non-team anchor", cohortIDs(result.Cohort))
 	}
+	for _, m := range result.Cohort.Members {
+		if len(m.InclusionReasons) != 1 || m.InclusionReasons[0] == teamAnchorInclusionReason {
+			t.Fatalf("inclusion reasons = %v, want the pool's own reason for a non-team anchor", m.InclusionReasons)
+		}
+	}
 }
 
 // The guard binds the project members of a team anchor only: a team anchor
@@ -137,7 +142,7 @@ func TestDiscoverContextTeamAnchorExcludesProjectsOnlyAnotherCommittedSubjectRea
 	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:other", Label: "full-chaos/other"}
 	edgeRow := func(id, src, srcKind, dst string) row {
 		return row{
-			"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNED_BY_TEAM", propRelationshipID: id}},
+			"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNED_BY_TEAM", propRelationshipID: id, propEvidenceRefs: []string{"evidence_" + id + "_1234"}}},
 			"srcKind": srcKind, "srcId": src, "dstKind": "project", "dstId": dst,
 		}
 	}
@@ -150,7 +155,13 @@ func TestDiscoverContextTeamAnchorExcludesProjectsOnlyAnotherCommittedSubjectRea
 			case "team:platform":
 				return []row{edgeRow("rel_team", "team:platform", "team", "project:owned")}, nil
 			case "repository:other":
-				return []row{edgeRow("rel_repo", "repository:other", "repository", "project:other-only")}, nil
+				return []row{
+					edgeRow("rel_repo", "repository:other", "repository", "project:other-only"),
+					{
+						"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNED_BY_TEAM", propRelationshipID: "rel_rev", propEvidenceRefs: []string{"evidence_rel_rev_1234"}}},
+						"srcKind": "project", "srcId": "project:other-only", "dstKind": "repository", "dstId": "repository:other",
+					},
+				}, nil
 			}
 			return nil, nil
 		default:
@@ -178,6 +189,29 @@ func TestDiscoverContextTeamAnchorExcludesProjectsOnlyAnotherCommittedSubjectRea
 	ids := cohortIDs(result.Cohort)
 	if !ids["project:owned"] || ids["project:other-only"] {
 		t.Fatalf("members = %v, want only project:owned", ids)
+	}
+	if len(result.Paths) == 0 {
+		t.Fatal("fixture admitted no path, so the path check proves nothing")
+	}
+	for _, path := range result.Paths {
+		for _, e := range path.Edges {
+			if e.From.CanonicalID == "project:other-only" || e.To.CanonicalID == "project:other-only" {
+				t.Fatalf("path %+v carries the excluded project", path)
+			}
+		}
+		for _, n := range path.Nodes {
+			if n.CanonicalID == "project:other-only" {
+				t.Fatalf("path %+v carries the excluded project", path)
+			}
+		}
+	}
+	for _, m := range result.Cohort.Members {
+		if len(m.InclusionReasons) != 1 || m.InclusionReasons[0] != teamAnchorInclusionReason {
+			t.Fatalf("inclusion reasons = %v, want the team-scoped reason", m.InclusionReasons)
+		}
+	}
+	if result.Cohort.Rationale != teamAnchorCohortRationale {
+		t.Fatalf("rationale = %q, want the team-scoped rationale", result.Cohort.Rationale)
 	}
 }
 

@@ -13,3 +13,10 @@ func teamAnchoredProjectCohort(request contextfabric.GraphDiscoveryRequest, decl
 	}
 	return contextfabric.ScopeAnchorTeams(request.Frame, request.ScopeAnchorKind, request.Resolution)
 }
+
+// teamAnchorInclusionReason is the inclusion reason of a project the named
+// team's own reach admitted.
+const teamAnchorInclusionReason = "Project the named team owns, reached from the team in the authorized Context Fabric graph."
+
+// teamAnchorCohortRationale is the rationale of a team-anchored project cohort.
+const teamAnchorCohortRationale = "Projects were reached from the team the question names in the authorized Context Fabric graph."
