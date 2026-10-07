@@ -30,7 +30,7 @@
     },
     "completeness": {
       "type": "string",
-      "description": "declared_complete or declared_partial only when the payload states its own coverage; otherwise unknown, which means unknown.",
+      "description": "declared_complete: the read returned the whole set it was asked for (no cut, no row cap reached, no disclosure field fired); this states read coverage, not data health. declared_partial: part of the set is missing; completeness_reason says why. unknown: acr could not tell, which means unknown.",
       "enum": [
         "declared_complete",
         "declared_partial",
@@ -52,7 +52,7 @@
     },
     "result": {
       "type": "string",
-      "description": "data: rows came back. empty_declared: empty and the payload declared itself complete. empty_unverified: empty and completeness is unknown; that is not proof of no data.",
+      "description": "data: rows came back. empty_declared: empty and the read returned the whole set it was asked for. empty_unverified: empty and completeness is unknown; that is not proof of no data.",
       "enum": [
         "data",
         "empty_unverified",

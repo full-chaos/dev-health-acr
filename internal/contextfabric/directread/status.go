@@ -10,9 +10,11 @@ package directread
 //   - CallOperationUnavailable is a 404 from the ops query service: the
 //     document is not registered OR its routing row is off. acr cannot tell
 //     which, and it does not retry on another path.
-//   - CompletenessDeclared* is reported ONLY when the operation's document
-//     selects a disclosure field (OperationPolicy.Disclosure) and the payload
-//     carries it. Every other answer is CompletenessUnknown.
+//   - CompletenessDeclaredComplete means the read returned the whole set it
+//     was asked for (no page cut, no row cap reached, no disclosure field
+//     fired). CompletenessDeclaredPartial carries a CompletenessReason. An
+//     answer whose verdict needs a field or a cap the read lacks is
+//     CompletenessUnknown (OperationPolicy.Verdict).
 //   - An empty result with unknown completeness is ResultEmptyUnverified.
 //     It is never "no data" and never "healthy".
 
@@ -39,7 +41,7 @@ func CallStatusVocabulary() [5]CallStatus {
 	return [5]CallStatus{CallServed, CallRefused, CallOperationUnavailable, CallUpstreamError, CallUpstreamTimeout}
 }
 
-// Completeness states what the payload declares about its own coverage.
+// Completeness states whether the read covered what it was asked for.
 type Completeness string
 
 const (
@@ -68,7 +70,7 @@ func ResultStateVocabulary() [3]ResultState {
 }
 
 // ResultStateFor applies the D.7 rule: a non-empty answer is data; an empty
-// answer is empty_declared only when the payload declared itself complete,
+// answer is empty_declared only when the read was declared complete,
 // and empty_unverified in every other case.
 func ResultStateFor(empty bool, completeness Completeness) ResultState {
 	switch {
