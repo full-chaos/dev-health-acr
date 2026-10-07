@@ -338,6 +338,12 @@ type RelationshipProjection = contractsv1.ContextFabricRelationshipProjection
 type ContentProjection = contractsv1.ContextFabricContentProjection
 type EpisodeProjection = contractsv1.ContextFabricEpisodeProjection
 type ProjectionTombstone = contractsv1.ContextFabricProjectionTombstone
+
+// TombstoneKindColumnProjectEdges retracts every open column-arm
+// BELONGS_TO_PROJECT edge of one work item (CanonicalID = the work item's
+// canonical id), whatever project each names.
+const TombstoneKindColumnProjectEdges = "column_project_edges"
+
 type ProjectionReceipt = contractsv1.ContextFabricProjectionReceipt
 type ProjectionWatermark = contractsv1.ContextFabricProjectionWatermark
 type ProjectionCheckpoint = contractsv1.ContextFabricProjectionCheckpoint
