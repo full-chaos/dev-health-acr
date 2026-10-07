@@ -465,7 +465,12 @@ import (
 // none, with no fact kind planned, is served with a degrading
 // graph_no_member_found row in place of an internal error. A candidate saved
 // before v88 holds no such row and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v88"
+//
+// v88 -> v89: the same row is filed from the cohort census result when the plan
+// did read a fact kind, so a project-less team asked with a planned fact read
+// is served with it too. A candidate saved before v89 holds no such row and
+// must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v89"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
