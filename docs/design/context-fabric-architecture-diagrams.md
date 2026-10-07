@@ -85,7 +85,10 @@ flowchart TD
   WGATE -->|"regime B: explicit / confirmed window"| RESOLVE["graphrank.ResolveSubjects<br/>ResolveDeps: Search / SearchQuestion / SearchKind /<br/>AliasLookup + CHAOS-4038 coverage floor<br/>(see diagram 2)"]
   RESOLVE --> POOL["candidate pool split:<br/>pool (commit-eligible) vs offerOnlyPool (CHAOS-4271)<br/>-- see diagram 2 for why this matters"]
   POOL --> GATE1["ResolveFromMergedCandidatesWithGateAndBasis<br/>resolution.go:401 -- corroboration -> ranked_cut -> commit decision"]
-  GATE1 --> DISCOVER["DiscoverContext<br/>cohort + structure offers, falkorgraph/reader.go"]
+  GATE1 --> TEAMANCHOR{"scope anchor is a team,<br/>zero committed, candidates exist?<br/>uncommitted_team_anchor.go"}
+  TEAMANCHOR -->|"yes: terminal BEFORE DiscoverContext,<br/>clarification_required naming the candidates<br/>(kind cue on a cross-kind label), no cohort"| STATUS
+  TEAMANCHOR -->|"no"| DISCOVER
+  DISCOVER["DiscoverContext<br/>cohort + structure offers, falkorgraph/reader.go"]
   DISCOVER --> SCOPE["FactReadScopeResolver<br/>fact_scope.go -- CHAOS-4099, activated<br/>project/team origin -> activity-proxy / attributed-team expansion"]
   SCOPE --> PLAN["planFactReads<br/>fact_planner.go:183 -- per-capability<br/>SupportedSubjectKinds partition: prune / narrow / run"]
   PLAN -->|"no supported subject, no scope gap"| PRUNE["pruned:subject_kind_unsupported<br/>proof of absence (CHAOS-3783)"]

@@ -52,3 +52,17 @@ func TestNodeCandidateFormsProviderOnTheCandidate(t *testing.T) {
 		t.Fatalf("candidate = %+v ok=%v, want provider jira", c, ok)
 	}
 }
+
+func TestClarificationPromptNamesTheKindWhenALabelIsHeldByTwoKinds(t *testing.T) {
+	mk := func(kind contextfabric.SubjectKind, id, provider string) contextfabric.SubjectCandidate {
+		return contextfabric.SubjectCandidate{Subject: contextfabric.SubjectRef{Kind: kind, CanonicalID: string(kind) + ":" + id, Label: "chaos"}, Provider: provider}
+	}
+	got := ClarificationPrompt([]contextfabric.SubjectCandidate{mk(contextfabric.SubjectTeam, "1", "linear"), mk(contextfabric.SubjectProject, "2", "jira")})
+	if want := "Which subject did you mean: chaos (team), chaos (project)?"; got != want {
+		t.Fatalf("prompt = %q, want %q", got, want)
+	}
+	got = ClarificationPrompt([]contextfabric.SubjectCandidate{mk(contextfabric.SubjectTeam, "1", "linear"), mk(contextfabric.SubjectTeam, "3", "jira"), mk(contextfabric.SubjectProject, "2", "jira")})
+	if want := "Which subject did you mean: chaos (team, linear), chaos (team, jira), chaos (project)?"; got != want {
+		t.Fatalf("prompt = %q, want %q", got, want)
+	}
+}
