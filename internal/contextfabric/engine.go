@@ -3524,7 +3524,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			facts = emptyFactReadBundle(familyOutcome.Frame, graphContext.Coverage)
 		}
 		if err == nil {
-			recordEmptyMemberSearch(&facts, familyOutcome.Frame, graphContext.Coverage, graphContext.Cohort)
+			recordEmptyMemberSearch(&facts, familyOutcome.Frame, graphContext.Coverage, graphContext.Cohort, graphContext.CohortPopulation)
 		}
 		if err != nil {
 			subjectKinds := make([]string, 0, len(subjects))

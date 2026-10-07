@@ -62,13 +62,16 @@ func emptyMemberSearchHolds(frame *QuestionFrame, graph Coverage) bool {
 
 // recordEmptyMemberSearch files the none-found row from the cohort census
 // result, whatever the plan read: a scoped member kind, a clean graph search
-// and a cohort with no member. A bundle that already carries the row is left
+// and a cohort with no member and a zero counted population. A bundle that already carries the row is left
 // alone.
-func recordEmptyMemberSearch(bundle *CanonicalFactBundle, frame *QuestionFrame, graph Coverage, cohort *Cohort) {
+func recordEmptyMemberSearch(bundle *CanonicalFactBundle, frame *QuestionFrame, graph Coverage, cohort *Cohort, population int) {
 	if cohort != nil && len(cohort.Members) > 0 {
 		return
 	}
-	if !emptyMemberSearchHolds(frame, graph) {
+	// The graph discovered no cohort for a reason other than an empty search
+	// when the frame's member kind is not one the graph can list, or when it
+	// counted members it did not carry: neither is "none found".
+	if population != 0 || !emptyMemberSearchHolds(frame, graph) || !CohortMemberSetResolvableForFrame(*frame) {
 		return
 	}
 	for _, existing := range bundle.Coverage.Details {
