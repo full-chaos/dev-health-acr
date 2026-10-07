@@ -764,9 +764,13 @@ func serveTable(name string, declaration contextfabric.FactFieldDeclaration, val
 	}
 	if table.Shape == string(contextfabric.FactTableTimeSeries) && len(table.Key) == 1 {
 		instants := map[string]bool{}
+		measured := map[string]bool{}
 		for _, row := range value.Rows {
 			if cell, ok := row.Fields[table.Key[0]]; ok && cell.String != nil {
 				instants[*cell.String] = true
+				if rowCarriesMeasure(row, table.Measures) {
+					measured[*cell.String] = true
+				}
 			}
 		}
 		sorted := make([]string, 0, len(instants))
@@ -783,16 +787,36 @@ func serveTable(name string, declaration contextfabric.FactFieldDeclaration, val
 			for day := plan.time.Start.UTC().Truncate(24 * time.Hour); day.Before(*plan.time.End); day = day.Add(24 * time.Hour) {
 				expected++
 				label := day.Format("2006-01-02")
-				if !instants[label] && !instants[day.Format(time.RFC3339)] {
+				if !measured[label] && !measured[day.Format(time.RFC3339)] {
 					missing = append(missing, label)
 				}
 			}
-			returned := len(sorted)
+			returned := expected - len(missing)
 			table.ExpectedPoints, table.ReturnedPoints = &expected, &returned
 			table.MissingInstants = missing
 		}
 	}
 	return table
+}
+
+// rowCarriesMeasure reports whether a series row holds at least one non-null
+// declared measure. A day whose row exists but whose measures are all null
+// is a missing day, not a returned one. A table that declares no measures
+// keeps the row-presence rule.
+func rowCarriesMeasure(row contextfabric.FactValueRow, measures []string) bool {
+	if len(measures) == 0 {
+		return true
+	}
+	for _, name := range measures {
+		cell := row.Fields[name]
+		if cell.Number != nil && (math.IsNaN(*cell.Number) || math.IsInf(*cell.Number, 0)) {
+			continue
+		}
+		if cell.String != nil || cell.Integer != nil || cell.Number != nil || cell.Boolean != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // wireScalar renders a leaf value. Integers go as strings so no JSON number
