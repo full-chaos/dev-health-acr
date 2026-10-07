@@ -475,7 +475,11 @@ import (
 // document selects more fields and the investment operations gain a person
 // variable path. A candidate saved before v90 holds the old shape and must not
 // be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v92"
+//
+// v92 -> v95: synthesis free text that states a calendar day the input does
+// not hold is rejected. A candidate saved before v95 may hold such text and
+// must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v95"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
