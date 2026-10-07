@@ -490,11 +490,11 @@ type GraphTelemetry interface {
 	// existed at all.
 	RecordEdgesFilteredByReason(ctx context.Context, orgID string, authz, temporalWindow, selfLoop int)
 	// RecordCohortDeniedByAuthorization (CHAOS-4577) reports ONE DiscoverContext
-	// call whose entire discovered cohort was dropped by AuthorizedAttributes --
-	// distinct from RecordCohortMembersAuthzDropped's ordinary, expected
-	// "nothing is wrong" narrowing posture. This fires only when authorization
-	// denied EVERY candidate member (count is the same number
-	// RecordCohortMembersAuthzDropped already saw for that call), which is the
+	// call that served the degrading cohort-denied row: authorization denied
+	// at least one candidate member of the requested kind, all of them or only
+	// some (count is the kind-scoped denied number). Unlike
+	// RecordCohortMembersAuthzDropped it is not a "nothing is wrong" posture.
+	// The all-denied shape is the
 	// shape a whole org's team_repo_ownership being empty produces: every Team
 	// node carries the CHAOS-4390 fail-closed sentinel, no repository-scoped
 	// principal can ever match it, and the terminal outcome is `no_match` --
@@ -851,8 +851,8 @@ func (t SlogTelemetry) RecordEdgesFilteredByReason(_ context.Context, orgID stri
 
 // RecordCohortDeniedByAuthorization logs at WARN, unlike every other
 // authz-drop signal above: those narrow an otherwise-nonempty result, which
-// is ordinary; this one means the call's ENTIRE cohort came back empty
-// because of authorization, which is the CHAOS-4577 "answer indistinguishable
+// is ordinary; this one means the call served the cohort-denied row (the
+// cohort came back empty, or partly cut, because of authorization), which is the CHAOS-4577 "answer indistinguishable
 // from no such teams" failure mode -- an operator should be able to find this
 // without already suspecting it.
 func (t SlogTelemetry) RecordCohortDeniedByAuthorization(_ context.Context, orgID string, count int) {
