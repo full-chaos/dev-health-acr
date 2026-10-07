@@ -28,8 +28,8 @@ type instantDays struct {
 const monthNamePattern = `(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)`
 
 var (
-	isoDayPattern       = regexp.MustCompile(`(?:^|[^0-9A-Za-z-])(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?(?:[^0-9A-Za-z-]|$)`)
-	isoDatetimePattern  = regexp.MustCompile(`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})`)
+	isoDayPattern       = regexp.MustCompile(`(?:^|[^0-9A-Za-z_-])(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?(?:[^0-9A-Za-z_-]|$)`)
+	isoDatetimePattern  = regexp.MustCompile(`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)(Z|[+-]\d{2}:\d{2})?`)
 	monthFirstPattern   = regexp.MustCompile(`\b` + monthNamePattern + `\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(,\d{3}\b)?(?:,?\s+(\d{4})\b)?`)
 	dayFirstPattern     = regexp.MustCompile(`\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?` + monthNamePattern + `\b\.?(?:,?\s+(\d{4})\b)?`)
 	monthNumberByPrefix = map[string]time.Month{
@@ -124,7 +124,7 @@ func synthesisInputInstantDays(input SynthesisInput) (instantDays, error) {
 	}
 	scanInstantDays(string(encoded), days.add)
 	for _, m := range isoDatetimePattern.FindAllStringSubmatch(string(encoded), -1) {
-		if at, err := time.Parse(time.RFC3339, m[1]+"Z"); err == nil {
+		if at, err := time.Parse(time.RFC3339, m[1]+zoneOrUTC(m[2])); err == nil {
 			days.addAdjacent(at)
 		}
 	}
@@ -195,4 +195,11 @@ func offsetLayout(offset string) string {
 		return "Z07:00"
 	}
 	return "Z0700"
+}
+
+func zoneOrUTC(zone string) string {
+	if zone == "" {
+		return "Z"
+	}
+	return zone
 }

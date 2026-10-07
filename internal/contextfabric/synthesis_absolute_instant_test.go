@@ -68,6 +68,7 @@ func TestDraftFreeTextInstantForms(t *testing.T) {
 		{"impossible yearless day is no day", "The label is Feb 30.", false},
 		{"date ending an identifier is no date", "Ticket ACR-2031-03-19 is open.", false},
 		{"yearless leap day not held", "Seen on Feb 29.", true},
+		{"underscore identifier is no date", "Worker run_2031-03-19_17 completed.", false},
 		{"window start held", "From 2031-01-10.", false},
 		{"clock instant held", "As of June 15, 2031.", false},
 		{"impossible calendar day is no day", "Key 2031-02-30 is an id.", false},
@@ -119,6 +120,31 @@ func TestDriverAndFindingTextInstantRejected(t *testing.T) {
 			var rejection *SynthesisRejection
 			if !errors.As(err, &rejection) || rejection.Reason != RejectionReasonFreeTextInstantUngrounded {
 				t.Fatalf("error = %v, want %q", err, RejectionReasonFreeTextInstantUngrounded)
+			}
+		})
+	}
+}
+
+func TestOffsetInputDatetimeGroundsItsUTCDayAndNeighbours(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		text   string
+		reject bool
+	}{
+		"utc day":             {"As of 2031-03-06.", false},
+		"utc day plus one":    {"As of 2031-03-07.", false},
+		"utc day minus one":   {"As of 2031-03-05.", false},
+		"written day minus 1": {"As of 2031-03-04.", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			input, draft := closureFixture()
+			at := time.Date(2031, 3, 5, 23, 30, 0, 0, time.FixedZone("west", -12*3600))
+			input.Facts.Facts[0].ObservedAt = &at
+			draft.CurrentState = tc.text
+			err := draft.ValidateAgainst(input)
+			if tc.reject != (err != nil) {
+				t.Fatalf("error = %v, reject = %v", err, tc.reject)
 			}
 		})
 	}
