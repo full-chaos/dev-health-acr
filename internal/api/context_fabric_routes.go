@@ -77,6 +77,14 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			return
 		}
 		investigateCtx, collectedSynthesisInput := contextfabric.WithSynthesisInputCollector(r.Context())
+		investigationStarted := a.now()
+		// The latency is recorded once, when the request ends, under the
+		// status of the answer it delivered; every earlier exit (a failure,
+		// or a response-size gate that refuses the answer) is "error".
+		deliveredStatus := "error"
+		defer func() {
+			a.metrics.InvestigationLatency(r.Context(), deliveredStatus, a.now().Sub(investigationStarted))
+		}()
 		result, err := investigateRecovered(investigateCtx, investigator, principal, request)
 		if err != nil {
 			if request.SuppliedSynthesis != nil && errors.Is(err, contextfabric.ErrSynthesisRejected) {
@@ -184,6 +192,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		}
 		a.logContextFabricResponseBudgetMeasured(r, measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes)
 		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_completed", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
+		deliveredStatus = string(result.Status)
 		writeEncodedJSON(w, http.StatusOK, encoded)
 	})
 	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
@@ -707,8 +716,12 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	if errors.Is(err, contextfabric.ErrInvalidResult) {
 		fields = append(fields, "validation_rule", contextFabricValidationRule(err))
 	}
+	if classification == contextFabricClassBudgetRefusal {
+		a.metrics.BudgetRefusal(r.Context())
+	}
 	var factReadAbort *contextfabric.FactReadAbortDetail
 	if errors.As(err, &factReadAbort) {
+		a.metrics.FactReadAbort(r.Context(), factReadAbortCause(factReadAbort.Err))
 		fields = append(fields,
 			"fact_read_cause", factReadAbortCause(factReadAbort.Err),
 			"fact_read_requirement_count", factReadAbort.RequirementCount,
@@ -994,6 +1007,7 @@ func (a *App) logContextFabricResponseBudgetExceeded(r *http.Request, reason str
 		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_response_budget", "reason", reason,
 	}, contextFabricResponseBudgetFields(a.config.MaxItems, measuredBytes, maximumBytes, estimatedTokens, counts)...)
 	a.logger.WarnContext(r.Context(), "context fabric response exceeded service limits", fields...)
+	a.metrics.BudgetRefusal(r.Context())
 }
 
 // logContextFabricResponseBudgetMeasured (CHAOS-4540) is the exceed line's

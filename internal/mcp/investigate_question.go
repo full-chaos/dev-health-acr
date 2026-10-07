@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -161,6 +163,8 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 	if err := response.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "internal", message: "the assembled response failed contract validation"}), nil
 	}
+	cfg.metrics.Answer(ctx, string(result.Status), surface)
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String(SpanAttributeQueryVersion, result.Versions.QueryVersion))
 	if cfg.diagnostics != nil {
 		args := answerprojection.DisplayLogArgs(result, response.Structured, answerprojection.Budget{MaxDrivers: budget.MaxDrivers, MaxCohortMembers: budget.MaxCohortMembers, MaxEvidenceRefs: budget.MaxEvidenceRefs}, true, truncated)
 		args = append(args, "request_id", currentRequestID, "surface", surface)

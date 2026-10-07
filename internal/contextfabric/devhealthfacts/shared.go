@@ -466,7 +466,12 @@ import (
 // graph_no_member_found row in place of an internal error. A candidate saved
 // before v88 holds no such row and must not be reused.
 //
-// v88 -> v90: the vendored ops registry moves to ops 98322341: the served home
+// v88 -> v89: the same row is filed from the cohort census result when the plan
+// did read a fact kind, so a project-less team asked with a planned fact read
+// is served with it too. A candidate saved before v89 holds no such row and
+// must not be reused.
+//
+// v89 -> v90: the vendored ops registry moves to ops 98322341: the served home
 // document selects more fields and the investment operations gain a person
 // variable path. A candidate saved before v90 holds the old shape and must not
 // be reused.
