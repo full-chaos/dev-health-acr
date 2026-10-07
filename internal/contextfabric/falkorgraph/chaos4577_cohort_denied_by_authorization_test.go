@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -82,54 +83,119 @@ func TestDiscoverContextSignalsWhenEntireCohortDeniedByAuthorization(t *testing.
 	}
 }
 
-// TestDiscoverContextCohortNarrowedByAuthorizationIsNotPartial proves the
-// negative: when authorization denies SOME cohort candidates but at least
-// one member survives, that is the ordinary, expected CHAOS-3888 narrowing
-// case -- Coverage.Partial must stay false and no cohort_denied_by_authorization
-// reason must appear, exactly as before this change.
-func TestDiscoverContextCohortNarrowedByAuthorizationIsNotPartial(t *testing.T) {
+// TestDiscoverContextCohortPartlyCutByAuthorizationIsPartial: one member
+// survives and one is denied, so the cohort is served partial with one
+// degrading row carrying the denied count (count only, no names).
+func TestDiscoverContextCohortPartlyCutByAuthorizationIsPartial(t *testing.T) {
+	result, telemetry := discoverCohortWithDenied(t, 1, 1)
+	if result.Cohort == nil || len(result.Cohort.Members) != 1 {
+		t.Fatalf("Cohort = %#v, want exactly one surviving member", result.Cohort)
+	}
+	if !result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = false, want true: a member was cut by authorization")
+	}
+	assertCohortDeniedRow(t, result.Coverage, 1, "1 group member excluded by authorization")
+	if telemetry.cohortDeniedByAuthorization != 1 {
+		t.Fatalf("cohortDeniedByAuthorization telemetry = %d, want 1", telemetry.cohortDeniedByAuthorization)
+	}
+	if telemetry.cohortMembersAuthzDropped != 1 {
+		t.Fatalf("cohortMembersAuthzDropped telemetry = %d, want 1", telemetry.cohortMembersAuthzDropped)
+	}
+}
+
+func TestDiscoverContextCohortPartlyCutByAuthorizationCarriesTheDeniedCount(t *testing.T) {
+	result, _ := discoverCohortWithDenied(t, 1, 2)
+	if result.Cohort == nil || len(result.Cohort.Members) != 1 {
+		t.Fatalf("Cohort = %#v, want exactly one surviving member", result.Cohort)
+	}
+	assertCohortDeniedRow(t, result.Coverage, 2, "2 group members excluded by authorization")
+}
+
+func TestDiscoverContextCohortWithNoDenialCarriesNoDeniedRow(t *testing.T) {
+	result, telemetry := discoverCohortWithDenied(t, 2, 0)
+	if result.Cohort == nil || len(result.Cohort.Members) != 2 {
+		t.Fatalf("Cohort = %#v, want two members", result.Cohort)
+	}
+	if result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = true, want false: nothing was denied")
+	}
+	for _, detail := range result.Coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization {
+			t.Fatalf("unexpected denied row %#v", detail)
+		}
+	}
+	for _, reason := range result.Coverage.DegradedReasons {
+		if strings.HasPrefix(reason, "cohort_denied_by_authorization") {
+			t.Fatalf("unexpected reason %q", reason)
+		}
+	}
+	if telemetry.cohortDeniedByAuthorization != 0 || telemetry.cohortMembersAuthzDropped != 0 {
+		t.Fatalf("telemetry = %d/%d, want 0/0", telemetry.cohortDeniedByAuthorization, telemetry.cohortMembersAuthzDropped)
+	}
+}
+
+func discoverCohortWithDenied(t *testing.T, served, denied int) (contextfabric.GraphContext, *recordingTelemetry) {
+	t.Helper()
 	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		switch {
 		case strings.Contains(cypher, "fulltext"):
 			return nil, nil
 		case strings.Contains(cypher, "$kinds"):
-			authorized := fakeSubjectNodeRow("team", "team_authorized", "Authorized")
-			authorized["n"].(*node).Properties["authorization_repositories"] = []string{"full-chaos/dev-health-acr"}
-			authorized["n"].(*node).Properties["authorization_teams"] = []string{"team_authorized"}
-			denied := fakeSubjectNodeRow("team", "team_denied", "Denied")
-			denied["n"].(*node).Properties["authorization_repositories"] = []string{"acr-context-fabric:no-team-repository-ownership"}
-			denied["n"].(*node).Properties["authorization_teams"] = []string{"team_denied"}
-			return []row{authorized, denied}, nil
+			var rows []row
+			for i := 0; i < served; i++ {
+				key := fmt.Sprintf("team_authorized_%d", i)
+				r := fakeSubjectNodeRow("team", key, "Authorized")
+				r["n"].(*node).Properties["authorization_repositories"] = []string{"full-chaos/dev-health-acr"}
+				r["n"].(*node).Properties["authorization_teams"] = []string{key}
+				rows = append(rows, r)
+			}
+			for i := 0; i < denied; i++ {
+				key := fmt.Sprintf("team_denied_%d", i)
+				r := fakeSubjectNodeRow("team", key, "Denied")
+				r["n"].(*node).Properties["authorization_repositories"] = []string{"acr-context-fabric:no-team-repository-ownership"}
+				r["n"].(*node).Properties["authorization_teams"] = []string{key}
+				rows = append(rows, r)
+			}
+			return rows, nil
 		default:
-			t.Fatalf("unexpected query for a subjectless cohort request with no committed origin: %s", cypher)
+			t.Fatalf("unexpected query: %s", cypher)
 			return nil, nil
 		}
 	}}
 	telemetry := &recordingTelemetry{}
 	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
 	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
-	request := cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort)
-
-	result, err := adapter.DiscoverContext(context.Background(), principal, request)
+	result, err := adapter.DiscoverContext(context.Background(), principal, cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort))
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
-	if result.Cohort == nil || len(result.Cohort.Members) != 1 {
-		t.Fatalf("Cohort = %#v, want exactly one surviving member", result.Cohort)
-	}
-	if result.Coverage.Partial {
-		t.Fatalf("Coverage.Partial = true, want false: one member survived, so this is ordinary narrowing, not denial")
-	}
-	for _, reason := range result.Coverage.DegradedReasons {
-		if strings.HasPrefix(reason, "cohort_denied_by_authorization") {
-			t.Fatalf("Coverage.DegradedReasons = %v, must not contain a cohort_denied_by_authorization reason when the cohort is not empty", result.Coverage.DegradedReasons)
+	return result, telemetry
+}
+
+func assertCohortDeniedRow(t *testing.T, coverage contextfabric.Coverage, count int, label string) {
+	t.Helper()
+	wantReason := fmt.Sprintf("cohort_denied_by_authorization:%d", count)
+	found := false
+	for _, detail := range coverage.Details {
+		if detail.Code != contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization {
+			continue
+		}
+		found = true
+		if !detail.Degrading || detail.Count == nil || *detail.Count != count || detail.Label != label || detail.Raw != wantReason {
+			t.Fatalf("denied row = %#v, want degrading count %d label %q raw %q", detail, count, label, wantReason)
 		}
 	}
-	if telemetry.cohortDeniedByAuthorization != 0 {
-		t.Fatalf("cohortDeniedByAuthorization telemetry = %d, want 0 (narrowing, not denial)", telemetry.cohortDeniedByAuthorization)
+	if !found {
+		t.Fatalf("no cohort_denied_by_authorization row in %#v", coverage.Details)
 	}
-	if telemetry.cohortMembersAuthzDropped != 1 {
-		t.Fatalf("cohortMembersAuthzDropped telemetry = %d, want exactly 1", telemetry.cohortMembersAuthzDropped)
+	reasons := 0
+	for _, reason := range coverage.DegradedReasons {
+		if reason == wantReason {
+			reasons++
+		}
+	}
+	if reasons != 1 {
+		t.Fatalf("DegradedReasons = %v, want %q once", coverage.DegradedReasons, wantReason)
 	}
 }
 
