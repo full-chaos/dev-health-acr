@@ -481,9 +481,14 @@ import (
 // organization-level project cohort. A candidate saved before v93 may hold that
 // cohort answer and must not be reused.
 //
-// -> v96: a work-item walk list cut to fit the byte ceiling keeps every member
-// whose evidence the answer cites and carries only the kept members' evidence. A candidate saved before v96 may hold
-// evidence of cut members and must not be reused.
+// v93 -> v94: a cohort cut by authorization, wholly or in part, is served
+// partial with one count row. A candidate saved before v94 holds a complete
+// answer over a cut cohort and must not be reused.
+//
+// v94 -> v96: a work-item walk list cut to fit the byte ceiling keeps every
+// member whose evidence the answer cites and carries only the kept members'
+// evidence. A candidate saved before v96 may hold evidence of cut members and
+// must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v96"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for

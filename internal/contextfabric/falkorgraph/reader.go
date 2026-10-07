@@ -1396,21 +1396,18 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// RecordCohortMembersAuthzDropped's own doc comments), not
 	// degradation, so none of them touches partial/degradedReasons below.
 	//
-	// CHAOS-4577 is the one exception: when authorization denied EVERY
-	// candidate cohort member OF THE REQUESTED KIND (cohort == nil AND
-	// cohortKindScopedAuthzDropped > 0 -- as opposed to cohort == nil with
-	// cohortKindScopedAuthzDropped == 0, which means the census genuinely
-	// found no matching subject of that kind at all), the caller cannot
-	// tell that apart from "there are no such teams" without a signal in
-	// the answer itself. Deliberately keyed on cohortKindScopedAuthzDropped,
-	// NOT the unscoped cohortAuthzDropped: the exact-name arm's pool mixes
-	// repository/project/team nodes, so an unrelated repository node denied
-	// for its own reasons must never manufacture a false
-	// cohort_denied_by_authorization signal for a teams question that had
-	// no denied team at all (codex round-1 P2). See
-	// graphrank.DiscoveredCohort's own doc comment for the distinction.
+	// The one exception: when authorization denied ANY candidate cohort member
+	// OF THE REQUESTED KIND, whether the cohort is empty (all denied) or only
+	// partly cut (some served), the answer carries one degrading
+	// cohort_denied_by_authorization row with the kind-scoped count. A cohort
+	// with no member of the kind denied files nothing. Keyed on
+	// cohortKindScopedAuthzDropped, NOT the unscoped cohortAuthzDropped: the
+	// exact-name arm's pool mixes repository/project/team nodes, so an
+	// unrelated repository node denied for its own reasons must never
+	// manufacture the row for a teams question (codex round-1 P2). See
+	// graphrank.DiscoveredCohort's own doc comment.
 	//
-	// Also requires ranExhaustiveCensus && !exactNameTruncated (codex
+	// The exhaustive-census gate below applies to an EMPTY cohort only (codex
 	// round-2 P2): ShapeExplicitCohort and a discovered_cohort request with
 	// an already-committed subject never run the org-wide census at all --
 	// their bounded fulltext/hopWalk candidates can contain one denied
@@ -1428,13 +1425,14 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// other servable kind the kind-scoped census is the census, and a cut one
 	// cannot show that the denied members were all there was.
 	cohortKindCensusedExhaustively := (ranExhaustiveCensus && !exactNameTruncated && exactNameCensusCoversKind(declaredCohortKind)) ||
-		(kindCensusRan && !kindCensusTruncated)
-	cohortWhollyDeniedByAuthz := cohort == nil && cohortKindScopedAuthzDropped > 0 && cohortKindCensusedExhaustively
+		(kindCensusRan && !kindCensusTruncated) ||
+		(ownershipRoutedRepoSlug != "" && !ownershipCensusTruncated)
+	cohortCutByAuthz := cohortKindScopedAuthzDropped > 0 && (cohort != nil || cohortKindCensusedExhaustively)
 	if a.config.Telemetry != nil {
 		if edgeFilters.Authz > 0 || edgeFilters.TemporalWindow > 0 || admission.DroppedSelfLoopCount > 0 {
 			a.config.Telemetry.RecordEdgesFilteredByReason(ctx, principal.OrgID, edgeFilters.Authz, edgeFilters.TemporalWindow, admission.DroppedSelfLoopCount)
 		}
-		if cohortWhollyDeniedByAuthz {
+		if cohortCutByAuthz {
 			a.config.Telemetry.RecordCohortDeniedByAuthorization(ctx, principal.OrgID, cohortKindScopedAuthzDropped)
 		}
 		if cohortAuthzDropped > 0 {
@@ -1488,7 +1486,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// denied reason is told nothing more: the project walk counts its cut
 	// before authorization.
 	anchoredCutEmpty := cohort == nil && deploymentAnchorReadCut && projectDeploymentsDenied < 0
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || anchoredCutEmpty
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortCutByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || anchoredCutEmpty
 	var degradedReasons []string
 	var coverageDetails []contextfabric.CoverageDetail
 	// CHAOS-4690: every degraded reason this reader composes gets a paired
@@ -1554,12 +1552,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		kindCensusDetail.Label = contractsv1.ComposeCoverageDetailLabel(kindCensusDetail)
 		coverageDetails = append(coverageDetails, kindCensusDetail)
 	}
-	if cohortWhollyDeniedByAuthz {
-		// CHAOS-4577: the discovered_cohort request found candidate members,
-		// but AuthorizedAttributes denied every one of them (the shape an
-		// org's team_repo_ownership being empty produces via the CHAOS-4390
-		// sentinel) -- the resulting empty Cohort must not read the same as
-		// "no such teams exist". degradedReasons is the same free-text
+	if cohortCutByAuthz {
+		// CHAOS-4577: AuthorizedAttributes denied candidate members of the
+		// requested kind -- every one (the shape an org's team_repo_ownership
+		// being empty produces via the CHAOS-4390 sentinel, an empty Cohort
+		// that must not read as "no such teams exist") or only some (the
+		// surviving members are served beside the count). degradedReasons is the same free-text
 		// vocabulary endpoint_lookup_failed/unknown_relationship_type
 		// already use above; no new wire field. Count is the KIND-SCOPED
 		// denial count (only candidates matching this cohort's requested
