@@ -28,9 +28,9 @@ type instantDays struct {
 const monthNamePattern = `(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)`
 
 var (
-	isoDayPattern       = regexp.MustCompile(`\b(\d{4})-(\d{2})-(\d{2})(?:\b|T)`)
+	isoDayPattern       = regexp.MustCompile(`(?:^|[^0-9A-Za-z-])(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?(?:[^0-9A-Za-z-]|$)`)
 	isoDatetimePattern  = regexp.MustCompile(`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})`)
-	monthFirstPattern   = regexp.MustCompile(`\b` + monthNamePattern + `\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(\d{4})\b)?`)
+	monthFirstPattern   = regexp.MustCompile(`\b` + monthNamePattern + `\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(,\d{3}\b)?(?:,?\s+(\d{4})\b)?`)
 	dayFirstPattern     = regexp.MustCompile(`\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?` + monthNamePattern + `\b\.?(?:,?\s+(\d{4})\b)?`)
 	monthNumberByPrefix = map[string]time.Month{
 		"Jan": time.January, "Feb": time.February, "Mar": time.March, "Apr": time.April,
@@ -83,7 +83,8 @@ func (d instantDays) holds(year int, month time.Month, day int) bool {
 // stated. A bare month or year names no day and is not visited.
 func scanInstantDays(text string, emit func(year int, month time.Month, day int)) {
 	visit := func(year int, month time.Month, day int) {
-		if year != 0 && time.Date(year, month, day, 0, 0, 0, 0, time.UTC).Day() != day {
+		// Year 0 is a leap year, so a yearless Feb 29 stays a day.
+		if time.Date(year, month, day, 0, 0, 0, 0, time.UTC).Day() != day {
 			return
 		}
 		emit(year, month, day)
@@ -92,11 +93,20 @@ func scanInstantDays(text string, emit func(year int, month time.Month, day int)
 		year, _ := strconv.Atoi(m[1])
 		month, _ := strconv.Atoi(m[2])
 		day, _ := strconv.Atoi(m[3])
+		if m[4] != "" && m[7] != "" && m[7] != "Z" {
+			if at, err := time.Parse("2006-01-02T15:04"+offsetLayout(m[7]), fmt.Sprintf("%s-%s-%sT%s:%s%s", m[1], m[2], m[3], m[4], m[5], m[7])); err == nil {
+				utc := at.UTC()
+				year, month, day = utc.Year(), int(utc.Month()), utc.Day()
+			}
+		}
 		visit(year, time.Month(month), day)
 	}
 	for _, m := range monthFirstPattern.FindAllStringSubmatch(text, -1) {
+		if m[3] != "" {
+			continue
+		}
 		day, _ := strconv.Atoi(m[2])
-		year, _ := strconv.Atoi(m[3])
+		year, _ := strconv.Atoi(m[4])
 		visit(year, monthNumberByPrefix[m[1][:3]], day)
 	}
 	for _, m := range dayFirstPattern.FindAllStringSubmatch(text, -1) {
@@ -178,4 +188,11 @@ func (d SynthesisDraft) requireGroundedInstants(input SynthesisInput) error {
 		return rejectSynthesis(RejectionReasonFreeTextInstantUngrounded, "synthesis free text states %d calendar day(s) the investigation input does not hold", ungrounded)
 	}
 	return nil
+}
+
+func offsetLayout(offset string) string {
+	if strings.Contains(offset, ":") {
+		return "Z07:00"
+	}
+	return "Z0700"
 }
