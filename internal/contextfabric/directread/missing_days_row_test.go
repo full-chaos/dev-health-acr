@@ -138,3 +138,48 @@ func TestInstantInWindowKeepsUnparsableKey(t *testing.T) {
 		t.Fatal("unparsable key must be kept")
 	}
 }
+
+func serveKeys(t *testing.T, keys ...string) ServedTable {
+	t.Helper()
+	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 2)
+	var rows []contextfabric.FactValueRow
+	for _, key := range keys {
+		rows = append(rows, contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
+			"day": contextfabric.StringFactValue(key), "compounding_risk": contextfabric.NumberFactValue(1)}})
+	}
+	value := contextfabric.TableFactValue(contextfabric.FactTable{
+		Shape: contextfabric.FactTableTimeSeries, Key: []string{"day"}, Measures: []string{"compounding_risk"},
+		Grain: contextfabric.GrainDay, Rows: rows,
+	})
+	decl := contextfabric.FactFieldDeclaration{Name: "daily_health", Columns: []contextfabric.FactColumnDeclaration{
+		{Name: "day", Type: contextfabric.FactFieldString},
+		{Name: "compounding_risk", Type: contextfabric.FactFieldNumber, Nullable: true},
+	}}
+	plan := readPlan{time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}}
+	return serveTable("daily_health", decl, value, GatedFact{}, plan, nil)
+}
+
+func TestServeTableOffsetFormKeyCountsAsItsUTCDay(t *testing.T) {
+	table := serveKeys(t, "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:00Z")
+	if *table.ReturnedPoints != 2 || len(table.MissingInstants) != 0 {
+		t.Fatalf("returned=%d missing=%v", *table.ReturnedPoints, table.MissingInstants)
+	}
+}
+
+func TestServeTableNonMidnightOffsetKeyCountsAsItsUTCDay(t *testing.T) {
+	table := serveKeys(t, "2026-03-01T23:00:00-05:00", "2026-03-01T10:00:00Z")
+	if *table.ReturnedPoints != 2 || len(table.MissingInstants) != 0 || table.RowsReturned != 2 {
+		t.Fatalf("returned=%d missing=%v rows=%d", *table.ReturnedPoints, table.MissingInstants, table.RowsReturned)
+	}
+	if got := serveKeys(t, "2026-03-01T10:00:00Z"); *got.ReturnedPoints != 1 || len(got.MissingInstants) != 1 || got.MissingInstants[0] != "2026-03-02" {
+		t.Fatalf("returned=%d missing=%v", *got.ReturnedPoints, got.MissingInstants)
+	}
+}
+
+func TestServeTableUnparsableKeyIsServedAndMatchesNoDay(t *testing.T) {
+	table := serveKeys(t, "not-a-day", "2026-03-01")
+	if table.RowsReturned != 2 || *table.ReturnedPoints != 1 || len(table.MissingInstants) != 1 {
+		t.Fatalf("rows=%d returned=%d missing=%v", table.RowsReturned, *table.ReturnedPoints, table.MissingInstants)
+	}
+}

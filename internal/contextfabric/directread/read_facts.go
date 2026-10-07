@@ -777,8 +777,8 @@ func serveTable(name string, declaration contextfabric.FactFieldDeclaration, val
 		for _, row := range sourceRows {
 			if cell, ok := row.Fields[table.Key[0]]; ok && cell.String != nil {
 				instants[*cell.String] = true
-				if rowCarriesValue(row, table.Measures) {
-					measured[*cell.String] = true
+				if day, ok := seriesKeyDay(*cell.String); ok && rowCarriesValue(row, table.Measures) {
+					measured[day.Format("2006-01-02")] = true
 				}
 			}
 		}
@@ -796,7 +796,7 @@ func serveTable(name string, declaration contextfabric.FactFieldDeclaration, val
 			for day := plan.time.Start.UTC().Truncate(24 * time.Hour); day.Before(*plan.time.End); day = day.Add(24 * time.Hour) {
 				expected++
 				label := day.Format("2006-01-02")
-				if !measured[label] && !measured[day.Format(time.RFC3339)] {
+				if !measured[label] {
 					missing = append(missing, label)
 				}
 			}
@@ -808,6 +808,19 @@ func serveTable(name string, declaration contextfabric.FactFieldDeclaration, val
 	return table
 }
 
+// seriesKeyDay maps a series key (a calendar day or an RFC3339 instant, any
+// offset) to its UTC day. It is the one place a key is parsed.
+func seriesKeyDay(key string) (time.Time, bool) {
+	instant, err := time.Parse("2006-01-02", key)
+	if err != nil {
+		instant, err = time.Parse(time.RFC3339, key)
+		if err != nil {
+			return time.Time{}, false
+		}
+	}
+	return instant.UTC().Truncate(24 * time.Hour), true
+}
+
 // instantInWindow reports whether a series row's key falls in the requested
 // range, on the same UTC day boundaries the expected-points walk uses. A key
 // that does not parse is kept.
@@ -816,14 +829,10 @@ func instantInWindow(row contextfabric.FactValueRow, key string, start, end time
 	if !ok || cell.String == nil {
 		return true
 	}
-	instant, err := time.Parse("2006-01-02", *cell.String)
-	if err != nil {
-		instant, err = time.Parse(time.RFC3339, *cell.String)
-		if err != nil {
-			return true
-		}
+	day, ok := seriesKeyDay(*cell.String)
+	if !ok {
+		return true
 	}
-	day := instant.UTC().Truncate(24 * time.Hour)
 	return !day.Before(start.UTC().Truncate(24*time.Hour)) && day.Before(end)
 }
 
