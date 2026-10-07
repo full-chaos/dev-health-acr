@@ -9,12 +9,15 @@ func uncommittedTeamAnchorNamed(frame *QuestionFrame, declaredAnchorKind Subject
 		len(resolution.Committed) == 0 && len(resolution.Candidates) > 0
 }
 
-// uncommittedTeamAnchorPrompt names the one candidate; several candidates keep
-// the resolver's prompt, or the generic one when it built none.
+// uncommittedTeamAnchorPrompt names the candidates the guard saw when the
+// resolver built no prompt, so the clarification never goes out nameless.
 func uncommittedTeamAnchorPrompt(resolution SubjectResolution) string {
-	if resolution.ClarificationPrompt != "" || len(resolution.Candidates) != 1 {
+	if resolution.ClarificationPrompt != "" {
 		return resolution.ClarificationPrompt
 	}
-	subject := resolution.Candidates[0].Subject
-	return "Did you mean " + string(subject.Kind) + " " + subject.Label + "?"
+	if len(resolution.Candidates) == 1 {
+		subject := resolution.Candidates[0].Subject
+		return "Did you mean " + string(subject.Kind) + " " + subject.Label + "?"
+	}
+	return ClarificationPrompt(resolution.Candidates)
 }

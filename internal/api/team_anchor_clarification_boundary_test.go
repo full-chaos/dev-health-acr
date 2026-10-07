@@ -2,11 +2,9 @@ package api
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -23,11 +21,7 @@ func (g uncommittedTeamAnchorGraph) ResolveSubjects(context.Context, storage.Pri
 	if candidates == nil {
 		candidates = []contextfabric.SubjectCandidate{}
 	}
-	prompt := ""
-	if len(g.candidates) > 1 {
-		prompt = graphrank.ClarificationPrompt(g.candidates)
-	}
-	return contextfabric.SubjectResolution{ClarificationPrompt: prompt, Candidates: candidates, Committed: []contextfabric.SubjectRef{}}, contextfabric.StructureOfferMaterial{}, contextfabric.CommitBasisSet{}, contextfabric.CommitDecisionDigestSet{}, nil
+	return contextfabric.SubjectResolution{Candidates: candidates, Committed: []contextfabric.SubjectRef{}}, contextfabric.StructureOfferMaterial{}, contextfabric.CommitBasisSet{}, contextfabric.CommitDecisionDigestSet{}, nil
 }
 
 func (g uncommittedTeamAnchorGraph) DiscoverContext(ctx context.Context, p storage.Principal, r contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
@@ -67,10 +61,9 @@ func TestAnOwnershipQuestionOnCollidingTeamLabelsIsAClarificationNotAnOrgCohort(
 	if node.Structured.Clarification == nil || len(node.Structured.Clarification.Candidates) != 3 {
 		t.Fatalf("clarification = %+v, want the three colliding candidates", node.Structured.Clarification)
 	}
-	for _, want := range []string{"team", "project"} {
-		if !strings.Contains(node.Structured.Clarification.Prompt, want) {
-			t.Fatalf("prompt %q lacks the kind cue %q", node.Structured.Clarification.Prompt, want)
-		}
+	const want = "Which subject did you mean: platform (team, linear), platform (team, jira), platform (project)?"
+	if node.Structured.Clarification.Prompt != want {
+		t.Fatalf("prompt = %q, want %q", node.Structured.Clarification.Prompt, want)
 	}
 }
 

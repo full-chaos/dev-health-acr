@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
@@ -2082,44 +2081,9 @@ func FinalizeExactResolutionWithBasis(candidatesBySubject map[string]contextfabr
 }
 
 // ClarificationPrompt builds the caller-facing ambiguity prompt from the
-// (post-truncation) candidate set. Ported unchanged from
-// zepgraph.clarificationPrompt.
+// (post-truncation) candidate set.
 func ClarificationPrompt(candidates []contextfabric.SubjectCandidate) string {
-	max := 3
-	if len(candidates) < max {
-		max = len(candidates)
-	}
-	labels := make([]string, 0, max)
-	shown := candidates
-	if len(shown) > max {
-		shown = shown[:max]
-	}
-	colliding := collidingLabelKeys(shown)
-	crossKind := crossKindLabels(shown)
-	for _, candidate := range shown {
-		label := candidate.Subject.Label
-		cues := make([]string, 0, 2)
-		if crossKind[strings.ToLower(strings.TrimSpace(candidate.Subject.Label))] {
-			cues = append(cues, string(candidate.Subject.Kind))
-		}
-		if candidate.Provider != "" && colliding[candidateLabelKey(candidate)] {
-			cues = append(cues, candidate.Provider)
-		}
-		if len(cues) > 0 {
-			label += " (" + strings.Join(cues, ", ") + ")"
-		}
-		labels = append(labels, label)
-	}
-	if len(labels) == 0 {
-		// An empty candidate list has no subject to ask about, and the
-		// prompt this used to build -- "Which subject did you mean: ?" --
-		// is prose no caller can act on. Returning empty also means that if
-		// the guarded rebuild site in resolve.go is ever called on an empty
-		// list, it degrades to "no prompt" (and so to the ordinary no_match
-		// terminal) rather than shipping a broken question to a user.
-		return ""
-	}
-	return "Which subject did you mean: " + strings.Join(labels, ", ") + "?"
+	return contextfabric.ClarificationPrompt(candidates)
 }
 
 // kindReserveSlotsPerKind is how many candidates of a RESERVED kind phase 4
