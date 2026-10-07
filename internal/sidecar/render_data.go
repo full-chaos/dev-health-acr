@@ -309,11 +309,12 @@ func RenderFindSubjectsSummary(raw json.RawMessage, max int) string {
 // the first list in the data.
 func RenderOperationSummary(raw json.RawMessage, max int) string {
 	var view struct {
-		Call         string `json:"call"`
-		Completeness string `json:"completeness"`
-		Result       string `json:"result"`
-		Operation    string `json:"operation"`
-		Refusal      *struct {
+		Call               string `json:"call"`
+		Completeness       string `json:"completeness"`
+		CompletenessReason string `json:"completeness_reason"`
+		Result             string `json:"result"`
+		Operation          string `json:"operation"`
+		Refusal            *struct {
 			Code   string `json:"code"`
 			Reason string `json:"reason"`
 			Path   string `json:"path"`
@@ -339,7 +340,7 @@ func RenderOperationSummary(raw json.RawMessage, max int) string {
 	if result == "" {
 		result = "none"
 	}
-	t.line(fmt.Sprintf("run_operation %s: call=%s; completeness=%s; result=%s.", plainToken(view.Operation), plainToken(view.Call), plainToken(view.Completeness), plainToken(result)))
+	t.line(fmt.Sprintf("run_operation %s: call=%s; completeness=%s; result=%s.", plainToken(view.Operation), plainToken(view.Call), completenessText(view.Completeness, view.CompletenessReason), plainToken(result)))
 	if view.Completeness == "unknown" {
 		t.line("Completeness unknown means unknown: do not call this complete.")
 	}
@@ -347,7 +348,7 @@ func RenderOperationSummary(raw json.RawMessage, max int) string {
 	case "empty_unverified":
 		t.line("Empty and unverified: this is not proof of no data, and not healthy.")
 	case "empty_declared":
-		t.line("Empty, and the payload declared itself complete.")
+		t.line("Empty, and the read returned the whole set it was asked for.")
 	}
 	if view.Refusal != nil {
 		line := fmt.Sprintf("Refused: code=%s; reason: %s", plainToken(view.Refusal.Code), plainToken(view.Refusal.Reason))
@@ -380,21 +381,23 @@ func RenderOperationSummary(raw json.RawMessage, max int) string {
 // shape. It adds nothing to the structured content.
 func RenderGraphQLSummary(raw json.RawMessage, max int) string {
 	var view struct {
-		Call         string `json:"call"`
-		Completeness string `json:"completeness"`
-		Result       string `json:"result"`
-		Refusal      *struct {
+		Call               string `json:"call"`
+		Completeness       string `json:"completeness"`
+		CompletenessReason string `json:"completeness_reason"`
+		Result             string `json:"result"`
+		Refusal            *struct {
 			Code       string `json:"code"`
 			Reason     string `json:"reason"`
 			Path       string `json:"path"`
 			ReadBudget string `json:"read_budget"`
 		} `json:"refusal"`
 		RootFields []struct {
-			Key            string `json:"key"`
-			Field          string `json:"field"`
-			Operation      string `json:"operation"`
-			Completeness   string `json:"completeness"`
-			EffectiveScope *struct {
+			Key                string `json:"key"`
+			Field              string `json:"field"`
+			Operation          string `json:"operation"`
+			Completeness       string `json:"completeness"`
+			CompletenessReason string `json:"completeness_reason"`
+			EffectiveScope     *struct {
 				RepoIDs       []string `json:"repo_ids"`
 				ForcedByGrant bool     `json:"forced_by_grant"`
 			} `json:"effective_scope"`
@@ -417,7 +420,7 @@ func RenderGraphQLSummary(raw json.RawMessage, max int) string {
 	if result == "" {
 		result = "none"
 	}
-	t.line(fmt.Sprintf("graphql_query: call=%s; completeness=%s; result=%s.", plainToken(view.Call), plainToken(view.Completeness), plainToken(result)))
+	t.line(fmt.Sprintf("graphql_query: call=%s; completeness=%s; result=%s.", plainToken(view.Call), completenessText(view.Completeness, view.CompletenessReason), plainToken(result)))
 	if view.Completeness == "unknown" {
 		t.line("Completeness unknown means unknown: do not call this complete.")
 	}
@@ -425,7 +428,7 @@ func RenderGraphQLSummary(raw json.RawMessage, max int) string {
 	case "empty_unverified":
 		t.line("Empty and unverified: this is not proof of no data, and not healthy.")
 	case "empty_declared":
-		t.line("Empty, and the payload declared itself complete.")
+		t.line("Empty, and the read returned the whole set it was asked for.")
 	}
 	if view.Refusal != nil {
 		line := fmt.Sprintf("Refused: code=%s; reason: %s", plainToken(view.Refusal.Code), plainToken(view.Refusal.Reason))
@@ -446,7 +449,7 @@ func RenderGraphQLSummary(raw json.RawMessage, max int) string {
 		t.line("Upstream error classes: " + strings.Join(classes, ", ") + ".")
 	}
 	for _, root := range view.RootFields {
-		line := fmt.Sprintf("Root %s: field %s, policy %s, completeness %s", plainToken(root.Key), plainToken(root.Field), plainToken(root.Operation), plainToken(root.Completeness))
+		line := fmt.Sprintf("Root %s: field %s, policy %s, completeness %s", plainToken(root.Key), plainToken(root.Field), plainToken(root.Operation), completenessText(root.Completeness, root.CompletenessReason))
 		if root.EffectiveScope != nil {
 			line += fmt.Sprintf(", %d repositories, forced by your grant: %t", len(root.EffectiveScope.RepoIDs), root.EffectiveScope.ForcedByGrant)
 		}
@@ -533,4 +536,11 @@ func renderOperationData(t *dataText, data json.RawMessage) {
 // bound and is valid UTF-8. Tests use it as the oracle.
 func DataTextWithinBound(text string) bool {
 	return len(text) <= DataTextMaxBytes && utf8.ValidString(text)
+}
+
+func completenessText(state, reason string) string {
+	if reason == "" {
+		return plainToken(state)
+	}
+	return plainToken(state) + " (" + plainToken(reason) + ")"
 }

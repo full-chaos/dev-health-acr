@@ -389,7 +389,7 @@ func TestChaos7072OperationUnrestrictedServedWithOutputAllowlist(t *testing.T) {
 	h.upstream.respond = func(map[string]any) string { return compoundingRiskAnswer(c7072RepoA, c7072RepoB) }
 	response := h.post(ContextFabricDataOperationsPath, token, `{"operation":"compoundingRisk","variables":{"filter":{"breakout":"REPO"}}}`)
 	body := decodeC7072(t, response)
-	if body["call"] != "served" || body["result"] != "data" || body["completeness"] != "unknown" || body["consistency"] != "best_effort" {
+	if body["call"] != "served" || body["result"] != "data" || body["completeness"] != "declared_complete" || body["consistency"] != "best_effort" {
 		t.Fatalf("served body %v", body)
 	}
 	rows := body["data"].(map[string]any)["compoundingRisk"].(map[string]any)["rows"].([]any)

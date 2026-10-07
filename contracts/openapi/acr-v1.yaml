@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 4d19dad252c8e4f790c88216c97a706e9a98db59db48d587fc42b5bb9020d1bb
+# canonical-content-sha256: 572f1d736d52237f5209c8d67929fdfe7ec46453b01bc3990f16cb5d27b5e07b
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1517,6 +1517,15 @@ components:
             - "declared_complete"
             - "declared_partial"
             - "unknown"
+        completeness_reason:
+          enum:
+            - "page_cut"
+            - "bounded"
+            - "coverage_below_one"
+            - "insufficient_history"
+            - "degraded"
+            - "disclosure_absent"
+            - "limit_not_sent"
         consistency:
           const: "best_effort"
         data:
@@ -1641,6 +1650,15 @@ components:
                   - "declared_complete"
                   - "declared_partial"
                   - "unknown"
+              completeness_reason:
+                enum:
+                  - "page_cut"
+                  - "bounded"
+                  - "coverage_below_one"
+                  - "insufficient_history"
+                  - "degraded"
+                  - "disclosure_absent"
+                  - "limit_not_sent"
               effective_scope:
                 additionalProperties: false
                 properties:
@@ -1743,6 +1761,15 @@ components:
             - "declared_complete"
             - "declared_partial"
             - "unknown"
+        completeness_reason:
+          enum:
+            - "page_cut"
+            - "bounded"
+            - "coverage_below_one"
+            - "insufficient_history"
+            - "degraded"
+            - "disclosure_absent"
+            - "limit_not_sent"
         consistency:
           const: "best_effort"
         data:

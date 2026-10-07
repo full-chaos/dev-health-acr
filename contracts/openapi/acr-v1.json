@@ -2421,6 +2421,17 @@
               "unknown"
             ]
           },
+          "completeness_reason": {
+            "enum": [
+              "page_cut",
+              "bounded",
+              "coverage_below_one",
+              "insufficient_history",
+              "degraded",
+              "disclosure_absent",
+              "limit_not_sent"
+            ]
+          },
           "result": {
             "enum": [
               "data",
@@ -2679,6 +2690,17 @@
               "unknown"
             ]
           },
+          "completeness_reason": {
+            "enum": [
+              "page_cut",
+              "bounded",
+              "coverage_below_one",
+              "insufficient_history",
+              "degraded",
+              "disclosure_absent",
+              "limit_not_sent"
+            ]
+          },
           "result": {
             "enum": [
               "data",
@@ -2897,6 +2919,17 @@
                     "declared_complete",
                     "declared_partial",
                     "unknown"
+                  ]
+                },
+                "completeness_reason": {
+                  "enum": [
+                    "page_cut",
+                    "bounded",
+                    "coverage_below_one",
+                    "insufficient_history",
+                    "degraded",
+                    "disclosure_absent",
+                    "limit_not_sent"
                   ]
                 },
                 "effective_scope": {

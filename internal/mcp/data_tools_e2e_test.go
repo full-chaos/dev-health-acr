@@ -333,7 +333,7 @@ func TestDataToolsEndToEndAreModelFreeAndScopedToTheCredential(t *testing.T) {
 		t.Fatalf("find_subjects: %v %q", found, text)
 	}
 	risk, text := dtCallTool(t, cs, "run_operation", map[string]any{"operation": "compoundingRisk", "variables": map[string]any{"filter": map[string]any{"breakout": "REPO", "repoIds": []string{"repository:" + dtRepoA}}}})
-	if risk == nil || risk["call"] != "served" || risk["result"] != "data" || risk["completeness"] != "unknown" {
+	if risk == nil || risk["call"] != "served" || risk["result"] != "data" || risk["completeness"] != "declared_complete" {
 		t.Fatalf("compoundingRisk: %v %q", risk, text)
 	}
 	hot, text := dtCallTool(t, cs, "run_operation", map[string]any{"operation": "hotspots", "variables": map[string]any{"input": map[string]any{"repoIds": []string{"repository:" + dtRepoA}, "sinceUtc": "2026-08-29T00:00:00Z", "untilUtc": "2026-09-28T00:00:00Z"}}})

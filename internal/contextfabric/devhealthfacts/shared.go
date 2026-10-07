@@ -498,7 +498,7 @@ import (
 // counts as missing, not returned: returned_points excludes it and
 // missing_instants names it. A candidate saved before v97 may count such a day
 // as returned and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v97"
+const QueryVersion = "devhealthfacts.clickhouse.v98"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

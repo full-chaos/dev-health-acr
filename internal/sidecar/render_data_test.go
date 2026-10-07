@@ -108,3 +108,20 @@ func TestFindSubjectsSummaryKeepsTheProviderColumn(t *testing.T) {
 		t.Fatalf("summary lost the provider column:\n%s", text)
 	}
 }
+
+func TestGraphQLSummaryShowsTheCompletenessReasonPerRoot(t *testing.T) {
+	answer, _ := json.Marshal(map[string]any{
+		"call": "served", "completeness": "declared_partial", "completeness_reason": "bounded", "result": "data",
+		"data": map[string]any{"a": map[string]any{}, "b": map[string]any{}},
+		"root_fields": []map[string]any{
+			{"key": "a", "field": "hotspots", "operation": "hotspots", "completeness": "declared_partial", "completeness_reason": "bounded", "added_paths": []string{}},
+			{"key": "b", "field": "workGraphEdges", "operation": "workGraphEdges", "completeness": "unknown", "completeness_reason": "disclosure_absent", "added_paths": []string{}},
+		},
+	})
+	text := RenderGraphQLSummary(answer, DataTextMaxBytes)
+	for _, want := range []string{"completeness=declared_partial (bounded)", "completeness declared_partial (bounded)", "completeness unknown (disclosure_absent)"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+}

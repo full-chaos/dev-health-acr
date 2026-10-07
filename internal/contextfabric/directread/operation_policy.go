@@ -37,7 +37,7 @@ package directread
 //	  (*OperationPolicy).Variable(path) (VariableRule, bool)
 //	  (*OperationPolicy).Scope(CallerClass) CallerScope
 //	  (*OperationPolicy).OutputAllowed(path) bool
-//	  (*OperationPolicy).Completeness(data []byte) Completeness
+//	  (*OperationPolicy).Verdict(data []byte, vars map[string]any) CompletenessVerdict
 //	  FilterResponse(op, data) (FilterResult, error)
 //	      removes every response path the allowlist does not list; the
 //	      caller ERROR-logs FilterResult.RemovedPaths / RemovedValues.
@@ -987,43 +987,6 @@ func (f *responseFilter) value(path string, value any) (any, bool) {
 		f.remove(path)
 		return nil, false
 	}
-}
-
-// Completeness applies the operation's disclosure fields to a "data" object
-// (D.7). Without a disclosure field the answer is always unknown.
-func (op *OperationPolicy) Completeness(data []byte) Completeness {
-	if len(op.Disclosure) == 0 {
-		return CompletenessUnknown
-	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var root any
-	if dec.Decode(&root) != nil {
-		return CompletenessUnknown
-	}
-	for _, d := range op.Disclosure {
-		value, present := lookupScalarPath(root, d.Path)
-		if !present {
-			continue
-		}
-		switch d.Rule {
-		case DisclosurePartialWhenNonNull:
-			if value != nil {
-				return CompletenessDeclaredPartial
-			}
-		case DisclosurePartialWhenTrue:
-			if b, ok := value.(bool); ok && b {
-				return CompletenessDeclaredPartial
-			}
-		case DisclosurePartialWhenBelowOne:
-			if n, ok := value.(json.Number); ok {
-				if x, err := n.Float64(); err == nil && x < 1 {
-					return CompletenessDeclaredPartial
-				}
-			}
-		}
-	}
-	return CompletenessUnknown
 }
 
 func lookupScalarPath(root any, path string) (any, bool) {

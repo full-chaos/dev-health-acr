@@ -30,16 +30,29 @@
     },
     "completeness": {
       "type": "string",
-      "description": "declared_complete or declared_partial only when the payload states its own coverage; otherwise unknown, which means unknown.",
+      "description": "declared_complete: the read returned the whole set it was asked for (no cut, no row cap reached, no disclosure field fired); this states read coverage, not data health. declared_partial: part of the set is missing; completeness_reason says why. unknown: acr could not tell, which means unknown.",
       "enum": [
         "declared_complete",
         "declared_partial",
         "unknown"
       ]
     },
+    "completeness_reason": {
+      "type": "string",
+      "description": "Why completeness is not declared_complete: page_cut (answer cut to whole rows to fit max_bytes), bounded (a list reached the row cap sent or defaulted), coverage_below_one, insufficient_history, degraded (the payload states a degraded reason), disclosure_absent (a field the verdict needs was not selected or not returned), limit_not_sent (the row cap is unknown). Absent when completeness is declared_complete.",
+      "enum": [
+        "page_cut",
+        "bounded",
+        "coverage_below_one",
+        "insufficient_history",
+        "degraded",
+        "disclosure_absent",
+        "limit_not_sent"
+      ]
+    },
     "result": {
       "type": "string",
-      "description": "data: rows came back. empty_declared: empty and the payload declared itself complete. empty_unverified: empty and completeness is unknown; that is not proof of no data.",
+      "description": "data: rows came back. empty_declared: empty and the read returned the whole set it was asked for. empty_unverified: empty and completeness is unknown; that is not proof of no data.",
       "enum": [
         "data",
         "empty_unverified",
@@ -177,6 +190,19 @@
               "declared_complete",
               "declared_partial",
               "unknown"
+            ]
+          },
+          "completeness_reason": {
+            "type": "string",
+            "description": "Why completeness is not declared_complete: page_cut (answer cut to whole rows to fit max_bytes), bounded (a list reached the row cap sent or defaulted), coverage_below_one, insufficient_history, degraded (the payload states a degraded reason), disclosure_absent (a field the verdict needs was not selected or not returned), limit_not_sent (the row cap is unknown). Absent when completeness is declared_complete.",
+            "enum": [
+              "page_cut",
+              "bounded",
+              "coverage_below_one",
+              "insufficient_history",
+              "degraded",
+              "disclosure_absent",
+              "limit_not_sent"
             ]
           },
           "effective_scope": {
