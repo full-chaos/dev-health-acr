@@ -750,6 +750,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		for _, anchor := range teamAnchors {
 			isTeamAnchor = isTeamAnchor || anchor == subject
 		}
+		if !teamAnchoredProjects || isTeamAnchor {
+			edgeFilters.mergeReachDenied(filters.ReachDenied)
+		}
 		for _, n := range nodes {
 			if teamAnchoredProjects && !isTeamAnchor && mustSubject(n).Kind == contextfabric.SubjectProject {
 				continue
@@ -1351,6 +1354,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// principal restriction, exactly as it does for every other arm; it is
 	// never widened or replaced for this pairing.
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
+	cohortKindScopedAuthzDropped, anchorReachDenied := anchorReachDeniedCount(cohortKind, cohortNodes, principal, request, edgeFilters.ReachDenied, cohortKindScopedAuthzDropped)
 	if cohort != nil && deploymentAnchor != nil {
 		// Every member was reached from the anchor, so the member says so
 		// instead of the pool's organization-level reason.
@@ -1451,7 +1455,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	cohortKindCensusedExhaustively := (ranExhaustiveCensus && !exactNameTruncated && exactNameCensusCoversKind(declaredCohortKind)) ||
 		(kindCensusRan && !kindCensusTruncated) ||
 		(ownershipRoutedRepoSlug != "" && !ownershipCensusTruncated)
-	cohortCutByAuthz := cohortKindScopedAuthzDropped > 0 && (cohort != nil || cohortKindCensusedExhaustively)
+	cohortCutByAuthz := cohortKindScopedAuthzDropped > 0 && (cohort != nil || cohortKindCensusedExhaustively || anchorReachDenied)
 	if a.config.Telemetry != nil {
 		if edgeFilters.Authz > 0 || edgeFilters.TemporalWindow > 0 || admission.DroppedSelfLoopCount > 0 {
 			a.config.Telemetry.RecordEdgesFilteredByReason(ctx, principal.OrgID, edgeFilters.Authz, edgeFilters.TemporalWindow, admission.DroppedSelfLoopCount)

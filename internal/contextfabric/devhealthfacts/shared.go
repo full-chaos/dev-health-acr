@@ -503,7 +503,12 @@ import (
 // reach, never from the question text or another committed subject, and the
 // commit of a team under which none were found stands. A candidate saved before
 // v99 may hold a cohort of a text-matched project and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v99"
+//
+// v99 -> v100: a member kind the caller is denied inside a committed anchor's
+// own ownership reach is counted in the denied-cohort row and the answer is
+// served partial, not as none found. A candidate saved before v100 holds the
+// none-found answer and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v100"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
