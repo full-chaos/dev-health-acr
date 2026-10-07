@@ -105,3 +105,60 @@ func TestEveryOperationHasACompletenessBasis(t *testing.T) {
 		t.Error("reason vocabulary changed")
 	}
 }
+
+func TestJoinVerdictsPartialBeatsUnknownBeatsComplete(t *testing.T) {
+	c := CompletenessVerdict{State: CompletenessDeclaredComplete}
+	u := CompletenessVerdict{CompletenessUnknown, ReasonDisclosureAbsent}
+	p := CompletenessVerdict{CompletenessDeclaredPartial, ReasonBounded}
+	for _, tc := range []struct {
+		name string
+		seq  []CompletenessVerdict
+		want CompletenessVerdict
+	}{
+		{"complete only", []CompletenessVerdict{c, c}, c},
+		{"unknown after complete", []CompletenessVerdict{c, u}, u},
+		{"unknown before complete", []CompletenessVerdict{u, c}, u},
+		{"partial after unknown", []CompletenessVerdict{u, p}, p},
+		{"partial before complete", []CompletenessVerdict{p, c}, p},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var acc *CompletenessVerdict
+			for _, v := range tc.seq {
+				acc = joinVerdicts(acc, v)
+			}
+			if *acc != tc.want {
+				t.Fatalf("got %+v want %+v", *acc, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerdictIndexedCapAndRatioRows(t *testing.T) {
+	cat := loadDefault(t)
+	ib, _ := cat.Lookup("investmentBreakdown")
+	full, _ := cat.Lookup("investmentFull")
+	dec := func(s string) map[string]any {
+		var m map[string]any
+		d := json.NewDecoder(strings.NewReader(s))
+		d.UseNumber()
+		if err := d.Decode(&m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	var got CompletenessVerdict
+	got = ib.Verdict([]byte(`{"analytics":{"breakdowns":[{"dimension":"THEME"}]}}`), dec(`{}`))
+	if got.State != CompletenessUnknown || got.Reason != ReasonDisclosureAbsent {
+		t.Fatalf("items not selected: %+v", got)
+	}
+	// ratio exactly one is complete, just below one is partial.
+	body := func(r string) []byte {
+		return []byte(`{"analytics":{"sankey":{"coverage":{"teamCoverage":` + r + `,"repoCoverage":1}},"breakdowns":[]}}`)
+	}
+	if got := full.Verdict(body("1"), dec(`{}`)); got.State != CompletenessDeclaredComplete {
+		t.Fatalf("coverage 1: %+v", got)
+	}
+	if got := full.Verdict(body("0.99"), dec(`{}`)); got.State != CompletenessDeclaredPartial || got.Reason != ReasonCoverageBelowOne {
+		t.Fatalf("coverage 0.99: %+v", got)
+	}
+}
