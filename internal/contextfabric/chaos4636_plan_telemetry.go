@@ -232,6 +232,10 @@ type PlanNarrowingEvent struct {
 	// and a reader could not tell which a given event meant.
 	OutcomeItemsServed   int
 	OutcomeItemsDeclared int
+	// EvidencePinnedMembers is how many listed members a work-item walk-list
+	// byte cut kept only because cited evidence pins them. Zero when no walk
+	// list was cut.
+	EvidencePinnedMembers int
 	// OutcomeCompletenessState is what the served answer claims about
 	// itself, from the closed vocabulary the outcome set derives. It is on
 	// the event so that a served answer's completeness can be counted

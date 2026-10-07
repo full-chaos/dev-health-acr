@@ -5358,6 +5358,11 @@
         "presence": "required"
       },
       {
+        "key": "evidence_pinned_members",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",

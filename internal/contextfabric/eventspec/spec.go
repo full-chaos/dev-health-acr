@@ -1958,6 +1958,7 @@ var SynthesisRetrySelection = Event{
 		{Key: "quota_groups_granted", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "quota_groups_measured", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "quota_groups_over_allowance", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "evidence_pinned_members", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

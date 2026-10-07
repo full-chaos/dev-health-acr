@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"testing"
 
@@ -54,6 +55,7 @@ func TestAByteFitCutOfAWalkListServesAValidPayloadInsteadOfFailingValidation(t *
 		t.Fatal(err)
 	}
 	shape.maxBytes = measured.Bytes - measured.Bytes/5
+	shape.telemetry = &recordingTelemetry{}
 	cutResult, err, _ := budgetTrimInvestigate(t, shape)
 	if err != nil {
 		t.Fatalf("the byte fit cut failed the investigation: %v", err)
@@ -63,6 +65,13 @@ func TestAByteFitCutOfAWalkListServesAValidPayloadInsteadOfFailingValidation(t *
 	}
 	if err := ValidateWorkItemTuplePayload(cutResult, storage.Principal{OrgID: "org-1"}); err != nil {
 		t.Fatalf("served payload invalid: %v", err)
+	}
+	pinned := 0
+	for _, event := range shape.telemetry.planNarrowings {
+		pinned = max(pinned, event.EvidencePinnedMembers)
+	}
+	if want := walkListEvidencePinnedOnly(cutResult); want == 0 || pinned != want {
+		t.Fatalf("evidence_pinned_members on the narrowing event = %d, want %d (members kept only by cited evidence)", pinned, want)
 	}
 	for _, ref := range full.EvidenceRefIDs {
 		if !slices.Contains(cutResult.EvidenceRefIDs, ref) {
@@ -128,7 +137,8 @@ func TestTheServedFitCutOfAWalkListKeepsTheCitedEvidenceAndAValidPayload(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := &Engine{}
+	telemetry := &recordingTelemetry{}
+	engine := &Engine{telemetry: telemetry}
 	budget := ResponseBudget{MaxItems: 1000, MaxSerializedBytes: measured.Bytes - measured.Bytes/5}
 	served, err := engine.finalizeServedFitting(context.Background(), storage.Principal{OrgID: "org-1"}, BudgetAssertDecisive, full, budget)
 	if err != nil {
@@ -139,6 +149,9 @@ func TestTheServedFitCutOfAWalkListKeepsTheCitedEvidenceAndAValidPayload(t *test
 	}
 	if err := ValidateWorkItemTuplePayload(served, storage.Principal{OrgID: "org-1"}); err != nil {
 		t.Fatalf("served payload invalid after the served-fit cut: %v", err)
+	}
+	if len(telemetry.planNarrowings) != 1 || telemetry.planNarrowings[0].EvidencePinnedMembers != walkListEvidencePinnedOnly(served) || walkListEvidencePinnedOnly(served) == 0 {
+		t.Fatalf("served-fit narrowing events = %+v, want one carrying the pinned count %d", telemetry.planNarrowings, walkListEvidencePinnedOnly(served))
 	}
 }
 
@@ -160,5 +173,22 @@ func TestAWalkListWhoseEveryMemberIsCitedAndOverrunsTheCeilingIsRefusedNotServed
 	}
 	if _, fired := WorkItemTupleRuleFiredBy(err); fired {
 		t.Fatalf("the refusal carries a payload rule: %v", err)
+	}
+}
+
+func TestPlanNarrowingLineCarriesEvidencePinnedMembers(t *testing.T) {
+	event := PlanNarrowingEvent{
+		Family: QuestionFamilyScopedCohortStatus, Stage: contractsv1.ContextFabricPlanNarrowingAssembledResult,
+		Before: 50, After: 34, EvidencePinnedMembers: 7,
+	}
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordPlanNarrowing(context.Background(), storage.Principal{OrgID: "org-1"}, event)
+	})
+	if len(records) != 1 {
+		t.Fatalf("emitted %d records, want 1", len(records))
+	}
+	got, ok := records[0]["evidence_pinned_members"]
+	if !ok || int(got.(float64)) != 7 {
+		t.Fatalf("evidence_pinned_members = %v (present %v), want 7", got, ok)
 	}
 }
