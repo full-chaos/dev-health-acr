@@ -879,21 +879,22 @@ func classifyProjectionError(operation string, err error) error {
 // batch, whatever its size: the work items whose column edge the batch
 // asserts lose every other open column edge, and the work items the batch
 // retracts (a column project that is unresolved or ambiguous, or history that
-// supersedes the column) lose all of them. A stored edge newer than the row
-// that retires it stays, as for every tombstone.
+// supersedes the column) lose all of them. A tombstone leaves a stored edge
+// newer than itself, as every tombstone does; the asserting row is the current
+// truth, so it removes the other edges whatever their stamps.
 func (a *Adapter) retractColumnProjectEdges(ctx context.Context, key string, batch contextfabric.ProjectionBatch) error {
 	var keeps, drops []interface{}
 	for _, relationship := range batch.Relationships {
 		if relationship.Type == contractsv1.ContextFabricRelationshipBelongsToProject && relationship.ValidFrom == nil && relationship.From.Kind == contextfabric.SubjectWorkItem {
-			keeps = append(keeps, map[string]interface{}{"kind": string(relationship.From.Kind), "sid": relationship.From.CanonicalID, "rid": relationship.RelationshipID, "ns": nsTimestamp(relationship.ObservedAt)})
+			keeps = append(keeps, map[string]interface{}{"kind": string(relationship.From.Kind), "sid": relationship.From.CanonicalID, "rid": relationship.RelationshipID, "ns": nsTimestamp(relationship.ObservedAt), "guard": false})
 		}
 	}
 	for _, tombstone := range batch.Tombstones {
 		if tombstone.Kind == contextfabric.TombstoneKindColumnProjectEdges {
-			drops = append(drops, map[string]interface{}{"kind": string(contextfabric.SubjectWorkItem), "sid": tombstone.CanonicalID, "rid": "", "ns": nsTimestamp(tombstone.EffectiveAt)})
+			drops = append(drops, map[string]interface{}{"kind": string(contextfabric.SubjectWorkItem), "sid": tombstone.CanonicalID, "rid": "", "ns": nsTimestamp(tombstone.EffectiveAt), "guard": true})
 		}
 	}
-	statement := fmt.Sprintf("UNWIND $rows AS row MATCH (a:%s {%s:$org, %s:row.kind, %s:row.sid})-[r:%s]->() WHERE r.%s = $rel AND r.%s IS NULL AND r.%s <> row.rid AND (r.%s IS NULL OR r.%s <= row.ns) DELETE r",
+	statement := fmt.Sprintf("UNWIND $rows AS row MATCH (a:%s {%s:$org, %s:row.kind, %s:row.sid})-[r:%s]->() WHERE r.%s = $rel AND r.%s IS NULL AND r.%s <> row.rid AND (NOT row.guard OR r.%s IS NULL OR r.%s <= row.ns) DELETE r",
 		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, propRelationType, propValidFromNs, propRelationshipID, propObservedAtNs, propObservedAtNs)
 	for _, rows := range [][]interface{}{keeps, drops} {
 		if len(rows) == 0 {

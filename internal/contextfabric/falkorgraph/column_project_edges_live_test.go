@@ -111,4 +111,11 @@ func TestLiveColumnProjectEdgesKeepOneOpenEdgePerWorkItem(t *testing.T) {
 	if got := openEdgeIDs(t, ctx, adapter, key, org, pr); len(got) != 2 {
 		t.Fatalf("a work item retraction touched a pull request: %v", got)
 	}
+
+	// A retraction leaves a stored edge stamped after it.
+	apply("batch-0006", t2.Add(time.Hour), []contextfabric.RelationshipProjection{columnEdge("rel-w1-C", wi, projA, t2.Add(time.Hour), nil)}, []contextfabric.ProjectionTombstone{})
+	apply("batch-0007", t2, []contextfabric.RelationshipProjection{}, []contextfabric.ProjectionTombstone{retract(t2)})
+	if got := openEdgeIDs(t, ctx, adapter, key, org, wi); fmt.Sprint(got) != "[rel-w1-C]" {
+		t.Fatalf("a retraction removed an edge stamped after it: open edges %v, want [rel-w1-C]", got)
+	}
 }
