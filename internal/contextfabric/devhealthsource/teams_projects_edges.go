@@ -569,7 +569,7 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 			// own column-arm literal): {work_item, pull_request}. An
 			// unrecognized value is schema drift this producer must not
 			// silently misroute.
-			return nil, &ProducerRejection{Reason: fmt.Sprintf("project_membership_presence returned unknown subject_kind %q", subjectKind)}
+			return nil, &ProducerRejection{Reason: fmt.Sprintf("project_membership_presence returned unknown subject_kind %q (source %q, repo %q, subject %q, project %q)", subjectKind, source, repoID, subjectID, projectID)}
 		}
 
 		// source is a closed vocabulary too ({transition, work_item_column})
