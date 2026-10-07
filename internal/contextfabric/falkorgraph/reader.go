@@ -654,6 +654,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			ownershipAnchorBasis = AnchorBasisBound
 		}
 	}
+	teamAnchors := teamAnchoredProjectCohort(request, declaredCohortKindForRouting)
+	teamAnchoredProjects := len(teamAnchors) > 0
 	// teamMembersOfScope: the frame asks for the team members of a named
 	// anchor, the one frame ownership routing can serve.
 	teamMembersOfScope := declaredCohortKindForRouting == contextfabric.SubjectTeam && request.Frame != nil &&
@@ -744,8 +746,17 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		edgeFilters.Authz += filters.Authz
 		edgeFilters.TemporalWindow += filters.TemporalWindow
-		edgeFilters.mergeReachDenied(filters.ReachDenied)
+		isTeamAnchor := false
+		for _, anchor := range teamAnchors {
+			isTeamAnchor = isTeamAnchor || anchor == subject
+		}
+		if !teamAnchoredProjects || isTeamAnchor {
+			edgeFilters.mergeReachDenied(filters.ReachDenied)
+		}
 		for _, n := range nodes {
+			if teamAnchoredProjects && !isTeamAnchor && mustSubject(n).Kind == contextfabric.SubjectProject {
+				continue
+			}
 			// When this call is ownership-routed for the declared member
 			// kind, that kind's member pool is the ownership census below
 			// ONLY -- never blended with a hop-walked node of the same kind
@@ -769,6 +780,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			}
 		}
 		for _, e := range edges {
+			if teamAnchoredProjects && !isTeamAnchor && (e.From.Kind == contextfabric.SubjectProject || e.To.Kind == contextfabric.SubjectProject) {
+				continue
+			}
 			if deploymentAnchor != nil && subject != *deploymentAnchor && (e.From.Kind == contextfabric.SubjectDeployment || e.To.Kind == contextfabric.SubjectDeployment) {
 				continue
 			}
@@ -923,6 +937,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if ownershipRoutedRepoSlug != "" && subject.Kind == contextfabric.SubjectTeam && !seenNode[graphrank.SubjectKey(subject)] {
 			continue
 		}
+		if teamAnchoredProjects && subject.Kind == contextfabric.SubjectProject && !seenNode[graphrank.SubjectKey(subject)] {
+			continue
+		}
 		nk := graphrank.SubjectKey(subject)
 		if !seenNode[nk] {
 			seenNode[nk] = true
@@ -1017,13 +1034,16 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// question-text match the plain arm already runs, merely not forced to
 	// share its budget with kinds this cohort never asked about.
 	cohortFulltextTruncated := fulltextTruncated
-	if deploymentAnchor != nil || ownershipRoutedRepoSlug != "" {
+	if deploymentAnchor != nil || ownershipRoutedRepoSlug != "" || teamAnchoredProjects {
 		// No lexical arm can add a member to an anchored deployment cohort or
 		// to an ownership-routed one, so a cut lexical arm is not a loss from
 		// it and the kind-scoped arm has nothing to fetch.
 		cohortFulltextTruncated = false
 	}
-	if declaredCohortKindForRouting != "" && !censusAdmitted && deploymentAnchor == nil && ownershipRoutedRepoSlug == "" {
+	if teamAnchoredProjects && !censusAdmitted && deploymentAnchor == nil && ownershipRoutedRepoSlug == "" && a.config.Telemetry != nil {
+		a.config.Telemetry.RecordCohortKindFulltext(ctx, principal.OrgID, CohortKindFulltextTeamAnchorReach, declaredCohortKindForRouting, 0, false, 0, 0, nil)
+	}
+	if declaredCohortKindForRouting != "" && !censusAdmitted && deploymentAnchor == nil && ownershipRoutedRepoSlug == "" && !teamAnchoredProjects {
 		kindTextNodes, kindTruncated, kindErr := a.fulltextSearchNodesForKind(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal, declaredCohortKindForRouting)
 		if kindErr != nil && (errors.Is(kindErr, context.Canceled) || errors.Is(kindErr, context.DeadlineExceeded)) {
 			// THE CALLER GIVING UP IS NOT A DEPENDENCY FAILURE THIS ARM CAN
@@ -1343,6 +1363,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			cohort.Members[i].InclusionReasons = []string{reason}
 		}
 		cohort.Rationale = anchoredDeploymentCohortRationale
+	}
+	if cohort != nil && teamAnchoredProjects {
+		for i := range cohort.Members {
+			cohort.Members[i].InclusionReasons = []string{teamAnchorInclusionReason}
+		}
+		cohort.Rationale = teamAnchorCohortRationale
 	}
 	if cohort != nil && ownershipRoutedRepoSlug != "" {
 		for i := range cohort.Members {

@@ -499,6 +499,11 @@ import (
 // missing_instants names it. A candidate saved before v97 may count such a day
 // as returned and must not be reused.
 //
+// v98 -> v99: the projects of a committed team come only from the team's own
+// reach, never from the question text or another committed subject, and the
+// commit of a team under which none were found stands. A candidate saved before
+// v99 may hold a cohort of a text-matched project and must not be reused.
+//
 // v99 -> v100: a member kind the caller is denied inside a committed anchor's
 // own ownership reach is counted in the denied-cohort row and the answer is
 // served partial, not as none found. A candidate saved before v100 holds the

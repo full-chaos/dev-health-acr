@@ -369,3 +369,52 @@ func TestDiscoverContextSharedProjectAdmittedByAnotherAnchorIsNotCountedDenied(t
 		t.Fatalf("denied reason = %q, want none: the project is served (reasons %v)", got, result.Coverage.DegradedReasons)
 	}
 }
+
+// Another committed team's denied ownership edge is not the question's team's
+// denied member.
+func TestDiscoverContextOtherCommittedTeamsDeniedProjectIsNotTheAnchorsDeniedMember(t *testing.T) {
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:chaos", Label: "Fullchaos"}
+	other := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:other", Label: "Other"}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			if params["id"] != "team:other" {
+				return nil, nil
+			}
+			return []row{{
+				"r": &edge{Properties: map[string]interface{}{
+					propRelationType: "OWNED_BY_TEAM", propRelationshipID: "rel_o",
+					propEvidenceRefs: []string{"evidence_rel_o_1234"}, "authorization_repositories": reachDenied,
+				}},
+				"srcKind": "team", "srcId": "team:other", "dstKind": "project", "dstId": "p-other",
+			}}, nil
+		default:
+			id, _ := params["id"].(string)
+			switch id {
+			case "team:chaos", "team:other":
+				r := fakeSubjectNodeRow("team", id, id)
+				r["n"].(*node).Properties["authorization_repositories"] = reachAllowed
+				return []row{r}, nil
+			case "p-other":
+				r := fakeSubjectNodeRow("project", id, id)
+				r["n"].(*node).Properties["authorization_repositories"] = reachDenied
+				return []row{r}, nil
+			}
+			return nil, nil
+		}
+	}}
+	request := ownershipRoutingRequest(reachProjectsFrame("Fullchaos"), team)
+	request.Resolution.Committed = []contextfabric.SubjectRef{team, other}
+	request.Resolution.Candidates[0].MatchedTerms = []string{"Fullchaos"}
+	request.ScopeAnchorKind = contextfabric.SubjectTeam
+	request.Request.Question = "which projects does team Fullchaos own?"
+	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: reachAllowed}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if got := deniedReasonCount(result); got != "" {
+		t.Fatalf("denied reason = %q, want none: the denied project belongs to the other team (reasons %v)", got, result.Coverage.DegradedReasons)
+	}
+}

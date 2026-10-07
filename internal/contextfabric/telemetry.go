@@ -131,6 +131,17 @@ func (t SlogEngineTelemetry) RecordCommitAffirmationRetraction(ctx context.Conte
 	t.logger.WarnContext(ctx, "context fabric commit affirmation retraction", args...)
 }
 
+// RecordCommitKeptByNoMemberFound implements CommitKeptTelemetry: the commit
+// gate kept a team anchor because the service filed the none-found row under
+// it. Counts a closed subject kind only, never an identity.
+func (t SlogEngineTelemetry) RecordCommitKeptByNoMemberFound(ctx context.Context, principal storage.Principal, subjectKind SubjectKind) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"subject_kind", SanitizeLogAttr(string(subjectKind)),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric commit kept by no member found", args...)
+}
+
 // RecordSynthesisStatusOverride implements EngineTelemetry (CHAOS-4098) --
 // the ONE operator-visible record that the engine served a different
 // investigation status than the synthesis step returned.
