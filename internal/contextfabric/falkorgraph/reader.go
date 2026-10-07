@@ -654,6 +654,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			ownershipAnchorBasis = AnchorBasisBound
 		}
 	}
+	teamAnchoredProjects := teamAnchoredProjectCohort(request, declaredCohortKindForRouting)
 	// teamMembersOfScope: the frame asks for the team members of a named
 	// anchor, the one frame ownership routing can serve.
 	teamMembersOfScope := declaredCohortKindForRouting == contextfabric.SubjectTeam && request.Frame != nil &&
@@ -922,6 +923,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if ownershipRoutedRepoSlug != "" && subject.Kind == contextfabric.SubjectTeam && !seenNode[graphrank.SubjectKey(subject)] {
 			continue
 		}
+		if teamAnchoredProjects && subject.Kind == contextfabric.SubjectProject && !seenNode[graphrank.SubjectKey(subject)] {
+			continue
+		}
 		nk := graphrank.SubjectKey(subject)
 		if !seenNode[nk] {
 			seenNode[nk] = true
@@ -1016,13 +1020,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// question-text match the plain arm already runs, merely not forced to
 	// share its budget with kinds this cohort never asked about.
 	cohortFulltextTruncated := fulltextTruncated
-	if deploymentAnchor != nil || ownershipRoutedRepoSlug != "" {
+	if deploymentAnchor != nil || ownershipRoutedRepoSlug != "" || teamAnchoredProjects {
 		// No lexical arm can add a member to an anchored deployment cohort or
 		// to an ownership-routed one, so a cut lexical arm is not a loss from
 		// it and the kind-scoped arm has nothing to fetch.
 		cohortFulltextTruncated = false
 	}
-	if declaredCohortKindForRouting != "" && !censusAdmitted && deploymentAnchor == nil && ownershipRoutedRepoSlug == "" {
+	if declaredCohortKindForRouting != "" && !censusAdmitted && deploymentAnchor == nil && ownershipRoutedRepoSlug == "" && !teamAnchoredProjects {
 		kindTextNodes, kindTruncated, kindErr := a.fulltextSearchNodesForKind(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal, declaredCohortKindForRouting)
 		if kindErr != nil && (errors.Is(kindErr, context.Canceled) || errors.Is(kindErr, context.DeadlineExceeded)) {
 			// THE CALLER GIVING UP IS NOT A DEPENDENCY FAILURE THIS ARM CAN

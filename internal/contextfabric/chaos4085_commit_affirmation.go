@@ -389,6 +389,12 @@ func commitSubjectAffirmed(subject SubjectRef, result InvestigationResult, input
 		return false
 	}
 
+	// Shape 4: the scope anchor of a question for the members of one kind,
+	// when the service itself filed that none were found under it. The row is
+	// the engine's own finding about this anchor, not model output.
+	if noMemberFoundUnderAnchor(subject, inputs.Facts.Coverage) {
+		return true
+	}
 	// Shape 2: a driver about the subject, standing on evidence -- or on a
 	// relationship path -- attributable to that same subject.
 	for _, driver := range result.Drivers {
@@ -552,4 +558,19 @@ func (e *Engine) recordCommitAffirmation(ctx context.Context, principal storage.
 	for _, outcome := range outcomes {
 		sink.RecordCommitAffirmationRetraction(ctx, principal, outcome)
 	}
+}
+
+// noMemberFoundUnderAnchor reports that coverage carries the service-authored
+// none-found row for a member kind other than subject's own: the subject is
+// then the anchor the search ran under.
+func noMemberFoundUnderAnchor(subject SubjectRef, coverage Coverage) bool {
+	if subject.Kind != SubjectTeam {
+		return false
+	}
+	for _, detail := range coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailGraphNoMemberFound && detail.Kind != "" && detail.Kind != subject.Kind {
+			return true
+		}
+	}
+	return false
 }
