@@ -96,11 +96,11 @@ func TestLiveColumnProjectEdgesKeepOneOpenEdgePerWorkItem(t *testing.T) {
 		t.Fatalf("a pull request may belong to several projects: open edges %v", got)
 	}
 
-	// A stored edge newer than the row that retires it stays.
+	// The asserting row is the current truth: an edge to A stamped later than the current B row still goes.
 	apply("batch-0003", t1, []contextfabric.RelationshipProjection{columnEdge("rel-w1-A", wi, projA, t1.Add(time.Hour), nil)}, []contextfabric.ProjectionTombstone{})
 	apply("batch-0004", t1, []contextfabric.RelationshipProjection{columnEdge("rel-w1-B", wi, projB, t1, nil)}, []contextfabric.ProjectionTombstone{})
-	if got := openEdgeIDs(t, ctx, adapter, key, org, wi); fmt.Sprint(got) != "[rel-w1-A rel-w1-B]" {
-		t.Fatalf("an edge observed after the retiring row was deleted: %v", got)
+	if got := openEdgeIDs(t, ctx, adapter, key, org, wi); fmt.Sprint(got) != "[rel-w1-B]" {
+		t.Fatalf("an edge to A stamped after the current B row leaves %v open, want only rel-w1-B", got)
 	}
 
 	t2 := t1.Add(2 * time.Hour)
