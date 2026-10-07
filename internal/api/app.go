@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
+	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 )
@@ -96,8 +97,8 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("POST /api/v1/oauth/device_authorization", a.deviceRuntimeHandler(http.HandlerFunc(a.handleDeviceAuthorization)))
 	mux.Handle("POST /api/v1/oauth/token", http.HandlerFunc(a.handleDeviceToken))
 	mux.Handle("POST /api/v1/oauth/device_approval", a.deviceRuntimeHandler(a.deviceApprovalHandler(http.HandlerFunc(a.handleDeviceApproval))))
-	mux.Handle("POST /api/v1/auth/credentials/self/rotate", a.selfLifecycleHandler(http.HandlerFunc(a.handleRotateSelfCredential)))
-	mux.Handle("POST /api/v1/auth/credentials/self/revoke", a.selfLifecycleHandler(http.HandlerFunc(a.handleRevokeSelfCredential)))
+	mux.Handle("POST /api/v1/auth/credentials/self/rotate", a.credentialLifecycleLine(oauthvocab.StepCredentialRotate, a.selfLifecycleHandler(http.HandlerFunc(a.handleRotateSelfCredential))))
+	mux.Handle("POST /api/v1/auth/credentials/self/revoke", a.credentialLifecycleLine(oauthvocab.StepCredentialRevoke, a.selfLifecycleHandler(http.HandlerFunc(a.handleRevokeSelfCredential))))
 	if a.oauth != nil {
 		mux.HandleFunc("GET "+OAuthAuthorizationServerMetadataPath, a.handleOAuthMetadata)
 		mux.HandleFunc("GET "+OAuthAuthorizePath, a.handleOAuthAuthorize)
@@ -106,7 +107,7 @@ func (a *App) Handler() http.Handler {
 		mux.HandleFunc("POST "+OAuthRegisterPath, a.handleOAuthRegister)
 		mux.HandleFunc("POST "+OAuthDeviceAuthorizationPath, a.handleOAuthDeviceAuthorization)
 	}
-	mux.Handle("POST /api/v1/auth/credentials/self/ack", a.selfLifecycleHandler(http.HandlerFunc(a.handleAcknowledgeSelfCredential)))
+	mux.Handle("POST /api/v1/auth/credentials/self/ack", a.credentialLifecycleLine(oauthvocab.StepCredentialAck, a.selfLifecycleHandler(http.HandlerFunc(a.handleAcknowledgeSelfCredential))))
 	// RouteNamer names the OTel server span (when export is on) by the matched
 	// route: InstrumentedHandler's middleware sits between the exporter's
 	// handler and this mux.

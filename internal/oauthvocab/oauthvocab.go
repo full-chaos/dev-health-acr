@@ -17,11 +17,17 @@ const (
 	// which starts a device-code grant. StepToken covers every /token poll
 	// against it, the same as it covers authorization_code exchanges.
 	StepDeviceAuthorization = "device_authorization"
+	// The credential lifecycle of a signed-in caller's own credential:
+	// acknowledging a device-poll credential it stored, rotating it,
+	// revoking it (or rolling a rotation back).
+	StepCredentialAck    = "credential_ack"
+	StepCredentialRotate = "credential_rotate"
+	StepCredentialRevoke = "credential_revoke"
 )
 
 // StepVocabulary lists every step.
 func StepVocabulary() []string {
-	return []string{StepRegister, StepAuthorize, StepConsentPreview, StepConsent, StepDeviceAuthorization, StepToken}
+	return []string{StepRegister, StepAuthorize, StepConsentPreview, StepConsent, StepDeviceAuthorization, StepToken, StepCredentialAck, StepCredentialRotate, StepCredentialRevoke}
 }
 
 // OAuth step outcomes. "ok" means the step did what it exists to do: a client

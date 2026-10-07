@@ -244,7 +244,11 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   `device_authorization` (ok = a device_code/user_code pair was issued),
   `token` (covers both the authorization_code and device_code grants; the
   device_code branch's `outcome` also carries `authorization_pending` and
-  `slow_down`). Codes, handles, verifiers, client IDs, device codes, user
+  `slow_down`), and the self-credential routes `credential_ack`,
+  `credential_rotate` and `credential_revoke` (ok = done; `invalid_grant` =
+  nothing to act on or a state conflict; `expired` = the acknowledgement window
+  closed; every request writes its line, including those refused before the
+  handler). Codes, handles, verifiers, client IDs, device codes, user
   codes, redirect URIs, state and tokens are never logged.
 
 The runtime database role needs `SELECT, INSERT, UPDATE, DELETE` on

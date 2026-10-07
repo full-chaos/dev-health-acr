@@ -148,6 +148,52 @@ func (a *App) oauthConsentLine(next http.Handler) http.Handler {
 	})
 }
 
+// credentialLifecycleMarker lets a self-credential handler name the one
+// outcome its status alone cannot (the acknowledgement window closing).
+type credentialLifecycleMarker struct{ outcome string }
+
+type credentialLifecycleMarkerKey struct{}
+
+func setCredentialLifecycleOutcome(r *http.Request, outcome string) {
+	if marker, ok := r.Context().Value(credentialLifecycleMarkerKey{}).(*credentialLifecycleMarker); ok {
+		marker.outcome = outcome
+	}
+}
+
+// credentialLifecycleLine writes the one OAuth step line of a self-credential
+// request, whatever stopped it: refused by the authenticator or the limiter
+// before the handler, or answered by the handler.
+func (a *App) credentialLifecycleLine(step string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		marker := &credentialLifecycleMarker{}
+		r = r.WithContext(context.WithValue(r.Context(), credentialLifecycleMarkerKey{}, marker))
+		recorder := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(recorder, r)
+		outcome := marker.outcome
+		if outcome == "" {
+			outcome = credentialLifecycleOutcome(recorder.status)
+		}
+		a.emitOAuthStep(r, step, outcome, "", recorder.status)
+	})
+}
+
+func credentialLifecycleOutcome(status int) string {
+	switch {
+	case status >= http.StatusOK && status < http.StatusMultipleChoices:
+		return oauthvocab.OutcomeOK
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return oauthvocab.OutcomeUnauthenticated
+	case status == http.StatusNotFound || status == http.StatusConflict:
+		return oauthvocab.OutcomeInvalidGrant
+	case status == http.StatusTooManyRequests:
+		return oauthvocab.OutcomeRateLimited
+	case status >= http.StatusInternalServerError:
+		return oauthvocab.OutcomeUnavailable
+	default:
+		return oauthvocab.OutcomeInvalidRequest
+	}
+}
+
 // oauthOutcome maps a service error to its telemetry outcome and OAuth code.
 func oauthOutcome(err error) (*auth.OAuthError, bool) {
 	var oauthErr *auth.OAuthError
