@@ -55,9 +55,26 @@ func requestOperation(request *http.Request) observability.Operation {
 		return observability.OperationContext
 	case "/api/v1/agent-context/episodes":
 		return observability.OperationEpisode
+	case ContextFabricInvestigationsPath:
+		return observability.OperationInvestigation
+	case ContextFabricDataCatalogPath:
+		return observability.OperationDataCatalog
+	case ContextFabricDataSubjectsPath:
+		return observability.OperationDataSubjects
+	case ContextFabricDataFactsPath:
+		return observability.OperationDataFacts
+	case ContextFabricDataRelationshipsPath:
+		return observability.OperationDataRelationships
+	case ContextFabricDataOperationsPath:
+		return observability.OperationDataOperations
+	case ContextFabricDataGraphQLPath:
+		return observability.OperationDataGraphQL
 	default:
 		if strings.HasPrefix(request.URL.Path, "/api/v1/agent-context/evidence/") {
 			return observability.OperationEvidence
+		}
+		if strings.HasPrefix(request.URL.Path, ContextFabricInvestigationsPath+"/") {
+			return observability.OperationInvestigationResult
 		}
 		return observability.OperationUnknown
 	}

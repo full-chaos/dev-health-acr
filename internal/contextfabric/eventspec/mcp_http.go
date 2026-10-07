@@ -156,7 +156,7 @@ func MCPHTTPToolVocabulary() []string {
 	return []string{
 		MCPHTTPValueNone, "context_for_task", "source_evidence", "investigate_question",
 		"investigate_with_interpretation", "investigation_result", "read_facts", "read_relationships",
-		"record_episode", MCPHTTPValueOther,
+		"record_episode", "data_catalog", "find_subjects", "run_operation", "graphql_query", MCPHTTPValueOther,
 	}
 }
 
