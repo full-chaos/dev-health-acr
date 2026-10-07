@@ -126,11 +126,12 @@ type GraphQLSource struct {
 
 // GraphQLRootResult is the per-root disclosure of a served answer.
 type GraphQLRootResult struct {
-	Key            string          `json:"key"`
-	Field          string          `json:"field"`
-	Operation      string          `json:"operation"`
-	Completeness   Completeness    `json:"completeness"`
-	EffectiveScope *EffectiveScope `json:"effective_scope"`
+	Key                string             `json:"key"`
+	Field              string             `json:"field"`
+	Operation          string             `json:"operation"`
+	Completeness       Completeness       `json:"completeness"`
+	CompletenessReason CompletenessReason `json:"completeness_reason,omitempty"`
+	EffectiveScope     *EffectiveScope    `json:"effective_scope"`
 	// AddedPaths are row id paths acr added to the selection so the rows
 	// could be checked against the caller's grant.
 	AddedPaths []string `json:"added_paths"`
@@ -169,17 +170,18 @@ func GraphQLUpstreamErrorClasses() []UpstreamErrorClass {
 
 // GraphQLResponse is graphql_query's answer (design D.7 vocabulary).
 type GraphQLResponse struct {
-	Call             CallStatus          `json:"call"`
-	Completeness     Completeness        `json:"completeness"`
-	Result           ResultState         `json:"result,omitempty"`
-	Refusal          *GraphQLRefusal     `json:"refusal,omitempty"`
-	Source           GraphQLSource       `json:"source"`
-	RootFields       []GraphQLRootResult `json:"root_fields"`
-	Data             json.RawMessage     `json:"data,omitempty"`
-	Errors           []OperationError    `json:"errors"`
-	Page             OperationPage       `json:"page"`
-	Consistency      string              `json:"consistency"`
-	UntrustedContent UntrustedContent    `json:"untrusted_content"`
+	Call               CallStatus          `json:"call"`
+	Completeness       Completeness        `json:"completeness"`
+	CompletenessReason CompletenessReason  `json:"completeness_reason,omitempty"`
+	Result             ResultState         `json:"result,omitempty"`
+	Refusal            *GraphQLRefusal     `json:"refusal,omitempty"`
+	Source             GraphQLSource       `json:"source"`
+	RootFields         []GraphQLRootResult `json:"root_fields"`
+	Data               json.RawMessage     `json:"data,omitempty"`
+	Errors             []OperationError    `json:"errors"`
+	Page               OperationPage       `json:"page"`
+	Consistency        string              `json:"consistency"`
+	UntrustedContent   UntrustedContent    `json:"untrusted_content"`
 }
 
 // GraphQLQueryRecorder receives one record per Run.
@@ -1220,7 +1222,7 @@ func (x *gqlRun) answer(ctx context.Context, planned []plannedRoot, data []byte,
 	out := map[string]any{}
 	results := make([]GraphQLRootResult, 0, len(planned))
 	removedPaths := map[string]bool{}
-	completeness := CompletenessUnknown
+	var joined *CompletenessVerdict
 	known := map[string]bool{}
 	for _, p := range planned {
 		known[p.sel.key] = true
@@ -1274,16 +1276,15 @@ func (x *gqlRun) answer(ctx context.Context, planned []plannedRoot, data []byte,
 			return x.upstream(CallUpstreamError, UpstreamDecode), nil
 		}
 		out[p.sel.key] = kept[p.sel.field]
-		rootCompleteness := op.Completeness(filtered.Data)
-		if rootCompleteness == CompletenessDeclaredPartial {
-			completeness = CompletenessDeclaredPartial
-		}
+		verdict := op.Verdict(filtered.Data, p.tree)
+		rootCompleteness := verdict.State
+		joined = joinVerdicts(joined, verdict)
 		added := p.added
 		if added == nil {
 			added = []string{}
 		}
 		results = append(results, GraphQLRootResult{
-			Key: p.sel.key, Field: p.sel.field, Operation: op.Name, Completeness: rootCompleteness,
+			Key: p.sel.key, Field: p.sel.field, Operation: op.Name, Completeness: rootCompleteness, CompletenessReason: verdict.Reason,
 			EffectiveScope: p.effective, AddedPaths: added,
 		})
 	}
@@ -1316,6 +1317,11 @@ func (x *gqlRun) answer(ctx context.Context, planned []plannedRoot, data []byte,
 		resp.Refusal.MaxBytes = maxBytes
 		x.resp = resp
 		return resp, nil
+	}
+	completeness := CompletenessUnknown
+	if joined != nil {
+		completeness = joined.State
+		x.resp.CompletenessReason = joined.Reason
 	}
 	x.resp.Call = CallServed
 	x.resp.Completeness = completeness

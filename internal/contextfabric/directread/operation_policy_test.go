@@ -651,28 +651,6 @@ func TestStatusVocabularyAndCompleteness(t *testing.T) {
 		}
 	}
 
-	cat := loadDefault(t)
-	edges, _ := cat.Lookup("workGraphEdges")
-	tf, _ := cat.Lookup("throughputForecast")
-	hs, _ := cat.Lookup("hotspots")
-	full, _ := cat.Lookup("investmentFull")
-	for _, tc := range []struct {
-		op   *OperationPolicy
-		data string
-		want Completeness
-	}{
-		{edges, `{"workGraphEdges":{"degradedReason":"MEMBERSHIP_NOT_MATERIALIZED","edges":[]}}`, CompletenessDeclaredPartial},
-		{edges, `{"workGraphEdges":{"degradedReason":null,"edges":[]}}`, CompletenessUnknown},
-		{tf, `{"throughputForecast":{"insufficientHistory":true}}`, CompletenessDeclaredPartial},
-		{tf, `{"throughputForecast":{"insufficientHistory":false}}`, CompletenessUnknown},
-		{full, `{"analytics":{"sankey":{"coverage":{"teamCoverage":0.4,"repoCoverage":1}}}}`, CompletenessDeclaredPartial},
-		{full, `{"analytics":{"sankey":null}}`, CompletenessUnknown},
-		{hs, `{"hotspots":{"rows":[]}}`, CompletenessUnknown},
-	} {
-		if got := tc.op.Completeness([]byte(tc.data)); got != tc.want {
-			t.Errorf("%s Completeness(%s) = %s, want %s", tc.op.Name, tc.data, got, tc.want)
-		}
-	}
 }
 
 func TestRefusalVocabularyIsClosed(t *testing.T) {

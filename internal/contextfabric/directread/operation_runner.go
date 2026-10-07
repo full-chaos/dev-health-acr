@@ -197,18 +197,19 @@ type UntrustedContent struct {
 
 // OperationResponse is run_operation's answer (design D.2, D.7).
 type OperationResponse struct {
-	Call             CallStatus        `json:"call"`
-	Completeness     Completeness      `json:"completeness"`
-	Result           ResultState       `json:"result,omitempty"`
-	Operation        string            `json:"operation"`
-	Refusal          *OperationRefusal `json:"refusal,omitempty"`
-	Source           OperationSource   `json:"source"`
-	EffectiveScope   *EffectiveScope   `json:"effective_scope,omitempty"`
-	Data             json.RawMessage   `json:"data,omitempty"`
-	Errors           []OperationError  `json:"errors"`
-	Page             OperationPage     `json:"page"`
-	Consistency      string            `json:"consistency"`
-	UntrustedContent UntrustedContent  `json:"untrusted_content"`
+	Call               CallStatus         `json:"call"`
+	Completeness       Completeness       `json:"completeness"`
+	CompletenessReason CompletenessReason `json:"completeness_reason,omitempty"`
+	Result             ResultState        `json:"result,omitempty"`
+	Operation          string             `json:"operation"`
+	Refusal            *OperationRefusal  `json:"refusal,omitempty"`
+	Source             OperationSource    `json:"source"`
+	EffectiveScope     *EffectiveScope    `json:"effective_scope,omitempty"`
+	Data               json.RawMessage    `json:"data,omitempty"`
+	Errors             []OperationError   `json:"errors"`
+	Page               OperationPage      `json:"page"`
+	Consistency        string             `json:"consistency"`
+	UntrustedContent   UntrustedContent   `json:"untrusted_content"`
 }
 
 // SubjectAuthorizer is the gate the runner calls once per request.
@@ -595,15 +596,15 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 	}
 
 	// 10: D.7 status.
-	completeness := op.Completeness(filtered.Data)
+	verdict := op.Verdict(filtered.Data, tree)
 	if cut != nil {
-		if completeness == CompletenessDeclaredComplete {
-			completeness = CompletenessUnknown
-		}
+		verdict = CompletenessVerdict{State: CompletenessDeclaredPartial, Reason: ReasonPageCut}
 		x.resp.Page.RowsReturned = cut.rowsReturned
 		x.resp.Page.RowsRead = cut.rowsRead
 		x.resp.Page.Cut = cut.statement(maxBytes, op)
 	}
+	completeness := verdict.State
+	x.resp.CompletenessReason = verdict.Reason
 	x.resp.Call = CallServed
 	x.resp.Completeness = completeness
 	x.resp.Result = ResultStateFor(dataIsEmpty(filtered.Data), completeness)

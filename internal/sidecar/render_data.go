@@ -309,11 +309,12 @@ func RenderFindSubjectsSummary(raw json.RawMessage, max int) string {
 // the first list in the data.
 func RenderOperationSummary(raw json.RawMessage, max int) string {
 	var view struct {
-		Call         string `json:"call"`
-		Completeness string `json:"completeness"`
-		Result       string `json:"result"`
-		Operation    string `json:"operation"`
-		Refusal      *struct {
+		Call               string `json:"call"`
+		Completeness       string `json:"completeness"`
+		CompletenessReason string `json:"completeness_reason"`
+		Result             string `json:"result"`
+		Operation          string `json:"operation"`
+		Refusal            *struct {
 			Code   string `json:"code"`
 			Reason string `json:"reason"`
 			Path   string `json:"path"`
@@ -339,7 +340,7 @@ func RenderOperationSummary(raw json.RawMessage, max int) string {
 	if result == "" {
 		result = "none"
 	}
-	t.line(fmt.Sprintf("run_operation %s: call=%s; completeness=%s; result=%s.", plainToken(view.Operation), plainToken(view.Call), plainToken(view.Completeness), plainToken(result)))
+	t.line(fmt.Sprintf("run_operation %s: call=%s; completeness=%s; result=%s.", plainToken(view.Operation), plainToken(view.Call), completenessText(view.Completeness, view.CompletenessReason), plainToken(result)))
 	if view.Completeness == "unknown" {
 		t.line("Completeness unknown means unknown: do not call this complete.")
 	}
@@ -380,10 +381,11 @@ func RenderOperationSummary(raw json.RawMessage, max int) string {
 // shape. It adds nothing to the structured content.
 func RenderGraphQLSummary(raw json.RawMessage, max int) string {
 	var view struct {
-		Call         string `json:"call"`
-		Completeness string `json:"completeness"`
-		Result       string `json:"result"`
-		Refusal      *struct {
+		Call               string `json:"call"`
+		Completeness       string `json:"completeness"`
+		CompletenessReason string `json:"completeness_reason"`
+		Result             string `json:"result"`
+		Refusal            *struct {
 			Code       string `json:"code"`
 			Reason     string `json:"reason"`
 			Path       string `json:"path"`
@@ -417,7 +419,7 @@ func RenderGraphQLSummary(raw json.RawMessage, max int) string {
 	if result == "" {
 		result = "none"
 	}
-	t.line(fmt.Sprintf("graphql_query: call=%s; completeness=%s; result=%s.", plainToken(view.Call), plainToken(view.Completeness), plainToken(result)))
+	t.line(fmt.Sprintf("graphql_query: call=%s; completeness=%s; result=%s.", plainToken(view.Call), completenessText(view.Completeness, view.CompletenessReason), plainToken(result)))
 	if view.Completeness == "unknown" {
 		t.line("Completeness unknown means unknown: do not call this complete.")
 	}
@@ -533,4 +535,11 @@ func renderOperationData(t *dataText, data json.RawMessage) {
 // bound and is valid UTF-8. Tests use it as the oracle.
 func DataTextWithinBound(text string) bool {
 	return len(text) <= DataTextMaxBytes && utf8.ValidString(text)
+}
+
+func completenessText(state, reason string) string {
+	if reason == "" {
+		return plainToken(state)
+	}
+	return plainToken(state) + " (" + plainToken(reason) + ")"
 }
