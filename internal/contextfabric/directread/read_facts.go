@@ -777,7 +777,7 @@ func serveTable(name string, declaration contextfabric.FactFieldDeclaration, val
 		for _, row := range sourceRows {
 			if cell, ok := row.Fields[table.Key[0]]; ok && cell.String != nil {
 				instants[*cell.String] = true
-				if rowCarriesValue(row, append(slices.Clone(table.Measures), table.Observations...)) {
+				if rowCarriesValue(row, table.Measures) {
 					measured[*cell.String] = true
 				}
 			}
@@ -828,9 +828,9 @@ func instantInWindow(row contextfabric.FactValueRow, key string, start, end time
 }
 
 // rowCarriesValue reports whether a series row holds at least one non-null
-// declared measure or observation. A day whose row exists but carries none is
-// a missing day, not a returned one. A table that declares neither keeps the
-// row-presence rule.
+// declared measure. A day whose row exists but carries none (an observation
+// such as severity does not count) is a missing day, not a returned one. A
+// table that declares no measures keeps the row-presence rule.
 func rowCarriesValue(row contextfabric.FactValueRow, names []string) bool {
 	if len(names) == 0 {
 		return true

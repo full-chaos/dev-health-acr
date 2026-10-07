@@ -55,14 +55,14 @@ func TestServeTableNullValuedDayIsMissingNotReturned(t *testing.T) {
 	}
 }
 
-func TestServeTableSeverityOnlyDayIsReturnedAndRowStays(t *testing.T) {
+func TestServeTableSeverityOnlyDayIsMissingButRowStays(t *testing.T) {
 	table := serveDaily(t, 3, func(i int) map[string]contextfabric.FactValue {
 		if i == 1 {
 			return map[string]contextfabric.FactValue{"severity": contextfabric.StringFactValue("high")}
 		}
 		return map[string]contextfabric.FactValue{"compounding_risk": contextfabric.NumberFactValue(0.2)}
 	})
-	if *table.ReturnedPoints != 3 || len(table.MissingInstants) != 0 {
+	if *table.ReturnedPoints != 2 || len(table.MissingInstants) != 1 || table.MissingInstants[0] != "2026-03-02" {
 		t.Fatalf("got %d missing=%v", *table.ReturnedPoints, table.MissingInstants)
 	}
 	if table.RowsReturned != 3 {
