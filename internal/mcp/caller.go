@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"io"
 	"log/slog"
 	"time"
@@ -38,7 +39,9 @@ type ProcessConfig struct {
 	transport string
 
 	diagnostics *slog.Logger
-	local       *localFederationRuntime
+	// metrics counts tool calls and delivered answers; nil records nothing.
+	metrics *hostedmetrics.Instruments
+	local   *localFederationRuntime
 
 	// hosted, when set, is a credential-less hosted API client whose
 	// connection pool every caller's client shares (see ResolveCaller). It
