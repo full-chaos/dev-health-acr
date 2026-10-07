@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -51,10 +52,13 @@ func TestColumnArmEdgeIsRetractedWhenTheSubjectGainsTransitionHistory(t *testing
 			if interval != 1 {
 				t.Fatalf("want the new transition interval projected once, got %d", interval)
 			}
+			subject := workItemSubject(t, "WI-gains")
 			retracted := false
 			for _, b := range third.batches {
-				if hasTombstone(b, columnID) {
-					retracted = true
+				for _, tombstone := range b.Tombstones {
+					if tombstone.Kind == contextfabric.TombstoneKindColumnProjectEdges && tombstone.CanonicalID == subject && tombstone.Reason == "superseded_by_transition_history" {
+						retracted = true
+					}
 				}
 			}
 			if !retracted {
@@ -107,13 +111,13 @@ SELECT ?, NULL, ?, 'work_item', concat('WS-', leftPad(toString(number), 4, '0'))
 	want := map[string]bool{}
 	for n := 0; n < subjects; n++ {
 		subject := workItemSubject(t, fmt.Sprintf("WS-%04d", n))
-		want[devhealthsource.ProjectMembershipRelationshipIDForTest(t, subject, "linear", "P-a", "")] = false
+		want[subject] = false
 	}
 	d := f.h.drain("")
 	for _, b := range d.batches {
 		inBatch := map[string]bool{}
 		for _, tombstone := range b.Tombstones {
-			if tombstone.Reason != "superseded_by_transition_history" {
+			if tombstone.Reason != "superseded_by_transition_history" || tombstone.Kind != contextfabric.TombstoneKindColumnProjectEdges {
 				continue
 			}
 			if inBatch[tombstone.CanonicalID] {
