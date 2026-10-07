@@ -1,9 +1,7 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -37,10 +35,8 @@ func handleInvestigateWithInterpretation(ctx context.Context, cfg *ProcessConfig
 		return refused, nil
 	}
 	var input contractsv1.MCPInvestigateWithInterpretationRequest
-	decoder := json.NewDecoder(bytes.NewReader(args))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_with_interpretation arguments are not valid JSON for the declared schema"}), nil
+	if err := decodeInvestigationArguments(args, &input); err != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: investigationArgumentsMessage(toolInvestigateWithInterpretation, err)}), nil
 	}
 	if len(input.Contract.Missing()) > 0 {
 		return toolErrorResult(&classifiedError{category: "validation", message: missingContractValueMessage}), nil

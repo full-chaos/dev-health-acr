@@ -1,11 +1,15 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"strconv"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -73,13 +77,45 @@ func handleInvestigateQuestion(ctx context.Context, cfg *ProcessConfig, req *mcp
 		return toolErrorResult(&classifiedError{category: "validation", message: writeBackNotHereMessage}), nil
 	}
 	var input contractsv1.MCPInvestigateQuestionRequest
-	if err := json.Unmarshal(args, &input); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_question arguments are not valid JSON for the declared schema"}), nil
+	if err := decodeInvestigationArguments(args, &input); err != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: investigationArgumentsMessage(toolInvestigateQuestion, err)}), nil
 	}
 	if err := input.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_question arguments failed schema validation"}), nil
 	}
 	return investigateAndRender(ctx, cfg, caller, toolInvestigateQuestion, input, nil, nil)
+}
+
+// decodeInvestigationArguments is the one request decode of the investigation
+// tools: a key the request type does not declare, at any depth, is refused
+// rather than dropped, matching the wire schemas' additionalProperties: false.
+// A misplaced budget field would otherwise be ignored and the default served.
+func decodeInvestigationArguments(args []byte, into any) error {
+	decoder := json.NewDecoder(bytes.NewReader(args))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(into); err != nil {
+		return err
+	}
+	if decoder.More() {
+		return errors.New("unexpected data after the JSON value")
+	}
+	return nil
+}
+
+const jsonUnknownFieldPrefix = "json: unknown field "
+
+// investigationArgumentsMessage is the validation message of a refused
+// decode. An undeclared key is named (the caller's own key, quoted and
+// bounded); any other decode failure keeps the generic text.
+func investigationArgumentsMessage(tool string, err error) string {
+	if text := err.Error(); strings.HasPrefix(text, jsonUnknownFieldPrefix) {
+		name := strings.Trim(strings.TrimPrefix(text, jsonUnknownFieldPrefix), `"`)
+		if len(name) > 64 {
+			name = name[:64]
+		}
+		return tool + " arguments carry a field the schema does not declare: " + strconv.Quote(name) + " (budget fields go inside budget)"
+	}
+	return tool + " arguments are not valid JSON for the declared schema"
 }
 
 // normalizedInvestigationArgs expands bare receipt ids in the raw arguments
