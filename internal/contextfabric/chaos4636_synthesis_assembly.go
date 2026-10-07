@@ -699,6 +699,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		Candidates: result.SubjectResolution.Candidates,
 		Graph:      graphContext,
 		Facts:      facts,
+		Frame:      params.Frame, ScopeAnchorKind: params.ScopeAnchorKind,
 	}); len(outcomes) > 0 {
 		pending.CommitAffirmations = outcomes
 		if clientSynthesisWithoutDraft(request) {

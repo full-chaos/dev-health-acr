@@ -174,6 +174,11 @@ type affirmationInputs struct {
 	Graph GraphContext
 	// Facts is the canonical fact bundle read for this investigation.
 	Facts CanonicalFactBundle
+	// Frame and ScopeAnchorKind are the question's own declared scope: the
+	// none-found shape affirms only the anchor of that scope, for the member
+	// kind it declared.
+	Frame           *QuestionFrame
+	ScopeAnchorKind SubjectKind
 }
 
 // affirmingEvidenceRefs returns the evidence-ref ids that are ATTRIBUTABLE
@@ -392,7 +397,7 @@ func commitSubjectAffirmed(subject SubjectRef, result InvestigationResult, input
 	// Shape 4: the scope anchor of a question for the members of one kind,
 	// when the service itself filed that none were found under it. The row is
 	// the engine's own finding about this anchor, not model output.
-	if noMemberFoundUnderAnchor(subject, inputs.Facts.Coverage) {
+	if noMemberFoundUnderAnchor(subject, inputs) {
 		return true
 	}
 	// Shape 2: a driver about the subject, standing on evidence -- or on a
@@ -560,15 +565,20 @@ func (e *Engine) recordCommitAffirmation(ctx context.Context, principal storage.
 	}
 }
 
-// noMemberFoundUnderAnchor reports that coverage carries the service-authored
-// none-found row for a member kind other than subject's own: the subject is
-// then the anchor the search ran under.
-func noMemberFoundUnderAnchor(subject SubjectRef, coverage Coverage) bool {
-	if subject.Kind != SubjectTeam {
+// noMemberFoundUnderAnchor reports that the service filed the none-found row
+// for the member kind the question declared, and that subject is the question's
+// scope anchor: the subject is then the anchor the search ran under.
+func noMemberFoundUnderAnchor(subject SubjectRef, inputs affirmationInputs) bool {
+	frame := inputs.Frame
+	if subject.Kind != SubjectTeam || frame == nil {
 		return false
 	}
-	for _, detail := range coverage.Details {
-		if detail.Code == contractsv1.ContextFabricCoverageDetailGraphNoMemberFound && detail.Kind != "" && detail.Kind != subject.Kind {
+	if ScopeAnchorRetrievalKind(frame, inputs.ScopeAnchorKind) != subject.Kind {
+		return false
+	}
+	declared := frame.SubjectExpression.Scoped.MemberKind
+	for _, detail := range inputs.Facts.Coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailGraphNoMemberFound && detail.Kind != "" && detail.Kind == declared {
 			return true
 		}
 	}
