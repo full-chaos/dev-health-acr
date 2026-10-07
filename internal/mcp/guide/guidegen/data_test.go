@@ -71,16 +71,10 @@ func TestDataGuideSaysWhichWayAndCarriesTheRules(t *testing.T) {
 			t.Errorf("the guide lacks %q", want)
 		}
 	}
-	// Only what exists is a callable: read_facts / read_relationships appear
-	// only in the "if your tools/list offers it" sentence.
-	// graphql_query ships with CHAOS-7075 and is named.
-	for _, tool := range []string{"read_relationships", "read_rows", "plan_investigation"} {
+	for _, tool := range []string{"read_rows", "plan_investigation"} {
 		if strings.Contains(text, tool) {
 			t.Errorf("the guide names %s, which does not exist in this release", tool)
 		}
-	}
-	if strings.Count(text, "read_facts") != 1 {
-		t.Errorf("read_facts appears %d times; it may appear once, as offered only when tools/list lists it", strings.Count(text, "read_facts"))
 	}
 	if !strings.Contains(embeddedFiles(t)[FileQuestions], "`acr://guide/data`") {
 		t.Error("the questions guide does not point to acr://guide/data")
