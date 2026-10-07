@@ -105,8 +105,17 @@ func dataToolsInstructions(caller *CallerContext) string {
 	b.WriteString("- completeness \"unknown\" means unknown. Do not say \"complete\". Do not fill gaps in a series.\n")
 	b.WriteString("- No person-level data is served. Do not rank persons. A relation is not a cause.\n")
 	b.WriteString("- When you derive a number, say it is yours, show its inputs and state the measure you rank by. Use \"appears\", \"leans\", \"suggests\" for derived statements.\n")
-	b.WriteString("- \"last month\" = previous calendar month. \"in the last month\" = trailing 30 days. A team = the repositories and projects it owns.\n")
+	b.WriteString("- \"last month\" = previous calendar month. \"in the last month\" = trailing 30 days.\n")
 	b.WriteString("- Never build an id. Take ids from find_subjects or from a response.\n")
-	b.WriteString("- Investment per team or repository is not served in this release: only org-wide by theme, subcategory and work type.\n")
+	if hostedToolEnabled(caller, toolReadRelationships) {
+		b.WriteString("- " + GuidanceTeamOwnership + "\n")
+	}
+	b.WriteString("- " + GuidanceProjectRepository + "\n")
+	if run {
+		b.WriteString("- " + GuidanceHomeRunOperation + "\n")
+	}
+	if hostedToolEnabled(caller, toolReadFacts) {
+		b.WriteString("- " + GuidanceInvestmentScopes + "\n")
+	}
 	return b.String()
 }

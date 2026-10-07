@@ -169,6 +169,70 @@ def test_a_json_target_goes_red_under_the_same_sentinel_edit():
             print("FAIL: restore of the JSON fixture failed -- tree left dirty")
 
 
+# ---- CHAOS-5292: the arm layout, offline (no runners, no go) ---------------
+
+import os  # noqa: E402
+import re  # noqa: E402
+import tempfile  # noqa: E402
+
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "mutation-battery.yml"
+
+
+def _plan(ids, only=""):
+    """Run the REAL plan_matrix.py as a subprocess; return (rc, matrix ids, stderr)."""
+    with tempfile.TemporaryDirectory() as d:
+        table = os.path.join(d, "t.jsonl")
+        with open(table, "w") as f:
+            for i in ids:
+                f.write(json.dumps({"id": i, "file": "x/%s.go" % i, "kind": "delete", "needle": "n", "replacement": ""}) + "\n")
+        r = subprocess.run(
+            [sys.executable, str(HERE / "plan_matrix.py"), "--table", table, "--only-arms", only],
+            capture_output=True, text=True,
+        )
+    ids_out = [e["id"] for e in json.loads(r.stdout)["include"]] if r.returncode == 0 else None
+    return r.returncode, ids_out, r.stderr
+
+
+def test_the_matrix_is_both_controls_plus_every_table_arm_in_order():
+    ids = ["M%d" % i for i in range(1, 23)]
+    rc, out, err = _plan(ids)
+    _check(
+        "22 table arms plan to _BASELINE + _SENTINEL + the 22 arms, in table order",
+        rc == 0 and out == ["_BASELINE", "_SENTINEL"] + ids,
+        "rc=%s out=%s" % (rc, out),
+    )
+    _check("matrix_size and arm_count report 24 and 22", "matrix_size=24" in err and "arm_count=22" in err and "run_scope=full" in err, err)
+
+
+def test_a_subset_keeps_both_controls_and_says_partial():
+    rc, out, err = _plan(["A", "B", "C"], only="B")
+    _check("only_arms keeps the controls and the chosen arm", rc == 0 and out == ["_BASELINE", "_SENTINEL", "B"], "rc=%s out=%s" % (rc, out))
+    _check("a subset is labelled run_scope=partial", "run_scope=partial" in err, err)
+
+
+def test_an_unknown_only_arm_is_refused_not_dropped():
+    rc, out, _ = _plan(["A", "B"], only="A,TYPO")
+    _check("an unknown only_arms id refuses (rc 2), never plans fewer arms", rc == 2 and out is None, "rc=%s" % rc)
+
+
+def test_a_matrix_over_the_github_cap_is_refused():
+    rc, out, _ = _plan(["M%d" % i for i in range(1, 260)])
+    _check("259 arms + 2 controls exceeds the cap and refuses", rc == 2 and out is None, "rc=%s" % rc)
+
+
+def test_the_workflow_arm_job_shape_is_pinned():
+    text = WORKFLOW.read_text()
+    arm = text.split("\n  arm:\n", 1)[1].split("\n  aggregate:\n", 1)[0]
+    _check("arm job has fail-fast: false", re.search(r"fail-fast:\s*false", arm) is not None)
+    _check("arm job max-parallel reads config's max_parallel", "max-parallel: ${{ fromJson(needs.config.outputs.max_parallel) }}" in arm)
+    _check("arm job matrix is the plan's matrix", "matrix: ${{ fromJson(needs.plan.outputs.matrix) }}" in arm)
+    _check("arm job needs [config, plan]", re.search(r"needs:\s*\[config, plan\]", arm) is not None)
+    _check("dispatch bound is 50", 'echo "max_parallel=50"' in text)
+    _check("smoke bound is 3", 'echo "max_parallel=3"' in text)
+    agg = text.split("\n  aggregate:\n", 1)[1].split("\n  smoke-assert:\n", 1)[0]
+    _check("aggregate needs [config, plan, arm] and runs always()", re.search(r"needs:\s*\[config, plan, arm\]", agg) is not None and "if: always()" in agg)
+
+
 TESTS = [
     test_all_json_table_selects_the_go_fallback,
     test_mixed_table_selects_the_first_go_file,
@@ -177,6 +241,11 @@ TESTS = [
     test_go_override_passes_through_unchanged,
     test_the_fallback_go_file_stays_green_under_the_real_sentinel_edit,
     test_a_json_target_goes_red_under_the_same_sentinel_edit,
+    test_the_matrix_is_both_controls_plus_every_table_arm_in_order,
+    test_a_subset_keeps_both_controls_and_says_partial,
+    test_an_unknown_only_arm_is_refused_not_dropped,
+    test_a_matrix_over_the_github_cap_is_refused,
+    test_the_workflow_arm_job_shape_is_pinned,
 ]
 
 
