@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "9832234172cf900fca78a559386efd941c6a68dd",
+    "commit": "ddb2e75ded46aa5390e2fc8cd6e8606c78e4f5f1",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },
@@ -362,9 +362,9 @@
     },
     {
       "operation": "operatingReview",
-      "document": "query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {\n  operatingReview(orgId: $orgId, input: $input) {\n    orgId\n    teamId\n    weekStart\n    priorWeekStart\n    sections {\n      key\n      title\n      changed\n      improved\n      worsened\n      metrics {\n        key\n        label\n        value\n        unit\n        hasData\n        delta {\n          value\n          priorValue\n          absolute\n          percent\n          status\n          hasPriorData\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    recommendations\n    recommendationsEmptyState\n    __typename\n  }\n}",
+      "document": "query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {\n  operatingReview(orgId: $orgId, input: $input) {\n    orgId\n    teamId\n    weekStart\n    priorWeekStart\n    sections {\n      key\n      title\n      changed\n      improved\n      worsened\n      metrics {\n        key\n        label\n        value\n        unit\n        hasData\n        scope\n        delta {\n          value\n          priorValue\n          absolute\n          percent\n          status\n          hasPriorData\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    recommendations\n    recommendationsEmptyState\n    __typename\n  }\n}",
       "const_name": "registeredOperatingReviewDocument",
-      "digest": "d26e965931987ac4bdf607f43f542e2bd3f49f91561400287014a161371726e9",
+      "digest": "fef895a373f536846afdb3bb93ef12dd03d8af8d23f3663b290c350e622ed8c3",
       "kind": "query"
     },
     {
@@ -372,6 +372,14 @@
       "document": "query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {\n  operatingReview(orgId: $orgId, input: $input) {\n    orgId\n    teamId\n    weekStart\n    priorWeekStart\n    sections {\n      key\n      title\n      changed\n      improved\n      worsened\n      metrics {\n        key\n        label\n        value\n        unit\n        delta {\n          value\n          priorValue\n          absolute\n          percent\n          status\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    recommendations\n    recommendationsEmptyState\n    __typename\n  }\n}",
       "const_name": "registeredOperatingReviewV1Document",
       "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "operatingReview",
+      "document": "query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {\n  operatingReview(orgId: $orgId, input: $input) {\n    orgId\n    teamId\n    weekStart\n    priorWeekStart\n    sections {\n      key\n      title\n      changed\n      improved\n      worsened\n      metrics {\n        key\n        label\n        value\n        unit\n        hasData\n        delta {\n          value\n          priorValue\n          absolute\n          percent\n          status\n          hasPriorData\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    recommendations\n    recommendationsEmptyState\n    __typename\n  }\n}",
+      "const_name": "registeredOperatingReviewV2Document",
+      "digest": "d26e965931987ac4bdf607f43f542e2bd3f49f91561400287014a161371726e9",
       "kind": "query",
       "legacy": true
     },

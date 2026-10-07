@@ -284,7 +284,7 @@ func TestRegistryWatch_invalid_base_url(t *testing.T) {
 
 // Golden fixture: the live prod query-api GET /registry document captured
 // 2026-09-30 00:21Z at ops cb758a29 (HTTP 200, 6916 bytes). Against the
-// catalogue pinned at ops 98322341 it must decode and show exactly the drift a
+// catalogue pinned at ops ddb2e75d it must decode and show exactly the drift a
 // re-vendor clears: the schema digest, the document digests that changed, and
 // the operation the old build did not serve.
 func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *testing.T) {
@@ -320,12 +320,12 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 	}
 }
 
-// Fixture: the GET /registry body of ops 98322341, written from the output of
+// Fixture: the GET /registry body of ops ddb2e75d, written from the output of
 // ops go run ./cmd/registrydump (the current text of every operation, the
 // legacy texts left out, as the route serves them), not captured from a host.
 // The catalogue pinned from that commit must match it with zero drift.
 func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_9832234172cf.json")
+	body, err := os.ReadFile("testdata/query_registry_ddb2e75d.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	w, cat, buf := newWatch(t, f, nil)
 	w.Start()
 	w.Wait()
-	const want = "sha256:358ec58640bd6df4e202fc67e958029f67dc0f943cf1957a96c7afef458b4210"
+	const want = "sha256:4870fac23a76a01dba146dc05ad9aadbd0efcc64e81b8a402ab7b962e256d6fa"
 	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
 		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
 	}
@@ -346,16 +346,15 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	}
 }
 
-// The prod fact before the re-vendor: the catalogue pinned at ops 562bcb38
-// against the registry ops 98322341 serves logs exactly three warnings, one
-// schema digest drift, the changed home document and the one operation the
-// pin does not know.
-func TestRegistryWatch_previous_pin_against_the_served_registry_shows_the_three_prod_warnings(t *testing.T) {
-	oldPin, err := os.ReadFile("testdata/operations_562bcb38.v1.json")
+// The prod fact before the re-vendor: the catalogue pinned at ops 98322341
+// against the registry ops ddb2e75d serves logs exactly two warnings, one
+// schema digest drift and the changed operatingReview document.
+func TestRegistryWatch_previous_pin_against_the_served_registry_shows_the_two_prod_warnings(t *testing.T) {
+	oldPin, err := os.ReadFile("testdata/operations_98322341.v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile("testdata/query_registry_9832234172cf.json")
+	body, err := os.ReadFile("testdata/query_registry_ddb2e75d.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +362,7 @@ func TestRegistryWatch_previous_pin_against_the_served_registry_shows_the_three_
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cat.SchemaDigest(); got != "sha256:ef3d81523579ddd2a2ac68b5a6052baa599f08ef20e4ef0116038e28fd59d3a8" {
+	if got := cat.SchemaDigest(); got != "sha256:358ec58640bd6df4e202fc67e958029f67dc0f943cf1957a96c7afef458b4210" {
 		t.Fatalf("old pin digest %s", got)
 	}
 	f := newRegistryFixture(t)
@@ -378,25 +377,23 @@ func TestRegistryWatch_previous_pin_against_the_served_registry_shows_the_three_
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 3 {
-		t.Fatalf("%d warnings, want 3: %q", len(ws), ws)
+	if len(ws) != 2 {
+		t.Fatalf("%d warnings, want 2: %q", len(ws), ws)
 	}
 	out := strings.Join(ws, "\n")
-	if !strings.Contains(out, "registry digest drift") || !strings.Contains(out, "sha256:358ec58640bd6df4e202fc67e958029f67dc0f943cf1957a96c7afef458b4210") {
+	if !strings.Contains(out, "registry digest drift") || !strings.Contains(out, "sha256:4870fac23a76a01dba146dc05ad9aadbd0efcc64e81b8a402ab7b962e256d6fa") {
 		t.Errorf("no schema digest drift line: %s", out)
 	}
-	if !strings.Contains(out, "operation=home ") || !strings.Contains(out, "reason=changed") {
-		t.Errorf("no changed line for home: %s", out)
-	}
-	if !strings.Contains(out, "operation=investmentEvidenceQuality ") || !strings.Contains(out, "reason=missing_in_pinned") {
-		t.Errorf("no missing_in_pinned line for investmentEvidenceQuality: %s", out)
+	if !strings.Contains(out, "operation=operatingReview ") || !strings.Contains(out, "reason=changed") {
+		t.Errorf("no changed line for operatingReview: %s", out)
 	}
 }
 
-// The registry ops 562bcb38 served, against the catalogue pinned now: the
-// same three differences seen from the other side.
-func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_same_three(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_562bcb38.json")
+// The registry ops 98322341 served, against the catalogue pinned now: the
+// same two differences seen from the other side. This is the state the new
+// pods log until the ops release that serves the new schema is rolled.
+func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_same_two(t *testing.T) {
+	body, err := os.ReadFile("testdata/query_registry_9832234172cf.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,11 +403,11 @@ func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_sa
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 3 {
-		t.Fatalf("%d warnings, want 3: %q", len(ws), ws)
+	if len(ws) != 2 {
+		t.Fatalf("%d warnings, want 2: %q", len(ws), ws)
 	}
 	out := strings.Join(ws, "\n")
-	if !strings.Contains(out, "operation=home ") || !strings.Contains(out, "operation=investmentEvidenceQuality ") || !strings.Contains(out, "reason=missing_in_served") {
+	if !strings.Contains(out, "registry digest drift") || !strings.Contains(out, "operation=operatingReview ") || !strings.Contains(out, "reason=changed") {
 		t.Errorf("served-side lines missing: %s", out)
 	}
 }
