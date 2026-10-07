@@ -1,9 +1,11 @@
 package contextfabric
 
 import (
+	"context"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func noMemberFoundFacts(kind SubjectKind) CanonicalFactBundle {
@@ -30,6 +32,7 @@ func teamCommitResult() InvestigationResult {
 	result.SubjectResolution.Committed = []SubjectRef{{Kind: SubjectTeam, CanonicalID: "team:platform", Label: "Platform"}}
 	for i := range result.SubjectResolution.Candidates {
 		result.SubjectResolution.Candidates[i].Subject = result.SubjectResolution.Committed[0]
+		result.SubjectResolution.Candidates[i].MatchedTerms = []string{"Platform"}
 	}
 	return result
 }
@@ -130,5 +133,97 @@ func TestCommitAffirmationRetractsTeamAnchorWhenNoMemberKindWasDeclared(t *testi
 	applyCommitAffirmation(&result, scopedInputs(result, noMemberFoundFacts(""), "", SubjectTeam))
 	if len(result.SubjectResolution.Committed) != 0 {
 		t.Fatalf("Committed = %v, want retracted: no declared member kind", result.SubjectResolution.Committed)
+	}
+}
+
+// Two teams committed, one matched the anchor term: only that one is kept.
+func TestCommitAffirmationKeepsOnlyTheAnchorMatchedTeam(t *testing.T) {
+	result := teamCommitResult()
+	other := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:other", Label: "Other"}
+	otherCandidate := result.SubjectResolution.Candidates[0]
+	otherCandidate.Subject = other
+	otherCandidate.MatchedTerms = []string{"unrelated"}
+	result.SubjectResolution.Candidates = append(result.SubjectResolution.Candidates, otherCandidate)
+	result.SubjectResolution.Committed = append(result.SubjectResolution.Committed, other)
+	var kept []SubjectRef
+	inputs := scopedInputs(result, noMemberFoundFacts(SubjectProject), SubjectProject, SubjectTeam)
+	inputs.KeptByNoMemberFound = &kept
+	applyCommitAffirmation(&result, inputs)
+	if len(result.SubjectResolution.Committed) != 1 || result.SubjectResolution.Committed[0].CanonicalID != "team:platform" {
+		t.Fatalf("Committed = %v, want only team:platform", result.SubjectResolution.Committed)
+	}
+	if len(kept) != 1 || kept[0].CanonicalID != "team:platform" {
+		t.Fatalf("kept = %v, want exactly the anchor-matched team", kept)
+	}
+}
+
+// One committed team no candidate matched by term is the anchor by being sole.
+func TestCommitAffirmationKeepsTheSoleCommittedTeamWhenNoTermMatched(t *testing.T) {
+	result := teamCommitResult()
+	for i := range result.SubjectResolution.Candidates {
+		result.SubjectResolution.Candidates[i].MatchedTerms = nil
+	}
+	applyCommitAffirmation(&result, scopedInputs(result, noMemberFoundFacts(SubjectProject), SubjectProject, SubjectTeam))
+	if len(result.SubjectResolution.Committed) != 1 {
+		t.Fatalf("Committed = %v, want the sole team kept", result.SubjectResolution.Committed)
+	}
+}
+
+// Several committed teams, none matched: none is the anchor.
+func TestCommitAffirmationRetractsEveryTeamWhenSeveralAndNoneMatched(t *testing.T) {
+	result := teamCommitResult()
+	other := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:other", Label: "Other"}
+	second := result.SubjectResolution.Candidates[0]
+	second.Subject = other
+	result.SubjectResolution.Candidates = append(result.SubjectResolution.Candidates, second)
+	for i := range result.SubjectResolution.Candidates {
+		result.SubjectResolution.Candidates[i].MatchedTerms = nil
+	}
+	result.SubjectResolution.Committed = append(result.SubjectResolution.Committed, other)
+	applyCommitAffirmation(&result, scopedInputs(result, noMemberFoundFacts(SubjectProject), SubjectProject, SubjectTeam))
+	if len(result.SubjectResolution.Committed) != 0 {
+		t.Fatalf("Committed = %v, want both retracted", result.SubjectResolution.Committed)
+	}
+}
+
+func TestCommitGateVersionNamesTheNoMemberFoundRule(t *testing.T) {
+	if CommitGateVersion != "cg_v5" {
+		t.Fatalf("CommitGateVersion = %q, want cg_v5", CommitGateVersion)
+	}
+}
+
+type keptSink struct {
+	SlogEngineTelemetry
+	kinds []SubjectKind
+}
+
+func (k *keptSink) RecordCommitKeptByNoMemberFound(_ context.Context, _ storage.Principal, kind SubjectKind) {
+	k.kinds = append(k.kinds, kind)
+}
+
+func TestRecordCommitKeptByNoMemberFoundEmitsOneEventPerKeptSubject(t *testing.T) {
+	sink := &keptSink{}
+	engine := &Engine{telemetry: sink}
+	engine.recordCommitKeptByNoMemberFound(context.Background(), storage.Principal{OrgID: "o"}, []SubjectRef{{Kind: SubjectTeam, CanonicalID: "t"}})
+	engine.recordCommitKeptByNoMemberFound(context.Background(), storage.Principal{OrgID: "o"}, nil)
+	if len(sink.kinds) != 1 || sink.kinds[0] != SubjectTeam {
+		t.Fatalf("kinds = %v, want one team event", sink.kinds)
+	}
+}
+
+// A committed non-team subject matched by the anchor term does not make the
+// one unmatched committed team a non-anchor.
+func TestScopeAnchorTeamsIgnoresNonTeamSubjectsMatchedByTheAnchorTerm(t *testing.T) {
+	result := teamCommitResult()
+	repo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:platform", Label: "platform"}
+	candidate := result.SubjectResolution.Candidates[0]
+	candidate.Subject = repo
+	result.SubjectResolution.Candidates[0].MatchedTerms = nil
+	result.SubjectResolution.Candidates = append(result.SubjectResolution.Candidates, candidate)
+	result.SubjectResolution.Committed = append(result.SubjectResolution.Committed, repo)
+	inputs := scopedInputs(result, noMemberFoundFacts(SubjectProject), SubjectProject, SubjectTeam)
+	anchors := ScopeAnchorTeams(inputs.Frame, inputs.ScopeAnchorKind, result.SubjectResolution)
+	if len(anchors) != 1 || anchors[0].Kind != SubjectTeam {
+		t.Fatalf("anchors = %v, want the one committed team", anchors)
 	}
 }

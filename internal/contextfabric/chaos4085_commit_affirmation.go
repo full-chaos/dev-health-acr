@@ -97,7 +97,7 @@ import (
 // "cg_v2", not v1: v1 names the pre-CHAOS-4085 behavior, which no row
 // records, so starting at v2 keeps the vocabulary honest about the fact
 // that a first generation existed and is exactly what is being fenced off.
-const CommitGateVersion = "cg_v4"
+const CommitGateVersion = "cg_v5"
 
 // commitRetractionLimitation is the answer-facing disclosure appended when
 // this gate retracts a commit.
@@ -179,6 +179,9 @@ type affirmationInputs struct {
 	// kind it declared.
 	Frame           *QuestionFrame
 	ScopeAnchorKind SubjectKind
+	// KeptByNoMemberFound, when set, collects each subject the none-found
+	// shape alone is the reason to keep.
+	KeptByNoMemberFound *[]SubjectRef
 }
 
 // affirmingEvidenceRefs returns the evidence-ref ids that are ATTRIBUTABLE
@@ -397,7 +400,10 @@ func commitSubjectAffirmed(subject SubjectRef, result InvestigationResult, input
 	// Shape 4: the scope anchor of a question for the members of one kind,
 	// when the service itself filed that none were found under it. The row is
 	// the engine's own finding about this anchor, not model output.
-	if noMemberFoundUnderAnchor(subject, inputs) {
+	if noMemberFoundUnderAnchor(subject, result.SubjectResolution, inputs) {
+		if inputs.KeptByNoMemberFound != nil {
+			*inputs.KeptByNoMemberFound = append(*inputs.KeptByNoMemberFound, subject)
+		}
 		return true
 	}
 	// Shape 2: a driver about the subject, standing on evidence -- or on a
@@ -565,15 +571,40 @@ func (e *Engine) recordCommitAffirmation(ctx context.Context, principal storage.
 	}
 }
 
+// CommitKeptTelemetry is the optional sink for the decision to keep a team
+// anchor's commit because the service filed the none-found row under it.
+type CommitKeptTelemetry interface {
+	RecordCommitKeptByNoMemberFound(ctx context.Context, principal storage.Principal, subjectKind SubjectKind)
+}
+
+func (e *Engine) recordCommitKeptByNoMemberFound(ctx context.Context, principal storage.Principal, kept []SubjectRef) {
+	if len(kept) == 0 || e.telemetry == nil {
+		return
+	}
+	sink, ok := e.telemetry.(CommitKeptTelemetry)
+	if !ok {
+		return
+	}
+	for _, subject := range kept {
+		sink.RecordCommitKeptByNoMemberFound(ctx, principal, subject.Kind)
+	}
+}
+
 // noMemberFoundUnderAnchor reports that the service filed the none-found row
-// for the member kind the question declared, and that subject is the question's
-// scope anchor: the subject is then the anchor the search ran under.
-func noMemberFoundUnderAnchor(subject SubjectRef, inputs affirmationInputs) bool {
+// for the member kind the question declared, and that subject is the team the
+// resolution recorded as the question's scope anchor: the subject is then the
+// anchor the search ran under. A team that is only another commit of the same
+// kind is not.
+func noMemberFoundUnderAnchor(subject SubjectRef, resolution SubjectResolution, inputs affirmationInputs) bool {
 	frame := inputs.Frame
-	if subject.Kind != SubjectTeam || frame == nil {
+	if subject.Kind != SubjectTeam || frame == nil || frame.SubjectExpression.Scoped == nil {
 		return false
 	}
-	if ScopeAnchorRetrievalKind(frame, inputs.ScopeAnchorKind) != subject.Kind {
+	anchored := false
+	for _, anchor := range ScopeAnchorTeams(frame, inputs.ScopeAnchorKind, resolution) {
+		anchored = anchored || anchor == subject
+	}
+	if !anchored {
 		return false
 	}
 	declared := frame.SubjectExpression.Scoped.MemberKind

@@ -654,7 +654,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			ownershipAnchorBasis = AnchorBasisBound
 		}
 	}
-	teamAnchoredProjects := teamAnchoredProjectCohort(request, declaredCohortKindForRouting)
+	teamAnchors := teamAnchoredProjectCohort(request, declaredCohortKindForRouting)
+	teamAnchoredProjects := len(teamAnchors) > 0
 	// teamMembersOfScope: the frame asks for the team members of a named
 	// anchor, the one frame ownership routing can serve.
 	teamMembersOfScope := declaredCohortKindForRouting == contextfabric.SubjectTeam && request.Frame != nil &&
@@ -745,7 +746,14 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		edgeFilters.Authz += filters.Authz
 		edgeFilters.TemporalWindow += filters.TemporalWindow
+		isTeamAnchor := false
+		for _, anchor := range teamAnchors {
+			isTeamAnchor = isTeamAnchor || anchor == subject
+		}
 		for _, n := range nodes {
+			if teamAnchoredProjects && !isTeamAnchor && mustSubject(n).Kind == contextfabric.SubjectProject {
+				continue
+			}
 			// When this call is ownership-routed for the declared member
 			// kind, that kind's member pool is the ownership census below
 			// ONLY -- never blended with a hop-walked node of the same kind
@@ -1025,6 +1033,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// to an ownership-routed one, so a cut lexical arm is not a loss from
 		// it and the kind-scoped arm has nothing to fetch.
 		cohortFulltextTruncated = false
+	}
+	if teamAnchoredProjects && !censusAdmitted && deploymentAnchor == nil && ownershipRoutedRepoSlug == "" && a.config.Telemetry != nil {
+		a.config.Telemetry.RecordCohortKindFulltext(ctx, principal.OrgID, CohortKindFulltextTeamAnchorReach, declaredCohortKindForRouting, 0, false, 0, 0, nil)
 	}
 	if declaredCohortKindForRouting != "" && !censusAdmitted && deploymentAnchor == nil && ownershipRoutedRepoSlug == "" && !teamAnchoredProjects {
 		kindTextNodes, kindTruncated, kindErr := a.fulltextSearchNodesForKind(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal, declaredCohortKindForRouting)

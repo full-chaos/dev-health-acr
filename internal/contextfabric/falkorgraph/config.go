@@ -939,13 +939,17 @@ const (
 	// call -- see RecordCohortKindFulltext's own doc comment for why an
 	// AUXILIARY arm must degrade rather than reduce availability.
 	CohortKindFulltextReadFailed CohortKindFulltextDecision = "read_failed"
+	// CohortKindFulltextTeamAnchorReach: the arm did not run because the
+	// question asks for the projects of a committed team, whose own reach is
+	// the whole member set. No fetch count is written.
+	CohortKindFulltextTeamAnchorReach CohortKindFulltextDecision = "team_anchor_reach"
 )
 
 // CohortKindFulltextDecisionVocabulary returns every declared decision, in
 // declaration order, so a test quantifies over what the line can carry
 // rather than over a hand-typed list beside it.
 func CohortKindFulltextDecisionVocabulary() []CohortKindFulltextDecision {
-	return []CohortKindFulltextDecision{CohortKindFulltextRan, CohortKindFulltextReadFailed}
+	return []CohortKindFulltextDecision{CohortKindFulltextRan, CohortKindFulltextReadFailed, CohortKindFulltextTeamAnchorReach}
 }
 
 // RecordCohortKindFulltext logs at Info: its own declaration

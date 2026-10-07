@@ -2817,7 +2817,7 @@ func frameValidationRequirementDerivationFields() []Field {
 // by TestCohortKindFulltextDecisionClosedVocabularyMatchesEventspec, the same
 // cross-package parity discipline CohortKindCensusDecision already proves for
 // its own sibling arm).
-var cohortKindFulltextDecision = []string{"ran", "read_failed"}
+var cohortKindFulltextDecision = []string{"ran", "read_failed", "team_anchor_reach"}
 
 // CohortKindFulltext is the Info line for falkorgraph's kind-scoped lexical
 // arm on one DiscoverContext call: whether a cohort's own declared member

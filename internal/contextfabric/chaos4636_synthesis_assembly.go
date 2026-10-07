@@ -690,6 +690,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// its limitations. Routing to the subjectless terminal here would
 	// discard a paid-for answer and change this path's contract outcome on
 	// a signal the terminal's own logic never sees.
+	var keptByNoMemberFound []SubjectRef
 	if outcomes := applyCommitAffirmationForWorkItemTuple(&result, params.WorkItemCensus, affirmationInputs{
 		Bases: commitBases,
 		// result.SubjectResolution.Candidates, not the local resolution's:
@@ -700,6 +701,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		Graph:      graphContext,
 		Facts:      facts,
 		Frame:      params.Frame, ScopeAnchorKind: params.ScopeAnchorKind,
+		KeptByNoMemberFound: &keptByNoMemberFound,
 	}); len(outcomes) > 0 {
 		pending.CommitAffirmations = outcomes
 		if clientSynthesisWithoutDraft(request) {
@@ -709,6 +711,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			pending.ClientCommitsRetracted = len(outcomes)
 		}
 	}
+	pending.CommitKeptByNoMemberFound = keptByNoMemberFound
 	// CHAOS-4087: stamped AFTER applyCommitAffirmation, not before -- that
 	// gate can RETRACT a subject from result.SubjectResolution.Committed
 	// (affirmationInputs.Bases is the SAME commitBases this reads), so
@@ -798,6 +801,9 @@ type assemblyTelemetry struct {
 	// event published always describes the cohort actually served.
 	CohortRanked       *CohortRankedEvent
 	CommitAffirmations []CommitAffirmationOutcome
+	// CommitKeptByNoMemberFound is the team anchors the commit gate kept
+	// because the service filed the none-found row under them.
+	CommitKeptByNoMemberFound []SubjectRef
 	// ObservationCover holds every read-requirement observation-cover event
 	// from EVERY pass this investigation ran (finalizeResult APPENDS to it,
 	// never replaces it), tagged per event with which pass produced it -- see
@@ -855,6 +861,7 @@ func (e *Engine) emit(ctx context.Context, principal storage.Principal, pending 
 		e.telemetry.RecordCohortDriverNarration(ctx, principal, *pending.CohortNarration)
 	}
 	e.recordCommitAffirmation(ctx, principal, pending.CommitAffirmations)
+	e.recordCommitKeptByNoMemberFound(ctx, principal, pending.CommitKeptByNoMemberFound)
 	// The cohort-narrowing disclosure (CHAOS-6561) is NOT published here
 	// either, for the same reason as the observation-cover events below: a
 	// `disclosed` line emitted before the final budget assertion read as a

@@ -122,10 +122,78 @@ func TestDiscoverContextTeamGuardDoesNotBindOtherMemberKindsOrAnchorKinds(t *tes
 		t.Fatalf("members = %v, want the text match kept when the scope anchor is a repository", cohortIDs(result.Cohort))
 	}
 	// A team anchor asked for teams (kind fulltext arm stays on).
-	if teamAnchoredProjectCohort(contextfabric.GraphDiscoveryRequest{
+	if len(teamAnchoredProjectCohort(contextfabric.GraphDiscoveryRequest{
 		Frame: projectsOfAnchorFrame("platform"), ScopeAnchorKind: contextfabric.SubjectTeam,
 		Resolution: contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{team}},
-	}, contextfabric.SubjectRepository) {
+	}, contextfabric.SubjectRepository)) > 0 {
 		t.Fatal("guard must not bind a repository member kind")
+	}
+}
+
+// A second committed subject's own reach is not the team's: the project only
+// the second subject reaches is not a member of the team's cohort.
+func TestDiscoverContextTeamAnchorExcludesProjectsOnlyAnotherCommittedSubjectReaches(t *testing.T) {
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:platform", Label: "Platform"}
+	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:other", Label: "full-chaos/other"}
+	edgeRow := func(id, src, srcKind, dst string) row {
+		return row{
+			"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNED_BY_TEAM", propRelationshipID: id}},
+			"srcKind": srcKind, "srcId": src, "dstKind": "project", "dstId": dst,
+		}
+	}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			switch params["id"] {
+			case "team:platform":
+				return []row{edgeRow("rel_team", "team:platform", "team", "project:owned")}, nil
+			case "repository:other":
+				return []row{edgeRow("rel_repo", "repository:other", "repository", "project:other-only")}, nil
+			}
+			return nil, nil
+		default:
+			switch params["id"] {
+			case "team:platform":
+				return []row{fakeSubjectNodeRow("team", "team:platform", "Platform")}, nil
+			case "repository:other":
+				return []row{fakeSubjectNodeRow("repository", "repository:other", "full-chaos/other")}, nil
+			case "project:owned":
+				return []row{fakeSubjectNodeRow("project", "project:owned", "Billing")}, nil
+			case "project:other-only":
+				return []row{fakeSubjectNodeRow("project", "project:other-only", "Other")}, nil
+			}
+			return nil, nil
+		}
+	}}
+	request := ownershipRoutingRequest(projectsOfAnchorFrame("Platform"), team)
+	request.Resolution.Committed = []contextfabric.SubjectRef{team, repo}
+	request.ScopeAnchorKind = contextfabric.SubjectTeam
+	request.Request.Question = "which projects does team Platform own?"
+	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	ids := cohortIDs(result.Cohort)
+	if !ids["project:owned"] || ids["project:other-only"] {
+		t.Fatalf("members = %v, want only project:owned", ids)
+	}
+}
+
+// The skipped lexical arm is a decision on the trace, not an absence.
+func TestDiscoverContextTeamAnchorReportsTheSkippedKindFulltextArm(t *testing.T) {
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:platform", Label: "Platform"}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		return nil, nil
+	}}
+	telemetry := &recordingTelemetry{}
+	request := ownershipRoutingRequest(projectsOfAnchorFrame("Platform"), anchor)
+	request.ScopeAnchorKind = contextfabric.SubjectTeam
+	if _, err := newFakeAdapterWithTelemetry(t, fake, telemetry).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(telemetry.cohortKindFulltexts) != 1 || telemetry.cohortKindFulltexts[0].decision != CohortKindFulltextTeamAnchorReach {
+		t.Fatalf("cohortKindFulltexts = %+v, want one team_anchor_reach decision", telemetry.cohortKindFulltexts)
 	}
 }
