@@ -219,6 +219,13 @@ func TestAnchorReachDeniedCountJoinsThePoolAndTheWalkOnce(t *testing.T) {
 	if got != 2 || !reach {
 		t.Fatalf("anchorReachDeniedCount = %d, %v, want 2, true (p-both once, p-walk)", got, reach)
 	}
+	// A pool-only denied subject stays counted beside a reach denial, and a
+	// walk-denied subject the pool holds authorized is dropped.
+	pool2 := graphrankNodes{denied("project", "p-poolonly"), {kind: "project", id: "p-served", authz: reachAllowed}}
+	walk2 := map[string]struct{}{subjectUUID("project", "p-walk"): {}, subjectUUID("project", "p-served"): {}}
+	if got, reach := anchorReachDeniedCount(contextfabric.SubjectProject, pool2.nodes(), storage.Principal{OrgID: "o", RepositoryScopes: reachAllowed}, contextfabric.GraphDiscoveryRequest{}, walk2, 7); got != 2 || !reach {
+		t.Fatalf("pool-only plus walk = %d, %v, want 2, true (p-poolonly, p-walk; p-served is admitted)", got, reach)
+	}
 	if got, reach := anchorReachDeniedCount(contextfabric.SubjectProject, pool.nodes(), storage.Principal{OrgID: "o"}, contextfabric.GraphDiscoveryRequest{}, nil, 7); got != 7 || reach {
 		t.Fatalf("with no walk denial = %d, %v, want the pool count 7, false", got, reach)
 	}
@@ -301,5 +308,64 @@ func TestDiscoverContextTeamAnchorDeniedOwnershipEdgeIntoTheAnchorCounts(t *test
 	result, _ := discoverReach(t, fake)
 	if got := deniedReasonCount(result); got != "cohort_denied_by_authorization:1" {
 		t.Fatalf("denied reason = %q, want cohort_denied_by_authorization:1 (reasons %v)", got, result.Coverage.DegradedReasons)
+	}
+}
+
+// A project one committed anchor reaches denied and another admits is a
+// served member, not a denied one.
+func TestDiscoverContextSharedProjectAdmittedByAnotherAnchorIsNotCountedDenied(t *testing.T) {
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:chaos", Label: "Fullchaos"}
+	other := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:other", Label: "Other"}
+	ownership := func(id, src, dst string, authz []string) row {
+		return row{
+			"r": &edge{Properties: map[string]interface{}{
+				propRelationType: "OWNED_BY_TEAM", propRelationshipID: id,
+				propEvidenceRefs: []string{"evidence_" + id + "_1234"}, "authorization_repositories": authz,
+			}},
+			"srcKind": "team", "srcId": src, "dstKind": "project", "dstId": dst,
+		}
+	}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			switch params["id"] {
+			case "team:chaos":
+				return []row{ownership("rel_a", "team:chaos", "p-shared", reachDenied)}, nil
+			case "team:other":
+				return []row{ownership("rel_b", "team:other", "p-shared", reachAllowed)}, nil
+			}
+			return nil, nil
+		default:
+			switch params["id"] {
+			case "team:chaos":
+				r := fakeSubjectNodeRow("team", "team:chaos", "Fullchaos")
+				r["n"].(*node).Properties["authorization_repositories"] = reachAllowed
+				return []row{r}, nil
+			case "team:other":
+				r := fakeSubjectNodeRow("team", "team:other", "Other")
+				r["n"].(*node).Properties["authorization_repositories"] = reachAllowed
+				return []row{r}, nil
+			case "p-shared":
+				r := fakeSubjectNodeRow("project", "p-shared", "Shared")
+				r["n"].(*node).Properties["authorization_repositories"] = reachAllowed
+				return []row{r}, nil
+			}
+			return nil, nil
+		}
+	}}
+	request := ownershipRoutingRequest(reachProjectsFrame("Fullchaos"), team)
+	request.Resolution.Committed = []contextfabric.SubjectRef{team, other}
+	request.Request.Question = "which projects does team Fullchaos own?"
+	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: reachAllowed}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if !reachMemberIDs(result.Cohort)["p-shared"] {
+		t.Fatalf("members = %v, want p-shared served", reachMemberIDs(result.Cohort))
+	}
+	if got := deniedReasonCount(result); got != "" {
+		t.Fatalf("denied reason = %q, want none: the project is served (reasons %v)", got, result.Coverage.DegradedReasons)
 	}
 }

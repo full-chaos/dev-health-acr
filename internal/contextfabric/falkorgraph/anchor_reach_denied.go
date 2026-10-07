@@ -10,7 +10,8 @@ import (
 // that a committed anchor's walk reached only through an authorization denial,
 // joined with the members the pool already counted as denied. The walk drops a
 // denied endpoint before it becomes a pool node, so the pool count alone never
-// sees it. A subject reached through an admitted edge is not denied, and one
+// sees it. A subject any walk reached through an admitted edge is in the pool
+// and authorized, so it is not denied; and one
 // the pool and the walk both name counts once. Without a denied reach the
 // pool's own count is returned unchanged. The second result is true when the
 // walk itself reached a denied subject of the kind.
@@ -31,9 +32,12 @@ func anchorReachDeniedCount(kind contextfabric.SubjectKind, pool []graphrank.Can
 		if !ok || subject.Kind != kind {
 			continue
 		}
-		if !graphrank.AuthorizedAttributes(principal, request.Request.RequestedScope, node.Attributes) {
-			denied[subjectUUID(string(subject.Kind), subject.CanonicalID)] = struct{}{}
+		uuid := subjectUUID(string(subject.Kind), subject.CanonicalID)
+		if graphrank.AuthorizedAttributes(principal, request.Request.RequestedScope, node.Attributes) {
+			delete(denied, uuid)
+			continue
 		}
+		denied[uuid] = struct{}{}
 	}
-	return len(denied), true
+	return len(denied), len(denied) > 0
 }

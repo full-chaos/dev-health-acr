@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -82,5 +83,14 @@ func TestDiscoverContextTeamAnchorWhollyDeniedProjectsFilesTheDeniedCountRow(t *
 	}
 	if !found || !result.Coverage.Partial {
 		t.Fatalf("Partial=%v DegradedReasons=%v, want a cohort_denied_by_authorization reason", result.Coverage.Partial, result.Coverage.DegradedReasons)
+	}
+	var detail *contextfabric.CoverageDetail
+	for i := range result.Coverage.Details {
+		if result.Coverage.Details[i].Code == contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization {
+			detail = &result.Coverage.Details[i]
+		}
+	}
+	if detail == nil || !detail.Degrading || detail.Count == nil || *detail.Count != 3 {
+		t.Fatalf("coverage detail = %+v, want a degrading cohort_denied_by_authorization row with count 3", detail)
 	}
 }
