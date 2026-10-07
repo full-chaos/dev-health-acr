@@ -127,11 +127,11 @@ func TestDiscoverContextTeamGuardDoesNotBindOtherMemberKindsOrAnchorKinds(t *tes
 		t.Fatalf("members = %v, want the text match kept when the scope anchor is a repository", cohortIDs(result.Cohort))
 	}
 	// A team anchor asked for teams (kind fulltext arm stays on).
-	if len(teamAnchoredProjectCohort(contextfabric.GraphDiscoveryRequest{
+	if len(teamAnchoredCohort(contextfabric.GraphDiscoveryRequest{
 		Frame: projectsOfAnchorFrame("platform"), ScopeAnchorKind: contextfabric.SubjectTeam,
 		Resolution: contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{team}},
-	}, contextfabric.SubjectRepository)) > 0 {
-		t.Fatal("guard must not bind a repository member kind")
+	}, contextfabric.SubjectTeam)) > 0 {
+		t.Fatal("guard must not bind a team member kind")
 	}
 }
 

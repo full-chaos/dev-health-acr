@@ -2871,7 +2871,7 @@ var CohortKindFulltext = Event{
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrOnePerRequest,
 	Attribution:        []string{"org_id"},
-	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind, the census is not already admitted for it, and no named anchor holds the member set (a deployment anchor reports no line; a committed team asked for its projects reports decision=team_anchor_reach)",
+	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind, the census is not already admitted for it, and no named anchor holds the member set (a deployment anchor reports no line; a committed team asked for its projects or repositories reports decision=team_anchor_reach)",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: cohortKindFulltextDecision},
