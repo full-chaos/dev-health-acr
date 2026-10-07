@@ -485,7 +485,11 @@ import (
 // partial with one count row. A candidate saved before v94 holds a complete
 // answer over a cut cohort and must not be reused.
 //
-// v94 -> v96: a work-item walk list cut to fit the byte ceiling keeps every
+// v94 -> v95: synthesis free text that states a calendar day the input does
+// not hold is rejected. A candidate saved before v95 may hold such text and
+// must not be reused.
+//
+// v95 -> v96: a work-item walk list cut to fit the byte ceiling keeps every
 // member whose evidence the answer cites and carries only the kept members'
 // evidence. A candidate saved before v96 may hold evidence of cut members and
 // must not be reused.

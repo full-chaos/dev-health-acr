@@ -810,7 +810,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			}
 		}
 	}
-	return nil
+	return d.requireGroundedInstants(input)
 }
 
 // requireGroundedClaims checks that every ID in claimedFactIDs resolves

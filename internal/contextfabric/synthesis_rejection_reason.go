@@ -100,6 +100,10 @@ const (
 	RejectionReasonFindingSubjectLabelMismatch SynthesisRejectionReason = "finding_subject_label_mismatch"
 	RejectionReasonFindingEvidenceUnknown      SynthesisRejectionReason = "finding_evidence_unknown"
 	RejectionReasonFindingClaimUngrounded      SynthesisRejectionReason = "finding_claim_ungrounded"
+
+	// RejectionReasonFreeTextInstantUngrounded: free text states a calendar
+	// day the investigation input does not hold.
+	RejectionReasonFreeTextInstantUngrounded SynthesisRejectionReason = "free_text_instant_ungrounded"
 )
 
 // canonicalSynthesisRejectionReasons maps each vocabulary member to
@@ -149,6 +153,7 @@ var canonicalSynthesisRejectionReasons = map[SynthesisRejectionReason]SynthesisR
 	RejectionReasonFindingSubjectLabelMismatch:      RejectionReasonFindingSubjectLabelMismatch,
 	RejectionReasonFindingEvidenceUnknown:           RejectionReasonFindingEvidenceUnknown,
 	RejectionReasonFindingClaimUngrounded:           RejectionReasonFindingClaimUngrounded,
+	RejectionReasonFreeTextInstantUngrounded:        RejectionReasonFreeTextInstantUngrounded,
 }
 
 // ValidSynthesisRejectionReason reports whether reason is a member of the
