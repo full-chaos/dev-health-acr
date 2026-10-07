@@ -1120,7 +1120,7 @@ func projectTeamsAssertingArm(resolved string, ingest bool) string {
 		SELECT p.id AS project_id, p.provider AS provider,
 		       o.project_ref AS ownership_ref, o.project_key AS ownership_key,
 		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at` + ingestStampSQL(ingest, "o.ingest_at AS ingest_at") + `,
-		       p.project_updated_at AS project_updated_at` + ingestStampSQL(ingest, "p.project_ingest_at AS project_ingest_at") + `, toUInt8(0) AS retraction_only
+		       p.project_updated_at AS project_updated_at, p.provider_updated_at AS provider_updated_at` + ingestStampSQL(ingest, "p.project_ingest_at AS project_ingest_at, p.provider_ingest_at AS provider_ingest_at") + `, toUInt8(0) AS retraction_only
 		FROM ` + resolved + `
 		INNER JOIN ` + ownership + ` ON o.provider = p.provider AND ` + readers.ProjectIdentityMatchSQL("o", "scope_value") + `
 		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
@@ -1160,7 +1160,7 @@ func projectTeamsRetractionArm(ambiguous string, ingest bool) string {
 		SELECT p.id AS project_id, p.provider AS provider,
 		       o.project_ref AS ownership_ref, o.project_key AS ownership_key,
 		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at` + ingestStampSQL(ingest, "o.ingest_at AS ingest_at") + `,
-		       p.project_updated_at AS project_updated_at` + ingestStampSQL(ingest, "p.project_ingest_at AS project_ingest_at") + `, toUInt8(1) AS retraction_only
+		       p.project_updated_at AS project_updated_at, p.provider_updated_at AS provider_updated_at` + ingestStampSQL(ingest, "p.project_ingest_at AS project_ingest_at, p.provider_ingest_at AS provider_ingest_at") + `, toUInt8(1) AS retraction_only
 		FROM ` + ambiguous + `
 		INNER JOIN ` + ownership + ` ON o.provider = p.provider AND o.match_value = p.project_key
 		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
@@ -1242,7 +1242,7 @@ func ingestStampSQL(ingest bool, column string) string {
 // rows, which is what makes the de-duplication above hold.
 func ambiguousProjectIdentitySQL(ingest bool) string {
 	return `(
-	SELECT pa.provider AS provider, pa.id AS id, pa.project_key AS project_key, pa.project_updated_at AS project_updated_at,` + ingestStampSQL(ingest, " pa.project_ingest_at AS project_ingest_at,") + `
+	SELECT pa.provider AS provider, pa.id AS id, pa.project_key AS project_key, pa.project_updated_at AS project_updated_at, pa.provider_updated_at AS provider_updated_at,` + ingestStampSQL(ingest, " pa.project_ingest_at AS project_ingest_at, pa.provider_ingest_at AS provider_ingest_at,") + `
 	       count() OVER (PARTITION BY pa.provider, pa.project_key) AS key_project_count
 	FROM (SELECT * FROM ` + projectIdentityWithWatermarkSQL(ingest) + `) AS pa
 	WHERE pa.scope_kind = 'id' AND pa.project_key != ''
@@ -1251,10 +1251,10 @@ func ambiguousProjectIdentitySQL(ingest bool) string {
 
 func projectIdentityWithWatermarkSQL(ingest bool) string {
 	return `(
-	SELECT pi.*, w.project_updated_at AS project_updated_at` + ingestStampSQL(ingest, ", w.project_ingest_at AS project_ingest_at") + `
+	SELECT pi.*, w.project_updated_at AS project_updated_at, w.provider_updated_at AS provider_updated_at` + ingestStampSQL(ingest, ", w.project_ingest_at AS project_ingest_at, w.provider_ingest_at AS provider_ingest_at") + `
 	FROM (SELECT * FROM ` + readers.ProjectIdentityCatalogSQL() + `) AS pi
 	INNER JOIN (
-		SELECT provider, id, updated_at AS project_updated_at` + ingestStampSQL(ingest, "last_synced AS project_ingest_at") + `
+		SELECT provider, id, updated_at AS project_updated_at, max(updated_at) OVER (PARTITION BY provider) AS provider_updated_at` + ingestStampSQL(ingest, "last_synced AS project_ingest_at, max(last_synced) OVER (PARTITION BY provider) AS provider_ingest_at") + `
 		FROM projects FINAL
 		WHERE org_id = {org_id:String}
 	) AS w ON w.provider = pi.provider AND w.id = pi.id
@@ -1490,6 +1490,16 @@ func projectTeamsStatementFor(cursor cursorState, ingest bool) string {
 		cursorWatermark = projectTeamsIngestWatermark
 	}
 	const identityPartition = " OVER (PARTITION BY provider, ownership_ref, ownership_key, retraction_only)"
+	// The provider-wide project stamp widens WHICH groups a cursor revisits. It
+	// belongs in the cursor position only: observed_at is the edge's own
+	// ObservedAt and a tombstone's EffectiveAt, which an unrelated project's
+	// write must not move. On the ingest cursor the position is row_ingest, so
+	// observed_at stays free of it; the legacy cursor's position IS observed_at,
+	// so there it carries the term.
+	legacyProviderTerm := ""
+	if !ingest {
+		legacyProviderTerm = ", max(provider_updated_at)" + identityPartition
+	}
 	return `SELECT o.project_id, o.team_id, o.source_name,
        minIf(o.valid_from, o.unassertable = 0) AS first_valid_from,
        argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.unassertable = 0).1 IS NULL AS latest_is_open,
@@ -1500,7 +1510,7 @@ func projectTeamsStatementFor(cursor cursorState, ingest bool) string {
        toUInt8(countIf(o.unassertable = 1 AND o.retraction_only = 0) > 0) AS conflicting_identity_present` + ingestStampSQL(ingest, projectTeamsIngestWatermark+" AS ingest_at") + `
 FROM (
 	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, valid_from, valid_to, retraction_only,
-	       greatest(updated_at, max(project_updated_at)` + identityPartition + `) AS row_watermark,` + ingestStampSQL(ingest, " greatest(ingest_at, max(project_ingest_at)"+identityPartition+") AS row_ingest,") + `
+	       greatest(updated_at, max(project_updated_at)` + identityPartition + legacyProviderTerm + `) AS row_watermark,` + ingestStampSQL(ingest, " greatest(ingest_at, max(project_ingest_at)"+identityPartition+", max(provider_ingest_at)"+identityPartition+") AS row_ingest,") + `
 	       toUInt8(retraction_only = 1 OR min(project_id)` + identityPartition + ` != max(project_id)` + identityPartition + `) AS unassertable
 	FROM (` + strings.Join(projectTeamsArmsFor(ingest), "\n\n\t\tUNION ALL\n") + `
 	)
