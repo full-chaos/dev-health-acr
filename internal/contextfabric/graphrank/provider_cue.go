@@ -52,3 +52,23 @@ func collidingLabelKeys(candidates []contextfabric.SubjectCandidate) map[string]
 	}
 	return out
 }
+
+// crossKindLabels returns the lowercased labels held by candidates of two or
+// more kinds, which only a kind cue tells apart.
+func crossKindLabels(candidates []contextfabric.SubjectCandidate) map[string]bool {
+	kinds := map[string]map[contextfabric.SubjectKind]struct{}{}
+	for _, c := range candidates {
+		label := strings.ToLower(strings.TrimSpace(c.Subject.Label))
+		if kinds[label] == nil {
+			kinds[label] = map[contextfabric.SubjectKind]struct{}{}
+		}
+		kinds[label][c.Subject.Kind] = struct{}{}
+	}
+	out := map[string]bool{}
+	for label, set := range kinds {
+		if len(set) > 1 {
+			out[label] = true
+		}
+	}
+	return out
+}

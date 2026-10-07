@@ -65,12 +65,13 @@ func (g projectlessTeamGraph) DiscoverContext(context.Context, storage.Principal
 
 type projectlessTeamModel struct {
 	freshTupleModel
+	anchorKind   contextfabric.SubjectKind
 	requirements []contextfabric.FactRequirement
 }
 
 func (m projectlessTeamModel) InterpretQuestion(ctx context.Context, p storage.Principal, r contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
 	interpreted, receipt, err := m.freshTupleModel.InterpretQuestion(ctx, p, r)
-	receipt.ScopeAnchorKind = contextfabric.SubjectTeam
+	receipt.ScopeAnchorKind = m.anchorKind
 	receipt.ScopeAnchorTerm = "platform"
 	receipt.RequestedSubjectKind = contextfabric.SubjectProject
 	interpreted.SubjectTerms = []string{"platform"}
@@ -195,6 +196,11 @@ func askProjectlessTeam(t *testing.T, denied bool, requirements ...contextfabric
 
 func askTeamOwnership(t *testing.T, graph contextfabric.GraphReader, requirements ...contextfabric.FactRequirement) projectlessTeamNode {
 	t.Helper()
+	return askOwnershipAnchoredOn(t, graph, contextfabric.SubjectTeam, requirements...)
+}
+
+func askOwnershipAnchoredOn(t *testing.T, graph contextfabric.GraphReader, anchorKind contextfabric.SubjectKind, requirements ...contextfabric.FactRequirement) projectlessTeamNode {
+	t.Helper()
 	fixture := newFreshTupleProducerFixtureWithBudget(t, "", limits.ResourceBudget{MaxItems: 30, MaxTokens: 16000, MaxBytes: 1 << 20})
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(fixture.client), contextfabric.FactRegistryOptions{})
 	if err != nil {
@@ -212,7 +218,7 @@ func askTeamOwnership(t *testing.T, graph contextfabric.GraphReader, requirement
 		Temporal: contextfabric.TemporalIntentCurrent,
 		Version:  contextfabric.QuestionFrameVersion,
 	}
-	dependencies.Interpreter = contextfabric.RuntimeQuestionInterpreter{Runtime: projectlessTeamModel{freshTupleModel: model, requirements: requirements}, Requirements: registry}
+	dependencies.Interpreter = contextfabric.RuntimeQuestionInterpreter{Runtime: projectlessTeamModel{freshTupleModel: model, anchorKind: anchorKind, requirements: requirements}, Requirements: registry}
 	dependencies.Graph = graph
 	dependencies.Results = store
 	options := fixture.engineOptions

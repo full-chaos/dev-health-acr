@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -18,7 +19,15 @@ type uncommittedTeamAnchorGraph struct {
 }
 
 func (g uncommittedTeamAnchorGraph) ResolveSubjects(context.Context, storage.Principal, contextfabric.InvestigationRequest, contextfabric.InterpretedQuestion, contextfabric.ResolvedGraphBinding, *contextfabric.ConfirmedExpectedKind, *contextfabric.ConfirmedAnchorSelection, *contextfabric.QuestionFrame, contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
-	return contextfabric.SubjectResolution{Candidates: g.candidates, Committed: []contextfabric.SubjectRef{}}, contextfabric.StructureOfferMaterial{}, contextfabric.CommitBasisSet{}, contextfabric.CommitDecisionDigestSet{}, nil
+	candidates := g.candidates
+	if candidates == nil {
+		candidates = []contextfabric.SubjectCandidate{}
+	}
+	prompt := ""
+	if len(g.candidates) > 1 {
+		prompt = graphrank.ClarificationPrompt(g.candidates)
+	}
+	return contextfabric.SubjectResolution{ClarificationPrompt: prompt, Candidates: candidates, Committed: []contextfabric.SubjectRef{}}, contextfabric.StructureOfferMaterial{}, contextfabric.CommitBasisSet{}, contextfabric.CommitDecisionDigestSet{}, nil
 }
 
 func (g uncommittedTeamAnchorGraph) DiscoverContext(ctx context.Context, p storage.Principal, r contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
@@ -65,11 +74,39 @@ func TestAnOwnershipQuestionOnCollidingTeamLabelsIsAClarificationNotAnOrgCohort(
 	}
 }
 
-func TestAnOwnershipQuestionOnALoneUncommittedTeamCandidateIsNotAnOrgCohort(t *testing.T) {
+func TestAnOwnershipQuestionOnALoneUncommittedTeamCandidateIsAClarificationNotAnOrgCohort(t *testing.T) {
 	node := askTeamOwnership(t, uncommittedTeamAnchorGraph{candidates: []contextfabric.SubjectCandidate{
 		anchorCandidate(contextfabric.SubjectTeam, "t1", "linear", contextfabric.ResolutionAmbiguous),
 	}})
-	if node.Structured.Cohort != nil && node.Structured.Cohort.Kind == "project" && node.Structured.Cohort.Total > 0 {
-		t.Fatalf("an org-level project cohort was served for a named team: status=%q cohort=%+v", node.Structured.Status, node.Structured.Cohort)
+	if node.Structured.Status != "clarification_required" {
+		t.Fatalf("status = %q, want clarification_required", node.Structured.Status)
+	}
+	if node.Structured.Cohort != nil {
+		t.Fatalf("an org-level cohort was served for a named team: %+v", node.Structured.Cohort)
+	}
+	if node.Structured.Clarification == nil || node.Structured.Clarification.Prompt != "Did you mean team platform?" || len(node.Structured.Clarification.Candidates) != 1 {
+		t.Fatalf("clarification = %+v", node.Structured.Clarification)
+	}
+}
+
+// With no candidate at all the team is simply not found: today's path stays.
+func TestAnOwnershipQuestionOnATeamWithNoCandidateKeepsTheNoCandidatePath(t *testing.T) {
+	node := askTeamOwnership(t, uncommittedTeamAnchorGraph{})
+	if node.Structured.Status == "clarification_required" || node.Structured.Clarification != nil {
+		t.Fatalf("a clarification was served with no candidate: status=%q %+v", node.Structured.Status, node.Structured.Clarification)
+	}
+	if node.Structured.Cohort == nil || node.Structured.Cohort.Total != 1 {
+		t.Fatalf("the no-candidate path changed: cohort=%+v", node.Structured.Cohort)
+	}
+}
+
+// Only a team anchor is guarded: a named repository anchor with candidates and
+// no commit keeps the path it had.
+func TestAnOwnershipQuestionOnANonTeamAnchorWithCandidatesKeepsItsPath(t *testing.T) {
+	node := askOwnershipAnchoredOn(t, uncommittedTeamAnchorGraph{candidates: []contextfabric.SubjectCandidate{
+		anchorCandidate(contextfabric.SubjectRepository, "r1", "github", contextfabric.ResolutionAmbiguous),
+	}}, contextfabric.SubjectRepository)
+	if node.Structured.Status == "clarification_required" || node.Structured.Clarification != nil {
+		t.Fatalf("a clarification was served for a non-team anchor: status=%q", node.Structured.Status)
 	}
 }

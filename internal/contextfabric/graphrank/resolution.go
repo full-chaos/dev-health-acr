@@ -2095,10 +2095,18 @@ func ClarificationPrompt(candidates []contextfabric.SubjectCandidate) string {
 		shown = shown[:max]
 	}
 	colliding := collidingLabelKeys(shown)
+	crossKind := crossKindLabels(shown)
 	for _, candidate := range shown {
 		label := candidate.Subject.Label
+		cues := make([]string, 0, 2)
+		if crossKind[strings.ToLower(strings.TrimSpace(candidate.Subject.Label))] {
+			cues = append(cues, string(candidate.Subject.Kind))
+		}
 		if candidate.Provider != "" && colliding[candidateLabelKey(candidate)] {
-			label += " (" + candidate.Provider + ")"
+			cues = append(cues, candidate.Provider)
+		}
+		if len(cues) > 0 {
+			label += " (" + strings.Join(cues, ", ") + ")"
 		}
 		labels = append(labels, label)
 	}
