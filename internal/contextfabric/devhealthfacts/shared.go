@@ -481,8 +481,8 @@ import (
 // organization-level project cohort. A candidate saved before v93 may hold that
 // cohort answer and must not be reused.
 //
-// v95 -> v96: a work-item walk list cut to fit the byte ceiling carries only
-// the evidence of the members it keeps. A candidate saved before v96 may hold
+// -> v96: a work-item walk list cut to fit the byte ceiling keeps every member
+// whose evidence the answer cites and carries only the kept members' evidence. A candidate saved before v96 may hold
 // evidence of cut members and must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v96"
 

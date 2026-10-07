@@ -101,6 +101,30 @@ func cutWalkListMembers(result InvestigationResult) (InvestigationResult, bool) 
 			}
 		}
 	}
+	// A member whose evidence the answer cites stays listed: the result, its
+	// drivers and its findings may cite the evidence of a member they name no
+	// subject for, and a cut that dropped it would orphan that citation.
+	citedEvidence := map[string]bool{}
+	for _, ref := range result.EvidenceRefIDs {
+		citedEvidence[ref] = true
+	}
+	for _, driver := range result.Drivers {
+		for _, ref := range driver.EvidenceRefIDs {
+			citedEvidence[ref] = true
+		}
+	}
+	for _, findings := range [][]Finding{result.RemainingWork, result.ReadinessGaps, result.Conflicts} {
+		for _, finding := range findings {
+			for _, ref := range finding.EvidenceRefIDs {
+				citedEvidence[ref] = true
+			}
+		}
+	}
+	for _, member := range result.Cohort.Members {
+		if ref, ok := canonicalWorkItemEvidenceRef(member.Subject); ok && citedEvidence[ref] {
+			cited[member.Subject.CanonicalID] = true
+		}
+	}
 	// The members the written summary read stay listed too: the coverage
 	// sentence names how many listed members it read, and a cut that removed
 	// one of them would make that count describe a list the answer no longer has.

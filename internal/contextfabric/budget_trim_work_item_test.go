@@ -33,7 +33,7 @@ type budgetTrimShape struct {
 	noEvidence  bool
 	symmetric   bool
 	scoped      bool
-	// evidenceMembers makes the synthesis cite the evidence of the first N members it read.
+	// evidenceMembers makes the synthesis cite the evidence of the last N members it read.
 	evidenceMembers int
 }
 
@@ -112,7 +112,7 @@ func budgetTrimInvestigate(t *testing.T, shape budgetTrimShape) (InvestigationRe
 			}
 			resultEvidence := []string{evidence}
 			for index := 0; index < shape.evidenceMembers && index < len(served); index++ {
-				if ref, ok := canonicalWorkItemEvidenceRef(SubjectRef{Kind: SubjectWorkItem, CanonicalID: served[index]}); ok && ref != evidence {
+				if ref, ok := canonicalWorkItemEvidenceRef(SubjectRef{Kind: SubjectWorkItem, CanonicalID: served[len(served)-1-index]}); ok && ref != evidence {
 					resultEvidence = append(resultEvidence, ref)
 				}
 			}
