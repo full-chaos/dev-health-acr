@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
 
 // Each self-credential request writes exactly one certified oauth step line,
@@ -122,4 +123,41 @@ func TestCredentialLifecycleLineSurvivesAPanic(t *testing.T) {
 		}
 	}()
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/auth/credentials/self/rotate", nil))
+}
+
+// The wrapper must not hide a refusal's denial class from request
+// observability: a missing bearer is an authentication denial there as before.
+func TestSelfCredentialRoutesKeepTheirDenialClassInRequestObservability(t *testing.T) {
+	sink := &snapshotSink{}
+	hooks := observability.NewHooks(sink, nil)
+	app, _ := newHostedTestApp(t, nil, &hooks, []string{auth.ScopeContextRead}, nil, nil)
+	request := deviceRequest(t, http.MethodPost, "/api/v1/auth/credentials/self/rotate", contractsv1.CredentialRotateRequest{SchemaVersion: contractsv1.CredentialRotateRequestSchema})
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, want 401", response.Code)
+	}
+	if got := sink.only(t).Denial; got != observability.DenialAuthentication {
+		t.Fatalf("observed denial %q, want %q", got, observability.DenialAuthentication)
+	}
+}
+
+// A panic after the handler committed a status keeps that status: the
+// recovery middleware's 500 cannot replace it, and the line must agree with
+// the response.
+func TestCredentialLifecycleLinePanicAfterCommitKeepsTheCommittedStatus(t *testing.T) {
+	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
+	logs := &bytes.Buffer{}
+	app.logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	handler := app.credentialLifecycleLine(oauthvocab.StepCredentialRevoke, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		panic("after commit")
+	}))
+	defer func() {
+		_ = recover()
+		if !strings.Contains(logs.String(), `"status":200`) || !strings.Contains(logs.String(), `"outcome":"ok"`) {
+			t.Fatalf("lines %s, want status 200 outcome ok (the committed response)", logs.String())
+		}
+	}()
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/auth/credentials/self/revoke", nil))
 }

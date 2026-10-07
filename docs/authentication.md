@@ -245,10 +245,16 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   `token` (covers both the authorization_code and device_code grants; the
   device_code branch's `outcome` also carries `authorization_pending` and
   `slow_down`), and the self-credential routes `credential_ack`,
-  `credential_rotate` and `credential_revoke` (ok = done; `invalid_grant` =
-  nothing to act on or a state conflict; `expired` = the acknowledgement window
-  closed; every request writes its line, including those refused before the
-  handler). Codes, handles, verifiers, client IDs, device codes, user
+  `credential_rotate` and `credential_revoke` (outcomes: `ok` = done;
+  `invalid_request` = malformed body; `unauthenticated` = no valid credential;
+  `invalid_grant` = nothing to act on or a state conflict; `expired` = the
+  acknowledgement window closed; `rate_limited`; `unavailable` = the credential
+  service or runtime could not answer. Every POST that reaches the route writes
+  its line, including those the authenticator or limiter refuses before the
+  handler; a method the router rejects with 405 never reaches it and writes none.
+  The unacknowledged-credential sweep writes its count-only line
+  `device credential ack sweep` carrying `oauth_step=credential_revoke` and
+  `source=sweep`). Codes, handles, verifiers, client IDs, device codes, user
   codes, redirect URIs, state and tokens are never logged.
 
 The runtime database role needs `SELECT, INSERT, UPDATE, DELETE` on

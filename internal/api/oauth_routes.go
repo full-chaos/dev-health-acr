@@ -130,7 +130,7 @@ func (a *App) oauthConsentLine(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		marker := &oauthLineMarker{}
 		r = r.WithContext(context.WithValue(r.Context(), oauthLineMarkerKey{}, marker))
-		recorder := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		recorder := newLineStatusWriter(w)
 		next.ServeHTTP(recorder, r)
 		if marker.emitted {
 			return
@@ -167,12 +167,21 @@ func (a *App) credentialLifecycleLine(step string, next http.Handler) http.Handl
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		marker := &credentialLifecycleMarker{}
 		r = r.WithContext(context.WithValue(r.Context(), credentialLifecycleMarkerKey{}, marker))
-		recorder := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-		// A panic still writes the line (as the 500 the recovery middleware
-		// answers with) and then continues to that middleware.
+		recorder := newLineStatusWriter(w)
+		// A panic still writes the line and then continues to the recovery
+		// middleware: as the 500 it answers with, unless the handler had
+		// already committed a status, which the response keeps.
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				a.emitOAuthStep(r, step, oauthvocab.OutcomeUnavailable, "", http.StatusInternalServerError)
+				status := http.StatusInternalServerError
+				if recorder.committed {
+					status = recorder.status
+				}
+				outcome := credentialLifecycleOutcome(status)
+				if !recorder.committed {
+					outcome = oauthvocab.OutcomeUnavailable
+				}
+				a.emitOAuthStep(r, step, outcome, "", status)
 				panic(recovered)
 			}
 		}()
@@ -184,6 +193,39 @@ func (a *App) credentialLifecycleLine(step string, next http.Handler) http.Handl
 		a.emitOAuthStep(r, step, outcome, "", recorder.status)
 	})
 }
+
+// lineStatusWriter records the status a handler committed for an OAuth line
+// and hands everything a wrapped writer must keep to the writer it wraps: the
+// denial class the access log reads, and the underlying writer for
+// http.ResponseController.
+type lineStatusWriter struct {
+	*statusWriter
+	outer     http.ResponseWriter
+	committed bool
+}
+
+func newLineStatusWriter(w http.ResponseWriter) *lineStatusWriter {
+	return &lineStatusWriter{statusWriter: &statusWriter{ResponseWriter: w, status: http.StatusOK}, outer: w}
+}
+
+func (w *lineStatusWriter) WriteHeader(status int) {
+	w.committed = true
+	w.statusWriter.WriteHeader(status)
+}
+
+func (w *lineStatusWriter) Write(p []byte) (int, error) {
+	w.committed = true
+	return w.statusWriter.Write(p)
+}
+
+func (w *lineStatusWriter) SetDenialCode(code string) {
+	w.statusWriter.SetDenialCode(code)
+	if outer, ok := w.outer.(interface{ SetDenialCode(string) }); ok {
+		outer.SetDenialCode(code)
+	}
+}
+
+func (w *lineStatusWriter) Unwrap() http.ResponseWriter { return w.outer }
 
 func credentialLifecycleOutcome(status int) string {
 	switch {
