@@ -460,7 +460,12 @@ import (
 // day, drops the legacy empty-repository row beside real ones, and recomputes
 // the two ratios from the summed counts. A candidate saved before v87 holds
 // one repository's figures and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v87"
+//
+// v87 -> v88: a question for the members of one kind under an anchor that found
+// none, with no fact kind planned, is served with a degrading
+// graph_no_member_found row in place of an internal error. A candidate saved
+// before v88 holds no such row and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v88"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -2670,7 +2670,8 @@
                 "kind_census_truncated",
                 "graph_walk_cut_before_member",
                 "computed_population_absent",
-                "requirement_not_evaluable"
+                "requirement_not_evaluable",
+                "graph_no_member_found"
               ],
               "type": "string"
             },

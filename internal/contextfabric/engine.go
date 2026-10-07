@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -3475,13 +3476,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			return terminal, terminalErr
 		}
 	}
+	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements)
 	factRequest := CanonicalFactRequest{
 		workItemTuple:            workItemTuple,
 		LinkScopedSubjects:       linkScopedFactSubjects(ctx, request, subjects, tupleCensus),
 		Question:                 factReadQuestion(interpretation, effectiveWindow),
 		Subjects:                 subjects,
 		Cohort:                   graphContext.Cohort,
-		Requirements:             mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements),
+		Requirements:             mergedFactRequirements,
 		RequestedRepositoryScope: copyRequestedRepositoryScope(request.RequestedScope.RepositorySlugs),
 	}
 	// The invariant, asserted rather than assumed (CHAOS-3810). The guard
@@ -3510,8 +3512,29 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// bundle alongside its error so Scope survives; a nil Scope (an error
 		// raised before resolution ran) simply emits nothing.
 		e.recordFactScopeExpansion(ctx, principal, facts.Scope)
+		// A turn whose interpretation named no fact kind and whose cohort
+		// never materialized (a requested member kind with zero members) has
+		// nothing to read. The registry refuses that request with a named
+		// sentinel; it used to end the turn as a read abort. The read is
+		// treated as having returned nothing, and the requirement evaluator
+		// reports every derived requirement as never planned, so the answer
+		// says so instead of failing.
+		if errors.Is(err, ErrNoFactRequirements) && !workItemTuple {
+			err = nil
+			facts = emptyFactReadBundle(familyOutcome.Frame, graphContext.Coverage)
+		}
 		if err != nil {
-			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts: %w", ErrFactReadAborted, err))
+			subjectKinds := make([]string, 0, len(subjects))
+			seenSubjectKind := make(map[SubjectKind]struct{}, len(subjects))
+			for _, subject := range subjects {
+				if _, seen := seenSubjectKind[subject.Kind]; !seen {
+					seenSubjectKind[subject.Kind] = struct{}{}
+					subjectKinds = append(subjectKinds, string(subject.Kind))
+				}
+			}
+			sort.Strings(subjectKinds)
+			detail := &FactReadAbortDetail{RequirementCount: len(factRequest.Requirements), SubjectKinds: subjectKinds, MemberKind: string(plan.MemberKind), Err: err}
+			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts: %w", ErrFactReadAborted, detail))
 		}
 
 	}

@@ -707,6 +707,15 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	if errors.Is(err, contextfabric.ErrInvalidResult) {
 		fields = append(fields, "validation_rule", contextFabricValidationRule(err))
 	}
+	var factReadAbort *contextfabric.FactReadAbortDetail
+	if errors.As(err, &factReadAbort) {
+		fields = append(fields,
+			"fact_read_cause", factReadAbortCause(factReadAbort.Err),
+			"fact_read_requirement_count", factReadAbort.RequirementCount,
+			"fact_read_subject_kinds", factReadAbort.SubjectKinds,
+			"fact_read_member_kind", contextfabric.SanitizeLogAttr(factReadAbort.MemberKind),
+		)
+	}
 	var overflow *contextfabric.ModelInputOverflow
 	if errors.As(err, &overflow) {
 		fields = append(fields, "input_bytes", overflow.Bytes, "max_input_bytes", overflow.MaxBytes)
@@ -1002,4 +1011,17 @@ func (a *App) logContextFabricResponseBudgetMeasured(r *http.Request, measuredBy
 		contextFabricResponseBudgetFields(a.config.MaxItems, measuredBytes, maximumBytes, estimatedTokens, counts)...)
 	fields = append(fields, extra...)
 	a.logger.InfoContext(r.Context(), "context fabric response measured", fields...)
+}
+
+// factReadAbortCause names a fact-read abort by a closed value. The error text
+// itself is never logged: it can carry canonical ids from the failed request.
+func factReadAbortCause(err error) string {
+	switch {
+	case errors.Is(err, contextfabric.ErrNoFactRequirements):
+		return "no_fact_requirements"
+	case errors.Is(err, contextfabric.ErrNoInvestigationSubjects):
+		return "no_investigation_subjects"
+	default:
+		return "other"
+	}
 }

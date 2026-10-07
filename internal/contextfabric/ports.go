@@ -22,6 +22,11 @@ var (
 	// at all. Every error the engine's fact read returns carries it; a more
 	// specific sentinel in the same chain keeps its own classification.
 	ErrFactReadAborted = errors.New("context fabric canonical fact read aborted")
+	// ErrNoFactRequirements identifies a canonical fact request that carried no
+	// requirement, or more than the bound allows. The engine decides the empty
+	// case before it reads; the sentinel is what keeps the registry's own
+	// refusal distinguishable from a real read failure.
+	ErrNoFactRequirements = errors.New("canonical fact request requires bounded fact requirements")
 	// ErrSynthesisAborted identifies an answer synthesis that ended the
 	// investigation. Every error the engine's synthesis call returns carries
 	// it; a more specific sentinel in the same chain keeps its own
@@ -1515,3 +1520,16 @@ type ProjectionCheckpointStore interface {
 	LoadProjectionCheckpoint(context.Context, string, string) (ProjectionCheckpoint, error)
 	CompareAndSwapProjectionCheckpoint(context.Context, ProjectionCheckpoint, ProjectionCheckpoint) error
 }
+
+// FactReadAbortDetail carries the closed-vocabulary shape of a fact read that
+// ended the investigation, so the failure log can say what the request was
+// without naming a subject.
+type FactReadAbortDetail struct {
+	RequirementCount int
+	SubjectKinds     []string
+	MemberKind       string
+	Err              error
+}
+
+func (d *FactReadAbortDetail) Error() string { return d.Err.Error() }
+func (d *FactReadAbortDetail) Unwrap() error { return d.Err }
