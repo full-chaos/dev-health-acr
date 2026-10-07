@@ -168,6 +168,10 @@ type projectlessTeamNode struct {
 			Label     string `json:"label"`
 		} `json:"coverage_details"`
 	} `json:"structured"`
+	byID struct {
+		Status  string
+		Details []string
+	}
 }
 
 func askProjectlessTeam(t *testing.T, denied bool, requirements ...contextfabric.FactRequirement) projectlessTeamNode {
@@ -225,6 +229,24 @@ func askProjectlessTeam(t *testing.T, denied bool, requirements ...contextfabric
 		t.Fatal(err)
 	}
 	t.Logf("served status=%q details=%+v", node.Structured.Status, node.Structured.Details)
+	stored := callRealMCPTool(t, boot, "investigation_result", contractsv1.MCPInvestigationResultRequest{ResultID: "result_projectless_team_01"})
+	var read struct {
+		Structured struct {
+			Status   string `json:"status"`
+			Coverage struct {
+				Details []struct {
+					Code string `json:"code"`
+				} `json:"details"`
+			} `json:"coverage"`
+		} `json:"structured"`
+	}
+	if err := json.Unmarshal(stored.structured, &read); err != nil {
+		t.Fatal(err)
+	}
+	node.byID.Status = read.Structured.Status
+	for _, d := range read.Structured.Coverage.Details {
+		node.byID.Details = append(node.byID.Details, d.Code)
+	}
 	return node
 }
 
@@ -249,6 +271,16 @@ func TestAFactReadAbortLogCarriesNoErrorText(t *testing.T) {
 
 func TestAPlannedFactReadOverADeniedCohortIsNotServedComplete(t *testing.T) {
 	node := askProjectlessTeam(t, true, contextfabric.FactRequirement{Kind: contextfabric.FactMembership})
+	if node.byID.Status != "partial" {
+		t.Fatalf("by-id status = %q, want partial", node.byID.Status)
+	}
+	denied := false
+	for _, code := range node.byID.Details {
+		denied = denied || code == "graph_cohort_denied_by_authorization"
+	}
+	if !denied {
+		t.Fatalf("by-id read lost the denial row: %v", node.byID.Details)
+	}
 	if node.Structured.Status != "partial" {
 		t.Fatalf("status = %q, want partial over a denied cohort: %+v", node.Structured.Status, node.Structured.Details)
 	}
