@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -51,6 +52,9 @@ type Dependencies struct {
 	// provides; the web assertion verifier fails closed without it.
 	WebAssertionReplays auth.WebAssertionReplayStore
 	UsageTelemetry      *auth.UsageTelemetry
+	// Metrics counts the investigation outcomes the route certifies. nil
+	// records nothing.
+	Metrics *hostedmetrics.Instruments
 }
 
 type App struct {
@@ -76,6 +80,7 @@ type App struct {
 	oauthConsentURL      string
 	clientIP             auth.ClientIPResolver
 	usageTelemetry       *auth.UsageTelemetry
+	metrics              *hostedmetrics.Instruments
 	closers              appClosers
 	// readinessTransitions (dictation 811) tracks the last OBSERVED /readyz
 	// outcome -- aggregate AND per-check -- so handleReady can log a
@@ -209,6 +214,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		authenticator:        authenticator,
 		clientIP:             deps.ClientIP,
 		usageTelemetry:       deps.UsageTelemetry,
+		metrics:              deps.Metrics,
 		credentialService:    credentialService,
 		deviceFlow:           deviceFlow,
 		oauth:                oauth,

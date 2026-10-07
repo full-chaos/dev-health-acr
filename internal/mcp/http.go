@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"log/slog"
 	"net/http"
 	"reflect"
@@ -635,7 +637,28 @@ func (h *HTTPHandler) emitRequestLine(ctx context.Context, line requestLine, rec
 		"in_flight", line.inFlight,
 	)
 	h.logger.InfoContext(ctx, HTTPRequestLogMessage, args...)
+	h.recordRequest(ctx, line, method, tool, result)
 }
+
+// recordRequest counts the request the line above certifies and names it on
+// the server span. Only closed-vocabulary values reach either: the tool, the
+// result class and the status class.
+func (h *HTTPHandler) recordRequest(ctx context.Context, line requestLine, method, tool, result string) {
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String(SpanAttributeTool, tool),
+		attribute.String(SpanAttributeResultClass, result),
+	)
+	if method == "tools/call" {
+		h.cfg.metrics.ToolCall(ctx, tool, result, line.status, line.latency)
+	}
+}
+
+// Span attributes set on the server span of every MCP request.
+const (
+	SpanAttributeTool         = "acr.tool"
+	SpanAttributeResultClass  = "acr.result_class"
+	SpanAttributeQueryVersion = "acr.query_version"
+)
 
 // principalRef is an opaque, per-process keyed digest of the bearer. It lets
 // one process's lines be correlated per credential without writing the
