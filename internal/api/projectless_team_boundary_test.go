@@ -160,7 +160,21 @@ func TestAProjectlessTeamWithAPlannedFactReadWhoseCohortWasDeniedIsNotServedAsNo
 
 type projectlessTeamNode struct {
 	Structured struct {
-		Status  string `json:"status"`
+		Status        string `json:"status"`
+		Clarification *struct {
+			Prompt     string `json:"prompt"`
+			Candidates []struct {
+				Subject struct {
+					Kind  string `json:"kind"`
+					Label string `json:"label"`
+				} `json:"subject"`
+				Provider string `json:"provider"`
+			} `json:"candidates"`
+		} `json:"clarification"`
+		Cohort *struct {
+			Kind  string `json:"kind"`
+			Total int    `json:"total"`
+		} `json:"cohort"`
 		Details []struct {
 			Code      string `json:"code"`
 			Kind      string `json:"kind"`
@@ -175,6 +189,11 @@ type projectlessTeamNode struct {
 }
 
 func askProjectlessTeam(t *testing.T, denied bool, requirements ...contextfabric.FactRequirement) projectlessTeamNode {
+	t.Helper()
+	return askTeamOwnership(t, projectlessTeamGraph{denied: denied}, requirements...)
+}
+
+func askTeamOwnership(t *testing.T, graph contextfabric.GraphReader, requirements ...contextfabric.FactRequirement) projectlessTeamNode {
 	t.Helper()
 	fixture := newFreshTupleProducerFixtureWithBudget(t, "", limits.ResourceBudget{MaxItems: 30, MaxTokens: 16000, MaxBytes: 1 << 20})
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(fixture.client), contextfabric.FactRegistryOptions{})
@@ -194,7 +213,7 @@ func askProjectlessTeam(t *testing.T, denied bool, requirements ...contextfabric
 		Version:  contextfabric.QuestionFrameVersion,
 	}
 	dependencies.Interpreter = contextfabric.RuntimeQuestionInterpreter{Runtime: projectlessTeamModel{freshTupleModel: model, requirements: requirements}, Requirements: registry}
-	dependencies.Graph = projectlessTeamGraph{denied: denied}
+	dependencies.Graph = graph
 	dependencies.Results = store
 	options := fixture.engineOptions
 	options.MaxItems = 30
