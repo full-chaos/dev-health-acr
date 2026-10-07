@@ -29,6 +29,7 @@ const monthNamePattern = `(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|
 
 var (
 	isoDayPattern       = regexp.MustCompile(`\b(\d{4})-(\d{2})-(\d{2})(?:\b|T)`)
+	isoDatetimePattern  = regexp.MustCompile(`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})`)
 	monthFirstPattern   = regexp.MustCompile(`\b` + monthNamePattern + `\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(\d{4})\b)?`)
 	dayFirstPattern     = regexp.MustCompile(`\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?` + monthNamePattern + `\b\.?(?:,?\s+(\d{4})\b)?`)
 	monthNumberByPrefix = map[string]time.Month{
@@ -57,6 +58,15 @@ func (d instantDays) add(year int, month time.Month, day int) {
 func (d instantDays) addTime(t time.Time) {
 	u := t.UTC()
 	d.add(u.Year(), u.Month(), u.Day())
+}
+
+// addAdjacent grounds the day an instant falls on and the days either side:
+// a draft may state the same instant in a local zone, whose day differs from
+// the UTC day by at most one.
+func (d instantDays) addAdjacent(t time.Time) {
+	for _, offset := range []int{-1, 0, 1} {
+		d.addTime(t.AddDate(0, 0, offset))
+	}
 }
 
 func (d instantDays) holds(year int, month time.Month, day int) bool {
@@ -103,6 +113,11 @@ func synthesisInputInstantDays(input SynthesisInput) (instantDays, error) {
 		return days, fmt.Errorf("synthesis input could not be read for instants: %w", err)
 	}
 	scanInstantDays(string(encoded), days.add)
+	for _, m := range isoDatetimePattern.FindAllStringSubmatch(string(encoded), -1) {
+		if at, err := time.Parse(time.RFC3339, m[1]+"Z"); err == nil {
+			days.addAdjacent(at)
+		}
+	}
 	if window := input.EvidenceWindow; window != nil {
 		if window.Start != nil {
 			days.addTime(*window.Start)
@@ -113,7 +128,7 @@ func synthesisInputInstantDays(input SynthesisInput) (instantDays, error) {
 		}
 	}
 	if !input.ReadTimeClamp.At.IsZero() {
-		days.addTime(input.ReadTimeClamp.At)
+		days.addAdjacent(input.ReadTimeClamp.At)
 	}
 	return days, nil
 }
