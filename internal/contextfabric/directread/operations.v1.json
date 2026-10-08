@@ -2604,7 +2604,8 @@
         }
       ],
       "withheld_outputs": [],
-      "disclosure": []
+      "disclosure": [],
+      "primary_list": "hotspots.rows"
     },
     {
       "name": "investmentBreakdown",

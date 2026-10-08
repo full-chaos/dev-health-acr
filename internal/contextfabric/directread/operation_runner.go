@@ -579,7 +579,7 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 	var cut *pageCut
 	if measured > maxBytes {
 		if listPath, has := op.PrimaryList(); has {
-			if fit, ok := fitListPage(filtered.Data, listPath, maxBytes); ok {
+			if fit, ok := fitListPage(filtered.Data, listPath, maxBytes, op.SiblingLists()); ok {
 				cut = &fit
 				filtered.Data = fit.data
 				measured = len(fit.data)

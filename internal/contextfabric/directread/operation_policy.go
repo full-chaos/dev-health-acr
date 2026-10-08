@@ -300,6 +300,7 @@ type OperationPolicy struct {
 	WithheldOutputs       []WithheldOutput  `json:"withheld_outputs"`
 	Disclosure            []DisclosureField `json:"disclosure"`
 	Notes                 []string          `json:"notes,omitempty"`
+	PrimaryListPath       string            `json:"primary_list,omitempty"`
 
 	variables map[string]int
 	outputs   map[string]OutputLeaf
@@ -638,6 +639,12 @@ func validateOperation(op *OperationPolicy) error {
 	if op.DeadlineSeconds <= 0 {
 		return errors.New("deadline_seconds must be positive")
 	}
+	if op.PrimaryListPath != "" {
+		lists := op.topLevelLists()
+		if !lists[op.PrimaryListPath] {
+			return fmt.Errorf("primary_list %q is not a top-level list output of the operation", op.PrimaryListPath)
+		}
+	}
 	op.variables = map[string]int{}
 	for i, v := range op.Variables {
 		if _, dup := op.variables[v.Path]; dup {
@@ -753,6 +760,18 @@ func validateOperation(op *OperationPolicy) error {
 			for _, row := range s.RowIDPaths {
 				if op.outputs[row] != LeafScalar {
 					return fmt.Errorf("row id path %q is not an allowed scalar output", row)
+				}
+				if strings.Count(row, "[*]") != 1 {
+					return fmt.Errorf("row id path %q must reach each row of one list through exactly one [*]: a nested list leaves a row with an empty nested list unchecked", row)
+				}
+			}
+			if op.PrimaryListPath != "" {
+				for list := range op.topLevelLists() {
+					checked := slices.ContainsFunc(s.RowIDPaths, func(row string) bool { return strings.HasPrefix(row, list+"[*].") })
+					declaredUnchecked := slices.ContainsFunc(s.UncheckedPaths, func(path string) bool { return list == path || strings.HasPrefix(list, path+".") })
+					if !checked && !declaredUnchecked {
+						return fmt.Errorf("restricted scope: list %q has no row id path and is not declared unchecked, so a foreign repository in it would be served", list)
+					}
 				}
 			}
 		}
