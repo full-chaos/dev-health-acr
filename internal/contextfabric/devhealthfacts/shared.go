@@ -508,7 +508,12 @@ import (
 // own ownership reach is counted in the denied-cohort row and the answer is
 // served partial, not as none found. A candidate saved before v100 holds the
 // none-found answer and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v100"
+//
+// v100 -> v101: the repositories of a committed team come only from the team's
+// own reach, never from the question text or another committed subject. A
+// candidate saved before v101 may hold a cohort of text-matched repositories
+// and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v101"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -940,8 +940,8 @@ const (
 	// AUXILIARY arm must degrade rather than reduce availability.
 	CohortKindFulltextReadFailed CohortKindFulltextDecision = "read_failed"
 	// CohortKindFulltextTeamAnchorReach: the arm did not run because the
-	// question asks for the projects of a committed team, whose own reach is
-	// the whole member set. No fetch count is written.
+	// question asks for the projects or repositories of a committed team, whose
+	// own reach is the whole member set. No fetch count is written.
 	CohortKindFulltextTeamAnchorReach CohortKindFulltextDecision = "team_anchor_reach"
 )
 
