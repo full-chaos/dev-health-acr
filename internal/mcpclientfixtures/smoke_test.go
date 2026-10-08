@@ -30,6 +30,15 @@ const smokeInjectedVersion = "1.4.2"
 // without this package importing or modifying internal/version itself.
 func buildVersionedACRMCPBinary(t *testing.T) string {
 	t.Helper()
+	return buildVersionedACRMCPBinaryWithTags(t, "acr_compiled_lifecycle_lock_fixture")
+}
+
+// buildVersionedACRMCPBinaryWithTags builds the real entrypoint. The default
+// build above carries the per-process lifecycle lock fixture so a child that
+// boots beside other packages' children never contends on the host-wide
+// credential lock file; a test that targets the real lock passes no tag.
+func buildVersionedACRMCPBinaryWithTags(t *testing.T, tags string) string {
+	t.Helper()
 	root := findRepoRoot(t)
 	binPath := filepath.Join(t.TempDir(), "acr-mcp")
 	versionPkg := "github.com/full-chaos/dev-health-acr/internal/version"
@@ -37,7 +46,12 @@ func buildVersionedACRMCPBinary(t *testing.T) string {
 		versionPkg, smokeInjectedVersion,
 		versionPkg, "0123456789abcdef0123456789abcdef01234567",
 		versionPkg, "2026-01-01T00:00:00Z")
-	cmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", binPath, "./cmd/acr-mcp")
+	args := []string{"build", "-ldflags", ldflags}
+	if tags != "" {
+		args = append(args, "-tags", tags)
+	}
+	args = append(args, "-o", binPath, "./cmd/acr-mcp")
+	cmd := exec.Command("go", args...)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build versioned acr-mcp: %v\n%s", err, out)

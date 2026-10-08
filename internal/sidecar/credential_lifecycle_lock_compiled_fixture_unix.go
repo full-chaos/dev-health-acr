@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func init() {
 	credentialLifecycleLockAcquire = acquireCompiledLifecycleLock
+	credentialLifecycleSharedLockAcquire = func(time.Duration) (func() error, error) {
+		return func() error { return nil }, nil
+	}
 }
 
 func acquireCompiledLifecycleLock() (func() error, error) {
