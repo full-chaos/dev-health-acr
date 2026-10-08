@@ -1,6 +1,11 @@
 package falkorgraph
 
-import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+import (
+	"strings"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+)
 
 // teamAnchoredCohort is the committed team subjects whose own reach is the
 // member set of a question for the projects or the repositories of a named
@@ -62,4 +67,34 @@ func teamAnchorMemberPosition(anchors []contextfabric.SubjectRef, subject contex
 		return treeProject, true
 	}
 	return "", false
+}
+
+// ownedMemberStates is the lifecycle state each owned member carries, keyed by
+// subject: a member the source marks completed, canceled or inactive is still
+// owned, and says so on its row.
+func ownedMemberStates(nodes []graphrank.CandidateNode) map[string]string {
+	states := map[string]string{}
+	for _, n := range nodes {
+		state := strings.TrimSpace(propStringValue(n.Attributes[propPropertyPrefix+"state"]))
+		inactive := false
+		if active, ok := n.Attributes[propPropertyPrefix+"is_active"].(bool); ok {
+			inactive = !active
+		}
+		if state == "" && !inactive {
+			continue
+		}
+		subject, ok := graphrank.NodeSubject(n)
+		if !ok {
+			continue
+		}
+		reason := "Project state: " + state + "."
+		switch {
+		case state == "":
+			reason = "Project is inactive in the source."
+		case inactive:
+			reason = "Project state: " + state + "; inactive in the source."
+		}
+		states[graphrank.SubjectKey(subject)] = reason
+	}
+	return states
 }

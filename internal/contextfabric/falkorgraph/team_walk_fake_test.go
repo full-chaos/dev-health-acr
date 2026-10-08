@@ -49,7 +49,7 @@ func withWalkStepReads(inner *fakeConn) *fakeConn {
 				if err != nil {
 					return nil, err
 				}
-				if len(nodes) == 0 || !windowAdmits(nodes[0]["n"].(*node).Properties, params) {
+				if len(nodes) == 0 || (strings.Contains(cypher, "b."+propValidToNs) && !windowAdmits(nodes[0]["n"].(*node).Properties, params)) {
 					continue
 				}
 				out = append(out, row{"id": id, "b": nodes[0]["n"], "r": e})
