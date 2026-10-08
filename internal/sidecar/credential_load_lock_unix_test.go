@@ -49,14 +49,53 @@ func TestSharedFlockWaitsForAnExclusiveHolderThenSucceeds(t *testing.T) {
 	_ = closeLock()
 }
 
+// returnsWithin runs fn and fails the test when it has not returned within
+// limit, so a lost bound fails by assertion rather than by the test timeout.
+func returnsWithin(t *testing.T, limit time.Duration, fn func() error) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(limit):
+		t.Fatalf("call did not return within %v; its wait bound is lost", limit)
+		return nil
+	}
+}
+
 func TestSharedFlockTimesOutBeyondTheBound(t *testing.T) {
 	path := lockTestPath(t)
 	release := holdFlock(t, path, syscall.LOCK_EX)
 	defer release()
 
-	_, err := acquireCredentialLifecycleSharedLockAt(path, 100*time.Millisecond)
+	start := time.Now()
+	err := returnsWithin(t, 3*time.Second, func() error {
+		_, err := acquireCredentialLifecycleSharedLockAt(path, 100*time.Millisecond)
+		return err
+	})
 	if !errors.Is(err, ErrCredentialLifecycleWaitTimeout) {
 		t.Fatalf("shared acquire = %v, want the wait timeout", err)
+	}
+	if elapsed := time.Since(start); elapsed < 90*time.Millisecond {
+		t.Fatalf("shared acquire gave up after %v, before its 100ms bound", elapsed)
+	}
+}
+
+func TestSharedCredentialGateTimesOutBeyondTheBound(t *testing.T) {
+	credentialLifecycleGate.Lock()
+	defer credentialLifecycleGate.Unlock()
+
+	start := time.Now()
+	err := returnsWithin(t, 3*time.Second, func() error {
+		_, err := acquireSharedCredentialLifecycle(100 * time.Millisecond)
+		return err
+	})
+	if !errors.Is(err, ErrCredentialLifecycleWaitTimeout) {
+		t.Fatalf("shared acquire = %v, want the wait timeout", err)
+	}
+	if elapsed := time.Since(start); elapsed < 90*time.Millisecond {
+		t.Fatalf("shared acquire gave up after %v, before its 100ms bound", elapsed)
 	}
 }
 
