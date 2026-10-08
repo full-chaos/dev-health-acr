@@ -42,8 +42,8 @@ func TestLegacyRowsDoNotChangeTheClassification(t *testing.T) {
 	}
 	for _, op := range file.Operations {
 		for _, row := range in.Registry.Rows {
-			if row.Legacy && row.Operation == op.Name && row.Digest == op.Digest && !in.Policy.Served[op.Name].PinLegacy {
-				t.Fatalf("%s is pinned on its legacy digest without declaring it", op.Name)
+			if row.Legacy && row.Operation == op.Name && row.Digest == op.Digest {
+				t.Fatalf("%s is pinned on its legacy digest", op.Name)
 			}
 		}
 	}
@@ -92,9 +92,6 @@ func TestLegacyTextIsNeverOfferedToClients(t *testing.T) {
 			continue
 		}
 		seen++
-		if in.Policy.Served[row.Operation].PinLegacy {
-			continue
-		}
 		if strings.Contains(string(artifact), row.Digest) {
 			t.Errorf("%s: legacy digest %s is in the artifact", row.Operation, row.Digest)
 		}

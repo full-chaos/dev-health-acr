@@ -21,10 +21,7 @@ type notServedDecl struct {
 // ALLOWLIST (paths as the SDL walk names them); every other path is
 // refused, with the code from RefusedPaths or variable_not_allowed.
 type operationDecl struct {
-	DocumentName string
-	// PinLegacy serves the operation on its legacy registry text (ops
-	// accepts it beside the current one) until a client needs the newer shape.
-	PinLegacy         bool
+	DocumentName      string
 	Cost              directread.CostClass
 	DeadlineSeconds   int
 	MaxInFlightPerOrg int
