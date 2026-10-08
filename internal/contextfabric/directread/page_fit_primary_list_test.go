@@ -42,6 +42,9 @@ func twoListCatalogueScoped(t *testing.T, declared string, rowChecked, unchecked
 		op := &file.Operations[i]
 		op.PrimaryListPath = declared
 		for j := range op.Scopes {
+			if !rowChecked && op.Scopes[j].Caller == directread.CallerRestricted {
+				op.Scopes[j].RowIDPaths = slices.DeleteFunc(slices.Clone(op.Scopes[j].RowIDPaths), func(p string) bool { return p == "hotspots.repos[*].repoId" })
+			}
 			if unchecked && op.Scopes[j].Caller == directread.CallerRestricted {
 				op.Scopes[j].UncheckedPaths = append(op.Scopes[j].UncheckedPaths, "hotspots.repos")
 			}
