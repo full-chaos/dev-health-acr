@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	wantTeamOwnership     = "A team owns repositories and projects: team ownership = OWNED_BY_TEAM edges from both kinds to the team; for a team ownership question read `read_relationships` on the team with types OWNED_BY_TEAM and direction in (or `find_subjects` `owned_by`) first."
+	wantTeamOwnership     = "A team owns repositories and projects: team ownership = OWNED_BY_TEAM edges from both kinds to the team; for a team ownership question read `read_relationships` on the team with types OWNED_BY_TEAM and direction in (or `find_subjects` `owned_by`) first. Archived projects stay listed as owned; a team project cohort in an investigation answer flags them archived."
 	wantProjectRepository = "A project reaches repositories only through its issues' linked pull requests; no repository is mapped to a team by a project directly."
 	wantHomeRunOperation  = "`home` is served by run_operation only, by design."
 	wantInvestmentScopes  = "Per-team, per-repository and per-project investment is served by `read_facts` kind `investment`; `investmentBreakdown` serves the organization only."
