@@ -1387,10 +1387,11 @@ func candidateOptionsOffered(opts []contractsv1.ContextFabricCandidateOption) []
 // veto reasons currently share one sentence (unlike window's three), so a
 // map is not yet warranted; revisit once a second distinct disclosure
 // exists.
-func structureVetoLimitation(veto structureVetoReason, detail structureVetoDetail) string {
-	if veto == structureVetoConfirmationUnresolved && detail != structureDetailNone {
-		return "a structure confirmation receipt could not be resolved (reason: " + string(detail) + ")"
-	}
+//
+// The text is the same for every exit of the unresolved veto: a denied prior
+// result, a missing one and a missing option must stay indistinguishable to the
+// caller. The exit is named only in the structure receipt veto log line.
+func structureVetoLimitation(veto structureVetoReason) string {
 	switch veto {
 	case structureVetoConfirmationConflict:
 		return "a structure confirmation receipt conflicted with another and could not be applied"
@@ -1428,7 +1429,7 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 			recorder.RecordStructureVetoDetail(ctx, principal, detail)
 		}
 	}
-	limitation := structureVetoLimitation(veto, detail)
+	limitation := structureVetoLimitation(veto)
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
 		RequestedJudgment: windowVetoPlaceholderJudgment,

@@ -1,7 +1,9 @@
 package contextfabric
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -52,9 +54,21 @@ func TestStructureVetoDetailNamesTheExit(t *testing.T) {
 			if canon.Veto != structureVetoConfirmationUnresolved || canon.Detail != tc.want {
 				t.Fatalf("veto=%q detail=%q, want unresolved/%q", canon.Veto, canon.Detail, tc.want)
 			}
-			if got := structureVetoLimitation(canon.Veto, canon.Detail); !strings.Contains(got, "(reason: "+string(tc.want)+")") {
-				t.Fatalf("limitation %q does not name %q", got, tc.want)
+			if got := structureVetoLimitation(canon.Veto); got != "a structure confirmation receipt could not be resolved" || strings.Contains(got, string(tc.want)) {
+				t.Fatalf("limitation %q must be the fixed generic text, identical for every exit", got)
 			}
 		})
+	}
+}
+
+func TestStructureVetoDetailIsLogged(t *testing.T) {
+	var out bytes.Buffer
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&out, nil)))
+	telemetry.RecordStructureVetoDetail(context.Background(), storage.Principal{OrgID: "org_1"}, structureDetailStoredNotFound)
+	line := out.String()
+	for _, want := range []string{"context fabric structure receipt veto", `"detail":"stored_result_not_found"`} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log line %q lacks %q", line, want)
+		}
 	}
 }
