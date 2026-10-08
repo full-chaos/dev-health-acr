@@ -761,6 +761,9 @@ func validateOperation(op *OperationPolicy) error {
 				if op.outputs[row] != LeafScalar {
 					return fmt.Errorf("row id path %q is not an allowed scalar output", row)
 				}
+				if strings.Count(row, "[*]") != 1 {
+					return fmt.Errorf("row id path %q must reach each row of one list through exactly one [*]: a nested list leaves a row with an empty nested list unchecked", row)
+				}
 			}
 			if op.PrimaryListPath != "" {
 				for list := range op.topLevelLists() {

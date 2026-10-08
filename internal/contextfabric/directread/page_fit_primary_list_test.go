@@ -205,3 +205,69 @@ func TestADeclaredUncheckedSecondListNeedsNoRowIdPath(t *testing.T) {
 		t.Fatal("the same list without the declaration loaded")
 	}
 }
+
+func TestARowIdPathWithANestedListIsRejected(t *testing.T) {
+	raw, err := os.ReadFile("operations.v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file directread.CatalogueFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	for i := range file.Operations {
+		if file.Operations[i].Name != "hotspots" {
+			continue
+		}
+		op := &file.Operations[i]
+		op.Outputs = append(op.Outputs, directread.OutputPath{Path: "hotspots.rows[*].files[*].repoId", Type: "String!", Leaf: directread.LeafScalar})
+		for j := range op.Scopes {
+			if op.Scopes[j].Caller == directread.CallerRestricted {
+				op.Scopes[j].RowIDPaths = []string{"hotspots.rows[*].files[*].repoId"}
+			}
+		}
+	}
+	out, _ := json.Marshal(file)
+	if _, err := directread.LoadCatalogue(out); err == nil || !strings.Contains(err.Error(), "exactly one [*]") {
+		t.Fatalf("a row id path through a nested list loaded: %v", err)
+	}
+}
+
+func TestARestrictedCallerNeverReceivesAForeignTopLevelRowWithAnEmptyNestedList(t *testing.T) {
+	cat, err := twoListCatalogue(t, "hotspots.rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, _ := cat.Lookup("hotspots")
+	scope := op.Scope(directread.CallerRestricted)
+	vars := opMerge(opMinimalVariables(t, op), scope.ForcedVariablePath, []any{opRepo(opRepoA)})
+	body := `{"data":{"hotspots":{"rows":[{"filePath":"a.go","repoId":"` + opRepoA + `"}],"repos":[{"repoId":"` + opRepoB + `","repoName":"r","topFilePath":"a.go","references":[]}]}}}`
+	h := newOpHarness(t, func(opRecorded) (int, string) { return 200, body }, opHarnessOptions{catalogue: cat})
+	resp := h.run(t, opRestrictedA(), "hotspots", vars)
+	if resp.Call != directread.CallRefused || resp.Refusal == nil || resp.Refusal.Code != directread.RefusalRowOutsideGrant || resp.Data != nil {
+		out, _ := json.Marshal(resp)
+		t.Fatalf("%.300s", out)
+	}
+}
+
+func TestTheDataCatalogNamesThePrimaryListOfAMultiListOperation(t *testing.T) {
+	cat, err := twoListCatalogue(t, "hotspots.rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := directread.CatalogCaller{PrincipalClass: directread.ClassUnrestricted, Scopes: []string{"context:read", "data:read"}, DataRead: true, OperationsServable: true, GateComposed: true}
+	parsed, err := directread.ParseCatalogSections("operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := directread.BuildDataCatalog(cat, caller, parsed)
+	for _, op := range got.Operations.Operations {
+		want := ""
+		if op.Name == "hotspots" {
+			want = "hotspots.rows"
+		}
+		if op.PrimaryList != want {
+			t.Fatalf("%s: primary_list %q, want %q", op.Name, op.PrimaryList, want)
+		}
+	}
+}

@@ -529,6 +529,11 @@ import (
 // subjects is no longer cut at the shared walk budget. A candidate saved
 // before v106 may hold a cut or former-owner cohort and must not be reused.
 //
+// v106 -> v107: a project or repository a team owns over an open ownership
+// edge is served although its own validity ended (an archived project), and
+// the row says so. A candidate saved before v107 may hold a cohort short of its
+// archived owned projects and must not be reused.
+//
 // v107 -> v108: the hotspots operation also returns a per-repository roll-up
 // (repos[]), row-checked against the caller's grant like rows[]. A candidate
 // saved before v108 may hold a hotspots answer without it and must not be
