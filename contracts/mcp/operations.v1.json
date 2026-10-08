@@ -6805,6 +6805,13 @@
       "reason": "root field is not enabled on the ops query service run-operation path (root_field_not_enabled): dark on purpose"
     },
     {
+      "name": "sourceHealth",
+      "kind": "query",
+      "digest": "f9196883f03de7e9689294590f40c0216374a8301ed8712830ec4b9836034fc0",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
+    },
+    {
       "name": "testOpsCoverage",
       "kind": "query",
       "digest": "404b55a3066388c00846a9330032aafdaff6f3441cca5258217ade4fb845ecac",

@@ -493,7 +493,11 @@ func (o *Oracle) temporaryAllowance(ctx context.Context, rr *RootReport, root *d
 	if got := echoValue(narrowLeaves, spec.Echo); derived {
 		held, _ := strconv.Atoi(wantWide)
 		stated, perr := strconv.Atoi(got)
-		if perr != nil || stated >= held {
+		if perr != nil || stated > held {
+			unmeasured(fmt.Sprintf("for the second history the answer states a history of %q at %s, not a number up to the %s days the first answer held", got, spec.Echo, wantWide))
+			return nil
+		}
+		if stated == held {
 			rr.CodeRead = append(rr.CodeRead, fmt.Sprintf("class %s, %s: read from the resolver code, not measured by this run (history %s d < both probe windows; windows not distinguishable: asked %d, the answer states %q)", ClassLatestDayVsWindow, covered, wantWide, narrowAsked, got))
 			return nil
 		}

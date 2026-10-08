@@ -1993,3 +1993,51 @@ func TestARecordedDeniedTeamIsLeftOutOfTheRead(t *testing.T) {
 		t.Fatalf("denied list %v", oracle.deniedList)
 	}
 }
+
+// The compatibility baseline is the one of the capture on disk: while the
+// catalogue pins the SDL the capture was taken at, every served contract is
+// the recorded one.
+func TestTheCaptureBaselineIsTheCaptureOfTheManifest(t *testing.T) {
+	manifest, _, _ := loadedCapture(t)
+	if manifest.SchemaDigest != captureSchemaDigest {
+		t.Fatalf("the manifest was captured at %s, the baseline names %s: advance contractsAtCapture with the capture", manifest.SchemaDigest, captureSchemaDigest)
+	}
+	policy := mustPolicy(t)
+	if policy.Catalogue().SchemaDigest() != manifest.SchemaDigest {
+		t.Skip("the catalogue pins another SDL than the capture")
+	}
+	for _, op := range policy.Catalogue().Operations(directread.CallerUnrestricted) {
+		if contractsAtCapture[op.Name] != contractDigest(op) {
+			t.Errorf("contract of %s is %s, the baseline holds %q", op.Name, contractDigest(op), contractsAtCapture[op.Name])
+		}
+	}
+}
+
+// A second echo that is not a history, or longer than the history the first
+// answer held, is a probe that did not measure; only an echo equal to the held
+// history says the windows cannot be told apart.
+func TestAMalformedSecondEchoIsNotCodeRead(t *testing.T) {
+	const held = 8
+	for _, tc := range []struct {
+		name string
+		echo func(asked int) any
+	}{
+		{"longer_than_held", func(int) any { return 20 }},
+		{"not_a_number", func(int) any { return "unknown" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			planes := recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+				asked := historyOf(variables, "historyWeeks")
+				if asked == 12 {
+					forecast["historyWeeks"] = held
+					return
+				}
+				forecast["historyWeeks"] = tc.echo(asked)
+			})
+			rr := fakeRun(t, "throughputForecast", planes, nil).Root("throughputForecast")
+			if len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], "not a number up to the 8 days") {
+				t.Fatalf("code read %v, probe invalid %v", rr.CodeRead, rr.Invalid)
+			}
+		})
+	}
+}
