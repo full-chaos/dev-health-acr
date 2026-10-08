@@ -632,10 +632,21 @@ func (s authorizedResultStore) Get(ctx context.Context, principal storage.Princi
 		s.recorder.RecordStoredResultAuthorization(ctx, principal, decision)
 	}
 	if err := decision.ServingError(); err != nil {
+		if decision.Decision == StoredResultDenied {
+			return StoredInvestigationResult{}, &storedResultDeniedError{reason: decision.Reason}
+		}
 		return StoredInvestigationResult{}, err
 	}
 	return stored, nil
 }
+
+// storedResultDeniedError is ErrInvestigationResultNotFound for every caller
+// that tests with errors.Is, and carries the closed denial reason for the
+// engine's own telemetry.
+type storedResultDeniedError struct{ reason StoredResultAuthorizationReason }
+
+func (e *storedResultDeniedError) Error() string { return ErrInvestigationResultNotFound.Error() }
+func (e *storedResultDeniedError) Unwrap() error { return ErrInvestigationResultNotFound }
 
 // StoredResultAuthorizationLogMessage is the Info line every decision emits.
 const StoredResultAuthorizationLogMessage = "context fabric stored result authorization"

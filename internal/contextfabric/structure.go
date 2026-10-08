@@ -2103,7 +2103,10 @@ type StructureVetoDetailRecorder interface {
 // storedResultGetDetail classifies a failed prior-result read without naming
 // the result or the error text.
 func storedResultGetDetail(err error) structureVetoDetail {
+	var denied *storedResultDeniedError
 	switch {
+	case errors.As(err, &denied):
+		return structureVetoDetail("stored_result_denied_" + string(denied.reason))
 	case errors.Is(err, ErrInvestigationResultNotFound):
 		return structureDetailStoredNotFound
 	case errors.Is(err, ErrUnavailable):
