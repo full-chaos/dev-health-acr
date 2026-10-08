@@ -199,9 +199,10 @@ type opHarness struct {
 }
 
 type opHarnessOptions struct {
-	noGrants bool
-	grants   directread.GrantedRepositories
-	timeout  time.Duration
+	noGrants  bool
+	grants    directread.GrantedRepositories
+	timeout   time.Duration
+	catalogue *directread.Catalogue
 }
 
 func newOpHarness(t *testing.T, respond func(rec opRecorded) (int, string), opts opHarnessOptions) *opHarness {
@@ -209,6 +210,9 @@ func newOpHarness(t *testing.T, respond func(rec opRecorded) (int, string), opts
 	cat, err := directread.DefaultCatalogue()
 	if err != nil {
 		t.Fatalf("DefaultCatalogue: %v", err)
+	}
+	if opts.catalogue != nil {
+		cat = opts.catalogue
 	}
 	upstream := newOpUpstream(t, respond)
 	timeout := opts.timeout

@@ -300,6 +300,7 @@ type OperationPolicy struct {
 	WithheldOutputs       []WithheldOutput  `json:"withheld_outputs"`
 	Disclosure            []DisclosureField `json:"disclosure"`
 	Notes                 []string          `json:"notes,omitempty"`
+	PrimaryListPath       string            `json:"primary_list,omitempty"`
 
 	variables map[string]int
 	outputs   map[string]OutputLeaf
@@ -637,6 +638,12 @@ func validateOperation(op *OperationPolicy) error {
 	}
 	if op.DeadlineSeconds <= 0 {
 		return errors.New("deadline_seconds must be positive")
+	}
+	if op.PrimaryListPath != "" {
+		lists := op.topLevelLists()
+		if !lists[op.PrimaryListPath] {
+			return fmt.Errorf("primary_list %q is not a top-level list output of the operation", op.PrimaryListPath)
+		}
 	}
 	op.variables = map[string]int{}
 	for i, v := range op.Variables {
