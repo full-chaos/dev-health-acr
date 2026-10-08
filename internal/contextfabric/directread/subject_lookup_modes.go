@@ -163,7 +163,7 @@ func (l *SubjectLookup) scanOwnedBy(ctx context.Context, principal storage.Princ
 	for {
 		page, err := l.edges.DirectEdgePage(ctx, principal, binding, EdgePageQuery{
 			Origins: []contextfabric.SubjectRef{team}, Types: []string{string(contractsv1.ContextFabricRelationshipOwnedByTeam)},
-			Direction: EdgeDirectionIn, EndKinds: plan.kinds, After: after, Limit: MaxLookupPageSize, ValidAt: l.clock().UTC(),
+			Direction: EdgeDirectionIn, EndKinds: plan.kinds, After: after, Limit: MaxLookupPageSize, ValidAt: l.clock().UTC(), Current: true,
 		})
 		if err != nil {
 			return nil, false, err

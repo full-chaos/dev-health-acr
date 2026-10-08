@@ -460,6 +460,7 @@ func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principa
 			hopTemporal, budget = currentOwnership(temporal, a.now()), exactNameCandidateQueryLimit
 		}
 		step := hop.step
+		step.edgeWindowOnly = hop.edge.ownership && !temporal.active
 		// A hop that only feeds the next one reads the walk properties of its
 		// nodes; the members' hop reads them whole.
 		step.projected = k < len(path)-1 && walkNodeProjected(hop.to)

@@ -1378,8 +1378,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		cohort.Rationale = anchoredDeploymentCohortRationale
 	}
 	if cohort != nil && teamAnchoredMembers {
+		states := ownedMemberStates(cohortNodes)
 		for i := range cohort.Members {
 			cohort.Members[i].InclusionReasons = []string{teamAnchorInclusionReasonFor(declaredCohortKindForRouting)}
+			if state, ok := states[graphrank.SubjectKey(cohort.Members[i].Subject)]; ok {
+				cohort.Members[i].InclusionReasons = append(cohort.Members[i].InclusionReasons, state)
+			}
 		}
 		cohort.Rationale = teamAnchorCohortRationaleFor(declaredCohortKindForRouting)
 	}
