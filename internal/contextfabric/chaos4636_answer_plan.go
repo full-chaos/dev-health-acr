@@ -162,6 +162,9 @@ type PlanAnswerInput struct {
 	// MaxCohortMembers is the caller's own cohort cap. The plan never
 	// exceeds it, so a caller asking for fewer members always gets fewer.
 	MaxCohortMembers int
+	// WorkItemList is true for a work-item walk, whose list is bounded by its
+	// own census and not by the plan's member budget.
+	WorkItemList bool
 	// Requirements are THIS TURN'S derived requirement rows, and they are an
 	// input to the plan rather than only an output stamped onto it.
 	//
@@ -211,7 +214,7 @@ func PlanAnswer(input PlanAnswerInput) AnswerPlan {
 		RenderKinds:    append([]contractsv1.ContextFabricRenderKind(nil), definition.RenderKinds...),
 		Axes:           planWireAxes(definition),
 		FactKinds:      planFactKinds(definition, input.Interpretation, input.Requirements),
-		Budget:         planBudget(definition.Budget, input.Budget, input.MaxCohortMembers),
+		Budget:         planBudget(definition.Budget, input.Budget, input.MaxCohortMembers, !input.WorkItemList),
 	}
 	// The group axis is a MODEL-EMITTED signal, and only the grouped family
 	// keys on it. Reading it on any other family would let a spurious
@@ -349,8 +352,12 @@ func isCohortSubjectAxis(axis SubjectAxisKind) bool {
 	return false
 }
 
+// flatCohortListingMemberCap is the most members a flat cohort listing is
+// planned to carry, whatever the caller asked for.
+const flatCohortListingMemberCap = 100
+
 // planBudget derives the plan's ceiling and its stage-1 member clamp.
-func planBudget(profile PlanBudgetProfile, budget ResponseBudget, maxCohortMembers int) AnswerPlanBudget {
+func planBudget(profile PlanBudgetProfile, budget ResponseBudget, maxCohortMembers int, listing bool) AnswerPlanBudget {
 	headroom := planSynthesisHeadroom(profile)
 	planned := AnswerPlanBudget{
 		MaxItems:           budget.MaxItems,
@@ -380,7 +387,18 @@ func planBudget(profile PlanBudgetProfile, budget ResponseBudget, maxCohortMembe
 			// different (and empty) one.
 			allowance = 1
 		}
-		if planned.MaxMembers <= 0 || allowance < planned.MaxMembers {
+		if listing && profile == PlanBudgetFlatCohort && budget.MaxItems > headroom {
+			// A flat cohort listing IS the answer: its members are the primary
+			// list and only the caller's own member budget cuts them. The item
+			// ceiling is derived from the members, never the members from the
+			// ceiling, so a caller asking for 25 is given room for 25.
+			members := allowance
+			if maxCohortMembers > 0 {
+				members = maxCohortMembers
+			}
+			planned.MaxMembers = min(members, flatCohortListingMemberCap)
+			planned.MaxItems = max(budget.MaxItems, planned.MaxMembers+headroom)
+		} else if planned.MaxMembers <= 0 || allowance < planned.MaxMembers {
 			planned.MaxMembers = allowance
 		}
 	}

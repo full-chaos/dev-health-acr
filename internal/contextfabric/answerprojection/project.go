@@ -122,7 +122,12 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	// reasons behind the answer.
 	clamp := &clamper{}
 	index := newEvidenceIndex(bounds.MaxEvidenceRefs)
+	// A flat cohort listing is the answer: one reference per member to be
+	// served is reserved before any driver is offered, so the drivers fill
+	// what is left rather than the members.
+	index.limit = max(bounds.MaxEvidenceRefs-flatCohortEvidenceReserve(result, bounds), 0)
 	drivers, driversOmitted, withheldOmitted, facts := projectDrivers(result, bounds, index, clamp)
+	index.limit = bounds.MaxEvidenceRefs
 	cohort, cohortOmitted, cohortReasonsOmitted, cohortGroupsOmitted, cohortSelectionBasis := projectCohort(result, bounds, index, clamp, &facts)
 	factsOmitted := countProjectedFactsOmitted(result, facts)
 	clarification, candidatesOmitted, candidateReasonsOmitted := projectClarification(result, bounds, clamp)
@@ -508,6 +513,7 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 	// projection carried before this slice, so the loop below is
 	// byte-identical for them.
 	admissible, selectionBasis := groupAwareMemberAllowance(canonical, bounds.MaxCohortMembers)
+	flat := isFlatListing(canonical)
 	members := make([]contractsv1.ContextFabricProjectedCohortMember, 0, min(len(canonical.Members), bounds.MaxCohortMembers))
 	// retained mirrors members 1:1 (same order, same cut) but keeps the
 	// CANONICAL member -- including Drivers, which the projected member
@@ -544,7 +550,12 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		// evidence index is dropped whole rather than kept with dangling
 		// references. Ranks stay strictly increasing because members are
 		// only ever dropped from consideration, never reordered.
-		if !index.admit(member.EvidenceRefIDs) {
+		memberRefs := member.EvidenceRefIDs
+		if flat {
+			// A flat listing never loses a member to the evidence budget:
+			// the references that do not fit are cut instead, and counted.
+			memberRefs = index.admitFitting(member.EvidenceRefIDs)
+		} else if !index.admit(member.EvidenceRefIDs) {
 			break
 		}
 		for _, fact := range additional {
@@ -557,7 +568,7 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 			Subject:          member.Subject,
 			Rank:             member.Rank,
 			InclusionReasons: reasons,
-			EvidenceRefIDs:   append([]string(nil), member.EvidenceRefIDs...),
+			EvidenceRefIDs:   append([]string(nil), memberRefs...),
 			// RankingComputed/AttentionRank/Score/RankingBasis/DataCompleteness/
 			// Outcome/MissingSignals (CHAOS-4398 PR3, design doc §4a/§8) are
 			// copied verbatim -- see ContextFabricProjectedCohortMember's own
@@ -750,6 +761,44 @@ type evidenceIndex struct {
 
 func newEvidenceIndex(limit int) *evidenceIndex {
 	return &evidenceIndex{limit: limit, seen: make(map[string]struct{}, limit), order: make([]string, 0, limit)}
+}
+
+// isFlatListing reports whether a cohort is a flat member listing: no group
+// axis, and not a work-item list, whose members are admitted together with the
+// direct facts they carry (display closure) and so keep the whole-member rule.
+func isFlatListing(cohort contractsv1.ContextFabricCohort) bool {
+	return len(cohort.Groups) == 0 && cohort.Kind != contractsv1.ContextFabricSubjectWorkItem
+}
+
+// flatCohortEvidenceReserve is the number of distinct references the members a
+// flat cohort will serve cite, capped at the evidence budget. A grouped cohort
+// reserves nothing.
+func flatCohortEvidenceReserve(result contractsv1.ContextFabricInvestigationResult, bounds Budget) int {
+	if result.Cohort == nil || !isFlatListing(*result.Cohort) {
+		return 0
+	}
+	seen := map[string]struct{}{}
+	for i, member := range result.Cohort.Members {
+		if i >= bounds.MaxCohortMembers {
+			break
+		}
+		for _, id := range member.EvidenceRefIDs {
+			seen[id] = struct{}{}
+		}
+	}
+	return min(len(seen), bounds.MaxEvidenceRefs)
+}
+
+// admitFitting adds the references in ids that fit the remaining budget, in
+// order, and returns the ones now indexed.
+func (e *evidenceIndex) admitFitting(ids []string) []string {
+	kept := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if e.admit([]string{id}) {
+			kept = append(kept, id)
+		}
+	}
+	return kept
 }
 
 // admit adds every reference in ids, or none of them. It reports whether

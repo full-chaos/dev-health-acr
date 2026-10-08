@@ -2587,6 +2587,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Interpretation:   interpretation,
 		Budget:           e.effectiveResponseBudget(request),
 		MaxCohortMembers: request.Options.MaxCohortMembers,
+		WorkItemList:     workItemTuple,
 		Requirements:     derivedRequirements,
 	})
 	// The derived requirement rows belong to the PLAN VARIABLE, not to a copy

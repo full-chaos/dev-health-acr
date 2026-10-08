@@ -123,6 +123,7 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 		return writeBackAwareErrorResult(err), nil
 	}
 	result := hostedResponse.ContextFabricInvestigationResult
+	budget.MaxEvidenceRefs = cohortEvidenceRefBudget(budget.MaxEvidenceRefs, input.Budget, result.Cohort)
 
 	projection := answerprojection.Project(result, answerprojection.Budget{
 		MaxDrivers:       budget.MaxDrivers,
@@ -171,6 +172,17 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 		cfg.diagnostics.InfoContext(ctx, "context fabric answer display", args...)
 	}
 	return buildToolResult(response, response.RenderedMarkdown.Markdown)
+}
+
+// cohortEvidenceRefBudget is the evidence-reference budget of an answer that
+// serves a cohort: a caller that set none gets one reference per served member
+// beside the default, up to the projection's own ceiling, so the members of a
+// listing do not spend the references the drivers cite.
+func cohortEvidenceRefBudget(effective int, requested *contractsv1.MCPInvestigationBudget, cohort *contractsv1.ContextFabricCohort) int {
+	if cohort == nil || (requested != nil && requested.MaxEvidenceRefs != 0) {
+		return effective
+	}
+	return min(len(cohort.Members)+defaultMaxAnswerEvidenceRefs, contractsv1.ContextFabricProjectedEvidenceMaxCount)
 }
 
 // hostedInvestigationRequest maps the MCP investigation arguments onto the
