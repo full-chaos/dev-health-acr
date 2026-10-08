@@ -6,7 +6,7 @@ package mcp
 // contracts/mcp/tools.v1.json are literal JSON and a test pins that they carry
 // the same sentences.
 const (
-	GuidanceTeamOwnership = "A team owns repositories and projects: team ownership = OWNED_BY_TEAM edges from both kinds to the team; for a team ownership question read `read_relationships` on the team with types OWNED_BY_TEAM and direction in (or `find_subjects` `owned_by`) first."
+	GuidanceTeamOwnership = "A team owns repositories and projects: team ownership = OWNED_BY_TEAM edges from both kinds to the team; for a team ownership question read `read_relationships` on the team with types OWNED_BY_TEAM and direction in (or `find_subjects` `owned_by`) first. Archived projects stay listed as owned, flagged archived."
 
 	GuidanceProjectRepository = "A project reaches repositories only through its issues' linked pull requests; no repository is mapped to a team by a project directly."
 
