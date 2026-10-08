@@ -320,12 +320,12 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 	}
 }
 
-// Fixture: the GET /registry body of ops 5c9a3d32, written from the output of
+// Fixture: the GET /registry body of ops 658531dd, written from the output of
 // ops go run ./cmd/registrydump (the current text of every operation, the
 // legacy texts left out, as the route serves them), not captured from a host.
 // The catalogue pinned from that commit must match it with zero drift.
 func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_5c9a3d32.json")
+	body, err := os.ReadFile("testdata/query_registry_658531dd.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	w, cat, buf := newWatch(t, f, nil)
 	w.Start()
 	w.Wait()
-	const want = "sha256:54a0f7d6ee428bc2f8c8ef6329680c8efeb4be94a7b41bdc12655006069335e4"
+	const want = "sha256:340709af6f7b8f1609ea8cb34c676a2882a1fd1b791b75007c08e3834ccf1d5a"
 	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
 		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
 	}
@@ -346,16 +346,15 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	}
 }
 
-// The prod fact before the re-vendor: the catalogue pinned at ops ddb2e75d
-// against the registry ops 5c9a3d32 serves logs exactly three warnings, one
-// schema digest drift, the changed hotspots document and the one operation
-// the pin does not know.
-func TestRegistryWatch_previous_pin_against_the_served_registry_shows_the_three_prod_warnings(t *testing.T) {
-	oldPin, err := os.ReadFile("testdata/operations_ddb2e75d.v1.json")
+// The prod fact before the roll: the catalogue pinned at ops 5c9a3d32
+// against the registry ops 658531dd serves logs exactly one warning, the
+// schema digest drift. No operation document moved, so no operation line.
+func TestRegistryWatch_previous_pin_against_the_served_registry_shows_the_digest_drift_only(t *testing.T) {
+	oldPin, err := os.ReadFile("testdata/operations_5c9a3d32.v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile("testdata/query_registry_5c9a3d32.json")
+	body, err := os.ReadFile("testdata/query_registry_658531dd.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +362,7 @@ func TestRegistryWatch_previous_pin_against_the_served_registry_shows_the_three_
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cat.SchemaDigest(); got != "sha256:4870fac23a76a01dba146dc05ad9aadbd0efcc64e81b8a402ab7b962e256d6fa" {
+	if got := cat.SchemaDigest(); got != "sha256:54a0f7d6ee428bc2f8c8ef6329680c8efeb4be94a7b41bdc12655006069335e4" {
 		t.Fatalf("old pin digest %s", got)
 	}
 	f := newRegistryFixture(t)
@@ -378,26 +377,19 @@ func TestRegistryWatch_previous_pin_against_the_served_registry_shows_the_three_
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 3 {
-		t.Fatalf("%d warnings, want 3: %q", len(ws), ws)
+	if len(ws) != 1 {
+		t.Fatalf("%d warnings, want 1: %q", len(ws), ws)
 	}
-	out := strings.Join(ws, "\n")
-	if !strings.Contains(out, "registry digest drift") || !strings.Contains(out, "sha256:54a0f7d6ee428bc2f8c8ef6329680c8efeb4be94a7b41bdc12655006069335e4") {
-		t.Errorf("no schema digest drift line: %s", out)
-	}
-	if !strings.Contains(out, "operation=hotspots ") || !strings.Contains(out, "reason=changed") {
-		t.Errorf("no changed line for hotspots: %s", out)
-	}
-	if !strings.Contains(out, "operation=sourceHealth ") || !strings.Contains(out, "reason=missing_in_pinned") {
-		t.Errorf("no missing_in_pinned line for sourceHealth: %s", out)
+	if !strings.Contains(ws[0], "registry digest drift") || !strings.Contains(ws[0], "sha256:340709af6f7b8f1609ea8cb34c676a2882a1fd1b791b75007c08e3834ccf1d5a") {
+		t.Errorf("no schema digest drift line: %s", ws[0])
 	}
 }
 
-// The registry ops ddb2e75d served, against the catalogue pinned now: the
-// same three differences seen from the other side. This is the state the new
-// pods log until the ops release that serves the new schema is rolled.
-func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_same_three(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_ddb2e75d.json")
+// The registry ops 5c9a3d32 served, against the catalogue pinned now: the same
+// single difference seen from the other side. This is the state the new pods
+// log until the ops release that serves the new schema is rolled.
+func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_digest_drift_only(t *testing.T) {
+	body, err := os.ReadFile("testdata/query_registry_5c9a3d32.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,11 +399,7 @@ func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_sa
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 3 {
-		t.Fatalf("%d warnings, want 3: %q", len(ws), ws)
-	}
-	out := strings.Join(ws, "\n")
-	if !strings.Contains(out, "registry digest drift") || !strings.Contains(out, "operation=hotspots ") || !strings.Contains(out, "reason=changed") || !strings.Contains(out, "operation=sourceHealth ") || !strings.Contains(out, "reason=missing_in_served") {
-		t.Errorf("served-side lines missing: %s", out)
+	if len(ws) != 1 || !strings.Contains(ws[0], "registry digest drift") {
+		t.Fatalf("want one digest drift warning: %q", ws)
 	}
 }
