@@ -117,17 +117,31 @@ FROM (
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
 			effort_value, theme_distribution_json, bugfix_share
 		FROM (
-			SELECT parsed.win AS win, parsed.work_unit_id AS work_unit_id,
+` + repoSplitCore(memberships, "", "") + `		)
+	)
+	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
+)
+GROUP BY win, repo_uuid
+ORDER BY win, repo_uuid`)
+}
+
+// repoSplitCore is the per-(window, work unit, repository) split shared by the
+// mix statement and the unit listing: the latest work-unit rows, their PR refs
+// resolved to repositories, and c = distinct refs in each repository. unitCols
+// and unitAgg add columns only the unit listing reads; both empty yields the
+// mix statement's own text byte for byte.
+func repoSplitCore(memberships []string, unitCols, unitAgg string) string {
+	return `			SELECT parsed.win AS win, parsed.work_unit_id AS work_unit_id,
 				if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')) AS repo_uuid,
 				uniqExact(if(repo_uuid = '', parsed.ref_text, concat(repo_uuid, '#', parsed.pr_number))) AS c,
 				any(parsed.effort_value) AS effort_value,
 				any(parsed.theme_distribution_json) AS theme_distribution_json,
-				any(parsed.bugfix_share) AS bugfix_share
+				any(parsed.bugfix_share) AS bugfix_share` + unitAgg + `
 			FROM (
-				SELECT work_unit_id, effort_value, theme_distribution_json, bugfix_share, win,
+				SELECT work_unit_id, effort_value, theme_distribution_json, bugfix_share, win,` + unitCols + `
 					ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
 				FROM (
-					SELECT work_unit_id, repo_id, effort_value, theme_distribution_json,
+					SELECT work_unit_id, repo_id, effort_value, theme_distribution_json,` + unitCols + `
 						ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS bugfix_share,
 						arrayFilter(w -> w >= 0, [` + strings.Join(memberships, ", ") + `]) AS wins,
 						arrayConcat(
@@ -164,12 +178,7 @@ FROM (
 				GROUP BY id
 			) AS rl ON rl.provider = parsed.lookup_provider AND rl.repo = parsed.lookup_repo
 			GROUP BY win, work_unit_id, repo_uuid
-		)
-	)
-	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
-)
-GROUP BY win, repo_uuid
-ORDER BY win, repo_uuid`)
+`
 }
 
 // repoMixChunk bounds how many repositories one statement reads. Each

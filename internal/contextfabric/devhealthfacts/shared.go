@@ -528,7 +528,12 @@ import (
 // owner's repository is no longer served and a team with many other owned
 // subjects is no longer cut at the shared walk budget. A candidate saved
 // before v106 may hold a cut or former-owner cohort and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v106"
+//
+// v106 -> v109: read_facts lists the work units behind an investment
+// allocation (units argument) and the investment capability declares the unit
+// fields. An answer saved before v109 cannot name a unit row or its weight and
+// must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v109"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

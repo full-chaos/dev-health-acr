@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -164,6 +165,28 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		rejectedCount += rejected
 	}
 
+	unitsCut := false
+	if unitsRequest, wanted := contextfabric.InvestmentUnitsFrom(ctx); wanted {
+		for _, subject := range query.Subjects {
+			prefix := teamPrefix
+			if subject.Kind == contextfabric.SubjectRepository {
+				prefix = repositoryPrefix
+			} else if subject.Kind != contextfabric.SubjectTeam {
+				continue
+			}
+			raw := strings.TrimPrefix(subject.CanonicalID, prefix)
+			if raw == "" || raw == subject.CanonicalID || !bindingSafeKey(raw) {
+				continue
+			}
+			unitFacts, more, unitErr := p.readInvestmentUnits(ctx, orgID, subject, raw, unitsRequest, timeBound)
+			if unitErr != nil {
+				return contextfabric.FactProviderResult{}, readFailure("query investment units", unitErr)
+			}
+			facts = append(facts, unitFacts...)
+			unitsCut = unitsCut || more
+		}
+	}
+
 	state, retentionReason := timeBound.retentionState(len(facts))
 	// CHAOS-4521b: this source has no project dimension, so an all-project
 	// read that came back empty says something more specific than "no rows".
@@ -174,6 +197,10 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
 	if mixUnavailable != "" {
 		mergeFactReadReason(&result, mixUnavailable)
+	}
+	if unitsCut {
+		result.Truncated = true
+		mergeFactReadReason(&result, unitFactReasonCut)
 	}
 	return result, nil
 }

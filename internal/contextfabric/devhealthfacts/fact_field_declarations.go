@@ -811,6 +811,7 @@ func investmentFields() []fieldDecl {
 		),
 		declOn(declTeamProject, investmentThemeFields(true)...),
 		declOn(declRepoTeam, themeBreakdown, fStr("mix_source"), fStr("attribution_basis")),
+		declOn(declRepoTeam, investmentUnitFields()...),
 		declOn(declRepositoryOnly, fInt("work_unit_count", "count")),
 		declOn(declTeamOnly, declAggregate(fInt("owned_repository_count", "count"))),
 		declOn(declTeamOnly, prior...),
@@ -829,4 +830,29 @@ func investmentFields() []fieldDecl {
 			declAggregate(fInt("owning_team_rollup_work_unit_count", "count")),
 		),
 	)
+}
+
+// investmentUnitFields declares the work-unit listing facts (unit_kind
+// work_unit_share and work_unit_page), served only when read_facts is asked
+// for units. repository_id is a repository reference, so a unit whose
+// repository the caller may not read has the field withheld and the fact is
+// dropped by the reader.
+func investmentUnitFields() []fieldDecl {
+	fields := []fieldDecl{
+		fStr("unit_kind"), fStr("unit_weight"), fStr("work_unit_id"),
+		declRef(declRepositoryRef, fStr("repository_id")),
+		fStr("unit_from"), fStr("unit_to"),
+		fNum("share_in_scope", ""), fNum("unit_effort_value", ""),
+		fInt("unit_pull_request_count", "count"), fInt("unit_refs_unresolved", "count"),
+		fStr("unit_unresolved_refs"), fStr("unit_mix_source"), fStr("unit_attribution_basis"),
+		fInt("units_returned", "count"), fNum("page_share_total", ""), fInt("units_refs_unresolved", "count"),
+		fNum("scope_share_total", ""), fInt("scope_unit_rows", "count"), fStr("next_cursor"),
+	}
+	for _, theme := range canonicalInvestmentThemes {
+		fields = append(fields, fNum("unit_"+contextfabric.FactFieldTheme(theme), "ratio"))
+	}
+	for i := range fields {
+		fields[i].Nullable = true
+	}
+	return fields
 }
