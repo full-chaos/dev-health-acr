@@ -129,7 +129,7 @@ and this issue does not read it. The id-space question is moot.
 | Edge | Source | Live evidence |
 | --- | --- | --- |
 | `work_item` → `project` | `work_items.project_id` INNER JOIN `projects FINAL` on `(org_id, id)` | 3086 of 3304 work items carry a non-empty `project_id`; 18 distinct values, **16 resolve**; **3080 of 3086 rows** join. `work_items.project_key` is empty on every row (0 of 3304) — do not use it. |
-| `work_item` → `team` | `work_item_team_attributions` where `is_primary = 1 AND team_id IS NOT NULL` | 3304 distinct work items, **all 3304 resolve** against `work_items`. **Zero** work items carry more than one primary team — the edge is genuinely 1:1. |
+| `work_item` → `team` | `work_item_team_attributions` where `is_primary IN (1, 2) AND team_id IS NOT NULL` | One edge per (work item, team): the primary row and any co-owner row. At the first live measurement 3304 distinct work items resolved against `work_items`, each with exactly one primary team. |
 | `project` → `team` | `team_project_ownership`, collapsed per Trap C, joined to `projects` on `project_key` and to `teams` on `teams.id` | 3 real edges. `team_id` values `{CHAOS, gl:full.chaos}` are 2-for-2 against `teams.id`. |
 
 The two dangling `project_id` values (6 work-item rows) are dropped by the INNER
