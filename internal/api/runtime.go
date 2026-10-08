@@ -93,6 +93,10 @@ type RuntimeDependencies struct {
 	// handler then fails closed as unavailable, never reads ungated.
 	DirectReadGate   *directread.SubjectGate
 	DirectFactReader *directread.FactReader
+	// DirectCursorKeyring seals the cursors read_facts issues for the units
+	// listing (the hosted evidence identifier keyring). Without a usable one
+	// a units request answers unavailable.
+	DirectCursorKeyring directread.CursorKeyring
 	// DataCatalogue, DataOperations and DataSubjects are the S1a direct
 	// data tools (CHAOS-7072), each optional and independent -- same
 	// convention as Investigator: an absent one never fails composition.

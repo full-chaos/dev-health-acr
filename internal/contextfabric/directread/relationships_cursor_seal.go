@@ -47,22 +47,29 @@ var ErrCursorKeyring = errors.New("read_relationships cursor keyring is not usab
 // authentication is what makes the position, the bindings and the issue time
 // impossible to edit.
 type cursorSealer struct {
+	label  string
 	active string
 	aeads  map[string]cipher.AEAD
 }
 
 func newCursorSealer(keyring CursorKeyring) (*cursorSealer, error) {
+	return newLabeledCursorSealer(keyring, CursorKeyLabel)
+}
+
+// newLabeledCursorSealer seals with a key derived under label, so a cursor
+// of one tool never opens under another's.
+func newLabeledCursorSealer(keyring CursorKeyring, label string) (*cursorSealer, error) {
 	active := strings.TrimSpace(keyring.ActiveKID)
 	if active == "" || !validCursorKID(active) {
 		return nil, fmt.Errorf("%w: no valid active kid", ErrCursorKeyring)
 	}
-	sealer := &cursorSealer{active: active, aeads: map[string]cipher.AEAD{}}
+	sealer := &cursorSealer{label: label, active: active, aeads: map[string]cipher.AEAD{}}
 	for kid, key := range keyring.Keys {
 		if !validCursorKID(kid) || len(key) < minCursorKeyBytes {
 			continue
 		}
 		mac := hmac.New(sha256.New, key)
-		mac.Write([]byte(CursorKeyLabel))
+		mac.Write([]byte(label))
 		block, err := aes.NewCipher(mac.Sum(nil))
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrCursorKeyring, err)
@@ -91,7 +98,9 @@ func validCursorKID(kid string) bool {
 	return true
 }
 
-func cursorAAD(kid string) []byte { return []byte(CursorKeyLabel + "\x00" + kid) }
+func cursorAAD(kid string) []byte { return labeledCursorAAD(CursorKeyLabel, kid) }
+
+func labeledCursorAAD(label, kid string) []byte { return []byte(label + "\x00" + kid) }
 
 // seal returns "<kid>.<base64url(nonce || ciphertext)>".
 func (s *cursorSealer) seal(plaintext []byte) (string, error) {
@@ -100,7 +109,7 @@ func (s *cursorSealer) seal(plaintext []byte) (string, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("read_relationships cursor nonce: %w", err)
 	}
-	sealed := aead.Seal(nonce, nonce, plaintext, cursorAAD(s.active))
+	sealed := aead.Seal(nonce, nonce, plaintext, labeledCursorAAD(s.label, s.active))
 	return s.active + "." + base64.RawURLEncoding.EncodeToString(sealed), nil
 }
 
@@ -119,7 +128,7 @@ func (s *cursorSealer) open(token string) ([]byte, error) {
 	if err != nil || len(raw) < aead.NonceSize()+aead.Overhead() {
 		return nil, &cursorError{CursorInvalid}
 	}
-	plaintext, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], cursorAAD(kid))
+	plaintext, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], labeledCursorAAD(s.label, kid))
 	if err != nil {
 		return nil, &cursorError{CursorInvalid}
 	}

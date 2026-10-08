@@ -141,6 +141,22 @@
         },
         "max_bytes": {
           "type": "integer"
+        },
+        "units": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_units",
+            "cursor"
+          ],
+          "properties": {
+            "max_units": {
+              "type": "integer"
+            },
+            "cursor": {
+              "type": "boolean"
+            }
+          }
         }
       },
       "description": "The request as the server served it."

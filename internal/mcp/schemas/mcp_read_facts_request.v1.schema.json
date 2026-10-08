@@ -129,6 +129,26 @@
       "maximum": 262144,
       "default": 65536,
       "description": "Bound on the serialized response, 4096 to 262144. 0 or absent means the default, 65536. Facts over the bound are left out and named in truncation; coverage is never cut."
+    },
+    "units": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "description": "The next_cursor of the previous work_unit_page fact. Omit it for the first page."
+        },
+        "max_units": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 150,
+          "default": 100,
+          "description": "Work-unit rows in one page, 1 to 150. 0 or absent means 100."
+        }
+      },
+      "description": "Also list the work units behind an investment allocation, one page. Needs kind investment and exactly one team or repository subject. The listing comes back as extra investment facts: one work_unit_page fact (page totals and next_cursor) and one work_unit_share fact per unit and repository."
     }
   }
 }

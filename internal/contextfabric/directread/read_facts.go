@@ -116,6 +116,21 @@ type FactsRequest struct {
 	Window   *RequestWindow   `json:"window,omitempty"`
 	Tables   string           `json:"tables,omitempty"`
 	MaxBytes int              `json:"max_bytes,omitempty"`
+	// Units, when set, also lists the work units behind an investment
+	// allocation (one subject, kind investment), one page.
+	Units *RequestUnits `json:"units,omitempty"`
+}
+
+// RequestUnits pages the work-unit listing of an investment read.
+type RequestUnits struct {
+	Cursor   string `json:"cursor,omitempty"`
+	MaxUnits int    `json:"max_units,omitempty"`
+}
+
+// EffectiveUnits echoes the listing page as it was served.
+type EffectiveUnits struct {
+	MaxUnits int  `json:"max_units"`
+	Cursor   bool `json:"cursor"`
 }
 
 // RequestSubject is a canonical subject reference.
@@ -168,6 +183,7 @@ type EffectiveRead struct {
 	Window          EffectiveWindow  `json:"window"`
 	Tables          string           `json:"tables"`
 	MaxBytes        int              `json:"max_bytes"`
+	Units           *EffectiveUnits  `json:"units,omitempty"`
 }
 
 // RefusedKind is a requested kind that is not served.
@@ -327,6 +343,7 @@ type FactsReader struct {
 	capabilities CapabilitySource
 	now          func() time.Time
 	recorder     FactsRecorder
+	unitsSealer  *cursorSealer
 }
 
 // FactsRecorder receives one record per read (telemetry "context fabric
@@ -351,8 +368,12 @@ type FactsReadRecord struct {
 	EvidenceWithheld  int
 	ReferencesRefused int
 	TruncatedBy       string
-	Bytes             int
-	Latency           time.Duration
+	// UnitsCursor is what a units page did with a cursor: issued, accepted,
+	// stale, invalid or foreign_org (the read_relationships cursor
+	// vocabulary); empty when the read carried no units argument.
+	UnitsCursor string
+	Bytes       int
+	Latency     time.Duration
 }
 
 // NewFactsReader builds the tool core. gate is the root subject gate,
@@ -440,6 +461,32 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 	for _, kind := range plan.kinds {
 		requirements = append(requirements, contextfabric.FactRequirement{Kind: kind})
 	}
+	unitsDigest, unitsIncoming := "", ""
+	if plan.units != nil {
+		if r.unitsSealer == nil {
+			response.Status = StatusUnavailable
+			return response, fmt.Errorf("%w: the units cursor keyring is not configured", ErrFactsUnavailable)
+		}
+		unitsDigest = unitsRequestDigest(request, plan)
+		if token := strings.TrimSpace(request.Units.Cursor); token != "" {
+			position, err := r.openUnitsCursor(token, principal.OrgID, unitsDigest)
+			if err != nil {
+				outcome, _ := cursorOutcomeOf(err)
+				record.UnitsCursor = string(outcome)
+				return response, invalid("units.cursor is not a cursor this server issued for this subject and window")
+			}
+			if position != "" {
+				cursor, decodeErr := contextfabric.DecodeInvestmentUnitsCursor(position)
+				if decodeErr != nil {
+					return response, invalid("units.cursor is not a cursor this server issued for this subject and window")
+				}
+				plan.units.Cursor = &cursor
+			}
+			unitsIncoming = position
+			record.UnitsCursor = string(CursorAccepted)
+		}
+		ctx = contextfabric.WithInvestmentUnits(ctx, *plan.units)
+	}
 	bundle, err := r.reader.Read(ctx, principal, admitted, contextfabric.CanonicalFactRequest{
 		Question:     contextfabric.InterpretedQuestion{TimeContext: plan.time},
 		Requirements: requirements,
@@ -469,7 +516,12 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 		response.Versions.Kinds[string(kind)] = version
 	}
 	withheldBySubject := map[string][]string{}
+	unitsNotVisible := 0
 	for _, item := range gated {
+		if unitRowNotVisible(item) {
+			unitsNotVisible++
+			continue
+		}
 		served, withheld := serveFact(item, capabilities[item.Fact.Kind], plan)
 		if len(withheld) > 0 {
 			key := string(item.Fact.Kind) + "\x00" + subjectKey(item.Fact.Subject)
@@ -478,9 +530,22 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 		response.Facts = append(response.Facts, served)
 	}
 	response.Coverage = coverageRows(plan, admitted.Subjects(), bundle, capabilities, response.Facts, withheldBySubject)
+	if plan.units != nil {
+		noteUnitsCoverage(response.Coverage, response.Facts, unitsNotVisible)
+	}
 	response.Untrusted.Fields = untrustedFields(response.Facts)
 	response.Status = readStatus(response)
+	if plan.units != nil {
+		response.Facts = orderUnitsFacts(response.Facts)
+	}
+	unitRows := countUnitRows(response.Facts)
 	response.Truncation = applyBudget(&response, plan.echo.MaxBytes)
+	if plan.units != nil {
+		if _, sealErr := r.finishUnitsPage(&response, plan.echo.MaxBytes, principal.OrgID, unitsDigest, unitsIncoming, unitRows); sealErr != nil {
+			response.Status = StatusUnavailable
+			return response, fmt.Errorf("%w: units cursor: %w", ErrFactsInternal, sealErr)
+		}
+	}
 	if response.Truncation != nil {
 		record.TruncatedBy = response.Truncation.TruncatedBy
 	}
@@ -498,12 +563,36 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 	return response, nil
 }
 
+// validateUnits checks a units page request: one team or repository subject,
+// kind investment named, a page size within bounds, a cursor this server issued.
+func validateUnits(request FactsRequest, plan readPlan) (*contextfabric.InvestmentUnitsRequest, *EffectiveUnits, error) {
+	if !slices.Contains(plan.kinds, contextfabric.FactInvestment) {
+		return nil, nil, invalid("units lists the work units behind an investment allocation: name the kind investment")
+	}
+	if len(plan.subjects) != 1 {
+		return nil, nil, invalid("units takes exactly one subject")
+	}
+	if kind := plan.subjects[0].Kind; kind != contextfabric.SubjectTeam && kind != contextfabric.SubjectRepository {
+		return nil, nil, invalid("units takes a team or a repository subject")
+	}
+	size := request.Units.MaxUnits
+	switch {
+	case size == 0:
+		size = contextfabric.InvestmentUnitsDefaultMax
+	case size < 1 || size > contextfabric.InvestmentUnitsMaxMax:
+		return nil, nil, invalid("units.max_units must be between 1 and %d", contextfabric.InvestmentUnitsMaxMax)
+	}
+	out := &contextfabric.InvestmentUnitsRequest{Max: size}
+	return out, &EffectiveUnits{MaxUnits: size, Cursor: strings.TrimSpace(request.Units.Cursor) != ""}, nil
+}
+
 // readPlan is a validated request.
 type readPlan struct {
 	kinds    []contextfabric.FactKind
 	subjects []contextfabric.SubjectRef
 	time     contextfabric.TimeContext
 	tables   string
+	units    *contextfabric.InvestmentUnitsRequest
 	echo     EffectiveRead
 }
 
@@ -558,6 +647,13 @@ func (r *FactsReader) validate(request FactsRequest, capabilities map[contextfab
 		return plan, invalid("tables must be include, omit or only")
 	}
 	plan.echo.Tables = plan.tables
+	if request.Units != nil {
+		units, echo, err := validateUnits(request, plan)
+		if err != nil {
+			return plan, err
+		}
+		plan.units, plan.echo.Units = units, echo
+	}
 	switch {
 	case request.MaxBytes == 0:
 		plan.echo.MaxBytes = DefaultMaxBytes
@@ -1066,4 +1162,78 @@ func subjectKindsOf(subjects []contextfabric.SubjectRef) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// unitRowNotVisible reports a work-unit row whose repository the caller may
+// not read: the reference field was withheld, and the row carries nothing else
+// the caller may keep (its shares and probabilities describe that repository).
+func unitRowNotVisible(item GatedFact) bool {
+	value, ok := item.Fact.Fields["unit_kind"]
+	if !ok || value.String == nil || *value.String != contextfabric.InvestmentUnitKind {
+		return false
+	}
+	return slices.Contains(item.FieldsWithheld, "repository_id")
+}
+
+// noteUnitsCoverage adds what a units page left out to the investment
+// coverage rows: rows hidden by the caller's grant and issue references that
+// resolved to no repository, each as a count, never dropped silently.
+func noteUnitsCoverage(rows []CoverageRow, facts []ServedFact, notVisible int) {
+	unresolved := int64(0)
+	for _, fact := range facts {
+		if fact.Kind != string(contextfabric.FactInvestment) {
+			continue
+		}
+		if kind, _ := fact.Fields["unit_kind"].(string); kind != contextfabric.InvestmentUnitPageKind {
+			continue
+		}
+		if text, ok := fact.Fields["units_refs_unresolved"].(string); ok {
+			if n, err := strconv.ParseInt(text, 10, 64); err == nil {
+				unresolved += n
+			}
+		}
+	}
+	for i := range rows {
+		if rows[i].Kind != string(contextfabric.FactInvestment) {
+			continue
+		}
+		var notes []string
+		if notVisible > 0 {
+			notes = append(notes, fmt.Sprintf("units_not_visible %d (aggregate over every owned repository)", notVisible))
+		}
+		if unresolved > 0 {
+			notes = append(notes, fmt.Sprintf("refs_unresolved %d (aggregate over every owned repository)", unresolved))
+		}
+		if len(notes) == 0 {
+			continue
+		}
+		note := strings.Join(notes, "; ")
+		if rows[i].Reason == "" {
+			rows[i].Reason = note
+		} else {
+			rows[i].Reason += "; " + note
+		}
+	}
+}
+
+// noteUnitsBudget says how many unit rows the byte budget cut from a page, and
+// that a page where none fits serves no cursor.
+func noteUnitsBudget(rows []CoverageRow, dropped int, noProgress bool) {
+	if dropped <= 0 {
+		return
+	}
+	note := fmt.Sprintf("units_cut_by_max_bytes %d: next_cursor resumes after the last row served", dropped)
+	if noProgress {
+		note = fmt.Sprintf("units_cut_by_max_bytes %d: no unit row fits max_bytes, so no next_cursor is served; raise max_bytes", dropped)
+	}
+	for i := range rows {
+		if rows[i].Kind != string(contextfabric.FactInvestment) {
+			continue
+		}
+		if rows[i].Reason == "" {
+			rows[i].Reason = note
+		} else {
+			rows[i].Reason += "; " + note
+		}
+	}
 }
