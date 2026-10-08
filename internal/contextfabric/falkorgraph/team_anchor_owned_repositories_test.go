@@ -20,9 +20,9 @@ func fulltextRepositoryRow(id, label string) row {
 	return row{"node": &node{Properties: map[string]interface{}{propKind: "repository", propCanonicalID: id, propLabel: label}}, "score": 1.0}
 }
 
-// ownedRepositoryFake is a team that owns ten repositories: six through the
-// repository's OWNED_BY_TEAM edge and four through the team's own OWNS edge,
-// beside a repository only the question text matches.
+// ownedRepositoryFake is a team that owns ten repositories through the
+// repository's OWNED_BY_TEAM edge, beside a repository only the question text
+// matches.
 func ownedRepositoryFake() (*fakeConn, []string) {
 	var owned []string
 	for i := 0; i < 10; i++ {
@@ -37,17 +37,10 @@ func ownedRepositoryFake() (*fakeConn, []string) {
 				return nil, nil
 			}
 			var rows []row
-			for i, id := range owned {
-				if i < 6 {
-					rows = append(rows, row{
-						"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNED_BY_TEAM", propRelationshipID: "rel_" + id}},
-						"srcKind": "repository", "srcId": id, "dstKind": "team", "dstId": "team:platform",
-					})
-					continue
-				}
+			for _, id := range owned {
 				rows = append(rows, row{
-					"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNS", propRelationshipID: "rel_" + id}},
-					"srcKind": "team", "srcId": "team:platform", "dstKind": "repository", "dstId": id,
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNED_BY_TEAM", propRelationshipID: "rel_" + id}},
+					"srcKind": "repository", "srcId": id, "dstKind": "team", "dstId": "team:platform",
 				})
 			}
 			return rows, nil
@@ -80,7 +73,7 @@ func discoverTeamRepositories(t *testing.T, fake *fakeConn, max int) *contextfab
 }
 
 // The team's own reach is the member set: every owned repository is a member,
-// whichever edge reached it, and a repository only the question text matched
+// and a repository only the question text matched
 // is not.
 func TestDiscoverContextTeamAnchorServesEveryOwnedRepositoryAndNoTextMatch(t *testing.T) {
 	fake, owned := ownedRepositoryFake()
@@ -133,7 +126,7 @@ func TestDiscoverContextTeamAnchorExcludesRepositoriesOnlyAnotherCommittedSubjec
 				}}, nil
 			case "project:other":
 				return []row{{
-					"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNS", propRelationshipID: "rel_other"}},
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "RELATES_TO", propRelationshipID: "rel_other"}},
 					"srcKind": "project", "srcId": "project:other", "dstKind": "repository", "dstId": "repository:other-only",
 				}}, nil
 			}
