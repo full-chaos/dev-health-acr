@@ -62,6 +62,16 @@ type CitedEvidenceLookup interface {
 	ResultIDsCitingEvidence(ctx context.Context, principal storage.Principal, evidenceRefID string, offset, limit int) ([]string, error)
 }
 
+// NoCitedEvidenceLookup finds no citing result. A ref that names one source row
+// is expanded unscoped from that row alone; when the row is absent the
+// expansion ends as not cited, the same closed outcome as an uncited ref, and
+// no stored result is read in its place.
+type NoCitedEvidenceLookup struct{}
+
+func (NoCitedEvidenceLookup) ResultIDsCitingEvidence(context.Context, storage.Principal, string, int, int) ([]string, error) {
+	return nil, nil
+}
+
 // ResultScopedCitedEvidenceLookup narrows a citing-result search to one
 // stored result (CHAOS-6563). A Context Fabric ref is keyed by its subject, so
 // many stored results cite the same ref; a caller that holds the result_id an

@@ -433,7 +433,7 @@ func TestEvidenceRouteWarnsUnscopedOnlyOnThePersistedRecordPath(t *testing.T) {
 		warns  bool
 	}{
 		{"served source row", newSourceRowTables().withPullRequest(sourceRowGrantedRepoID, hostedTestRepository), http.StatusOK, false},
-		{"no row, record path", newSourceRowTables(), http.StatusNotFound, true},
+		{"no row, no record path for a row-keyed ref", newSourceRowTables(), http.StatusNotFound, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := &bytes.Buffer{}
@@ -730,5 +730,32 @@ func TestEvidenceRouteRefusesARowOfAnotherSubject(t *testing.T) {
 		"org_id": "org_1", "entity_type": "project", "source_reason": "no_row", "source_query": "projects.v1", "source_admitted": 1, "source_rows": 1,
 	}}); err != nil {
 		t.Fatalf("certify: %v\n%s", err, logs.String())
+	}
+}
+
+// A pull request ref without a result_id is expanded from its source row only:
+// when the row is absent a stored result citing the ref is not served in its
+// place. With the result_id of that result the persisted record still answers,
+// and a ref of a subject kind keeps the legacy unscoped record path.
+func TestEvidenceRouteRowKeyedRefWithoutResultIDNeverFallsBackToAStoredResult(t *testing.T) {
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, sourceRowGrantedRepoID+":532")
+	teamRef := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "CHAOS")
+	store := memoryinvestigation.NewStore()
+	seedResult3355(t, store, "org_1", citingStoredResult("result_row_keyed_stored", ref, teamRef))
+	logs := &bytes.Buffer{}
+	app, token := sourceRowApp(t, newSourceRowTables(), store, logs)
+	get := func(ref, resultID string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		app.Handler().ServeHTTP(rec, scopedEvidenceRequest(t, token, ref, resultID))
+		return rec
+	}
+	if rec := get(ref, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("unscoped pull request ref with an absent row: status = %d, want 404 (no stored-result fallback): %s", rec.Code, rec.Body.String())
+	}
+	if rec := get(ref, "result_row_keyed_stored"); rec.Code != http.StatusOK {
+		t.Fatalf("scoped pull request ref: status = %d, want 200 from the stored result: %s", rec.Code, rec.Body.String())
+	}
+	if rec := get(teamRef, ""); rec.Code != http.StatusOK {
+		t.Fatalf("unscoped team ref keeps the legacy record path: status = %d: %s", rec.Code, rec.Body.String())
 	}
 }

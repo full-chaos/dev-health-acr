@@ -380,7 +380,7 @@ func TestEvidenceRouteFollowsTheResultByIDServingDecision(t *testing.T) {
 			byID := httptest.NewRecorder()
 			app.Handler().ServeHTTP(byID, investigationResultRequest(t, token, stored.Result.ResultID))
 			expand := httptest.NewRecorder()
-			app.Handler().ServeHTTP(expand, evidenceRequest(t, token, ref))
+			app.Handler().ServeHTTP(expand, scopedEvidenceRequest(t, token, ref, stored.Result.ResultID))
 			if byID.Code != tc.status || expand.Code != tc.status {
 				t.Fatalf("investigation_result status %d, source evidence status %d, want both %d: %s", byID.Code, expand.Code, tc.status, expand.Body.String())
 			}
@@ -429,7 +429,7 @@ func TestEvidenceRouteRefusesARowTheResultByIDRouteRefuses(t *testing.T) {
 	app.Handler().ServeHTTP(byID, investigationResultRequest(t, token, stored.ResultID))
 	logs.Reset()
 	expand := httptest.NewRecorder()
-	app.Handler().ServeHTTP(expand, evidenceRequest(t, token, ref))
+	app.Handler().ServeHTTP(expand, scopedEvidenceRequest(t, token, ref, stored.ResultID))
 	if byID.Code != http.StatusInternalServerError || expand.Code != http.StatusServiceUnavailable {
 		t.Fatalf("investigation_result status %d (want 500), source evidence status %d (want 503): %s", byID.Code, expand.Code, expand.Body.String())
 	}

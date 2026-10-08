@@ -666,6 +666,28 @@ func EvidenceRefID(entityType ContextFabricEvidenceEntityType, id string) string
 	return ContextFabricEvidenceRefPrefix + string(entityType) + ":" + id
 }
 
+// RowKeyedEvidenceRef reports whether ref names ONE source row by its own key:
+// a pull request or a work item (id opens with the repository UUID). Such a ref
+// is expanded from the row, authorized live against the caller's repository
+// grant, and needs no stored answer; every other kind names a subject that many
+// stored results cite and is expanded only in the scope of the answer that
+// returned it.
+func RowKeyedEvidenceRef(ref string) bool {
+	rest, ok := strings.CutPrefix(ref, ContextFabricEvidenceRefPrefix)
+	if !ok {
+		return false
+	}
+	entity, id, ok := strings.Cut(rest, ":")
+	if !ok || id == "" {
+		return false
+	}
+	switch ContextFabricEvidenceEntityType(entity) {
+	case ContextFabricEvidenceEntityPullRequest, ContextFabricEvidenceEntityWorkItem:
+		return true
+	}
+	return false
+}
+
 // ContextFabricEvidenceRefPrefix starts every ref EvidenceRefID mints. A
 // reader that recognizes or splits such a ref uses this constant; it never
 // spells the prefix itself.
