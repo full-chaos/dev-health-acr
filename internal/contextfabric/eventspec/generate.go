@@ -214,6 +214,8 @@ func goVarName(e Event) string {
 		return "RepositoryWorkItemWalk"
 	case OwnershipRouting.ID:
 		return "OwnershipRouting"
+	case TeamAnchorWalk.ID:
+		return "TeamAnchorWalk"
 	case AnchorBindingTransition.ID:
 		return "AnchorBindingTransition"
 	case MCPHostedContextScope.ID:

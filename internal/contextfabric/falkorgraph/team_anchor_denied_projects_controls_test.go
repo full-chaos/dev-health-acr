@@ -458,4 +458,7 @@ func TestDiscoverContextTeamAnchorDeniedTeamNodeServesNoMember(t *testing.T) {
 	if ids := reachMemberIDs(result.Cohort); len(ids) != 0 {
 		t.Fatalf("members = %v, want none: the team is not visible to the caller", ids)
 	}
+	if got := deniedReasonCount(result); got != "cohort_denied_by_authorization:1" {
+		t.Fatalf("denied reason = %q, want cohort_denied_by_authorization:1 (reasons %v)", got, result.Coverage.DegradedReasons)
+	}
 }

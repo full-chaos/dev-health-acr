@@ -5372,6 +5372,78 @@
     ]
   },
   {
+    "id": "contextfabric.team_anchor_walk",
+    "msg": "context_fabric: team anchor walk",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the question asks for the repositories or projects of a committed team",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "members",
+          "no_members",
+          "denied",
+          "read_failed"
+        ]
+      },
+      {
+        "key": "member_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "repository",
+          "project"
+        ]
+      },
+      {
+        "key": "committed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "members",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read finished (every outcome but read_failed)"
+      },
+      {
+        "key": "denied",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read finished (every outcome but read_failed)"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "conditional",
+        "applicability": "written when the read finished (every outcome but read_failed)"
+      },
+      {
+        "key": "error",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when outcome=read_failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.terminal_save_skipped",
     "msg": "context fabric terminal save skipped",
     "level": "error",

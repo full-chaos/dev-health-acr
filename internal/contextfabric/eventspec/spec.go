@@ -2912,6 +2912,44 @@ var scopedAnchorBasis = []string{"none", "bound", "sole_commit"}
 // "outcome" field -- see falkorgraph.OwnershipRoutingOutcomeVocabulary.
 var ownershipRoutingOutcome = []string{"not_routed", "owners", "no_owner", "read_failed"}
 
+// teamAnchorWalkOutcome is the closed vocabulary of TeamAnchorWalk's "outcome"
+// field -- see falkorgraph.TeamAnchorWalkOutcomeVocabulary.
+var teamAnchorWalkOutcome = []string{"members", "no_members", "denied", "read_failed"}
+
+// TeamAnchorWalk is the Info line of one DiscoverContext call whose question
+// asks for the repositories or projects of a committed team: the team's own
+// ownership edges were read as the member set (never the generic two-hop
+// walk), and what that read found.
+//
+// outcome=members is a read that served at least one member; no_members a
+// finished read with no member and nothing hidden from the caller; denied a
+// finished read with no member served, where members or the team itself were
+// hidden by the caller's authorization. outcome=read_failed carries the error
+// and no count. Every other outcome carries members (served), denied (hidden
+// by authorization) and truncated (the read was cut at the member budget),
+// summed over the committed teams the question anchors on.
+//
+// The line carries counts and closed values only, never a subject name or id.
+var TeamAnchorWalk = Event{
+	ID:                 "contextfabric.team_anchor_walk",
+	Msg:                "context_fabric: team anchor walk",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the question asks for the repositories or projects of a committed team",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: teamAnchorWalkOutcome},
+		{Key: "member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"repository", "project"}},
+		{Key: "committed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "members", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read finished (every outcome but read_failed)"},
+		{Key: "denied", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read finished (every outcome but read_failed)"},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the read finished (every outcome but read_failed)"},
+		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // OwnershipRouting is the Info line of one DiscoverContext call that asks for
 // the team members of a named anchor: whether the ownership read (the teams
 // whose ownership records name the repository) ran, and what it found.
@@ -3072,6 +3110,7 @@ var All = []Event{
 	ProjectDeploymentWalk,
 	RepositoryWorkItemWalk,
 	OwnershipRouting,
+	TeamAnchorWalk,
 	AnchorBindingTransition,
 	MCPHostedContextScope,
 	MCPHTTPRequest,

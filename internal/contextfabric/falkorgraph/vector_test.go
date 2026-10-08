@@ -1147,6 +1147,8 @@ type recordingTelemetry struct {
 	// count argument (CHAOS-3884).
 	identityGraphMissing int
 
+	// teamAnchorWalks records every RecordTeamAnchorWalk call.
+	teamAnchorWalks []TeamAnchorWalkDecision
 	// projectDeploymentWalks records every RecordProjectDeploymentWalk call.
 	projectDeploymentWalks []ProjectDeploymentWalkDecision
 	// ownershipRoutings records every RecordOwnershipRouting call.
@@ -1358,6 +1360,10 @@ func (r *recordingTelemetry) RecordCohortKindFulltext(_ context.Context, orgID s
 
 func (r *recordingTelemetry) RecordProjectDeploymentWalk(_ context.Context, _ string, decision ProjectDeploymentWalkDecision) {
 	r.projectDeploymentWalks = append(r.projectDeploymentWalks, decision)
+}
+
+func (r *recordingTelemetry) RecordTeamAnchorWalk(_ context.Context, _ string, decision TeamAnchorWalkDecision) {
+	r.teamAnchorWalks = append(r.teamAnchorWalks, decision)
 }
 
 func (r *recordingTelemetry) RecordOwnershipRouting(_ context.Context, _ string, decision OwnershipRoutingDecision) {
