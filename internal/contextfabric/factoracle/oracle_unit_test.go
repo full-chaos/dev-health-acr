@@ -1823,3 +1823,15 @@ func TestTheReplayedRequestIsBoundToItsCase(t *testing.T) {
 		t.Fatalf("another dimension than the document's: %v", problems)
 	}
 }
+
+// A denied read says which subjects it asked for and what each coverage row
+// said, so the denial can be told apart from an empty read.
+func TestADeniedFactsReadNamesTheSubjectAndItsOutcome(t *testing.T) {
+	oracle := &Oracle{Planes: fakePlanes{facts: func(request FactsRequest) (json.RawMessage, error) {
+		return json.RawMessage(`{"status":"denied","facts":[],"coverage":[{"kind":"readiness","subject":{"kind":"team","canonical_id":"team:t1"},"outcome":"denied_by_authorization"}]}`), nil
+	}}}
+	_, err := oracle.readFacts(context.Background(), "readiness", "team", []string{"t1"}, readCurrentHeldToStore)
+	if err == nil || !strings.Contains(err.Error(), "status denied") || !strings.Contains(err.Error(), "team:t1=denied_by_authorization") || !strings.Contains(err.Error(), "asked 1 subjects") {
+		t.Fatalf("denial error: %v", err)
+	}
+}

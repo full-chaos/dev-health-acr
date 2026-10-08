@@ -174,7 +174,11 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 		// A partial read is a read with a subject that has no fact. A read
 		// that could not measure, or that was cut, is not compared.
 		if answer.Status != directread.StatusComplete && answer.Status != directread.StatusPartial {
-			return nil, fmt.Errorf("read_facts %s: status %s", kind, answer.Status)
+			var rows []string
+			for _, row := range answer.Coverage {
+				rows = append(rows, row.Subject.CanonicalID+"="+row.Outcome)
+			}
+			return nil, fmt.Errorf("read_facts %s: status %s (asked %d subjects; coverage rows: %s)", kind, answer.Status, end-start, strings.Join(rows, ", "))
 		}
 		for _, row := range answer.Coverage {
 			cut := row.Outcome == directread.OutcomeTruncated && mode != readCurrentHeldToStore
@@ -446,7 +450,7 @@ func (o *Oracle) generatedCases() ([]ShapeCase, error) {
 		switch shape.Operation {
 		case "investmentBreakdown", "investmentFull":
 			sets = append(sets, investmentVariables(o.Window, "THEME"), investmentVariables(o.Window, "SUBCATEGORY"), investmentVariables(o.Window, "WORK_TYPE"))
-		case "capacityForecast":
+		case "capacityForecast", "capacityCompletionDistribution":
 			sets = append(sets, map[string]any{"input": map[string]any{"teamId": team, "historyDays": 90, "simulations": 1000}})
 		case "capacityForecasts":
 			sets = append(sets, map[string]any{"filters": map[string]any{"fromDate": start, "toDate": last, "limit": 50}})
