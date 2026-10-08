@@ -3,6 +3,7 @@ package directread_test
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -29,7 +30,10 @@ func twoListCatalogue(t *testing.T, declared string) (*directread.Catalogue, err
 		op := &file.Operations[i]
 		op.PrimaryListPath = declared
 		for _, f := range []string{"repoId", "repoName", "topFilePath"} {
-			op.Outputs = append(op.Outputs, directread.OutputPath{Path: "hotspots.repos[*]." + f, Type: "String!", Leaf: directread.LeafScalar})
+			path := "hotspots.repos[*]." + f
+			if !slices.ContainsFunc(op.Outputs, func(o directread.OutputPath) bool { return o.Path == path }) {
+				op.Outputs = append(op.Outputs, directread.OutputPath{Path: path, Type: "String!", Leaf: directread.LeafScalar})
+			}
 		}
 	}
 	out, err := json.Marshal(file)
