@@ -123,3 +123,27 @@ func TestLockPathOverrideRejectsGroupWritableDirectory(t *testing.T) {
 		t.Fatalf("acquire under a group-writable override dir = %v, want unsafe", err)
 	}
 }
+
+func TestLockPathOverrideParentMetadataRules(t *testing.T) {
+	self := uint32(os.Geteuid())
+	cases := []struct {
+		name  string
+		mode  os.FileMode
+		owner uint32
+		safe  bool
+	}{
+		{"own owner-only dir", os.ModeDir | 0o700, self, true},
+		{"root-owned dir", os.ModeDir | 0o755, 0, true},
+		{"foreign-owned dir", os.ModeDir | 0o700, self + 1, false},
+		{"group-writable dir", os.ModeDir | 0o770, self, false},
+		{"sticky world-writable dir", os.ModeDir | os.ModeSticky | 0o777, self, true},
+		{"symlink", os.ModeSymlink | 0o700, self, false},
+		{"not a directory", 0o700, self, false},
+	}
+	for _, c := range cases {
+		err := validateCredentialLifecycleLockOverrideParentMetadata(c.mode, c.owner)
+		if c.safe != (err == nil) {
+			t.Errorf("%s: err = %v, safe want %v", c.name, err, c.safe)
+		}
+	}
+}
