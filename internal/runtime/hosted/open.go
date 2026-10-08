@@ -1006,9 +1006,6 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		AnchorMembershipVerifier: anchorMembershipVerifier,
 		// CHAOS-4012: see candidateVerifier's own construction comment above.
 		CandidateVerifier: candidateVerifier,
-		// A confirmed handle's value is a literal, not a subject id: the
-		// stored-result gate decides only the identities a result commits to.
-		HandleLiteralMatcher: graphrank.IsHandleLiteral,
 		// CHAOS-3977 P5: nil unless ACR_CONTEXT_FABRIC_STRUCTURE_PRIORS_ENABLED
 		// -- see priorConsultant's own construction comment above.
 		PriorConsultant:           priorConsultant,

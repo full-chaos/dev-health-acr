@@ -236,30 +236,30 @@ type StoredResultAuthorizationRecorder interface {
 type StoredResultGate struct {
 	graph    GraphReader
 	subjects StoredSubjectAuthorizer
-	// handleLiteral reports whether a confirmed handle's applied value is a
-	// handle literal (a pull request number) rather than a canonical subject
-	// id. nil means no value is known to be a literal.
-	handleLiteral func(value string) bool
 }
 
-// WithHandleLiteralMatcher sets how the gate tells a handle literal from a
-// canonical subject id and returns the gate.
-func (g *StoredResultGate) WithHandleLiteralMatcher(matches func(value string) bool) *StoredResultGate {
-	g.handleLiteral = matches
-	return g
+// IsCanonicalSubjectID reports whether value has the shape of a canonical
+// subject id: a subject kind (optionally with the ".v2" identity suffix), a
+// colon, and a non-empty remainder ("pull_request:<repo>:<number>",
+// "work_item.v2:..."). Anything else, a bare pull request number for one, is
+// not an identity.
+func IsCanonicalSubjectID(value string) bool {
+	kind, rest, ok := strings.Cut(value, ":")
+	if !ok || rest == "" {
+		return false
+	}
+	return contractsv1.ValidContextFabricSubjectKind(contractsv1.ContextFabricSubjectKind(strings.TrimSuffix(kind, ".v2")))
 }
 
 // subjectsOf is StoredResultSubjects with one guard: a confirmed handle whose
-// applied value is a handle literal carries no identity, so it names no
-// subject. The identity the result commits to is in its committed subjects and
-// its anchor and candidate entries, which are still decided.
+// applied value is not a canonical subject id carries no identity (its value
+// is a literal such as a pull request number), so it names no subject. The
+// identity the result commits to is in its committed subjects and its anchor
+// and candidate entries, which are still decided.
 func (g *StoredResultGate) subjectsOf(result InvestigationResult) []SubjectRef {
-	if g == nil || g.handleLiteral == nil {
-		return StoredResultSubjects(result)
-	}
 	kept := make([]contractsv1.ContextFabricConfirmedStructureEntry, 0, len(result.ConfirmedStructure))
 	for _, entry := range result.ConfirmedStructure {
-		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectHandle && g.handleLiteral(entry.AppliedValue) {
+		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectHandle && !IsCanonicalSubjectID(entry.AppliedValue) {
 			continue
 		}
 		kept = append(kept, entry)

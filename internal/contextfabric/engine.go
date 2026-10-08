@@ -246,11 +246,6 @@ type EngineDependencies struct {
 	// candidate offers never exercises this path regardless, so leaving it
 	// nil is safe ONLY until they exist.
 	CandidateVerifier CandidateVerifier
-	// HandleLiteralMatcher tells the stored-result gate whether a confirmed
-	// handle's applied value is a handle literal (a pull request number)
-	// rather than a canonical subject id. nil keeps every handle value
-	// decided as a subject id.
-	HandleLiteralMatcher func(value string) bool
 	// WorkItemMembership performs the bounded tuple-only reuse census.
 	WorkItemMembership WorkItemMembershipPort
 	// TreeWorkItemGraph and TreeWorkItemFilter are the two ports behind the
@@ -1331,7 +1326,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 	if dependencies.Telemetry != nil {
 		recorder = dependencies.Telemetry
 	}
-	gate := NewStoredResultGate(dependencies.Graph).WithHandleLiteralMatcher(dependencies.HandleLiteralMatcher)
+	gate := NewStoredResultGate(dependencies.Graph)
 	var results InvestigationResultStore
 	if dependencies.Results != nil {
 		results = authorizedResultStore{InvestigationResultStore: dependencies.Results, gate: gate, recorder: recorder}

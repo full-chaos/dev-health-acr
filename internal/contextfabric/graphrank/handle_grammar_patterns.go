@@ -20,15 +20,3 @@ func HandleGrammarPatterns() []HandleGrammarPattern {
 	}
 	return patterns
 }
-
-// IsHandleLiteral reports whether value has the shape of a handle value in the
-// closed registry (a pull request number, a ticket key, a run id). Such a value
-// is a literal a caller sent or a census offered, never a canonical subject id.
-func IsHandleLiteral(value string) bool {
-	for _, entry := range handleGrammarRegistry {
-		if entry.valuePattern.MatchString(value) {
-			return true
-		}
-	}
-	return false
-}

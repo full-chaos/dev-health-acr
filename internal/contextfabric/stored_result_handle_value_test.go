@@ -22,7 +22,7 @@ func TestStoredResultGateDoesNotLookUpAHandleValueAsANode(t *testing.T) {
 			{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedValue: "747"},
 		}
 		graph := &gateGraph{capturingGraphReader: &capturingGraphReader{}, outcomes: map[string]StoredSubjectOutcome{SubjectMapKey(project): StoredSubjectAdmitted}}
-		decision := NewStoredResultGate(graph).WithHandleLiteralMatcher(func(value string) bool { return value == "747" }).Authorize(context.Background(), principal,
+		decision := NewStoredResultGate(graph).Authorize(context.Background(), principal,
 			StoredInvestigationResult{Result: result, GrantDigest: StoredResultGrantDigest(principal)}, StoredResultSurfacePriorResult)
 		if decision.Decision != StoredResultAdmitted || decision.AbsentCount != 0 {
 			t.Fatalf("scope %v: decision=%s reason=%s absent=%d, want admitted with no absent subject", principal.RepositoryScopes, decision.Decision, decision.Reason, decision.AbsentCount)
@@ -32,8 +32,8 @@ func TestStoredResultGateDoesNotLookUpAHandleValueAsANode(t *testing.T) {
 
 // Every structure member is classified: a member whose applied value is a
 // canonical id (anchor and candidate options carry opt.CanonicalID) reaches the
-// graph decision; a handle's value does too unless it is a handle literal
-// (StoredResultGate.subjectsOf); kind and window values are literals.
+// graph decision; a handle's value does too unless it is not a canonical
+// subject id (StoredResultGate.subjectsOf); kind and window values are literals.
 func TestStoredSubjectStructureMembersCoverTheVocabulary(t *testing.T) {
 	canonical := map[contractsv1.ContextFabricStructureNeedKind]bool{
 		contractsv1.ContextFabricStructureNeedSubjectAnchor:    true,
@@ -49,6 +49,17 @@ func TestStoredSubjectStructureMembersCoverTheVocabulary(t *testing.T) {
 		}
 		if storedSubjectStructureMembers[member] != want {
 			t.Errorf("member %q: reaches the graph decision = %v, want %v", member, storedSubjectStructureMembers[member], want)
+		}
+	}
+}
+
+func TestIsCanonicalSubjectID(t *testing.T) {
+	for value, want := range map[string]bool{
+		"pull_request:repo:747": true, "repository:abc": true, "work_item.v2:x:y": true, "project:p1": true,
+		"747": false, "CHAOS-8929": false, "project_granted": false, "unknown:abc": false, "repository:": false, "": false,
+	} {
+		if got := IsCanonicalSubjectID(value); got != want {
+			t.Errorf("IsCanonicalSubjectID(%q) = %v, want %v", value, got, want)
 		}
 	}
 }
