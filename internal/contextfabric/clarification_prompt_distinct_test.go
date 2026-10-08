@@ -83,3 +83,15 @@ func TestClarificationPromptKeepsIDCueWhenWithinBound(t *testing.T) {
 		t.Fatalf("id cue lost: %q", got)
 	}
 }
+
+func TestClarificationPromptOrdinalFallbackLeavesUniqueLabelsAlone(t *testing.T) {
+	label := strings.Repeat("l", 512)
+	got := ClarificationPrompt([]SubjectCandidate{
+		promptCandidate(contractsv1.ContextFabricSubjectProject, strings.Repeat("a", 256), label, "jira"),
+		promptCandidate(contractsv1.ContextFabricSubjectProject, strings.Repeat("b", 256), label, "jira"),
+		promptCandidate(contractsv1.ContextFabricSubjectProject, "id-c", "platform", "jira"),
+	})
+	if !strings.HasSuffix(got, ", platform?") {
+		t.Fatalf("unique label altered: %q", got[len(got)-40:])
+	}
+}
