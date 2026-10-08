@@ -1283,19 +1283,21 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 		t.Fatalf("a probe that changed nothing: %d differences, expired %v, code read %v, invalid %v", count(rr), blind.Expired(), rr.CodeRead, rr.Invalid)
 	}
 
-	// The answer states a history other than the one asked for: 8 weeks for a
-	// request of 12, and 4 for the probe. The two echoes differ and the covered
-	// values are equal, but the answer does not say that the probe changed what
-	// was read: nothing is counted.
+	// The answer states a history shorter than the one asked for (8 weeks for
+	// a request of 12, 4 for the probe): the data holds 8, so the probe is
+	// measured with 8 and 4, the history the answer states; it is not a run
+	// that failed to measure (see TestAShortHistoryIsProbedWithWindowsTheDataCanTellApart).
+	// An echo longer than the request, or not a number, is not a history the
+	// probe can use: not measured.
 	wrongEcho := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
 		if historyOf(variables, "historyWeeks") == 12 {
-			forecast["historyWeeks"] = 8
+			forecast["historyWeeks"] = 20
 		} else {
 			forecast["historyWeeks"] = historyOf(variables, "historyWeeks")
 		}
 	}), nil)
 	rr = wrongEcho.Root("throughputForecast")
-	if count(rr) != 0 || len(wrongEcho.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], `states a history of "8"`) || wrongEcho.Err() == nil {
+	if count(rr) != 0 || len(wrongEcho.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], `states a history of "20"`) || wrongEcho.Err() == nil {
 		t.Fatalf("an echo that is not the history asked for: %d differences, expired %v, code read %v, invalid %v", count(rr), wrongEcho.Expired(), rr.CodeRead, rr.Invalid)
 	}
 
@@ -1929,5 +1931,42 @@ func TestADeniedTeamIsNeitherAFindingNorACompareInAnyTeamRead(t *testing.T) {
 	}
 	if len(oracle.deniedNotes) != 1 || !strings.Contains(oracle.deniedNotes[0], "team a is denied") {
 		t.Fatalf("notes: %v", oracle.deniedNotes)
+	}
+}
+
+// A venue that holds less history than the probe asks for states the history
+// it used: the probe then asks for half of that, so the class is still
+// measured; when the resolver gives the same history for both, the run says
+// it read the class from the code and names the reason.
+func TestAShortHistoryIsProbedWithWindowsTheDataCanTellApart(t *testing.T) {
+	const held = 8
+	count := func(rr *RootReport) int { return rr.ByClass[ClassLatestDayVsWindow] }
+	clamp := func(variables map[string]any, forecast map[string]any) {
+		forecast["historyWeeks"] = min(historyOf(variables, "historyWeeks"), held)
+	}
+	same := fakeRun(t, "throughputForecast", recordedThroughput(t, clamp), nil)
+	rr := same.Root("throughputForecast")
+	if count(rr) != 4 || len(same.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 0 {
+		t.Fatalf("a short history, windows told apart: %d differences, expired %v, code read %v, invalid %v", count(rr), same.Expired(), rr.CodeRead, rr.Invalid)
+	}
+	for _, d := range rr.Differences {
+		if d.Class == ClassLatestDayVsWindow && !strings.Contains(d.Detail, "history of 8 and of 4") {
+			t.Fatalf("the probe did not use 8 and 4: %s", d.Detail)
+		}
+	}
+	follows := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+		clamp(variables, forecast)
+		forecast["backlogSize"] = 100 + historyOf(variables, "historyWeeks")
+	}), nil)
+	if expired := follows.Expired(); len(expired) != 1 || !strings.Contains(expired[0], "throughputForecast.backlogSize is another value") {
+		t.Fatalf("a short history, backlog follows the window: expired %v", expired)
+	}
+	stuck := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+		forecast["historyWeeks"] = held
+	}), nil)
+	srr := stuck.Root("throughputForecast")
+	read := strings.Join(srr.CodeRead, " ")
+	if count(srr) != 0 || len(probeInvalid(srr)) != 0 || !strings.Contains(read, "history 8 d < both probe windows; windows not distinguishable") {
+		t.Fatalf("a resolver that states the same history twice: %d differences, invalid %v, code read %q", count(srr), srr.Invalid, read)
 	}
 }

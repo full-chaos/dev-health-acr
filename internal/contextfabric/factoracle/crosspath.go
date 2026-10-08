@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
@@ -449,6 +450,38 @@ func (o *Oracle) temporaryAllowance(ctx context.Context, rr *RootReport, root *d
 		unmeasured(reason)
 		return nil
 	}
+	wantWide := fmt.Sprint(prior)
+	if spec.WideStated != 0 {
+		wantWide = fmt.Sprint(spec.WideStated)
+	}
+	narrowAsked := spec.Narrow
+	wantNarrow := fmt.Sprint(spec.Narrow)
+	if spec.NarrowStated != 0 {
+		wantNarrow = fmt.Sprint(spec.NarrowStated)
+	}
+	derived := false
+	if got := echoValue(wideLeaves, spec.Echo); got != wantWide {
+		// The venue holds less history than the first request asks for, and
+		// the answer states the history it used: two windows the data can
+		// tell apart are that history and half of it.
+		held, perr := strconv.Atoi(got)
+		askedWide, aerr := strconv.Atoi(fmt.Sprint(prior))
+		if perr != nil || aerr != nil || held < 2 || held >= askedWide {
+			unmeasured(fmt.Sprintf("the answer states a history of %q at %s for the request of %s, not %s", got, spec.Echo, fmt.Sprint(prior), wantWide))
+			return nil
+		}
+		narrowAsked = held / 2
+		derived = true
+		wantWide = got
+		var ok2 bool
+		narrow, _, ok2 = setVariable(wide, spec.Window, narrowAsked)
+		if !ok2 {
+			return fmt.Errorf("the case of shape %s does not set %s", shape.ID(), spec.Window)
+		}
+		if err := checkVariablePaths(shape, "", narrow); err != nil {
+			return err
+		}
+	}
 	narrowLeaves, reason, err := o.probeLeaves(ctx, rr, shape, narrow)
 	if err != nil {
 		return err
@@ -457,21 +490,21 @@ func (o *Oracle) temporaryAllowance(ctx context.Context, rr *RootReport, root *d
 		unmeasured("for the second history " + reason)
 		return nil
 	}
-	wantWide := fmt.Sprint(prior)
-	if spec.WideStated != 0 {
-		wantWide = fmt.Sprint(spec.WideStated)
-	}
-	if got := echoValue(wideLeaves, spec.Echo); got != wantWide {
-		unmeasured(fmt.Sprintf("the answer states a history of %q at %s for the request of %s, not %s", got, spec.Echo, fmt.Sprint(prior), wantWide))
-		return nil
-	}
-	wantNarrow := fmt.Sprint(spec.Narrow)
-	if spec.NarrowStated != 0 {
-		wantNarrow = fmt.Sprint(spec.NarrowStated)
-	}
-	if got := echoValue(narrowLeaves, spec.Echo); got != wantNarrow {
+	if got := echoValue(narrowLeaves, spec.Echo); derived {
+		held, _ := strconv.Atoi(wantWide)
+		stated, perr := strconv.Atoi(got)
+		if perr != nil || stated >= held {
+			rr.CodeRead = append(rr.CodeRead, fmt.Sprintf("class %s, %s: read from the resolver code, not measured by this run (history %s d < both probe windows; windows not distinguishable: asked %d, the answer states %q)", ClassLatestDayVsWindow, covered, wantWide, narrowAsked, got))
+			return nil
+		}
+		wantNarrow = got
+	} else if got != wantNarrow {
 		unmeasured(fmt.Sprintf("the answer states a history of %q at %s for the request of %d, not %s", got, spec.Echo, spec.Narrow, wantNarrow))
 		return nil
+	}
+	if derived {
+		prior = wantWide
+		spec.Narrow = narrowAsked
 	}
 	for _, path := range spec.Paths {
 		a, measured := leavesUnder(wideLeaves, path)
