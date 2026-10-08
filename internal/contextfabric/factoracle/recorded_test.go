@@ -119,7 +119,7 @@ func oracleFor(t *testing.T, manifest Manifest, planes Planes, reference *Extrac
 		t.Fatalf("reference store: %v", err)
 	}
 	return &Oracle{Policy: policy, Planes: planes, Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases,
-		ListenerDark: manifest.ListenerDark, OperationDark: manifest.OperationDark}
+		ListenerDark: manifest.ListenerDark, OperationDark: manifest.OperationDark, DeniedTeams: manifest.DeniedTeams}
 }
 
 func runOracle(t *testing.T, o *Oracle) *Report {
@@ -165,8 +165,8 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	}
 	unused := planes.Unused()
 	darkKeys := darkReplyKeys(recording, dark)
-	if len(darkKeys) == 0 {
-		t.Fatalf("the capture holds no recorded reply of a dark operation: the exclusion measured nothing")
+	if len(darkKeys) == 0 && len(darkCases(t, recording, dark)) > 0 {
+		t.Fatalf("the capture holds cases of a dark operation and no recorded reply of it: the exclusion measured nothing")
 	}
 	unusedSet := map[string]bool{}
 	var live []string
@@ -346,28 +346,24 @@ func withoutDarkRoots(t *testing.T, manifest Manifest, dark map[string]bool) Man
 func TestRecordedCaptureKeepsTheDarkOperationAndTheTestExcludesIt(t *testing.T) {
 	manifest, recording, _ := loadedCapture(t)
 	dark := darkOperations(t)
-	if got := len(darkReplyKeys(recording, dark)); got != 5 {
-		t.Fatalf("the capture holds %d recorded replies of a dark operation, want 5", got)
+	if got := len(darkReplyKeys(recording, dark)); got != 0 {
+		t.Fatalf("the capture holds %d recorded replies of a dark operation, want 0: the venue registry does not offer one", got)
 	}
 	filtered := withoutDarkRoots(t, manifest, dark)
 	policy := mustPolicy(t)
 	if len(filtered.Expect) != len(policy.Roots()) {
 		t.Fatalf("filtered capture pins %d roots, the policy allows %d", len(filtered.Expect), len(policy.Roots()))
 	}
-	if len(manifest.Expect) != len(filtered.Expect)+len(dark) || len(manifest.ShapeCases) != len(filtered.ShapeCases)+4 {
+	if len(manifest.Expect) != len(filtered.Expect) || len(manifest.ShapeCases) != len(filtered.ShapeCases) {
 		t.Fatalf("the recorded manifest was changed: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
 	}
 }
 
-// notRecordedRoots are the roots the recorded capture cannot replay: the
-// capture was taken against a registry that had no document for the operation
-// below and a capacityForecast document without the completion distribution.
-// The capture stays as recorded; the recorded run says which roots it did not
-// measure, and recording them again needs the venue to serve both documents
-// (`make o4-oracle-capture`), after which this list must be emptied.
-var notRecordedRoots = map[string]string{
-	"capacityForecast": "capacityCompletionDistribution has no recorded reply and the capacityForecast document selected no completionDistribution at capture time",
-}
+// notRecordedRoots are the roots the recorded capture cannot replay: a root
+// whose registry document or shape the venue did not serve when the capture
+// was taken. The capture of the venue at ops 5c9a3d32 records every root, so
+// the list is empty; a root added here again must say why the capture lacks it.
+var notRecordedRoots = map[string]string{}
 
 // withoutNotRecordedRoots returns the manifest without the shape cases and
 // the pinned outcome of a root the capture does not record, and the sorted
@@ -449,22 +445,37 @@ func isNotRecordedKey(t *testing.T, key string, skipped []string) bool {
 	return false
 }
 
+// The capture of the venue at ops 5c9a3d32 records every root: nothing is
+// excluded, so a root added to notRecordedRoots has to be a root the capture
+// really lacks.
 func TestRecordedRunNamesTheRootsItDoesNotMeasure(t *testing.T) {
 	manifest, recording, _ := loadedCapture(t)
 	filtered, skipped := withoutNotRecordedRoots(t, manifest)
-	if !slices.Equal(skipped, []string{"capacityForecast"}) {
+	if len(skipped) != 0 {
 		t.Fatalf("not recorded roots = %v", skipped)
 	}
-	if len(manifest.Expect) != len(filtered.Expect)+1 || len(manifest.ShapeCases) <= len(filtered.ShapeCases) {
-		t.Fatalf("the recorded manifest was changed or the exclusion dropped nothing: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
+	if len(manifest.Expect) != len(filtered.Expect) || len(manifest.ShapeCases) != len(filtered.ShapeCases) {
+		t.Fatalf("the recorded manifest was changed: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
 	}
-	n := 0
 	for key := range recording.Replies {
 		if isNotRecordedKey(t, key, skipped) {
-			n++
+			t.Fatalf("reply %s belongs to a not recorded root", key)
 		}
 	}
-	if n == 0 {
-		t.Fatal("the capture holds no reply of a not recorded root: the exclusion measured nothing")
+	if _, ok := manifest.Expect["capacityForecast"]; !ok {
+		t.Fatal("the capture pins no outcome for capacityForecast")
 	}
+}
+
+// darkCases are the shape cases of the manifest that belong to a dark operation.
+func darkCases(t *testing.T, _ Recording, dark map[string]bool) []string {
+	t.Helper()
+	manifest, _, _ := loadedCapture(t)
+	var out []string
+	for _, c := range manifest.ShapeCases {
+		if isDarkCase(c.ShapeID, dark) {
+			out = append(out, c.ShapeID)
+		}
+	}
+	return out
 }

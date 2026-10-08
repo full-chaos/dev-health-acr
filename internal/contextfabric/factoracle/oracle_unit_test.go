@@ -1890,7 +1890,7 @@ func TestADeniedReadinessTeamIsNotJoinedAndTheRunContinues(t *testing.T) {
 			notJoined = append(notJoined, n)
 		}
 	}
-	if len(notJoined) != 1 || !strings.Contains(notJoined[0], strings.TrimPrefix(asked[0], "team:")) || !strings.Contains(notJoined[0], "denied_or_not_found") {
+	if len(notJoined) != 1 || !strings.Contains(notJoined[0], strings.TrimPrefix(asked[0], "team:")) {
 		t.Fatalf("not joined: %v, first asked %s", notJoined, asked[0])
 	}
 }
@@ -1968,5 +1968,28 @@ func TestAShortHistoryIsProbedWithWindowsTheDataCanTellApart(t *testing.T) {
 	read := strings.Join(srr.CodeRead, " ")
 	if count(srr) != 0 || len(probeInvalid(srr)) != 0 || !strings.Contains(read, "history 8 d < both probe windows; windows not distinguishable") {
 		t.Fatalf("a resolver that states the same history twice: %d differences, invalid %v, code read %q", count(srr), srr.Invalid, read)
+	}
+}
+
+// A recorded run leaves out the teams the capture was denied: the seeded store
+// has no authorization, so it would otherwise read teams the venue never did.
+func TestARecordedDeniedTeamIsLeftOutOfTheRead(t *testing.T) {
+	var asked []string
+	oracle := &Oracle{DeniedTeams: map[string][]string{"flow": {"B"}}, Planes: fakePlanes{facts: func(request FactsRequest) (json.RawMessage, error) {
+		asked = append(asked, request.Subjects[0].CanonicalID)
+		return noFacts(request)
+	}}}
+	if _, err := oracle.readFacts(context.Background(), "flow", "team", []string{"a", "b", "c"}, readCurrent); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(asked, ",") != "team:a,team:c" {
+		t.Fatalf("asked %v", asked)
+	}
+	if got := oracle.withoutDenied("flow", []string{"a", "b", "c"}); strings.Join(got, ",") != "a,c" {
+		t.Fatalf("not dropped: %v", got)
+	}
+	// The capture and the replay agree: the same teams, scrubbed alike.
+	if len(oracle.deniedList) != 1 || oracle.deniedList[0].id != "b" {
+		t.Fatalf("denied list %v", oracle.deniedList)
 	}
 }

@@ -56,6 +56,11 @@ type Oracle struct {
 	// no grant for; deniedNotes states each once for the report.
 	denied      map[string]bool
 	deniedNotes []string
+	deniedList  []deniedTeam
+	// DeniedTeams are, per fact kind, the teams the capture was denied on the
+	// venue (ids as the extract holds them): a recorded run leaves them out
+	// the way the capture did, since the seeded store has no authorization.
+	DeniedTeams map[string][]string
 	Policy      *directread.GraphQLPolicy
 	Planes      Planes
 	// Store is the reference reading of the rows both planes read.
@@ -177,6 +182,12 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 			request.Window = &FactsWindow{Mode: directread.WindowRange, Start: o.Window.Start, End: o.Window.End}
 			request.Tables = directread.TablesInclude
 		}
+		if chunk == 1 && subjectKind == "team" && o.recordedDenied(kind, ids[start]) {
+			o.noteDenied(kind, ids[start])
+			deniedCount++
+			deniedRows = append(deniedRows, "denied on the venue at capture")
+			continue
+		}
 		for _, id := range ids[start:end] {
 			request.Subjects = append(request.Subjects, FactsSubject{Kind: subjectKind, CanonicalID: subjectKind + ":" + id})
 		}
@@ -201,7 +212,7 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 				// joined: stated, not compared. A call whose every subject is
 				// denied is a lost authorization and fails.
 				if chunk == 1 {
-					o.noteDenied(kind, ids[start], strings.Join(rows, ", "))
+					o.noteDenied(kind, ids[start])
 					deniedCount++
 					deniedRows = append(deniedRows, strings.Join(rows, ", "))
 					continue
@@ -276,8 +287,20 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 	return out, nil
 }
 
+type deniedTeam struct{ kind, id string }
+
+// recordedDenied reports whether the capture was denied this team.
+func (o *Oracle) recordedDenied(kind, id string) bool {
+	for _, d := range o.DeniedTeams[kind] {
+		if strings.EqualFold(d, id) {
+			return true
+		}
+	}
+	return false
+}
+
 // noteDenied records a team the token cannot read, once per kind.
-func (o *Oracle) noteDenied(kind, id, outcomes string) {
+func (o *Oracle) noteDenied(kind, id string) {
 	if o.denied == nil {
 		o.denied = map[string]bool{}
 	}
@@ -286,7 +309,8 @@ func (o *Oracle) noteDenied(kind, id, outcomes string) {
 		return
 	}
 	o.denied[key] = true
-	o.deniedNotes = append(o.deniedNotes, kind+": team "+id+" is denied to the venue token ("+outcomes+")")
+	o.deniedList = append(o.deniedList, deniedTeam{kind: kind, id: id})
+	o.deniedNotes = append(o.deniedNotes, kind+": team "+id+" is denied to the venue token")
 }
 
 // withoutDenied drops the teams a read of this kind was denied.
