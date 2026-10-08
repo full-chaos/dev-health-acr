@@ -13,12 +13,14 @@ import (
 // read_facts bounds, mirrored from the hosted contract (the hosted route is
 // authoritative and re-validates every request).
 const (
-	readFactsMaxKinds       = 8
-	readFactsMaxSubjects    = 25
-	readFactsMinMaxBytes    = 4096
-	readFactsMaxMaxBytes    = 262144
-	readFactsMaxRangeDays   = 60
-	readFactsMaxFieldLength = 256
+	readFactsMaxKinds        = 8
+	readFactsMaxSubjects     = 25
+	readFactsMinMaxBytes     = 4096
+	readFactsMaxMaxBytes     = 262144
+	readFactsMaxRangeDays    = 60
+	readFactsMaxFieldLength  = 256
+	readFactsMaxUnits        = 150
+	readFactsMaxCursorLength = 1024
 )
 
 type readFactsSubjectInput struct {
@@ -40,6 +42,12 @@ type readFactsInput struct {
 	Window   *readFactsWindowInput   `json:"window"`
 	Tables   string                  `json:"tables"`
 	MaxBytes int                     `json:"max_bytes"`
+	Units    *readFactsUnitsInput    `json:"units"`
+}
+
+type readFactsUnitsInput struct {
+	Cursor   string `json:"cursor"`
+	MaxUnits int    `json:"max_units"`
 }
 
 func (in readFactsInput) validate() error {
@@ -66,6 +74,11 @@ func (in readFactsInput) validate() error {
 	}
 	if in.MaxBytes != 0 && (in.MaxBytes < readFactsMinMaxBytes || in.MaxBytes > readFactsMaxMaxBytes) {
 		return fmt.Errorf("max_bytes is out of bounds")
+	}
+	if u := in.Units; u != nil {
+		if u.MaxUnits < 0 || u.MaxUnits > readFactsMaxUnits || len(u.Cursor) > readFactsMaxCursorLength {
+			return fmt.Errorf("units is out of bounds")
+		}
 	}
 	if w := in.Window; w != nil {
 		switch w.Mode {

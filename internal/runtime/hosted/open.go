@@ -261,6 +261,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			SourceRows:                 sourceRows,
 			DirectReadGate:             directReadGate,
 			DirectFactReader:           directFactReader,
+			DirectCursorKeyring:        directread.CursorKeyring{ActiveKID: request.config.EvidenceIDActiveKID, Keys: request.config.EvidenceIDKeys},
 			DataCatalogue:              dataReads.catalogue,
 			DataOperations:             dataReads.operations,
 			DataGraphQL:                dataReads.graphql,

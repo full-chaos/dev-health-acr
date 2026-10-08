@@ -125,6 +125,9 @@ var (
 	// declRepositoryRef: a repos.id uuid ("repository:"+uuid is the stored
 	// canonical id).
 	declRepositoryRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectRepository, IDForm: contextfabric.FactSubjectIDRepositoryUUID}
+	// declUnresolvedHandleRef: a reference no repository of the organization
+	// resolves; the gate cannot decide it, so it is opaque.
+	declUnresolvedHandleRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectRepository, IDForm: contextfabric.FactSubjectIDOpaque}
 	// declOrganizationRef: an organization id; the gate admits only the
 	// caller's own organization.
 	declOrganizationRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectOrganization, IDForm: contextfabric.FactSubjectIDCanonical}
@@ -811,6 +814,7 @@ func investmentFields() []fieldDecl {
 		),
 		declOn(declTeamProject, investmentThemeFields(true)...),
 		declOn(declRepoTeam, themeBreakdown, fStr("mix_source"), fStr("attribution_basis")),
+		declOn(declRepoTeam, investmentUnitFields()...),
 		declOn(declRepositoryOnly, fInt("work_unit_count", "count")),
 		declOn(declTeamOnly, declAggregate(fInt("owned_repository_count", "count"))),
 		declOn(declTeamOnly, prior...),
@@ -829,4 +833,41 @@ func investmentFields() []fieldDecl {
 			declAggregate(fInt("owning_team_rollup_work_unit_count", "count")),
 		),
 	)
+}
+
+// investmentUnitFields declares the work-unit listing facts (unit_kind
+// work_unit_share and work_unit_page), served only when read_facts is asked
+// for units. repository_id is a repository reference, so a unit whose
+// repository the caller may not read has the field withheld and the fact is
+// dropped by the reader.
+func investmentUnitFields() []fieldDecl {
+	fields := []fieldDecl{
+		fStr("unit_kind"), fStr("unit_weight"), fStr("work_unit_id"),
+		declRef(declRepositoryRef, fStr("repository_id")),
+		fStr("unit_from"), fStr("unit_to"),
+		fNum("share_in_scope", ""), fNum("unit_effort_value", ""),
+		fInt("unit_pull_request_count", "count"), fInt("unit_refs_unresolved", "count"),
+		// The handles name issue keys that matched no repository of the
+		// organization, so they can name a repository the caller has no grant
+		// for: an opaque reference, withheld for a repository-restricted caller.
+		declRef(declUnresolvedHandleRef, fStr("unit_unresolved_refs")), fStr("unit_mix_source"), fStr("unit_attribution_basis"),
+		fInt("units_returned", "count"), fNum("page_share_total", ""), fInt("units_refs_unresolved", "count"),
+		fNum("scope_share_total", ""), fInt("scope_unit_rows", "count"), fStr("next_cursor"),
+	}
+	for _, theme := range canonicalInvestmentThemes {
+		fields = append(fields, fNum("unit_"+contextfabric.FactFieldTheme(theme), "ratio"))
+	}
+	// The page fact's counts and totals are taken over every row of the page,
+	// including rows the reader drops for a caller who may not read their
+	// repository, so they are aggregates: served with the all-owned-
+	// repositories label like the mix they sum to.
+	pageAggregates := map[string]bool{
+		"units_returned": true, "page_share_total": true, "units_refs_unresolved": true,
+		"scope_share_total": true, "scope_unit_rows": true,
+	}
+	for i := range fields {
+		fields[i].Nullable = true
+		fields[i].Aggregate = pageAggregates[fields[i].Name]
+	}
+	return fields
 }
