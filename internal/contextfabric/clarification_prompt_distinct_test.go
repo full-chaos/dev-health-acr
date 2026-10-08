@@ -58,18 +58,58 @@ func TestClarificationPromptProviderCueStillSeparatesWithoutID(t *testing.T) {
 	}
 }
 
+func TestClarificationPromptShowsShortestUniqueIDSuffix(t *testing.T) {
+	got := ClarificationPrompt([]SubjectCandidate{
+		promptCandidate(contractsv1.ContextFabricSubjectProject, "jira:project:0000000012345678", "payments", "jira"),
+		promptCandidate(contractsv1.ContextFabricSubjectProject, "jira:project:0000000099995678", "payments", "jira"),
+	})
+	want := "Which subject did you mean: payments (jira, 12345678), payments (jira, 99995678)?"
+	if got != want {
+		t.Fatalf("prompt = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "jira:project") {
+		t.Fatalf("full id shown: %q", got)
+	}
+}
+
+func TestClarificationPromptSuffixesExtendUntilUnique(t *testing.T) {
+	got := ClarificationPrompt([]SubjectCandidate{
+		promptCandidate(contractsv1.ContextFabricSubjectProject, "AAAA-0000000000", "payments", "jira"),
+		promptCandidate(contractsv1.ContextFabricSubjectProject, "BBBB-0000000000", "payments", "jira"),
+	})
+	want := "Which subject did you mean: payments (jira, A-0000000000), payments (jira, B-0000000000)?"
+	if got != want {
+		t.Fatalf("prompt = %q, want %q", got, want)
+	}
+}
+
 func TestClarificationPromptStaysWithinPublishedBoundAtMaxLengths(t *testing.T) {
 	label := strings.Repeat("l", 512)
 	cands := []SubjectCandidate{}
 	for _, c := range []string{"a", "b", "c"} {
-		cands = append(cands, promptCandidate(contractsv1.ContextFabricSubjectProject, strings.Repeat(c, 256), label, "jira"))
+		cands = append(cands, promptCandidate(contractsv1.ContextFabricSubjectProject, strings.Repeat("x", 248)+strings.Repeat(c, 8), label, "jira"))
+	}
+	got := ClarificationPrompt(cands)
+	if n := utf8.RuneCountInString(got); n > contractsv1.ContextFabricProjectedClarificationPromptMaxLength {
+		t.Fatalf("prompt is %d runes, bound %d", n, contractsv1.ContextFabricProjectedClarificationPromptMaxLength)
+	}
+	if !strings.Contains(got, "aaaaaaaa") || !strings.Contains(got, "bbbbbbbb") || strings.Contains(got, "#") {
+		t.Fatalf("suffix cues expected: %q", got[len(got)-60:])
+	}
+}
+
+func TestClarificationPromptFallsBackToOrdinalsWhenSuffixesStillOverflow(t *testing.T) {
+	label := strings.Repeat("l", 512)
+	cands := []SubjectCandidate{}
+	for _, c := range []string{"a", "b", "c"} {
+		cands = append(cands, promptCandidate(contractsv1.ContextFabricSubjectProject, strings.Repeat(c, 8)+strings.Repeat("x", 248), label, "jira"))
 	}
 	got := ClarificationPrompt(cands)
 	if n := utf8.RuneCountInString(got); n > contractsv1.ContextFabricProjectedClarificationPromptMaxLength {
 		t.Fatalf("prompt is %d runes, bound %d", n, contractsv1.ContextFabricProjectedClarificationPromptMaxLength)
 	}
 	if !strings.Contains(got, "#1") || !strings.Contains(got, "#2") || !strings.Contains(got, "#3") {
-		t.Fatalf("identical choices not told apart: %q", got)
+		t.Fatalf("identical choices not told apart: %q", got[len(got)-60:])
 	}
 }
 

@@ -33,7 +33,7 @@ func ClarificationPrompt(candidates []SubjectCandidate) string {
 		cueLists[i] = cues
 	}
 	// Two distinct subjects can still render identically after the kind and
-	// provider cues; the canonical id is the last cue, added only then.
+	// provider cues; the shortest unique canonical id suffix is the last cue, added only then.
 	rendered := make([]string, len(shown))
 	owners := map[string]map[string]struct{}{}
 	for i, candidate := range shown {
@@ -43,17 +43,23 @@ func ClarificationPrompt(candidates []SubjectCandidate) string {
 		}
 		owners[rendered[i]][candidate.Subject.CanonicalID] = struct{}{}
 	}
+	suffixes := map[string]map[string]string{}
+	for key, ids := range owners {
+		if len(ids) > 1 {
+			suffixes[key] = shortestUniqueSuffixes(ids)
+		}
+	}
 	labels := make([]string, 0, max)
 	for i, candidate := range shown {
 		label := rendered[i]
 		if len(owners[rendered[i]]) > 1 {
-			label = renderCandidateLabel(candidate.Subject.Label, append(cueLists[i], candidate.Subject.CanonicalID))
+			label = renderCandidateLabel(candidate.Subject.Label, append(cueLists[i], suffixes[rendered[i]][candidate.Subject.CanonicalID]))
 		}
 		labels = append(labels, label)
 	}
 	if promptRuneCount(labels) > contractsv1.ContextFabricProjectedClarificationPromptMaxLength {
-		// The ids would push the prompt past its published bound; a short
-		// ordinal still tells the identical choices apart.
+		// The suffix cues would push the prompt past its published bound; a
+		// short ordinal still tells the identical choices apart.
 		ordinals := map[string]int{}
 		for i, candidate := range shown {
 			if len(owners[rendered[i]]) <= 1 {
@@ -128,4 +134,39 @@ func crossKindLabels(candidates []SubjectCandidate) map[string]bool {
 
 func promptRuneCount(labels []string) int {
 	return utf8.RuneCountInString("Which subject did you mean: " + strings.Join(labels, ", ") + "?")
+}
+
+// minIDSuffixRunes is the shortest id suffix shown as a cue.
+const minIDSuffixRunes = 8
+
+// shortestUniqueSuffixes maps each id to its shortest suffix, at least
+// minIDSuffixRunes long (or the whole id when shorter), that no other id in
+// the set shares.
+func shortestUniqueSuffixes(ids map[string]struct{}) map[string]string {
+	longest := 0
+	for id := range ids {
+		if n := utf8.RuneCountInString(id); n > longest {
+			longest = n
+		}
+	}
+	for k := minIDSuffixRunes; ; k++ {
+		out := make(map[string]string, len(ids))
+		seen := make(map[string]struct{}, len(ids))
+		for id := range ids {
+			suffix := idSuffix(id, k)
+			out[id] = suffix
+			seen[suffix] = struct{}{}
+		}
+		if len(seen) == len(ids) || k >= longest {
+			return out
+		}
+	}
+}
+
+func idSuffix(id string, k int) string {
+	runes := []rune(id)
+	if len(runes) <= k {
+		return id
+	}
+	return string(runes[len(runes)-k:])
 }
