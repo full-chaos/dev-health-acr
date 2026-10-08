@@ -125,6 +125,9 @@ var (
 	// declRepositoryRef: a repos.id uuid ("repository:"+uuid is the stored
 	// canonical id).
 	declRepositoryRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectRepository, IDForm: contextfabric.FactSubjectIDRepositoryUUID}
+	// declUnresolvedHandleRef: a reference no repository of the organization
+	// resolves; the gate cannot decide it, so it is opaque.
+	declUnresolvedHandleRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectRepository, IDForm: contextfabric.FactSubjectIDOpaque}
 	// declOrganizationRef: an organization id; the gate admits only the
 	// caller's own organization.
 	declOrganizationRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectOrganization, IDForm: contextfabric.FactSubjectIDCanonical}
@@ -844,7 +847,10 @@ func investmentUnitFields() []fieldDecl {
 		fStr("unit_from"), fStr("unit_to"),
 		fNum("share_in_scope", ""), fNum("unit_effort_value", ""),
 		fInt("unit_pull_request_count", "count"), fInt("unit_refs_unresolved", "count"),
-		fStr("unit_unresolved_refs"), fStr("unit_mix_source"), fStr("unit_attribution_basis"),
+		// The handles name issue keys that matched no repository of the
+		// organization, so they can name a repository the caller has no grant
+		// for: an opaque reference, withheld for a repository-restricted caller.
+		declRef(declUnresolvedHandleRef, fStr("unit_unresolved_refs")), fStr("unit_mix_source"), fStr("unit_attribution_basis"),
 		fInt("units_returned", "count"), fNum("page_share_total", ""), fInt("units_refs_unresolved", "count"),
 		fNum("scope_share_total", ""), fInt("scope_unit_rows", "count"), fStr("next_cursor"),
 	}

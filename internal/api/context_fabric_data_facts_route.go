@@ -22,7 +22,7 @@ func (a *App) directFacts() *directread.FactsReader {
 	if a.runtime == nil || a.runtime.DirectReadGate == nil || a.runtime.DirectFactReader == nil {
 		return nil
 	}
-	return directread.NewFactsReader(a.runtime.DirectReadGate, a.runtime.DirectFactReader, directread.NewSlogFactsRecorder(a.logger))
+	return directread.NewFactsReader(a.runtime.DirectReadGate, a.runtime.DirectFactReader, directread.NewSlogFactsRecorder(a.logger)).WithCursorKeyring(a.runtime.DirectCursorKeyring)
 }
 
 // contextFabricDataFactsHandler serves read_facts (CHAOS-7073). It runs only

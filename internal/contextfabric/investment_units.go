@@ -24,7 +24,7 @@ const (
 	InvestmentUnitPageKind = "work_unit_page"
 
 	// InvestmentUnitsWeight names the weight the unit shares carry.
-	InvestmentUnitsWeight = "share_in_scope = (distinct PR refs of the unit in this repository / distinct refs of the unit) * persisted effort_value"
+	InvestmentUnitsWeight = "share_in_scope = (distinct PR refs of the unit in this repository / distinct refs of the unit) * persisted effort_value; a unit with no PR ref counts its stored repository as one reference"
 )
 
 // InvestmentUnitsRequest asks a FactInvestment provider to list the work units

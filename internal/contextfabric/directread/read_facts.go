@@ -343,6 +343,7 @@ type FactsReader struct {
 	capabilities CapabilitySource
 	now          func() time.Time
 	recorder     FactsRecorder
+	unitsSealer  *cursorSealer
 }
 
 // FactsRecorder receives one record per read (telemetry "context fabric
@@ -456,7 +457,27 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 	for _, kind := range plan.kinds {
 		requirements = append(requirements, contextfabric.FactRequirement{Kind: kind})
 	}
+	unitsDigest, unitsIncoming := "", ""
 	if plan.units != nil {
+		if r.unitsSealer == nil {
+			response.Status = StatusUnavailable
+			return response, fmt.Errorf("%w: the units cursor keyring is not configured", ErrFactsUnavailable)
+		}
+		unitsDigest = unitsRequestDigest(request, plan)
+		if token := strings.TrimSpace(request.Units.Cursor); token != "" {
+			position, err := r.openUnitsCursor(token, principal.OrgID, unitsDigest)
+			if err != nil {
+				return response, invalid("units.cursor is not a cursor this server issued for this subject and window")
+			}
+			if position != "" {
+				cursor, decodeErr := contextfabric.DecodeInvestmentUnitsCursor(position)
+				if decodeErr != nil {
+					return response, invalid("units.cursor is not a cursor this server issued for this subject and window")
+				}
+				plan.units.Cursor = &cursor
+			}
+			unitsIncoming = position
+		}
 		ctx = contextfabric.WithInvestmentUnits(ctx, *plan.units)
 	}
 	bundle, err := r.reader.Read(ctx, principal, admitted, contextfabric.CanonicalFactRequest{
@@ -507,7 +528,19 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 	}
 	response.Untrusted.Fields = untrustedFields(response.Facts)
 	response.Status = readStatus(response)
+	if plan.units != nil {
+		response.Facts = orderUnitsFacts(response.Facts)
+	}
+	unitRows := countUnitRows(response.Facts)
 	response.Truncation = applyBudget(&response, plan.echo.MaxBytes)
+	if plan.units != nil {
+		dropped, sealErr := r.finishUnitsPage(&response, principal.OrgID, unitsDigest, unitsIncoming, unitRows)
+		if sealErr != nil {
+			response.Status = StatusUnavailable
+			return response, fmt.Errorf("%w: units cursor: %w", ErrFactsInternal, sealErr)
+		}
+		noteUnitsBudget(response.Coverage, dropped)
+	}
 	if response.Truncation != nil {
 		record.TruncatedBy = response.Truncation.TruncatedBy
 	}
@@ -545,14 +578,7 @@ func validateUnits(request FactsRequest, plan readPlan) (*contextfabric.Investme
 		return nil, nil, invalid("units.max_units must be between 1 and %d", contextfabric.InvestmentUnitsMaxMax)
 	}
 	out := &contextfabric.InvestmentUnitsRequest{Max: size}
-	if token := strings.TrimSpace(request.Units.Cursor); token != "" {
-		cursor, err := contextfabric.DecodeInvestmentUnitsCursor(token)
-		if err != nil {
-			return nil, nil, invalid("units.cursor is not a cursor this server issued")
-		}
-		out.Cursor = &cursor
-	}
-	return out, &EffectiveUnits{MaxUnits: size, Cursor: out.Cursor != nil}, nil
+	return out, &EffectiveUnits{MaxUnits: size, Cursor: strings.TrimSpace(request.Units.Cursor) != ""}, nil
 }
 
 // readPlan is a validated request.
@@ -1177,6 +1203,24 @@ func noteUnitsCoverage(rows []CoverageRow, facts []ServedFact, notVisible int) {
 			continue
 		}
 		note := strings.Join(notes, "; ")
+		if rows[i].Reason == "" {
+			rows[i].Reason = note
+		} else {
+			rows[i].Reason += "; " + note
+		}
+	}
+}
+
+// noteUnitsBudget says how many unit rows the byte budget cut from a page.
+func noteUnitsBudget(rows []CoverageRow, dropped int) {
+	if dropped <= 0 {
+		return
+	}
+	for i := range rows {
+		if rows[i].Kind != string(contextfabric.FactInvestment) {
+			continue
+		}
+		note := fmt.Sprintf("units_cut_by_max_bytes %d: next_cursor resumes after the last row served", dropped)
 		if rows[i].Reason == "" {
 			rows[i].Reason = note
 		} else {

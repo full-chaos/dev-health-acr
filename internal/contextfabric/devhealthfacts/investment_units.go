@@ -139,6 +139,7 @@ func (p *InvestmentProvider) readInvestmentUnits(ctx context.Context, orgID stri
 			if err := row.Scan(&r.WorkUnitID, &r.RepoID, &r.Share, &r.Effort, &r.Theme, &r.From, &r.To, &r.PRs, &r.UnresolvedN, &r.UnresolvedRefs, &r.ScopeTotal, &r.ScopeUnits); err != nil {
 				return err
 			}
+			r.PRs = withoutEmpty(r.PRs)
 			rows = append(rows, r)
 			return nil
 		}, extra...)
@@ -233,4 +234,17 @@ func unitFact(subject contextfabric.SubjectRef, r unitRow) contextfabric.Canonic
 		refs = append(refs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, r.RepoID+":"+number))
 	}
 	return contextfabric.CanonicalFact{Kind: contextfabric.FactInvestment, Subject: subject, Fields: fields, EvidenceRefIDs: refs}
+}
+
+// withoutEmpty drops the empty pull request number the repository fallback
+// (a unit with no PR reference, split by its own repo_id) carries: it is a
+// reference to a repository, not to a pull request.
+func withoutEmpty(values []string) []string {
+	out := values[:0:0]
+	for _, v := range values {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

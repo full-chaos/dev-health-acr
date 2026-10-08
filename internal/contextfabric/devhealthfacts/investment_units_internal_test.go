@@ -186,3 +186,23 @@ func TestUnitPageTotalsAreDeclaredAggregates(t *testing.T) {
 		}
 	}
 }
+
+// unit_unresolved_refs can name a repository the caller has no grant for; as an
+// opaque reference it is withheld from a repository-restricted caller.
+func TestUnresolvedHandlesAreAnOpaqueReference(t *testing.T) {
+	t.Parallel()
+	capability := newInvestmentProvider(nil).Capability()
+	for _, kind := range []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectRepository} {
+		field, ok := capability.FieldDeclaration("unit_unresolved_refs", kind)
+		if !ok || field.SubjectRef == nil || field.SubjectRef.IDForm != contextfabric.FactSubjectIDOpaque {
+			t.Errorf("%s: unit_unresolved_refs declared=%v ref=%+v, want an opaque reference", kind, ok, field.SubjectRef)
+		}
+	}
+	fact := unitFact(contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:t"}, unitRow{WorkUnitID: "u", RepoID: "r", Theme: map[string]float64{"risk": 1}, PRs: []string{"", "5"}, UnresolvedN: 1, UnresolvedRefs: []string{"ghpr:x/y#1"}})
+	if got := *fact.Fields["unit_pull_request_count"].Integer; got != 2 {
+		t.Errorf("unit_pull_request_count = %d on the raw row; the scan removes the empty fallback number before unitFact", got)
+	}
+	if got := withoutEmpty([]string{"", "5", "", "7"}); len(got) != 2 || got[0] != "5" || got[1] != "7" {
+		t.Errorf("withoutEmpty = %v, want [5 7]", got)
+	}
+}

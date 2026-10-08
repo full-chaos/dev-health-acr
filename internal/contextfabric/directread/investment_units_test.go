@@ -2,6 +2,9 @@ package directread
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -54,6 +57,7 @@ func unitsProvider(seen *[]contextfabric.InvestmentUnitsRequest) *stubProvider {
 			{Kind: contextfabric.FactInvestment, Subject: team, Fields: map[string]contextfabric.FactValue{
 				"unit_kind": strValue(contextfabric.InvestmentUnitPageKind), "units_returned": intValue(2), "units_refs_unresolved": intValue(3),
 				"repository_id": strValue("b"),
+				"next_cursor":   strValue(hiddenRowCursor),
 			}, EvidenceRefIDs: []string{"acr:v1:team:t"}},
 			unitRowFact(team, "wu-a", "a", 5),
 			unitRowFact(team, "wu-b", "b", 7),
@@ -76,7 +80,7 @@ func (p *unitsCapture) ReadFacts(ctx context.Context, principal storage.Principa
 func TestInvestmentUnitsRestrictedCallerSeesOnlyGrantedRepositoryRows(t *testing.T) {
 	var seen []contextfabric.InvestmentUnitsRequest
 	provider := &unitsCapture{stubProvider: *unitsProvider(&seen), seen: &seen}
-	reader := newTestFactsReader(t, graphOfOrgA(), provider)
+	reader := newUnitsReader(t, provider)
 	response, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{
 		Kinds:    []string{"investment"},
 		Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}},
@@ -135,7 +139,7 @@ func TestInvestmentUnitsRestrictedCallerSeesOnlyGrantedRepositoryRows(t *testing
 func TestInvestmentUnitsUnrestrictedCallerSeesEveryRow(t *testing.T) {
 	var seen []contextfabric.InvestmentUnitsRequest
 	provider := &unitsCapture{stubProvider: *unitsProvider(&seen), seen: &seen}
-	reader := newTestFactsReader(t, graphOfOrgA(), provider)
+	reader := newUnitsReader(t, provider)
 	unrestricted := storage.Principal{OrgID: orgA, Subject: "user-2", CredentialID: "cred-2"}
 	response, err := reader.Read(requestContext(), unrestricted, FactsRequest{
 		Kinds:    []string{"investment"},
@@ -162,7 +166,7 @@ func TestInvestmentUnitsUnrestrictedCallerSeesEveryRow(t *testing.T) {
 func TestInvestmentUnitsAreNotRequestedWithoutTheArgument(t *testing.T) {
 	var seen []contextfabric.InvestmentUnitsRequest
 	provider := &unitsCapture{stubProvider: *unitsProvider(&seen), seen: &seen}
-	reader := newTestFactsReader(t, graphOfOrgA(), provider)
+	reader := newUnitsReader(t, provider)
 	if _, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{
 		Kinds:    []string{"investment"},
 		Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}},
@@ -177,7 +181,7 @@ func TestInvestmentUnitsAreNotRequestedWithoutTheArgument(t *testing.T) {
 func TestInvestmentUnitsRequestValidation(t *testing.T) {
 	var seen []contextfabric.InvestmentUnitsRequest
 	provider := &unitsCapture{stubProvider: *unitsProvider(&seen), seen: &seen}
-	reader := newTestFactsReader(t, graphOfOrgA(), provider)
+	reader := newUnitsReader(t, provider)
 	team := RequestSubject{Kind: "team", CanonicalID: teamT.CanonicalID}
 	cases := map[string]FactsRequest{
 		"no investment kind":  {Kinds: []string{"health"}, Subjects: []RequestSubject{team}, Units: &RequestUnits{}},
@@ -190,7 +194,7 @@ func TestInvestmentUnitsRequestValidation(t *testing.T) {
 	healthProvider := &stubProvider{capability: healthLikeCapability(), read: func(contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
 		return contextfabric.FactProviderResult{State: contextfabric.SourceNoData}, nil
 	}}
-	withHealth := newTestFactsReader(t, graphOfOrgA(), provider, healthProvider)
+	withHealth := newUnitsReader(t, provider, healthProvider)
 	_, err := withHealth.Read(requestContext(), restrictedToA(), FactsRequest{Kinds: []string{"health"}, Subjects: []RequestSubject{team}, Units: &RequestUnits{}})
 	if err == nil || !strings.Contains(err.Error(), "investment") {
 		t.Errorf("units without the investment kind: err = %v, want invalid_request naming investment", err)
@@ -200,12 +204,241 @@ func TestInvestmentUnitsRequestValidation(t *testing.T) {
 			t.Errorf("%s: err = %v, want invalid_request", name, err)
 		}
 	}
-	token := contextfabric.EncodeInvestmentUnitsCursor(contextfabric.InvestmentUnitsCursor{Share: 4.5, WorkUnitID: "wu-x", RepoID: "a"})
+	first, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{Kinds: []string{"investment"}, Subjects: []RequestSubject{team}, Units: &RequestUnits{}})
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	token := pageCursor(t, first)
 	if _, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{Kinds: []string{"investment"}, Subjects: []RequestSubject{team}, Units: &RequestUnits{Cursor: token, MaxUnits: 150}}); err != nil {
 		t.Fatalf("a valid page request was refused: %v", err)
 	}
 	last := seen[len(seen)-1]
-	if last.Cursor == nil || last.Cursor.Share != 4.5 || last.Cursor.WorkUnitID != "wu-x" || last.Cursor.RepoID != "a" || last.Max != 150 {
-		t.Errorf("provider saw %+v, want the decoded cursor and Max 150", last)
+	if last.Cursor == nil || last.Cursor.Share != 4.5 || last.Cursor.WorkUnitID != "wu-b" || last.Cursor.RepoID != "b" || last.Max != 150 {
+		t.Errorf("provider saw %+v, want the position the sealed cursor held and Max 150", last)
+	}
+}
+
+var hiddenRowCursor = contextfabric.EncodeInvestmentUnitsCursor(contextfabric.InvestmentUnitsCursor{Share: 4.5, WorkUnitID: "wu-b", RepoID: "b"})
+
+func unitsTestKeyring() CursorKeyring {
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	return CursorKeyring{ActiveKID: "k1", Keys: map[string][]byte{"k1": key}}
+}
+
+func newUnitsReader(t *testing.T, providers ...contextfabric.FactProvider) *FactsReader {
+	t.Helper()
+	return newTestFactsReader(t, graphOfOrgA(), providers...).WithCursorKeyring(unitsTestKeyring())
+}
+
+func pageCursor(t *testing.T, response FactsResponse) string {
+	t.Helper()
+	for _, fact := range response.Facts {
+		if fact.Fields["unit_kind"] == contextfabric.InvestmentUnitPageKind {
+			if token, ok := fact.Fields["next_cursor"].(string); ok {
+				return token
+			}
+		}
+	}
+	t.Fatalf("no next_cursor on the page fact: %s", mustJSON(t, response))
+	return ""
+}
+
+// The provider's cursor names the last row it READ, a row of a repository the
+// caller may not read. It must leave the server sealed: no id, share or
+// repository of that row is readable, it opens only for the subject and window
+// it was issued for, and the provider then sees the position it held.
+func TestInvestmentUnitsCursorIsSealedAndBoundToSubjectAndWindow(t *testing.T) {
+	var seen []contextfabric.InvestmentUnitsRequest
+	provider := &unitsCapture{stubProvider: *unitsProvider(&seen), seen: &seen}
+	reader := newUnitsReader(t, provider)
+	team := RequestSubject{Kind: "team", CanonicalID: teamT.CanonicalID}
+	window := &RequestWindow{Mode: WindowTrailing, Days: 30}
+	first, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{Kinds: []string{"investment"}, Subjects: []RequestSubject{team}, Window: window, Units: &RequestUnits{MaxUnits: 1}})
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	token := pageCursor(t, first)
+	if token == hiddenRowCursor {
+		t.Fatal("the provider's plain cursor was served")
+	}
+	if _, err := contextfabric.DecodeInvestmentUnitsCursor(token); err == nil {
+		t.Fatal("the served cursor decodes as a plain keyset position")
+	}
+	for _, leak := range []string{"wu-b", hiddenRowCursor} {
+		if strings.Contains(mustJSON(t, first), leak) {
+			t.Fatalf("response carries %q of the row the caller may not read", leak)
+		}
+	}
+	if opened, err := reader.openUnitsCursor(token, orgA, unitsRequestDigest(FactsRequest{Window: window}, readPlan{subjects: []contextfabric.SubjectRef{teamT}})); err != nil || opened != hiddenRowCursor {
+		t.Fatalf("the sealed cursor holds %q, %v; want the provider position", opened, err)
+	}
+	unrestricted := storage.Principal{OrgID: orgA, Subject: "user-2", CredentialID: "cred-2"}
+	next := func(subject RequestSubject, w *RequestWindow) error {
+		_, err := reader.Read(requestContext(), unrestricted, FactsRequest{Kinds: []string{"investment"}, Subjects: []RequestSubject{subject}, Window: w, Units: &RequestUnits{Cursor: token}})
+		return err
+	}
+	if err := next(team, window); err != nil {
+		t.Fatalf("the cursor was refused for its own subject and window: %v", err)
+	}
+	if last := seen[len(seen)-1]; last.Cursor == nil || last.Cursor.WorkUnitID != "wu-b" {
+		t.Fatalf("provider saw %+v, want the position the cursor held", last)
+	}
+	if err := next(RequestSubject{Kind: "team", CanonicalID: teamU.CanonicalID}, window); err == nil {
+		t.Error("a cursor issued for one team was accepted for another")
+	}
+	if err := next(team, &RequestWindow{Mode: WindowTrailing, Days: 7}); err == nil {
+		t.Error("a cursor issued for one window was accepted for another")
+	}
+	if err := next(team, nil); err == nil {
+		t.Error("a cursor issued for a window was accepted for the default one")
+	}
+	raw := []byte(token)
+	raw[len(raw)-3] ^= 1
+	if err := next(team, window); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.Read(requestContext(), unrestricted, FactsRequest{Kinds: []string{"investment"}, Subjects: []RequestSubject{team}, Window: window, Units: &RequestUnits{Cursor: string(raw)}}); err == nil {
+		t.Error("an edited cursor was accepted")
+	}
+}
+
+func TestInvestmentUnitsNeedAKeyring(t *testing.T) {
+	var seen []contextfabric.InvestmentUnitsRequest
+	provider := &unitsCapture{stubProvider: *unitsProvider(&seen), seen: &seen}
+	reader := newTestFactsReader(t, graphOfOrgA(), provider)
+	_, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{Kinds: []string{"investment"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}}, Units: &RequestUnits{}})
+	if err == nil || !errors.Is(err, ErrFactsUnavailable) {
+		t.Fatalf("err = %v, want unavailable without a cursor keyring", err)
+	}
+	if len(seen) != 0 {
+		t.Fatalf("the provider was read %d times without a keyring", len(seen))
+	}
+}
+
+// The provider chose its cursor before the byte budget dropped unit rows; the
+// cursor served resumes after the last row actually served, and the page says
+// how many rows the budget cut.
+func TestInvestmentUnitsByteBudgetKeepsTheCursorHonest(t *testing.T) {
+	var seen []contextfabric.InvestmentUnitsRequest
+	many := &unitsCapture{seen: &seen, stubProvider: stubProvider{capability: unitsInvestmentCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		team := query.Subjects[0]
+		facts := []contextfabric.CanonicalFact{{Kind: contextfabric.FactInvestment, Subject: team, Fields: map[string]contextfabric.FactValue{
+			"unit_kind": strValue(contextfabric.InvestmentUnitPageKind), "units_returned": intValue(60),
+		}, EvidenceRefIDs: []string{"acr:v1:team:t"}}}
+		for i := 0; i < 60; i++ {
+			facts = append(facts, unitRowFact(team, fmt.Sprintf("wu-%02d-%s", i, strings.Repeat("x", 40)), "a", float64(100-i)))
+		}
+		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable, Facts: facts}, nil
+	}}}
+	reader := newUnitsReader(t, many)
+	response, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{
+		Kinds: []string{"investment"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}},
+		Units: &RequestUnits{MaxUnits: 60}, MaxBytes: MinMaxBytes,
+	})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	served := countUnitRows(response.Facts)
+	if served == 0 || served >= 60 {
+		t.Fatalf("served %d unit rows, want some but not all 60 under the byte bound", served)
+	}
+	token := pageCursor(t, response)
+	var lastID string
+	for _, fact := range response.Facts {
+		if fact.Fields["unit_kind"] == contextfabric.InvestmentUnitKind {
+			lastID = fact.Fields["work_unit_id"].(string)
+		}
+	}
+	for _, fact := range response.Facts {
+		if fact.Fields["unit_kind"] == contextfabric.InvestmentUnitPageKind && fact.Fields["units_returned"] != strconv.Itoa(served) {
+			t.Errorf("units_returned = %v, want the %d rows served", fact.Fields["units_returned"], served)
+		}
+	}
+	position, err := reader.openUnitsCursor(token, orgA, unitsRequestDigest(FactsRequest{}, readPlan{subjects: []contextfabric.SubjectRef{teamT}}))
+	if err != nil {
+		t.Fatalf("cursor: %v", err)
+	}
+	cursor, err := contextfabric.DecodeInvestmentUnitsCursor(position)
+	if err != nil || cursor.WorkUnitID != lastID {
+		t.Fatalf("cursor resumes after %q (%v), want the last row served %q", cursor.WorkUnitID, err, lastID)
+	}
+	var reason string
+	for _, row := range response.Coverage {
+		reason = row.Reason
+	}
+	if !strings.Contains(reason, "units_cut_by_max_bytes") {
+		t.Errorf("coverage reason = %q, want units_cut_by_max_bytes", reason)
+	}
+}
+
+// unit_unresolved_refs is an opaque reference: withheld from a repository-
+// restricted caller, served to an unrestricted one.
+func TestInvestmentUnitsUnresolvedHandlesAreWithheldFromARestrictedCaller(t *testing.T) {
+	capability := unitsInvestmentCapability()
+	capability.Fields = append(capability.Fields, contextfabric.FactFieldDeclaration{
+		Name: "unit_unresolved_refs", Type: contextfabric.FactFieldString, Nullable: true,
+		SubjectRef: &contextfabric.FactSubjectRefDeclaration{Kind: contractsv1.ContextFabricSubjectRepository, IDForm: contextfabric.FactSubjectIDOpaque},
+	})
+	provider := &stubProvider{capability: capability, read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		team := query.Subjects[0]
+		row := unitRowFact(team, "wu-a", "a", 5)
+		row.Fields["unit_unresolved_refs"] = strValue("ghpr:private/repo#17")
+		page := contextfabric.CanonicalFact{Kind: contextfabric.FactInvestment, Subject: team, Fields: map[string]contextfabric.FactValue{
+			"unit_kind": strValue(contextfabric.InvestmentUnitPageKind),
+		}, EvidenceRefIDs: []string{"acr:v1:team:t"}}
+		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable, Facts: []contextfabric.CanonicalFact{page, row}}, nil
+	}}
+	reader := newUnitsReader(t, provider)
+	request := FactsRequest{Kinds: []string{"investment"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}}, Units: &RequestUnits{}}
+	restricted, err := reader.Read(requestContext(), restrictedToA(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(mustJSON(t, restricted), "private/repo") {
+		t.Fatalf("a restricted caller received a handle naming a repository outside its grant: %s", mustJSON(t, restricted))
+	}
+	open, err := newUnitsReader(t, provider).Read(requestContext(), storage.Principal{OrgID: orgA, Subject: "user-2", CredentialID: "cred-2"}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(mustJSON(t, open), "ghpr:private/repo#17") {
+		t.Fatalf("an unrestricted caller lost the handle: %s", mustJSON(t, open))
+	}
+}
+
+// A cursor opens only for the organization that was issued it.
+func TestInvestmentUnitsCursorIsBoundToTheOrganization(t *testing.T) {
+	reader := newUnitsReader(t)
+	token, err := reader.sealUnitsCursor(orgA, "digest", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.openUnitsCursor(token, orgA, "digest"); err != nil {
+		t.Fatalf("own organization: %v", err)
+	}
+	if _, err := reader.openUnitsCursor(token, orgA+"-other", "digest"); err == nil {
+		t.Error("a cursor issued in one organization opened in another")
+	}
+	if _, err := reader.openUnitsCursor(token, orgA, "other-digest"); err == nil {
+		t.Error("a cursor issued for one request opened for another")
+	}
+}
+
+// A page the provider did not cut, and the budget did not cut, serves no
+// cursor: an empty token is not one.
+func TestInvestmentUnitsCompletePageServesNoCursor(t *testing.T) {
+	reader := newUnitsReader(t)
+	response := FactsResponse{Facts: []ServedFact{{
+		Kind: string(contextfabric.FactInvestment),
+		Fields: map[string]any{"unit_kind": contextfabric.InvestmentUnitPageKind, "next_cursor": "", "units_returned": "0"},
+	}}}
+	if _, err := reader.finishUnitsPage(&response, orgA, "digest", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if token, present := response.Facts[0].Fields["next_cursor"]; present {
+		t.Fatalf("next_cursor = %v on a complete page", token)
 	}
 }

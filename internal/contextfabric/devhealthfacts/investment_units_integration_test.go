@@ -54,6 +54,14 @@ func TestInvestmentUnitsMatchTheMixAndPageAgainstRealClickHouse(t *testing.T) {
 	seed("wu4", map[string]float64{"operational": 1.0}, 50, fmt.Sprintf(`{"issues":[],"prs":["%s#pr5"]}`, c))
 	seed("wu5", map[string]float64{"feature_delivery": 0.25, "quality": 0.75}, 4, fmt.Sprintf(`{"issues":["ghpr:acme/missing#7"],"prs":["%s#pr9"]}`, a))
 
+	// A unit with no PR reference is split by its own repo_id: one reference
+	// to a repository, never a pull request.
+	if err := direct.Exec(ctx,
+		`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		"wu6", at, at, repoUUID("repo-a"), 3.0, map[string]float64{"risk": 1.0}, map[string]float64{}, `{"issues":[],"prs":[]}`, at, orgID); err != nil {
+		t.Fatalf("seed wu6: %v", err)
+	}
+
 	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:team-1", Label: "team-1"}
 	read := func(req *contextfabric.InvestmentUnitsRequest) contextfabric.FactProviderResult {
 		t.Helper()
@@ -126,6 +134,17 @@ func TestInvestmentUnitsMatchTheMixAndPageAgainstRealClickHouse(t *testing.T) {
 						t.Fatalf("wu1@a share = %v, want 5 (1 of 2 refs of effort 10)", share)
 					}
 				}
+				if key.id == "wu6" {
+					if n := *f.Fields["unit_pull_request_count"].Integer; n != 0 {
+						t.Fatalf("wu6 unit_pull_request_count = %d, want 0 (the repo_id fallback is not a pull request)", n)
+					}
+					if len(f.EvidenceRefIDs) != 1 {
+						t.Fatalf("wu6 refs = %v, want the repository ref only", f.EvidenceRefIDs)
+					}
+					if math.Abs(share-3) > 1e-9 {
+						t.Fatalf("wu6 share = %v, want 3 (one of one reference)", share)
+					}
+				}
 				if key.id == "wu5" {
 					if n := *f.Fields["unit_refs_unresolved"].Integer; n != 1 {
 						t.Fatalf("wu5 unit_refs_unresolved = %d, want 1", n)
@@ -174,7 +193,7 @@ func TestInvestmentUnitsMatchTheMixAndPageAgainstRealClickHouse(t *testing.T) {
 	if pages < 2 {
 		t.Fatalf("pages = %d, want a cut first page", pages)
 	}
-	wantRows := []unit{{"wu1", a}, {"wu1", b}, {"wu2", a}, {"wu3", b}, {"wu5", a}}
+	wantRows := []unit{{"wu1", a}, {"wu1", b}, {"wu2", a}, {"wu3", b}, {"wu5", a}, {"wu6", a}}
 	var gotRows []string
 	for k := range seen {
 		gotRows = append(gotRows, k.id+"@"+k.repo)
