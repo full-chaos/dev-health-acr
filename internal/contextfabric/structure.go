@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -53,6 +54,8 @@ const (
 	structureDetailNilStore           structureVetoDetail = "nil_store"
 	structureDetailEmptyIDs           structureVetoDetail = "empty_ids"
 	structureDetailStoredResultGet    structureVetoDetail = "stored_result_get"
+	structureDetailStoredNotFound     structureVetoDetail = "stored_result_not_found"
+	structureDetailStoredUnavailable  structureVetoDetail = "stored_result_unavailable"
 	structureDetailOptionNotFound     structureVetoDetail = "option_not_found"
 	structureDetailReverifyNoVerifier structureVetoDetail = "reverify_no_verifier"
 	structureDetailReverifyUnverif    structureVetoDetail = "reverify_unverifiable"
@@ -814,7 +817,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		stored, err := e.results.Get(ctx, principal, resultID)
 		if err != nil {
 			return requestStructureCanonicalization{
-				Detail:        structureDetailStoredResultGet,
+				Detail:        storedResultGetDetail(err),
 				Veto:          structureVetoConfirmationUnresolved,
 				VetoedEntries: vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedUnresolved),
 			}
@@ -2095,4 +2098,17 @@ func recordStructureNeedsTelemetry(ctx context.Context, telemetry EngineTelemetr
 // by type assertion, that logs which exit of the receipt loop vetoed.
 type StructureVetoDetailRecorder interface {
 	RecordStructureVetoDetail(ctx context.Context, principal storage.Principal, detail structureVetoDetail)
+}
+
+// storedResultGetDetail classifies a failed prior-result read without naming
+// the result or the error text.
+func storedResultGetDetail(err error) structureVetoDetail {
+	switch {
+	case errors.Is(err, ErrInvestigationResultNotFound):
+		return structureDetailStoredNotFound
+	case errors.Is(err, ErrUnavailable):
+		return structureDetailStoredUnavailable
+	default:
+		return structureDetailStoredResultGet
+	}
 }
