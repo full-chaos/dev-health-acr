@@ -301,7 +301,7 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 	if !strings.Contains(out, "registry digest drift") {
 		t.Fatalf("no schema digest drift line: %s", out)
 	}
-	changed := []string{"aiAttributedPrs", "aiImpactSummary", "aiOpportunities", "aiWorkflowDrilldown", "capacityForecast", "home", "hotspots", "improveOpportunities", "operatingReview", "reviewEdges"}
+	changed := []string{"aiAttributedPrs", "aiImpactSummary", "aiOpportunities", "aiWorkflowDrilldown", "capacityForecast", "home", "improveOpportunities", "operatingReview", "reviewEdges"}
 	for _, op := range changed {
 		if !strings.Contains(out, "operation="+op+" ") || !strings.Contains(out, "reason=changed") {
 			t.Errorf("no changed drift line for %s: %s", op, out)
@@ -323,7 +323,8 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 // Fixture: the GET /registry body of ops 5c9a3d32, written from the output of
 // ops go run ./cmd/registrydump (the current text of every operation, the
 // legacy texts left out, as the route serves them), not captured from a host.
-// The catalogue pinned from that commit must match it with zero drift.
+// The catalogue pinned from that commit matches it except hotspots, which
+// stays pinned on its legacy text: exactly one operation drift line.
 func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T) {
 	body, err := os.ReadFile("testdata/query_registry_5c9a3d32.json")
 	if err != nil {
@@ -338,11 +339,11 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
 		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
 	}
-	if ws := warns(buf.String()); len(ws) != 0 {
-		t.Fatalf("drift against the vendored commit's registry: %q", ws)
+	if ws := warns(buf.String()); len(ws) != 1 || !strings.Contains(ws[0], "registry operation drift") || !strings.Contains(ws[0], "operation=hotspots ") || !strings.Contains(ws[0], "reason=changed") {
+		t.Fatalf("want the one hotspots legacy-pin line, got %q", ws)
 	}
-	if !strings.Contains(buf.String(), "registry digest match") || !strings.Contains(buf.String(), "operations=64") {
-		t.Fatalf("no match line with 64 ops: %s", buf)
+	if !strings.Contains(buf.String(), "pinned_document_digest=6ccfcc785f38dc4a2d3ef5c9bdc2a00e76c02ccf58d11fd1198d2d321165e781") || !strings.Contains(buf.String(), "served_document_digest=e5a6ed356c1b4deca559bf5954509b5fb7a0bb9310d7c4bb7643cd95f752e59f") {
+		t.Fatalf("the drift line does not name the legacy pin and the current text: %s", buf)
 	}
 }
 
@@ -394,9 +395,9 @@ func TestRegistryWatch_previous_pin_against_the_served_registry_shows_the_three_
 }
 
 // The registry ops ddb2e75d served, against the catalogue pinned now: the
-// same three differences seen from the other side. This is the state the new
+// digest and the new operation seen from the other side (hotspots is pinned on the text the old registry served). This is the state the new
 // pods log until the ops release that serves the new schema is rolled.
-func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_same_three(t *testing.T) {
+func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_same_two(t *testing.T) {
 	body, err := os.ReadFile("testdata/query_registry_ddb2e75d.json")
 	if err != nil {
 		t.Fatal(err)
@@ -407,11 +408,11 @@ func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_sa
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 3 {
-		t.Fatalf("%d warnings, want 3: %q", len(ws), ws)
+	if len(ws) != 2 {
+		t.Fatalf("%d warnings, want 2: %q", len(ws), ws)
 	}
 	out := strings.Join(ws, "\n")
-	if !strings.Contains(out, "registry digest drift") || !strings.Contains(out, "operation=hotspots ") || !strings.Contains(out, "reason=changed") || !strings.Contains(out, "operation=sourceHealth ") || !strings.Contains(out, "reason=missing_in_served") {
+	if !strings.Contains(out, "registry digest drift") || !strings.Contains(out, "operation=sourceHealth ") || !strings.Contains(out, "reason=missing_in_served") {
 		t.Errorf("served-side lines missing: %s", out)
 	}
 }

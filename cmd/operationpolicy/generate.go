@@ -173,6 +173,18 @@ func build(in inputs) (directread.CatalogueFile, error) {
 		if !ok {
 			return directread.CatalogueFile{}, fmt.Errorf("served operation %q is not in the registry", name)
 		}
+		if in.Policy.Served[name].PinLegacy {
+			pinned := false
+			for _, l := range legacy {
+				if l.Operation == name {
+					row, pinned = l, true
+					break
+				}
+			}
+			if !pinned {
+				return directread.CatalogueFile{}, fmt.Errorf("served operation %q pins its legacy text, the registry has none", name)
+			}
+		}
 		op, err := buildOperation(schema, row, in.Policy.Served[name])
 		if err != nil {
 			return directread.CatalogueFile{}, fmt.Errorf("operation %q: %w", name, err)

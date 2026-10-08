@@ -241,6 +241,9 @@ func TestT11GenerationRefusesNonQueries(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			in := cloneInputs(base)
+			decl := in.Policy.Served["hotspots"]
+			decl.PinLegacy = false
+			in.Policy.Served["hotspots"] = decl
 			tc.edit(&in)
 			_, err := generate(in)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
