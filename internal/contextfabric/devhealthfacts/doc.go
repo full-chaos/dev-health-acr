@@ -55,9 +55,11 @@
 //   - FactOperationalDeficiencies from recommendations_daily (fired=1 rows
 //     only -- rule outcomes Ops' own rule engine already decided, never
 //     re-evaluated here).
-//   - FactSourceHealth from backfill_log (per-provider ingestion job
-//     outcome, scoped to the organization subject -- there is no finer
-//     per-repository/per-team ingestion-health column).
+//   - FactSourceHealth from the ops GraphQL root sourceHealth, read through the
+//     direct-read operation runner (one row per sync source: provider, scope,
+//     last successful sync, latest failure time and stage). The root is
+//     org-level: the only subject is the organization, and a repository-scoped
+//     caller gets a limitation row, never rows.
 //
 // FactEvidence is deliberately NOT implemented: no ClickHouse table maps
 // honestly to it. report_provenance is schema-present but empty in every

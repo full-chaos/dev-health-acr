@@ -23,7 +23,7 @@ pull_requests	declares=pull_request:[principal_drivers state]	emits=[owned_repos
 readiness	declares=project:[period_delta principal_drivers readiness state trend_series],team:[period_delta principal_drivers readiness state trend_series]	emits=[backlog_size basis daily_readiness daily_readiness_omitted_count day estimate_coverage_ratio estimated_count provider rollup_basis team_breakdown team_count team_id team_name unestimated_count work_scope_id]
 required_children	declares=work_item:[remaining_work]	emits=[relationship_type required_child_work_item_id required_child_work_item_ref]
 reviews	declares=pull_request_review:[principal_drivers]	emits=[state]
-source_health	declares=(none)	emits=[duration_ms error_message items_synced last_synced_at provider status]
+source_health	declares=(none)	emits=[last_failure_occurred_at last_failure_stage last_sync_at provider scope]
 status	declares=work_item:[state]	emits=[status status_basis status_in_vocabulary status_provenance]
 work	declares=(none)	emits=[title]
 workload	declares=project:[period_delta principal_drivers state trend_series],team:[period_delta principal_drivers state trend_series]	emits=[backlog_size basis computed_at daily_workload daily_workload_omitted_count forecast_p50_days high_variance insufficient_history p50_basis p50_excluded_null_p50_count p50_excluded_unattributed_count p50_known_count p50_unavailable_reason rollup_basis team_breakdown team_breakdown_rows_shown team_breakdown_rows_total team_count team_id team_name throughput_mean throughput_stddev work_scope_id]

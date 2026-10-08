@@ -61,17 +61,6 @@ type Column struct {
 // devhealthsource's freshness test, which fails when production drifts
 // from what is declared here.
 var ProductionColumns = map[string][]Column{
-	"backfill_log": {
-		{Name: "job_id", Type: "String"},
-		{Name: "org_id", Type: "String"},
-		{Name: "chunk_index", Type: "UInt32"},
-		{Name: "provider", Type: "String"},
-		{Name: "items_synced", Type: "UInt32"},
-		{Name: "duration_ms", Type: "UInt64"},
-		{Name: "status", Type: "String"},
-		{Name: "error_message", Type: "String"},
-		{Name: "created_at", Type: "DateTime64(3)"},
-	},
 	"capacity_forecasts": {
 		{Name: "forecast_id", Type: "String"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
@@ -657,7 +646,6 @@ var ProductionColumns = map[string][]Column{
 // from live. A field that cannot be authored separately cannot drift
 // separately.
 var EngineFull = map[string]string{
-	"backfill_log":                            "MergeTree ORDER BY (org_id, job_id, chunk_index) SETTINGS index_granularity = 8192",
 	"capacity_forecasts":                      "ReplacingMergeTree(computed_at) ORDER BY (org_id, forecast_id) SETTINGS index_granularity = 8192",
 	"ci_pipeline_runs":                        "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id) SETTINGS index_granularity = 8192",
 	"cicd_metrics_daily":                      "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",

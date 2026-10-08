@@ -219,7 +219,7 @@ Daily/periodic tables that already pick "latest row"; an as-of query only moves 
 | `readiness.go` | `estimate_coverage_metrics_daily` | `day <= as_of` |
 | `deficiencies.go` | `recommendations_daily` | `window_end <= as_of` |
 | `workload.go` | `capacity_forecasts` | `computed_at <= as_of` (forecast is a point observation) |
-| `source_health.go` | `backfill_log` | `created_at <= as_of` (append-only MergeTree) |
+| `source_health.go` | ops `sourceHealth` root (no table) | current axis only; a non-current axis is not_applicable |
 
 The existing `row_number() … ORDER BY day DESC, computed_at DESC, cityHash64(…) DESC` tiebreaker
 stays exactly as is — only the `WHERE` gains the bound. That preserves the determinism work those

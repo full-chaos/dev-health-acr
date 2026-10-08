@@ -447,6 +447,7 @@ func TestEveryOperationIsClassifiedForTheBudgetRule(t *testing.T) {
 		"investmentFull":                 "",
 		"recommendations":                "",
 		"securityOverview":               "",
+		"sourceHealth":                   "",
 		"throughputForecast":             "",
 		"workGraphFlow":                  "",
 		"workItemTeamAttributions":       "",

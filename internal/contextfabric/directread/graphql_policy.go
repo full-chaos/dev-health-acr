@@ -100,6 +100,7 @@ var graphqlDesignExcludedRoots = map[string]string{
 	"home":                     "design r5 D.8: not a graphql_query root (served by run_operation only); outside the MCP listener ceiling",
 	"recommendations":          "design r5 D.8: not a graphql_query root (served by run_operation only); outside the MCP listener ceiling",
 	"workItemTeamAttributions": "design r5 D.8: not a graphql_query root (served by run_operation only); outside the MCP listener ceiling",
+	"sourceHealth":             "not a graphql_query root: served by run_operation and read by the source_health fact; the listener root is not opened to free-form queries in this slice",
 }
 
 // GraphQLDesignExcludedRoots returns the served run_operation roots that

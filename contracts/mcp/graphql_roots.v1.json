@@ -231,6 +231,7 @@
   "design_excluded_roots": [
     "home",
     "recommendations",
+    "sourceHealth",
     "workItemTeamAttributions"
   ]
 }
