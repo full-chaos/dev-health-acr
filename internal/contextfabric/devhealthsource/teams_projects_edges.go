@@ -700,17 +700,19 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 }
 
 // queryWorkItemTeams projects work_item -> team (OWNED_BY_TEAM) from
-// work_item_team_attributions, restricted to the primary attribution.
+// work_item_team_attributions: the primary row (is_primary = 1) and the
+// co-owner rows (is_primary = 2), one edge per team.
 //
-// is_primary = 1 is what makes this a well-defined edge rather than a fan-out:
-// live, 3304 work items carry a primary team attribution, every one resolves
-// against work_items, and ZERO work items carry more than one primary team,
-// more than one repo_id, or more than one source among their primaries
-// (all four counts verified directly). Without the is_primary filter the same
-// work item carries up to five attributions from different sources
-// (native_team, assignee_membership, issue_project, linked_issue,
-// project_ownership), which would collapse onto duplicate relationship IDs
-// and fail ContextFabricProjectionBatch.Validate() outright.
+// The edge is per (work item, team), so a co-owner team gets its own edge and
+// a work item with a primary and a co-owner row collapses onto no duplicate
+// relationship ID. Candidate rows (is_primary = 0) are excluded: without the
+// is_primary filter the same work item carries up to five attributions from
+// different sources (native_team, assignee_membership, issue_project,
+// linked_issue, project_ownership) for the same team, which would collapse
+// onto duplicate relationship IDs and fail
+// ContextFabricProjectionBatch.Validate() outright. The page key carries the
+// team id because a primary and a co-owner row of one work item share a
+// computed_at.
 //
 // Derivation is always RuleInferred, NOT canonical_structured: this table is
 // Ops' own computed attribution (its source enum spans native_team through
