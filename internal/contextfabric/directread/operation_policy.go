@@ -762,6 +762,13 @@ func validateOperation(op *OperationPolicy) error {
 					return fmt.Errorf("row id path %q is not an allowed scalar output", row)
 				}
 			}
+			if op.PrimaryListPath != "" {
+				for list := range op.topLevelLists() {
+					if !slices.ContainsFunc(s.RowIDPaths, func(row string) bool { return strings.HasPrefix(row, list+"[*].") }) {
+						return fmt.Errorf("restricted scope: list %q has no row id path, so a foreign repository in it would be served", list)
+					}
+				}
+			}
 		}
 		allConstraints = append(allConstraints, s.Constraints...)
 	}
