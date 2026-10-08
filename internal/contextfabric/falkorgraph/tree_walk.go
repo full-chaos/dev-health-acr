@@ -301,6 +301,16 @@ type treeWalkState struct {
 	collectLimit int
 }
 
+// authorizedHit is the decision on one hit of a step read: the node, and for
+// an ownership edge the edge's own authorization attributes too, the rule
+// resolveEdge applies to every edge of the generic walk.
+func (s treeWalkState) authorizedHit(hop treeHop, h walkHit) bool {
+	if hop.edge.ownership && h.rel != nil && !graphrank.AuthorizedAttributes(s.principal, s.scope, h.rel.Properties) {
+		return false
+	}
+	return s.authorized(h.to)
+}
+
 func (s treeWalkState) authorized(n *node) bool {
 	return graphrank.AuthorizedAttributes(s.principal, s.scope, toCandidateNode(n).Attributes)
 }
@@ -441,7 +451,7 @@ func (s treeWalkState) advance(hop treeHop, hits []walkHit, parents map[string]c
 	reached := map[string]walkHit{}
 	subjects := map[string]contextfabric.SubjectRef{}
 	for _, h := range hits {
-		if !s.authorized(h.to) {
+		if !s.authorizedHit(hop, h) {
 			s.deny()
 			continue
 		}
@@ -473,7 +483,7 @@ func (s treeWalkState) advance(hop treeHop, hits []walkHit, parents map[string]c
 func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]contextfabric.SubjectRef) {
 	seen := map[string]bool{}
 	for _, h := range hits {
-		if !s.authorized(h.to) {
+		if !s.authorizedHit(hop, h) {
 			s.denyOwned(hop, h.to)
 			continue
 		}

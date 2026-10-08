@@ -422,3 +422,18 @@ func TestDiscoverContextOtherCommittedTeamsDeniedProjectIsNotTheAnchorsDeniedMem
 		t.Fatalf("denied reason = %q, want none: the denied project belongs to the other team (reasons %v)", got, result.Coverage.DegradedReasons)
 	}
 }
+
+// An ownership edge the caller is denied excludes its project even when the
+// project node itself is allowed, and the project is counted denied.
+func TestDiscoverContextTeamAnchorEdgeDeniedNodeAllowedProjectIsExcludedAndCounted(t *testing.T) {
+	result, _ := discoverReach(t, reachFixture(
+		[]reachEdge{{id: "a", dstKind: "project", dstID: "p-ok"}, {id: "b", dstKind: "project", dstID: "p-edge-only", edgeAuthz: reachDenied}},
+		map[string][]string{"p-ok": reachAllowed, "p-edge-only": reachAllowed}))
+	ids := reachMemberIDs(result.Cohort)
+	if !ids["p-ok"] || ids["p-edge-only"] || len(ids) != 1 {
+		t.Fatalf("members = %v, want only p-ok", ids)
+	}
+	if got := deniedReasonCount(result); got != "cohort_denied_by_authorization:1" {
+		t.Fatalf("denied reason = %q, want cohort_denied_by_authorization:1 (reasons %v)", got, result.Coverage.DegradedReasons)
+	}
+}

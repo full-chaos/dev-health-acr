@@ -173,3 +173,34 @@ func TestDenyOwnedNamesOnlyOwnershipReach(t *testing.T) {
 		}
 	}
 }
+
+// An ownership hit is admitted only when both the edge and the node are; an
+// edge of any other hop is decided by its node alone.
+func TestAuthorizedHitDecidesOwnershipByEdgeAndNode(t *testing.T) {
+	allowed := []string{"full-chaos/dev-health-acr"}
+	denied := []string{"other/private"}
+	hit := func(edgeAuthz, nodeAuthz []string) walkHit {
+		return walkHit{
+			to:  &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "project:x", "authorization_repositories": nodeAuthz}},
+			rel: &edge{Properties: map[string]interface{}{"authorization_repositories": edgeAuthz}},
+		}
+	}
+	state := treeWalkState{principal: storage.Principal{OrgID: "org-1", RepositoryScopes: allowed}}
+	owned, other := treeHop{edge: treeEdge{ownership: true}}, treeHop{}
+	for _, c := range []struct {
+		name       string
+		hop        treeHop
+		edge, node []string
+		want       bool
+	}{
+		{"ownership both allowed", owned, allowed, allowed, true},
+		{"ownership edge denied", owned, denied, allowed, false},
+		{"ownership node denied", owned, allowed, denied, false},
+		{"other hop edge denied, node allowed", other, denied, allowed, true},
+		{"other hop node denied", other, allowed, denied, false},
+	} {
+		if got := state.authorizedHit(c.hop, hit(c.edge, c.node)); got != c.want {
+			t.Errorf("%s: authorized = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
