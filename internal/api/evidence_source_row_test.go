@@ -739,9 +739,10 @@ func TestEvidenceRouteRefusesARowOfAnotherSubject(t *testing.T) {
 // and a ref of a subject kind keeps the legacy unscoped record path.
 func TestEvidenceRouteRowKeyedRefWithoutResultIDNeverFallsBackToAStoredResult(t *testing.T) {
 	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, sourceRowGrantedRepoID+":532")
+	workItemRef := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, sourceRowGrantedRepoID+":WI-9")
 	teamRef := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "CHAOS")
 	store := memoryinvestigation.NewStore()
-	seedResult3355(t, store, "org_1", citingStoredResult("result_row_keyed_stored", ref, teamRef))
+	seedResult3355(t, store, "org_1", citingStoredResult("result_row_keyed_stored", ref, workItemRef, teamRef))
 	logs := &bytes.Buffer{}
 	app, token := sourceRowApp(t, newSourceRowTables(), store, logs)
 	get := func(ref, resultID string) *httptest.ResponseRecorder {
@@ -751,6 +752,12 @@ func TestEvidenceRouteRowKeyedRefWithoutResultIDNeverFallsBackToAStoredResult(t 
 	}
 	if rec := get(ref, ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("unscoped pull request ref with an absent row: status = %d, want 404 (no stored-result fallback): %s", rec.Code, rec.Body.String())
+	}
+	if rec := get(workItemRef, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("unscoped work item ref with an absent row: status = %d, want 404 (no stored-result fallback): %s", rec.Code, rec.Body.String())
+	}
+	if rec := get(workItemRef, "result_row_keyed_stored"); rec.Code != http.StatusOK {
+		t.Fatalf("scoped work item ref: status = %d, want 200 from the stored result: %s", rec.Code, rec.Body.String())
 	}
 	if rec := get(ref, "result_row_keyed_stored"); rec.Code != http.StatusOK {
 		t.Fatalf("scoped pull request ref: status = %d, want 200 from the stored result: %s", rec.Code, rec.Body.String())

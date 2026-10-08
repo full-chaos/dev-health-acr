@@ -227,8 +227,11 @@ func TestHandleSourceEvidenceRowKeyedRefsResolveWithoutResultID(t *testing.T) {
 
 	for _, kind := range []contractsv1.ContextFabricEvidenceEntityType{
 		contractsv1.ContextFabricEvidenceEntityTeam, contractsv1.ContextFabricEvidenceEntityRepository, contractsv1.ContextFabricEvidenceEntityProject,
+		contractsv1.ContextFabricEvidenceEntityReview, contractsv1.ContextFabricEvidenceEntityIncident, contractsv1.ContextFabricEvidenceEntityCI,
+		contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2,
+		contractsv1.ContextFabricEvidenceEntityWorkItemTeam, contractsv1.ContextFabricEvidenceEntityWorkItemDependency, contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy,
 	} {
-		ref := contractsv1.EvidenceRefID(kind, "x")
+		ref := contractsv1.ContextFabricEvidenceRefPrefix + string(kind) + ":x"
 		result, _ := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": ref}))
 		if !result.IsError || !strings.Contains(toolResultText(result), "evidence_ref_unscoped") {
 			t.Fatalf("%s must still require result_id, got %q", kind, toolResultText(result))
