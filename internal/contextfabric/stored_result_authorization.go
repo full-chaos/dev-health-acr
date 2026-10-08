@@ -643,7 +643,9 @@ func (s authorizedResultStore) Get(ctx context.Context, principal storage.Princi
 // storedResultDeniedError is ErrInvestigationResultNotFound for every caller
 // that tests with errors.Is, and carries the closed denial reason for the
 // engine's own telemetry.
-type storedResultDeniedError struct{ reason StoredResultAuthorizationReason }
+type storedResultDeniedError struct {
+	reason StoredResultAuthorizationReason
+}
 
 func (e *storedResultDeniedError) Error() string { return ErrInvestigationResultNotFound.Error() }
 func (e *storedResultDeniedError) Unwrap() error { return ErrInvestigationResultNotFound }
