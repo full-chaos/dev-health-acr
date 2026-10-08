@@ -125,7 +125,7 @@ func TestInvestmentUnitsRestrictedCallerSeesOnlyGrantedRepositoryRows(t *testing
 	for _, row := range response.Coverage {
 		reason = row.Reason
 	}
-	if !strings.Contains(reason, "units_not_visible 1") || !strings.Contains(reason, "refs_unresolved 3") {
+	if !strings.Contains(reason, "units_not_visible 1 (aggregate over every owned repository)") || !strings.Contains(reason, "refs_unresolved 3") {
 		t.Errorf("coverage reason = %q, want units_not_visible 1 and refs_unresolved 3", reason)
 	}
 	if len(seen) != 1 || seen[0].Max != 2 || seen[0].Cursor != nil {
@@ -435,10 +435,121 @@ func TestInvestmentUnitsCompletePageServesNoCursor(t *testing.T) {
 		Kind:   string(contextfabric.FactInvestment),
 		Fields: map[string]any{"unit_kind": contextfabric.InvestmentUnitPageKind, "next_cursor": "", "units_returned": "0"},
 	}}}
-	if _, err := reader.finishUnitsPage(&response, orgA, "digest", "", 0); err != nil {
+	if _, err := reader.finishUnitsPage(&response, MinMaxBytes, orgA, "digest", "", 0); err != nil {
 		t.Fatal(err)
 	}
 	if token, present := response.Facts[0].Fields["next_cursor"]; present {
 		t.Fatalf("next_cursor = %v on a complete page", token)
 	}
+}
+
+func bigUnitsProvider(rows int, pad int, seen *[]contextfabric.InvestmentUnitsRequest) *unitsCapture {
+	return &unitsCapture{seen: seen, stubProvider: stubProvider{capability: unitsInvestmentCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		team := query.Subjects[0]
+		facts := []contextfabric.CanonicalFact{{Kind: contextfabric.FactInvestment, Subject: team, Fields: map[string]contextfabric.FactValue{
+			"unit_kind": strValue(contextfabric.InvestmentUnitPageKind), "units_returned": intValue(int64(rows)),
+		}, EvidenceRefIDs: []string{"acr:v1:team:t"}}}
+		for i := 0; i < rows; i++ {
+			facts = append(facts, unitRowFact(team, fmt.Sprintf("wu-%02d-%s", i, strings.Repeat("x", pad)), "a", float64(1000-i)))
+		}
+		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable, Facts: facts}, nil
+	}}}
+}
+
+// The final document, after the cursor is sealed and the cut is noted, is
+// within max_bytes, at every bound near the edge of what fits.
+func TestInvestmentUnitsFinalDocumentFitsMaxBytes(t *testing.T) {
+	var seen []contextfabric.InvestmentUnitsRequest
+	reader := newUnitsReader(t, bigUnitsProvider(40, 30, &seen))
+	for limit := MinMaxBytes; limit <= MinMaxBytes+1500; limit += 53 {
+		response, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{
+			Kinds: []string{"investment"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}},
+			Units: &RequestUnits{MaxUnits: 40}, MaxBytes: limit,
+		})
+		if err != nil {
+			t.Fatalf("limit %d: %v", limit, err)
+		}
+		if size := len(mustJSON(t, response)); size > limit && !(response.Truncation != nil && response.Truncation.CoverageOverBudget) {
+			t.Fatalf("limit %d: final document is %d bytes", limit, size)
+		}
+		if served := countUnitRows(response.Facts); served < 40 {
+			if response.Truncation == nil || response.Truncation.FactsOmitted != 40-served {
+				t.Fatalf("limit %d: served %d of 40 rows but truncation = %+v, want %d facts omitted", limit, served, response.Truncation, 40-served)
+			}
+		}
+	}
+}
+
+// When not one unit row fits, no cursor is served (it could not advance) and
+// the coverage says to raise max_bytes.
+func TestInvestmentUnitsNoRowFitsServesNoCursor(t *testing.T) {
+	var seen []contextfabric.InvestmentUnitsRequest
+	reader := newUnitsReader(t, bigUnitsProvider(3, 6000, &seen))
+	response, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{
+		Kinds: []string{"investment"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}},
+		Units: &RequestUnits{MaxUnits: 3}, MaxBytes: MinMaxBytes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := countUnitRows(response.Facts); rows != 0 {
+		t.Fatalf("served %d rows, want none to fit", rows)
+	}
+	for _, fact := range response.Facts {
+		if _, present := fact.Fields["next_cursor"]; present {
+			t.Fatal("a cursor that cannot advance was served")
+		}
+	}
+	var reason string
+	for _, row := range response.Coverage {
+		reason = row.Reason
+	}
+	if !strings.Contains(reason, "raise max_bytes") {
+		t.Fatalf("coverage reason = %q, want the raise-max_bytes note", reason)
+	}
+}
+
+type unitsRecorder struct{ records []FactsReadRecord }
+
+func (r *unitsRecorder) RecordDirectFactsRead(_ context.Context, _ storage.Principal, record FactsReadRecord) {
+	r.records = append(r.records, record)
+}
+
+// A refused units cursor is recorded with its cause, and an accepted one too.
+func TestInvestmentUnitsCursorOutcomesAreRecorded(t *testing.T) {
+	var seen []contextfabric.InvestmentUnitsRequest
+	provider := &unitsCapture{stubProvider: *unitsProvider(&seen), seen: &seen}
+	reader := newUnitsReader(t, provider)
+	recorder := &unitsRecorder{}
+	reader.recorder = recorder
+	team := RequestSubject{Kind: "team", CanonicalID: teamT.CanonicalID}
+	first, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{Kinds: []string{"investment"}, Subjects: []RequestSubject{team}, Units: &RequestUnits{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := pageCursor(t, first)
+	if _, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{Kinds: []string{"investment"}, Subjects: []RequestSubject{team}, Units: &RequestUnits{Cursor: token}}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = reader.Read(requestContext(), restrictedToA(), FactsRequest{Kinds: []string{"investment"}, Subjects: []RequestSubject{team}, Window: &RequestWindow{Mode: WindowTrailing, Days: 3}, Units: &RequestUnits{Cursor: token}})
+	_, _ = reader.Read(requestContext(), restrictedToA(), FactsRequest{Kinds: []string{"investment"}, Subjects: []RequestSubject{team}, Units: &RequestUnits{Cursor: "garbage"}})
+	var got []string
+	for _, record := range recorder.records {
+		got = append(got, record.UnitsCursor)
+	}
+	want := []string{"", "accepted", "stale", "invalid"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("recorded cursor outcomes = %v, want %v", got, want)
+	}
+	if !strings.Contains(strings.Join(argsAsStrings(FactsReadLogArgs(restrictedToA(), FactsReadRecord{UnitsCursor: "stale"})), " "), "units_cursor stale") {
+		t.Error("the trace line does not carry units_cursor")
+	}
+}
+
+func argsAsStrings(args []any) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = fmt.Sprint(a)
+	}
+	return out
 }

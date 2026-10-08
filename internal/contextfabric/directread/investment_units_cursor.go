@@ -116,51 +116,100 @@ func unitPositionOf(fact ServedFact) (string, bool) {
 }
 
 // finishUnitsPage replaces the provider's plain cursor with a sealed one and
-// keeps the cursor honest when the byte budget dropped unit rows after the
-// provider chose it: the cursor then resumes after the last row actually
-// served. It returns how many unit rows the budget dropped.
-func (r *FactsReader) finishUnitsPage(response *FactsResponse, orgID, digest, incoming string, rowsBeforeBudget int) (budgetDropped int, err error) {
-	pageIndex, kept := -1, 0
-	var last *ServedFact
+// keeps the page honest under the byte bound. The provider chose its cursor
+// before the budget dropped unit rows, and sealing the cursor and noting the
+// cut add bytes after it: so the page is re-fitted until the FINAL document is
+// within maxBytes, and the cursor resumes after the last row actually served.
+// A page where not one row fits serves no cursor (it could not advance) and
+// says so. It returns how many unit rows the budget dropped.
+func (r *FactsReader) finishUnitsPage(response *FactsResponse, maxBytes int, orgID, digest, incoming string, rowsBeforeBudget int) (dropped int, err error) {
+	pageIndex := -1
 	for i := range response.Facts {
-		switch unitFactKind(response.Facts[i]) {
-		case contextfabric.InvestmentUnitPageKind:
+		if unitFactKind(response.Facts[i]) == contextfabric.InvestmentUnitPageKind {
 			pageIndex = i
-		case contextfabric.InvestmentUnitKind:
-			kept++
-			last = &response.Facts[i]
+			break
 		}
 	}
-	budgetDropped = rowsBeforeBudget - kept
+	kept := countUnitRows(response.Facts)
+	dropped = rowsBeforeBudget - kept
 	if pageIndex < 0 {
-		return budgetDropped, nil
+		return dropped, nil
 	}
 	fields := response.Facts[pageIndex].Fields
-	position, more := "", false
-	if token, ok := fields["next_cursor"].(string); ok && token != "" {
-		position, more = token, true
+	providerToken, _ := fields["next_cursor"].(string)
+	baseReasons := make([]string, len(response.Coverage))
+	for i := range response.Coverage {
+		baseReasons[i] = response.Coverage[i].Reason
 	}
-	if budgetDropped > 0 {
-		more = true
-		position = incoming
-		if last != nil {
-			if p, ok := unitPositionOf(*last); ok {
-				position = p
+	lastRow := func() *ServedFact {
+		for i := len(response.Facts) - 1; i >= 0; i-- {
+			if unitFactKind(response.Facts[i]) == contextfabric.InvestmentUnitKind {
+				return &response.Facts[i]
 			}
 		}
-		fields["units_returned"] = strconv.Itoa(kept)
+		return nil
 	}
-	if !more {
-		delete(fields, "next_cursor")
-		return budgetDropped, nil
+	apply := func() error {
+		position, more := providerToken, providerToken != ""
+		if dropped > 0 {
+			more, position = true, incoming
+			if last := lastRow(); last != nil {
+				if p, ok := unitPositionOf(*last); ok {
+					position = p
+				}
+			}
+			fields["units_returned"] = strconv.Itoa(kept)
+		}
+		noProgress := dropped > 0 && kept == 0
+		for i := range response.Coverage {
+			response.Coverage[i].Reason = baseReasons[i]
+		}
+		noteUnitsBudget(response.Coverage, dropped, noProgress)
+		if !more || noProgress {
+			delete(fields, "next_cursor")
+			return nil
+		}
+		sealed, sealErr := r.sealUnitsCursor(orgID, digest, position)
+		if sealErr != nil {
+			delete(fields, "next_cursor")
+			return sealErr
+		}
+		fields["next_cursor"] = sealed
+		return nil
 	}
-	sealed, err := r.sealUnitsCursor(orgID, digest, position)
-	if err != nil {
-		delete(fields, "next_cursor")
-		return budgetDropped, err
+	if err := apply(); err != nil {
+		return dropped, err
 	}
-	fields["next_cursor"] = sealed
-	return budgetDropped, nil
+	size := func() int {
+		encoded, marshalErr := json.Marshal(response)
+		if marshalErr != nil {
+			return maxBytes + 1
+		}
+		return len(encoded)
+	}
+	extra := 0
+	for kept > 0 && size() > maxBytes {
+		for i := len(response.Facts) - 1; i >= 0; i-- {
+			if unitFactKind(response.Facts[i]) == contextfabric.InvestmentUnitKind {
+				response.Facts = append(response.Facts[:i], response.Facts[i+1:]...)
+				break
+			}
+		}
+		kept--
+		dropped++
+		extra++
+		if err := apply(); err != nil {
+			return dropped, err
+		}
+	}
+	if dropped > 0 {
+		if response.Truncation == nil {
+			response.Truncation = &Truncation{TruncatedBy: TruncatedByMaxBytes}
+		}
+		response.Truncation.FactsOmitted += extra
+		response.Status = StatusPartial
+	}
+	return dropped, nil
 }
 
 func countUnitRows(facts []ServedFact) int {

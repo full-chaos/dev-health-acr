@@ -368,8 +368,12 @@ type FactsReadRecord struct {
 	EvidenceWithheld  int
 	ReferencesRefused int
 	TruncatedBy       string
-	Bytes             int
-	Latency           time.Duration
+	// UnitsCursor is what a units page did with a cursor: issued, accepted,
+	// stale, invalid or foreign_org (the read_relationships cursor
+	// vocabulary); empty when the read carried no units argument.
+	UnitsCursor string
+	Bytes       int
+	Latency     time.Duration
 }
 
 // NewFactsReader builds the tool core. gate is the root subject gate,
@@ -467,6 +471,8 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 		if token := strings.TrimSpace(request.Units.Cursor); token != "" {
 			position, err := r.openUnitsCursor(token, principal.OrgID, unitsDigest)
 			if err != nil {
+				outcome, _ := cursorOutcomeOf(err)
+				record.UnitsCursor = string(outcome)
 				return response, invalid("units.cursor is not a cursor this server issued for this subject and window")
 			}
 			if position != "" {
@@ -477,6 +483,7 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 				plan.units.Cursor = &cursor
 			}
 			unitsIncoming = position
+			record.UnitsCursor = string(CursorAccepted)
 		}
 		ctx = contextfabric.WithInvestmentUnits(ctx, *plan.units)
 	}
@@ -534,12 +541,10 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 	unitRows := countUnitRows(response.Facts)
 	response.Truncation = applyBudget(&response, plan.echo.MaxBytes)
 	if plan.units != nil {
-		dropped, sealErr := r.finishUnitsPage(&response, principal.OrgID, unitsDigest, unitsIncoming, unitRows)
-		if sealErr != nil {
+		if _, sealErr := r.finishUnitsPage(&response, plan.echo.MaxBytes, principal.OrgID, unitsDigest, unitsIncoming, unitRows); sealErr != nil {
 			response.Status = StatusUnavailable
 			return response, fmt.Errorf("%w: units cursor: %w", ErrFactsInternal, sealErr)
 		}
-		noteUnitsBudget(response.Coverage, dropped)
 	}
 	if response.Truncation != nil {
 		record.TruncatedBy = response.Truncation.TruncatedBy
@@ -1194,10 +1199,10 @@ func noteUnitsCoverage(rows []CoverageRow, facts []ServedFact, notVisible int) {
 		}
 		var notes []string
 		if notVisible > 0 {
-			notes = append(notes, fmt.Sprintf("units_not_visible %d", notVisible))
+			notes = append(notes, fmt.Sprintf("units_not_visible %d (aggregate over every owned repository)", notVisible))
 		}
 		if unresolved > 0 {
-			notes = append(notes, fmt.Sprintf("refs_unresolved %d", unresolved))
+			notes = append(notes, fmt.Sprintf("refs_unresolved %d (aggregate over every owned repository)", unresolved))
 		}
 		if len(notes) == 0 {
 			continue
@@ -1211,16 +1216,20 @@ func noteUnitsCoverage(rows []CoverageRow, facts []ServedFact, notVisible int) {
 	}
 }
 
-// noteUnitsBudget says how many unit rows the byte budget cut from a page.
-func noteUnitsBudget(rows []CoverageRow, dropped int) {
+// noteUnitsBudget says how many unit rows the byte budget cut from a page, and
+// that a page where none fits serves no cursor.
+func noteUnitsBudget(rows []CoverageRow, dropped int, noProgress bool) {
 	if dropped <= 0 {
 		return
+	}
+	note := fmt.Sprintf("units_cut_by_max_bytes %d: next_cursor resumes after the last row served", dropped)
+	if noProgress {
+		note = fmt.Sprintf("units_cut_by_max_bytes %d: no unit row fits max_bytes, so no next_cursor is served; raise max_bytes", dropped)
 	}
 	for i := range rows {
 		if rows[i].Kind != string(contextfabric.FactInvestment) {
 			continue
 		}
-		note := fmt.Sprintf("units_cut_by_max_bytes %d: next_cursor resumes after the last row served", dropped)
 		if rows[i].Reason == "" {
 			rows[i].Reason = note
 		} else {

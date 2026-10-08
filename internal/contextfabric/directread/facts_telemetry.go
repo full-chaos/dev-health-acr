@@ -16,7 +16,7 @@ const FactsReadLogMessage = "context fabric direct read"
 // vocabulary values only. Never a subject id, a label, a fact value or an
 // error text. The caller appends request_id.
 func FactsReadLogArgs(principal storage.Principal, record FactsReadRecord) []any {
-	return []any{
+	args := []any{
 		"tool", "read_facts",
 		"org_id", contextfabric.SanitizeLogAttr(principal.OrgID),
 		"status", contextfabric.SanitizeLogAttr(record.Status),
@@ -36,6 +36,10 @@ func FactsReadLogArgs(principal storage.Principal, record FactsReadRecord) []any
 		"bytes", record.Bytes,
 		"latency_ms", record.Latency.Milliseconds(),
 	}
+	if record.UnitsCursor != "" {
+		args = append(args, "units_cursor", contextfabric.SanitizeLogAttr(record.UnitsCursor))
+	}
+	return args
 }
 
 // SlogFactsRecorder is the production FactsRecorder.
