@@ -280,6 +280,61 @@ func TestStoredResultAuthorizationLineCertifiesAgainstItsSpecification(t *testin
 	}
 }
 
+// A confirmed handle's applied value is a literal (a pull request number) when
+// it has a handle shape: it names no subject, so the identity check falls on the
+// result's committed subject. A handle value that is a node id is still decided
+// as one.
+func TestAConfirmedHandleLiteralCarriesNoIdentity(t *testing.T) {
+	granted := map[string]interface{}{"authorization_repositories": []string{hostedTestRepository}}
+	other := map[string]interface{}{"authorization_repositories": []string{"other-org/secret-service"}}
+	nodes := map[string]map[string]interface{}{
+		"project\x00project:granted": granted,
+		"project\x00project:secret":  other,
+	}
+	store := memoryinvestigation.NewStore()
+	type cell struct {
+		name   string
+		served bool
+		result contractsv1.ContextFabricInvestigationResult
+	}
+	var cells []cell
+	for _, tc := range []struct {
+		name      string
+		committed string
+		handle    string
+		served    bool
+	}{
+		{"literal/committed granted", "project:granted", "747", true},
+		{"literal/committed ungranted", "project:secret", "747", false},
+		{"node id/committed granted/ungranted node", "project:granted", "project:secret", false},
+		{"node id/committed granted/no node", "project:granted", "project:nowhere", false},
+		{"node id/committed granted/granted node", "project:granted", "project:granted", true},
+	} {
+		result := validContextFabricInvestigationResult()
+		result.ResultID = fmt.Sprintf("result_handle_%d", len(cells))
+		result.SubjectResolution.Committed = []contractsv1.ContextFabricSubjectRef{{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: tc.committed, Label: "Committed"}}
+		result.SubjectResolution.Candidates = []contractsv1.ContextFabricSubjectCandidate{}
+		result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{{
+			Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedValue: tc.handle, Source: contractsv1.ContextFabricStructureSourceReceipt,
+			ReceiptID: "handr_0000000000000000000000aa", PriorResultID: "result_prior_" + result.ResultID,
+			Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+		}}
+		seedResult3355(t, store, "org_1", result)
+		cells = append(cells, cell{name: tc.name, served: tc.served, result: result})
+	}
+	app, _ := newParityHostedAppWithLogs(t, nil, ownGrantStore{store}, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, &bytes.Buffer{})
+	app.runtime.StoredResultGate = contextfabric.NewStoredResultGate(subjectNodeGraph{nodes: nodes})
+	token := storedServingCredential(t, app, []string{hostedTestRepository})
+	for _, c := range cells {
+		req := investigationResultRequest(t, token, c.result.ResultID)
+		rec := httptest.NewRecorder()
+		app.Handler().ServeHTTP(rec, req)
+		if (rec.Code == http.StatusOK) != c.served {
+			t.Errorf("%s: status %d, want served=%t", c.name, rec.Code, c.served)
+		}
+	}
+}
+
 // A subject can be named by canonical id alone -- a carried structure
 // confirmation (anchor, candidate, handle) stores only the id. Such an identity
 // is decided by every graph node carrying the id: a result whose current
@@ -288,13 +343,13 @@ func TestStoredResultAuthorizationLineCertifiesAgainstItsSpecification(t *testin
 func TestAStoredResultNamingAnUngrantedSubjectByIDAloneIsRefused(t *testing.T) {
 	granted := map[string]interface{}{"authorization_repositories": []string{hostedTestRepository}}
 	other := map[string]interface{}{"authorization_repositories": []string{"other-org/secret-service"}}
-	current := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_current", Label: "Current"}
+	current := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project:current", Label: "Current"}
 	nodes := map[string]map[string]interface{}{
-		"project\x00project_current": granted,
-		"project\x00project_granted": granted,
-		"project\x00project_secret":  other,
-		"team\x00project_split":      granted,
-		"project\x00project_split":   other,
+		"project\x00project:current": granted,
+		"project\x00project:granted": granted,
+		"project\x00project:secret":  other,
+		"team\x00project:split":      granted,
+		"project\x00project:split":   other,
 	}
 	store := memoryinvestigation.NewStore()
 	type cell struct {
@@ -308,7 +363,7 @@ func TestAStoredResultNamingAnUngrantedSubjectByIDAloneIsRefused(t *testing.T) {
 		for _, target := range []struct {
 			value  string
 			served bool
-		}{{"project_granted", true}, {"project_secret", false}, {"project_split", false}, {"project_nowhere", false}} {
+		}{{"project:granted", true}, {"project:secret", false}, {"project:split", false}, {"project:nowhere", false}} {
 			result := validContextFabricInvestigationResult()
 			result.ResultID = fmt.Sprintf("result_unkinded_%s_%s", member, target.value)
 			result.DirectJudgment = "JUDGMENT-" + result.ResultID

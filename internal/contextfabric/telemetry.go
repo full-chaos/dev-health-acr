@@ -637,6 +637,13 @@ func (t SlogEngineTelemetry) RecordStructureReceipt(ctx context.Context, princip
 	t.logger.InfoContext(ctx, "context fabric structure receipt", args...)
 }
 
+// RecordStructureVetoDetail logs which receipt-loop exit vetoed a follow-up.
+// detail is a closed vocabulary; it carries no ids or values.
+func (t SlogEngineTelemetry) RecordStructureVetoDetail(ctx context.Context, principal storage.Principal, detail structureVetoDetail) {
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "detail", SanitizeLogAttr(string(detail))}, requestIDLogAttrs(ctx)...)
+	t.logger.WarnContext(ctx, "context fabric structure receipt veto", args...)
+}
+
 // RecordStructureExplicit (CHAOS-3972 P3) mirrors RecordStructureReceipt's
 // own logging shape exactly, for the explicit (non-receipt) structure
 // fields.

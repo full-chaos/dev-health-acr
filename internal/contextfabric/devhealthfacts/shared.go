@@ -513,7 +513,11 @@ import (
 // own reach, never from the question text or another committed subject. A
 // candidate saved before v101 may hold a cohort of text-matched repositories
 // and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v101"
+//
+// v103 -> v104: a prior result that echoes a handle literal is readable by a
+// follow-up turn from a scoped caller. A candidate saved before v104 may hold
+// the no-match answer that refusal produced and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v104"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
