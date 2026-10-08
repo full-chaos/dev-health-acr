@@ -655,6 +655,9 @@ func TestGraphQLBudgetAndUpstreamMapping(t *testing.T) {
 			if carried := name == "graphql errors"; strings.Contains(string(raw), "secret upstream text") != carried {
 				t.Fatalf("upstream text carried=%v, expected only for graphql errors: %s", carried, raw)
 			}
+			if carried := name == "graphql errors"; strings.Contains(bad.logs.String(), `"error_message":"secret upstream text"`) != carried {
+				t.Fatalf("log error_message carried=%v:\n%s", carried, bad.logs.String())
+			}
 		})
 	}
 }
