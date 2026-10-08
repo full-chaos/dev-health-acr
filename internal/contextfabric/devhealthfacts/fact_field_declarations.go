@@ -851,8 +851,17 @@ func investmentUnitFields() []fieldDecl {
 	for _, theme := range canonicalInvestmentThemes {
 		fields = append(fields, fNum("unit_"+contextfabric.FactFieldTheme(theme), "ratio"))
 	}
+	// The page fact's counts and totals are taken over every row of the page,
+	// including rows the reader drops for a caller who may not read their
+	// repository, so they are aggregates: served with the all-owned-
+	// repositories label like the mix they sum to.
+	pageAggregates := map[string]bool{
+		"units_returned": true, "page_share_total": true, "units_refs_unresolved": true,
+		"scope_share_total": true, "scope_unit_rows": true,
+	}
 	for i := range fields {
 		fields[i].Nullable = true
+		fields[i].Aggregate = pageAggregates[fields[i].Name]
 	}
 	return fields
 }

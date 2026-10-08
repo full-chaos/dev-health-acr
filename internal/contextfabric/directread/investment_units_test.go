@@ -27,8 +27,8 @@ func unitsInvestmentCapability() contextfabric.FactCapability {
 			nullable(contextfabric.FactFieldDeclaration{Name: "work_unit_id", Type: contextfabric.FactFieldString}),
 			nullable(contextfabric.FactFieldDeclaration{Name: "repository_id", Type: contextfabric.FactFieldString, SubjectRef: repoRef}),
 			nullable(contextfabric.FactFieldDeclaration{Name: "share_in_scope", Type: contextfabric.FactFieldNumber}),
-			nullable(contextfabric.FactFieldDeclaration{Name: "units_returned", Type: contextfabric.FactFieldInteger}),
-			nullable(contextfabric.FactFieldDeclaration{Name: "units_refs_unresolved", Type: contextfabric.FactFieldInteger}),
+			nullable(contextfabric.FactFieldDeclaration{Name: "units_returned", Type: contextfabric.FactFieldInteger, Aggregate: true}),
+			nullable(contextfabric.FactFieldDeclaration{Name: "units_refs_unresolved", Type: contextfabric.FactFieldInteger, Aggregate: true}),
 			nullable(contextfabric.FactFieldDeclaration{Name: "next_cursor", Type: contextfabric.FactFieldString}),
 		},
 	}
@@ -99,6 +99,11 @@ func TestInvestmentUnitsRestrictedCallerSeesOnlyGrantedRepositoryRows(t *testing
 	for _, fact := range response.Facts {
 		if fact.Fields["unit_kind"] == contextfabric.InvestmentUnitPageKind {
 			pages++
+		}
+	}
+	for _, fact := range response.Facts {
+		if fact.Fields["unit_kind"] == contextfabric.InvestmentUnitPageKind && (fact.AggregateScope != "all_owned_repositories" || len(fact.AggregateFields) != 2) {
+			t.Errorf("page fact aggregate label = %q %v, want all_owned_repositories over its 2 declared aggregates", fact.AggregateScope, fact.AggregateFields)
 		}
 	}
 	if pages != 1 {

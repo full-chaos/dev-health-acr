@@ -168,3 +168,21 @@ func TestUnitFactBoundsHoldAtTheirEdges(t *testing.T) {
 		t.Errorf("unit_effort_value = %v, want 11", got)
 	}
 }
+
+// The page fact's counts and totals cover rows a restricted caller cannot
+// read, so every one of them is declared an aggregate.
+func TestUnitPageTotalsAreDeclaredAggregates(t *testing.T) {
+	t.Parallel()
+	capability := newInvestmentProvider(nil).Capability()
+	for _, name := range []string{"units_returned", "page_share_total", "units_refs_unresolved", "scope_share_total", "scope_unit_rows"} {
+		field, ok := capability.FieldDeclaration(name, contextfabric.SubjectTeam)
+		if !ok || !field.Aggregate {
+			t.Errorf("%s: declared=%v aggregate=%v, want an aggregate", name, ok, field.Aggregate)
+		}
+	}
+	for _, name := range []string{"share_in_scope", "work_unit_id", "next_cursor"} {
+		if field, ok := capability.FieldDeclaration(name, contextfabric.SubjectTeam); ok && field.Aggregate {
+			t.Errorf("%s must not be an aggregate", name)
+		}
+	}
+}
