@@ -22,7 +22,7 @@ func TestStoredResultGateDoesNotLookUpAHandleValueAsANode(t *testing.T) {
 			{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedValue: "747"},
 		}
 		graph := &gateGraph{capturingGraphReader: &capturingGraphReader{}, outcomes: map[string]StoredSubjectOutcome{SubjectMapKey(project): StoredSubjectAdmitted}}
-		decision := NewStoredResultGate(graph).Authorize(context.Background(), principal,
+		decision := NewStoredResultGate(graph).WithHandleLiteralMatcher(func(value string) bool { return value == "747" }).Authorize(context.Background(), principal,
 			StoredInvestigationResult{Result: result, GrantDigest: StoredResultGrantDigest(principal)}, StoredResultSurfacePriorResult)
 		if decision.Decision != StoredResultAdmitted || decision.AbsentCount != 0 {
 			t.Fatalf("scope %v: decision=%s reason=%s absent=%d, want admitted with no absent subject", principal.RepositoryScopes, decision.Decision, decision.Reason, decision.AbsentCount)
@@ -30,15 +30,16 @@ func TestStoredResultGateDoesNotLookUpAHandleValueAsANode(t *testing.T) {
 	}
 }
 
-// Every structure member is classified: only a member whose applied value is a
+// Every structure member is classified: a member whose applied value is a
 // canonical id (anchor and candidate options carry opt.CanonicalID) reaches the
-// graph decision; kind, handle and window values are literals.
+// graph decision; a handle's value does too unless it is a handle literal
+// (StoredResultGate.subjectsOf); kind and window values are literals.
 func TestStoredSubjectStructureMembersCoverTheVocabulary(t *testing.T) {
 	canonical := map[contractsv1.ContextFabricStructureNeedKind]bool{
 		contractsv1.ContextFabricStructureNeedSubjectAnchor:    true,
 		contractsv1.ContextFabricStructureNeedSubjectCandidate: true,
 		contractsv1.ContextFabricStructureNeedExpectedKind:     false,
-		contractsv1.ContextFabricStructureNeedSubjectHandle:    false,
+		contractsv1.ContextFabricStructureNeedSubjectHandle:    true,
 		contractsv1.ContextFabricStructureNeedWindow:           false,
 	}
 	for _, member := range contractsv1.ContextFabricStructureNeedKindVocabulary() {

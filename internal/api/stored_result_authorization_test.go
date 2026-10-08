@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -277,6 +278,61 @@ func TestStoredResultAuthorizationLineCertifiesAgainstItsSpecification(t *testin
 				t.Fatalf("certify: %v\n%s", err, logs.String())
 			}
 		})
+	}
+}
+
+// A confirmed handle's applied value is a literal (a pull request number) when
+// it has a handle shape: it names no subject, so the identity check falls on the
+// result's committed subject. A handle value that is a node id is still decided
+// as one.
+func TestAConfirmedHandleLiteralCarriesNoIdentity(t *testing.T) {
+	granted := map[string]interface{}{"authorization_repositories": []string{hostedTestRepository}}
+	other := map[string]interface{}{"authorization_repositories": []string{"other-org/secret-service"}}
+	nodes := map[string]map[string]interface{}{
+		"project\x00project_granted": granted,
+		"project\x00project_secret":  other,
+	}
+	store := memoryinvestigation.NewStore()
+	type cell struct {
+		name   string
+		served bool
+		result contractsv1.ContextFabricInvestigationResult
+	}
+	var cells []cell
+	for _, tc := range []struct {
+		name      string
+		committed string
+		handle    string
+		served    bool
+	}{
+		{"literal/committed granted", "project_granted", "747", true},
+		{"literal/committed ungranted", "project_secret", "747", false},
+		{"node id/committed granted/ungranted node", "project_granted", "project_secret", false},
+		{"node id/committed granted/no node", "project_granted", "project_nowhere", false},
+		{"node id/committed granted/granted node", "project_granted", "project_granted", true},
+	} {
+		result := validContextFabricInvestigationResult()
+		result.ResultID = fmt.Sprintf("result_handle_%d", len(cells))
+		result.SubjectResolution.Committed = []contractsv1.ContextFabricSubjectRef{{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: tc.committed, Label: "Committed"}}
+		result.SubjectResolution.Candidates = []contractsv1.ContextFabricSubjectCandidate{}
+		result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{{
+			Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedValue: tc.handle, Source: contractsv1.ContextFabricStructureSourceReceipt,
+			ReceiptID: "handr_0000000000000000000000aa", PriorResultID: "result_prior_" + result.ResultID,
+			Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+		}}
+		seedResult3355(t, store, "org_1", result)
+		cells = append(cells, cell{name: tc.name, served: tc.served, result: result})
+	}
+	app, _ := newParityHostedAppWithLogs(t, nil, ownGrantStore{store}, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, &bytes.Buffer{})
+	app.runtime.StoredResultGate = contextfabric.NewStoredResultGate(subjectNodeGraph{nodes: nodes}).WithHandleLiteralMatcher(graphrank.IsHandleLiteral)
+	token := storedServingCredential(t, app, []string{hostedTestRepository})
+	for _, c := range cells {
+		req := investigationResultRequest(t, token, c.result.ResultID)
+		rec := httptest.NewRecorder()
+		app.Handler().ServeHTTP(rec, req)
+		if (rec.Code == http.StatusOK) != c.served {
+			t.Errorf("%s: status %d, want served=%t", c.name, rec.Code, c.served)
+		}
 	}
 }
 

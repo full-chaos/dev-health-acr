@@ -236,6 +236,36 @@ type StoredResultAuthorizationRecorder interface {
 type StoredResultGate struct {
 	graph    GraphReader
 	subjects StoredSubjectAuthorizer
+	// handleLiteral reports whether a confirmed handle's applied value is a
+	// handle literal (a pull request number) rather than a canonical subject
+	// id. nil means no value is known to be a literal.
+	handleLiteral func(value string) bool
+}
+
+// WithHandleLiteralMatcher sets how the gate tells a handle literal from a
+// canonical subject id and returns the gate.
+func (g *StoredResultGate) WithHandleLiteralMatcher(matches func(value string) bool) *StoredResultGate {
+	g.handleLiteral = matches
+	return g
+}
+
+// subjectsOf is StoredResultSubjects with one guard: a confirmed handle whose
+// applied value is a handle literal carries no identity, so it names no
+// subject. The identity the result commits to is in its committed subjects and
+// its anchor and candidate entries, which are still decided.
+func (g *StoredResultGate) subjectsOf(result InvestigationResult) []SubjectRef {
+	if g == nil || g.handleLiteral == nil {
+		return StoredResultSubjects(result)
+	}
+	kept := make([]contractsv1.ContextFabricConfirmedStructureEntry, 0, len(result.ConfirmedStructure))
+	for _, entry := range result.ConfirmedStructure {
+		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectHandle && g.handleLiteral(entry.AppliedValue) {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	result.ConfirmedStructure = kept
+	return StoredResultSubjects(result)
 }
 
 // NewStoredResultGate builds a gate over graph. The graph must implement
@@ -306,7 +336,7 @@ func (g *StoredResultGate) decide(ctx context.Context, principal storage.Princip
 		PrincipalScope:       classifyStoredResultPrincipalScope(principal),
 		RepositoryScopeCount: len(principal.RepositoryScopes),
 	}
-	subjects := StoredResultSubjects(result)
+	subjects := g.subjectsOf(result)
 	decision.SubjectCount = len(subjects)
 
 	groups := storedResultGroups(result)
@@ -555,11 +585,13 @@ func StoredResultSubjects(result InvestigationResult) []SubjectRef {
 
 // storedSubjectStructureMembers are the confirmed-structure members whose
 // applied value is a subject identity rather than a kind or a window. A
+// handle's value is an identity only when it is not a handle literal. A
 // handle is not one: its applied value is the literal the caller sent or a
 // census offered (a pull request number), which names no graph node.
 var storedSubjectStructureMembers = map[contractsv1.ContextFabricStructureNeedKind]bool{
 	contractsv1.ContextFabricStructureNeedSubjectAnchor:    true,
 	contractsv1.ContextFabricStructureNeedSubjectCandidate: true,
+	contractsv1.ContextFabricStructureNeedSubjectHandle:    true,
 }
 
 var confirmedStructureEntryType = reflect.TypeOf(contractsv1.ContextFabricConfirmedStructureEntry{})

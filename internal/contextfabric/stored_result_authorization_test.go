@@ -349,7 +349,7 @@ func TestStoredResultSubjectCollectorDomain(t *testing.T) {
 		{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: "trailing_30d"},
 		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedValue: " "},
 	}
-	want = []string{"set", "no-kind", "anchored", "candidate"}
+	want = []string{"set", "no-kind", "anchored", "candidate", "handle"}
 	var ids []string
 	for _, subject := range StoredResultSubjects(result) {
 		ids = append(ids, subject.CanonicalID)
