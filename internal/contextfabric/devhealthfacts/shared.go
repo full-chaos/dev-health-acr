@@ -528,6 +528,11 @@ import (
 // owner's repository is no longer served and a team with many other owned
 // subjects is no longer cut at the shared walk budget. A candidate saved
 // before v106 may hold a cut or former-owner cohort and must not be reused.
+//
+// v107 -> v108: the hotspots operation also returns a per-repository roll-up
+// (repos[]), row-checked against the caller's grant like rows[]. A candidate
+// saved before v108 may hold a hotspots answer without it and must not be
+// reused.
 const QueryVersion = "devhealthfacts.clickhouse.v108"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
