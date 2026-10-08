@@ -43,6 +43,7 @@ func askCountOverCohort(t *testing.T, size, refsPerMember, memberCap int) served
 		cohort:     servedSentencesCohort(contextfabric.SubjectTeam, size),
 		facts:      servedSentencesFacts{capabilities: servedSentencesCapabilities()},
 		window:     contractsv1.ContextFabricRelativeWindowTrailing30D,
+		maxItems:   50,
 	}
 	for index := range scenario.cohort.Members {
 		for ref := 0; ref < refsPerMember; ref++ {
@@ -94,6 +95,20 @@ func TestACountBesideAnUncutMemberSetIsServedUnchanged(t *testing.T) {
 	for _, row := range node.Structured.Completeness.Outcomes {
 		if row.Obligation == "count" && row.Stage == "projection" {
 			t.Errorf("a projection that cut nothing served a projection-stage count row: %+v", row)
+		}
+	}
+}
+
+// A flat listing at the planned hard cap is served whole through the route's
+// own item gate: the plan raised its ceiling, so the route must honour it.
+func TestAFlatListingAtTheHardCapIsServedWholeThroughTheRoute(t *testing.T) {
+	node := askCountOverCohort(t, 100, 1, 100)
+	if got := len(node.Structured.Cohort.Members); got != 100 {
+		t.Fatalf("served members = %d, want all 100", got)
+	}
+	for _, row := range node.Structured.Completeness.Outcomes {
+		if row.Obligation == "count" && row.Outcome == "narrowed" {
+			t.Errorf("a whole listing served a narrowed count row: %+v", row)
 		}
 	}
 }

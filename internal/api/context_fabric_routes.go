@@ -160,7 +160,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			Bytes:  measuredBytes,
 		}
 		override := limits.ResourceBudget{
-			MaxItems: int64(a.config.MaxItems) + int64(itemCounts.Paths) + int64(itemCounts.WalkCohortMembers), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
+			MaxItems: int64(contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems)) + int64(itemCounts.Paths) + int64(itemCounts.WalkCohortMembers), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
 		}
 		if err := CompleteUsageWithBudget(r.Context(), usage, override); err != nil {
 			a.logContextFabricResponseBudgetExceeded(r, "items", measuredBytes, maximumBytes, estimatedTokens, itemCounts)

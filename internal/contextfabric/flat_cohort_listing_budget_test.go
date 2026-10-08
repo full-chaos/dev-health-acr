@@ -13,6 +13,7 @@ import (
 
 const (
 	listingPopulation = 19
+	capPopulation     = 100
 	listingArchived   = 5
 	archivedReason    = "Project state: completed; archived."
 )
@@ -22,10 +23,18 @@ const (
 // reports the pool it counted.
 type ownedProjectsGraph struct {
 	*capturingGraphReader
+	population int
 }
 
-func ownedProjectsCohort() *Cohort {
-	cohort := budgetStageCohort(listingPopulation)
+func ownedProjectsCohort(population int) *Cohort {
+	cohort := budgetStageCohort(0)
+	for i := 0; i < population; i++ {
+		id := fmt.Sprintf("project_%03d", i)
+		cohort.Members = append(cohort.Members, CohortMember{
+			Subject: SubjectRef{Kind: SubjectProject, CanonicalID: id, Label: id}, Rank: i + 1,
+			InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."},
+		})
+	}
 	for i := range cohort.Members {
 		cohort.Members[i].InclusionReasons = []string{"Project the named team owns, reached from the team in the authorized Context Fabric graph."}
 		cohort.Members[i].EvidenceRefIDs = []string{fmt.Sprintf("ref_member_%02d", i)}
@@ -41,19 +50,24 @@ func (g ownedProjectsGraph) DiscoverContext(ctx context.Context, principal stora
 	if err != nil {
 		return graph, err
 	}
-	cohort := ownedProjectsCohort()
+	cohort := ownedProjectsCohort(g.population)
 	if limit := request.Request.Options.MaxCohortMembers; limit > 0 && limit < len(cohort.Members) {
 		cohort.Members = cohort.Members[:limit]
 		cohort.Complete = false
 		cohort.Truncated = true
-		cohort.Population = listingPopulation
+		cohort.Population = g.population
 	}
 	graph.Cohort = cohort
-	graph.CohortPopulation = listingPopulation
+	graph.CohortPopulation = g.population
 	return graph, nil
 }
 
 func investigateOwnedProjects(t *testing.T, family QuestionFamily, maxItems, callerMembers int) InvestigationResult {
+	t.Helper()
+	return investigateOwnedPopulation(t, family, maxItems, callerMembers, listingPopulation)
+}
+
+func investigateOwnedPopulation(t *testing.T, family QuestionFamily, maxItems, callerMembers, population int) InvestigationResult {
 	t.Helper()
 	frame := QuestionFrame{
 		Goals: []InvestigationGoal{GoalCountOrAggregate},
@@ -81,7 +95,7 @@ func investigateOwnedProjects(t *testing.T, family QuestionFamily, maxItems, cal
 				FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			},
-		}},
+		}, population},
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{
 				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
@@ -183,5 +197,18 @@ func TestPlanBudgetFlatCohortDerivesItemsFromTheCallerMembers(t *testing.T) {
 	}
 	if got := planBudget(PlanBudgetGroupedCohort, ResponseBudget{MaxItems: serverItemCeiling}, 25, true); got.MaxMembers != 10 {
 		t.Fatalf("grouped profile moved: members=%d, want 10", got.MaxMembers)
+	}
+}
+
+func TestFlatCohortListingAtTheHardCapIsServedWhole(t *testing.T) {
+	result := investigateOwnedPopulation(t, QuestionFamilyScopedCohortStatus, serverItemCeiling, flatCohortListingMemberCap, capPopulation)
+	if got := len(result.Cohort.Members); got != capPopulation {
+		t.Fatalf("served %d members, want all %d", got, capPopulation)
+	}
+	if !result.Cohort.Complete || result.Cohort.Truncated {
+		t.Fatalf("complete=%v truncated=%v, want true/false", result.Cohort.Complete, result.Cohort.Truncated)
+	}
+	if result.AnswerPlan.Budget.MaxItems < capPopulation+result.AnswerPlan.Budget.SynthesisHeadroom {
+		t.Fatalf("plan ceiling %d does not hold %d members and the headroom", result.AnswerPlan.Budget.MaxItems, capPopulation)
 	}
 }

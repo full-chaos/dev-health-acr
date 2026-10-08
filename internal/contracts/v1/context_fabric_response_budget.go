@@ -123,6 +123,17 @@ func CountContextFabricResultItems(result ContextFabricInvestigationResult) Cont
 	return counts
 }
 
+// ContextFabricPlannedItemCeiling is the item ceiling a served result is held
+// to: the configured one, or the one its own answer plan was derived with when
+// that is higher (a flat cohort listing is planned a ceiling that holds its
+// members and the synthesis headroom).
+func ContextFabricPlannedItemCeiling(result ContextFabricInvestigationResult, configured int) int {
+	if result.AnswerPlan != nil && result.AnswerPlan.Budget.MaxItems > configured {
+		return result.AnswerPlan.Budget.MaxItems
+	}
+	return configured
+}
+
 // ContextFabricResponseBudget is the effective ceiling a result is measured
 // against. MaxItems bounds Budgeted(); MaxSerializedBytes bounds the marshaled
 // response body.
