@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ACR MCP source_evidence Request v1",
-  "description": "Input for the source_evidence tool. evidence_ref_id is required. result_id is required for a Context Fabric reference (acr:v1:...), which is keyed by its subject and expands only in the scope of the answer that returned it.",
+  "description": "Input for the source_evidence tool. evidence_ref_id is required. result_id is required for a Context Fabric reference (acr:v1:...), which is keyed by its subject and expands only in the scope of the answer that returned it. A pull-request or work-item reference names one row and needs no result_id.",
   "examples": [
     {
       "evidence_ref_id": "ev_2f9c81ab"

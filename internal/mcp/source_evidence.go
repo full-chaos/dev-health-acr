@@ -31,7 +31,7 @@ func handleSourceEvidence(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.C
 	// many results cite it, so it expands only in the scope of the answer that
 	// returned it. An unscoped one is refused here, by name, rather than
 	// resolving to the citation of some other result.
-	if strings.HasPrefix(input.EvidenceRefID, contractsv1.ContextFabricEvidenceRefPrefix) && strings.TrimSpace(input.ResultID) == "" {
+	if strings.HasPrefix(input.EvidenceRefID, contractsv1.ContextFabricEvidenceRefPrefix) && strings.TrimSpace(input.ResultID) == "" && !contractsv1.RowKeyedEvidenceRef(input.EvidenceRefID) {
 		return toolErrorResult(&classifiedError{category: "validation", message: "evidence_ref_unscoped: this evidence reference names its subject, not its answer; pass the result_id of the investigate_question answer that returned it as result_id"}), nil
 	}
 

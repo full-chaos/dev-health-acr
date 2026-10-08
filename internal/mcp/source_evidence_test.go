@@ -201,3 +201,43 @@ func TestHandleSourceEvidenceScopesContextFabricRefsToTheAnswerResult(t *testing
 		t.Fatalf("packet handle: err=%v result=%#v", err, packet)
 	}
 }
+
+func TestHandleSourceEvidenceRowKeyedRefsResolveWithoutResultID(t *testing.T) {
+	fx := newFixtureServer(t)
+	var hostedQueries []string
+	fx.EvidenceHandler = func(w http.ResponseWriter, r *http.Request) {
+		hostedQueries = append(hostedQueries, r.URL.Path+"?"+r.URL.RawQuery)
+		writeJSONFixture(t, w, http.StatusOK, validExpandedEvidenceFixture(r.URL.Path[len("/api/v1/agent-context/evidence/"):]))
+	}
+	boot := newFixtureBootstrap(t, fx)
+
+	const repo = "0b8f2a4e-1c3d-4e5f-8a9b-0c1d2e3f4a5b"
+	for _, ref := range []string{
+		contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, repo+":42"),
+		contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, repo+":PAY-7"),
+	} {
+		result, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": ref}))
+		if err != nil || result.IsError {
+			t.Fatalf("%s: row-keyed ref without result_id must resolve: err=%v text=%q", ref, err, toolResultText(result))
+		}
+	}
+	if len(hostedQueries) != 2 {
+		t.Fatalf("hosted calls = %q, want 2 unscoped", hostedQueries)
+	}
+
+	for _, kind := range []contractsv1.ContextFabricEvidenceEntityType{
+		contractsv1.ContextFabricEvidenceEntityTeam, contractsv1.ContextFabricEvidenceEntityRepository, contractsv1.ContextFabricEvidenceEntityProject,
+		contractsv1.ContextFabricEvidenceEntityReview, contractsv1.ContextFabricEvidenceEntityIncident, contractsv1.ContextFabricEvidenceEntityCI,
+		contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2,
+		contractsv1.ContextFabricEvidenceEntityWorkItemTeam, contractsv1.ContextFabricEvidenceEntityWorkItemDependency, contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy,
+	} {
+		ref := contractsv1.ContextFabricEvidenceRefPrefix + string(kind) + ":x"
+		result, _ := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": ref}))
+		if !result.IsError || !strings.Contains(toolResultText(result), "evidence_ref_unscoped") {
+			t.Fatalf("%s must still require result_id, got %q", kind, toolResultText(result))
+		}
+	}
+	if len(hostedQueries) != 2 {
+		t.Fatalf("a subject-keyed ref reached the hosted route: %q", hostedQueries)
+	}
+}
