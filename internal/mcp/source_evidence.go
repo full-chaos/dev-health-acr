@@ -31,7 +31,7 @@ func handleSourceEvidence(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.C
 	// many results cite it, so it expands only in the scope of the answer that
 	// returned it. An unscoped one is refused here, by name, rather than
 	// resolving to the citation of some other result.
-	if strings.HasPrefix(input.EvidenceRefID, contractsv1.ContextFabricEvidenceRefPrefix) && strings.TrimSpace(input.ResultID) == "" {
+	if strings.HasPrefix(input.EvidenceRefID, contractsv1.ContextFabricEvidenceRefPrefix) && strings.TrimSpace(input.ResultID) == "" && !rowKeyedEvidenceRef(input.EvidenceRefID) {
 		return toolErrorResult(&classifiedError{category: "validation", message: "evidence_ref_unscoped: this evidence reference names its subject, not its answer; pass the result_id of the investigate_question answer that returned it as result_id"}), nil
 	}
 
@@ -71,4 +71,26 @@ func handleSourceEvidence(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.C
 	}
 
 	return buildToolResult(response, response.RenderedMarkdown.Markdown)
+}
+
+// rowKeyedEvidenceRef reports whether ref names one source row by its own
+// key: a pull request or a work item, whose id opens with the repository
+// UUID. The hosted route reads that row and authorizes it live against the
+// caller's repository grant, so no stored answer is needed to expand it.
+// Every other Context Fabric kind names a subject that many results cite and
+// keeps the result_id requirement.
+func rowKeyedEvidenceRef(ref string) bool {
+	rest, ok := strings.CutPrefix(ref, contractsv1.ContextFabricEvidenceRefPrefix)
+	if !ok {
+		return false
+	}
+	entity, _, ok := strings.Cut(rest, ":")
+	if !ok {
+		return false
+	}
+	switch contractsv1.ContextFabricEvidenceEntityType(entity) {
+	case contractsv1.ContextFabricEvidenceEntityPullRequest, contractsv1.ContextFabricEvidenceEntityWorkItem:
+		return true
+	}
+	return false
 }
