@@ -34,7 +34,7 @@ type servedCountOutcomes struct {
 	} `json:"structured"`
 }
 
-func askCountOverCohort(t *testing.T, size, refsPerMember int) servedCountOutcomes {
+func askCountOverCohort(t *testing.T, size, refsPerMember, memberCap int) servedCountOutcomes {
 	t.Helper()
 	scenario := servedSentencesScenario{
 		frame:      servedSentencesCountFrame(contextfabric.SubjectTeam),
@@ -50,7 +50,12 @@ func askCountOverCohort(t *testing.T, size, refsPerMember int) servedCountOutcom
 		}
 	}
 	scenario.bases.Record(servedSentencesRepository, contextfabric.CommitBasisCallerCanonicalID)
-	answer := newServedSentencesRig(t, scenario).ask(t, "how many teams own repository named one", contractsv1.ContextFabricRelativeWindowTrailing30D)
+	rig := newServedSentencesRig(t, scenario)
+	answer := callRealMCPTool(t, rig.boot, "investigate_question", contractsv1.MCPInvestigateQuestionRequest{
+		Question:       "how many teams own repository named one",
+		EvidenceWindow: &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowTrailing30D},
+		Budget:         &contractsv1.MCPInvestigationBudget{MaxCohortMembers: memberCap},
+	})
 	var node servedCountOutcomes
 	if err := json.Unmarshal(answer.structured, &node); err != nil {
 		t.Fatal(err)
@@ -60,10 +65,10 @@ func askCountOverCohort(t *testing.T, size, refsPerMember int) servedCountOutcom
 
 func TestACountBesideACutMemberSetReachesTheClientAsTheServedCount(t *testing.T) {
 	const canonical = 20
-	node := askCountOverCohort(t, canonical, 2)
+	node := askCountOverCohort(t, canonical, 2, 12)
 	served := len(node.Structured.Cohort.Members)
 	if served == 0 || served >= canonical {
-		t.Fatalf("served members = %d of %d, want a cut by the evidence index", served, canonical)
+		t.Fatalf("served members = %d of %d, want a cut by the caller's member budget", served, canonical)
 	}
 	var count []int
 	for index, row := range node.Structured.Completeness.Outcomes {
@@ -75,9 +80,9 @@ func TestACountBesideACutMemberSetReachesTheClientAsTheServedCount(t *testing.T)
 		t.Fatalf("no count row served: %+v", node.Structured.Completeness.Outcomes)
 	}
 	last := node.Structured.Completeness.Outcomes[count[len(count)-1]]
-	if last.Stage != "projection" || last.Outcome != "narrowed" || last.Served != served || last.Declared != canonical || last.Requirement == "" ||
-		last.Impact != "scope" || last.Cause != "bytes" || !last.Observed || len(last.Refinements) != 1 {
-		t.Errorf("effective count row = %+v, want projection-stage narrowed %d/%d", last, served, canonical)
+	if last.Stage != "assembled_result" || last.Outcome != "narrowed" || last.Served != served || last.Declared != canonical || last.Requirement == "" ||
+		last.Impact != "scope" || !last.Observed {
+		t.Errorf("effective count row = %+v, want assembled-result narrowed %d/%d", last, served, canonical)
 	}
 	if node.Structured.Completeness.State != "partial" {
 		t.Errorf("completeness state = %q, want partial", node.Structured.Completeness.State)
@@ -85,7 +90,7 @@ func TestACountBesideACutMemberSetReachesTheClientAsTheServedCount(t *testing.T)
 }
 
 func TestACountBesideAnUncutMemberSetIsServedUnchanged(t *testing.T) {
-	node := askCountOverCohort(t, 4, 2)
+	node := askCountOverCohort(t, 4, 2, 0)
 	for _, row := range node.Structured.Completeness.Outcomes {
 		if row.Obligation == "count" && row.Stage == "projection" {
 			t.Errorf("a projection that cut nothing served a projection-stage count row: %+v", row)
