@@ -86,12 +86,16 @@ func TestClarificationPromptKeepsIDCueWhenWithinBound(t *testing.T) {
 
 func TestClarificationPromptOrdinalFallbackLeavesUniqueLabelsAlone(t *testing.T) {
 	label := strings.Repeat("l", 512)
+	unique := strings.Repeat("p", 512)
 	got := ClarificationPrompt([]SubjectCandidate{
 		promptCandidate(contractsv1.ContextFabricSubjectProject, strings.Repeat("a", 256), label, "jira"),
 		promptCandidate(contractsv1.ContextFabricSubjectProject, strings.Repeat("b", 256), label, "jira"),
-		promptCandidate(contractsv1.ContextFabricSubjectProject, "id-c", "platform", "jira"),
+		promptCandidate(contractsv1.ContextFabricSubjectProject, "id-c", unique, "jira"),
 	})
-	if !strings.HasSuffix(got, ", platform?") {
+	if utf8.RuneCountInString(got) > contractsv1.ContextFabricProjectedClarificationPromptMaxLength {
+		t.Fatalf("prompt over bound: %d", utf8.RuneCountInString(got))
+	}
+	if !strings.HasSuffix(got, ", "+unique+"?") {
 		t.Fatalf("unique label altered: %q", got[len(got)-40:])
 	}
 }
