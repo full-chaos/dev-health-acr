@@ -554,11 +554,12 @@ func StoredResultSubjects(result InvestigationResult) []SubjectRef {
 }
 
 // storedSubjectStructureMembers are the confirmed-structure members whose
-// applied value is a subject identity rather than a kind or a window.
+// applied value is a subject identity rather than a kind or a window. A
+// handle is not one: its applied value is the literal the caller sent or a
+// census offered (a pull request number), which names no graph node.
 var storedSubjectStructureMembers = map[contractsv1.ContextFabricStructureNeedKind]bool{
 	contractsv1.ContextFabricStructureNeedSubjectAnchor:    true,
 	contractsv1.ContextFabricStructureNeedSubjectCandidate: true,
-	contractsv1.ContextFabricStructureNeedSubjectHandle:    true,
 }
 
 var confirmedStructureEntryType = reflect.TypeOf(contractsv1.ContextFabricConfirmedStructureEntry{})
