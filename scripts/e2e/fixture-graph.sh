@@ -107,6 +107,8 @@ graph_census() {
     compose exec -T falkordb redis-cli GRAPH.QUERY "$g" 'MATCH (n) RETURN labels(n), count(*)' 2>&1 | head -40 >&2 || true
     fg_note "graph ${g##*:}: edges by type"
     compose exec -T falkordb redis-cli GRAPH.QUERY "$g" 'MATCH ()-[e]->() RETURN e.relation_type, e.link_provenance, count(*)' 2>&1 | head -40 >&2 || true
+    fg_note "graph ${g##*:}: repository nodes with their validity window and org (host now ns: $(date -u +%s%N); acr-api now ns: $(compose exec -T acr-api date -u +%s%N 2>/dev/null | tr -d '\r' || true))"
+    compose exec -T falkordb redis-cli GRAPH.QUERY "$g" "MATCH (n) WHERE n.subject_kind = 'repository' RETURN n.canonical_id, n.label, n.org_id, n.valid_from_ns, n.valid_to_ns, n.authorization_repositories" 2>&1 | head -40 | paste -sd' ' >&2 || true
     fg_note "graph ${g##*:}: sample link edge, its ends, and a pull request node"
     compose exec -T falkordb redis-cli GRAPH.QUERY "$g" "MATCH (a)-[e]->(b) WHERE e.relation_type = 'LINKS_PULL_REQUEST' RETURN properties(a), properties(e), properties(b) LIMIT 2" 2>&1 | head -60 >&2 || true
     fg_note "graph ${g##*:}: link edges per pull request, and the links of three issues the walk may omit"
