@@ -789,6 +789,54 @@ jobs:
             exit 1
           fi
 
+  # The O4 oracle package (factoracle) seeds a ClickHouse store from the venue
+  # capture and replays 95 cases; it ran 100s in a shared race shard and was
+  # killed at that shard's 420s budget twice after the capture of the venue at
+  # ops 5c9a3d32. It runs alone here (isolated_packages and
+  # dedicated_isolated_packages in scripts/ci/test-shard.sh) under
+  # GOTEST_FACTORACLE_TIMEOUT; the step prints the wall time and fails past 85%
+  # of the budget so a creeping suite is caught loudly.
+  race-factoracle:
+    name: race (factoracle, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as race-devhealthfacts -- needs mirror-preflight.
+    needs: mirror-preflight
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.0'
+          cache: true
+      # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
+      # job above.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run isolated factoracle race suite
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated factoracle)"
+          printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          timeout="$(make -s isolated-timeout PKG="$packages")"
+          start=$SECONDS
+          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT="$timeout"
+          elapsed=$((SECONDS - start))
+          limit=${timeout%s}
+          printf 'factoracle race wall time: %ss (budget %ss)\n' "$elapsed" "$limit"
+          if [ $((elapsed * 100)) -gt $((limit * 85)) ]; then
+            printf '::error::factoracle took %ss, over 85%% of its %ss budget (GOTEST_FACTORACLE_TIMEOUT); retune the budget or shrink the suite\n' "$elapsed" "$limit"
+            exit 1
+          fi
+
+
   build:
     runs-on: ubuntu-latest
     needs: mirror-preflight
@@ -1271,6 +1319,7 @@ jobs:
       - race-devhealthschema
       - race-devhealthfacts
       - race-devhealthsource
+      - race-factoracle
       - build
       - contracts
       - container-contract-smoke

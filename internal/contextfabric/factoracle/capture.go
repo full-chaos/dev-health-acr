@@ -303,6 +303,10 @@ type Manifest struct {
 	// was told (VenueConfig).
 	ListenerDark  []string `json:"listener_dark"`
 	OperationDark []string `json:"operation_dark"`
+	// DeniedTeams are, per fact kind, the teams (ids scrubbed like the
+	// extract) the venue token had no grant for: the capture left them out,
+	// and so does a recorded run.
+	DeniedTeams map[string][]string `json:"denied_teams,omitempty"`
 }
 
 // Capture file names under the capture directory.
@@ -424,6 +428,19 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 		VenueFactQueryVersions: sortedKeys(run.Oracle.FactVersions),
 		Rows:                   map[string]int{}, Residual: run.Oracle.Residual, Expect: map[string]RootExpectation{},
 		ListenerDark: append([]string{}, cfg.ListenerDark...), OperationDark: append([]string{}, cfg.OperationDark...),
+	}
+	for _, d := range run.Oracle.deniedList {
+		id := d.id
+		if mapped, ok := scrubber.SubjectID("team:" + id); ok {
+			id = strings.TrimPrefix(mapped, "team:")
+		}
+		manifest.DeniedTeams = appendDenied(manifest.DeniedTeams, d.kind, id)
+		// The notes of the report name the team as the extract does.
+		for _, rr := range run.Report.Roots {
+			for i, note := range rr.NotJoined {
+				rr.NotJoined[i] = strings.Replace(note, d.kind+": team "+d.id+" is denied", d.kind+": team "+id+" is denied", 1)
+			}
+		}
 	}
 	for _, c := range generated {
 		manifest.ShapeCases = append(manifest.ShapeCases, ShapeCase{ShapeID: c.ShapeID, Variables: scrubVariables(scrubber, c.Variables)})
@@ -738,4 +755,13 @@ func scrubJSONScalar(s *Scrubber, value map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+func appendDenied(m map[string][]string, kind, id string) map[string][]string {
+	if m == nil {
+		m = map[string][]string{}
+	}
+	m[kind] = append(m[kind], id)
+	sort.Strings(m[kind])
+	return m
 }

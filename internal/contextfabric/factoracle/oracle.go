@@ -52,8 +52,17 @@ type ShapeCase struct {
 
 // Oracle is one configured run.
 type Oracle struct {
-	Policy *directread.GraphQLPolicy
-	Planes Planes
+	// denied is, per fact kind and bare id, the team subjects the token has
+	// no grant for; deniedNotes states each once for the report.
+	denied      map[string]bool
+	deniedNotes []string
+	deniedList  []deniedTeam
+	// DeniedTeams are, per fact kind, the teams the capture was denied on the
+	// venue (ids as the extract holds them): a recorded run leaves them out
+	// the way the capture did, since the seeded store has no authorization.
+	DeniedTeams map[string][]string
+	Policy      *directread.GraphQLPolicy
+	Planes      Planes
 	// Store is the reference reading of the rows both planes read.
 	Store  *Store
 	Window Window
@@ -144,6 +153,17 @@ func (o *Oracle) facts(ctx context.Context, kind, subjectKind string, ids []stri
 // factRowCap is the fact providers' row cap per query.
 const factRowCap = 200
 
+// deniedFactsError is a facts read the caller is not allowed to make: the
+// subjects asked for have no grant. It is a state of the venue, not a defect
+// of the read, so a caller that can go on without those subjects may.
+type deniedFactsError struct {
+	err      error
+	outcomes string
+}
+
+func (e *deniedFactsError) Error() string { return e.err.Error() }
+func (e *deniedFactsError) Unwrap() error { return e.err }
+
 func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []string, mode int) ([]ServedFact, error) {
 	var out []ServedFact
 	// A provider's row cap is shared by the subjects of one read: with many
@@ -153,12 +173,20 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 	if subjectKind == "team" {
 		chunk = 1
 	}
+	deniedCount := 0
+	var deniedRows []string
 	for start := 0; start < len(ids); start += chunk {
 		end := min(start+chunk, len(ids))
 		request := FactsRequest{Kinds: []string{kind}, MaxBytes: directread.MaxMaxBytes, Tables: directread.TablesOmit}
 		if mode == readWindowed {
 			request.Window = &FactsWindow{Mode: directread.WindowRange, Start: o.Window.Start, End: o.Window.End}
 			request.Tables = directread.TablesInclude
+		}
+		if chunk == 1 && subjectKind == "team" && o.recordedDenied(kind, ids[start]) {
+			o.noteDenied(kind, ids[start])
+			deniedCount++
+			deniedRows = append(deniedRows, "denied on the venue at capture")
+			continue
 		}
 		for _, id := range ids[start:end] {
 			request.Subjects = append(request.Subjects, FactsSubject{Kind: subjectKind, CanonicalID: subjectKind + ":" + id})
@@ -174,7 +202,24 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 		// A partial read is a read with a subject that has no fact. A read
 		// that could not measure, or that was cut, is not compared.
 		if answer.Status != directread.StatusComplete && answer.Status != directread.StatusPartial {
-			return nil, fmt.Errorf("read_facts %s: status %s", kind, answer.Status)
+			var rows []string
+			for _, row := range answer.Coverage {
+				rows = append(rows, row.Subject.CanonicalID+"="+row.Outcome)
+			}
+			err := fmt.Errorf("read_facts %s: status %s (asked %d subjects; coverage rows: %s)", kind, answer.Status, end-start, strings.Join(rows, ", "))
+			if answer.Status == directread.StatusDenied {
+				// A team read alone that the token has no grant for is not
+				// joined: stated, not compared. A call whose every subject is
+				// denied is a lost authorization and fails.
+				if chunk == 1 {
+					o.noteDenied(kind, ids[start])
+					deniedCount++
+					deniedRows = append(deniedRows, strings.Join(rows, ", "))
+					continue
+				}
+				return nil, &deniedFactsError{err: err, outcomes: strings.Join(rows, ", ")}
+			}
+			return nil, err
 		}
 		for _, row := range answer.Coverage {
 			cut := row.Outcome == directread.OutcomeTruncated && mode != readCurrentHeldToStore
@@ -236,7 +281,47 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 		}
 		out = append(out, answer.Facts...)
 	}
+	if chunk == 1 && len(ids) > 0 && deniedCount == len(ids) {
+		return nil, &deniedFactsError{err: fmt.Errorf("read_facts %s: every one of %d teams was denied (coverage rows: %s)", kind, len(ids), strings.Join(deniedRows, "; ")), outcomes: strings.Join(deniedRows, "; ")}
+	}
 	return out, nil
+}
+
+type deniedTeam struct{ kind, id string }
+
+// recordedDenied reports whether the capture was denied this team.
+func (o *Oracle) recordedDenied(kind, id string) bool {
+	for _, d := range o.DeniedTeams[kind] {
+		if strings.EqualFold(d, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// noteDenied records a team the token cannot read, once per kind.
+func (o *Oracle) noteDenied(kind, id string) {
+	if o.denied == nil {
+		o.denied = map[string]bool{}
+	}
+	key := kind + "|" + strings.ToLower(id)
+	if o.denied[key] {
+		return
+	}
+	o.denied[key] = true
+	o.deniedList = append(o.deniedList, deniedTeam{kind: kind, id: id})
+	o.deniedNotes = append(o.deniedNotes, kind+": team "+id+" is denied to the venue token")
+}
+
+// withoutDenied drops the teams a read of this kind was denied.
+func (o *Oracle) withoutDenied(kind string, ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if !o.denied[kind+"|"+strings.ToLower(id)] {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // Run executes the shape pass and the value pairs of every allowed root.
@@ -321,6 +406,8 @@ func (o *Oracle) Run(ctx context.Context) (*Report, error) {
 			if err := pair.compare(ctx, o, rr); err != nil {
 				return nil, fmt.Errorf("root %s: %w", root.Field, err)
 			}
+			rr.NotJoined = append(rr.NotJoined, o.deniedNotes...)
+			o.deniedNotes = nil
 		}
 		if err := o.temporaryAllowance(ctx, rr, root, byShape); err != nil {
 			return nil, fmt.Errorf("root %s: %w", root.Field, err)
@@ -446,7 +533,7 @@ func (o *Oracle) generatedCases() ([]ShapeCase, error) {
 		switch shape.Operation {
 		case "investmentBreakdown", "investmentFull":
 			sets = append(sets, investmentVariables(o.Window, "THEME"), investmentVariables(o.Window, "SUBCATEGORY"), investmentVariables(o.Window, "WORK_TYPE"))
-		case "capacityForecast":
+		case "capacityForecast", "capacityCompletionDistribution":
 			sets = append(sets, map[string]any{"input": map[string]any{"teamId": team, "historyDays": 90, "simulations": 1000}})
 		case "capacityForecasts":
 			sets = append(sets, map[string]any{"filters": map[string]any{"fromDate": start, "toDate": last, "limit": 50}})
@@ -463,7 +550,7 @@ func (o *Oracle) generatedCases() ([]ShapeCase, error) {
 		case "cognitiveLoad":
 			sets = append(sets, map[string]any{"input": map[string]any{"sinceDate": start, "untilDate": last, "teamId": team}})
 		case "complexityTimeseries":
-			sets = append(sets, map[string]any{"input": map[string]any{"sinceUtc": dateTime(start), "untilUtc": dateTime(last), "granularity": "DAY", "scope": "REPO", "limit": 5}})
+			sets = append(sets, map[string]any{"input": map[string]any{"sinceUtc": dateTime(start), "untilUtc": dateTime(last), "granularity": "DAY", "scope": "REPO", "limit": 1}})
 		case "compoundingRisk":
 			sets = append(sets, map[string]any{"filter": map[string]any{"breakout": "REPO", "trendDays": 30}}, map[string]any{"filter": map[string]any{"breakout": "TEAM", "trendDays": 30}})
 		case "hotspots":

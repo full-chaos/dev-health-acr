@@ -40,3 +40,23 @@ func TestADroppedSiblingConnectionDescribesTheReturnedPage(t *testing.T) {
 		t.Fatalf("dropped connection: %s (dropped %v)", cut.data, cut.dropped)
 	}
 }
+
+// One primary row that fits by itself is still served when only the emptied
+// sibling brings the answer under the budget; without a sibling a single row
+// has nothing to cut.
+func TestASinglePrimaryRowIsServedBesideAnEmptiedSibling(t *testing.T) {
+	data, _ := json.Marshal(map[string]any{"hotspots": map[string]any{
+		"rows":  []map[string]any{{"filePath": "a.go"}},
+		"repos": []map[string]any{{"repoId": "r1", "note": strings.Repeat("z", 800)}},
+	}})
+	cut, ok := fitListPage(data, "hotspots.rows", 200, []string{"hotspots.repos"})
+	if !ok || cut.rowsReturned != 1 || cut.rowsRead != 1 || len(cut.dropped) != 1 || cut.dropped[0] != "hotspots.repos" {
+		t.Fatalf("cut %+v ok %v", cut, ok)
+	}
+	if strings.Contains(string(cut.data), "zzzz") {
+		t.Fatalf("the sibling was not emptied: %s", cut.data)
+	}
+	if _, ok := fitListPage(data, "hotspots.rows", 200, nil); ok {
+		t.Fatal("one row with no sibling was cut")
+	}
+}
