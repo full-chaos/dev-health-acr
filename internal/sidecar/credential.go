@@ -95,12 +95,19 @@ func (e *CredentialCleanupError) Unwrap() error { return e.cause }
 // malformed disable flag rejected a perfectly valid ACR_API_TOKEN, taking
 // down a source the flag does not govern.
 func LoadCredential() (CredentialResult, error) {
-	session, err := BeginCredentialLifecycleSession()
+	// A load only reads. An environment token touches no shared state, so it
+	// takes no lock; keyring and file sources take the shared side of the
+	// lifecycle boundary so a concurrent login or logout finishes first,
+	// and two readers never exclude each other.
+	if result, configured, err := loadFromEnvironment(); configured {
+		return result, err
+	}
+	release, err := acquireSharedCredentialLifecycle(credentialLifecycleSharedWait)
 	if err != nil {
 		return CredentialResult{}, err
 	}
-	defer session.Close()
-	return session.LoadCredential()
+	defer release()
+	return loadCredentialForLifecycleSession()
 }
 
 func (s *CredentialLifecycleSession) LoadCredential() (CredentialResult, error) {

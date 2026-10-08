@@ -3,6 +3,7 @@ package sidecar
 import (
 	"errors"
 	"sync"
+	"time"
 )
 
 // ErrCredentialLifecycleBusy means another local credential lifecycle session
@@ -15,9 +16,51 @@ var ErrCredentialLifecycleSessionInvalid = errors.New("acr: credential lifecycle
 
 var ErrCredentialLifecycleSessionClosed = errors.New("acr: credential lifecycle session is closed")
 
-var credentialLifecycleGate sync.Mutex
+// ErrCredentialLifecycleWaitTimeout means a read-only credential load waited
+// its full bound for a concurrent credential mutation (login, refresh, logout)
+// to finish and the mutation was still running.
+var ErrCredentialLifecycleWaitTimeout = errors.New("acr: credential lifecycle did not become available in time")
+
+// credentialLifecycleSharedWait bounds how long a read-only credential load
+// waits for a concurrent mutation. Mutations keep the exclusive try-lock.
+const credentialLifecycleSharedWaitDefault = 2 * time.Second
+
+var credentialLifecycleSharedWait = credentialLifecycleSharedWaitDefault
+
+// credentialLifecycleGate lets any number of read-only loads share the process
+// while a mutation session holds it exclusively.
+var credentialLifecycleGate sync.RWMutex
 
 var credentialLifecycleLockAcquire = acquireCredentialLifecycleLock
+
+var credentialLifecycleSharedLockAcquire = acquireCredentialLifecycleSharedLock
+
+const credentialLifecycleSharedPoll = 10 * time.Millisecond
+
+// acquireSharedCredentialLifecycle takes the shared side of the lifecycle
+// boundary for a read-only load, waiting at most wait for a mutation to end.
+func acquireSharedCredentialLifecycle(wait time.Duration) (func(), error) {
+	deadline := time.Now().Add(wait)
+	for !credentialLifecycleGate.TryRLock() {
+		if !time.Now().Before(deadline) {
+			return nil, ErrCredentialLifecycleWaitTimeout
+		}
+		time.Sleep(credentialLifecycleSharedPoll)
+	}
+	remaining := time.Until(deadline)
+	if remaining < 0 {
+		remaining = 0
+	}
+	release, err := credentialLifecycleSharedLockAcquire(remaining)
+	if err != nil {
+		credentialLifecycleGate.RUnlock()
+		return nil, err
+	}
+	return func() {
+		_ = release()
+		credentialLifecycleGate.RUnlock()
+	}, nil
+}
 
 type CredentialLifecycleSession struct {
 	state *credentialLifecycleSessionState

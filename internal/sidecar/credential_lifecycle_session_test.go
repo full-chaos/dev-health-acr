@@ -36,17 +36,6 @@ func TestCredentialLifecycleSessionMethodsDoNotReenterTheLock(t *testing.T) {
 	}
 }
 
-func TestCredentialLifecyclePublicReaderReportsBusyDuringSession(t *testing.T) {
-	session, err := BeginCredentialLifecycleSession()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer session.Close()
-	if _, err := LoadCredential(); !errors.Is(err, ErrCredentialLifecycleBusy) {
-		t.Fatalf("public load = %v, want busy", err)
-	}
-}
-
 func TestCredentialLifecycleSessionVerifyDoesNotReenterTheLock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "token")
 	token := validTestToken(83)
@@ -237,7 +226,6 @@ func TestCredentialLifecyclePublicWrappersReportBusyAcrossMutationSurfaces(t *te
 		name string
 		call func() error
 	}{
-		{"load", func() error { _, err := LoadCredential(); return err }},
 		{"persist", func() error { _, err := PersistCredential(""); return err }},
 		{"replace", func() error { return ReplaceCredential(CredentialResult{}, "") }},
 		{"restore", func() error { return RestoreCredential(CredentialResult{}) }},
