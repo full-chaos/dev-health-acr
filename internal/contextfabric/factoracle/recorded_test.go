@@ -42,6 +42,7 @@ var contractsAtCapture = map[string]string{
 	"investmentFull":                 "sha256:179a09e19ce83802c67b1b40fe4c2c1b3c003617d4b49acca225146db3737111",
 	"recommendations":                "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
 	"securityOverview":               "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",
+	"sourceHealth":                   "sha256:1e37288fae98f7a84a5f7a2a8d6bea26514c6e4bf284f8d9e528a7e0819ba876",
 	"throughputForecast":             "sha256:ad5d774fa899197d84842001d2f9fcee48155c5356a27238e1d726e1aff4db51",
 	"workGraphArtifacts":             "sha256:551ed4f4200e13f02a988d6deab6a9ffc41e41a2d2c72c9d66f224b0d5fe86fc",
 	"workGraphEdges":                 "sha256:22f4a10da08615255631c5f866313fdeda9c65bd17a6b621f332984e61ce602e",
