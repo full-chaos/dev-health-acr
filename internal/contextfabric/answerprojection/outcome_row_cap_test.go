@@ -52,9 +52,6 @@ func TestProjectedOutcomeRowsNeverExceedTheRowCap(t *testing.T) {
 		if got := len(served.Completeness.Outcomes); got > max {
 			t.Errorf("canonical=%d: projected %d rows, cap %d", canonical, got, max)
 		}
-		if served.Completeness.State == contractsv1.ContextFabricAnswerCompletenessComplete {
-			t.Errorf("canonical=%d: cut projection serves a complete state", canonical)
-		}
 	}
 }
 
@@ -150,16 +147,27 @@ func TestACutDisclosureDoesNotOverflowTheLimitationsCap(t *testing.T) {
 	}
 }
 
-func TestACutBarsACompleteStateWhenNoRowCanSayWhy(t *testing.T) {
+func TestAFullCanonicalCutKeepsTheRowDerivedStateAndCarriesTheCutOutsideTheRows(t *testing.T) {
 	t.Parallel()
 	max := contractsv1.ContextFabricPlanRequirementOutcomeMaxCount
 	in := capFixture(max, 3)
-	if got := contractsv1.DeriveContextFabricAnswerCompletenessState(in.Completeness.Outcomes); got != contractsv1.ContextFabricAnswerCompletenessComplete {
-		t.Fatalf("fixture precondition: canonical rows derive %q, want complete", got)
+	want := contractsv1.DeriveContextFabricAnswerCompletenessState(in.Completeness.Outcomes)
+	if want != contractsv1.ContextFabricAnswerCompletenessComplete {
+		t.Fatalf("fixture precondition: canonical rows derive %q, want complete", want)
 	}
 	served := appendProjectionOutcomes(in)
-	if served.Completeness.State != contractsv1.ContextFabricAnswerCompletenessPartial {
-		t.Fatalf("a cut projection serves %q", served.Completeness.State)
+	if served.Completeness.State != want {
+		t.Fatalf("state %q, want the row-derived %q (no row was appended)", served.Completeness.State, want)
+	}
+	if !served.ProjectionBudget.Truncated {
+		t.Fatal("truncated not set")
+	}
+	found := false
+	for _, l := range served.Limitations {
+		found = found || strings.Contains(l, "outcome rows were cut")
+	}
+	if !found {
+		t.Fatalf("cut not carried by the limitations: %v", served.Limitations)
 	}
 }
 

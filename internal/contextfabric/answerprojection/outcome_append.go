@@ -84,12 +84,10 @@ func appendProjectionOutcomes(projection contractsv1.ContextFabricAnswerProjecti
 	}
 	omissions, omissionRows := pendingOmissionRows(projection)
 	countRows := countRowsBesideCutMembers(projection)
-	cut := false
 	if len(omissionRows)+len(countRows) <= room {
 		rows = append(rows, omissionRows...)
 		rows = append(rows, countRows...)
 	} else {
-		cut = true
 		// The disclosure displaces a limitation when that list is full, and
 		// the displacement is itself an omission, so it is applied BEFORE the
 		// omission rows are built from the budget.
@@ -104,11 +102,6 @@ func appendProjectionOutcomes(projection contractsv1.ContextFabricAnswerProjecti
 	// DERIVED LAST, over the whole set. This is the line that makes the
 	// served answer's completeness true of the served document.
 	projection.Completeness.State = contractsv1.DeriveContextFabricAnswerCompletenessState(rows)
-	// A cut can leave no room for any row to say so, and the rows then derive
-	// the state of a document that lost rows; the cut itself bars `complete`.
-	if cut && projection.Completeness.State == contractsv1.ContextFabricAnswerCompletenessComplete {
-		projection.Completeness.State = contractsv1.ContextFabricAnswerCompletenessPartial
-	}
 	return projection
 }
 
