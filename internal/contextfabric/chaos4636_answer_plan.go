@@ -387,7 +387,7 @@ func planBudget(profile PlanBudgetProfile, budget ResponseBudget, maxCohortMembe
 			// different (and empty) one.
 			allowance = 1
 		}
-		if listing && profile == PlanBudgetFlatCohort && budget.MaxItems > headroom {
+		if listing && profile == PlanBudgetFlatCohort {
 			// A flat cohort listing IS the answer: its members are the primary
 			// list and only the caller's own member budget cuts them. The item
 			// ceiling is derived from the members, never the members from the

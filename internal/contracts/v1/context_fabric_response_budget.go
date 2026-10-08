@@ -460,3 +460,21 @@ func contextFabricSubjectsBucket(subjects []ContextFabricSubjectRef, members, gr
 func contextFabricSubjectBucketKey(subject ContextFabricSubjectRef) string {
 	return string(subject.Kind) + "\x00" + subject.CanonicalID
 }
+
+// ContextFabricServesFlatListing reports whether a result's cohort is a flat
+// member listing: it has no group axis, is not a work-item list (those carry
+// their direct facts with each member and keep the whole-member rule), and its
+// answer plan does not name a family whose cohort is something else (a matched
+// pair, a grouped status list).
+func ContextFabricServesFlatListing(result ContextFabricInvestigationResult) bool {
+	if result.Cohort == nil || len(result.Cohort.Groups) != 0 || result.Cohort.Kind == ContextFabricSubjectWorkItem {
+		return false
+	}
+	if result.AnswerPlan != nil {
+		switch result.AnswerPlan.Family {
+		case ContextFabricQuestionFamilyExplicitComparison, ContextFabricQuestionFamilyGroupedCohortStatus:
+			return false
+		}
+	}
+	return true
+}

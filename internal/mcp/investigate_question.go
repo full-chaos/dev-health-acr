@@ -123,7 +123,7 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 		return writeBackAwareErrorResult(err), nil
 	}
 	result := hostedResponse.ContextFabricInvestigationResult
-	budget.MaxEvidenceRefs = cohortEvidenceRefBudget(budget.MaxEvidenceRefs, input.Budget, result.Cohort)
+	budget.MaxEvidenceRefs = cohortEvidenceRefBudget(budget.MaxEvidenceRefs, input.Budget, result)
 
 	projection := answerprojection.Project(result, answerprojection.Budget{
 		MaxDrivers:       budget.MaxDrivers,
@@ -178,11 +178,11 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 // serves a flat cohort listing (not a grouped cohort or a work-item list): a caller that set none gets one reference per served member
 // beside the default, up to the projection's own ceiling, so the members of a
 // listing do not spend the references the drivers cite.
-func cohortEvidenceRefBudget(effective int, requested *contractsv1.MCPInvestigationBudget, cohort *contractsv1.ContextFabricCohort) int {
-	if cohort == nil || len(cohort.Groups) != 0 || cohort.Kind == contractsv1.ContextFabricSubjectWorkItem || (requested != nil && requested.MaxEvidenceRefs != 0) {
+func cohortEvidenceRefBudget(effective int, requested *contractsv1.MCPInvestigationBudget, result contractsv1.ContextFabricInvestigationResult) int {
+	if !contractsv1.ContextFabricServesFlatListing(result) || (requested != nil && requested.MaxEvidenceRefs != 0) {
 		return effective
 	}
-	return min(len(cohort.Members)+defaultMaxAnswerEvidenceRefs, contractsv1.ContextFabricProjectedEvidenceMaxCount)
+	return min(len(result.Cohort.Members)+defaultMaxAnswerEvidenceRefs, contractsv1.ContextFabricProjectedEvidenceMaxCount)
 }
 
 // hostedInvestigationRequest maps the MCP investigation arguments onto the

@@ -88,14 +88,55 @@ func TestFlatListingReservesOnlyForTheMembersItWillServe(t *testing.T) {
 func TestGroupedCohortKeepsTheWholeMemberRule(t *testing.T) {
 	result := ownedListing(4, 1)
 	result.Cohort.Groups = []contractsv1.ContextFabricCohortGroup{{Subject: subject(contractsv1.ContextFabricSubjectTeam, "team_g", "Team G"), MemberCanonicalIDs: []string{"project_00"}}}
-	if isFlatListing(*result.Cohort) {
+	if isFlatListing(result) {
 		t.Fatal("a grouped cohort is not a flat listing")
 	}
-	if got := flatCohortEvidenceReserve(result, Budget{MaxCohortMembers: 25, MaxEvidenceRefs: 25}); got != 0 {
-		t.Fatalf("reserve for a grouped cohort = %d, want 0", got)
+	if got := flatCohortEvidenceReserve(result, Budget{MaxCohortMembers: 25, MaxEvidenceRefs: 25}); len(got) != 0 {
+		t.Fatalf("reserve for a grouped cohort = %d, want 0", len(got))
 	}
 	flat := ownedListing(4, 1)
-	if got := flatCohortEvidenceReserve(flat, Budget{MaxCohortMembers: 25, MaxEvidenceRefs: 25}); got != 4 {
-		t.Fatalf("reserve for a flat listing = %d, want 4", got)
+	if got := flatCohortEvidenceReserve(flat, Budget{MaxCohortMembers: 25, MaxEvidenceRefs: 25}); len(got) != 4 {
+		t.Fatalf("reserve for a flat listing = %d, want 4", len(got))
+	}
+}
+
+func TestMatchedPairCohortKeepsTheWholeMemberRule(t *testing.T) {
+	result := ownedListing(2, 3)
+	result.AnswerPlan = &contractsv1.ContextFabricAnswerPlan{Family: contractsv1.ContextFabricQuestionFamilyExplicitComparison}
+	if isFlatListing(result) {
+		t.Fatal("a matched-pair cohort is not a flat listing")
+	}
+	if got := flatCohortEvidenceReserve(result, Budget{MaxCohortMembers: 25, MaxEvidenceRefs: 25}); len(got) != 0 {
+		t.Fatalf("reserve for a matched pair = %d, want 0", len(got))
+	}
+}
+
+func TestADriverCitingTheMemberReferencesIsNotOmittedForThem(t *testing.T) {
+	result := ownedListing(19, 0)
+	shared := make([]string, 0, 19)
+	for _, member := range result.Cohort.Members {
+		shared = append(shared, member.EvidenceRefIDs...)
+	}
+	for i := range result.Drivers {
+		if result.Drivers[i].Standing == contractsv1.ContextFabricDriverPrincipal {
+			result.Drivers[i].EvidenceRefIDs = shared
+		}
+	}
+	projection := Project(result, Budget{MaxCohortMembers: 25, MaxEvidenceRefs: 25})
+	if projection.ProjectionBudget.DriversOmitted != 0 {
+		t.Fatalf("drivers_omitted = %d: a driver citing the 19 member references needs no room beyond them", projection.ProjectionBudget.DriversOmitted)
+	}
+	if got := len(projection.Cohort.Members); got != 19 {
+		t.Fatalf("served %d members, want 19", got)
+	}
+}
+
+func TestTheReserveIsOneReferencePerServedMember(t *testing.T) {
+	result := ownedListing(5, 0)
+	for i := range result.Cohort.Members {
+		result.Cohort.Members[i].EvidenceRefIDs = []string{fmt.Sprintf("evidence_member_%02d", i), fmt.Sprintf("evidence_extra_%02d", i), fmt.Sprintf("evidence_more_%02d", i)}
+	}
+	if got := flatCohortEvidenceReserve(result, Budget{MaxCohortMembers: 25, MaxEvidenceRefs: 25}); len(got) != 5 {
+		t.Fatalf("reserve = %d, want one per member (5)", len(got))
 	}
 }

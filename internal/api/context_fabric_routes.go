@@ -111,7 +111,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			// the CompleteUsage budget below, instead of the misleading
 			// 500 "internal_error" this branch used to return with no
 			// measurement at all.
-			a.logContextFabricResponseBudgetExceeded(r, "bytes", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
+			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "bytes", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
 			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
 				"measured_bytes": measuredBytes, "max_serialized_bytes": maximumBytes,
 			})
@@ -163,10 +163,10 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			MaxItems: int64(contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems)) + int64(itemCounts.Paths) + int64(itemCounts.WalkCohortMembers), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
 		}
 		if err := CompleteUsageWithBudget(r.Context(), usage, override); err != nil {
-			a.logContextFabricResponseBudgetExceeded(r, "items", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
+			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "items", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
 			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
 				"measured_bytes": usage.Bytes, "measured_items": usage.Items, "estimated_tokens": estimatedTokens,
-				"max_items":       a.config.MaxItems,
+				"max_items":       contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems),
 				"items_breakdown": itemCounts,
 			})
 			return
@@ -182,7 +182,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 				return
 			}
 			if envelopeBytes > int64(a.config.MaxSerializedBytes) {
-				a.logContextFabricResponseBudgetExceeded(r, "synthesis_input_bytes", envelopeBytes, int64(a.config.MaxSerializedBytes), estimatedTokens, itemCounts)
+				a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "synthesis_input_bytes", envelopeBytes, int64(a.config.MaxSerializedBytes), estimatedTokens, itemCounts)
 				writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
 					"measured_bytes": envelopeBytes, "max_serialized_bytes": int64(a.config.MaxSerializedBytes),
 				})
@@ -190,7 +190,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			}
 			synthesisInputBytes = int(envelopeBytes - measuredBytes)
 		}
-		a.logContextFabricResponseBudgetMeasured(r, measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes)
+		a.logContextFabricResponseBudgetMeasured(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes)
 		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_completed", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
 		deliveredStatus = string(result.Status)
 		writeEncodedJSON(w, http.StatusOK, encoded)
@@ -1010,10 +1010,10 @@ func contextFabricResponseBudgetFields(maxItems int, measuredBytes, maximumBytes
 // own artifacts without re-running with instrumentation added after the
 // fact. See writeError's "details" map on the caller side for the
 // caller-visible half of this same disclosure.
-func (a *App) logContextFabricResponseBudgetExceeded(r *http.Request, reason string, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts) {
+func (a *App) logContextFabricResponseBudgetExceeded(r *http.Request, maxItems int, reason string, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts) {
 	fields := append([]any{
 		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_response_budget", "reason", reason,
-	}, contextFabricResponseBudgetFields(a.config.MaxItems, measuredBytes, maximumBytes, estimatedTokens, counts)...)
+	}, contextFabricResponseBudgetFields(maxItems, measuredBytes, maximumBytes, estimatedTokens, counts)...)
 	a.logger.WarnContext(r.Context(), "context fabric response exceeded service limits", fields...)
 	a.metrics.BudgetRefusal(r.Context())
 }
@@ -1028,9 +1028,9 @@ func (a *App) logContextFabricResponseBudgetExceeded(r *http.Request, reason str
 // regression from 40-42 down to under 30 had nowhere to be read off from a
 // successful run. The exceed-path WARN above is unchanged in name, level and
 // field set, so existing consumers of it are unaffected.
-func (a *App) logContextFabricResponseBudgetMeasured(r *http.Request, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts, extra ...any) {
+func (a *App) logContextFabricResponseBudgetMeasured(r *http.Request, maxItems int, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts, extra ...any) {
 	fields := append([]any{"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context()))},
-		contextFabricResponseBudgetFields(a.config.MaxItems, measuredBytes, maximumBytes, estimatedTokens, counts)...)
+		contextFabricResponseBudgetFields(maxItems, measuredBytes, maximumBytes, estimatedTokens, counts)...)
 	fields = append(fields, extra...)
 	a.logger.InfoContext(r.Context(), "context fabric response measured", fields...)
 }

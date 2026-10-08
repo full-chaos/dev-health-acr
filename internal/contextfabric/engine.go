@@ -2022,7 +2022,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				reuseKeys = e.observationKeys.ObservationKeyAssignment()
 			}
 			cover.events = reusedObservationCoverEvents(reused, reuseKeys)
-			reused, reuseBudgetErr := e.finalizeServed(ctx, principal, BudgetAssertReuse, reused, nil, e.effectiveResponseBudget(request))
+			reused, reuseBudgetErr := e.finalizeServed(ctx, principal, BudgetAssertReuse, reused, nil, e.reuseResponseBudget(request, reused))
 			if reuseBudgetErr != nil {
 				// The matched row does not fit the current budget and is
 				// refused rather than served stale -- this turn's own

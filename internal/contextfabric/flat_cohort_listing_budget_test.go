@@ -186,8 +186,11 @@ func TestPlanBudgetFlatCohortDerivesItemsFromTheCallerMembers(t *testing.T) {
 	if got := flat(serverItemCeiling, 5); got.MaxMembers != 5 || got.MaxItems != serverItemCeiling {
 		t.Fatalf("caller 5: members=%d items=%d, want 5 and the unlowered ceiling %d", got.MaxMembers, got.MaxItems, serverItemCeiling)
 	}
-	if got := flat(16, 25); got.MaxMembers != 1 {
-		t.Fatalf("a ceiling at its own headroom: members=%d, want the floor 1", got.MaxMembers)
+	if got := flat(16, 25); got.MaxMembers != 25 || got.MaxItems < 25+got.SynthesisHeadroom {
+		t.Fatalf("a ceiling at its own headroom: members=%d items=%d, want the caller's 25 with room for them", got.MaxMembers, got.MaxItems)
+	}
+	if got := flat(16, 0); got.MaxMembers != 1 {
+		t.Fatalf("a ceiling at its own headroom, no caller cap: members=%d, want the floor 1", got.MaxMembers)
 	}
 	if got := flat(serverItemCeiling, 0); got.MaxMembers != 14 {
 		t.Fatalf("no caller cap: members=%d, want the 14 default", got.MaxMembers)
@@ -210,5 +213,20 @@ func TestFlatCohortListingAtTheHardCapIsServedWhole(t *testing.T) {
 	}
 	if result.AnswerPlan.Budget.MaxItems < capPopulation+result.AnswerPlan.Budget.SynthesisHeadroom {
 		t.Fatalf("plan ceiling %d does not hold %d members and the headroom", result.AnswerPlan.Budget.MaxItems, capPopulation)
+	}
+}
+
+func TestReuseIsHeldToTheCeilingTheStoredListingWasPlannedWith(t *testing.T) {
+	engine := &Engine{maxItems: serverItemCeiling, maxSerializedBytes: 131072}
+	stored := InvestigationResult{AnswerPlan: &AnswerPlan{Budget: AnswerPlanBudget{MaxItems: 116}}}
+	if got := engine.reuseResponseBudget(InvestigationRequest{}, stored).MaxItems; got != 116 {
+		t.Fatalf("reuse item ceiling = %d, want the stored plan's 116", got)
+	}
+	if got := engine.reuseResponseBudget(InvestigationRequest{}, InvestigationResult{}).MaxItems; got != serverItemCeiling {
+		t.Fatalf("reuse item ceiling without a plan = %d, want the configured %d", got, serverItemCeiling)
+	}
+	unbounded := &Engine{}
+	if got := unbounded.reuseResponseBudget(InvestigationRequest{}, stored).MaxItems; got != 0 {
+		t.Fatalf("an unbounded engine reuse ceiling = %d, want 0", got)
 	}
 }

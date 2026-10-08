@@ -125,9 +125,9 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	// A flat cohort listing is the answer: one reference per member to be
 	// served is reserved before any driver is offered, so the drivers fill
 	// what is left rather than the members.
-	index.limit = max(bounds.MaxEvidenceRefs-flatCohortEvidenceReserve(result, bounds), 0)
+	index.reserve(flatCohortEvidenceReserve(result, bounds))
 	drivers, driversOmitted, withheldOmitted, facts := projectDrivers(result, bounds, index, clamp)
-	index.limit = bounds.MaxEvidenceRefs
+	index.releaseReserve()
 	cohort, cohortOmitted, cohortReasonsOmitted, cohortGroupsOmitted, cohortSelectionBasis := projectCohort(result, bounds, index, clamp, &facts)
 	factsOmitted := countProjectedFactsOmitted(result, facts)
 	clarification, candidatesOmitted, candidateReasonsOmitted := projectClarification(result, bounds, clamp)
@@ -513,7 +513,7 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 	// projection carried before this slice, so the loop below is
 	// byte-identical for them.
 	admissible, selectionBasis := groupAwareMemberAllowance(canonical, bounds.MaxCohortMembers)
-	flat := isFlatListing(canonical)
+	flat := isFlatListing(result)
 	members := make([]contractsv1.ContextFabricProjectedCohortMember, 0, min(len(canonical.Members), bounds.MaxCohortMembers))
 	// retained mirrors members 1:1 (same order, same cut) but keeps the
 	// CANONICAL member -- including Drivers, which the projected member
@@ -757,36 +757,68 @@ type evidenceIndex struct {
 	limit int
 	seen  map[string]struct{}
 	order []string
+	// reserved are references held back for later items; pending counts the
+	// reserved ones not yet indexed.
+	reserved map[string]struct{}
+	pending  int
 }
 
 func newEvidenceIndex(limit int) *evidenceIndex {
 	return &evidenceIndex{limit: limit, seen: make(map[string]struct{}, limit), order: make([]string, 0, limit)}
 }
 
-// isFlatListing reports whether a cohort is a flat member listing: no group
-// axis, and not a work-item list, whose members are admitted together with the
-// direct facts they carry (display closure) and so keep the whole-member rule.
-func isFlatListing(cohort contractsv1.ContextFabricCohort) bool {
-	return len(cohort.Groups) == 0 && cohort.Kind != contractsv1.ContextFabricSubjectWorkItem
+// isFlatListing reports whether the result's cohort is a flat member listing:
+// no group axis, not a work-item list (whose members are admitted together
+// with the direct facts they carry and so keep the whole-member rule), and not
+// a family whose cohort is something other than the listing.
+func isFlatListing(result contractsv1.ContextFabricInvestigationResult) bool {
+	return contractsv1.ContextFabricServesFlatListing(result)
 }
 
-// flatCohortEvidenceReserve is the number of distinct references the members a
-// flat cohort will serve cite, capped at the evidence budget. A grouped cohort
-// reserves nothing.
-func flatCohortEvidenceReserve(result contractsv1.ContextFabricInvestigationResult, bounds Budget) int {
-	if result.Cohort == nil || !isFlatListing(*result.Cohort) {
-		return 0
+// flatCohortEvidenceReserve is one reference per member a flat cohort will
+// serve: the first it cites, distinct, capped at the evidence budget. A cohort
+// that is not a flat listing reserves nothing.
+func flatCohortEvidenceReserve(result contractsv1.ContextFabricInvestigationResult, bounds Budget) []string {
+	if !isFlatListing(result) {
+		return nil
 	}
 	seen := map[string]struct{}{}
+	var ids []string
 	for i, member := range result.Cohort.Members {
-		if i >= bounds.MaxCohortMembers {
+		if i >= bounds.MaxCohortMembers || len(ids) >= bounds.MaxEvidenceRefs {
 			break
 		}
-		for _, id := range member.EvidenceRefIDs {
-			seen[id] = struct{}{}
+		if len(member.EvidenceRefIDs) == 0 {
+			continue
 		}
+		id := member.EvidenceRefIDs[0]
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
 	}
-	return len(seen)
+	return ids
+}
+
+// reserve holds back room for ids that the members will cite: an item offered
+// before the members may spend what is left, and a reference it shares with a
+// reserved one costs nothing extra.
+func (e *evidenceIndex) reserve(ids []string) {
+	e.reserved = make(map[string]struct{}, len(ids))
+	e.pending = 0
+	for _, id := range ids {
+		if _, ok := e.reserved[id]; ok {
+			continue
+		}
+		e.reserved[id] = struct{}{}
+		e.pending++
+	}
+}
+
+func (e *evidenceIndex) releaseReserve() {
+	e.reserved = nil
+	e.pending = 0
 }
 
 // admitFitting adds the references in ids that fit the remaining budget, in
@@ -808,13 +840,20 @@ func (e *evidenceIndex) admitFitting(ids []string) []string {
 // citing only references a previous item already brought always fits.
 func (e *evidenceIndex) admit(ids []string) bool {
 	additional := 0
+	fresh := map[string]struct{}{}
 	for _, id := range ids {
 		if _, exists := e.seen[id]; exists {
 			continue
 		}
-		additional++
+		if _, dup := fresh[id]; dup {
+			continue
+		}
+		fresh[id] = struct{}{}
+		if _, held := e.reserved[id]; !held {
+			additional++
+		}
 	}
-	if len(e.order)+additional > e.limit {
+	if len(e.order)+e.pending+additional > e.limit {
 		return false
 	}
 	for _, id := range ids {
@@ -823,6 +862,9 @@ func (e *evidenceIndex) admit(ids []string) bool {
 		}
 		e.seen[id] = struct{}{}
 		e.order = append(e.order, id)
+		if _, held := e.reserved[id]; held {
+			e.pending--
+		}
 	}
 	return true
 }
