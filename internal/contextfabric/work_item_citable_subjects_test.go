@@ -79,3 +79,24 @@ func hasDriverID(result InvestigationResult, id string) bool {
 	}
 	return false
 }
+
+func TestAServedBreachAgainstTheFinalMembersIsDegradedAtValidation(t *testing.T) {
+	result, err, _ := budgetTrimInvestigate(t, budgetTrimShape{members: 30, claims: 3, maxItems: 30, findings: 1, foreignDriver: true})
+	if err != nil {
+		t.Fatalf("investigation failed instead of degrading at validation: %v", err)
+	}
+	if result.Status != InvestigationDegraded || hasDriverID(result, "driver_foreign01") || !IsSynthesisModelFailureAnswer(result) {
+		t.Fatalf("status %q drivers %+v warnings %v: want degraded facts-only", result.Status, result.Drivers, result.Warnings)
+	}
+	if err := ValidateWorkItemTuplePayload(result, storage.Principal{OrgID: "org-1"}); err != nil {
+		t.Fatalf("degraded answer invalid: %v", err)
+	}
+}
+
+func TestAServerCausedBreachIsNotDegradedAtValidation(t *testing.T) {
+	result := workItemTuplePayloadFixture(t)
+	result.SubjectResolution.Candidates[0].EvidenceRefIDs = []string{"evidence-outside-members"}
+	if _, ok := degradeWorkItemModelBreach(result, storage.Principal{OrgID: "org-1"}); ok {
+		t.Fatal("a server-caused rule was degraded")
+	}
+}

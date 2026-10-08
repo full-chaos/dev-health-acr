@@ -4137,7 +4137,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// to stamp. It still measures, which is the half that matters.
 	if tupleCensus != nil {
 		if err := ValidateWorkItemTuplePayload(result, principal); err != nil {
-			return InvestigationResult{}, stageError(StageValidation, err)
+			degraded, ok := degradeWorkItemModelBreach(result, principal)
+			if !ok {
+				return InvestigationResult{}, stageError(StageValidation, err)
+			}
+			result = degraded
 		}
 	}
 	decisiveBudget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
