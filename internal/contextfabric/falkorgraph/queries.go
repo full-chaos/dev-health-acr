@@ -1018,7 +1018,7 @@ func endpointLookupUUID(err error) string {
 }
 
 func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, ce graphrank.CandidateEdge, temporal temporalFilter) (graphrank.ResolvedEdge, edgeResolution, edgeFilterReason, error) {
-	if !graphrank.AuthorizedAttributes(principal, scope, ce.Attributes) {
+	if !authorizedEdgeAttributes(principal, scope, ce.Attributes) {
 		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz, nil
 	}
 	fromKind, fromID := splitSubjectUUID(ce.SourceNodeUUID)
@@ -1060,7 +1060,7 @@ func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal 
 	}
 	fromCandidate := toCandidateNode(fromNode)
 	toCandidate := toCandidateNode(toNode)
-	if !graphrank.AuthorizedAttributes(principal, scope, fromCandidate.Attributes) || !graphrank.AuthorizedAttributes(principal, scope, toCandidate.Attributes) {
+	if !authorizedNodeAttributes(principal, scope, fromCandidate.Attributes) || !authorizedNodeAttributes(principal, scope, toCandidate.Attributes) {
 		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz, nil
 	}
 	fromSubject, ok := graphrank.NodeSubject(fromCandidate)
@@ -1076,6 +1076,19 @@ func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal 
 		Relevance: ce.Relevance, Score: ce.Score, Attributes: ce.Attributes,
 		CreatedAt: ce.CreatedAt, ValidAt: ce.ValidAt, InvalidAt: ce.InvalidAt, ExpiredAt: ce.ExpiredAt,
 	}, edgeAdmitted, edgeFilterReasonNone, nil
+}
+
+// authorizedEdgeAttributes and authorizedNodeAttributes are the two halves of
+// an edge's admission: the edge's own authorization attributes, and each
+// endpoint's. resolveEdge applies both to every edge of the generic walk, and
+// the team anchor's member read applies the same two (tree_walk.go), so the
+// two reads cannot decide one edge differently.
+func authorizedEdgeAttributes(principal storage.Principal, scope contextfabric.RequestedScope, attributes map[string]interface{}) bool {
+	return graphrank.AuthorizedAttributes(principal, scope, attributes)
+}
+
+func authorizedNodeAttributes(principal storage.Principal, scope contextfabric.RequestedScope, attributes map[string]interface{}) bool {
+	return graphrank.AuthorizedAttributes(principal, scope, attributes)
 }
 
 // rankCandidateEdges sorts edges by graphrank's own relevance tie-break.

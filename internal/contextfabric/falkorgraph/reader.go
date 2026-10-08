@@ -685,6 +685,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			Committed: len(request.Resolution.Committed),
 		})
 	}
+	var teamWalkTally teamAnchorWalkTally
 	projectDeploymentsUnlinked := -1
 	projectDeploymentsDenied := -1
 	// deploymentAnchorReadCut: the read of the deployment anchor's own reach
@@ -722,6 +723,14 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 					Truncated: walk.truncated, Err: err,
 				})
 			}
+		} else if position, ok := teamAnchorMemberPosition(teamAnchors, subject, declaredCohortKindForRouting); ok {
+			var walk treeWalk
+			walk, err = a.teamAnchorMembers(ctx, key, principal.OrgID, principal, scope, subject, position, collectLimit, temporal)
+			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
+			if err != nil && a.config.Telemetry != nil {
+				a.config.Telemetry.RecordTeamAnchorWalk(ctx, principal.OrgID, teamWalkTally.decision(declaredCohortKindForRouting, len(request.Resolution.Committed), err))
+			}
+			teamWalkTally.add(walk)
 		} else {
 			nodes, edges, failed, filters, walkTruncated, err = a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
 		}
@@ -791,6 +800,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 				resolvedEdges = append(resolvedEdges, e)
 			}
 		}
+	}
+
+	if teamWalkTally.ran && a.config.Telemetry != nil {
+		a.config.Telemetry.RecordTeamAnchorWalk(ctx, principal.OrgID, teamWalkTally.decision(declaredCohortKindForRouting, len(request.Resolution.Committed), nil))
 	}
 
 	// cohortMemberSource travels onto GraphContext so the count scope

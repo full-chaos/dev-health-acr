@@ -581,6 +581,11 @@ type GraphTelemetry interface {
 	// anchor's kind, so "the walk was not reached" is a line and not an
 	// absence. Counts and closed values only.
 	RecordProjectDeploymentWalk(ctx context.Context, orgID string, decision ProjectDeploymentWalkDecision)
+	// RecordTeamAnchorWalk (eventspec.TeamAnchorWalk) reports ONE
+	// DiscoverContext call whose question asks for the repositories or
+	// projects of a committed team: the read of the team's own ownership
+	// edges and what it found. Counts and closed values only.
+	RecordTeamAnchorWalk(ctx context.Context, orgID string, decision TeamAnchorWalkDecision)
 	// RecordOwnershipRouting (eventspec.OwnershipRouting) reports ONE
 	// DiscoverContext call that asks for the team members of a named anchor:
 	// whether the ownership read ran and what it found. A call whose anchor
@@ -674,6 +679,8 @@ func (NoopTelemetry) RecordCohortKindFulltext(context.Context, string, CohortKin
 }
 func (NoopTelemetry) RecordProjectDeploymentWalk(context.Context, string, ProjectDeploymentWalkDecision) {
 }
+func (NoopTelemetry) RecordTeamAnchorWalk(context.Context, string, TeamAnchorWalkDecision) {}
+
 func (NoopTelemetry) RecordOwnershipRouting(context.Context, string, OwnershipRoutingDecision) {
 }
 
@@ -1030,6 +1037,27 @@ func (t SlogTelemetry) RecordProjectDeploymentWalk(ctx context.Context, orgID st
 		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
 	}
 	t.logger().Info(eventspec.ProjectDeploymentWalk.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
+}
+
+// RecordTeamAnchorWalk logs at Info. The counts ride only on a read that
+// finished, and error only on a failed one.
+func (t SlogTelemetry) RecordTeamAnchorWalk(ctx context.Context, orgID string, decision TeamAnchorWalkDecision) {
+	args := []any{
+		"org_id", contextfabric.SanitizeLogAttr(orgID),
+		"outcome", contextfabric.SanitizeLogAttr(string(decision.Outcome)),
+		"member_kind", contextfabric.SanitizeLogAttr(string(decision.MemberKind)),
+		"committed", decision.Committed,
+	}
+	if decision.Outcome != TeamAnchorWalkReadFailed {
+		args = append(args,
+			"members", decision.Members,
+			"denied", decision.Denied,
+			"truncated", decision.Truncated)
+	}
+	if decision.Err != nil {
+		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
+	}
+	t.logger().Info(eventspec.TeamAnchorWalk.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
 // RecordOwnershipRouting logs at Info. The read counts ride only on an

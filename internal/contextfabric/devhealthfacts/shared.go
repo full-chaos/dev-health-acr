@@ -522,7 +522,13 @@ import (
 // committed anchor, and a draft that breaks a work-item tuple rule on model
 // output is served as the facts-only degraded answer. A candidate saved before
 // v105 may hold the failed or anchor-less answer and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v105"
+//
+// v105 -> v106: the repositories and projects of a committed team are read
+// over the team's own ownership edges in full and as of now, so a former
+// owner's repository is no longer served and a team with many other owned
+// subjects is no longer cut at the shared walk budget. A candidate saved
+// before v106 may hold a cut or former-owner cohort and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v106"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

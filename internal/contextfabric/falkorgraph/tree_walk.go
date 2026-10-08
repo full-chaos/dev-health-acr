@@ -242,7 +242,9 @@ type treeWalk struct {
 	nodes      []graphrank.CandidateNode
 	edges      []graphrank.ResolvedEdge
 	filters    edgeFilterCounts
-	truncated  bool
+	// anchorDenied: the anchor itself is hidden from the caller.
+	anchorDenied bool
+	truncated    bool
 	// hasLink: the path crosses the issue <> pull request link.
 	hasLink bool
 	// linkSources is how many nodes the hop that feeds the link reached (a
@@ -299,10 +301,30 @@ type treeWalkState struct {
 	principal    storage.Principal
 	scope        contextfabric.RequestedScope
 	collectLimit int
+	// ownershipEdges: an ownership hit must also pass its edge's own
+	// authorization. Set for a team anchor's member read, the rule of the
+	// generic walk it replaces; the other tree walks decide by the node.
+	ownershipEdges bool
+	// anchorDenied: the anchor of a team member read is not visible to the
+	// caller, so every ownership hit is a denied member.
+	anchorDenied bool
+}
+
+// authorizedHit is the decision on one hit of a step read: the node, and for
+// an ownership edge the edge's own authorization attributes too, the rule
+// resolveEdge applies to every edge of the generic walk.
+func (s treeWalkState) authorizedHit(hop treeHop, h walkHit) bool {
+	if s.anchorDenied && hop.edge.ownership {
+		return false
+	}
+	if s.ownershipEdges && hop.edge.ownership && h.rel != nil && !authorizedEdgeAttributes(s.principal, s.scope, h.rel.Properties) {
+		return false
+	}
+	return s.authorized(h.to)
 }
 
 func (s treeWalkState) authorized(n *node) bool {
-	return graphrank.AuthorizedAttributes(s.principal, s.scope, toCandidateNode(n).Attributes)
+	return authorizedNodeAttributes(s.principal, s.scope, toCandidateNode(n).Attributes)
 }
 
 // admitted is the work-item rule at a position inside a link read: an issue
@@ -339,6 +361,16 @@ func (s treeWalkState) deny() {
 	s.out.denied++
 }
 
+// denyOwned is deny for a node reached over an ownership edge of the anchor:
+// the anchor's member the caller was denied is named, as hopWalk names it.
+func (s treeWalkState) denyOwned(hop treeHop, n *node) {
+	s.deny()
+	if !hop.edge.ownership {
+		return
+	}
+	s.out.filters.mergeReachDenied(map[string]struct{}{subjectUUID(propStringValue(n.Properties[propKind]), canonicalIDOf(n)): {}})
+}
+
 // cut bounds a frontier by the collect budget; a cut one is truncation.
 func (s treeWalkState) cut(ids []string) []string {
 	sort.Strings(ids)
@@ -364,7 +396,31 @@ func (s treeWalkState) cutRanked(ids []string) []string {
 // bounded by the collect budget, and a spent budget is truncation. A pair of
 // positions off the tree returns an empty walk.
 func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter) (treeWalk, error) {
-	out := treeWalk{anchorKind: anchor.Kind}
+	return a.treeMembersOf(ctx, key, orgID, principal, scope, anchor, member, collectLimit, temporal, false, false)
+}
+
+// teamAnchorMembers is treeMembers for a team anchor's repositories or
+// projects: ownership edges are authorized as the generic walk authorizes
+// every edge.
+func (a *Adapter) teamAnchorMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter) (treeWalk, error) {
+	// The step read returns the member and the edge, never the team: the
+	// anchor is read here, in the caller's window, and decided by the same
+	// predicate resolveEdge applies to both endpoints of every edge. A team
+	// the caller cannot see still has its members read, so each is counted
+	// denied rather than lost.
+	team, err := a.nodeByKindID(ctx, key, orgID, string(anchor.Kind), anchor.CanonicalID, temporal)
+	if err != nil {
+		return treeWalk{anchorKind: anchor.Kind}, err
+	}
+	if team == nil {
+		return treeWalk{anchorKind: anchor.Kind}, nil
+	}
+	denied := !authorizedNodeAttributes(principal, scope, toCandidateNode(team).Attributes)
+	return a.treeMembersOf(ctx, key, orgID, principal, scope, anchor, member, collectLimit, temporal, true, denied)
+}
+
+func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter, ownershipEdges, anchorDenied bool) (treeWalk, error) {
+	out := treeWalk{anchorKind: anchor.Kind, anchorDenied: anchorDenied}
 	start, ok := anchorPosition(anchor.Kind)
 	if !ok {
 		return out, nil
@@ -373,7 +429,7 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 	if !ok {
 		return out, nil
 	}
-	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit}
+	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit, ownershipEdges: ownershipEdges, anchorDenied: anchorDenied}
 	frontier := []string{anchor.CanonicalID}
 	subjects := map[string]contextfabric.SubjectRef{anchor.CanonicalID: anchor}
 	for k := 0; k < len(path); k++ {
@@ -431,7 +487,7 @@ func (s treeWalkState) advance(hop treeHop, hits []walkHit, parents map[string]c
 	reached := map[string]walkHit{}
 	subjects := map[string]contextfabric.SubjectRef{}
 	for _, h := range hits {
-		if !s.authorized(h.to) {
+		if !s.authorizedHit(hop, h) {
 			s.deny()
 			continue
 		}
@@ -463,8 +519,8 @@ func (s treeWalkState) advance(hop treeHop, hits []walkHit, parents map[string]c
 func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]contextfabric.SubjectRef) {
 	seen := map[string]bool{}
 	for _, h := range hits {
-		if !s.authorized(h.to) {
-			s.deny()
+		if !s.authorizedHit(hop, h) {
+			s.denyOwned(hop, h.to)
 			continue
 		}
 		id := canonicalIDOf(h.to)
