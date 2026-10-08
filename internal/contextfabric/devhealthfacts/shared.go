@@ -544,7 +544,12 @@ import (
 // saved before v109 may hold a hotspots answer without it and must not be
 // reused.
 //
-// v109 -> v111: a team-scoped cohort (the team's repositories and work items)
+// v109 -> v110: the clarification prompt tells apart same-kind, same-provider,
+// same-label candidates by a canonical id suffix (or an ordinal). A candidate
+// saved before v110 may hold the older, identical-looking prompt and must not
+// be reused.
+//
+// v110 -> v111: a team-scoped cohort (the team's repositories and work items)
 // and the work item to team edges include a co-owner of the item (a second
 // team owning its project), not only the primary team. A candidate saved
 // before v111 may hold a cohort short of the co-owner team's items and must not
