@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -86,5 +88,86 @@ func TestDecodeInvestigationArgumentsRefusesTrailingDataAndBoundsTheNamedKey(t *
 	message := investigationArgumentsMessage(toolInvestigateQuestion, err)
 	if strings.Contains(message, strings.Repeat("k", 65)) || !strings.Contains(message, strings.Repeat("k", 64)) {
 		t.Errorf("message %q does not bound the named key to 64 characters", message)
+	}
+}
+
+func TestDecodeInvestigationArgumentsRefusesAClosingDelimiterAfterTheValue(t *testing.T) {
+	for _, tail := range []string{"]", "}", ")", ","} {
+		var input contractsv1.MCPInvestigateQuestionRequest
+		if err := decodeInvestigationArguments([]byte(`{"question":"q"}`+tail), &input); err == nil {
+			t.Errorf("decode accepted %q after the value", tail)
+		}
+	}
+	var input contractsv1.MCPInvestigateQuestionRequest
+	if err := decodeInvestigationArguments([]byte(" {\"question\":\"q\"}\n"), &input); err != nil {
+		t.Errorf("surrounding whitespace refused: %v", err)
+	}
+}
+
+// Every property a request schema declares has a field on the Go request, and
+// every field has a property, so the strict decode can neither refuse a key the
+// schema allows nor allow one the schema forbids.
+func TestInvestigationRequestSchemasMatchTheGoRequestFields(t *testing.T) {
+	cases := map[string]any{
+		investigateQuestionRequestSchemaFile:           contractsv1.MCPInvestigateQuestionRequest{},
+		investigateWithInterpretationRequestSchemaFile: contractsv1.MCPInvestigateWithInterpretationRequest{},
+	}
+	for file, request := range cases {
+		raw, err := schemaFiles.ReadFile(file)
+		if err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		var schema struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil || len(schema.Properties) == 0 {
+			t.Fatalf("%s: properties unreadable (%v)", file, err)
+		}
+		tags := jsonTagsOf(reflect.TypeOf(request))
+		for name := range schema.Properties {
+			if !tags[name] {
+				t.Errorf("%s declares %q, which the Go request has no field for", file, name)
+			}
+		}
+		for name := range tags {
+			if _, ok := schema.Properties[name]; !ok {
+				t.Errorf("%s: the Go request carries %q, which the schema does not declare", file, name)
+			}
+		}
+	}
+}
+
+func jsonTagsOf(t reflect.Type) map[string]bool {
+	tags := map[string]bool{}
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if field.Anonymous {
+			for name := range jsonTagsOf(field.Type) {
+				tags[name] = true
+			}
+			continue
+		}
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name != "" && name != "-" {
+			tags[name] = true
+		}
+	}
+	return tags
+}
+
+// A bare receipt id bound to parent_result_id is expanded into the object the
+// strict decode accepts.
+func TestBareReceiptExpansionOutputPassesTheStrictDecode(t *testing.T) {
+	raw := []byte(`{"question":"q","parent_result_id":"result_1","prior_subject_receipts":["receipt_1"]}`)
+	expanded, summary, err := expandBareReceiptIDs(raw, toolInvestigateQuestion)
+	if err != nil || summary.Bare != 1 {
+		t.Fatalf("expandBareReceiptIDs: summary %+v, err %v", summary, err)
+	}
+	var input contractsv1.MCPInvestigateQuestionRequest
+	if err := decodeInvestigationArguments(expanded, &input); err != nil {
+		t.Fatalf("expanded arguments refused: %v", err)
+	}
+	if len(input.PriorSubjectReceipts) != 1 || input.PriorSubjectReceipts[0].ReceiptID != "receipt_1" || input.PriorSubjectReceipts[0].ResultID != "result_1" {
+		t.Fatalf("receipts = %+v", input.PriorSubjectReceipts)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"io"
 	"strconv"
 	"strings"
 
@@ -96,7 +97,8 @@ func decodeInvestigationArguments(args []byte, into any) error {
 	if err := decoder.Decode(into); err != nil {
 		return err
 	}
-	if decoder.More() {
+	var extra json.RawMessage
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return errors.New("unexpected data after the JSON value")
 	}
 	return nil
