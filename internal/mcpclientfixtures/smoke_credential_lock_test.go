@@ -18,6 +18,8 @@ import (
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 )
 
 // holdHostCredentialLock takes the exclusive flock the real acr-mcp credential
@@ -128,4 +130,45 @@ func TestRealBinaryNamesCredentialOperationWhenFileCredentialWaitExpires(t *test
 	if strings.Contains(string(out), "internal:") {
 		t.Fatalf("stderr = %q, must not report an internal failure", out)
 	}
+}
+
+// A child pointed at its own lock path boots with a file credential while the
+// real host lock is held, because it never contends on the host file.
+func TestRealBinaryFileCredentialBootsViaOverrideLockPathWhileHostLockIsHeld(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping process-spawning smoke test in -short mode")
+	}
+	binPath := buildVersionedACRMCPBinaryWithTags(t, "")
+	server, caPath := smokeServerAndCA(t)
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte(fixtureToken()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lockDir := t.TempDir()
+	if err := os.Chmod(lockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	release := holdHostCredentialLock(t)
+	defer release()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, binPath, "serve")
+	cmd.Stderr = &stderr
+	cmd.Env = append(os.Environ(),
+		"ACR_API_URL="+server.URL,
+		"ACR_API_CA_BUNDLE="+caPath,
+		"ACR_API_TOKEN=",
+		"ACR_API_TOKEN_FILE="+tokenFile,
+		"ACR_API_TOKEN_KEYRING_DISABLED=true",
+		"ACR_SIDECAR_VERSION=1.0.0",
+		sidecar.CredentialLifecycleLockPathEnvironment+"="+filepath.Join(lockDir, "child.lock"),
+	)
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "mcpclientfixtures-lock", Version: "0.0.1"}, nil)
+	session, err := client.Connect(ctx, &mcpsdk.CommandTransport{Command: cmd}, nil)
+	if err != nil {
+		t.Fatalf("connect via the override lock path: %v\nchild stderr: %s", err, stderr.String())
+	}
+	defer session.Close()
 }

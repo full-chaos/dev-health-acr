@@ -85,3 +85,41 @@ func TestSharedFlockRejectsUnsafeLockFile(t *testing.T) {
 		t.Fatalf("shared acquire under an unsafe parent = %v, want unsafe", err)
 	}
 }
+
+func TestLockPathEnvironmentOverrideReplacesDefaultPath(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "alt.lock")
+	t.Setenv(CredentialLifecycleLockPathEnvironment, want)
+	if got := credentialLifecycleLockPath(); got != want {
+		t.Fatalf("lock path = %q, want the override %q", got, want)
+	}
+	t.Setenv(CredentialLifecycleLockPathEnvironment, "")
+	if got := credentialLifecycleLockPath(); filepath.Dir(got) != "/var/tmp" {
+		t.Fatalf("default lock path = %q, want it under /var/tmp", got)
+	}
+}
+
+func TestLockPathOverrideIsUsableUnderOwnerOnlyDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "alt.lock")
+	t.Setenv(CredentialLifecycleLockPathEnvironment, path)
+	closeLock, err := acquireCredentialLifecycleSharedLockAt(credentialLifecycleLockPath(), time.Second)
+	if err != nil {
+		t.Fatalf("shared acquire at the override = %v, want success", err)
+	}
+	_ = closeLock()
+}
+
+func TestLockPathOverrideRejectsGroupWritableDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(CredentialLifecycleLockPathEnvironment, filepath.Join(dir, "alt.lock"))
+	_, err := acquireCredentialLifecycleSharedLockAt(credentialLifecycleLockPath(), 10*time.Millisecond)
+	if !errors.Is(err, errCredentialLifecycleLockUnsafe) {
+		t.Fatalf("acquire under a group-writable override dir = %v, want unsafe", err)
+	}
+}

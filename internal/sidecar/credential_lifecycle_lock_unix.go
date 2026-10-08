@@ -17,7 +17,15 @@ func acquireCredentialLifecycleLock() (func() error, error) {
 	return acquireCredentialLifecycleLockAt(credentialLifecycleLockPath())
 }
 
+// CredentialLifecycleLockPathEnvironment names an alternate lock file path.
+// When set, the lifecycle lock lives there instead of the per-user file under
+// /var/tmp, so a process can be kept off the host-wide lock.
+const CredentialLifecycleLockPathEnvironment = "ACR_CREDENTIAL_LIFECYCLE_LOCK_PATH"
+
 func credentialLifecycleLockPath() string {
+	if override := os.Getenv(CredentialLifecycleLockPathEnvironment); override != "" {
+		return override
+	}
 	return filepath.Join("/var/tmp", fmt.Sprintf("acr-credential-lifecycle-%d.lock", os.Geteuid()))
 }
 
@@ -106,11 +114,29 @@ func validateCredentialLifecycleLockParent(path string) error {
 	if !ok {
 		return errCredentialLifecycleLockUnsafe
 	}
+	if override := os.Getenv(CredentialLifecycleLockPathEnvironment); override != "" && filepath.Dir(override) == path {
+		return validateCredentialLifecycleLockOverrideParentMetadata(info.Mode(), stat.Uid)
+	}
 	return validateCredentialLifecycleLockParentMetadata(info.Mode(), stat.Uid)
 }
 
 func validateCredentialLifecycleLockParentMetadata(mode os.FileMode, owner uint32) error {
 	if mode&os.ModeDir == 0 || mode&os.ModeSymlink != 0 || owner != 0 || mode&os.ModeSticky == 0 {
+		return errCredentialLifecycleLockUnsafe
+	}
+	return nil
+}
+
+// An override directory must be a real directory that only its owner (the
+// caller or root) can write into, unless it is sticky like /var/tmp.
+func validateCredentialLifecycleLockOverrideParentMetadata(mode os.FileMode, owner uint32) error {
+	if mode&os.ModeDir == 0 || mode&os.ModeSymlink != 0 {
+		return errCredentialLifecycleLockUnsafe
+	}
+	if owner != 0 && owner != uint32(os.Geteuid()) {
+		return errCredentialLifecycleLockUnsafe
+	}
+	if mode&0o022 != 0 && mode&os.ModeSticky == 0 {
 		return errCredentialLifecycleLockUnsafe
 	}
 	return nil
