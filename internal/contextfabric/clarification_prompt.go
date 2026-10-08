@@ -1,6 +1,12 @@
 package contextfabric
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
 
 // ClarificationPrompt builds the caller-facing ambiguity prompt from the
 // (post-truncation) candidate set.
@@ -39,10 +45,23 @@ func ClarificationPrompt(candidates []SubjectCandidate) string {
 	}
 	labels := make([]string, 0, max)
 	for i, candidate := range shown {
+		label := rendered[i]
 		if len(owners[rendered[i]]) > 1 {
-			rendered[i] = renderCandidateLabel(candidate.Subject.Label, append(cueLists[i], candidate.Subject.CanonicalID))
+			label = renderCandidateLabel(candidate.Subject.Label, append(cueLists[i], candidate.Subject.CanonicalID))
 		}
-		labels = append(labels, rendered[i])
+		labels = append(labels, label)
+	}
+	if promptRuneCount(labels) > contractsv1.ContextFabricProjectedClarificationPromptMaxLength {
+		// The ids would push the prompt past its published bound; a short
+		// ordinal still tells the identical choices apart.
+		ordinals := map[string]int{}
+		for i, candidate := range shown {
+			if len(owners[rendered[i]]) <= 1 {
+				continue
+			}
+			ordinals[rendered[i]]++
+			labels[i] = renderCandidateLabel(candidate.Subject.Label, append(cueLists[i], "#"+strconv.Itoa(ordinals[rendered[i]])))
+		}
 	}
 	if len(labels) == 0 {
 		// An empty candidate list has no subject to ask about, and the
@@ -105,4 +124,8 @@ func crossKindLabels(candidates []SubjectCandidate) map[string]bool {
 		}
 	}
 	return out
+}
+
+func promptRuneCount(labels []string) int {
+	return utf8.RuneCountInString("Which subject did you mean: " + strings.Join(labels, ", ") + "?")
 }

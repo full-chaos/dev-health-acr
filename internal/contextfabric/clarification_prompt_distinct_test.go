@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -54,5 +55,31 @@ func TestClarificationPromptProviderCueStillSeparatesWithoutID(t *testing.T) {
 	})
 	if want := "Which subject did you mean: payments (jira), payments (github)?"; got != want {
 		t.Fatalf("prompt = %q, want %q", got, want)
+	}
+}
+
+func TestClarificationPromptStaysWithinPublishedBoundAtMaxLengths(t *testing.T) {
+	label := strings.Repeat("l", 512)
+	cands := []SubjectCandidate{}
+	for _, c := range []string{"a", "b", "c"} {
+		cands = append(cands, promptCandidate(contractsv1.ContextFabricSubjectProject, strings.Repeat(c, 256), label, "jira"))
+	}
+	got := ClarificationPrompt(cands)
+	if n := utf8.RuneCountInString(got); n > contractsv1.ContextFabricProjectedClarificationPromptMaxLength {
+		t.Fatalf("prompt is %d runes, bound %d", n, contractsv1.ContextFabricProjectedClarificationPromptMaxLength)
+	}
+	if !strings.Contains(got, "#1") || !strings.Contains(got, "#2") || !strings.Contains(got, "#3") {
+		t.Fatalf("identical choices not told apart: %q", got)
+	}
+}
+
+func TestClarificationPromptKeepsIDCueWhenWithinBound(t *testing.T) {
+	label := strings.Repeat("l", 100)
+	got := ClarificationPrompt([]SubjectCandidate{
+		promptCandidate(contractsv1.ContextFabricSubjectProject, "id-a", label, "jira"),
+		promptCandidate(contractsv1.ContextFabricSubjectProject, "id-b", label, "jira"),
+	})
+	if !strings.Contains(got, "id-a") || strings.Contains(got, "#") {
+		t.Fatalf("id cue lost: %q", got)
 	}
 }
