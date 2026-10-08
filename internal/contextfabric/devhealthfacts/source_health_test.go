@@ -129,6 +129,17 @@ func TestSourceHealthProviderUnreadableAnswerIsALimitation(t *testing.T) {
 	}
 }
 
+func TestSourceHealthProviderMissingOrNullRootIsALimitationNotNoData(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{`{}`, `{"sourceHealth":null}`, `null`} {
+		caller := &fakeOperationCaller{outcome: devhealthfacts.OperationOutcome{Served: true, Complete: true, Data: json.RawMessage(body)}}
+		result := readSourceHealth(t, sourceHealthProvider(t, sourceHealthHolder(caller)), storage.Principal{OrgID: "org-1"}, organizationSubject("org-1"))
+		if len(result.Facts) != 0 || result.State != contextfabric.SourceUnavailable {
+			t.Fatalf("body %s: result = %+v", body, result)
+		}
+	}
+}
+
 func TestSourceHealthProviderEmptyListIsNoData(t *testing.T) {
 	t.Parallel()
 	caller := &fakeOperationCaller{outcome: devhealthfacts.OperationOutcome{Served: true, Complete: true, Data: sourceHealthData()}}

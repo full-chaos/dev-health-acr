@@ -56,7 +56,7 @@ type sourceHealthRow struct {
 }
 
 type sourceHealthData struct {
-	SourceHealth []sourceHealthRow `json:"sourceHealth"`
+	SourceHealth *[]sourceHealthRow `json:"sourceHealth"`
 }
 
 func sourceHealthRestricted(principal storage.Principal) bool {
@@ -118,8 +118,12 @@ func (p *SourceHealthProvider) read(ctx context.Context, principal storage.Princ
 	if err := json.Unmarshal(outcome.Data, &data); err != nil {
 		return limitation(contextfabric.SourceUnavailable, sourceHealthUnreadableReason)
 	}
-	facts := make([]contextfabric.CanonicalFact, 0, len(data.SourceHealth))
-	for _, row := range data.SourceHealth {
+	if data.SourceHealth == nil {
+		return limitation(contextfabric.SourceUnavailable, sourceHealthUnreadableReason)
+	}
+	rows := *data.SourceHealth
+	facts := make([]contextfabric.CanonicalFact, 0, len(rows))
+	for _, row := range rows {
 		fields := map[string]contextfabric.FactValue{
 			"provider":                 contextfabric.StringFactValue(row.Provider),
 			"scope":                    contextfabric.StringFactValue(row.Scope),
