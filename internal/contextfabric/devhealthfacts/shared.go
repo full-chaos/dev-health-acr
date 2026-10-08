@@ -514,7 +514,11 @@ import (
 // candidate saved before v101 may hold a cohort of text-matched repositories
 // and must not be reused.
 //
-// v105 -> v106: the repositories and projects of a committed team are read
+// v103 -> v104: a prior result that echoes a handle literal is readable by a
+// follow-up turn from a scoped caller. A candidate saved before v104 may hold
+// the no-match answer that refusal produced and must not be reused.
+//
+// v104 -> v106: the repositories and projects of a committed team are read
 // over the team's own ownership edges in full and as of now, so a former
 // owner's repository is no longer served and a team with many other owned
 // subjects is no longer cut at the shared walk budget. A candidate saved

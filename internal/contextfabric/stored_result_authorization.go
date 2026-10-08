@@ -238,6 +238,36 @@ type StoredResultGate struct {
 	subjects StoredSubjectAuthorizer
 }
 
+// IsCanonicalSubjectID reports whether value has the shape of a canonical
+// subject id: a subject kind (optionally with the ".v2" identity suffix), a
+// colon, and a non-empty remainder ("pull_request:<repo>:<number>",
+// "work_item.v2:..."). Anything else, a bare pull request number for one, is
+// not an identity.
+func IsCanonicalSubjectID(value string) bool {
+	kind, rest, ok := strings.Cut(value, ":")
+	if !ok || rest == "" {
+		return false
+	}
+	return contractsv1.ValidContextFabricSubjectKind(contractsv1.ContextFabricSubjectKind(strings.TrimSuffix(kind, ".v2")))
+}
+
+// subjectsOf is StoredResultSubjects with one guard: a confirmed handle whose
+// applied value is not a canonical subject id carries no identity (its value
+// is a literal such as a pull request number), so it names no subject. The
+// identity the result commits to is in its committed subjects and its anchor
+// and candidate entries, which are still decided.
+func (g *StoredResultGate) subjectsOf(result InvestigationResult) []SubjectRef {
+	kept := make([]contractsv1.ContextFabricConfirmedStructureEntry, 0, len(result.ConfirmedStructure))
+	for _, entry := range result.ConfirmedStructure {
+		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectHandle && !IsCanonicalSubjectID(entry.AppliedValue) {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	result.ConfirmedStructure = kept
+	return StoredResultSubjects(result)
+}
+
 // NewStoredResultGate builds a gate over graph. The graph must implement
 // StoredSubjectAuthorizer for a restricted caller to be admitted to any result
 // that names a graph subject; without it such reads fail closed as
@@ -306,7 +336,7 @@ func (g *StoredResultGate) decide(ctx context.Context, principal storage.Princip
 		PrincipalScope:       classifyStoredResultPrincipalScope(principal),
 		RepositoryScopeCount: len(principal.RepositoryScopes),
 	}
-	subjects := StoredResultSubjects(result)
+	subjects := g.subjectsOf(result)
 	decision.SubjectCount = len(subjects)
 
 	groups := storedResultGroups(result)
@@ -554,7 +584,10 @@ func StoredResultSubjects(result InvestigationResult) []SubjectRef {
 }
 
 // storedSubjectStructureMembers are the confirmed-structure members whose
-// applied value is a subject identity rather than a kind or a window.
+// applied value is a subject identity rather than a kind or a window. A
+// handle's value is an identity only when it is not a handle literal. A
+// handle is not one: its applied value is the literal the caller sent or a
+// census offered (a pull request number), which names no graph node.
 var storedSubjectStructureMembers = map[contractsv1.ContextFabricStructureNeedKind]bool{
 	contractsv1.ContextFabricStructureNeedSubjectAnchor:    true,
 	contractsv1.ContextFabricStructureNeedSubjectCandidate: true,
@@ -632,10 +665,23 @@ func (s authorizedResultStore) Get(ctx context.Context, principal storage.Princi
 		s.recorder.RecordStoredResultAuthorization(ctx, principal, decision)
 	}
 	if err := decision.ServingError(); err != nil {
+		if decision.Decision == StoredResultDenied {
+			return StoredInvestigationResult{}, &storedResultDeniedError{reason: decision.Reason}
+		}
 		return StoredInvestigationResult{}, err
 	}
 	return stored, nil
 }
+
+// storedResultDeniedError is ErrInvestigationResultNotFound for every caller
+// that tests with errors.Is, and carries the closed denial reason for the
+// engine's own telemetry.
+type storedResultDeniedError struct {
+	reason StoredResultAuthorizationReason
+}
+
+func (e *storedResultDeniedError) Error() string { return ErrInvestigationResultNotFound.Error() }
+func (e *storedResultDeniedError) Unwrap() error { return ErrInvestigationResultNotFound }
 
 // StoredResultAuthorizationLogMessage is the Info line every decision emits.
 const StoredResultAuthorizationLogMessage = "context fabric stored result authorization"
