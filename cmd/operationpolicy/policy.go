@@ -247,6 +247,7 @@ func declaredPolicy() policyDeclaration {
 			},
 			"hotspots": {
 				DocumentName: "Hotspots",
+				PrimaryList:  "hotspots.rows",
 				Cost:         dr.CostList,
 				Variables: map[string]variableDecl{
 					"input.orgId":    principalOrg,
