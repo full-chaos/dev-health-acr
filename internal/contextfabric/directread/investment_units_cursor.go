@@ -8,6 +8,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -168,6 +169,7 @@ func (r *FactsReader) finishUnitsPage(response *FactsResponse, maxBytes int, org
 		noteUnitsBudget(response.Coverage, dropped, noProgress)
 		if !more || noProgress {
 			delete(fields, "next_cursor")
+			dropUnitsCursorPromise(response.Coverage)
 			return nil
 		}
 		sealed, sealErr := r.sealUnitsCursor(orgID, digest, position)
@@ -274,29 +276,36 @@ func findUnitsPageFact(facts []ServedFact) (ServedFact, bool) {
 // noteUnitsPageNotServed runs when the byte budget left no room for the page
 // fact beside the mix fact, which outranks it. The page fact is the smallest
 // fact and carries next_cursor, so it is always served when units are
-// requested: here as a limitation row (units_returned 0, no cursor, the reason
-// and the max_bytes minimum that serves the real page fact), and the same text
-// goes to the coverage rows (never dropped). A document that is then over
-// max_bytes says so in truncation.coverage_over_budget.
+// requested: here as the page fact itself without its cursor and with
+// units_returned 0 and units_limitation (the reason and the max_bytes minimum
+// that serves the page fact whole). The coverage rows (never dropped) lose
+// the provider's sentence promising a cursor and carry the same text. A
+// document that is then over max_bytes is flagged by flagUnitsOverBudget after
+// the page is finished.
 func (r *FactsReader) noteUnitsPageNotServed(response *FactsResponse, maxBytes int, page ServedFact, unitRowsBefore int) {
 	bare := page
-	bare.Fields = map[string]any{
-		"unit_kind":      contextfabric.InvestmentUnitPageKind,
-		"units_returned": "0",
+	bare.Fields = make(map[string]any, len(page.Fields))
+	for name, value := range page.Fields {
+		bare.Fields[name] = value
 	}
-	size := func(candidate FactsResponse) int {
-		encoded, err := json.Marshal(candidate)
-		if err != nil {
-			return math.MaxInt
-		}
-		return len(encoded)
-	}
+	delete(bare.Fields, "next_cursor")
+	bare.Fields["units_returned"] = "0"
+	dropUnitsCursorPromise(response.Coverage)
 	probe := *response
 	probe.Facts = append(append([]ServedFact{}, response.Facts...), bare)
 	probe.Coverage = append([]CoverageRow(nil), response.Coverage...)
 	noteUnitsBudget(probe.Coverage, unitRowsBefore, true)
 	probe.Truncation = &Truncation{TruncatedBy: TruncatedByMaxBytes, FactsOmitted: unitRowsBefore}
-	minimum := size(probe)
+	minimum := maxBytes
+	for i := 0; i < 3; i++ {
+		probe.Request.MaxBytes = minimum
+		encoded, err := json.Marshal(probe)
+		if err != nil {
+			minimum = math.MaxInt
+			break
+		}
+		minimum = len(encoded)
+	}
 	note := fmt.Sprintf("units not served under max_bytes %d; minimum %d (the work_unit_page fact does not fit beside the mix fact); no next_cursor; raise max_bytes", maxBytes, minimum)
 	bare.Fields["units_limitation"] = note
 	response.Facts = append(response.Facts, bare)
@@ -310,10 +319,54 @@ func (r *FactsReader) noteUnitsPageNotServed(response *FactsResponse, maxBytes i
 			response.Coverage[i].Reason += "; " + note
 		}
 	}
-	if size(*response) > maxBytes {
-		if response.Truncation == nil {
-			response.Truncation = &Truncation{TruncatedBy: TruncatedByMaxBytes}
+}
+
+// flagUnitsOverBudget says in truncation.coverage_over_budget that the FINAL
+// document is over max_bytes (the limitation row, or the coverage notes the
+// page finishing added, are never cut).
+func flagUnitsOverBudget(response *FactsResponse, maxBytes int) {
+	encoded, err := json.Marshal(response)
+	if err == nil && len(encoded) <= maxBytes {
+		return
+	}
+	if response.Truncation == nil {
+		response.Truncation = &Truncation{TruncatedBy: TruncatedByMaxBytes}
+	}
+	response.Truncation.CoverageOverBudget = true
+}
+
+// dropUnitsCursorPromise removes the provider's sentence that points at the
+// page fact's next_cursor from the coverage rows of a page that serves none.
+func dropUnitsCursorPromise(rows []CoverageRow) {
+	for i := range rows {
+		if rows[i].Kind == string(contextfabric.FactInvestment) {
+			rows[i].Reason = strings.ReplaceAll(rows[i].Reason, contextfabric.InvestmentUnitsCutReason, "units_page_cut: more work units follow")
 		}
-		response.Truncation.CoverageOverBudget = true
+	}
+}
+
+// stashUnitsPageCursor takes the provider's cursor off the page fact for the
+// budget cut: the cursor is replaced by a sealed one (or none) after the cut,
+// so it must not weigh on whether the page fact fits.
+func stashUnitsPageCursor(facts []ServedFact) (token any) {
+	for _, fact := range facts {
+		if unitFactKind(fact) == contextfabric.InvestmentUnitPageKind {
+			token = fact.Fields["next_cursor"]
+			delete(fact.Fields, "next_cursor")
+			return token
+		}
+	}
+	return nil
+}
+
+func restoreUnitsPageCursor(facts []ServedFact, token any) {
+	if token == nil {
+		return
+	}
+	for _, fact := range facts {
+		if unitFactKind(fact) == contextfabric.InvestmentUnitPageKind {
+			fact.Fields["next_cursor"] = token
+			return
+		}
 	}
 }

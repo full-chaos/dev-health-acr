@@ -16,14 +16,14 @@ func pageFactUnitsProvider(mixPad, rows int) *stubProvider {
 				"unit_kind": strValue("mix"), "work_unit_id": strValue(strings.Repeat("m", mixPad)),
 			}, EvidenceRefIDs: []string{"acr:v1:team:t"}},
 			{Kind: contextfabric.FactInvestment, Subject: team, Fields: map[string]contextfabric.FactValue{
-				"unit_kind": strValue(contextfabric.InvestmentUnitPageKind), "units_returned": intValue(int64(rows)),
+				"unit_kind": strValue(contextfabric.InvestmentUnitPageKind), "units_returned": intValue(int64(rows)), "units_refs_unresolved": intValue(3),
 				"next_cursor": strValue(hiddenRowCursor),
 			}, EvidenceRefIDs: []string{"acr:v1:team:t"}},
 		}
 		for i := 0; i < rows; i++ {
 			facts = append(facts, unitRowFact(team, "wu-"+strings.Repeat("x", 40)+fmt.Sprintf("%02d", i), "a", float64(100-i)))
 		}
-		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable, Facts: facts}, nil
+		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable, Facts: facts, Reason: contextfabric.InvestmentUnitsCutReason, Truncated: true}, nil
 	}}
 }
 
@@ -118,6 +118,9 @@ func TestInvestmentUnitsPageFactNotFittingBesideTheMixIsALimitation(t *testing.T
 		t.Fatalf("served %d unit rows", n)
 	}
 	reason := investmentReason(response)
+	if strings.Contains(reason, "pass the next_cursor") {
+		t.Fatalf("coverage still promises a cursor: %q", reason)
+	}
 	if !strings.Contains(reason, "units not served under max_bytes 4096; minimum ") || !strings.Contains(reason, "raise max_bytes") {
 		t.Fatalf("coverage reason = %q, want the limitation text", reason)
 	}
@@ -142,10 +145,15 @@ func TestInvestmentUnitsPageFactNotFittingBesideTheMixIsALimitation(t *testing.T
 	if size := len(mustJSON(t, retry)); size > minimum {
 		t.Fatalf("document is %d bytes at the stated minimum %d", size, minimum)
 	}
-	below := readPageFact(t, mixPadFilling(t), minimum-300)
-	belowPage, _ := hasPageFact(below)
-	if _, limited := belowPage.Fields["units_limitation"]; !limited {
-		t.Fatalf("minimum %d overstates: the page fact fits 300 bytes below it", minimum)
+	if retry.Truncation != nil && retry.Truncation.CoverageOverBudget {
+		t.Fatal("flagged over budget at the stated minimum")
+	}
+	below := readPageFact(t, mixPadFilling(t), minimum-1)
+	if _, ok := hasPageFact(below); !ok {
+		t.Fatal("no page fact one byte below the minimum")
+	}
+	if size := len(mustJSON(t, below)); size > minimum-1 && (below.Truncation == nil || !below.Truncation.CoverageOverBudget) {
+		t.Fatalf("document is %d bytes over max_bytes %d without the coverage_over_budget flag", size, minimum-1)
 	}
 }
 

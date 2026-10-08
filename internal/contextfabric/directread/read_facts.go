@@ -540,7 +540,9 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 	}
 	unitRows := countUnitRows(response.Facts)
 	pageBeforeBudget, hadPage := findUnitsPageFact(response.Facts)
+	providerCursor := stashUnitsPageCursor(response.Facts)
 	response.Truncation = applyBudget(&response, plan.echo.MaxBytes)
+	restoreUnitsPageCursor(response.Facts, providerCursor)
 	if plan.units != nil && hadPage {
 		if _, stillThere := findUnitsPageFact(response.Facts); !stillThere {
 			r.noteUnitsPageNotServed(&response, plan.echo.MaxBytes, pageBeforeBudget, unitRows)
@@ -551,6 +553,7 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 			response.Status = StatusUnavailable
 			return response, fmt.Errorf("%w: units cursor: %w", ErrFactsInternal, sealErr)
 		}
+		flagUnitsOverBudget(&response, plan.echo.MaxBytes)
 	}
 	if response.Truncation != nil {
 		record.TruncatedBy = response.Truncation.TruncatedBy

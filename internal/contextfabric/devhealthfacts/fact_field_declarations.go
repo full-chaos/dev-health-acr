@@ -852,7 +852,7 @@ func investmentUnitFields() []fieldDecl {
 		// for: an opaque reference, withheld for a repository-restricted caller.
 		declRef(declUnresolvedHandleRef, fStr("unit_unresolved_refs")), fStr("unit_mix_source"), fStr("unit_attribution_basis"),
 		fInt("units_returned", "count"), fNum("page_share_total", ""), fInt("units_refs_unresolved", "count"),
-		fNum("scope_share_total", ""), fInt("scope_unit_rows", "count"), fStr("next_cursor"),
+		fNum("scope_share_total", ""), fInt("scope_unit_rows", "count"), fStr("next_cursor"), fStr("units_limitation"),
 	}
 	for _, theme := range canonicalInvestmentThemes {
 		fields = append(fields, fNum("unit_"+contextfabric.FactFieldTheme(theme), "ratio"))
