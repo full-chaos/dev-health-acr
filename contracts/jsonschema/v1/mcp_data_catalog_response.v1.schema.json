@@ -143,6 +143,10 @@
                 "type": "string",
                 "description": "Digest of the registered query document behind the operation."
               },
+              "primary_list": {
+                "type": "string",
+                "description": "Present when the answer has more than one list: the list a cut page cuts. The other lists are carried whole, or emptied and named in page.cut."
+              },
               "variables": {
                 "type": "array",
                 "description": "The variables you may set.",

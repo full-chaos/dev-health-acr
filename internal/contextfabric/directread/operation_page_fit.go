@@ -193,6 +193,7 @@ func emptyList(root map[string]any, path string) bool {
 		return false
 	}
 	parent[key] = []any{}
+	describeReturnedPage(parent, nil)
 	return true
 }
 
@@ -241,9 +242,11 @@ func describeReturnedPage(parent map[string]any, rows []any) {
 	}
 	if _, has := info["endCursor"]; has {
 		info["endCursor"] = nil
-		if last, ok := rows[len(rows)-1].(map[string]any); ok {
-			if cursor, ok := last["cursor"].(string); ok {
-				info["endCursor"] = cursor
+		if len(rows) > 0 {
+			if last, ok := rows[len(rows)-1].(map[string]any); ok {
+				if cursor, ok := last["cursor"].(string); ok {
+					info["endCursor"] = cursor
+				}
 			}
 		}
 	}
