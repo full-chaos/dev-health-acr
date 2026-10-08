@@ -53,6 +53,7 @@ func unitsProvider(seen *[]contextfabric.InvestmentUnitsRequest) *stubProvider {
 		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable, Facts: []contextfabric.CanonicalFact{
 			{Kind: contextfabric.FactInvestment, Subject: team, Fields: map[string]contextfabric.FactValue{
 				"unit_kind": strValue(contextfabric.InvestmentUnitPageKind), "units_returned": intValue(2), "units_refs_unresolved": intValue(3),
+				"repository_id": strValue("b"),
 			}, EvidenceRefIDs: []string{"acr:v1:team:t"}},
 			unitRowFact(team, "wu-a", "a", 5),
 			unitRowFact(team, "wu-b", "b", 7),
@@ -93,6 +94,15 @@ func TestInvestmentUnitsRestrictedCallerSeesOnlyGrantedRepositoryRows(t *testing
 				t.Errorf("a unit row outside the grant was served: %v", fact.Fields)
 			}
 		}
+	}
+	pages := 0
+	for _, fact := range response.Facts {
+		if fact.Fields["unit_kind"] == contextfabric.InvestmentUnitPageKind {
+			pages++
+		}
+	}
+	if pages != 1 {
+		t.Fatalf("page summary facts = %d, want 1 (the page fact is never dropped with the rows it summarises)", pages)
 	}
 	if rows != 1 {
 		t.Fatalf("unit rows = %d, want 1 (the repository the caller may read): %s", rows, encoded)
@@ -171,6 +181,14 @@ func TestInvestmentUnitsRequestValidation(t *testing.T) {
 		"page size too large": {Kinds: []string{"investment"}, Subjects: []RequestSubject{team}, Units: &RequestUnits{MaxUnits: contextfabric.InvestmentUnitsMaxMax + 1}},
 		"negative page size":  {Kinds: []string{"investment"}, Subjects: []RequestSubject{team}, Units: &RequestUnits{MaxUnits: -1}},
 		"foreign cursor":      {Kinds: []string{"investment"}, Subjects: []RequestSubject{team}, Units: &RequestUnits{Cursor: "not-a-cursor"}},
+	}
+	healthProvider := &stubProvider{capability: healthLikeCapability(), read: func(contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		return contextfabric.FactProviderResult{State: contextfabric.SourceNoData}, nil
+	}}
+	withHealth := newTestFactsReader(t, graphOfOrgA(), provider, healthProvider)
+	_, err := withHealth.Read(requestContext(), restrictedToA(), FactsRequest{Kinds: []string{"health"}, Subjects: []RequestSubject{team}, Units: &RequestUnits{}})
+	if err == nil || !strings.Contains(err.Error(), "investment") {
+		t.Errorf("units without the investment kind: err = %v, want invalid_request naming investment", err)
 	}
 	for name, request := range cases {
 		if _, err := reader.Read(requestContext(), restrictedToA(), request); err == nil || !strings.Contains(err.Error(), FactsRefusalInvalidRequest) {

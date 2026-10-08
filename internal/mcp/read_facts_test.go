@@ -177,6 +177,10 @@ func TestReadFactsRefusesInvalidInputWithoutCallingHosted(t *testing.T) {
 		"bad window mode":     `{"kinds":["health"],"subjects":[{"kind":"team","canonical_id":"t"}],"window":{"mode":"sometime"}}`,
 		"window days too big": `{"kinds":["health"],"subjects":[{"kind":"team","canonical_id":"t"}],"window":{"mode":"trailing","days":61}}`,
 		"subject no id":       `{"kinds":["health"],"subjects":[{"kind":"team"}]}`,
+		"units too large":     `{"kinds":["investment"],"subjects":[{"kind":"team","canonical_id":"t"}],"units":{"max_units":151}}`,
+		"units negative":      `{"kinds":["investment"],"subjects":[{"kind":"team","canonical_id":"t"}],"units":{"max_units":-1}}`,
+		"units cursor huge":   `{"kinds":["investment"],"subjects":[{"kind":"team","canonical_id":"t"}],"units":{"cursor":"` + strings.Repeat("a", 1025) + `"}}`,
+		"units unknown field": `{"kinds":["investment"],"subjects":[{"kind":"team","canonical_id":"t"}],"units":{"page":2}}`,
 	}
 	for name, arguments := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -215,4 +219,23 @@ func jsonEqual(a, b any) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
+}
+
+func TestReadFactsForwardsTheUnitsPageRequestUnchanged(t *testing.T) {
+	arguments := `{"kinds":["investment"],"subjects":[{"kind":"team","canonical_id":"team:t"}],"units":{"cursor":"abc","max_units":150}}`
+	hosted := &readFactsHosted{respond: readFactsExample(t)}
+	result := callReadFacts(t, newReadFactsBootstrap(t, hosted, true), arguments)
+	if result.IsError {
+		t.Fatalf("tool error: %s", toolResultText(result))
+	}
+	var sent, want map[string]any
+	if err := json.Unmarshal([]byte(hosted.body), &sent); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(arguments), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !jsonEqual(sent, want) {
+		t.Fatalf("units request was rewritten:\nsent %s\nwant %s", hosted.body, arguments)
+	}
 }

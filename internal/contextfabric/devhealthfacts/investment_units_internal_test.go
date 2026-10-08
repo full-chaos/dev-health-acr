@@ -128,3 +128,43 @@ func TestUnitFactFieldsAreDeclaredAndRefsAreBounded(t *testing.T) {
 		t.Errorf("unresolved handles = %d, want %d", got, unitUnresolvedRefsPerFact)
 	}
 }
+
+// Boundaries of the bounds: one more than the cap is cut, exactly the cap is
+// kept whole, and a non-numeric pull request number is never minted as a ref.
+func TestUnitFactBoundsHoldAtTheirEdges(t *testing.T) {
+	t.Parallel()
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:t"}
+	handles := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = "ghpr:acme/missing#" + strconv.Itoa(100+i)
+		}
+		return out
+	}
+	for n, want := range map[int]int{unitUnresolvedRefsPerFact - 1: unitUnresolvedRefsPerFact - 1, unitUnresolvedRefsPerFact: unitUnresolvedRefsPerFact, unitUnresolvedRefsPerFact + 1: unitUnresolvedRefsPerFact} {
+		fact := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Theme: map[string]float64{"risk": 1}, UnresolvedN: uint64(n), UnresolvedRefs: handles(n)})
+		if got := len(strings.Split(*fact.Fields["unit_unresolved_refs"].String, ",")); got != want {
+			t.Errorf("%d unresolved handles served as %d, want %d", n, got, want)
+		}
+	}
+	for length, want := range map[int]int{unitUnresolvedRefMaxBytes: unitUnresolvedRefMaxBytes, unitUnresolvedRefMaxBytes + 1: unitUnresolvedRefMaxBytes} {
+		fact := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Theme: map[string]float64{"risk": 1}, UnresolvedN: 1, UnresolvedRefs: []string{strings.Repeat("h", length)}})
+		if got := len(*fact.Fields["unit_unresolved_refs"].String); got != want {
+			t.Errorf("a %d byte handle served as %d bytes, want %d", length, got, want)
+		}
+	}
+	fact := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Theme: map[string]float64{"risk": 1}, PRs: []string{"12", "not-a-number", "7"}})
+	if got := len(fact.EvidenceRefIDs); got != 3 {
+		t.Errorf("refs = %v, want the repository ref and the two numeric pull requests", fact.EvidenceRefIDs)
+	}
+	if got := *fact.Fields["unit_pull_request_count"].Integer; got != 3 {
+		t.Errorf("unit_pull_request_count = %d, want 3 (the count is of stored references)", got)
+	}
+	share := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Share: 3, Effort: 11, Theme: map[string]float64{"risk": 1}})
+	if got := *share.Fields["share_in_scope"].Number; got != 3 {
+		t.Errorf("share_in_scope = %v, want the row share 3 (not the effort)", got)
+	}
+	if got := *share.Fields["unit_effort_value"].Number; got != 11 {
+		t.Errorf("unit_effort_value = %v, want 11", got)
+	}
+}
