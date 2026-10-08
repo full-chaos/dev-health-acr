@@ -272,25 +272,34 @@ func findUnitsPageFact(facts []ServedFact) (ServedFact, bool) {
 }
 
 // noteUnitsPageNotServed runs when the byte budget left no room for the page
-// fact beside the facts that outrank it. It is the smallest fact that carries
-// next_cursor, so its absence is never silent: the coverage rows (never
-// dropped) say no units were served and what max_bytes the page fact needs.
-func (r *FactsReader) noteUnitsPageNotServed(response *FactsResponse, maxBytes int, page ServedFact, orgID, digest, incoming string) {
-	probe := page
-	probe.Fields = make(map[string]any, len(page.Fields)+1)
-	for name, value := range page.Fields {
-		probe.Fields[name] = value
+// fact beside the mix fact, which outranks it. The page fact is the smallest
+// fact and carries next_cursor, so it is always served when units are
+// requested: here as a limitation row (units_returned 0, no cursor, the reason
+// and the max_bytes minimum that serves the real page fact), and the same text
+// goes to the coverage rows (never dropped). A document that is then over
+// max_bytes says so in truncation.coverage_over_budget.
+func (r *FactsReader) noteUnitsPageNotServed(response *FactsResponse, maxBytes int, page ServedFact, unitRowsBefore int) {
+	bare := page
+	bare.Fields = map[string]any{
+		"unit_kind":      contextfabric.InvestmentUnitPageKind,
+		"units_returned": "0",
 	}
-	if sealed, err := r.sealUnitsCursor(orgID, digest, incoming); err == nil {
-		probe.Fields["next_cursor"] = sealed
+	size := func(candidate FactsResponse) int {
+		encoded, err := json.Marshal(candidate)
+		if err != nil {
+			return math.MaxInt
+		}
+		return len(encoded)
 	}
-	withPage := *response
-	withPage.Facts = append(append([]ServedFact{}, response.Facts...), probe)
-	minimum := math.MaxInt
-	if encoded, err := json.Marshal(withPage); err == nil {
-		minimum = len(encoded)
-	}
-	note := fmt.Sprintf("units not served under max_bytes %d; minimum %d (the work_unit_page fact does not fit beside the facts that outrank it); no next_cursor; raise max_bytes", maxBytes, minimum)
+	probe := *response
+	probe.Facts = append(append([]ServedFact{}, response.Facts...), bare)
+	probe.Coverage = append([]CoverageRow(nil), response.Coverage...)
+	noteUnitsBudget(probe.Coverage, unitRowsBefore, true)
+	probe.Truncation = &Truncation{TruncatedBy: TruncatedByMaxBytes, FactsOmitted: unitRowsBefore}
+	minimum := size(probe)
+	note := fmt.Sprintf("units not served under max_bytes %d; minimum %d (the work_unit_page fact does not fit beside the mix fact); no next_cursor; raise max_bytes", maxBytes, minimum)
+	bare.Fields["units_limitation"] = note
+	response.Facts = append(response.Facts, bare)
 	for i := range response.Coverage {
 		if response.Coverage[i].Kind != string(contextfabric.FactInvestment) {
 			continue
@@ -301,7 +310,7 @@ func (r *FactsReader) noteUnitsPageNotServed(response *FactsResponse, maxBytes i
 			response.Coverage[i].Reason += "; " + note
 		}
 	}
-	if encoded, err := json.Marshal(response); err != nil || len(encoded) > maxBytes {
+	if size(*response) > maxBytes {
 		if response.Truncation == nil {
 			response.Truncation = &Truncation{TruncatedBy: TruncatedByMaxBytes}
 		}

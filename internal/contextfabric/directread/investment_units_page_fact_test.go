@@ -21,7 +21,7 @@ func pageFactUnitsProvider(mixPad, rows int) *stubProvider {
 			}, EvidenceRefIDs: []string{"acr:v1:team:t"}},
 		}
 		for i := 0; i < rows; i++ {
-			facts = append(facts, unitRowFact(team, "wu-"+strings.Repeat("x", 40)+string(rune('a'+i)), "a", float64(100-i)))
+			facts = append(facts, unitRowFact(team, "wu-"+strings.Repeat("x", 40)+fmt.Sprintf("%02d", i), "a", float64(100-i)))
 		}
 		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable, Facts: facts}, nil
 	}}
@@ -29,10 +29,10 @@ func pageFactUnitsProvider(mixPad, rows int) *stubProvider {
 
 func readPageFact(t *testing.T, mixPad, maxBytes int) FactsResponse {
 	t.Helper()
-	reader := newUnitsReader(t, pageFactUnitsProvider(mixPad, 5))
+	reader := newUnitsReader(t, pageFactUnitsProvider(mixPad, 12))
 	response, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{
 		Kinds: []string{"investment"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}},
-		Units: &RequestUnits{MaxUnits: 5}, MaxBytes: maxBytes,
+		Units: &RequestUnits{MaxUnits: 12}, MaxBytes: maxBytes,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -101,8 +101,18 @@ func TestInvestmentUnitsPageFactNotFittingBesideTheMixIsALimitation(t *testing.T
 	if !hasMixFact(response) {
 		t.Fatal("the mix fact was dropped for the page fact")
 	}
-	if _, ok := hasPageFact(response); ok {
-		t.Fatal("page fact served although it does not fit")
+	page, ok := hasPageFact(response)
+	if !ok {
+		t.Fatal("no work_unit_page fact: the limitation must be a structural row")
+	}
+	if got := page.Fields["units_returned"]; got != "0" {
+		t.Fatalf("units_returned = %v, want 0", got)
+	}
+	if _, has := page.Fields["next_cursor"]; has {
+		t.Fatal("limitation row carries a cursor")
+	}
+	if text, _ := page.Fields["units_limitation"].(string); !strings.Contains(text, "units not served under max_bytes 4096; minimum ") {
+		t.Fatalf("units_limitation = %q", text)
 	}
 	if n := countUnitRows(response.Facts); n != 0 {
 		t.Fatalf("served %d unit rows", n)
@@ -115,12 +125,27 @@ func TestInvestmentUnitsPageFactNotFittingBesideTheMixIsALimitation(t *testing.T
 	if _, err := fmt.Sscanf(reason[strings.Index(reason, "; minimum ")+len("; minimum "):], "%d", &minimum); err != nil {
 		t.Fatalf("no minimum in %q: %v", reason, err)
 	}
-	if minimum <= MinMaxBytes {
+	if minimum < MinMaxBytes-300 {
 		t.Fatalf("minimum %d is not above the budget %d that failed", minimum, MinMaxBytes)
 	}
-	retry := readPageFact(t, mixPadFilling(t), minimum+16)
-	if _, ok := hasPageFact(retry); !ok {
-		t.Fatalf("the page fact is still not served at the stated minimum %d", minimum)
+	if response.Truncation == nil || !response.Truncation.CoverageOverBudget {
+		t.Fatal("a document over max_bytes must say so in truncation.coverage_over_budget")
+	}
+	retry := readPageFact(t, mixPadFilling(t), minimum)
+	retryPage, served := hasPageFact(retry)
+	if !served {
+		t.Fatal("no page fact at the stated minimum")
+	}
+	if _, limited := retryPage.Fields["units_limitation"]; limited {
+		t.Fatalf("still a limitation row at the stated minimum %d", minimum)
+	}
+	if size := len(mustJSON(t, retry)); size > minimum {
+		t.Fatalf("document is %d bytes at the stated minimum %d", size, minimum)
+	}
+	below := readPageFact(t, mixPadFilling(t), minimum-300)
+	belowPage, _ := hasPageFact(below)
+	if _, limited := belowPage.Fields["units_limitation"]; !limited {
+		t.Fatalf("minimum %d overstates: the page fact fits 300 bytes below it", minimum)
 	}
 }
 
@@ -129,14 +154,14 @@ func TestInvestmentUnitsPageFactIsReservedBeforeRows(t *testing.T) {
 	pad := mixPadFilling(t)
 	base := sizeWithout(t, pad, contextfabric.InvestmentUnitKind)
 	oneRow := sizeWithout(t, pad) - base
-	perRow := oneRow / 5
+	perRow := oneRow / 12
 	response := readPageFact(t, pad, base+perRow+500)
 	page, ok := hasPageFact(response)
 	if !ok {
 		t.Fatal("page fact not served although mix + page fit")
 	}
 	rows := countUnitRows(response.Facts)
-	if rows == 0 || rows >= 5 {
+	if rows == 0 || rows >= 12 {
 		t.Fatalf("served %d rows, want a cut page", rows)
 	}
 	if _, has := page.Fields["next_cursor"]; !has {

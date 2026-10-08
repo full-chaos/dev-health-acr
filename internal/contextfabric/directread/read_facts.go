@@ -543,7 +543,7 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 	response.Truncation = applyBudget(&response, plan.echo.MaxBytes)
 	if plan.units != nil && hadPage {
 		if _, stillThere := findUnitsPageFact(response.Facts); !stillThere {
-			r.noteUnitsPageNotServed(&response, plan.echo.MaxBytes, pageBeforeBudget, principal.OrgID, unitsDigest, unitsIncoming)
+			r.noteUnitsPageNotServed(&response, plan.echo.MaxBytes, pageBeforeBudget, unitRows)
 		}
 	}
 	if plan.units != nil {
