@@ -125,7 +125,14 @@ type SynthesisFailure struct {
 	Receipt  ModelExecutionReceipt
 	// InputBounded: the call that failed was placed with a reduced fact set.
 	InputBounded bool
-	cause        error
+	// Rule and Stage name a work-item tuple rule breach that was served as this
+	// failure, and the stage that served it (synthesis or validation).
+	Rule  string
+	Stage string
+	// DeferEvent leaves the model-failure event to the caller, which records it
+	// only once the degraded answer is actually served.
+	DeferEvent bool
+	cause      error
 }
 
 func (f *SynthesisFailure) Error() string { return f.cause.Error() }
@@ -141,7 +148,9 @@ type DegradedSynthesizer interface {
 // paths and coverage of the input, no model-authored content, a degraded
 // status and the fixed warning.
 func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal storage.Principal, input SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
-	r.recordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Attempts: failure.Attempts, ElapsedMS: failure.Elapsed.Milliseconds()})
+	if !failure.DeferEvent {
+		r.recordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Attempts: failure.Attempts, ElapsedMS: failure.Elapsed.Milliseconds(), Rule: failure.Rule, Stage: failure.Stage})
+	}
 	return r.composeSynthesisResult(ctx, principal, input, degradedSynthesisDraft(failure.Class), failure.Receipt, failure.InputBounded, true)
 }
 
@@ -162,6 +171,10 @@ type SynthesisModelFailureEvent struct {
 	Class     SynthesisFailureClass
 	Attempts  int
 	ElapsedMS int64
+	// Rule and Stage are set only for a work-item tuple rule breach served as
+	// this failure: the closed rule token and where it was caught.
+	Rule  string
+	Stage string
 }
 
 func (r RuntimeAnswerSynthesizer) recordSynthesisModelFailure(ctx context.Context, principal storage.Principal, event SynthesisModelFailureEvent) {

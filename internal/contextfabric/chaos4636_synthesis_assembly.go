@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -360,9 +361,19 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 				result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, modelFailure)
 			}
 		}
+		if err == nil && params.WorkItemCensus != nil && ctx.Err() == nil {
+			if rule, breach := workItemModelBreach(result, synthesisInput, resolution, principal); breach {
+				if degraded, ok := e.synthesizer.(DegradedSynthesizer); ok {
+					result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, workItemModelBreachFailure(rule, "synthesis", slices.Contains(result.Limitations, contractsv1.ContextFabricSynthesisInputBoundedLimitation)))
+				}
+			}
+		}
 	}
 	if err != nil {
 		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageSynthesis, fmt.Errorf("%w: synthesize investigation: %w", ErrSynthesisAborted, err))
+	}
+	if params.WorkItemCensus != nil && !clientSynthesisRequested(request) {
+		pending.WorkItemDegrade = newWorkItemDegradeBasis(synthesisInput, result)
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()
@@ -792,7 +803,11 @@ func correctKindCensusTruncatedServedCounts(details []CoverageDetail, cohort *Co
 type assemblyTelemetry struct {
 	// RetryAttempted carries actual second-pass execution to the final
 	// decisive budget assertion; input narrowing alone does not prove it.
-	RetryAttempted          bool
+	RetryAttempted bool
+	// WorkItemDegrade is what the validation stage needs to serve a work-item
+	// tuple answer as the facts-only degraded answer. Nil for a client-supplied
+	// synthesis, which is never rewritten.
+	WorkItemDegrade         *workItemDegradeBasis
 	WindowCanonicalization  *WindowCanonicalizationOutcome
 	SynthesisStatusOverride *SynthesisStatusOverrideOutcome
 	CohortNarration         *CohortDriverNarrationEvent

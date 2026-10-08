@@ -140,15 +140,19 @@ func ValidateWorkItemTuplePayload(result InvestigationResult, principal storage.
 			return workItemRuleErrorf(WorkItemRuleResultEvidenceOutsideMembers, "work-item tuple result evidence reference %q is outside retained members", ref)
 		}
 	}
+	citableKeys := make(map[string]struct{}, len(memberKeys)+1)
+	forEachCitableAnchorOrMember([]SubjectRef{anchor}, result.Cohort, func(subject SubjectRef) {
+		citableKeys[workItemSubjectKey(subject)] = struct{}{}
+	})
 	for _, findingSet := range [][]Finding{result.RemainingWork, result.ReadinessGaps, result.Conflicts} {
 		for _, finding := range findingSet {
-			if err := validateWorkItemMemberReferences(finding.Subjects, finding.EvidenceRefIDs, finding.ClaimedFactIDs, memberKeys, memberEvidence, memberClaimIDs, "finding"); err != nil {
+			if err := validateWorkItemMemberReferences(finding.Subjects, finding.EvidenceRefIDs, finding.ClaimedFactIDs, citableKeys, memberEvidence, memberClaimIDs, "finding"); err != nil {
 				return err
 			}
 		}
 	}
 	for _, driver := range result.Drivers {
-		if err := validateWorkItemMemberReferences(driver.AffectedSubjects, driver.EvidenceRefIDs, driver.ClaimedFactIDs, memberKeys, memberEvidence, memberClaimIDs, "driver"); err != nil {
+		if err := validateWorkItemMemberReferences(driver.AffectedSubjects, driver.EvidenceRefIDs, driver.ClaimedFactIDs, citableKeys, memberEvidence, memberClaimIDs, "driver"); err != nil {
 			return err
 		}
 	}
@@ -302,12 +306,28 @@ func workItemClaimCarriesTable(claim ClaimedFact) bool {
 	return len(claim.Rows) != 0 || claim.Table != nil || len(claim.TimeSeriesRows) != 0 || claim.TimeSeriesTable != nil
 }
 
-func validateWorkItemMemberReferences(subjects []SubjectRef, evidence, claims []string, memberKeys, memberEvidence, memberClaimIDs map[string]struct{}, kind string) error {
+// forEachCitableAnchorOrMember is the one definition of the subjects an answer
+// may name beside its facts: the committed anchors of the investigation and the
+// retained cohort members. The synthesis admission and the work-item tuple
+// validator both read it, so a subject one admits is never a subject the other
+// refuses.
+func forEachCitableAnchorOrMember(committed []SubjectRef, cohort *Cohort, visit func(SubjectRef)) {
+	for _, subject := range committed {
+		visit(subject)
+	}
+	if cohort != nil {
+		for _, member := range cohort.Members {
+			visit(member.Subject)
+		}
+	}
+}
+
+func validateWorkItemMemberReferences(subjects []SubjectRef, evidence, claims []string, citableKeys, memberEvidence, memberClaimIDs map[string]struct{}, kind string) error {
 	if len(subjects) == 0 {
 		return workItemRuleErrorf(ruleForKind(kind == "finding", WorkItemRuleFindingNoMemberSubject, WorkItemRuleDriverNoMemberSubject), "work-item tuple %s has no retained member subject", kind)
 	}
 	for _, subject := range subjects {
-		if _, ok := memberKeys[workItemSubjectKey(subject)]; !ok {
+		if _, ok := citableKeys[workItemSubjectKey(subject)]; !ok {
 			return workItemRuleErrorf(ruleForKind(kind == "finding", WorkItemRuleFindingSubjectOutsideMembers, WorkItemRuleDriverSubjectOutsideMembers), "work-item tuple %s names subject %q outside retained members", kind, subject.CanonicalID)
 		}
 	}
