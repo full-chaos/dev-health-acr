@@ -152,7 +152,7 @@ func TestADeclaredPrimaryListMustBeATopLevelListOutput(t *testing.T) {
 func TestShippedHotspotsDeclaresRowsAsItsPrimaryList(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
 	op, _ := cat.Lookup("hotspots")
-	if got, ok := op.PrimaryList(); !ok || got != "hotspots.rows" || len(op.SiblingLists()) != 0 {
+	if got, ok := op.PrimaryList(); !ok || got != "hotspots.rows" || !slices.Equal(op.SiblingLists(), []string{"hotspots.repos"}) {
 		t.Fatalf("primary %q %v siblings %v", got, ok, op.SiblingLists())
 	}
 }
