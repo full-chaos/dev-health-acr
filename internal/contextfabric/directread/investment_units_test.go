@@ -432,7 +432,7 @@ func TestInvestmentUnitsCursorIsBoundToTheOrganization(t *testing.T) {
 func TestInvestmentUnitsCompletePageServesNoCursor(t *testing.T) {
 	reader := newUnitsReader(t)
 	response := FactsResponse{Facts: []ServedFact{{
-		Kind: string(contextfabric.FactInvestment),
+		Kind:   string(contextfabric.FactInvestment),
 		Fields: map[string]any{"unit_kind": contextfabric.InvestmentUnitPageKind, "next_cursor": "", "units_returned": "0"},
 	}}}
 	if _, err := reader.finishUnitsPage(&response, orgA, "digest", "", 0); err != nil {
