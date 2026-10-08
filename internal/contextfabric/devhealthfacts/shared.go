@@ -544,11 +544,16 @@ import (
 // saved before v109 may hold a hotspots answer without it and must not be
 // reused.
 //
-// v110 -> v111: source_health is read from the ops sourceHealth root and its
+// v109 -> v110: the clarification prompt tells apart same-kind, same-provider,
+// same-label candidates by a canonical id suffix (or an ordinal). A candidate
+// saved before v110 may hold the older, identical-looking prompt and must not
+// be reused.
+//
+// v111 -> v112: source_health is read from the ops sourceHealth root and its
 // fields are provider, scope, last_sync_at, last_failure_occurred_at and
 // last_failure_stage (it was the backfill_log columns). A candidate saved
-// before v111 may hold the old fields and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v111"
+// before v112 may hold the old fields and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v112"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
