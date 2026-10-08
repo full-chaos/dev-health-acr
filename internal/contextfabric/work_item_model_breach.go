@@ -131,7 +131,10 @@ func (e *Engine) degradeWorkItemModelBreach(ctx context.Context, principal stora
 		}
 	}
 	out.EvidenceRefLabels = labels
-	out.Limitations = slices.DeleteFunc(slices.Clone(result.Limitations), func(limitation string) bool { return slices.Contains(basis.DraftLimitations, limitation) })
+	serverLimitations := slices.DeleteFunc(slices.Clone(result.Limitations), func(limitation string) bool { return slices.Contains(basis.DraftLimitations, limitation) })
+	composedLimitations, displaced := appendBoundedLimitations([]string{}, serverLimitations)
+	out.Limitations = composedLimitations
+	out.LimitationsDisplaced += displaced
 	warnings := slices.DeleteFunc(slices.Clone(result.Warnings), func(warning string) bool { return slices.Contains(basis.DraftWarnings, warning) })
 	out.Warnings = append(composed.Warnings, warnings...)
 	if len(out.Warnings) > contractsv1.ContextFabricWarningsMaxCount {
