@@ -554,7 +554,13 @@ import (
 // team owning its project), not only the primary team. A candidate saved
 // before v111 may hold a cohort short of the co-owner team's items and must not
 // be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v111"
+//
+// v111 -> v115: run_operation and graphql_query refuse a Date value for a
+// DateTime variable (and the reverse) before the upstream call, and carry the
+// bounded upstream GraphQL error message and path in errors[]. A candidate
+// saved before v115 may hold an answer served from a mistyped variable and
+// must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v115"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
