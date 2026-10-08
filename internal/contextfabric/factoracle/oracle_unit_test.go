@@ -1283,19 +1283,21 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 		t.Fatalf("a probe that changed nothing: %d differences, expired %v, code read %v, invalid %v", count(rr), blind.Expired(), rr.CodeRead, rr.Invalid)
 	}
 
-	// The answer states a history other than the one asked for: 8 weeks for a
-	// request of 12, and 4 for the probe. The two echoes differ and the covered
-	// values are equal, but the answer does not say that the probe changed what
-	// was read: nothing is counted.
+	// The answer states a history shorter than the one asked for (8 weeks for
+	// a request of 12, 4 for the probe): the data holds 8, so the probe is
+	// measured with 8 and 4, the history the answer states; it is not a run
+	// that failed to measure (see TestAShortHistoryIsProbedWithWindowsTheDataCanTellApart).
+	// An echo longer than the request, or not a number, is not a history the
+	// probe can use: not measured.
 	wrongEcho := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
 		if historyOf(variables, "historyWeeks") == 12 {
-			forecast["historyWeeks"] = 8
+			forecast["historyWeeks"] = 20
 		} else {
 			forecast["historyWeeks"] = historyOf(variables, "historyWeeks")
 		}
 	}), nil)
 	rr = wrongEcho.Root("throughputForecast")
-	if count(rr) != 0 || len(wrongEcho.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], `states a history of "8"`) || wrongEcho.Err() == nil {
+	if count(rr) != 0 || len(wrongEcho.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], `states a history of "20"`) || wrongEcho.Err() == nil {
 		t.Fatalf("an echo that is not the history asked for: %d differences, expired %v, code read %v, invalid %v", count(rr), wrongEcho.Expired(), rr.CodeRead, rr.Invalid)
 	}
 
@@ -1821,5 +1823,221 @@ func TestTheReplayedRequestIsBoundToItsCase(t *testing.T) {
 	}
 	if problems := boundRequest(scopes, false, map[string]any{}, FixtureOrgID, upstream(`{"orgId":"`+FixtureOrgID+`","dimension":"TEAM"}`), all); len(problems) != 1 || !strings.Contains(problems[0], "dimension is not the value the registered document writes") {
 		t.Fatalf("another dimension than the document's: %v", problems)
+	}
+}
+
+// A denied read says which subjects it asked for and what each coverage row
+// said, so the denial can be told apart from an empty read.
+func TestADeniedFactsReadNamesTheSubjectAndItsOutcome(t *testing.T) {
+	oracle := &Oracle{Planes: fakePlanes{facts: func(request FactsRequest) (json.RawMessage, error) {
+		return json.RawMessage(`{"status":"denied","facts":[],"coverage":[{"kind":"readiness","subject":{"kind":"team","canonical_id":"team:t1"},"outcome":"denied_by_authorization"}]}`), nil
+	}}}
+	_, err := oracle.readFacts(context.Background(), "readiness", "team", []string{"t1"}, readCurrentHeldToStore)
+	if err == nil || !strings.Contains(err.Error(), "every one of 1 teams was denied") || !strings.Contains(err.Error(), "team:t1=denied_by_authorization") {
+		t.Fatalf("denial error: %v", err)
+	}
+}
+
+func readinessRun(t *testing.T, planes Planes) (*Report, error) {
+	t.Helper()
+	manifest, _, extract, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(extract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"throughputForecast"}, Planes: planes}
+	return oracle.Run(context.Background())
+}
+
+func deniedFacts(request FactsRequest) (json.RawMessage, error) {
+	coverage := []any{}
+	for _, s := range request.Subjects {
+		coverage = append(coverage, map[string]any{"kind": request.Kinds[0], "subject": s, "outcome": "denied_or_not_found"})
+	}
+	return json.Marshal(map[string]any{"status": "denied", "facts": []any{}, "coverage": coverage, "versions": map[string]any{"kinds": map[string]any{}}})
+}
+
+// A team the token has no grant for is recorded as not joined with its
+// reason and the run goes on; the root fails only when no team joins.
+func TestADeniedReadinessTeamIsNotJoinedAndTheRunContinues(t *testing.T) {
+	echo := func(variables map[string]any, forecast map[string]any) {
+		forecast["historyWeeks"] = historyOf(variables, "historyWeeks")
+	}
+	var asked []string
+	planes := recordedThroughput(t, echo)
+	planes.facts = func(request FactsRequest) (json.RawMessage, error) {
+		if request.Kinds[0] == "readiness" {
+			asked = append(asked, request.Subjects[0].CanonicalID)
+			if len(asked) == 1 {
+				return deniedFacts(request)
+			}
+		}
+		return noFacts(request)
+	}
+	report, err := readinessRun(t, planes)
+	if err != nil {
+		t.Fatalf("one denied team stopped the run: %v", err)
+	}
+	if len(asked) < 2 {
+		t.Fatalf("the test needs at least two teams, asked %v", asked)
+	}
+	var notJoined []string
+	for _, n := range report.Root("throughputForecast").NotJoined {
+		if strings.HasPrefix(n, "readiness: team ") {
+			notJoined = append(notJoined, n)
+		}
+	}
+	if len(notJoined) != 1 || !strings.Contains(notJoined[0], strings.TrimPrefix(asked[0], "team:")) {
+		t.Fatalf("not joined: %v, first asked %s", notJoined, asked[0])
+	}
+}
+
+func TestEveryReadinessTeamDeniedFailsTheRoot(t *testing.T) {
+	echo := func(variables map[string]any, forecast map[string]any) {
+		forecast["historyWeeks"] = historyOf(variables, "historyWeeks")
+	}
+	planes := recordedThroughput(t, echo)
+	planes.facts = func(request FactsRequest) (json.RawMessage, error) { return deniedFacts(request) }
+	report, err := readinessRun(t, planes)
+	text := fmt.Sprint(err)
+	if report != nil {
+		text += fmt.Sprint(report.Root("throughputForecast").Invalid)
+	}
+	if !strings.Contains(text, "every one of") || !strings.Contains(text, "teams was denied") {
+		t.Fatalf("all teams denied did not fail the root: %v", text)
+	}
+}
+
+// Some teams denied in a flow read: the run goes on over the others and the
+// denied ones are stated, none of them a finding.
+func TestADeniedTeamIsNeitherAFindingNorACompareInAnyTeamRead(t *testing.T) {
+	var asked []string
+	oracle := &Oracle{Planes: fakePlanes{facts: func(request FactsRequest) (json.RawMessage, error) {
+		asked = append(asked, request.Subjects[0].CanonicalID)
+		if len(asked) == 1 {
+			return deniedFacts(request)
+		}
+		return noFacts(request)
+	}}}
+	facts, err := oracle.readFacts(context.Background(), "flow", "team", []string{"a", "b", "c"}, readCurrent)
+	if err != nil || len(facts) != 0 {
+		t.Fatalf("a partly denied read failed: %v %v", err, facts)
+	}
+	if got := oracle.withoutDenied("flow", []string{"a", "b", "c"}); strings.Join(got, ",") != "b,c" {
+		t.Fatalf("not dropped: %v", got)
+	}
+	if len(oracle.deniedNotes) != 1 || !strings.Contains(oracle.deniedNotes[0], "team a is denied") {
+		t.Fatalf("notes: %v", oracle.deniedNotes)
+	}
+}
+
+// A venue that holds less history than the probe asks for states the history
+// it used: the probe then asks for half of that, so the class is still
+// measured; when the resolver gives the same history for both, the run says
+// it read the class from the code and names the reason.
+func TestAShortHistoryIsProbedWithWindowsTheDataCanTellApart(t *testing.T) {
+	const held = 8
+	count := func(rr *RootReport) int { return rr.ByClass[ClassLatestDayVsWindow] }
+	clamp := func(variables map[string]any, forecast map[string]any) {
+		forecast["historyWeeks"] = min(historyOf(variables, "historyWeeks"), held)
+	}
+	same := fakeRun(t, "throughputForecast", recordedThroughput(t, clamp), nil)
+	rr := same.Root("throughputForecast")
+	if count(rr) != 4 || len(same.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 0 {
+		t.Fatalf("a short history, windows told apart: %d differences, expired %v, code read %v, invalid %v", count(rr), same.Expired(), rr.CodeRead, rr.Invalid)
+	}
+	for _, d := range rr.Differences {
+		if d.Class == ClassLatestDayVsWindow && !strings.Contains(d.Detail, "history of 8 and of 4") {
+			t.Fatalf("the probe did not use 8 and 4: %s", d.Detail)
+		}
+	}
+	follows := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+		clamp(variables, forecast)
+		forecast["backlogSize"] = 100 + historyOf(variables, "historyWeeks")
+	}), nil)
+	if expired := follows.Expired(); len(expired) != 1 || !strings.Contains(expired[0], "throughputForecast.backlogSize is another value") {
+		t.Fatalf("a short history, backlog follows the window: expired %v", expired)
+	}
+	stuck := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+		forecast["historyWeeks"] = held
+	}), nil)
+	srr := stuck.Root("throughputForecast")
+	read := strings.Join(srr.CodeRead, " ")
+	if count(srr) != 0 || len(probeInvalid(srr)) != 0 || !strings.Contains(read, "history 8 d < both probe windows; windows not distinguishable") {
+		t.Fatalf("a resolver that states the same history twice: %d differences, invalid %v, code read %q", count(srr), srr.Invalid, read)
+	}
+}
+
+// A recorded run leaves out the teams the capture was denied: the seeded store
+// has no authorization, so it would otherwise read teams the venue never did.
+func TestARecordedDeniedTeamIsLeftOutOfTheRead(t *testing.T) {
+	var asked []string
+	oracle := &Oracle{DeniedTeams: map[string][]string{"flow": {"B"}}, Planes: fakePlanes{facts: func(request FactsRequest) (json.RawMessage, error) {
+		asked = append(asked, request.Subjects[0].CanonicalID)
+		return noFacts(request)
+	}}}
+	if _, err := oracle.readFacts(context.Background(), "flow", "team", []string{"a", "b", "c"}, readCurrent); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(asked, ",") != "team:a,team:c" {
+		t.Fatalf("asked %v", asked)
+	}
+	if got := oracle.withoutDenied("flow", []string{"a", "b", "c"}); strings.Join(got, ",") != "a,c" {
+		t.Fatalf("not dropped: %v", got)
+	}
+	// The capture and the replay agree: the same teams, scrubbed alike.
+	if len(oracle.deniedList) != 1 || oracle.deniedList[0].id != "b" {
+		t.Fatalf("denied list %v", oracle.deniedList)
+	}
+}
+
+// The compatibility baseline is the one of the capture on disk: while the
+// catalogue pins the SDL the capture was taken at, every served contract is
+// the recorded one.
+func TestTheCaptureBaselineIsTheCaptureOfTheManifest(t *testing.T) {
+	manifest, _, _ := loadedCapture(t)
+	if manifest.SchemaDigest != captureSchemaDigest {
+		t.Fatalf("the manifest was captured at %s, the baseline names %s: advance contractsAtCapture with the capture", manifest.SchemaDigest, captureSchemaDigest)
+	}
+	policy := mustPolicy(t)
+	if policy.Catalogue().SchemaDigest() != manifest.SchemaDigest {
+		t.Skip("the catalogue pins another SDL than the capture")
+	}
+	for _, op := range policy.Catalogue().Operations(directread.CallerUnrestricted) {
+		if contractsAtCapture[op.Name] != contractDigest(op) {
+			t.Errorf("contract of %s is %s, the baseline holds %q", op.Name, contractDigest(op), contractsAtCapture[op.Name])
+		}
+	}
+}
+
+// A second echo that is not a history, or longer than the history the first
+// answer held, is a probe that did not measure; only an echo equal to the held
+// history says the windows cannot be told apart.
+func TestAMalformedSecondEchoIsNotCodeRead(t *testing.T) {
+	const held = 8
+	for _, tc := range []struct {
+		name string
+		echo func(asked int) any
+	}{
+		{"longer_than_held", func(int) any { return 20 }},
+		{"not_a_number", func(int) any { return "unknown" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			planes := recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+				asked := historyOf(variables, "historyWeeks")
+				if asked == 12 {
+					forecast["historyWeeks"] = held
+					return
+				}
+				forecast["historyWeeks"] = tc.echo(asked)
+			})
+			rr := fakeRun(t, "throughputForecast", planes, nil).Root("throughputForecast")
+			if len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], "not a number up to the 8 days") {
+				t.Fatalf("code read %v, probe invalid %v", rr.CodeRead, rr.Invalid)
+			}
+		})
 	}
 }

@@ -538,7 +538,12 @@ import (
 // allocation (units argument) and the investment capability declares the unit
 // fields. An answer saved before v108 cannot name a unit row or its weight and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v108"
+//
+// v108 -> v109: the hotspots operation also returns a per-repository roll-up
+// (repos[]), row-checked against the caller's grant like rows[]. A candidate
+// saved before v109 may hold a hotspots answer without it and must not be
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v109"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
