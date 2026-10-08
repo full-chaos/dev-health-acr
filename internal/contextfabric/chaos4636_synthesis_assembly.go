@@ -360,6 +360,13 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 				result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, modelFailure)
 			}
 		}
+		if err == nil && params.WorkItemCensus != nil && ctx.Err() == nil {
+			if rule, breach := workItemModelBreach(result, synthesisInput, resolution, principal); breach {
+				if degraded, ok := e.synthesizer.(DegradedSynthesizer); ok {
+					result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, workItemModelBreachFailure(rule))
+				}
+			}
+		}
 	}
 	if err != nil {
 		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageSynthesis, fmt.Errorf("%w: synthesize investigation: %w", ErrSynthesisAborted, err))
