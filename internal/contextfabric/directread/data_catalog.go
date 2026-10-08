@@ -194,6 +194,10 @@ type CatalogOperation struct {
 	DocumentDigest    string            `json:"document_digest"`
 	Variables         []CatalogVariable `json:"variables"`
 	Notes             []string          `json:"notes,omitempty"`
+	// PrimaryList is the list a cut page cuts when the operation has more
+	// than one top-level list; the other lists ride along whole or are
+	// emptied and named in page.cut.
+	PrimaryList string `json:"primary_list,omitempty"`
 }
 
 // CatalogVariable is one client-settable variable path.
@@ -557,6 +561,9 @@ func catalogOperation(op *OperationPolicy, class CallerClass, reason string) Cat
 		ScopeClass: ScopeOrgWide, ScopeVariables: []string{}, CostClass: op.CostClass,
 		DisclosureFields: []string{}, DeadlineSeconds: op.DeadlineSeconds, MaxInFlightPerOrg: op.MaxInFlightPerOrg,
 		DocumentDigest: op.Digest, Variables: []CatalogVariable{}, Notes: append([]string(nil), op.Notes...),
+	}
+	if len(op.SiblingLists()) > 0 {
+		entry.PrimaryList, _ = op.PrimaryList()
 	}
 	if class == CallerRestricted {
 		entry.ScopeClass = ScopeForcedGrant

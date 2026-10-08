@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -11,7 +12,10 @@ import (
 // variable for it and its served outputs hold exactly one list reached from
 // the root field through objects only. Only such an operation is cut to fit
 // the response budget; every other shape (two or more top-level lists, no
-// row-limit variable, lists inside rows) keeps the response_budget refusal.
+// row-limit variable, lists inside rows) keeps the response_budget refusal,
+// unless the catalogue declares which list is the primary one (primary_list):
+// the other top-level lists then ride along whole on a cut page, or are left
+// out and named.
 
 // PrimaryList is the output path of the operation's one primary list, for
 // example "workGraphEdges.edges", or false when the operation has none.
@@ -26,6 +30,22 @@ func (op *OperationPolicy) PrimaryList() (string, bool) {
 	if !limited {
 		return "", false
 	}
+	lists := op.topLevelLists()
+	if op.PrimaryListPath != "" {
+		return op.PrimaryListPath, true
+	}
+	if len(lists) != 1 {
+		return "", false
+	}
+	for path := range lists {
+		return path, true
+	}
+	return "", false
+}
+
+// topLevelLists is the set of list paths reached from the root field through
+// objects only, outside the part of the answer beyond the document.
+func (op *OperationPolicy) topLevelLists() map[string]bool {
 	lists := map[string]bool{}
 	for _, out := range op.Outputs {
 		if out.BeyondDocument {
@@ -35,13 +55,23 @@ func (op *OperationPolicy) PrimaryList() (string, bool) {
 			lists[out.Path[:i]] = true
 		}
 	}
-	if len(lists) != 1 {
-		return "", false
+	return lists
+}
+
+// SiblingLists are the other top-level lists of an operation whose primary
+// list is declared. A cut page carries them whole, or drops them and says so.
+func (op *OperationPolicy) SiblingLists() []string {
+	if op.PrimaryListPath == "" {
+		return nil
 	}
-	for path := range lists {
-		return path, true
+	var out []string
+	for path := range op.topLevelLists() {
+		if path != op.PrimaryListPath {
+			out = append(out, path)
+		}
 	}
-	return "", false
+	slices.Sort(out)
+	return out
 }
 
 // hasClientVariable reports whether the client can set a scalar variable.
@@ -64,13 +94,14 @@ type pageCut struct {
 	fullBytes    int
 	hasPageInfo  bool
 	hasTotal     bool
+	dropped      []string
 }
 
 // fitListPage cuts the primary list at listPath (an output path such as
 // "workGraphEdges.edges") to the largest whole-row prefix whose serialized
 // data fits maxBytes. It reports false when the path holds no list of more
 // than one row, or when not even one row fits: such an answer stays refused.
-func fitListPage(data json.RawMessage, listPath string, maxBytes int) (pageCut, bool) {
+func fitListPage(data json.RawMessage, listPath string, maxBytes int, siblings []string) (pageCut, bool) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var root map[string]any
@@ -102,6 +133,15 @@ func fitListPage(data json.RawMessage, listPath string, maxBytes int) (pageCut, 
 		}
 		return len(out)
 	}
+	var dropped []string
+	if size(1) > maxBytes && len(siblings) > 0 {
+		for _, sib := range siblings {
+			if emptyList(root, sib) {
+				dropped = append(dropped, sib)
+			}
+		}
+		parent[key] = rows
+	}
 	if size(1) > maxBytes {
 		return pageCut{}, false
 	}
@@ -130,10 +170,31 @@ func fitListPage(data json.RawMessage, listPath string, maxBytes int) (pageCut, 
 	if err != nil {
 		return pageCut{}, false
 	}
-	cut := pageCut{data: final, path: listPath, rowsReturned: lo, rowsRead: total, fullBytes: len(data)}
+	cut := pageCut{data: final, path: listPath, rowsReturned: lo, rowsRead: total, fullBytes: len(data), dropped: dropped}
 	_, cut.hasPageInfo = parent["pageInfo"].(map[string]any)
 	_, cut.hasTotal = parent["totalCount"]
 	return cut, true
+}
+
+// emptyList empties the non-empty list at path and reports whether it did.
+func emptyList(root map[string]any, path string) bool {
+	segs := strings.Split(path, ".")
+	parent := root
+	for _, seg := range segs[:len(segs)-1] {
+		next, ok := parent[seg].(map[string]any)
+		if !ok {
+			return false
+		}
+		parent = next
+	}
+	key := segs[len(segs)-1]
+	list, ok := parent[key].([]any)
+	if !ok || len(list) == 0 {
+		return false
+	}
+	parent[key] = []any{}
+	describeReturnedPage(parent, nil)
+	return true
 }
 
 // cursorSpread is the largest difference in serialized length (as the size
@@ -179,11 +240,16 @@ func describeReturnedPage(parent map[string]any, rows []any) {
 	if _, has := info["hasNextPage"]; has {
 		info["hasNextPage"] = true
 	}
+	if _, has := info["startCursor"]; has && len(rows) == 0 {
+		info["startCursor"] = nil
+	}
 	if _, has := info["endCursor"]; has {
 		info["endCursor"] = nil
-		if last, ok := rows[len(rows)-1].(map[string]any); ok {
-			if cursor, ok := last["cursor"].(string); ok {
-				info["endCursor"] = cursor
+		if len(rows) > 0 {
+			if last, ok := rows[len(rows)-1].(map[string]any); ok {
+				if cursor, ok := last["cursor"].(string); ok {
+					info["endCursor"] = cursor
+				}
 			}
 		}
 	}
@@ -202,6 +268,9 @@ func (c pageCut) statement(maxBytes int, op *OperationPolicy) string {
 		out += fmt.Sprintf(" The whole answer does not fit the largest max_bytes (%d): narrow the call with the operation's variables.", MaxOperationMaxBytes)
 	default:
 		out += fmt.Sprintf(" The whole answer does not fit the largest max_bytes (%d) and this operation has no variable to narrow it.", MaxOperationMaxBytes)
+	}
+	if len(c.dropped) > 0 {
+		out += fmt.Sprintf(" The other lists (%s) did not fit beside even one row and were left out.", strings.Join(c.dropped, ", "))
 	}
 	if c.hasPageInfo {
 		out += " pageInfo describes this page: more rows exist."

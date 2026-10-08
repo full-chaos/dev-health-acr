@@ -30,6 +30,9 @@ type operationDecl struct {
 	Constraints       []directread.Constraint
 	Unrestricted      directread.CallerScope
 	Restricted        directread.CallerScope
+	// PrimaryList names the list a cut page cuts when the operation has more
+	// than one top-level list (for example "hotspots.rows").
+	PrimaryList       string
 	AdditionalOutputs []string
 	OutputExceptions  map[string]string
 	WithheldOutputs   map[string]string

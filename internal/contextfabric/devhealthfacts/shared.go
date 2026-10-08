@@ -534,11 +534,11 @@ import (
 // the row says so. A candidate saved before v107 may hold a cohort short of its
 // archived owned projects and must not be reused.
 //
-// v107 -> v109: read_facts lists the work units behind an investment
+// v107 -> v108: read_facts lists the work units behind an investment
 // allocation (units argument) and the investment capability declares the unit
-// fields. An answer saved before v109 cannot name a unit row or its weight and
+// fields. An answer saved before v108 cannot name a unit row or its weight and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v109"
+const QueryVersion = "devhealthfacts.clickhouse.v108"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
