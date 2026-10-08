@@ -30,7 +30,7 @@ func TestDiscoverContextTeamAnchorWithoutOwnedProjectsDoesNotServeTextMatchedPro
 		}
 		return nil, nil
 	}}
-	adapter := newFakeAdapter(t, fake)
+	adapter := newTeamAdapter(t, fake)
 	request := ownershipRoutingRequest(frame, anchor)
 	request.ScopeAnchorKind = contextfabric.SubjectTeam
 	request.Request.Question = "which projects does team Platform own?"

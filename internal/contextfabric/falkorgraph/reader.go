@@ -722,6 +722,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 					Truncated: walk.truncated, Err: err,
 				})
 			}
+		} else if position, ok := teamAnchorMemberPosition(teamAnchors, subject, declaredCohortKindForRouting); ok {
+			var walk treeWalk
+			walk, err = a.treeMembers(ctx, key, principal.OrgID, principal, scope, subject, position, collectLimit, temporal)
+			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
 		} else {
 			nodes, edges, failed, filters, walkTruncated, err = a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
 		}

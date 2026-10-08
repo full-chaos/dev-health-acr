@@ -43,7 +43,7 @@ func TestDiscoverContextTeamAnchorWhollyDeniedProjectsFilesTheDeniedCountRow(t *
 						propRelationType: "OWNED_BY_TEAM", propRelationshipID: "rel_" + id,
 						"authorization_repositories": allowed,
 					}},
-					"srcKind": "team", "srcId": "team:chaos", "dstKind": "project", "dstId": id,
+					"srcKind": "project", "srcId": id, "dstKind": "team", "dstId": "team:chaos",
 				})
 			}
 			return rows, nil
@@ -63,7 +63,7 @@ func TestDiscoverContextTeamAnchorWhollyDeniedProjectsFilesTheDeniedCountRow(t *
 		}
 	}}
 	telemetry := &recordingTelemetry{}
-	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	adapter := newFakeAdapterWithTelemetry(t, withWalkStepReads(fake), telemetry)
 	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: allowed}
 	request := ownershipRoutingRequest(frame, anchor)
 	request.Request.Question = "which projects does team Fullchaos own?"

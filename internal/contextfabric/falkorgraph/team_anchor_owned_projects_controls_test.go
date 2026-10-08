@@ -51,8 +51,8 @@ func TestDiscoverContextTeamAnchorServesOnlyOwnedProjects(t *testing.T) {
 				return nil, nil
 			}
 			return []row{{
-				"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNS", propRelationshipID: "rel_owned"}},
-				"srcKind": "team", "srcId": "team:platform", "dstKind": "project", "dstId": "project:owned",
+				"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNED_BY_TEAM", propRelationshipID: "rel_owned"}},
+				"srcKind": "project", "srcId": "project:owned", "dstKind": "team", "dstId": "team:platform",
 			}}, nil
 		default:
 			switch params["id"] {
@@ -67,7 +67,7 @@ func TestDiscoverContextTeamAnchorServesOnlyOwnedProjects(t *testing.T) {
 	request := ownershipRoutingRequest(projectsOfAnchorFrame("Platform"), anchor)
 	request.ScopeAnchorKind = contextfabric.SubjectTeam
 	request.Request.Question = "which projects does team Platform own?"
-	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	result, err := newTeamAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
@@ -90,7 +90,7 @@ func TestDiscoverContextNonTeamAnchorKeepsTextMatchedProjects(t *testing.T) {
 	request := ownershipRoutingRequest(projectsOfAnchorFrame("platform"), anchor)
 	request.ScopeAnchorKind = contextfabric.SubjectRepository
 	request.Request.Question = "which projects does repository platform have?"
-	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	result, err := newTeamAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
@@ -119,7 +119,7 @@ func TestDiscoverContextTeamGuardDoesNotBindOtherMemberKindsOrAnchorKinds(t *tes
 	request := ownershipRoutingRequest(projectsOfAnchorFrame("platform"), team)
 	request.ScopeAnchorKind = contextfabric.SubjectRepository
 	request.Request.Question = "which projects does repository platform have?"
-	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	result, err := newTeamAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
@@ -141,10 +141,11 @@ func TestDiscoverContextTeamAnchorExcludesProjectsOnlyAnotherCommittedSubjectRea
 	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:platform", Label: "Platform"}
 	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:other", Label: "full-chaos/other"}
 	edgeRow := func(id, src, srcKind, dst string) row {
-		return row{
-			"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNED_BY_TEAM", propRelationshipID: id, propEvidenceRefs: []string{"evidence_" + id + "_1234"}}},
-			"srcKind": srcKind, "srcId": src, "dstKind": "project", "dstId": dst,
+		r := &edge{Properties: map[string]interface{}{propRelationType: "OWNED_BY_TEAM", propRelationshipID: id, propEvidenceRefs: []string{"evidence_" + id + "_1234"}}}
+		if srcKind == "team" {
+			return row{"r": r, "srcKind": "project", "srcId": dst, "dstKind": "team", "dstId": src}
 		}
+		return row{"r": r, "srcKind": srcKind, "srcId": src, "dstKind": "project", "dstId": dst}
 	}
 	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		switch {
@@ -182,7 +183,7 @@ func TestDiscoverContextTeamAnchorExcludesProjectsOnlyAnotherCommittedSubjectRea
 	request.Resolution.Committed = []contextfabric.SubjectRef{team, repo}
 	request.ScopeAnchorKind = contextfabric.SubjectTeam
 	request.Request.Question = "which projects does team Platform own?"
-	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	result, err := newTeamAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
@@ -224,7 +225,7 @@ func TestDiscoverContextTeamAnchorReportsTheSkippedKindFulltextArm(t *testing.T)
 	telemetry := &recordingTelemetry{}
 	request := ownershipRoutingRequest(projectsOfAnchorFrame("Platform"), anchor)
 	request.ScopeAnchorKind = contextfabric.SubjectTeam
-	if _, err := newFakeAdapterWithTelemetry(t, fake, telemetry).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request); err != nil {
+	if _, err := newFakeAdapterWithTelemetry(t, withWalkStepReads(fake), telemetry).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request); err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
 	if len(telemetry.cohortKindFulltexts) != 1 || telemetry.cohortKindFulltexts[0].decision != CohortKindFulltextTeamAnchorReach {

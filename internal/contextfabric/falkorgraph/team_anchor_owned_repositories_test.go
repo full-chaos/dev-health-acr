@@ -65,7 +65,7 @@ func discoverTeamRepositories(t *testing.T, fake *fakeConn, max int) *contextfab
 	request.ScopeAnchorKind = contextfabric.SubjectTeam
 	request.Request.Question = "which repositories does team Platform own?"
 	request.Request.Options.MaxCohortMembers = max
-	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	result, err := newTeamAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
@@ -149,7 +149,7 @@ func TestDiscoverContextTeamAnchorExcludesRepositoriesOnlyAnotherCommittedSubjec
 	request.ScopeAnchorKind = contextfabric.SubjectTeam
 	request.Request.Question = "which repositories does team Platform own?"
 	request.Resolution.Committed = append(request.Resolution.Committed, project)
-	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	result, err := newTeamAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}

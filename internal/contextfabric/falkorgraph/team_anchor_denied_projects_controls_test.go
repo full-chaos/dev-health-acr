@@ -45,13 +45,17 @@ func reachFixture(edges []reachEdge, nodeAuthz map[string][]string) *fakeConn {
 				if authz == nil {
 					authz = reachAllowed
 				}
-				rows = append(rows, row{
+				r := row{
 					"r": &edge{Properties: map[string]interface{}{
 						propRelationType: relationOr(e.relation), propRelationshipID: "rel_" + e.id,
 						"authorization_repositories": authz,
 					}},
 					"srcKind": srcKindOf(src), "srcId": src, "dstKind": e.dstKind, "dstId": e.dstID,
-				})
+				}
+				if src == "team:chaos" && relationOr(e.relation) == "OWNED_BY_TEAM" {
+					r["srcKind"], r["srcId"], r["dstKind"], r["dstId"] = e.dstKind, e.dstID, "team", src
+				}
+				rows = append(rows, r)
 			}
 			return rows, nil
 		default:
@@ -88,7 +92,7 @@ func discoverReach(t *testing.T, fake *fakeConn) (contextfabric.GraphContext, *r
 	request.ScopeAnchorKind = contextfabric.SubjectTeam
 	request.Request.Question = "which projects does team Fullchaos own?"
 	telemetry := &recordingTelemetry{}
-	result, err := newFakeAdapterWithTelemetry(t, fake, telemetry).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: reachAllowed}, request)
+	result, err := newFakeAdapterWithTelemetry(t, withWalkStepReads(fake), telemetry).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: reachAllowed}, request)
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
@@ -197,7 +201,7 @@ func TestDiscoverContextAnchorIsNotCountedAsADeniedMemberOfItsOwnKind(t *testing
 	frame.SubjectExpression.Scoped.MemberKind = contextfabric.SubjectTeam
 	request := ownershipRoutingRequest(frame, anchor)
 	request.Request.Question = "which teams relate to Fullchaos?"
-	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: reachAllowed}, request)
+	result, err := newTeamAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: reachAllowed}, request)
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
@@ -322,7 +326,7 @@ func TestDiscoverContextSharedProjectAdmittedByAnotherAnchorIsNotCountedDenied(t
 				propRelationType: "OWNED_BY_TEAM", propRelationshipID: id,
 				propEvidenceRefs: []string{"evidence_" + id + "_1234"}, "authorization_repositories": authz,
 			}},
-			"srcKind": "team", "srcId": src, "dstKind": "project", "dstId": dst,
+			"srcKind": "project", "srcId": dst, "dstKind": "team", "dstId": src,
 		}
 	}
 	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
@@ -358,7 +362,7 @@ func TestDiscoverContextSharedProjectAdmittedByAnotherAnchorIsNotCountedDenied(t
 	request := ownershipRoutingRequest(reachProjectsFrame("Fullchaos"), team)
 	request.Resolution.Committed = []contextfabric.SubjectRef{team, other}
 	request.Request.Question = "which projects does team Fullchaos own?"
-	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: reachAllowed}, request)
+	result, err := newTeamAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: reachAllowed}, request)
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
@@ -388,7 +392,7 @@ func TestDiscoverContextOtherCommittedTeamsDeniedProjectIsNotTheAnchorsDeniedMem
 					propRelationType: "OWNED_BY_TEAM", propRelationshipID: "rel_o",
 					propEvidenceRefs: []string{"evidence_rel_o_1234"}, "authorization_repositories": reachDenied,
 				}},
-				"srcKind": "team", "srcId": "team:other", "dstKind": "project", "dstId": "p-other",
+				"srcKind": "project", "srcId": "p-other", "dstKind": "team", "dstId": "team:other",
 			}}, nil
 		default:
 			id, _ := params["id"].(string)
@@ -410,7 +414,7 @@ func TestDiscoverContextOtherCommittedTeamsDeniedProjectIsNotTheAnchorsDeniedMem
 	request.Resolution.Candidates[0].MatchedTerms = []string{"Fullchaos"}
 	request.ScopeAnchorKind = contextfabric.SubjectTeam
 	request.Request.Question = "which projects does team Fullchaos own?"
-	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: reachAllowed}, request)
+	result, err := newTeamAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: reachAllowed}, request)
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}

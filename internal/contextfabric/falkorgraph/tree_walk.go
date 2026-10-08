@@ -339,6 +339,16 @@ func (s treeWalkState) deny() {
 	s.out.denied++
 }
 
+// denyOwned is deny for a node reached over an ownership edge of the anchor:
+// the anchor's member the caller was denied is named, as hopWalk names it.
+func (s treeWalkState) denyOwned(hop treeHop, n *node) {
+	s.deny()
+	if !hop.edge.ownership {
+		return
+	}
+	s.out.filters.mergeReachDenied(map[string]struct{}{subjectUUID(propStringValue(n.Properties[propKind]), canonicalIDOf(n)): {}})
+}
+
 // cut bounds a frontier by the collect budget; a cut one is truncation.
 func (s treeWalkState) cut(ids []string) []string {
 	sort.Strings(ids)
@@ -464,7 +474,7 @@ func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]c
 	seen := map[string]bool{}
 	for _, h := range hits {
 		if !s.authorized(h.to) {
-			s.deny()
+			s.denyOwned(hop, h.to)
 			continue
 		}
 		id := canonicalIDOf(h.to)

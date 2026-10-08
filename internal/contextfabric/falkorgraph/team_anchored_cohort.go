@@ -42,3 +42,24 @@ func teamAnchorCohortRationaleFor(kind contextfabric.SubjectKind) string {
 	}
 	return teamAnchorCohortRationale
 }
+
+// teamAnchorMemberPosition is the tree position a team anchor's members are
+// read at, and whether the subject is such an anchor: a committed team whose
+// own reach is the member set of a question for its projects or repositories.
+// Every other anchor, and every other member kind, stays on the generic walk.
+func teamAnchorMemberPosition(anchors []contextfabric.SubjectRef, subject contextfabric.SubjectRef, declaredKind contextfabric.SubjectKind) (treePosition, bool) {
+	found := false
+	for _, anchor := range anchors {
+		found = found || anchor == subject
+	}
+	if !found {
+		return "", false
+	}
+	switch declaredKind {
+	case contextfabric.SubjectRepository:
+		return treeRepository, true
+	case contextfabric.SubjectProject:
+		return treeProject, true
+	}
+	return "", false
+}
