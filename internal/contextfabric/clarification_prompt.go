@@ -1,6 +1,12 @@
 package contextfabric
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
 
 // ClarificationPrompt builds the caller-facing ambiguity prompt from the
 // (post-truncation) candidate set.
@@ -9,26 +15,59 @@ func ClarificationPrompt(candidates []SubjectCandidate) string {
 	if len(candidates) < max {
 		max = len(candidates)
 	}
-	labels := make([]string, 0, max)
 	shown := candidates
 	if len(shown) > max {
 		shown = shown[:max]
 	}
+	cueLists := make([][]string, len(shown))
 	colliding := collidingLabelKeys(shown)
 	crossKind := crossKindLabels(shown)
-	for _, candidate := range shown {
-		label := candidate.Subject.Label
-		cues := make([]string, 0, 2)
+	for i, candidate := range shown {
+		cues := make([]string, 0, 3)
 		if crossKind[strings.ToLower(strings.TrimSpace(candidate.Subject.Label))] {
 			cues = append(cues, string(candidate.Subject.Kind))
 		}
 		if candidate.Provider != "" && colliding[candidateLabelKey(candidate)] {
 			cues = append(cues, candidate.Provider)
 		}
-		if len(cues) > 0 {
-			label += " (" + strings.Join(cues, ", ") + ")"
+		cueLists[i] = cues
+	}
+	// Two distinct subjects can still render identically after the kind and
+	// provider cues; the shortest unique canonical id suffix is the last cue, added only then.
+	rendered := make([]string, len(shown))
+	owners := map[string]map[string]struct{}{}
+	for i, candidate := range shown {
+		rendered[i] = renderCandidateLabel(candidate.Subject.Label, cueLists[i])
+		if owners[rendered[i]] == nil {
+			owners[rendered[i]] = map[string]struct{}{}
+		}
+		owners[rendered[i]][candidate.Subject.CanonicalID] = struct{}{}
+	}
+	suffixes := map[string]map[string]string{}
+	for key, ids := range owners {
+		if len(ids) > 1 {
+			suffixes[key] = shortestUniqueSuffixes(ids)
+		}
+	}
+	labels := make([]string, 0, max)
+	for i, candidate := range shown {
+		label := rendered[i]
+		if len(owners[rendered[i]]) > 1 {
+			label = renderCandidateLabel(candidate.Subject.Label, append(cueLists[i], suffixes[rendered[i]][candidate.Subject.CanonicalID]))
 		}
 		labels = append(labels, label)
+	}
+	if promptRuneCount(labels) > contractsv1.ContextFabricProjectedClarificationPromptMaxLength {
+		// The suffix cues would push the prompt past its published bound; a
+		// short ordinal still tells the identical choices apart.
+		ordinals := map[string]int{}
+		for i, candidate := range shown {
+			if len(owners[rendered[i]]) <= 1 {
+				continue
+			}
+			ordinals[rendered[i]]++
+			labels[i] = renderCandidateLabel(candidate.Subject.Label, append(cueLists[i], "#"+strconv.Itoa(ordinals[rendered[i]])))
+		}
 	}
 	if len(labels) == 0 {
 		// An empty candidate list has no subject to ask about, and the
@@ -40,6 +79,13 @@ func ClarificationPrompt(candidates []SubjectCandidate) string {
 		return ""
 	}
 	return "Which subject did you mean: " + strings.Join(labels, ", ") + "?"
+}
+
+func renderCandidateLabel(label string, cues []string) string {
+	if len(cues) == 0 {
+		return label
+	}
+	return label + " (" + strings.Join(cues, ", ") + ")"
 }
 
 func candidateLabelKey(c SubjectCandidate) string {
@@ -84,4 +130,43 @@ func crossKindLabels(candidates []SubjectCandidate) map[string]bool {
 		}
 	}
 	return out
+}
+
+func promptRuneCount(labels []string) int {
+	return utf8.RuneCountInString("Which subject did you mean: " + strings.Join(labels, ", ") + "?")
+}
+
+// minIDSuffixRunes is the shortest id suffix shown as a cue.
+const minIDSuffixRunes = 8
+
+// shortestUniqueSuffixes maps each id to its shortest suffix, at least
+// minIDSuffixRunes long (or the whole id when shorter), that no other id in
+// the set shares.
+func shortestUniqueSuffixes(ids map[string]struct{}) map[string]string {
+	longest := 0
+	for id := range ids {
+		if n := utf8.RuneCountInString(id); n > longest {
+			longest = n
+		}
+	}
+	for k := minIDSuffixRunes; ; k++ {
+		out := make(map[string]string, len(ids))
+		seen := make(map[string]struct{}, len(ids))
+		for id := range ids {
+			suffix := idSuffix(id, k)
+			out[id] = suffix
+			seen[suffix] = struct{}{}
+		}
+		if len(seen) == len(ids) || k >= longest {
+			return out
+		}
+	}
+}
+
+func idSuffix(id string, k int) string {
+	runes := []rune(id)
+	if len(runes) <= k {
+		return id
+	}
+	return string(runes[len(runes)-k:])
 }
