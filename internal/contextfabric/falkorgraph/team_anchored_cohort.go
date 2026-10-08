@@ -70,17 +70,17 @@ func teamAnchorMemberPosition(anchors []contextfabric.SubjectRef, subject contex
 }
 
 // ownedMemberStates is the lifecycle state each owned member carries, keyed by
-// subject: a member the source marks completed, canceled or inactive is still
+// subject: a member the source marks completed, canceled or archived is still
 // owned, and says so on its row.
 func ownedMemberStates(nodes []graphrank.CandidateNode) map[string]string {
 	states := map[string]string{}
 	for _, n := range nodes {
 		state := strings.TrimSpace(propStringValue(n.Attributes[propPropertyPrefix+"state"]))
-		inactive := false
+		archived := false
 		if active, ok := n.Attributes[propPropertyPrefix+"is_active"].(bool); ok {
-			inactive = !active
+			archived = !active
 		}
-		if state == "" && !inactive {
+		if state == "" && !archived {
 			continue
 		}
 		subject, ok := graphrank.NodeSubject(n)
@@ -90,9 +90,9 @@ func ownedMemberStates(nodes []graphrank.CandidateNode) map[string]string {
 		reason := "Project state: " + state + "."
 		switch {
 		case state == "":
-			reason = "Project is inactive in the source."
-		case inactive:
-			reason = "Project state: " + state + "; inactive in the source."
+			reason = "Project is archived."
+		case archived:
+			reason = "Project state: " + state + "; archived."
 		}
 		states[graphrank.SubjectKey(subject)] = reason
 	}

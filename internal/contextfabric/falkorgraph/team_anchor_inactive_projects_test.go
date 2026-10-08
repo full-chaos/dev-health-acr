@@ -42,7 +42,7 @@ func TestDiscoverContextTeamAnchorServesOwnedProjectsWithClosedNodeWindow(t *tes
 		if len(m.InclusionReasons) != want {
 			t.Fatalf("%s reasons = %v, want %d", id, m.InclusionReasons, want)
 		}
-		if closed[id] && m.InclusionReasons[1] != "Project state: completed; inactive in the source." {
+		if closed[id] && m.InclusionReasons[1] != "Project state: completed; archived." {
 			t.Fatalf("%s state reason = %q", id, m.InclusionReasons[1])
 		}
 	}
