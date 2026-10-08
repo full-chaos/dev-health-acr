@@ -21,6 +21,11 @@ func twoListCatalogue(t *testing.T, declared string) (*directread.Catalogue, err
 // twoListCatalogueChecked can leave the second list out of the restricted
 // caller's row check.
 func twoListCatalogueChecked(t *testing.T, declared string, rowChecked bool) (*directread.Catalogue, error) {
+	return twoListCatalogueScoped(t, declared, rowChecked, false)
+}
+
+// twoListCatalogueScoped can also declare the second list unchecked.
+func twoListCatalogueScoped(t *testing.T, declared string, rowChecked, unchecked bool) (*directread.Catalogue, error) {
 	t.Helper()
 	raw, err := os.ReadFile("operations.v1.json")
 	if err != nil {
@@ -37,6 +42,9 @@ func twoListCatalogueChecked(t *testing.T, declared string, rowChecked bool) (*d
 		op := &file.Operations[i]
 		op.PrimaryListPath = declared
 		for j := range op.Scopes {
+			if unchecked && op.Scopes[j].Caller == directread.CallerRestricted {
+				op.Scopes[j].UncheckedPaths = append(op.Scopes[j].UncheckedPaths, "hotspots.repos")
+			}
 			if rowChecked && op.Scopes[j].Caller == directread.CallerRestricted && !slices.Contains(op.Scopes[j].RowIDPaths, "hotspots.repos[*].repoId") {
 				op.Scopes[j].RowIDPaths = append(op.Scopes[j].RowIDPaths, "hotspots.repos[*].repoId")
 			}
@@ -183,5 +191,14 @@ func TestARestrictedCallerNeverReceivesAForeignRepositoryFromTheSecondList(t *te
 				t.Fatalf("%.300s", out)
 			}
 		})
+	}
+}
+
+func TestADeclaredUncheckedSecondListNeedsNoRowIdPath(t *testing.T) {
+	if _, err := twoListCatalogueScoped(t, "hotspots.rows", false, true); err != nil {
+		t.Fatalf("a list declared unchecked was rejected: %v", err)
+	}
+	if _, err := twoListCatalogueScoped(t, "hotspots.rows", false, false); err == nil {
+		t.Fatal("the same list without the declaration loaded")
 	}
 }
