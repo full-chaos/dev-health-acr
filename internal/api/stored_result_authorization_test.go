@@ -284,7 +284,8 @@ func TestStoredResultAuthorizationLineCertifiesAgainstItsSpecification(t *testin
 // confirmation (anchor, candidate, handle) stores only the id. Such an identity
 // is decided by every graph node carrying the id: a result whose current
 // subject is granted but whose carried identity is not is refused on every
-// surface, exactly like a refused committed subject.
+// surface, exactly like a refused committed subject. A carried handle value
+// is a literal: it is refused only when a node it matches is not granted.
 func TestAStoredResultNamingAnUngrantedSubjectByIDAloneIsRefused(t *testing.T) {
 	granted := map[string]interface{}{"authorization_repositories": []string{hostedTestRepository}}
 	other := map[string]interface{}{"authorization_repositories": []string{"other-org/secret-service"}}
@@ -320,7 +321,11 @@ func TestAStoredResultNamingAnUngrantedSubjectByIDAloneIsRefused(t *testing.T) {
 				Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
 			}}
 			seedResult3355(t, store, "org_1", result)
-			cells = append(cells, cell{member: member, value: target.value, served: target.served, result: result})
+			// A handle's value is a literal (a pull request number): matching no
+			// node proves nothing is withheld, while a node it does match is
+			// decided like any other subject.
+			served := target.served || member == contractsv1.ContextFabricStructureNeedSubjectHandle && target.value == "project_nowhere"
+			cells = append(cells, cell{member: member, value: target.value, served: served, result: result})
 		}
 	}
 	app, _ := newParityHostedAppWithLogs(t, nil, ownGrantStore{store}, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, &bytes.Buffer{})
