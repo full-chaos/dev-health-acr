@@ -242,7 +242,9 @@ type treeWalk struct {
 	nodes      []graphrank.CandidateNode
 	edges      []graphrank.ResolvedEdge
 	filters    edgeFilterCounts
-	truncated  bool
+	// anchorDenied: the anchor itself is hidden from the caller.
+	anchorDenied bool
+	truncated    bool
 	// hasLink: the path crosses the issue <> pull request link.
 	hasLink bool
 	// linkSources is how many nodes the hop that feeds the link reached (a
@@ -418,7 +420,7 @@ func (a *Adapter) teamAnchorMembers(ctx context.Context, key, orgID string, prin
 }
 
 func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter, ownershipEdges, anchorDenied bool) (treeWalk, error) {
-	out := treeWalk{anchorKind: anchor.Kind}
+	out := treeWalk{anchorKind: anchor.Kind, anchorDenied: anchorDenied}
 	start, ok := anchorPosition(anchor.Kind)
 	if !ok {
 		return out, nil

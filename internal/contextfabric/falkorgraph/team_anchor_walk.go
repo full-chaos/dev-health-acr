@@ -45,6 +45,9 @@ type teamAnchorWalkTally struct {
 	ran             bool
 	members, denied int
 	truncated       bool
+	// anchorDenied: a team the caller cannot see was read, so the read is
+	// denied even when it owns nothing.
+	anchorDenied bool
 }
 
 func (t *teamAnchorWalkTally) add(walk treeWalk) {
@@ -52,6 +55,7 @@ func (t *teamAnchorWalkTally) add(walk treeWalk) {
 	t.members += len(walk.nodes)
 	t.denied += walk.denied
 	t.truncated = t.truncated || walk.truncated
+	t.anchorDenied = t.anchorDenied || walk.anchorDenied
 }
 
 func (t teamAnchorWalkTally) decision(memberKind contextfabric.SubjectKind, committed int, err error) TeamAnchorWalkDecision {
@@ -61,7 +65,7 @@ func (t teamAnchorWalkTally) decision(memberKind contextfabric.SubjectKind, comm
 		d.Outcome = TeamAnchorWalkReadFailed
 	case t.members > 0:
 		d.Outcome = TeamAnchorWalkMembers
-	case t.denied > 0:
+	case t.denied > 0 || t.anchorDenied:
 		d.Outcome = TeamAnchorWalkDenied
 	default:
 		d.Outcome = TeamAnchorWalkNoMembers

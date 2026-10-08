@@ -177,3 +177,23 @@ func TestTeamAnchorWalkTallySumsTheReadsOfOneCall(t *testing.T) {
 		t.Fatalf("decision = %+v, want %+v", got, want)
 	}
 }
+
+// A team the caller cannot see is a denied read even when it owns nothing.
+func TestTeamAnchorWalkDeniedTeamWithNoOwnedMembersIsDenied(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	fake := withWalkStepReads(&fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if !strings.Contains(cypher, "UNION") && !strings.Contains(cypher, "UNWIND") && !strings.Contains(cypher, "fulltext") && params["id"] == "team:platform" {
+			r := fakeSubjectNodeRow("team", "team:platform", "Platform")
+			r["n"].(*node).Properties["authorization_repositories"] = []string{"other/private"}
+			return []row{r}, nil
+		}
+		return nil, nil
+	}})
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: teamWalkAllowed}
+	if _, err := newFakeAdapterWithTelemetry(t, fake, telemetry).DiscoverContext(context.Background(), principal, teamWalkRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if len(telemetry.teamAnchorWalks) != 1 || telemetry.teamAnchorWalks[0].Outcome != TeamAnchorWalkDenied {
+		t.Fatalf("decisions = %+v, want one denied", telemetry.teamAnchorWalks)
+	}
+}
