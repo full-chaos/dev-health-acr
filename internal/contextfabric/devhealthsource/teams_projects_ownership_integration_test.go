@@ -516,6 +516,10 @@ func newOwnershipFixture(t *testing.T, ctx context.Context, query contextpacket.
 			t.Fatalf("seed %s: %v", label, err)
 		}
 	}
+	// The projection always reads project_membership_presence, so every
+	// fixture creates the view itself: a test must not rely on an earlier test
+	// of the shared container having created it.
+	createProjectMembershipPresenceView(t, ctx, direct)
 	seedTeam := func(id, provider string) {
 		mustSeed("teams "+id, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, id+" name", "", at, orgID, provider, id, []string{}, uint8(1))

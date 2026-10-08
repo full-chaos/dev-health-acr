@@ -266,7 +266,10 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // duplicate). Builds before v18 left both intervals open, and the trailing
 // overlap that re-reads a row is finite, so only the rebuild clears an
 // already-projected superseded interval.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v18"
+// v18 -> v19: work item -> team edges now include the co-owner attribution
+// rows (is_primary = 2), one edge per team, and the page key carries the team.
+// Edges projected before v19 lack the co-owner teams; only the rebuild adds them.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v19"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.

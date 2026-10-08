@@ -549,7 +549,13 @@ import (
 // saved before v110 may hold the older, identical-looking prompt and must not
 // be reused.
 //
-// v110 -> v114: a flat cohort listing serves every member within the caller's
+// v110 -> v111: a team-scoped cohort (the team's repositories and work items)
+// and the work item to team edges include a co-owner of the item (a second
+// team owning its project), not only the primary team. A candidate saved
+// before v111 may hold a cohort short of the co-owner team's items and must not
+// be reused.
+//
+// v111 -> v114: a flat cohort listing serves every member within the caller's
 // member budget (the plan derives its item ceiling from the members, and the
 // member references are reserved before the driver references). An answer
 // saved before v114 may hold the same listing cut at 14 members, or at the

@@ -640,7 +640,7 @@ rule instead, the same discipline the three project policies already honour.
 
 ```mermaid
 flowchart LR
-    T["SubjectTeam"] -->|"OWNED_BY_TEAM<br/>(work_item_team_attributions,<br/>is_primary = 1)"| WI["work_item"]
+    T["SubjectTeam"] -->|"OWNED_BY_TEAM<br/>(work_item_team_attributions,<br/>is_primary IN (1, 2))"| WI["work_item"]
     WI -->|"BELONGS_TO_REPOSITORY"| R["repository"]
     R -->|"BELONGS_TO_REPOSITORY"| PR["pull_request"]
     PR -->|"BELONGS_TO_PULL_REQUEST"| RV["pull_request_review"]

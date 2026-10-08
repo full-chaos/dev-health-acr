@@ -2003,13 +2003,41 @@ func TestTheCaptureBaselineIsTheCaptureOfTheManifest(t *testing.T) {
 		t.Fatalf("the manifest was captured at %s, the baseline names %s: advance contractsAtCapture with the capture", manifest.SchemaDigest, captureSchemaDigest)
 	}
 	policy := mustPolicy(t)
-	if policy.Catalogue().SchemaDigest() != manifest.SchemaDigest {
-		t.Skip("the catalogue pins another SDL than the capture")
+	for _, name := range operationsWithChangedContract(policy, contractsAtCapture) {
+		t.Errorf("contract of %s is not the one the baseline holds: recapture on the venue", name)
 	}
-	for _, op := range policy.Catalogue().Operations(directread.CallerUnrestricted) {
-		if contractsAtCapture[op.Name] != contractDigest(op) {
-			t.Errorf("contract of %s is %s, the baseline holds %q", op.Name, contractDigest(op), contractsAtCapture[op.Name])
+}
+
+// A capture replays under a later pinned SDL only while every operation
+// contract is the captured one: one changed digest, or one operation the
+// baseline does not hold, is named.
+func TestACaptureReplaysOnlyWhileEveryContractIsTheCapturedOne(t *testing.T) {
+	policy := mustPolicy(t)
+	if got := operationsWithChangedContract(policy, contractsAtCapture); len(got) != 0 {
+		t.Fatalf("the baseline is not the served contracts: %v", got)
+	}
+	var first string
+	for name := range contractsAtCapture {
+		if first == "" || name < first {
+			first = name
 		}
+	}
+	changed := map[string]string{}
+	for k, v := range contractsAtCapture {
+		changed[k] = v
+	}
+	changed[first] = "sha256:0"
+	if got := operationsWithChangedContract(policy, changed); len(got) != 1 || got[0] != first {
+		t.Errorf("one changed contract digest: got %v, want [%s]", got, first)
+	}
+	missing := map[string]string{}
+	for k, v := range contractsAtCapture {
+		if k != first {
+			missing[k] = v
+		}
+	}
+	if got := operationsWithChangedContract(policy, missing); len(got) != 1 || got[0] != first {
+		t.Errorf("one operation missing from the baseline: got %v, want [%s]", got, first)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -149,14 +150,14 @@ var SourceRowOnlyQueriesV2 = []SourceQuery{
 	{"work_item_hierarchy.v2", workItemsSourceFamily, EvidenceScopeRepo, standardColumns + ` SELECT ` +
 		evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, "c.repo_id", "c.work_item_id", "c.parent_id") + ` evidence_ref_id, 'dev_health' system, 'work_item_hierarchy' entity_type, ` +
 		evidenceref.IDSQL(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, "c.repo_id", "c.work_item_id", "c.parent_id") + ` entity_id, concat(c.work_item_id, ' part of ', c.parent_id) display_label, '' safe_uri, 'native' provenance, 1.0 confidence, concat('child=', c.work_item_id, ', parent=', c.parent_id) citation, c.updated_at observed_at FROM work_items AS c FINAL WHERE c.org_id = {org_id:String} AND c.repo_id = {repo_id:UUID} AND c.work_item_id = {component_2:String} AND c.parent_id = {component_3:String} AND c.parent_id != '' AND c.parent_id != c.work_item_id AND c.parent_id IN (SELECT work_item_id FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id = {component_3:String}) )`},
-	// The primary work_item_team_attributions row by its full key; its work
+	// The work_item_team_attributions row (primary or co-owner) by its full key; its work
 	// item has a row in the read repository and its team is a team of the
 	// organization (the projector's joins). Provenance follows the
 	// projector's epistemic split (CHAOS-4101): a native_team row is the
 	// provider's own assertion, every other source is Ops' inference.
 	{"work_item_teams.v2", workItemsSourceFamily, EvidenceScopeRepo, standardColumns + ` SELECT ` +
 		evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, "a.repo_id", "a.work_item_id", "ifNull(a.team_id, '')", "toString(a.source)") + ` evidence_ref_id, 'dev_health' system, 'work_item_team' entity_type, ` +
-		evidenceref.IDSQL(contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, "a.repo_id", "a.work_item_id", "ifNull(a.team_id, '')", "toString(a.source)") + ` entity_id, concat(a.work_item_id, ' owned by team ', ifNull(a.team_id, '')) display_label, '' safe_uri, if(toString(a.source) = 'native_team', 'native', 'heuristic') provenance, 1.0 confidence, concat('source=', toString(a.source), ', confidence=', toString(a.confidence)) citation, a.computed_at observed_at FROM work_item_team_attributions AS a FINAL WHERE a.org_id = {org_id:String} AND toString(a.repo_id) = {component_1:String} AND a.work_item_id = {component_2:String} AND ifNull(a.team_id, '') = {component_3:String} AND toString(a.source) = {component_4:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') != '' AND a.work_item_id IN (SELECT work_item_id FROM work_items FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND work_item_id = {component_2:String}) AND ifNull(a.team_id, '') IN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND id = {component_3:String}) )`},
+		evidenceref.IDSQL(contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, "a.repo_id", "a.work_item_id", "ifNull(a.team_id, '')", "toString(a.source)") + ` entity_id, concat(a.work_item_id, ' owned by team ', ifNull(a.team_id, '')) display_label, '' safe_uri, if(toString(a.source) = 'native_team', 'native', 'heuristic') provenance, 1.0 confidence, concat('source=', toString(a.source), ', confidence=', toString(a.confidence)) citation, a.computed_at observed_at FROM work_item_team_attributions AS a FINAL WHERE a.org_id = {org_id:String} AND toString(a.repo_id) = {component_1:String} AND a.work_item_id = {component_2:String} AND ifNull(a.team_id, '') = {component_3:String} AND toString(a.source) = {component_4:String} AND ` + devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam) + ` AND ifNull(a.team_id, '') != '' AND a.work_item_id IN (SELECT work_item_id FROM work_items FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND work_item_id = {component_2:String}) AND ifNull(a.team_id, '') IN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND id = {component_3:String}) )`},
 	// The work_graph_deployment_incident_edges row by its full key (org,
 	// deployment, incident, source), in the repository the ref names.
 	{"deployment_incident_edges.v2", "work_graph", EvidenceScopeRepo, standardColumns + ` SELECT ` +
