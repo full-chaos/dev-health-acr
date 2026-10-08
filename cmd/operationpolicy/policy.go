@@ -265,8 +265,8 @@ func declaredPolicy() policyDeclaration {
 					Served:             true,
 					ForcedVariablePath: "input.repoIds",
 					SubjectKind:        dr.SubjectKindRepository,
-					RowIDPaths:         []string{"hotspots.rows[*].repoId"},
-					Basis:              "forced input.repoIds + row check on rows[*].repoId = toString(repo_id) ([ops] hotspots/hotspots.go:228,375). Empty or null repoIds means ALL repositories (:245), so an empty grant intersection must end before dispatch with no_granted_scope (RM §2)",
+					RowIDPaths:         []string{"hotspots.rows[*].repoId", "hotspots.repos[*].repoId"},
+					Basis:              "forced input.repoIds + row check on rows[*].repoId = toString(repo_id) ([ops] hotspots/hotspots.go:228,375) and on repos[*].repoId, the per-repository roll-up of the same rows. Empty or null repoIds means ALL repositories (:245), so an empty grant intersection must end before dispatch with no_granted_scope (RM §2)",
 				},
 			},
 			"acrRepositoryScopes": {
@@ -560,6 +560,7 @@ func notServed() map[string]notServedDecl {
 		"investmentEvidenceQuality":         {noScope},
 		"testOpsCoverage":                   {noScope},
 		"testopsJobFailures":                {noScope},
+		"sourceHealth":                      {noScope},
 		"testOpsPipeline":                   {noScope},
 		"testOpsTest":                       {noScope},
 		"testopsRisk":                       {noScope},

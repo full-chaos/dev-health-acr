@@ -112,6 +112,7 @@ isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/factoracle"
 )
 
 # CHAOS-5977: dedicated_isolated_packages is a SUBSET of isolated_packages
@@ -148,9 +149,17 @@ isolated_packages=(
 # `test-shard.sh isolated-dedicated <package-basename>` (see main()) so two
 # dedicated packages never share a `go test` invocation; its own budget is
 # GOTEST_DEVHEALTHSOURCE_TIMEOUT in the Makefile.
+#
+# factoracle joins them: the O4 oracle package seeds a real ClickHouse store
+# from the venue capture (testdata/venue) and replays 95 shape cases against
+# it; its race wall time grew with the capture (100s in a shared shard before
+# the capture of the venue at ops 5c9a3d32, then a `panic: test timed out
+# after 7m0s` at 420s in "race (shard 4 of 4)" on two hosted runs). It runs
+# alone in its own job under GOTEST_FACTORACLE_TIMEOUT.
 dedicated_isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/factoracle"
 )
 
 # CHAOS-7282: unit_dedicated_packages is a SUBSET of isolated_packages naming

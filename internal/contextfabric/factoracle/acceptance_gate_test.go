@@ -88,8 +88,15 @@ func wantClean(t *testing.T, rr *RootReport, allowed ...Class) {
 // sameThemes reports whether two theme maps hold the same values; a theme
 // that one map lacks is zero there.
 func sameThemes(got, want map[string]float64) bool {
+	// A theme whose true value is zero comes out as the rounding error of
+	// the sums of the other themes, so the tolerance is the one of the
+	// largest theme of the two maps, not of the theme itself.
+	scale := 0.0
 	for _, theme := range themeKeys(got, want) {
-		if math.Abs(got[theme]-want[theme]) > sumTolerance(got[theme], want[theme]) {
+		scale = math.Max(scale, math.Max(math.Abs(got[theme]), math.Abs(want[theme])))
+	}
+	for _, theme := range themeKeys(got, want) {
+		if math.Abs(got[theme]-want[theme]) > sumTolerance(scale) {
 			return false
 		}
 	}
@@ -572,8 +579,13 @@ func effortMovedBetweenRepositoriesIsAFinding(t *testing.T) {
 		}
 	}
 	_, rr := gateRun(t, manifest, recording, extract, planted)
-	if len(rr.Differences) != 0 {
-		t.Fatalf("moved effort was named a class: %+v", rr.Differences)
+	// The residual of attribution_basis is by design and present whenever
+	// effort reaches no repository (the venue at ops 5c9a3d32 has some);
+	// moved effort must not be named by any other class.
+	for _, d := range rr.Differences {
+		if d.Class != ClassAttributionBasis {
+			t.Fatalf("moved effort was named a class: %+v", d)
+		}
 	}
 	found := false
 	for _, f := range rr.Findings {

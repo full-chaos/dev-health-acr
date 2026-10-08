@@ -18,38 +18,35 @@ import (
 
 const captureDir = "testdata/venue"
 
-// captureSchemaDigest is the SDL digest the recorded capture was taken at.
-const captureSchemaDigest = "sha256:330d0ebf0ea59fce8d0b1bb14887cad8e5b3f6971ad02618afa9844b6fac7a50"
+// captureSchemaDigest is the SDL digest the recorded capture was taken at
+// (the venue at ops 5c9a3d32, pin 18).
+const captureSchemaDigest = "sha256:54a0f7d6ee428bc2f8c8ef6329680c8efeb4be94a7b41bdc12655006069335e4"
 
 // contractsAtCapture is contractDigest of every served operation under the SDL
 // the capture was taken at. A build that pins another SDL may replay the
 // capture only for the operations whose contract is still the one below; an
-// operation that changed or is new belongs to a root in notRecordedRoots.
-// investmentBreakdown and investmentFull are re-pinned at ops 98322341: their
-// document, outputs and allowed variables are the captured ones, and the only
-// difference is refused variables (batch.evidenceQualityGroupBy,
-// batch.breakdowns[*].keys), so the recorded replies still hold. home changed
-// in its document but belongs to no graphql_query root, so no recorded shape
-// of it is replayed.
+// operation that changed or is new belongs to a root in notRecordedRoots, or
+// the capture is taken again on the venue.
 var contractsAtCapture = map[string]string{
-	"acrRepositoryScopes":      "sha256:43fa66efd5d4c5dfc3699253378000be29e86dee1640f22dff19f40a0eb68c6a",
-	"capacityForecast":         "sha256:a4f248d9f964db5d669f8f1e906dec90babe7b4752824318d4b1b92f0f6d3052",
-	"capacityForecasts":        "sha256:c08fb7e162371f005c8a151a2504b88a521e0f5ad855d96087848000821dc7bf",
-	"catalogValues":            "sha256:00ad023c9a2febf03c47ca10f24c66bdcc7916bac2e5ffc688a2a65d8e3d0258",
-	"cognitiveLoad":            "sha256:52ce7277e9e7033d638b213773e41b478f6cd9af0c540655998dad13dabc4dfb",
-	"complexityTimeseries":     "sha256:5795ecd7c05b216647191e6eca4b6b397c4612a21e2225137590930bf1c65569",
-	"compoundingRisk":          "sha256:77ac36ec578a347763cf97ea1946219d43481774b06878514f34c2f166042525",
-	"home":                     "sha256:baf84f2d080ae0816080a4b434ac85686de90d345ab88db28d16ad7fcf9658fc",
-	"hotspots":                 "sha256:ce8c2b910621109693743b85571b3fbc62a133d62c61aae79394b10af2ae7994",
-	"investmentBreakdown":      "sha256:8742ea2b7d3c3014c7a429a115108e167caf8a250230f5e59c16e3332f7b1749",
-	"investmentFull":           "sha256:179a09e19ce83802c67b1b40fe4c2c1b3c003617d4b49acca225146db3737111",
-	"recommendations":          "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
-	"securityOverview":         "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",
-	"throughputForecast":       "sha256:ad5d774fa899197d84842001d2f9fcee48155c5356a27238e1d726e1aff4db51",
-	"workGraphArtifacts":       "sha256:551ed4f4200e13f02a988d6deab6a9ffc41e41a2d2c72c9d66f224b0d5fe86fc",
-	"workGraphEdges":           "sha256:22f4a10da08615255631c5f866313fdeda9c65bd17a6b621f332984e61ce602e",
-	"workGraphFlow":            "sha256:d442757b8633c7f9542f48a92a34ef1dbcfacdd994e68c76ad7a31cce1428cf1",
-	"workItemTeamAttributions": "sha256:e3e1700f64773540a6192f8239068aac3b780a4d5cf37c5252f766bf819dda58",
+	"acrRepositoryScopes":            "sha256:43fa66efd5d4c5dfc3699253378000be29e86dee1640f22dff19f40a0eb68c6a",
+	"capacityCompletionDistribution": "sha256:4deebbadf5ad5bd86c3f2be8bef3bbc1e622e110080038cf5359d02fe03dca02",
+	"capacityForecast":               "sha256:f93d3cf5c8b5ecd443fbacaeeb7a21aa84a06d7177f748732c2c06a13a8478dc",
+	"capacityForecasts":              "sha256:c08fb7e162371f005c8a151a2504b88a521e0f5ad855d96087848000821dc7bf",
+	"catalogValues":                  "sha256:00ad023c9a2febf03c47ca10f24c66bdcc7916bac2e5ffc688a2a65d8e3d0258",
+	"cognitiveLoad":                  "sha256:52ce7277e9e7033d638b213773e41b478f6cd9af0c540655998dad13dabc4dfb",
+	"complexityTimeseries":           "sha256:5795ecd7c05b216647191e6eca4b6b397c4612a21e2225137590930bf1c65569",
+	"compoundingRisk":                "sha256:77ac36ec578a347763cf97ea1946219d43481774b06878514f34c2f166042525",
+	"home":                           "sha256:342fa4e571ab2bd02005a65a7fe68a3f2ae8c1fce6ab9b1fefaf5fc1a4bb48f6",
+	"hotspots":                       "sha256:30999b82cd7e907ea1711e271b90aae84e66e60f9e93bbee835acf377cdbab23",
+	"investmentBreakdown":            "sha256:8742ea2b7d3c3014c7a429a115108e167caf8a250230f5e59c16e3332f7b1749",
+	"investmentFull":                 "sha256:179a09e19ce83802c67b1b40fe4c2c1b3c003617d4b49acca225146db3737111",
+	"recommendations":                "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
+	"securityOverview":               "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",
+	"throughputForecast":             "sha256:ad5d774fa899197d84842001d2f9fcee48155c5356a27238e1d726e1aff4db51",
+	"workGraphArtifacts":             "sha256:551ed4f4200e13f02a988d6deab6a9ffc41e41a2d2c72c9d66f224b0d5fe86fc",
+	"workGraphEdges":                 "sha256:22f4a10da08615255631c5f866313fdeda9c65bd17a6b621f332984e61ce602e",
+	"workGraphFlow":                  "sha256:d442757b8633c7f9542f48a92a34ef1dbcfacdd994e68c76ad7a31cce1428cf1",
+	"workItemTeamAttributions":       "sha256:e3e1700f64773540a6192f8239068aac3b780a4d5cf37c5252f766bf819dda58",
 }
 
 func requireCaptureContractsUnchanged(t *testing.T, policy *directread.GraphQLPolicy, recorded, pinned string) {
@@ -119,7 +116,7 @@ func oracleFor(t *testing.T, manifest Manifest, planes Planes, reference *Extrac
 		t.Fatalf("reference store: %v", err)
 	}
 	return &Oracle{Policy: policy, Planes: planes, Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases,
-		ListenerDark: manifest.ListenerDark, OperationDark: manifest.OperationDark}
+		ListenerDark: manifest.ListenerDark, OperationDark: manifest.OperationDark, DeniedTeams: manifest.DeniedTeams}
 }
 
 func runOracle(t *testing.T, o *Oracle) *Report {
@@ -165,8 +162,8 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	}
 	unused := planes.Unused()
 	darkKeys := darkReplyKeys(recording, dark)
-	if len(darkKeys) == 0 {
-		t.Fatalf("the capture holds no recorded reply of a dark operation: the exclusion measured nothing")
+	if len(darkKeys) == 0 && len(darkCases(t, recording, dark)) > 0 {
+		t.Fatalf("the capture holds cases of a dark operation and no recorded reply of it: the exclusion measured nothing")
 	}
 	unusedSet := map[string]bool{}
 	var live []string
@@ -346,28 +343,24 @@ func withoutDarkRoots(t *testing.T, manifest Manifest, dark map[string]bool) Man
 func TestRecordedCaptureKeepsTheDarkOperationAndTheTestExcludesIt(t *testing.T) {
 	manifest, recording, _ := loadedCapture(t)
 	dark := darkOperations(t)
-	if got := len(darkReplyKeys(recording, dark)); got != 5 {
-		t.Fatalf("the capture holds %d recorded replies of a dark operation, want 5", got)
+	if got := len(darkReplyKeys(recording, dark)); got != 0 {
+		t.Fatalf("the capture holds %d recorded replies of a dark operation, want 0: the venue registry does not offer one", got)
 	}
 	filtered := withoutDarkRoots(t, manifest, dark)
 	policy := mustPolicy(t)
 	if len(filtered.Expect) != len(policy.Roots()) {
 		t.Fatalf("filtered capture pins %d roots, the policy allows %d", len(filtered.Expect), len(policy.Roots()))
 	}
-	if len(manifest.Expect) != len(filtered.Expect)+len(dark) || len(manifest.ShapeCases) != len(filtered.ShapeCases)+4 {
+	if len(manifest.Expect) != len(filtered.Expect) || len(manifest.ShapeCases) != len(filtered.ShapeCases) {
 		t.Fatalf("the recorded manifest was changed: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
 	}
 }
 
-// notRecordedRoots are the roots the recorded capture cannot replay: the
-// capture was taken against a registry that had no document for the operation
-// below and a capacityForecast document without the completion distribution.
-// The capture stays as recorded; the recorded run says which roots it did not
-// measure, and recording them again needs the venue to serve both documents
-// (`make o4-oracle-capture`), after which this list must be emptied.
-var notRecordedRoots = map[string]string{
-	"capacityForecast": "capacityCompletionDistribution has no recorded reply and the capacityForecast document selected no completionDistribution at capture time",
-}
+// notRecordedRoots are the roots the recorded capture cannot replay: a root
+// whose registry document or shape the venue did not serve when the capture
+// was taken. The capture of the venue at ops 5c9a3d32 records every root, so
+// the list is empty; a root added here again must say why the capture lacks it.
+var notRecordedRoots = map[string]string{}
 
 // withoutNotRecordedRoots returns the manifest without the shape cases and
 // the pinned outcome of a root the capture does not record, and the sorted
@@ -449,22 +442,37 @@ func isNotRecordedKey(t *testing.T, key string, skipped []string) bool {
 	return false
 }
 
+// The capture of the venue at ops 5c9a3d32 records every root: nothing is
+// excluded, so a root added to notRecordedRoots has to be a root the capture
+// really lacks.
 func TestRecordedRunNamesTheRootsItDoesNotMeasure(t *testing.T) {
 	manifest, recording, _ := loadedCapture(t)
 	filtered, skipped := withoutNotRecordedRoots(t, manifest)
-	if !slices.Equal(skipped, []string{"capacityForecast"}) {
+	if len(skipped) != 0 {
 		t.Fatalf("not recorded roots = %v", skipped)
 	}
-	if len(manifest.Expect) != len(filtered.Expect)+1 || len(manifest.ShapeCases) <= len(filtered.ShapeCases) {
-		t.Fatalf("the recorded manifest was changed or the exclusion dropped nothing: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
+	if len(manifest.Expect) != len(filtered.Expect) || len(manifest.ShapeCases) != len(filtered.ShapeCases) {
+		t.Fatalf("the recorded manifest was changed: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
 	}
-	n := 0
 	for key := range recording.Replies {
 		if isNotRecordedKey(t, key, skipped) {
-			n++
+			t.Fatalf("reply %s belongs to a not recorded root", key)
 		}
 	}
-	if n == 0 {
-		t.Fatal("the capture holds no reply of a not recorded root: the exclusion measured nothing")
+	if _, ok := manifest.Expect["capacityForecast"]; !ok {
+		t.Fatal("the capture pins no outcome for capacityForecast")
 	}
+}
+
+// darkCases are the shape cases of the manifest that belong to a dark operation.
+func darkCases(t *testing.T, _ Recording, dark map[string]bool) []string {
+	t.Helper()
+	manifest, _, _ := loadedCapture(t)
+	var out []string
+	for _, c := range manifest.ShapeCases {
+		if isDarkCase(c.ShapeID, dark) {
+			out = append(out, c.ShapeID)
+		}
+	}
+	return out
 }
