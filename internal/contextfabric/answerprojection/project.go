@@ -786,7 +786,7 @@ func flatCohortEvidenceReserve(result contractsv1.ContextFabricInvestigationResu
 			seen[id] = struct{}{}
 		}
 	}
-	return min(len(seen), bounds.MaxEvidenceRefs)
+	return len(seen)
 }
 
 // admitFitting adds the references in ids that fit the remaining budget, in

@@ -169,8 +169,11 @@ func TestPlanBudgetFlatCohortDerivesItemsFromTheCallerMembers(t *testing.T) {
 	if got := flat(serverItemCeiling, 25); got.MaxMembers != 25 || got.MaxItems < 25+got.SynthesisHeadroom {
 		t.Fatalf("caller 25 under 30 items: members=%d items=%d headroom=%d, want 25 and items >= members+headroom", got.MaxMembers, got.MaxItems, got.SynthesisHeadroom)
 	}
-	if got := flat(serverItemCeiling, 5); got.MaxMembers != 5 {
-		t.Fatalf("caller 5: members=%d, want 5", got.MaxMembers)
+	if got := flat(serverItemCeiling, 5); got.MaxMembers != 5 || got.MaxItems != serverItemCeiling {
+		t.Fatalf("caller 5: members=%d items=%d, want 5 and the unlowered ceiling %d", got.MaxMembers, got.MaxItems, serverItemCeiling)
+	}
+	if got := flat(16, 25); got.MaxMembers != 1 {
+		t.Fatalf("a ceiling at its own headroom: members=%d, want the floor 1", got.MaxMembers)
 	}
 	if got := flat(serverItemCeiling, 0); got.MaxMembers != 14 {
 		t.Fatalf("no caller cap: members=%d, want the 14 default", got.MaxMembers)
