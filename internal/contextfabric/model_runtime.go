@@ -3380,13 +3380,8 @@ func synthesisSubjects(input SynthesisInput) map[string]struct{} {
 // binding without admitting is the safe direction, handled by
 // canonicalSubjectLabels itself.
 func forEachCitableSynthesisSubject(input SynthesisInput, visit func(SubjectRef)) {
-	for _, subject := range input.Graph.Resolution.Committed {
-		visit(subject)
-	}
+	forEachCitableAnchorOrMember(input.Graph.Resolution.Committed, input.Graph.Cohort, visit)
 	if input.Graph.Cohort != nil {
-		for _, member := range input.Graph.Cohort.Members {
-			visit(member.Subject)
-		}
 		// CHAOS-4962: the group entity -- the team in "project statuses for
 		// each team" -- lives only in Cohort.Groups[].Subject and was
 		// admitted by nothing, which is the defect this branch exists to fix.

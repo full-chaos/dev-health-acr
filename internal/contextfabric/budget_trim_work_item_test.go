@@ -36,6 +36,12 @@ type budgetTrimShape struct {
 	// evidenceMembers makes the synthesis cite the evidence of the last N members it read.
 	evidenceMembers int
 	telemetry       *recordingTelemetry
+	// anchorDriver adds a driver that names the committed anchor.
+	anchorDriver bool
+	// foreignDriver adds a driver that names a subject outside the cohort.
+	foreignDriver bool
+	// degradable makes the synthesizer one that composes the degraded answer.
+	degradable bool
 }
 
 var budgetTrimProdShape = budgetTrimShape{members: 14, claims: 42, maxItems: 30, reserve: time.Second, deadline: 50 * time.Millisecond}
@@ -78,7 +84,7 @@ func budgetTrimInvestigate(t *testing.T, shape budgetTrimShape) (InvestigationRe
 		Facts: factReaderFunc(func(_ context.Context, _ storage.Principal, _ CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1"}, nil
 		}),
-		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+		Synthesizer: budgetTrimSynthesizer(shape, func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
 			syntheses++
 			claims := make([]ClaimedFact, 0, shape.claims)
 			served := ids
@@ -110,6 +116,12 @@ func budgetTrimInvestigate(t *testing.T, shape budgetTrimShape) (InvestigationRe
 					EvidenceRefIDs: driverEvidence, ClaimedFactIDs: cited,
 					Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.9, Current: true,
 				})
+			}
+			if shape.anchorDriver {
+				drivers = append(drivers, DriverJudgment{DriverID: "driver_anchor01", Standing: DriverPrincipal, Category: "status", Title: "Repository status", Summary: "The repository appears busy.", AffectedSubjects: []SubjectRef{input.Graph.Resolution.Committed[0]}, EvidenceRefIDs: []string{evidence}, ClaimedFactIDs: []string{claims[0].ClaimID}, Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.9, Current: true})
+			}
+			if shape.foreignDriver {
+				drivers = append(drivers, DriverJudgment{DriverID: "driver_foreign01", Standing: DriverPrincipal, Category: "status", Title: "Foreign status", Summary: "A work item outside the list appears busy.", AffectedSubjects: []SubjectRef{{Kind: SubjectWorkItem, CanonicalID: "work-item-outside-list", Label: "Outside"}}, EvidenceRefIDs: []string{evidence}, ClaimedFactIDs: []string{claims[0].ClaimID}, Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.9, Current: true})
 			}
 			resultEvidence := []string{evidence}
 			for index := 0; index < shape.evidenceMembers && index < len(served); index++ {
@@ -418,4 +430,32 @@ func shapeTelemetry(shape budgetTrimShape) EngineTelemetry {
 		return nil
 	}
 	return shape.telemetry
+}
+
+type degradableBudgetTrimSynthesizer struct {
+	synthesizerFunc
+	telemetry *recordingTelemetry
+}
+
+func (d degradableBudgetTrimSynthesizer) ComposeDegraded(ctx context.Context, principal storage.Principal, input SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
+	if d.telemetry != nil && !failure.DeferEvent {
+		d.telemetry.RecordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Rule: failure.Rule, Stage: failure.Stage})
+	}
+	result, err := d.synthesizerFunc(ctx, principal, input)
+	if err != nil {
+		return result, err
+	}
+	result.Status = InvestigationDegraded
+	result.Drivers, result.RemainingWork, result.ReadinessGaps, result.Conflicts = []DriverJudgment{}, []Finding{}, []Finding{}, []Finding{}
+	result.ClaimedFacts = []ClaimedFact{}
+	result.EvidenceRefIDs = []string{}
+	result.Warnings = []string{synthesisFailureWarning(failure.Class)}
+	return result, nil
+}
+
+func budgetTrimSynthesizer(shape budgetTrimShape, f synthesizerFunc) AnswerSynthesizer {
+	if shape.degradable {
+		return degradableBudgetTrimSynthesizer{f, shape.telemetry}
+	}
+	return f
 }

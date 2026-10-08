@@ -518,7 +518,12 @@ import (
 // follow-up turn from a scoped caller. A candidate saved before v104 may hold
 // the no-match answer that refusal produced and must not be reused.
 //
-// v104 -> v106: the repositories and projects of a committed team are read
+// v104 -> v105: a driver or finding of a work-item answer may name the
+// committed anchor, and a draft that breaks a work-item tuple rule on model
+// output is served as the facts-only degraded answer. A candidate saved before
+// v105 may hold the failed or anchor-less answer and must not be reused.
+//
+// v105 -> v106: the repositories and projects of a committed team are read
 // over the team's own ownership edges in full and as of now, so a former
 // owner's repository is no longer served and a team with many other owned
 // subjects is no longer cut at the shared walk budget. A candidate saved
