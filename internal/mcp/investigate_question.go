@@ -73,8 +73,8 @@ func handleInvestigateQuestion(ctx context.Context, cfg *ProcessConfig, req *mcp
 		return toolErrorResult(&classifiedError{category: "validation", message: writeBackNotHereMessage}), nil
 	}
 	var input contractsv1.MCPInvestigateQuestionRequest
-	if err := json.Unmarshal(args, &input); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_question arguments are not valid JSON for the declared schema"}), nil
+	if err := decodeToolArguments(args, &input, false); err != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: toolArgumentsMessage(toolInvestigateQuestion, err)}), nil
 	}
 	if err := input.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_question arguments failed schema validation"}), nil

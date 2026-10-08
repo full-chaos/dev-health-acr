@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -21,8 +20,8 @@ func handleSourceEvidence(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.C
 	}
 
 	var input contractsv1.MCPSourceEvidenceRequest
-	if err := json.Unmarshal(rawArgs(req), &input); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: "source_evidence arguments are not valid JSON for the declared schema"}), nil
+	if err := decodeToolArguments(rawArgs(req), &input, false); err != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: toolArgumentsMessage(toolSourceEvidence, err)}), nil
 	}
 	if err := input.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "source_evidence arguments failed schema validation"}), nil
