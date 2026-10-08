@@ -33,6 +33,9 @@ type walkStep struct {
 	// (walk_projection.go), not the whole node. Set for a hop that only feeds
 	// the next one; a hop whose nodes are members reads them whole.
 	projected bool
+	// edgeWindowOnly: the window is applied to the edge alone. The edge says
+	// the owner owns the node; a node whose own validity ended is still owned.
+	edgeWindowOnly bool
 }
 
 type walkHit struct {
@@ -65,9 +68,13 @@ func walkStepCypher(step walkStep, temporal temporalFilter) string {
 	if step.projected {
 		column = walkProjection("b", walkNodeProperties)
 	}
+	nodeWindow := temporal.predicate("b")
+	if step.edgeWindowOnly {
+		nodeWindow = ""
+	}
 	return fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+arrow+"(b:%s {%s:$org, %s:$toKind}) WHERE r.%s = $rel%s%s%s RETURN id, %s, r ORDER BY id, b.%s, r.%s LIMIT $limit",
 		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, propKind,
-		propRelationType, typeClause, temporal.predicate("r"), temporal.predicate("b"), column, propCanonicalID, propRelationshipID)
+		propRelationType, typeClause, temporal.predicate("r"), nodeWindow, column, propCanonicalID, propRelationshipID)
 }
 
 // walkStepParams binds one batch of a step read.

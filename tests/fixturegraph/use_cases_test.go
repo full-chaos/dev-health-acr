@@ -485,13 +485,19 @@ HAVING countIf(w.completed_at IS NULL AND w.closed_at IS NULL) = 0 AND max(coale
 }
 
 // Use-case: the projects of the entity tree are projected and findable. The seeded projects
-// table is the expectation.
+// table is the expectation, less the projects the source archived: find_subjects list and name
+// modes read the current axis, and an archived project is reached through its owner instead
+// (TestOwnedByListsAnArchivedOwnedProject).
 func TestFindSubjectsServesEverySeededProject(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
 	c.requireTools("find_subjects")
 	want := map[string]bool{}
-	for _, r := range ch(t, fmt.Sprintf("SELECT name FROM projects FINAL WHERE org_id = %s", sqlStr(orgID(t)))) {
+	for _, r := range ch(t, fmt.Sprintf("SELECT name FROM projects FINAL WHERE org_id = %s AND is_active = 1", sqlStr(orgID(t)))) {
 		want[r[0]] = true
+	}
+	archived := ch(t, fmt.Sprintf("SELECT name FROM projects FINAL WHERE org_id = %s AND is_active = 0", sqlStr(orgID(t))))
+	if len(archived) == 0 {
+		t.Fatal("the venue seeds an archived project and none is present")
 	}
 	if len(want) == 0 {
 		t.Fatal("no project is seeded")
@@ -503,5 +509,10 @@ func TestFindSubjectsServesEverySeededProject(t *testing.T) {
 	}
 	if diffSets(want, got) != diffSets(want, want) {
 		t.Fatalf("served projects differ from seeded: %s\n%.1500s", diffSets(want, got), raw)
+	}
+	for _, r := range archived {
+		if got[r[0]] {
+			t.Fatalf("find_subjects list served the archived project %q", r[0])
+		}
 	}
 }
