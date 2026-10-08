@@ -67,9 +67,11 @@ GOTEST_DEVHEALTHSOURCE_TIMEOUT ?= 600s
 # race-factoracle). The package seeds a ClickHouse store from the venue capture
 # and replays 95 cases; it ran 100s in a shared 420s race shard before the
 # capture of the venue at ops 5c9a3d32 and was killed at 420s twice after it.
-# 600s is deliberately just above the observed range, NOT a raise of a shared
-# budget; the job prints its wall time and fails past 85% of this number.
-GOTEST_FACTORACLE_TIMEOUT ?= 600s
+# Hosted wall times of its own job: 353s, then 540s on the next tip (same
+# package, runner variance x1.5), so 600s failed its own 85% guard; 900s keeps
+# the guard at 765s above the worst seen. NOT a raise of a shared budget; the
+# job prints its wall time and fails past 85% of this number.
+GOTEST_FACTORACLE_TIMEOUT ?= 900s
 # CHAOS-7282: internal/contextfabric/devhealthfacts' plain (non-race) budget,
 # used by its own `unit` matrix leg (scripts/ci/test-shard.sh unit-dedicated
 # legs; ci.yml). The package is ONE serial test binary: 445 tests, one shared
