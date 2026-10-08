@@ -364,7 +364,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		if err == nil && params.WorkItemCensus != nil && ctx.Err() == nil {
 			if rule, breach := workItemModelBreach(result, synthesisInput, resolution, principal); breach {
 				if degraded, ok := e.synthesizer.(DegradedSynthesizer); ok {
-					result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, workItemModelBreachFailure(rule, "synthesis"))
+					result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, workItemModelBreachFailure(rule, "synthesis", slices.Contains(result.Limitations, contractsv1.ContextFabricSynthesisInputBoundedLimitation)))
 				}
 			}
 		}
@@ -373,7 +373,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageSynthesis, fmt.Errorf("%w: synthesize investigation: %w", ErrSynthesisAborted, err))
 	}
 	if params.WorkItemCensus != nil && !clientSynthesisRequested(request) {
-		pending.WorkItemDegrade = &workItemDegradeBasis{Input: synthesisInput, DraftLimitations: slices.Clone(result.Limitations), DraftWarnings: slices.Clone(result.Warnings)}
+		pending.WorkItemDegrade = newWorkItemDegradeBasis(synthesisInput, result)
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()

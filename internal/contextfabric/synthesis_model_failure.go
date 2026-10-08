@@ -129,7 +129,10 @@ type SynthesisFailure struct {
 	// failure, and the stage that served it (synthesis or validation).
 	Rule  string
 	Stage string
-	cause error
+	// DeferEvent leaves the model-failure event to the caller, which records it
+	// only once the degraded answer is actually served.
+	DeferEvent bool
+	cause      error
 }
 
 func (f *SynthesisFailure) Error() string { return f.cause.Error() }
@@ -145,7 +148,9 @@ type DegradedSynthesizer interface {
 // paths and coverage of the input, no model-authored content, a degraded
 // status and the fixed warning.
 func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal storage.Principal, input SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
-	r.recordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Attempts: failure.Attempts, ElapsedMS: failure.Elapsed.Milliseconds(), Rule: failure.Rule, Stage: failure.Stage})
+	if !failure.DeferEvent {
+		r.recordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Attempts: failure.Attempts, ElapsedMS: failure.Elapsed.Milliseconds(), Rule: failure.Rule, Stage: failure.Stage})
+	}
 	return r.composeSynthesisResult(ctx, principal, input, degradedSynthesisDraft(failure.Class), failure.Receipt, failure.InputBounded, true)
 }
 

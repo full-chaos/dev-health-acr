@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -58,8 +59,8 @@ func workItemModelBreach(draft InvestigationResult, input SynthesisInput, resolu
 	return rule, true
 }
 
-func workItemModelBreachFailure(rule WorkItemTupleRule, stage string) *SynthesisFailure {
-	return &SynthesisFailure{Class: SynthesisFailureRejected, Rule: string(rule), Stage: stage, cause: fmt.Errorf("%w: %w: work-item tuple draft breaks %s", ErrSynthesisRejected, ErrModelOutput, rule)}
+func workItemModelBreachFailure(rule WorkItemTupleRule, stage string, inputBounded bool) *SynthesisFailure {
+	return &SynthesisFailure{Class: SynthesisFailureRejected, Rule: string(rule), Stage: stage, InputBounded: inputBounded, cause: fmt.Errorf("%w: %w: work-item tuple draft breaks %s", ErrSynthesisRejected, ErrModelOutput, rule)}
 }
 
 // workItemDegradeBasis is what the validation stage keeps of the synthesis
@@ -70,6 +71,17 @@ type workItemDegradeBasis struct {
 	Input            SynthesisInput
 	DraftLimitations []string
 	DraftWarnings    []string
+}
+
+// newWorkItemDegradeBasis records which limitations and warnings the model
+// wrote: the service-authored limitations a synthesis adds after the call (the
+// bounded-input disclosure) are the server's and are never removed.
+func newWorkItemDegradeBasis(input SynthesisInput, draft InvestigationResult) *workItemDegradeBasis {
+	return &workItemDegradeBasis{
+		Input:            input,
+		DraftLimitations: slices.DeleteFunc(slices.Clone(draft.Limitations), contractsv1.IsContextFabricServiceAuthoredLimitation),
+		DraftWarnings:    slices.Clone(draft.Warnings),
+	}
 }
 
 // degradeWorkItemModelBreach is the validation-time form of the same rule: the
@@ -93,12 +105,15 @@ func (e *Engine) degradeWorkItemModelBreach(ctx context.Context, principal stora
 	if !ok {
 		return result, false
 	}
-	composed, err := composer.ComposeDegraded(ctx, principal, basis.Input, workItemModelBreachFailure(rule, "validation"))
+	failure := workItemModelBreachFailure(rule, "validation", slices.Contains(result.Limitations, contractsv1.ContextFabricSynthesisInputBoundedLimitation))
+	failure.DeferEvent = true
+	composed, err := composer.ComposeDegraded(ctx, principal, basis.Input, failure)
 	if err != nil {
 		return result, false
 	}
 	out := result
 	out.Status = composed.Status
+	out.Coverage.Partial = out.Coverage.Partial || composed.Coverage.Partial
 	out.DirectJudgment, out.CurrentState, out.DeterministicAnswer = composed.DirectJudgment, composed.CurrentState, composed.DeterministicAnswer
 	out.StrongestPressures = composed.StrongestPressures
 	out.Drivers, out.RemainingWork, out.ReadinessGaps, out.Conflicts = []DriverJudgment{}, []Finding{}, []Finding{}, []Finding{}
@@ -142,6 +157,12 @@ func (e *Engine) degradeWorkItemModelBreach(ctx context.Context, principal stora
 	}
 	if ValidateWorkItemTuplePayload(out, principal) != nil {
 		return result, false
+	}
+	event := SynthesisModelFailureEvent{Class: failure.Class, Rule: failure.Rule, Stage: failure.Stage}
+	if e.telemetry != nil {
+		e.telemetry.RecordSynthesisModelFailure(ctx, principal, event)
+	} else {
+		NewSlogEngineTelemetry(slog.Default()).RecordSynthesisModelFailure(ctx, principal, event)
 	}
 	return out, true
 }

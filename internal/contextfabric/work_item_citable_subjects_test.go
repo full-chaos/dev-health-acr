@@ -90,8 +90,10 @@ type fixedDegradedComposer struct {
 }
 
 func (f fixedDegradedComposer) ComposeDegraded(_ context.Context, principal storage.Principal, _ SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
-	f.telemetry.RecordSynthesisModelFailure(context.Background(), principal, SynthesisModelFailureEvent{Class: failure.Class, Rule: failure.Rule, Stage: failure.Stage})
-	return InvestigationResult{Status: InvestigationDegraded, DirectJudgment: "degraded", CurrentState: synthesisFailureCurrentState, DeterministicAnswer: "degraded", StrongestPressures: []string{}, EvidenceRefIDs: []string{}, Warnings: []string{synthesisFailureWarning(failure.Class)}}, nil
+	if !failure.DeferEvent {
+		f.telemetry.RecordSynthesisModelFailure(context.Background(), principal, SynthesisModelFailureEvent{Class: failure.Class, Rule: failure.Rule, Stage: failure.Stage})
+	}
+	return InvestigationResult{Status: InvestigationDegraded, Coverage: Coverage{Partial: true, Sources: []SourceObservation{}, DegradedReasons: []string{}}, DirectJudgment: "degraded", CurrentState: synthesisFailureCurrentState, DeterministicAnswer: "degraded", StrongestPressures: []string{}, EvidenceRefIDs: []string{}, Warnings: []string{synthesisFailureWarning(failure.Class)}}, nil
 }
 
 func validationStageFixture(t *testing.T) (*Engine, *recordingTelemetry, InvestigationResult, *workItemDegradeBasis) {
@@ -102,7 +104,7 @@ func validationStageFixture(t *testing.T) (*Engine, *recordingTelemetry, Investi
 	result.DirectJudgment, result.CurrentState, result.DeterministicAnswer = "model prose", "model prose", "model prose"
 	result.Limitations = []string{"model caveat", "server caveat"}
 	telemetry := &recordingTelemetry{}
-	engine := &Engine{synthesizer: fixedDegradedComposer{telemetry: telemetry}}
+	engine := &Engine{synthesizer: fixedDegradedComposer{telemetry: telemetry}, telemetry: telemetry}
 	return engine, telemetry, result, &workItemDegradeBasis{DraftLimitations: []string{"model caveat"}, DraftWarnings: result.Warnings}
 }
 
@@ -120,6 +122,41 @@ func TestTheValidationStageDegradeServesTheComposedFactsOnlyAnswer(t *testing.T)
 	}
 	if len(telemetry.synthesisModelFailures) != 1 || telemetry.synthesisModelFailures[0].Rule != string(WorkItemRuleDriverSubjectOutsideMembers) || telemetry.synthesisModelFailures[0].Stage != "validation" {
 		t.Fatalf("validation-stage event %+v", telemetry.synthesisModelFailures)
+	}
+}
+
+func TestTheValidationStageDegradeKeepsTheServerDisclosuresAndMarksCoveragePartial(t *testing.T) {
+	engine, telemetry, result, basis := validationStageFixture(t)
+	result.Limitations = []string{"model caveat", contractsv1.ContextFabricSynthesisInputBoundedLimitation}
+	result.Coverage.Partial = false
+	out, ok := engine.degradeWorkItemModelBreach(context.Background(), storage.Principal{OrgID: "org-1"}, result, basis)
+	if !ok {
+		t.Fatal("not degraded")
+	}
+	if !slices.Equal(out.Limitations, []string{contractsv1.ContextFabricSynthesisInputBoundedLimitation}) {
+		t.Fatalf("limitations %v: want the bounded-input disclosure kept and the model caveat removed", out.Limitations)
+	}
+	if !out.Coverage.Partial {
+		t.Fatal("coverage.partial not carried from the composed degraded answer")
+	}
+	if len(telemetry.synthesisModelFailures) != 1 {
+		t.Fatalf("events %+v: want exactly one, recorded by the caller after the answer was accepted", telemetry.synthesisModelFailures)
+	}
+}
+
+func TestEveryTupleRuleIsClassifiedAsTheOracleSays(t *testing.T) {
+	modelCaused := map[WorkItemTupleRule]bool{}
+	for _, rule := range []string{"result_evidence_outside_members", "claim_without_id", "claim_repeated", "status_claim_not_work_item", "work_claim_not_work_item", "status_claim_outside_members", "work_claim_outside_members", "status_claim_table_data", "work_claim_table_data", "claim_kind_unsupported", "finding_no_member_subject", "driver_no_member_subject", "finding_subject_outside_members", "driver_subject_outside_members", "finding_evidence_outside_members", "driver_evidence_outside_members", "finding_claim_outside_members", "driver_claim_outside_members"} {
+		modelCaused[WorkItemTupleRule(rule)] = true
+	}
+	rules := WorkItemTupleRules()
+	if len(rules) != 41 {
+		t.Fatalf("%d rules: a new rule needs a classification here", len(rules))
+	}
+	for _, rule := range rules {
+		if WorkItemTupleRuleModelCaused(rule) != modelCaused[rule] {
+			t.Fatalf("%s: model-caused=%v, oracle says %v", rule, WorkItemTupleRuleModelCaused(rule), modelCaused[rule])
+		}
 	}
 }
 
@@ -175,10 +212,31 @@ func TestTheRealComposerCarriesTheRuleAndStageIntoItsEvent(t *testing.T) {
 	telemetry := &recordingTelemetry{}
 	input := largeSynthesisInputFixture(3)
 	synthesizer := RuntimeAnswerSynthesizer{Telemetry: telemetry}
-	if _, err := synthesizer.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, input, workItemModelBreachFailure(WorkItemRuleDriverSubjectOutsideMembers, "validation")); err != nil {
+	if _, err := synthesizer.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, input, workItemModelBreachFailure(WorkItemRuleDriverSubjectOutsideMembers, "validation", false)); err != nil {
 		t.Fatal(err)
 	}
 	if len(telemetry.synthesisModelFailures) != 1 || telemetry.synthesisModelFailures[0].Rule != "driver_subject_outside_members" || telemetry.synthesisModelFailures[0].Stage != "validation" {
 		t.Fatalf("events %+v", telemetry.synthesisModelFailures)
+	}
+}
+
+func TestTheDegradeBasisKeepsTheServiceAuthoredDisclosures(t *testing.T) {
+	draft := InvestigationResult{Limitations: []string{"model caveat", contractsv1.ContextFabricSynthesisInputBoundedLimitation}, Warnings: []string{"model warning"}}
+	basis := newWorkItemDegradeBasis(SynthesisInput{}, draft)
+	if !slices.Equal(basis.DraftLimitations, []string{"model caveat"}) || !slices.Equal(basis.DraftWarnings, []string{"model warning"}) {
+		t.Fatalf("basis %+v: only the model's own limitation may be marked removable", basis)
+	}
+}
+
+func TestADeferredEventIsLeftToTheCaller(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	synthesizer := RuntimeAnswerSynthesizer{Telemetry: telemetry}
+	failure := workItemModelBreachFailure(WorkItemRuleDriverSubjectOutsideMembers, "validation", false)
+	failure.DeferEvent = true
+	if _, err := synthesizer.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, largeSynthesisInputFixture(3), failure); err != nil {
+		t.Fatal(err)
+	}
+	if len(telemetry.synthesisModelFailures) != 0 {
+		t.Fatalf("composer recorded %+v for a deferred event", telemetry.synthesisModelFailures)
 	}
 }

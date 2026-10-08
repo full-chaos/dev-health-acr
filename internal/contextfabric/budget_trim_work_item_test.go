@@ -438,7 +438,7 @@ type degradableBudgetTrimSynthesizer struct {
 }
 
 func (d degradableBudgetTrimSynthesizer) ComposeDegraded(ctx context.Context, principal storage.Principal, input SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
-	if d.telemetry != nil {
+	if d.telemetry != nil && !failure.DeferEvent {
 		d.telemetry.RecordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Rule: failure.Rule, Stage: failure.Stage})
 	}
 	result, err := d.synthesizerFunc(ctx, principal, input)
