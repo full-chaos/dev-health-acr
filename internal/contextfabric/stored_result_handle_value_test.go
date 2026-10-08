@@ -30,17 +30,15 @@ func TestStoredResultGateDoesNotLookUpAHandleValueAsANode(t *testing.T) {
 	}
 }
 
-// Every structure member is classified: a member whose applied value is a
+// Every structure member is classified: only a member whose applied value is a
 // canonical id (anchor and candidate options carry opt.CanonicalID) reaches the
-// graph decision and an absent node refuses the result; a handle reaches it too
-// but an absent node is tolerated (see storedResultHandleLiteralKeys); kind and
-// window values are literals that never reach it.
+// graph decision; kind, handle and window values are literals.
 func TestStoredSubjectStructureMembersCoverTheVocabulary(t *testing.T) {
 	canonical := map[contractsv1.ContextFabricStructureNeedKind]bool{
 		contractsv1.ContextFabricStructureNeedSubjectAnchor:    true,
 		contractsv1.ContextFabricStructureNeedSubjectCandidate: true,
 		contractsv1.ContextFabricStructureNeedExpectedKind:     false,
-		contractsv1.ContextFabricStructureNeedSubjectHandle:    true,
+		contractsv1.ContextFabricStructureNeedSubjectHandle:    false,
 		contractsv1.ContextFabricStructureNeedWindow:           false,
 	}
 	for _, member := range contractsv1.ContextFabricStructureNeedKindVocabulary() {

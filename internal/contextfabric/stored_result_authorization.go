@@ -308,7 +308,6 @@ func (g *StoredResultGate) decide(ctx context.Context, principal storage.Princip
 	}
 	subjects := StoredResultSubjects(result)
 	decision.SubjectCount = len(subjects)
-	handleLiterals := storedResultHandleLiteralKeys(result)
 
 	groups := storedResultGroups(result)
 	decision.GroupCount = len(groups)
@@ -379,10 +378,6 @@ func (g *StoredResultGate) decide(ctx context.Context, principal storage.Princip
 				decision.DeniedCount++
 				refuseKind(refused, subject)
 			default:
-				if _, literal := handleLiterals[SubjectMapKey(subject)]; literal {
-					decision.AdmittedCount++
-					continue
-				}
 				decision.AbsentCount++
 				refuseKind(refused, subject)
 			}
@@ -561,39 +556,10 @@ func StoredResultSubjects(result InvestigationResult) []SubjectRef {
 // storedSubjectStructureMembers are the confirmed-structure members whose
 // applied value is a subject identity rather than a kind or a window. A
 // handle is not one: its applied value is the literal the caller sent or a
-// census offered (a pull request number), which usually names no graph node.
-// It stays in this set so a literal that does match a node the caller is not
-// granted still refuses the result; see storedResultHandleLiteralKeys for how
-// a literal that matches no node is treated.
+// census offered (a pull request number), which names no graph node.
 var storedSubjectStructureMembers = map[contractsv1.ContextFabricStructureNeedKind]bool{
 	contractsv1.ContextFabricStructureNeedSubjectAnchor:    true,
 	contractsv1.ContextFabricStructureNeedSubjectCandidate: true,
-	contractsv1.ContextFabricStructureNeedSubjectHandle:    true,
-}
-
-// storedResultHandleLiteralKeys returns the keys of the subjects a result names
-// only through a confirmed handle entry. A handle's applied value is a literal
-// (a pull request number), so a graph read that finds no node for it proves
-// nothing is withheld; a node that is found is still decided like any other.
-func storedResultHandleLiteralKeys(result InvestigationResult) map[string]struct{} {
-	without := result
-	without.ConfirmedStructure = nil
-	for _, entry := range result.ConfirmedStructure {
-		if entry.Member != contractsv1.ContextFabricStructureNeedSubjectHandle {
-			without.ConfirmedStructure = append(without.ConfirmedStructure, entry)
-		}
-	}
-	named := map[string]struct{}{}
-	for _, subject := range StoredResultSubjects(without) {
-		named[SubjectMapKey(subject)] = struct{}{}
-	}
-	literal := map[string]struct{}{}
-	for _, subject := range StoredResultSubjects(result) {
-		if _, ok := named[SubjectMapKey(subject)]; !ok {
-			literal[SubjectMapKey(subject)] = struct{}{}
-		}
-	}
-	return literal
 }
 
 var confirmedStructureEntryType = reflect.TypeOf(contractsv1.ContextFabricConfirmedStructureEntry{})
