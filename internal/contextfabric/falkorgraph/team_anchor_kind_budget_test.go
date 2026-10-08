@@ -185,7 +185,7 @@ func TestAuthorizedHitDecidesOwnershipByEdgeAndNode(t *testing.T) {
 			rel: &edge{Properties: map[string]interface{}{"authorization_repositories": edgeAuthz}},
 		}
 	}
-	state := treeWalkState{principal: storage.Principal{OrgID: "org-1", RepositoryScopes: allowed}}
+	state := treeWalkState{principal: storage.Principal{OrgID: "org-1", RepositoryScopes: allowed}, ownershipEdges: true}
 	owned, other := treeHop{edge: treeEdge{ownership: true}}, treeHop{}
 	for _, c := range []struct {
 		name       string
@@ -197,9 +197,12 @@ func TestAuthorizedHitDecidesOwnershipByEdgeAndNode(t *testing.T) {
 		{"ownership edge denied", owned, denied, allowed, false},
 		{"ownership node denied", owned, allowed, denied, false},
 		{"other hop edge denied, node allowed", other, denied, allowed, true},
+		{"ownership edge denied, edge rule off (deployment walks)", owned, denied, allowed, true},
 		{"other hop node denied", other, allowed, denied, false},
 	} {
-		if got := state.authorizedHit(c.hop, hit(c.edge, c.node)); got != c.want {
+		st := state
+		st.ownershipEdges = !strings.Contains(c.name, "edge rule off")
+		if got := st.authorizedHit(c.hop, hit(c.edge, c.node)); got != c.want {
 			t.Errorf("%s: authorized = %v, want %v", c.name, got, c.want)
 		}
 	}

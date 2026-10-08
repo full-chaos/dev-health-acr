@@ -299,13 +299,17 @@ type treeWalkState struct {
 	principal    storage.Principal
 	scope        contextfabric.RequestedScope
 	collectLimit int
+	// ownershipEdges: an ownership hit must also pass its edge's own
+	// authorization. Set for a team anchor's member read, the rule of the
+	// generic walk it replaces; the other tree walks decide by the node.
+	ownershipEdges bool
 }
 
 // authorizedHit is the decision on one hit of a step read: the node, and for
 // an ownership edge the edge's own authorization attributes too, the rule
 // resolveEdge applies to every edge of the generic walk.
 func (s treeWalkState) authorizedHit(hop treeHop, h walkHit) bool {
-	if hop.edge.ownership && h.rel != nil && !graphrank.AuthorizedAttributes(s.principal, s.scope, h.rel.Properties) {
+	if s.ownershipEdges && hop.edge.ownership && h.rel != nil && !graphrank.AuthorizedAttributes(s.principal, s.scope, h.rel.Properties) {
 		return false
 	}
 	return s.authorized(h.to)
@@ -384,6 +388,17 @@ func (s treeWalkState) cutRanked(ids []string) []string {
 // bounded by the collect budget, and a spent budget is truncation. A pair of
 // positions off the tree returns an empty walk.
 func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter) (treeWalk, error) {
+	return a.treeMembersOf(ctx, key, orgID, principal, scope, anchor, member, collectLimit, temporal, false)
+}
+
+// teamAnchorMembers is treeMembers for a team anchor's repositories or
+// projects: ownership edges are authorized as the generic walk authorizes
+// every edge.
+func (a *Adapter) teamAnchorMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter) (treeWalk, error) {
+	return a.treeMembersOf(ctx, key, orgID, principal, scope, anchor, member, collectLimit, temporal, true)
+}
+
+func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter, ownershipEdges bool) (treeWalk, error) {
 	out := treeWalk{anchorKind: anchor.Kind}
 	start, ok := anchorPosition(anchor.Kind)
 	if !ok {
@@ -393,7 +408,7 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 	if !ok {
 		return out, nil
 	}
-	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit}
+	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit, ownershipEdges: ownershipEdges}
 	frontier := []string{anchor.CanonicalID}
 	subjects := map[string]contextfabric.SubjectRef{anchor.CanonicalID: anchor}
 	for k := 0; k < len(path); k++ {
