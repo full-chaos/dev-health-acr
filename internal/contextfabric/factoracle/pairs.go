@@ -289,6 +289,7 @@ func compareTeamRollup(ctx context.Context, o *Oracle, rr *RootReport, byRepo ma
 	if err != nil {
 		return err
 	}
+	teams = o.withoutDenied("investment", teams)
 	got := map[string]map[string]float64{}
 	for _, fact := range facts {
 		effort, terr := themeEffort(fact)
@@ -406,6 +407,7 @@ func compareHealth(ctx context.Context, o *Oracle, rr *RootReport) error {
 		if err != nil {
 			return err
 		}
+		ids = o.withoutDenied("health", ids)
 		// Every subject with a risk row in the store must have a fact, and a
 		// fact that states a day must have a row in the store: a subject that
 		// is absent on one side is a finding, never skipped.
@@ -553,6 +555,7 @@ func compareWorkload(ctx context.Context, o *Oracle, rr *RootReport) error {
 	if err != nil {
 		return err
 	}
+	ids = o.withoutDenied("workload", ids)
 	byTeam := map[string][]ServedFact{}
 	for _, fact := range facts {
 		team := bareID(fact.Subject.CanonicalID)
@@ -756,6 +759,7 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 	if err != nil {
 		return err
 	}
+	ids = o.withoutDenied("readiness", ids)
 	byTeam := map[string][]ServedFact{}
 	for _, fact := range facts {
 		team := bareID(fact.Subject.CanonicalID)
@@ -920,6 +924,7 @@ func compareFlowWindow(ctx context.Context, o *Oracle, rr *RootReport) error {
 	if err != nil {
 		return err
 	}
+	ids = o.withoutDenied("flow", ids)
 	hasFact := map[string]bool{}
 	for _, fact := range facts {
 		hasFact[bareID(fact.Subject.CanonicalID)] = true

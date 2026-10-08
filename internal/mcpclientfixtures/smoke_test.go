@@ -16,7 +16,6 @@ import (
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // smokeInjectedVersion is the release-shaped version this test's build
@@ -134,8 +133,7 @@ func TestFixtureCommandAndArgsStartRealVersionedSTDIOServer(t *testing.T) {
 		"ACR_SIDECAR_VERSION=1.0.0",
 	)
 
-	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "mcpclientfixtures-smoke", Version: "0.0.1"}, nil)
-	session, err := client.Connect(ctx, &mcpsdk.CommandTransport{Command: cmd}, nil)
+	session, err := connectStdioWithDiagnostics(ctx, cmd)
 	if err != nil {
 		t.Fatalf("connect over CommandTransport failed: %v", err)
 	}

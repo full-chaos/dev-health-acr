@@ -1,27 +1,27 @@
 {
-  "captured_at": "2026-10-01T20:40:52Z",
+  "captured_at": "2026-10-08T15:38:05Z",
   "window": {
-    "start": "2026-09-01T00:00:00Z",
-    "end": "2026-10-02T00:00:00Z"
+    "start": "2026-09-08T00:00:00Z",
+    "end": "2026-10-09T00:00:00Z"
   },
   "fixture_org": "0f0f0f0f-0000-4000-8000-00000000f4c7",
-  "ops_build": "dev-health-ops 31a54720edbe (bigboy cut 2, 2026-10-01T18:13Z); query-api image dev-health-go-dho digest f296d57da9a8 (arm64 child 15fbf5182399)",
-  "acr_build": "dev-health-acr e3c1b332; acr-api image ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:ea7d7f16178bedf70188df89599e5abd8967747f8e708ae89ed180e2382a8a4b",
-  "schema_digest": "sha256:330d0ebf0ea59fce8d0b1bb14887cad8e5b3f6971ad02618afa9844b6fac7a50",
+  "ops_build": "dev-health-ops 5c9a3d328546 (bigboy re-cut 2026-10-08T12:56Z); dho image sha256:195709968b48",
+  "acr_build": "213717c83fd20dfc8fd464c52ff10e7cdc54ca0c",
+  "schema_digest": "sha256:54a0f7d6ee428bc2f8c8ef6329680c8efeb4be94a7b41bdc12655006069335e4",
   "venue_fact_query_versions": [
-    "devhealthfacts.clickhouse.v21"
+    "devhealthfacts.clickhouse.v108"
   ],
-  "fact_query_version": "devhealthfacts.clickhouse.v22",
+  "fact_query_version": "devhealthfacts.clickhouse.v108",
   "rows": {
-    "capacity_forecasts": 40,
-    "compounding_risk_daily": 97,
-    "estimate_coverage_metrics_daily": 635,
+    "capacity_forecasts": 76,
+    "compounding_risk_daily": 153,
+    "estimate_coverage_metrics_daily": 1271,
     "repos": 11,
-    "team_repo_ownership": 18,
-    "teams": 17,
-    "work_item_metrics_daily": 510,
-    "work_unit_investments": 2609,
-    "work_unit_membership": 1351,
+    "team_repo_ownership": 19,
+    "teams": 28,
+    "work_item_metrics_daily": 1054,
+    "work_unit_investments": 15727,
+    "work_unit_membership": 6131,
     "work_unit_membership_runs": 2,
     "work_unit_supersessions": 0
   },
@@ -33,8 +33,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "THEME",
               "measure": "CHURN_LOC",
@@ -51,8 +51,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "SUBCATEGORY",
               "measure": "CHURN_LOC",
@@ -69,8 +69,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "WORK_TYPE",
               "measure": "CHURN_LOC",
@@ -87,8 +87,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "THEME",
               "measure": "CHURN_LOC",
@@ -105,8 +105,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "SUBCATEGORY",
               "measure": "CHURN_LOC",
@@ -123,8 +123,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "WORK_TYPE",
               "measure": "CHURN_LOC",
@@ -141,8 +141,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "THEME",
               "measure": "CHURN_LOC",
@@ -159,8 +159,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "SUBCATEGORY",
               "measure": "CHURN_LOC",
@@ -177,8 +177,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "WORK_TYPE",
               "measure": "CHURN_LOC",
@@ -195,8 +195,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "THEME",
               "measure": "CHURN_LOC",
@@ -213,8 +213,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "SUBCATEGORY",
               "measure": "CHURN_LOC",
@@ -231,8 +231,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "WORK_TYPE",
               "measure": "CHURN_LOC",
@@ -249,8 +249,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "THEME",
               "measure": "CHURN_LOC",
@@ -267,8 +267,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "SUBCATEGORY",
               "measure": "CHURN_LOC",
@@ -285,8 +285,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "WORK_TYPE",
               "measure": "CHURN_LOC",
@@ -303,8 +303,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "THEME",
               "measure": "CHURN_LOC",
@@ -321,8 +321,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "SUBCATEGORY",
               "measure": "CHURN_LOC",
@@ -339,8 +339,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "WORK_TYPE",
               "measure": "CHURN_LOC",
@@ -357,8 +357,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "THEME",
               "measure": "CHURN_LOC",
@@ -375,8 +375,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "SUBCATEGORY",
               "measure": "CHURN_LOC",
@@ -393,8 +393,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "WORK_TYPE",
               "measure": "CHURN_LOC",
@@ -411,8 +411,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "THEME",
               "measure": "CHURN_LOC",
@@ -429,8 +429,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "SUBCATEGORY",
               "measure": "CHURN_LOC",
@@ -447,14 +447,44 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-02",
-                "startDate": "2026-09-01"
+                "endDate": "2026-10-09",
+                "startDate": "2026-09-08"
               },
               "dimension": "WORK_TYPE",
               "measure": "CHURN_LOC",
               "topN": 100
             }
           ]
+        }
+      }
+    },
+    {
+      "shape": "capacityForecast/capacityCompletionDistribution/all",
+      "variables": {
+        "input": {
+          "historyDays": 90,
+          "simulations": 1000,
+          "teamId": "team:team-9f48cb33e6dc6967"
+        }
+      }
+    },
+    {
+      "shape": "capacityForecast/capacityCompletionDistribution/branch:completionDistribution",
+      "variables": {
+        "input": {
+          "historyDays": 90,
+          "simulations": 1000,
+          "teamId": "team:team-9f48cb33e6dc6967"
+        }
+      }
+    },
+    {
+      "shape": "capacityForecast/capacityCompletionDistribution/branch:(root)",
+      "variables": {
+        "input": {
+          "historyDays": 90,
+          "simulations": 1000,
+          "teamId": "team:team-9f48cb33e6dc6967"
         }
       }
     },
@@ -464,7 +494,27 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-e62ea33c034087cd"
+          "teamId": "team:team-9f48cb33e6dc6967"
+        }
+      }
+    },
+    {
+      "shape": "capacityForecast/capacityForecast/branch:(root)",
+      "variables": {
+        "input": {
+          "historyDays": 90,
+          "simulations": 1000,
+          "teamId": "team:team-9f48cb33e6dc6967"
+        }
+      }
+    },
+    {
+      "shape": "capacityForecast/capacityForecast/branch:completionDistribution",
+      "variables": {
+        "input": {
+          "historyDays": 90,
+          "simulations": 1000,
+          "teamId": "team:team-9f48cb33e6dc6967"
         }
       }
     },
@@ -472,9 +522,9 @@
       "shape": "capacityForecasts/capacityForecasts/all",
       "variables": {
         "filters": {
-          "fromDate": "2026-09-01",
+          "fromDate": "2026-09-08",
           "limit": 50,
-          "toDate": "2026-10-01"
+          "toDate": "2026-10-08"
         }
       }
     },
@@ -482,9 +532,9 @@
       "shape": "capacityForecasts/capacityForecasts/branch:edges",
       "variables": {
         "filters": {
-          "fromDate": "2026-09-01",
+          "fromDate": "2026-09-08",
           "limit": 50,
-          "toDate": "2026-10-01"
+          "toDate": "2026-10-08"
         }
       }
     },
@@ -492,9 +542,9 @@
       "shape": "capacityForecasts/capacityForecasts/branch:pageInfo",
       "variables": {
         "filters": {
-          "fromDate": "2026-09-01",
+          "fromDate": "2026-09-08",
           "limit": 50,
-          "toDate": "2026-10-01"
+          "toDate": "2026-10-08"
         }
       }
     },
@@ -502,9 +552,9 @@
       "shape": "capacityForecasts/capacityForecasts/branch:(root)",
       "variables": {
         "filters": {
-          "fromDate": "2026-09-01",
+          "fromDate": "2026-09-08",
           "limit": 50,
-          "toDate": "2026-10-01"
+          "toDate": "2026-10-08"
         }
       }
     },
@@ -535,6 +585,12 @@
     {
       "shape": "catalog/catalogValues/all",
       "variables": {
+        "dimension": "WORK_TYPE"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/all",
+      "variables": {
         "dimension": "THEME"
       }
     },
@@ -542,12 +598,6 @@
       "shape": "catalog/catalogValues/all",
       "variables": {
         "dimension": "SUBCATEGORY"
-      }
-    },
-    {
-      "shape": "catalog/catalogValues/all",
-      "variables": {
-        "dimension": "WORK_TYPE"
       }
     },
     {
@@ -565,6 +615,12 @@
     {
       "shape": "catalog/catalogValues/branch:values",
       "variables": {
+        "dimension": "WORK_TYPE"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/branch:values",
+      "variables": {
         "dimension": "THEME"
       }
     },
@@ -572,12 +628,6 @@
       "shape": "catalog/catalogValues/branch:values",
       "variables": {
         "dimension": "SUBCATEGORY"
-      }
-    },
-    {
-      "shape": "catalog/catalogValues/branch:values",
-      "variables": {
-        "dimension": "WORK_TYPE"
       }
     },
     {
@@ -595,6 +645,12 @@
     {
       "shape": "catalog/catalogValues/branch:(root)",
       "variables": {
+        "dimension": "WORK_TYPE"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/branch:(root)",
+      "variables": {
         "dimension": "THEME"
       }
     },
@@ -602,21 +658,15 @@
       "shape": "catalog/catalogValues/branch:(root)",
       "variables": {
         "dimension": "SUBCATEGORY"
-      }
-    },
-    {
-      "shape": "catalog/catalogValues/branch:(root)",
-      "variables": {
-        "dimension": "WORK_TYPE"
       }
     },
     {
       "shape": "cognitiveLoad/cognitiveLoad/all",
       "variables": {
         "input": {
-          "sinceDate": "2026-09-01",
-          "teamId": "team:team-e62ea33c034087cd",
-          "untilDate": "2026-10-01"
+          "sinceDate": "2026-09-08",
+          "teamId": "team:team-9f48cb33e6dc6967",
+          "untilDate": "2026-10-08"
         }
       }
     },
@@ -624,9 +674,9 @@
       "shape": "cognitiveLoad/cognitiveLoad/branch:(root)",
       "variables": {
         "input": {
-          "sinceDate": "2026-09-01",
-          "teamId": "team:team-e62ea33c034087cd",
-          "untilDate": "2026-10-01"
+          "sinceDate": "2026-09-08",
+          "teamId": "team:team-9f48cb33e6dc6967",
+          "untilDate": "2026-10-08"
         }
       }
     },
@@ -634,9 +684,9 @@
       "shape": "cognitiveLoad/cognitiveLoad/branch:signals",
       "variables": {
         "input": {
-          "sinceDate": "2026-09-01",
-          "teamId": "team:team-e62ea33c034087cd",
-          "untilDate": "2026-10-01"
+          "sinceDate": "2026-09-08",
+          "teamId": "team:team-9f48cb33e6dc6967",
+          "untilDate": "2026-10-08"
         }
       }
     },
@@ -645,10 +695,10 @@
       "variables": {
         "input": {
           "granularity": "DAY",
-          "limit": 5,
+          "limit": 1,
           "scope": "REPO",
-          "sinceUtc": "2026-09-01T00:00:00Z",
-          "untilUtc": "2026-10-01T00:00:00Z"
+          "sinceUtc": "2026-09-08T00:00:00Z",
+          "untilUtc": "2026-10-08T00:00:00Z"
         }
       }
     },
@@ -657,10 +707,10 @@
       "variables": {
         "input": {
           "granularity": "DAY",
-          "limit": 5,
+          "limit": 1,
           "scope": "REPO",
-          "sinceUtc": "2026-09-01T00:00:00Z",
-          "untilUtc": "2026-10-01T00:00:00Z"
+          "sinceUtc": "2026-09-08T00:00:00Z",
+          "untilUtc": "2026-10-08T00:00:00Z"
         }
       }
     },
@@ -669,10 +719,10 @@
       "variables": {
         "input": {
           "granularity": "DAY",
-          "limit": 5,
+          "limit": 1,
           "scope": "REPO",
-          "sinceUtc": "2026-09-01T00:00:00Z",
-          "untilUtc": "2026-10-01T00:00:00Z"
+          "sinceUtc": "2026-09-08T00:00:00Z",
+          "untilUtc": "2026-10-08T00:00:00Z"
         }
       }
     },
@@ -753,8 +803,8 @@
       "variables": {
         "input": {
           "limit": 50,
-          "sinceUtc": "2026-09-01T00:00:00Z",
-          "untilUtc": "2026-10-01T00:00:00Z"
+          "sinceUtc": "2026-09-08T00:00:00Z",
+          "untilUtc": "2026-10-08T00:00:00Z"
         }
       }
     },
@@ -763,8 +813,18 @@
       "variables": {
         "input": {
           "limit": 50,
-          "sinceUtc": "2026-09-01T00:00:00Z",
-          "untilUtc": "2026-10-01T00:00:00Z"
+          "sinceUtc": "2026-09-08T00:00:00Z",
+          "untilUtc": "2026-10-08T00:00:00Z"
+        }
+      }
+    },
+    {
+      "shape": "hotspots/hotspots/branch:repos",
+      "variables": {
+        "input": {
+          "limit": 50,
+          "sinceUtc": "2026-09-08T00:00:00Z",
+          "untilUtc": "2026-10-08T00:00:00Z"
         }
       }
     },
@@ -773,56 +833,8 @@
       "variables": {
         "input": {
           "limit": 50,
-          "sinceUtc": "2026-09-01T00:00:00Z",
-          "untilUtc": "2026-10-01T00:00:00Z"
-        }
-      }
-    },
-    {
-      "shape": "securityAlerts/securityAlerts/all",
-      "variables": {
-        "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
-        },
-        "pagination": {
-          "first": 5
-        }
-      }
-    },
-    {
-      "shape": "securityAlerts/securityAlerts/branch:edges",
-      "variables": {
-        "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
-        },
-        "pagination": {
-          "first": 5
-        }
-      }
-    },
-    {
-      "shape": "securityAlerts/securityAlerts/branch:(root)",
-      "variables": {
-        "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
-        },
-        "pagination": {
-          "first": 5
-        }
-      }
-    },
-    {
-      "shape": "securityAlerts/securityAlerts/branch:pageInfo",
-      "variables": {
-        "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
-        },
-        "pagination": {
-          "first": 5
+          "sinceUtc": "2026-09-08T00:00:00Z",
+          "untilUtc": "2026-10-08T00:00:00Z"
         }
       }
     },
@@ -830,8 +842,8 @@
       "shape": "securityOverview/securityOverview/all",
       "variables": {
         "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
+          "since": "2026-09-08",
+          "until": "2026-10-08"
         }
       }
     },
@@ -839,8 +851,8 @@
       "shape": "securityOverview/securityOverview/branch:kpis",
       "variables": {
         "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
+          "since": "2026-09-08",
+          "until": "2026-10-08"
         }
       }
     },
@@ -848,8 +860,8 @@
       "shape": "securityOverview/securityOverview/branch:severityBreakdown",
       "variables": {
         "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
+          "since": "2026-09-08",
+          "until": "2026-10-08"
         }
       }
     },
@@ -857,8 +869,8 @@
       "shape": "securityOverview/securityOverview/branch:topRepos",
       "variables": {
         "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
+          "since": "2026-09-08",
+          "until": "2026-10-08"
         }
       }
     },
@@ -866,8 +878,8 @@
       "shape": "securityOverview/securityOverview/branch:trend",
       "variables": {
         "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
+          "since": "2026-09-08",
+          "until": "2026-10-08"
         }
       }
     },
@@ -875,8 +887,8 @@
       "shape": "securityOverview/securityOverview/branch:(root)",
       "variables": {
         "filters": {
-          "since": "2026-09-01",
-          "until": "2026-10-01"
+          "since": "2026-09-08",
+          "until": "2026-10-08"
         }
       }
     },
@@ -886,7 +898,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-e62ea33c034087cd"
+            "team:team-9f48cb33e6dc6967"
           ]
         }
       }
@@ -897,7 +909,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-e62ea33c034087cd"
+            "team:team-9f48cb33e6dc6967"
           ]
         }
       }
@@ -908,7 +920,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-e62ea33c034087cd"
+            "team:team-9f48cb33e6dc6967"
           ]
         }
       }
@@ -919,7 +931,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-e62ea33c034087cd"
+            "team:team-9f48cb33e6dc6967"
           ]
         }
       }
@@ -930,7 +942,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-e62ea33c034087cd"
+            "team:team-9f48cb33e6dc6967"
           ]
         }
       }
@@ -941,7 +953,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-e62ea33c034087cd"
+            "team:team-9f48cb33e6dc6967"
           ]
         }
       }
@@ -952,7 +964,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-e62ea33c034087cd"
+            "team:team-9f48cb33e6dc6967"
           ]
         }
       }
@@ -963,7 +975,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-e62ea33c034087cd"
+            "team:team-9f48cb33e6dc6967"
           ]
         }
       }
@@ -974,7 +986,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-e62ea33c034087cd"
+            "team:team-9f48cb33e6dc6967"
           ]
         }
       }
@@ -1049,29 +1061,87 @@
     }
   ],
   "residual": {
-    "feature_delivery": 0.004845833405852318,
-    "maintenance": 0.0027481766883283854,
-    "operational": 0.00024466507602483034,
-    "quality": 0.002130022505298257,
-    "risk": 0.00047797006845939904
+    "feature_delivery": 262266.61807412864,
+    "maintenance": 262175.61023908225,
+    "operational": 262092.61622782866,
+    "quality": 262092.6125072172,
+    "risk": 262092.60959029105
   },
   "expect": {
     "analytics": {
       "mode": "value",
       "listener": "served",
       "shapes_run": 24,
-      "leaves": 384,
+      "leaves": 396,
       "compared": 40,
-      "matches": 40,
-      "by_class": {},
+      "matches": 35,
+      "by_class": {
+        "attribution_basis": 5
+      },
       "findings": [],
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 6,
-      "operation_leaves": 192,
-      "cross_paths": 192,
-      "cross_matches": 192,
-      "differences": [],
+      "operation_leaves": 198,
+      "cross_paths": 198,
+      "cross_matches": 198,
+      "differences": [
+        {
+          "pair": "investment_org",
+          "key": "feature_delivery",
+          "class": "attribution_basis",
+          "exact": true,
+          "values": {
+            "acr_repository_sum": 1990581.3768311755,
+            "ops": 2252847.994905304,
+            "residual": 262266.61807412864
+          }
+        },
+        {
+          "pair": "investment_org",
+          "key": "maintenance",
+          "class": "attribution_basis",
+          "exact": true,
+          "values": {
+            "acr_repository_sum": 726628.9394916359,
+            "ops": 988804.5497307181,
+            "residual": 262175.61023908225
+          }
+        },
+        {
+          "pair": "investment_org",
+          "key": "operational",
+          "class": "attribution_basis",
+          "exact": true,
+          "values": {
+            "acr_repository_sum": 1365867.3044414737,
+            "ops": 1627959.9206693023,
+            "residual": 262092.61622782866
+          }
+        },
+        {
+          "pair": "investment_org",
+          "key": "quality",
+          "class": "attribution_basis",
+          "exact": true,
+          "values": {
+            "acr_repository_sum": 946486.364767454,
+            "ops": 1208578.9772746712,
+            "residual": 262092.6125072172
+          }
+        },
+        {
+          "pair": "investment_org",
+          "key": "risk",
+          "class": "attribution_basis",
+          "exact": true,
+          "values": {
+            "acr_repository_sum": 550770.014468261,
+            "ops": 812862.6240585521,
+            "residual": 262092.60959029105
+          }
+        }
+      ],
       "unmeasured": [
         "analytics.sankey.__typename",
         "analytics.sankey.coverage.__typename",
@@ -1093,9 +1163,9 @@
     },
     "capacityForecast": {
       "mode": "shape",
-      "listener": "operation_unavailable",
-      "shapes_run": 1,
-      "leaves": 0,
+      "listener": "served",
+      "shapes_run": 6,
+      "leaves": 70,
       "compared": 0,
       "matches": 0,
       "by_class": {
@@ -1104,8 +1174,8 @@
       "findings": [],
       "not_joined": [],
       "run_operation": "served",
-      "operations_run": 1,
-      "operation_leaves": 22,
+      "operations_run": 2,
+      "operation_leaves": 35,
       "cross_paths": 0,
       "cross_matches": 0,
       "differences": [
@@ -1116,7 +1186,12 @@
           "exact": true
         }
       ],
-      "unmeasured": [],
+      "unmeasured": [
+        "capacityForecast.completionDistribution.items[*].__typename",
+        "capacityForecast.completionDistribution.items[*].count",
+        "capacityForecast.completionDistribution.items[*].cumulativeShare",
+        "capacityForecast.completionDistribution.items[*].value"
+      ],
       "code_read": [],
       "invalid": []
     },
@@ -1124,18 +1199,30 @@
       "mode": "value",
       "listener": "served",
       "shapes_run": 4,
-      "leaves": 1934,
-      "compared": 224,
-      "matches": 224,
-      "by_class": {},
+      "leaves": 2414,
+      "compared": 287,
+      "matches": 287,
+      "by_class": {
+        "forecast_by_design": 1
+      },
       "findings": [],
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 967,
-      "cross_paths": 967,
-      "cross_matches": 967,
-      "differences": [],
+      "operation_leaves": 1207,
+      "cross_paths": 1207,
+      "cross_matches": 1207,
+      "differences": [
+        {
+          "pair": "workload",
+          "key": "all teams",
+          "class": "forecast_by_design",
+          "exact": true,
+          "values": {
+            "ops_rows_collapsed": 19
+          }
+        }
+      ],
       "unmeasured": [],
       "code_read": [],
       "invalid": []
@@ -1144,7 +1231,7 @@
       "mode": "value",
       "listener": "served",
       "shapes_run": 18,
-      "leaves": 402,
+      "leaves": 384,
       "compared": 11,
       "matches": 11,
       "by_class": {},
@@ -1152,9 +1239,9 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 6,
-      "operation_leaves": 201,
-      "cross_paths": 201,
-      "cross_matches": 201,
+      "operation_leaves": 192,
+      "cross_paths": 192,
+      "cross_matches": 192,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -1192,7 +1279,7 @@
       "mode": "shape",
       "listener": "served",
       "shapes_run": 3,
-      "leaves": 1804,
+      "leaves": 624,
       "compared": 0,
       "matches": 0,
       "by_class": {},
@@ -1200,9 +1287,9 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 902,
-      "cross_paths": 902,
-      "cross_matches": 902,
+      "operation_leaves": 312,
+      "cross_paths": 312,
+      "cross_matches": 312,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -1212,22 +1299,22 @@
       "mode": "value",
       "listener": "served",
       "shapes_run": 8,
-      "leaves": 704,
+      "leaves": 756,
       "compared": 36,
       "matches": 36,
       "by_class": {},
       "findings": [],
       "not_joined": [
-        "repository: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
+        "repository: a health fact states no severity_as_of day (known_severity_stale_beyond_freshness_window)",
         "repository: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
         "repository: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
         "team: a health fact states no severity_as_of day (known_severity_stale_beyond_freshness_window)"
       ],
       "run_operation": "served",
       "operations_run": 2,
-      "operation_leaves": 352,
-      "cross_paths": 350,
-      "cross_matches": 350,
+      "operation_leaves": 378,
+      "cross_paths": 376,
+      "cross_matches": 376,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -1236,28 +1323,8 @@
     "hotspots": {
       "mode": "shape",
       "listener": "served",
-      "shapes_run": 3,
-      "leaves": 1102,
-      "compared": 0,
-      "matches": 0,
-      "by_class": {},
-      "findings": [],
-      "not_joined": [],
-      "run_operation": "served",
-      "operations_run": 1,
-      "operation_leaves": 551,
-      "cross_paths": 551,
-      "cross_matches": 551,
-      "differences": [],
-      "unmeasured": [],
-      "code_read": [],
-      "invalid": []
-    },
-    "securityAlerts": {
-      "mode": "shape",
-      "listener": "operation_unavailable",
       "shapes_run": 4,
-      "leaves": 0,
+      "leaves": 1210,
       "compared": 0,
       "matches": 0,
       "by_class": {},
@@ -1265,9 +1332,9 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 97,
-      "cross_paths": 0,
-      "cross_matches": 0,
+      "operation_leaves": 605,
+      "cross_paths": 605,
+      "cross_matches": 605,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -1277,7 +1344,7 @@
       "mode": "shape",
       "listener": "served",
       "shapes_run": 6,
-      "leaves": 258,
+      "leaves": 250,
       "compared": 0,
       "matches": 0,
       "by_class": {},
@@ -1285,9 +1352,9 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 129,
-      "cross_paths": 129,
-      "cross_matches": 129,
+      "operation_leaves": 125,
+      "cross_paths": 125,
+      "cross_matches": 125,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -1298,8 +1365,8 @@
       "listener": "served",
       "shapes_run": 9,
       "leaves": 124,
-      "compared": 188,
-      "matches": 187,
+      "compared": 334,
+      "matches": 334,
       "by_class": {
         "forecast_by_design": 1,
         "latest_day_vs_window": 4
@@ -1307,17 +1374,28 @@
       "findings": [
         {
           "root": "throughputForecast",
-          "pair": "readiness",
-          "key": "team",
-          "detail": "estimate coverage present in ops false, in acr true"
+          "pair": "cross_path",
+          "key": "",
+          "path": "throughputForecast.reviewBottleneck.score",
+          "detail": "run_operation and graphql_query answer differently: 1 and 1 leaves, not the same values"
+        },
+        {
+          "root": "throughputForecast",
+          "pair": "cross_path",
+          "key": "",
+          "path": "throughputForecast.reviewBottleneck.value",
+          "detail": "run_operation and graphql_query answer differently: 1 and 1 leaves, not the same values"
         }
       ],
-      "not_joined": [],
+      "not_joined": [
+        "flow: team team-7b376e85a6204287 is denied to the venue token",
+        "readiness: team team-7b376e85a6204287 is denied to the venue token"
+      ],
       "run_operation": "served",
       "operations_run": 1,
       "operation_leaves": 62,
       "cross_paths": 60,
-      "cross_matches": 60,
+      "cross_matches": 58,
       "differences": [
         {
           "pair": "readiness",
@@ -1417,9 +1495,14 @@
       "invalid": []
     }
   },
-  "listener_dark": [
-    "securityAlerts",
-    "capacityForecast"
-  ],
-  "operation_dark": []
+  "listener_dark": [],
+  "operation_dark": [],
+  "denied_teams": {
+    "flow": [
+      "team-7b376e85a6204287"
+    ],
+    "readiness": [
+      "team-7b376e85a6204287"
+    ]
+  }
 }

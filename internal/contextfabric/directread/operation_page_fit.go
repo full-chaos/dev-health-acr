@@ -119,7 +119,9 @@ func fitListPage(data json.RawMessage, listPath string, maxBytes int, siblings [
 	}
 	key := segs[len(segs)-1]
 	rows, ok := parent[key].([]any)
-	if !ok || len(rows) < 2 {
+	// One row can still be served beside emptied siblings; without siblings
+	// there is nothing to cut.
+	if !ok || len(rows) < 1 || (len(rows) < 2 && len(siblings) == 0) {
 		return pageCut{}, false
 	}
 	total := len(rows)

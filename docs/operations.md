@@ -172,6 +172,22 @@ Deployment both do this directly; neither introduces a helper script.
   (or scale the Deployment to zero) without touching `acr-api` or the graph
   backend.
 
+**Readiness during a cold organization's first projection.** `/readyz` on
+`acr-projector` is backend health plus checkpoint/graph agreement: the
+`postgres`, `clickhouse` and `falkordb` checks, and `projection_liveness`,
+which reports not-ready only when a durable checkpoint carries a backend
+watermark that the graph no longer holds. Drain progress is never a
+readiness input, and a tick that runs out of time does not stop the process
+(`drain_yield_reason` is a log field; the next tick resumes). A large first
+projection therefore stays Ready while it drains.
+`TestLivenessCheckStaysLiveWhileColdOrgFirstProjectionDrains` pins this. Probe
+values of record (`deploy/helm/acr/templates/projector-deployment.yaml`):
+readiness and liveness `periodSeconds: 10`, `timeoutSeconds: 3`,
+`failureThreshold: 3`; startup probe on `/readyz`, `periodSeconds: 5`,
+`failureThreshold: 30`. The checks run in series inside one probe request, so
+a slow graph read can exhaust the 3 s timeout; if a projector log shows a
+`/readyz` 503 during a first projection, report it with the log line.
+
 Both Compose and Helm default `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` to
 `false`. Reaching a healthy, running-but-disabled `acr-projector` is
 therefore the expected out-of-the-box state — the same "an unset dependency

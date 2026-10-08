@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "ddb2e75ded46aa5390e2fc8cd6e8606c78e4f5f1",
+    "commit": "5c9a3d328546d1fb93f28bfd164622972c856953",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },
@@ -305,10 +305,18 @@
     },
     {
       "operation": "hotspots",
-      "document": "query Hotspots($input: HotspotsInput!) {\n  hotspots(input: $input) {\n    rows {\n      filePath\n      repoId\n      repoName\n      churnLoc30d\n      churnCommits30d\n      cyclomaticTotal\n      cyclomaticAvg\n      blameConcentration\n      riskScore\n      evidenceUrl\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query Hotspots($input: HotspotsInput!) {\n  hotspots(input: $input) {\n    rows {\n      filePath\n      repoId\n      repoName\n      churnLoc30d\n      churnCommits30d\n      cyclomaticTotal\n      cyclomaticAvg\n      blameConcentration\n      riskScore\n      evidenceUrl\n      __typename\n    }\n    repos {\n      repoId\n      repoName\n      topFilePath\n      topRiskScore\n      evidenceUrl\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredHotspotsDocument",
-      "digest": "6ccfcc785f38dc4a2d3ef5c9bdc2a00e76c02ccf58d11fd1198d2d321165e781",
+      "digest": "e5a6ed356c1b4deca559bf5954509b5fb7a0bb9310d7c4bb7643cd95f752e59f",
       "kind": "query"
+    },
+    {
+      "operation": "hotspots",
+      "document": "query Hotspots($input: HotspotsInput!) {\n  hotspots(input: $input) {\n    rows {\n      filePath\n      repoId\n      repoName\n      churnLoc30d\n      churnCommits30d\n      cyclomaticTotal\n      cyclomaticAvg\n      blameConcentration\n      riskScore\n      evidenceUrl\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredHotspotsV1Document",
+      "digest": "6ccfcc785f38dc4a2d3ef5c9bdc2a00e76c02ccf58d11fd1198d2d321165e781",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "improveOpportunities",
@@ -466,6 +474,13 @@
       "document": "query SecurityOverview($orgId: String!, $filters: SecurityAlertFilterInput) {\n  securityOverview(orgId: $orgId, filters: $filters) {\n    kpis {\n      openTotal\n      critical\n      high\n      meanDaysToFix30d\n      openDelta30d\n      __typename\n    }\n    severityBreakdown {\n      severity\n      count\n      __typename\n    }\n    topRepos {\n      repoId\n      repoName\n      repoUrl\n      count\n      __typename\n    }\n    trend {\n      day\n      opened\n      fixed\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredSecurityOverviewDocument",
       "digest": "3b76c20e6950094356311d84f4288a7ce9e1e936c60c2b867b6e083f2d709884",
+      "kind": "query"
+    },
+    {
+      "operation": "sourceHealth",
+      "document": "query SourceHealth($orgId: String!) {\n  sourceHealth(orgId: $orgId) {\n    provider\n    scope\n    lastSyncAt\n    lastFailure {\n      occurredAt\n      stage\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredSourceHealthDocument",
+      "digest": "f9196883f03de7e9689294590f40c0216374a8301ed8712830ec4b9836034fc0",
       "kind": "query"
     },
     {

@@ -63,6 +63,15 @@ GOTEST_CONTEXTFABRIC_TIMEOUT ?= 750s
 # re-measured from its first hosted run (race-devhealthsource prints it and
 # fails past 85% of this budget) and this number retuned from that evidence.
 GOTEST_DEVHEALTHSOURCE_TIMEOUT ?= 600s
+# internal/contextfabric/factoracle's own isolated budget (its own ci.yml job,
+# race-factoracle). The package seeds a ClickHouse store from the venue capture
+# and replays 95 cases; it ran 100s in a shared 420s race shard before the
+# capture of the venue at ops 5c9a3d32 and was killed at 420s twice after it.
+# Hosted wall times of its own job: 353s, then 540s on the next tip (same
+# package, runner variance x1.5), so 600s failed its own 85% guard; 900s keeps
+# the guard at 765s above the worst seen. NOT a raise of a shared budget; the
+# job prints its wall time and fails past 85% of this number.
+GOTEST_FACTORACLE_TIMEOUT ?= 900s
 # CHAOS-7282: internal/contextfabric/devhealthfacts' plain (non-race) budget,
 # used by its own `unit` matrix leg (scripts/ci/test-shard.sh unit-dedicated
 # legs; ci.yml). The package is ONE serial test binary: 445 tests, one shared
@@ -132,6 +141,7 @@ test-split:
 		case "$$pkg" in \
 			*/internal/contextfabric) timeout="$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
 			*/internal/contextfabric/devhealthsource) timeout="$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
+			*/internal/contextfabric/factoracle) timeout="$(GOTEST_FACTORACLE_TIMEOUT)" ;; \
 			*/internal/contextfabric/devhealthfacts) timeout="$(GOTEST_DEVHEALTHFACTS_TIMEOUT)" ;; \
 			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 		esac; \
@@ -183,6 +193,7 @@ test-race-isolated:
 		case "$$pkg" in \
 			*/internal/contextfabric) timeout="$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
 			*/internal/contextfabric/devhealthsource) timeout="$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
+			*/internal/contextfabric/factoracle) timeout="$(GOTEST_FACTORACLE_TIMEOUT)" ;; \
 			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 		esac; \
 		echo "test-race-isolated: $$pkg (GOTEST_TIMEOUT=$$timeout)"; \
@@ -244,6 +255,7 @@ isolated-timeout:
 	@case "$(PKG)" in \
 		*/internal/contextfabric) echo "$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
 		*/internal/contextfabric/devhealthsource) echo "$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
+		*/internal/contextfabric/factoracle) echo "$(GOTEST_FACTORACLE_TIMEOUT)" ;; \
 		*/internal/contextfabric/devhealthfacts) echo "$(GOTEST_DEVHEALTHFACTS_TIMEOUT)" ;; \
 		*) echo "$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 	esac
