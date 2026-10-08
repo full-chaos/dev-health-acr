@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"time"
@@ -259,4 +260,51 @@ func orderUnitsFacts(facts []ServedFact) []ServedFact {
 	out = append(out, others...)
 	out = append(out, pages...)
 	return append(out, rows...)
+}
+
+func findUnitsPageFact(facts []ServedFact) (ServedFact, bool) {
+	for _, fact := range facts {
+		if unitFactKind(fact) == contextfabric.InvestmentUnitPageKind {
+			return fact, true
+		}
+	}
+	return ServedFact{}, false
+}
+
+// noteUnitsPageNotServed runs when the byte budget left no room for the page
+// fact beside the facts that outrank it. It is the smallest fact that carries
+// next_cursor, so its absence is never silent: the coverage rows (never
+// dropped) say no units were served and what max_bytes the page fact needs.
+func (r *FactsReader) noteUnitsPageNotServed(response *FactsResponse, maxBytes int, page ServedFact, orgID, digest, incoming string) {
+	probe := page
+	probe.Fields = make(map[string]any, len(page.Fields)+1)
+	for name, value := range page.Fields {
+		probe.Fields[name] = value
+	}
+	if sealed, err := r.sealUnitsCursor(orgID, digest, incoming); err == nil {
+		probe.Fields["next_cursor"] = sealed
+	}
+	withPage := *response
+	withPage.Facts = append(append([]ServedFact{}, response.Facts...), probe)
+	minimum := math.MaxInt
+	if encoded, err := json.Marshal(withPage); err == nil {
+		minimum = len(encoded)
+	}
+	note := fmt.Sprintf("units not served under max_bytes %d; minimum %d (the work_unit_page fact does not fit beside the facts that outrank it); no next_cursor; raise max_bytes", maxBytes, minimum)
+	for i := range response.Coverage {
+		if response.Coverage[i].Kind != string(contextfabric.FactInvestment) {
+			continue
+		}
+		if response.Coverage[i].Reason == "" {
+			response.Coverage[i].Reason = note
+		} else {
+			response.Coverage[i].Reason += "; " + note
+		}
+	}
+	if encoded, err := json.Marshal(response); err != nil || len(encoded) > maxBytes {
+		if response.Truncation == nil {
+			response.Truncation = &Truncation{TruncatedBy: TruncatedByMaxBytes}
+		}
+		response.Truncation.CoverageOverBudget = true
+	}
 }

@@ -539,7 +539,13 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 		response.Facts = orderUnitsFacts(response.Facts)
 	}
 	unitRows := countUnitRows(response.Facts)
+	pageBeforeBudget, hadPage := findUnitsPageFact(response.Facts)
 	response.Truncation = applyBudget(&response, plan.echo.MaxBytes)
+	if plan.units != nil && hadPage {
+		if _, stillThere := findUnitsPageFact(response.Facts); !stillThere {
+			r.noteUnitsPageNotServed(&response, plan.echo.MaxBytes, pageBeforeBudget, principal.OrgID, unitsDigest, unitsIncoming)
+		}
+	}
 	if plan.units != nil {
 		if _, sealErr := r.finishUnitsPage(&response, plan.echo.MaxBytes, principal.OrgID, unitsDigest, unitsIncoming, unitRows); sealErr != nil {
 			response.Status = StatusUnavailable
