@@ -94,10 +94,8 @@ func handleReadRelationships(ctx context.Context, cfg *ProcessConfig, req *mcpsd
 
 	raw := rawArgs(req)
 	var input readRelationshipsInput
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: "read_relationships arguments are not valid JSON for the declared schema"}), nil
+	if err := decodeToolArguments(raw, &input, false); err != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: toolArgumentsMessage(toolReadRelationships, err)}), nil
 	}
 	if err := input.validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "read_relationships arguments failed schema validation: " + err.Error()}), nil

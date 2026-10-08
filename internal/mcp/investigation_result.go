@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
@@ -29,8 +28,8 @@ func handleInvestigationResult(ctx context.Context, cfg *ProcessConfig, req *mcp
 	}
 
 	var input contractsv1.MCPInvestigationResultRequest
-	if err := json.Unmarshal(rawArgs(req), &input); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: "investigation_result arguments are not valid JSON for the declared schema"}), nil
+	if err := decodeToolArguments(rawArgs(req), &input, false); err != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: toolArgumentsMessage(toolInvestigationResult, err)}), nil
 	}
 	if err := input.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigation_result arguments failed schema validation"}), nil

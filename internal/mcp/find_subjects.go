@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
@@ -20,8 +19,8 @@ func handleFindSubjects(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.Cal
 		return refuseWithoutCaller(ctx, cfg, toolFindSubjects), nil
 	}
 	var input contractsv1.MCPFindSubjectsRequest
-	if err := json.Unmarshal(rawArgs(req), &input); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: "find_subjects arguments are not valid JSON for the declared schema"}), nil
+	if err := decodeToolArguments(rawArgs(req), &input, false); err != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: toolArgumentsMessage(toolFindSubjects, err)}), nil
 	}
 	if err := input.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "find_subjects arguments failed schema validation"}), nil

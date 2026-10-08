@@ -40,8 +40,8 @@ func handleContextForTask(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.C
 	}
 
 	var input contractsv1.MCPContextForTaskRequest
-	if err := json.Unmarshal(rawArgs(req), &input); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: "context_for_task arguments are not valid JSON for the declared schema"}), nil
+	if err := decodeToolArguments(rawArgs(req), &input, false); err != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: toolArgumentsMessage(toolContextForTask, err)}), nil
 	}
 	// A hosted caller that sends an empty repository object has named no
 	// repository: treat it as omitted so it gets the typed refusal that names

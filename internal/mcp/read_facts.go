@@ -94,10 +94,8 @@ func handleReadFacts(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.CallTo
 
 	raw := rawArgs(req)
 	var input readFactsInput
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: "read_facts arguments are not valid JSON for the declared schema"}), nil
+	if err := decodeToolArguments(raw, &input, false); err != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: toolArgumentsMessage(toolReadFacts, err)}), nil
 	}
 	if err := input.validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "read_facts arguments failed schema validation: " + err.Error()}), nil

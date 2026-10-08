@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
@@ -19,8 +18,8 @@ func handleDataCatalog(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.Call
 		return refuseWithoutCaller(ctx, cfg, toolDataCatalog), nil
 	}
 	var input contractsv1.MCPDataCatalogRequest
-	if err := json.Unmarshal(rawArgs(req), &input); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: "data_catalog arguments are not valid JSON for the declared schema"}), nil
+	if err := decodeToolArguments(rawArgs(req), &input, false); err != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: toolArgumentsMessage(toolDataCatalog, err)}), nil
 	}
 	if err := input.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "data_catalog arguments failed schema validation"}), nil

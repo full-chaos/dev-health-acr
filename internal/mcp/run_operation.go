@@ -1,9 +1,7 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
@@ -27,10 +25,8 @@ func handleRunOperation(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.Cal
 		return refuseWithoutCaller(ctx, cfg, toolRunOperation), nil
 	}
 	var input contractsv1.MCPRunOperationRequest
-	decoder := json.NewDecoder(bytes.NewReader(rawArgs(req)))
-	decoder.UseNumber()
-	if err := decoder.Decode(&input); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: "run_operation arguments are not valid JSON for the declared schema"}), nil
+	if err := decodeToolArguments(rawArgs(req), &input, true); err != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: toolArgumentsMessage(toolRunOperation, err)}), nil
 	}
 	if err := input.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "run_operation arguments failed schema validation"}), nil

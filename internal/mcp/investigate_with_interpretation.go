@@ -35,8 +35,8 @@ func handleInvestigateWithInterpretation(ctx context.Context, cfg *ProcessConfig
 		return refused, nil
 	}
 	var input contractsv1.MCPInvestigateWithInterpretationRequest
-	if err := decodeInvestigationArguments(args, &input); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: investigationArgumentsMessage(toolInvestigateWithInterpretation, err)}), nil
+	if err := decodeToolArguments(args, &input, false); err != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: toolArgumentsMessage(toolInvestigateWithInterpretation, err)}), nil
 	}
 	if len(input.Contract.Missing()) > 0 {
 		return toolErrorResult(&classifiedError{category: "validation", message: missingContractValueMessage}), nil
