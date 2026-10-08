@@ -78,8 +78,44 @@ func projectionOmissions(budget contractsv1.ContextFabricProjectionBudget) []pro
 // vocabulary -- which is what a projection budget is.
 func appendProjectionOutcomes(projection contractsv1.ContextFabricAnswerProjection) contractsv1.ContextFabricAnswerProjection {
 	rows := projection.Completeness.Outcomes
-	var omissionRows []contractsv1.ContextFabricPlanRequirementOutcomeRow
+	room := contractsv1.ContextFabricPlanRequirementOutcomeMaxCount - len(rows)
+	if room < 0 {
+		room = 0
+	}
+	omissions, omissionRows := pendingOmissionRows(projection)
+	countRows := countRowsBesideCutMembers(projection)
+	cut := false
+	if len(omissionRows)+len(countRows) <= room {
+		rows = append(rows, omissionRows...)
+		rows = append(rows, countRows...)
+	} else {
+		cut = true
+		// The disclosure displaces a limitation when that list is full, and
+		// the displacement is itself an omission, so it is applied BEFORE the
+		// omission rows are built from the budget.
+		projection = reserveDisclosureLimitation(projection)
+		omissions, omissionRows = pendingOmissionRows(projection)
+		var merged, dropped int
+		rows, merged, dropped = appendWithinCap(rows, omissions, omissionRows, countRows, room)
+		projection.ProjectionBudget.Truncated = true
+		projection.Limitations = withCutDisclosure(projection.Limitations, merged, dropped)
+	}
+	projection.Completeness.Outcomes = rows
+	// DERIVED LAST, over the whole set. This is the line that makes the
+	// served answer's completeness true of the served document.
+	projection.Completeness.State = contractsv1.DeriveContextFabricAnswerCompletenessState(rows)
+	// A cut can leave no room for any row to say so, and the rows then derive
+	// the state of a document that lost rows; the cut itself bars `complete`.
+	if cut && projection.Completeness.State == contractsv1.ContextFabricAnswerCompletenessComplete {
+		projection.Completeness.State = contractsv1.ContextFabricAnswerCompletenessPartial
+	}
+	return projection
+}
+
+// pendingOmissionRows builds one row per non-zero omission counter.
+func pendingOmissionRows(projection contractsv1.ContextFabricAnswerProjection) ([]projectionOmission, []contractsv1.ContextFabricPlanRequirementOutcomeRow) {
 	var omissions []projectionOmission
+	var omissionRows []contractsv1.ContextFabricPlanRequirementOutcomeRow
 	for _, omission := range projectionOmissions(projection.ProjectionBudget) {
 		if omission.Count <= 0 {
 			continue
@@ -92,36 +128,38 @@ func appendProjectionOutcomes(projection contractsv1.ContextFabricAnswerProjecti
 		omissions = append(omissions, omission)
 		omissionRows = append(omissionRows, projectionOutcomeRow(omission.Impact, omission.Count))
 	}
-	countRows := countRowsBesideCutMembers(projection)
-	room := contractsv1.ContextFabricPlanRequirementOutcomeMaxCount - len(rows)
-	if room < 0 {
-		room = 0
-	}
-	cut := false
-	if len(omissionRows)+len(countRows) <= room {
-		rows = append(rows, omissionRows...)
-		rows = append(rows, countRows...)
-	} else {
-		cut = true
-		rows, projection = appendWithinCap(projection, rows, omissions, omissionRows, countRows, room)
-	}
-	projection.Completeness.Outcomes = rows
-	// DERIVED LAST, over the whole set. This is the line that makes the
-	// served answer's completeness true of the served document.
-	projection.Completeness.State = contractsv1.DeriveContextFabricAnswerCompletenessState(rows)
-	if cut && projection.Completeness.State == contractsv1.ContextFabricAnswerCompletenessComplete {
-		projection.Completeness.State = contractsv1.ContextFabricAnswerCompletenessPartial
+	return omissions, omissionRows
+}
+
+// reserveDisclosureLimitation makes room in a full limitations list for the
+// cut disclosure and counts the limitation it displaces.
+func reserveDisclosureLimitation(projection contractsv1.ContextFabricAnswerProjection) contractsv1.ContextFabricAnswerProjection {
+	if len(projection.Limitations) >= contractsv1.ContextFabricProjectedNarrativeMaxCount {
+		projection.Limitations = append([]string(nil), projection.Limitations[:contractsv1.ContextFabricProjectedNarrativeMaxCount-1]...)
+		projection.ProjectionBudget.LimitationsOmitted++
 	}
 	return projection
+}
+
+// withCutDisclosure appends the cut disclosure, unless the list already holds
+// that exact text (the validator rejects duplicates).
+func withCutDisclosure(limitations []string, merged, dropped int) []string {
+	disclosure := fmt.Sprintf("Projection outcome rows were cut to the %d-row cap: %d omission rows merged by impact, %d rows not itemized.", contractsv1.ContextFabricPlanRequirementOutcomeMaxCount, merged, dropped)
+	for _, existing := range limitations {
+		if existing == disclosure {
+			return limitations
+		}
+	}
+	return append(append([]string(nil), limitations...), disclosure)
 }
 
 // appendWithinCap keeps the projection-stage rows inside the outcome row cap.
 // Canonical rows are never rewritten. Omission rows go first; when they do not
 // fit they are merged into one row per impact kind, and count rows take
-// whatever room remains. Whatever could not be itemized is named in the
-// limitations, outside the rows, because at a full canonical set there is no
-// room for a row to say so.
-func appendWithinCap(projection contractsv1.ContextFabricAnswerProjection, rows []contractsv1.ContextFabricPlanRequirementOutcomeRow, omissions []projectionOmission, omissionRows, countRows []contractsv1.ContextFabricPlanRequirementOutcomeRow, room int) ([]contractsv1.ContextFabricPlanRequirementOutcomeRow, contractsv1.ContextFabricAnswerProjection) {
+// whatever room remains. It reports how many omission rows were merged and how
+// many rows could not be itemized, which the limitations then name outside the
+// rows, because at a full canonical set there is no room for a row to say so.
+func appendWithinCap(rows []contractsv1.ContextFabricPlanRequirementOutcomeRow, omissions []projectionOmission, omissionRows, countRows []contractsv1.ContextFabricPlanRequirementOutcomeRow, room int) ([]contractsv1.ContextFabricPlanRequirementOutcomeRow, int, int) {
 	remaining := room
 	merged := 0
 	dropped := 0
@@ -154,15 +192,7 @@ func appendWithinCap(projection contractsv1.ContextFabricAnswerProjection, rows 
 		rows = append(rows, row)
 		remaining--
 	}
-	projection.ProjectionBudget.Truncated = true
-	disclosure := fmt.Sprintf("Projection outcome rows were cut to the %d-row cap: %d omission rows merged by impact, %d rows not itemized.", contractsv1.ContextFabricPlanRequirementOutcomeMaxCount, merged, dropped)
-	limitations := append([]string(nil), projection.Limitations...)
-	if len(limitations) >= contractsv1.ContextFabricProjectedNarrativeMaxCount {
-		limitations = limitations[:contractsv1.ContextFabricProjectedNarrativeMaxCount-1]
-		projection.ProjectionBudget.LimitationsOmitted++
-	}
-	projection.Limitations = append(limitations, disclosure)
-	return rows, projection
+	return rows, merged, dropped
 }
 
 // projectionOutcomeRow is the shape every projection-stage row takes: no

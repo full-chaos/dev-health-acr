@@ -11,7 +11,9 @@ func capFixture(canonical int, countRows int) contractsv1.ContextFabricAnswerPro
 	rows := make([]contractsv1.ContextFabricPlanRequirementOutcomeRow, 0, canonical)
 	for i := 0; i < canonical; i++ {
 		row := contractsv1.ContextFabricPlanRequirementOutcomeRow{
-			Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
+			Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
+			Served:      1,
+			Declared:    1,
 			Requirement: "state/member/team",
 			Obligation:  "state",
 			Outcome:     contractsv1.ContextFabricRequirementSatisfied,
@@ -145,5 +147,57 @@ func TestACutDisclosureDoesNotOverflowTheLimitationsCap(t *testing.T) {
 	}
 	if !strings.Contains(served.Limitations[len(served.Limitations)-1], "outcome rows were cut") {
 		t.Fatal("disclosure missing")
+	}
+}
+
+func TestACutBarsACompleteStateWhenNoRowCanSayWhy(t *testing.T) {
+	t.Parallel()
+	max := contractsv1.ContextFabricPlanRequirementOutcomeMaxCount
+	in := capFixture(max, 3)
+	if got := contractsv1.DeriveContextFabricAnswerCompletenessState(in.Completeness.Outcomes); got != contractsv1.ContextFabricAnswerCompletenessComplete {
+		t.Fatalf("fixture precondition: canonical rows derive %q, want complete", got)
+	}
+	served := appendProjectionOutcomes(in)
+	if served.Completeness.State != contractsv1.ContextFabricAnswerCompletenessPartial {
+		t.Fatalf("a cut projection serves %q", served.Completeness.State)
+	}
+}
+
+func TestADisplacedLimitationIsCountedInTheMergedOmissionRow(t *testing.T) {
+	t.Parallel()
+	max := contractsv1.ContextFabricPlanRequirementOutcomeMaxCount
+	in := capFixture(max-10, 3)
+	for i := 0; i < contractsv1.ContextFabricProjectedNarrativeMaxCount; i++ {
+		in.Limitations = append(in.Limitations, "limitation "+string(rune('A'+i%26))+string(rune('a'+i/26)))
+	}
+	served := appendProjectionOutcomes(in)
+	rows := served.Completeness.Outcomes[max-10:]
+	// 10 depth counters at 1, plus the displaced limitation: 11. Scope: 3.
+	declared := map[contractsv1.ContextFabricAnswerImpactKind]int{}
+	for _, row := range rows[:2] {
+		declared[row.Impact] = row.Declared
+	}
+	if declared[contractsv1.ContextFabricAnswerImpactScope] != 3 || declared[contractsv1.ContextFabricAnswerImpactDepth] != 11 {
+		t.Fatalf("merged rows declare %v, want scope 3 depth 11", declared)
+	}
+	if served.ProjectionBudget.LimitationsOmitted != 2 {
+		t.Fatalf("limitations_omitted = %d, want 2", served.ProjectionBudget.LimitationsOmitted)
+	}
+}
+
+func TestACutDisclosureIsNotDuplicatedWhenAlreadyPresent(t *testing.T) {
+	t.Parallel()
+	max := contractsv1.ContextFabricPlanRequirementOutcomeMaxCount
+	first := appendProjectionOutcomes(capFixture(max, 3))
+	disclosure := first.Limitations[len(first.Limitations)-1]
+	in := capFixture(max, 3)
+	in.Limitations = []string{disclosure}
+	served := appendProjectionOutcomes(in)
+	seen := map[string]int{}
+	for _, l := range served.Limitations {
+		seen[l]++
+	}
+	if seen[disclosure] != 1 {
+		t.Fatalf("disclosure appears %d times", seen[disclosure])
 	}
 }
