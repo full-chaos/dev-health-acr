@@ -543,7 +543,30 @@ import (
 // (repos[]), row-checked against the caller's grant like rows[]. A candidate
 // saved before v109 may hold a hotspots answer without it and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v113"
+//
+// v109 -> v110: the clarification prompt tells apart same-kind, same-provider,
+// same-label candidates by a canonical id suffix (or an ordinal). A candidate
+// saved before v110 may hold the older, identical-looking prompt and must not
+// be reused.
+//
+// v110 -> v111: a team-scoped cohort (the team's repositories and work items)
+// and the work item to team edges include a co-owner of the item (a second
+// team owning its project), not only the primary team. A candidate saved
+// before v111 may hold a cohort short of the co-owner team's items and must not
+// be reused.
+//
+// v111 -> v114: a flat cohort listing serves every member within the caller's
+// member budget (the plan derives its item ceiling from the members, and the
+// member references are reserved before the driver references). An answer
+// saved before v114 may hold the same listing cut at 14 members, or at the
+// members that fit after the driver references, and must not be reused.
+//
+// v114 -> v116: the work-unit page fact (units_returned, next_cursor,
+// coverage) is reserved before the unit rows under max_serialized_bytes; when
+// even it does not fit, it is served as a limitation row with the minimum
+// bytes and no cursor. An answer saved before v116 may hold a unit page whose
+// page fact was dropped and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v116"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

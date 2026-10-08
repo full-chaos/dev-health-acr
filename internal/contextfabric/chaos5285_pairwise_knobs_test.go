@@ -50,7 +50,7 @@ func TestPairwiseMaxItemsByHeadroomAgreesWithTheClampFlag(t *testing.T) {
 				continue
 			}
 			seen[maxItems] = true
-			planned := planBudget(p.profile, ResponseBudget{MaxItems: maxItems, MaxSerializedBytes: 262144}, 1000)
+			planned := planBudget(p.profile, ResponseBudget{MaxItems: maxItems, MaxSerializedBytes: 262144}, 1000, false)
 			got := cohortMemberAllowanceClamped(planned)
 			want := maxItems > 0 && maxItems-p.headroom < 1
 			verdict := "ok"
