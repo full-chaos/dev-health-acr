@@ -513,6 +513,15 @@ import (
 // own reach, never from the question text or another committed subject. A
 // candidate saved before v101 may hold a cohort of text-matched repositories
 // and must not be reused.
+//
+// v103 -> v104: a prior result that echoes a handle literal is readable by a
+// follow-up turn from a scoped caller. A candidate saved before v104 may hold
+// the no-match answer that refusal produced and must not be reused.
+//
+// v104 -> v105: a driver or finding of a work-item answer may name the
+// committed anchor, and a draft that breaks a work-item tuple rule on model
+// output is served as the facts-only degraded answer. A candidate saved before
+// v105 may hold the failed or anchor-less answer and must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v105"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for

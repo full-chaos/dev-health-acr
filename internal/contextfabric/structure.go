@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -42,6 +43,25 @@ import (
 // resolves atomically or vetoes the whole request, with no partial
 // application and no inference substituted for a vetoed member.
 type structureVetoReason string
+
+// structureVetoDetail names which exit of canonicalizeStructure's receipt
+// loop fired. Closed vocabulary, no values: it is served in the limitation
+// and logged, so an operator can tell the exits apart.
+type structureVetoDetail string
+
+const (
+	structureDetailNone               structureVetoDetail = ""
+	structureDetailNilStore           structureVetoDetail = "nil_store"
+	structureDetailEmptyIDs           structureVetoDetail = "empty_ids"
+	structureDetailStoredResultGet    structureVetoDetail = "stored_result_get"
+	structureDetailStoredNotFound     structureVetoDetail = "stored_result_not_found"
+	structureDetailStoredUnavailable  structureVetoDetail = "stored_result_unavailable"
+	structureDetailOptionNotFound     structureVetoDetail = "option_not_found"
+	structureDetailReverifyNoVerifier structureVetoDetail = "reverify_no_verifier"
+	structureDetailReverifyUnverif    structureVetoDetail = "reverify_unverifiable"
+	structureDetailReverifyClaimLost  structureVetoDetail = "reverify_claim_lost"
+	structureDetailReverifyRejected   structureVetoDetail = "reverify_rejected"
+)
 
 const (
 	structureVetoNone structureVetoReason = ""
@@ -143,6 +163,8 @@ type explicitStructureMember struct {
 
 // requestStructureCanonicalization is canonicalizeStructure's own result.
 type requestStructureCanonicalization struct {
+	// Detail is the exit that fired when Veto is structureVetoConfirmationUnresolved.
+	Detail structureVetoDetail
 	// Confirmed lists every member this request's receipts resolved.
 	// NON-EMPTY means the request BYPASSES tryReuse entirely (design brief
 	// §2.1/DP11: "any request whose canonicalized confirmed-structure set
@@ -534,9 +556,10 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		// No store to resolve against -- cannot confirm, so this cannot
 		// proceed as if nothing had been asked (mirrors
 		// resolveWindowReceipts' own fail-closed rule).
-		return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved}
+		return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved, Detail: structureDetailNilStore}
 	}
 
+	var reverifyDetail structureVetoDetail
 	members := []structureReceiptMember{
 		{
 			member:   contractsv1.ContextFabricStructureNeedExpectedKind,
@@ -628,7 +651,11 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 					if opt.ReceiptID != receiptID {
 						continue
 					}
-					return e.reverifyAnchorClaim(ctx, principal, request.RequestedScope, binding, stored.SchemaVersion, opt.Kind, opt.CanonicalID, opt.MatchedTermHash)
+					ok := e.reverifyAnchorClaim(ctx, principal, request.RequestedScope, binding, stored.SchemaVersion, opt.Kind, opt.CanonicalID, opt.MatchedTermHash)
+					if !ok {
+						reverifyDetail = structureDetailReverifyRejected
+					}
+					return ok
 				}
 				return false
 			},
@@ -683,6 +710,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 			// canonical-id-only check).
 			reverify: func(ctx context.Context, principal storage.Principal, stored InvestigationResult, receiptID string) bool {
 				if e.handleVerifier == nil || stored.StructureNeeds == nil {
+					reverifyDetail = structureDetailReverifyNoVerifier
 					return false
 				}
 				for _, opt := range stored.StructureNeeds.HandleOptions {
@@ -694,6 +722,9 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 						// HandleVerifier cannot open redemption on an
 						// inconsistent (true, non-valid-reason) result.
 						ok, reason := e.handleVerifier(ctx, principal.OrgID, opt.Kind, opt.PatternID, opt.Value)
+						if !(ok && reason == HandleVerificationValid) {
+							reverifyDetail = structureDetailReverifyRejected
+						}
 						return ok && reason == HandleVerificationValid
 					}
 				}
@@ -738,12 +769,21 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 			// stored value anyway would be a false sense of safety.
 			reverify: func(ctx context.Context, principal storage.Principal, stored InvestigationResult, receiptID string) bool {
 				if e.candidateVerifier == nil || stored.StructureNeeds == nil {
+					reverifyDetail = structureDetailReverifyNoVerifier
 					return false
 				}
 				for _, opt := range stored.StructureNeeds.CandidateOptions {
 					if opt.ReceiptID == receiptID {
 						ok, reason := e.candidateVerifier(ctx, principal, request.RequestedScope, binding, opt.Kind, opt.CanonicalID)
-						return ok && reason == CandidateVerificationValid
+						if ok && reason == CandidateVerificationValid {
+							return true
+						}
+						if reason == CandidateVerificationGraphUnverifiable {
+							reverifyDetail = structureDetailReverifyUnverif
+						} else {
+							reverifyDetail = structureDetailReverifyClaimLost
+						}
+						return false
 					}
 				}
 				return false
@@ -769,6 +809,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		receiptID := strings.TrimSpace(receipt.ReceiptID)
 		if resultID == "" || receiptID == "" {
 			return requestStructureCanonicalization{
+				Detail:        structureDetailEmptyIDs,
 				Veto:          structureVetoConfirmationUnresolved,
 				VetoedEntries: vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedUnresolved),
 			}
@@ -776,6 +817,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		stored, err := e.results.Get(ctx, principal, resultID)
 		if err != nil {
 			return requestStructureCanonicalization{
+				Detail:        storedResultGetDetail(err),
 				Veto:          structureVetoConfirmationUnresolved,
 				VetoedEntries: vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedUnresolved),
 			}
@@ -783,11 +825,16 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		value, kind, offerSource, priorVersionID, priorEntryID, ok := m.appliedValueFor(stored.Result, receiptID)
 		if !ok {
 			return requestStructureCanonicalization{
+				Detail:        structureDetailOptionNotFound,
 				Veto:          structureVetoConfirmationUnresolved,
 				VetoedEntries: vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedUnresolved),
 			}
 		}
+		reverifyDetail = structureDetailNone
 		if m.reverify != nil && !m.reverify(ctx, principal, stored.Result, receiptID) {
+			if reverifyDetail == structureDetailNone {
+				reverifyDetail = structureDetailReverifyRejected
+			}
 			// Unlike the failure modes above, appliedValueFor already
 			// resolved a real value here -- reverify rejected it, not the
 			// lookup -- so this member's own attempted state IS echoable
@@ -796,7 +843,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 			// already-confirmed members.
 			entries := vetoedConfirmedEntries(confirmed, contractsv1.ContextFabricStructureDispositionVetoedUnresolved)
 			entries = append(entries, triggeringMemberEntry(m.member, contractsv1.ContextFabricStructureDispositionVetoedUnresolved, resultID, receiptID, value, offerSource, priorVersionID, priorEntryID))
-			return requestStructureCanonicalization{Veto: structureVetoConfirmationUnresolved, VetoedEntries: entries}
+			return requestStructureCanonicalization{Detail: reverifyDetail, Veto: structureVetoConfirmationUnresolved, VetoedEntries: entries}
 		}
 		// CHAOS-3927 P4 (design brief §2.1 offer-supersession rule): a
 		// receipt that resolves cleanly against its stored offer can still
@@ -1005,7 +1052,7 @@ func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal 
 	echo := appendCarriedStructureEntry(staleConfirmedStructureEntries(confirmed, superseded.Members), carriedStructureEntries...)
 	// The refused members leave the outgoing ledger HERE, once, for every Save
 	// site that can lose the claim race (withoutSupersededConfirmedNeeds).
-	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, echo, binding, priorSubjectReceiptDispositions, plan, ancestryParent, semantic.withoutSupersededNeeds(superseded.Members))
+	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, structureDetailNone, echo, binding, priorSubjectReceiptDispositions, plan, ancestryParent, semantic.withoutSupersededNeeds(superseded.Members))
 }
 
 // resolveExplicitStructure implements design brief §2.5's "explicit
@@ -1340,6 +1387,10 @@ func candidateOptionsOffered(opts []contractsv1.ContextFabricCandidateOption) []
 // veto reasons currently share one sentence (unlike window's three), so a
 // map is not yet warranted; revisit once a second distinct disclosure
 // exists.
+//
+// The text is the same for every exit of the unresolved veto: a denied prior
+// result, a missing one and a missing option must stay indistinguishable to the
+// caller. The exit is named only in the structure receipt veto log line.
 func structureVetoLimitation(veto structureVetoReason) string {
 	switch veto {
 	case structureVetoConfirmationConflict:
@@ -1372,7 +1423,12 @@ func structureVetoLimitation(veto structureVetoReason) string {
 // paths -- StaleMembers and VetoedEntries are mutually exclusive by
 // construction (each is populated by different veto reasons), so callers
 // pass whichever one the veto reason actually populated.
-func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto structureVetoReason, echoEntries []contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry, plan *AnswerPlan, ancestryParent string, semantic semanticStateCapture) (InvestigationResult, error) {
+func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto structureVetoReason, detail structureVetoDetail, echoEntries []contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry, plan *AnswerPlan, ancestryParent string, semantic semanticStateCapture) (InvestigationResult, error) {
+	if detail != structureDetailNone {
+		if recorder, ok := e.telemetry.(StructureVetoDetailRecorder); ok {
+			recorder.RecordStructureVetoDetail(ctx, principal, detail)
+		}
+	}
 	limitation := structureVetoLimitation(veto)
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
@@ -2036,5 +2092,27 @@ func recordStructureNeedsTelemetry(ctx context.Context, telemetry EngineTelemetr
 			}
 			telemetry.RecordStructureOfferCount(ctx, principal, member, source, count)
 		}
+	}
+}
+
+// StructureVetoDetailRecorder is an optional EngineTelemetry extension, found
+// by type assertion, that logs which exit of the receipt loop vetoed.
+type StructureVetoDetailRecorder interface {
+	RecordStructureVetoDetail(ctx context.Context, principal storage.Principal, detail structureVetoDetail)
+}
+
+// storedResultGetDetail classifies a failed prior-result read without naming
+// the result or the error text.
+func storedResultGetDetail(err error) structureVetoDetail {
+	var denied *storedResultDeniedError
+	switch {
+	case errors.As(err, &denied):
+		return structureVetoDetail("stored_result_denied_" + string(denied.reason))
+	case errors.Is(err, ErrInvestigationResultNotFound):
+		return structureDetailStoredNotFound
+	case errors.Is(err, ErrUnavailable):
+		return structureDetailStoredUnavailable
+	default:
+		return structureDetailStoredResultGet
 	}
 }

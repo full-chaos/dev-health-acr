@@ -1782,7 +1782,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// refuses the receipt its own veto DISPROVED and this path did not.
 		// Same shape, one member over -- recording a disproved receipt as
 		// ancestry guarantees the next turn's walk stops at miss_unloadable.
-		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, echoEntries, binding, nil, nil, ancestryRoot(request, receiptsNotYetValidated(), vetoingStructureReceiptID(request, structureCanon.Veto)), e.captureConfirmedNeedLedgerOnly(request, remembered, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember)).withAnchorShadow(anchorShadow))
+		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, structureCanon.Detail, echoEntries, binding, nil, nil, ancestryRoot(request, receiptsNotYetValidated(), vetoingStructureReceiptID(request, structureCanon.Veto)), e.captureConfirmedNeedLedgerOnly(request, remembered, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember)).withAnchorShadow(anchorShadow))
 	}
 
 	// CHAOS-5639: confirmedNeedLedger/remembered were already resolved above,
