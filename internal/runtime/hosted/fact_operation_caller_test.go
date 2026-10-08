@@ -59,8 +59,8 @@ func TestFactOperationCallerSendsTheRegisteredSourceHealthDocument(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !outcome.Served {
-		t.Fatalf("outcome = %+v, want served", outcome)
+	if !outcome.Served || !outcome.Complete {
+		t.Fatalf("outcome = %+v, want served and complete", outcome)
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("query calls = %d, want 1", len(client.calls))

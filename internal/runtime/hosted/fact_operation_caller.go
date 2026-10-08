@@ -24,7 +24,7 @@ func newFactOperationCaller(runner *directread.OperationRunner) *factOperationCa
 
 // CallOperation runs the operation and reduces the answer to the closed
 // devhealthfacts outcome: served, or the call status (and refusal code).
-// Only a declared partial answer is incomplete: a plain list declares nothing.
+// Only a declared complete answer is complete: unknown completeness is not.
 func (c *factOperationCaller) CallOperation(ctx context.Context, principal storage.Principal, operation string) (devhealthfacts.OperationOutcome, error) {
 	resp, err := c.runner.Run(ctx, principal, directread.OperationRequest{Operation: operation})
 	if err != nil {
@@ -37,5 +37,5 @@ func (c *factOperationCaller) CallOperation(ctx context.Context, principal stora
 		}
 		return devhealthfacts.OperationOutcome{Reason: reason}, nil
 	}
-	return devhealthfacts.OperationOutcome{Served: true, Complete: resp.Completeness != directread.CompletenessDeclaredPartial, Data: resp.Data}, nil
+	return devhealthfacts.OperationOutcome{Served: true, Complete: resp.Completeness == directread.CompletenessDeclaredComplete, Data: resp.Data}, nil
 }

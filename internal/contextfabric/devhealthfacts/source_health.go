@@ -143,6 +143,8 @@ func (p *SourceHealthProvider) read(ctx context.Context, principal storage.Princ
 	state := contextfabric.SourceAvailable
 	reason := ""
 	switch {
+	case len(facts) == 0 && !outcome.Complete:
+		return limitation(contextfabric.SourceUnavailable, sourceHealthIncompleteReason)
 	case len(facts) == 0:
 		state = contextfabric.SourceNoData
 	case !outcome.Complete:

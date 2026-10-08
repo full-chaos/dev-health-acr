@@ -140,6 +140,15 @@ func TestSourceHealthProviderMissingOrNullRootIsALimitationNotNoData(t *testing.
 	}
 }
 
+func TestSourceHealthProviderEmptyListWithoutCompleteAnswerIsALimitationNotNoData(t *testing.T) {
+	t.Parallel()
+	caller := &fakeOperationCaller{outcome: devhealthfacts.OperationOutcome{Served: true, Complete: false, Data: sourceHealthData()}}
+	result := readSourceHealth(t, sourceHealthProvider(t, sourceHealthHolder(caller)), storage.Principal{OrgID: "org-1"}, organizationSubject("org-1"))
+	if len(result.Facts) != 0 || result.State != contextfabric.SourceUnavailable {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestSourceHealthProviderEmptyListIsNoData(t *testing.T) {
 	t.Parallel()
 	caller := &fakeOperationCaller{outcome: devhealthfacts.OperationOutcome{Served: true, Complete: true, Data: sourceHealthData()}}
