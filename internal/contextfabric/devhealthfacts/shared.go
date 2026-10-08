@@ -513,7 +513,13 @@ import (
 // own reach, never from the question text or another committed subject. A
 // candidate saved before v101 may hold a cohort of text-matched repositories
 // and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v101"
+//
+// v102 -> v103: the repositories and projects of a committed team are read
+// over the team's own ownership edges in full and as of now, so a former
+// owner's repository is no longer served and a team with many other owned
+// subjects is no longer cut at the shared walk budget. A candidate saved
+// before v103 may hold a cut or former-owner cohort and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v103"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

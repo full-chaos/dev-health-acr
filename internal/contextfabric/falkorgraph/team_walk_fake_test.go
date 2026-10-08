@@ -29,10 +29,8 @@ func withWalkStepReads(inner *fakeConn) *fakeConn {
 				if e == nil || propStringValue(e.Properties[propRelationType]) != params["rel"] {
 					continue
 				}
-				if start, ok := params[temporalParamStart].(int64); ok {
-					if end, ended := e.Properties[propValidToNs].(int64); ended && end <= start {
-						continue
-					}
+				if !windowAdmits(e.Properties, params) {
+					continue
 				}
 				var neighbour, neighbourKind string
 				incoming := strings.Contains(cypher, "<-[r:")
@@ -51,7 +49,7 @@ func withWalkStepReads(inner *fakeConn) *fakeConn {
 				if err != nil {
 					return nil, err
 				}
-				if len(nodes) == 0 {
+				if len(nodes) == 0 || !windowAdmits(nodes[0]["n"].(*node).Properties, params) {
 					continue
 				}
 				out = append(out, row{"id": id, "b": nodes[0]["n"], "r": e})
@@ -71,4 +69,22 @@ func withWalkStepReads(inner *fakeConn) *fakeConn {
 func newTeamAdapter(t *testing.T, fake *fakeConn) *Adapter {
 	t.Helper()
 	return newFakeAdapter(t, withWalkStepReads(fake))
+}
+
+// windowAdmits is the stored read's validity predicate for one element: no
+// bound is unbounded, a start after the window's end or an end at or before
+// its start excludes. An unbound window admits everything.
+func windowAdmits(props map[string]interface{}, params map[string]interface{}) bool {
+	start, ok := params[temporalParamStart].(int64)
+	if !ok {
+		return true
+	}
+	end, _ := params[temporalParamEnd].(int64)
+	if from, has := props[propValidFromNs].(int64); has && from > end {
+		return false
+	}
+	if to, has := props[propValidToNs].(int64); has && to <= start {
+		return false
+	}
+	return true
 }

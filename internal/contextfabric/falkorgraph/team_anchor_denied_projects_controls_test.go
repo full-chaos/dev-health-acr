@@ -437,3 +437,25 @@ func TestDiscoverContextTeamAnchorEdgeDeniedNodeAllowedProjectIsExcludedAndCount
 		t.Fatalf("denied reason = %q, want cohort_denied_by_authorization:1 (reasons %v)", got, result.Coverage.DegradedReasons)
 	}
 }
+
+// The anchor team itself is checked: a team the caller cannot see discloses
+// none of its owned projects, whatever the edges and projects allow.
+func TestDiscoverContextTeamAnchorDeniedTeamNodeServesNoMember(t *testing.T) {
+	fake := reachFixture(
+		[]reachEdge{{id: "a", dstKind: "project", dstID: "p-ok"}},
+		map[string][]string{"p-ok": reachAllowed})
+	base := fake.queryFunc
+	fake.queryFunc = func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		rows, err := base(ctx, graphKey, cypher, params, readOnly)
+		if err == nil && !strings.Contains(cypher, "UNION") && !strings.Contains(cypher, "UNWIND") && params["id"] == "team:chaos" {
+			for _, r := range rows {
+				r["n"].(*node).Properties["authorization_repositories"] = reachDenied
+			}
+		}
+		return rows, err
+	}
+	result, _ := discoverReach(t, fake)
+	if ids := reachMemberIDs(result.Cohort); len(ids) != 0 {
+		t.Fatalf("members = %v, want none: the team is not visible to the caller", ids)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -205,5 +206,89 @@ func TestAuthorizedHitDecidesOwnershipByEdgeAndNode(t *testing.T) {
 		if got := st.authorizedHit(c.hop, hit(c.edge, c.node)); got != c.want {
 			t.Errorf("%s: authorized = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// windowed discovers the budget team's repositories at the stated instant.
+func discoverBudgetTeamAt(t *testing.T, fake *fakeConn, at time.Time) *contextfabric.Cohort {
+	t.Helper()
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:platform", Label: "Platform"}
+	request := ownershipRoutingRequest(repositoriesOfAnchorFrame("Platform"), anchor)
+	request.ScopeAnchorKind = contextfabric.SubjectTeam
+	request.Request.Options.MaxCohortMembers = 50
+	request.Interpretation.TimeContext = contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &at}
+	result, err := newTeamAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result.Cohort
+}
+
+// Under a stated instant the stored read bounds the ownership edge and the
+// member on both sides: an edge that starts later and a member that did not
+// exist yet are not members.
+func TestDiscoverContextTeamAnchorHonoursTheWindowOnEdgeAndMember(t *testing.T) {
+	at := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	future := at.Add(48 * time.Hour).UnixNano()
+	fake := budgetTeamFakeWith(nil, 0)
+	base := fake.queryFunc
+	fake.queryFunc = func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		rows, err := base(ctx, graphKey, cypher, params, readOnly)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			if e, ok := r["r"].(*edge); ok && propStringValue(r["srcId"]) == "repository:r-01" {
+				e.Properties[propValidFromNs] = future
+			}
+			if n, ok := r["n"].(*node); ok && propStringValue(n.Properties[propCanonicalID]) == "repository:r-02" {
+				n.Properties[propValidFromNs] = future
+			}
+		}
+		return rows, nil
+	}
+	ids := cohortIDs(discoverBudgetTeamAt(t, fake, at))
+	if ids["repository:r-01"] || ids["repository:r-02"] || len(ids) != 8 {
+		t.Fatalf("members = %v, want the 8 repositories whose edge and node exist at the instant", ids)
+	}
+}
+
+// A team the graph does not hold at the instant serves no member.
+func TestDiscoverContextTeamAnchorAbsentTeamServesNoMember(t *testing.T) {
+	base := budgetTeamFake().queryFunc
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if !strings.Contains(cypher, "UNION") && !strings.Contains(cypher, "UNWIND") && params["id"] == "team:platform" {
+			return nil, nil
+		}
+		return base(ctx, graphKey, cypher, params, readOnly)
+	}}
+	if ids := cohortIDs(discoverBudgetTeamAt(t, fake, time.Now())); len(ids) != 0 {
+		t.Fatalf("members = %v, want none", ids)
+	}
+}
+
+// A team that did not exist yet at the stated instant serves no member, though
+// its ownership edges and the repositories do.
+func TestDiscoverContextTeamAnchorNotYetExistingTeamServesNoMember(t *testing.T) {
+	at := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	base := budgetTeamFakeWith(nil, 0).queryFunc
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		rows, err := base(ctx, graphKey, cypher, params, readOnly)
+		if err != nil || strings.Contains(cypher, "UNION") || strings.Contains(cypher, "UNWIND") || params["id"] != "team:platform" {
+			return rows, err
+		}
+		for _, r := range rows {
+			r["n"].(*node).Properties[propValidFromNs] = at.Add(time.Hour).UnixNano()
+		}
+		var kept []row
+		for _, r := range rows {
+			if windowAdmits(r["n"].(*node).Properties, params) {
+				kept = append(kept, r)
+			}
+		}
+		return kept, nil
+	}}
+	if ids := cohortIDs(discoverBudgetTeamAt(t, fake, at)); len(ids) != 0 {
+		t.Fatalf("members = %v, want none", ids)
 	}
 }

@@ -395,6 +395,21 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 // projects: ownership edges are authorized as the generic walk authorizes
 // every edge.
 func (a *Adapter) teamAnchorMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter) (treeWalk, error) {
+	// The step read returns the member and the edge, never the team: the
+	// anchor is read and authorized here, as resolveEdge does for both
+	// endpoints of every edge of the generic walk.
+	team, err := a.nodeByKindID(ctx, key, orgID, string(anchor.Kind), anchor.CanonicalID, temporal)
+	if err != nil {
+		return treeWalk{anchorKind: anchor.Kind}, err
+	}
+	if team == nil {
+		return treeWalk{anchorKind: anchor.Kind}, nil
+	}
+	if !graphrank.AuthorizedAttributes(principal, scope, toCandidateNode(team).Attributes) {
+		out := treeWalk{anchorKind: anchor.Kind}
+		treeWalkState{out: &out}.deny()
+		return out, nil
+	}
 	return a.treeMembersOf(ctx, key, orgID, principal, scope, anchor, member, collectLimit, temporal, true)
 }
 
