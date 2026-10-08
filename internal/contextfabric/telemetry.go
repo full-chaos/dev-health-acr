@@ -765,6 +765,9 @@ func (t SlogEngineTelemetry) RecordSynthesisModelFailure(ctx context.Context, pr
 		"attempts", event.Attempts,
 		"elapsed_ms", event.ElapsedMS,
 	}, requestIDLogAttrs(ctx)...)
+	if event.Rule != "" {
+		args = append(args, "work_item_rule", event.Rule, "stage", event.Stage)
+	}
 	t.logger.Log(ctx, slog.LevelWarn, synthesisModelFailureMessage, args...)
 }
 

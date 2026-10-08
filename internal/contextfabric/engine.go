@@ -4137,7 +4137,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// to stamp. It still measures, which is the half that matters.
 	if tupleCensus != nil {
 		if err := ValidateWorkItemTuplePayload(result, principal); err != nil {
-			degraded, ok := degradeWorkItemModelBreach(result, principal)
+			degraded, ok := e.degradeWorkItemModelBreach(ctx, principal, result, pendingTelemetry.WorkItemDegrade)
 			if !ok {
 				return InvestigationResult{}, stageError(StageValidation, err)
 			}

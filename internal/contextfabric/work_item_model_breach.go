@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"context"
 	"fmt"
 	"slices"
 
@@ -16,7 +17,6 @@ import (
 // answer plan, the paths) and stays a hard failure.
 var workItemModelCausedRules = map[WorkItemTupleRule]struct{}{
 	WorkItemRuleResultEvidenceOutsideMembers:  {},
-	WorkItemRuleEvidenceLabelOutsideMembers:   {},
 	WorkItemRuleClaimWithoutId:                {},
 	WorkItemRuleClaimRepeated:                 {},
 	WorkItemRuleStatusClaimNotWorkItem:        {},
@@ -58,56 +58,87 @@ func workItemModelBreach(draft InvestigationResult, input SynthesisInput, resolu
 	return rule, true
 }
 
-func workItemModelBreachFailure(rule WorkItemTupleRule) *SynthesisFailure {
-	return &SynthesisFailure{Class: SynthesisFailureRejected, cause: fmt.Errorf("%w: %w: work-item tuple draft breaks %s", ErrSynthesisRejected, ErrModelOutput, rule)}
+func workItemModelBreachFailure(rule WorkItemTupleRule, stage string) *SynthesisFailure {
+	return &SynthesisFailure{Class: SynthesisFailureRejected, Rule: string(rule), Stage: stage, cause: fmt.Errorf("%w: %w: work-item tuple draft breaks %s", ErrSynthesisRejected, ErrModelOutput, rule)}
+}
+
+// workItemDegradeBasis is what the validation stage keeps of the synthesis
+// pass: the input the model was shown and the draft's own limitations and
+// warnings, so the answer text the model wrote can be told from the text the
+// server added.
+type workItemDegradeBasis struct {
+	Input            SynthesisInput
+	DraftLimitations []string
+	DraftWarnings    []string
 }
 
 // degradeWorkItemModelBreach is the validation-time form of the same rule: the
 // answer about to be served breaks a model-caused rule against the FINAL
-// retained members and anchor (the set the validator reads), so the
-// model-authored content is withheld and the facts-only degraded answer is
-// served instead. It returns false when the breach is server-caused, so the
-// original failure stands.
-func degradeWorkItemModelBreach(result InvestigationResult, principal storage.Principal) (InvestigationResult, bool) {
-	token, fired := WorkItemTupleRuleFiredBy(ValidateWorkItemTuplePayload(result, principal))
-	if !fired || !WorkItemTupleRuleModelCaused(WorkItemTupleRule(token)) {
+// retained members and anchor (the set the validator reads). The facts-only
+// answer is composed by the same ComposeDegraded a rejected draft is served
+// with, and only its model-authored fields replace the result's; everything the
+// server wrote (cohort, coverage, plan, limitations, the cardinality claim)
+// stays. It returns false when the breach is server-caused, the answer cannot
+// be composed or still fails the validator, so the original failure stands.
+func (e *Engine) degradeWorkItemModelBreach(ctx context.Context, principal storage.Principal, result InvestigationResult, basis *workItemDegradeBasis) (InvestigationResult, bool) {
+	if basis == nil {
 		return result, false
 	}
-	result.Status = InvestigationDegraded
-	result.Drivers = []DriverJudgment{}
-	result.RemainingWork, result.ReadinessGaps, result.Conflicts = []Finding{}, []Finding{}, []Finding{}
+	token, fired := WorkItemTupleRuleFiredBy(ValidateWorkItemTuplePayload(result, principal))
+	rule := WorkItemTupleRule(token)
+	if !fired || !WorkItemTupleRuleModelCaused(rule) {
+		return result, false
+	}
+	composer, ok := e.synthesizer.(DegradedSynthesizer)
+	if !ok {
+		return result, false
+	}
+	composed, err := composer.ComposeDegraded(ctx, principal, basis.Input, workItemModelBreachFailure(rule, "validation"))
+	if err != nil {
+		return result, false
+	}
+	out := result
+	out.Status = composed.Status
+	out.DirectJudgment, out.CurrentState, out.DeterministicAnswer = composed.DirectJudgment, composed.CurrentState, composed.DeterministicAnswer
+	out.StrongestPressures = composed.StrongestPressures
+	out.Drivers, out.RemainingWork, out.ReadinessGaps, out.Conflicts = []DriverJudgment{}, []Finding{}, []Finding{}, []Finding{}
 	claims := make([]ClaimedFact, 0, len(result.ClaimedFacts))
 	for _, claim := range result.ClaimedFacts {
 		if claim.Kind == contractsv1.ContextFabricFactCardinality {
 			claims = append(claims, claim)
 		}
 	}
-	result.ClaimedFacts = claims
+	out.ClaimedFacts = claims
 	allowed := map[string]bool{}
-	if result.Cohort != nil {
-		for _, member := range result.Cohort.Members {
+	if out.Cohort != nil {
+		for _, member := range out.Cohort.Members {
 			if ref, ok := canonicalWorkItemEvidenceRef(member.Subject); ok {
 				allowed[ref] = true
 			}
 		}
 	}
-	refs := make([]string, 0, len(result.EvidenceRefIDs))
-	for _, ref := range result.EvidenceRefIDs {
+	refs := make([]string, 0, len(composed.EvidenceRefIDs))
+	for _, ref := range composed.EvidenceRefIDs {
 		if allowed[ref] {
 			refs = append(refs, ref)
 		}
 	}
-	result.EvidenceRefIDs = refs
+	out.EvidenceRefIDs = refs
 	labels := make(map[string]string, len(result.EvidenceRefLabels))
 	for ref, label := range result.EvidenceRefLabels {
 		if allowed[ref] {
 			labels[ref] = label
 		}
 	}
-	result.EvidenceRefLabels = labels
-	result.Warnings = append(slices.Clone(result.Warnings), synthesisFailureWarning(SynthesisFailureRejected))
-	if ValidateWorkItemTuplePayload(result, principal) != nil {
+	out.EvidenceRefLabels = labels
+	out.Limitations = slices.DeleteFunc(slices.Clone(result.Limitations), func(limitation string) bool { return slices.Contains(basis.DraftLimitations, limitation) })
+	warnings := slices.DeleteFunc(slices.Clone(result.Warnings), func(warning string) bool { return slices.Contains(basis.DraftWarnings, warning) })
+	out.Warnings = append(composed.Warnings, warnings...)
+	if len(out.Warnings) > contractsv1.ContextFabricWarningsMaxCount {
+		out.Warnings = out.Warnings[:contractsv1.ContextFabricWarningsMaxCount]
+	}
+	if ValidateWorkItemTuplePayload(out, principal) != nil {
 		return result, false
 	}
-	return result, true
+	return out, true
 }

@@ -432,9 +432,15 @@ func shapeTelemetry(shape budgetTrimShape) EngineTelemetry {
 	return shape.telemetry
 }
 
-type degradableBudgetTrimSynthesizer struct{ synthesizerFunc }
+type degradableBudgetTrimSynthesizer struct {
+	synthesizerFunc
+	telemetry *recordingTelemetry
+}
 
 func (d degradableBudgetTrimSynthesizer) ComposeDegraded(ctx context.Context, principal storage.Principal, input SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
+	if d.telemetry != nil {
+		d.telemetry.RecordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Rule: failure.Rule, Stage: failure.Stage})
+	}
 	result, err := d.synthesizerFunc(ctx, principal, input)
 	if err != nil {
 		return result, err
@@ -449,7 +455,7 @@ func (d degradableBudgetTrimSynthesizer) ComposeDegraded(ctx context.Context, pr
 
 func budgetTrimSynthesizer(shape budgetTrimShape, f synthesizerFunc) AnswerSynthesizer {
 	if shape.degradable {
-		return degradableBudgetTrimSynthesizer{f}
+		return degradableBudgetTrimSynthesizer{f, shape.telemetry}
 	}
 	return f
 }
