@@ -9,26 +9,40 @@ func ClarificationPrompt(candidates []SubjectCandidate) string {
 	if len(candidates) < max {
 		max = len(candidates)
 	}
-	labels := make([]string, 0, max)
 	shown := candidates
 	if len(shown) > max {
 		shown = shown[:max]
 	}
+	cueLists := make([][]string, len(shown))
 	colliding := collidingLabelKeys(shown)
 	crossKind := crossKindLabels(shown)
-	for _, candidate := range shown {
-		label := candidate.Subject.Label
-		cues := make([]string, 0, 2)
+	for i, candidate := range shown {
+		cues := make([]string, 0, 3)
 		if crossKind[strings.ToLower(strings.TrimSpace(candidate.Subject.Label))] {
 			cues = append(cues, string(candidate.Subject.Kind))
 		}
 		if candidate.Provider != "" && colliding[candidateLabelKey(candidate)] {
 			cues = append(cues, candidate.Provider)
 		}
-		if len(cues) > 0 {
-			label += " (" + strings.Join(cues, ", ") + ")"
+		cueLists[i] = cues
+	}
+	// Two distinct subjects can still render identically after the kind and
+	// provider cues; the canonical id is the last cue, added only then.
+	rendered := make([]string, len(shown))
+	owners := map[string]map[string]struct{}{}
+	for i, candidate := range shown {
+		rendered[i] = renderCandidateLabel(candidate.Subject.Label, cueLists[i])
+		if owners[rendered[i]] == nil {
+			owners[rendered[i]] = map[string]struct{}{}
 		}
-		labels = append(labels, label)
+		owners[rendered[i]][candidate.Subject.CanonicalID] = struct{}{}
+	}
+	labels := make([]string, 0, max)
+	for i, candidate := range shown {
+		if len(owners[rendered[i]]) > 1 {
+			rendered[i] = renderCandidateLabel(candidate.Subject.Label, append(cueLists[i], candidate.Subject.CanonicalID))
+		}
+		labels = append(labels, rendered[i])
 	}
 	if len(labels) == 0 {
 		// An empty candidate list has no subject to ask about, and the
@@ -40,6 +54,13 @@ func ClarificationPrompt(candidates []SubjectCandidate) string {
 		return ""
 	}
 	return "Which subject did you mean: " + strings.Join(labels, ", ") + "?"
+}
+
+func renderCandidateLabel(label string, cues []string) string {
+	if len(cues) == 0 {
+		return label
+	}
+	return label + " (" + strings.Join(cues, ", ") + ")"
 }
 
 func candidateLabelKey(c SubjectCandidate) string {
