@@ -548,7 +548,13 @@ import (
 // same-label candidates by a canonical id suffix (or an ordinal). A candidate
 // saved before v110 may hold the older, identical-looking prompt and must not
 // be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v110"
+//
+// v110 -> v111: a team-scoped cohort (the team's repositories and work items)
+// and the work item to team edges include a co-owner of the item (a second
+// team owning its project), not only the primary team. A candidate saved
+// before v111 may hold a cohort short of the co-owner team's items and must not
+// be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v111"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

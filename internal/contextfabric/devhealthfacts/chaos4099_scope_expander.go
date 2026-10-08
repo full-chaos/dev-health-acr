@@ -1395,7 +1395,7 @@ func (e *ScopeExpander) teamRepositories(ctx context.Context, orgID string, orig
 FROM work_item_team_attributions AS a FINAL
 INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.repo_id = a.repo_id AND w.org_id = a.org_id
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND a.team_id IN {team_ids:Array(String)}
+WHERE a.org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam) + ` AND a.team_id IN {team_ids:Array(String)}
 GROUP BY toString(w.repo_id), ifNull(r.repo, '')
 ORDER BY toString(w.repo_id)
 LIMIT ` + strconv.Itoa(limitPlusOne)
@@ -1656,7 +1656,7 @@ func (e *ScopeExpander) teamWorkItems(ctx context.Context, principal storage.Pri
 FROM work_item_team_attributions AS a FINAL
 INNER JOIN (SELECT work_item_id, repo_id, org_id, provider, project_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.repo_id = a.repo_id AND w.org_id = a.org_id
 `+rendered.JoinSQL+`
-WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND a.team_id IN {team_ids:Array(String)}
+WHERE a.org_id = {org_id:String} AND `+devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam)+` AND a.team_id IN {team_ids:Array(String)}
 GROUP BY toString(w.repo_id), w.work_item_id, ifNull(r.repo, '')`, limit)
 	return e.scanWorkItemCandidates(ctx, statement, orgID, scope, rendered, []contextpacket.ClickHouseBinding{
 		{Name: "team_ids", Value: teamIDs},
