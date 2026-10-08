@@ -96,7 +96,7 @@ func TestInvestmentUnitsMatchTheMixAndPageAgainstRealClickHouse(t *testing.T) {
 		pages++
 		result := read(&contextfabric.InvestmentUnitsRequest{Max: 2, Cursor: cursor})
 		var page *contextfabric.CanonicalFact
-		rows := 0
+		rows, mixFacts := 0, 0
 		for i := range result.Facts {
 			f := result.Facts[i]
 			switch kindOf(f) {
@@ -137,12 +137,17 @@ func TestInvestmentUnitsMatchTheMixAndPageAgainstRealClickHouse(t *testing.T) {
 						t.Fatalf("wu5 share = %v, want 2 (1 of 2 refs of effort 4)", share)
 					}
 				}
+			case "":
+				mixFacts++
 			default:
 				t.Fatalf("unexpected fact in a units read: %v", f.Fields)
 			}
 		}
 		if page == nil {
 			t.Fatalf("page %d has no work_unit_page fact", pages)
+		}
+		if mixFacts != 1 {
+			t.Fatalf("page %d serves %d mix facts, want the one mix beside the listing", pages, mixFacts)
 		}
 		next, more := page.Fields["next_cursor"]
 		if more != result.Truncated {
