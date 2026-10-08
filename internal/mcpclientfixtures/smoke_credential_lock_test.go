@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/pem"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,26 +21,31 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 )
 
-// holdHostCredentialLock takes the exclusive flock the real acr-mcp credential
-// lifecycle uses, as a second process of the same user would while it logs in.
-func holdHostCredentialLock(t *testing.T) func() {
+// lockDirAndPath returns a private directory and a lock file path in it, the
+// path a child is told to use through the lock path override. Tests never
+// touch the real host lock file, which other packages' tests use.
+func lockDirAndPath(t *testing.T, name string) string {
 	t.Helper()
-	path := filepath.Join("/var/tmp", fmt.Sprintf("acr-credential-lifecycle-%d.lock", os.Geteuid()))
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
-		if err != nil {
-			t.Fatalf("open the host credential lock: %v", err)
-		}
-		if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
-			return func() { _ = syscall.Close(fd) }
-		}
-		_ = syscall.Close(fd)
-		if time.Now().After(deadline) {
-			t.Fatal("the host credential lock stayed busy for 10s; a sibling test holds it")
-		}
-		time.Sleep(50 * time.Millisecond)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
 	}
+	return filepath.Join(dir, name)
+}
+
+// holdCredentialLock takes the exclusive flock a credential operation of
+// another acr-mcp process of the same user would hold while it logs in.
+func holdCredentialLock(t *testing.T, path string) func() {
+	t.Helper()
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		t.Fatalf("open the credential lock: %v", err)
+	}
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = syscall.Close(fd)
+		t.Fatalf("take the credential lock: %v", err)
+	}
+	return func() { _ = syscall.Close(fd) }
 }
 
 func smokeServerAndCA(t *testing.T) (*httptest.Server, string) {
@@ -68,7 +72,8 @@ func TestRealBinaryServesWithEnvironmentTokenWhileCredentialLockIsHeld(t *testin
 	}
 	binPath := buildVersionedACRMCPBinaryWithTags(t, "")
 	server, caPath := smokeServerAndCA(t)
-	release := holdHostCredentialLock(t)
+	lockPath := lockDirAndPath(t, "held.lock")
+	release := holdCredentialLock(t, lockPath)
 	defer release()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -81,6 +86,7 @@ func TestRealBinaryServesWithEnvironmentTokenWhileCredentialLockIsHeld(t *testin
 		"ACR_API_CA_BUNDLE="+caPath,
 		"ACR_API_TOKEN="+fixtureToken(),
 		"ACR_SIDECAR_VERSION=1.0.0",
+		sidecar.CredentialLifecycleLockPathEnvironment+"="+lockPath,
 	)
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "mcpclientfixtures-lock", Version: "0.0.1"}, nil)
 	session, err := client.Connect(ctx, &mcpsdk.CommandTransport{Command: cmd}, nil)
@@ -105,7 +111,8 @@ func TestRealBinaryNamesCredentialOperationWhenFileCredentialWaitExpires(t *test
 	if err := os.WriteFile(tokenFile, []byte(fixtureToken()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	release := holdHostCredentialLock(t)
+	lockPath := lockDirAndPath(t, "held.lock")
+	release := holdCredentialLock(t, lockPath)
 	defer release()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -118,6 +125,7 @@ func TestRealBinaryNamesCredentialOperationWhenFileCredentialWaitExpires(t *test
 		"ACR_API_TOKEN_FILE="+tokenFile,
 		"ACR_API_TOKEN_KEYRING_DISABLED=true",
 		"ACR_SIDECAR_VERSION=1.0.0",
+		sidecar.CredentialLifecycleLockPathEnvironment+"="+lockPath,
 	)
 	out, err := cmd.CombinedOutput()
 	exitErr, isExit := err.(*exec.ExitError)
@@ -132,8 +140,8 @@ func TestRealBinaryNamesCredentialOperationWhenFileCredentialWaitExpires(t *test
 	}
 }
 
-// A child pointed at its own lock path boots with a file credential while the
-// real host lock is held, because it never contends on the host file.
+// A child pointed at its own lock path boots with a file credential while
+// another lock file is held, because it contends only on the path it was given.
 func TestRealBinaryFileCredentialBootsViaOverrideLockPathWhileHostLockIsHeld(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping process-spawning smoke test in -short mode")
@@ -144,12 +152,10 @@ func TestRealBinaryFileCredentialBootsViaOverrideLockPathWhileHostLockIsHeld(t *
 	if err := os.WriteFile(tokenFile, []byte(fixtureToken()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	lockDir := t.TempDir()
-	if err := os.Chmod(lockDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	release := holdHostCredentialLock(t)
+	heldPath := lockDirAndPath(t, "held.lock")
+	release := holdCredentialLock(t, heldPath)
 	defer release()
+	childPath := lockDirAndPath(t, "child.lock")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -163,7 +169,7 @@ func TestRealBinaryFileCredentialBootsViaOverrideLockPathWhileHostLockIsHeld(t *
 		"ACR_API_TOKEN_FILE="+tokenFile,
 		"ACR_API_TOKEN_KEYRING_DISABLED=true",
 		"ACR_SIDECAR_VERSION=1.0.0",
-		sidecar.CredentialLifecycleLockPathEnvironment+"="+filepath.Join(lockDir, "child.lock"),
+		sidecar.CredentialLifecycleLockPathEnvironment+"="+childPath,
 	)
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "mcpclientfixtures-lock", Version: "0.0.1"}, nil)
 	session, err := client.Connect(ctx, &mcpsdk.CommandTransport{Command: cmd}, nil)
