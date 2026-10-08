@@ -555,11 +555,17 @@ import (
 // before v111 may hold a cohort short of the co-owner team's items and must not
 // be reused.
 //
-// v111 -> v112: source_health is read from the ops sourceHealth root and its
+// v111 -> v114: a flat cohort listing serves every member within the caller's
+// member budget (the plan derives its item ceiling from the members, and the
+// member references are reserved before the driver references). An answer
+// saved before v114 may hold the same listing cut at 14 members, or at the
+// members that fit after the driver references, and must not be reused.
+//
+// v114 -> v115: source_health is read from the ops sourceHealth root and its
 // fields are provider, scope, last_sync_at, last_failure_occurred_at and
 // last_failure_stage (it was the backfill_log columns). A candidate saved
-// before v112 may hold the old fields and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v112"
+// before v115 may hold the old fields and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v115"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
