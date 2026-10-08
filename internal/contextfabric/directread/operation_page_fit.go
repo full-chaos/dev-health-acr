@@ -240,6 +240,9 @@ func describeReturnedPage(parent map[string]any, rows []any) {
 	if _, has := info["hasNextPage"]; has {
 		info["hasNextPage"] = true
 	}
+	if _, has := info["startCursor"]; has && len(rows) == 0 {
+		info["startCursor"] = nil
+	}
 	if _, has := info["endCursor"]; has {
 		info["endCursor"] = nil
 		if len(rows) > 0 {
