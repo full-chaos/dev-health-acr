@@ -700,17 +700,19 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 }
 
 // queryWorkItemTeams projects work_item -> team (OWNED_BY_TEAM) from
-// work_item_team_attributions, restricted to the primary attribution.
+// work_item_team_attributions: the primary row (is_primary = 1) and the
+// co-owner rows (is_primary = 2), one edge per team.
 //
-// is_primary = 1 is what makes this a well-defined edge rather than a fan-out:
-// live, 3304 work items carry a primary team attribution, every one resolves
-// against work_items, and ZERO work items carry more than one primary team,
-// more than one repo_id, or more than one source among their primaries
-// (all four counts verified directly). Without the is_primary filter the same
-// work item carries up to five attributions from different sources
-// (native_team, assignee_membership, issue_project, linked_issue,
-// project_ownership), which would collapse onto duplicate relationship IDs
-// and fail ContextFabricProjectionBatch.Validate() outright.
+// The edge is per (work item, team), so a co-owner team gets its own edge and
+// a work item with a primary and a co-owner row collapses onto no duplicate
+// relationship ID. Candidate rows (is_primary = 0) are excluded: without the
+// is_primary filter the same work item carries up to five attributions from
+// different sources (native_team, assignee_membership, issue_project,
+// linked_issue, project_ownership) for the same team, which would collapse
+// onto duplicate relationship IDs and fail
+// ContextFabricProjectionBatch.Validate() outright. The page key carries the
+// team id because a primary and a co-owner row of one work item share a
+// computed_at.
 //
 // Derivation is always RuleInferred, NOT canonical_structured: this table is
 // Ops' own computed attribution (its source enum spans native_team through
@@ -734,13 +736,13 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 // column's 5089 rows are the zero UUID (CHAOS-3785's trap), so scoping on it
 // would be meaningless.
 func queryWorkItemTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	rowKey := rowKeySQL("toString(w.repo_id)", "a.work_item_id")
+	rowKey := rowKeySQL("toString(w.repo_id)", "a.work_item_id", "ifNull(a.team_id, '')")
 	statement := `SELECT a.work_item_id, ifNull(a.team_id, ''), toString(a.source), toString(a.confidence), toString(w.repo_id), ifNull(r.repo, ''), a.computed_at, toString(a.repo_id)
 FROM work_item_team_attributions AS a FINAL
 INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
 INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = ifNull(a.team_id, '')
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') != ''` + sincePredicate(cursor, "a.computed_at", rowKey) + orderBy("a.computed_at", rowKey)
+WHERE a.org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam) + ` AND ifNull(a.team_id, '') != ''` + sincePredicate(cursor, "a.computed_at", rowKey) + orderBy("a.computed_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var workItemID, teamID, source, confidence, repoID, repoSlug, attributionRepoID string
 		var observedAt time.Time
@@ -748,7 +750,7 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
-		rowSortKey := identity.JoinSegments(repoID, workItemID)
+		rowSortKey := identity.JoinSegments(repoID, workItemID, teamID)
 		workItemCanonicalID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, workItemID}, nil)
 		if err != nil {
 			return nil, err

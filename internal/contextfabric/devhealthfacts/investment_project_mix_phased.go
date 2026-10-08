@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"log/slog"
 	"slices"
 	"sort"
@@ -287,7 +288,7 @@ repo_lookup AS (
 wita AS (
 	SELECT work_item_id, team_id
 	FROM work_item_team_attributions FINAL
-	WHERE org_id = {org_id:String} AND is_primary = 1
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicate("", devhealthschema.AttributionScopeOrg) + `
 	  AND (work_item_id, computed_at) IN (
 		  SELECT work_item_id, max(computed_at)
 		  FROM work_item_team_attributions

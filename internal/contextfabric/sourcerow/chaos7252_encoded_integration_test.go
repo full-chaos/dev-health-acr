@@ -101,7 +101,8 @@ func seed7252(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 		fmt.Sprintf(`INSERT INTO teams (id, name, updated_at, org_id, provider, is_active) VALUES ('ari:cloud:identity::team/1', 'Team ARI', %[1]s, '%[2]s', 'jira', 1), ('cloud:identity::team/1', 'Team shifted', %[1]s, '%[2]s', 'jira', 1), ('gl:full.chaos', 'Full Chaos', %[1]s, '%[2]s', 'gitlab', 1)`, now7252, org),
 		fmt.Sprintf(`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES
 			('%[1]s', '00000000-0000-0000-0000-000000000000', 'jira:ABC-1', 'ari:cloud:identity::team/1', 'native_team', 1, 'high', %[2]s),
-			('%[1]s', '00000000-0000-0000-0000-000000000000', 'jira:ABC-1:ari', 'cloud:identity::team/1', 'issue_project', 1, 'medium', %[2]s)`, org, now7252),
+			('%[1]s', '00000000-0000-0000-0000-000000000000', 'jira:ABC-1:ari', 'cloud:identity::team/1', 'issue_project', 1, 'medium', %[2]s),
+			('%[1]s', '00000000-0000-0000-0000-000000000000', 'jira:ABC-1', 'cloud:identity::team/1', 'project_ownership', 2, 'medium', %[2]s)`, org, now7252),
 		// Incidents: INC-1 maps to acme/api now, INC-S only to
 		// other-org/secret, INC-U to nothing.
 		fmt.Sprintf(`INSERT INTO operational_incidents (org_id, source_version_at, id, observed_at, last_synced, service_id, title, started_at, is_deleted) VALUES ('%[1]s', %[2]s, 'INC-1', %[2]s, %[2]s, 'svc-1', 'Outage', %[2]s, 0), ('%[1]s', %[2]s, 'INC-S', %[2]s, %[2]s, 'svc-s', 'Secret outage', %[2]s, 0), ('%[1]s', %[2]s, 'INC-U', %[2]s, %[2]s, 'svc-u', 'Unmapped outage', %[2]s, 0)`, org, past7252),
@@ -209,6 +210,8 @@ func rowCases() []rowCase {
 		// Fail closed for a restricted caller until CHAOS-7227's team gate.
 		{team, []string{zeroRepoID, "jira:ABC-1", "ari:cloud:identity::team/1", "native_team"}, false, true, "source=native_team", ""},
 		{team, []string{zeroRepoID, "jira:ABC-1:ari", "cloud:identity::team/1", "issue_project"}, false, true, "source=issue_project", ""},
+		// A co-owner row (is_primary = 2) is its own edge and its ref resolves.
+		{team, []string{zeroRepoID, "jira:ABC-1", "cloud:identity::team/1", "project_ownership"}, false, true, "source=project_ownership", ""},
 		// One (deployment, incident), two sources: two rows, two refs.
 		{deploymentIncident, []string{grantedID, "dep-1", "INC-1", "native"}, true, true, "asserted link", "edge-1"},
 		{deploymentIncident, []string{grantedID, "dep-1", "INC-1", "heuristic"}, true, true, "inferred link", "edge-1"},

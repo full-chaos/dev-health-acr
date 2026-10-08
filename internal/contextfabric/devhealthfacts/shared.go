@@ -549,6 +549,12 @@ import (
 // saved before v110 may hold the older, identical-looking prompt and must not
 // be reused.
 //
+// v110 -> v111: a team-scoped cohort (the team's repositories and work items)
+// and the work item to team edges include a co-owner of the item (a second
+// team owning its project), not only the primary team. A candidate saved
+// before v111 may hold a cohort short of the co-owner team's items and must not
+// be reused.
+//
 // v111 -> v112: source_health is read from the ops sourceHealth root and its
 // fields are provider, scope, last_sync_at, last_failure_occurred_at and
 // last_failure_stage (it was the backfill_log columns). A candidate saved
