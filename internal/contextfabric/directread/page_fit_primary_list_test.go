@@ -15,6 +15,18 @@ import (
 // list (declared "") or left to inference.
 func twoListCatalogue(t *testing.T, declared string) (*directread.Catalogue, error) {
 	t.Helper()
+	return twoListCatalogueChecked(t, declared, true)
+}
+
+// twoListCatalogueChecked can leave the second list out of the restricted
+// caller's row check.
+func twoListCatalogueChecked(t *testing.T, declared string, rowChecked bool) (*directread.Catalogue, error) {
+	return twoListCatalogueScoped(t, declared, rowChecked, false)
+}
+
+// twoListCatalogueScoped can also declare the second list unchecked.
+func twoListCatalogueScoped(t *testing.T, declared string, rowChecked, unchecked bool) (*directread.Catalogue, error) {
+	t.Helper()
 	raw, err := os.ReadFile("operations.v1.json")
 	if err != nil {
 		t.Fatal(err)
@@ -29,6 +41,14 @@ func twoListCatalogue(t *testing.T, declared string) (*directread.Catalogue, err
 		}
 		op := &file.Operations[i]
 		op.PrimaryListPath = declared
+		for j := range op.Scopes {
+			if unchecked && op.Scopes[j].Caller == directread.CallerRestricted {
+				op.Scopes[j].UncheckedPaths = append(op.Scopes[j].UncheckedPaths, "hotspots.repos")
+			}
+			if rowChecked && op.Scopes[j].Caller == directread.CallerRestricted && !slices.Contains(op.Scopes[j].RowIDPaths, "hotspots.repos[*].repoId") {
+				op.Scopes[j].RowIDPaths = append(op.Scopes[j].RowIDPaths, "hotspots.repos[*].repoId")
+			}
+		}
 		for _, f := range []string{"repoId", "repoName", "topFilePath"} {
 			path := "hotspots.repos[*]." + f
 			if !slices.ContainsFunc(op.Outputs, func(o directread.OutputPath) bool { return o.Path == path }) {
@@ -131,5 +151,54 @@ func TestShippedHotspotsDeclaresRowsAsItsPrimaryList(t *testing.T) {
 	op, _ := cat.Lookup("hotspots")
 	if got, ok := op.PrimaryList(); !ok || got != "hotspots.rows" || len(op.SiblingLists()) != 0 {
 		t.Fatalf("primary %q %v siblings %v", got, ok, op.SiblingLists())
+	}
+}
+
+func TestARestrictedScopeMustRowCheckEveryListOfADeclaredPrimaryListOperation(t *testing.T) {
+	if _, err := twoListCatalogueChecked(t, "hotspots.rows", false); err == nil || !strings.Contains(err.Error(), "has no row id path") {
+		t.Fatalf("a second list outside the row check loaded: %v", err)
+	}
+}
+
+func TestARestrictedCallerNeverReceivesAForeignRepositoryFromTheSecondList(t *testing.T) {
+	cat, err := twoListCatalogue(t, "hotspots.rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, _ := cat.Lookup("hotspots")
+	scope := op.Scope(directread.CallerRestricted)
+	vars := opMerge(opMinimalVariables(t, op), scope.ForcedVariablePath, []any{opRepo(opRepoA)})
+	for _, tc := range []struct {
+		name  string
+		repos []any
+		want  directread.CallStatus
+	}{
+		{"granted", []any{opRepoA}, directread.CallServed},
+		{"foreign_only_in_the_second_list", []any{opRepoB}, directread.CallRefused},
+		{"foreign_beside_granted", []any{opRepoA, opRepoB}, directread.CallRefused},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := []map[string]any{{"filePath": "a.go", "repoId": opRepoA}}
+			repos := make([]map[string]any, 0, len(tc.repos))
+			for _, id := range tc.repos {
+				repos = append(repos, map[string]any{"repoId": id, "repoName": "r", "topFilePath": "a.go"})
+			}
+			raw, _ := json.Marshal(map[string]any{"data": map[string]any{"hotspots": map[string]any{"rows": rows, "repos": repos}}})
+			h := newOpHarness(t, func(opRecorded) (int, string) { return 200, string(raw) }, opHarnessOptions{catalogue: cat})
+			resp := h.run(t, opRestrictedA(), "hotspots", vars)
+			if resp.Call != tc.want || (tc.want == directread.CallRefused && (resp.Refusal == nil || resp.Refusal.Code != directread.RefusalRowOutsideGrant || resp.Data != nil)) {
+				out, _ := json.Marshal(resp)
+				t.Fatalf("%.300s", out)
+			}
+		})
+	}
+}
+
+func TestADeclaredUncheckedSecondListNeedsNoRowIdPath(t *testing.T) {
+	if _, err := twoListCatalogueScoped(t, "hotspots.rows", false, true); err != nil {
+		t.Fatalf("a list declared unchecked was rejected: %v", err)
+	}
+	if _, err := twoListCatalogueScoped(t, "hotspots.rows", false, false); err == nil {
+		t.Fatal("the same list without the declaration loaded")
 	}
 }

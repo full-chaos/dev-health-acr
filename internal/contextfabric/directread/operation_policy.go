@@ -762,6 +762,15 @@ func validateOperation(op *OperationPolicy) error {
 					return fmt.Errorf("row id path %q is not an allowed scalar output", row)
 				}
 			}
+			if op.PrimaryListPath != "" {
+				for list := range op.topLevelLists() {
+					checked := slices.ContainsFunc(s.RowIDPaths, func(row string) bool { return strings.HasPrefix(row, list+"[*].") })
+					declaredUnchecked := slices.ContainsFunc(s.UncheckedPaths, func(path string) bool { return list == path || strings.HasPrefix(list, path+".") })
+					if !checked && !declaredUnchecked {
+						return fmt.Errorf("restricted scope: list %q has no row id path and is not declared unchecked, so a foreign repository in it would be served", list)
+					}
+				}
+			}
 		}
 		allConstraints = append(allConstraints, s.Constraints...)
 	}
