@@ -554,7 +554,13 @@ import (
 // team owning its project), not only the primary team. A candidate saved
 // before v111 may hold a cohort short of the co-owner team's items and must not
 // be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v111"
+//
+// v111 -> v114: a flat cohort listing serves every member within the caller's
+// member budget (the plan derives its item ceiling from the members, and the
+// member references are reserved before the driver references). An answer
+// saved before v114 may hold the same listing cut at 14 members, or at the
+// members that fit after the driver references, and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v114"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
