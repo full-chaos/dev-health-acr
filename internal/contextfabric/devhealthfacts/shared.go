@@ -543,7 +543,12 @@ import (
 // (repos[]), row-checked against the caller's grant like rows[]. A candidate
 // saved before v109 may hold a hotspots answer without it and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v109"
+//
+// v109 -> v110: source_health is read from the ops sourceHealth root and its
+// fields are provider, scope, last_sync_at, last_failure_occurred_at and
+// last_failure_stage (it was the backfill_log columns). A candidate saved
+// before v110 may hold the old fields and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v110"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
