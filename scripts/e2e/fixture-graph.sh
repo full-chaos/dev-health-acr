@@ -41,6 +41,12 @@ seed_fixture_worlds() {
   DHO_CLICKHOUSE_URI="$sink" dho_analytics fixtures generate --sink "$sink" --db-type clickhouse --org "$org_id" \
     --repo-name "$FG_WORLD_TWO_SLUG" --provider synthetic --repo-count 1 --days 7 --commits-per-day 5 --pr-count 20 --team-count 1 \
     --seed 4276 >"$STATE/fixtures-world-two.json" || fg_die 'fixture world two did not load'
+  # One owned project is archived the way the source does it: a later version of its row with
+  # is_active = 0 (ReplacingMergeTree), its open ownership row untouched.
+  clickhouse_query "INSERT INTO ${db}.projects SELECT * REPLACE (0 AS is_active, now64(3) AS updated_at, now64(3) AS last_synced) FROM ${db}.projects FINAL WHERE org_id = '${org_id}' AND id IN (SELECT project_id FROM ${db}.team_project_ownership FINAL WHERE org_id = '${org_id}' AND valid_to IS NULL AND team_id IN (SELECT id FROM ${db}.teams FINAL WHERE org_id = '${org_id}')) ORDER BY id LIMIT 1" || fg_die 'the archived owned project was not seeded'
+  local archived
+  archived="$(clickhouse_query "SELECT count() FROM ${db}.projects FINAL WHERE org_id = '${org_id}' AND is_active = 0 AND id IN (SELECT project_id FROM ${db}.team_project_ownership FINAL WHERE org_id = '${org_id}' AND valid_to IS NULL)")"
+  [[ "$archived" == "1" ]] || fg_die "want exactly one archived owned project, found ${archived}"
   local slug count
   for slug in "$FG_WORLD_ONE_SLUG" "$FG_WORLD_TWO_SLUG"; do
     count="$(clickhouse_query "SELECT count() FROM ${db}.repos FINAL WHERE org_id = '${org_id}' AND repo = '${slug}'")"
