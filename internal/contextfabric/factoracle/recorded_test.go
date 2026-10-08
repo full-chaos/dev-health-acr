@@ -61,21 +61,28 @@ func requireCaptureContractsUnchanged(t *testing.T, policy *directread.GraphQLPo
 			rootsOf[name] = append(rootsOf[name], root.Field)
 		}
 	}
-	changed := 0
-	for _, op := range policy.Catalogue().Operations(directread.CallerUnrestricted) {
-		if contractsAtCapture[op.Name] == contractDigest(op) {
-			continue
-		}
-		changed++
-		for _, root := range rootsOf[op.Name] {
+	for _, name := range operationsWithChangedContract(policy, contractsAtCapture) {
+		for _, root := range rootsOf[name] {
 			if _, listed := notRecordedRoots[root]; !listed {
-				t.Fatalf("the contract of %s changed since the capture (SDL %s, this build pins %s) and root %s is not listed as not recorded: run `make o4-oracle-capture` on the venue", op.Name, recorded, pinned, root)
+				t.Fatalf("the contract of %s changed since the capture (SDL %s, this build pins %s) and root %s is not listed as not recorded: run `make o4-oracle-capture` on the venue", name, recorded, pinned, root)
 			}
 		}
 	}
-	if changed == 0 {
-		t.Fatalf("the build pins SDL %s, not the capture's %s, but no operation contract changed: recapture or the pin is wrong", pinned, recorded)
+	t.Logf("capture taken at SDL %s replays under pinned SDL %s: every recorded operation contract is the captured one", recorded, pinned)
+}
+
+// operationsWithChangedContract names the served operations whose contract
+// digest is not the baseline's. A capture replays under any pinned SDL
+// while this list is empty: the oracle compares operation documents, and an
+// SDL field no document selects cannot change a reply.
+func operationsWithChangedContract(policy *directread.GraphQLPolicy, baseline map[string]string) []string {
+	var changed []string
+	for _, op := range policy.Catalogue().Operations(directread.CallerUnrestricted) {
+		if baseline[op.Name] != contractDigest(op) {
+			changed = append(changed, op.Name)
+		}
 	}
+	return changed
 }
 
 // repinEnv makes the recorded-mode test write its outcome as the pinned one

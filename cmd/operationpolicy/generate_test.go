@@ -73,7 +73,7 @@ func mutationRows(t *testing.T, in inputs) []registryRow {
 func TestVendoredDigestsRecompute(t *testing.T) {
 	in := vendoredInputs(t)
 	if len(in.Registry.Rows) != 79 {
-		t.Fatalf("vendored registry has %d rows, the dump at ops 5c9a3d32 has 79", len(in.Registry.Rows))
+		t.Fatalf("vendored registry has %d rows, the dump at ops 658531dd has 79", len(in.Registry.Rows))
 	}
 	for _, row := range in.Registry.Rows {
 		if got := directread.DocumentDigest(row.Document); got != row.Digest {
