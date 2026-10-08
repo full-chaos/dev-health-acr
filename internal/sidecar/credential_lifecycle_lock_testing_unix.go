@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 )
 
 func installIsolatedCredentialLifecycleLockForTesting() (func(), error) {
@@ -19,6 +20,10 @@ func installIsolatedCredentialLifecycleLockForTesting() (func(), error) {
 		return nil, fmt.Errorf("close isolated credential lifecycle lock: %w", err)
 	}
 	original := credentialLifecycleLockAcquire
+	originalShared := credentialLifecycleSharedLockAcquire
+	credentialLifecycleSharedLockAcquire = func(wait time.Duration) (func() error, error) {
+		return acquireCredentialLifecycleSharedLockAt(path, wait)
+	}
 	credentialLifecycleLockAcquire = func() (func() error, error) {
 		closeLock, err := acquireCredentialLifecycleLockAt(path)
 		if err != nil {
@@ -30,6 +35,7 @@ func installIsolatedCredentialLifecycleLockForTesting() (func(), error) {
 	}
 	return func() {
 		credentialLifecycleLockAcquire = original
+		credentialLifecycleSharedLockAcquire = originalShared
 		_ = os.Remove(path)
 	}, nil
 }

@@ -4,4 +4,5 @@ package sidecar
 
 func init() {
 	credentialLifecycleLockAcquire = acquireCredentialLifecycleLock
+	credentialLifecycleSharedLockAcquire = acquireCredentialLifecycleSharedLock
 }

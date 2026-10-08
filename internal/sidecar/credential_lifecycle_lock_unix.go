@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 var errCredentialLifecycleLockUnsafe = errors.New("acr: credential lifecycle lock is unsafe")
@@ -27,7 +28,26 @@ func acquireCredentialLifecycleLockAt(path string) (func() error, error) {
 	return acquireCredentialLifecycleLockFile(path)
 }
 
+func acquireCredentialLifecycleSharedLock(wait time.Duration) (func() error, error) {
+	return acquireCredentialLifecycleSharedLockAt(credentialLifecycleLockPath(), wait)
+}
+
+func acquireCredentialLifecycleSharedLockAt(path string, wait time.Duration) (func() error, error) {
+	if err := validateCredentialLifecycleLockParent(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	return acquireCredentialLifecycleLockFileMode(path, syscall.LOCK_SH, wait)
+}
+
 func acquireCredentialLifecycleLockFile(path string) (func() error, error) {
+	return acquireCredentialLifecycleLockFileMode(path, syscall.LOCK_EX, 0)
+}
+
+// acquireCredentialLifecycleLockFileMode takes the flock in how mode without
+// blocking, retrying until wait has passed. An exclusive caller passes a zero
+// wait and gets ErrCredentialLifecycleBusy at once; a shared caller that is
+// still refused after wait gets ErrCredentialLifecycleWaitTimeout.
+func acquireCredentialLifecycleLockFileMode(path string, how int, wait time.Duration) (func() error, error) {
 	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EISDIR) {
@@ -40,9 +60,25 @@ func acquireCredentialLifecycleLockFile(path string) (func() error, error) {
 		_ = syscall.Close(fd)
 		return nil, errCredentialLifecycleLockUnsafe
 	}
-	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		_ = syscall.Close(fd)
-		return nil, ErrCredentialLifecycleBusy
+	deadline := time.Now().Add(wait)
+	for {
+		err := syscall.Flock(fd, how|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			_ = syscall.Close(fd)
+			return nil, fmt.Errorf("acquire credential lifecycle lock: %w", err)
+		}
+		if wait == 0 {
+			_ = syscall.Close(fd)
+			return nil, ErrCredentialLifecycleBusy
+		}
+		if !time.Now().Before(deadline) {
+			_ = syscall.Close(fd)
+			return nil, ErrCredentialLifecycleWaitTimeout
+		}
+		time.Sleep(credentialLifecycleSharedPoll)
 	}
 	return func() error {
 		unlockErr := syscall.Flock(fd, syscall.LOCK_UN)

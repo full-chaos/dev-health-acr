@@ -12,6 +12,8 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const credentialOperationInProgressMessage = "another acr-mcp credential operation is in progress; retry shortly"
+
 // classifiedError is a sanitized, category-tagged failure safe to surface
 // verbatim in a CallToolResult. Message never contains a bearer token, a
 // raw hosted response body, or a filesystem path: it is either a fixed
@@ -81,6 +83,9 @@ func classify(err error) *classifiedError {
 		return &classifiedError{category: "validation", message: err.Error()}
 	}
 
+	if errors.Is(err, sidecar.ErrCredentialLifecycleBusy) || errors.Is(err, sidecar.ErrCredentialLifecycleWaitTimeout) {
+		return &classifiedError{category: "unavailable", message: credentialOperationInProgressMessage}
+	}
 	if errors.Is(err, sidecar.ErrCredentialMissing) {
 		return &classifiedError{category: "auth", message: "the ACR API credential is missing; run acr-mcp login"}
 	}
