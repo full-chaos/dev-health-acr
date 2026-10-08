@@ -1831,7 +1831,7 @@ func TestADeniedFactsReadNamesTheSubjectAndItsOutcome(t *testing.T) {
 		return json.RawMessage(`{"status":"denied","facts":[],"coverage":[{"kind":"readiness","subject":{"kind":"team","canonical_id":"team:t1"},"outcome":"denied_by_authorization"}]}`), nil
 	}}}
 	_, err := oracle.readFacts(context.Background(), "readiness", "team", []string{"t1"}, readCurrentHeldToStore)
-	if err == nil || !strings.Contains(err.Error(), "status denied") || !strings.Contains(err.Error(), "team:t1=denied_by_authorization") || !strings.Contains(err.Error(), "asked 1 subjects") {
+	if err == nil || !strings.Contains(err.Error(), "every one of 1 teams was denied") || !strings.Contains(err.Error(), "team:t1=denied_by_authorization") {
 		t.Fatalf("denial error: %v", err)
 	}
 }
@@ -1906,5 +1906,28 @@ func TestEveryReadinessTeamDeniedFailsTheRoot(t *testing.T) {
 	}
 	if !strings.Contains(text, "every one of") || !strings.Contains(text, "teams was denied") {
 		t.Fatalf("all teams denied did not fail the root: %v", text)
+	}
+}
+
+// Some teams denied in a flow read: the run goes on over the others and the
+// denied ones are stated, none of them a finding.
+func TestADeniedTeamIsNeitherAFindingNorACompareInAnyTeamRead(t *testing.T) {
+	var asked []string
+	oracle := &Oracle{Planes: fakePlanes{facts: func(request FactsRequest) (json.RawMessage, error) {
+		asked = append(asked, request.Subjects[0].CanonicalID)
+		if len(asked) == 1 {
+			return deniedFacts(request)
+		}
+		return noFacts(request)
+	}}}
+	facts, err := oracle.readFacts(context.Background(), "flow", "team", []string{"a", "b", "c"}, readCurrent)
+	if err != nil || len(facts) != 0 {
+		t.Fatalf("a partly denied read failed: %v %v", err, facts)
+	}
+	if got := oracle.withoutDenied("flow", []string{"a", "b", "c"}); strings.Join(got, ",") != "b,c" {
+		t.Fatalf("not dropped: %v", got)
+	}
+	if len(oracle.deniedNotes) != 1 || !strings.Contains(oracle.deniedNotes[0], "team a is denied") {
+		t.Fatalf("notes: %v", oracle.deniedNotes)
 	}
 }

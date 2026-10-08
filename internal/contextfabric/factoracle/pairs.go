@@ -2,7 +2,6 @@ package factoracle
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -290,6 +289,7 @@ func compareTeamRollup(ctx context.Context, o *Oracle, rr *RootReport, byRepo ma
 	if err != nil {
 		return err
 	}
+	teams = o.withoutDenied("investment", teams)
 	got := map[string]map[string]float64{}
 	for _, fact := range facts {
 		effort, terr := themeEffort(fact)
@@ -407,6 +407,7 @@ func compareHealth(ctx context.Context, o *Oracle, rr *RootReport) error {
 		if err != nil {
 			return err
 		}
+		ids = o.withoutDenied("health", ids)
 		// Every subject with a risk row in the store must have a fact, and a
 		// fact that states a day must have a row in the store: a subject that
 		// is absent on one side is a finding, never skipped.
@@ -554,6 +555,7 @@ func compareWorkload(ctx context.Context, o *Oracle, rr *RootReport) error {
 	if err != nil {
 		return err
 	}
+	ids = o.withoutDenied("workload", ids)
 	byTeam := map[string][]ServedFact{}
 	for _, fact := range facts {
 		team := bareID(fact.Subject.CanonicalID)
@@ -753,28 +755,11 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 	}
 	// ops reads the team's latest day with no window, so the acr side is the
 	// current read: one fact per work scope, each with its own latest day.
-	// A team the token has no grant for is not joined, with its reason; the
-	// root fails when no team joins at all, so a lost authorization still
-	// stops the run.
-	var facts []ServedFact
-	var joined []string
-	for _, id := range ids {
-		teamFacts, err := o.readFacts(ctx, "readiness", "team", []string{id}, readCurrentHeldToStore)
-		var denied *deniedFactsError
-		if errors.As(err, &denied) {
-			rr.NotJoined = append(rr.NotJoined, "readiness: team "+id+" is denied to the venue token ("+denied.outcomes+")")
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		facts = append(facts, teamFacts...)
-		joined = append(joined, id)
+	facts, err := o.readFacts(ctx, "readiness", "team", ids, readCurrentHeldToStore)
+	if err != nil {
+		return err
 	}
-	if len(joined) == 0 {
-		return fmt.Errorf("read_facts readiness: every one of %d teams was denied", len(ids))
-	}
-	ids = joined
+	ids = o.withoutDenied("readiness", ids)
 	byTeam := map[string][]ServedFact{}
 	for _, fact := range facts {
 		team := bareID(fact.Subject.CanonicalID)
@@ -939,6 +924,7 @@ func compareFlowWindow(ctx context.Context, o *Oracle, rr *RootReport) error {
 	if err != nil {
 		return err
 	}
+	ids = o.withoutDenied("flow", ids)
 	hasFact := map[string]bool{}
 	for _, fact := range facts {
 		hasFact[bareID(fact.Subject.CanonicalID)] = true

@@ -52,8 +52,12 @@ type ShapeCase struct {
 
 // Oracle is one configured run.
 type Oracle struct {
-	Policy *directread.GraphQLPolicy
-	Planes Planes
+	// denied is, per fact kind and bare id, the team subjects the token has
+	// no grant for; deniedNotes states each once for the report.
+	denied      map[string]bool
+	deniedNotes []string
+	Policy      *directread.GraphQLPolicy
+	Planes      Planes
 	// Store is the reference reading of the rows both planes read.
 	Store  *Store
 	Window Window
@@ -164,6 +168,8 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 	if subjectKind == "team" {
 		chunk = 1
 	}
+	deniedCount := 0
+	var deniedRows []string
 	for start := 0; start < len(ids); start += chunk {
 		end := min(start+chunk, len(ids))
 		request := FactsRequest{Kinds: []string{kind}, MaxBytes: directread.MaxMaxBytes, Tables: directread.TablesOmit}
@@ -191,6 +197,15 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 			}
 			err := fmt.Errorf("read_facts %s: status %s (asked %d subjects; coverage rows: %s)", kind, answer.Status, end-start, strings.Join(rows, ", "))
 			if answer.Status == directread.StatusDenied {
+				// A team read alone that the token has no grant for is not
+				// joined: stated, not compared. A call whose every subject is
+				// denied is a lost authorization and fails.
+				if chunk == 1 {
+					o.noteDenied(kind, ids[start], strings.Join(rows, ", "))
+					deniedCount++
+					deniedRows = append(deniedRows, strings.Join(rows, ", "))
+					continue
+				}
 				return nil, &deniedFactsError{err: err, outcomes: strings.Join(rows, ", ")}
 			}
 			return nil, err
@@ -255,7 +270,34 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 		}
 		out = append(out, answer.Facts...)
 	}
+	if chunk == 1 && len(ids) > 0 && deniedCount == len(ids) {
+		return nil, &deniedFactsError{err: fmt.Errorf("read_facts %s: every one of %d teams was denied (coverage rows: %s)", kind, len(ids), strings.Join(deniedRows, "; ")), outcomes: strings.Join(deniedRows, "; ")}
+	}
 	return out, nil
+}
+
+// noteDenied records a team the token cannot read, once per kind.
+func (o *Oracle) noteDenied(kind, id, outcomes string) {
+	if o.denied == nil {
+		o.denied = map[string]bool{}
+	}
+	key := kind + "|" + strings.ToLower(id)
+	if o.denied[key] {
+		return
+	}
+	o.denied[key] = true
+	o.deniedNotes = append(o.deniedNotes, kind+": team "+id+" is denied to the venue token ("+outcomes+")")
+}
+
+// withoutDenied drops the teams a read of this kind was denied.
+func (o *Oracle) withoutDenied(kind string, ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if !o.denied[kind+"|"+strings.ToLower(id)] {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // Run executes the shape pass and the value pairs of every allowed root.
@@ -340,6 +382,8 @@ func (o *Oracle) Run(ctx context.Context) (*Report, error) {
 			if err := pair.compare(ctx, o, rr); err != nil {
 				return nil, fmt.Errorf("root %s: %w", root.Field, err)
 			}
+			rr.NotJoined = append(rr.NotJoined, o.deniedNotes...)
+			o.deniedNotes = nil
 		}
 		if err := o.temporaryAllowance(ctx, rr, root, byShape); err != nil {
 			return nil, fmt.Errorf("root %s: %w", root.Field, err)
