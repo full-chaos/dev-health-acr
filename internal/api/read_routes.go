@@ -128,6 +128,14 @@ func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request
 	if scoped != "" && lookup != nil {
 		lookup = contextfabric.ResultScopedCitedEvidenceLookup{ResultID: scoped}
 	}
+	// A pull request or work item ref names one source row. Without a
+	// result_id it is expanded from that row alone: an absent row is the
+	// closed not-found outcome, never the newest stored result that cites the
+	// ref.
+	rowKeyed := contractsv1.RowKeyedEvidenceRef(referenceID)
+	if scoped == "" && rowKeyed {
+		lookup = contextfabric.NoCitedEvidenceLookup{}
+	}
 	var gate contextfabric.StoredResultAuthorizer
 	if authorizer := a.storedResultGate(); authorizer != nil {
 		gate = authorizer
@@ -137,7 +145,7 @@ func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request
 		source = a.runtime.SourceRows
 	}
 	expanded, decision := contextfabric.ExpandEvidence(r.Context(), principal, referenceID, source, lookup, results, gate, a.now())
-	if scoped == "" && decision.PersistedRecordConsulted() {
+	if scoped == "" && !rowKeyed && decision.PersistedRecordConsulted() {
 		// Deprecated: the ref names its subject, so a persisted-record read
 		// may return the citation of a result other than the answer the
 		// caller holds. A source row does not depend on a result, so it
