@@ -2,6 +2,7 @@ package factoracle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -752,10 +753,28 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 	}
 	// ops reads the team's latest day with no window, so the acr side is the
 	// current read: one fact per work scope, each with its own latest day.
-	facts, err := o.readFacts(ctx, "readiness", "team", ids, readCurrentHeldToStore)
-	if err != nil {
-		return err
+	// A team the token has no grant for is not joined, with its reason; the
+	// root fails when no team joins at all, so a lost authorization still
+	// stops the run.
+	var facts []ServedFact
+	var joined []string
+	for _, id := range ids {
+		teamFacts, err := o.readFacts(ctx, "readiness", "team", []string{id}, readCurrentHeldToStore)
+		var denied *deniedFactsError
+		if errors.As(err, &denied) {
+			rr.NotJoined = append(rr.NotJoined, "readiness: team "+id+" is denied to the venue token ("+denied.outcomes+")")
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		facts = append(facts, teamFacts...)
+		joined = append(joined, id)
 	}
+	if len(joined) == 0 {
+		return fmt.Errorf("read_facts readiness: every one of %d teams was denied", len(ids))
+	}
+	ids = joined
 	byTeam := map[string][]ServedFact{}
 	for _, fact := range facts {
 		team := bareID(fact.Subject.CanonicalID)

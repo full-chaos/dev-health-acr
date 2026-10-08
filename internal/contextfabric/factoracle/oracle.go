@@ -144,6 +144,17 @@ func (o *Oracle) facts(ctx context.Context, kind, subjectKind string, ids []stri
 // factRowCap is the fact providers' row cap per query.
 const factRowCap = 200
 
+// deniedFactsError is a facts read the caller is not allowed to make: the
+// subjects asked for have no grant. It is a state of the venue, not a defect
+// of the read, so a caller that can go on without those subjects may.
+type deniedFactsError struct {
+	err      error
+	outcomes string
+}
+
+func (e *deniedFactsError) Error() string { return e.err.Error() }
+func (e *deniedFactsError) Unwrap() error { return e.err }
+
 func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []string, mode int) ([]ServedFact, error) {
 	var out []ServedFact
 	// A provider's row cap is shared by the subjects of one read: with many
@@ -178,7 +189,11 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 			for _, row := range answer.Coverage {
 				rows = append(rows, row.Subject.CanonicalID+"="+row.Outcome)
 			}
-			return nil, fmt.Errorf("read_facts %s: status %s (asked %d subjects; coverage rows: %s)", kind, answer.Status, end-start, strings.Join(rows, ", "))
+			err := fmt.Errorf("read_facts %s: status %s (asked %d subjects; coverage rows: %s)", kind, answer.Status, end-start, strings.Join(rows, ", "))
+			if answer.Status == directread.StatusDenied {
+				return nil, &deniedFactsError{err: err, outcomes: strings.Join(rows, ", ")}
+			}
+			return nil, err
 		}
 		for _, row := range answer.Coverage {
 			cut := row.Outcome == directread.OutcomeTruncated && mode != readCurrentHeldToStore

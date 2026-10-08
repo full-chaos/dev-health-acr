@@ -1835,3 +1835,76 @@ func TestADeniedFactsReadNamesTheSubjectAndItsOutcome(t *testing.T) {
 		t.Fatalf("denial error: %v", err)
 	}
 }
+
+func readinessRun(t *testing.T, planes Planes) (*Report, error) {
+	t.Helper()
+	manifest, _, extract, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(extract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"throughputForecast"}, Planes: planes}
+	return oracle.Run(context.Background())
+}
+
+func deniedFacts(request FactsRequest) (json.RawMessage, error) {
+	coverage := []any{}
+	for _, s := range request.Subjects {
+		coverage = append(coverage, map[string]any{"kind": request.Kinds[0], "subject": s, "outcome": "denied_or_not_found"})
+	}
+	return json.Marshal(map[string]any{"status": "denied", "facts": []any{}, "coverage": coverage, "versions": map[string]any{"kinds": map[string]any{}}})
+}
+
+// A team the token has no grant for is recorded as not joined with its
+// reason and the run goes on; the root fails only when no team joins.
+func TestADeniedReadinessTeamIsNotJoinedAndTheRunContinues(t *testing.T) {
+	echo := func(variables map[string]any, forecast map[string]any) {
+		forecast["historyWeeks"] = historyOf(variables, "historyWeeks")
+	}
+	var asked []string
+	planes := recordedThroughput(t, echo)
+	planes.facts = func(request FactsRequest) (json.RawMessage, error) {
+		if request.Kinds[0] == "readiness" {
+			asked = append(asked, request.Subjects[0].CanonicalID)
+			if len(asked) == 1 {
+				return deniedFacts(request)
+			}
+		}
+		return noFacts(request)
+	}
+	report, err := readinessRun(t, planes)
+	if err != nil {
+		t.Fatalf("one denied team stopped the run: %v", err)
+	}
+	if len(asked) < 2 {
+		t.Fatalf("the test needs at least two teams, asked %v", asked)
+	}
+	var notJoined []string
+	for _, n := range report.Root("throughputForecast").NotJoined {
+		if strings.HasPrefix(n, "readiness: team ") {
+			notJoined = append(notJoined, n)
+		}
+	}
+	if len(notJoined) != 1 || !strings.Contains(notJoined[0], strings.TrimPrefix(asked[0], "team:")) || !strings.Contains(notJoined[0], "denied_or_not_found") {
+		t.Fatalf("not joined: %v, first asked %s", notJoined, asked[0])
+	}
+}
+
+func TestEveryReadinessTeamDeniedFailsTheRoot(t *testing.T) {
+	echo := func(variables map[string]any, forecast map[string]any) {
+		forecast["historyWeeks"] = historyOf(variables, "historyWeeks")
+	}
+	planes := recordedThroughput(t, echo)
+	planes.facts = func(request FactsRequest) (json.RawMessage, error) { return deniedFacts(request) }
+	report, err := readinessRun(t, planes)
+	text := fmt.Sprint(err)
+	if report != nil {
+		text += fmt.Sprint(report.Root("throughputForecast").Invalid)
+	}
+	if !strings.Contains(text, "every one of") || !strings.Contains(text, "teams was denied") {
+		t.Fatalf("all teams denied did not fail the root: %v", text)
+	}
+}
