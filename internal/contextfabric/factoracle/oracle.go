@@ -526,7 +526,7 @@ func (o *Oracle) generatedCases() ([]ShapeCase, error) {
 		case "cognitiveLoad":
 			sets = append(sets, map[string]any{"input": map[string]any{"sinceDate": start, "untilDate": last, "teamId": team}})
 		case "complexityTimeseries":
-			sets = append(sets, map[string]any{"input": map[string]any{"sinceUtc": dateTime(start), "untilUtc": dateTime(last), "granularity": "DAY", "scope": "REPO", "limit": 5}})
+			sets = append(sets, map[string]any{"input": map[string]any{"sinceUtc": dateTime(start), "untilUtc": dateTime(last), "granularity": "DAY", "scope": "REPO", "limit": 1}})
 		case "compoundingRisk":
 			sets = append(sets, map[string]any{"filter": map[string]any{"breakout": "REPO", "trendDays": 30}}, map[string]any{"filter": map[string]any{"breakout": "TEAM", "trendDays": 30}})
 		case "hotspots":
