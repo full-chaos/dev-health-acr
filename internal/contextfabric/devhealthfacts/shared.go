@@ -555,12 +555,18 @@ import (
 // before v111 may hold a cohort short of the co-owner team's items and must not
 // be reused.
 //
-// v111 -> v115: run_operation and graphql_query refuse a Date value for a
+// v111 -> v114: a flat cohort listing serves every member within the caller's
+// member budget (the plan derives its item ceiling from the members, and the
+// member references are reserved before the driver references). An answer
+// saved before v114 may hold the same listing cut at 14 members, or at the
+// members that fit after the driver references, and must not be reused.
+//
+// v114 -> v117: run_operation and graphql_query refuse a Date value for a
 // DateTime variable (and the reverse) before the upstream call, and carry the
 // bounded upstream GraphQL error message and path in errors[]. A candidate
-// saved before v115 may hold an answer served from a mistyped variable and
+// saved before v117 may hold an answer served from a mistyped variable and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v115"
+const QueryVersion = "devhealthfacts.clickhouse.v117"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

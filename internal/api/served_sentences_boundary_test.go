@@ -38,6 +38,8 @@ type servedSentencesScenario struct {
 	// modelFails makes the answer-writing model call fail: the answer is then
 	// served without any model text.
 	modelFails bool
+	// maxItems is the engine's item ceiling; zero leaves it unbounded.
+	maxItems int
 }
 
 type servedSentencesFacts struct {
@@ -146,6 +148,7 @@ func newServedSentencesRig(t *testing.T, scenario servedSentencesScenario) *serv
 		Requirements: servedSentencesDeriver{capabilities: capabilities},
 	}, contextfabric.EngineOptions{
 		ServiceVersion: "served-sentences",
+		MaxItems:       scenario.maxItems,
 		Now:            func() time.Time { return servedSentencesNow },
 		NewResultID: func() string {
 			nextID++
@@ -287,8 +290,12 @@ func servedSentencesCandidate(subject contextfabric.SubjectRef) contextfabric.Su
 func servedSentencesCohort(kind contextfabric.SubjectKind, size int) *contextfabric.Cohort {
 	members := make([]contextfabric.CohortMember, 0, size)
 	for index := 0; index < size; index++ {
+		suffix := fmt.Sprintf("%c", 'A'+index)
+		if index >= 26 {
+			suffix = fmt.Sprintf("%03d", index)
+		}
 		members = append(members, contextfabric.CohortMember{
-			Subject: contextfabric.SubjectRef{Kind: kind, CanonicalID: fmt.Sprintf("%s:COUNTED_%c", kind, 'A'+index), Label: fmt.Sprintf("Counted %c", 'A'+index)},
+			Subject: contextfabric.SubjectRef{Kind: kind, CanonicalID: fmt.Sprintf("%s:COUNTED_%s", kind, suffix), Label: "Counted " + suffix},
 			Rank:    index + 1, InclusionReasons: []string{"matched"},
 		})
 	}

@@ -655,6 +655,19 @@ func (e *Engine) effectiveResponseBudget(request InvestigationRequest) ResponseB
 	return budget
 }
 
+// reuseResponseBudget is the budget a stored document is re-validated
+// against: the current effective one, with the item ceiling the document's own
+// answer plan was derived with when that is higher (a flat cohort listing is
+// planned room for its members), so a listing that was served once is not
+// refused the next time it matches.
+func (e *Engine) reuseResponseBudget(request InvestigationRequest, stored InvestigationResult) ResponseBudget {
+	budget := e.effectiveResponseBudget(request)
+	if budget.MaxItems > 0 {
+		budget.MaxItems = contractsv1.ContextFabricPlannedItemCeiling(stored, budget.MaxItems)
+	}
+	return budget
+}
+
 // MembershipCardinalityEvent is one served answer's counted cardinality.
 //
 // IT IS READ OFF THE SERVED DOCUMENT, never recomputed for the log line.
