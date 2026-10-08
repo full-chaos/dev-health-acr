@@ -245,6 +245,10 @@ func (vc *variableCheck) scalar(path string, rule VariableRule, value any) (any,
 			vc.refuse(path, 1, RefusalInvalidRequest, "value must be a string")
 			return nil, false
 		}
+		if reason := temporalScalarReason(path, baseTypeName(rule.Type), s); reason != "" {
+			vc.refuse(path, 1, RefusalInvalidRequest, reason)
+			return nil, false
+		}
 		if rule.MaxLength > 0 && len([]rune(s)) > rule.MaxLength {
 			vc.refuse(path, 1, RefusalVariableOutOfRange, fmt.Sprintf("string longer than %d characters", rule.MaxLength))
 			return nil, false
@@ -254,6 +258,33 @@ func (vc *variableCheck) scalar(path string, rule VariableRule, value any) (any,
 		}
 		return s, true
 	}
+}
+
+// temporalScalarReason checks a Date or DateTime variable against its GraphQL
+// scalar form and names the path and the expected form. The value is never
+// echoed; only its kind is named.
+func temporalScalarReason(path, typ, s string) string {
+	switch typ {
+	case "DateTime":
+		if _, err := time.Parse(time.RFC3339Nano, s); err == nil {
+			return ""
+		}
+		got := "a string that is not a timestamp"
+		if _, err := time.Parse("2006-01-02", s); err == nil {
+			got = "a date"
+		}
+		return path + ": DateTime needs an RFC3339 timestamp, e.g. 2026-09-08T00:00:00Z; got " + got
+	case "Date":
+		if _, err := time.Parse("2006-01-02", s); err == nil {
+			return ""
+		}
+		got := "a string that is not a date"
+		if _, err := time.Parse(time.RFC3339Nano, s); err == nil {
+			got = "a timestamp"
+		}
+		return path + ": Date needs a YYYY-MM-DD date, e.g. 2026-09-08; got " + got
+	}
+	return ""
 }
 
 // inspectRefused walks below a refused path only to find DEEPER refusals:

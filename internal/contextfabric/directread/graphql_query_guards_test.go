@@ -652,8 +652,8 @@ func TestGraphQLBudgetAndUpstreamMapping(t *testing.T) {
 				t.Fatalf("upstream failure served: %+v", resp)
 			}
 			raw, _ := json.Marshal(resp)
-			if strings.Contains(string(raw), "secret upstream text") {
-				t.Fatal("upstream text echoed")
+			if carried := name == "graphql errors"; strings.Contains(string(raw), "secret upstream text") != carried {
+				t.Fatalf("upstream text carried=%v, expected only for graphql errors: %s", carried, raw)
 			}
 		})
 	}

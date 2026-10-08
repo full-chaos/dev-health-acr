@@ -1789,6 +1789,7 @@ type GraphQLQueryFields struct {
 	UpstreamStatus int
 	GraphqlCode    string
 	Variable       string
+	ErrorMessage   string
 	ReadBudget     string
 	RequestID      string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
@@ -1804,7 +1805,7 @@ type GraphQLQueryFields struct {
 
 // NewGraphQLQueryFields is the generated constructor for GraphQLQueryFields -- every
 // field GraphQLQuery.Fields declares is a required parameter.
-func NewGraphQLQueryFields(orgID string, callerClass string, scopeClass string, decision string, rootFields []string, operations []string, rootCount int, aliasCount int, depth int, fieldCount int, complexity int, forcedByGrant bool, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, queryDigest string, result string, refusalCode string, errorClass string, upstreamStatus int, graphqlCode string, variable string, readBudget string, requestID string) GraphQLQueryFields {
+func NewGraphQLQueryFields(orgID string, callerClass string, scopeClass string, decision string, rootFields []string, operations []string, rootCount int, aliasCount int, depth int, fieldCount int, complexity int, forcedByGrant bool, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, queryDigest string, result string, refusalCode string, errorClass string, upstreamStatus int, graphqlCode string, variable string, errorMessage string, readBudget string, requestID string) GraphQLQueryFields {
 	valid := true
 	if rootFields == nil {
 		valid = false
@@ -1839,6 +1840,7 @@ func NewGraphQLQueryFields(orgID string, callerClass string, scopeClass string, 
 		UpstreamStatus: upstreamStatus,
 		GraphqlCode:    graphqlCode,
 		Variable:       variable,
+		ErrorMessage:   errorMessage,
 		ReadBudget:     readBudget,
 		RequestID:      requestID,
 		constructed:    valid,
@@ -1884,6 +1886,7 @@ func (f GraphQLQueryFields) SlogArgs() []any {
 		"upstream_status", f.UpstreamStatus,
 		"graphql_code", contextfabric.SanitizeLogAttr(f.GraphqlCode),
 		"variable", contextfabric.SanitizeLogAttr(f.Variable),
+		"error_message", contextfabric.SanitizeLogAttr(f.ErrorMessage),
 		"read_budget", contextfabric.SanitizeLogAttr(f.ReadBudget),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
@@ -1914,6 +1917,7 @@ type OperationReadFields struct {
 	UpstreamStatus    int
 	GraphqlCode       string
 	Variable          string
+	ErrorMessage      string
 	RequestID         string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every OperationReadFields uniformly, set ONLY by NewOperationReadFields below. A caller
@@ -1928,7 +1932,7 @@ type OperationReadFields struct {
 
 // NewOperationReadFields is the generated constructor for OperationReadFields -- every
 // field OperationRead.Fields declares is a required parameter.
-func NewOperationReadFields(orgID string, operation string, callerClass string, scopeClass string, decision string, forcedByGrant bool, variablesRejected int, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, documentDigest string, queryPath string, result string, refusalCode string, errorClass string, upstreamStatus int, graphqlCode string, variable string, requestID string) OperationReadFields {
+func NewOperationReadFields(orgID string, operation string, callerClass string, scopeClass string, decision string, forcedByGrant bool, variablesRejected int, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, documentDigest string, queryPath string, result string, refusalCode string, errorClass string, upstreamStatus int, graphqlCode string, variable string, errorMessage string, requestID string) OperationReadFields {
 	return OperationReadFields{
 		OrgID:             orgID,
 		Operation:         operation,
@@ -1952,6 +1956,7 @@ func NewOperationReadFields(orgID string, operation string, callerClass string, 
 		UpstreamStatus:    upstreamStatus,
 		GraphqlCode:       graphqlCode,
 		Variable:          variable,
+		ErrorMessage:      errorMessage,
 		RequestID:         requestID,
 		constructed:       true,
 	}
@@ -1992,6 +1997,7 @@ func (f OperationReadFields) SlogArgs() []any {
 		"upstream_status", f.UpstreamStatus,
 		"graphql_code", contextfabric.SanitizeLogAttr(f.GraphqlCode),
 		"variable", contextfabric.SanitizeLogAttr(f.Variable),
+		"error_message", contextfabric.SanitizeLogAttr(f.ErrorMessage),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
