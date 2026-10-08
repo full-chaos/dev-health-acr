@@ -65,7 +65,7 @@ const CatalogFactsNote = "facts: read_facts is not available in this deployment"
 
 // CatalogFactsServedNote is the fixed note when read_facts serves the kinds
 // listed in the facts section.
-const CatalogFactsServedNote = "facts: served by read_facts; kinds listed are the ones it accepts; kind investment with one team or repository also takes units to list the work units behind the allocation, weighted by share_in_scope"
+const CatalogFactsServedNote = "facts: served by read_facts; kinds listed are the ones it accepts; kind investment with one team or repository also takes units to list the work units behind the allocation, weighted by share_in_scope, at most 25 pull request references per row"
 
 // Reasons an operation entry is not available to this caller now.
 const (
