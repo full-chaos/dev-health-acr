@@ -17,6 +17,14 @@ const (
 	defaultHostedPostgresStartupBackoff  = 2 * time.Second
 )
 
+// DefaultClickHouseMaxBytesToRead is the per-statement max_bytes_to_read when
+// ACR_CLICKHOUSE_MAX_BYTES_TO_READ is unset: 256 MiB. The investment mix
+// statement reads work_unit_investments plus the membership scope in one pass
+// (measured 56.5 MB against a 64 MiB cap on a production-sized organization,
+// growing linearly with its work units); 256 MiB is about four times that, and a
+// statement that still exceeds it is refused by name, never retried.
+const DefaultClickHouseMaxBytesToRead uint64 = 256 << 20
+
 // loadHostedRuntimeValues loads the Postgres/ClickHouse/backing-store knobs
 // shared by acr-api (Config) and acr-projector (ProjectorConfig).
 //
@@ -54,15 +62,6 @@ const (
 //	    ACR_CLICKHOUSE_DSN_FILE=/nonexistent/ch.dsn \
 //	    acr-projector priors flip --org org-review --version 1 --by operator
 //	configuration: ACR_CLICKHOUSE_DSN_FILE: secret file is unreadable
-//
-// DefaultClickHouseMaxBytesToRead is the per-statement max_bytes_to_read when
-// ACR_CLICKHOUSE_MAX_BYTES_TO_READ is unset: 128 MiB. The investment mix
-// statement reads work_unit_investments plus the membership scope in one pass
-// (measured 56.5 MB against a 64 MiB cap on a production-sized organization,
-// growing linearly with its work units); 128 MiB is about twice that, and a
-// statement that still exceeds it is refused by name, never retried.
-const DefaultClickHouseMaxBytesToRead uint64 = 128 << 20
-
 func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores, forceRequireStores, loadClickHouse bool) error {
 	var err error
 	if loadClickHouse {

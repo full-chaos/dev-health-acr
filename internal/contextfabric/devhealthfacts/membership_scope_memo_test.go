@@ -183,3 +183,41 @@ func TestMembershipScopeTooLargeToRememberFallsBackToTheSubqueries(t *testing.T)
 		t.Fatal("an oversize scope must keep the scope subqueries, so the answer is the same")
 	}
 }
+
+func TestMembershipScopeFallsBackToTheSubqueriesWhenTheRunReadFails(t *testing.T) {
+	t.Parallel()
+	client, provider, query := scopeFixture(t)
+	readScoped(t, provider, "org-scope-runfail", query) // remembers run-1
+	for i := range client.tables {
+		if client.tables[i].match == scopeRunMatch {
+			client.tables[i].err = fmt.Errorf("connection reset")
+		}
+	}
+	readScoped(t, provider, "org-scope-runfail", query)
+	mix := lastMixStatement(t, client)
+	if _, bound := scopeIDsBinding(mix); bound {
+		t.Fatal("a failed run read served a remembered scope: the run may have been replaced")
+	}
+	if !strings.Contains(mix.statement, "work_unit_membership AS m") {
+		t.Fatal("a failed run read must leave the scope subqueries to decide")
+	}
+}
+
+func TestMembershipScopeNeverRemembersAnEmptySet(t *testing.T) {
+	t.Parallel()
+	client, provider, query := scopeFixture(t)
+	for i := range client.tables {
+		if client.tables[i].match == scopeUnitsMatch {
+			client.tables[i].rows = nil
+		}
+	}
+	readScoped(t, provider, "org-scope-empty", query)
+	readScoped(t, provider, "org-scope-empty", query)
+	if got := countStatements(client, "SELECT DISTINCT work_unit_id FROM work_unit_membership WHERE"); got != 2 {
+		t.Fatalf("unit reads = %d over two reads of a run with no visible rows, want 2 (an empty set is not a hit)", got)
+	}
+	mix := lastMixStatement(t, client)
+	if _, bound := scopeIDsBinding(mix); bound {
+		t.Fatal("an empty scope must not be bound: it would filter out every work unit")
+	}
+}

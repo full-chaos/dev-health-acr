@@ -1021,7 +1021,7 @@ failure arrived that this vocabulary does not yet name, which is itself the
 signal that the vocabulary needs extending.
 
 **ClickHouse read budget (acr-api).** `ACR_CLICKHOUSE_MAX_BYTES_TO_READ`
-defaults to 128 MiB per statement. The bytes a statement reads come from the
+defaults to 256 MiB per statement. The bytes a statement reads come from the
 table state (every version row of the organization's `work_unit_investments`,
 plus `work_unit_membership` when a membership run is recorded), never from the
 server's cache state, and grow with the organization's work units. The

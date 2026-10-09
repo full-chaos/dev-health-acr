@@ -117,6 +117,12 @@ func investmentMembershipScopeFilter() string {
 // read and pass that run's work unit ids as one bound array, remembered per
 // (organization, run id) -- see membershipScopeCache. The resolved scope never
 // changes which work units are kept, only how the statement learns them.
+//
+// The memo covers ONLY the organization-wide run (the marker read from
+// work_unit_membership_runs); repository-scoped runs carry no such marker and
+// are never seen here. "Current" is the run with the newest completed_at,
+// re-read on every request, so a run that finishes late and becomes current is
+// followed, and a run id is the cache key, never an assumption of order.
 type membershipScope struct {
 	mode membershipScopeMode
 	ids  []string
@@ -223,10 +229,16 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 		runs++
 		return row.Scan(&runID)
 	}); err != nil {
-		return membershipScope{}, err
+		if ctx.Err() != nil {
+			return membershipScope{}, err
+		}
+		// The run could not be resolved: never serve a remembered set for a run
+		// that may have been replaced. The scope subqueries decide in the
+		// statement itself, exactly as before.
+		return subqueryMembershipScope, nil
 	}
 	if runs > 1 {
-		return membershipScope{}, fmt.Errorf("membership scope run read returned %d rows, want at most 1", runs)
+		return subqueryMembershipScope, nil
 	}
 	switch runID {
 	case "":
@@ -261,7 +273,10 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 		if scanErr != nil {
 			return nil, scanErr
 		}
-		if overflow {
+		if overflow || len(ids) == 0 {
+			// Too large to remember, or no row visible for the run yet (a run
+			// marker can be seen before its rows, and an organization's rows
+			// can be deleted): an empty set is never remembered.
 			return []string(nil), nil
 		}
 		p.scopes.put(orgID, runID, ids)
