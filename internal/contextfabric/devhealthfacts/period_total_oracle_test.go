@@ -31,7 +31,7 @@ func TestAPeriodTotalOfTheRealRepositoryMetricsSeriesEqualsTheSumOfTheSeededRows
 		row := metricsRow("repo-1")
 		commits, merged := int64(5+i), int64(i%4)
 		row[1], row[2], row[3] = day, commits, merged
-		row[10] = int64(periodDays - len(skipped))
+		row[11] = int64(periodDays - len(skipped))
 		seeded = append(seeded, row)
 		wantCommits += commits
 		wantMerged += merged

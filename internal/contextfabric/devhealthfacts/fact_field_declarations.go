@@ -697,6 +697,7 @@ func metricsFields() []fieldDecl {
 			fInt("prs_merged", "count"),
 			fNum("median_pr_cycle_hours", "hours"),
 			fNum("change_failure_rate", "ratio"),
+			fInt("change_failure_rate_days", "days"),
 			fInt("bus_factor", "count"),
 			fNum("code_ownership_gini", "ratio"),
 			fNum("mttr_hours", "hours"),
