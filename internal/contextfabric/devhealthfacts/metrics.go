@@ -234,10 +234,10 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 // NULL day is not applicable (not zero, not an error); the read names how many
 // days were not, so a partial window is never read as a complete one.
 type changeFailureRateCoverage struct {
-	days, present int
+	days, present int64
 }
 
-func (c *changeFailureRateCoverage) add(days, present int) {
+func (c *changeFailureRateCoverage) add(days, present int64) {
 	c.days += days
 	c.present += present
 }
@@ -264,6 +264,11 @@ type repositoryMetricsDayRow struct {
 	// see the count() window in the statement below (codex R4 finding 3).
 	// Identical on every row of a given repository.
 	totalDays int64
+	// cfrDays is how many of this repository's totalDays carry a
+	// change_failure_rate, counted by the query over the same window and
+	// before the same per-repository row cap as totalDays, so a NULL day
+	// beyond the cap is still counted.
+	cfrDays int64
 }
 
 // readRepositoryMetrics (CHAOS-4418 widening of CHAOS-3780's original
@@ -352,7 +357,7 @@ func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID strin
 	// doc comment explains -- a query-wide cap and a per-group cap do not
 	// compose into "each group gets its fair share"; only dropping the
 	// query-wide cap for this one query does.
-	statement := `SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toUInt8(isNotNull(change_failure_rate)), toFloat64(ifNull(change_failure_rate, 0)), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini), toInt64(total_days)
+	statement := `SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toUInt8(isNotNull(change_failure_rate)), toFloat64(ifNull(change_failure_rate, 0)), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini), toInt64(total_days), toInt64(cfr_days)
 FROM (
 	-- codex R4 finding 3: the per-repository distinct-day count, computed
 	-- HERE -- after the rn = 1 intraday-rerun dedup (so it counts days,
@@ -362,7 +367,8 @@ FROM (
 	-- for any window wider than it, and day_count would ground a false
 	-- EXACT count for a 201-day-and-wider window.
 	SELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini,
-		count() OVER (PARTITION BY repo_id) AS total_days
+		count() OVER (PARTITION BY repo_id) AS total_days,
+		sum(toInt64(isNotNull(change_failure_rate))) OVER (PARTITION BY repo_id) AS cfr_days
 	FROM (
 		-- CHAOS-4418: PARTITION BY (repo_id, day), NOT repo_id alone --
 		-- every distinct day survives its own row_number()/cityHash64
@@ -400,7 +406,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		var repoID string
 		var r repositoryMetricsDayRow
 		var hasCFR, hasMTTR uint8
-		if scanErr := row.Scan(&repoID, &r.day, &r.commitsCount, &r.prsMerged, &r.medianPRCycleHours, &hasCFR, &r.changeFailureRate, &hasMTTR, &r.mttrHours, &r.busFactor, &r.codeOwnershipGini, &r.totalDays); scanErr != nil {
+		if scanErr := row.Scan(&repoID, &r.day, &r.commitsCount, &r.prsMerged, &r.medianPRCycleHours, &hasCFR, &r.changeFailureRate, &hasMTTR, &r.mttrHours, &r.busFactor, &r.codeOwnershipGini, &r.totalDays, &r.cfrDays); scanErr != nil {
 			return scanErr
 		}
 		r.hasChangeFailureRate = hasCFR != 0
@@ -421,7 +427,6 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		subject := bySubject[repoID]
 		days := byRepo[repoID]
 		dayRows := make([]contextfabric.FactValueRow, 0, len(days))
-		cfrPresent := 0
 		for _, d := range days {
 			rowFields := map[string]contextfabric.FactValue{
 				"day":                   contextfabric.StringFactValue(d.day),
@@ -432,7 +437,6 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 				"code_ownership_gini":   contextfabric.NumberFactValue(d.codeOwnershipGini),
 			}
 			if d.hasChangeFailureRate {
-				cfrPresent++
 				rowFields["change_failure_rate"] = contextfabric.NumberFactValue(d.changeFailureRate)
 			}
 			if d.hasMTTRHours {
@@ -462,7 +466,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 			// that carry a change_failure_rate; a NULL day is not applicable,
 			// never zero, so a window average must divide by this, not by
 			// day_count.
-			"change_failure_rate_days": contextfabric.IntegerFactValue(int64(cfrPresent)),
+			"change_failure_rate_days": contextfabric.IntegerFactValue(days[0].cfrDays),
 			// CHAOS-4633 P1 dual-write: TableFactValue builds Rows AND the
 			// declared Table off the SAME dayRows slice, so they cannot
 			// diverge. Key is exactly [day] (time_series arity 1, parses as
@@ -493,7 +497,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		// same "latest day per repository" instant the reader this
 		// widened already did, and an unrecorded mttr_hours stays absent
 		// here exactly as it is absent from its own row.
-		cfr.add(len(days), cfrPresent)
+		cfr.add(days[0].totalDays, days[0].cfrDays)
 		for name, value := range dayRows[0].Fields {
 			fields[name] = value
 		}

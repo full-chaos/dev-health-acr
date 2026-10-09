@@ -33,9 +33,13 @@ func TestChangeFailureRateColumnTypesAgainstRealClickHouse(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := direct.Exec(ctx, "CREATE DATABASE IF NOT EXISTS "+tc.database); err != nil {
+			if err := direct.Exec(ctx, "DROP DATABASE IF EXISTS "+tc.database); err != nil {
+				t.Fatalf("drop stale database: %v", err)
+			}
+			if err := direct.Exec(ctx, "CREATE DATABASE "+tc.database); err != nil {
 				t.Fatalf("create database: %v", err)
 			}
+			t.Cleanup(func() { _ = direct.Exec(ctx, "DROP DATABASE IF EXISTS "+tc.database) })
 			ddl := devhealthschema.DDLWithColumnType(tc.database, "repo_metrics_daily", "change_failure_rate", tc.typ)
 			if err := direct.Exec(ctx, ddl); err != nil {
 				t.Fatalf("create fixture: %v", err)

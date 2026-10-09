@@ -23,7 +23,7 @@ import (
 // -- which is why it is 1 here and not len(rows): a single-row fixture is a
 // one-day series.
 func metricsRow(repoID string) []any {
-	return []any{repoID, "2026-02-21", int64(42), int64(7), float64(12.5), uint8(1), float64(0.1), uint8(1), float64(3.5), int64(4), float64(0.2), int64(1)}
+	return []any{repoID, "2026-02-21", int64(42), int64(7), float64(12.5), uint8(1), float64(0.1), uint8(1), float64(3.5), int64(4), float64(0.2), int64(1), int64(1)}
 }
 
 // projectSubject mints a CHAOS-3898 "project.v2:<provider>:<project_id>"
@@ -303,6 +303,7 @@ func TestMetricsProviderMultipleDaysBuildOneSeries(t *testing.T) {
 	// total_days: the query's own per-repository distinct-day count, which
 	// a real server computes over BOTH rows (codex R4 finding 3).
 	day1[11], day2[11] = int64(2), int64(2)
+	day1[12], day2[12] = int64(2), int64(2)
 	// fakeClient replays rows verbatim in the order given (it is not a
 	// real SQL engine) -- day2 (the LATER day) first, day1 second,
 	// mirroring the real query's own `ORDER BY repo_id, day DESC`.
@@ -555,7 +556,7 @@ func metricsRowsForOneRepoOverDays(repoID string, n int) [][]any {
 	for i := 0; i < n; i++ {
 		row := metricsRow(repoID)
 		row[1] = fmt.Sprintf("2026-%02d-%02d", 1+i/28, 1+i%28)
-		row[11] = int64(n)
+		row[11], row[12] = int64(n), int64(n)
 		rows[i] = row
 	}
 	return rows
