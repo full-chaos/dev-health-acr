@@ -13,11 +13,13 @@ import (
 // read_facts bounds, mirrored from the hosted contract (the hosted route is
 // authoritative and re-validates every request).
 const (
-	readFactsMaxKinds        = 8
-	readFactsMaxSubjects     = 25
-	readFactsMinMaxBytes     = 4096
-	readFactsMaxMaxBytes     = 262144
-	readFactsMaxRangeDays    = 60
+	readFactsMaxKinds    = 8
+	readFactsMaxSubjects = 25
+	readFactsMinMaxBytes = 4096
+	readFactsMaxMaxBytes = 262144
+	// The widest window any kind takes; the hosted route holds each kind to
+	// its own declared maximum (directread.MaxRangeDaysFor).
+	readFactsMaxRangeDays    = 365
 	readFactsMaxFieldLength  = 256
 	readFactsMaxUnits        = 150
 	readFactsMaxCursorLength = 1024

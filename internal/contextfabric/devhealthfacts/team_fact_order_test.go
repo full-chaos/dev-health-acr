@@ -63,7 +63,7 @@ func teamMixClient(order []int, noise float64, windows uint8) *fakeClient {
 			mix = append(mix, []any{window, repo, map[string]float64{
 				"feature_delivery": 0.48898883728007437 * scale * (1 + 0.1*float64(window)), "operational": 0.047865254810142 * scale * (1 - 0.2*float64(window)),
 				"maintenance": 0.2304889002988043 * scale, "quality": 0.1388265562681117 * scale, "risk": 0.0936 * scale * (1 + 0.3*float64(window)),
-			}, 0.0864588925764 * efforts[index] * (1 - 7*noise), uint64(3)})
+			}, 0.0864588925764 * efforts[index] * (1 - 7*noise), uint64(3), clockSpanStart})
 		}
 	}
 	mixOrder := make([]int, len(mix))
@@ -185,7 +185,7 @@ func TestRepositoryMixClientInputIsStableOverAggregationNoise(t *testing.T) {
 		client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{{uint8(0), rowID, map[string]float64{
 			"feature_delivery": 0.48898883728007437 * (1 + noise), "operational": 0.047865254810142 * (1 - 2*noise),
 			"maintenance": 0.2304889002988043 * (1 + 3*noise), "quality": 0.1388265562681117 * (1 - 4*noise), "risk": 0.0936 * (1 + 5*noise),
-		}, 0.0864588925764 * (1 - 7*noise), uint64(3)}}}}}
+		}, 0.0864588925764 * (1 - 7*noise), uint64(3), clockSpanStart}}}}}
 		provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
 		payload, facts, err := clockTestPayload(t, provider, subject, contextfabric.FactInvestment, tc, now)
 		if err != nil || facts == 0 {
@@ -287,7 +287,7 @@ func TestInvestmentClientInputCarriesOnlyRoundedSharesAndNoTables(t *testing.T) 
 	}{
 		"repository": {repository, &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{{uint8(0), rowID, map[string]float64{
 			"feature_delivery": 0.48898883728007437, "operational": 0.047865254810142, "maintenance": 0.2304889002988043, "quality": 0.1388265562681117, "risk": 0.0936,
-		}, 0.0864588925764, uint64(3)}}}}}},
+		}, 0.0864588925764, uint64(3), clockSpanStart}}}}}},
 		"team": {teamSubject("CHAOS"), teamMixClient([]int{0, 1, 2, 3, 4, 5}, 0, 1)},
 	}
 	for name, c := range subjects {
@@ -328,7 +328,7 @@ func TestAShareAtARoundingEdgeCanStillFlipTheDigest(t *testing.T) {
 	read := func(edge float64) []byte {
 		client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{{uint8(0), rowID, map[string]float64{
 			"feature_delivery": edge, "operational": 1 - edge, "maintenance": 0, "quality": 0, "risk": 0,
-		}, 0.0, uint64(3)}}}}}
+		}, 0.0, uint64(3), clockSpanStart}}}}}
 		provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
 		payload, _, err := clockTestPayload(t, provider, subject, contextfabric.FactInvestment, tc, now)
 		if err != nil {

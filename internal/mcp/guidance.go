@@ -12,5 +12,5 @@ const (
 
 	GuidanceHomeRunOperation = "`home` is served by run_operation only, by design."
 
-	GuidanceInvestmentScopes = "Per-team, per-repository and per-project investment is served by `read_facts` kind `investment`; `investmentBreakdown` serves the organization only."
+	GuidanceInvestmentScopes = "Per-team, per-repository and per-project investment is served by `read_facts` kind `investment`; `investmentBreakdown` serves the organization only. `read_facts` kind `investment` takes a trailing window of up to 365 days in one read (window {mode: trailing, days: N}; other kinds stay at 60); read one long window, do not add up shorter ones: a work unit that spans a window boundary counts in each of them, so a sum of stitched windows overcounts it. A window that starts before the earliest stored work unit is served over the available span and says so in the coverage reason."
 )

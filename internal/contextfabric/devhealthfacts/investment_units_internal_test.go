@@ -51,12 +51,12 @@ func TestInvestmentUnitsStatementReadsWorkUnitInvestmentsOnceAndKeysetOnlyWithAC
 func TestRepoMixStatementEmbedsTheSharedSplit(t *testing.T) {
 	t.Parallel()
 	statement := repoMixStatement([]factTimeBound{{}})
-	core := repoSplitCore([]string{"if(1, 0, -1)"}, "", "")
+	core := repoSplitCore([]string{"if(1, 0, -1)"}, "", "", true)
 	if !strings.Contains(statement, core) {
 		t.Fatal("the mix statement no longer embeds the shared split verbatim")
 	}
 	units := investmentUnitsStatement(factTimeBound{}, false)
-	withUnitColumns := repoSplitCore([]string{"if(1, 0, -1)"}, " from_ts, to_ts,", ",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts")
+	withUnitColumns := repoSplitCore([]string{"if(1, 0, -1)"}, " from_ts, to_ts,", ",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts", false)
 	if !strings.Contains(units, withUnitColumns) {
 		t.Fatal("the unit statement does not embed the shared split")
 	}

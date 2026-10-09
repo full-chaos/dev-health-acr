@@ -86,6 +86,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
+	ctx, span := withInvestmentSpan(ctx)
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
 	omittedUnrepresentableCount := 0
@@ -197,6 +198,14 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
 	if mixUnavailable != "" {
 		mergeFactReadReason(&result, mixUnavailable)
+	}
+	// Every requested subject is checked, with or without a fact: a window
+	// with no overlapping unit serves no fact and must still say the window
+	// starts before the stored history.
+	for _, subject := range query.Subjects {
+		if reason := span.reasonFor(subject.CanonicalID, subject.Kind == contextfabric.SubjectProject, timeBound); reason != "" {
+			mergeFactReadReason(&result, reason)
+		}
 	}
 	if unitsCut {
 		result.Truncated = true

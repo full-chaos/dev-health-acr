@@ -19,7 +19,7 @@ import (
 // table is faked by ownsRepoTable) and the scan order is window, repo_id, theme map,
 // bugfix, work_units.
 func themeMixRow(teamID, teamName string, themes map[string]float64, bugfix float64) []any {
-	return []any{uint8(0), "repo-" + teamID, themes, bugfix, uint64(3)}
+	return []any{uint8(0), "repo-" + teamID, themes, bugfix, uint64(3), clockSpanStart}
 }
 
 // watermarkTable answers the freshness read (max computed_at) ahead of the
@@ -314,3 +314,7 @@ func TestInvestmentProviderTeamDeclaresAndEmitsThemeBreakdownTable(t *testing.T)
 		t.Fatalf("provenance missing: %#v", result.Facts[0].Fields)
 	}
 }
+
+// clockSpanStart is the earliest stored work unit start fakes report in the
+// span column of the mix and project scope statements.
+var clockSpanStart = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

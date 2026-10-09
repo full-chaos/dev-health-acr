@@ -577,7 +577,12 @@ import (
 // even it does not fit, it is served as a limitation row with the minimum
 // bytes and no cursor. An answer saved before v118 may hold a unit page whose
 // page fact was dropped and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v118"
+//
+// v118 -> v119: an investment read may take a window up to 365 days in one
+// read, and states the available span when the window starts before the
+// earliest persisted work unit. A candidate saved before v119 may hold a
+// refusal of such a window and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v119"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

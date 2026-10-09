@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -102,15 +103,16 @@ func projectMixBetweenPhases(ctx context.Context) {
 }
 
 func projectMixScopeStatement(timeBound factTimeBound) string {
-	return `SELECT groupArray(work_unit_id) AS unit_ids, groupArray(toUnixTimestamp64Milli(latest_at)) AS version_ms FROM (
-    SELECT work_unit_id, max(computed_at) AS latest_at,
-        argMax(from_ts, computed_at) AS from_ts,
-        argMax(to_ts, computed_at) AS to_ts
-    FROM work_unit_investments
-    WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + investmentMembershipScopeFilter() + `
-    GROUP BY work_unit_id
-)
-WHERE 1` + themeInvestmentRangePredicate(timeBound, "from_ts", "to_ts")
+	return `SELECT groupArrayIf(work_unit_id, in_window) AS unit_ids, groupArrayIf(toUnixTimestamp64Milli(latest_at), in_window) AS version_ms, min(span_from) AS span_from FROM (
+    SELECT work_unit_id, latest_at, from_ts, to_ts, min(from_ts) OVER () AS span_from, (1` + themeInvestmentRangePredicate(timeBound, "from_ts", "to_ts") + `) AS in_window FROM (
+        SELECT work_unit_id, max(computed_at) AS latest_at,
+            argMax(from_ts, computed_at) AS from_ts,
+            argMax(to_ts, computed_at) AS to_ts
+        FROM work_unit_investments
+        WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + investmentMembershipScopeFilter() + `
+        GROUP BY work_unit_id
+    )
+)`
 }
 
 func readProjectMixScope(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound) (projectMixScope, error) {
@@ -120,7 +122,12 @@ func readProjectMixScope(ctx context.Context, client contextpacket.ClickHouseQue
 		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
 	}
 	err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixScope", projectMixScopeStatement(timeBound), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		return row.Scan(&scope.unitIDs, &scope.versionsMs)
+		var spanFrom time.Time
+		if err := row.Scan(&scope.unitIDs, &scope.versionsMs, &spanFrom); err != nil {
+			return err
+		}
+		recordInvestmentOrgSpan(ctx, spanFrom, true)
+		return nil
 	}, extra...)
 	if err == nil && len(scope.versionsMs) != len(scope.unitIDs) {
 		err = fmt.Errorf("project mix scope arrays disagree: %d ids, %d versions", len(scope.unitIDs), len(scope.versionsMs))
