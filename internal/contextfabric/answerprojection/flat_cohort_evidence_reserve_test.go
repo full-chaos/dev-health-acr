@@ -140,3 +140,31 @@ func TestTheReserveIsOneReferencePerServedMember(t *testing.T) {
 		t.Fatalf("reserve = %d, want one per member (5)", len(got))
 	}
 }
+
+func TestGroupedFamilyWithoutGroupsIsNotAFlatListing(t *testing.T) {
+	result := ownedListing(4, 1)
+	result.AnswerPlan = &contractsv1.ContextFabricAnswerPlan{Family: contractsv1.ContextFabricQuestionFamilyGroupedCohortStatus}
+	if isFlatListing(result) {
+		t.Fatal("a grouped-family cohort is not a flat listing")
+	}
+}
+
+func TestTheReserveNeverExceedsTheReferenceBudgetNorTheServedMembers(t *testing.T) {
+	result := ownedListing(19, 0)
+	if got := flatCohortEvidenceReserve(result, Budget{MaxCohortMembers: 25, MaxEvidenceRefs: 5}); len(got) != 5 {
+		t.Fatalf("reserve = %d, want the reference budget 5", len(got))
+	}
+	if got := flatCohortEvidenceReserve(result, Budget{MaxCohortMembers: 3, MaxEvidenceRefs: 25}); len(got) != 3 {
+		t.Fatalf("reserve = %d, want the served members 3", len(got))
+	}
+}
+
+func TestACitationRepeatingAReferenceCostsItOnce(t *testing.T) {
+	index := newEvidenceIndex(3)
+	if !index.admit([]string{"a", "a", "b", "b"}) {
+		t.Fatal("two distinct references fit a budget of 3")
+	}
+	if got := len(index.ids()); got != 2 {
+		t.Fatalf("indexed %d references, want 2", got)
+	}
+}
