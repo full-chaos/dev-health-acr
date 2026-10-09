@@ -207,7 +207,7 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	//
 	// v18 -> v19: work item -> team edges include the co-owner rows
 	// (is_primary = 2); only the rebuild projects them.
-	if want := "devhealthsource.teams_projects.v19"; TeamsProjectsSourceVersion != want {
+	if want := "devhealthsource.teams_projects.v20"; TeamsProjectsSourceVersion != want {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }
