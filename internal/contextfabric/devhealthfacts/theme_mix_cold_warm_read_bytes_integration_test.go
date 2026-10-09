@@ -149,7 +149,7 @@ func TestThemeMixTotalReadBytesWithMembershipScopeAgainstRealClickHouse(t *testi
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 
 	const base, scoped = "org-ms-base", "org-ms-scoped"
-	const units, nodesPerUnit = 12000, 6
+	const units, nodesPerUnit = 12000, 9
 	seedColdWarmOrg(t, ctx, direct, base, units)
 	seedColdWarmOrg(t, ctx, direct, scoped, units)
 	at := ts(2026, 9, 10, 0, 0, 0)
@@ -162,7 +162,7 @@ func TestThemeMixTotalReadBytesWithMembershipScopeAgainstRealClickHouse(t *testi
 	}
 	for i := 0; i < units; i++ {
 		for n := 0; n < nodesPerUnit; n++ {
-			if err := batch.Append(scoped, "repo", fmt.Sprintf("cw-%d", (i+n)%coldWarmRepos), fmt.Sprintf("wu-%06d", i), "theme", "feature_delivery", at, "run-1"); err != nil {
+			if err := batch.Append(scoped, "issue", fmt.Sprintf("issue-%06d-%d", i, n), fmt.Sprintf("wu-%06d", i), "theme", "feature_delivery", at, "run-1"); err != nil {
 				t.Fatalf("append membership: %v", err)
 			}
 		}
