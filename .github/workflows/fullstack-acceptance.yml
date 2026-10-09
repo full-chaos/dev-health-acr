@@ -126,7 +126,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: false
 
       - name: Install the pinned OpenCode release
@@ -359,7 +359,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: false
       - name: Seed the fixture worlds, project the graph, and assert the use-cases
         working-directory: dev-health-acr
@@ -479,7 +479,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         if: steps.decide.outputs.run == 'true'
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: false
       - name: Install the pinned OpenCode release
         if: steps.decide.outputs.run == 'true'

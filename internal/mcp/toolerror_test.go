@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -172,5 +173,22 @@ func TestClassifyMapsConnectionFailureToUnavailable(t *testing.T) {
 	}
 	if strings.Contains(ce.Error(), cfg.APIBaseURL.Host) {
 		t.Fatalf("classified error leaked the configured host: %v", ce)
+	}
+}
+
+func TestClassifyCredentialLifecycleContentionIsSpecificAndNeverInternal(t *testing.T) {
+	for name, err := range map[string]error{
+		"busy":    fmt.Errorf("load ACR credential: %w", sidecar.ErrCredentialLifecycleBusy),
+		"timeout": fmt.Errorf("load ACR credential: %w", sidecar.ErrCredentialLifecycleWaitTimeout),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ce := classify(err)
+			if ce.category != "unavailable" {
+				t.Fatalf("category = %q, want unavailable", ce.category)
+			}
+			if !strings.Contains(ce.message, "another acr-mcp credential operation is in progress") {
+				t.Fatalf("message = %q, want the credential-operation cause", ce.message)
+			}
+		})
 	}
 }
