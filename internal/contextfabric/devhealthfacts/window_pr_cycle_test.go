@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -219,5 +220,79 @@ func TestTeamWindowPRCycleReadsEachTeamsOwnRepositories(t *testing.T) {
 	}
 	if len(seen) != 2 || len(seen[0]) != 1 || seen[0][0] != "repo-a" || len(seen[1]) != 1 || seen[1][0] != "repo-b" {
 		t.Fatalf("window statements read repositories %v, want [[repo-a] [repo-b]]: each team's own owned set", seen)
+	}
+}
+
+func TestWindowPRCycleBoundsFollowTheResolvedWindowKind(t *testing.T) {
+	t.Parallel()
+	asOf := ts(2026, 9, 10, 12, 0, 0)
+	for name, tc := range map[string]struct {
+		time      contextfabric.TimeContext
+		wantStart bool
+		check     func(t *testing.T, start, end time.Time)
+	}{
+		"all_time": {
+			time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent, EvidenceWindow: &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowAllTime}},
+		},
+		"default_trailing": {
+			time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, wantStart: true,
+			check: func(t *testing.T, start, end time.Time) {
+				if end.Sub(start) != 90*24*time.Hour {
+					t.Fatalf("default window = %v, want 90 days", end.Sub(start))
+				}
+			},
+		},
+		"as_of": {
+			time: contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf},
+			check: func(t *testing.T, _, end time.Time) {
+				if !end.Equal(asOf) {
+					t.Fatalf("rollup_end = %v, want the as-of instant %v", end, asOf)
+				}
+			},
+		},
+	} {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			client := &fakeClient{tables: []fakeTable{
+				{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}},
+				{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", int64(1), float64(2)}}},
+			}}
+			provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+			if _, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+				Time: tc.time, Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+			}); err != nil {
+				t.Fatalf("ReadFacts() error = %v", err)
+			}
+			var statement string
+			got := map[string]time.Time{}
+			for _, q := range client.queries {
+				if strings.Contains(q.statement, "FROM git_pull_requests") {
+					statement = q.statement
+					for _, b := range q.bindings {
+						if v, ok := b.Value.(time.Time); ok {
+							got[b.Name] = v
+						}
+					}
+				}
+			}
+			if statement == "" {
+				t.Fatal("no git_pull_requests query")
+			}
+			_, hasStart := got["rollup_start"]
+			if hasStart != tc.wantStart {
+				t.Fatalf("rollup_start bound = %v, want %v (bindings %v)", hasStart, tc.wantStart, got)
+			}
+			if hasStart != strings.Contains(statement, "merged_at >= {rollup_start") {
+				t.Fatalf("statement and bindings disagree on the lower bound:\n%s", statement)
+			}
+			if tc.check != nil {
+				tc.check(t, got["rollup_start"], got["rollup_end"])
+			}
+			if name == "all_time" {
+				if _, hasEnd := got["rollup_end"]; hasEnd || strings.Contains(statement, "rollup_end") {
+					t.Fatalf("all_time must carry no upper bound either:\n%s", statement)
+				}
+			}
+		})
 	}
 }
