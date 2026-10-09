@@ -84,7 +84,8 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v18 -> v19: the shape mapping, the flat-field restatement, the proper-name first term, the subject expression rules and the kind-word rule for requested_subject_kind.
 			// v19 -> v20: rule precedence with the count rule before the share rule, the member-kind, event-member and assignee rules, more state conditions, and worked examples for the members of a named parent.
 			// v21 -> v22: the status line of the fact-kind glossary lists all eight status values.
-			digest: "e82ef29885df32b3484c08a253a66bbac6065a2b9a33667bacb6c11b8b13df21",
+			// v22 -> v23: the investment line of the fact-kind glossary names organization among its subject kinds.
+			digest: "fe42e19ac4a4e89965bccf19e63502483d8daca0bcfad5e5e5658903ad31dd0e",
 		},
 		{
 			name:    "synthesis system prompt",
