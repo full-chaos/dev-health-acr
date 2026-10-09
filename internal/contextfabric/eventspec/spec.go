@@ -2279,6 +2279,7 @@ var OperationRead = Event{
 		{Key: "upstream_status", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when error_class is http_status: the upstream HTTP status, 100 to 599"},
 		{Key: "graphql_code", Type: FieldString, Presence: PresenceConditional, Applicability: "written when error_class is http_status and the upstream body is a GraphQL error envelope with a code; the code is a closed token, never upstream message text", ClosedVocabulary: operationReadGraphQLCodes},
 		{Key: "variable", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the upstream rejected a named GraphQL variable (errors[0].path variable, a GraphQL name of at most 64 characters)"},
+		{Key: "error_message", Type: FieldString, Presence: PresenceConditional, Applicability: "written when error_class is graphql_errors: the first upstream GraphQL error message and path, bounded to 512 characters; untrusted upstream text"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
@@ -2343,6 +2344,7 @@ var GraphQLQuery = Event{
 		{Key: "upstream_status", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when error_class is http_status: the upstream HTTP status, 100 to 599"},
 		{Key: "graphql_code", Type: FieldString, Presence: PresenceConditional, Applicability: "written when error_class is http_status and the upstream body is a GraphQL error envelope with a code; the code is a closed token, never upstream message text", ClosedVocabulary: operationReadGraphQLCodes},
 		{Key: "variable", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the upstream rejected a named GraphQL variable (errors[0].path variable, a GraphQL name of at most 64 characters)"},
+		{Key: "error_message", Type: FieldString, Presence: PresenceConditional, Applicability: "written when error_class is graphql_errors: the first upstream GraphQL error message and path, bounded to 512 characters; untrusted upstream text"},
 		{Key: "read_budget", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the listener refused the query on its read budget (refusal_code read_budget_exceeded)", ClosedVocabulary: graphqlQueryReadBudgets},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},

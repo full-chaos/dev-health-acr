@@ -3451,6 +3451,12 @@
         "applicability": "written when the upstream rejected a named GraphQL variable (errors[0].path variable, a GraphQL name of at most 64 characters)"
       },
       {
+        "key": "error_message",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when error_class is graphql_errors: the first upstream GraphQL error message and path, bounded to 512 characters; untrusted upstream text"
+      },
+      {
         "key": "read_budget",
         "type": "string",
         "presence": "conditional",
@@ -3657,6 +3663,12 @@
         "type": "string",
         "presence": "conditional",
         "applicability": "written when the upstream rejected a named GraphQL variable (errors[0].path variable, a GraphQL name of at most 64 characters)"
+      },
+      {
+        "key": "error_message",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when error_class is graphql_errors: the first upstream GraphQL error message and path, bounded to 512 characters; untrusted upstream text"
       },
       {
         "key": "request_id",

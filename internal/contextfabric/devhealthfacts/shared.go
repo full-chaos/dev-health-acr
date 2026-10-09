@@ -565,7 +565,13 @@ import (
 // fields are provider, scope, last_sync_at, last_failure_occurred_at and
 // last_failure_stage (it was the backfill_log columns). A candidate saved
 // before v115 may hold the old fields and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v115"
+//
+// v115 -> v117: run_operation and graphql_query refuse a Date value for a
+// DateTime variable (and the reverse) before the upstream call, and carry the
+// bounded upstream GraphQL error message and path in errors[]. A candidate
+// saved before v117 may hold an answer served from a mistyped variable and
+// must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v117"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
