@@ -2566,6 +2566,16 @@
                   "description": "The GraphQL variable the query service named in its rejection.",
                   "pattern": "^[_A-Za-z][_0-9A-Za-z]*$",
                   "maxLength": 64
+                },
+                "message": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "description": "The upstream GraphQL error message, bounded; untrusted upstream text. Present with class graphql_errors."
+                },
+                "path": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "description": "The upstream GraphQL error path, dot-joined; untrusted upstream text. Present with class graphql_errors."
                 }
               }
             }
@@ -2837,6 +2847,16 @@
                   "description": "The GraphQL variable the data service named in its rejection.",
                   "pattern": "^[_A-Za-z][_0-9A-Za-z]*$",
                   "maxLength": 64
+                },
+                "message": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "description": "The upstream GraphQL error message, bounded; untrusted upstream text. Present with class graphql_errors."
+                },
+                "path": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "description": "The upstream GraphQL error path, dot-joined; untrusted upstream text. Present with class graphql_errors."
                 }
               },
               "additionalProperties": false

@@ -244,7 +244,8 @@
     },
     "errors": {
       "type": "array",
-      "description": "Upstream errors, as safe classes and closed tokens only; never upstream message text.",
+      "description": "Upstream errors: safe classes and closed tokens, plus, for class graphql_errors only, the bounded upstream GraphQL error message and path (untrusted upstream text). At most 5 entries.",
+      "maxItems": 5,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -290,6 +291,16 @@
             "description": "The GraphQL variable the data service named in its rejection, for example a required variable that was not sent.",
             "pattern": "^[_A-Za-z][_0-9A-Za-z]*$",
             "maxLength": 64
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "The upstream GraphQL error message, bounded; untrusted upstream text. Present with class graphql_errors."
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "The upstream GraphQL error path, dot-joined; untrusted upstream text. Present with class graphql_errors."
           }
         }
       }

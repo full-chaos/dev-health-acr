@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 572f1d736d52237f5209c8d67929fdfe7ec46453b01bc3990f16cb5d27b5e07b
+# canonical-content-sha256: ba6144c52144dfe31b738aa381e35497758b365320d28b63c7ca6200d7c1a4ad
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1556,6 +1556,14 @@ components:
                   - "mcp_read_budget_exceeded"
                   - "other"
                 type: "string"
+              message:
+                description: "The upstream GraphQL error message, bounded; untrusted upstream text. Present with class graphql_errors."
+                maxLength: 512
+                type: "string"
+              path:
+                description: "The upstream GraphQL error path, dot-joined; untrusted upstream text. Present with class graphql_errors."
+                maxLength: 512
+                type: "string"
               status:
                 description: "The data service's HTTP status. Present with class http_status."
                 maximum: 599
@@ -1808,6 +1816,14 @@ components:
                   - "mcp_refused"
                   - "mcp_read_budget_exceeded"
                   - "other"
+                type: "string"
+              message:
+                description: "The upstream GraphQL error message, bounded; untrusted upstream text. Present with class graphql_errors."
+                maxLength: 512
+                type: "string"
+              path:
+                description: "The upstream GraphQL error path, dot-joined; untrusted upstream text. Present with class graphql_errors."
+                maxLength: 512
                 type: "string"
               status:
                 description: "The query service's HTTP status. Present with class http_status."

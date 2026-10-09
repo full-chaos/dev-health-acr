@@ -566,12 +566,18 @@ import (
 // last_failure_stage (it was the backfill_log columns). A candidate saved
 // before v115 may hold the old fields and must not be reused.
 //
-// v114 -> v116: the work-unit page fact (units_returned, next_cursor,
+// v115 -> v117: run_operation and graphql_query refuse a Date value for a
+// DateTime variable (and the reverse) before the upstream call, and carry the
+// bounded upstream GraphQL error message and path in errors[]. A candidate
+// saved before v117 may hold an answer served from a mistyped variable and
+// must not be reused.
+//
+// v117 -> v118: the work-unit page fact (units_returned, next_cursor,
 // coverage) is reserved before the unit rows under max_serialized_bytes; when
 // even it does not fit, it is served as a limitation row with the minimum
-// bytes and no cursor. An answer saved before v116 may hold a unit page whose
+// bytes and no cursor. An answer saved before v118 may hold a unit page whose
 // page fact was dropped and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v116"
+const QueryVersion = "devhealthfacts.clickhouse.v118"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

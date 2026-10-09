@@ -221,6 +221,7 @@ type GraphQLQueryRead struct {
 	UpstreamStatus int
 	GraphQLCode    UpstreamGraphQLCode
 	Variable       string
+	ErrorMessage   string
 }
 
 // GraphQLRunnerConfig wires the runner.
@@ -312,6 +313,17 @@ func (x *gqlRun) refuse(code RefusalCode, reason, path string) GraphQLResponse {
 	x.read.Decision = string(CallRefused)
 	x.read.RefusalCode = code
 	return x.resp
+}
+
+func (x *gqlRun) upstreamEntries(call CallStatus, class UpstreamErrorClass, entries []OperationError) GraphQLResponse {
+	resp := x.upstream(call, class)
+	if len(entries) > 0 {
+		x.resp.Errors = entries
+		x.resp.UntrustedContent.Fields = []string{"data", "errors"}
+		x.read.ErrorMessage = logErrorMessage(entries)
+		resp = x.resp
+	}
+	return resp
 }
 
 func (x *gqlRun) upstream(call CallStatus, class UpstreamErrorClass) GraphQLResponse {
@@ -629,9 +641,9 @@ func (x *gqlRun) execute(ctx context.Context, req GraphQLRequest) (GraphQLRespon
 	if class, reason := listenerRefusalOf(result.Body); class != "" {
 		return x.listenerRefused(class, reason, result.StatusCode), nil
 	}
-	data, class9, ok := parseGraphQLAnswer(result.Body)
+	data, class9, entries, ok := parseGraphQLAnswer(result.Body, result.StatusCode)
 	if !ok {
-		return x.upstream(CallUpstreamError, class9), nil
+		return x.upstreamEntries(CallUpstreamError, class9, entries), nil
 	}
 	return x.answer(ctx, planned, data, maxBytes)
 }
@@ -1505,6 +1517,9 @@ func GraphQLQueryLogArgs(principal storage.Principal, read GraphQLQueryRead) []a
 	}
 	if read.Variable != "" {
 		args = append(args, "variable", contextfabric.SanitizeLogAttr(read.Variable))
+	}
+	if read.ErrorMessage != "" {
+		args = append(args, "error_message", contextfabric.SanitizeLogAttr(read.ErrorMessage))
 	}
 	return args
 }
