@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -155,5 +156,40 @@ func TestListSubjectsByKindOmitsInactiveTeams(t *testing.T) {
 	}
 	if len(page.Nodes) != 1 || page.Nodes[0].CanonicalID != "team:jira:platform" {
 		t.Fatalf("nodes = %+v, want only the active keyed team", page.Nodes)
+	}
+}
+
+func TestExplicitInactiveTeamIsAbsentToHintAndStoredSubjectLookups(t *testing.T) {
+	inactive := row{"n": &node{Properties: map[string]interface{}{propKind: "team", propCanonicalID: "team:platform", propOrgID: "org-1", propPropertyPrefix + "is_active": false, propAuthzRepos: []string{"acme/api"}}}}
+	active := row{"n": &node{Properties: map[string]interface{}{propKind: "team", propCanonicalID: "team:jira:platform", propOrgID: "org-1", propPropertyPrefix + "is_active": true, propAuthzRepos: []string{"acme/api"}}}}
+	if _, found := exactHintCandidate([]row{inactive}); found {
+		t.Fatal("an exact hint committed an inactive team")
+	}
+	if _, found := exactHintCandidate([]row{active}); !found {
+		t.Fatal("an exact hint did not commit an active team")
+	}
+
+	fake := &fakeConn{queryFunc: func(_ context.Context, _, _ string, params map[string]interface{}, _ bool) ([]row, error) {
+		var rows []row
+		for _, raw := range params["targets"].([]interface{}) {
+			switch raw.(map[string]interface{})["id"] {
+			case "team:platform":
+				rows = append(rows, inactive)
+			case "team:jira:platform":
+				rows = append(rows, active)
+			}
+		}
+		return rows, nil
+	}}
+	subjects := []contextfabric.SubjectRef{
+		{Kind: contextfabric.SubjectTeam, CanonicalID: "team:platform"},
+		{Kind: contextfabric.SubjectTeam, CanonicalID: "team:jira:platform"},
+	}
+	outcomes, err := newFakeAdapter(t, fake).AuthorizeStoredSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/api"}}, lookupBinding, subjects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcomes[0] != contextfabric.StoredSubjectAbsent || outcomes[1] != contextfabric.StoredSubjectAdmitted {
+		t.Fatalf("outcomes = %v, want [absent admitted]", outcomes)
 	}
 }

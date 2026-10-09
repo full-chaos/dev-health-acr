@@ -105,14 +105,8 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			if err != nil {
 				return graphrank.CandidateNode{}, false, safeDependencyError("resolve exact subject hint", err)
 			}
-			if len(rows) == 0 {
-				return graphrank.CandidateNode{}, false, nil
-			}
-			n, ok := rows[0]["n"].(*node)
-			if !ok || n == nil {
-				return graphrank.CandidateNode{}, false, nil
-			}
-			return toCandidateNode(n), true, nil
+			candidate, found := exactHintCandidate(rows)
+			return candidate, found, nil
 		},
 		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
 			return a.hybridSearchNodes(ctx, key, principal.OrgID, term, limit, fence, temporal)
@@ -1851,4 +1845,18 @@ func touchesDeployment(ce graphrank.CandidateEdge) bool {
 		}
 	}
 	return false
+}
+
+// exactHintCandidate is the candidate an exact-hint read yields: the first
+// row's node, unless there is none or it is an inactive team (an inactive team
+// is absent, so a hint naming it commits nothing).
+func exactHintCandidate(rows []row) (graphrank.CandidateNode, bool) {
+	if len(rows) == 0 {
+		return graphrank.CandidateNode{}, false
+	}
+	n, ok := rows[0]["n"].(*node)
+	if !ok || n == nil || inactiveTeamNode(n) {
+		return graphrank.CandidateNode{}, false
+	}
+	return toCandidateNode(n), true
 }

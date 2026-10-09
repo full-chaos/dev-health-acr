@@ -616,7 +616,13 @@ import (
 // start; ownership synced after the window end no longer empties the window. A
 // candidate saved under v125 for such a window may hold an empty answer and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v126"
+//
+// v126 -> v127: a team is one subject: name resolution, project flow and
+// readiness reads, the health roll-up and the theme mix admit active team rows
+// only, and an inactive team id is absent to an explicit read. A candidate saved
+// under v126 may hold a second team, a doubled or diluted aggregate, or a
+// cohort refused as ambiguous, and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v127"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

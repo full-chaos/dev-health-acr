@@ -68,7 +68,7 @@ func (a *Adapter) AuthorizeStoredSubjects(ctx context.Context, principal storage
 			}
 			for _, row := range rows {
 				n, ok := row["n"].(*node)
-				if !ok || n == nil {
+				if !ok || n == nil || inactiveTeamNode(n) {
 					continue
 				}
 				subject := contextfabric.SubjectRef{CanonicalID: propStringValue(n.Properties[propCanonicalID])}
