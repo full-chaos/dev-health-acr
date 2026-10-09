@@ -368,7 +368,7 @@ func acceptanceGateNullRepoID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned, _, err := store.ownedRepositories(manifest.Window.End)
+	owned, _, err := store.ownedRepositories(manifest.Window.Start)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +454,7 @@ func teamRollupLossWithNoNullRowIsAFinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned, _, err := store.ownedRepositories(manifest.Window.End)
+	owned, _, err := store.ownedRepositories(manifest.Window.Start)
 	if err != nil {
 		t.Fatal(err)
 	}
