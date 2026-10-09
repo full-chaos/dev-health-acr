@@ -16,8 +16,7 @@ import (
 // read_facts serves but the interpretation prompt does not yet name. The
 // prompt text is not changed by the change that adds the pair; adding it to
 // the glossary is a separate, deliberate prompt revision.
-var notInterpretationFacing = map[string]map[string]string{
-}
+var notInterpretationFacing = map[string]map[string]string{}
 
 func TestInterpretationPromptGlossarySubjectKindsMatchCapabilities(t *testing.T) {
 	t.Parallel()
