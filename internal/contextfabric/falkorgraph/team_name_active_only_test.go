@@ -139,8 +139,8 @@ func TestEveryTeamCandidateQueryCarriesTheActiveTeamCypher(t *testing.T) {
 			t.Fatalf("%s: no query issued", name)
 		}
 		for _, q := range captured {
-			if !strings.Contains(q, teamActiveProperty) {
-				t.Errorf("%s: query lacks the active-team clause: %s", name, q)
+			if !strings.Contains(q, activeTeamCypher("n")) && !strings.Contains(q, activeTeamCypher("node")) {
+				t.Errorf("%s: query lacks the exact active-team clause %q: %s", name, activeTeamCypher("n"), q)
 			}
 		}
 	}
@@ -162,10 +162,10 @@ func TestListSubjectsByKindOmitsInactiveTeams(t *testing.T) {
 func TestExplicitInactiveTeamIsAbsentToHintAndStoredSubjectLookups(t *testing.T) {
 	inactive := row{"n": &node{Properties: map[string]interface{}{propKind: "team", propCanonicalID: "team:platform", propOrgID: "org-1", propPropertyPrefix + "is_active": false, propAuthzRepos: []string{"acme/api"}}}}
 	active := row{"n": &node{Properties: map[string]interface{}{propKind: "team", propCanonicalID: "team:jira:platform", propOrgID: "org-1", propPropertyPrefix + "is_active": true, propAuthzRepos: []string{"acme/api"}}}}
-	if _, found := exactHintCandidate([]row{inactive}); found {
+	if _, found := exactHintCandidate(context.Background(), []row{inactive}); found {
 		t.Fatal("an exact hint committed an inactive team")
 	}
-	if _, found := exactHintCandidate([]row{active}); !found {
+	if _, found := exactHintCandidate(context.Background(), []row{active}); !found {
 		t.Fatal("an exact hint did not commit an active team")
 	}
 
@@ -191,5 +191,30 @@ func TestExplicitInactiveTeamIsAbsentToHintAndStoredSubjectLookups(t *testing.T)
 	}
 	if outcomes[0] != contextfabric.StoredSubjectAbsent || outcomes[1] != contextfabric.StoredSubjectAdmitted {
 		t.Fatalf("outcomes = %v, want [absent admitted]", outcomes)
+	}
+}
+
+func TestCountKindAndConfirmedKindCensusCountOnlyActiveTeams(t *testing.T) {
+	var captured []string
+	fake := &fakeConn{queryFunc: func(_ context.Context, _, q string, _ map[string]interface{}, _ bool) ([]row, error) {
+		captured = append(captured, q)
+		return []row{{"total": int64(3)}}, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+	ctx := context.Background()
+	if _, err := adapter.countKindEmbedderFenceCorpus(ctx, "k", "org-1", "team", "identity"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := adapter.fetchKindEmbedderFenceCorpus(ctx, "k", "org-1", "team", "identity"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = adapter.CountKind(ctx, "org-1", "team")
+	if len(captured) < 3 {
+		t.Fatalf("queries issued = %d", len(captured))
+	}
+	for _, q := range captured {
+		if !strings.Contains(q, activeTeamCypher("n")) {
+			t.Errorf("query lacks the exact active-team clause: %s", q)
+		}
 	}
 }

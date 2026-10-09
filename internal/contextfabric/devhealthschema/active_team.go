@@ -49,6 +49,7 @@ const (
 	OmittedStoredSubjects
 	OmittedIdentityUniverse
 	OmittedProjectReadiness
+	OmittedExactHint
 )
 
 var omissionSiteNames = map[OmissionSite]string{
@@ -61,6 +62,7 @@ var omissionSiteNames = map[OmissionSite]string{
 	OmittedStoredSubjects:          "stored_subjects",
 	OmittedIdentityUniverse:        "identity_universe",
 	OmittedProjectReadiness:        "project_readiness",
+	OmittedExactHint:               "exact_hint",
 }
 
 // MarshalText makes a handler print the site by name.

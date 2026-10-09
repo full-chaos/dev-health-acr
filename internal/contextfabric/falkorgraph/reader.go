@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -105,7 +106,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			if err != nil {
 				return graphrank.CandidateNode{}, false, safeDependencyError("resolve exact subject hint", err)
 			}
-			candidate, found := exactHintCandidate(rows)
+			candidate, found := exactHintCandidate(ctx, rows)
 			return candidate, found, nil
 		},
 		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
@@ -1850,12 +1851,16 @@ func touchesDeployment(ce graphrank.CandidateEdge) bool {
 // exactHintCandidate is the candidate an exact-hint read yields: the first
 // row's node, unless there is none or it is an inactive team (an inactive team
 // is absent, so a hint naming it commits nothing).
-func exactHintCandidate(rows []row) (graphrank.CandidateNode, bool) {
+func exactHintCandidate(ctx context.Context, rows []row) (graphrank.CandidateNode, bool) {
 	if len(rows) == 0 {
 		return graphrank.CandidateNode{}, false
 	}
 	n, ok := rows[0]["n"].(*node)
-	if !ok || n == nil || inactiveTeamNode(n) {
+	if !ok || n == nil {
+		return graphrank.CandidateNode{}, false
+	}
+	if inactiveTeamNode(n) {
+		devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedExactHint, 1)
 		return graphrank.CandidateNode{}, false
 	}
 	return toCandidateNode(n), true
