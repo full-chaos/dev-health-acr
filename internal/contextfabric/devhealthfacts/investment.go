@@ -619,7 +619,7 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 	// subject), never conflated with that reader's own instrumentation.
 	// CHAOS-7271: phased reads (investment_project_mix_phased.go); every
 	// phase reports through readers.QueryOrgScopedNamed.
-	mixRows, readErr := readProjectRollupMixRows(ctx, p.facts.client, orgID, ids, timeBound)
+	mixRows, readErr := readProjectRollupMixRows(ctx, p.facts.client, orgID, ids, timeBound, p.projectMixScopeResolver(orgID))
 	if readErr != nil {
 		return 0, readErr
 	}
@@ -762,7 +762,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	rows, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxFactRowsProbe)
+	rows, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxFactRowsProbe, p.projectMixScopeResolver(orgID))
 	if err != nil {
 		return 0, err
 	}
