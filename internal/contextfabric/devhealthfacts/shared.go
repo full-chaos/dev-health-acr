@@ -593,7 +593,11 @@ import (
 // fact over every repository once. A candidate saved before v122 may hold an
 // investment answer that could not name the organization and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v122"
+//
+// v122 -> v123: a read_facts window refusal reaches the client with its
+// per-kind advice. A candidate saved before v123 may hold a refusal without
+// it and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v123"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
