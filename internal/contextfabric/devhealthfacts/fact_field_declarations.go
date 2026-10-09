@@ -692,6 +692,12 @@ func metricsFields() []fieldDecl {
 	)
 	return declJoin(
 		declOn(declRepoTeam, declFresh(fStr("day")), fInt("commits_count", "count")),
+		// The median of (merged_at - created_at) over every pull request
+		// merged in the window, one weight per pull request, with the count
+		// it stands on; both absent when no pull request merged. Never
+		// average or take the median of the daily median_pr_cycle_hours to
+		// build a weekly or monthly value: use this field.
+		declOn(declRepoTeam, fNum("window_pr_cycle_hours_median", "hours"), fInt("window_pr_count", "count")),
 		declOn(declRepositoryOnly,
 			fInt("day_count", "days"),
 			fInt("prs_merged", "count"),

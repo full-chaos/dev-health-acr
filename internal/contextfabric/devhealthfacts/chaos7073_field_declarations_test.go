@@ -231,9 +231,12 @@ func t4Cases() []t4Case {
 	// ---- metrics
 	add(t4Case{name: "metrics/repository", kind: contextfabric.FactMetrics, subjects: repo, tables: []fakeTable{
 		{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}},
+		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", int64(3), float64(1)}}},
 	}})
 	add(t4Case{name: "metrics/team", kind: contextfabric.FactMetrics, subjects: team, tables: []fakeTable{
 		{match: "FROM team_metrics_daily", rows: [][]any{teamMetricsRow("CHAOS")}},
+		{match: "GROUP BY team_id, repo_key", rows: [][]any{{"CHAOS", "repo-a", "acme/a"}}},
+		{match: "FROM git_pull_requests", rows: [][]any{{"", int64(3), float64(1)}}},
 	}})
 	add(t4Case{name: "metrics/project", kind: contextfabric.FactMetrics, subjects: proj, tables: []fakeTable{
 		{match: "FROM team_project_ownership", rows: [][]any{

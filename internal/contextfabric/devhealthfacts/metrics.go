@@ -202,7 +202,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	}
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		rowCount, rejected, scanErr := p.readTeamMetrics(ctx, orgID, teamSubjects, &facts, timeBound)
+		rowCount, rejected, scanErr := p.readTeamMetrics(ctx, orgID, teamSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team metrics", scanErr)
 		}
@@ -389,6 +389,10 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 	if scanErr != nil {
 		return rowCount, rejected, false, scanErr
 	}
+	windowCycles, err := readWindowPRCycle(ctx, p.facts.client, orgID, repoOrder, resolveRollupWindow(timeBound, evidenceWindow, clock()), true)
+	if err != nil {
+		return rowCount, rejected, false, err
+	}
 	for _, repoID := range repoOrder {
 		subject := bySubject[repoID]
 		days := byRepo[repoID]
@@ -459,6 +463,11 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		for name, value := range dayRows[0].Fields {
 			fields[name] = value
 		}
+		// The window median is over every pull request merged in the
+		// window (window_pr_cycle.go); absent when none merged.
+		if c, ok := windowCycles[repoID]; ok {
+			setWindowPRCycle(fields, c)
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, repoID)},
@@ -470,7 +479,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 // readTeamMetrics reads team_metrics_daily directly -- a genuinely
 // team-scoped rollup, not a proxy through any repository the team touches.
 // The SQL/scan half now lives in readers.ReadTeamMetrics (CHAOS-4377).
-func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
+func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidenceWindow *contractsv1.ContextFabricRequestedEvidenceWindow) (int, int, error) {
 	ids, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
 		return 0, rejected, nil
@@ -479,21 +488,39 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 	if err != nil {
 		return 0, rejected, err
 	}
+	var owned map[string][]teamOwnedRepo
+	if len(rows) > 0 {
+		owned, err = teamOwnedRepositories(ctx, p.facts.client, orgID, ids, timeBound)
+		if err != nil {
+			return 0, rejected, err
+		}
+	}
+	window := resolveRollupWindow(timeBound, evidenceWindow, clock())
 	for _, r := range rows {
 		subject, ok := bySubject[r.TeamID]
 		if !ok {
 			continue
 		}
+		fields := map[string]contextfabric.FactValue{
+			"day":                       contextfabric.StringFactValue(r.Day),
+			"commits_count":             contextfabric.IntegerFactValue(r.CommitsCount),
+			"after_hours_commits_count": contextfabric.IntegerFactValue(r.AfterHoursCommitsCount),
+			"weekend_commits_count":     contextfabric.IntegerFactValue(r.WeekendCommitsCount),
+			"after_hours_commit_ratio":  contextfabric.NumberFactValue(r.AfterHoursCommitRatio),
+			"weekend_commit_ratio":      contextfabric.NumberFactValue(r.WeekendCommitRatio),
+		}
+		// One median over the union of the pull requests merged in the
+		// window in the repositories the team owns, never a combination of
+		// per-repository or per-day medians; absent when none merged.
+		cycles, cycleErr := readWindowPRCycle(ctx, p.facts.client, orgID, repoKeysOf(map[string][]teamOwnedRepo{r.TeamID: owned[r.TeamID]}), window, false)
+		if cycleErr != nil {
+			return 0, rejected, cycleErr
+		}
+		if c, ok := cycles[""]; ok {
+			setWindowPRCycle(fields, c)
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactMetrics, Subject: subject,
-			Fields: map[string]contextfabric.FactValue{
-				"day":                       contextfabric.StringFactValue(r.Day),
-				"commits_count":             contextfabric.IntegerFactValue(r.CommitsCount),
-				"after_hours_commits_count": contextfabric.IntegerFactValue(r.AfterHoursCommitsCount),
-				"weekend_commits_count":     contextfabric.IntegerFactValue(r.WeekendCommitsCount),
-				"after_hours_commit_ratio":  contextfabric.NumberFactValue(r.AfterHoursCommitRatio),
-				"weekend_commit_ratio":      contextfabric.NumberFactValue(r.WeekendCommitRatio),
-			},
+			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID)},
 		})
 	}
