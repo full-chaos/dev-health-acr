@@ -314,3 +314,9 @@ func TestInvestmentProviderTeamDeclaresAndEmitsThemeBreakdownTable(t *testing.T)
 		t.Fatalf("provenance missing: %#v", result.Facts[0].Fields)
 	}
 }
+
+// investmentSpanTable answers the earliest-stored-unit read of a windowed
+// investment read; list it BEFORE the broader work_unit_investments table.
+func investmentSpanTable() fakeTable {
+	return fakeTable{match: "SELECT toString(min(from_ts)), count() FROM work_unit_investments", rows: [][]any{{"2026-01-01 00:00:00.000000", uint64(2)}}}
+}
