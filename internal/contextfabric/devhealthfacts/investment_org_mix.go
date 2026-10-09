@@ -45,7 +45,7 @@ type orgMixRow struct {
 // repository (repo_uuid = ”) contribute only to the unresolved effort.
 func orgMixStatement(bound factTimeBound) string {
 	memberships := []string{fmt.Sprintf("if(%s, 0, -1)", mixWindowPredicate(0, bound))}
-	return withRowLimit(`SELECT
+	statement := `SELECT
 	sumMap(mapApply((k, v) -> (k, if(repo_uuid != '', v * effort, 0.)), theme_distribution_json)) AS theme_effort,
 	sumIf(bugfix_share * effort, repo_uuid != '') AS bugfix_effort,
 	uniqExactIf(work_unit_id, repo_uuid != '') AS work_units,
@@ -61,7 +61,8 @@ FROM (
 		FROM (
 ` + repoSplitCore(memberships, "", "") + `		)
 	)
-)`)
+)`
+	return withRowLimit(statement)
 }
 
 func (p *InvestmentProvider) readOrgMixRow(ctx context.Context, orgID string, bound factTimeBound) (orgMixRow, bool, error) {
