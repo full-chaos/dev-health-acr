@@ -303,11 +303,3 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 	}
 	return membershipScope{mode: membershipScopeIDs, ids: ids}, nil
 }
-
-// projectMixScopeResolver returns the resolver the phased project mixes call
-// once per read attempt, after the baseline marks and before phase 0.
-func (p *InvestmentProvider) projectMixScopeResolver(orgID string) projectMixScopeResolver {
-	return func(ctx context.Context) (membershipScope, error) {
-		return p.resolveMembershipScope(ctx, orgID)
-	}
-}

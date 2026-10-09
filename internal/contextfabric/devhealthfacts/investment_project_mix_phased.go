@@ -102,15 +102,13 @@ func projectMixBetweenPhases(ctx context.Context) {
 	}
 }
 
-// projectMixScopeResolver resolves the membership scope of one read attempt. nil
-// keeps the scope subqueries in the statement.
-type projectMixScopeResolver func(ctx context.Context) (membershipScope, error)
-
-func resolveProjectMixScope(ctx context.Context, resolve projectMixScopeResolver) (membershipScope, error) {
-	if resolve == nil {
+// resolveProjectMixScope resolves the membership scope of one read attempt. A
+// nil provider keeps the scope subqueries in the statement.
+func resolveProjectMixScope(ctx context.Context, p *InvestmentProvider, orgID string) (membershipScope, error) {
+	if p == nil {
 		return subqueryMembershipScope, nil
 	}
-	return resolve(ctx)
+	return p.resolveMembershipScope(ctx, orgID)
 }
 
 func projectMixScopeStatement(timeBound factTimeBound) string {
@@ -130,9 +128,9 @@ func projectMixScopeStatementScoped(timeBound factTimeBound, scope membershipSco
 )`
 }
 
-func readProjectMixScope(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, resolve projectMixScopeResolver) (projectMixScope, error) {
+func readProjectMixScope(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, resolve *InvestmentProvider) (projectMixScope, error) {
 	var scope projectMixScope
-	membership, err := resolveProjectMixScope(ctx, resolve)
+	membership, err := resolveProjectMixScope(ctx, resolve, orgID)
 	if err != nil {
 		return scope, err
 	}
@@ -378,7 +376,7 @@ ORDER BY project_key`)
 // readProjectRollupMixRows runs the roll-up mix: phase 0, then the two arms. A
 // project is a row only when its repo arm counted a work unit (the old
 // statement's HAVING work_units > 0); the evidence arm only adds its count.
-func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, resolve projectMixScopeResolver) ([]projectRollupMixRow, bool, error) {
+func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, resolve *InvestmentProvider) ([]projectRollupMixRow, bool, error) {
 	// Nothing is read before the baseline marks: every input below is read after
 	// them and checked against the marks read again at the end.
 	before, err := readProjectMixInputs(ctx, client, orgID, ids, projectRollupInputSources)
@@ -536,7 +534,7 @@ type projectNativeUnitValues struct {
 // unit values, then the per-project aggregation the single statement did in
 // SQL: a unit counts in full for every requested project it is placed in,
 // spanning when it is placed in more than one project (requested or not).
-func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int, resolve projectMixScopeResolver) ([]readers.ProjectThemeMixRow, bool, error) {
+func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int, resolve *InvestmentProvider) ([]readers.ProjectThemeMixRow, bool, error) {
 	// Nothing is read before the baseline marks (see the roll-up).
 	before, err := readProjectMixInputs(ctx, client, orgID, ids, projectNativeInputSources)
 	if err != nil {
@@ -777,7 +775,7 @@ func projectMixEvent(ctx context.Context, reader string, err error) {
 	finish(err)
 }
 
-func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, resolve projectMixScopeResolver) ([]projectRollupMixRow, error) {
+func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, resolve *InvestmentProvider) ([]projectRollupMixRow, error) {
 	for attempt := 1; attempt <= projectMixMaxAttempts; attempt++ {
 		rows, changed, err := readProjectRollupMixRowsOnce(ctx, client, orgID, ids, timeBound, resolve)
 		if err != nil || !changed {
@@ -794,7 +792,7 @@ func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHou
 	return nil, contended
 }
 
-func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int, resolve projectMixScopeResolver) ([]readers.ProjectThemeMixRow, error) {
+func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int, resolve *InvestmentProvider) ([]readers.ProjectThemeMixRow, error) {
 	for attempt := 1; attempt <= projectMixMaxAttempts; attempt++ {
 		rows, changed, err := readProjectNativeMixRowsOnce(ctx, client, orgID, ids, timeBound, rowLimit, resolve)
 		if err != nil || !changed {
