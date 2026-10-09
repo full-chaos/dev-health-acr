@@ -61,9 +61,15 @@ type unitRow struct {
 // investmentUnitsStatement lists one window's unit rows of the repositories in
 // {ids}, ordered by share descending, work unit, repository, one page.
 func investmentUnitsStatement(b factTimeBound, withCursor bool) string {
+	return investmentUnitsStatementScoped(b, withCursor, subqueryMembershipScope)
+}
+
+// investmentUnitsStatementScoped is investmentUnitsStatement with the resolved
+// membership scope.
+func investmentUnitsStatementScoped(b factTimeBound, withCursor bool, scope membershipScope) string {
 	memberships := []string{fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(0, b), 0)}
-	core := repoSplitCore(memberships, " from_ts, to_ts,",
-		",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts", false)
+	core := repoSplitCoreScoped(memberships, " from_ts, to_ts,",
+		",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts", false, scope)
 	keyset := ""
 	if withCursor {
 		keyset = `
@@ -134,7 +140,12 @@ func (p *InvestmentProvider) readInvestmentUnits(ctx context.Context, orgID stri
 				readers.Binding{Name: unitCursorRepoParam, Value: request.Cursor.RepoID},
 			)
 		}
-		scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadInvestmentUnits", investmentUnitsStatement(timeBound, request.Cursor != nil), orgID, repoIDs, func(row contextpacket.ClickHouseRowScanner) error {
+		scope, scopeErr := p.resolveMembershipScope(ctx, orgID)
+		if scopeErr != nil {
+			return nil, false, scopeErr
+		}
+		extra = append(extra, scope.bindings()...)
+		scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadInvestmentUnits", investmentUnitsStatementScoped(timeBound, request.Cursor != nil, scope), orgID, repoIDs, func(row contextpacket.ClickHouseRowScanner) error {
 			var r unitRow
 			if err := row.Scan(&r.WorkUnitID, &r.RepoID, &r.Share, &r.Effort, &r.Theme, &r.From, &r.To, &r.PRs, &r.UnresolvedN, &r.UnresolvedRefs, &r.ScopeTotal, &r.ScopeUnits); err != nil {
 				return err

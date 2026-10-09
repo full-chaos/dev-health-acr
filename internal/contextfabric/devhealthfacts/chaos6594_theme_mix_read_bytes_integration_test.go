@@ -313,7 +313,7 @@ func TestRepositoryThemeMixAcrossChunksIsCompleteAgainstRealClickHouse(t *testin
 	if facts != n {
 		t.Fatalf("facts = %d, want %d (no repository may be dropped across chunks)", facts, n)
 	}
-	if m.statements != 2 {
-		t.Fatalf("statements = %d, want 2 (100 repositories in chunks of 90)", m.statements)
+	if m.statements != 1 {
+		t.Fatalf("statements = %d, want 1 (all repositories of the request in one pass)", m.statements)
 	}
 }
