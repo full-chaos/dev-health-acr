@@ -39,10 +39,38 @@ const (
 	DefaultMaxBytes = 65536
 	MaxMaxBytes     = 262144
 	MinMaxBytes     = 4096
-	// MaxRangeDays bounds a range or trailing window. A longer period is
-	// read as several windows by the client.
+	// MaxRangeDays bounds a range or trailing window for every kind that
+	// declares no larger maximum in maxRangeDaysByKind.
 	MaxRangeDays = 60
 )
+
+// maxRangeDaysByKind declares the kinds whose stored rows serve a longer
+// window in one read. investment reads work_unit_investments once however
+// long the window is, so its cost does not grow with the span. A kind is
+// listed here only when its rows support it; there is no blanket lift.
+var maxRangeDaysByKind = map[contextfabric.FactKind]int{
+	contextfabric.FactInvestment: 365,
+}
+
+// MaxRangeDaysFor is the widest range or trailing window one read may take
+// for kinds: the smallest maximum among them, so a mixed read is held to its
+// most limited kind.
+func MaxRangeDaysFor(kinds []contextfabric.FactKind) int {
+	widest := 0
+	for _, kind := range kinds {
+		limit := MaxRangeDays
+		if declared, ok := maxRangeDaysByKind[kind]; ok {
+			limit = declared
+		}
+		if widest == 0 || limit < widest {
+			widest = limit
+		}
+	}
+	if widest == 0 {
+		return MaxRangeDays
+	}
+	return widest
+}
 
 // Window modes.
 const (
@@ -662,7 +690,7 @@ func (r *FactsReader) validate(request FactsRequest, capabilities map[contextfab
 	default:
 		plan.echo.MaxBytes = request.MaxBytes
 	}
-	timeContext, window, err := r.window(request.Window)
+	timeContext, window, err := r.window(request.Window, MaxRangeDaysFor(plan.kinds))
 	if err != nil {
 		return plan, err
 	}
@@ -673,7 +701,7 @@ func (r *FactsReader) validate(request FactsRequest, capabilities map[contextfab
 // window turns the requested window into the registry's time context. A
 // trailing window becomes a range by the server clock and is echoed; nothing
 // is inferred from text (design C.5). No window = current (decision K5).
-func (r *FactsReader) window(requested *RequestWindow) (contextfabric.TimeContext, EffectiveWindow, error) {
+func (r *FactsReader) window(requested *RequestWindow, maxDays int) (contextfabric.TimeContext, EffectiveWindow, error) {
 	if requested == nil || strings.TrimSpace(requested.Mode) == "" || requested.Mode == WindowCurrent {
 		if requested != nil && (requested.AsOf != nil || requested.Start != nil || requested.End != nil || requested.Days != 0) {
 			return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("a current window takes no as_of, start, end or days")
@@ -701,8 +729,8 @@ func (r *FactsReader) window(requested *RequestWindow) (contextfabric.TimeContex
 			}
 			start, end = requested.Start.UTC(), requested.End.UTC()
 		} else {
-			if requested.Days < 1 || requested.Days > MaxRangeDays || requested.AsOf != nil || requested.Start != nil || requested.End != nil {
-				return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("a trailing window takes days from 1 to %d only", MaxRangeDays)
+			if requested.Days < 1 || requested.Days > maxDays || requested.AsOf != nil || requested.Start != nil || requested.End != nil {
+				return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("a trailing window takes days from 1 to %d only for the kinds asked", maxDays)
 			}
 			end = r.now().UTC().Truncate(time.Second)
 			start = end.Add(-time.Duration(requested.Days) * 24 * time.Hour)
@@ -710,8 +738,8 @@ func (r *FactsReader) window(requested *RequestWindow) (contextfabric.TimeContex
 		if !start.Before(end) {
 			return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("start must be before end")
 		}
-		if end.Sub(start) > MaxRangeDays*24*time.Hour {
-			return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("a window spans at most %d days; read a longer period as several windows", MaxRangeDays)
+		if end.Sub(start) > time.Duration(maxDays)*24*time.Hour {
+			return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("a window spans at most %d days for the kinds asked; read a longer period as several windows", maxDays)
 		}
 		return contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
 			EffectiveWindow{Mode: requested.Mode, Axis: string(contextfabric.TemporalRange), Start: &start, End: &end}, nil

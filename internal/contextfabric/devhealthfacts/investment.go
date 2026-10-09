@@ -187,6 +187,17 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		}
 	}
 
+	var spanReason string
+	if isLongInvestmentWindow(timeBound) && len(facts) > 0 {
+		earliest, found, spanErr := p.readInvestmentSpanStart(ctx, orgID)
+		if spanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query investment span", spanErr)
+		}
+		if found && timeBound.start.Before(earliest) {
+			spanReason = investmentWindowSpanReason(earliest, timeBound)
+		}
+	}
+
 	state, retentionReason := timeBound.retentionState(len(facts))
 	// CHAOS-4521b: this source has no project dimension, so an all-project
 	// read that came back empty says something more specific than "no rows".
@@ -197,6 +208,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
 	if mixUnavailable != "" {
 		mergeFactReadReason(&result, mixUnavailable)
+	}
+	if spanReason != "" {
+		mergeFactReadReason(&result, spanReason)
 	}
 	if unitsCut {
 		result.Truncated = true
