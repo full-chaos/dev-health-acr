@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -572,7 +573,7 @@ INNER JOIN (
 	SELECT team_id, provider, work_scope_id, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
 		row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
 	FROM work_item_metrics_daily
-	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
 ) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
 GROUP BY p.provider, p.id, wm.team_id
 ORDER BY p.id, wm.team_id`)
@@ -723,7 +724,7 @@ INNER JOIN (
 	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed,
 		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed)) DESC) AS rn
 	FROM work_item_metrics_daily
-	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
 ) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
 GROUP BY p.provider, p.id, wm.day
 ORDER BY p.id, wm.day DESC`)
@@ -878,7 +879,7 @@ FROM ` + projectIdentityJoinSQL() + `
 INNER JOIN (
 	` + flowWindowTotalsDedupe + `
 	FROM work_item_metrics_daily
-	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
 ) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
 GROUP BY p.provider, p.id
 ORDER BY p.id -- window totals`)

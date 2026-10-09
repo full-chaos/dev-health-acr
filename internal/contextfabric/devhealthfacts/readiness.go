@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -325,7 +326,7 @@ INNER JOIN (
 	SELECT team_id, provider, work_scope_id, day, estimated_count, unestimated_count, backlog_size,
 		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size)) DESC) AS rn
 	FROM estimate_coverage_metrics_daily FINAL
-	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
 ) AS ec ON ` + projectIdentityMatchSQL("ec", "work_scope_id") + ` AND ec.rn = 1
 GROUP BY p.provider, p.id, ec.day
 ORDER BY p.id, ec.day DESC`)
