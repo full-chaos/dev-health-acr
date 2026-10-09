@@ -276,13 +276,14 @@ func findUnitsPageFact(facts []ServedFact) (ServedFact, bool) {
 // noteUnitsPageNotServed runs when the byte budget left no room for the page
 // fact beside the mix fact, which outranks it. The page fact is the smallest
 // fact and carries next_cursor, so it is always served when units are
-// requested: here as the page fact itself without its cursor and with
+// requested (the minimum counts every non-unit fact the budget cut, so a retry at
+// it restores them ahead of the page fact): here as the page fact itself without its cursor and with
 // units_returned 0 and units_limitation (the reason and the max_bytes minimum
 // that serves the page fact whole). The coverage rows (never dropped) lose
 // the provider's sentence promising a cursor and carry the same text. A
 // document that is then over max_bytes is flagged by flagUnitsOverBudget after
 // the page is finished.
-func (r *FactsReader) noteUnitsPageNotServed(response *FactsResponse, maxBytes int, page ServedFact, unitRowsBefore int) {
+func (r *FactsReader) noteUnitsPageNotServed(response *FactsResponse, maxBytes int, factsBefore []ServedFact, page ServedFact, unitRowsBefore int) {
 	bare := page
 	bare.Fields = make(map[string]any, len(page.Fields))
 	for name, value := range page.Fields {
@@ -292,7 +293,15 @@ func (r *FactsReader) noteUnitsPageNotServed(response *FactsResponse, maxBytes i
 	bare.Fields["units_returned"] = "0"
 	dropUnitsCursorPromise(response.Coverage)
 	probe := *response
-	probe.Facts = append(append([]ServedFact{}, response.Facts...), bare)
+	probe.Facts = nil
+	for _, fact := range factsBefore {
+		switch unitFactKind(fact) {
+		case contextfabric.InvestmentUnitKind, contextfabric.InvestmentUnitPageKind:
+		default:
+			probe.Facts = append(probe.Facts, fact)
+		}
+	}
+	probe.Facts = append(probe.Facts, bare)
 	probe.Coverage = append([]CoverageRow(nil), response.Coverage...)
 	noteUnitsBudget(probe.Coverage, unitRowsBefore, true)
 	probe.Truncation = &Truncation{TruncatedBy: TruncatedByMaxBytes, FactsOmitted: unitRowsBefore}

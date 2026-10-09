@@ -179,3 +179,33 @@ func TestInvestmentUnitsPageFactIsReservedBeforeRows(t *testing.T) {
 		t.Fatal("mix fact missing")
 	}
 }
+
+// A mix too large for the original budget is dropped too. The stated minimum
+// must still be measured with the mix, or a retry at that minimum restores the
+// mix ahead of the page fact and is limited again.
+func TestInvestmentUnitsPageFactMinimumCountsAMixDroppedAtTheOriginalBudget(t *testing.T) {
+	const pad = 3 * 1024
+	response := readPageFact(t, pad, MinMaxBytes)
+	if hasMixFact(response) {
+		t.Fatal("fixture: the mix fact must be dropped at the original budget")
+	}
+	page, ok := hasPageFact(response)
+	if !ok {
+		t.Fatal("no work_unit_page fact")
+	}
+	text, _ := page.Fields["units_limitation"].(string)
+	var minimum int
+	if i := strings.Index(text, "minimum "); i < 0 {
+		t.Fatalf("units_limitation = %q", text)
+	} else if _, err := fmt.Sscanf(text[i+len("minimum "):], "%d", &minimum); err != nil {
+		t.Fatalf("no minimum in %q: %v", text, err)
+	}
+	retry := readPageFact(t, pad, minimum)
+	retryPage, served := hasPageFact(retry)
+	if !served {
+		t.Fatal("no page fact at the stated minimum")
+	}
+	if _, limited := retryPage.Fields["units_limitation"]; limited {
+		t.Fatalf("still a limitation row at the stated minimum %d (mix served: %v)", minimum, hasMixFact(retry))
+	}
+}
