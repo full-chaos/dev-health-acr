@@ -171,7 +171,7 @@ func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSen
 							arrayMap(r -> ('', 'gitlab', substring(splitByChar('!', r)[1], 8), splitByChar('!', r)[2], r),
 								arrayFilter(r -> match(r, '^gitlab:[^!]+![0-9]+$'), JSONExtract(structural_evidence_json, 'issues', 'Array(String)')))
 						) AS pr_refs,
-						if(empty(pr_refs) AND repo_id IS NOT NULL, [(toString(repo_id), '', '', '', '')], pr_refs) AS refs
+						` + repoRefsExpression + ` AS refs
 					FROM (
 						SELECT work_unit_id,
 							(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
@@ -199,6 +199,10 @@ func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSen
 			GROUP BY win, work_unit_id, repo_uuid
 `
 }
+
+// repoRefsExpression is the per-unit reference list: its PR references, else
+// its own persisted repository, else none (the unit then reaches no row).
+const repoRefsExpression = "if(empty(pr_refs) AND repo_id IS NOT NULL, [(toString(repo_id), '', '', '', '')], pr_refs)"
 
 // spanSentinelWindow is the pseudo-window every unit joins in the mix
 // statement, whatever the requested windows: its rows carry each repository's

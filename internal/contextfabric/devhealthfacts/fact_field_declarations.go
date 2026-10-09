@@ -28,16 +28,18 @@ import (
 //     in the same row and declares none.
 
 var (
-	declTeamOnly        = []contextfabric.SubjectKind{contextfabric.SubjectTeam}
-	declProjectOnly     = []contextfabric.SubjectKind{contextfabric.SubjectProject}
-	declRepositoryOnly  = []contextfabric.SubjectKind{contextfabric.SubjectRepository}
-	declTeamProject     = []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectProject}
-	declRepoTeam        = []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectTeam}
-	declWorkItemOnly    = []contextfabric.SubjectKind{contextfabric.SubjectWorkItem}
-	declCIRunOnly       = []contextfabric.SubjectKind{contractsv1.ContextFabricSubjectCIRun}
-	declDeploymentOnly  = []contextfabric.SubjectKind{contextfabric.SubjectDeployment}
-	declIncidentOnly    = []contextfabric.SubjectKind{contextfabric.SubjectIncident}
-	declPullRequestOnly = []contextfabric.SubjectKind{contextfabric.SubjectPullRequest}
+	declTeamOnly         = []contextfabric.SubjectKind{contextfabric.SubjectTeam}
+	declProjectOnly      = []contextfabric.SubjectKind{contextfabric.SubjectProject}
+	declRepositoryOnly   = []contextfabric.SubjectKind{contextfabric.SubjectRepository}
+	declTeamProject      = []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectProject}
+	declOrganizationOnly = []contextfabric.SubjectKind{contextfabric.SubjectOrganization}
+	declRepoTeamOrg      = []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectTeam, contextfabric.SubjectOrganization}
+	declRepoTeam         = []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectTeam}
+	declWorkItemOnly     = []contextfabric.SubjectKind{contextfabric.SubjectWorkItem}
+	declCIRunOnly        = []contextfabric.SubjectKind{contractsv1.ContextFabricSubjectCIRun}
+	declDeploymentOnly   = []contextfabric.SubjectKind{contextfabric.SubjectDeployment}
+	declIncidentOnly     = []contextfabric.SubjectKind{contextfabric.SubjectIncident}
+	declPullRequestOnly  = []contextfabric.SubjectKind{contextfabric.SubjectPullRequest}
 )
 
 type fieldDecl = contextfabric.FactFieldDeclaration
@@ -697,6 +699,7 @@ func metricsFields() []fieldDecl {
 			fInt("prs_merged", "count"),
 			fNum("median_pr_cycle_hours", "hours"),
 			fNum("change_failure_rate", "ratio"),
+			fInt("change_failure_rate_days", "days"),
 			fInt("bus_factor", "count"),
 			fNum("code_ownership_gini", "ratio"),
 			fNum("mttr_hours", "hours"),
@@ -812,9 +815,11 @@ func investmentFields() []fieldDecl {
 			investmentThemeFields(false)...,
 		),
 		declOn(declTeamProject, investmentThemeFields(true)...),
-		declOn(declRepoTeam, themeBreakdown, fStr("mix_source"), fStr("attribution_basis")),
+		declOn(declOrganizationOnly, investmentThemeFields(false)...),
+		declOn(declRepoTeamOrg, themeBreakdown, fStr("mix_source"), fStr("attribution_basis")),
 		declOn(declRepoTeam, investmentUnitFields()...),
-		declOn(declRepositoryOnly, fInt("work_unit_count", "count")),
+		declOn(declOrganizationOnly, fStr("scope"), fInt("repositories_in_scope", "count"), fNum("unattributed_effort_share", "ratio")),
+		declOn([]contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectOrganization}, fInt("work_unit_count", "count")),
 		declOn(declTeamOnly, declAggregate(fInt("owned_repository_count", "count"))),
 		declOn(declTeamOnly, prior...),
 		declOn(declProjectOnly,

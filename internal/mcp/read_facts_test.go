@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -26,6 +27,8 @@ type readFactsHosted struct {
 	bearer  string
 	status  int
 	respond []byte
+	message string
+	details map[string]any
 }
 
 func newReadFactsBootstrap(t *testing.T, hosted *readFactsHosted, advertise bool) *Bootstrap {
@@ -40,8 +43,19 @@ func newReadFactsBootstrap(t *testing.T, hosted *readFactsHosted, advertise bool
 		hosted.calls++
 		hosted.body = string(raw)
 		hosted.bearer = r.Header.Get("Authorization")
-		status, respond := hosted.status, hosted.respond
+		status, respond, message, details := hosted.status, hosted.respond, hosted.message, hosted.details
 		hosted.mu.Unlock()
+		if status != 0 && status != http.StatusOK && message != "" {
+			writeJSONFixture(t, w, status, contractsv1.ErrorEnvelope{
+				SchemaVersion: contractsv1.ErrorSchema,
+				RequestID:     "req_fixture",
+				Error: contractsv1.ErrorDetail{
+					Code: "invalid_request", Message: message, HTTPStatus: status,
+					Details: details,
+				},
+			})
+			return
+		}
 		if status != 0 && status != http.StatusOK {
 			writeErrorFixture(t, w, status, "invalid_request", false)
 			return
@@ -237,5 +251,37 @@ func TestReadFactsForwardsTheUnitsPageRequestUnchanged(t *testing.T) {
 	}
 	if !jsonEqual(sent, want) {
 		t.Fatalf("units request was rewritten:\nsent %s\nwant %s", hosted.body, arguments)
+	}
+}
+
+func TestReadFactsCarriesTheWindowRefusalAdviceToTheClient(t *testing.T) {
+	const advice = "read a longer period as several windows"
+	hosted := &readFactsHosted{
+		respond: readFactsExample(t),
+		status:  http.StatusBadRequest,
+		message: "The read_facts request is invalid: a window spans at most 60 days for the kinds asked; " + advice,
+		details: map[string]any{"reason": "window_beyond_kind_max", "max_days": 60},
+	}
+	args := `{"kinds":["health"],"subjects":[{"kind":"team","canonical_id":"team-payments"}],"window":{"mode":"range","start":"2026-01-01T00:00:00Z","end":"2026-04-01T00:00:00Z"}}`
+	result := callReadFacts(t, newReadFactsBootstrap(t, hosted, true), args)
+	if !result.IsError {
+		t.Fatal("a hosted window refusal must be a tool error")
+	}
+	text := toolResultText(result)
+	if !strings.Contains(text, "at most 60 days") || !strings.Contains(text, advice) {
+		t.Fatalf("the refusal advice did not reach the client: %s", text)
+	}
+}
+
+func TestReadFactsRefusesAWindowBeyondEveryKindWithAdviceLocally(t *testing.T) {
+	hosted := &readFactsHosted{respond: readFactsExample(t)}
+	args := `{"kinds":["investment"],"subjects":[{"kind":"team","canonical_id":"team-payments"}],"window":{"mode":"trailing","days":366}}`
+	result := callReadFacts(t, newReadFactsBootstrap(t, hosted, true), args)
+	text := toolResultText(result)
+	if !result.IsError || !strings.Contains(text, "do not add shorter windows") || !strings.Contains(text, "at most 365 days") {
+		t.Fatalf("366 d refusal lacks the advice: %v %s", result.IsError, text)
+	}
+	if hosted.calls != 0 {
+		t.Fatal("a locally refused window must not call hosted")
 	}
 }

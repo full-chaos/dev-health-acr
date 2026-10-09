@@ -54,7 +54,11 @@ func (a *App) contextFabricDataFactsHandler() http.HandlerFunc {
 		if err != nil {
 			var requestError *directread.RequestError
 			if errors.As(err, &requestError) {
-				writeError(w, r, http.StatusBadRequest, "invalid_request", "The read_facts request is invalid: "+contextfabric.SanitizeLogAttr(requestError.Detail), false, map[string]any{"reason": requestError.Reason})
+				details := map[string]any{"reason": requestError.Reason}
+				if requestError.MaxDays > 0 {
+					details["max_days"] = requestError.MaxDays
+				}
+				writeError(w, r, http.StatusBadRequest, "invalid_request", "The read_facts request is invalid: "+contextfabric.SanitizeLogAttr(requestError.Detail), false, details)
 				return
 			}
 			if errors.Is(err, directread.ErrFactsInternal) {
