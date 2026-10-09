@@ -48,9 +48,9 @@ func TestWindowPRCycleMedianIsOverPullRequestsNotDailyMedians(t *testing.T) {
 	}
 	pr("repo-a", 1, ts(2026, 9, 14, 9, 0, 0), 1, true)
 	pr("repo-a", 2, ts(2026, 9, 15, 9, 0, 0), 1, true)
-	pr("repo-a", 3, ts(2026, 9, 16, 9, 0, 0), 100, true)
-	pr("repo-a", 4, ts(2026, 9, 17, 9, 0, 0), 5, false)  // never merged
-	pr("repo-a", 5, ts(2026, 8, 1, 9, 0, 0), 2000, true) // merged outside the window
+	pr("repo-a", 3, ts(2026, 9, 14, 10, 0, 0), 100, true)
+	pr("repo-a", 4, ts(2026, 9, 17, 9, 0, 0), 5, false) // never merged
+	pr("repo-a", 5, ts(2026, 8, 1, 9, 0, 0), 200, true) // merged outside the window
 	pr("repo-b", 1, ts(2026, 9, 16, 9, 0, 0), 3, true)
 	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		orgID, "github", "team-1", repoUUID("repo-a"), "acme/repo-a", "exact", "native", uint8(1), uint16(100), int32(0), ts(2026, 1, 1, 0, 0, 0), nil, synced)

@@ -352,6 +352,12 @@ FROM (
 )
 ORDER BY repo_id, day DESC
 LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
+	// Read before the series statement so that statement stays the last
+	// query this provider issues for the repository path.
+	windowCycles, err := readWindowPRCycle(ctx, p.facts.client, orgID, ids, resolveRollupWindow(timeBound, evidenceWindow, clock()), true)
+	if err != nil {
+		return 0, rejected, false, err
+	}
 	byRepo := make(map[string][]repositoryMetricsDayRow)
 	var repoOrder []string
 	// readers.QueryOrgScopedNamed (CHAOS-4418), not p.facts.query -- this
@@ -388,10 +394,6 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 	}, extra...)
 	if scanErr != nil {
 		return rowCount, rejected, false, scanErr
-	}
-	windowCycles, err := readWindowPRCycle(ctx, p.facts.client, orgID, repoOrder, resolveRollupWindow(timeBound, evidenceWindow, clock()), true)
-	if err != nil {
-		return rowCount, rejected, false, err
 	}
 	for _, repoID := range repoOrder {
 		subject := bySubject[repoID]
