@@ -437,10 +437,10 @@ func publicTokenEndpointAuth(document OAuthClientMetadata) bool {
 // registration nor an accepted metadata document URL.
 func unresolvedClientRefusal(clientID string) string {
 	parsed, err := url.Parse(clientID)
-	if err != nil || parsed.Host == "" {
+	if err != nil {
 		return oauthvocab.ClientRefusalUnknownClient
 	}
-	switch strings.ToLower(parsed.Scheme) {
+	switch parsed.Scheme {
 	case "https":
 		return oauthvocab.ClientRefusalUnsupportedClientID
 	case "http":

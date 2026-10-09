@@ -128,6 +128,9 @@ func TestOAuthMetadataDocumentClientListingNoneSignsIn(t *testing.T) {
 	if recorder.Code != http.StatusOK || body["client_kind"] != "metadata_document" || body["resource"] != cimdTestOriginOnly {
 		t.Fatalf("preview: %d %v", recorder.Code, body)
 	}
+	if line := oauthLogLine(logs.String(), "consent_preview"); line == nil || line["outcome"] != "ok" || line["client_refusal"] != "none" {
+		t.Fatalf("consent_preview line = %v", line)
+	}
 	recorder, body = serveConsent(app, consentRequest(t, map[string]any{"action": "approve", "handle": handle, "repository_scopes": all}, all, "a1"))
 	redirectURL, _ := body["redirect_url"].(string)
 	redirect, err := url.Parse(redirectURL)
@@ -188,6 +191,9 @@ func TestOAuthTokenLogsAClientAssertionOnlyWhenOneIsSent(t *testing.T) {
 			if recorder.Code != http.StatusBadRequest {
 				t.Fatalf("token: %d %s", recorder.Code, recorder.Body.String())
 			}
+			if line := oauthLogLine(logs.String(), "token"); line == nil || line["outcome"] != "invalid_grant" || line["client_refusal"] != "none" {
+				t.Fatalf("token line = %v, want invalid_grant with client_refusal none", line)
+			}
 			count := strings.Count(logs.String(), `"msg":"oauth client assertion ignored"`)
 			if tc.want == "" {
 				if count != 0 {
@@ -195,7 +201,7 @@ func TestOAuthTokenLogsAClientAssertionOnlyWhenOneIsSent(t *testing.T) {
 				}
 				return
 			}
-			if count != 1 || !strings.Contains(logs.String(), `"assertion_type":"`+tc.want+`"`) {
+			if count != 1 || !strings.Contains(logs.String(), `"step":"token","client_kind":"none","assertion_type":"`+tc.want+`"`) {
 				t.Fatalf("assertion lines = %d, want 1 with assertion_type %s: %s", count, tc.want, logs.String())
 			}
 			if strings.Contains(logs.String(), cimdTestAssertion) || strings.Contains(logs.String(), "urn:example:other") {

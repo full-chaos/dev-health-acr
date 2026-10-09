@@ -522,6 +522,7 @@ func TestOAuthClientMetadataDocumentResolution(t *testing.T) {
 		"https://client.example.test":             oauthvocab.ClientRefusalUnsupportedClientID,
 		"https://client.example.test/a/../c.json": oauthvocab.ClientRefusalUnsupportedClientID,
 		"not-a-client":                            oauthvocab.ClientRefusalUnknownClient,
+		"https://%zz/c.json":                      oauthvocab.ClientRefusalUnknownClient,
 		"acrc_00000000000000000000000000000000":   oauthvocab.ClientRefusalUnknownClient,
 	} {
 		calls := h.meta.calls
@@ -1041,5 +1042,24 @@ func TestResolveResourceAcceptsEndpointAliases(t *testing.T) {
 		if ok != want || (ok && got != requested) {
 			t.Errorf("resolveResource(%q) = %q, %v; want ok=%v as requested", requested, got, ok, want)
 		}
+	}
+}
+
+// TestOAuthConsentCarriesTheClientRefusal: a metadata-document client whose
+// document stops resolving between /authorize and the consent page's read is
+// refused there with the class of the failed resolution.
+func TestOAuthConsentCarriesTheClientRefusal(t *testing.T) {
+	h := newOAuthHarness(t)
+	id := "https://client.example.test/oauth/client.json"
+	h.meta.documents[id] = OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt", TokenEndpointAuthMethodsSupported: []string{"none"}}
+	_, challenge := pkce(t)
+	authorization, err := h.oauth.Authorize(context.Background(), OAuthAuthorizeRequest{ResponseType: "code", ClientID: id, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256", State: "st"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.meta.documents[id] = OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt"}
+	_, kind, err := h.oauth.ConsentRequest(context.Background(), authorization.Handle, webPrincipal(nil))
+	if outcomeOf(err) != oauthvocab.OutcomeInvalidClient || clientRefusalOf(err) != oauthvocab.ClientRefusalAuthMethodUnsupported || kind != storage.OAuthClientKindMetadataDocument {
+		t.Fatalf("consent read = %v refusal %q kind %q, want invalid_client auth_method_unsupported metadata_document", err, clientRefusalOf(err), kind)
 	}
 }

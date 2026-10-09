@@ -118,7 +118,7 @@ func jsonDocument(w http.ResponseWriter, body string) {
 }
 
 func documentFor(url string) string {
-	return fmt.Sprintf(`{"client_id":%q,"client_name":"Test","redirect_uris":["http://127.0.0.1:33418/cb"],"token_endpoint_auth_method":"none"}`, url)
+	return fmt.Sprintf(`{"client_id":%q,"client_name":"Test","redirect_uris":["http://127.0.0.1:33418/cb"],"token_endpoint_auth_method":"none","token_endpoint_auth_methods_supported":["none"]}`, url)
 }
 
 func TestClientMetadataFetchDialGuard(t *testing.T) {
@@ -325,13 +325,15 @@ func TestClientMetadataFetchCache(t *testing.T) {
 	}
 	first := fetch()
 	first.RedirectURIs[0] = "https://mutated.example.test/cb" // a caller cannot poison the cache
+	first.TokenEndpointAuthMethodsSupported[0] = "mutated"
 	second := fetch()
-	if server.hits.Load() != 1 || second.RedirectURIs[0] == "https://mutated.example.test/cb" {
-		t.Fatalf("second fetch: hits %d redirects %v, want one cached, unmodified fetch", server.hits.Load(), second.RedirectURIs)
+	if server.hits.Load() != 1 || second.RedirectURIs[0] == "https://mutated.example.test/cb" || second.TokenEndpointAuthMethodsSupported[0] != "none" {
+		t.Fatalf("second fetch: hits %d redirects %v methods %v, want one cached, unmodified fetch", server.hits.Load(), second.RedirectURIs, second.TokenEndpointAuthMethodsSupported)
 	}
 	second.RedirectURIs[0] = "https://mutated.example.test/cb" // nor can a caller served from the cache
-	if third := fetch(); third.RedirectURIs[0] == "https://mutated.example.test/cb" {
-		t.Fatalf("a cached result aliases the cache: third fetch redirects %v", third.RedirectURIs)
+	second.TokenEndpointAuthMethodsSupported[0] = "mutated"
+	if third := fetch(); third.RedirectURIs[0] == "https://mutated.example.test/cb" || third.TokenEndpointAuthMethodsSupported[0] != "none" {
+		t.Fatalf("a cached result aliases the cache: third fetch redirects %v methods %v", third.RedirectURIs, third.TokenEndpointAuthMethodsSupported)
 	}
 	now = now.Add(clientMetadataCacheTTL - time.Second)
 	fetch()
@@ -393,8 +395,8 @@ func TestClientMetadataFetchHonoursContext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	if _, err := server.unguardedFetcher().Fetch(ctx, server.URL+"/client.json"); !errors.Is(err, ErrClientMetadataUnavailable) {
-		t.Fatalf("err = %v, want ErrClientMetadataUnavailable", err)
+	if _, err := server.unguardedFetcher().Fetch(ctx, server.URL+"/client.json"); !errors.Is(err, ErrClientMetadataUnavailable) || fetchRefusal(err) != oauthvocab.ClientRefusalFetchFailed {
+		t.Fatalf("err = %v, want the fetch_failed refusal", err)
 	}
 	if time.Since(started) > 3*time.Second {
 		t.Fatalf("a cancelled fetch took %v", time.Since(started))
