@@ -180,7 +180,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: true
       - name: Test the mutation-battery plan matrix and arm layout
         run: python3 scripts/battery/test_plan_matrix.py
@@ -200,7 +200,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: true
       - name: Verify Go formatting
         run: make fmt-check
@@ -325,7 +325,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: true
       # docker/login-action v4.5.1. No Docker Hub credentials exist in this
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
@@ -492,7 +492,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: true
       # actions/download-artifact v8.0.1. One directory per artifact
       # (merge-multiple is left false), which is the layout the merge tool reads.
@@ -574,7 +574,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: true
       # docker/login-action v4.5.1. No Docker Hub credentials exist in this
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
@@ -671,7 +671,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: true
       - name: Run isolated devhealthschema race suite
         run: |
@@ -720,7 +720,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: true
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
@@ -763,7 +763,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: true
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
@@ -810,7 +810,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: true
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
@@ -855,7 +855,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: true
       # docker/login-action v4.5.1. No Docker Hub credentials exist in this
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
@@ -885,7 +885,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.2'
           cache: true
       # Must run before anything else in this job that could dirty the
       # worktree: the script refuses to start unless `git status --porcelain`
