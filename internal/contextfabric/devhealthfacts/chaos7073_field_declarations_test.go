@@ -296,7 +296,7 @@ func t4Cases() []t4Case {
 	end := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
 	add(t4Case{name: "investment/team_range_prior", kind: contextfabric.FactInvestment, subjects: team,
 		time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
-		tables: []fakeTable{ownsRepoTable("CHAOS"), investmentSpanTable(), {match: "FROM work_unit_investments", rows: [][]any{
+		tables: []fakeTable{ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: [][]any{
 			themeMixRow("CHAOS", "", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 1),
 			priorRow,
 		}}}})
