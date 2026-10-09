@@ -45,7 +45,7 @@ func TestChangeFailureRateColumnTypesAgainstRealClickHouse(t *testing.T) {
 				second = "NULL"
 			}
 			for i, value := range []string{"0.25", second, "0.0"} {
-				day := time.Date(2026, 3, 1+i, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+				day := time.Now().UTC().AddDate(0, 0, -(3 - i)).Format("2006-01-02")
 				stmt := fmt.Sprintf(`INSERT INTO %s.repo_metrics_daily (repo_id, org_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini, computed_at) VALUES ('%s', '%s', '%s', 1, 1, 1.0, %s, NULL, 1, 0.1, '%s 10:00:00')`,
 					tc.database, repoID, orgID, day, value, day)
 				if err := direct.Exec(ctx, stmt); err != nil {
@@ -66,6 +66,9 @@ func TestChangeFailureRateColumnTypesAgainstRealClickHouse(t *testing.T) {
 			})
 			if err != nil {
 				t.Fatalf("ReadFacts: %v", err)
+			}
+			if len(result.Facts) != 1 {
+				t.Fatalf("facts = %d, want 1 (state %s, reason %q)", len(result.Facts), result.State, result.Reason)
 			}
 			rows := result.Facts[0].Fields["daily_metrics"].Rows // newest day first
 			if len(rows) != 3 {
