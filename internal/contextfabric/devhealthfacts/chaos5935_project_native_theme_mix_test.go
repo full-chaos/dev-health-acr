@@ -235,7 +235,7 @@ func TestProjectInvestmentWindowBeforeTheStoredSpanNamesIt(t *testing.T) {
 		return result
 	}
 	// The stored span starts 2026-01-01.
-	if reason := read(time.Date(2025, 9, 28, 0, 0, 0, 0, time.UTC)).Reason; !strings.Contains(reason, "investment_window_beyond_stored_history") || !strings.Contains(reason, "2026-01-01T00:00:00Z") {
+	if reason := read(time.Date(2025, 9, 28, 0, 0, 0, 0, time.UTC)).Reason; !strings.Contains(reason, "investment_window_beyond_stored_history") || !strings.Contains(reason, "2026-01-01T00:00:00Z") || !strings.Contains(reason, "earliest persisted work unit of the organization starts") || !strings.Contains(reason, "this project's own span is not derived") {
 		t.Errorf("window before the span: reason %q", reason)
 	}
 	if reason := read(time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)).Reason; strings.Contains(reason, "investment_window_beyond_stored_history") {

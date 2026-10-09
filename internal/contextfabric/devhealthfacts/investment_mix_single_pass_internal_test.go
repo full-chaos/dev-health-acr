@@ -113,3 +113,19 @@ func TestPhasedProjectMixStatementsReadOneWideColumnGroupEach(t *testing.T) {
 		}
 	}
 }
+
+// The mix statement reads each repository's earliest unit through a sentinel
+// window; the unit listing, which pages only the requested window, must not.
+func TestSpanSentinelIsInTheMixStatementAndNotTheUnitListing(t *testing.T) {
+	t.Parallel()
+	sentinel := "arrayConcat([" + spanSentinelWindow + "], "
+	if !strings.Contains(repoMixStatement([]factTimeBound{{}}), sentinel) {
+		t.Error("the mix statement lacks the span sentinel window")
+	}
+	if strings.Contains(investmentUnitsStatement(factTimeBound{}, false), sentinel) {
+		t.Error("the unit listing carries the span sentinel window")
+	}
+	if got := strings.Count(repoMixStatement([]factTimeBound{{}, {}}), "work_unit_investments"); got != 1 {
+		t.Errorf("mix statement names work_unit_investments %d times with the sentinel, want 1", got)
+	}
+}

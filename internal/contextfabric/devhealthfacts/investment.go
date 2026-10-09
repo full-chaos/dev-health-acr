@@ -199,8 +199,13 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if mixUnavailable != "" {
 		mergeFactReadReason(&result, mixUnavailable)
 	}
-	if spanReason := span.reasonFor(timeBound); spanReason != "" && len(facts) > 0 {
-		mergeFactReadReason(&result, spanReason)
+	for _, fact := range facts {
+		if fact.Kind != contextfabric.FactInvestment {
+			continue
+		}
+		if reason := span.reasonFor(fact.Subject.CanonicalID, fact.Subject.Kind == contextfabric.SubjectProject, timeBound); reason != "" {
+			mergeFactReadReason(&result, reason)
+		}
 	}
 	if unitsCut {
 		result.Truncated = true

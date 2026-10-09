@@ -127,7 +127,8 @@ func readProjectMixScope(ctx context.Context, client contextpacket.ClickHouseQue
 		if err := row.Scan(&scope.unitIDs, &scope.versionsMs, &spanFrom); err != nil {
 			return err
 		}
-		return recordInvestmentSpanTime(ctx, spanFrom, len(scope.unitIDs) > 0)
+		recordInvestmentOrgSpan(ctx, spanFrom, len(scope.unitIDs) > 0)
+		return nil
 	}, extra...)
 	if err == nil && len(scope.versionsMs) != len(scope.unitIDs) {
 		err = fmt.Errorf("project mix scope arrays disagree: %d ids, %d versions", len(scope.unitIDs), len(scope.versionsMs))

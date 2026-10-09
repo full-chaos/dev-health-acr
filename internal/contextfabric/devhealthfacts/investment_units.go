@@ -63,7 +63,7 @@ type unitRow struct {
 func investmentUnitsStatement(b factTimeBound, withCursor bool) string {
 	memberships := []string{fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(0, b), 0)}
 	core := repoSplitCore(memberships, " from_ts, to_ts,",
-		",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts")
+		",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts", false)
 	keyset := ""
 	if withCursor {
 		keyset = `
