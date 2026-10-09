@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -522,12 +523,15 @@ func (a *Adapter) runFulltextQuery(ctx context.Context, key, orgID, query string
 		rows = rows[:limit]
 	}
 	candidates := make([]graphrank.CandidateNode, 0, len(rows))
+	omitted := 0
+	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, "fulltext_search", omitted) }()
 	for _, row := range rows {
 		n, ok := row["node"].(*node)
 		if !ok || n == nil {
 			continue
 		}
 		if inactiveTeamNode(n) {
+			omitted++
 			continue
 		}
 		candidate := toCandidateNode(n)

@@ -361,11 +361,13 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 	if err != nil {
 		return 0, rejected, false, err
 	}
-	inactive, err := p.inactiveTeamIDs(ctx, orgID)
+	inactive, err := p.inactiveTeamIDs(ctx, orgID, readinessTeamIDs(scanned))
 	if err != nil {
 		return 0, rejected, false, err
 	}
+	before := len(scanned)
 	scanned = dropInactiveTeamReadinessRows(scanned, inactive)
+	devhealthschema.NoteInactiveTeamsOmitted(ctx, "project_readiness", before-len(scanned))
 	// CHAOS-4645, design doc §5.2: additive, off the SAME project-identity
 	// join -- never changing an existing field.
 	//
@@ -554,12 +556,31 @@ func dropInactiveTeamReadinessRows(rows []readers.ReadinessProjectRow, inactive 
 	return kept
 }
 
-// inactiveTeamIDs is the set of the organization's inactive team ids (teams read
-// with FINAL, so the newest row per team decides).
-func (p *ReadinessProvider) inactiveTeamIDs(ctx context.Context, orgID string) (map[string]bool, error) {
+// readinessTeamIDs is the distinct team ids of the team-attributed rows.
+func readinessTeamIDs(rows []readers.ReadinessProjectRow) []string {
+	seen := map[string]bool{}
+	var ids []string
+	for _, row := range rows {
+		if row.HasTeam != 0 && !seen[row.TeamID] {
+			seen[row.TeamID] = true
+			ids = append(ids, row.TeamID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// inactiveTeamIDs is the subset of ids that are inactive teams of the
+// organization (teams read with FINAL, so the newest row per team decides). The
+// lookup is bound to the ids of the rows in hand, never the organization's whole
+// inactive list, so no row limit can hide an inactive team behind its page.
+func (p *ReadinessProvider) inactiveTeamIDs(ctx context.Context, orgID string, ids []string) (map[string]bool, error) {
 	out := map[string]bool{}
-	statement := withRowLimit(`SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND length({ids:Array(String)}) >= 0 AND ` + devhealthschema.InactiveTeamPredicate("") + ` ORDER BY id`)
-	err := p.facts.query(ctx, statement, orgID, []string{}, func(row contextpacket.ClickHouseRowScanner) error {
+	if len(ids) == 0 {
+		return out, nil
+	}
+	statement := `SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {ids:Array(String)} AND ` + devhealthschema.InactiveTeamPredicate("") + ` ORDER BY id`
+	err := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var id string
 		if err := row.Scan(&id); err != nil {
 			return err

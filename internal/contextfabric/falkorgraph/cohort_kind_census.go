@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
@@ -100,12 +101,15 @@ func (a *Adapter) cohortKindCensusCandidates(ctx context.Context, key, orgID str
 		rows = rows[:exactNameCandidateQueryLimit]
 	}
 	candidates := make([]graphrank.CandidateNode, 0, len(rows))
+	omitted := 0
+	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, "cohort_kind_census", omitted) }()
 	for _, r := range rows {
 		n, ok := r["n"].(*node)
 		if !ok || n == nil {
 			continue
 		}
 		if inactiveTeamNode(n) {
+			omitted++
 			continue
 		}
 		candidates = append(candidates, toCandidateNode(n))

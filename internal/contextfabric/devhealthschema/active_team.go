@@ -1,5 +1,10 @@
 package devhealthschema
 
+import (
+	"context"
+	"log/slog"
+)
+
 // ActiveTeamPredicate renders the active-team predicate for a read of the
 // teams table (read with FINAL, so the newest row per team wins). An inactive
 // team row is the superseded copy of a carried team and is never a subject.
@@ -28,4 +33,15 @@ func InactiveTeamPredicate(alias string) string {
 // row, and an unattributed row (team_id empty or NULL), stay.
 func ActiveTeamScopePredicate(column string) string {
 	return "ifNull(" + column + ", '') NOT IN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND " + InactiveTeamPredicate("") + ")"
+}
+
+// NoteInactiveTeamsOmitted records, at debug level, that rows of inactive teams
+// were left out of a read, so a changed candidate list or aggregate can be
+// traced to the active-team rule. site names the reader; a zero count logs
+// nothing.
+func NoteInactiveTeamsOmitted(ctx context.Context, site string, count int) {
+	if count <= 0 {
+		return
+	}
+	slog.Default().DebugContext(ctx, "inactive team rows omitted from a read", "site", site, "omitted", count)
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -61,6 +62,8 @@ func (a *Adapter) ListSubjectsByKind(ctx context.Context, principal storage.Prin
 	if page.More {
 		rows = rows[:pageSize]
 	}
+	omitted := 0
+	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, "list_subjects_by_kind", omitted) }()
 	for _, r := range rows {
 		n, ok := r["n"].(*node)
 		if !ok || n == nil {
@@ -72,6 +75,7 @@ func (a *Adapter) ListSubjectsByKind(ctx context.Context, principal storage.Prin
 			continue
 		}
 		if inactiveTeamNode(n) {
+			omitted++
 			continue
 		}
 		page.Nodes = append(page.Nodes, lookupNode(n, ""))
@@ -119,6 +123,8 @@ func (a *Adapter) FindSubjectsByExactName(ctx context.Context, principal storage
 	if page.More {
 		rows = rows[:pageSize]
 	}
+	omitted := 0
+	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, "find_subjects_by_exact_name", omitted) }()
 	for _, r := range rows {
 		n, ok := r["n"].(*node)
 		if !ok || n == nil {
@@ -129,6 +135,7 @@ func (a *Adapter) FindSubjectsByExactName(ctx context.Context, principal storage
 		}
 		page.After = propStringValue(n.Properties[propCanonicalID])
 		if inactiveTeamNode(n) {
+			omitted++
 			continue
 		}
 		candidate := toCandidateNode(n)

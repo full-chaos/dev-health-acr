@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -131,6 +132,7 @@ func fetchIdentityKind(ctx context.Context, client contextpacket.ClickHouseQuery
 				continue // relationship/episode/tombstone/progress-marker candidate
 			}
 			if inactiveTeamEntity(c.entity) {
+				devhealthschema.NoteInactiveTeamsOmitted(ctx, "identity_universe", 1)
 				continue // an inactive team is not a claimant: it must not make a name ambiguous
 			}
 			if c.entity.ObservedAt.After(observedAt) {

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -68,7 +69,11 @@ func (a *Adapter) AuthorizeStoredSubjects(ctx context.Context, principal storage
 			}
 			for _, row := range rows {
 				n, ok := row["n"].(*node)
-				if !ok || n == nil || inactiveTeamNode(n) {
+				if !ok || n == nil {
+					continue
+				}
+				if inactiveTeamNode(n) {
+					devhealthschema.NoteInactiveTeamsOmitted(ctx, "stored_subjects", 1)
 					continue
 				}
 				subject := contextfabric.SubjectRef{CanonicalID: propStringValue(n.Properties[propCanonicalID])}

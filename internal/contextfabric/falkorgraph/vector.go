@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
@@ -422,9 +423,10 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 		similarity float64
 	}
 	survivors := make([]survivor, 0, len(rows))
+	omittedInactive := 0
 	for _, row := range rows {
 		n, ok := row["node"].(*node)
-		if !ok || n == nil || inactiveTeamNode(n) {
+		if !ok || n == nil {
 			continue
 		}
 		distance, ok := row["score"].(float64)
@@ -436,10 +438,22 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 			// AC-3778-4: not close enough to be evidence of anything.
 			continue
 		}
+		if inactiveTeamNode(n) {
+			omittedInactive++
+			continue
+		}
 		survivors = append(survivors, survivor{node: n, similarity: similarity})
 	}
 	truncated := len(survivors) > returnCap
-	if truncated {
+	// The k-NN fetch is bounded and takes inactive teams as well as active
+	// nodes: when it came back full and an inactive team above the floor used a
+	// slot, an active candidate may lie beyond the fetch, so the search is
+	// reported truncated rather than complete.
+	if omittedInactive > 0 && len(rows) >= fetchK {
+		truncated = true
+	}
+	devhealthschema.NoteInactiveTeamsOmitted(ctx, "vector_search", omittedInactive)
+	if len(survivors) > returnCap {
 		survivors = survivors[:returnCap]
 	}
 	candidates := make([]graphrank.CandidateNode, 0, len(survivors))
