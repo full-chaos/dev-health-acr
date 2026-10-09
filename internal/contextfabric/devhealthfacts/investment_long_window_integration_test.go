@@ -46,10 +46,26 @@ func TestLongInvestmentWindowIsOneTrueWindowAgainstRealClickHouse(t *testing.T) 
 		}
 	}
 	// Window A = [end-180d, end-120d), B = [end-120d, end-60d), C = [end-60d, end).
-	seed("in-a", end.Add(-179*day), end.Add(-165*day), 10)
+	seed("in-a", end.Add(-181*day), end.Add(-165*day), 10)
 	seed("in-b", end.Add(-100*day), end.Add(-95*day), 7)
 	seed("spans-bc", end.Add(-70*day), end.Add(-50*day), 20)
 	seed("in-c", end.Add(-20*day), end.Add(-15*day), 10)
+
+	// A second team on its own repository whose earliest unit is far later: the
+	// span is per subject, so the same 180-day read names it for this team only.
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID("repo-m"), orgID, "acme/repo-m", "github", owned); err != nil {
+		t.Fatalf("seed repo m: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		orgID, "github", "team-late", repoUUID("repo-m"), "acme/repo-m", "exact", "native", uint8(1), uint16(100), int32(0), owned, nil, owned); err != nil {
+		t.Fatalf("seed ownership m: %v", err)
+	}
+	if err := direct.Exec(ctx,
+		`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"late", end.Add(-100*day), end.Add(-95*day), 5.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{},
+		fmt.Sprintf(`{"issues":[],"prs":["%s#pr%d"]}`, repoUUID("repo-m"), 424242), end.Add(-95*day), orgID); err != nil {
+		t.Fatalf("seed late wu: %v", err)
+	}
 
 	read := func(days int) (contextfabric.FactProviderResult, float64) {
 		t.Helper()
@@ -98,14 +114,30 @@ func TestLongInvestmentWindowIsOneTrueWindowAgainstRealClickHouse(t *testing.T) 
 		t.Fatalf("a window inside the stored history carries a span limitation: %q", whole.Reason)
 	}
 
-	// Window longer than the stored history: earliest stored unit starts at end-179d.
+	// Window longer than the stored history: earliest stored unit starts at end-181d.
 	long, longTotal := read(365)
 	if math.Abs(longTotal-47) > 1e-9 {
 		t.Fatalf("365d total = %v, want 47 (days before the history are not zero-filled into the mix)", longTotal)
 	}
-	if !strings.Contains(long.Reason, "investment_window_beyond_stored_history") || !strings.Contains(long.Reason, end.Add(-179*day).Format(time.RFC3339)) {
+	if !strings.Contains(long.Reason, "investment_window_beyond_stored_history") || !strings.Contains(long.Reason, end.Add(-181*day).Format(time.RFC3339)) {
 		t.Fatalf("365d reason = %q, want the span limitation naming the earliest stored unit", long.Reason)
 	}
+	// Two teams, one read: only the team whose own history starts after the window start is named.
+	startSix := end.Add(-180 * day)
+	both, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &startSix, End: &end},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject("team-long"), teamSubject("team-late")},
+	})
+	if err != nil || len(both.Facts) != 2 {
+		t.Fatalf("two-team read: err=%v facts=%d reason=%q", err, len(both.Facts), both.Reason)
+	}
+	if !strings.Contains(both.Reason, "team:team-late: the window starts") || !strings.Contains(both.Reason, end.Add(-100*day).Format(time.RFC3339)) {
+		t.Fatalf("team-late reason = %q, want its own earliest unit", both.Reason)
+	}
+	if strings.Contains(both.Reason, "team:team-long") {
+		t.Fatalf("team-long (history starts before the window) carries a span reason: %q", both.Reason)
+	}
+
 	// A 60-day window inside the stored history carries no span limitation.
 	short, _ := read(60)
 	if strings.Contains(short.Reason, "investment_window_beyond_stored_history") {

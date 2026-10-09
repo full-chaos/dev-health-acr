@@ -36,6 +36,9 @@ func OAuthScopeVocabulary() []string { return oauthvocab.ScopeVocabulary() }
 // OAuthClientKindVocabulary lists every client kind.
 func OAuthClientKindVocabulary() []string { return oauthvocab.ClientKindVocabulary() }
 
+// OAuthClientRefusalVocabulary lists every client refusal, none first.
+func OAuthClientRefusalVocabulary() []string { return oauthvocab.ClientRefusalVocabulary() }
+
 // OAuthStepLogMessage is the message of the one OAuth line.
 const OAuthStepLogMessage = "acr-api oauth step"
 
@@ -60,5 +63,6 @@ var OAuthStep = Event{
 		{Key: "client_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: OAuthClientKindVocabulary()},
 		{Key: "scopes", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: OAuthScopeVocabulary(), Applicability: "the requested scopes on an authorize ok line, the granted scopes on a token ok line, empty on every other line"},
 		{Key: "status", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "client_refusal", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: OAuthClientRefusalVocabulary(), Applicability: "why the client could not be identified or its redirect_uri was not accepted (on register, authorize, consent_preview, consent and device_authorization lines); none on every other line"},
 	},
 }

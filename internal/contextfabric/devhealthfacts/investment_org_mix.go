@@ -39,6 +39,7 @@ type orgMixRow struct {
 	Repositories     int64
 	ResolvedEffort   float64
 	UnresolvedEffort float64
+	EarliestUnit     time.Time
 }
 
 // orgMixStatement sums the per-(work unit, repository) split of
@@ -47,21 +48,21 @@ type orgMixRow struct {
 func orgMixStatement(bound factTimeBound) string {
 	memberships := []string{fmt.Sprintf("if(%s, 0, -1)", mixWindowPredicate(0, bound))}
 	statement := `SELECT
-	sumMap(mapApply((k, v) -> (k, if(repo_uuid != '', v * effort, 0.)), theme_distribution_json)) AS theme_effort,
-	sumIf(bugfix_share * effort, repo_uuid != '') AS bugfix_effort,
-	uniqExactIf(work_unit_id, repo_uuid != '') AS work_units,
-	uniqExactIf(repo_uuid, repo_uuid != '') AS repositories,
-	sumIf(effort, repo_uuid != '') AS resolved_effort,
-	sumIf(effort, repo_uuid = '') AS unresolved_effort,
+	sumMap(mapApply((k, v) -> (k, if(win >= 0 AND repo_uuid != '', v * effort, 0.)), theme_distribution_json)) AS theme_effort,
+	sumIf(bugfix_share * effort, win >= 0 AND repo_uuid != '') AS bugfix_effort,
+	uniqExactIf(work_unit_id, win >= 0 AND repo_uuid != '') AS work_units,
+	uniqExactIf(repo_uuid, win >= 0 AND repo_uuid != '') AS repositories,
+	sumIf(effort, win >= 0 AND repo_uuid != '') AS resolved_effort,
+	sumIf(effort, win >= 0 AND repo_uuid = '') AS unresolved_effort,
 	min(span_from) AS span_from
 FROM (
-	SELECT repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share, span_from
+	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share, span_from
 	FROM (
 		SELECT win, repo_uuid, work_unit_id, c,
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
 			effort_value, theme_distribution_json, bugfix_share, span_from
 		FROM (
-` + repoSplitCore(memberships, "", "") + `		)
+` + repoSplitCore(memberships, "", "", true) + `		)
 	)
 )`
 	return withRowLimit(statement)
@@ -79,9 +80,7 @@ func (p *InvestmentProvider) readOrgMixRow(ctx context.Context, orgID string, bo
 		if err := row.Scan(&out.Theme, &out.Bugfix, &workUnits, &repositories, &out.ResolvedEffort, &out.UnresolvedEffort, &spanFrom); err != nil {
 			return err
 		}
-		if spanErr := recordInvestmentSpanTime(ctx, spanFrom, workUnits > 0 || out.UnresolvedEffort > 0); spanErr != nil {
-			return spanErr
-		}
+		out.EarliestUnit = spanFrom
 		out.WorkUnits = int64(workUnits)
 		out.Repositories = int64(repositories)
 		return nil
@@ -117,6 +116,9 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 	row, err := p.readOrgMixRow(ctx, orgID, timeBound)
 	if err != nil {
 		return rejected, false, err
+	}
+	for _, subject := range own {
+		recordInvestmentSpan(ctx, subject.CanonicalID, row.EarliestUnit)
 	}
 	t := &repoThemeTotals{theme: row.Theme, bugfix: row.Bugfix, workUnits: row.WorkUnits, repos: row.Repositories}
 	if t.theme == nil {

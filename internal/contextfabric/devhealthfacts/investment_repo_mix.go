@@ -107,7 +107,7 @@ func repoMixStatement(bounds []factTimeBound) string {
 	for i, b := range bounds {
 		memberships = append(memberships, fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(i, b), i))
 	}
-	return withRowLimit(`SELECT toUInt8(win) AS window, repo_uuid AS repo_id,
+	return withRowLimit(`SELECT toUInt8(if(win < 0, 255, win)) AS window, repo_uuid AS repo_id,
 	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
 	sum(bugfix_share * effort) AS bugfix_effort,
 	uniqExact(work_unit_id) AS work_units,
@@ -119,7 +119,7 @@ FROM (
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
 			effort_value, theme_distribution_json, bugfix_share, span_from
 		FROM (
-` + repoSplitCore(memberships, "", "") + `		)
+` + repoSplitCore(memberships, "", "", true) + `		)
 	)
 	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
 )
@@ -132,7 +132,11 @@ ORDER BY win, repo_uuid`)
 // resolved to repositories, and c = distinct refs in each repository. unitCols
 // and unitAgg add columns only the unit listing reads; both empty yields the
 // mix statement's own text byte for byte.
-func repoSplitCore(memberships []string, unitCols, unitAgg string) string {
+func repoSplitCore(memberships []string, unitCols, unitAgg string, spanSentinel bool) string {
+	wins := "arrayFilter(w -> w >= 0, [" + strings.Join(memberships, ", ") + "])"
+	if spanSentinel {
+		wins = "arrayConcat([" + spanSentinelWindow + "], " + wins + ")"
+	}
 	return `			SELECT parsed.win AS win, parsed.work_unit_id AS work_unit_id,
 				if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')) AS repo_uuid,
 				uniqExact(if(repo_uuid = '', parsed.ref_text, concat(repo_uuid, '#', parsed.pr_number))) AS c,
@@ -144,9 +148,9 @@ func repoSplitCore(memberships []string, unitCols, unitAgg string) string {
 				SELECT work_unit_id, effort_value, theme_distribution_json, bugfix_share, span_from, win,` + unitCols + `
 					ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
 				FROM (
-					SELECT work_unit_id, repo_id, effort_value, theme_distribution_json, min(from_ts) OVER () AS span_from,` + unitCols + `
+					SELECT work_unit_id, repo_id, effort_value, theme_distribution_json, from_ts AS span_from,` + unitCols + `
 						ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS bugfix_share,
-						arrayFilter(w -> w >= 0, [` + strings.Join(memberships, ", ") + `]) AS wins,
+						` + wins + ` AS wins,
 						arrayConcat(
 							arrayMap(r -> (splitByString('#pr', r)[1], '', '', splitByString('#pr', r)[2], r),
 								arrayFilter(r -> match(r, '^[0-9a-fA-F-]{36}#pr[0-9]+$'), JSONExtract(structural_evidence_json, 'prs', 'Array(String)'))),
@@ -184,20 +188,30 @@ func repoSplitCore(memberships []string, unitCols, unitAgg string) string {
 `
 }
 
+// spanSentinelWindow is the pseudo-window every unit joins in the mix
+// statement, whatever the requested windows: its rows carry each repository's
+// earliest unit start (the stored span of that subject) and are served as
+// window 255, never as a mix window. The unit listing does not add it.
+const spanSentinelWindow = "-1"
+
+// spanSentinelServed is the window number the sentinel rows come out as.
+const spanSentinelServed = 255
+
 // repoMixChunk bounds how many repositories one statement reads. Each
-// repository yields one row per window (at most 2), so 90 repositories stay
+// repository yields one row per window (at most 2) plus its span row, so 60 repositories stay
 // strictly under maxFactRowsPerQuery (200): the row limit is never reached and
 // a partial mix can never be served as complete. More repositories are read by
 // more statements, in a stable order, never by a silently truncated one.
-const repoMixChunk = 90
+const repoMixChunk = 60
 
 // readRepoMixRows reads the mix of repoIDs for every window in bounds with ONE
 // pass over work_unit_investments per chunk of repositories; result[i] holds
 // window i's rows.
-func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, repoIDs []string, bounds ...factTimeBound) ([][]repoMixRow, error) {
+func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, repoIDs []string, bounds ...factTimeBound) ([][]repoMixRow, map[string]time.Time, error) {
 	out := make([][]repoMixRow, len(bounds))
+	spans := map[string]time.Time{}
 	if len(repoIDs) == 0 {
-		return out, nil
+		return out, spans, nil
 	}
 	sorted := append([]string(nil), repoIDs...)
 	sort.Strings(sorted)
@@ -227,8 +241,14 @@ func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, 
 			if err := row.Scan(&window, &r.RepoID, &r.Theme, &r.Bugfix, &workUnits, &spanFrom); err != nil {
 				return err
 			}
-			if spanErr := recordInvestmentSpanTime(ctx, spanFrom, true); spanErr != nil {
-				return spanErr
+			if window == spanSentinelServed {
+				got++
+				if !spanFrom.IsZero() && spanFrom.Unix() > 0 {
+					if prev, ok := spans[r.RepoID]; !ok || spanFrom.Before(prev) {
+						spans[r.RepoID] = spanFrom.UTC()
+					}
+				}
+				return nil
 			}
 			if int(window) < 0 || int(window) >= len(out) {
 				return fmt.Errorf("repository theme mix returned window %d for %d requested", window, len(out))
@@ -240,16 +260,16 @@ func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, 
 			return nil
 		}, extra...)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if got >= maxFactRowsPerQuery {
 			// Unreachable by construction (repoMixChunk * windows < the
 			// limit); if a future change breaks that, fail loudly, never
 			// serve a truncated mix as complete.
-			return nil, fmt.Errorf("repository theme mix chunk reached the row limit (%d rows for %d repositories)", got, end-start)
+			return nil, nil, fmt.Errorf("repository theme mix chunk reached the row limit (%d rows for %d repositories)", got, end-start)
 		}
 	}
-	return out, nil
+	return out, spans, nil
 }
 
 // repoThemeTotals folds one repository's rows into per-theme effort, the
@@ -347,9 +367,12 @@ func (p *InvestmentProvider) readRepositoryThemeMix(ctx context.Context, orgID s
 	if len(ids) == 0 {
 		return rejected, nil
 	}
-	windows, err := p.readRepoMixRows(ctx, orgID, ids, timeBound)
+	windows, spans, err := p.readRepoMixRows(ctx, orgID, ids, timeBound)
 	if err != nil {
 		return rejected, err
+	}
+	for repoID, from := range spans {
+		recordInvestmentSpan(ctx, repositoryPrefix+repoID, from)
 	}
 	grouped := groupRepoMix(windows[0])
 	repoIDs := make([]string, 0, len(grouped))
@@ -412,9 +435,16 @@ func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string,
 		repoIDs = append(repoIDs, id)
 	}
 	sort.Strings(repoIDs)
-	windows, err := p.readRepoMixRows(ctx, orgID, repoIDs, bounds...)
+	windows, spans, err := p.readRepoMixRows(ctx, orgID, repoIDs, bounds...)
 	if err != nil {
 		return nil, nil, err
+	}
+	for teamID, repos := range ownedByWindow[0] {
+		for _, repoID := range repos {
+			if from, ok := spans[repoID]; ok {
+				recordInvestmentSpan(ctx, teamPrefix+teamID, from)
+			}
+		}
 	}
 	current = sumOwnedRepoMix(ownedByWindow[0], groupRepoMix(windows[0]))
 	if prior != nil {

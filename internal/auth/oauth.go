@@ -132,6 +132,10 @@ type OAuthError struct {
 	// RetryAfter is set for an RFC 8628 slow_down refusal: how long the
 	// client must wait before polling again. Zero for every other refusal.
 	RetryAfter time.Duration
+	// ClientRefusal is the oauthvocab client refusal class when the client
+	// could not be identified or its redirect_uri was not accepted; empty
+	// otherwise.
+	ClientRefusal string
 }
 
 // OAuthRedirectMismatch is diagnostic-only, never a secret: the origins of a
@@ -157,11 +161,15 @@ type OAuthClientMetadataFetcher interface {
 }
 
 // OAuthClientMetadata is the part of a client's metadata this server uses.
+// TokenEndpointAuthMethodsSupported is not an RFC 7591 member: a client that
+// can authenticate more than one way lists them there and uses the one the
+// server's metadata advertises.
 type OAuthClientMetadata struct {
-	ClientID                string   `json:"client_id"`
-	ClientName              string   `json:"client_name"`
-	RedirectURIs            []string `json:"redirect_uris"`
-	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
+	ClientID                          string   `json:"client_id"`
+	ClientName                        string   `json:"client_name"`
+	RedirectURIs                      []string `json:"redirect_uris"`
+	TokenEndpointAuthMethod           string   `json:"token_endpoint_auth_method"`
+	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
 }
 
 // OAuthConfig configures the OAuth service.
@@ -362,13 +370,17 @@ type OAuthResolvedClient struct {
 }
 
 // ResolveClient identifies a client by its ID: a dynamic registration, or a
-// metadata document when enabled. Anything else is invalid_client.
+// metadata document when enabled. Anything else is invalid_client. Every
+// refusal carries its client refusal class.
 func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAuthResolvedClient, error) {
+	refuseMetadata := func(refusal string) (OAuthResolvedClient, error) {
+		return OAuthResolvedClient{}, &OAuthError{Code: "invalid_client", Outcome: oauthvocab.OutcomeInvalidClientMetadata, ClientRefusal: refusal}
+	}
 	switch {
 	case storage.IsDynamicOAuthClientID(clientID):
 		client, err := s.store.GetClient(ctx, clientID)
 		if errors.Is(err, storage.ErrNotFound) {
-			return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClient, false)
+			return OAuthResolvedClient{}, &OAuthError{Code: "invalid_client", Outcome: oauthvocab.OutcomeInvalidClient, ClientRefusal: oauthvocab.ClientRefusalUnknownClient}
 		}
 		if err != nil {
 			return OAuthResolvedClient{}, fmt.Errorf("%w: read client: %w", ErrOAuthUnavailable, err)
@@ -377,19 +389,24 @@ func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAut
 	case s.metadata != nil && storage.ValidOAuthClientMetadataURL(clientID):
 		document, err := s.metadata.Fetch(ctx, clientID)
 		if err != nil {
-			return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClientMetadata, false)
+			var failure *ClientMetadataError
+			if errors.As(err, &failure) && failure.Refusal != oauthvocab.ClientRefusalNone && slices.Contains(oauthvocab.ClientRefusalVocabulary(), failure.Refusal) {
+				return refuseMetadata(failure.Refusal)
+			}
+			return refuseMetadata(oauthvocab.ClientRefusalFetchFailed)
 		}
-		if document.ClientID != clientID || len(document.RedirectURIs) == 0 {
-			return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClientMetadata, false)
+		if document.ClientID != clientID {
+			return refuseMetadata(oauthvocab.ClientRefusalBadClientID)
 		}
-		switch document.TokenEndpointAuthMethod {
-		case "", "none":
-		default:
-			return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClientMetadata, false)
+		if len(document.RedirectURIs) == 0 {
+			return refuseMetadata(oauthvocab.ClientRefusalInvalidRedirectURIs)
+		}
+		if !publicTokenEndpointAuth(document) {
+			return refuseMetadata(oauthvocab.ClientRefusalAuthMethodUnsupported)
 		}
 		for _, redirect := range document.RedirectURIs {
 			if !storage.ValidOAuthRedirectURI(redirect) {
-				return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClientMetadata, false)
+				return refuseMetadata(oauthvocab.ClientRefusalInvalidRedirectURIs)
 			}
 		}
 		name := strings.TrimSpace(document.ClientName)
@@ -398,7 +415,38 @@ func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAut
 		}
 		return OAuthResolvedClient{ClientID: clientID, Kind: storage.OAuthClientKindMetadataDocument, Name: name, RedirectURIs: document.RedirectURIs}, nil
 	default:
-		return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClient, false)
+		return OAuthResolvedClient{}, &OAuthError{Code: "invalid_client", Outcome: oauthvocab.OutcomeInvalidClient, ClientRefusal: unresolvedClientRefusal(clientID)}
+	}
+}
+
+// publicTokenEndpointAuth reports whether a metadata-document client can use
+// the token endpoint as a public client. A document that carries
+// token_endpoint_auth_methods_supported, even an empty list, is public only
+// when "none" is on the list, whatever method it names (this server
+// advertises only "none", so the client uses it). A document without the list
+// (nil after decoding) is public when it names "none" or no method. A client
+// that cannot use "none" is refused, never downgraded.
+func publicTokenEndpointAuth(document OAuthClientMetadata) bool {
+	if document.TokenEndpointAuthMethodsSupported != nil {
+		return slices.Contains(document.TokenEndpointAuthMethodsSupported, "none")
+	}
+	return document.TokenEndpointAuthMethod == "" || document.TokenEndpointAuthMethod == "none"
+}
+
+// unresolvedClientRefusal classifies a client ID that is neither a dynamic
+// registration nor an accepted metadata document URL.
+func unresolvedClientRefusal(clientID string) string {
+	parsed, err := url.Parse(clientID)
+	if err != nil {
+		return oauthvocab.ClientRefusalUnknownClient
+	}
+	switch {
+	case parsed.Scheme == "https":
+		return oauthvocab.ClientRefusalUnsupportedClientID
+	case parsed.Scheme != "" && parsed.Host != "":
+		return oauthvocab.ClientRefusalNotHTTPS
+	default:
+		return oauthvocab.ClientRefusalUnknownClient
 	}
 }
 
@@ -452,7 +500,7 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 	}
 	if !matched {
 		return OAuthAuthorization{}, &OAuthError{
-			Code: "invalid_request", Outcome: oauthvocab.OutcomeInvalidRedirectURI,
+			Code: "invalid_request", Outcome: oauthvocab.OutcomeInvalidRedirectURI, ClientRefusal: oauthvocab.ClientRefusalRedirectURIMismatch,
 			RedirectMismatch: &OAuthRedirectMismatch{
 				Registered: redirectOrigins(client.RedirectURIs),
 				Presented:  safeRedirectOrigin(request.RedirectURI),
@@ -505,7 +553,7 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 	if errors.Is(err, storage.ErrOAuthClientGone) {
 		// The idle-client purge removed the client after it was resolved above:
 		// answer as for a client that was never registered (it registers again).
-		return OAuthAuthorization{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClient, false)
+		return OAuthAuthorization{}, &OAuthError{Code: "invalid_client", Outcome: oauthvocab.OutcomeInvalidClient, ClientRefusal: oauthvocab.ClientRefusalUnknownClient}
 	}
 	if err != nil {
 		return OAuthAuthorization{}, fmt.Errorf("%w: store authorization request: %w", ErrOAuthUnavailable, err)
@@ -670,7 +718,7 @@ func (s *OAuthService) ConsentRequest(ctx context.Context, handle string, princi
 	if err != nil {
 		var refusal *OAuthError
 		if errors.As(err, &refusal) {
-			return OAuthConsentRequest{}, request.ClientKind, oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidClient, false)
+			return OAuthConsentRequest{}, request.ClientKind, &OAuthError{Code: OAuthConsentCodeInvalid, Outcome: oauthvocab.OutcomeInvalidClient, ClientRefusal: refusal.ClientRefusal}
 		}
 		return OAuthConsentRequest{}, request.ClientKind, err
 	}
@@ -924,7 +972,7 @@ func (s *OAuthService) StartDeviceAuthorization(ctx context.Context, request OAu
 		Resource: resource, Scope: scope, CreatedAt: now, ExpiresAt: start.ExpiresAt,
 	})
 	if errors.Is(err, storage.ErrOAuthClientGone) {
-		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClient, false)
+		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, &OAuthError{Code: "invalid_client", Outcome: oauthvocab.OutcomeInvalidClient, ClientRefusal: oauthvocab.ClientRefusalUnknownClient}
 	}
 	if err != nil {
 		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, fmt.Errorf("%w: store device grant: %w", ErrOAuthUnavailable, err)

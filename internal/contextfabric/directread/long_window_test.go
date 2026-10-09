@@ -1,6 +1,7 @@
 package directread
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -38,5 +39,17 @@ func TestWindowMaximumIsDeclaredPerKind(t *testing.T) {
 		if err == nil && c.window.Mode == WindowTrailing && effective.Start != nil && effective.End.Sub(*effective.Start) != time.Duration(c.window.Days)*24*time.Hour {
 			t.Errorf("%s: echoed span %v", c.name, effective.End.Sub(*effective.Start))
 		}
+	}
+}
+
+func TestWindowRefusalAdviceFollowsTheKind(t *testing.T) {
+	reader := &FactsReader{now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }}
+	_, _, err := reader.window(&RequestWindow{Mode: WindowTrailing, Days: 366}, MaxRangeDaysFor([]contextfabric.FactKind{contextfabric.FactInvestment}))
+	if err == nil || !strings.Contains(err.Error(), "do not add shorter windows") || strings.Contains(err.Error(), "as several windows") {
+		t.Errorf("investment refusal: %v", err)
+	}
+	_, _, err = reader.window(&RequestWindow{Mode: WindowTrailing, Days: 61}, MaxRangeDaysFor([]contextfabric.FactKind{contextfabric.FactHealth}))
+	if err == nil || !strings.Contains(err.Error(), "read a longer period as several windows") {
+		t.Errorf("health refusal: %v", err)
 	}
 }

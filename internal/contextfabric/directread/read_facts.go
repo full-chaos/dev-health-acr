@@ -52,6 +52,17 @@ var maxRangeDaysByKind = map[contextfabric.FactKind]int{
 	contextfabric.FactInvestment: 365,
 }
 
+// windowRefusalAdvice is the closing advice of a window refusal. A kind whose
+// maximum is the default may be read as several windows; a kind with a larger
+// declared maximum counts a work unit that spans a boundary whole in each
+// window, so adding shorter windows overcounts and is not advised.
+func windowRefusalAdvice(maxDays int) string {
+	if maxDays > MaxRangeDays {
+		return "; ask one window of at most that length and do not add shorter windows: a work unit that spans a window boundary counts in each of them"
+	}
+	return "; read a longer period as several windows"
+}
+
 // MaxRangeDaysFor is the widest range or trailing window one read may take
 // for kinds: the smallest maximum among them, so a mixed read is held to its
 // most limited kind.
@@ -740,7 +751,7 @@ func (r *FactsReader) window(requested *RequestWindow, maxDays int) (contextfabr
 			start, end = requested.Start.UTC(), requested.End.UTC()
 		} else {
 			if requested.Days < 1 || requested.Days > maxDays || requested.AsOf != nil || requested.Start != nil || requested.End != nil {
-				return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("a trailing window takes days from 1 to %d only for the kinds asked", maxDays)
+				return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("a trailing window takes days from 1 to %d only for the kinds asked%s", maxDays, windowRefusalAdvice(maxDays))
 			}
 			end = r.now().UTC().Truncate(time.Second)
 			start = end.Add(-time.Duration(requested.Days) * 24 * time.Hour)
@@ -749,7 +760,7 @@ func (r *FactsReader) window(requested *RequestWindow, maxDays int) (contextfabr
 			return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("start must be before end")
 		}
 		if end.Sub(start) > time.Duration(maxDays)*24*time.Hour {
-			return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("a window spans at most %d days for the kinds asked; read a longer period as several windows", maxDays)
+			return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("a window spans at most %d days for the kinds asked%s", maxDays, windowRefusalAdvice(maxDays))
 		}
 		return contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
 			EffectiveWindow{Mode: requested.Mode, Axis: string(contextfabric.TemporalRange), Start: &start, End: &end}, nil

@@ -34,11 +34,15 @@ type oauthHarness struct {
 
 type fakeMetadata struct {
 	documents map[string]OAuthClientMetadata
+	errs      map[string]error
 	calls     int
 }
 
 func (f *fakeMetadata) Fetch(_ context.Context, clientID string) (OAuthClientMetadata, error) {
 	f.calls++
+	if err, ok := f.errs[clientID]; ok {
+		return OAuthClientMetadata{}, err
+	}
 	document, ok := f.documents[clientID]
 	if !ok {
 		return OAuthClientMetadata{}, ErrClientMetadataUnavailable
@@ -486,13 +490,23 @@ func TestOAuthClientMetadataDocumentResolution(t *testing.T) {
 		name     string
 		document *OAuthClientMetadata
 		want     string
+		refusal  string
 	}{
-		{"valid", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}}, ""},
-		{"absent", nil, oauthvocab.OutcomeInvalidClientMetadata},
-		{"other client id", &OAuthClientMetadata{ClientID: "https://evil.example.test/c.json", RedirectURIs: []string{testRedirect}}, oauthvocab.OutcomeInvalidClientMetadata},
-		{"no redirects", &OAuthClientMetadata{ClientID: id}, oauthvocab.OutcomeInvalidClientMetadata},
-		{"confidential", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt"}, oauthvocab.OutcomeInvalidClientMetadata},
-		{"bad redirect", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{"http://evil.example.test/cb"}}, oauthvocab.OutcomeInvalidClientMetadata},
+		{"valid", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}}, "", ""},
+		{"none named", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "none"}, "", ""},
+		{"private_key_jwt with none listed", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt", TokenEndpointAuthMethodsSupported: []string{"none", "private_key_jwt"}}, "", ""},
+		{"absent", nil, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalFetchFailed},
+		{"other client id", &OAuthClientMetadata{ClientID: "https://evil.example.test/c.json", RedirectURIs: []string{testRedirect}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalBadClientID},
+		{"no redirects", &OAuthClientMetadata{ClientID: id}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalInvalidRedirectURIs},
+		{"private_key_jwt only", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt", TokenEndpointAuthMethodsSupported: []string{"private_key_jwt"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
+		{"private_key_jwt without a list", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt"}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
+		{"client_secret_basic with none listed elsewhere", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "client_secret_basic", TokenEndpointAuthMethodsSupported: []string{"client_secret_post"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
+		{"bad redirect", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{"http://evil.example.test/cb"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalInvalidRedirectURIs},
+		{"no method with a confidential list", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethodsSupported: []string{"private_key_jwt"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
+		{"none named with a confidential list", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "none", TokenEndpointAuthMethodsSupported: []string{"private_key_jwt"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
+		{"no method with an empty list", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethodsSupported: []string{}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
+		{"none named with an empty list", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "none", TokenEndpointAuthMethodsSupported: []string{}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
+		{"none listed in another case", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt", TokenEndpointAuthMethodsSupported: []string{"None"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			delete(h.meta.documents, id)
@@ -506,17 +520,40 @@ func TestOAuthClientMetadataDocumentResolution(t *testing.T) {
 				}
 				return
 			}
-			if outcomeOf(err) != tc.want {
-				t.Fatalf("outcome = %s, want %s", outcomeOf(err), tc.want)
+			if outcomeOf(err) != tc.want || clientRefusalOf(err) != tc.refusal {
+				t.Fatalf("outcome = %s refusal = %s, want %s %s", outcomeOf(err), clientRefusalOf(err), tc.want, tc.refusal)
 			}
 		})
 	}
-	for _, id := range []string{"http://client.example.test/c.json", "https://client.example.test/", "https://client.example.test", "https://client.example.test/a/../c.json"} {
+	for id, refusal := range map[string]string{
+		"http://client.example.test/c.json":       oauthvocab.ClientRefusalNotHTTPS,
+		"https://client.example.test/":            oauthvocab.ClientRefusalUnsupportedClientID,
+		"https://client.example.test":             oauthvocab.ClientRefusalUnsupportedClientID,
+		"https://client.example.test/a/../c.json": oauthvocab.ClientRefusalUnsupportedClientID,
+		"not-a-client":                            oauthvocab.ClientRefusalUnknownClient,
+		"https://%zz/c.json":                      oauthvocab.ClientRefusalUnknownClient,
+		"HTTPS://client.example.test/":            oauthvocab.ClientRefusalUnsupportedClientID,
+		"HTTP://client.example.test/c.json":       oauthvocab.ClientRefusalNotHTTPS,
+		"ftp://client.example.test/c.json":        oauthvocab.ClientRefusalNotHTTPS,
+		"wss://client.example.test/c.json":        oauthvocab.ClientRefusalNotHTTPS,
+		"urn:example:client":                      oauthvocab.ClientRefusalUnknownClient,
+		"mailto:client@example.test":              oauthvocab.ClientRefusalUnknownClient,
+		"//client.example.test/c.json":            oauthvocab.ClientRefusalUnknownClient,
+		"acrc_00000000000000000000000000000000":   oauthvocab.ClientRefusalUnknownClient,
+	} {
 		calls := h.meta.calls
-		if _, err := h.oauth.ResolveClient(context.Background(), id); outcomeOf(err) != oauthvocab.OutcomeInvalidClient || h.meta.calls != calls {
-			t.Fatalf("client id %q: %v (fetched %d times), want invalid_client without a fetch", id, err, h.meta.calls-calls)
+		if _, err := h.oauth.ResolveClient(context.Background(), id); outcomeOf(err) != oauthvocab.OutcomeInvalidClient || clientRefusalOf(err) != refusal || h.meta.calls != calls {
+			t.Fatalf("client id %q: %v refusal %s (fetched %d times), want invalid_client %s without a fetch", id, err, clientRefusalOf(err), h.meta.calls-calls, refusal)
 		}
 	}
+}
+
+func clientRefusalOf(err error) string {
+	var oauthErr *OAuthError
+	if errors.As(err, &oauthErr) {
+		return oauthErr.ClientRefusal
+	}
+	return ""
 }
 
 func TestPublicAddress(t *testing.T) {
@@ -1021,5 +1058,81 @@ func TestResolveResourceAcceptsEndpointAliases(t *testing.T) {
 		if ok != want || (ok && got != requested) {
 			t.Errorf("resolveResource(%q) = %q, %v; want ok=%v as requested", requested, got, ok, want)
 		}
+	}
+}
+
+// TestOAuthConsentCarriesTheClientRefusal: a metadata-document client whose
+// document stops resolving between /authorize and the consent page's read is
+// refused there with the class of the failed resolution.
+func TestOAuthConsentCarriesTheClientRefusal(t *testing.T) {
+	h := newOAuthHarness(t)
+	id := "https://client.example.test/oauth/client.json"
+	h.meta.documents[id] = OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt", TokenEndpointAuthMethodsSupported: []string{"none"}}
+	_, challenge := pkce(t)
+	authorization, err := h.oauth.Authorize(context.Background(), OAuthAuthorizeRequest{ResponseType: "code", ClientID: id, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256", State: "st"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.meta.documents[id] = OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt"}
+	_, kind, err := h.oauth.ConsentRequest(context.Background(), authorization.Handle, webPrincipal(nil))
+	if outcomeOf(err) != oauthvocab.OutcomeInvalidClient || clientRefusalOf(err) != oauthvocab.ClientRefusalAuthMethodUnsupported || kind != storage.OAuthClientKindMetadataDocument {
+		t.Fatalf("consent read = %v refusal %q kind %q, want invalid_client auth_method_unsupported metadata_document", err, clientRefusalOf(err), kind)
+	}
+}
+
+// TestOAuthClientRefusalFromAFetcherStaysInTheVocabulary: a fetcher is an
+// injected interface, so a refusal class it returns outside the closed
+// vocabulary is reported as fetch_failed, never forwarded.
+func TestOAuthClientRefusalFromAFetcherStaysInTheVocabulary(t *testing.T) {
+	h := newOAuthHarness(t)
+	id := "https://client.example.test/oauth/client.json"
+	for injected, want := range map[string]string{
+		"not-a-class":                          oauthvocab.ClientRefusalFetchFailed,
+		"":                                     oauthvocab.ClientRefusalFetchFailed,
+		oauthvocab.ClientRefusalNone:           oauthvocab.ClientRefusalFetchFailed,
+		oauthvocab.ClientRefusalTooLarge:       oauthvocab.ClientRefusalTooLarge,
+		oauthvocab.ClientRefusalPrivateAddress: oauthvocab.ClientRefusalPrivateAddress,
+	} {
+		h.meta.errs = map[string]error{id: &ClientMetadataError{Refusal: injected}}
+		if _, err := h.oauth.ResolveClient(context.Background(), id); outcomeOf(err) != oauthvocab.OutcomeInvalidClientMetadata || clientRefusalOf(err) != want {
+			t.Errorf("injected refusal %q: %v refusal %q, want %q", injected, err, clientRefusalOf(err), want)
+		}
+	}
+}
+
+// clientGoneStore answers every row that needs the client's row as if the
+// idle-client purge had removed it after the client was resolved.
+type clientGoneStore struct {
+	storage.OAuthStore
+}
+
+func (clientGoneStore) CreateAuthorizationRequest(context.Context, storage.OAuthAuthorizationRequest) (storage.OAuthAuthorizationRequest, error) {
+	return storage.OAuthAuthorizationRequest{}, storage.ErrOAuthClientGone
+}
+
+func (clientGoneStore) CreateDeviceGrant(context.Context, storage.OAuthDeviceGrant) (storage.OAuthDeviceGrant, error) {
+	return storage.OAuthDeviceGrant{}, storage.ErrOAuthClientGone
+}
+
+// TestOAuthPurgedClientIsAnUnknownClient: a dynamic client the purge removes
+// between its resolution and the stored row is refused as unknown_client.
+func TestOAuthPurgedClientIsAnUnknownClient(t *testing.T) {
+	h := newOAuthHarness(t)
+	service, err := NewOAuthService(clientGoneStore{memory.NewOAuthStore(func() time.Time { return h.now })}, h.devices, OAuthConfig{Issuer: testIssuer, Resources: []string{testResource}, Now: func() time.Time { return h.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := service.Register(context.Background(), OAuthRegistrationRequest{RedirectURIs: []string{testRedirect}, GrantTypes: []string{"authorization_code", OAuthDeviceCodeGrantType}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, challenge := pkce(t)
+	_, err = service.Authorize(context.Background(), OAuthAuthorizeRequest{ResponseType: "code", ClientID: client.ClientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256", State: "st"})
+	if outcomeOf(err) != oauthvocab.OutcomeInvalidClient || clientRefusalOf(err) != oauthvocab.ClientRefusalUnknownClient {
+		t.Fatalf("authorize = %v refusal %q, want invalid_client unknown_client", err, clientRefusalOf(err))
+	}
+	_, err = service.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: client.ClientID})
+	if outcomeOf(err) != oauthvocab.OutcomeInvalidClient || clientRefusalOf(err) != oauthvocab.ClientRefusalUnknownClient {
+		t.Fatalf("device authorization = %v refusal %q, want invalid_client unknown_client", err, clientRefusalOf(err))
 	}
 }

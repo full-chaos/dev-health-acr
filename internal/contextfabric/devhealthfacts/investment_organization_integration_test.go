@@ -9,7 +9,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -121,5 +123,54 @@ func TestOrganizationThemeMixCountsASharedRepositoryOnceAgainstRealClickHouse(t 
 	}
 	if team1["feature_delivery"]+team2["feature_delivery"] == got["feature_delivery"] {
 		t.Fatalf("summed team feature effort equals the org's; the shared repository is not double counted in the fixture")
+	}
+}
+
+// A unit outside the requested window must not enter the organization's
+// shares (the stored-span rows ride the same statement), while the window that
+// starts before the earliest stored unit still says so.
+func TestOrganizationThemeMixKeepsOutOfWindowUnitsOutOfTheSharesAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	createCHAOS5930Tables(t, ctx, direct)
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
+	const orgID = "org-organization-window"
+	inWindow, early := ts(2026, 9, 18, 0, 0, 0), ts(2026, 2, 1, 0, 0, 0)
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`,
+		repoUUID("repo-w"), orgID, "acme/repo-w", "github", inWindow); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	seed := func(id string, at time.Time, themes map[string]float64, effort float64, pr string) {
+		t.Helper()
+		if err := direct.Exec(ctx,
+			`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+			id, at, at, effort, themes, map[string]float64{}, fmt.Sprintf(`{"issues":[],"prs":["%s#%s"]}`, repoUUID("repo-w"), pr), inWindow, orgID); err != nil {
+			t.Fatalf("seed wu %s: %v", id, err)
+		}
+	}
+	seed("wu-in", inWindow, map[string]float64{"feature_delivery": 1.0}, 10, "pr1")
+	seed("wu-old", early, map[string]float64{"operational": 1.0}, 90, "pr2")
+	start, end := ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 30, 0, 0, 0)
+	read := func(start time.Time) contextfabric.FactProviderResult {
+		t.Helper()
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
+			Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{organizationSubject(orgID)},
+		})
+		if err != nil || len(result.Facts) != 1 {
+			t.Fatalf("read: err=%v facts=%d reason=%q", err, len(result.Facts), result.Reason)
+		}
+		return result
+	}
+	inside := read(start)
+	if got := *inside.Facts[0].Fields["theme_feature_delivery"].Number; math.Abs(got-1) > 1e-9 {
+		t.Fatalf("theme_feature_delivery = %v, want 1 (the early unit is outside the window)", got)
+	}
+	if strings.Contains(inside.Reason, "investment_window_beyond_stored_history") {
+		t.Fatalf("a window inside the stored history carries a span limitation: %q", inside.Reason)
+	}
+	before := read(ts(2026, 1, 1, 0, 0, 0))
+	if !strings.Contains(before.Reason, "investment_window_beyond_stored_history") {
+		t.Fatalf("a window that starts before the earliest stored unit names no span: %q", before.Reason)
 	}
 }

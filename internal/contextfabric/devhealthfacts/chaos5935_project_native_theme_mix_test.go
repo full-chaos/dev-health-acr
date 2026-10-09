@@ -235,10 +235,27 @@ func TestProjectInvestmentWindowBeforeTheStoredSpanNamesIt(t *testing.T) {
 		return result
 	}
 	// The stored span starts 2026-01-01.
-	if reason := read(time.Date(2025, 9, 28, 0, 0, 0, 0, time.UTC)).Reason; !strings.Contains(reason, "investment_window_beyond_stored_history") || !strings.Contains(reason, "2026-01-01T00:00:00Z") {
+	if reason := read(time.Date(2025, 9, 28, 0, 0, 0, 0, time.UTC)).Reason; !strings.Contains(reason, "investment_window_beyond_stored_history") || !strings.Contains(reason, "2026-01-01T00:00:00Z") || !strings.Contains(reason, "earliest persisted work unit of the organization starts") || !strings.Contains(reason, "this project's own span is not derived") {
 		t.Errorf("window before the span: reason %q", reason)
 	}
 	if reason := read(time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)).Reason; strings.Contains(reason, "investment_window_beyond_stored_history") {
 		t.Errorf("window inside the span carries the limitation: %q", reason)
+	}
+}
+
+func TestProjectInvestmentSpanIsStatedWhenNoUnitOverlapsTheWindow(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: nativePhasedTables()}
+	start, end := time.Date(2025, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2025, 10, 1, 0, 0, 0, 0, time.UTC)
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, Kind: contextfabric.FactInvestment,
+		Subjects: []contextfabric.SubjectRef{projectSubject("linear", "a")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(result.Facts) != 0 || !strings.Contains(result.Reason, "investment_window_beyond_stored_history") {
+		t.Errorf("facts=%d reason=%q, want no fact and the organization span reason", len(result.Facts), result.Reason)
 	}
 }

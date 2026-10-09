@@ -86,6 +86,26 @@
         "key": "status",
         "type": "int",
         "presence": "required"
+      },
+      {
+        "key": "client_refusal",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "unknown_client",
+          "not_https",
+          "unsupported_client_id",
+          "fetch_failed",
+          "private_address",
+          "too_large",
+          "invalid_document",
+          "bad_client_id",
+          "invalid_redirect_uris",
+          "auth_method_unsupported",
+          "redirect_uri_mismatch"
+        ],
+        "applicability": "why the client could not be identified or its redirect_uri was not accepted (on register, authorize, consent_preview, consent and device_authorization lines); none on every other line"
       }
     ]
   },

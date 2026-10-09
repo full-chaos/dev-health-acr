@@ -227,7 +227,7 @@ func clockTestRules() []stringRule {
 		{"SELECT r.review_id", []string{"review1", "approved", "r1"}, nil},
 		{"SELECT c.run_id", []string{"item1", "success", "r1"}, nil},
 		{"SELECT d.deployment_id", []string{"item1", "success", "production", "r1"}, nil},
-		{"SELECT toUInt8(win) AS window", []string{"r1"}, []float64{0, 0.5, 3}},
+		{"SELECT toUInt8(if(win < 0, 255, win)) AS window", []string{"r1"}, []float64{0, 0.5, 3}},
 		{"SELECT team_id, ifNull(work_scope_id", []string{"t1", "scope1", day + " 08:30:00"}, nil},
 		{"SELECT toString(team_id), toString(toDate(computed_at))", []string{"t1", day}, nil},
 		{"SELECT concat(p.provider, ':', p.id), cf.has_team", []string{"linear:P1", "T1", "Team One", "scope1", day + " 08:30:00"}, nil},
