@@ -181,3 +181,53 @@ func TestOrganizationStatementKeepsAUnitWithNoReferenceAsUnattributedEffort(t *t
 		}
 	}
 }
+
+func TestInvestmentOrganizationNamedByBothSpellingsIsOneFact(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: organizationMixTable()}
+	result := readOrganizationInvestment(t, client, storage.Principal{OrgID: "org-1"}, organizationSubject("org-1"), bareOrganizationSubject("org-1"))
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %d, want exactly one for one organization named twice", len(result.Facts))
+	}
+}
+
+func TestInvestmentOrganizationWithOnlyUnattributedEffortDisclosesItWithoutAMix(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{
+		{map[string]float64{}, 0.0, uint64(0), uint64(0), 0.0, 10.0, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+	}}}}
+	result := readOrganizationInvestment(t, client, storage.Principal{OrgID: "org-1"}, organizationSubject("org-1"))
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %d, want one fact that discloses the unattributed effort", len(result.Facts))
+	}
+	fields := result.Facts[0].Fields
+	if got := *fields["unattributed_effort_share"].Number; got != 1 {
+		t.Fatalf("unattributed_effort_share = %v, want 1", got)
+	}
+	if got := *fields["repositories_in_scope"].Integer; got != 0 {
+		t.Fatalf("repositories_in_scope = %d, want 0", got)
+	}
+	for _, name := range []string{"theme_breakdown", "theme_feature_delivery", "theme_quality_bugfix"} {
+		if _, present := fields[name]; present {
+			t.Fatalf("%s present: no mix may be presented when nothing is attributed to a repository", name)
+		}
+	}
+}
+
+func TestInvestmentOrganizationWithNothingUnattributedServesTheMixWithAZeroShare(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{
+		{map[string]float64{"feature_delivery": 4, "risk": 6}, 0.0, uint64(2), uint64(1), 10.0, 0.0, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+	}}}}
+	result := readOrganizationInvestment(t, client, storage.Principal{OrgID: "org-1"}, organizationSubject("org-1"))
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %d, want 1", len(result.Facts))
+	}
+	fields := result.Facts[0].Fields
+	if got := *fields["unattributed_effort_share"].Number; got != 0 {
+		t.Fatalf("unattributed_effort_share = %v, want 0", got)
+	}
+	if got := *fields["theme_risk"].Number; math.Abs(got-0.6) > 1e-9 {
+		t.Fatalf("theme_risk = %v, want 0.6", got)
+	}
+}

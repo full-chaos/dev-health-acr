@@ -177,3 +177,33 @@ func TestOrganizationThemeMixKeepsOutOfWindowUnitsOutOfTheSharesAgainstRealClick
 		t.Fatalf("a window that starts before the earliest stored unit names no span: %q", before.Reason)
 	}
 }
+
+// An organization whose only work in the window has references that match no
+// repository is disclosed as unattributed, with no mix.
+func TestOrganizationWithOnlyUnattributedEffortIsDisclosedAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	createCHAOS5930Tables(t, ctx, direct)
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
+	const orgID = "org-organization-unattributed"
+	at := ts(2026, 9, 18, 0, 0, 0)
+	if err := direct.Exec(ctx,
+		`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"wu-lost", at, at, 10.0, map[string]float64{"risk": 1.0}, map[string]float64{}, `{"issues":["ghpr:acme/not-synced#7"],"prs":[]}`, at, orgID); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{organizationSubject(orgID), bareOrganizationSubject(orgID)},
+	})
+	if err != nil || len(result.Facts) != 1 {
+		t.Fatalf("err=%v facts=%d, want one fact", err, len(result.Facts))
+	}
+	fields := result.Facts[0].Fields
+	if u := *fields["unattributed_effort_share"].Number; u != 1 {
+		t.Fatalf("unattributed_effort_share = %v, want 1", u)
+	}
+	if _, present := fields["theme_breakdown"]; present {
+		t.Fatal("a theme breakdown was presented for effort attributed to no repository")
+	}
+}

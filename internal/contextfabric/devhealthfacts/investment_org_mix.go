@@ -105,8 +105,10 @@ func organizationSubjectsOfCaller(subjects []contextfabric.SubjectRef, orgID str
 }
 
 // readOrganizationThemeMix emits the organization-scope investment fact: one
-// per requested own-organization subject, none when the window holds no
-// persisted effort (never a zero mix).
+// for the organization, none when the window holds no persisted effort (never
+// a zero mix). When all of the window's effort is unattributed the fact carries
+// no theme shares and no breakdown, only the counts and the unattributed share
+// (1): the effort is disclosed, never presented as a mix.
 func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, principal storage.Principal, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rejected int, restricted bool, err error) {
 	own, rejected := organizationSubjectsOfCaller(subjects, orgID)
 	if len(own) == 0 {
@@ -119,6 +121,9 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 	if err != nil {
 		return rejected, false, err
 	}
+	// Both accepted spellings of the organization id name ONE organization:
+	// one fact, under the first spelling asked for.
+	own = own[:1]
 	for _, subject := range own {
 		recordInvestmentSpan(ctx, subject.CanonicalID, row.EarliestUnit)
 	}
@@ -127,7 +132,7 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 		t.theme = map[string]float64{}
 	}
 	total := t.total()
-	if total <= 0 {
+	if total <= 0 && row.UnattributedEffort <= 0 {
 		return rejected, false, nil
 	}
 	unattributedShare := 0.0
@@ -136,12 +141,14 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 	}
 	for _, subject := range own {
 		fields := make(map[string]contextfabric.FactValue, 2*len(canonicalInvestmentThemes)+8)
-		for _, theme := range canonicalInvestmentThemes {
-			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(roundMixEffort(t.theme[theme] / total))
+		if total > 0 {
+			for _, theme := range canonicalInvestmentThemes {
+				fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(roundMixEffort(t.theme[theme] / total))
+			}
+			fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(roundMixEffort(t.bugfix / total))
+			fields["theme_breakdown"] = themeBreakdownTable(t, timeBound.effectiveGrain(grainDaily))
 		}
-		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(roundMixEffort(t.bugfix / total))
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(t.workUnits)
-		fields["theme_breakdown"] = themeBreakdownTable(t, timeBound.effectiveGrain(grainDaily))
 		fields["scope"] = contextfabric.StringFactValue(orgMixScope)
 		fields["repositories_in_scope"] = contextfabric.IntegerFactValue(t.repos)
 		fields["unattributed_effort_share"] = contextfabric.NumberFactValue(roundMixEffort(unattributedShare))
