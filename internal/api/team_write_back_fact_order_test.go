@@ -71,6 +71,8 @@ func (s *teamStoreScanner) Scan(dest ...any) error {
 			*value = row[index].(uint64)
 		case *uint8:
 			*value = row[index].(uint8)
+		case *time.Time:
+			*value = row[index].(time.Time)
 		case *float64:
 			*value = row[index].(float64)
 		case *map[string]float64:
@@ -119,7 +121,7 @@ func newTeamStoreClient() *teamStoreClient {
 		mix = append(mix, []any{uint8(0), repo, map[string]float64{
 			"feature_delivery": 0.48898883728007437 * scale, "operational": 0.047865254810142 * scale,
 			"maintenance": 0.2304889002988043 * scale, "quality": 0.1388265562681117 * scale, "risk": 0.0936 * scale,
-		}, 0.0864588925764 * scale, uint64(3)})
+		}, 0.0864588925764 * scale, uint64(3), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})
 	}
 	return &teamStoreClient{tables: []teamTable{
 		{match: "PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC", rows: func(call int) [][]any { return reorderedFor(readiness, call) }},
