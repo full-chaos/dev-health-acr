@@ -42,7 +42,7 @@ const (
 	unitUnresolvedRefMaxBytes = 120
 )
 
-const unitFactReasonCut = "units_page_cut: more work units follow; pass the next_cursor of the work_unit_page fact as units.cursor"
+const unitFactReasonCut = contextfabric.InvestmentUnitsCutReason
 
 type unitRow struct {
 	WorkUnitID     string
