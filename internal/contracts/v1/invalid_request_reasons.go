@@ -22,6 +22,8 @@ var invalidRequestReasons = map[string]struct{}{
 	"body_too_large":          {}, // body exceeds the request byte limit
 	"invalid_idempotency_key": {}, // Idempotency-Key header missing, duplicated, out of bounds or not equal to the body key
 
+	WindowBeyondKindMaxReason: {}, // read_facts window wider than the kinds asked allow (details.max_days)
+
 	ContextFabricSuppliedSynthesisReasonInputChanged:           {}, // supplied synthesis written from another input
 	ContextFabricSuppliedSynthesisReasonInterpretationRequired: {}, // supplied synthesis without a supplied interpretation
 }

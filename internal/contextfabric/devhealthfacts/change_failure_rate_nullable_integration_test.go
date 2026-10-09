@@ -44,6 +44,11 @@ func TestChangeFailureRateColumnTypesAgainstRealClickHouse(t *testing.T) {
 			if err := direct.Exec(ctx, ddl); err != nil {
 				t.Fatalf("create fixture: %v", err)
 			}
+			// The metrics read also asks git_pull_requests for the window
+			// pull request median; no row is needed, the table must exist.
+			if err := direct.Exec(ctx, devhealthschema.DDLWithColumnType(tc.database, "git_pull_requests", "state", "Nullable(String)")); err != nil {
+				t.Fatalf("create pull request fixture: %v", err)
+			}
 			second := "0.0"
 			if tc.nullDay {
 				second = "NULL"
