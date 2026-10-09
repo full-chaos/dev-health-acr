@@ -1,6 +1,7 @@
 package directread
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -51,5 +52,29 @@ func TestWindowRefusalAdviceFollowsTheKind(t *testing.T) {
 	_, _, err = reader.window(&RequestWindow{Mode: WindowTrailing, Days: 61}, MaxRangeDaysFor([]contextfabric.FactKind{contextfabric.FactHealth}))
 	if err == nil || !strings.Contains(err.Error(), "read a longer period as several windows") {
 		t.Errorf("health refusal: %v", err)
+	}
+}
+
+func TestWindowRefusalIsATypedTokenWithMaxDays(t *testing.T) {
+	reader := &FactsReader{now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }}
+	for _, c := range []struct {
+		kind contextfabric.FactKind
+		days int
+		want int
+	}{
+		{contextfabric.FactHealth, 61, 60},
+		{contextfabric.FactInvestment, 366, 365},
+	} {
+		kinds := []contextfabric.FactKind{c.kind}
+		_, _, err := reader.window(&RequestWindow{Mode: WindowTrailing, Days: c.days}, MaxRangeDaysFor(kinds))
+		var re *RequestError
+		if !errors.As(err, &re) || re.Reason != "window_beyond_kind_max" || re.MaxDays != c.want {
+			t.Errorf("%s %d d: %#v", c.kind, c.days, err)
+		}
+		end := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+		_, _, err = reader.window(&RequestWindow{Mode: WindowRange, Start: &[]time.Time{end.AddDate(0, 0, -c.want-1)}[0], End: &end}, c.want)
+		if !errors.As(err, &re) || re.Reason != "window_beyond_kind_max" || re.MaxDays != c.want {
+			t.Errorf("%s range: %#v", c.kind, err)
+		}
 	}
 }

@@ -805,6 +805,8 @@ failure is a failed content read, never a successfully measured partial
 stream. The thread setting is per statement and does not change the shared
 client pool or server defaults.
 
+**`FactMetrics` serves the window PR cycle time beside the repo-day median.** `window_pr_cycle_hours_median` (hours) with `window_pr_count` is the median of `merged_at - created_at` over EVERY pull request merged in the window (`git_pull_requests FINAL`, merged rows only, one weight per pull request), for a repository subject and for a team subject (one median over the union of the pull requests of the repositories the team owns, never a combination of per-repository medians). Both fields are absent when no pull request merged in the window: never 0, never carried from an earlier window. Never average, or take the median of, the daily `median_pr_cycle_hours` to build a weekly or monthly value; read this field. Project and organization subjects do not carry it.
+
 **`FactMetrics`'s project rollup never averages a rate across
 differently-sized teams.** Additive counts (commits, after-hours/weekend
 commit counts) are SUMMED across the project's current owning teams
