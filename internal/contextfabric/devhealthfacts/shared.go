@@ -603,7 +603,14 @@ import (
 // request merged in the window. A candidate saved before v124 may hold only
 // the repo-day median, from which a weekly value was averaged, and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v124"
+//
+// v124 -> v125: an investment read that exceeds the ClickHouse read budget is
+// refused with "exceeded the read budget (...); narrow the window or the
+// subject" instead of "failed". A candidate saved under v124 for an investment
+// question may hold the bare failure text that answer reuse serves for Partial
+// and Degraded results too, and must not be reused. The rows the statements
+// return are unchanged.
+const QueryVersion = "devhealthfacts.clickhouse.v125"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
