@@ -72,8 +72,8 @@ func TestInvestmentOrganizationFactIsOneFactNotATeamSum(t *testing.T) {
 			t.Fatalf("%s = %v, want %v", theme, got, want)
 		}
 	}
-	if got, want := *fields["unresolved_effort_share"].Number, 25.0/125.0; math.Abs(got-want) > 1e-9 {
-		t.Fatalf("unresolved_effort_share = %v, want %v", got, want)
+	if got, want := *fields["unattributed_effort_share"].Number, 25.0/125.0; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("unattributed_effort_share = %v, want %v", got, want)
 	}
 	for _, query := range client.queries {
 		if strings.Contains(query.statement, "team_repo_ownership") {
@@ -154,5 +154,30 @@ func TestInvestmentOrganizationNamesTheStoredSpanWhenTheWindowStartsBeforeIt(t *
 	}
 	if !strings.Contains(result.Reason, "investment_window_beyond_stored_history") {
 		t.Fatalf("reason = %q, want the stored-span disclosure", result.Reason)
+	}
+}
+
+// The organization statement keeps a unit with no reference as unattributed
+// effort; the repository statement does not.
+func TestOrganizationStatementKeepsAUnitWithNoReferenceAsUnattributedEffort(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: organizationMixTable()}
+	readOrganizationInvestment(t, client, storage.Principal{OrgID: "org-1"}, organizationSubject("org-1"))
+	if len(client.queries) != 1 {
+		t.Fatalf("queries = %d, want 1", len(client.queries))
+	}
+	statement := client.queries[0].statement
+	// The sentinel window's rows (win < 0) carry only the stored span: every
+	// sum must leave them out, so each clause names the window test.
+	for _, clause := range []string{
+		"concat('unit:', work_unit_id)",
+		"sumIf(effort, win >= 0 AND repo_uuid = '') AS unattributed_effort",
+		"sumIf(effort, win >= 0 AND repo_uuid != '') AS resolved_effort",
+		"uniqExactIf(repo_uuid, win >= 0 AND repo_uuid != '') AS repositories",
+		"if(win >= 0 AND repo_uuid != '', v * effort, 0.)",
+	} {
+		if !strings.Contains(statement, clause) {
+			t.Fatalf("the organization statement lost the clause %q", clause)
+		}
 	}
 }

@@ -817,7 +817,7 @@ func investmentFields() []fieldDecl {
 		declOn(declOrganizationOnly, investmentThemeFields(false)...),
 		declOn(declRepoTeamOrg, themeBreakdown, fStr("mix_source"), fStr("attribution_basis")),
 		declOn(declRepoTeam, investmentUnitFields()...),
-		declOn(declOrganizationOnly, fStr("scope"), fInt("repositories_in_scope", "count"), fNum("unresolved_effort_share", "ratio")),
+		declOn(declOrganizationOnly, fStr("scope"), fInt("repositories_in_scope", "count"), fNum("unattributed_effort_share", "ratio")),
 		declOn([]contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectOrganization}, fInt("work_unit_count", "count")),
 		declOn(declTeamOnly, declAggregate(fInt("owned_repository_count", "count"))),
 		declOn(declTeamOnly, prior...),

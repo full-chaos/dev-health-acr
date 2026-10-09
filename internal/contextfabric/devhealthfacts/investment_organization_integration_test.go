@@ -60,6 +60,9 @@ func TestOrganizationThemeMixCountsASharedRepositoryOnceAgainstRealClickHouse(t 
 	seed("wu3", map[string]float64{"maintenance": 1.0}, 6, fmt.Sprintf(`{"issues":[],"prs":["%s#pr4"]}`, b))
 	seed("wu4", map[string]float64{"operational": 1.0}, 50, fmt.Sprintf(`{"issues":[],"prs":["%s#pr5"]}`, c))
 	seed("wu5", map[string]float64{"maintenance": 1.0}, 10, `{"issues":["ghpr:acme/not-synced#7"],"prs":[]}`)
+	// wu6 carries no PR reference and no repository: its effort is disclosed,
+	// not placed in any theme share.
+	seed("wu6", map[string]float64{"risk": 1.0}, 10, `{"issues":[],"prs":[]}`)
 	// A superseded row of wu4 (older computed_at, other effort) must not count.
 	if err := direct.Exec(ctx,
 		`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)`,
@@ -88,7 +91,7 @@ func TestOrganizationThemeMixCountsASharedRepositoryOnceAgainstRealClickHouse(t 
 
 	org := read(organizationSubject(orgID))
 	// Each repository once: feature 10, risk 4, quality 4, maintenance 6,
-	// operational 50 = 74. The unresolved unit (10) is not in the shares.
+	// operational 50 = 74. The unresolved unit (10) and the no-reference unit (10) are not in the shares.
 	want := map[string]float64{"feature_delivery": 10, "risk": 4, "quality": 4, "maintenance": 6, "operational": 50}
 	got := weighted(org)
 	for theme, w := range want {
@@ -105,8 +108,8 @@ func TestOrganizationThemeMixCountsASharedRepositoryOnceAgainstRealClickHouse(t 
 	if s := *org.Fields["scope"].String; s != "organization" {
 		t.Fatalf("scope = %q", s)
 	}
-	if u := *org.Fields["unresolved_effort_share"].Number; math.Abs(u-10.0/84.0) > 1e-9 {
-		t.Fatalf("unresolved_effort_share = %v, want %v", u, 10.0/84.0)
+	if u := *org.Fields["unattributed_effort_share"].Number; math.Abs(u-20.0/94.0) > 1e-9 {
+		t.Fatalf("unattributed_effort_share = %v, want %v", u, 20.0/94.0)
 	}
 
 	// The sum of the two team facts counts repo-b twice: it is NOT the org.

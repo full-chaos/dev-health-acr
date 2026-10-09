@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -19,9 +20,10 @@ import (
 // repository is therefore counted once: the mix never goes through team
 // ownership, so a repository owned by several teams is not counted per team.
 //
-// A PR ref that resolves to no repository attaches to no repository
-// (null-carrying, as in a repository's own mix). Its share of the ref-carrying
-// effort is served as unresolved_effort_share and is not part of the shares.
+// Effort that reaches no repository is never folded into the shares and never
+// dropped silently: a PR reference that resolves to no repository, and a unit
+// that carries no PR reference and no repository at all, count in
+// unattributed_effort_share (their share of all effort the statement sees).
 
 const (
 	orgMixScope       = "organization"
@@ -33,18 +35,18 @@ const (
 )
 
 type orgMixRow struct {
-	Theme            map[string]float64
-	Bugfix           float64
-	WorkUnits        int64
-	Repositories     int64
-	ResolvedEffort   float64
-	UnresolvedEffort float64
-	EarliestUnit     time.Time
+	Theme              map[string]float64
+	Bugfix             float64
+	WorkUnits          int64
+	Repositories       int64
+	ResolvedEffort     float64
+	UnattributedEffort float64
+	EarliestUnit       time.Time
 }
 
 // orgMixStatement sums the per-(work unit, repository) split of
 // repoSplitCore over every repository. Rows of a ref that resolved to no
-// repository (repo_uuid = ”) contribute only to the unresolved effort.
+// repository (repo_uuid = ”) contribute only to the unattributed effort.
 func orgMixStatement(bound factTimeBound) string {
 	memberships := []string{fmt.Sprintf("if(%s, 0, -1)", mixWindowPredicate(0, bound))}
 	statement := `SELECT
@@ -53,7 +55,7 @@ func orgMixStatement(bound factTimeBound) string {
 	uniqExactIf(work_unit_id, win >= 0 AND repo_uuid != '') AS work_units,
 	uniqExactIf(repo_uuid, win >= 0 AND repo_uuid != '') AS repositories,
 	sumIf(effort, win >= 0 AND repo_uuid != '') AS resolved_effort,
-	sumIf(effort, win >= 0 AND repo_uuid = '') AS unresolved_effort,
+	sumIf(effort, win >= 0 AND repo_uuid = '') AS unattributed_effort,
 	min(span_from) AS span_from
 FROM (
 	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share, span_from
@@ -62,7 +64,7 @@ FROM (
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
 			effort_value, theme_distribution_json, bugfix_share, span_from
 		FROM (
-` + repoSplitCore(memberships, "", "", true) + `		)
+` + orgSplitCore(memberships) + `		)
 	)
 )`
 	return withRowLimit(statement)
@@ -77,7 +79,7 @@ func (p *InvestmentProvider) readOrgMixRow(ctx context.Context, orgID string, bo
 	err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadOrganizationThemeMix", orgMixStatement(bound), orgID, []string{}, func(row contextpacket.ClickHouseRowScanner) error {
 		var workUnits, repositories uint64
 		var spanFrom time.Time
-		if err := row.Scan(&out.Theme, &out.Bugfix, &workUnits, &repositories, &out.ResolvedEffort, &out.UnresolvedEffort, &spanFrom); err != nil {
+		if err := row.Scan(&out.Theme, &out.Bugfix, &workUnits, &repositories, &out.ResolvedEffort, &out.UnattributedEffort, &spanFrom); err != nil {
 			return err
 		}
 		out.EarliestUnit = spanFrom
@@ -128,9 +130,9 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 	if total <= 0 {
 		return rejected, false, nil
 	}
-	unresolvedShare := 0.0
-	if all := row.ResolvedEffort + row.UnresolvedEffort; all > 0 {
-		unresolvedShare = row.UnresolvedEffort / all
+	unattributedShare := 0.0
+	if all := row.ResolvedEffort + row.UnattributedEffort; all > 0 {
+		unattributedShare = row.UnattributedEffort / all
 	}
 	for _, subject := range own {
 		fields := make(map[string]contextfabric.FactValue, 2*len(canonicalInvestmentThemes)+8)
@@ -142,7 +144,7 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 		fields["theme_breakdown"] = themeBreakdownTable(t, timeBound.effectiveGrain(grainDaily))
 		fields["scope"] = contextfabric.StringFactValue(orgMixScope)
 		fields["repositories_in_scope"] = contextfabric.IntegerFactValue(t.repos)
-		fields["unresolved_effort_share"] = contextfabric.NumberFactValue(roundMixEffort(unresolvedShare))
+		fields["unattributed_effort_share"] = contextfabric.NumberFactValue(roundMixEffort(unattributedShare))
 		fields["mix_source"] = contextfabric.StringFactValue(repoMixSource)
 		fields["attribution_basis"] = contextfabric.StringFactValue(repoMixBasis + orgMixBasisSuffix)
 		*facts = append(*facts, contextfabric.CanonicalFact{
@@ -151,4 +153,20 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 		})
 	}
 	return rejected, false, nil
+}
+
+// orgNoRefUnit names the one placeholder reference a unit with no reference
+// and no repository of its own gets in the organization statement, so its
+// effort lands in the unattributed share instead of vanishing.
+const orgNoRefUnit = "[('', '', '', '', concat('unit:', work_unit_id))]"
+
+// orgSplitCore is the repository split with one addition: a unit that has no
+// PR reference and no repository of its own keeps its effort as an
+// unattributed row (repo_uuid ”) rather than being dropped by the reference
+// join. Repository and team reads keep their own rule (such a unit reaches no
+// repository).
+func orgSplitCore(memberships []string) string {
+	core := repoSplitCore(memberships, "", "", true)
+	return strings.Replace(core, repoRefsExpression+" AS refs",
+		"if(empty("+repoRefsExpression+"), "+orgNoRefUnit+", "+repoRefsExpression+") AS refs", 1)
 }
