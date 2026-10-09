@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -121,5 +122,18 @@ func TestInvestmentOrganizationWithNoEffortServesNoFact(t *testing.T) {
 	result := readOrganizationInvestment(t, client, storage.Principal{OrgID: "org-1"}, organizationSubject("org-1"))
 	if len(result.Facts) != 0 {
 		t.Fatalf("facts = %d, want none (never a zero mix)", len(result.Facts))
+	}
+}
+
+func TestInvestmentOrganizationReadFailureIsAFailureNotAnEmptyAnswer(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", err: errors.New("store down")}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{organizationSubject("org-1")},
+	})
+	if err == nil {
+		t.Fatal("a failed organization mix read was served as an empty answer")
 	}
 }

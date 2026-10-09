@@ -65,9 +65,8 @@ FROM (
 	return withRowLimit(statement)
 }
 
-func (p *InvestmentProvider) readOrgMixRow(ctx context.Context, orgID string, bound factTimeBound) (orgMixRow, bool, error) {
+func (p *InvestmentProvider) readOrgMixRow(ctx context.Context, orgID string, bound factTimeBound) (orgMixRow, error) {
 	var out orgMixRow
-	found := false
 	var extra []readers.Binding
 	for _, tb := range bound.bindings() {
 		extra = append(extra, readers.Binding{Name: tb.Name, Value: tb.Value})
@@ -79,10 +78,9 @@ func (p *InvestmentProvider) readOrgMixRow(ctx context.Context, orgID string, bo
 		}
 		out.WorkUnits = int64(workUnits)
 		out.Repositories = int64(repositories)
-		found = true
 		return nil
 	}, extra...)
-	return out, found, err
+	return out, err
 }
 
 // organizationSubjectsOfCaller returns the requested organization subjects
@@ -110,8 +108,8 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 	if sourceHealthRestricted(principal) {
 		return rejected, true, nil
 	}
-	row, found, err := p.readOrgMixRow(ctx, orgID, timeBound)
-	if err != nil || !found {
+	row, err := p.readOrgMixRow(ctx, orgID, timeBound)
+	if err != nil {
 		return rejected, false, err
 	}
 	t := &repoThemeTotals{theme: row.Theme, bugfix: row.Bugfix, workUnits: row.WorkUnits, repos: row.Repositories}

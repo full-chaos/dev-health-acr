@@ -582,7 +582,12 @@ import (
 // read, and states the available span when the window starts before the
 // earliest persisted work unit. A candidate saved before v119 may hold a
 // refusal of such a window and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v119"
+//
+// v119 -> v120: the investment kind serves the organization subject as one
+// fact over every repository once. A candidate saved before v120 may hold an
+// investment answer that could not name the organization and must not be
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v120"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
