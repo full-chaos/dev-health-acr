@@ -11,6 +11,7 @@ func TestTemporalScalarReasonForms(t *testing.T) {
 		{"DateTime", "2026-09-08T00:00:00Z", ""},
 		{"DateTime", "2026-09-08", "got a date"},
 		{"DateTime", "soon", "not a timestamp"},
+		{"DateTime", "2026-09-08T00:00:00,5Z", "not a timestamp"},
 		{"Date", "2026-09-08", ""},
 		{"Date", "2026-09-08T00:00:00Z", "got a timestamp"},
 		{"Date", "soon", "not a date"},
@@ -35,6 +36,10 @@ func TestUpstreamGraphQLEntriesBounds(t *testing.T) {
 	}
 	if n := len([]rune(got[0].Message)); n != 512 {
 		t.Fatalf("message runes %d", n)
+	}
+	odd := upstreamGraphQLEntries([]json.RawMessage{json.RawMessage(`{"message":"m","path":["a",{"x":1},[2],true,3]}`)})
+	if odd[0].Path != "a.3" {
+		t.Fatalf("non string/int segments must be omitted: %q", odd[0].Path)
 	}
 	if got[0].Path != "a.1.b" || got[0].Class != UpstreamGraphQLErrors {
 		t.Fatalf("%+v", got[0])

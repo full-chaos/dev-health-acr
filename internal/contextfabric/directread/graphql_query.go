@@ -641,7 +641,7 @@ func (x *gqlRun) execute(ctx context.Context, req GraphQLRequest) (GraphQLRespon
 	if class, reason := listenerRefusalOf(result.Body); class != "" {
 		return x.listenerRefused(class, reason, result.StatusCode), nil
 	}
-	data, class9, entries, ok := parseGraphQLAnswer(result.Body)
+	data, class9, entries, ok := parseGraphQLAnswer(result.Body, result.StatusCode)
 	if !ok {
 		return x.upstreamEntries(CallUpstreamError, class9, entries), nil
 	}

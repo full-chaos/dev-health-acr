@@ -2,6 +2,7 @@ package directread
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
@@ -30,10 +31,13 @@ func upstreamGraphQLEntries(raw []json.RawMessage) []OperationError {
 			parts := make([]string, 0, len(e.Path))
 			for _, seg := range e.Path {
 				var s string
-				if json.Unmarshal(seg, &s) != nil {
-					s = strings.TrimSpace(string(seg))
+				var n int64
+				switch {
+				case json.Unmarshal(seg, &s) == nil:
+					parts = append(parts, s)
+				case json.Unmarshal(seg, &n) == nil:
+					parts = append(parts, strconv.FormatInt(n, 10))
 				}
-				parts = append(parts, s)
 			}
 			entry.Path = boundRunes(strings.Join(parts, "."), upstreamErrorMessageMaxRunes)
 		}

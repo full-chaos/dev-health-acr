@@ -244,7 +244,8 @@
     },
     "errors": {
       "type": "array",
-      "description": "Upstream errors, as safe classes and closed tokens only; never upstream message text.",
+      "description": "Upstream errors: safe classes and closed tokens, plus, for class graphql_errors only, the bounded upstream GraphQL error message and path (untrusted upstream text). At most 5 entries.",
+      "maxItems": 5,
       "items": {
         "type": "object",
         "additionalProperties": false,

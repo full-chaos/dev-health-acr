@@ -548,7 +548,7 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 	}
 
 	// 9a: the GraphQL answer.
-	data, class9, entries, ok := parseGraphQLAnswer(result.Body)
+	data, class9, entries, ok := parseGraphQLAnswer(result.Body, result.StatusCode)
 	if !ok {
 		return x.upstreamEntries(CallUpstreamError, class9, entries), nil
 	}
@@ -962,7 +962,7 @@ func upstreamHTTPEntry(err error) (entry OperationError, callerFault, ok bool) {
 // parseGraphQLAnswer reads {"data": ..., "errors": [...]}. Any GraphQL error
 // fails the call: a partial answer with errors is not served. The error
 // text of a 200 answer is carried bounded; no other upstream text is.
-func parseGraphQLAnswer(body []byte) (json.RawMessage, UpstreamErrorClass, []OperationError, bool) {
+func parseGraphQLAnswer(body []byte, statusCode int) (json.RawMessage, UpstreamErrorClass, []OperationError, bool) {
 	var answer struct {
 		Data   json.RawMessage   `json:"data"`
 		Errors []json.RawMessage `json:"errors"`
@@ -971,6 +971,9 @@ func parseGraphQLAnswer(body []byte) (json.RawMessage, UpstreamErrorClass, []Ope
 		return nil, UpstreamDecode, nil, false
 	}
 	if len(answer.Errors) > 0 {
+		if statusCode != http.StatusOK {
+			return nil, UpstreamGraphQLErrors, nil, false
+		}
 		return nil, UpstreamGraphQLErrors, upstreamGraphQLEntries(answer.Errors), false
 	}
 	data := bytes.TrimSpace(answer.Data)

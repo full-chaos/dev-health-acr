@@ -60,7 +60,9 @@ func TestTemporalScalarForms(t *testing.T) {
 		{"2026-09-08T00:00:00.5+02:00", false, ""},
 		{"2026-09-08", true, "got a date"},
 		{"yesterday", true, "not a timestamp"},
-		{float64(5), true, "string"},
+		{float64(5), true, "RFC3339 timestamp, e.g. 2026-09-08T00:00:00Z; got a number"},
+		{true, true, "got a boolean"},
+		{"2026-09-08T00:00:00,5Z", true, "not a timestamp"},
 	} {
 		vars := opMinimalVariables(t, hot)
 		in := vars["input"].(map[string]any)
@@ -72,6 +74,29 @@ func TestTemporalScalarForms(t *testing.T) {
 		out, _ := json.Marshal(resp)
 		if (resp.Call == directread.CallRefused) != tc.refused || !strings.Contains(string(out), tc.want) {
 			t.Fatalf("%v: %s", tc.value, out)
+		}
+	}
+}
+
+func TestGraphQLErrorTextOnlyFromStatus200(t *testing.T) {
+	cat, _ := directread.DefaultCatalogue()
+	hot, _ := cat.Lookup("hotspots")
+	vars := opMinimalVariables(t, hot)
+	for _, status := range []int{200, 201, 206} {
+		h := newOpHarness(t, func(opRecorded) (int, string) {
+			return status, `{"data":null,"errors":[{"message":"upstream words","path":["hotspots"]}]}`
+		}, opHarnessOptions{})
+		raw, _ := json.Marshal(vars)
+		resp, _ := h.runner.Run(context.Background(), opUnrestricted(opOrgA), directread.OperationRequest{Operation: "hotspots", Variables: raw})
+		out, _ := json.Marshal(resp)
+		if resp.Call != directread.CallUpstreamError || len(resp.Errors) != 1 || resp.Errors[0].Class != directread.UpstreamGraphQLErrors {
+			t.Fatalf("%d: %s", status, out)
+		}
+		if carried := strings.Contains(string(out), "upstream words"); carried != (status == 200) {
+			t.Fatalf("status %d carried=%v: %s", status, carried, out)
+		}
+		if logged := strings.Contains(h.logs.String(), "upstream words"); logged != (status == 200) {
+			t.Fatalf("status %d logged=%v", status, logged)
 		}
 	}
 }

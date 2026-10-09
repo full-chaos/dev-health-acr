@@ -242,7 +242,11 @@ func (vc *variableCheck) scalar(path string, rule VariableRule, value any) (any,
 	default:
 		s, ok := value.(string)
 		if !ok {
-			vc.refuse(path, 1, RefusalInvalidRequest, "value must be a string")
+			reason := "value must be a string"
+			if typ := baseTypeName(rule.Type); typ == "DateTime" || typ == "Date" {
+				reason = temporalFormReason(path, typ) + "; got " + jsonKindName(value)
+			}
+			vc.refuse(path, 1, RefusalInvalidRequest, reason)
 			return nil, false
 		}
 		if reason := temporalScalarReason(path, baseTypeName(rule.Type), s); reason != "" {
@@ -266,25 +270,57 @@ func (vc *variableCheck) scalar(path string, rule VariableRule, value any) (any,
 func temporalScalarReason(path, typ, s string) string {
 	switch typ {
 	case "DateTime":
-		if _, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		if isRFC3339(s) {
 			return ""
 		}
 		got := "a string that is not a timestamp"
 		if _, err := time.Parse("2006-01-02", s); err == nil {
 			got = "a date"
 		}
-		return path + ": DateTime needs an RFC3339 timestamp, e.g. 2026-09-08T00:00:00Z; got " + got
+		return temporalFormReason(path, typ) + "; got " + got
 	case "Date":
 		if _, err := time.Parse("2006-01-02", s); err == nil {
 			return ""
 		}
 		got := "a string that is not a date"
-		if _, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		if isRFC3339(s) {
 			got = "a timestamp"
 		}
-		return path + ": Date needs a YYYY-MM-DD date, e.g. 2026-09-08; got " + got
+		return temporalFormReason(path, typ) + "; got " + got
 	}
 	return ""
+}
+
+// isRFC3339 is time.RFC3339Nano without Go's comma fraction separator, which
+// RFC 3339 does not allow.
+func isRFC3339(s string) bool {
+	if strings.Contains(s, ",") {
+		return false
+	}
+	_, err := time.Parse(time.RFC3339Nano, s)
+	return err == nil
+}
+
+func temporalFormReason(path, typ string) string {
+	if typ == "DateTime" {
+		return path + ": DateTime needs an RFC3339 timestamp, e.g. 2026-09-08T00:00:00Z"
+	}
+	return path + ": Date needs a YYYY-MM-DD date, e.g. 2026-09-08"
+}
+
+// jsonKindName names a decoded JSON value's kind, never its content.
+func jsonKindName(v any) string {
+	switch v.(type) {
+	case json.Number, float64:
+		return "a number"
+	case bool:
+		return "a boolean"
+	case []any:
+		return "a list"
+	case map[string]any:
+		return "an object"
+	}
+	return "a non-string value"
 }
 
 // inspectRefused walks below a refused path only to find DEEPER refusals:
