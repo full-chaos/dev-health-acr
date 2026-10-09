@@ -519,7 +519,7 @@ func compoundingRiskLatestSubquery(scope string, timeBound factTimeBound) string
 	return `SELECT scope_id, severity, compounding_risk, computed_at, day,
 		row_number() OVER (PARTITION BY scope_id ORDER BY (severity != 'unknown') DESC, day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
 	FROM compounding_risk_daily
-	WHERE org_id = {org_id:String} AND scope = '` + scope + `'` + timeBound.dayPredicate("day")
+	WHERE org_id = {org_id:String} AND scope = '` + scope + `'` + activeTeamScopeFor(scope, "scope_id") + timeBound.dayPredicate("day")
 }
 
 // compoundingRiskDailySubquery is compoundingRiskLatestSubquery's CHAOS-4645
@@ -532,7 +532,7 @@ func compoundingRiskDailySubquery(scope string, timeBound factTimeBound) string 
 	return `SELECT scope_id, day, severity, compounding_risk,
 		row_number() OVER (PARTITION BY scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
 	FROM compounding_risk_daily
-	WHERE org_id = {org_id:String} AND scope = '` + scope + `'` + timeBound.dayPredicate("day")
+	WHERE org_id = {org_id:String} AND scope = '` + scope + `'` + activeTeamScopeFor(scope, "scope_id") + timeBound.dayPredicate("day")
 }
 
 // healthRollupRow is one (project, scope, scope_id) triple's contribution to
@@ -1096,4 +1096,13 @@ ORDER BY project_key`)
 		return nil
 	}, timeBound.bindings()...)
 	return byProject, order, rowCount, scanErr
+}
+
+// activeTeamScopeFor is the active-team scope predicate for a compounding-risk
+// scope whose scope_id is a team id; other scopes carry none.
+func activeTeamScopeFor(scope, column string) string {
+	if scope != "team" {
+		return ""
+	}
+	return " AND " + devhealthschema.ActiveTeamScopePredicate(column)
 }

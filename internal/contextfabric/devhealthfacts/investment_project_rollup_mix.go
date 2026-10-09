@@ -104,11 +104,11 @@ repo_lookup AS (
 wita AS (
 	SELECT work_item_id, team_id
 	FROM work_item_team_attributions FINAL
-	WHERE org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicate("", devhealthschema.AttributionScopeOrg) + `
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicate("", devhealthschema.AttributionScopeOrg) + ` AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + `
 	  AND (work_item_id, computed_at) IN (
 		  SELECT work_item_id, max(computed_at)
 		  FROM work_item_team_attributions
-		  WHERE org_id = {org_id:String}
+		  WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + `
 		  GROUP BY work_item_id
 	  )
 )

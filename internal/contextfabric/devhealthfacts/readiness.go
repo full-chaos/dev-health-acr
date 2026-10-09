@@ -361,6 +361,7 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 	if err != nil {
 		return 0, rejected, false, err
 	}
+	scanned = dropRetractionReadinessRows(scanned)
 	// CHAOS-4645, design doc §5.2: additive, off the SAME project-identity
 	// join -- never changing an existing field.
 	//
@@ -530,4 +531,20 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 		})
 	}
 	return rowCount, rejected, breakdownTruncated, nil
+}
+
+// dropRetractionReadinessRows removes the rows a team-id carry writes over a
+// retired team key: a team-attributed row whose count columns are all zero and
+// whose ratio is NULL is a retraction, not a sample and not a team. The shared
+// reader cannot take the active-team predicate, so the rule is applied to its
+// rows.
+func dropRetractionReadinessRows(rows []readers.ReadinessProjectRow) []readers.ReadinessProjectRow {
+	kept := rows[:0:0]
+	for _, row := range rows {
+		if row.HasTeam != 0 && row.EstimatedCount == 0 && row.UnestimatedCount == 0 && row.BacklogSize == 0 && row.HasRatio == 0 {
+			continue
+		}
+		kept = append(kept, row)
+	}
+	return kept
 }
