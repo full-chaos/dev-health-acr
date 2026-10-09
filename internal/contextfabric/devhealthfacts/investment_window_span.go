@@ -3,7 +3,6 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 )
@@ -36,18 +35,14 @@ func recordInvestmentSpan(ctx context.Context, from time.Time) {
 	}
 }
 
-// recordInvestmentSpanText parses the toString of a DateTime64(6) min(from_ts)
-// column and records it. A statement that selected no row reports the epoch
-// default, which is not a stored start, so it is skipped.
-func recordInvestmentSpanText(ctx context.Context, text string, hadRows bool) error {
-	if !hadRows {
+// recordInvestmentSpanTime records a min(from_ts) column. A statement that
+// selected no row reports the epoch default, which is not a stored start, so
+// it is skipped.
+func recordInvestmentSpanTime(ctx context.Context, from time.Time, hadRows bool) error {
+	if !hadRows || from.Unix() <= 0 {
 		return nil
 	}
-	parsed, err := time.ParseInLocation("2006-01-02 15:04:05.999999", strings.TrimSpace(text), time.UTC)
-	if err != nil {
-		return fmt.Errorf("parse earliest work unit start %q: %w", text, err)
-	}
-	recordInvestmentSpan(ctx, parsed.UTC())
+	recordInvestmentSpan(ctx, from.UTC())
 	return nil
 }
 

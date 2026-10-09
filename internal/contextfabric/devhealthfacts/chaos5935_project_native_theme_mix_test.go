@@ -69,7 +69,7 @@ func nativePhasedTables(groups ...[]nativePhasedUnit) []fakeTable {
 		}
 	}
 	return []fakeTable{
-		{match: "AS unit_ids", rows: [][]any{{ids, versions, "2026-01-01 00:00:00.000000"}}},
+		{match: "AS unit_ids", rows: [][]any{{ids, versions, clockSpanStart}}},
 		{match: "groupArray(multi_placed)", rows: [][]any{{pUnit, pProvider, pProject, pMulti}}},
 		{match: "groupArray(theme_feature_delivery)", rows: [][]any{{ids, effort, fd, op, zero, zero, zero}}},
 		{match: "groupArray(bugfix_share)", rows: [][]any{{ids, bugfix}}},

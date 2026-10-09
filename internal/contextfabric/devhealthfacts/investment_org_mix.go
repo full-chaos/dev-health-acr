@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -52,7 +53,7 @@ func orgMixStatement(bound factTimeBound) string {
 	uniqExactIf(repo_uuid, repo_uuid != '') AS repositories,
 	sumIf(effort, repo_uuid != '') AS resolved_effort,
 	sumIf(effort, repo_uuid = '') AS unresolved_effort,
-	toString(min(span_from)) AS span_from
+	min(span_from) AS span_from
 FROM (
 	SELECT repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share, span_from
 	FROM (
@@ -74,11 +75,11 @@ func (p *InvestmentProvider) readOrgMixRow(ctx context.Context, orgID string, bo
 	}
 	err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadOrganizationThemeMix", orgMixStatement(bound), orgID, []string{}, func(row contextpacket.ClickHouseRowScanner) error {
 		var workUnits, repositories uint64
-		var spanFrom string
+		var spanFrom time.Time
 		if err := row.Scan(&out.Theme, &out.Bugfix, &workUnits, &repositories, &out.ResolvedEffort, &out.UnresolvedEffort, &spanFrom); err != nil {
 			return err
 		}
-		if spanErr := recordInvestmentSpanText(ctx, spanFrom, workUnits > 0 || out.UnresolvedEffort > 0); spanErr != nil {
+		if spanErr := recordInvestmentSpanTime(ctx, spanFrom, workUnits > 0 || out.UnresolvedEffort > 0); spanErr != nil {
 			return spanErr
 		}
 		out.WorkUnits = int64(workUnits)
