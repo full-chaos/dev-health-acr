@@ -13,6 +13,7 @@ import (
 // statement is checked at its own definition).
 var rowLimitWithoutOrder = map[string]string{
 	"investment.go|investmentWatermarkStatement": "one aggregate row, nothing to cut",
+	"investment_org_mix.go|statement":            "one aggregate row over the whole organization, nothing to cut",
 	"workitems.go|statement":                     "built above with ORDER BY p.id; the variable cannot be read here",
 }
 

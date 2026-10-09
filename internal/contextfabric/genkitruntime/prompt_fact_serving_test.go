@@ -12,6 +12,14 @@ import (
 
 // The glossary's per-kind subject lists are DERIVED from the fact capability
 // registry here, so the prompt cannot drift from what the providers serve.
+// notInterpretationFacing declares (fact kind, subject kind) pairs that
+// read_facts serves but the interpretation prompt does not yet name. The
+// prompt text is not changed by the change that adds the pair; adding it to
+// the glossary is a separate, deliberate prompt revision.
+var notInterpretationFacing = map[string]map[string]string{
+	"investment": {"organization": "served by read_facts for the caller's own organization; the interpretation prompt does not yet name it"},
+}
+
 func TestInterpretationPromptGlossarySubjectKindsMatchCapabilities(t *testing.T) {
 	t.Parallel()
 	prompt := genkitruntime.InterpretationSystemPrompt()
@@ -20,6 +28,9 @@ func TestInterpretationPromptGlossarySubjectKindsMatchCapabilities(t *testing.T)
 		capability := provider.Capability()
 		kinds := make([]string, 0, len(capability.SupportedSubjectKinds))
 		for _, kind := range capability.SupportedSubjectKinds {
+			if _, excluded := notInterpretationFacing[string(capability.Kind)][string(kind)]; excluded {
+				continue
+			}
 			kinds = append(kinds, string(kind))
 		}
 		sort.Strings(kinds)
