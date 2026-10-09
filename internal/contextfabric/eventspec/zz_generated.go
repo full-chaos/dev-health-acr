@@ -101,12 +101,13 @@ var ByID = map[string]Event{
 // OAuthStepFields is api.oauth_step's generated typed construction interface
 // (CHAOS-5516): one Go field per Field OAuthStep.Fields declares in spec.go.
 type OAuthStepFields struct {
-	RequestID  string
-	Step       string
-	Outcome    string
-	ClientKind string
-	Scopes     []string
-	Status     int
+	RequestID     string
+	Step          string
+	Outcome       string
+	ClientKind    string
+	Scopes        []string
+	Status        int
+	ClientRefusal string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every OAuthStepFields uniformly, set ONLY by NewOAuthStepFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -120,19 +121,20 @@ type OAuthStepFields struct {
 
 // NewOAuthStepFields is the generated constructor for OAuthStepFields -- every
 // field OAuthStep.Fields declares is a required parameter.
-func NewOAuthStepFields(requestID string, step string, outcome string, clientKind string, scopes []string, status int) OAuthStepFields {
+func NewOAuthStepFields(requestID string, step string, outcome string, clientKind string, scopes []string, status int, clientRefusal string) OAuthStepFields {
 	valid := true
 	if scopes == nil {
 		valid = false
 	}
 	return OAuthStepFields{
-		RequestID:   requestID,
-		Step:        step,
-		Outcome:     outcome,
-		ClientKind:  clientKind,
-		Scopes:      scopes,
-		Status:      status,
-		constructed: valid,
+		RequestID:     requestID,
+		Step:          step,
+		Outcome:       outcome,
+		ClientKind:    clientKind,
+		Scopes:        scopes,
+		Status:        status,
+		ClientRefusal: clientRefusal,
+		constructed:   valid,
 	}
 }
 
@@ -155,6 +157,7 @@ func (f OAuthStepFields) SlogArgs() []any {
 		"client_kind", contextfabric.SanitizeLogAttr(f.ClientKind),
 		"scopes", contextfabric.SanitizeLogStrings(f.Scopes),
 		"status", f.Status,
+		"client_refusal", contextfabric.SanitizeLogAttr(f.ClientRefusal),
 	}
 }
 

@@ -100,19 +100,33 @@ type oauthErrorBody struct {
 
 // emitOAuthStep writes the one telemetry line of an OAuth request.
 func (a *App) emitOAuthStep(r *http.Request, step, outcome, clientKind string, status int) {
-	a.emitOAuthStepScopes(r, step, outcome, clientKind, status, []string{})
+	a.emitOAuthLine(r, step, outcome, clientKind, oauthvocab.ClientRefusalNone, status, []string{})
 }
 
 // emitOAuthStepScopes writes the line with the requested (authorize) or
 // granted (token) scopes.
 func (a *App) emitOAuthStepScopes(r *http.Request, step, outcome, clientKind string, status int, scopes []string) {
+	a.emitOAuthLine(r, step, outcome, clientKind, oauthvocab.ClientRefusalNone, status, scopes)
+}
+
+// emitOAuthRefusal writes the line of a refused request: its outcome and,
+// when the client was refused, the client refusal class.
+func (a *App) emitOAuthRefusal(r *http.Request, step string, refusal *auth.OAuthError, clientKind string, status int) {
+	clientRefusal := refusal.ClientRefusal
+	if clientRefusal == "" {
+		clientRefusal = oauthvocab.ClientRefusalNone
+	}
+	a.emitOAuthLine(r, step, refusal.Outcome, clientKind, clientRefusal, status, []string{})
+}
+
+func (a *App) emitOAuthLine(r *http.Request, step, outcome, clientKind, clientRefusal string, status int, scopes []string) {
 	if marker, ok := r.Context().Value(oauthLineMarkerKey{}).(*oauthLineMarker); ok {
 		marker.emitted = true
 	}
 	if clientKind == "" {
 		clientKind = oauthvocab.ClientKindNone
 	}
-	fields := eventspec.NewOAuthStepFields(RequestID(r.Context()), step, outcome, clientKind, scopes, status)
+	fields := eventspec.NewOAuthStepFields(RequestID(r.Context()), step, outcome, clientKind, scopes, status, clientRefusal)
 	a.logger.InfoContext(r.Context(), eventspec.OAuthStepLogMessage, fields.SlogArgs()...)
 }
 
@@ -299,7 +313,7 @@ func (a *App) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if refusal, ok := oauthOutcome(err); ok {
 			writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: refusal.Code})
-			a.emitOAuthStep(r, oauthvocab.StepRegister, refusal.Outcome, "", http.StatusBadRequest)
+			a.emitOAuthRefusal(r, oauthvocab.StepRegister, refusal, "", http.StatusBadRequest)
 			return
 		}
 		a.logOAuthDependencyFailure(r, oauthvocab.StepRegister, err)
@@ -444,7 +458,7 @@ func (a *App) handleOAuthDeviceAuthorization(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		if refusal, ok := oauthOutcome(err); ok {
 			writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: refusal.Code})
-			a.emitOAuthStep(r, oauthvocab.StepDeviceAuthorization, refusal.Outcome, start.ClientKind, http.StatusBadRequest)
+			a.emitOAuthRefusal(r, oauthvocab.StepDeviceAuthorization, refusal, start.ClientKind, http.StatusBadRequest)
 			return
 		}
 		a.logOAuthDependencyFailure(r, oauthvocab.StepDeviceAuthorization, err)
@@ -485,14 +499,14 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 			if refusal.Redirectable && refusal.RedirectURL != "" {
 				w.Header().Set("Cache-Control", "no-store")
 				http.Redirect(w, r, refusal.RedirectURL, http.StatusSeeOther)
-				a.emitOAuthStep(r, oauthvocab.StepAuthorize, refusal.Outcome, "", http.StatusSeeOther)
+				a.emitOAuthRefusal(r, oauthvocab.StepAuthorize, refusal, "", http.StatusSeeOther)
 				return
 			}
-			a.renderOAuthProblem(w, r, http.StatusBadRequest, "The application's sign-in request is not valid, so it cannot be sent back to the application.")
+			a.renderOAuthProblem(w, r, http.StatusBadRequest, oauthAuthorizeProblem(refusal.ClientRefusal))
 			if refusal.RedirectMismatch != nil {
 				a.logOAuthRedirectMismatch(r, refusal.RedirectMismatch)
 			}
-			a.emitOAuthStep(r, oauthvocab.StepAuthorize, refusal.Outcome, "", http.StatusBadRequest)
+			a.emitOAuthRefusal(r, oauthvocab.StepAuthorize, refusal, "", http.StatusBadRequest)
 			return
 		}
 		a.logOAuthDependencyFailure(r, oauthvocab.StepAuthorize, err)
@@ -674,7 +688,7 @@ func (a *App) writeOAuthConsentError(w http.ResponseWriter, r *http.Request, ste
 			status = http.StatusBadRequest
 		}
 		writeOAuthJSON(w, status, oauthErrorBody{Error: refusal.Code})
-		a.emitOAuthStep(r, step, refusal.Outcome, clientKind, status)
+		a.emitOAuthRefusal(r, step, refusal, clientKind, status)
 		return
 	}
 	a.logOAuthDependencyFailure(r, step, err)
@@ -729,13 +743,14 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 			ClientID: clientID, CodeVerifier: form.Get("code_verifier"), Resource: form.Get("resource"),
 		})
 	}
+	a.logOAuthClientAssertionIgnored(r, token.ClientKind)
 	if err != nil {
 		if refusal, ok := oauthOutcome(err); ok {
 			if refusal.RetryAfter > 0 {
 				w.Header().Set("Retry-After", strconv.Itoa(max(1, int((refusal.RetryAfter+time.Second-1)/time.Second))))
 			}
 			writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: refusal.Code})
-			a.emitOAuthStep(r, oauthvocab.StepToken, refusal.Outcome, token.ClientKind, http.StatusBadRequest)
+			a.emitOAuthRefusal(r, oauthvocab.StepToken, refusal, token.ClientKind, http.StatusBadRequest)
 			return
 		}
 		a.logOAuthDependencyFailure(r, oauthvocab.StepToken, err)
@@ -748,6 +763,61 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		ExpiresIn: int64(token.ExpiresIn / time.Second), Scope: token.Scope,
 	})
 	a.emitOAuthStepScopes(r, oauthvocab.StepToken, oauthvocab.OutcomeOK, token.ClientKind, http.StatusOK, strings.Fields(token.Scope))
+}
+
+// oauthClientRefusalReasons names each client refusal in plain words for the
+// error page. No value from the request or the client's document is shown.
+var oauthClientRefusalReasons = map[string]string{
+	oauthvocab.ClientRefusalUnknownClient:         "The application is not registered with this server. Remove the connection and add it again.",
+	oauthvocab.ClientRefusalNotHTTPS:              "The application's client ID is not an https address.",
+	oauthvocab.ClientRefusalUnsupportedClientID:   "The application's client ID is not a form this server accepts.",
+	oauthvocab.ClientRefusalFetchFailed:           "The application's client information document could not be retrieved.",
+	oauthvocab.ClientRefusalPrivateAddress:        "The application's client information document is on an address this server does not contact.",
+	oauthvocab.ClientRefusalTooLarge:              "The application's client information document is too large.",
+	oauthvocab.ClientRefusalInvalidDocument:       "The application's client information document is not valid: it must be one JSON object, served as application/json, that names each member once.",
+	oauthvocab.ClientRefusalBadClientID:           "The application's client information document names a different client ID.",
+	oauthvocab.ClientRefusalInvalidRedirectURIs:   "The application's client information document lists no return address this server accepts.",
+	oauthvocab.ClientRefusalAuthMethodUnsupported: "The application asks to sign in with a client authentication method this server does not support.",
+	oauthvocab.ClientRefusalRedirectURIMismatch:   "The return address in the sign-in request is not one the application registered.",
+}
+
+// oauthAuthorizeProblem is the error page text for an authorize refusal that
+// cannot be sent back to the application.
+func oauthAuthorizeProblem(clientRefusal string) string {
+	const stopped = "The application's sign-in request is not valid, so it cannot be sent back to the application."
+	if reason, ok := oauthClientRefusalReasons[clientRefusal]; ok {
+		return stopped + " " + reason
+	}
+	return stopped
+}
+
+// clientAssertionJWTBearer is RFC 7523's client_assertion_type.
+const clientAssertionJWTBearer = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+
+// logOAuthClientAssertionIgnored records a token request that carried a
+// client assertion. Every client here authenticates with "none" (PKCE is the
+// proof), so the assertion is neither verified nor refused; the line names
+// the assertion type's class only, never its value.
+func (a *App) logOAuthClientAssertionIgnored(r *http.Request, clientKind string) {
+	form := r.PostForm
+	_, assertion := form["client_assertion"]
+	_, assertionTypeSent := form["client_assertion_type"]
+	if !assertion && !assertionTypeSent {
+		return
+	}
+	assertionType := "other"
+	if form.Get("client_assertion_type") == clientAssertionJWTBearer {
+		assertionType = "jwt_bearer"
+	}
+	if clientKind == "" {
+		clientKind = oauthvocab.ClientKindNone
+	}
+	a.logger.InfoContext(r.Context(), "oauth client assertion ignored",
+		"request_id", logsanitize.SanitizeLogAttr(RequestID(r.Context())),
+		"step", oauthvocab.StepToken,
+		"client_kind", clientKind,
+		"assertion_type", assertionType,
+	)
 }
 
 // tokenClientID reads the client ID of a public client: the client_id form
