@@ -212,6 +212,7 @@ func TestThemeMixTotalReadBytesWithMembershipScopeAgainstRealClickHouse(t *testi
 	t.Logf("MEASURE investments-only=%d scoped-total=%d membership-one-pass=%d membership-in-statement=%d ratio=%.2fx statements=%d",
 		baseline.readBytes, withScope.readBytes, onePass, int64(withScope.readBytes)-int64(baseline.readBytes),
 		float64(int64(withScope.readBytes)-int64(baseline.readBytes))/float64(onePass), withScope.statements)
+	t.Errorf("MEASUREMENT-REPORT temporary")
 	if float64(withScope.readBytes) > 1.3*float64(baseline.readBytes+onePass) {
 		t.Fatalf("statement read %d bytes with membership scope, want <= 1.3 x (investments %d + one membership pass %d): membership is scanned more than once",
 			withScope.readBytes, baseline.readBytes, onePass)
