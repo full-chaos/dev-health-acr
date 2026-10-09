@@ -29,20 +29,6 @@ func TestFindSubjectsByExactNameTeamAdmitsActiveRowsOnly(t *testing.T) {
 	}
 }
 
-func TestFindSubjectsByExactNameNonTeamKindCarriesNoActiveTeamPredicate(t *testing.T) {
-	var cypher string
-	fake := &fakeConn{queryFunc: func(_ context.Context, _, q string, _ map[string]interface{}, _ bool) ([]row, error) {
-		cypher = q
-		return nil, nil
-	}}
-	if _, err := newFakeAdapter(t, fake).FindSubjectsByExactName(context.Background(), storage.Principal{OrgID: "org-1"}, lookupBinding, "Platform", "project", "", 10); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(cypher, teamActiveProperty) {
-		t.Fatalf("project name query carries the team predicate: %s", cypher)
-	}
-}
-
 func inactiveBareAndActiveKeyedRows() []row {
 	return []row{
 		lookupRow("org-1", "team", "team:platform", "Platform", map[string]interface{}{propPropertyPrefix + "is_active": false}),
@@ -109,5 +95,65 @@ func TestInactiveTeamNodeOnlyTeamsWithAnExplicitFalse(t *testing.T) {
 		if got := inactiveTeamNode(c.n); got != c.want {
 			t.Errorf("%s: inactiveTeamNode = %t, want %t", c.name, got, c.want)
 		}
+	}
+}
+
+func TestEveryTeamCandidateQueryCarriesTheActiveTeamCypher(t *testing.T) {
+	var captured []string
+	fake := &fakeConn{queryFunc: func(_ context.Context, _, q string, _ map[string]interface{}, _ bool) ([]row, error) {
+		captured = append(captured, q)
+		return nil, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+	ctx := context.Background()
+	principal := storage.Principal{OrgID: "org-1"}
+	reads := map[string]func() error{
+		"list by kind": func() error {
+			_, err := adapter.ListSubjectsByKind(ctx, principal, lookupBinding, "team", "", 10)
+			return err
+		},
+		"exact name": func() error {
+			_, err := adapter.FindSubjectsByExactName(ctx, principal, lookupBinding, "Platform", "team", "", 10)
+			return err
+		},
+		"exact census": func() error {
+			_, _, err := adapter.chaos4348ExactNameCandidates(ctx, "k", "org-1", temporalFilter{})
+			return err
+		},
+		"cohort census": func() error {
+			_, _, err := adapter.cohortKindCensusCandidates(ctx, "k", "org-1", []string{"team"}, temporalFilter{})
+			return err
+		},
+		"fulltext": func() error {
+			_, _, err := adapter.fulltextSearchNodes(ctx, "k", "org-1", "Platform", 10, temporalFilter{})
+			return err
+		},
+	}
+	for name, read := range reads {
+		captured = nil
+		if err := read(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(captured) == 0 {
+			t.Fatalf("%s: no query issued", name)
+		}
+		for _, q := range captured {
+			if !strings.Contains(q, teamActiveProperty) {
+				t.Errorf("%s: query lacks the active-team clause: %s", name, q)
+			}
+		}
+	}
+}
+
+func TestListSubjectsByKindOmitsInactiveTeams(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) {
+		return inactiveBareAndActiveKeyedRows(), nil
+	}}
+	page, err := newFakeAdapter(t, fake).ListSubjectsByKind(context.Background(), storage.Principal{OrgID: "org-1"}, lookupBinding, "team", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Nodes) != 1 || page.Nodes[0].CanonicalID != "team:jira:platform" {
+		t.Fatalf("nodes = %+v, want only the active keyed team", page.Nodes)
 	}
 }

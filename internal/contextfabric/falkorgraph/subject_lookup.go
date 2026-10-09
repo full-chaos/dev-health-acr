@@ -47,8 +47,8 @@ func (a *Adapter) ListSubjectsByKind(ctx context.Context, principal storage.Prin
 	if afterCanonicalID != "" {
 		after = fmt.Sprintf(" AND n.%s > $after", propCanonicalID)
 	}
-	cypher := fmt.Sprintf("MATCH (n:%s) WHERE n.%s = $org AND n.%s = $kind%s%s RETURN n ORDER BY n.%s LIMIT %d",
-		labelSubject, propOrgID, propKind, after, current.predicate("n"), propCanonicalID, pageSize+1)
+	cypher := fmt.Sprintf("MATCH (n:%s) WHERE n.%s = $org AND n.%s = $kind%s%s%s RETURN n ORDER BY n.%s LIMIT %d",
+		labelSubject, propOrgID, propKind, after, current.predicate("n"), activeTeamCypher("n"), propCanonicalID, pageSize+1)
 	params := map[string]interface{}{"org": orgID, "kind": kind}
 	if afterCanonicalID != "" {
 		params["after"] = afterCanonicalID
@@ -69,6 +69,9 @@ func (a *Adapter) ListSubjectsByKind(ctx context.Context, principal storage.Prin
 		// A node of another kind or organization is never returned, even
 		// if the store answered one: the read is exact on both keys.
 		if propStringValue(n.Properties[propOrgID]) != orgID || propStringValue(n.Properties[propKind]) != kind {
+			continue
+		}
+		if inactiveTeamNode(n) {
 			continue
 		}
 		page.Nodes = append(page.Nodes, lookupNode(n, ""))
@@ -147,10 +150,7 @@ func (a *Adapter) exactNameKindPage(ctx context.Context, key, orgID, kind, term,
 	if after != "" {
 		afterClause = fmt.Sprintf(" AND n.%s > $after", propCanonicalID)
 	}
-	activeClause := ""
-	if kind == string(contractsv1.ContextFabricSubjectTeam) {
-		activeClause = fmt.Sprintf(" AND coalesce(n.%s, true) = true", teamActiveProperty)
-	}
+	activeClause := activeTeamCypher("n")
 	cypher := fmt.Sprintf("MATCH (n:%[1]s) WHERE n.%[2]s = $org AND n.%[3]s = $kind%[4]s%[5]s%[9]s AND (%[6]s) RETURN n ORDER BY n.%[7]s LIMIT %[8]d",
 		labelSubject, propOrgID, propKind, temporal.predicate("n"), afterClause, exactNamePredicate("n"), propCanonicalID, pageSize+1, activeClause)
 	params := map[string]interface{}{"org": orgID, "kind": kind, "term": term, "termLower": strings.ToLower(term)}
@@ -221,6 +221,14 @@ func lookupNodeFromCandidate(candidate graphrank.CandidateNode, match string) di
 // teamActiveProperty is the node property the team projector writes from
 // teams.is_active.
 const teamActiveProperty = propPropertyPrefix + "is_active"
+
+// activeTeamCypher is the graph-query form of the active-team rule, pushed into
+// every query that lists subjects so an inactive team never takes a page or a
+// census slot: any node that is not a team passes, a team passes unless its
+// property is an explicit false.
+func activeTeamCypher(alias string) string {
+	return fmt.Sprintf(" AND (%[1]s.%[2]s <> '%[3]s' OR coalesce(%[1]s.%[4]s, true) = true)", alias, propKind, contractsv1.ContextFabricSubjectTeam, teamActiveProperty)
+}
 
 // inactiveTeamNode reports a team node the source marks inactive. A node
 // without the property is not inactive: only an explicit false is. It is the

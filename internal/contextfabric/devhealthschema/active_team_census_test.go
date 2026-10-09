@@ -72,7 +72,7 @@ func TestActiveTeamPredicateForm(t *testing.T) {
 	}
 }
 
-var teamDailyReadPattern = regexp.MustCompile("FROM (?:work_item_metrics_daily|estimate_coverage_metrics_daily)\\b")
+var teamDailyReadPattern = regexp.MustCompile("FROM (?:work_item_metrics_daily|estimate_coverage_metrics_daily|compounding_risk_daily)\\b")
 
 // A read of a daily table keyed by team_id either names its teams (team_id IN
 // the requested ids) or carries the scope predicate that drops superseded team
@@ -99,12 +99,12 @@ func TestEveryTeamDailyReadNamesItsTeamsOrDropsInactiveOnes(t *testing.T) {
 				continue
 			}
 			sites++
-			end := loc[1] + 200
+			end := loc[1] + 240
 			if end > len(src) {
 				end = len(src)
 			}
 			window := src[loc[1]:end]
-			if !strings.Contains(window, "ActiveTeamScopePredicate(") && !strings.Contains(window, "team_id) IN {ids") && !strings.Contains(window, "team_id IN {ids") {
+			if !strings.Contains(window, "ActiveTeamScopePredicate(") && !strings.Contains(window, "activeTeamScopeFor(") && !strings.Contains(window, "scope_id IN {ids") && !strings.Contains(window, "team_id) IN {ids") && !strings.Contains(window, "team_id IN {ids") {
 				t.Errorf("%s: team-keyed daily read at byte %d neither names its teams nor carries ActiveTeamScopePredicate", rel, loc[0])
 			}
 		}
@@ -113,7 +113,7 @@ func TestEveryTeamDailyReadNamesItsTeamsOrDropsInactiveOnes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sites < 6 {
-		t.Fatalf("census found %d daily reads, want at least 6", sites)
+	if sites < 10 {
+		t.Fatalf("census found %d daily reads, want at least 10", sites)
 	}
 }

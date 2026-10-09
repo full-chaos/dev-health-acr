@@ -507,9 +507,9 @@ func (a *Adapter) runFulltextQuery(ctx context.Context, key, orgID, query string
 	// alike, since they all share this one query-building authority.
 	cypher := fmt.Sprintf(
 		"CALL db.idx.fulltext.queryNodes('%s', $query) YIELD node, score "+
-			"WHERE node.%s = $org%s%s "+
+			"WHERE node.%s = $org%s%s%s "+
 			"RETURN node, score ORDER BY score DESC, node.%s ASC, node.%s ASC LIMIT %d",
-		labelSubject, propOrgID, kindPredicate, temporal.predicate("node"), propKind, propCanonicalID, limit+1,
+		labelSubject, propOrgID, kindPredicate, temporal.predicate("node"), activeTeamCypher("node"), propKind, propCanonicalID, limit+1,
 	)
 	rows, err := a.api.query(ctx, key, cypher, params, true)
 	if err != nil {

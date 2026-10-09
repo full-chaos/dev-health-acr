@@ -88,8 +88,8 @@ func cohortKindCensusDecision(censusAdmitted bool, servableKind contextfabric.Su
 // every call, so the cohort a truncated population yields is reproducible.
 func (a *Adapter) cohortKindCensusCandidates(ctx context.Context, key, orgID string, kinds []string, temporal temporalFilter) ([]graphrank.CandidateNode, bool, error) {
 	cypher := fmt.Sprintf(
-		"MATCH (n:%s) WHERE n.%s = $org AND n.%s IN $kinds%s RETURN n ORDER BY n.%s LIMIT %d",
-		labelSubject, propOrgID, propKind, temporal.predicate("n"), propCanonicalID, exactNameCandidateQueryLimit+1,
+		"MATCH (n:%s) WHERE n.%s = $org AND n.%s IN $kinds%s%s RETURN n ORDER BY n.%s LIMIT %d",
+		labelSubject, propOrgID, propKind, temporal.predicate("n"), activeTeamCypher("n"), propCanonicalID, exactNameCandidateQueryLimit+1,
 	)
 	rows, err := a.api.query(ctx, key, cypher, temporal.bind(map[string]interface{}{"org": orgID, "kinds": kinds}), true)
 	if err != nil {

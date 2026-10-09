@@ -424,7 +424,7 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 	survivors := make([]survivor, 0, len(rows))
 	for _, row := range rows {
 		n, ok := row["node"].(*node)
-		if !ok || n == nil {
+		if !ok || n == nil || inactiveTeamNode(n) {
 			continue
 		}
 		distance, ok := row["score"].(float64)
@@ -444,9 +444,6 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 	}
 	candidates := make([]graphrank.CandidateNode, 0, len(survivors))
 	for _, s := range survivors {
-		if inactiveTeamNode(s.node) {
-			continue
-		}
 		candidate := toCandidateNode(s.node)
 		relevance := vectorRelevanceFloor
 		if !truncated {
