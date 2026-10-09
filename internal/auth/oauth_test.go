@@ -486,13 +486,18 @@ func TestOAuthClientMetadataDocumentResolution(t *testing.T) {
 		name     string
 		document *OAuthClientMetadata
 		want     string
+		refusal  string
 	}{
-		{"valid", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}}, ""},
-		{"absent", nil, oauthvocab.OutcomeInvalidClientMetadata},
-		{"other client id", &OAuthClientMetadata{ClientID: "https://evil.example.test/c.json", RedirectURIs: []string{testRedirect}}, oauthvocab.OutcomeInvalidClientMetadata},
-		{"no redirects", &OAuthClientMetadata{ClientID: id}, oauthvocab.OutcomeInvalidClientMetadata},
-		{"confidential", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt"}, oauthvocab.OutcomeInvalidClientMetadata},
-		{"bad redirect", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{"http://evil.example.test/cb"}}, oauthvocab.OutcomeInvalidClientMetadata},
+		{"valid", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}}, "", ""},
+		{"none named", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "none"}, "", ""},
+		{"private_key_jwt with none listed", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt", TokenEndpointAuthMethodsSupported: []string{"none", "private_key_jwt"}}, "", ""},
+		{"absent", nil, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalFetchFailed},
+		{"other client id", &OAuthClientMetadata{ClientID: "https://evil.example.test/c.json", RedirectURIs: []string{testRedirect}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalBadClientID},
+		{"no redirects", &OAuthClientMetadata{ClientID: id}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalInvalidRedirectURIs},
+		{"private_key_jwt only", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt", TokenEndpointAuthMethodsSupported: []string{"private_key_jwt"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
+		{"private_key_jwt without a list", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt"}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
+		{"client_secret_basic with none listed elsewhere", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "client_secret_basic", TokenEndpointAuthMethodsSupported: []string{"client_secret_post"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
+		{"bad redirect", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{"http://evil.example.test/cb"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalInvalidRedirectURIs},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			delete(h.meta.documents, id)
@@ -506,17 +511,32 @@ func TestOAuthClientMetadataDocumentResolution(t *testing.T) {
 				}
 				return
 			}
-			if outcomeOf(err) != tc.want {
-				t.Fatalf("outcome = %s, want %s", outcomeOf(err), tc.want)
+			if outcomeOf(err) != tc.want || clientRefusalOf(err) != tc.refusal {
+				t.Fatalf("outcome = %s refusal = %s, want %s %s", outcomeOf(err), clientRefusalOf(err), tc.want, tc.refusal)
 			}
 		})
 	}
-	for _, id := range []string{"http://client.example.test/c.json", "https://client.example.test/", "https://client.example.test", "https://client.example.test/a/../c.json"} {
+	for id, refusal := range map[string]string{
+		"http://client.example.test/c.json":       oauthvocab.ClientRefusalNotHTTPS,
+		"https://client.example.test/":            oauthvocab.ClientRefusalUnsupportedClientID,
+		"https://client.example.test":             oauthvocab.ClientRefusalUnsupportedClientID,
+		"https://client.example.test/a/../c.json": oauthvocab.ClientRefusalUnsupportedClientID,
+		"not-a-client":                            oauthvocab.ClientRefusalUnknownClient,
+		"acrc_00000000000000000000000000000000":   oauthvocab.ClientRefusalUnknownClient,
+	} {
 		calls := h.meta.calls
-		if _, err := h.oauth.ResolveClient(context.Background(), id); outcomeOf(err) != oauthvocab.OutcomeInvalidClient || h.meta.calls != calls {
-			t.Fatalf("client id %q: %v (fetched %d times), want invalid_client without a fetch", id, err, h.meta.calls-calls)
+		if _, err := h.oauth.ResolveClient(context.Background(), id); outcomeOf(err) != oauthvocab.OutcomeInvalidClient || clientRefusalOf(err) != refusal || h.meta.calls != calls {
+			t.Fatalf("client id %q: %v refusal %s (fetched %d times), want invalid_client %s without a fetch", id, err, clientRefusalOf(err), h.meta.calls-calls, refusal)
 		}
 	}
+}
+
+func clientRefusalOf(err error) string {
+	var oauthErr *OAuthError
+	if errors.As(err, &oauthErr) {
+		return oauthErr.ClientRefusal
+	}
+	return ""
 }
 
 func TestPublicAddress(t *testing.T) {

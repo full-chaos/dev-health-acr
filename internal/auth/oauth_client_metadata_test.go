@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
 )
 
 func TestPublicAddressDomain(t *testing.T) {
@@ -138,12 +140,12 @@ func TestClientMetadataFetchDialGuard(t *testing.T) {
 	// The production dial guard refuses the same loopback server by address...
 	server.hits.Store(0)
 	guarded := NewClientMetadataFetcher(&http.Client{Transport: server.transport()})
-	if _, err := guarded.Fetch(context.Background(), documentURL); !errors.Is(err, ErrClientMetadataUnavailable) {
-		t.Fatalf("loopback fetch through the guarded transport: err = %v, want ErrClientMetadataUnavailable", err)
+	if _, err := guarded.Fetch(context.Background(), documentURL); !errors.Is(err, ErrClientMetadataUnavailable) || fetchRefusal(err) != oauthvocab.ClientRefusalPrivateAddress {
+		t.Fatalf("loopback fetch through the guarded transport: err = %v, want the private_address refusal", err)
 	}
 	// ...and by name: localhost resolves to loopback after DNS.
 	port := server.Listener.Addr().(*net.TCPAddr).Port
-	if _, err := guarded.Fetch(context.Background(), fmt.Sprintf("https://localhost:%d/client.json", port)); !errors.Is(err, ErrClientMetadataUnavailable) {
+	if _, err := guarded.Fetch(context.Background(), fmt.Sprintf("https://localhost:%d/client.json", port)); !errors.Is(err, ErrClientMetadataUnavailable) || fetchRefusal(err) != oauthvocab.ClientRefusalPrivateAddress {
 		t.Fatalf("localhost fetch through the guarded transport: err = %v", err)
 	}
 	if server.hits.Load() != 0 {
@@ -158,6 +160,19 @@ func TestPublicTransportUsesNoProxy(t *testing.T) {
 	}
 }
 
+// fetchRefusal is the client refusal class a Fetch error carries; "" for
+// no error.
+func fetchRefusal(err error) string {
+	if err == nil {
+		return ""
+	}
+	var failure *ClientMetadataError
+	if errors.As(err, &failure) {
+		return failure.Refusal
+	}
+	return "untyped:" + err.Error()
+}
+
 func TestClientMetadataFetchResponses(t *testing.T) {
 	padded := func(size int) string {
 		return `{"client_id":"https://placeholder","redirect_uris":["https://c.example.test/cb"]}` + strings.Repeat(" ", size)
@@ -165,66 +180,66 @@ func TestClientMetadataFetchResponses(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		handler func(w http.ResponseWriter, r *http.Request)
-		wantErr bool
+		want    string
 	}{
 		{"json", func(w http.ResponseWriter, r *http.Request) {
 			jsonDocument(w, documentFor("https://"+r.Host+r.URL.Path))
-		}, false},
+		}, ""},
 		{"json with charset", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			_, _ = w.Write([]byte(documentFor("https://" + r.Host + r.URL.Path)))
-		}, false},
+		}, ""},
 		{"exactly 5 KiB", func(w http.ResponseWriter, _ *http.Request) {
 			body := padded(0)
 			jsonDocument(w, body+strings.Repeat(" ", clientMetadataMaxBytes-len(body)))
-		}, false},
+		}, ""},
 		{"5 KiB plus one byte", func(w http.ResponseWriter, _ *http.Request) {
 			body := padded(0)
 			jsonDocument(w, body+strings.Repeat(" ", clientMetadataMaxBytes-len(body)+1))
-		}, true},
-		{"large body", func(w http.ResponseWriter, _ *http.Request) { jsonDocument(w, padded(1<<20)) }, true},
+		}, oauthvocab.ClientRefusalTooLarge},
+		{"large body", func(w http.ResponseWriter, _ *http.Request) { jsonDocument(w, padded(1<<20)) }, oauthvocab.ClientRefusalTooLarge},
 		{"html", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/html")
 			_, _ = w.Write([]byte(padded(0)))
-		}, true},
+		}, oauthvocab.ClientRefusalInvalidDocument},
 		{"text plain", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/plain")
 			_, _ = w.Write([]byte(padded(0)))
-		}, true},
+		}, oauthvocab.ClientRefusalInvalidDocument},
 		{"json subtype", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/jwk-set+json")
 			_, _ = w.Write([]byte(padded(0)))
-		}, true},
+		}, oauthvocab.ClientRefusalInvalidDocument},
 		{"no content type", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header()["Content-Type"] = nil
 			_, _ = w.Write([]byte(padded(0)))
-		}, true},
+		}, oauthvocab.ClientRefusalInvalidDocument},
 		{"404 with a valid document", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(documentFor("https://" + r.Host + r.URL.Path)))
-		}, true},
+		}, oauthvocab.ClientRefusalFetchFailed},
 		{"201 with a valid document", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(documentFor("https://" + r.Host + r.URL.Path)))
-		}, true},
+		}, oauthvocab.ClientRefusalFetchFailed},
 		{"500 with a valid document", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(documentFor("https://" + r.Host + r.URL.Path)))
-		}, true},
-		{"not json", func(w http.ResponseWriter, _ *http.Request) { jsonDocument(w, "<html>") }, true},
-		{"json array", func(w http.ResponseWriter, _ *http.Request) { jsonDocument(w, `[]`) }, true},
-		{"not found", func(w http.ResponseWriter, _ *http.Request) { http.NotFound(w, nil) }, true},
-		{"server error", func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "x", http.StatusInternalServerError) }, true},
-		{"no content", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }, true},
+		}, oauthvocab.ClientRefusalFetchFailed},
+		{"not json", func(w http.ResponseWriter, _ *http.Request) { jsonDocument(w, "<html>") }, oauthvocab.ClientRefusalInvalidDocument},
+		{"json array", func(w http.ResponseWriter, _ *http.Request) { jsonDocument(w, `[]`) }, oauthvocab.ClientRefusalInvalidDocument},
+		{"not found", func(w http.ResponseWriter, _ *http.Request) { http.NotFound(w, nil) }, oauthvocab.ClientRefusalFetchFailed},
+		{"server error", func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "x", http.StatusInternalServerError) }, oauthvocab.ClientRefusalFetchFailed},
+		{"no content", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }, oauthvocab.ClientRefusalFetchFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := newMetadataServer(t, tc.handler)
 			_, err := server.unguardedFetcher().Fetch(context.Background(), server.URL+"/client.json")
-			if (err != nil) != tc.wantErr || (err != nil && !errors.Is(err, ErrClientMetadataUnavailable)) {
-				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			if got := fetchRefusal(err); got != tc.want || (err != nil && !errors.Is(err, ErrClientMetadataUnavailable)) {
+				t.Fatalf("err = %v (refusal %q), want refusal %q", err, got, tc.want)
 			}
 		})
 	}
@@ -241,7 +256,7 @@ func TestClientMetadataFetchFollowsNoRedirect(t *testing.T) {
 			fetcher := origin.unguardedFetcher()
 			// The redirect target is trusted and reachable, so only the
 			// refusal to follow keeps its hit count at zero.
-			if _, err := fetcher.Fetch(context.Background(), origin.URL+"/client.json"); !errors.Is(err, ErrClientMetadataUnavailable) {
+			if _, err := fetcher.Fetch(context.Background(), origin.URL+"/client.json"); !errors.Is(err, ErrClientMetadataUnavailable) || fetchRefusal(err) != oauthvocab.ClientRefusalFetchFailed {
 				t.Fatalf("redirected fetch: err = %v, want ErrClientMetadataUnavailable", err)
 			}
 			if target.hits.Load() != 0 {
@@ -269,8 +284,8 @@ func TestClientMetadataFetchIsBoundedInBytesRead(t *testing.T) {
 		}
 		completed.Store(true)
 	})
-	if _, err := server.unguardedFetcher().Fetch(context.Background(), server.URL+"/client.json"); !errors.Is(err, ErrClientMetadataUnavailable) {
-		t.Fatalf("err = %v, want ErrClientMetadataUnavailable", err)
+	if _, err := server.unguardedFetcher().Fetch(context.Background(), server.URL+"/client.json"); !errors.Is(err, ErrClientMetadataUnavailable) || fetchRefusal(err) != oauthvocab.ClientRefusalTooLarge {
+		t.Fatalf("err = %v, want the too_large refusal", err)
 	}
 	// Give the handler time to observe the closed connection.
 	time.Sleep(200 * time.Millisecond)

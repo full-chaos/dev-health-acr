@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"mime"
 	"net"
@@ -14,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -35,6 +35,20 @@ var (
 	ErrClientMetadataUnavailable = errors.New("client metadata document unavailable")
 	errClientMetadataAddress     = errors.New("client metadata host resolves to a non-public address")
 )
+
+// ClientMetadataError is a fetch refusal and its class, one of the
+// oauthvocab client refusals. It matches ErrClientMetadataUnavailable.
+type ClientMetadataError struct {
+	Refusal string
+}
+
+func (e *ClientMetadataError) Error() string {
+	return ErrClientMetadataUnavailable.Error() + ": " + e.Refusal
+}
+
+func (e *ClientMetadataError) Unwrap() error { return ErrClientMetadataUnavailable }
+
+func clientMetadataFailure(refusal string) error { return &ClientMetadataError{Refusal: refusal} }
 
 // HTTPClientMetadataFetcher fetches and caches client ID metadata documents.
 type HTTPClientMetadataFetcher struct {
@@ -82,7 +96,7 @@ func NewClientMetadataFetcher(client *http.Client) *HTTPClientMetadataFetcher {
 // Fetch returns the document a metadata-document client ID names.
 func (f *HTTPClientMetadataFetcher) Fetch(ctx context.Context, clientID string) (OAuthClientMetadata, error) {
 	if !storage.ValidOAuthClientMetadataURL(clientID) {
-		return OAuthClientMetadata{}, ErrClientMetadataUnavailable
+		return OAuthClientMetadata{}, clientMetadataFailure(oauthvocab.ClientRefusalUnsupportedClientID)
 	}
 	now := f.now()
 	f.mu.Lock()
@@ -94,27 +108,33 @@ func (f *HTTPClientMetadataFetcher) Fetch(ctx context.Context, clientID string) 
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, clientID, nil)
 	if err != nil {
-		return OAuthClientMetadata{}, ErrClientMetadataUnavailable
+		return OAuthClientMetadata{}, clientMetadataFailure(oauthvocab.ClientRefusalFetchFailed)
 	}
 	request.Header.Set("Accept", "application/json")
 	response, err := f.client.Do(request)
+	if errors.Is(err, errClientMetadataAddress) {
+		return OAuthClientMetadata{}, clientMetadataFailure(oauthvocab.ClientRefusalPrivateAddress)
+	}
 	if err != nil {
-		return OAuthClientMetadata{}, fmt.Errorf("%w: request failed", ErrClientMetadataUnavailable)
+		return OAuthClientMetadata{}, clientMetadataFailure(oauthvocab.ClientRefusalFetchFailed)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return OAuthClientMetadata{}, fmt.Errorf("%w: status %d", ErrClientMetadataUnavailable, response.StatusCode)
+		return OAuthClientMetadata{}, clientMetadataFailure(oauthvocab.ClientRefusalFetchFailed)
 	}
 	if mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
-		return OAuthClientMetadata{}, fmt.Errorf("%w: not json", ErrClientMetadataUnavailable)
+		return OAuthClientMetadata{}, clientMetadataFailure(oauthvocab.ClientRefusalInvalidDocument)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, clientMetadataMaxBytes+1))
-	if err != nil || len(body) > clientMetadataMaxBytes {
-		return OAuthClientMetadata{}, fmt.Errorf("%w: body unreadable or too large", ErrClientMetadataUnavailable)
+	if err != nil {
+		return OAuthClientMetadata{}, clientMetadataFailure(oauthvocab.ClientRefusalFetchFailed)
+	}
+	if len(body) > clientMetadataMaxBytes {
+		return OAuthClientMetadata{}, clientMetadataFailure(oauthvocab.ClientRefusalTooLarge)
 	}
 	var metadata OAuthClientMetadata
 	if err := json.Unmarshal(body, &metadata); err != nil {
-		return OAuthClientMetadata{}, fmt.Errorf("%w: invalid json", ErrClientMetadataUnavailable)
+		return OAuthClientMetadata{}, clientMetadataFailure(oauthvocab.ClientRefusalInvalidDocument)
 	}
 	f.mu.Lock()
 	if len(f.cache) >= clientMetadataCacheMax {
@@ -134,6 +154,7 @@ func (f *HTTPClientMetadataFetcher) Fetch(ctx context.Context, clientID string) 
 
 func cloneClientMetadata(metadata OAuthClientMetadata) OAuthClientMetadata {
 	metadata.RedirectURIs = append([]string(nil), metadata.RedirectURIs...)
+	metadata.TokenEndpointAuthMethodsSupported = append([]string(nil), metadata.TokenEndpointAuthMethodsSupported...)
 	return metadata
 }
 

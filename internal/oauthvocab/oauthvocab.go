@@ -90,6 +90,52 @@ func ClientKindVocabulary() []string {
 	return []string{ClientKindNone, ClientKindDynamic, ClientKindMetadataDocument}
 }
 
+// Client refusals: why a step could not identify its client, or could not
+// accept the redirect_uri a request presented for it. "none" on every line
+// whose client was not refused.
+const (
+	ClientRefusalNone = "none"
+	// ClientRefusalUnknownClient: not a registered client, and not a client
+	// ID metadata document URL.
+	ClientRefusalUnknownClient = "unknown_client"
+	// ClientRefusalNotHTTPS: a URL client ID that is not https.
+	ClientRefusalNotHTTPS = "not_https"
+	// ClientRefusalUnsupportedClientID: an https client ID this server does
+	// not accept as a metadata document URL, or metadata documents are off.
+	ClientRefusalUnsupportedClientID = "unsupported_client_id"
+	// ClientRefusalFetchFailed: the metadata document could not be fetched
+	// (network error, timeout, a status other than 200, a redirect).
+	ClientRefusalFetchFailed = "fetch_failed"
+	// ClientRefusalPrivateAddress: the metadata document host resolves to an
+	// address that is not publicly routable.
+	ClientRefusalPrivateAddress = "private_address"
+	// ClientRefusalTooLarge: the metadata document exceeds the size limit.
+	ClientRefusalTooLarge = "too_large"
+	// ClientRefusalInvalidDocument: the metadata document is not JSON.
+	ClientRefusalInvalidDocument = "invalid_document"
+	// ClientRefusalBadClientID: the document's client_id is not the URL it
+	// was fetched from.
+	ClientRefusalBadClientID = "bad_client_id"
+	// ClientRefusalInvalidRedirectURIs: the document lists no redirect URI,
+	// or one this server does not accept.
+	ClientRefusalInvalidRedirectURIs = "invalid_redirect_uris"
+	// ClientRefusalAuthMethodUnsupported: the document neither names nor
+	// lists the token endpoint authentication method "none".
+	ClientRefusalAuthMethodUnsupported = "auth_method_unsupported"
+	// ClientRefusalRedirectURIMismatch: the presented redirect_uri is not
+	// one the client registered or its document lists.
+	ClientRefusalRedirectURIMismatch = "redirect_uri_mismatch"
+)
+
+// ClientRefusalVocabulary lists every client refusal, none first.
+func ClientRefusalVocabulary() []string {
+	return []string{
+		ClientRefusalNone, ClientRefusalUnknownClient, ClientRefusalNotHTTPS, ClientRefusalUnsupportedClientID,
+		ClientRefusalFetchFailed, ClientRefusalPrivateAddress, ClientRefusalTooLarge, ClientRefusalInvalidDocument,
+		ClientRefusalBadClientID, ClientRefusalInvalidRedirectURIs, ClientRefusalAuthMethodUnsupported, ClientRefusalRedirectURIMismatch,
+	}
+}
+
 // Scopes an OAuth request may ask for and a credential may be granted, in
 // canonical order. internal/auth pins this list against its own scope
 // constants.

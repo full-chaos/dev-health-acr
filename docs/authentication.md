@@ -186,7 +186,17 @@ approval surface (`ACR_WEB_ASSERTION_*`) and the hosted runtime; startup fails
 without them.
 `ACR_OAUTH_CLIENT_METADATA_DOCUMENTS` (default `true`) accepts HTTPS client ID
 metadata documents; they are fetched only from public addresses, with no
-redirects, a 5-second timeout and a 5 KiB limit.
+redirects, a 5-second timeout and a 5 KiB limit. The document's `client_id`
+must equal the URL it was fetched from, and every redirect URI it lists must be
+acceptable. Every client here is public (`token_endpoint_auth_method` `none`;
+PKCE is the proof). A document that names another method is accepted only when
+it also lists `none` in `token_endpoint_auth_methods_supported` (the server
+metadata advertises only `none`, so such a client uses it); a document that
+cannot use `none` is refused, never downgraded. A client assertion sent to
+`/token` (`client_assertion`, `client_assertion_type`) is not verified and not
+refused: it writes one Info line `oauth client assertion ignored` with
+`step=token`, `client_kind` and `assertion_type` (`jwt_bearer` or `other`),
+never the assertion.
 
 Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
 `POST /authorize/consent`, `POST /token`, `POST /register`,
@@ -208,7 +218,9 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   handle is 256-bit, stored as SHA-256, and lives as long as the device
   authorization (10 minutes). A request that fails verification never reaches
   the consent page: an unverified client or redirect URI gets an error page,
-  anything else the OAuth error redirect.
+  anything else the OAuth error redirect. The error page names why the client
+  was refused in plain words (the `client_refusal` classes below) and never
+  repeats a value from the request or the client's document.
 - The web signs the user in (and returns to the same consent URL), then calls
   `POST /authorize/consent` for the signed-in user with a web assertion
   (`credential:issue`, exactly one `X-ACR-Web-Assertion`, no `Authorization`;
@@ -255,7 +267,15 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   The unacknowledged-credential sweep writes its count-only line
   `device credential ack sweep` carrying `oauth_step=credential_revoke` and
   `source=sweep`). Codes, handles, verifiers, client IDs, device codes, user
-  codes, redirect URIs, state and tokens are never logged.
+  codes, redirect URIs, state and tokens are never logged. Every line carries
+  `client_refusal`: `none`, or why the client was refused (register,
+  authorize, consent_preview, consent and device_authorization lines):
+  `unknown_client`, `not_https`, `unsupported_client_id` (not a metadata
+  document URL this server accepts, or metadata documents are off),
+  `fetch_failed`, `private_address`, `too_large`, `invalid_document`,
+  `bad_client_id` (the document names another client ID),
+  `invalid_redirect_uris`, `auth_method_unsupported` (the document cannot use
+  `none`) or `redirect_uri_mismatch`.
 
 The runtime database role needs `SELECT, INSERT, UPDATE, DELETE` on
 `acr.oauth_clients`, `acr.oauth_authorization_requests` and
