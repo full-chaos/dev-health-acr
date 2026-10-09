@@ -128,8 +128,8 @@ func TestCHAOS4418RepositoryMetricScalarsSpeakForTheLatestDay(t *testing.T) {
 func TestCHAOS4418RepositoryMetricUnrecordedMTTRHasNoScalar(t *testing.T) {
 	t.Parallel()
 	row := metricsRow("repo-1")
-	row[6] = uint8(0)
-	row[7] = float64(0)
+	row[7] = uint8(0)
+	row[8] = float64(0)
 	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: [][]any{row}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{

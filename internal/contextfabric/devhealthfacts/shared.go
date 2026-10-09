@@ -583,11 +583,17 @@ import (
 // earliest persisted work unit. A candidate saved before v119 may hold a
 // refusal of such a window and must not be reused.
 //
-// v119 -> v120: the investment kind serves the organization subject as one
-// fact over every repository once. A candidate saved before v120 may hold an
+// v120 -> v121: a repository metrics day whose change_failure_rate is NULL
+// serves no change_failure_rate (not applicable, never zero), the fact carries
+// change_failure_rate_days, and the read's coverage reason names how many days
+// were not applicable. A candidate saved before v121 may hold a zero served for
+// such a day and must not be reused.
+//
+// v121 -> v122: the investment kind serves the organization subject as one
+// fact over every repository once. A candidate saved before v122 may hold an
 // investment answer that could not name the organization and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v120"
+const QueryVersion = "devhealthfacts.clickhouse.v122"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
