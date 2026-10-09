@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "658531dd097296017a2e42acabd11d050407d484",
+    "commit": "754d86cfd95e54f1a6006b6c0935ebb64661f0ba",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },
@@ -30,10 +30,18 @@
     },
     {
       "operation": "aiAttributionOverview",
-      "document": "query AIAttributionOverview($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIAttributionScopeInput, $limit: Int! = 50, $offset: Int! = 0) {\n  aiAttributionOverview(\n    orgId: $orgId\n    dateRange: $dateRange\n    scope: $scope\n    limit: $limit\n    offset: $offset\n  ) {\n    orgId\n    startDate\n    endDate\n    mix {\n      kind\n      count\n      share\n      __typename\n    }\n    totalAttributed\n    hasMore\n    dataAvailable\n    rows {\n      subjectType\n      subjectId\n      repoId\n      provider\n      kind\n      source\n      confidence\n      actor\n      evidence\n      observedAt\n      teamId\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query AIAttributionOverview($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIAttributionScopeInput, $limit: Int! = 50, $offset: Int! = 0) {\n  aiAttributionOverview(\n    orgId: $orgId\n    dateRange: $dateRange\n    scope: $scope\n    limit: $limit\n    offset: $offset\n  ) {\n    orgId\n    startDate\n    endDate\n    mix {\n      kind\n      count\n      share\n      __typename\n    }\n    totalAttributed\n    hasMore\n    dataAvailable\n    rows {\n      subjectType\n      subjectId\n      repoId\n      provider\n      kind\n      source\n      confidence\n      actor\n      evidence\n      observedAt\n      teamId\n      repoName\n      teamName\n      subjectTitle\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredAiAttributionOverviewDocument",
-      "digest": "ed60bc0ddeb514d39c3ed1c655e65d0c414e5e5ab05e33928a99f527972cda0a",
+      "digest": "6ac8d84b372a39443160f536160fcf6eee13b23f0805366b828372a7ee8f7ef5",
       "kind": "query"
+    },
+    {
+      "operation": "aiAttributionOverview",
+      "document": "query AIAttributionOverview($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIAttributionScopeInput, $limit: Int! = 50, $offset: Int! = 0) {\n  aiAttributionOverview(\n    orgId: $orgId\n    dateRange: $dateRange\n    scope: $scope\n    limit: $limit\n    offset: $offset\n  ) {\n    orgId\n    startDate\n    endDate\n    mix {\n      kind\n      count\n      share\n      __typename\n    }\n    totalAttributed\n    hasMore\n    dataAvailable\n    rows {\n      subjectType\n      subjectId\n      repoId\n      provider\n      kind\n      source\n      confidence\n      actor\n      evidence\n      observedAt\n      teamId\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredAiAttributionOverviewV1Document",
+      "digest": "ed60bc0ddeb514d39c3ed1c655e65d0c414e5e5ab05e33928a99f527972cda0a",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "aiComparison",
@@ -44,10 +52,18 @@
     },
     {
       "operation": "aiGovernanceSummary",
-      "document": "query AIGovernanceSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $violationLimit: Int! = 50) {\n  aiGovernanceSummary(\n    orgId: $orgId\n    dateRange: $dateRange\n    scope: $scope\n    violationLimit: $violationLimit\n  ) {\n    orgId\n    startDate\n    endDate\n    dataAvailable\n    recentViolations {\n      ruleId\n      severity\n      subjectType\n      subjectId\n      teamId\n      repoId\n      observedAt\n      evidence\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query AIGovernanceSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $violationLimit: Int! = 50) {\n  aiGovernanceSummary(\n    orgId: $orgId\n    dateRange: $dateRange\n    scope: $scope\n    violationLimit: $violationLimit\n  ) {\n    orgId\n    startDate\n    endDate\n    dataAvailable\n    recentViolations {\n      ruleId\n      severity\n      subjectType\n      subjectId\n      teamId\n      repoId\n      observedAt\n      evidence\n      repoName\n      teamName\n      subjectTitle\n      ruleName\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredAiGovernanceSummaryDocument",
-      "digest": "ba73e66057e6dfc659ad198a9a90cd3f7827e31486cf850324d9655e486c86fa",
+      "digest": "fb4d7fb81eb9961ab4446acc42f8d4d3d165112d0f5a3a8f486687ef7a06ef98",
       "kind": "query"
+    },
+    {
+      "operation": "aiGovernanceSummary",
+      "document": "query AIGovernanceSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $violationLimit: Int! = 50) {\n  aiGovernanceSummary(\n    orgId: $orgId\n    dateRange: $dateRange\n    scope: $scope\n    violationLimit: $violationLimit\n  ) {\n    orgId\n    startDate\n    endDate\n    dataAvailable\n    recentViolations {\n      ruleId\n      severity\n      subjectType\n      subjectId\n      teamId\n      repoId\n      observedAt\n      evidence\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredAiGovernanceSummaryV1Document",
+      "digest": "ba73e66057e6dfc659ad198a9a90cd3f7827e31486cf850324d9655e486c86fa",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "aiImpactSummary",
@@ -225,10 +241,18 @@
     },
     {
       "operation": "dataHealthIdentity",
-      "document": "query DataHealthIdentity($team: ID!) {\n  dataHealth(team: $team) {\n    identityMapping {\n      unmappedCount\n      unmappedIdentities {\n        provider\n        email\n        displayName\n        observedCount\n        __typename\n      }\n      suggestedAliases {\n        unmappedIdentity {\n          provider\n          email\n          displayName\n          __typename\n        }\n        suggestedCanonicalId\n        confidence\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query DataHealthIdentity($team: ID!) {\n  dataHealth(team: $team) {\n    identityMapping {\n      unmappedCount\n      unmappedIdentities {\n        provider\n        email\n        displayName\n        observedCount\n        __typename\n      }\n      suggestedAliases {\n        unmappedIdentity {\n          provider\n          email\n          displayName\n          __typename\n        }\n        suggestedCanonicalId\n        suggestedCanonicalName\n        confidence\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredDataHealthIdentityDocument",
-      "digest": "a31987266aad8c1e9eb7cb1b572cc45aecc417f566773e9b5ba6e1bf10ec1a94",
+      "digest": "3a6f9e0676663b447d633872098e14e387f07b95b90b88d6255263d3a339362d",
       "kind": "query"
+    },
+    {
+      "operation": "dataHealthIdentity",
+      "document": "query DataHealthIdentity($team: ID!) {\n  dataHealth(team: $team) {\n    identityMapping {\n      unmappedCount\n      unmappedIdentities {\n        provider\n        email\n        displayName\n        observedCount\n        __typename\n      }\n      suggestedAliases {\n        unmappedIdentity {\n          provider\n          email\n          displayName\n          __typename\n        }\n        suggestedCanonicalId\n        confidence\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredDataHealthIdentityV1Document",
+      "digest": "a31987266aad8c1e9eb7cb1b572cc45aecc417f566773e9b5ba6e1bf10ec1a94",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "deleteSavedReport",
@@ -320,9 +344,9 @@
     },
     {
       "operation": "improveOpportunities",
-      "document": "query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {\n  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {\n    orgId\n    detectorReady\n    totalCount\n    opportunities {\n      opportunityId\n      kind\n      entityType\n      entityId\n      title\n      rationale\n      score\n      severity\n      evidenceRefs\n      recommendedAction\n      value\n      threshold\n      unit\n      thresholdDirection\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {\n  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {\n    orgId\n    detectorReady\n    totalCount\n    opportunities {\n      opportunityId\n      kind\n      entityType\n      entityId\n      title\n      rationale\n      score\n      severity\n      evidenceRefs\n      recommendedAction\n      value\n      threshold\n      unit\n      thresholdDirection\n      entityDisplayName\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredImproveOpportunitiesDocument",
-      "digest": "645f285412fb2c9517238aabca7e1204f530b66748893b748c0e5160cccf35c4",
+      "digest": "50bfefc387db621d8bc649840f129d096a61cd2a348238eccc26359a1421fbf0",
       "kind": "query"
     },
     {
@@ -330,6 +354,14 @@
       "document": "query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {\n  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {\n    orgId\n    detectorReady\n    totalCount\n    opportunities {\n      opportunityId\n      kind\n      entityType\n      entityId\n      title\n      rationale\n      score\n      severity\n      evidenceRefs\n      recommendedAction\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredImproveOpportunitiesV1Document",
       "digest": "8890d7aeddfebaa9683d6c8834c82b059e345af1dbf42db14eebba840fcd87d2",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "improveOpportunities",
+      "document": "query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {\n  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {\n    orgId\n    detectorReady\n    totalCount\n    opportunities {\n      opportunityId\n      kind\n      entityType\n      entityId\n      title\n      rationale\n      score\n      severity\n      evidenceRefs\n      recommendedAction\n      value\n      threshold\n      unit\n      thresholdDirection\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredImproveOpportunitiesV2Document",
+      "digest": "645f285412fb2c9517238aabca7e1204f530b66748893b748c0e5160cccf35c4",
       "kind": "query",
       "legacy": true
     },
@@ -513,10 +545,18 @@
     },
     {
       "operation": "testopsRisk",
-      "document": "query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {\n  testopsRisk(orgId: $orgId, input: $input) {\n    releaseConfidence\n    qualityDragHours\n    pipelineStability\n    timeseries {\n      date\n      riskScore\n      __typename\n    }\n    qualityDragBreakdown {\n      category\n      hours\n      __typename\n    }\n    quadrantData {\n      id\n      pipelineSuccessRate\n      testPassRate\n      __typename\n    }\n    confidenceSpark {\n      ts\n      value\n      __typename\n    }\n    confidenceDelta\n    dragSpark {\n      ts\n      value\n      __typename\n    }\n    dragDelta\n    stabilitySpark {\n      ts\n      value\n      __typename\n    }\n    stabilityDelta\n    __typename\n  }\n}",
+      "document": "query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {\n  testopsRisk(orgId: $orgId, input: $input) {\n    releaseConfidence\n    qualityDragHours\n    pipelineStability\n    timeseries {\n      date\n      riskScore\n      __typename\n    }\n    qualityDragBreakdown {\n      category\n      hours\n      __typename\n    }\n    quadrantData {\n      id\n      name\n      pipelineSuccessRate\n      testPassRate\n      __typename\n    }\n    confidenceSpark {\n      ts\n      value\n      __typename\n    }\n    confidenceDelta\n    dragSpark {\n      ts\n      value\n      __typename\n    }\n    dragDelta\n    stabilitySpark {\n      ts\n      value\n      __typename\n    }\n    stabilityDelta\n    __typename\n  }\n}",
       "const_name": "registeredTestopsRiskDocument",
-      "digest": "de0e6a96f2f917aa3a785993b5b35c4f003f974d638097f5702b3b8a56fa0bf7",
+      "digest": "72c3e61ea17ba9550d5ab96ae298879f4559e08de8c0d6742c394b9a7b93d13e",
       "kind": "query"
+    },
+    {
+      "operation": "testopsRisk",
+      "document": "query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {\n  testopsRisk(orgId: $orgId, input: $input) {\n    releaseConfidence\n    qualityDragHours\n    pipelineStability\n    timeseries {\n      date\n      riskScore\n      __typename\n    }\n    qualityDragBreakdown {\n      category\n      hours\n      __typename\n    }\n    quadrantData {\n      id\n      pipelineSuccessRate\n      testPassRate\n      __typename\n    }\n    confidenceSpark {\n      ts\n      value\n      __typename\n    }\n    confidenceDelta\n    dragSpark {\n      ts\n      value\n      __typename\n    }\n    dragDelta\n    stabilitySpark {\n      ts\n      value\n      __typename\n    }\n    stabilityDelta\n    __typename\n  }\n}",
+      "const_name": "registeredTestopsRiskV1Document",
+      "digest": "de0e6a96f2f917aa3a785993b5b35c4f003f974d638097f5702b3b8a56fa0bf7",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "throughputForecast",

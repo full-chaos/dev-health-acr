@@ -3,10 +3,10 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "658531dd097296017a2e42acabd11d050407d484",
+    "commit": "754d86cfd95e54f1a6006b6c0935ebb64661f0ba",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_digest": "sha256:340709af6f7b8f1609ea8cb34c676a2882a1fd1b791b75007c08e3834ccf1d5a",
-    "registry_sha256": "cdd56103b91bbdcf2f87ebc40062e2fe49e1bb462dea41bc068b6e0ef8ff61f3",
+    "registry_sha256": "dff56073e12b1a36056dbf6db31d907811af6738f412729400990348252115ba",
     "registry_rows": 64
   },
   "person_name_tokens": [
@@ -6562,7 +6562,7 @@
     {
       "name": "aiAttributionOverview",
       "kind": "query",
-      "digest": "ed60bc0ddeb514d39c3ed1c655e65d0c414e5e5ab05e33928a99f527972cda0a",
+      "digest": "6ac8d84b372a39443160f536160fcf6eee13b23f0805366b828372a7ee8f7ef5",
       "code": "unknown_operation",
       "reason": "AI analytics: later slice (design D.3)"
     },
@@ -6576,7 +6576,7 @@
     {
       "name": "aiGovernanceSummary",
       "kind": "query",
-      "digest": "ba73e66057e6dfc659ad198a9a90cd3f7827e31486cf850324d9655e486c86fa",
+      "digest": "fb4d7fb81eb9961ab4446acc42f8d4d3d165112d0f5a3a8f486687ef7a06ef98",
       "code": "unknown_operation",
       "reason": "AI analytics: later slice (design D.3)"
     },
@@ -6660,7 +6660,7 @@
     {
       "name": "dataHealthIdentity",
       "kind": "query",
-      "digest": "a31987266aad8c1e9eb7cb1b572cc45aecc417f566773e9b5ba6e1bf10ec1a94",
+      "digest": "3a6f9e0676663b447d633872098e14e387f07b95b90b88d6255263d3a339362d",
       "code": "unknown_operation",
       "reason": "operator or superuser view (design D.3)"
     },
@@ -6709,7 +6709,7 @@
     {
       "name": "improveOpportunities",
       "kind": "query",
-      "digest": "645f285412fb2c9517238aabca7e1204f530b66748893b748c0e5160cccf35c4",
+      "digest": "50bfefc387db621d8bc649840f129d096a61cd2a348238eccc26359a1421fbf0",
       "code": "unknown_operation",
       "reason": "not in slice 1: no resolver path read in step 0 (default REFUSED, design D.4)"
     },
@@ -6835,7 +6835,7 @@
     {
       "name": "testopsRisk",
       "kind": "query",
-      "digest": "de0e6a96f2f917aa3a785993b5b35c4f003f974d638097f5702b3b8a56fa0bf7",
+      "digest": "72c3e61ea17ba9550d5ab96ae298879f4559e08de8c0d6742c394b9a7b93d13e",
       "code": "unknown_operation",
       "reason": "no scope rule or no honest status yet (design D.3)"
     },
