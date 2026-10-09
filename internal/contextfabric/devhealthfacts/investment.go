@@ -199,11 +199,11 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if mixUnavailable != "" {
 		mergeFactReadReason(&result, mixUnavailable)
 	}
-	for _, fact := range facts {
-		if fact.Kind != contextfabric.FactInvestment {
-			continue
-		}
-		if reason := span.reasonFor(fact.Subject.CanonicalID, fact.Subject.Kind == contextfabric.SubjectProject, timeBound); reason != "" {
+	// Every requested subject is checked, with or without a fact: a window
+	// with no overlapping unit serves no fact and must still say the window
+	// starts before the stored history.
+	for _, subject := range query.Subjects {
+		if reason := span.reasonFor(subject.CanonicalID, subject.Kind == contextfabric.SubjectProject, timeBound); reason != "" {
 			mergeFactReadReason(&result, reason)
 		}
 	}

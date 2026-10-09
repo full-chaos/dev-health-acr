@@ -242,3 +242,20 @@ func TestProjectInvestmentWindowBeforeTheStoredSpanNamesIt(t *testing.T) {
 		t.Errorf("window inside the span carries the limitation: %q", reason)
 	}
 }
+
+func TestProjectInvestmentSpanIsStatedWhenNoUnitOverlapsTheWindow(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: nativePhasedTables()}
+	start, end := time.Date(2025, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2025, 10, 1, 0, 0, 0, 0, time.UTC)
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, Kind: contextfabric.FactInvestment,
+		Subjects: []contextfabric.SubjectRef{projectSubject("linear", "a")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(result.Facts) != 0 || !strings.Contains(result.Reason, "investment_window_beyond_stored_history") {
+		t.Errorf("facts=%d reason=%q, want no fact and the organization span reason", len(result.Facts), result.Reason)
+	}
+}

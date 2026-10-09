@@ -129,3 +129,23 @@ func TestSpanSentinelIsInTheMixStatementAndNotTheUnitListing(t *testing.T) {
 		t.Errorf("mix statement names work_unit_investments %d times with the sentinel, want 1", got)
 	}
 }
+
+// The project scope statement reports the organization's earliest unit over
+// ALL latest units, and filters to the window only inside the aggregates, so a
+// window with no overlapping unit still reports the span.
+func TestProjectScopeStatementReportsTheSpanBeyondTheWindowFilter(t *testing.T) {
+	t.Parallel()
+	bound := factTimeBound{active: true, hasStart: true, start: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), end: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
+	statement := projectMixScopeStatement(bound)
+	for _, want := range []string{"groupArrayIf(work_unit_id, in_window)", "min(span_from) AS span_from", "min(from_ts) OVER () AS span_from"} {
+		if !strings.Contains(statement, want) {
+			t.Errorf("project scope statement lacks %q", want)
+		}
+	}
+	if strings.Contains(statement, "\nWHERE 1") {
+		t.Error("project scope statement filters rows to the window before the span aggregate")
+	}
+	if got := strings.Count(statement, "work_unit_investments"); got != 1 {
+		t.Errorf("project scope statement names work_unit_investments %d times, want 1", got)
+	}
+}
