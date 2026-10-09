@@ -51,13 +51,14 @@ func orgMixStatement(bound factTimeBound) string {
 	uniqExactIf(work_unit_id, repo_uuid != '') AS work_units,
 	uniqExactIf(repo_uuid, repo_uuid != '') AS repositories,
 	sumIf(effort, repo_uuid != '') AS resolved_effort,
-	sumIf(effort, repo_uuid = '') AS unresolved_effort
+	sumIf(effort, repo_uuid = '') AS unresolved_effort,
+	toString(min(span_from)) AS span_from
 FROM (
-	SELECT repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share
+	SELECT repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share, span_from
 	FROM (
 		SELECT win, repo_uuid, work_unit_id, c,
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
-			effort_value, theme_distribution_json, bugfix_share
+			effort_value, theme_distribution_json, bugfix_share, span_from
 		FROM (
 ` + repoSplitCore(memberships, "", "") + `		)
 	)
@@ -73,8 +74,12 @@ func (p *InvestmentProvider) readOrgMixRow(ctx context.Context, orgID string, bo
 	}
 	err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadOrganizationThemeMix", orgMixStatement(bound), orgID, []string{}, func(row contextpacket.ClickHouseRowScanner) error {
 		var workUnits, repositories uint64
-		if err := row.Scan(&out.Theme, &out.Bugfix, &workUnits, &repositories, &out.ResolvedEffort, &out.UnresolvedEffort); err != nil {
+		var spanFrom string
+		if err := row.Scan(&out.Theme, &out.Bugfix, &workUnits, &repositories, &out.ResolvedEffort, &out.UnresolvedEffort, &spanFrom); err != nil {
 			return err
+		}
+		if spanErr := recordInvestmentSpanText(ctx, spanFrom, workUnits > 0 || out.UnresolvedEffort > 0); spanErr != nil {
+			return spanErr
 		}
 		out.WorkUnits = int64(workUnits)
 		out.Repositories = int64(repositories)

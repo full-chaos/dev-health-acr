@@ -109,13 +109,14 @@ func repoMixStatement(bounds []factTimeBound) string {
 	return withRowLimit(`SELECT toUInt8(win) AS window, repo_uuid AS repo_id,
 	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
 	sum(bugfix_share * effort) AS bugfix_effort,
-	uniqExact(work_unit_id) AS work_units
+	uniqExact(work_unit_id) AS work_units,
+	toString(min(span_from)) AS span_from
 FROM (
-	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share
+	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share, span_from
 	FROM (
 		SELECT win, repo_uuid, work_unit_id, c,
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
-			effort_value, theme_distribution_json, bugfix_share
+			effort_value, theme_distribution_json, bugfix_share, span_from
 		FROM (
 ` + repoSplitCore(memberships, "", "") + `		)
 	)
@@ -136,12 +137,13 @@ func repoSplitCore(memberships []string, unitCols, unitAgg string) string {
 				uniqExact(if(repo_uuid = '', parsed.ref_text, concat(repo_uuid, '#', parsed.pr_number))) AS c,
 				any(parsed.effort_value) AS effort_value,
 				any(parsed.theme_distribution_json) AS theme_distribution_json,
-				any(parsed.bugfix_share) AS bugfix_share` + unitAgg + `
+				any(parsed.bugfix_share) AS bugfix_share,
+				any(parsed.span_from) AS span_from` + unitAgg + `
 			FROM (
-				SELECT work_unit_id, effort_value, theme_distribution_json, bugfix_share, win,` + unitCols + `
+				SELECT work_unit_id, effort_value, theme_distribution_json, bugfix_share, span_from, win,` + unitCols + `
 					ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
 				FROM (
-					SELECT work_unit_id, repo_id, effort_value, theme_distribution_json,` + unitCols + `
+					SELECT work_unit_id, repo_id, effort_value, theme_distribution_json, min(from_ts) OVER () AS span_from,` + unitCols + `
 						ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS bugfix_share,
 						arrayFilter(w -> w >= 0, [` + strings.Join(memberships, ", ") + `]) AS wins,
 						arrayConcat(
@@ -220,8 +222,12 @@ func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, 
 			var r repoMixRow
 			var window uint8
 			var workUnits uint64
-			if err := row.Scan(&window, &r.RepoID, &r.Theme, &r.Bugfix, &workUnits); err != nil {
+			var spanFrom string
+			if err := row.Scan(&window, &r.RepoID, &r.Theme, &r.Bugfix, &workUnits, &spanFrom); err != nil {
 				return err
+			}
+			if spanErr := recordInvestmentSpanText(ctx, spanFrom, true); spanErr != nil {
+				return spanErr
 			}
 			if int(window) < 0 || int(window) >= len(out) {
 				return fmt.Errorf("repository theme mix returned window %d for %d requested", window, len(out))

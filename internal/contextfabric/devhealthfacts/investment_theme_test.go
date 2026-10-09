@@ -19,7 +19,7 @@ import (
 // table is faked by ownsRepoTable) and the scan order is window, repo_id, theme map,
 // bugfix, work_units.
 func themeMixRow(teamID, teamName string, themes map[string]float64, bugfix float64) []any {
-	return []any{uint8(0), "repo-" + teamID, themes, bugfix, uint64(3)}
+	return []any{uint8(0), "repo-" + teamID, themes, bugfix, uint64(3), "2026-01-01 00:00:00.000000"}
 }
 
 // watermarkTable answers the freshness read (max computed_at) ahead of the
@@ -313,10 +313,4 @@ func TestInvestmentProviderTeamDeclaresAndEmitsThemeBreakdownTable(t *testing.T)
 	if result.Facts[0].Fields["mix_source"].String == nil || result.Facts[0].Fields["attribution_basis"].String == nil {
 		t.Fatalf("provenance missing: %#v", result.Facts[0].Fields)
 	}
-}
-
-// investmentSpanTable answers the earliest-stored-unit read of a windowed
-// investment read; list it BEFORE the broader work_unit_investments table.
-func investmentSpanTable() fakeTable {
-	return fakeTable{match: "SELECT toString(min(from_ts)), count() FROM work_unit_investments", rows: [][]any{{"2026-01-01 00:00:00.000000", uint64(2)}}}
 }

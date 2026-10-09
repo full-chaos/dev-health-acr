@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -68,7 +69,7 @@ func nativePhasedTables(groups ...[]nativePhasedUnit) []fakeTable {
 		}
 	}
 	return []fakeTable{
-		{match: "AS unit_ids", rows: [][]any{{ids, versions}}},
+		{match: "AS unit_ids", rows: [][]any{{ids, versions, "2026-01-01 00:00:00.000000"}}},
 		{match: "groupArray(multi_placed)", rows: [][]any{{pUnit, pProvider, pProject, pMulti}}},
 		{match: "groupArray(theme_feature_delivery)", rows: [][]any{{ids, effort, fd, op, zero, zero, zero}}},
 		{match: "groupArray(bugfix_share)", rows: [][]any{{ids, bugfix}}},
@@ -214,5 +215,30 @@ func TestProjectNativeThemeMixDisclosesMultiPlacedUnitsWithoutAMix(t *testing.T)
 		if _, has := fact.Fields[field]; has {
 			t.Errorf("field %q present on a fact with no native mix", field)
 		}
+	}
+}
+
+func TestProjectInvestmentWindowBeforeTheStoredSpanNamesIt(t *testing.T) {
+	t.Parallel()
+	read := func(start time.Time) contextfabric.FactProviderResult {
+		t.Helper()
+		client := &fakeClient{tables: nativePhasedTables(nativeMixUnits("a", 7))}
+		end := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+		provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+		result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, Kind: contextfabric.FactInvestment,
+			Subjects: []contextfabric.SubjectRef{projectSubject("linear", "a")},
+		})
+		if err != nil || len(result.Facts) != 1 {
+			t.Fatalf("read: err=%v facts=%d reason=%q", err, len(result.Facts), result.Reason)
+		}
+		return result
+	}
+	// The stored span starts 2026-01-01.
+	if reason := read(time.Date(2025, 9, 28, 0, 0, 0, 0, time.UTC)).Reason; !strings.Contains(reason, "investment_window_beyond_stored_history") || !strings.Contains(reason, "2026-01-01T00:00:00Z") {
+		t.Errorf("window before the span: reason %q", reason)
+	}
+	if reason := read(time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)).Reason; strings.Contains(reason, "investment_window_beyond_stored_history") {
+		t.Errorf("window inside the span carries the limitation: %q", reason)
 	}
 }

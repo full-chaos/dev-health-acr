@@ -87,6 +87,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
+	ctx, span := withInvestmentSpan(ctx)
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
 	omittedUnrepresentableCount := 0
@@ -198,17 +199,6 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		}
 	}
 
-	var spanReason string
-	if hasInvestmentWindowStart(timeBound) && len(facts) > 0 {
-		earliest, found, spanErr := p.readInvestmentSpanStart(ctx, orgID)
-		if spanErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query investment span", spanErr)
-		}
-		if found && timeBound.start.Before(earliest) {
-			spanReason = investmentWindowSpanReason(earliest, timeBound)
-		}
-	}
-
 	state, retentionReason := timeBound.retentionState(len(facts))
 	// CHAOS-4521b: this source has no project dimension, so an all-project
 	// read that came back empty says something more specific than "no rows".
@@ -220,7 +210,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if mixUnavailable != "" {
 		mergeFactReadReason(&result, mixUnavailable)
 	}
-	if spanReason != "" {
+	if spanReason := span.reasonFor(timeBound); spanReason != "" && len(facts) > 0 {
 		mergeFactReadReason(&result, spanReason)
 	}
 	if orgRestricted {

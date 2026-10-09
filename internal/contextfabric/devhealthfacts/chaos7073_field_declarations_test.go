@@ -296,7 +296,7 @@ func t4Cases() []t4Case {
 	end := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
 	add(t4Case{name: "investment/team_range_prior", kind: contextfabric.FactInvestment, subjects: team,
 		time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
-		tables: []fakeTable{ownsRepoTable("CHAOS"), investmentSpanTable(), {match: "FROM work_unit_investments", rows: [][]any{
+		tables: []fakeTable{ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: [][]any{
 			themeMixRow("CHAOS", "", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 1),
 			priorRow,
 		}}}})
@@ -313,7 +313,7 @@ func t4Cases() []t4Case {
 			nullStream,
 		}},
 		// The phased roll-up (CHAOS-7271): scope, repo themes, repo bugfix, evidence arm.
-		{match: "AS unit_ids", rows: [][]any{{[]string{"unit-1"}, []int64{1}}}},
+		{match: "AS unit_ids", rows: [][]any{{[]string{"unit-1"}, []int64{1}, "2026-01-01 00:00:00.000000"}}},
 		{match: "groupArray(link_kind)", rows: [][]any{{[]string{"linear"}, []string{"proj-1"}, []string{"repo"}, []string{"r:repo-1"}, [][]string{{"team-1"}}}}},
 		{match: "uniqExactIf(u.repo_id", rows: [][]any{
 			{"linear:proj-1", 60.0, 20.0, 10.0, 6.0, 4.0, uint64(9), uint64(2), uint64(2)},

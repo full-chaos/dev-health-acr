@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -30,10 +31,10 @@ func readOrganizationInvestment(t *testing.T, client *fakeClient, principal stor
 }
 
 // organization row columns: theme effort, bugfix effort, work units,
-// repositories, resolved effort, unresolved effort.
+// repositories, resolved effort, unresolved effort, earliest start.
 func organizationMixTable() []fakeTable {
 	return []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{
-		{map[string]float64{"feature_delivery": 30, "operational": 50, "maintenance": 10, "quality": 6, "risk": 4}, 5.0, uint64(9), uint64(3), 100.0, 25.0},
+		{map[string]float64{"feature_delivery": 30, "operational": 50, "maintenance": 10, "quality": 6, "risk": 4}, 5.0, uint64(9), uint64(3), 100.0, 25.0, "2026-08-01 00:00:00.000000"},
 	}}}
 }
 
@@ -117,7 +118,7 @@ func TestInvestmentOrganizationForARepositoryBoundCallerIsALimitationNotAPartial
 func TestInvestmentOrganizationWithNoEffortServesNoFact(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{
-		{map[string]float64{}, 0.0, uint64(0), uint64(0), 0.0, 0.0},
+		{map[string]float64{}, 0.0, uint64(0), uint64(0), 0.0, 0.0, "1970-01-01 00:00:00.000000"},
 	}}}}
 	result := readOrganizationInvestment(t, client, storage.Principal{OrgID: "org-1"}, organizationSubject("org-1"))
 	if len(result.Facts) != 0 {
@@ -135,5 +136,23 @@ func TestInvestmentOrganizationReadFailureIsAFailureNotAnEmptyAnswer(t *testing.
 	})
 	if err == nil {
 		t.Fatal("a failed organization mix read was served as an empty answer")
+	}
+}
+
+func TestInvestmentOrganizationNamesTheStoredSpanWhenTheWindowStartsBeforeIt(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: organizationMixTable()}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{organizationSubject("org-1")},
+	})
+	if err != nil || len(result.Facts) != 1 {
+		t.Fatalf("err=%v facts=%d", err, len(result.Facts))
+	}
+	if !strings.Contains(result.Reason, "investment_window_beyond_stored_history") {
+		t.Fatalf("reason = %q, want the stored-span disclosure", result.Reason)
 	}
 }
