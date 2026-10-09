@@ -420,13 +420,14 @@ func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAut
 }
 
 // publicTokenEndpointAuth reports whether a metadata-document client can use
-// the token endpoint as a public client. A document that lists
-// token_endpoint_auth_methods_supported is public only when "none" is on the
-// list, whatever method it names (this server advertises only "none", so the
-// client uses it). A document with no list is public when it names "none" or
-// no method. A client that cannot use "none" is refused, never downgraded.
+// the token endpoint as a public client. A document that carries
+// token_endpoint_auth_methods_supported, even an empty list, is public only
+// when "none" is on the list, whatever method it names (this server
+// advertises only "none", so the client uses it). A document without the list
+// (nil after decoding) is public when it names "none" or no method. A client
+// that cannot use "none" is refused, never downgraded.
 func publicTokenEndpointAuth(document OAuthClientMetadata) bool {
-	if len(document.TokenEndpointAuthMethodsSupported) > 0 {
+	if document.TokenEndpointAuthMethodsSupported != nil {
 		return slices.Contains(document.TokenEndpointAuthMethodsSupported, "none")
 	}
 	return document.TokenEndpointAuthMethod == "" || document.TokenEndpointAuthMethod == "none"
@@ -552,7 +553,7 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 	if errors.Is(err, storage.ErrOAuthClientGone) {
 		// The idle-client purge removed the client after it was resolved above:
 		// answer as for a client that was never registered (it registers again).
-		return OAuthAuthorization{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClient, false)
+		return OAuthAuthorization{}, &OAuthError{Code: "invalid_client", Outcome: oauthvocab.OutcomeInvalidClient, ClientRefusal: oauthvocab.ClientRefusalUnknownClient}
 	}
 	if err != nil {
 		return OAuthAuthorization{}, fmt.Errorf("%w: store authorization request: %w", ErrOAuthUnavailable, err)
@@ -971,7 +972,7 @@ func (s *OAuthService) StartDeviceAuthorization(ctx context.Context, request OAu
 		Resource: resource, Scope: scope, CreatedAt: now, ExpiresAt: start.ExpiresAt,
 	})
 	if errors.Is(err, storage.ErrOAuthClientGone) {
-		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClient, false)
+		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, &OAuthError{Code: "invalid_client", Outcome: oauthvocab.OutcomeInvalidClient, ClientRefusal: oauthvocab.ClientRefusalUnknownClient}
 	}
 	if err != nil {
 		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, fmt.Errorf("%w: store device grant: %w", ErrOAuthUnavailable, err)

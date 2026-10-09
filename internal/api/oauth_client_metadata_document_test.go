@@ -241,6 +241,9 @@ func TestOAuthAuthorizeNamesTheClientRefusal(t *testing.T) {
 		{name: "null method with a confidential list", document: func() string {
 			return chatGPTShapedDocument(clientID, map[string]any{"token_endpoint_auth_method": json.RawMessage("null"), "token_endpoint_auth_methods_supported": []string{"private_key_jwt"}})
 		}, refusal: "auth_method_unsupported", reason: "client authentication method this server does not support"},
+		{name: "empty methods list", document: func() string {
+			return chatGPTShapedDocument(clientID, map[string]any{"token_endpoint_auth_method": nil, "token_endpoint_auth_methods_supported": []string{}})
+		}, refusal: "auth_method_unsupported", reason: "client authentication method this server does not support"},
 		{name: "private_key_jwt without a list", document: func() string {
 			return chatGPTShapedDocument(clientID, map[string]any{"token_endpoint_auth_methods_supported": nil})
 		}, refusal: "auth_method_unsupported", reason: "client authentication method this server does not support"},

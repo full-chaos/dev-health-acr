@@ -206,7 +206,9 @@ func unambiguousClientMetadataObject(body []byte) bool {
 
 func cloneClientMetadata(metadata OAuthClientMetadata) OAuthClientMetadata {
 	metadata.RedirectURIs = append([]string(nil), metadata.RedirectURIs...)
-	metadata.TokenEndpointAuthMethodsSupported = append([]string(nil), metadata.TokenEndpointAuthMethodsSupported...)
+	if metadata.TokenEndpointAuthMethodsSupported != nil {
+		metadata.TokenEndpointAuthMethodsSupported = append(make([]string, 0, len(metadata.TokenEndpointAuthMethodsSupported)), metadata.TokenEndpointAuthMethodsSupported...)
+	}
 	return metadata
 }
 

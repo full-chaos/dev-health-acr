@@ -189,9 +189,9 @@ metadata documents; they are fetched only from public addresses, with no
 redirects, a 5-second timeout and a 5 KiB limit. The document's `client_id`
 must equal the URL it was fetched from, and every redirect URI it lists must be
 acceptable. Every client uses the token endpoint as a public client (method
-`none`; PKCE is the proof). A document that lists
-`token_endpoint_auth_methods_supported` is accepted only when `none` is on that
-list, whatever `token_endpoint_auth_method` it names (the server metadata
+`none`; PKCE is the proof). A document that carries
+`token_endpoint_auth_methods_supported`, even an empty list, is accepted only
+when `none` is on that list, whatever `token_endpoint_auth_method` it names (the server metadata
 advertises only `none`, so such a client uses it); a document with no list must
 name `none` or no method. A document that cannot use `none` is refused, never
 downgraded. A document with two top-level members whose names are equal

@@ -425,3 +425,32 @@ func TestClientMetadataMemberNamesAreTheDecodedFields(t *testing.T) {
 		t.Fatalf("member names = %v, want %v", clientMetadataMemberNames, want)
 	}
 }
+
+// TestClientMetadataCacheKeepsAnEmptyMethodList: an empty
+// token_endpoint_auth_methods_supported list is not the same as no list, on
+// the first read and on a cached one.
+func TestClientMetadataCacheKeepsAnEmptyMethodList(t *testing.T) {
+	server := newMetadataServer(t, func(w http.ResponseWriter, r *http.Request) {
+		jsonDocument(w, `{"client_id":"https://`+r.Host+r.URL.Path+`","redirect_uris":["http://127.0.0.1:33418/cb"],"token_endpoint_auth_methods_supported":[]}`)
+	})
+	fetcher := server.unguardedFetcher()
+	for read := range 2 {
+		metadata, err := fetcher.Fetch(context.Background(), server.URL+"/client.json")
+		if err != nil || metadata.TokenEndpointAuthMethodsSupported == nil || len(metadata.TokenEndpointAuthMethodsSupported) != 0 {
+			t.Fatalf("read %d: methods %#v err %v, want an empty, present list", read, metadata.TokenEndpointAuthMethodsSupported, err)
+		}
+	}
+	if server.hits.Load() != 1 {
+		t.Fatalf("hits = %d, want the second read from the cache", server.hits.Load())
+	}
+	absent := newMetadataServer(t, func(w http.ResponseWriter, r *http.Request) {
+		jsonDocument(w, `{"client_id":"https://`+r.Host+r.URL.Path+`","redirect_uris":["http://127.0.0.1:33418/cb"]}`)
+	})
+	absentFetcher := absent.unguardedFetcher()
+	for read := range 2 {
+		metadata, err := absentFetcher.Fetch(context.Background(), absent.URL+"/client.json")
+		if err != nil || metadata.TokenEndpointAuthMethodsSupported != nil {
+			t.Fatalf("read %d of a document without the list: methods %#v err %v, want no list", read, metadata.TokenEndpointAuthMethodsSupported, err)
+		}
+	}
+}

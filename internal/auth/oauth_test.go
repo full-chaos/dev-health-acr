@@ -504,7 +504,8 @@ func TestOAuthClientMetadataDocumentResolution(t *testing.T) {
 		{"bad redirect", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{"http://evil.example.test/cb"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalInvalidRedirectURIs},
 		{"no method with a confidential list", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethodsSupported: []string{"private_key_jwt"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
 		{"none named with a confidential list", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "none", TokenEndpointAuthMethodsSupported: []string{"private_key_jwt"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
-		{"no method with an empty list", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethodsSupported: []string{}}, "", ""},
+		{"no method with an empty list", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethodsSupported: []string{}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
+		{"none named with an empty list", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "none", TokenEndpointAuthMethodsSupported: []string{}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
 		{"none listed in another case", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt", TokenEndpointAuthMethodsSupported: []string{"None"}}, oauthvocab.OutcomeInvalidClientMetadata, oauthvocab.ClientRefusalAuthMethodUnsupported},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1096,5 +1097,42 @@ func TestOAuthClientRefusalFromAFetcherStaysInTheVocabulary(t *testing.T) {
 		if _, err := h.oauth.ResolveClient(context.Background(), id); outcomeOf(err) != oauthvocab.OutcomeInvalidClientMetadata || clientRefusalOf(err) != want {
 			t.Errorf("injected refusal %q: %v refusal %q, want %q", injected, err, clientRefusalOf(err), want)
 		}
+	}
+}
+
+// clientGoneStore answers every row that needs the client's row as if the
+// idle-client purge had removed it after the client was resolved.
+type clientGoneStore struct {
+	storage.OAuthStore
+}
+
+func (clientGoneStore) CreateAuthorizationRequest(context.Context, storage.OAuthAuthorizationRequest) (storage.OAuthAuthorizationRequest, error) {
+	return storage.OAuthAuthorizationRequest{}, storage.ErrOAuthClientGone
+}
+
+func (clientGoneStore) CreateDeviceGrant(context.Context, storage.OAuthDeviceGrant) (storage.OAuthDeviceGrant, error) {
+	return storage.OAuthDeviceGrant{}, storage.ErrOAuthClientGone
+}
+
+// TestOAuthPurgedClientIsAnUnknownClient: a dynamic client the purge removes
+// between its resolution and the stored row is refused as unknown_client.
+func TestOAuthPurgedClientIsAnUnknownClient(t *testing.T) {
+	h := newOAuthHarness(t)
+	service, err := NewOAuthService(clientGoneStore{memory.NewOAuthStore(func() time.Time { return h.now })}, h.devices, OAuthConfig{Issuer: testIssuer, Resources: []string{testResource}, Now: func() time.Time { return h.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := service.Register(context.Background(), OAuthRegistrationRequest{RedirectURIs: []string{testRedirect}, GrantTypes: []string{"authorization_code", OAuthDeviceCodeGrantType}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, challenge := pkce(t)
+	_, err = service.Authorize(context.Background(), OAuthAuthorizeRequest{ResponseType: "code", ClientID: client.ClientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256", State: "st"})
+	if outcomeOf(err) != oauthvocab.OutcomeInvalidClient || clientRefusalOf(err) != oauthvocab.ClientRefusalUnknownClient {
+		t.Fatalf("authorize = %v refusal %q, want invalid_client unknown_client", err, clientRefusalOf(err))
+	}
+	_, err = service.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: client.ClientID})
+	if outcomeOf(err) != oauthvocab.OutcomeInvalidClient || clientRefusalOf(err) != oauthvocab.ClientRefusalUnknownClient {
+		t.Fatalf("device authorization = %v refusal %q, want invalid_client unknown_client", err, clientRefusalOf(err))
 	}
 }
