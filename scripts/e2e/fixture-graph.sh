@@ -47,6 +47,9 @@ seed_fixture_worlds() {
   # The archived project's owner also has a superseded copy of its row: same name, another id,
   # is_active = 0, the way a carried team id leaves the old row behind.
   clickhouse_query "INSERT INTO ${db}.teams SELECT * REPLACE (concat('superseded-', id) AS id, 0 AS is_active, now64(3) AS updated_at, now64(3) AS last_synced) FROM ${db}.teams FINAL WHERE org_id = '${org_id}' AND id IN (SELECT team_id FROM ${db}.team_project_ownership FINAL WHERE org_id = '${org_id}' AND valid_to IS NULL AND project_id IN (SELECT id FROM ${db}.projects FINAL WHERE org_id = '${org_id}' AND is_active = 0)) ORDER BY id LIMIT 1" || fg_die 'the superseded team row was not seeded'
+  local twins
+  twins="$(clickhouse_query "SELECT count() FROM ${db}.teams FINAL WHERE org_id = '${org_id}' AND is_active = 0 AND startsWith(id, 'superseded-')")"
+  [[ "$twins" == "1" ]] || fg_die "want exactly one superseded team row, found ${twins}"
   local archived
   archived="$(clickhouse_query "SELECT count() FROM ${db}.projects FINAL WHERE org_id = '${org_id}' AND is_active = 0 AND id IN (SELECT project_id FROM ${db}.team_project_ownership FINAL WHERE org_id = '${org_id}' AND valid_to IS NULL)")"
   [[ "$archived" == "1" ]] || fg_die "want exactly one archived owned project, found ${archived}"
