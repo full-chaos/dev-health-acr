@@ -250,9 +250,6 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 	case legacyRunID:
 		return subqueryMembershipScope, nil
 	}
-	if ids, ok := p.scopes.get(orgID, runID); ok {
-		return membershipScope{mode: membershipScopeIDs, ids: ids}, nil
-	}
 	loaded, err, _ := p.scopes.loads.Do(orgID+"\x00"+runID, func() (any, error) {
 		if ids, ok := p.scopes.get(orgID, runID); ok {
 			return ids, nil

@@ -290,6 +290,19 @@ func TestLoad_defaultsClickHouseMaxBytesToRead(t *testing.T) {
 	}
 }
 
+// The default is a number chosen from a measurement (the investment mix read
+// 56.5 MB on a production-sized organization); pin it by value, not by the
+// constant it is read from.
+func TestLoad_defaultClickHouseMaxBytesToReadIs256MiB(t *testing.T) {
+	cfg, err := load(mapLookup(completeRuntimeEnvironment()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ClickHouseMaxBytesToRead != 256*1024*1024 {
+		t.Fatalf("ClickHouseMaxBytesToRead = %d, want 268435456 (256 MiB)", cfg.ClickHouseMaxBytesToRead)
+	}
+}
+
 func TestLoad_appliesConfiguredClickHouseMaxBytesToRead(t *testing.T) {
 	// Given
 	values := completeRuntimeEnvironment()

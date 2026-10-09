@@ -111,7 +111,14 @@ func openClickHouse(_ context.Context, request clickHouseOpenRequest) (clickHous
 		return fail(fmt.Errorf("create evidence store: %w", err))
 	}
 	return clickHouseComponents{
-		evidence: evidence, factory: factory, queryClient: devhealthfacts.NewMeasuredQueryClient(client, request.config.ClickHouseMaxBytesToRead),
+		evidence: evidence, factory: factory, queryClient: measuredClickHouseQueryClient(client, request.config),
 		check: func(ctx context.Context) error { return checkClickHouseRuntime(ctx, client.Ping, client) }, close: client.Close,
 	}, nil
+}
+
+// measuredClickHouseQueryClient is the one boundary every ClickHouse statement
+// of this binary goes through: it measures what the server reads and turns a
+// read-budget exception into an error that names the configured cap.
+func measuredClickHouseQueryClient(client contextpacket.ClickHouseQueryClient, cfg config.Config) contextpacket.ClickHouseQueryClient {
+	return devhealthfacts.NewMeasuredQueryClient(client, cfg.ClickHouseMaxBytesToRead)
 }

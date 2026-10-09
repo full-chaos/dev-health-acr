@@ -47,6 +47,18 @@ func TestReadBudgetRefusalNamesTheActionTheCapAndWhatWasMeasured(t *testing.T) {
 	}
 }
 
+func TestReadBudgetRefusalWithoutProgressStillNamesTheCap(t *testing.T) {
+	t.Parallel()
+	err := readInvestmentWithFailingMix(t, &devhealthfacts.BudgetExceededError{Code: 307, CapBytes: 268435456, Cause: errors.New("x")})
+	var failure *contextfabric.FactReadFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("error = %v, want a FactReadFailure", err)
+	}
+	if want := "devhealthfacts: query repository theme mix exceeded the read budget (limit 268435456 bytes); narrow the window or the subject"; failure.Reason != want {
+		t.Fatalf("reason = %q, want %q", failure.Reason, want)
+	}
+}
+
 func TestReadBudgetRefusalWithoutMeasurementStillNamesTheBudget(t *testing.T) {
 	t.Parallel()
 	err := readInvestmentWithFailingMix(t, &devhealthfacts.BudgetExceededError{Code: 158, Cause: errors.New("x")})
