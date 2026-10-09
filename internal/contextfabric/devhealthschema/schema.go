@@ -42,6 +42,11 @@ import (
 type Column struct {
 	Name string
 	Type string
+	// AlsoAccepts lists further types the column may carry in a deployment
+	// while a type change rolls out. Type stays the canonical one; every
+	// listed type is ALSO a shape the readers must serve, and a fixture is
+	// rendered for each (DDLWithColumnType).
+	AlsoAccepts []string
 }
 
 // ProductionColumns is the snapshot: table name -> the columns Context
@@ -258,7 +263,7 @@ var ProductionColumns = map[string][]Column{
 		{Name: "prs_merged", Type: "UInt32"},
 		{Name: "median_pr_cycle_hours", Type: "Float64"},
 		{Name: "mttr_hours", Type: "Nullable(Float64)"},
-		{Name: "change_failure_rate", Type: "Float64"},
+		{Name: "change_failure_rate", Type: "Float64", AlsoAccepts: []string{"Nullable(Float64)"}},
 		{Name: "computed_at", Type: "DateTime('UTC')"},
 		{Name: "bus_factor", Type: "UInt32"},
 		{Name: "code_ownership_gini", Type: "Float64"},
@@ -687,6 +692,53 @@ var EngineFull = map[string]string{
 	"work_unit_membership":      "ReplacingMergeTree(computed_at) ORDER BY (org_id, node_type, node_id, category_kind, category, run_id) SETTINGS index_granularity = 8192",
 	"work_unit_membership_runs": "ReplacingMergeTree(completed_at) ORDER BY (org_id, run_id) SETTINGS index_granularity = 8192",
 	"work_unit_supersessions":   "ReplacingMergeTree(superseded_at) ORDER BY (org_id, superseded_work_unit_id) SETTINGS index_granularity = 8192",
+}
+
+// AcceptsColumnType reports whether typ is the canonical type of the column or
+// one of its declared alternates.
+func AcceptsColumnType(table, column, typ string) bool {
+	for _, c := range ProductionColumns[table] {
+		if c.Name != column {
+			continue
+		}
+		if c.Type == typ {
+			return true
+		}
+		for _, alt := range c.AlsoAccepts {
+			if alt == typ {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// DDLWithColumnType renders the table's CREATE statement with one column
+// carrying typ instead of its canonical type, created in database when that is
+// not empty. typ must be accepted by
+// AcceptsColumnType; anything else panics, so a fixture cannot invent a type.
+func DDLWithColumnType(database, table, column, typ string) string {
+	if !AcceptsColumnType(table, column, typ) {
+		panic("devhealthschema: " + table + "." + column + " does not accept type " + typ)
+	}
+	columns := ProductionColumns[table]
+	rendered := make([]string, 0, len(columns))
+	for _, c := range columns {
+		t := c.Type
+		if c.Name == column {
+			t = typ
+		}
+		rendered = append(rendered, c.Name+" "+t)
+	}
+	engine, ok := EngineFull[table]
+	if !ok {
+		panic("devhealthschema: no declared engine for table " + table)
+	}
+	qualified := table
+	if database != "" {
+		qualified = database + "." + table
+	}
+	return fmt.Sprintf("CREATE TABLE %s (%s) ENGINE = %s", qualified, strings.Join(rendered, ", "), withNullableKeySetting(engine))
 }
 
 // DDL renders CREATE TABLE statements for the named tables, in a
