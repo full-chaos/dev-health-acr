@@ -197,7 +197,8 @@ func runDoctor() doctorReport {
 	// never reach the report.
 	credentialMissing := errors.Is(credentialErr, sidecar.ErrCredentialMissing)
 	credentialShapeInvalid := errors.Is(credentialErr, sidecar.ErrCredentialShapeInvalid)
-	credentialLifecycleBusy := errors.Is(credentialErr, sidecar.ErrCredentialLifecycleBusy)
+	credentialLifecycleBusy := errors.Is(credentialErr, sidecar.ErrCredentialLifecycleBusy) ||
+		errors.Is(credentialErr, sidecar.ErrCredentialLifecycleWaitTimeout)
 	credentialUnavailable := credentialErr != nil && !credentialMissing && !credentialShapeInvalid
 	credentialSet := credentialErr == nil || credentialShapeInvalid
 	credentialShapeValid := credentialErr == nil && auth.IsTokenShapeValid(credential.Token)
