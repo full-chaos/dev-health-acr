@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -230,7 +231,20 @@ func TestClientMetadataFetchResponses(t *testing.T) {
 			_, _ = w.Write([]byte(documentFor("https://" + r.Host + r.URL.Path)))
 		}, oauthvocab.ClientRefusalFetchFailed},
 		{"not json", func(w http.ResponseWriter, _ *http.Request) { jsonDocument(w, "<html>") }, oauthvocab.ClientRefusalInvalidDocument},
+		{"duplicate member", func(w http.ResponseWriter, r *http.Request) {
+			jsonDocument(w, strings.TrimSuffix(documentFor("https://"+r.Host+r.URL.Path), "}")+`,"redirect_uris":["https://evil.example.test/cb"]}`)
+		}, oauthvocab.ClientRefusalInvalidDocument},
+		{"case-variant known member", func(w http.ResponseWriter, r *http.Request) {
+			jsonDocument(w, `{"Client_Id":"https://`+r.Host+r.URL.Path+`","redirect_uris":["http://127.0.0.1:33418/cb"]}`)
+		}, oauthvocab.ClientRefusalInvalidDocument},
+		{"case-variant unknown members", func(w http.ResponseWriter, r *http.Request) {
+			jsonDocument(w, strings.TrimSuffix(documentFor("https://"+r.Host+r.URL.Path), "}")+`,"logo_uri":"a","Logo_URI":"b"}`)
+		}, oauthvocab.ClientRefusalInvalidDocument},
+		{"distinct extension members", func(w http.ResponseWriter, r *http.Request) {
+			jsonDocument(w, strings.TrimSuffix(documentFor("https://"+r.Host+r.URL.Path), "}")+`,"logo_uri":"a","jwks_uri":"b","nested":{"x":1,"x":2}}`)
+		}, ""},
 		{"json array", func(w http.ResponseWriter, _ *http.Request) { jsonDocument(w, `[]`) }, oauthvocab.ClientRefusalInvalidDocument},
+		{"json null", func(w http.ResponseWriter, _ *http.Request) { jsonDocument(w, `null`) }, oauthvocab.ClientRefusalInvalidDocument},
 		{"not found", func(w http.ResponseWriter, _ *http.Request) { http.NotFound(w, nil) }, oauthvocab.ClientRefusalFetchFailed},
 		{"server error", func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "x", http.StatusInternalServerError) }, oauthvocab.ClientRefusalFetchFailed},
 		{"no content", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }, oauthvocab.ClientRefusalFetchFailed},
@@ -400,5 +414,14 @@ func TestClientMetadataFetchHonoursContext(t *testing.T) {
 	}
 	if time.Since(started) > 3*time.Second {
 		t.Fatalf("a cancelled fetch took %v", time.Since(started))
+	}
+}
+
+// TestClientMetadataMemberNamesAreTheDecodedFields pins the names the
+// ambiguity scan protects to the fields OAuthClientMetadata decodes.
+func TestClientMetadataMemberNamesAreTheDecodedFields(t *testing.T) {
+	want := []string{"client_id", "client_name", "redirect_uris", "token_endpoint_auth_method", "token_endpoint_auth_methods_supported"}
+	if !slices.Equal(clientMetadataMemberNames, want) {
+		t.Fatalf("member names = %v, want %v", clientMetadataMemberNames, want)
 	}
 }

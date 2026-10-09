@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -136,6 +139,9 @@ func (f *HTTPClientMetadataFetcher) Fetch(ctx context.Context, clientID string) 
 	if err := json.Unmarshal(body, &metadata); err != nil {
 		return OAuthClientMetadata{}, clientMetadataFailure(oauthvocab.ClientRefusalInvalidDocument)
 	}
+	if !unambiguousClientMetadataObject(body) {
+		return OAuthClientMetadata{}, clientMetadataFailure(oauthvocab.ClientRefusalInvalidDocument)
+	}
 	f.mu.Lock()
 	if len(f.cache) >= clientMetadataCacheMax {
 		for key, cached := range f.cache {
@@ -150,6 +156,52 @@ func (f *HTTPClientMetadataFetcher) Fetch(ctx context.Context, clientID string) 
 	f.cache[clientID] = cachedClientMetadata{metadata: cloneClientMetadata(metadata), expiresAt: now.Add(clientMetadataCacheTTL)}
 	f.mu.Unlock()
 	return metadata, nil
+}
+
+// clientMetadataMemberNames are the member names OAuthClientMetadata decodes,
+// read from its json tags.
+var clientMetadataMemberNames = func() []string {
+	kind := reflect.TypeFor[OAuthClientMetadata]()
+	names := make([]string, 0, kind.NumField())
+	for i := range kind.NumField() {
+		names = append(names, kind.Field(i).Tag.Get("json"))
+	}
+	return names
+}()
+
+// unambiguousClientMetadataObject reports whether a body encoding/json has
+// already decoded is a JSON object whose top-level members a case-sensitive
+// reader and encoding/json (which matches member names case-insensitively,
+// the last one winning) read the same way: no two members whose names are
+// equal ignoring case, and no member whose name equals a decoded member's name
+// only ignoring case. A JSON null, which decodes to the zero document, is not
+// an object. The body is valid JSON (Unmarshal accepted the same bytes), so
+// the decoder reports no error here; were one to occur, More reports false
+// and the scan ends.
+func unambiguousClientMetadataObject(body []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	if open, _ := decoder.Token(); open != json.Delim('{') {
+		return false
+	}
+	seen := make([]string, 0, 16)
+	for decoder.More() {
+		token, _ := decoder.Token()
+		name, _ := token.(string)
+		for _, other := range seen {
+			if strings.EqualFold(other, name) {
+				return false
+			}
+		}
+		for _, decoded := range clientMetadataMemberNames {
+			if name != decoded && strings.EqualFold(name, decoded) {
+				return false
+			}
+		}
+		seen = append(seen, name)
+		var value json.RawMessage
+		_ = decoder.Decode(&value)
+	}
+	return true
 }
 
 func cloneClientMetadata(metadata OAuthClientMetadata) OAuthClientMetadata {

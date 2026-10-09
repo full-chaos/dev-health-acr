@@ -439,10 +439,10 @@ func unresolvedClientRefusal(clientID string) string {
 	if err != nil {
 		return oauthvocab.ClientRefusalUnknownClient
 	}
-	switch parsed.Scheme {
-	case "https":
+	switch {
+	case parsed.Scheme == "https":
 		return oauthvocab.ClientRefusalUnsupportedClientID
-	case "http":
+	case parsed.Scheme != "" && parsed.Host != "":
 		return oauthvocab.ClientRefusalNotHTTPS
 	default:
 		return oauthvocab.ClientRefusalUnknownClient

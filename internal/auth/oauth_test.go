@@ -533,6 +533,11 @@ func TestOAuthClientMetadataDocumentResolution(t *testing.T) {
 		"https://%zz/c.json":                      oauthvocab.ClientRefusalUnknownClient,
 		"HTTPS://client.example.test/":            oauthvocab.ClientRefusalUnsupportedClientID,
 		"HTTP://client.example.test/c.json":       oauthvocab.ClientRefusalNotHTTPS,
+		"ftp://client.example.test/c.json":        oauthvocab.ClientRefusalNotHTTPS,
+		"wss://client.example.test/c.json":        oauthvocab.ClientRefusalNotHTTPS,
+		"urn:example:client":                      oauthvocab.ClientRefusalUnknownClient,
+		"mailto:client@example.test":              oauthvocab.ClientRefusalUnknownClient,
+		"//client.example.test/c.json":            oauthvocab.ClientRefusalUnknownClient,
 		"acrc_00000000000000000000000000000000":   oauthvocab.ClientRefusalUnknownClient,
 	} {
 		calls := h.meta.calls

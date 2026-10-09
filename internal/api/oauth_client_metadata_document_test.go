@@ -261,7 +261,21 @@ func TestOAuthAuthorizeNamesTheClientRefusal(t *testing.T) {
 		{name: "not json", handler: func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/html")
 			_, _ = w.Write([]byte("<html></html>"))
-		}, refusal: "invalid_document", reason: "is not a JSON document served as application/json"},
+		}, refusal: "invalid_document", reason: "client information document is not valid"},
+		{name: "case-variant methods key after the canonical one", document: func() string {
+			return withMember(chatGPTShapedDocument(clientID, map[string]any{"token_endpoint_auth_methods_supported": []string{"private_key_jwt"}}), `"Token_Endpoint_Auth_Methods_Supported":["none"]`)
+		}, refusal: "invalid_document", reason: "client information document is not valid"},
+		{name: "case-variant methods key alone", document: func() string {
+			return withMember(chatGPTShapedDocument(clientID, map[string]any{"token_endpoint_auth_methods_supported": nil}), `"TOKEN_ENDPOINT_AUTH_METHODS_SUPPORTED":["none"]`)
+		}, refusal: "invalid_document", reason: "client information document is not valid"},
+		{name: "duplicate redirect_uris member", document: func() string {
+			return withMember(chatGPTShapedDocument(clientID, nil), `"redirect_uris":["https://evil.example.test/cb"]`)
+		}, refusal: "invalid_document", reason: "client information document is not valid"},
+		{name: "duplicate unrecognized member", document: func() string {
+			return withMember(chatGPTShapedDocument(clientID, nil), `"Client_URI":"https://client.example.test/other"`)
+		}, refusal: "invalid_document", reason: "client information document is not valid"},
+		{name: "ftp client id", clientID: "ftp://client.example.test/oauth/client.json",
+			refusal: "not_https", reason: "is not an https address"},
 		{name: "not found", handler: func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) },
 			refusal: "fetch_failed", reason: "could not be retrieved"},
 		{name: "redirected", handler: func(w http.ResponseWriter, r *http.Request) {
@@ -324,4 +338,9 @@ func TestOAuthAuthorizeNamesTheClientRefusal(t *testing.T) {
 			}
 		})
 	}
+}
+
+// withMember appends one raw member to a JSON object document.
+func withMember(document, member string) string {
+	return strings.TrimSuffix(document, "}") + "," + member + "}"
 }

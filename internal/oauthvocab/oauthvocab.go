@@ -98,7 +98,8 @@ const (
 	// ClientRefusalUnknownClient: not a registered client, and not a client
 	// ID metadata document URL.
 	ClientRefusalUnknownClient = "unknown_client"
-	// ClientRefusalNotHTTPS: a URL client ID that is not https.
+	// ClientRefusalNotHTTPS: a client ID that is an absolute URL with a host
+	// and a scheme other than https.
 	ClientRefusalNotHTTPS = "not_https"
 	// ClientRefusalUnsupportedClientID: an https client ID this server does
 	// not accept as a metadata document URL, or metadata documents are off.
@@ -111,7 +112,10 @@ const (
 	ClientRefusalPrivateAddress = "private_address"
 	// ClientRefusalTooLarge: the metadata document exceeds the size limit.
 	ClientRefusalTooLarge = "too_large"
-	// ClientRefusalInvalidDocument: the metadata document is not JSON.
+	// ClientRefusalInvalidDocument: the metadata document is not a JSON
+	// object served as application/json, or its member names are ambiguous
+	// (two equal ignoring case, or one equal to a known member only ignoring
+	// case).
 	ClientRefusalInvalidDocument = "invalid_document"
 	// ClientRefusalBadClientID: the document's client_id is not the URL it
 	// was fetched from.
