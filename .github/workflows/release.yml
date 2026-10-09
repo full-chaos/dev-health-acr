@@ -317,7 +317,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.27.0"
+          go-version: "1.27.2"
           check-latest: false
           cache: false
       # Supply-chain checks only. The test suite, vet, fmt, crosscompile and
@@ -371,7 +371,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.27.0"
+          go-version: "1.27.2"
           check-latest: false
           cache: false
       # CHAOS-6403: cache ONLY the Go module cache. It is verifiable: `go mod
@@ -429,7 +429,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.27.0"
+          go-version: "1.27.2"
           check-latest: false
           cache: false
       # actions/download-artifact v8.0.1
