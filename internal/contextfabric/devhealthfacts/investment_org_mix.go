@@ -25,6 +25,10 @@ import (
 // that carries no PR reference and no repository at all, count in
 // unattributed_effort_share (their share of all effort the statement sees).
 
+// investmentOrgUnattributedOnlyReason names the window whose effort reaches no
+// repository: the fact carries the disclosure and no mix.
+const investmentOrgUnattributedOnlyReason = "investment_organization_unattributed_only: the window holds persisted work, but none of it resolves to a repository; no theme mix is served and unattributed_effort_share is 1"
+
 const (
 	orgMixScope       = "organization"
 	orgMixBasisSuffix = "_over_all_repositories"
@@ -109,17 +113,17 @@ func organizationSubjectsOfCaller(subjects []contextfabric.SubjectRef, orgID str
 // a zero mix). When all of the window's effort is unattributed the fact carries
 // no theme shares and no breakdown, only the counts and the unattributed share
 // (1): the effort is disclosed, never presented as a mix.
-func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, principal storage.Principal, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rejected int, restricted bool, err error) {
+func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, principal storage.Principal, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rejected int, restricted, unattributedOnly bool, err error) {
 	own, rejected := organizationSubjectsOfCaller(subjects, orgID)
 	if len(own) == 0 {
-		return rejected, false, nil
+		return rejected, false, false, nil
 	}
 	if sourceHealthRestricted(principal) {
-		return rejected, true, nil
+		return rejected, true, false, nil
 	}
 	row, err := p.readOrgMixRow(ctx, orgID, timeBound)
 	if err != nil {
-		return rejected, false, err
+		return rejected, false, false, err
 	}
 	// Both accepted spellings of the organization id name ONE organization:
 	// one fact, under the first spelling asked for.
@@ -133,7 +137,7 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 	}
 	total := t.total()
 	if total <= 0 && row.UnattributedEffort <= 0 {
-		return rejected, false, nil
+		return rejected, false, false, nil
 	}
 	unattributedShare := 0.0
 	if all := row.ResolvedEffort + row.UnattributedEffort; all > 0 {
@@ -159,7 +163,7 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, orgID)},
 		})
 	}
-	return rejected, false, nil
+	return rejected, false, total <= 0, nil
 }
 
 // orgNoRefUnit names the one placeholder reference a unit with no reference

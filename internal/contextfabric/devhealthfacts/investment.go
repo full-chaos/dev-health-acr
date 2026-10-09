@@ -167,14 +167,15 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		rejectedCount += rejected
 	}
 
-	orgRestricted := false
+	orgRestricted, orgUnattributedOnly := false, false
 	if orgSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization); len(orgSubjects) > 0 {
-		rejected, restricted, scanErr := p.readOrganizationThemeMix(ctx, principal, orgID, orgSubjects, &facts, timeBound)
+		rejected, restricted, unattributedOnly, scanErr := p.readOrganizationThemeMix(ctx, principal, orgID, orgSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query organization theme mix", scanErr)
 		}
 		rejectedCount += rejected
 		orgRestricted = restricted
+		orgUnattributedOnly = unattributedOnly
 	}
 
 	unitsCut := false
@@ -217,6 +218,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		if reason := span.reasonFor(subject.CanonicalID, subject.Kind == contextfabric.SubjectProject, timeBound); reason != "" {
 			mergeFactReadReason(&result, reason)
 		}
+	}
+	if orgUnattributedOnly {
+		mergeFactReadReason(&result, investmentOrgUnattributedOnlyReason)
 	}
 	if orgRestricted {
 		if len(facts) == 0 {

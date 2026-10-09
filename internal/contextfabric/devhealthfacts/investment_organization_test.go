@@ -200,6 +200,9 @@ func TestInvestmentOrganizationWithOnlyUnattributedEffortDisclosesItWithoutAMix(
 	if len(result.Facts) != 1 {
 		t.Fatalf("facts = %d, want one fact that discloses the unattributed effort", len(result.Facts))
 	}
+	if !strings.Contains(result.Reason, "investment_organization_unattributed_only") {
+		t.Fatalf("reason = %q, want the unattributed-only disclosure", result.Reason)
+	}
 	fields := result.Facts[0].Fields
 	if got := *fields["unattributed_effort_share"].Number; got != 1 {
 		t.Fatalf("unattributed_effort_share = %v, want 1", got)
@@ -224,6 +227,9 @@ func TestInvestmentOrganizationWithNothingUnattributedServesTheMixWithAZeroShare
 		t.Fatalf("facts = %d, want 1", len(result.Facts))
 	}
 	fields := result.Facts[0].Fields
+	if strings.Contains(result.Reason, "investment_organization_unattributed_only") {
+		t.Fatalf("reason = %q: a window with attributed effort must not carry the unattributed-only disclosure", result.Reason)
+	}
 	if got := *fields["unattributed_effort_share"].Number; got != 0 {
 		t.Fatalf("unattributed_effort_share = %v, want 0", got)
 	}
