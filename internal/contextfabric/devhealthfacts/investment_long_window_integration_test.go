@@ -106,9 +106,53 @@ func TestLongInvestmentWindowIsOneTrueWindowAgainstRealClickHouse(t *testing.T) 
 	if !strings.Contains(long.Reason, "investment_window_beyond_stored_history") || !strings.Contains(long.Reason, end.Add(-170*day).Format(time.RFC3339)) {
 		t.Fatalf("365d reason = %q, want the span limitation naming the earliest stored unit", long.Reason)
 	}
-	// A window of 60 days or less is never given the span limitation.
+	// A 60-day window inside the stored history carries no span limitation.
 	short, _ := read(60)
 	if strings.Contains(short.Reason, "investment_window_beyond_stored_history") {
 		t.Fatalf("60d reason = %q", short.Reason)
+	}
+}
+
+// A 60-day window over 30 days of history is the same partial truth.
+func TestShortInvestmentWindowBeyondHistoryNamesTheSpanAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	createCHAOS5930Tables(t, ctx, direct)
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
+	const orgID = "org-short-history"
+	end := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	day := 24 * time.Hour
+	owned := end.Add(-400 * day)
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID("repo-s"), orgID, "acme/repo-s", "github", owned); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		orgID, "github", "team-short", repoUUID("repo-s"), "acme/repo-s", "exact", "native", uint8(1), uint16(100), int32(0), owned, nil, owned); err != nil {
+		t.Fatalf("seed ownership: %v", err)
+	}
+	from, to := end.Add(-30*day), end.Add(-10*day)
+	if err := direct.Exec(ctx,
+		`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"only", from, to, 9.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{},
+		fmt.Sprintf(`{"issues":[],"prs":["%s#only"]}`, repoUUID("repo-s")), to, orgID); err != nil {
+		t.Fatalf("seed wu: %v", err)
+	}
+	start, stop := end.Add(-60*day), end
+	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &stop},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject("team-short")},
+	})
+	if err != nil || len(result.Facts) != 1 {
+		t.Fatalf("read: err=%v facts=%d", err, len(result.Facts))
+	}
+	total := 0.0
+	for _, row := range result.Facts[0].Fields["theme_breakdown"].Table.Rows {
+		total += *row.Fields["weighted_effort"].Number
+	}
+	if math.Abs(total-9) > 1e-9 {
+		t.Fatalf("total = %v, want 9", total)
+	}
+	if !strings.Contains(result.Reason, "investment_window_beyond_stored_history") || !strings.Contains(result.Reason, from.Format(time.RFC3339)) {
+		t.Fatalf("reason = %q, want the span limitation naming %s", result.Reason, from.Format(time.RFC3339))
 	}
 }

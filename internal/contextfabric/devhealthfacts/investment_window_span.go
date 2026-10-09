@@ -10,16 +10,14 @@ import (
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
-// longInvestmentWindow is the width above which an investment read states how
-// much of its window the stored rows cover. Narrower windows are unchanged.
-const longInvestmentWindow = 60 * 24 * time.Hour
-
 // investmentSpanStatement reads the earliest persisted work unit start of the
 // organization: the start of the history a window can be served from.
 const investmentSpanStatement = `SELECT toString(min(from_ts)), count() FROM work_unit_investments WHERE org_id = {org_id:String}`
 
-func isLongInvestmentWindow(b factTimeBound) bool {
-	return b.active && b.hasStart && b.end.Sub(b.start) > longInvestmentWindow
+// hasInvestmentWindowStart reports whether the read names a window start, the
+// only case where "before the stored history" has a meaning.
+func hasInvestmentWindowStart(b factTimeBound) bool {
+	return b.active && b.hasStart
 }
 
 // readInvestmentSpanStart returns the earliest persisted from_ts, and false
