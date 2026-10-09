@@ -942,9 +942,18 @@ func projectIdentityMatchSQL(alias, column string) string {
 	return readers.ProjectIdentityMatchSQL(alias, column)
 }
 
+// ownershipValidityPredicate is the one ownership rule of a bounded read.
+// Ownership is synced state, and valid_from is the sync stamp, not the start
+// of ownership: it is never a window filter. A row counts for a window when it
+// has not ended before the window start (a point-in-time bound uses its
+// instant). An unbounded read keeps the currently-owned rule.
 func ownershipValidityPredicate(timeBound factTimeBound) string {
 	if timeBound.active {
-		return fmt.Sprintf(" AND valid_from <= {%s:DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", boundEndParam, boundEndParam)
+		param := boundEndParam
+		if timeBound.hasStart {
+			param = boundStartParam
+		}
+		return fmt.Sprintf(" AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", param)
 	}
 	return " AND valid_from <= now64(3) AND valid_to IS NULL"
 }
