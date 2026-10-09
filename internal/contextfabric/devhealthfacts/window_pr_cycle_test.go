@@ -190,3 +190,34 @@ func TestWindowPRCycleFiltersOnTheMergeTimeInsideTheEvidenceWindow(t *testing.T)
 		})
 	}
 }
+
+func TestTeamWindowPRCycleReadsEachTeamsOwnRepositories(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_metrics_daily", rows: [][]any{teamMetricsRow("team-1"), teamMetricsRow("team-2")}},
+		{match: "GROUP BY team_id, repo_key", rows: [][]any{{"team-1", "repo-a", "acme/a"}, {"team-2", "repo-b", "acme/b"}}},
+		{match: "FROM git_pull_requests", rows: [][]any{{"", int64(2), float64(4)}}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	if _, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{teamSubject("team-1"), teamSubject("team-2")},
+	}); err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	var seen [][]string
+	for _, q := range client.queries {
+		if !strings.Contains(q.statement, "FROM git_pull_requests") {
+			continue
+		}
+		for _, b := range q.bindings {
+			if b.Name == "ids" {
+				ids, _ := b.Value.([]string)
+				seen = append(seen, ids)
+			}
+		}
+	}
+	if len(seen) != 2 || len(seen[0]) != 1 || seen[0][0] != "repo-a" || len(seen[1]) != 1 || seen[1][0] != "repo-b" {
+		t.Fatalf("window statements read repositories %v, want [[repo-a] [repo-b]]: each team's own owned set", seen)
+	}
+}
