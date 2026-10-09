@@ -39,48 +39,13 @@ const (
 	DefaultMaxBytes = 65536
 	MaxMaxBytes     = 262144
 	MinMaxBytes     = 4096
-	// MaxRangeDays bounds a range or trailing window for every kind that
-	// declares no larger maximum in maxRangeDaysByKind.
-	MaxRangeDays = 60
+	MaxRangeDays    = contractsv1.DefaultMaxRangeDays
 )
 
-// maxRangeDaysByKind declares the kinds whose stored rows serve a longer
-// window in one read. investment reads work_unit_investments once however
-// long the window is, so its cost does not grow with the span. A kind is
-// listed here only when its rows support it; there is no blanket lift.
-var maxRangeDaysByKind = map[contextfabric.FactKind]int{
-	contextfabric.FactInvestment: 365,
-}
-
-// windowRefusalAdvice is the closing advice of a window refusal. A kind whose
-// maximum is the default may be read as several windows; a kind with a larger
-// declared maximum counts a work unit that spans a boundary whole in each
-// window, so adding shorter windows overcounts and is not advised.
-func windowRefusalAdvice(maxDays int) string {
-	if maxDays > MaxRangeDays {
-		return "; ask one window of at most that length and do not add shorter windows: a work unit that spans a window boundary counts in each of them"
-	}
-	return "; read a longer period as several windows"
-}
-
 // MaxRangeDaysFor is the widest range or trailing window one read may take
-// for kinds: the smallest maximum among them, so a mixed read is held to its
-// most limited kind.
+// for kinds (contractsv1.MaxRangeDaysFor, the one per-kind table).
 func MaxRangeDaysFor(kinds []contextfabric.FactKind) int {
-	widest := 0
-	for _, kind := range kinds {
-		limit := MaxRangeDays
-		if declared, ok := maxRangeDaysByKind[kind]; ok {
-			limit = declared
-		}
-		if widest == 0 || limit < widest {
-			widest = limit
-		}
-	}
-	if widest == 0 {
-		return MaxRangeDays
-	}
-	return widest
+	return contractsv1.MaxRangeDaysFor(kinds)
 }
 
 // Window modes.
@@ -191,9 +156,15 @@ type RequestWindow struct {
 type RequestError struct {
 	Reason string
 	Detail string
+	// MaxDays is set with Reason window_beyond_kind_max.
+	MaxDays int
 }
 
 func (e *RequestError) Error() string { return e.Reason + ": " + e.Detail }
+
+func windowBeyondMax(maxDays int) error {
+	return &RequestError{Reason: contractsv1.WindowBeyondKindMaxReason, Detail: contractsv1.WindowRefusalMessage(maxDays), MaxDays: maxDays}
+}
 
 func invalid(format string, args ...any) error {
 	return &RequestError{Reason: FactsRefusalInvalidRequest, Detail: fmt.Sprintf(format, args...)}
@@ -750,8 +721,11 @@ func (r *FactsReader) window(requested *RequestWindow, maxDays int) (contextfabr
 			}
 			start, end = requested.Start.UTC(), requested.End.UTC()
 		} else {
-			if requested.Days < 1 || requested.Days > maxDays || requested.AsOf != nil || requested.Start != nil || requested.End != nil {
-				return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("a trailing window takes days from 1 to %d only for the kinds asked%s", maxDays, windowRefusalAdvice(maxDays))
+			if requested.Days < 1 || requested.AsOf != nil || requested.Start != nil || requested.End != nil {
+				return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("a trailing window takes days from 1 to %d only for the kinds asked%s", maxDays, contractsv1.WindowRefusalAdvice(maxDays))
+			}
+			if requested.Days > maxDays {
+				return contextfabric.TimeContext{}, EffectiveWindow{}, windowBeyondMax(maxDays)
 			}
 			end = r.now().UTC().Truncate(time.Second)
 			start = end.Add(-time.Duration(requested.Days) * 24 * time.Hour)
@@ -760,7 +734,7 @@ func (r *FactsReader) window(requested *RequestWindow, maxDays int) (contextfabr
 			return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("start must be before end")
 		}
 		if end.Sub(start) > time.Duration(maxDays)*24*time.Hour {
-			return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("a window spans at most %d days for the kinds asked%s", maxDays, windowRefusalAdvice(maxDays))
+			return contextfabric.TimeContext{}, EffectiveWindow{}, windowBeyondMax(maxDays)
 		}
 		return contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
 			EffectiveWindow{Mode: requested.Mode, Axis: string(contextfabric.TemporalRange), Start: &start, End: &end}, nil
