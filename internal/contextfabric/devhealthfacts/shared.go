@@ -572,7 +572,13 @@ import (
 // saved before v117 may hold an answer served from a mistyped variable and
 // must not be reused.
 //
-// v117 -> v119: an investment read may take a window up to 365 days in one
+// v117 -> v118: the work-unit page fact (units_returned, next_cursor,
+// coverage) is reserved before the unit rows under max_serialized_bytes; when
+// even it does not fit, it is served as a limitation row with the minimum
+// bytes and no cursor. An answer saved before v118 may hold a unit page whose
+// page fact was dropped and must not be reused.
+//
+// v118 -> v119: an investment read may take a window up to 365 days in one
 // read, and states the available span when the window starts before the
 // earliest persisted work unit. A candidate saved before v119 may hold a
 // refusal of such a window and must not be reused.
