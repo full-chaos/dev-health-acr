@@ -31,7 +31,7 @@ var (
 const (
 	// PromptVersion names the interpretation prompt text; bump it on every
 	// change to what the model is told.
-	PromptVersion = "context-fabric-interpretation.v23"
+	PromptVersion = "context-fabric-interpretation.v22"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = "context-fabric-model-output.v8"
 )

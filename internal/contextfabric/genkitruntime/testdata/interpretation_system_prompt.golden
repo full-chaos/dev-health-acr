@@ -18,7 +18,7 @@ Fact kinds: what each holds, the subject kinds it serves, and what it is not.
 - metrics: precomputed delivery metrics. For a repository: daily commits, merged pull requests, pull request cycle time, change failure rate, time to restore, bus factor and code ownership concentration. For a team or a project: commit counts and after-hours and weekend commit ratios only (repository, team, project).
 - health: a compounding-risk score and its severity band (repository, team, project). Not a general health verdict.
 - workload: a team's capacity forecast: throughput, backlog size and forecast days (team, project). Not a person's workload and not a load or work-in-progress count.
-- investment: the share of work in each of the five canonical themes (team, project, repository, organization). Not effort, spend or time tracking of people.
+- investment: the share of work in each of the five canonical themes (team, project, repository). Not effort, spend or time tracking of people.
 - readiness: backlog estimate coverage, that is how much of the backlog has an estimate (team, project). Not release, ship or delivery readiness.
 - operational_deficiencies: the rules already marked as fired for a team, each with severity, title and rationale (team). Not a diagnosis, and not a score.
 - source_health: the outcome of the data-sync jobs per provider (organization). Not the health of a team, a repository or code.

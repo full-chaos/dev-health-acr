@@ -259,9 +259,6 @@ const (
 	// blocked were missing; in_progress was written "in progress"). A change
 	// to what the model is told, so the version bumps (same standing rule
 	// stated at v9 above).
-	// v22 -> v23: the investment line of the fact-kind glossary lists the
-	// organization subject kind. A change to what the model is told, so the
-	// version bumps (same standing rule stated at v9 above).
 	DefaultInterpretationPromptVersion = interpretprompt.PromptVersion
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
