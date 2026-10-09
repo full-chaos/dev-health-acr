@@ -610,6 +610,11 @@ const maxFactRowsPerQuery = 200
 // directly into the statement rather than route it through
 // clickhouseFacts.query's bindings, which only ever carry caller/subject
 // scoped values (org_id, ids).
+// withRowLimitOf is withRowLimit with a caller-sized ceiling.
+func withRowLimitOf(statement string, limit int) string {
+	return statement + "\nLIMIT " + strconv.Itoa(limit)
+}
+
 func withRowLimit(statement string) string {
 	return statement + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery)
 }
@@ -714,6 +719,13 @@ func mixReadFailure(action string, err error) error {
 }
 
 func readFailure(action string, err error) error {
+	var budget *BudgetExceededError
+	if errors.As(err, &budget) {
+		return &contextfabric.FactReadFailure{
+			State:  contextfabric.SourceUnavailable,
+			Reason: budgetRefusalReason(action, budget),
+		}
+	}
 	return &contextfabric.FactReadFailure{
 		State:  contextfabric.SourceUnavailable,
 		Reason: "devhealthfacts: " + action + " failed",

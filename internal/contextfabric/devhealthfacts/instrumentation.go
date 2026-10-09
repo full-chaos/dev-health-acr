@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -123,17 +124,27 @@ func NewBudgetWarningInstrumentation(next readers.Instrumentation, logger *slog.
 	return budgetWarningInstrumentation{next: next, logger: logger}
 }
 
+// ReadStatsMessage is the log message of the per-statement read line.
+const ReadStatsMessage = "devhealthfacts.read_stats"
+
 // StartQuery implements readers.Instrumentation.
 func (b budgetWarningInstrumentation) StartQuery(ctx context.Context, reader string, orgScoped bool) (context.Context, func(error)) {
-	ctx, finish := b.next.StartQuery(ctx, reader, orgScoped)
+	stats := &ReadStats{}
+	started := time.Now()
+	ctx, finish := b.next.StartQuery(contextWithReadStats(ctx, stats), reader, orgScoped)
 	return ctx, func(err error) {
+		rows, bytes := stats.Snapshot()
+		attrs := []slog.Attr{
+			slog.String("reader", contextfabric.SanitizeLogAttr(reader)),
+			slog.Uint64("read_rows", rows),
+			slog.Uint64("read_bytes", bytes),
+			slog.Int64("elapsed_ms", time.Since(started).Milliseconds()),
+		}
 		if code, exceeded := runtimeclickhouse.QueryBudgetExceededCode(err); exceeded {
 			b.logger.LogAttrs(ctx, slog.LevelWarn, ReadBudgetExceededMessage,
-				slog.String("reason", ReadBudgetExceededReason),
-				slog.String("reader", contextfabric.SanitizeLogAttr(reader)),
-				slog.Int("clickhouse_code", int(code)),
-			)
+				append([]slog.Attr{slog.String("reason", ReadBudgetExceededReason), slog.Int("clickhouse_code", int(code))}, attrs...)...)
 		}
+		b.logger.LogAttrs(ctx, slog.LevelInfo, ReadStatsMessage, attrs...)
 		finish(err)
 	}
 }

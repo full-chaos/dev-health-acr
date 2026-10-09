@@ -111,7 +111,7 @@ func openClickHouse(_ context.Context, request clickHouseOpenRequest) (clickHous
 		return fail(fmt.Errorf("create evidence store: %w", err))
 	}
 	return clickHouseComponents{
-		evidence: evidence, factory: factory, queryClient: client,
+		evidence: evidence, factory: factory, queryClient: devhealthfacts.NewMeasuredQueryClient(client, request.config.ClickHouseMaxBytesToRead),
 		check: func(ctx context.Context) error { return checkClickHouseRuntime(ctx, client.Ping, client) }, close: client.Close,
 	}, nil
 }
