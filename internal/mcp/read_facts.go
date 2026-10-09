@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -19,7 +20,7 @@ const (
 	readFactsMaxMaxBytes = 262144
 	// The widest window any kind takes; the hosted route holds each kind to
 	// its own declared maximum (directread.MaxRangeDaysFor).
-	readFactsMaxRangeDays    = 365
+	readFactsMaxRangeDays    = 365 // == contractsv1.WidestRangeDays(), pinned by a test
 	readFactsMaxFieldLength  = 256
 	readFactsMaxUnits        = 150
 	readFactsMaxCursorLength = 1024
@@ -88,7 +89,10 @@ func (in readFactsInput) validate() error {
 		default:
 			return fmt.Errorf("window.mode must be current, as_of, range or trailing")
 		}
-		if w.Days < 0 || w.Days > readFactsMaxRangeDays {
+		if w.Days > readFactsMaxRangeDays {
+			return fmt.Errorf("%s", contractsv1.WindowRefusalMessage(readFactsMaxRangeDays))
+		}
+		if w.Days < 0 {
 			return fmt.Errorf("window.days is out of bounds")
 		}
 	}

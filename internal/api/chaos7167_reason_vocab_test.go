@@ -15,6 +15,7 @@ func TestCHAOS7167_EmittedInvalidRequestReasonsAreInTheClosedVocabulary(t *testi
 		directread.RelationshipsRefusalInvalidRequest, directread.RelationshipsRefusalInvalidCursor,
 		directread.RelationshipsRefusalExpiredCursor, directread.RelationshipsRefusalDeniedOrNotFound,
 		directread.FactsRefusalInvalidRequest, directread.FactsRefusalDeniedOrNotFound,
+		contractsv1.WindowBeyondKindMaxReason,
 	} {
 		if !contractsv1.IsInvalidRequestReason(reason) {
 			t.Errorf("route reason %q missing from contractsv1 invalid_request vocabulary", reason)

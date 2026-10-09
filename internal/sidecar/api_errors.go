@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -160,6 +161,10 @@ type APIError struct {
 	// It is never hosted free text: a value outside it is dropped, so no count, subject, id or
 	// name can ride through it.
 	Reason string
+	// MaxDays is set only for Reason window_beyond_kind_max with a
+	// details.max_days integer from 1 to 366: the widest window the kinds
+	// asked allow. Message then holds the fixed refusal advice.
+	MaxDays int
 	// Field is set only for an invalid_request whose Reason was surfaced and
 	// whose error.details.field has a closed identifier shape (letters,
 	// digits, underscore, dot; at most 64): the JSON path of the failing
@@ -367,6 +372,12 @@ func newAPIError(status int, detail contractsv1.ErrorDetail, requestID, retryAft
 		if apiErr.Reason != "" {
 			apiErr.Field = safeFieldToken(detail.Details)
 		}
+		if apiErr.Reason == contractsv1.WindowBeyondKindMaxReason {
+			if days, ok := windowMaxDays(detail.Details); ok {
+				apiErr.MaxDays = days
+				apiErr.Message = contractsv1.WindowRefusalMessage(days)
+			}
+		}
 	}
 	if detail.Code == "synthesis_rejected" && status == 422 {
 		apiErr.SynthesisRejectionReason = rejectionReasonToken(detail.Details)
@@ -540,6 +551,16 @@ func safeReasonToken(details map[string]any) string {
 	slog.Warn("acr invalid_request reason outside the closed vocabulary was dropped", "dropped_total", droppedInvalidRequestReasons.Load())
 	return ""
 }
+
+func windowMaxDays(details map[string]any) (int, bool) {
+	value, ok := details["max_days"].(float64)
+	if !ok || value != math.Trunc(value) || value < 1 || value > maxWindowDays {
+		return 0, false
+	}
+	return int(value), true
+}
+
+const maxWindowDays = 366
 
 func minimumClientVersion(details map[string]any) string {
 	raw, ok := details["minimum_client_version"].(string)

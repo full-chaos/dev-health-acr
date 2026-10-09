@@ -360,18 +360,23 @@ func TestChaos7073Window(t *testing.T) {
 		t.Errorf("trailing echo %+v", w)
 	}
 	for name, window := range map[string]*RequestWindow{
-		"range over 60 days": {Mode: WindowRange, Start: ptrTime(wantEnd.Add(-61 * 24 * time.Hour)), End: &wantEnd},
-		"reversed range":     {Mode: WindowRange, Start: &wantEnd, End: ptrTime(wantEnd.Add(-time.Hour))},
-		"future as_of":       {Mode: WindowAsOf, AsOf: ptrTime(wantEnd.Add(time.Hour))},
-		"trailing 0":         {Mode: WindowTrailing},
-		"unknown mode":       {Mode: "yesterday"},
-		"current with days":  {Mode: WindowCurrent, Days: 3},
+		"reversed range":    {Mode: WindowRange, Start: &wantEnd, End: ptrTime(wantEnd.Add(-time.Hour))},
+		"future as_of":      {Mode: WindowAsOf, AsOf: ptrTime(wantEnd.Add(time.Hour))},
+		"trailing 0":        {Mode: WindowTrailing},
+		"unknown mode":      {Mode: "yesterday"},
+		"current with days": {Mode: WindowCurrent, Days: 3},
 	} {
 		request := base
 		request.Window = window
 		if _, err := reader.Read(requestContext(), unrestrictedA(), request); !isInvalid(err) {
 			t.Errorf("%s: err %v, want invalid_request", name, err)
 		}
+	}
+	over := base
+	over.Window = &RequestWindow{Mode: WindowRange, Start: ptrTime(wantEnd.Add(-61 * 24 * time.Hour)), End: &wantEnd}
+	var refusal *RequestError
+	if _, err := reader.Read(requestContext(), unrestrictedA(), over); !errors.As(err, &refusal) || refusal.Reason != "window_beyond_kind_max" || refusal.MaxDays != 60 {
+		t.Errorf("range over 60 days: err %v, want window_beyond_kind_max with max_days 60", err)
 	}
 }
 
