@@ -124,8 +124,11 @@ func (a *Adapter) FindSubjectsByExactName(ctx context.Context, principal storage
 		if propStringValue(n.Properties[propOrgID]) != orgID || propStringValue(n.Properties[propKind]) != kind {
 			continue
 		}
-		candidate := toCandidateNode(n)
 		page.After = propStringValue(n.Properties[propCanonicalID])
+		if inactiveTeamNode(n) {
+			continue
+		}
+		candidate := toCandidateNode(n)
 		if match := exactNameMatchClass(query, candidate); match != "" {
 			page.Nodes = append(page.Nodes, lookupNodeFromCandidate(candidate, match))
 		}
@@ -144,8 +147,12 @@ func (a *Adapter) exactNameKindPage(ctx context.Context, key, orgID, kind, term,
 	if after != "" {
 		afterClause = fmt.Sprintf(" AND n.%s > $after", propCanonicalID)
 	}
-	cypher := fmt.Sprintf("MATCH (n:%[1]s) WHERE n.%[2]s = $org AND n.%[3]s = $kind%[4]s%[5]s AND (%[6]s) RETURN n ORDER BY n.%[7]s LIMIT %[8]d",
-		labelSubject, propOrgID, propKind, temporal.predicate("n"), afterClause, exactNamePredicate("n"), propCanonicalID, pageSize+1)
+	activeClause := ""
+	if kind == string(contractsv1.ContextFabricSubjectTeam) {
+		activeClause = fmt.Sprintf(" AND coalesce(n.%s, true) = true", teamActiveProperty)
+	}
+	cypher := fmt.Sprintf("MATCH (n:%[1]s) WHERE n.%[2]s = $org AND n.%[3]s = $kind%[4]s%[5]s%[9]s AND (%[6]s) RETURN n ORDER BY n.%[7]s LIMIT %[8]d",
+		labelSubject, propOrgID, propKind, temporal.predicate("n"), afterClause, exactNamePredicate("n"), propCanonicalID, pageSize+1, activeClause)
 	params := map[string]interface{}{"org": orgID, "kind": kind, "term": term, "termLower": strings.ToLower(term)}
 	if after != "" {
 		params["after"] = after
@@ -209,4 +216,19 @@ func lookupNodeFromCandidate(candidate graphrank.CandidateNode, match string) di
 		Match:       match,
 		Attributes:  candidate.Attributes,
 	}
+}
+
+// teamActiveProperty is the node property the team projector writes from
+// teams.is_active.
+const teamActiveProperty = propPropertyPrefix + "is_active"
+
+// inactiveTeamNode reports a team node the source marks inactive. A node
+// without the property is not inactive: only an explicit false is. It is the
+// one Go-side active-team rule for every site that lists team candidates.
+func inactiveTeamNode(n *node) bool {
+	if n == nil || propStringValue(n.Properties[propKind]) != string(contractsv1.ContextFabricSubjectTeam) {
+		return false
+	}
+	active, ok := n.Properties[teamActiveProperty].(bool)
+	return ok && !active
 }

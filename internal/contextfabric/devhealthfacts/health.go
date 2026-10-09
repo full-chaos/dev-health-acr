@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -633,7 +634,7 @@ FROM (
 	SELECT concat(p.provider, ':', p.id) AS project_key, 'team' AS scope, p.team_id AS scope_id, ifNull(t.name, '') AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at, toString(cr.day) AS day, toUInt8(` + freshnessIsKnownSQL("cr.severity") + `) AS is_known, toUInt8(` + freshnessIsKnownSQL("cr.severity") + ` AND ` + freshnessIsFreshSQL("cr.day", timeBound) + `) AS is_fresh
 	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
 	INNER JOIN (` + compoundingRiskLatestSubquery("team", timeBound) + `) AS cr ON cr.scope_id = p.team_id AND cr.rn = 1
-	LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = p.team_id
+	LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = p.team_id
 
 	UNION ALL
 

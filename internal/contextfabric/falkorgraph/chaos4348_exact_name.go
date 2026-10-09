@@ -94,6 +94,9 @@ func (a *Adapter) chaos4348ExactNameCandidates(ctx context.Context, key, orgID s
 		if !ok || n == nil {
 			continue
 		}
+		if inactiveTeamNode(n) {
+			continue
+		}
 		candidates = append(candidates, toCandidateNode(n))
 	}
 	return candidates, truncated, nil

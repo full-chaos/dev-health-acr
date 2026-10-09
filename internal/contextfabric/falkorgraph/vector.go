@@ -444,6 +444,9 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 	}
 	candidates := make([]graphrank.CandidateNode, 0, len(survivors))
 	for _, s := range survivors {
+		if inactiveTeamNode(s.node) {
+			continue
+		}
 		candidate := toCandidateNode(s.node)
 		relevance := vectorRelevanceFloor
 		if !truncated {

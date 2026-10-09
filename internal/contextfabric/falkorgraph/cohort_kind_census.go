@@ -105,6 +105,9 @@ func (a *Adapter) cohortKindCensusCandidates(ctx context.Context, key, orgID str
 		if !ok || n == nil {
 			continue
 		}
+		if inactiveTeamNode(n) {
+			continue
+		}
 		candidates = append(candidates, toCandidateNode(n))
 	}
 	return candidates, truncated, nil

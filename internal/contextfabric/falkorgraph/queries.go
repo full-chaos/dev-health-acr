@@ -527,6 +527,9 @@ func (a *Adapter) runFulltextQuery(ctx context.Context, key, orgID, query string
 		if !ok || n == nil {
 			continue
 		}
+		if inactiveTeamNode(n) {
+			continue
+		}
 		candidate := toCandidateNode(n)
 		if score, ok := row["score"].(float64); ok {
 			candidate.Score = &score
