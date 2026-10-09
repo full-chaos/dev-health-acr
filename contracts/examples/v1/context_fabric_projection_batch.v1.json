@@ -361,8 +361,7 @@
         "kind": "team",
         "label": "gl:full.chaos"
       },
-      "type": "OWNED_BY_TEAM",
-      "valid_from": "2026-08-12T13:08:20.079Z"
+      "type": "OWNED_BY_TEAM"
     },
     {
       "authorization": {
@@ -409,8 +408,7 @@
         "kind": "team",
         "label": "gl:full.chaos"
       },
-      "type": "OWNED_BY_TEAM",
-      "valid_from": "2026-08-10T19:00:02.504Z"
+      "type": "OWNED_BY_TEAM"
     },
     {
       "authorization": {

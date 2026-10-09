@@ -103,8 +103,8 @@ func subOwnershipWindowTakesTheLatestAssertion(t *testing.T, ctx context.Context
 	if stillOpen.ValidTo != nil {
 		t.Errorf("PROJ-OPEN: ValidTo = %v, want nil -- the latest assertion left the window open, and a NULL valid_to must not be skipped in favour of an older closed row", stillOpen.ValidTo)
 	}
-	if stillOpen.ValidFrom == nil || !stillOpen.ValidFrom.Equal(ownershipFirstSeen) {
-		t.Errorf("PROJ-OPEN: ValidFrom = %v, want the EARLIEST observed assertion %v", stillOpen.ValidFrom, ownershipFirstSeen)
+	if stillOpen.ValidFrom != nil {
+		t.Errorf("PROJ-OPEN: ValidFrom = %v, want nil: valid_from is a sync stamp (first seen %v), not the start of ownership", stillOpen.ValidFrom, ownershipFirstSeen)
 	}
 }
 
