@@ -41,12 +41,12 @@ func TestLongInvestmentWindowIsOneTrueWindowAgainstRealClickHouse(t *testing.T) 
 		if err := direct.Exec(ctx,
 			`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)`,
 			id, from, to, effort, map[string]float64{"feature_delivery": 1.0}, map[string]float64{},
-			fmt.Sprintf(`{"issues":[],"prs":["%s#%s"]}`, repoUUID("repo-l"), id), to, orgID); err != nil {
+			fmt.Sprintf(`{"issues":[],"prs":["%s#pr%d"]}`, repoUUID("repo-l"), prNumber(id)), to, orgID); err != nil {
 			t.Fatalf("seed wu %s: %v", id, err)
 		}
 	}
 	// Window A = [end-180d, end-120d), B = [end-120d, end-60d), C = [end-60d, end).
-	seed("in-a", end.Add(-170*day), end.Add(-165*day), 10)
+	seed("in-a", end.Add(-179*day), end.Add(-165*day), 10)
 	seed("in-b", end.Add(-100*day), end.Add(-95*day), 7)
 	seed("spans-bc", end.Add(-70*day), end.Add(-50*day), 20)
 	seed("in-c", end.Add(-20*day), end.Add(-15*day), 10)
@@ -98,12 +98,12 @@ func TestLongInvestmentWindowIsOneTrueWindowAgainstRealClickHouse(t *testing.T) 
 		t.Fatalf("a window inside the stored history carries a span limitation: %q", whole.Reason)
 	}
 
-	// Window longer than the stored history: earliest stored unit starts at end-170d.
+	// Window longer than the stored history: earliest stored unit starts at end-179d.
 	long, longTotal := read(365)
 	if math.Abs(longTotal-47) > 1e-9 {
 		t.Fatalf("365d total = %v, want 47 (days before the history are not zero-filled into the mix)", longTotal)
 	}
-	if !strings.Contains(long.Reason, "investment_window_beyond_stored_history") || !strings.Contains(long.Reason, end.Add(-170*day).Format(time.RFC3339)) {
+	if !strings.Contains(long.Reason, "investment_window_beyond_stored_history") || !strings.Contains(long.Reason, end.Add(-179*day).Format(time.RFC3339)) {
 		t.Fatalf("365d reason = %q, want the span limitation naming the earliest stored unit", long.Reason)
 	}
 	// A 60-day window inside the stored history carries no span limitation.
@@ -134,7 +134,7 @@ func TestShortInvestmentWindowBeyondHistoryNamesTheSpanAgainstRealClickHouse(t *
 	if err := direct.Exec(ctx,
 		`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)`,
 		"only", from, to, 9.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{},
-		fmt.Sprintf(`{"issues":[],"prs":["%s#only"]}`, repoUUID("repo-s")), to, orgID); err != nil {
+		fmt.Sprintf(`{"issues":[],"prs":["%s#pr1"]}`, repoUUID("repo-s")), to, orgID); err != nil {
 		t.Fatalf("seed wu: %v", err)
 	}
 	start, stop := end.Add(-60*day), end
@@ -155,4 +155,17 @@ func TestShortInvestmentWindowBeyondHistoryNamesTheSpanAgainstRealClickHouse(t *
 	if !strings.Contains(result.Reason, "investment_window_beyond_stored_history") || !strings.Contains(result.Reason, from.Format(time.RFC3339)) {
 		t.Fatalf("reason = %q, want the span limitation naming %s", result.Reason, from.Format(time.RFC3339))
 	}
+}
+
+// prNumber gives each seeded work unit its own pull request number: a ref
+// resolves to a repository only in the shape <repo uuid>#pr<number>.
+func prNumber(id string) int {
+	sum := 0
+	for _, r := range id {
+		sum = sum*31 + int(r)
+	}
+	if sum < 0 {
+		sum = -sum
+	}
+	return sum%100000 + 1
 }
