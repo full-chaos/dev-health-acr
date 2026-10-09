@@ -162,8 +162,8 @@ func TestChaos6561_OwnershipRowProjectsOneRepositoryToTeamEdge(t *testing.T) {
 	if edge.SourceVersion != devhealthsource.TeamsProjectsSourceVersion {
 		t.Fatalf("source version = %q, want %q", edge.SourceVersion, devhealthsource.TeamsProjectsSourceVersion)
 	}
-	if edge.ValidFrom == nil || !edge.ValidFrom.Equal(fixture.validFrom) || edge.ValidTo != nil {
-		t.Fatalf("validity = %v..%v, want %v..open", edge.ValidFrom, edge.ValidTo, fixture.validFrom)
+	if edge.ValidFrom != nil || edge.ValidTo != nil {
+		t.Fatalf("validity = %v..%v, want no start and open end (valid_from %v is a sync stamp)", edge.ValidFrom, edge.ValidTo, fixture.validFrom)
 	}
 }
 
@@ -215,8 +215,8 @@ func TestChaos6561_ClosedLatestAssertionEndsTheEdge(t *testing.T) {
 	if edge.ValidTo == nil || !edge.ValidTo.Equal(closed.latestValidTo) {
 		t.Fatalf("ValidTo = %v, want the latest assertion's valid_to %v", edge.ValidTo, closed.latestValidTo)
 	}
-	if edge.ValidFrom == nil || !edge.ValidFrom.Equal(closed.validFrom) {
-		t.Fatalf("ValidFrom = %v, want %v", edge.ValidFrom, closed.validFrom)
+	if edge.ValidFrom != nil {
+		t.Fatalf("ValidFrom = %v, want nil (valid_from %v is a sync stamp)", edge.ValidFrom, closed.validFrom)
 	}
 	if len(batch.Tombstones) != 0 {
 		t.Fatalf("a closed ownership is history, not a retraction: tombstones = %+v", batch.Tombstones)

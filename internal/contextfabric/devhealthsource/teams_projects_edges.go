@@ -2066,18 +2066,19 @@ func countAmbiguousProjectKeysInCatalog(ctx context.Context, client contextpacke
 	return nil
 }
 
-// ownershipValidity states a project->team edge's window explicitly in both
-// directions, the same owned-write discipline queryTeams/queryProjects apply
-// to entities (CHAOS-3785 R3-1). Ownership begins at the earliest assertion
-// ever observed for the edge and ends per the LATEST assertion -- open if that
-// assertion left it open, otherwise at its valid_to.
-func ownershipValidity(validFrom time.Time, latestIsOpen uint8, latestValidTo time.Time) (*time.Time, *time.Time) {
-	from := validFrom
+// ownershipValidity states an ownership edge's end and never its start.
+// team_*_ownership.valid_from is the sync stamp of the assertion, not the
+// moment ownership began, so projecting it as the edge's start would hide a
+// synced ownership from every read of a window that ended before the stamp.
+// The start is therefore explicitly absent (CHAOS-3785 R3-1: asserted nil, not
+// left stale); the end follows the LATEST assertion -- open if that assertion
+// left it open, otherwise its valid_to.
+func ownershipValidity(_ time.Time, latestIsOpen uint8, latestValidTo time.Time) (*time.Time, *time.Time) {
 	if latestIsOpen != 0 {
-		return &from, nil
+		return nil, nil
 	}
 	to := latestValidTo
-	return &from, &to
+	return nil, &to
 }
 
 // retractionReason is the CLOSED vocabulary of why an OWNED_BY_TEAM edge

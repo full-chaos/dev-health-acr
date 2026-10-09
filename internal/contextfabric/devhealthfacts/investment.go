@@ -228,10 +228,8 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if orgRestricted {
 		if len(facts) == 0 {
 			result.State = contextfabric.SourceNotApplicable
-			result.Reason = investmentOrgRestrictedReason
-		} else {
-			mergeFactReadReason(&result, investmentOrgRestrictedReason)
 		}
+		mergeFactReadReason(&result, investmentOrgRestrictedReason)
 	}
 	if unitsCut {
 		result.Truncated = true

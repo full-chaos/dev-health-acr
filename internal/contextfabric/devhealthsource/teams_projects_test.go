@@ -541,11 +541,8 @@ func TestProjectTeamEdgeStatesAnOpenOwnershipWindow(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
 	edge := relationshipByID(t, batch, devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "gl:full.chaos", "native"))
-	if edge.ValidFrom == nil {
-		t.Fatal("a collapsed ownership edge must state when ownership began")
-	}
-	if !edge.ValidFrom.Equal(time.Date(2026, 8, 12, 13, 8, 20, 79000000, time.UTC)) {
-		t.Fatalf("ValidFrom = %v, want the earliest observed valid_from", edge.ValidFrom)
+	if edge.ValidFrom != nil {
+		t.Fatalf("ValidFrom = %v, want nil: valid_from is a sync stamp, not the start of ownership", edge.ValidFrom)
 	}
 	if edge.ValidTo != nil {
 		t.Fatalf("ValidTo = %v, want nil while any ownership window is still open", edge.ValidTo)
@@ -571,8 +568,8 @@ func TestClosedOwnershipWindowEndsTheEdge(t *testing.T) {
 	if edge.ValidTo == nil || !edge.ValidTo.Equal(ended) {
 		t.Fatalf("ValidTo = %v, want the latest closed window %v", edge.ValidTo, ended)
 	}
-	if edge.ValidFrom == nil || !edge.ValidFrom.Equal(began) {
-		t.Fatalf("ValidFrom = %v, want %v", edge.ValidFrom, began)
+	if edge.ValidFrom != nil {
+		t.Fatalf("ValidFrom = %v, want nil (began %v is a sync stamp)", edge.ValidFrom, began)
 	}
 }
 
