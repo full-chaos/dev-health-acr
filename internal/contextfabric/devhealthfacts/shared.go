@@ -610,7 +610,13 @@ import (
 // question may hold the bare failure text that answer reuse serves for Partial
 // and Degraded results too, and must not be reused. The rows the statements
 // return are unchanged.
-const QueryVersion = "devhealthfacts.clickhouse.v125"
+//
+// v125 -> v126: project metrics and project investment for a past window count a
+// team's ownership of the project when it has not ended before the window
+// start; ownership synced after the window end no longer empties the window. A
+// candidate saved under v125 for such a window may hold an empty answer and
+// must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v126"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
