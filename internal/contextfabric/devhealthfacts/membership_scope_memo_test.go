@@ -29,7 +29,7 @@ func scopeFixture(t *testing.T) (*fakeClient, contextfabric.FactProvider, contex
 			{uint8(0), repo, map[string]float64{"feature_delivery": 4}, 0.0, uint64(2), clockSpanStart},
 			{uint8(255), repo, map[string]float64{}, 0.0, uint64(2), clockSpanStart},
 		}},
-		{match: scopeUnitsMatch, rows: [][]any{{"wu-1"}, {"wu-2"}}},
+		{match: scopeUnitsMatch, rows: [][]any{{[]string{"wu-1", "wu-2"}}}},
 		{match: scopeRunMatch, rows: [][]any{{"run-1"}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
@@ -85,7 +85,7 @@ func TestMembershipScopeOfARealRunIsReadOnceAndBoundToTheMixStatement(t *testing
 	readScoped(t, provider, "org-scope-1", query)
 	readScoped(t, provider, "org-scope-1", query)
 
-	if got := countStatements(client, "SELECT DISTINCT work_unit_id FROM work_unit_membership WHERE"); got != 1 {
+	if got := countStatements(client, "groupUniqArray(100001)(work_unit_id)"); got != 1 {
 		t.Fatalf("membership unit reads = %d over three mix reads, want 1 (the run's scope is remembered)", got)
 	}
 	mix := lastMixStatement(t, client)
@@ -105,7 +105,7 @@ func TestMembershipScopeIsKeyedByOrganizationAndReplacedWhenTheRunChanges(t *tes
 	client, provider, query := scopeFixture(t)
 	readScoped(t, provider, "org-scope-a", query)
 	readScoped(t, provider, "org-scope-b", query)
-	if got := countStatements(client, "SELECT DISTINCT work_unit_id FROM work_unit_membership WHERE"); got != 2 {
+	if got := countStatements(client, "groupUniqArray(100001)(work_unit_id)"); got != 2 {
 		t.Fatalf("unit reads = %d for two organizations, want 2", got)
 	}
 	// A new complete run for org-scope-a: its ids are read again, with the new run.
@@ -114,11 +114,11 @@ func TestMembershipScopeIsKeyedByOrganizationAndReplacedWhenTheRunChanges(t *tes
 			client.tables[i].rows = [][]any{{"run-2"}}
 		}
 		if client.tables[i].match == scopeUnitsMatch {
-			client.tables[i].rows = [][]any{{"wu-9"}}
+			client.tables[i].rows = [][]any{{[]string{"wu-9"}}}
 		}
 	}
 	readScoped(t, provider, "org-scope-a", query)
-	if got := countStatements(client, "SELECT DISTINCT work_unit_id FROM work_unit_membership WHERE"); got != 3 {
+	if got := countStatements(client, "groupUniqArray(100001)(work_unit_id)"); got != 3 {
 		t.Fatalf("unit reads = %d after the run changed, want 3", got)
 	}
 	if ids, _ := scopeIDsBinding(lastMixStatement(t, client)); strings.Join(ids, ",") != "wu-9" {
@@ -135,7 +135,7 @@ func TestMembershipScopeOfALegacyRunKeepsTheScopeSubqueries(t *testing.T) {
 		}
 	}
 	readScoped(t, provider, "org-scope-legacy", query)
-	if got := countStatements(client, "SELECT DISTINCT work_unit_id FROM work_unit_membership WHERE"); got != 0 {
+	if got := countStatements(client, "groupUniqArray(100001)(work_unit_id)"); got != 0 {
 		t.Fatalf("a legacy run read its unit ids %d times, want 0 (the subqueries keep its per-node rule)", got)
 	}
 	mix := lastMixStatement(t, client)
@@ -165,13 +165,13 @@ func TestMembershipScopeWithNoCompleteRunFiltersNothing(t *testing.T) {
 func TestMembershipScopeTooLargeToRememberFallsBackToTheSubqueries(t *testing.T) {
 	t.Parallel()
 	client, provider, query := scopeFixture(t)
-	big := make([][]any, 0, 100001)
+	big := make([]string, 0, 100001)
 	for i := 0; i < 100001; i++ {
-		big = append(big, []any{fmt.Sprintf("wu-%06d", i)})
+		big = append(big, fmt.Sprintf("wu-%06d", i))
 	}
 	for i := range client.tables {
 		if client.tables[i].match == scopeUnitsMatch {
-			client.tables[i].rows = big
+			client.tables[i].rows = [][]any{{big}}
 		}
 	}
 	readScoped(t, provider, "org-scope-big", query)
@@ -208,12 +208,12 @@ func TestMembershipScopeNeverRemembersAnEmptySet(t *testing.T) {
 	client, provider, query := scopeFixture(t)
 	for i := range client.tables {
 		if client.tables[i].match == scopeUnitsMatch {
-			client.tables[i].rows = nil
+			client.tables[i].rows = [][]any{{[]string{}}}
 		}
 	}
 	readScoped(t, provider, "org-scope-empty", query)
 	readScoped(t, provider, "org-scope-empty", query)
-	if got := countStatements(client, "SELECT DISTINCT work_unit_id FROM work_unit_membership WHERE"); got != 2 {
+	if got := countStatements(client, "groupUniqArray(100001)(work_unit_id)"); got != 2 {
 		t.Fatalf("unit reads = %d over two reads of a run with no visible rows, want 2 (an empty set is not a hit)", got)
 	}
 	mix := lastMixStatement(t, client)

@@ -173,7 +173,11 @@ const (
 
 const membershipScopeRunStatement = `SELECT argMax(run_id, completed_at) FROM work_unit_membership_runs WHERE org_id = {org_id:String}`
 
-const membershipScopeUnitsStatement = `SELECT DISTINCT work_unit_id FROM work_unit_membership WHERE org_id = {org_id:String} AND run_id = {scope_run:String} ORDER BY work_unit_id`
+// membershipScopeUnitsStatement returns the run's unit ids as ONE row (an
+// array), so the client's max_result_rows never bounds a scope's size; the
+// array itself holds at most membershipScopeMaxUnits+1 ids, the extra one
+// proving the bound was crossed.
+const membershipScopeUnitsStatement = `SELECT arraySort(groupUniqArray(100001)(work_unit_id)) FROM work_unit_membership WHERE org_id = {org_id:String} AND run_id = {scope_run:String}`
 
 type membershipScopeEntry struct {
 	runID string
@@ -253,26 +257,16 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 		if ids, ok := p.scopes.get(orgID, runID); ok {
 			return ids, nil
 		}
-		ids := make([]string, 0, 1024)
-		overflow := false
+		var ids []string
+		rows := 0
 		scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadMembershipScopeUnits", membershipScopeUnitsStatement, orgID, nil, func(row contextpacket.ClickHouseRowScanner) error {
-			if overflow {
-				return nil
-			}
-			var id string
-			if err := row.Scan(&id); err != nil {
-				return err
-			}
-			if len(ids) >= membershipScopeMaxUnits {
-				overflow = true
-				return nil
-			}
-			ids = append(ids, id)
-			return nil
+			rows++
+			return row.Scan(&ids)
 		}, readers.Binding{Name: "scope_run", Value: runID})
 		if scanErr != nil {
 			return nil, scanErr
 		}
+		overflow := rows != 1 || len(ids) > membershipScopeMaxUnits
 		if overflow || len(ids) == 0 {
 			// Too large to remember, or no row visible for the run yet (a run
 			// marker can be seen before its rows, and an organization's rows

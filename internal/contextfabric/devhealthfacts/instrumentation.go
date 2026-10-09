@@ -124,27 +124,71 @@ func NewBudgetWarningInstrumentation(next readers.Instrumentation, logger *slog.
 	return budgetWarningInstrumentation{next: next, logger: logger}
 }
 
+// StartQuery implements readers.Instrumentation.
+func (b budgetWarningInstrumentation) StartQuery(ctx context.Context, reader string, orgScoped bool) (context.Context, func(error)) {
+	ctx, finish := b.next.StartQuery(ctx, reader, orgScoped)
+	return ctx, func(err error) {
+		if code, exceeded := runtimeclickhouse.QueryBudgetExceededCode(err); exceeded {
+			b.logger.LogAttrs(ctx, slog.LevelWarn, ReadBudgetExceededMessage,
+				slog.String("reason", ReadBudgetExceededReason),
+				slog.String("reader", contextfabric.SanitizeLogAttr(reader)),
+				slog.Int("clickhouse_code", int(code)),
+			)
+		}
+		finish(err)
+	}
+}
+
 // ReadStatsMessage is the log message of the per-statement read line.
 const ReadStatsMessage = "devhealthfacts.read_stats"
 
+// readStatsInstrumentation decorates a readers.Instrumentation so every
+// readers.QueryOrgScopedNamed statement is ALSO logged at Info with what the
+// server reported it read (rows, bytes), how long it took and how it ended.
+// The statistics are collected by the measured query client (read_budget.go)
+// into a ReadStats it finds on the context this decorator wires in.
+//
+// Only closed values are logged: the reader name (a constant chosen at each
+// call site), numbers and a closed outcome. Never the exception text, a row,
+// an org id or a subject id.
+type readStatsInstrumentation struct {
+	next   readers.Instrumentation
+	logger *slog.Logger
+}
+
+// NewReadStatsInstrumentation wraps next (nil = no other instrumentation) so
+// every statement reports its measured reads through logger (nil =
+// slog.Default()).
+func NewReadStatsInstrumentation(next readers.Instrumentation, logger *slog.Logger) readers.Instrumentation {
+	if next == nil {
+		next = readers.NoopInstrumentation{}
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return readStatsInstrumentation{next: next, logger: logger}
+}
+
 // StartQuery implements readers.Instrumentation.
-func (b budgetWarningInstrumentation) StartQuery(ctx context.Context, reader string, orgScoped bool) (context.Context, func(error)) {
+func (r readStatsInstrumentation) StartQuery(ctx context.Context, reader string, orgScoped bool) (context.Context, func(error)) {
 	stats := &ReadStats{}
 	started := time.Now()
-	ctx, finish := b.next.StartQuery(contextWithReadStats(ctx, stats), reader, orgScoped)
+	ctx, finish := r.next.StartQuery(contextWithReadStats(ctx, stats), reader, orgScoped)
 	return ctx, func(err error) {
 		rows, bytes := stats.Snapshot()
-		attrs := []slog.Attr{
+		outcome := "ok"
+		if _, exceeded := runtimeclickhouse.QueryBudgetExceededCode(err); exceeded {
+			outcome = "budget_exceeded"
+		} else if err != nil {
+			outcome = "error"
+		}
+		r.logger.LogAttrs(ctx, slog.LevelInfo, ReadStatsMessage,
 			slog.String("reader", contextfabric.SanitizeLogAttr(reader)),
 			slog.Uint64("read_rows", rows),
 			slog.Uint64("read_bytes", bytes),
 			slog.Int64("elapsed_ms", time.Since(started).Milliseconds()),
-		}
-		if code, exceeded := runtimeclickhouse.QueryBudgetExceededCode(err); exceeded {
-			b.logger.LogAttrs(ctx, slog.LevelWarn, ReadBudgetExceededMessage,
-				append([]slog.Attr{slog.String("reason", ReadBudgetExceededReason), slog.Int("clickhouse_code", int(code))}, attrs...)...)
-		}
-		b.logger.LogAttrs(ctx, slog.LevelInfo, ReadStatsMessage, attrs...)
+			slog.String("outcome", contextfabric.SanitizeLogAttr(outcome)),
+		)
 		finish(err)
 	}
 }

@@ -83,33 +83,31 @@ func TestMeasuredClientPassesOtherErrorsThroughUnchanged(t *testing.T) {
 	}
 }
 
-func TestBudgetInstrumentationLogsMeasuredReadStatsForEveryStatementAndOnABudgetRefusal(t *testing.T) {
+func TestReadStatsInstrumentationLogsMeasuredReadsForEveryStatement(t *testing.T) {
 	t.Parallel()
-	var buffer bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	instr := NewBudgetWarningInstrumentation(readers.NoopInstrumentation{}, logger)
-
-	ctx, finish := instr.StartQuery(context.Background(), "ReadRepositoryThemeMix", true)
-	readStatsFromContext(ctx).add(288509, 67158099)
-	finish(nil)
-	line := buffer.String()
-	for _, want := range []string{"devhealthfacts.read_stats", "reader=ReadRepositoryThemeMix", "read_rows=288509", "read_bytes=67158099", "elapsed_ms="} {
-		if !strings.Contains(line, want) {
-			t.Fatalf("read stats line %q lacks %q", line, want)
+	for _, tc := range []struct {
+		name    string
+		err     error
+		outcome string
+	}{
+		{"ok", nil, "outcome=ok"},
+		{"budget", &clickhousedriver.Exception{Code: 307}, "outcome=budget_exceeded"},
+		{"other", errors.New("connection reset"), "outcome=error"},
+	} {
+		var buffer bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		instr := NewReadStatsInstrumentation(readers.NoopInstrumentation{}, logger)
+		ctx, finish := instr.StartQuery(context.Background(), "ReadRepositoryThemeMix", true)
+		readStatsFromContext(ctx).add(288509, 67158099)
+		finish(tc.err)
+		line := buffer.String()
+		for _, want := range []string{"level=INFO", "devhealthfacts.read_stats", "reader=ReadRepositoryThemeMix", "read_rows=288509", "read_bytes=67158099", "elapsed_ms=", tc.outcome} {
+			if !strings.Contains(line, want) {
+				t.Fatalf("%s: read stats line %q lacks %q", tc.name, line, want)
+			}
 		}
-	}
-	if strings.Contains(line, "read_budget_exceeded") {
-		t.Fatalf("a successful statement logged a budget warning: %q", line)
-	}
-
-	buffer.Reset()
-	ctx, finish = instr.StartQuery(context.Background(), "ReadRepositoryThemeMix", true)
-	readStatsFromContext(ctx).add(7, 9)
-	finish(&clickhousedriver.Exception{Code: 307})
-	line = buffer.String()
-	for _, want := range []string{"level=WARN", "devhealthfacts.read_budget_exceeded", "clickhouse_code=307", "read_rows=7", "read_bytes=9", "devhealthfacts.read_stats"} {
-		if !strings.Contains(line, want) {
-			t.Fatalf("budget refusal log %q lacks %q", line, want)
+		if strings.Contains(line, "connection reset") {
+			t.Fatalf("%s: the line carries the error text: %q", tc.name, line)
 		}
 	}
 }

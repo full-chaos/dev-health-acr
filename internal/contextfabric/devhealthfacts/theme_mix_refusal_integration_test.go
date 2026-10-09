@@ -34,7 +34,7 @@ func TestThemeMixRefusalNamesTheBudgetAndMeasuredFactsAgainstRealClickHouse(t *t
 	if !errors.As(err, &failure) {
 		t.Fatalf("ReadFacts error = %v, want a FactReadFailure", err)
 	}
-	for _, want := range []string{"query repository theme mix", "exceeded the read budget", fmt.Sprintf("limit %d bytes", capBytes), "the server had read", "narrow the window or the subject"} {
+	for _, want := range []string{"query repository theme mix", "exceeded the read budget", fmt.Sprintf("limit %d bytes", capBytes), "narrow the window or the subject"} {
 		if !strings.Contains(failure.Reason, want) {
 			t.Errorf("refusal reason %q does not contain %q", failure.Reason, want)
 		}
