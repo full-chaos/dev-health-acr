@@ -187,7 +187,7 @@ func TestThemeMixTotalReadBytesWithMembershipScopeAgainstRealClickHouse(t *testi
 			t.Fatalf("ReadFacts(%s): %v\nserver: %s", orgID, err, lastServerException(ctx, direct))
 		}
 		if len(result.Facts) == 0 {
-			t.Fatalf("no investment facts served for %s", orgID)
+			t.Fatalf("no investment facts served for %s: %+v\nserver: %s", orgID, result, lastServerException(ctx, direct))
 		}
 		after := orgReadTotals(t, ctx, direct)
 		return readTotals{after.statements - before.statements, after.readBytes - before.readBytes, after.readRows - before.readRows}
