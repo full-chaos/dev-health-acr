@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -134,6 +135,69 @@ func (b budgetWarningInstrumentation) StartQuery(ctx context.Context, reader str
 				slog.Int("clickhouse_code", int(code)),
 			)
 		}
+		finish(err)
+	}
+}
+
+// ReadStatsMessage is the log message of the per-statement read line.
+const ReadStatsMessage = "devhealthfacts.read_stats"
+
+// readStatsInstrumentation decorates a readers.Instrumentation so every
+// readers.QueryOrgScopedNamed statement is ALSO logged at Info with what the
+// server reported it read (rows, bytes), how long it took and how it ended.
+// The statistics are collected by the measured query client (read_budget.go)
+// into a ReadStats it finds on the context this decorator wires in.
+//
+// Only closed values are logged: the reader name (a constant chosen at each
+// call site), numbers and a closed outcome. Never the exception text, a row,
+// an org id or a subject id.
+type readStatsInstrumentation struct {
+	next   readers.Instrumentation
+	logger *slog.Logger
+	now    func() time.Time
+}
+
+// NewReadStatsInstrumentation wraps next (nil = no other instrumentation) so
+// every statement reports its measured reads through logger (nil =
+// slog.Default()). now is the caller's clock (this package reads the wall
+// clock nowhere itself); a nil now reports elapsed_ms as 0.
+func NewReadStatsInstrumentation(next readers.Instrumentation, logger *slog.Logger, now func() time.Time) readers.Instrumentation {
+	if next == nil {
+		next = readers.NoopInstrumentation{}
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return readStatsInstrumentation{next: next, logger: logger, now: now}
+}
+
+// StartQuery implements readers.Instrumentation.
+func (r readStatsInstrumentation) StartQuery(ctx context.Context, reader string, orgScoped bool) (context.Context, func(error)) {
+	stats := &ReadStats{}
+	var started time.Time
+	if r.now != nil {
+		started = r.now()
+	}
+	ctx, finish := r.next.StartQuery(contextWithReadStats(ctx, stats), reader, orgScoped)
+	return ctx, func(err error) {
+		rows, bytes := stats.Snapshot()
+		var elapsed time.Duration
+		if r.now != nil {
+			elapsed = r.now().Sub(started)
+		}
+		outcome := "ok"
+		if _, exceeded := runtimeclickhouse.QueryBudgetExceededCode(err); exceeded {
+			outcome = "budget_exceeded"
+		} else if err != nil {
+			outcome = "error"
+		}
+		r.logger.LogAttrs(ctx, slog.LevelInfo, ReadStatsMessage,
+			slog.String("reader", contextfabric.SanitizeLogAttr(reader)),
+			slog.Uint64("read_rows", rows),
+			slog.Uint64("read_bytes", bytes),
+			slog.Int64("elapsed_ms", elapsed.Milliseconds()),
+			slog.String("outcome", contextfabric.SanitizeLogAttr(outcome)),
+		)
 		finish(err)
 	}
 }
