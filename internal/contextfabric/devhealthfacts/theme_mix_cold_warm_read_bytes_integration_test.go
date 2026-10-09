@@ -136,5 +136,4 @@ func TestThemeMixReadBytesColdVersusWarmAndByOrgSizeAgainstRealClickHouse(t *tes
 	if bigCold.readBytes != bigWarm.readBytes {
 		t.Errorf("large org read_bytes depends on cache state: cold=%d warm=%d", bigCold.readBytes, bigWarm.readBytes)
 	}
-	t.Errorf("MEASUREMENT-REPORT (deliberate fail so the log prints): see MEASURE lines above")
 }
