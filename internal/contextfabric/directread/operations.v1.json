@@ -5035,6 +5035,85 @@
       ]
     },
     {
+      "name": "sourceHealth",
+      "document_operation_name": "SourceHealth",
+      "kind": "query",
+      "digest": "f9196883f03de7e9689294590f40c0216374a8301ed8712830ec4b9836034fc0",
+      "document_text": "query SourceHealth($orgId: String!) {\n  sourceHealth(orgId: $orgId) {\n    provider\n    scope\n    lastSyncAt\n    lastFailure {\n      occurredAt\n      stage\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "list",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        }
+      ],
+      "person_variables": [],
+      "constraints": [],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] the ops sourceHealth root lists one row per sync configuration of the caller org: provider, closed scope code, last successful sync time, and the latest failure time and closed stage code (CHAOS-8906); acr sends viewer and the principal org"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "org-level fact; caller scope is repository-bound: rows are sync configurations of the org with no repository id, so a granted-repository row check is not possible (CHAOS-8899)"
+          },
+          "basis": "org-level fact; caller scope is repository-bound: rows are sync configurations of the org with no repository id, so a granted-repository row check is not possible (CHAOS-8899)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "sourceHealth[*].provider",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "sourceHealth[*].scope",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "sourceHealth[*].lastSyncAt",
+          "type": "DateTime",
+          "leaf": "scalar"
+        },
+        {
+          "path": "sourceHealth[*].lastFailure.occurredAt",
+          "type": "DateTime!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "sourceHealth[*].lastFailure.stage",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "sourceHealth[*].lastFailure.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "sourceHealth[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": [],
+      "notes": [
+        "lastSyncAt is the last SUCCESSFUL sync and is null when never synced or when the latest sync failed; lastFailure set = the latest sync failed",
+        "a source-health read that cannot run answers a GraphQL error, never an empty list"
+      ]
+    },
+    {
       "name": "throughputForecast",
       "document_operation_name": "ThroughputForecast",
       "kind": "query",
@@ -6724,13 +6803,6 @@
       "digest": "c7660e4db9d230cee45deb465db15fb795965bf66a1cefd2a8f51555dac376cf",
       "code": "unknown_operation",
       "reason": "root field is not enabled on the ops query service run-operation path (root_field_not_enabled): dark on purpose"
-    },
-    {
-      "name": "sourceHealth",
-      "kind": "query",
-      "digest": "f9196883f03de7e9689294590f40c0216374a8301ed8712830ec4b9836034fc0",
-      "code": "unknown_operation",
-      "reason": "no scope rule or no honest status yet (design D.3)"
     },
     {
       "name": "testOpsCoverage",

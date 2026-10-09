@@ -561,7 +561,12 @@ import (
 // saved before v114 may hold the same listing cut at 14 members, or at the
 // members that fit after the driver references, and must not be reused.
 //
-// v114 -> v117: run_operation and graphql_query refuse a Date value for a
+// v114 -> v115: source_health is read from the ops sourceHealth root and its
+// fields are provider, scope, last_sync_at, last_failure_occurred_at and
+// last_failure_stage (it was the backfill_log columns). A candidate saved
+// before v115 may hold the old fields and must not be reused.
+//
+// v115 -> v117: run_operation and graphql_query refuse a Date value for a
 // DateTime variable (and the reverse) before the upstream call, and carry the
 // bounded upstream GraphQL error message and path in errors[]. A candidate
 // saved before v117 may hold an answer served from a mistyped variable and

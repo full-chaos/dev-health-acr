@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"log/slog"
 	"sync"
 	"time"
@@ -264,4 +265,8 @@ type buildRequest struct {
 	config    config.Config
 	options   Options
 	factories componentFactories
+	// sourceHealthOperations late-binds the operation runner the
+	// source_health fact reads the ops sourceHealth root through; open sets
+	// it before the server serves. Nil in tests that skip the runner.
+	sourceHealthOperations *devhealthfacts.OperationHolder
 }

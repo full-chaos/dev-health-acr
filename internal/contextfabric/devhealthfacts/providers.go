@@ -11,6 +11,13 @@ import (
 // see doc.go for the full list of FactKinds this package covers and the
 // eight it deliberately leaves unregistered.
 func NewProviders(client contextpacket.ClickHouseQueryClient) []contextfabric.FactProvider {
+	return NewProvidersWithOperations(client, nil)
+}
+
+// NewProvidersWithOperations is NewProviders with the operation holder the
+// source_health provider reads the ops sourceHealth root through. A nil
+// holder makes that provider answer a limitation row on every read.
+func NewProvidersWithOperations(client contextpacket.ClickHouseQueryClient, operations *OperationHolder) []contextfabric.FactProvider {
 	return []contextfabric.FactProvider{
 		newIdentityProvider(client),
 		newMembershipProvider(client),
@@ -30,7 +37,7 @@ func NewProviders(client contextpacket.ClickHouseQueryClient) []contextfabric.Fa
 		newInvestmentProvider(client),
 		newReadinessProvider(client),
 		newOperationalDeficienciesProvider(client),
-		newSourceHealthProvider(client),
+		newSourceHealthProvider(operations),
 		newFlowProvider(client),
 		newLandscapeProvider(client),
 	}

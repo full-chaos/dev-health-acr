@@ -100,6 +100,7 @@ var operationPurposes = map[string]string{
 	"home":                           "The org-wide home summary: data freshness, metric deltas, tiles, signals, the limiting factor and data confidence.",
 	"recommendations":                "A team's stored recommendations over a lookback window, each with its rationale and evidence rows.",
 	"workItemTeamAttributions":       "Raw team attribution facts per work item, with source, confidence, primary flag and evidence text.",
+	"sourceHealth":                   "Data-sync health per source: provider, scope, last successful sync and the latest failure time and stage.",
 	"securityOverview":               "Security posture: open alert counts by severity, the trend and 30-day indicators.",
 	"throughputForecast":             "A throughput forecast with its history sufficiency flag.",
 	"workGraphArtifacts":             "Work graph artifacts (issues, pull requests and more) in a window, with a degraded-reason disclosure.",

@@ -401,7 +401,11 @@ func TestClientInputIsClockIndependentForEveryFactKind(t *testing.T) {
 		for _, subjectKind := range capability.SupportedSubjectKinds {
 			canonicalID, rowID := clockTestSubjectID(subjectKind)
 			subject := contextfabric.SubjectRef{Kind: subjectKind, CanonicalID: canonicalID, Label: "subject-1"}
-			provider := findProvider(t, devhealthfacts.NewProviders(&universalClient{subjectID: rowID, rows: 1, rules: clockTestRules()}), kind)
+			// source_health reads the ops root, not ClickHouse: its input is the
+			// served operation answer, held fixed across the clocks.
+			operations := sourceHealthHolder(&fakeOperationCaller{outcome: devhealthfacts.OperationOutcome{Served: true, Complete: true, Data: sourceHealthData(
+				`{"provider":"github","scope":"all","lastSyncAt":"2026-09-20T11:00:00Z","lastFailure":null}`)}})
+			provider := findProvider(t, devhealthfacts.NewProvidersWithOperations(&universalClient{subjectID: rowID, rows: 1, rules: clockTestRules()}, operations), kind)
 			for _, tc := range clockTestCases() {
 				label := fmt.Sprintf("%s/%s/%s", kind, subjectKind, tc.name)
 				labels = append(labels, label)

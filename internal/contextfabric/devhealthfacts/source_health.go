@@ -2,12 +2,13 @@ package devhealthfacts
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
-	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // organizationPrefix is the CanonicalID prefix devhealthsource/clickhouse.go
@@ -17,52 +18,63 @@ import (
 // organization evidence ref.
 const organizationPrefix = "organization:"
 
-// SourceHealthProvider implements contextfabric.FactProvider for
-// FactSourceHealth from backfill_log -- the per-provider ingestion job
-// outcome Dev Health Ops records for every backfill/sync run (status,
-// duration, items synced, and any error). This is org-scoped, not
-// subject-scoped in any finer-grained way: there is no per-repository or
-// per-team ingestion-health column, so the only honest subject this
-// provider supports is the organization itself, matching the organization
-// entity devhealthsource/clickhouse.go already projects into the graph.
-type SourceHealthProvider struct{ facts clickhouseFacts }
+// Closed limitation reasons the provider answers instead of facts.
+const (
+	sourceHealthRestrictedReason = "org-level fact; caller scope is repository-bound"
+	sourceHealthUnsetReason      = "source health read is not configured: no operation runner"
+	sourceHealthNotServedReason  = "source health root not served: "
+	sourceHealthUnreadableReason = "source health answer could not be read"
+	sourceHealthIncompleteReason = "source health answer is incomplete"
+)
 
-func newSourceHealthProvider(client contextpacket.ClickHouseQueryClient) *SourceHealthProvider {
-	return &SourceHealthProvider{facts: clickhouseFacts{client: client}}
+// SourceHealthProvider implements contextfabric.FactProvider for
+// FactSourceHealth from the ops GraphQL root sourceHealth: one fact per sync
+// configuration of the caller's organization (provider, closed scope code,
+// last successful sync, latest failure time and closed stage). The root is
+// org-level, so the only honest subject is the organization itself and a
+// repository-scoped caller gets a limitation, never rows.
+type SourceHealthProvider struct{ operations *OperationHolder }
+
+func newSourceHealthProvider(operations *OperationHolder) *SourceHealthProvider {
+	return &SourceHealthProvider{operations: operations}
 }
 
 func (p *SourceHealthProvider) Capability() contextfabric.FactCapability {
 	return newCapability(contextfabric.FactSourceHealth, "devhealthfacts.source_health", []contextfabric.SubjectKind{contextfabric.SubjectOrganization})
 }
 
+type sourceHealthFailure struct {
+	OccurredAt string `json:"occurredAt"`
+	Stage      string `json:"stage"`
+}
+
+type sourceHealthRow struct {
+	Provider    string               `json:"provider"`
+	Scope       string               `json:"scope"`
+	LastSyncAt  *string              `json:"lastSyncAt"`
+	LastFailure *sourceHealthFailure `json:"lastFailure"`
+}
+
+type sourceHealthData struct {
+	SourceHealth *[]sourceHealthRow `json:"sourceHealth"`
+}
+
+func sourceHealthRestricted(principal storage.Principal) bool {
+	return len(principal.RepositoryScopes) > 0 && !slices.ContainsFunc(principal.RepositoryScopes, func(scope string) bool { return strings.TrimSpace(scope) == "*" })
+}
+
 func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
-	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
-	if unsupported {
-		return unsupportedResult, nil
+	// The root has no history: any non-current axis is not applicable.
+	if refused, unsupported := refuseHistoricalFact(query); unsupported {
+		return refused, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	// backfill_log has no per-subject key other than org_id itself, so the
-	// only requested subjects this provider ever honors are organization
-	// subjects whose raw ID equals the caller's own org -- there is nothing
-	// else to scope an "ids IN (...)" clause against, and the WHERE
-	// org_id = {org_id:String} clause below is itself the whole scope.
 	orgSubjectIDs, bySubject, rejected := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization), organizationPrefix)
-
-	// codex terra xhigh r1 (EXECUTED-confirmed): this provider has THREE
-	// success-shaped outcomes (no well-shaped org subject survived; the
-	// survivor isn't the caller's own org; the real query ran). Three
-	// separate applySubjectShapeRejection call sites meant a caller-visible
-	// subject could reach the real query (and get a clean SourceNoData)
-	// while its shape-rejected sibling's disclosure lived on a DIFFERENT,
-	// unreached return -- deleting only the third call was a compiling
-	// mutation that survived every other test in this package. Consolidated
-	// to ONE `result` variable, and -- same as every other provider in this
-	// package -- a DEFERRED call so a future branch added to this switch
-	// cannot re-introduce the gap by skipping the disclosure entirely, not
-	// just by landing on the wrong one of several call sites.
+	// ONE result variable and a deferred disclosure so no branch can skip the
+	// shape-rejection note (same construction as every provider here).
 	defer func() {
 		if err == nil {
 			applySubjectShapeRejection(&result, "devhealthfacts.source_health", contextfabric.FactSourceHealth, rejected)
@@ -72,61 +84,78 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 	subject, requested := bySubject[orgID]
 	switch {
 	case len(orgSubjectIDs) == 0:
-		// Only ever reached when every requested organization subject was
-		// rejected for shape (subjectsOfKind already narrowed to
-		// SubjectOrganization, and this provider supports no other kind) --
-		// a genuinely EMPTY query.Subjects also lands here with rejected=0,
-		// which applySubjectShapeRejection's own no-op-on-zero guard keeps
-		// silent, matching this branch's pre-existing "nothing asked, report
-		// available" contract. result stays the zero-fact default above.
+		// Nothing asked, or every organization subject was rejected for shape.
 	case !requested:
-		// The caller asked about a different organization's subject than
-		// principal.OrgID names -- never honor it (org scoping is
-		// structural, never caller-supplied). result stays the default.
+		// A different organization than the caller's: never honored.
+	case sourceHealthRestricted(principal):
+		result = limitation(contextfabric.SourceNotApplicable, sourceHealthRestrictedReason)
 	default:
-		facts := make([]contextfabric.CanonicalFact, 0, maxFactRowsPerQuery)
-		// CHAOS-4377: the SQL build + scan half (the row_number tiebreak
-		// reasoning, the toInt64/raw-uint64 Scan-width reasoning) moved to
-		// github.com/full-chaos/dev-health-go/readers.ReadSourceHealth; its
-		// doc comment carries that reasoning now.
-		rows, scanErr := readers.ReadSourceHealth(ctx, p.facts.client, orgID, orgSubjectIDs, timeBound.neutral())
-		if scanErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query source health", scanErr)
-		}
-		omittedUnrepresentableCount := 0
-		for _, row := range rows {
-			// duration_ms is UInt64 and is NOT wrapped with toInt64 in SQL
-			// (round-3 F2): the wrap is what silently turned a value above
-			// MaxInt64 negative. Scanned raw by the reader and range-checked
-			// here instead.
-			durationMS, representable := representableInt64(row.DurationMS)
-			if !representable {
-				omittedUnrepresentableCount++
-				continue
-			}
-			fields := map[string]contextfabric.FactValue{
-				"provider":       stringOrNull(row.Provider),
-				"status":         stringOrNull(row.Status),
-				"items_synced":   contextfabric.IntegerFactValue(row.ItemsSynced),
-				"duration_ms":    contextfabric.IntegerFactValue(durationMS),
-				"last_synced_at": contextfabric.StringFactValue(row.CreatedAt),
-			}
-			if row.ErrorMessage != "" {
-				fields["error_message"] = contextfabric.StringFactValue(row.ErrorMessage)
-			}
-			facts = append(facts, contextfabric.CanonicalFact{
-				Kind: contextfabric.FactSourceHealth, Subject: subject, Fields: fields,
-				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, orgID)},
-			})
-		}
-		state, retentionReason := timeBound.retentionState(len(rows))
-		// Round-4 R4-2: the COUNT travels, not just a flag. The registry
-		// turns a nonzero count into a truncated/partial result, so an
-		// answer can never report complete coverage while rows were dropped.
-		if omittedUnrepresentableCount > 0 && retentionReason == "" {
-			retentionReason = unrepresentableValueReason
-		}
-		result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery, OmittedCount: omittedUnrepresentableCount}
+		result = p.read(ctx, principal, orgID, subject)
 	}
 	return result, nil
+}
+
+func limitation(state contextfabric.SourceState, reason string) contextfabric.FactProviderResult {
+	return contextfabric.FactProviderResult{Facts: nil, State: state, Reason: reason, Version: QueryVersion}
+}
+
+func (p *SourceHealthProvider) read(ctx context.Context, principal storage.Principal, orgID string, subject contextfabric.SubjectRef) contextfabric.FactProviderResult {
+	if p == nil || !p.operations.IsSet() {
+		return limitation(contextfabric.SourceUnconfigured, sourceHealthUnsetReason)
+	}
+	outcome, callErr := p.operations.CallOperation(ctx, principal, SourceHealthOperationName)
+	if callErr != nil {
+		return limitation(contextfabric.SourceUnavailable, sourceHealthNotServedReason+"call_failed")
+	}
+	if !outcome.Served {
+		reason := outcome.Reason
+		if reason == "" {
+			reason = "unknown"
+		}
+		return limitation(contextfabric.SourceUnavailable, sourceHealthNotServedReason+reason)
+	}
+	var data sourceHealthData
+	if err := json.Unmarshal(outcome.Data, &data); err != nil {
+		return limitation(contextfabric.SourceUnavailable, sourceHealthUnreadableReason)
+	}
+	if data.SourceHealth == nil {
+		return limitation(contextfabric.SourceUnavailable, sourceHealthUnreadableReason)
+	}
+	rows := *data.SourceHealth
+	facts := make([]contextfabric.CanonicalFact, 0, len(rows))
+	for _, row := range rows {
+		fields := map[string]contextfabric.FactValue{
+			"provider":                 contextfabric.StringFactValue(row.Provider),
+			"scope":                    contextfabric.StringFactValue(row.Scope),
+			"last_sync_at":             nullableString(row.LastSyncAt),
+			"last_failure_occurred_at": contextfabric.NullFactValue(),
+			"last_failure_stage":       contextfabric.NullFactValue(),
+		}
+		if row.LastFailure != nil {
+			fields["last_failure_occurred_at"] = stringOrNull(row.LastFailure.OccurredAt)
+			fields["last_failure_stage"] = stringOrNull(row.LastFailure.Stage)
+		}
+		facts = append(facts, contextfabric.CanonicalFact{
+			Kind: contextfabric.FactSourceHealth, Subject: subject, Fields: fields,
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, orgID)},
+		})
+	}
+	state := contextfabric.SourceAvailable
+	reason := ""
+	switch {
+	case len(facts) == 0 && !outcome.Complete:
+		return limitation(contextfabric.SourceUnavailable, sourceHealthIncompleteReason)
+	case len(facts) == 0:
+		state = contextfabric.SourceNoData
+	case !outcome.Complete:
+		state, reason = contextfabric.SourceTruncated, sourceHealthIncompleteReason
+	}
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: reason, Version: QueryVersion, Truncated: state == contextfabric.SourceTruncated}
+}
+
+func nullableString(value *string) contextfabric.FactValue {
+	if value == nil {
+		return contextfabric.NullFactValue()
+	}
+	return stringOrNull(*value)
 }

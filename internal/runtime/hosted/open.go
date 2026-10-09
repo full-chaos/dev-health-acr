@@ -49,6 +49,27 @@ import (
 // movable in one place.
 const contextFabricSynthesisDeadlineReserveDivisor = 3
 
+var errSourceHealthOperationsUnbound = errors.New("source_health fact has no operation runner: data query is configured but the runner was not composed")
+
+// bindSourceHealthOperations binds the source_health fact to the data
+// operation runner. With an investigator composed and the data query
+// configured the runner must exist; anything less is a startup failure.
+// Without a data query the holder stays unset on purpose and the provider
+// answers a limitation row.
+func bindSourceHealthOperations(holder *devhealthfacts.OperationHolder, investigatorComposed, dataQueryConfigured bool, runner *directread.OperationRunner) error {
+	if !investigatorComposed || !dataQueryConfigured {
+		return nil
+	}
+	if runner == nil || holder == nil {
+		return errSourceHealthOperationsUnbound
+	}
+	holder.Set(newFactOperationCaller(runner))
+	if !holder.IsSet() {
+		return errSourceHealthOperationsUnbound
+	}
+	return nil
+}
+
 func Open(ctx context.Context, cfg config.Config, options Options) (*Runtime, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate hosted runtime configuration: %w", err)
@@ -161,6 +182,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric org model config store: %w", err))
 	}
+	request.sourceHealthOperations = devhealthfacts.NewOperationHolder()
 	investigator, investigationResultStore, runtimeEvictor, resultReuseInvalidator, clarificationSink, structureSelectionSink, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigStore)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
@@ -220,6 +242,13 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	// CHAOS-7072 (S1a): data_catalog, find_subjects and run_operation.
 	dataReads, err := buildDataReads(request.config.DataQueryURL(), request.config.DataQueryPath(), request.config.DataGraphQLURL(), request.config.DataQueryTimeout(), investigator, directReadGate, request.options.Logger)
 	if err != nil {
+		return nil, closeAfterError(runtime, err)
+	}
+	// The source_health fact shares the data operation runner. Bound before
+	// anything serves; with the data query configured and a composed
+	// investigator an unbound holder is a startup failure, never a request-time
+	// surprise.
+	if err := bindSourceHealthOperations(request.sourceHealthOperations, investigator != nil, request.config.DataQueryURL() != "", dataReads.runner); err != nil {
 		return nil, closeAfterError(runtime, err)
 	}
 	// CHAOS-7126: find_subjects owned_by and handle.
@@ -718,8 +747,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// CHAOS-7257: the slog instrumentation is wrapped so a ClickHouse
 		// read-budget exception (Code 307/158) on a fact statement is also a
 		// Warn with the closed reason read_budget_exceeded and the statement id.
-		devhealthfacts.NewInstrumentedProviders(clickhouse.queryClient, devhealthfacts.NewBudgetWarningInstrumentation(
-			readers.NewSlogInstrumentation(request.options.Logger, slog.LevelInfo), request.options.Logger)),
+		devhealthfacts.NewInstrumentedProvidersWithOperations(clickhouse.queryClient, devhealthfacts.NewBudgetWarningInstrumentation(
+			readers.NewSlogInstrumentation(request.options.Logger, slog.LevelInfo), request.options.Logger), request.sourceHealthOperations),
 		// CHAOS-4099 stage 2: the real ScopeExpander over the SAME
 		// ClickHouse client every FactProvider above shares -- activating
 		// the 3 ratified project-origin policies (fact_scope.go's own
