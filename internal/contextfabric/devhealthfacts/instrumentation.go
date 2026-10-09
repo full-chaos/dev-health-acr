@@ -63,7 +63,13 @@ func (p instrumentedProvider) ReadFacts(ctx context.Context, principal storage.P
 // "Boundary corrections" section for the matching reasoning on the library
 // side).
 func NewInstrumentedProviders(client contextpacket.ClickHouseQueryClient, instr readers.Instrumentation) []contextfabric.FactProvider {
-	providers := NewProviders(client)
+	return NewInstrumentedProvidersWithOperations(client, instr, nil)
+}
+
+// NewInstrumentedProvidersWithOperations is NewInstrumentedProviders with the
+// operation holder of NewProvidersWithOperations.
+func NewInstrumentedProvidersWithOperations(client contextpacket.ClickHouseQueryClient, instr readers.Instrumentation, operations *OperationHolder) []contextfabric.FactProvider {
+	providers := NewProvidersWithOperations(client, operations)
 	if instr == nil {
 		return providers
 	}

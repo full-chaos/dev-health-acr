@@ -61,6 +61,9 @@ type t4Case struct {
 	subjects []contextfabric.SubjectRef
 	tables   []fakeTable
 	time     contextfabric.TimeContext
+	// operation, when set, is the served-operation answer the source_health
+	// provider reads through its holder.
+	operation *devhealthfacts.OperationOutcome
 }
 
 func t4Days(n int) []string {
@@ -95,12 +98,11 @@ func t4Cases() []t4Case {
 	add := func(c t4Case) { cases = append(cases, c) }
 
 	// ---- source_health (organization)
-	withError := sourceHealthRow("gitlab")
-	withError[4] = "rate limited"
-	nullLabels := sourceHealthRow("")
-	nullLabels[1] = ""
-	add(t4Case{name: "source_health/organization", kind: contextfabric.FactSourceHealth, subjects: org, tables: []fakeTable{
-		{match: "FROM backfill_log", rows: [][]any{sourceHealthRow("github"), withError, nullLabels}},
+	add(t4Case{name: "source_health/organization", kind: contextfabric.FactSourceHealth, subjects: org, operation: &devhealthfacts.OperationOutcome{
+		Served: true, Complete: true, Data: sourceHealthData(
+			`{"provider":"github","scope":"git, prs","lastSyncAt":"2026-10-08T01:00:00Z","lastFailure":null}`,
+			`{"provider":"gitlab","scope":"all","lastSyncAt":null,"lastFailure":{"occurredAt":"2026-10-08T02:00:00Z","stage":"provider_rate_limited"}}`,
+			`{"provider":"jira","scope":"other","lastSyncAt":null,"lastFailure":null}`),
 	}})
 
 	// ---- operational_deficiencies (team)
@@ -444,7 +446,11 @@ func t4Run(t *testing.T, cases []t4Case, capabilityOf func(contextfabric.FactKin
 	observed := t4Observed{seen: map[string]bool{}, subjects: map[string]bool{}, cases: map[contextfabric.FactKind]int{}}
 	for _, c := range cases {
 		client := &fakeClient{tables: c.tables}
-		provider := findProvider(t, devhealthfacts.NewProviders(client), c.kind)
+		providers := devhealthfacts.NewProviders(client)
+		if c.operation != nil {
+			providers = devhealthfacts.NewProvidersWithOperations(client, sourceHealthHolder(&fakeOperationCaller{outcome: *c.operation}))
+		}
+		provider := findProvider(t, providers, c.kind)
 		timeContext := c.time
 		if timeContext.Axis == "" {
 			timeContext = contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}

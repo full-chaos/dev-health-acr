@@ -50,7 +50,6 @@ func timeAxisCases() []timeAxisCase {
 		{"investment", contextfabric.FactInvestment, teamSubject("CHAOS"), true},
 		{"readiness", contextfabric.FactReadiness, teamSubject("CHAOS"), true},
 		{"operational_deficiencies", contextfabric.FactOperationalDeficiencies, teamSubject("CHAOS"), true},
-		{"source_health", contextfabric.FactSourceHealth, organizationSubject("org-1"), true},
 	}
 }
 

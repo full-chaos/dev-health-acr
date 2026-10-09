@@ -22,6 +22,9 @@ type dataReads struct {
 	// graphql is the graphql_query runner (CHAOS-7075); nil unless the MCP
 	// listener URL is configured and the catalogue and root policy loaded.
 	graphql api.DataGraphQLRunner
+	// runner is the concrete operation runner the source_health fact shares;
+	// nil whenever operations are off.
+	runner *directread.OperationRunner
 }
 
 // dataReadsCatalogue is the policy loader; a variable so a test can plant a
@@ -118,6 +121,7 @@ func buildDataReads(queryURL, queryPath, graphqlURL string, queryTimeout time.Du
 		return dataReads{}, fmt.Errorf("initialize data operation runner: %w", err)
 	}
 	out.operations = runner
+	out.runner = runner
 	logger.Info("context fabric direct data composition", "decision", "loaded", "schema_digest", out.catalogue.SchemaDigest())
 	return out, nil
 }
