@@ -588,7 +588,7 @@ import (
 // change_failure_rate_days, and the read's coverage reason names how many days
 // were not applicable. A candidate saved before v121 may hold a zero served for
 // such a day and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v123"
+const QueryVersion = "devhealthfacts.clickhouse.v124"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
