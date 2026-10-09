@@ -287,14 +287,14 @@ func TestT13EveryPersonVariableRefusedAtTheEdge(t *testing.T) {
 
 // ---------------------------------------------------------------- T2
 
-// TestT2OrgIsolationEveryOperation: two organizations, all 19 operations.
+// TestT2OrgIsolationEveryOperation: two organizations, all 20 operations.
 // The orgId variable and X-DH-Internal-Org-Id are always the principal's
 // organization; the service never sees the other one.
 func TestT2OrgIsolationEveryOperation(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
 	ops := cat.Operations(directread.CallerUnrestricted)
-	if len(ops) != 19 {
-		t.Fatalf("unrestricted catalogue has %d operations, want 19", len(ops))
+	if len(ops) != 20 {
+		t.Fatalf("unrestricted catalogue has %d operations, want 20", len(ops))
 	}
 	for _, op := range ops {
 		var orgPaths []string
@@ -592,8 +592,12 @@ func TestStatusMappingBudgetAndOutputAllowlist(t *testing.T) {
 			if resp.Call != tc.call || resp.Result != tc.result || resp.Completeness != tc.complete {
 				t.Fatalf("got %s", out)
 			}
-			if strings.Contains(string(out), "SECRET-UPSTREAM") || strings.Contains(string(out), "127.0.0.1") {
-				t.Fatalf("upstream text or host in the response: %s", out)
+			carried := tc.errorClass == directread.UpstreamGraphQLErrors
+			if strings.Contains(string(out), "SECRET-UPSTREAM") != carried || strings.Contains(string(out), "127.0.0.1") {
+				t.Fatalf("upstream text carried=%v expected only for graphql_errors, or host in the response: %s", carried, out)
+			}
+			if carried && (resp.Errors[0].Message != "SECRET-UPSTREAM clickhouse" || !slices.Contains(resp.UntrustedContent.Fields, "errors")) {
+				t.Fatalf("graphql_errors message not carried as untrusted: %s", out)
 			}
 			if tc.refusal != "" && (resp.Refusal == nil || resp.Refusal.Code != tc.refusal || resp.Data != nil) {
 				t.Fatalf("refusal: %s", out)

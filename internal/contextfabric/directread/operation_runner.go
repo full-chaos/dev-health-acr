@@ -162,6 +162,10 @@ type OperationError struct {
 	GraphQLCode UpstreamGraphQLCode `json:"graphql_code,omitempty"`
 	// Variable is the GraphQL variable name the upstream rejected.
 	Variable string `json:"variable,omitempty"`
+	// Message and Path carry the upstream GraphQL error text and path, set
+	// only with class graphql_errors; bounded, untrusted upstream text.
+	Message string `json:"message,omitempty"`
+	Path    string `json:"path,omitempty"`
 }
 
 // OperationSource names where the data came from.
@@ -246,6 +250,7 @@ type OperationRead struct {
 	UpstreamStatus    int
 	GraphQLCode       UpstreamGraphQLCode
 	Variable          string
+	ErrorMessage      string
 	ForcedByGrant     bool
 	VariablesRejected int
 	RowsChecked       int
@@ -367,6 +372,19 @@ func (x *run) upstream(call CallStatus, class UpstreamErrorClass) OperationRespo
 	x.read.Decision = string(call)
 	x.read.ErrorClass = class
 	return x.resp
+}
+
+// upstreamEntries is upstream with the bounded GraphQL error text of a 200
+// answer carried into errors[] and the read log.
+func (x *run) upstreamEntries(call CallStatus, class UpstreamErrorClass, entries []OperationError) OperationResponse {
+	resp := x.upstream(call, class)
+	if len(entries) > 0 {
+		x.resp.Errors = entries
+		x.resp.UntrustedContent.Fields = []string{"data", "errors"}
+		x.read.ErrorMessage = logErrorMessage(entries)
+		resp = x.resp
+	}
+	return resp
 }
 
 // safeRefusalPath keeps a path only when it is short and uses path
@@ -530,9 +548,9 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 	}
 
 	// 9a: the GraphQL answer.
-	data, class9, ok := parseGraphQLAnswer(result.Body)
+	data, class9, entries, ok := parseGraphQLAnswer(result.Body, result.StatusCode)
 	if !ok {
-		return x.upstream(CallUpstreamError, class9), nil
+		return x.upstreamEntries(CallUpstreamError, class9, entries), nil
 	}
 	if class == CallerRestricted {
 		checked, err := checkRows(data, scope.RowIDPaths, x.grantSet(effective))
@@ -943,23 +961,26 @@ func upstreamHTTPEntry(err error) (entry OperationError, callerFault, ok bool) {
 
 // parseGraphQLAnswer reads {"data": ..., "errors": [...]}. Any GraphQL error
 // fails the call: a partial answer with errors is not served. The error
-// text is never read into the response.
-func parseGraphQLAnswer(body []byte) (json.RawMessage, UpstreamErrorClass, bool) {
+// text of a 200 answer is carried bounded; no other upstream text is.
+func parseGraphQLAnswer(body []byte, statusCode int) (json.RawMessage, UpstreamErrorClass, []OperationError, bool) {
 	var answer struct {
 		Data   json.RawMessage   `json:"data"`
 		Errors []json.RawMessage `json:"errors"`
 	}
 	if err := json.Unmarshal(body, &answer); err != nil {
-		return nil, UpstreamDecode, false
+		return nil, UpstreamDecode, nil, false
 	}
 	if len(answer.Errors) > 0 {
-		return nil, UpstreamGraphQLErrors, false
+		if statusCode != http.StatusOK {
+			return nil, UpstreamGraphQLErrors, nil, false
+		}
+		return nil, UpstreamGraphQLErrors, upstreamGraphQLEntries(answer.Errors), false
 	}
 	data := bytes.TrimSpace(answer.Data)
 	if len(data) == 0 || data[0] != '{' {
-		return nil, UpstreamDecode, false
+		return nil, UpstreamDecode, nil, false
 	}
-	return data, "", true
+	return data, "", nil, true
 }
 
 // orgLimiter bounds in-flight calls per (organization, operation).
@@ -1029,6 +1050,9 @@ func OperationReadLogArgs(principal storage.Principal, read OperationRead) []any
 	}
 	if read.Variable != "" {
 		args = append(args, "variable", contextfabric.SanitizeLogAttr(read.Variable))
+	}
+	if read.ErrorMessage != "" {
+		args = append(args, "error_message", contextfabric.SanitizeLogAttr(read.ErrorMessage))
 	}
 	return args
 }

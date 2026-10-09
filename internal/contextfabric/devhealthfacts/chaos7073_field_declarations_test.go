@@ -48,7 +48,7 @@ func investmentUnitFieldsNotExercised() map[string]string {
 	const reason = "work-unit listing field, emitted only when read_facts asks for units; exercised by investment_units_integration_test.go"
 	out := map[string]string{}
 	for _, subject := range []string{"team", "repository"} {
-		for _, name := range []string{"next_cursor", "page_share_total", "repository_id", "scope_share_total", "scope_unit_rows", "share_in_scope", "unit_attribution_basis", "unit_effort_value", "unit_from", "unit_kind", "unit_mix_source", "unit_pull_request_count", "unit_refs_unresolved", "unit_theme_feature_delivery", "unit_theme_maintenance", "unit_theme_operational", "unit_theme_quality", "unit_theme_risk", "unit_to", "unit_unresolved_refs", "unit_weight", "units_refs_unresolved", "units_returned", "work_unit_id"} {
+		for _, name := range []string{"next_cursor", "page_share_total", "repository_id", "scope_share_total", "scope_unit_rows", "share_in_scope", "unit_attribution_basis", "unit_effort_value", "unit_from", "unit_kind", "unit_mix_source", "unit_pull_request_count", "unit_refs_unresolved", "unit_theme_feature_delivery", "unit_theme_maintenance", "unit_theme_operational", "unit_theme_quality", "unit_theme_risk", "unit_to", "unit_unresolved_refs", "unit_weight", "units_limitation", "units_refs_unresolved", "units_returned", "work_unit_id"} {
 			out[subject+":"+name] = reason
 		}
 	}
@@ -61,6 +61,9 @@ type t4Case struct {
 	subjects []contextfabric.SubjectRef
 	tables   []fakeTable
 	time     contextfabric.TimeContext
+	// operation, when set, is the served-operation answer the source_health
+	// provider reads through its holder.
+	operation *devhealthfacts.OperationOutcome
 }
 
 func t4Days(n int) []string {
@@ -95,12 +98,11 @@ func t4Cases() []t4Case {
 	add := func(c t4Case) { cases = append(cases, c) }
 
 	// ---- source_health (organization)
-	withError := sourceHealthRow("gitlab")
-	withError[4] = "rate limited"
-	nullLabels := sourceHealthRow("")
-	nullLabels[1] = ""
-	add(t4Case{name: "source_health/organization", kind: contextfabric.FactSourceHealth, subjects: org, tables: []fakeTable{
-		{match: "FROM backfill_log", rows: [][]any{sourceHealthRow("github"), withError, nullLabels}},
+	add(t4Case{name: "source_health/organization", kind: contextfabric.FactSourceHealth, subjects: org, operation: &devhealthfacts.OperationOutcome{
+		Served: true, Complete: true, Data: sourceHealthData(
+			`{"provider":"github","scope":"git, prs","lastSyncAt":"2026-10-08T01:00:00Z","lastFailure":null}`,
+			`{"provider":"gitlab","scope":"all","lastSyncAt":null,"lastFailure":{"occurredAt":"2026-10-08T02:00:00Z","stage":"provider_rate_limited"}}`,
+			`{"provider":"jira","scope":"other","lastSyncAt":null,"lastFailure":null}`),
 	}})
 
 	// ---- operational_deficiencies (team)
@@ -444,7 +446,11 @@ func t4Run(t *testing.T, cases []t4Case, capabilityOf func(contextfabric.FactKin
 	observed := t4Observed{seen: map[string]bool{}, subjects: map[string]bool{}, cases: map[contextfabric.FactKind]int{}}
 	for _, c := range cases {
 		client := &fakeClient{tables: c.tables}
-		provider := findProvider(t, devhealthfacts.NewProviders(client), c.kind)
+		providers := devhealthfacts.NewProviders(client)
+		if c.operation != nil {
+			providers = devhealthfacts.NewProvidersWithOperations(client, sourceHealthHolder(&fakeOperationCaller{outcome: *c.operation}))
+		}
+		provider := findProvider(t, providers, c.kind)
 		timeContext := c.time
 		if timeContext.Axis == "" {
 			timeContext = contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}

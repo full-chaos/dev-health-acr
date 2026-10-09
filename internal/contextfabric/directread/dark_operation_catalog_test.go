@@ -16,8 +16,8 @@ func TestCatalogOffersNoDarkOperation(t *testing.T) {
 	if slices.Contains(offered, darkOperation) {
 		t.Fatalf("policy offers %s, whose root field is not enabled on the ops query service", darkOperation)
 	}
-	if len(offered) != 19 {
-		t.Fatalf("unrestricted policy offers %d operations, want 19: %v", len(offered), offered)
+	if len(offered) != 20 {
+		t.Fatalf("unrestricted policy offers %d operations, want 20: %v", len(offered), offered)
 	}
 	if _, refusal := cat.Lookup(darkOperation); refusal == nil || refusal.Code != RefusalUnknownOperation || refusal.Reason == "" {
 		t.Fatalf("lookup of %s: refusal %+v, want unknown_operation with a reason", darkOperation, refusal)
@@ -43,8 +43,8 @@ func TestCatalogOffersNoDarkOperation(t *testing.T) {
 		}
 	}
 	unrestricted := catalogFor(t, ClassUnrestricted, true, true).Operations
-	if len(unrestricted.Operations) != 19 {
-		t.Fatalf("data_catalog lists %d operations, want 19", len(unrestricted.Operations))
+	if len(unrestricted.Operations) != 20 {
+		t.Fatalf("data_catalog lists %d operations, want 20", len(unrestricted.Operations))
 	}
 	for _, op := range unrestricted.Operations {
 		if !op.Available {

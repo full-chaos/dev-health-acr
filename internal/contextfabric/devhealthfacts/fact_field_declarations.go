@@ -433,12 +433,11 @@ func incidentFields() []fieldDecl {
 
 func sourceHealthFields() []fieldDecl {
 	return []fieldDecl{
-		declNullable(fStr("provider")),
-		declNullable(fStr("status")),
-		fInt("items_synced", "count"),
-		fInt("duration_ms", "ms"),
-		declFresh(fStr("last_synced_at")),
-		fStr("error_message"),
+		fStr("provider"),
+		fStr("scope"),
+		declNullable(declFresh(fStr("last_sync_at"))),
+		declNullable(declFresh(fStr("last_failure_occurred_at"))),
+		declNullable(fStr("last_failure_stage")),
 	}
 }
 
@@ -852,7 +851,7 @@ func investmentUnitFields() []fieldDecl {
 		// for: an opaque reference, withheld for a repository-restricted caller.
 		declRef(declUnresolvedHandleRef, fStr("unit_unresolved_refs")), fStr("unit_mix_source"), fStr("unit_attribution_basis"),
 		fInt("units_returned", "count"), fNum("page_share_total", ""), fInt("units_refs_unresolved", "count"),
-		fNum("scope_share_total", ""), fInt("scope_unit_rows", "count"), fStr("next_cursor"),
+		fNum("scope_share_total", ""), fInt("scope_unit_rows", "count"), fStr("next_cursor"), fStr("units_limitation"),
 	}
 	for _, theme := range canonicalInvestmentThemes {
 		fields = append(fields, fNum("unit_"+contextfabric.FactFieldTheme(theme), "ratio"))

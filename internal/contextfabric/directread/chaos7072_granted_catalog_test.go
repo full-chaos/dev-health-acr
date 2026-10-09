@@ -127,7 +127,7 @@ func TestDataCatalogOperationsPerCallerClass(t *testing.T) {
 	if got := len(restricted.Operations.Operations); got != 2 {
 		t.Fatalf("restricted: %d operations", got)
 	}
-	if got := len(unrestricted.Operations.Operations); got != 19 || len(universal.Operations.Operations) != 19 {
+	if got := len(unrestricted.Operations.Operations); got != 20 || len(universal.Operations.Operations) != 20 {
 		t.Fatalf("unrestricted: %d, universal %d", got, len(universal.Operations.Operations))
 	}
 	for _, op := range restricted.Operations.Operations {
@@ -135,7 +135,7 @@ func TestDataCatalogOperationsPerCallerClass(t *testing.T) {
 			t.Fatalf("restricted entry %+v", op)
 		}
 	}
-	// Restricted: the 16 operations served only to unrestricted callers are
+	// Restricted: the 18 operations served only to unrestricted callers are
 	// listed as not served with the class refusal.
 	classRefused := 0
 	for _, ns := range restricted.Operations.NotServed {
@@ -143,8 +143,8 @@ func TestDataCatalogOperationsPerCallerClass(t *testing.T) {
 			classRefused++
 		}
 	}
-	if classRefused != 17 {
-		t.Fatalf("restricted: %d class refusals, want 17", classRefused)
+	if classRefused != 18 {
+		t.Fatalf("restricted: %d class refusals, want 18", classRefused)
 	}
 	cat, _ := DefaultCatalogue()
 	if got := len(unrestricted.Operations.NotServed); got != len(cat.NotServed()) {
