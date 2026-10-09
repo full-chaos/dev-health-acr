@@ -189,10 +189,12 @@ metadata documents; they are fetched only from public addresses, with no
 redirects, a 5-second timeout and a 5 KiB limit. The document's `client_id`
 must equal the URL it was fetched from, and every redirect URI it lists must be
 acceptable. Every client here is public (`token_endpoint_auth_method` `none`;
-PKCE is the proof). A document that names another method is accepted only when
-it also lists `none` in `token_endpoint_auth_methods_supported` (the server
-metadata advertises only `none`, so such a client uses it); a document that
-cannot use `none` is refused, never downgraded. A client assertion sent to
+PKCE is the proof). A document that lists
+`token_endpoint_auth_methods_supported` is accepted only when `none` is on that
+list, whatever `token_endpoint_auth_method` it names (the server metadata
+advertises only `none`, so such a client uses it); a document with no list must
+name `none` or no method. A document that cannot use `none` is refused, never
+downgraded. A client assertion sent to
 `/token` (`client_assertion`, `client_assertion_type`) is not verified and not
 refused: it writes one Info line `oauth client assertion ignored` with
 `step=token`, `client_kind` and `assertion_type` (`jwt_bearer` or `other`),

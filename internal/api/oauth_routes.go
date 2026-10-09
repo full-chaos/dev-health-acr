@@ -774,7 +774,7 @@ var oauthClientRefusalReasons = map[string]string{
 	oauthvocab.ClientRefusalFetchFailed:           "The application's client information document could not be retrieved.",
 	oauthvocab.ClientRefusalPrivateAddress:        "The application's client information document is on an address this server does not contact.",
 	oauthvocab.ClientRefusalTooLarge:              "The application's client information document is too large.",
-	oauthvocab.ClientRefusalInvalidDocument:       "The application's client information document is not valid JSON.",
+	oauthvocab.ClientRefusalInvalidDocument:       "The application's client information document is not a JSON document served as application/json.",
 	oauthvocab.ClientRefusalBadClientID:           "The application's client information document names a different client ID.",
 	oauthvocab.ClientRefusalInvalidRedirectURIs:   "The application's client information document lists no return address this server accepts.",
 	oauthvocab.ClientRefusalAuthMethodUnsupported: "The application asks to sign in with a client authentication method this server does not support.",
@@ -800,7 +800,9 @@ const clientAssertionJWTBearer = "urn:ietf:params:oauth:client-assertion-type:jw
 // the assertion type's class only, never its value.
 func (a *App) logOAuthClientAssertionIgnored(r *http.Request, clientKind string) {
 	form := r.PostForm
-	if form.Get("client_assertion") == "" && form.Get("client_assertion_type") == "" {
+	_, assertion := form["client_assertion"]
+	_, assertionTypeSent := form["client_assertion_type"]
+	if !assertion && !assertionTypeSent {
 		return
 	}
 	assertionType := "other"

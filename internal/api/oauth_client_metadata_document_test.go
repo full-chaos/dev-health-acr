@@ -174,6 +174,10 @@ func TestOAuthTokenLogsAClientAssertionOnlyWhenOneIsSent(t *testing.T) {
 		"jwt bearer":             {url.Values{"client_assertion_type": {cimdTestJWTBearer}, "client_assertion": {cimdTestAssertion}}, "jwt_bearer"},
 		"assertion only":         {url.Values{"client_assertion": {cimdTestAssertion}}, "other"},
 		"another assertion type": {url.Values{"client_assertion_type": {"urn:example:other"}}, "other"},
+		"empty assertion":        {url.Values{"client_assertion": {""}}, "other"},
+		"empty assertion type":   {url.Values{"client_assertion_type": {""}}, "other"},
+		"device code grant": {url.Values{"grant_type": {auth.OAuthDeviceCodeGrantType}, "device_code": {"unknown"},
+			"client_assertion_type": {cimdTestJWTBearer}, "client_assertion": {cimdTestAssertion}}, "jwt_bearer"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			app, logs, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
@@ -191,8 +195,8 @@ func TestOAuthTokenLogsAClientAssertionOnlyWhenOneIsSent(t *testing.T) {
 			if recorder.Code != http.StatusBadRequest {
 				t.Fatalf("token: %d %s", recorder.Code, recorder.Body.String())
 			}
-			if line := oauthLogLine(logs.String(), "token"); line == nil || line["outcome"] != "invalid_grant" || line["client_refusal"] != "none" {
-				t.Fatalf("token line = %v, want invalid_grant with client_refusal none", line)
+			if line := oauthLogLine(logs.String(), "token"); line == nil || line["outcome"] == "ok" || line["client_refusal"] != "none" {
+				t.Fatalf("token line = %v, want a refusal with client_refusal none", line)
 			}
 			count := strings.Count(logs.String(), `"msg":"oauth client assertion ignored"`)
 			if tc.want == "" {
@@ -231,6 +235,12 @@ func TestOAuthAuthorizeNamesTheClientRefusal(t *testing.T) {
 		{name: "private_key_jwt only", document: func() string {
 			return chatGPTShapedDocument(clientID, map[string]any{"token_endpoint_auth_methods_supported": []string{"private_key_jwt"}})
 		}, refusal: "auth_method_unsupported", reason: "client authentication method this server does not support"},
+		{name: "no method with a confidential list", document: func() string {
+			return chatGPTShapedDocument(clientID, map[string]any{"token_endpoint_auth_method": nil, "token_endpoint_auth_methods_supported": []string{"private_key_jwt"}})
+		}, refusal: "auth_method_unsupported", reason: "client authentication method this server does not support"},
+		{name: "null method with a confidential list", document: func() string {
+			return chatGPTShapedDocument(clientID, map[string]any{"token_endpoint_auth_method": json.RawMessage("null"), "token_endpoint_auth_methods_supported": []string{"private_key_jwt"}})
+		}, refusal: "auth_method_unsupported", reason: "client authentication method this server does not support"},
 		{name: "private_key_jwt without a list", document: func() string {
 			return chatGPTShapedDocument(clientID, map[string]any{"token_endpoint_auth_methods_supported": nil})
 		}, refusal: "auth_method_unsupported", reason: "client authentication method this server does not support"},
@@ -251,7 +261,7 @@ func TestOAuthAuthorizeNamesTheClientRefusal(t *testing.T) {
 		{name: "not json", handler: func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/html")
 			_, _ = w.Write([]byte("<html></html>"))
-		}, refusal: "invalid_document", reason: "is not valid JSON"},
+		}, refusal: "invalid_document", reason: "is not a JSON document served as application/json"},
 		{name: "not found", handler: func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) },
 			refusal: "fetch_failed", reason: "could not be retrieved"},
 		{name: "redirected", handler: func(w http.ResponseWriter, r *http.Request) {

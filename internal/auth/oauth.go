@@ -390,7 +390,7 @@ func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAut
 		document, err := s.metadata.Fetch(ctx, clientID)
 		if err != nil {
 			var failure *ClientMetadataError
-			if errors.As(err, &failure) {
+			if errors.As(err, &failure) && failure.Refusal != oauthvocab.ClientRefusalNone && slices.Contains(oauthvocab.ClientRefusalVocabulary(), failure.Refusal) {
 				return refuseMetadata(failure.Refusal)
 			}
 			return refuseMetadata(oauthvocab.ClientRefusalFetchFailed)
@@ -420,17 +420,16 @@ func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAut
 }
 
 // publicTokenEndpointAuth reports whether a metadata-document client can use
-// the token endpoint as a public client: it names "none" (or nothing, the
-// RFC 7591 default being a public client here), or it names another method
-// and lists "none" among token_endpoint_auth_methods_supported. This server
-// advertises only "none", so such a client uses "none"; one that cannot is
-// refused, never downgraded.
+// the token endpoint as a public client. A document that lists
+// token_endpoint_auth_methods_supported is public only when "none" is on the
+// list, whatever method it names (this server advertises only "none", so the
+// client uses it). A document with no list is public when it names "none" or
+// no method. A client that cannot use "none" is refused, never downgraded.
 func publicTokenEndpointAuth(document OAuthClientMetadata) bool {
-	switch document.TokenEndpointAuthMethod {
-	case "", "none":
-		return true
+	if len(document.TokenEndpointAuthMethodsSupported) > 0 {
+		return slices.Contains(document.TokenEndpointAuthMethodsSupported, "none")
 	}
-	return slices.Contains(document.TokenEndpointAuthMethodsSupported, "none")
+	return document.TokenEndpointAuthMethod == "" || document.TokenEndpointAuthMethod == "none"
 }
 
 // unresolvedClientRefusal classifies a client ID that is neither a dynamic
