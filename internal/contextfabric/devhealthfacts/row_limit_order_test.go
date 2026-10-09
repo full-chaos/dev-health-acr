@@ -12,8 +12,9 @@ import (
 // row, and an argument the guard cannot read because it is a variable (its
 // statement is checked at its own definition).
 var rowLimitWithoutOrder = map[string]string{
-	"investment.go|investmentWatermarkStatement": "one aggregate row, nothing to cut",
-	"workitems.go|statement":                     "built above with ORDER BY p.id; the variable cannot be read here",
+	"investment.go|investmentWatermarkStatement":        "one aggregate row, nothing to cut",
+	"investment_window_span.go|investmentSpanStatement": "one aggregate row, nothing to cut",
+	"workitems.go|statement":                            "built above with ORDER BY p.id; the variable cannot be read here",
 }
 
 func matchingParen(text string, open int) int {

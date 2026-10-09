@@ -175,7 +175,7 @@ func TestReadFactsRefusesInvalidInputWithoutCallingHosted(t *testing.T) {
 		"max_bytes too large": `{"kinds":["health"],"subjects":[{"kind":"team","canonical_id":"t"}],"max_bytes":262145}`,
 		"bad tables":          `{"kinds":["health"],"subjects":[{"kind":"team","canonical_id":"t"}],"tables":"all"}`,
 		"bad window mode":     `{"kinds":["health"],"subjects":[{"kind":"team","canonical_id":"t"}],"window":{"mode":"sometime"}}`,
-		"window days too big": `{"kinds":["health"],"subjects":[{"kind":"team","canonical_id":"t"}],"window":{"mode":"trailing","days":61}}`,
+		"window days too big": `{"kinds":["health"],"subjects":[{"kind":"team","canonical_id":"t"}],"window":{"mode":"trailing","days":366}}`,
 		"subject no id":       `{"kinds":["health"],"subjects":[{"kind":"team"}]}`,
 		"units too large":     `{"kinds":["investment"],"subjects":[{"kind":"team","canonical_id":"t"}],"units":{"max_units":151}}`,
 		"units negative":      `{"kinds":["investment"],"subjects":[{"kind":"team","canonical_id":"t"}],"units":{"max_units":-1}}`,

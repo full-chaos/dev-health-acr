@@ -5,21 +5,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // read_facts bounds, mirrored from the hosted contract (the hosted route is
 // authoritative and re-validates every request).
 const (
-	readFactsMaxKinds        = 8
-	readFactsMaxSubjects     = 25
-	readFactsMinMaxBytes     = 4096
-	readFactsMaxMaxBytes     = 262144
+	readFactsMaxKinds    = 8
+	readFactsMaxSubjects = 25
+	readFactsMinMaxBytes = 4096
+	readFactsMaxMaxBytes = 262144
+	// The widest window any kind takes; the hosted route holds each kind to
+	// its own declared maximum (directread.MaxRangeDaysFor).
+	readFactsMaxRangeDays    = 365
 	readFactsMaxFieldLength  = 256
 	readFactsMaxUnits        = 150
 	readFactsMaxCursorLength = 1024
@@ -88,11 +88,7 @@ func (in readFactsInput) validate() error {
 		default:
 			return fmt.Errorf("window.mode must be current, as_of, range or trailing")
 		}
-		kinds := make([]contextfabric.FactKind, 0, len(in.Kinds))
-		for _, kind := range in.Kinds {
-			kinds = append(kinds, contextfabric.FactKind(strings.TrimSpace(kind)))
-		}
-		if w.Days < 0 || w.Days > directread.MaxRangeDaysFor(kinds) {
+		if w.Days < 0 || w.Days > readFactsMaxRangeDays {
 			return fmt.Errorf("window.days is out of bounds")
 		}
 	}
