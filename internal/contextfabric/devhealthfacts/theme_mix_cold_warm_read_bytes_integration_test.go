@@ -137,3 +137,95 @@ func TestThemeMixReadBytesColdVersusWarmAndByOrgSizeAgainstRealClickHouse(t *tes
 		t.Errorf("large org read_bytes depends on cache state: cold=%d warm=%d", bigCold.readBytes, bigWarm.readBytes)
 	}
 }
+
+// With a complete membership run recorded, the mix statement also reads
+// work_unit_membership. Every table the statement touches counts toward its
+// max_bytes_to_read, so the membership table must be read once, not once per
+// reference in the scope fragment.
+func TestThemeMixTotalReadBytesWithMembershipScopeAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	createCHAOS5930Tables(t, ctx, direct)
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
+
+	const base, scoped = "org-ms-base", "org-ms-scoped"
+	const units, nodesPerUnit = 12000, 6
+	seedColdWarmOrg(t, ctx, direct, base, units)
+	seedColdWarmOrg(t, ctx, direct, scoped, units)
+	at := ts(2026, 9, 10, 0, 0, 0)
+	if err := direct.Exec(ctx, `INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?,?,?)`, scoped, "run-1", at); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	batch, err := direct.PrepareBatch(ctx, `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id)`)
+	if err != nil {
+		t.Fatalf("prepare membership: %v", err)
+	}
+	for i := 0; i < units; i++ {
+		for n := 0; n < nodesPerUnit; n++ {
+			if err := batch.Append(scoped, "repo", fmt.Sprintf("cw-%d", (i+n)%coldWarmRepos), fmt.Sprintf("wu-%06d", i), "theme", "feature_delivery", at, "run-1"); err != nil {
+				t.Fatalf("append membership: %v", err)
+			}
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send membership: %v", err)
+	}
+
+	subjects := make([]contextfabric.SubjectRef, 0, coldWarmRepos)
+	for i := 0; i < coldWarmRepos; i++ {
+		label := fmt.Sprintf("cw-%d", i)
+		subjects = append(subjects, contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoUUID(label), Label: label})
+	}
+	start, end := ts(2026, 8, 11, 0, 0, 0), ts(2026, 9, 10, 0, 0, 0)
+	read := func(orgID string) readTotals {
+		t.Helper()
+		before := orgReadTotals(t, ctx, direct)
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, Kind: contextfabric.FactInvestment, Subjects: subjects,
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts(%s): %v\nserver: %s", orgID, err, lastServerException(ctx, direct))
+		}
+		if len(result.Facts) == 0 {
+			t.Fatalf("no investment facts served for %s", orgID)
+		}
+		after := orgReadTotals(t, ctx, direct)
+		return readTotals{after.statements - before.statements, after.readBytes - before.readBytes, after.readRows - before.readRows}
+	}
+	baseline := read(base)
+	withScope := read(scoped)
+	if baseline.readBytes == 0 || withScope.readBytes == 0 {
+		t.Fatalf("measurement did not happen: base=%+v scoped=%+v", baseline, withScope)
+	}
+
+	// One pass over the membership columns the scope reads.
+	before := orgReadTotalsAll(t, ctx, direct)
+	var rows uint64
+	if err := direct.QueryRow(ctx, `SELECT count() FROM (SELECT DISTINCT work_unit_id FROM work_unit_membership WHERE org_id = ? AND run_id = 'run-1')`, scoped).Scan(&rows); err != nil {
+		t.Fatalf("membership pass: %v", err)
+	}
+	after := orgReadTotalsAll(t, ctx, direct)
+	onePass := after - before
+	if onePass == 0 {
+		t.Fatalf("measurement did not happen: membership single pass read 0 bytes")
+	}
+	t.Logf("MEASURE investments-only=%d scoped-total=%d membership-one-pass=%d membership-in-statement=%d ratio=%.2fx statements=%d",
+		baseline.readBytes, withScope.readBytes, onePass, int64(withScope.readBytes)-int64(baseline.readBytes),
+		float64(int64(withScope.readBytes)-int64(baseline.readBytes))/float64(onePass), withScope.statements)
+	if float64(withScope.readBytes) > 1.3*float64(baseline.readBytes+onePass) {
+		t.Fatalf("statement read %d bytes with membership scope, want <= 1.3 x (investments %d + one membership pass %d): membership is scanned more than once",
+			withScope.readBytes, baseline.readBytes, onePass)
+	}
+}
+
+func orgReadTotalsAll(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) uint64 {
+	t.Helper()
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs (measurement did not happen): %v", err)
+	}
+	var b uint64
+	if err := direct.QueryRow(ctx, `SELECT sum(read_bytes) FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND has(tables, concat(currentDatabase(), '.work_unit_membership'))`).Scan(&b); err != nil {
+		t.Fatalf("read query_log: %v", err)
+	}
+	return b
+}
