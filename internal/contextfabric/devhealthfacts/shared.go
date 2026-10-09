@@ -588,6 +588,17 @@ import (
 // change_failure_rate_days, and the read's coverage reason names how many days
 // were not applicable. A candidate saved before v121 may hold a zero served for
 // such a day and must not be reused.
+//
+// v121 -> v122: the investment kind serves the organization subject as one
+// fact over every repository once. A candidate saved before v122 may hold an
+// investment answer that could not name the organization and must not be
+// reused.
+//
+// v122 -> v124: a repository or team metrics fact serves
+// window_pr_cycle_hours_median and window_pr_count, the median over every pull
+// request merged in the window. A candidate saved before v124 may hold only
+// the repo-day median, from which a weekly value was averaged, and must not be
+// reused.
 const QueryVersion = "devhealthfacts.clickhouse.v124"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for

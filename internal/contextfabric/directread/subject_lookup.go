@@ -387,6 +387,9 @@ func (l *SubjectLookup) Find(ctx context.Context, principal storage.Principal, r
 	if planErr != nil {
 		return FindResponse{}, planErr
 	}
+	if plan.list && plan.kind == string(contractsv1.ContextFabricSubjectOrganization) {
+		return ownOrganizationResponse(principal, plan), nil
+	}
 	if l == nil || l.graph == nil || l.gate == nil {
 		return FindResponse{}, fmt.Errorf("%w: no graph or gate", ErrFindUnavailable)
 	}
@@ -681,4 +684,28 @@ func (r *SlogFindRecorder) RecordFindSubjects(ctx context.Context, principal sto
 		args = append(args, "request_id", contextfabric.SanitizeLogAttr(string(requestID)))
 	}
 	r.logger.InfoContext(ctx, DirectReadLogMessage, args...)
+}
+
+// ownOrganizationResponse answers a list of kind organization: exactly the
+// caller's own organization, in the form read_facts accepts for it. It names
+// the organization and reads no data, so every caller (a repository-bound one
+// too) gets the same one row; the graph is not consulted.
+func ownOrganizationResponse(principal storage.Principal, plan findPlan) FindResponse {
+	orgID := strings.TrimSpace(principal.OrgID)
+	response := FindResponse{
+		Consistency:   ConsistencyBestEffort,
+		SearchedKinds: []string{plan.kind},
+		Population:    FindPopulation{Kind: plan.kind},
+		Page:          FindPage{Complete: true},
+		Subjects:      []FoundSubject{},
+	}
+	if orgID == "" || plan.cursor != "" {
+		response.Status = FindEmpty
+		return response
+	}
+	response.Status = FindComplete
+	response.Subjects = []FoundSubject{{Kind: plan.kind, CanonicalID: "organization:" + orgID, Label: orgID, Match: MatchExact}}
+	response.Population.Returned, response.Population.TotalKnown = 1, 1
+	response.Page.Returned = 1
+	return response
 }

@@ -66,12 +66,13 @@ func newInvestmentProvider(client contextpacket.ClickHouseQueryClient) *Investme
 
 func (p *InvestmentProvider) Capability() contextfabric.FactCapability {
 	capability := newCapability(contextfabric.FactInvestment, "devhealthfacts.investment", []contextfabric.SubjectKind{
-		contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository,
+		contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository, contextfabric.SubjectOrganization,
 	})
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
-		contextfabric.SubjectTeam:       {contextfabric.FactTableBreakdown},
-		contextfabric.SubjectRepository: {contextfabric.FactTableBreakdown},
-		contextfabric.SubjectProject:    {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectTeam:         {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectRepository:   {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectProject:      {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectOrganization: {contextfabric.FactTableBreakdown},
 	}
 	capability.EstimatedItems = 20
 	return capability
@@ -166,6 +167,17 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		rejectedCount += rejected
 	}
 
+	orgRestricted, orgUnattributedOnly := false, false
+	if orgSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization); len(orgSubjects) > 0 {
+		rejected, restricted, unattributedOnly, scanErr := p.readOrganizationThemeMix(ctx, principal, orgID, orgSubjects, &facts, timeBound)
+		if scanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query organization theme mix", scanErr)
+		}
+		rejectedCount += rejected
+		orgRestricted = restricted
+		orgUnattributedOnly = unattributedOnly
+	}
+
 	unitsCut := false
 	if unitsRequest, wanted := contextfabric.InvestmentUnitsFrom(ctx); wanted {
 		for _, subject := range query.Subjects {
@@ -205,6 +217,17 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	for _, subject := range query.Subjects {
 		if reason := span.reasonFor(subject.CanonicalID, subject.Kind == contextfabric.SubjectProject, timeBound); reason != "" {
 			mergeFactReadReason(&result, reason)
+		}
+	}
+	if orgUnattributedOnly {
+		mergeFactReadReason(&result, investmentOrgUnattributedOnlyReason)
+	}
+	if orgRestricted {
+		if len(facts) == 0 {
+			result.State = contextfabric.SourceNotApplicable
+			result.Reason = investmentOrgRestrictedReason
+		} else {
+			mergeFactReadReason(&result, investmentOrgRestrictedReason)
 		}
 	}
 	if unitsCut {

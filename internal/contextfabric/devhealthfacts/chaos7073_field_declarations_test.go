@@ -308,6 +308,7 @@ func t4Cases() []t4Case {
 			themeMixRow("CHAOS", "", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 1),
 		}},
 	}})
+	add(t4Case{name: "investment/organization", kind: contextfabric.FactInvestment, subjects: org, tables: organizationMixTable()})
 	nullStream := investmentProjectRollupRow("linear", "proj-1", "team-2", "", "", "", 10, 5, 2, 100, 4.0)
 	projectAB := []fakeTable{
 		{match: "FROM investment_metrics_daily", rows: [][]any{
