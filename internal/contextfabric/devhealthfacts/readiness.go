@@ -365,7 +365,7 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 	if err != nil {
 		return 0, rejected, false, err
 	}
-	scanned = dropRetractionReadinessRows(scanned, inactive)
+	scanned = dropInactiveTeamReadinessRows(scanned, inactive)
 	// CHAOS-4645, design doc §5.2: additive, off the SAME project-identity
 	// join -- never changing an existing field.
 	//
@@ -537,18 +537,16 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 	return rowCount, rejected, breakdownTruncated, nil
 }
 
-// dropRetractionReadinessRows removes the rows of a known-inactive team and
-// the rows a team-id carry writes over a retired team key: a team-attributed row whose count columns are all zero and
-// whose ratio is NULL is a retraction, not a sample and not a team. The shared
-// reader cannot take the active-team predicate, so the rule is applied to its
-// rows.
-func dropRetractionReadinessRows(rows []readers.ReadinessProjectRow, inactive map[string]bool) []readers.ReadinessProjectRow {
+// dropInactiveTeamReadinessRows removes the rows of a known-inactive team: a
+// team-id carry leaves a retraction row over the retired key, and the shared
+// reader cannot take the active-team predicate. Estimate coverage has no marker
+// that tells a retraction row from a measured empty backlog (a real all-zero row
+// exists), so a row is dropped by its team, never by its values. An unattributed
+// row stays.
+func dropInactiveTeamReadinessRows(rows []readers.ReadinessProjectRow, inactive map[string]bool) []readers.ReadinessProjectRow {
 	kept := rows[:0:0]
 	for _, row := range rows {
 		if row.HasTeam != 0 && inactive[row.TeamID] {
-			continue
-		}
-		if row.HasTeam != 0 && row.EstimatedCount == 0 && row.UnestimatedCount == 0 && row.BacklogSize == 0 && row.HasRatio == 0 {
 			continue
 		}
 		kept = append(kept, row)
