@@ -748,7 +748,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// read-budget exception (Code 307/158) on a fact statement is also a
 		// Warn with the closed reason read_budget_exceeded and the statement id.
 		devhealthfacts.NewInstrumentedProvidersWithOperations(clickhouse.queryClient, devhealthfacts.NewBudgetWarningInstrumentation(
-			readers.NewSlogInstrumentation(request.options.Logger, slog.LevelInfo), request.options.Logger), request.sourceHealthOperations),
+			devhealthfacts.NewReadStatsInstrumentation(readers.NewSlogInstrumentation(request.options.Logger, slog.LevelInfo), request.options.Logger, request.options.Now), request.options.Logger), request.sourceHealthOperations),
 		// CHAOS-4099 stage 2: the real ScopeExpander over the SAME
 		// ClickHouse client every FactProvider above shares -- activating
 		// the 3 ratified project-origin policies (fact_scope.go's own

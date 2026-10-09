@@ -4,8 +4,6 @@ import (
 	"net"
 	"strings"
 	"testing"
-
-	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // TestLoadProjectorDefaults binds the same class-sweep fix as acr-api's
@@ -198,8 +196,8 @@ func TestLoadProjectorDefaults_developmentWithLocalCompositionReady(t *testing.T
 	// CHAOS-3848: acr-projector is the binary that was actually wedged --
 	// it must inherit the same raised default acr-api does, via the shared
 	// loadHostedRuntimeValues path.
-	if cfg.ClickHouseMaxBytesToRead != runtimeclickhouse.DefaultMaxBytesToRead {
-		t.Fatalf("ClickHouseMaxBytesToRead = %d, want default %d", cfg.ClickHouseMaxBytesToRead, runtimeclickhouse.DefaultMaxBytesToRead)
+	if cfg.ClickHouseMaxBytesToRead != DefaultClickHouseMaxBytesToRead {
+		t.Fatalf("ClickHouseMaxBytesToRead = %d, want default %d", cfg.ClickHouseMaxBytesToRead, DefaultClickHouseMaxBytesToRead)
 	}
 }
 

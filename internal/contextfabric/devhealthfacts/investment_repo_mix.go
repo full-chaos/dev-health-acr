@@ -103,11 +103,18 @@ func mixWindowPredicate(i int, b factTimeBound) string {
 // instead of argMax skipping it and reviving an older row's repository.
 // None of these reads work_unit_investments again.
 func repoMixStatement(bounds []factTimeBound) string {
+	return repoMixStatementScoped(bounds, subqueryMembershipScope, maxFactRowsPerQuery)
+}
+
+// repoMixStatementScoped is repoMixStatement with the membership scope the
+// caller resolved: the run's unit ids as one bound array, no filter, or the
+// scope subqueries (investment_membership_scope.go).
+func repoMixStatementScoped(bounds []factTimeBound, scope membershipScope, limit int) string {
 	memberships := make([]string, 0, len(bounds))
 	for i, b := range bounds {
 		memberships = append(memberships, fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(i, b), i))
 	}
-	return withRowLimit(`SELECT toUInt8(if(win < 0, 255, win)) AS window, repo_uuid AS repo_id,
+	return withRowLimitOf(`SELECT toUInt8(if(win < 0, 255, win)) AS window, repo_uuid AS repo_id,
 	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
 	sum(bugfix_share * effort) AS bugfix_effort,
 	uniqExact(work_unit_id) AS work_units,
@@ -119,12 +126,12 @@ FROM (
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
 			effort_value, theme_distribution_json, bugfix_share, span_from
 		FROM (
-` + repoSplitCore(memberships, "", "", true) + `		)
+`+repoSplitCoreScoped(memberships, "", "", true, scope)+`		)
 	)
 	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
 )
 GROUP BY win, repo_uuid
-ORDER BY win, repo_uuid`)
+ORDER BY win, repo_uuid`, limit)
 }
 
 // repoSplitCore is the per-(window, work unit, repository) split shared by the
@@ -133,6 +140,11 @@ ORDER BY win, repo_uuid`)
 // and unitAgg add columns only the unit listing reads; both empty yields the
 // mix statement's own text byte for byte.
 func repoSplitCore(memberships []string, unitCols, unitAgg string, spanSentinel bool) string {
+	return repoSplitCoreScoped(memberships, unitCols, unitAgg, spanSentinel, subqueryMembershipScope)
+}
+
+// repoSplitCoreScoped is repoSplitCore with the resolved membership scope.
+func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSentinel bool, scope membershipScope) string {
 	wins := "arrayFilter(w -> w >= 0, [" + strings.Join(memberships, ", ") + "])"
 	if spanSentinel {
 		wins = "arrayConcat([" + spanSentinelWindow + "], " + wins + ")"
@@ -170,7 +182,7 @@ func repoSplitCore(memberships []string, unitCols, unitAgg string, spanSentinel 
 							argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
 							argMax(structural_evidence_json, computed_at) AS structural_evidence_json
 						FROM work_unit_investments
-						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + investmentMembershipScopeFilter() + `
+						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
 						GROUP BY work_unit_id
 					)
 				)
@@ -202,11 +214,23 @@ const spanSentinelWindow = "-1"
 const spanSentinelServed = 255
 
 // repoMixChunk bounds how many repositories one statement reads. Each
-// repository yields one row per window (at most 2) plus its span row, so 60 repositories stay
-// strictly under maxFactRowsPerQuery (200): the row limit is never reached and
-// a partial mix can never be served as complete. More repositories are read by
-// more statements, in a stable order, never by a silently truncated one.
-const repoMixChunk = 60
+// repository yields one row per window plus its span row, so a statement's
+// row ceiling is sized from its own repositories and windows (repoMixRowLimit)
+// and the row limit is never reached: a partial mix can never be served as
+// complete. Every chunk re-reads work_unit_investments and the membership
+// scope, so the chunk is as large as the result ceiling comfortably allows:
+// a team of any realistic size is ONE pass, not one pass per 60 repositories.
+// More repositories than a chunk are read by more statements, in a stable
+// order, never by a silently truncated one.
+const repoMixChunk = 500
+
+// repoMixRowLimit is the LIMIT of a statement reading repos repositories for
+// windows windows: every repository yields at most one row per window plus
+// its span row, and one more row is the probe that proves the ceiling was not
+// reached.
+func repoMixRowLimit(repos, windows int) int {
+	return repos*(windows+1) + 1
+}
 
 // readRepoMixRows reads the mix of repoIDs for every window in bounds with ONE
 // pass over work_unit_investments per chunk of repositories; result[i] holds
@@ -230,12 +254,18 @@ func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, 
 			extra = append(extra, readers.Binding{Name: name, Value: tb.Value})
 		}
 	}
-	statement := repoMixStatement(bounds)
+	scope, err := p.resolveMembershipScope(ctx, orgID)
+	if err != nil {
+		return nil, nil, err
+	}
+	extra = append(extra, scope.bindings()...)
 	for start := 0; start < len(sorted); start += repoMixChunk {
 		end := start + repoMixChunk
 		if end > len(sorted) {
 			end = len(sorted)
 		}
+		limit := repoMixRowLimit(end-start, len(bounds))
+		statement := repoMixStatementScoped(bounds, scope, limit)
 		got := 0
 		err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadRepositoryThemeMix", statement, orgID, sorted[start:end], func(row contextpacket.ClickHouseRowScanner) error {
 			var r repoMixRow
@@ -266,7 +296,7 @@ func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, 
 		if err != nil {
 			return nil, nil, err
 		}
-		if got >= maxFactRowsPerQuery {
+		if got >= limit {
 			// Unreachable by construction (repoMixChunk * windows < the
 			// limit); if a future change breaks that, fail loudly, never
 			// serve a truncated mix as complete.

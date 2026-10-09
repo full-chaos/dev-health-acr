@@ -4,8 +4,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 func TestLoad_requires_complete_runtime_when_backing_stores_are_explicit(t *testing.T) {
@@ -275,7 +273,7 @@ func TestLoad_acceptsPgBouncerConnectionKindWithAdminDSN(t *testing.T) {
 // applyOptions's own defaultPositiveUint64 fallback happened to paper over
 // -- but nothing pinned that the CONFIGURED default was the raised 64 MiB
 // ceiling rather than the stale 16 MiB one. This fails red against the old
-// 16 MiB constant and green against runtimeclickhouse.DefaultMaxBytesToRead.
+// 16 MiB constant and green against DefaultClickHouseMaxBytesToRead.
 func TestLoad_defaultsClickHouseMaxBytesToRead(t *testing.T) {
 	// Given
 	values := completeRuntimeEnvironment()
@@ -287,8 +285,21 @@ func TestLoad_defaultsClickHouseMaxBytesToRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ClickHouseMaxBytesToRead != runtimeclickhouse.DefaultMaxBytesToRead {
-		t.Fatalf("ClickHouseMaxBytesToRead = %d, want default %d", cfg.ClickHouseMaxBytesToRead, runtimeclickhouse.DefaultMaxBytesToRead)
+	if cfg.ClickHouseMaxBytesToRead != DefaultClickHouseMaxBytesToRead {
+		t.Fatalf("ClickHouseMaxBytesToRead = %d, want default %d", cfg.ClickHouseMaxBytesToRead, DefaultClickHouseMaxBytesToRead)
+	}
+}
+
+// The default is a number chosen from a measurement (the investment mix read
+// 56.5 MB on a production-sized organization); pin it by value, not by the
+// constant it is read from.
+func TestLoad_defaultClickHouseMaxBytesToReadIs256MiB(t *testing.T) {
+	cfg, err := load(mapLookup(completeRuntimeEnvironment()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ClickHouseMaxBytesToRead != 256*1024*1024 {
+		t.Fatalf("ClickHouseMaxBytesToRead = %d, want 268435456 (256 MiB)", cfg.ClickHouseMaxBytesToRead)
 	}
 }
 
