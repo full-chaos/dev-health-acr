@@ -35,13 +35,49 @@ func ActiveTeamScopePredicate(column string) string {
 	return "ifNull(" + column + ", '') NOT IN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND " + InactiveTeamPredicate("") + ")"
 }
 
+// OmissionSite names a reader that left inactive teams out. It is a closed
+// enumeration, never request data, and logs as its name.
+type OmissionSite int
+
+const (
+	OmittedListSubjectsByKind OmissionSite = iota + 1
+	OmittedFindSubjectsByExactName
+	OmittedExactNameCensus
+	OmittedCohortKindCensus
+	OmittedFulltextSearch
+	OmittedVectorSearch
+	OmittedStoredSubjects
+	OmittedIdentityUniverse
+	OmittedProjectReadiness
+)
+
+var omissionSiteNames = map[OmissionSite]string{
+	OmittedListSubjectsByKind:      "list_subjects_by_kind",
+	OmittedFindSubjectsByExactName: "find_subjects_by_exact_name",
+	OmittedExactNameCensus:         "exact_name_census",
+	OmittedCohortKindCensus:        "cohort_kind_census",
+	OmittedFulltextSearch:          "fulltext_search",
+	OmittedVectorSearch:            "vector_search",
+	OmittedStoredSubjects:          "stored_subjects",
+	OmittedIdentityUniverse:        "identity_universe",
+	OmittedProjectReadiness:        "project_readiness",
+}
+
+// MarshalText makes a handler print the site by name.
+func (s OmissionSite) MarshalText() ([]byte, error) {
+	if name, ok := omissionSiteNames[s]; ok {
+		return []byte(name), nil
+	}
+	return []byte("unknown"), nil
+}
+
 // NoteInactiveTeamsOmitted records, at debug level, that rows of inactive teams
 // were left out of a read, so a changed candidate list or aggregate can be
 // traced to the active-team rule. site names the reader; a zero count logs
 // nothing.
-func NoteInactiveTeamsOmitted(ctx context.Context, site string, count int) {
+func NoteInactiveTeamsOmitted(ctx context.Context, site OmissionSite, count int) {
 	if count <= 0 {
 		return
 	}
-	slog.Default().DebugContext(ctx, "inactive team rows omitted from a read", "site", site, "omitted", count)
+	slog.Default().DebugContext(ctx, "inactive team rows omitted from a read", slog.Any("site", site), slog.Int("omitted", count))
 }

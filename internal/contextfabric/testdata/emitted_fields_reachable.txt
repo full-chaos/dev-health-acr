@@ -266,7 +266,7 @@ FactPullRequests
   fields             owned_repositories owned_repositories_omitted_count owned_repository_count pull_requests_closed_unmerged_window pull_requests_merged_window pull_requests_opened_window repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_name rollup_basis state window_basis window_end window_start
 
 FactReadiness
-  reached_funcs      93
+  reached_funcs      94
   dynamic_key_sites  1
   leaked_call_sites  8
     leak interface_method     7
@@ -277,7 +277,7 @@ FactReadiness
     calls followed            718
     calls accounted           13
     calls not_a_call          6
-    calls excluded_by_design  130
+    calls excluded_by_design  136
     calls leaked              8
   fields             backlog_size basis daily_readiness daily_readiness_omitted_count day estimate_coverage_ratio estimated_count provider rollup_basis team_breakdown team_count team_id team_name unestimated_count work_scope_id
 

@@ -102,7 +102,7 @@ func (a *Adapter) cohortKindCensusCandidates(ctx context.Context, key, orgID str
 	}
 	candidates := make([]graphrank.CandidateNode, 0, len(rows))
 	omitted := 0
-	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, "cohort_kind_census", omitted) }()
+	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedCohortKindCensus, omitted) }()
 	for _, r := range rows {
 		n, ok := r["n"].(*node)
 		if !ok || n == nil {

@@ -452,7 +452,7 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 	if omittedInactive > 0 && len(rows) >= fetchK {
 		truncated = true
 	}
-	devhealthschema.NoteInactiveTeamsOmitted(ctx, "vector_search", omittedInactive)
+	devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedVectorSearch, omittedInactive)
 	if len(survivors) > returnCap {
 		survivors = survivors[:returnCap]
 	}

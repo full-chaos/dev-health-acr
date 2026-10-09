@@ -63,7 +63,7 @@ func (a *Adapter) ListSubjectsByKind(ctx context.Context, principal storage.Prin
 		rows = rows[:pageSize]
 	}
 	omitted := 0
-	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, "list_subjects_by_kind", omitted) }()
+	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedListSubjectsByKind, omitted) }()
 	for _, r := range rows {
 		n, ok := r["n"].(*node)
 		if !ok || n == nil {
@@ -124,7 +124,7 @@ func (a *Adapter) FindSubjectsByExactName(ctx context.Context, principal storage
 		rows = rows[:pageSize]
 	}
 	omitted := 0
-	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, "find_subjects_by_exact_name", omitted) }()
+	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedFindSubjectsByExactName, omitted) }()
 	for _, r := range rows {
 		n, ok := r["n"].(*node)
 		if !ok || n == nil {

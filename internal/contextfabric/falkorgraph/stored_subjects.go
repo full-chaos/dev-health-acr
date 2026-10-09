@@ -73,7 +73,7 @@ func (a *Adapter) AuthorizeStoredSubjects(ctx context.Context, principal storage
 					continue
 				}
 				if inactiveTeamNode(n) {
-					devhealthschema.NoteInactiveTeamsOmitted(ctx, "stored_subjects", 1)
+					devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedStoredSubjects, 1)
 					continue
 				}
 				subject := contextfabric.SubjectRef{CanonicalID: propStringValue(n.Properties[propCanonicalID])}

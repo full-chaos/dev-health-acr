@@ -524,7 +524,7 @@ func (a *Adapter) runFulltextQuery(ctx context.Context, key, orgID, query string
 	}
 	candidates := make([]graphrank.CandidateNode, 0, len(rows))
 	omitted := 0
-	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, "fulltext_search", omitted) }()
+	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedFulltextSearch, omitted) }()
 	for _, row := range rows {
 		n, ok := row["node"].(*node)
 		if !ok || n == nil {

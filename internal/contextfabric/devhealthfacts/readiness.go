@@ -367,7 +367,7 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 	}
 	before := len(scanned)
 	scanned = dropInactiveTeamReadinessRows(scanned, inactive)
-	devhealthschema.NoteInactiveTeamsOmitted(ctx, "project_readiness", before-len(scanned))
+	devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedProjectReadiness, before-len(scanned))
 	// CHAOS-4645, design doc §5.2: additive, off the SAME project-identity
 	// join -- never changing an existing field.
 	//

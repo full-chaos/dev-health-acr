@@ -91,7 +91,7 @@ func (a *Adapter) chaos4348ExactNameCandidates(ctx context.Context, key, orgID s
 	}
 	candidates := make([]graphrank.CandidateNode, 0, len(rows))
 	omitted := 0
-	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, "exact_name_census", omitted) }()
+	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedExactNameCensus, omitted) }()
 	for _, r := range rows {
 		n, ok := r["n"].(*node)
 		if !ok || n == nil {
