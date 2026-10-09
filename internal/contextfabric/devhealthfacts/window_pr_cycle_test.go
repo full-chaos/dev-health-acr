@@ -55,6 +55,7 @@ func TestRepositoryMetricsServeWindowPRCycleMedianBesideTheDailyMedian(t *testin
 		t.Fatalf("median_pr_cycle_hours = %#v, want the repo-day value 12.5 unchanged", fact.Fields["median_pr_cycle_hours"])
 	}
 	statement := windowStatement(t, client)
+	assertQueryScopedToOrgAndSubjects(t, statement)
 	for _, want := range []string{"quantileExactInclusive(0.5)", "merged_at IS NOT NULL", "FINAL", "GROUP BY repo_id"} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("window statement lacks %q:\n%s", want, statement)
@@ -91,6 +92,20 @@ func TestTeamMetricsServeOneWindowPRCycleMedianOverTheOwnedRepositories(t *testi
 		t.Fatalf("window_pr_count = %#v, want 5", fact.Fields["window_pr_count"])
 	}
 	statement := windowStatement(t, client)
+	assertQueryScopedToOrgAndSubjects(t, statement)
+	for _, q := range client.queries {
+		if !strings.Contains(q.statement, "FROM git_pull_requests") {
+			continue
+		}
+		for _, b := range q.bindings {
+			if b.Name == "ids" {
+				ids, _ := b.Value.([]string)
+				if len(ids) != 2 || ids[0] != "repo-a" || ids[1] != "repo-b" {
+					t.Fatalf("ids = %#v, want exactly the team's owned repositories [repo-a repo-b]", b.Value)
+				}
+			}
+		}
+	}
 	if strings.Contains(statement, "GROUP BY") {
 		t.Fatalf("team window statement groups by repository, so it cannot be one median over the union:\n%s", statement)
 	}
