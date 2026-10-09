@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -52,9 +51,6 @@ type repoMixRow struct {
 	Theme     map[string]float64
 	Bugfix    float64
 	WorkUnits int64
-	// SpanFrom is the earliest from_ts of every latest work unit of the
-	// organization, read in the same statement (zero when absent).
-	SpanFrom time.Time
 }
 
 // mixWindowParams names the bind parameters of window i: window 0 uses the
@@ -230,12 +226,9 @@ func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, 
 			if err := row.Scan(&window, &r.RepoID, &r.Theme, &r.Bugfix, &workUnits, &spanFrom); err != nil {
 				return err
 			}
-			parsedSpan, spanErr := time.ParseInLocation("2006-01-02 15:04:05.999999", strings.TrimSpace(spanFrom), time.UTC)
-			if spanErr != nil {
-				return fmt.Errorf("parse earliest work unit start %q: %w", spanFrom, spanErr)
+			if spanErr := recordInvestmentSpanText(ctx, spanFrom, true); spanErr != nil {
+				return spanErr
 			}
-			r.SpanFrom = parsedSpan.UTC()
-			recordInvestmentSpan(ctx, r.SpanFrom)
 			if int(window) < 0 || int(window) >= len(out) {
 				return fmt.Errorf("repository theme mix returned window %d for %d requested", window, len(out))
 			}
