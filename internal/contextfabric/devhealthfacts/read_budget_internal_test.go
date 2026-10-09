@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 
@@ -96,12 +97,17 @@ func TestReadStatsInstrumentationLogsMeasuredReadsForEveryStatement(t *testing.T
 	} {
 		var buffer bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
-		instr := NewReadStatsInstrumentation(readers.NoopInstrumentation{}, logger)
+		ticks := []time.Time{time.Unix(100, 0), time.Unix(100, 0).Add(1500 * time.Millisecond)}
+		instr := NewReadStatsInstrumentation(readers.NoopInstrumentation{}, logger, func() time.Time {
+			now := ticks[0]
+			ticks = ticks[1:]
+			return now
+		})
 		ctx, finish := instr.StartQuery(context.Background(), "ReadRepositoryThemeMix", true)
 		readStatsFromContext(ctx).add(288509, 67158099)
 		finish(tc.err)
 		line := buffer.String()
-		for _, want := range []string{"level=INFO", "devhealthfacts.read_stats", "reader=ReadRepositoryThemeMix", "read_rows=288509", "read_bytes=67158099", "elapsed_ms=", tc.outcome} {
+		for _, want := range []string{"level=INFO", "devhealthfacts.read_stats", "reader=ReadRepositoryThemeMix", "read_rows=288509", "read_bytes=67158099", "elapsed_ms=1500", tc.outcome} {
 			if !strings.Contains(line, want) {
 				t.Fatalf("%s: read stats line %q lacks %q", tc.name, line, want)
 			}

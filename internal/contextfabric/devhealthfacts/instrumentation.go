@@ -154,28 +154,37 @@ const ReadStatsMessage = "devhealthfacts.read_stats"
 type readStatsInstrumentation struct {
 	next   readers.Instrumentation
 	logger *slog.Logger
+	now    func() time.Time
 }
 
 // NewReadStatsInstrumentation wraps next (nil = no other instrumentation) so
 // every statement reports its measured reads through logger (nil =
-// slog.Default()).
-func NewReadStatsInstrumentation(next readers.Instrumentation, logger *slog.Logger) readers.Instrumentation {
+// slog.Default()). now is the caller's clock (this package reads the wall
+// clock nowhere itself); a nil now reports elapsed_ms as 0.
+func NewReadStatsInstrumentation(next readers.Instrumentation, logger *slog.Logger, now func() time.Time) readers.Instrumentation {
 	if next == nil {
 		next = readers.NoopInstrumentation{}
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return readStatsInstrumentation{next: next, logger: logger}
+	return readStatsInstrumentation{next: next, logger: logger, now: now}
 }
 
 // StartQuery implements readers.Instrumentation.
 func (r readStatsInstrumentation) StartQuery(ctx context.Context, reader string, orgScoped bool) (context.Context, func(error)) {
 	stats := &ReadStats{}
-	started := time.Now()
+	var started time.Time
+	if r.now != nil {
+		started = r.now()
+	}
 	ctx, finish := r.next.StartQuery(contextWithReadStats(ctx, stats), reader, orgScoped)
 	return ctx, func(err error) {
 		rows, bytes := stats.Snapshot()
+		var elapsed time.Duration
+		if r.now != nil {
+			elapsed = r.now().Sub(started)
+		}
 		outcome := "ok"
 		if _, exceeded := runtimeclickhouse.QueryBudgetExceededCode(err); exceeded {
 			outcome = "budget_exceeded"
@@ -186,7 +195,7 @@ func (r readStatsInstrumentation) StartQuery(ctx context.Context, reader string,
 			slog.String("reader", contextfabric.SanitizeLogAttr(reader)),
 			slog.Uint64("read_rows", rows),
 			slog.Uint64("read_bytes", bytes),
-			slog.Int64("elapsed_ms", time.Since(started).Milliseconds()),
+			slog.Int64("elapsed_ms", elapsed.Milliseconds()),
 			slog.String("outcome", contextfabric.SanitizeLogAttr(outcome)),
 		)
 		finish(err)
