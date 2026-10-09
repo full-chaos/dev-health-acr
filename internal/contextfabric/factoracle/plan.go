@@ -269,6 +269,7 @@ var factPlan = map[string]map[string]string{
 		"prior_theme_quality":             "the mix of the period before the window; not read",
 		"prior_theme_risk":                "the mix of the period before the window; not read",
 		"next_cursor":                     "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",
+		"units_limitation":                "the work-unit listing, served only when read_facts is asked for units and the page fact cannot fit beside the mix; the oracle reads the mix, not the listing",
 		"page_share_total":                "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",
 		"repository_id":                   "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",
 		"scope_share_total":               "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",

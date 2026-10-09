@@ -567,12 +567,22 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 		response.Facts = orderUnitsFacts(response.Facts)
 	}
 	unitRows := countUnitRows(response.Facts)
+	pageBeforeBudget, hadPage := findUnitsPageFact(response.Facts)
+	factsBeforeBudget := slices.Clone(response.Facts)
+	providerCursor := stashUnitsPageCursor(response.Facts)
 	response.Truncation = applyBudget(&response, plan.echo.MaxBytes)
+	restoreUnitsPageCursor(response.Facts, providerCursor)
+	if plan.units != nil && hadPage {
+		if _, stillThere := findUnitsPageFact(response.Facts); !stillThere {
+			r.noteUnitsPageNotServed(&response, plan.echo.MaxBytes, factsBeforeBudget, pageBeforeBudget, unitRows)
+		}
+	}
 	if plan.units != nil {
 		if _, sealErr := r.finishUnitsPage(&response, plan.echo.MaxBytes, principal.OrgID, unitsDigest, unitsIncoming, unitRows); sealErr != nil {
 			response.Status = StatusUnavailable
 			return response, fmt.Errorf("%w: units cursor: %w", ErrFactsInternal, sealErr)
 		}
+		flagUnitsOverBudget(&response, plan.echo.MaxBytes)
 	}
 	if response.Truncation != nil {
 		record.TruncatedBy = response.Truncation.TruncatedBy

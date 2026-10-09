@@ -199,7 +199,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}
 
 	var spanReason string
-	if isLongInvestmentWindow(timeBound) && len(facts) > 0 {
+	if hasInvestmentWindowStart(timeBound) && len(facts) > 0 {
 		earliest, found, spanErr := p.readInvestmentSpanStart(ctx, orgID)
 		if spanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query investment span", spanErr)
