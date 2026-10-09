@@ -102,7 +102,7 @@ func TestThemeMixScopeAtAndAboveTheBoundServeTheSameMixAgainstRealClickHouse(t *
 			if shares[contextfabric.ThemeFeatureDelivery] != 0.5 || shares[contextfabric.ThemeOperational] != 0.5 {
 				t.Fatalf("%s: shares = %v, want feature_delivery 0.5 and operational 0.5", tc.org, shares)
 			}
-			if _, leaked := shares[contextfabric.ThemeRisk]; leaked {
+			if shares[contextfabric.ThemeRisk] != 0 {
 				t.Fatalf("%s: shares = %v: a work unit outside the run reached the mix", tc.org, shares)
 			}
 		}
@@ -115,10 +115,11 @@ func TestThemeMixScopeAtAndAboveTheBoundServeTheSameMixAgainstRealClickHouse(t *
 	}
 }
 
-// 500 repositories with both windows and the span row fill the statement's
-// row ceiling exactly (500 x 3 rows, ceiling 1501): one statement serves all
-// of them, none is dropped.
-func TestRepositoryThemeMixFillsTheRowCeilingOfOneStatementAgainstRealClickHouse(t *testing.T) {
+// A team owning 500 repositories, read for the current and the prior window,
+// fills the statement's row ceiling exactly (500 x (2 windows + span row) =
+// 1500 rows, ceiling 1501): one statement serves them all and the guard that
+// fails a truncated read never fires.
+func TestTeamThemeMixOver500RepositoriesFillsTheRowCeilingOfOneStatementAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newScopedCHAOS7257Client(t, nil)
 	createCHAOS7257Tables(t, ctx, direct)
@@ -130,15 +131,21 @@ func TestRepositoryThemeMixFillsTheRowCeilingOfOneStatementAgainstRealClickHouse
 	if err != nil {
 		t.Fatal(err)
 	}
+	ownBatch, err := direct.PrepareBatch(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`)
+	if err != nil {
+		t.Fatal(err)
+	}
 	wuBatch, err := direct.PrepareBatch(ctx, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	subjects := make([]contextfabric.SubjectRef, 0, repos)
 	current, prior := at.Add(-5*24*time.Hour), at.Add(-45*24*time.Hour)
 	for i := 0; i < repos; i++ {
 		label := fmt.Sprintf("ceil-%03d", i)
 		if err := repoBatch.Append(repoUUID(label), orgID, "acme/"+label, "github", at); err != nil {
+			t.Fatal(err)
+		}
+		if err := ownBatch.Append(orgID, "github", "team-ceil", repoUUID(label), "acme/"+label, "exact", "native", uint8(1), uint16(100), int32(0), ts(2026, 1, 1, 0, 0, 0), nil, at); err != nil {
 			t.Fatal(err)
 		}
 		evidence := fmt.Sprintf(`{"issues":[],"prs":["%s#pr1"]}`, repoUUID(label))
@@ -147,33 +154,39 @@ func TestRepositoryThemeMixFillsTheRowCeilingOfOneStatementAgainstRealClickHouse
 				t.Fatal(err)
 			}
 		}
-		subjects = append(subjects, contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoUUID(label), Label: label})
 	}
-	if err := repoBatch.Send(); err != nil {
-		t.Fatal(err)
-	}
-	if err := wuBatch.Send(); err != nil {
-		t.Fatal(err)
+	for _, batch := range []interface{ Send() error }{repoBatch, ownBatch, wuBatch} {
+		if err := batch.Send(); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	start, end := at.Add(-30*24*time.Hour), at
 	before := budgetQueryLogTotals(t, ctx, direct, "work_unit_investments")
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, Kind: contextfabric.FactInvestment, Subjects: subjects,
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, Kind: contextfabric.FactInvestment,
+		Subjects: []contextfabric.SubjectRef{teamSubject("team-ceil")},
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts: %v\nserver: %s", err, lastServerException(ctx, direct))
 	}
 	statements := budgetDelta(budgetQueryLogTotals(t, ctx, direct, "work_unit_investments"), before).statements
-	if len(result.Facts) != repos {
-		t.Fatalf("facts = %d, want %d: no repository may be dropped by the row ceiling", len(result.Facts), repos)
-	}
 	if statements != 1 {
-		t.Fatalf("statements over work_unit_investments = %d, want 1", statements)
+		t.Fatalf("statements over work_unit_investments = %d, want 1 for %d repositories", statements, repos)
 	}
+	var found bool
 	for _, fact := range result.Facts {
-		if _, ok := fact.Fields[contextfabric.FactFieldPriorTheme(contextfabric.ThemeOperational)]; !ok {
-			t.Fatalf("fact %s carries no prior-window share: the second window's rows were cut", fact.Subject.CanonicalID)
+		current, ok := fact.Fields[contextfabric.FactFieldTheme(contextfabric.ThemeOperational)]
+		if !ok || current.Number == nil {
+			continue
 		}
+		found = true
+		priorShare := fact.Fields[contextfabric.FactFieldPriorTheme(contextfabric.ThemeOperational)]
+		if *current.Number != 1.0 || priorShare.Number == nil || *priorShare.Number != 1.0 {
+			t.Fatalf("operational share current=%v prior=%v, want 1.0 / 1.0: a window's rows were cut", current.Number, priorShare.Number)
+		}
+	}
+	if !found {
+		t.Fatalf("no team fact carries theme fields: %#v", result.Facts)
 	}
 }
