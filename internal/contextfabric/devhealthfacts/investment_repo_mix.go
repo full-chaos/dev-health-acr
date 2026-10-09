@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -110,7 +111,7 @@ func repoMixStatement(bounds []factTimeBound) string {
 	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
 	sum(bugfix_share * effort) AS bugfix_effort,
 	uniqExact(work_unit_id) AS work_units,
-	toString(min(span_from)) AS span_from
+	min(span_from) AS span_from
 FROM (
 	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share, span_from
 	FROM (
@@ -222,11 +223,11 @@ func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, 
 			var r repoMixRow
 			var window uint8
 			var workUnits uint64
-			var spanFrom string
+			var spanFrom time.Time
 			if err := row.Scan(&window, &r.RepoID, &r.Theme, &r.Bugfix, &workUnits, &spanFrom); err != nil {
 				return err
 			}
-			if spanErr := recordInvestmentSpanText(ctx, spanFrom, true); spanErr != nil {
+			if spanErr := recordInvestmentSpanTime(ctx, spanFrom, true); spanErr != nil {
 				return spanErr
 			}
 			if int(window) < 0 || int(window) >= len(out) {
