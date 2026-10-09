@@ -269,7 +269,13 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // v18 -> v19: work item -> team edges now include the co-owner attribution
 // rows (is_primary = 2), one edge per team, and the page key carries the team.
 // Edges projected before v19 lack the co-owner teams; only the rebuild adds them.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v19"
+//
+// v19 -> v20: project -> team and repository -> team ownership edges carry no
+// start. team_*_ownership.valid_from is the sync stamp of the assertion, not
+// the start of ownership, so the edges projected before v20 hide a synced
+// ownership from every graph read of a window that ended before the stamp;
+// only the rebuild clears their stored start.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v20"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.

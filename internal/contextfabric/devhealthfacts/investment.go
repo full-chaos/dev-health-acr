@@ -363,7 +363,7 @@ func (p *InvestmentProvider) readInvestmentWatermark(ctx context.Context, orgID 
 const (
 	investmentTeamNoOwnedRepository = "investment_team_no_owned_repository"
 	investmentTeamNoUnitInWindow    = "investment_team_no_unit_in_window"
-	investmentOwnershipAsSynced     = "investment_ownership_as_synced: team ownership is as currently synced (not historical); a past window reads the repositories the team owns now"
+	investmentOwnershipAsSynced     = "investment_ownership_as_synced: team ownership is read from the synced ownership assertions (not historical); a past window includes every assertion not ended before the window start"
 )
 
 // investmentMixUnavailableReason is the disclosure for teams that have no

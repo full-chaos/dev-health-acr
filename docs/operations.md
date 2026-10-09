@@ -607,6 +607,16 @@ owned" arm (`valid_from <= now`) now applies to the edge too: future-dated
 assertions are no longer projected as edges. Already-projected team nodes keep
 the old raw list, and old future-dated edges remain, until a full rebuild.
 
+**A rebuild is likewise REQUIRED after the ownership edges drop their start**
+(`TeamsProjectsSourceVersion` v19 → v20). Project → team and repository → team
+`OWNED_BY_TEAM` edges no longer project `team_*_ownership.valid_from` as the
+edge start: that column is the sync stamp of the assertion, not the start of
+ownership. Edges projected before v20 carry the stamp and are excluded from a
+graph read of a window that ended before it, until one
+`acr-projector rebuild --org <organization-id>` per organization. The
+checkpoint refuses the incremental tick with
+`ErrProjectionSourceVersionChanged` until then.
+
 **A rebuild is REQUIRED after deploying the issue <> pull request link edge**
 (`ClickHouseSourceVersion` v7 → v8). `queryIssuePullRequestLinks` projects the
 ops link table of record `work_graph_issue_pr` as `LINKS_PULL_REQUEST`
