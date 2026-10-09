@@ -151,8 +151,7 @@ func currentAxisReadState(rowCount int) (contextfabric.SourceState, string) {
 // unrepresentableValueReason names a fact omitted because a source column
 // held a value this reader cannot represent (CHAOS-3781 round-3 F2).
 //
-// Two columns are UInt64 -- backfill_log.duration_ms and
-// investment_metrics_daily.churn_loc -- and every other numeric column
+// One column is UInt64 -- investment_metrics_daily.churn_loc -- and every other numeric column
 // these providers read is UInt32, which fits int64 by construction. A
 // UInt64 above MaxInt64 wrapped NEGATIVE through toInt64, and
 // FactValue.Validate accepts negatives, so it would have reached a public
@@ -333,7 +332,7 @@ func (b factTimeBound) bindings() []timeBinding {
 // itself exact: Tier B's derivations from immutable event columns (merged
 // at, resolved at, finished at, completed at), and the Tier A sources
 // whose rows are point observations rather than daily buckets
-// (capacity_forecasts' computed_at, backfill_log's created_at). "The
+// (capacity_forecasts' computed_at). "The
 // latest such row at or before T" is exactly true at T, with no bucket
 // rounding.
 const (

@@ -561,6 +561,11 @@ import (
 // saved before v114 may hold the same listing cut at 14 members, or at the
 // members that fit after the driver references, and must not be reused.
 //
+// v114 -> v115: source_health is read from the ops sourceHealth root and its
+// fields are provider, scope, last_sync_at, last_failure_occurred_at and
+// last_failure_stage (it was the backfill_log columns). A candidate saved
+// before v115 may hold the old fields and must not be reused.
+//
 // v114 -> v116: the work-unit page fact (units_returned, next_cursor,
 // coverage) is reserved before the unit rows under max_serialized_bytes; when
 // even it does not fit, it is served as a limitation row with the minimum

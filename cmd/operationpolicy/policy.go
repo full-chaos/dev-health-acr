@@ -380,6 +380,14 @@ func declaredPolicy() policyDeclaration {
 				Restricted:   refusedFor("rows carry a work item id and a team id, no repository id, so a granted-repository row check is not possible ([ops] graph/schema.resolvers.go:654-693; design D.3, K15; CHAOS-7202)"),
 				Notes:        []string{"team = project/repository ownership only; rows are raw attribution facts with provenance (source, confidence, evidence)", "workItemIds and teamId both absent reads every attribution row of the org: bounded by the response byte cap"},
 			},
+			"sourceHealth": {
+				DocumentName: "SourceHealth",
+				Cost:         dr.CostList,
+				Variables:    map[string]variableDecl{"orgId": principalOrg},
+				Unrestricted: served("[ops] the ops sourceHealth root lists one row per sync configuration of the caller org: provider, closed scope code, last successful sync time, and the latest failure time and closed stage code (CHAOS-8906); acr sends viewer and the principal org"),
+				Restricted:   refusedFor("org-level fact; caller scope is repository-bound: rows are sync configurations of the org with no repository id, so a granted-repository row check is not possible (CHAOS-8899)"),
+				Notes:        []string{"lastSyncAt is the last SUCCESSFUL sync and is null when never synced or when the latest sync failed; lastFailure set = the latest sync failed", "a source-health read that cannot run answers a GraphQL error, never an empty list"},
+			},
 			"investmentBreakdown": breakdown,
 			"investmentFull":      full,
 			"securityOverview": {
@@ -560,7 +568,6 @@ func notServed() map[string]notServedDecl {
 		"investmentEvidenceQuality":         {noScope},
 		"testOpsCoverage":                   {noScope},
 		"testopsJobFailures":                {noScope},
-		"sourceHealth":                      {noScope},
 		"testOpsPipeline":                   {noScope},
 		"testOpsTest":                       {noScope},
 		"testopsRisk":                       {noScope},

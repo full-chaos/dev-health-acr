@@ -433,12 +433,11 @@ func incidentFields() []fieldDecl {
 
 func sourceHealthFields() []fieldDecl {
 	return []fieldDecl{
-		declNullable(fStr("provider")),
-		declNullable(fStr("status")),
-		fInt("items_synced", "count"),
-		fInt("duration_ms", "ms"),
-		declFresh(fStr("last_synced_at")),
-		fStr("error_message"),
+		fStr("provider"),
+		fStr("scope"),
+		declNullable(declFresh(fStr("last_sync_at"))),
+		declNullable(declFresh(fStr("last_failure_occurred_at"))),
+		declNullable(fStr("last_failure_stage")),
 	}
 }
 

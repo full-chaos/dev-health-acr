@@ -45,7 +45,7 @@ var factSchemaTables = []string{
 	"repos", "work_items", "git_pull_requests", "git_pull_request_reviews",
 	"ci_pipeline_runs", "deployments", "operational_incidents", "work_item_dependencies",
 	"repo_metrics_daily", "compounding_risk_daily", "estimate_coverage_metrics_daily",
-	"capacity_forecasts", "investment_metrics_daily", "recommendations_daily", "backfill_log",
+	"capacity_forecasts", "investment_metrics_daily", "recommendations_daily",
 	// CHAOS-4364: FlowProvider/LandscapeProvider's tables (flow.go,
 	// landscape.go). projects/team_project_ownership back their PROJECT
 	// subject branches specifically (codex R3 P2: those branches were
@@ -140,8 +140,6 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		orgID, "CHAOS", day, at)
 	seed("recommendations_daily", `INSERT INTO recommendations_daily (org_id, team_id, window_end, computed_at) VALUES (?, ?, ?, ?)`,
 		orgID, "CHAOS", at, at)
-	seed("backfill_log", `INSERT INTO backfill_log (org_id, provider, status, created_at) VALUES (?, ?, ?, ?)`,
-		orgID, "github", "ok", at)
 	// CHAOS-4364: FlowProvider/LandscapeProvider's own tables. uint32/
 	// uint64 typed to match the declared columns, same discipline as the
 	// git_pull_requests.number seed above.
