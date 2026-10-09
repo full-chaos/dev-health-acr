@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -104,5 +105,73 @@ func TestTeamMetricsWithoutMergedPullRequestsHaveNoWindowCycle(t *testing.T) {
 	fact := readMetricsFor(t, client, teamSubject("team-1"))
 	if _, ok := fact.Fields["window_pr_cycle_hours_median"]; ok {
 		t.Fatalf("window_pr_cycle_hours_median present with no merged pull request: %#v", fact.Fields["window_pr_cycle_hours_median"])
+	}
+}
+
+func TestTeamMetricsZeroCountAggregateRowIsNotAValue(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_metrics_daily", rows: [][]any{teamMetricsRow("team-1")}},
+		{match: "GROUP BY team_id, repo_key", rows: [][]any{{"team-1", "repo-a", "acme/a"}}},
+		{match: "FROM git_pull_requests", rows: [][]any{{"", int64(0), float64(0)}}},
+	}}
+	fact := readMetricsFor(t, client, teamSubject("team-1"))
+	for _, name := range []string{"window_pr_cycle_hours_median", "window_pr_count"} {
+		if _, ok := fact.Fields[name]; ok {
+			t.Fatalf("%s = %#v, want absent for a zero-count aggregate row (never 0)", name, fact.Fields[name])
+		}
+	}
+}
+
+func TestWindowPRCycleFiltersOnTheMergeTimeInsideTheEvidenceWindow(t *testing.T) {
+	t.Parallel()
+	start, end := ts(2026, 9, 13, 0, 0, 0), ts(2026, 9, 19, 23, 59, 59)
+	for name, tc := range map[string]struct {
+		subject contextfabric.SubjectRef
+		tables  []fakeTable
+	}{
+		"repository": {repoSubject("repo-1"), []fakeTable{
+			{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}},
+			{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", int64(1), float64(2)}}},
+		}},
+		"team": {teamSubject("team-1"), []fakeTable{
+			{match: "FROM team_metrics_daily", rows: [][]any{teamMetricsRow("team-1")}},
+			{match: "GROUP BY team_id, repo_key", rows: [][]any{{"team-1", "repo-a", "acme/a"}}},
+			{match: "FROM git_pull_requests", rows: [][]any{{"", int64(1), float64(2)}}},
+		}},
+	} {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			client := &fakeClient{tables: tc.tables}
+			provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+			if _, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+				Time: contractsv1TimeContext(start, end), Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{tc.subject},
+			}); err != nil {
+				t.Fatalf("ReadFacts() error = %v", err)
+			}
+			var found bool
+			for _, q := range client.queries {
+				if !strings.Contains(q.statement, "FROM git_pull_requests") {
+					continue
+				}
+				found = true
+				if !strings.Contains(q.statement, "merged_at >= {rollup_start:DateTime64(6,'UTC')}") || !strings.Contains(q.statement, "merged_at <= {rollup_end:DateTime64(6,'UTC')}") {
+					t.Fatalf("window statement does not bound merged_at by the window:\n%s", q.statement)
+				}
+				got := map[string]any{}
+				for _, b := range q.bindings {
+					got[b.Name] = b.Value
+				}
+				if s, ok := got["rollup_start"].(time.Time); !ok || !s.Equal(start) {
+					t.Fatalf("rollup_start = %#v, want %v", got["rollup_start"], start)
+				}
+				if e, ok := got["rollup_end"].(time.Time); !ok || !e.Equal(end) {
+					t.Fatalf("rollup_end = %#v, want %v", got["rollup_end"], end)
+				}
+			}
+			if !found {
+				t.Fatal("no git_pull_requests query")
+			}
+		})
 	}
 }
