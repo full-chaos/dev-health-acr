@@ -46,7 +46,7 @@ func TestLongInvestmentWindowIsOneTrueWindowAgainstRealClickHouse(t *testing.T) 
 		}
 	}
 	// Window A = [end-180d, end-120d), B = [end-120d, end-60d), C = [end-60d, end).
-	seed("in-a", end.Add(-179*day), end.Add(-165*day), 10)
+	seed("in-a", end.Add(-181*day), end.Add(-165*day), 10)
 	seed("in-b", end.Add(-100*day), end.Add(-95*day), 7)
 	seed("spans-bc", end.Add(-70*day), end.Add(-50*day), 20)
 	seed("in-c", end.Add(-20*day), end.Add(-15*day), 10)
@@ -98,12 +98,12 @@ func TestLongInvestmentWindowIsOneTrueWindowAgainstRealClickHouse(t *testing.T) 
 		t.Fatalf("a window inside the stored history carries a span limitation: %q", whole.Reason)
 	}
 
-	// Window longer than the stored history: earliest stored unit starts at end-179d.
+	// Window longer than the stored history: earliest stored unit starts at end-181d.
 	long, longTotal := read(365)
 	if math.Abs(longTotal-47) > 1e-9 {
 		t.Fatalf("365d total = %v, want 47 (days before the history are not zero-filled into the mix)", longTotal)
 	}
-	if !strings.Contains(long.Reason, "investment_window_beyond_stored_history") || !strings.Contains(long.Reason, end.Add(-179*day).Format(time.RFC3339)) {
+	if !strings.Contains(long.Reason, "investment_window_beyond_stored_history") || !strings.Contains(long.Reason, end.Add(-181*day).Format(time.RFC3339)) {
 		t.Fatalf("365d reason = %q, want the span limitation naming the earliest stored unit", long.Reason)
 	}
 	// A 60-day window inside the stored history carries no span limitation.
