@@ -1026,13 +1026,17 @@ table state (every version row of the organization's `work_unit_investments`,
 plus `work_unit_membership` when a membership run is recorded), never from the
 server's cache state, and grow with the organization's work units. The
 repository and team investment mix reads the membership scope once per
-(organization, run id) and remembers it; the investment table is read once per
-request. Every reader statement logs `devhealthfacts.read_stats` (`reader`,
-`read_rows`, `read_bytes`, `elapsed_ms`); alert on `read_bytes` approaching the
-limit rather than on the refusal. A statement over the limit is refused with
-`devhealthfacts: <action> exceeded the read budget (limit N bytes; the server
-had read R rows and B bytes); narrow the window or the subject` and logs
-`devhealthfacts.read_budget_exceeded` with the same numbers.
+(organization, run id) and remembers it for at most five minutes; the investment
+table is read once per request. Every reader statement logs
+`devhealthfacts.read_stats` at Info (`reader`, `read_rows`, `read_bytes`,
+`elapsed_ms`, `outcome` = `ok`, `budget_exceeded` or `error`); alert on
+`read_bytes` approaching the limit rather than on the refusal. A statement over
+the limit is refused with `devhealthfacts: <action> exceeded the read budget
+(limit N bytes; the server had read R rows and B bytes); narrow the window or
+the subject` (the measured part appears when the server reported progress
+before refusing; a row-limit refusal names a row limit, not the byte cap) and
+logs `devhealthfacts.read_budget_exceeded` at Warn with `reason`, `reader` and
+`clickhouse_code`; the numbers are on the matching `read_stats` line.
 
 **Known limitation — no backlog ratio.** These signals report *events*, not a
 *proportion*. Summing `cleared` against `embedded` over time approximates how

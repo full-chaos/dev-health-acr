@@ -66,7 +66,7 @@ func TestReadBudgetRefusalWithoutMeasurementStillNamesTheBudget(t *testing.T) {
 	if !errors.As(err, &failure) {
 		t.Fatalf("error = %v, want a FactReadFailure", err)
 	}
-	if want := "devhealthfacts: query repository theme mix exceeded the read budget; narrow the window or the subject"; failure.Reason != want {
+	if want := "devhealthfacts: query repository theme mix exceeded the read budget (a row limit); narrow the window or the subject"; failure.Reason != want {
 		t.Fatalf("reason = %q, want %q", failure.Reason, want)
 	}
 }
@@ -80,5 +80,21 @@ func TestOtherQueryErrorsKeepTheBareFailureReason(t *testing.T) {
 	}
 	if want := "devhealthfacts: query repository theme mix failed"; failure.Reason != want {
 		t.Fatalf("reason = %q, want %q", failure.Reason, want)
+	}
+}
+
+func TestReadBudgetRefusalForARowLimitNamesARowLimitNotTheByteCap(t *testing.T) {
+	t.Parallel()
+	err := readInvestmentWithFailingMix(t, &devhealthfacts.BudgetExceededError{Code: 158, CapBytes: 268435456, ReadRows: 1001, ReadBytes: 9000, Cause: errors.New("x")})
+	var failure *contextfabric.FactReadFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("error = %v, want a FactReadFailure", err)
+	}
+	want := "devhealthfacts: query repository theme mix exceeded the read budget (a row limit; the server had read 1001 rows and 9000 bytes); narrow the window or the subject"
+	if failure.Reason != want {
+		t.Fatalf("reason = %q, want %q", failure.Reason, want)
+	}
+	if strings.Contains(failure.Reason, "268435456") {
+		t.Fatalf("reason %q names the byte cap for a row-limit refusal", failure.Reason)
 	}
 }

@@ -67,16 +67,33 @@ func (e *BudgetExceededError) Unwrap() error { return e.Cause }
 // budgetRefusalReason is the caller-visible text of a budget refusal: it names
 // the action, the cap and what was measured, and says what to change.
 func budgetRefusalReason(action string, budget *BudgetExceededError) string {
-	switch {
-	case budget.CapBytes > 0 && budget.ReadBytes > 0:
-		return fmt.Sprintf("devhealthfacts: %s exceeded the read budget (limit %d bytes; the server had read %d rows and %d bytes); narrow the window or the subject",
-			action, budget.CapBytes, budget.ReadRows, budget.ReadBytes)
-	case budget.CapBytes > 0:
-		return fmt.Sprintf("devhealthfacts: %s exceeded the read budget (limit %d bytes); narrow the window or the subject", action, budget.CapBytes)
-	default:
-		return fmt.Sprintf("devhealthfacts: %s exceeded the read budget; narrow the window or the subject", action)
+	measured := ""
+	if budget.ReadBytes > 0 {
+		measured = fmt.Sprintf("the server had read %d rows and %d bytes", budget.ReadRows, budget.ReadBytes)
 	}
+	var limit string
+	switch {
+	case budget.Code == budgetRowsCode:
+		limit = "a row limit"
+	case budget.CapBytes > 0:
+		limit = fmt.Sprintf("limit %d bytes", budget.CapBytes)
+	}
+	detail := limit
+	if measured != "" {
+		if detail != "" {
+			detail += "; "
+		}
+		detail += measured
+	}
+	if detail != "" {
+		detail = " (" + detail + ")"
+	}
+	return "devhealthfacts: " + action + " exceeded the read budget" + detail + "; narrow the window or the subject"
 }
+
+// budgetRowsCode is ClickHouse's TOO_MANY_ROWS: a row limit, not the byte cap
+// this binary configures, so a refusal under it never names the byte cap.
+const budgetRowsCode int32 = 158
 
 // NewMeasuredQueryClient wraps inner so every statement reports the rows and
 // bytes the server read into the ReadStats on its context (when one is

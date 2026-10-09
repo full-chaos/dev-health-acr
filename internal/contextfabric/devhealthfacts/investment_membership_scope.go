@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/singleflight"
 
@@ -169,6 +170,13 @@ const (
 	membershipScopeMaxUnits = 100000
 	// membershipScopeMaxOrgs bounds how many organizations are remembered.
 	membershipScopeMaxOrgs = 64
+	// membershipScopeTTL bounds how long a remembered scope is served. A
+	// completed run is immutable, so a fresh entry is exact; the bound only
+	// limits how long a set read while the run's rows were still becoming
+	// visible (replica lag against the run marker) could stay wrong.
+	membershipScopeTTL = 5 * time.Minute
+	// membershipScopeLoadTimeout bounds the one shared read of a scope's ids.
+	membershipScopeLoadTimeout = 30 * time.Second
 )
 
 const membershipScopeRunStatement = `SELECT argMax(run_id, completed_at) FROM work_unit_membership_runs WHERE org_id = {org_id:String}`
@@ -180,8 +188,9 @@ const membershipScopeRunStatement = `SELECT argMax(run_id, completed_at) FROM wo
 const membershipScopeUnitsStatement = `SELECT arraySort(groupUniqArray(100001)(work_unit_id)) FROM work_unit_membership WHERE org_id = {org_id:String} AND run_id = {scope_run:String}`
 
 type membershipScopeEntry struct {
-	runID string
-	ids   []string
+	runID  string
+	ids    []string
+	loaded time.Time
 }
 
 // membershipScopeCache remembers the unit ids of the latest complete run per
@@ -197,17 +206,17 @@ func newMembershipScopeCache() *membershipScopeCache {
 	return &membershipScopeCache{entries: map[string]membershipScopeEntry{}}
 }
 
-func (c *membershipScopeCache) get(orgID, runID string) ([]string, bool) {
+func (c *membershipScopeCache) get(orgID, runID string, now time.Time) ([]string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[orgID]
-	if !ok || entry.runID != runID {
+	if !ok || entry.runID != runID || now.Sub(entry.loaded) >= membershipScopeTTL {
 		return nil, false
 	}
 	return entry.ids, true
 }
 
-func (c *membershipScopeCache) put(orgID, runID string, ids []string) {
+func (c *membershipScopeCache) put(orgID, runID string, ids []string, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.entries[orgID]; !ok && len(c.entries) >= membershipScopeMaxOrgs {
@@ -216,7 +225,7 @@ func (c *membershipScopeCache) put(orgID, runID string, ids []string) {
 			break
 		}
 	}
-	c.entries[orgID] = membershipScopeEntry{runID: runID, ids: ids}
+	c.entries[orgID] = membershipScopeEntry{runID: runID, ids: ids, loaded: now}
 }
 
 // resolveMembershipScope reads the organization's latest complete run id and
@@ -250,13 +259,18 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 	case legacyRunID:
 		return subqueryMembershipScope, nil
 	}
-	loaded, err, _ := p.scopes.loads.Do(orgID+"\x00"+runID, func() (any, error) {
-		if ids, ok := p.scopes.get(orgID, runID); ok {
+	// The shared read must not die with the first caller: it runs on a context
+	// that keeps the caller's values but not its cancellation, under its own
+	// timeout, and every waiter still honours its own context.
+	result := p.scopes.loads.DoChan(orgID+"\x00"+runID, func() (any, error) {
+		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), membershipScopeLoadTimeout)
+		defer cancel()
+		if ids, ok := p.scopes.get(orgID, runID, clock()); ok {
 			return ids, nil
 		}
 		var ids []string
 		rows := 0
-		scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadMembershipScopeUnits", membershipScopeUnitsStatement, orgID, nil, func(row contextpacket.ClickHouseRowScanner) error {
+		scanErr := readers.QueryOrgScopedNamed(loadCtx, p.facts.client, "ReadMembershipScopeUnits", membershipScopeUnitsStatement, orgID, nil, func(row contextpacket.ClickHouseRowScanner) error {
 			rows++
 			return row.Scan(&ids)
 		}, readers.Binding{Name: "scope_run", Value: runID})
@@ -270,11 +284,18 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 			// can be deleted): an empty set is never remembered.
 			return []string(nil), nil
 		}
-		p.scopes.put(orgID, runID, ids)
+		p.scopes.put(orgID, runID, ids, clock())
 		return ids, nil
 	})
-	if err != nil {
-		return membershipScope{}, err
+	var loaded any
+	select {
+	case <-ctx.Done():
+		return membershipScope{}, ctx.Err()
+	case res := <-result:
+		if res.Err != nil {
+			return membershipScope{}, res.Err
+		}
+		loaded = res.Val
 	}
 	ids, _ := loaded.([]string)
 	if ids == nil {
