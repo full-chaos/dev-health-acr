@@ -26,7 +26,7 @@ func TestCHAOS4418RepositoryDayCountIsNotCappedByThePerRepositoryRowLimit(t *tes
 	// own repository.
 	rows := metricsRowsForOneRepoOverDays("repo-1", devhealthfacts.MetricsSeriesPerRepositoryRowCap)
 	for _, row := range rows {
-		row[10] = int64(trueDays)
+		row[11], row[12] = int64(trueDays), int64(trueDays)
 	}
 	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: rows}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
