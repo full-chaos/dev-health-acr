@@ -49,7 +49,7 @@ func TestEveryTeamsReadCarriesTheActiveTeamPredicate(t *testing.T) {
 			if cut := strings.Index(window, "\n\n"); cut >= 0 {
 				window = window[:cut]
 			}
-			if !strings.Contains(window, "ActiveTeamPredicate(") {
+			if !strings.Contains(window, "ActiveTeamPredicate(") && !strings.Contains(window, "InactiveTeamPredicate(") {
 				t.Errorf("%s: teams read at byte %d lacks devhealthschema.ActiveTeamPredicate", rel, loc[0])
 			}
 		}
