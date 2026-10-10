@@ -58,7 +58,7 @@ func TestCHAOS4418RepositoryMetricScalarsSurviveTheModelFacingProjection(t *test
 	// The value is the latest day's -- the single day that reader read.
 	for name, want := range map[string]float64{
 		"commits_count": 42, "prs_merged": 7, "median_pr_cycle_hours": 12.5,
-		"change_failure_rate": 0.1, "mttr_hours": 3.5, "bus_factor": 4,
+		"revert_rate": 0.1, "mttr_hours": 3.5, "bus_factor": 4,
 		"code_ownership_gini": 0.2,
 	} {
 		value, ok := fields[name]

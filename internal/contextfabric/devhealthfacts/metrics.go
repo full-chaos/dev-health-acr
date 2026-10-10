@@ -178,7 +178,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
 	rejectedCount := 0
-	var cfrCoverage changeFailureRateCoverage
+	var revertCoverage revertRateCoverage
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
 	defer func() {
@@ -195,7 +195,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 		// legitimately-wide repository series is expected and NOT evidence
 		// of dropped data -- breakdownTruncated (capFactValueRows' own
 		// per-fact signal) is the accurate truncation report here.
-		_, rejected, breakdownTruncated, scanErr := p.readRepositoryMetrics(ctx, orgID, repoSubjects, &facts, timeBound, query.Time.EvidenceWindow, &cfrCoverage)
+		_, rejected, breakdownTruncated, scanErr := p.readRepositoryMetrics(ctx, orgID, repoSubjects, &facts, timeBound, query.Time.EvidenceWindow, &revertCoverage)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository metrics", scanErr)
 		}
@@ -223,30 +223,30 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 
 	state, retentionReason := timeBound.retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
-	if reason := cfrCoverage.reason(); reason != "" {
+	if reason := revertCoverage.reason(); reason != "" {
 		mergeFactReadReason(&result, reason)
 	}
 	return result, nil
 }
 
-// changeFailureRateCoverage counts, across the repository series one read
-// returned, the days read and the days that carry a change_failure_rate. A
+// revertRateCoverage counts, across the repository series one read
+// returned, the days read and the days that carry a revert_rate. A
 // NULL day is not applicable (not zero, not an error); the read names how many
 // days were not, so a partial window is never read as a complete one.
-type changeFailureRateCoverage struct {
+type revertRateCoverage struct {
 	days, present int64
 }
 
-func (c *changeFailureRateCoverage) add(days, present int64) {
+func (c *revertRateCoverage) add(days, present int64) {
 	c.days += days
 	c.present += present
 }
 
-func (c *changeFailureRateCoverage) reason() string {
+func (c *revertRateCoverage) reason() string {
 	if c.days == 0 || c.present >= c.days {
 		return ""
 	}
-	return fmt.Sprintf("change_failure_rate not applicable on %d of %d days", c.days-c.present, c.days)
+	return fmt.Sprintf("revert_rate not applicable on %d of %d days", c.days-c.present, c.days)
 }
 
 // repositoryMetricsDayRow is one repo_metrics_daily row within the series
@@ -255,8 +255,8 @@ type repositoryMetricsDayRow struct {
 	day                                   string
 	commitsCount, prsMerged, busFactor    int64
 	medianPRCycleHours, codeOwnershipGini float64
-	hasChangeFailureRate                  bool
-	changeFailureRate                     float64
+	hasRevertRate                         bool
+	revertRate                            float64
 	hasMTTRHours                          bool
 	mttrHours                             float64
 	// totalDays is this repository's own distinct-day count within the
@@ -264,11 +264,11 @@ type repositoryMetricsDayRow struct {
 	// see the count() window in the statement below (codex R4 finding 3).
 	// Identical on every row of a given repository.
 	totalDays int64
-	// cfrDays is how many of this repository's totalDays carry a
-	// change_failure_rate, counted by the query over the same window and
+	// revertDays is how many of this repository's totalDays carry a
+	// revert_rate, counted by the query over the same window and
 	// before the same per-repository row cap as totalDays, so a NULL day
 	// beyond the cap is still counted.
-	cfrDays int64
+	revertDays int64
 }
 
 // readRepositoryMetrics (CHAOS-4418 widening of CHAOS-3780's original
@@ -289,7 +289,7 @@ type repositoryMetricsDayRow struct {
 // intraday-rerun tiebreak, but PARTITION BY (repo_id, day) instead of
 // repo_id alone, so every distinct day survives instead of only the
 // latest.
-func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidenceWindow *contractsv1.ContextFabricRequestedEvidenceWindow, cfr *changeFailureRateCoverage) (rowCount int, rejected int, breakdownTruncated bool, err error) {
+func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidenceWindow *contractsv1.ContextFabricRequestedEvidenceWindow, revertCover *revertRateCoverage) (rowCount int, rejected int, breakdownTruncated bool, err error) {
 	ids, bySubject, rejected := subjectIndex(subjects, repositoryPrefix)
 	if len(ids) == 0 {
 		return 0, rejected, false, nil
@@ -357,7 +357,7 @@ func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID strin
 	// doc comment explains -- a query-wide cap and a per-group cap do not
 	// compose into "each group gets its fair share"; only dropping the
 	// query-wide cap for this one query does.
-	statement := `SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toUInt8(isNotNull(change_failure_rate)), toFloat64(ifNull(change_failure_rate, 0)), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini), toInt64(total_days), toInt64(cfr_days)
+	statement := `SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toUInt8(isNotNull(revert_rate)), toFloat64(ifNull(revert_rate, 0)), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini), toInt64(total_days), toInt64(revert_days)
 FROM (
 	-- codex R4 finding 3: the per-repository distinct-day count, computed
 	-- HERE -- after the rn = 1 intraday-rerun dedup (so it counts days,
@@ -366,9 +366,9 @@ FROM (
 	-- receives: the cap already fired server-side, so len(rows) is the cap
 	-- for any window wider than it, and day_count would ground a false
 	-- EXACT count for a 201-day-and-wider window.
-	SELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini,
+	SELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, revert_rate, mttr_hours, bus_factor, code_ownership_gini,
 		count() OVER (PARTITION BY repo_id) AS total_days,
-		sum(toInt64(isNotNull(change_failure_rate))) OVER (PARTITION BY repo_id) AS cfr_days
+		sum(toInt64(isNotNull(revert_rate))) OVER (PARTITION BY repo_id) AS revert_days
 	FROM (
 		-- CHAOS-4418: PARTITION BY (repo_id, day), NOT repo_id alone --
 		-- every distinct day survives its own row_number()/cityHash64
@@ -376,8 +376,8 @@ FROM (
 		-- readers.ReadRepositoryMetrics' own repo_id-only partition already
 		-- uses, one level finer), instead of collapsing the whole repository
 		-- down to its single latest day the way that shared reader does.
-		SELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini,
-			row_number() OVER (PARTITION BY repo_id, day ORDER BY computed_at DESC, cityHash64(tuple(commits_count, prs_merged, median_pr_cycle_hours, ifNull(change_failure_rate, -1), ifNull(mttr_hours, -1), bus_factor, code_ownership_gini)) DESC) AS rn
+		SELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, revert_rate, mttr_hours, bus_factor, code_ownership_gini,
+			row_number() OVER (PARTITION BY repo_id, day ORDER BY computed_at DESC, cityHash64(tuple(commits_count, prs_merged, median_pr_cycle_hours, ifNull(revert_rate, -1), ifNull(mttr_hours, -1), bus_factor, code_ownership_gini)) DESC) AS rn
 		FROM repo_metrics_daily
 		WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}` + dayPredicate + `
 	)
@@ -388,6 +388,10 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 	// Read before the series statement so that statement stays the last
 	// query this provider issues for the repository path.
 	windowCycles, err := readWindowPRCycle(ctx, p.facts.client, orgID, ids, resolveRollupWindow(timeBound, evidenceWindow, clock()), true)
+	if err != nil {
+		return 0, rejected, false, err
+	}
+	windowFailures, err := readWindowChangeFailure(ctx, p.facts.client, orgID, ids, resolveRollupWindow(timeBound, evidenceWindow, clock()), true)
 	if err != nil {
 		return 0, rejected, false, err
 	}
@@ -412,10 +416,10 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		var repoID string
 		var r repositoryMetricsDayRow
 		var hasCFR, hasMTTR uint8
-		if scanErr := row.Scan(&repoID, &r.day, &r.commitsCount, &r.prsMerged, &r.medianPRCycleHours, &hasCFR, &r.changeFailureRate, &hasMTTR, &r.mttrHours, &r.busFactor, &r.codeOwnershipGini, &r.totalDays, &r.cfrDays); scanErr != nil {
+		if scanErr := row.Scan(&repoID, &r.day, &r.commitsCount, &r.prsMerged, &r.medianPRCycleHours, &hasCFR, &r.revertRate, &hasMTTR, &r.mttrHours, &r.busFactor, &r.codeOwnershipGini, &r.totalDays, &r.revertDays); scanErr != nil {
 			return scanErr
 		}
-		r.hasChangeFailureRate = hasCFR != 0
+		r.hasRevertRate = hasCFR != 0
 		r.hasMTTRHours = hasMTTR != 0
 		if _, ok := bySubject[repoID]; !ok {
 			return nil
@@ -442,8 +446,8 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 				"bus_factor":            contextfabric.IntegerFactValue(d.busFactor),
 				"code_ownership_gini":   contextfabric.NumberFactValue(d.codeOwnershipGini),
 			}
-			if d.hasChangeFailureRate {
-				rowFields["change_failure_rate"] = contextfabric.NumberFactValue(d.changeFailureRate)
+			if d.hasRevertRate {
+				rowFields["revert_rate"] = contextfabric.NumberFactValue(d.revertRate)
 			}
 			if d.hasMTTRHours {
 				rowFields["mttr_hours"] = contextfabric.NumberFactValue(d.mttrHours)
@@ -468,11 +472,11 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 			// Truncated flag reports that a cap fired, this says how
 			// much was behind it.
 			"day_count": contextfabric.IntegerFactValue(days[0].totalDays),
-			// change_failure_rate_days counts the days of the series read
-			// that carry a change_failure_rate; a NULL day is not applicable,
+			// revert_rate_days counts the days of the series read
+			// that carry a revert_rate; a NULL day is not applicable,
 			// never zero, so a window average must divide by this, not by
 			// day_count.
-			"change_failure_rate_days": contextfabric.IntegerFactValue(days[0].cfrDays),
+			"revert_rate_days": contextfabric.IntegerFactValue(days[0].revertDays),
 			// CHAOS-4633 P1 dual-write: TableFactValue builds Rows AND the
 			// declared Table off the SAME dayRows slice, so they cannot
 			// diverge. Key is exactly [day] (time_series arity 1, parses as
@@ -486,7 +490,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 				Key:   []string{"day"},
 				Measures: []string{
 					"commits_count", "prs_merged", "median_pr_cycle_hours",
-					"change_failure_rate", "bus_factor", "code_ownership_gini", "mttr_hours",
+					"revert_rate", "bus_factor", "code_ownership_gini", "mttr_hours",
 				},
 				Grain: timeBound.effectiveGrain(grainDaily),
 				Rows:  dayRows,
@@ -503,7 +507,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		// same "latest day per repository" instant the reader this
 		// widened already did, and an unrecorded mttr_hours stays absent
 		// here exactly as it is absent from its own row.
-		cfr.add(days[0].totalDays, days[0].cfrDays)
+		revertCover.add(days[0].totalDays, days[0].revertDays)
 		for name, value := range dayRows[0].Fields {
 			fields[name] = value
 		}
@@ -512,6 +516,14 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		if c, ok := windowCycles[repoID]; ok {
 			setWindowPRCycle(fields, c)
 		}
+		// The window change failure rate is over the summed stored counts
+		// of repo_change_failure_daily (window_change_failure.go); the
+		// state is always served, the rate only when it is measured.
+		var failure *changeFailureCounts
+		if c, ok := windowFailures[repoID]; ok {
+			failure = &c
+		}
+		setChangeFailure(fields, failure)
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, repoID)},
@@ -562,6 +574,19 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 		}
 		if c, ok := cycles[""]; ok {
 			setWindowPRCycle(fields, c)
+		}
+		// A team that owns no repository has nothing to count, so no state
+		// is served for it (applyNoOwnedRepositories says why).
+		if len(owned[r.TeamID]) > 0 {
+			failures, failureErr := readWindowChangeFailure(ctx, p.facts.client, orgID, repoKeysOf(map[string][]teamOwnedRepo{r.TeamID: owned[r.TeamID]}), window, false)
+			if failureErr != nil {
+				return 0, rejected, failureErr
+			}
+			var failure *changeFailureCounts
+			if c, ok := failures[""]; ok {
+				failure = &c
+			}
+			setChangeFailure(fields, failure)
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
