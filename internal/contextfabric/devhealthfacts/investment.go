@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -61,6 +62,8 @@ import (
 type InvestmentProvider struct {
 	facts  clickhouseFacts
 	scopes *membershipScopeCache
+	// scopeLoadTimeout overrides membershipScopeLoadTimeout (tests only).
+	scopeLoadTimeout time.Duration
 }
 
 func newInvestmentProvider(client contextpacket.ClickHouseQueryClient) *InvestmentProvider {

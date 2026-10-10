@@ -2,12 +2,15 @@ package devhealthfacts
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -262,8 +265,13 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 	// The shared read must not die with the first caller: it runs on a context
 	// that keeps the caller's values but not its cancellation, under its own
 	// timeout, and every waiter still honours its own context.
+	loadTimeout := membershipScopeLoadTimeout
+	if p.scopeLoadTimeout > 0 {
+		loadTimeout = p.scopeLoadTimeout
+	}
+	started := clock()
 	result := p.scopes.loads.DoChan(orgID+"\x00"+runID, func() (any, error) {
-		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), membershipScopeLoadTimeout)
+		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), loadTimeout)
 		defer cancel()
 		if ids, ok := p.scopes.get(orgID, runID, clock()); ok {
 			return ids, nil
@@ -293,7 +301,19 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 		return membershipScope{}, ctx.Err()
 	case res := <-result:
 		if res.Err != nil {
-			return membershipScope{}, res.Err
+			// The scope ids are an optimization of the scope subqueries: a load
+			// that failed on its own (its timeout, a server error) degrades to
+			// them, so the read costs more but still answers. A caller that is
+			// itself cancelled is not degraded.
+			if ctx.Err() != nil {
+				return membershipScope{}, res.Err
+			}
+			reason := "load_failed"
+			if errors.Is(res.Err, context.DeadlineExceeded) {
+				reason = "load_timeout"
+			}
+			slog.WarnContext(ctx, "devhealthfacts.membership_scope_fallback", "reason", contextfabric.SanitizeLogAttr(reason), "path", contextfabric.SanitizeLogAttr("scope_subqueries"), "elapsed_ms", clock().Sub(started).Milliseconds(), "load_timeout_ms", loadTimeout.Milliseconds())
+			return subqueryMembershipScope, nil
 		}
 		loaded = res.Val
 	}

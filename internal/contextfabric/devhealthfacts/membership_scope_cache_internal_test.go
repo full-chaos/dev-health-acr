@@ -3,7 +3,9 @@ package devhealthfacts
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,5 +117,62 @@ func TestMembershipScopeLoadSurvivesTheFirstCallersCancellation(t *testing.T) {
 	}
 	if got.scope.mode != membershipScopeIDs || strings.Join(got.scope.ids, ",") != "wu-1,wu-2" {
 		t.Fatalf("scope = %+v, want the run's ids", got.scope)
+	}
+}
+
+type warnCapture struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (w *warnCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (w *warnCapture) Handle(_ context.Context, r slog.Record) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.records = append(w.records, r)
+	return nil
+}
+func (w *warnCapture) WithAttrs([]slog.Attr) slog.Handler { return w }
+func (w *warnCapture) WithGroup(string) slog.Handler      { return w }
+
+// A scope load that fails on its own (its timeout) degrades to the scope
+// subqueries with one structured warning; the caller is not failed. Not
+// parallel: it swaps the default logger.
+func TestMembershipScopeLoadTimeoutFallsBackToTheSubqueriesWithAWarning(t *testing.T) {
+	capture := &warnCapture{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(capture))
+	defer slog.SetDefault(previous)
+
+	client := &scopeStubClient{started: make(chan struct{}, 4), release: make(chan struct{})}
+	provider := newInvestmentProvider(client)
+	provider.scopeLoadTimeout = time.Millisecond
+
+	scope, err := provider.resolveMembershipScope(context.Background(), "org-timeout")
+	if err != nil {
+		t.Fatalf("a timed-out scope load failed the read: %v", err)
+	}
+	if scope.mode != membershipScopeSubquery {
+		t.Fatalf("scope mode = %v, want the subquery fallback", scope.mode)
+	}
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	var fallbacks int
+	for _, r := range capture.records {
+		if r.Message != "devhealthfacts.membership_scope_fallback" {
+			continue
+		}
+		fallbacks++
+		attrs := map[string]any{}
+		r.Attrs(func(a slog.Attr) bool { attrs[a.Key] = a.Value.Any(); return true })
+		if attrs["reason"] != "load_timeout" || attrs["path"] != "scope_subqueries" {
+			t.Fatalf("fallback warning attrs = %v, want reason load_timeout, path scope_subqueries", attrs)
+		}
+		if _, ok := attrs["elapsed_ms"]; !ok {
+			t.Fatalf("fallback warning carries no elapsed_ms: %v", attrs)
+		}
+	}
+	if fallbacks != 1 {
+		t.Fatalf("fallback warnings = %d, want 1", fallbacks)
 	}
 }
