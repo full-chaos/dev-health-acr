@@ -148,3 +148,19 @@ func TestInvestmentOrganizationUnitsAreNotServedForARepositoryBoundCallerOrAnoth
 		t.Errorf("another organization's units were read: %#v", result.Facts)
 	}
 }
+
+// One listing for the caller's own organization however it is named; another
+// organization named beside it is never read.
+func TestInvestmentOrganizationUnitsAreListedOnceForTheOwnOrganization(t *testing.T) {
+	t.Parallel()
+	for name, subjects := range map[string][]contextfabric.SubjectRef{
+		"own and another organization": {organizationSubject("org-1"), organizationSubject("org-2")},
+		"both spellings of the own":    {organizationSubject("org-1"), organizationSubject("organization:org-1")},
+	} {
+		client := &fakeClient{tables: organizationUnitsTable()}
+		result := readOrganizationUnits(t, client, storage.Principal{OrgID: "org-1"}, nil, subjects...)
+		if pages := unitFactsOf(result, contextfabric.InvestmentUnitPageKind); len(pages) != 1 {
+			t.Errorf("%s: %d page facts, want exactly 1", name, len(pages))
+		}
+	}
+}
