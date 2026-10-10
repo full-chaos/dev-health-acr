@@ -3,10 +3,10 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "7a0a22a9709269892dbf9bfe10bbf4133fecdcfb",
+    "commit": "2ddb9f43b9f43b58a09ad60b6fb06d7286a16660",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:608a6270255afcbd86fde5889e67102b3cb22b49280c77a53102269e6f2d60a6",
-    "registry_sha256": "a6341d32be29086e165805b9cbe0d2ffedf05e22258336c61a6b40349845b175",
+    "schema_digest": "sha256:0faa6eb033aa32c7793dc547a778649379afb75db53606d37637e0bac46938a0",
+    "registry_sha256": "7aaf3818255ffe19ab04fc799b4f018a78937a31581b5cc4c974dfa4ae456f2c",
     "registry_rows": 64
   },
   "person_name_tokens": [
@@ -1306,8 +1306,8 @@
       "name": "compoundingRisk",
       "document_operation_name": "CompoundingRisk",
       "kind": "query",
-      "digest": "2b50958a4670a434bbfe46be7344486488d3a278e62b09b257252441e962bb67",
-      "document_text": "query CompoundingRisk($orgId: String!, $filter: CompoundingRiskFilterInput = null) {\n  compoundingRisk(orgId: $orgId, filter: $filter) {\n    orgId\n    breakout\n    generatedAt\n    rows {\n      day\n      scope\n      scopeId\n      scopeLabel\n      score\n      severity\n      computedAt\n      components {\n        churnNorm\n        complexityNorm\n        ownershipNorm\n        reviewNorm\n        reworkChurn\n        complexityDelta\n        ownershipGini\n        singleOwnerRatio\n        reviewLatencyP90h\n        __typename\n      }\n      weights {\n        churn\n        complexity\n        ownership\n        review\n        __typename\n      }\n      thresholds {\n        elevated\n        high\n        __typename\n      }\n      __typename\n    }\n    trend {\n      day\n      score\n      severity\n      __typename\n    }\n    __typename\n  }\n}",
+      "digest": "6bb6a6de9cc77faa27f47c2646436f67cfbd0558f3deded569e44f77689bc460",
+      "document_text": "query CompoundingRisk($orgId: String!, $filter: CompoundingRiskFilterInput = null) {\n  compoundingRisk(orgId: $orgId, filter: $filter) {\n    orgId\n    breakout\n    generatedAt\n    rows {\n      day\n      scope\n      scopeId\n      scopeLabel\n      score\n      coverage\n      severity\n      computedAt\n      components {\n        churnNorm\n        complexityNorm\n        ownershipNorm\n        reviewNorm\n        reworkChurn\n        complexityDelta\n        ownershipGini\n        singleOwnerRatio\n        reviewLatencyP90h\n        __typename\n      }\n      weights {\n        churn\n        complexity\n        ownership\n        review\n        __typename\n      }\n      thresholds {\n        elevated\n        high\n        __typename\n      }\n      __typename\n    }\n    trend {\n      day\n      score\n      severity\n      __typename\n    }\n    __typename\n  }\n}",
       "cost_class": "series",
       "deadline_seconds": 30,
       "variables": [
@@ -1494,6 +1494,11 @@
           "leaf": "scalar"
         },
         {
+          "path": "compoundingRisk.rows[*].coverage",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
           "path": "compoundingRisk.rows[*].severity",
           "type": "CompoundingRiskSeverity!",
           "leaf": "scalar"
@@ -1631,8 +1636,8 @@
       "name": "home",
       "document_operation_name": "Home",
       "kind": "query",
-      "digest": "5351e92b61599543ce5913591687ac01f642e27b6ab01577357e442b15e27dce",
-      "document_text": "query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {\n  home(orgId: $orgId, filters: $filters, window: $window) {\n    freshness {\n      lastIngestedAt\n      latestSuccessfulSyncAt\n      sources {\n        provider\n        status\n        __typename\n      }\n      coverage {\n        reposCoveredPct\n        prsLinkedToIssuesPct\n        issuesWithCycleStatesPct\n        __typename\n      }\n      __typename\n    }\n    deltas {\n      metric\n      label\n      value\n      unit\n      deltaPct\n      hasData\n      hasPriorData\n      spark {\n        ts\n        value\n        __typename\n      }\n      rateState\n      __typename\n    }\n    reworkThemeAllocation {\n      theme\n      label\n      allocation\n      allocationPct\n      prsMerged\n      churnLoc\n      __typename\n    }\n    summary {\n      id\n      text\n      evidenceLink\n      __typename\n    }\n    tiles {\n      key\n      value {\n        title\n        subtitle\n        link\n        __typename\n      }\n      __typename\n    }\n    constraint {\n      title\n      claim\n      evidence {\n        label\n        link\n        __typename\n      }\n      experiments\n      __typename\n    }\n    events {\n      ts\n      type\n      text\n      link\n      __typename\n    }\n    healthState {\n      status\n      headline\n      summary\n      asOf\n      __typename\n    }\n    signals {\n      id\n      title\n      metric\n      currentValue\n      priorValue\n      delta\n      direction\n      severity\n      confidence\n      affectedScope\n      evidenceCount\n      whyItMatters\n      recommendedAction\n      evidenceRef\n      category\n      scopeEntity {\n        id\n        displayName\n        __typename\n      }\n      attribution {\n        items\n        sources {\n          source\n          items\n          share\n          __typename\n        }\n        confidence {\n          confidence\n          items\n          share\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    limitingFactor {\n      claim\n      whyItMatters\n      recommendedAction\n      confidence\n      evidenceRef\n      __typename\n    }\n    dataConfidence {\n      level\n      coveragePct\n      connectedSources\n      missingSources\n      caveats\n      __typename\n    }\n    scopeDataConfidence {\n      level\n      coveragePct\n      lastIngestedAt\n      caveats\n      __typename\n    }\n    __typename\n  }\n}",
+      "digest": "c59c472017b6fad5049df55d06bb1f31d4638bead8695e49063f6b83958004e9",
+      "document_text": "query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {\n  home(orgId: $orgId, filters: $filters, window: $window) {\n    freshness {\n      lastIngestedAt\n      latestSuccessfulSyncAt\n      sources {\n        provider\n        status\n        __typename\n      }\n      coverage {\n        reposCoveredPct\n        prsLinkedToIssuesPct\n        issuesWithCycleStatesPct\n        __typename\n      }\n      __typename\n    }\n    deltas {\n      metric\n      label\n      value\n      unit\n      deltaPct\n      hasData\n      hasPriorData\n      spark {\n        ts\n        value\n        __typename\n      }\n      rateState\n      rateCoverage\n      repoFilterApplied\n      __typename\n    }\n    reworkThemeAllocation {\n      theme\n      label\n      allocation\n      allocationPct\n      prsMerged\n      churnLoc\n      __typename\n    }\n    summary {\n      id\n      text\n      evidenceLink\n      __typename\n    }\n    tiles {\n      key\n      value {\n        title\n        subtitle\n        link\n        __typename\n      }\n      __typename\n    }\n    constraint {\n      title\n      claim\n      evidence {\n        label\n        link\n        __typename\n      }\n      experiments\n      __typename\n    }\n    events {\n      ts\n      type\n      text\n      link\n      __typename\n    }\n    healthState {\n      status\n      headline\n      summary\n      asOf\n      __typename\n    }\n    signals {\n      id\n      title\n      metric\n      currentValue\n      priorValue\n      delta\n      direction\n      severity\n      confidence\n      affectedScope\n      evidenceCount\n      whyItMatters\n      recommendedAction\n      evidenceRef\n      category\n      scopeEntity {\n        id\n        displayName\n        __typename\n      }\n      coverage\n      repoFilterApplied\n      attribution {\n        items\n        sources {\n          source\n          items\n          share\n          __typename\n        }\n        confidence {\n          confidence\n          items\n          share\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    limitingFactor {\n      claim\n      whyItMatters\n      recommendedAction\n      confidence\n      evidenceRef\n      __typename\n    }\n    dataConfidence {\n      level\n      coveragePct\n      connectedSources\n      missingSources\n      caveats\n      __typename\n    }\n    scopeDataConfidence {\n      level\n      coveragePct\n      lastIngestedAt\n      caveats\n      __typename\n    }\n    __typename\n  }\n}",
       "cost_class": "series",
       "deadline_seconds": 30,
       "variables": [
@@ -2021,6 +2026,16 @@
           "leaf": "scalar"
         },
         {
+          "path": "home.deltas[*].rateCoverage",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].repoFilterApplied",
+          "type": "Boolean",
+          "leaf": "scalar"
+        },
+        {
           "path": "home.deltas[*].__typename",
           "type": "String",
           "leaf": "typename"
@@ -2284,6 +2299,16 @@
           "path": "home.signals[*].scopeEntity.__typename",
           "type": "String",
           "leaf": "typename"
+        },
+        {
+          "path": "home.signals[*].coverage",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].repoFilterApplied",
+          "type": "Boolean",
+          "leaf": "scalar"
         },
         {
           "path": "home.signals[*].attribution.items",

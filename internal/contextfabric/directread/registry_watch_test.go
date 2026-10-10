@@ -315,17 +315,17 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 			t.Errorf("no missing_in_served line for %s: %s", op, out)
 		}
 	}
-	if got := strings.Count(out, "registry operation drift"); got != len(changed)+6 {
-		t.Errorf("%d operation drift lines, want %d: %s", got, len(changed)+6, out)
+	if got := strings.Count(out, "registry operation drift"); got != len(changed)+7 {
+		t.Errorf("%d operation drift lines, want %d: %s", got, len(changed)+7, out)
 	}
 }
 
-// Fixture: the GET /registry body of ops 7a0a22a9, written from the output of
+// Fixture: the GET /registry body of ops 2ddb9f43, written from the output of
 // ops go run ./cmd/registrydump (the current text of every operation, the
 // legacy texts left out, as the route serves them), not captured from a host.
 // The catalogue pinned from that commit must match it with zero drift.
 func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_7a0a22a9.json")
+	body, err := os.ReadFile("testdata/query_registry_2ddb9f43.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	w, cat, buf := newWatch(t, f, nil)
 	w.Start()
 	w.Wait()
-	const want = "sha256:608a6270255afcbd86fde5889e67102b3cb22b49280c77a53102269e6f2d60a6"
+	const want = "sha256:0faa6eb033aa32c7793dc547a778649379afb75db53606d37637e0bac46938a0"
 	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
 		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
 	}
@@ -405,15 +405,15 @@ func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_di
 			digest++
 		}
 	}
-	if digest != 1 || len(ws) != 8 {
-		t.Fatalf("want one digest drift warning + 7 changed documents: %q", ws)
+	if digest != 1 || len(ws) != 9 {
+		t.Fatalf("want one digest drift warning + 8 changed documents: %q", ws)
 	}
 }
 
 // The registry ops 754d86cf served (pin 21), against the catalogue pinned now:
 // the schema digest moved (deltaPct nullable, rateState added) and the two
 // operations whose registered document text moved are home and operatingReview.
-func TestRegistryWatch_pin21_served_registry_against_the_new_pin_shows_digest_drift_and_two_changed_documents(t *testing.T) {
+func TestRegistryWatch_pin21_served_registry_against_the_new_pin_shows_digest_drift_and_three_changed_documents(t *testing.T) {
 	body, err := os.ReadFile("testdata/query_registry_754d86cf.json")
 	if err != nil {
 		t.Fatal(err)
@@ -424,13 +424,13 @@ func TestRegistryWatch_pin21_served_registry_against_the_new_pin_shows_digest_dr
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 3 {
-		t.Fatalf("want digest drift + 2 operation drift warnings: %q", ws)
+	if len(ws) != 4 {
+		t.Fatalf("want digest drift + 3 operation drift warnings: %q", ws)
 	}
 	if !strings.Contains(buf.String(), "registry digest drift") {
 		t.Errorf("no schema digest drift line: %s", buf)
 	}
-	for _, op := range []string{"home", "operatingReview"} {
+	for _, op := range []string{"compoundingRisk", "home", "operatingReview"} {
 		if !strings.Contains(buf.String(), "operation="+op+" ") {
 			t.Errorf("no drift line for %s", op)
 		}

@@ -6,7 +6,7 @@
   "path": "graphql",
   "service": "dho query-api",
   "listener": "mcp",
-  "schema_digest": "sha256:608a6270255afcbd86fde5889e67102b3cb22b49280c77a53102269e6f2d60a6",
+  "schema_digest": "sha256:0faa6eb033aa32c7793dc547a778649379afb75db53606d37637e0bac46938a0",
   "query_digest": "3f1c0a9d6b2e4f7a8c5d1e0b9a8f7e6d5c4b3a2918f7e6d5c4b3a29180f7e6d5"
  },
  "root_fields": [
