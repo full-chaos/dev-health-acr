@@ -454,7 +454,7 @@ func checkProjectThemeMixByteBudget(t *testing.T, units int, growth bool) {
 		t.Logf("statement %d: %s code=%d read_bytes=%d (%.1f MiB)", i, s.Type, s.Code, s.ReadBytes, float64(s.ReadBytes)/(1<<20))
 	}
 	if err != nil {
-		t.Fatalf("ReadFacts under max_bytes_to_read=%d failed: %v\nserver: %s", chaos7257ProdMaxBytesToRead, err, lastServerException(ctx, direct))
+		t.Fatalf("ReadFacts under max_bytes_to_read=%d failed: %v\ncause: %s\nserver: %s", chaos7257ProdMaxBytesToRead, err, readFailureCause(err), lastServerException(ctx, direct))
 	}
 	if len(statements) == 0 {
 		t.Fatal("measurement did not happen: query_log holds no statement over work_unit_investments")

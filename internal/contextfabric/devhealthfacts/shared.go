@@ -747,6 +747,7 @@ func mixReadFailure(action string, err error) error {
 		return &contextfabric.FactReadFailure{
 			State:  contextfabric.SourceUnavailable,
 			Reason: "devhealthfacts: " + action + " contended: its inputs changed during every read attempt; retry",
+			Cause:  err,
 		}
 	}
 	return readFailure(action, err)
@@ -758,11 +759,16 @@ func readFailure(action string, err error) error {
 		return &contextfabric.FactReadFailure{
 			State:  contextfabric.SourceUnavailable,
 			Reason: budgetRefusalReason(action, budget),
+			Cause:  err,
 		}
 	}
+	// The served reason is closed; the cause stays on the error for tests and
+	// is named in the log by its Go type only (never the exception text).
+	slog.Warn("devhealthfacts.read_failed", "action", contextfabric.SanitizeLogAttr(action), "error_type", fmt.Sprintf("%T", err))
 	return &contextfabric.FactReadFailure{
 		State:  contextfabric.SourceUnavailable,
 		Reason: "devhealthfacts: " + action + " failed",
+		Cause:  err,
 	}
 }
 

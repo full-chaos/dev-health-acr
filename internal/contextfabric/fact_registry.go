@@ -421,6 +421,17 @@ type FactProvider interface {
 type FactReadFailure struct {
 	State  SourceState
 	Reason string
+	// Cause is the error the read failed with. It is for logs and tests only:
+	// Error() returns Reason alone, so a served answer never carries it.
+	Cause error
+}
+
+// Unwrap exposes Cause to errors.Is / errors.As.
+func (e *FactReadFailure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
 }
 
 func (e *FactReadFailure) Error() string {

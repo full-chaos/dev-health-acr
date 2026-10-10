@@ -42,7 +42,7 @@ func TestProjectMixMembershipScopeIsReadOnceAndRememberedAgainstRealClickHouse(t
 			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, Kind: contextfabric.FactInvestment,
 			Subjects: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:github:PRJ", Label: "PRJ"}},
 		}); err != nil {
-			t.Fatalf("ReadFacts: %v\nserver: %s", err, lastServerException(ctx, direct))
+			t.Fatalf("ReadFacts: %v\ncause: %s\nserver: %s", err, readFailureCause(err), lastServerException(ctx, direct))
 		}
 		investments = budgetDelta(budgetQueryLogTotals(t, ctx, direct, "work_unit_investments"), beforeInv)
 		membership = budgetDelta(budgetQueryLogTotals(t, ctx, direct, "work_unit_membership"), beforeMem)
