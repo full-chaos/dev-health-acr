@@ -234,3 +234,114 @@ func TestEveryRepositoryHasANodeOnTheFirstTickOfAFromZeroBuild(t *testing.T) {
 		t.Fatalf("after tick 1 of %d: %d of 11 repositories were emitted, the re-stamped one among them: %v (it was first emitted on tick %d)", len(ticks), ticks[0].repositories, ticks[0].targetThere, firstWithTarget)
 	}
 }
+
+// catchUpSummaries drives the production source under the production
+// coordinator from an empty checkpoint, one tick per entry, until a tick says
+// the organization is ok (or 40 ticks). It returns each tick's summary line.
+func catchUpSummaries(t *testing.T, client *fakeClient, drainBudget int) []map[string]any {
+	t.Helper()
+	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
+	source, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.SetClockForTest(func() time.Time { return now })
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	source.WithLogger(logger)
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:      []string{"org-1"},
+		Sources:     []projectionrun.SourcePair{{Name: devhealthsource.SourceName, Source: source}},
+		Backend:     &catchUpBackend{repository: map[string]int{}, watermarks: map[string]contextfabric.ProjectionWatermark{}},
+		Checkpoints: &summaryCheckpoints{data: map[string]contextfabric.ProjectionCheckpoint{}}, RebuildMarkers: summaryRebuildMarker{},
+		DrainBatchBudget: drainBudget, Logger: logger, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summaries []map[string]any
+	for tick := 1; tick <= 40; tick++ {
+		logs.Reset()
+		coordinator.Tick(context.Background())
+		var summary map[string]any
+		for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			var line map[string]any
+			if json.Unmarshal([]byte(raw), &line) == nil && line["msg"] == "context_fabric: projection tick freshness summary" {
+				summary = line
+			}
+		}
+		if summary == nil {
+			t.Fatalf("tick %d: no summary line", tick)
+		}
+		t.Logf("tick %2d: orgs_ok=%v orgs_catching_up=%v sources_catching_up=%v tick_complete=%v", tick, summary["orgs_ok"], summary["orgs_catching_up"], summary["sources_catching_up"], summary["tick_complete"])
+		summaries = append(summaries, summary)
+		if summary["orgs_ok"] == float64(1) {
+			break
+		}
+		now = now.Add(15 * time.Second)
+	}
+	return summaries
+}
+
+// requireCatchingUpUntilTheEnd: every tick but the last says catching up and
+// not complete; the last says ok and complete; and there are at least ticks
+// of them.
+func requireCatchingUpUntilTheEnd(t *testing.T, summaries []map[string]any, ticks int) {
+	t.Helper()
+	last := len(summaries) - 1
+	for i, summary := range summaries {
+		wantOK, wantCatchingUp, wantComplete := float64(0), float64(1), false
+		if i == last {
+			wantOK, wantCatchingUp, wantComplete = 1, 0, true
+		}
+		if summary["orgs_ok"] != wantOK || summary["orgs_catching_up"] != wantCatchingUp || summary["tick_complete"] != wantComplete {
+			t.Errorf("tick %d of %d: orgs_ok=%v orgs_catching_up=%v tick_complete=%v, want %v %v %v", i+1, len(summaries),
+				summary["orgs_ok"], summary["orgs_catching_up"], summary["tick_complete"], wantOK, wantCatchingUp, wantComplete)
+		}
+	}
+	if len(summaries) < ticks {
+		t.Errorf("the catch-up took %d ticks, want %d or more: the fixture must leave work after the first tick", len(summaries), ticks)
+	}
+}
+
+func catchUpWorkItems(count int, id func(int) string) [][]any {
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	repo := "00000000-0000-4000-8000-000000000001"
+	var items [][]any
+	for n := 0; n < count; n++ {
+		at := start.Add(time.Duration(n) * time.Second)
+		items = append(items, []any{id(n), repo, "acme/repo-1", fmt.Sprintf("item %d", n), "open", "", at, at, uint8(0), zeroTime, "bug", "ACME", "Acme", []string{}})
+	}
+	return items
+}
+
+// With extra draining disabled a tick makes one attempt. A from-zero walk of
+// three pages then takes three ticks, and the first two left rows unread.
+func TestTickSummaryIsNotOKWithOneAttemptPerTickAndRowsUnread(t *testing.T) {
+	repoAt := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	client := &fakeClient{tables: []fakeTable{
+		repoRow("00000000-0000-4000-8000-000000000001", "acme/repo-1", "github", repoAt),
+		{match: "FROM work_items AS w", rows: catchUpWorkItems(500, func(n int) string { return fmt.Sprintf("WI-%04d", n) }), cursorOf: workItemCursorOf},
+	}}
+	requireCatchingUpUntilTheEnd(t, catchUpSummaries(t, client, -1), 3)
+}
+
+// A read that meets page after page of rows it must omit stops without a
+// batch after a bounded number of pages. Rows it did not reach are work left:
+// the tick is not ok and not complete because the read gave up early.
+func TestTickSummaryIsNotOKWhenTheReadStopsWithoutABatchBeforeTheRowsEnd(t *testing.T) {
+	repoAt := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	// 10,600 work items whose identity is over the natural-key bound (each
+	// is consumed and emits nothing), then 5 that project.
+	long := strings.Repeat("x", 215)
+	client := &fakeClient{tables: []fakeTable{
+		repoRow("00000000-0000-4000-8000-000000000001", "acme/repo-1", "github", repoAt),
+		{match: "FROM work_items AS w", rows: catchUpWorkItems(10605, func(n int) string {
+			if n < 10600 {
+				return fmt.Sprintf("%s-%05d", long, n)
+			}
+			return fmt.Sprintf("WI-%05d", n)
+		}), cursorOf: workItemCursorOf},
+	}}
+	requireCatchingUpUntilTheEnd(t, catchUpSummaries(t, client, 500), 2)
+}

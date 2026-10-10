@@ -680,17 +680,21 @@ left`: `cursor_at`, `lag_seconds`, `pass_edge`, `remaining_to_edge_seconds`;
 `-1` and empty mean the source could not say), its organization is counted in
 the bucket `orgs_catching_up` and NOT in `orgs_ok`, `tick_complete` is false,
 and the summary carries `sources_catching_up`, `catching_up_sources` and
-`catch_up_lag_seconds_max`. With extra draining disabled
-(`ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET` below zero) the projector makes
-one attempt per tick by design and does not classify a pair this way. A
+`catch_up_lag_seconds_max`. Work is left when the drain spent its budget with
+a further batch waiting, or when the source says its last read stopped with
+rows beyond it (a page cut at its row limit, or a read that ended without a
+batch); the second reading also holds for a graph build in progress and with
+extra draining disabled (`ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET` below
+zero, one attempt per tick). A
 stretch of paged work is a catch-up pass with a fixed edge (the source clock
 when it started); it ends when the cursor reaches the edge or the source is
 caught up, and logs `devhealthsource catch-up pass ended`. The first batch of
 a from-zero walk also carries every table the from-zero read returned whole
 (at most 150 rows; `devhealthsource from-zero read emits its complete tables
-with the first batch` names them): a repository, a team or a project has its
+with the first batch` names them, and names the tables over that size that it
+left to the walk): a repository, a team or a project of such a table has its
 node on the first tick, although its row is rewritten by every sync and so
-is the last one the walk reaches. The walk emits those rows again when it
+is the last one the walk reaches. A table over 150 rows gets no row early. The walk emits those rows again when it
 gets there. A table that does not fit the batch, or that makes the batch
 invalid beside the page (WARN, `fallback=batch_invalid_with_tables`), is left
 to the walk.

@@ -601,3 +601,104 @@ func TestEarlyRowsAreACopyOfWhatTheWalkEmits(t *testing.T) {
 		}
 	}
 }
+
+// The report says whether the last read stopped with rows beyond it. Two
+// things say so: a table had more rows than the read asked for, or the merged
+// page was cut at the row limit. A page that takes every row there is says
+// no, and so does a read that finds nothing.
+func TestCatchUpReportSaysWhenRowsLieAhead(t *testing.T) {
+	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org", Source: "catch_up_test"}
+	for _, tc := range []struct {
+		name   string
+		tables []int // rows per table
+		ahead  []bool
+	}{
+		{"one table over the read limit, then its rest", []int{incrementalBatchCap + 50}, []bool{true, false}},
+		{"two tables under the read limit, cut at the page limit", []int{incrementalBatchCap - 50, incrementalBatchCap - 50}, []bool{true, false}},
+		{"one table the page takes whole", []int{incrementalBatchCap - 50}, []bool{false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := sourcePlan{
+				client: keysetRows{}, source: "catch_up_test", version: ClickHouseSourceVersion,
+				now: func() time.Time { return now }, overlap: defaultReprojectOverlap, window: newWindowMemo(),
+				windowScope: windowScopeFor("org", 0),
+			}
+			for i, rows := range tc.tables {
+				plan.tables = append(plan.tables, namedRepositoryTable(fmt.Sprintf("table_%d", i), catchUpRows(i+1, rows, now.Add(-time.Hour), time.Second)))
+			}
+			state := cursorState{}
+			for page, want := range tc.ahead {
+				batch, available, err := plan.pagedBatch(context.Background(), "org", "", state, false)
+				if err != nil || !available {
+					t.Fatalf("page %d: available=%v err=%v", page+1, available, err)
+				}
+				if got := reportCatchUp(plan.window, checkpoint).WorkAhead; got != want {
+					t.Fatalf("after page %d: WorkAhead = %v, want %v", page+1, got, want)
+				}
+				if state, err = decodeCursor(batch.NextCursor); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+	t.Run("a read that finds nothing clears it", func(t *testing.T) {
+		store := catchUpRows(1, incrementalBatchCap+50, now.Add(-time.Hour), time.Second)
+		plan := sourcePlan{
+			client: keysetRows{}, source: "catch_up_test", version: ClickHouseSourceVersion,
+			tables: []entityTable{namedRepositoryTable("table", store)},
+			now:    func() time.Time { return now }, overlap: defaultReprojectOverlap, window: newWindowMemo(),
+			windowScope: windowScopeFor("org", 0),
+		}
+		if _, available, err := plan.pagedBatch(context.Background(), "org", "", cursorState{}, false); err != nil || !available {
+			t.Fatalf("available=%v err=%v", available, err)
+		}
+		if !reportCatchUp(plan.window, checkpoint).WorkAhead {
+			t.Fatal("precondition: the first page of a table over the read limit must say rows lie ahead")
+		}
+		if reportCatchUp(plan.window, contextfabric.ProjectionCheckpoint{OrgID: "org", Source: "catch_up_test", Epoch: 1}).WorkAhead {
+			t.Fatal("another epoch's scope says rows lie ahead")
+		}
+		last := store.rows[len(store.rows)-1]
+		if _, _, err := plan.pagedBatch(context.Background(), "org", "", cursorState{Since: last.at, After: last.key}, false); err != nil {
+			t.Fatal(err)
+		}
+		if reportCatchUp(plan.window, checkpoint).WorkAhead {
+			t.Fatal("WorkAhead is still set after a read that found nothing beyond the cursor")
+		}
+	})
+	if reportCatchUp(nil, checkpoint).WorkAhead {
+		t.Fatal("a source with no memo says rows lie ahead")
+	}
+}
+
+// A read that skips its bounded number of pages with nothing publishable
+// returns no batch. Rows it did not reach are still ahead, and it says so.
+func TestAReadThatStopsWithoutABatchSaysRowsLieAhead(t *testing.T) {
+	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org", Source: "catch_up_test"}
+	pages := maxOmittedPageSkips + 1
+	for _, tc := range []struct {
+		name  string
+		rows  int
+		ahead bool
+	}{
+		{"rows remain beyond the last skipped page", pages*incrementalBatchCap + 10, true},
+		{"the last skipped page was the last page", pages*incrementalBatchCap - 10, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := sourcePlan{
+				client: keysetRows{}, source: "catch_up_test", version: ClickHouseSourceVersion,
+				tables: []entityTable{keysetTable("history", progressRows(tc.rows, now.Add(-90*24*time.Hour), time.Minute))},
+				now:    func() time.Time { return now }, overlap: defaultReprojectOverlap, window: newWindowMemo(),
+				windowScope: windowScopeFor("org", 0),
+			}
+			if _, available, err := plan.pagedBatch(context.Background(), "org", "", cursorState{}, false); err != nil || available {
+				t.Fatalf("available=%v err=%v, want no batch: no row is publishable", available, err)
+			}
+			if got := reportCatchUp(plan.window, checkpoint).WorkAhead; got != tc.ahead {
+				t.Fatalf("WorkAhead = %v, want %v", got, tc.ahead)
+			}
+		})
+	}
+}

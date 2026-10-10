@@ -98,6 +98,28 @@ func (m *windowMemo) catchUp(scope string) catchUpPass {
 	return catchUpPass{}
 }
 
+func (m *windowMemo) workAhead(scope string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sc := m.scopes[scope]
+	return sc != nil && sc.ahead
+}
+
+// setAhead records whether the scope's paged read stopped with rows beyond
+// it. The caller of the source reads it as "work is left", whatever the
+// reason the read stopped.
+func (m *windowMemo) setAhead(scope string, ahead bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.scopeLocked(scope).ahead = ahead
+}
+
 const (
 	catchUpEndedMessage    = "devhealthsource catch-up pass ended"
 	completeTablesMessage  = "devhealthsource from-zero read emits its complete tables with the first batch"
@@ -119,6 +141,7 @@ func (p sourcePlan) notePagedPage(ctx context.Context, orgID string, page []cand
 
 // noteCaughtUp ends the scope's catch-up pass: nothing lies beyond the cursor.
 func (p sourcePlan) noteCaughtUp(ctx context.Context, orgID string) {
+	p.window.setAhead(p.windowScope, false)
 	if ended, done := p.window.endCatchUp(p.windowScope); done {
 		p.logCatchUpEnded(ctx, orgID, ended, p.clock(), catchUpEndNothingAhead)
 	}
@@ -237,7 +260,8 @@ func (p sourcePlan) logCompleteTables(ctx context.Context, orgID string, emitted
 }
 
 // reportCatchUp is ProjectionCatchUp for both sources: where the checkpoint's
-// cursor stands, and the scope's open catch-up pass. It reads; it changes
+// cursor stands, the scope's open catch-up pass, and whether its last read
+// stopped with rows beyond it. It reads; it changes
 // nothing.
 func reportCatchUp(memo *windowMemo, checkpoint contextfabric.ProjectionCheckpoint) contextfabric.ProjectionCatchUp {
 	var report contextfabric.ProjectionCatchUp
@@ -246,9 +270,11 @@ func reportCatchUp(memo *windowMemo, checkpoint contextfabric.ProjectionCheckpoi
 		(state.Space == cursorSpaceIngest || state.Space == cursorSpaceIngestColumns) {
 		report.CursorKnown, report.CursorAt = true, state.Since.UTC()
 	}
-	if pass := memo.catchUp(windowScopeFor(strings.TrimSpace(checkpoint.OrgID), checkpoint.Epoch)); pass.open {
+	scope := windowScopeFor(strings.TrimSpace(checkpoint.OrgID), checkpoint.Epoch)
+	if pass := memo.catchUp(scope); pass.open {
 		report.PassOpen, report.PassEdge = true, pass.edge.UTC()
 	}
+	report.WorkAhead = memo.workAhead(scope)
 	return report
 }
 

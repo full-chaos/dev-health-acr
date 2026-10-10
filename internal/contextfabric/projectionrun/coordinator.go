@@ -1560,19 +1560,18 @@ type tickFreshnessStats struct {
 	// an organization whose window holds more rows than one tick walks.
 	orgsWindowPassOpen int64
 	// orgsCatchingUp is the catching_up bucket: a source of the organization
-	// ended the tick with work left (its drain budget was spent and a further
-	// batch exists, or could not be ruled out). The tick did not read
+	// ended the tick with work left (endedWithWorkLeft). The tick did not read
 	// everything there was to read, so the organization is not ok and the
 	// tick is not complete, however healthy every attempt was.
 	orgsCatchingUp int64
 	// catchingUpSources names the sources behind it; sourcesCatchingUp counts
 	// the (org, source) pairs; catchUpLagMax is the largest distance between
-	// such a pair's cursor and now, in seconds, and catchUpLagUnknown says
-	// one of them could not place its cursor. Guarded by mu.
+	// such a pair's cursor and now, in seconds, and catchUpLagKnown says
+	// one of them could place its cursor. Guarded by mu.
 	sourcesCatchingUp int64
 	catchingUpSources []string
 	catchUpLagMax     int64
-	catchUpLagUnknown bool
+	catchUpLagKnown   bool
 }
 
 func (s *tickFreshnessStats) recordOK()              { atomic.AddInt64(&s.orgsOK, 1) }
@@ -1595,24 +1594,24 @@ func (s *tickFreshnessStats) recordPairCatchingUp(source string, lagSeconds int6
 	s.sourcesCatchingUp++
 	s.catchingUpSources = appendDistinctSourceName(s.catchingUpSources, source)
 	if lagSeconds < 0 {
-		s.catchUpLagUnknown = true
 		return
 	}
+	s.catchUpLagKnown = true
 	if lagSeconds > s.catchUpLagMax {
 		s.catchUpLagMax = lagSeconds
 	}
 }
 
 // snapshotCatchUp returns the catch-up fields of the summary line. The lag is
-// -1 when no pair is catching up with a known lag and one has an unknown one:
-// an unknown lag must not read as zero.
+// -1 when pairs are catching up and none could place its cursor: an unknown
+// lag must not read as zero, and a known lag of zero must not read as unknown.
 func (s *tickFreshnessStats) snapshotCatchUp() (pairs int64, names []string, lagMax int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	names = make([]string, len(s.catchingUpSources))
 	copy(names, s.catchingUpSources)
 	lagMax = s.catchUpLagMax
-	if lagMax == 0 && s.catchUpLagUnknown {
+	if s.sourcesCatchingUp > 0 && !s.catchUpLagKnown {
 		lagMax = -1
 	}
 	return s.sourcesCatchingUp, names, lagMax
@@ -2661,8 +2660,9 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 		budget := c.drainBudget // CHAOS-7171: per-source, see runOrgLegacy
 		var buildEvaluated, buildFailed, buildWithheld, buildRebuild, buildBroke bool
 		var buildStage contextfabric.PairStage
+		var buildReading pairReading
 		_ = scope.run(func(ctx context.Context) error {
-			buildEvaluated, buildFailed, buildWithheld, buildRebuild, buildStage, buildBroke = c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
+			buildEvaluated, buildFailed, buildWithheld, buildRebuild, buildStage, buildBroke, buildReading = c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
 			return nil
 		})
 		// Folded into signals AS OBSERVED, never into locals copied out
@@ -2679,10 +2679,14 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 		signals.pairBroke = signals.pairBroke || buildBroke
 		signals.stale = signals.stale || buildRebuild
 		signals.sourceFailed = signals.sourceFailed || buildFailed || buildWithheld
+		signals.catchingUp = signals.catchingUp || buildReading.workLeft
 		scope.recordPair(func(truncated bool) {
 			scope.stats.recordBuildPairOutcome(source, buildEvaluated, buildFailed, buildWithheld, truncated)
 			if buildBroke {
 				scope.stats.recordPairFailure(source, buildStage)
+			}
+			if buildReading.workLeft {
+				scope.stats.recordPairCatchingUp(source, catchUpLagSeconds(c.now(), buildReading.catchUp))
 			}
 		})
 	}
@@ -2841,7 +2845,7 @@ func (c *Coordinator) abortRefusedBuild(scope *orgScope, orgID string, targetEpo
 // cf_build_source_progress's own last-successful (now stale) value, with
 // no way to recover the lost batches' rows once the checkpoint had already
 // advanced past them.
-func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, failed, withheld, rebuild bool, pairStage contextfabric.PairStage, pairBroke bool) {
+func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, failed, withheld, rebuild bool, pairStage contextfabric.PairStage, pairBroke bool, reading pairReading) {
 	key := orgID + "\x00build\x00" + source
 	started := c.now()
 	var total int64
@@ -2876,6 +2880,9 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			break
 		}
 		batches++ // Codex round-2 F3: every attempt counts, matching runPair -- a worker-construction or RunOnce failure is still a real round-trip.
+		// The last attempt's reading, as in runPair: an attempt that fails
+		// reports none.
+		reading = pairReading{}
 		attemptStarted := c.now()
 		worker, werr := c.workerFor(source, checkpoints)
 		if werr != nil {
@@ -2912,6 +2919,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		// not -- on a no-op attempt (available=false) it is simply the
 		// unchanged pre-existing count, still correct.
 		total = run.RowsApplied
+		reading = pairReading{window: run.WindowPass, catchUp: run.CatchUp}
 		if run.Applied {
 			applied++
 			c.clearRebuildOwed(key)
@@ -2997,7 +3005,13 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	if c.rebuildOwed(key) {
 		rebuild = true
 	}
-	return batches > 0, buildFailed, withheld, rebuild, buildStage, buildBroke
+	// A build that stopped with rows still to read is not "still building,
+	// nothing to say": its tick left work, exactly as a steady-state drain's.
+	if c.endedWithWorkLeft(reason, reading) {
+		reading.workLeft = true
+		c.logWorkLeft(ctx, orgID, source, batches, applied, reading.catchUp)
+	}
+	return batches > 0, buildFailed, withheld, rebuild, buildStage, buildBroke, reading
 }
 
 // classifyBuildCompletion maps one build tick's ProjectionRun onto design
@@ -3301,6 +3315,18 @@ type pairReading struct {
 	workLeft bool
 }
 
+// endedWithWorkLeft says a pair's drain, steady state or build, stopped with
+// rows still to read. Two readings say so. The source says it: its last read
+// stopped with rows beyond it (WorkAhead), whatever made the drain stop, so a
+// read that ends without a batch and a drain of one attempt per tick are both
+// covered. Or the drain says it: budget_exceeded is the one yield reason that
+// says a further batch exists (a peek proved it) or could not be ruled out.
+// With extra draining disabled that reason is a constant and proves nothing,
+// so there only the source's word counts.
+func (c *Coordinator) endedWithWorkLeft(reason DrainYieldReason, reading pairReading) bool {
+	return reading.catchUp.WorkAhead || (reason == DrainYieldBudgetExceeded && c.drainBudget > 0)
+}
+
 // catchUpLagSeconds is the distance between a cursor and now. Negative means
 // unknown: the source could not place the cursor on its clock.
 func catchUpLagSeconds(now time.Time, catchUp contextfabric.ProjectionCatchUp) int64 {
@@ -3512,12 +3538,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 	// tick has failed and is named as a failing source; a cancellation with
 	// no error of its own is still caught, because the context is what is
 	// read.
-	// budget_exceeded is the one reason that says a further batch exists (a
-	// peek proved it) or could not be ruled out. With extra draining disabled
-	// there is no such reading: one attempt per tick is that mode's design
-	// and its yield reason is the constant budget_exceeded, so the pair is
-	// not classified. (A drain that ended on an error has another reason.)
-	if reason == DrainYieldBudgetExceeded && c.drainBudget > 0 {
+	if c.endedWithWorkLeft(reason, reading) {
 		reading.workLeft = true
 		c.logWorkLeft(ctx, orgID, source, batches, applied, reading.catchUp)
 	}

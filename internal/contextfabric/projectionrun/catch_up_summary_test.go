@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -51,6 +52,10 @@ func TestTickSummaryReportsAPairThatEndedWithWorkLeft(t *testing.T) {
 	known := func(lag time.Duration) contextfabric.ProjectionCatchUp {
 		return contextfabric.ProjectionCatchUp{CursorKnown: true, CursorAt: now.Add(-lag)}
 	}
+	ahead := func(catchUp contextfabric.ProjectionCatchUp) contextfabric.ProjectionCatchUp {
+		catchUp.WorkAhead = true
+		return catchUp
+	}
 	overdue := contextfabric.ProjectionWindowPass{Open: true, Age: 16 * time.Minute, Bound: 15 * time.Minute, Overdue: true}
 	type source struct {
 		pages   int // 0: the stream never ends
@@ -77,7 +82,10 @@ func TestTickSummaryReportsAPairThatEndedWithWorkLeft(t *testing.T) {
 		{name: "one source ran dry, the next has work left", sources: []source{{pages: 1, catchUp: known(time.Hour)}, {catchUp: known(time.Hour)}}, budget: 2, catchingUp: 1, pairs: 1, names: []string{"source-b"}, lagMin: 3600, lagMax: 3660},
 		{name: "a cursor ahead of the clock has no negative lag", sources: []source{{catchUp: known(-time.Hour)}}, budget: 2, catchingUp: 1, pairs: 1, names: []string{"source-a"}},
 		{name: "work left outranks an overdue window pass", sources: []source{{catchUp: known(time.Hour), window: overdue}}, budget: 2, catchingUp: 1, pairs: 1, names: []string{"source-a"}, lagMin: 3600, lagMax: 3660, windowPassOpn: 1},
-		{name: "extra draining disabled: one attempt per tick is not classified", sources: []source{{catchUp: known(time.Hour)}}, budget: -1, ok: 1, names: []string{}, complete: true},
+		{name: "extra draining disabled, the source does not say rows lie ahead", sources: []source{{catchUp: known(time.Hour)}}, budget: -1, ok: 1, names: []string{}, complete: true},
+		{name: "extra draining disabled, the source says rows lie ahead", sources: []source{{catchUp: ahead(known(time.Hour))}}, budget: -1, catchingUp: 1, pairs: 1, names: []string{"source-a"}, lagMin: 3600, lagMax: 3660},
+		{name: "the source stops handing out batches but says rows lie ahead", sources: []source{{pages: 1, catchUp: ahead(known(time.Hour))}}, budget: 2, catchingUp: 1, pairs: 1, names: []string{"source-a"}, lagMin: 3600, lagMax: 3660},
+		{name: "a known lag of zero beside an unknown lag is zero", sources: []source{{catchUp: known(-time.Hour)}, {plain: true}}, budget: 2, catchingUp: 1, pairs: 2, names: []string{"source-a", "source-b"}},
 	} {
 		for _, lifecycle := range []bool{false, true} {
 			path := map[bool]string{false: "legacy path", true: "lifecycle path"}[lifecycle]
@@ -193,6 +201,116 @@ func TestWorkLeftLine(t *testing.T) {
 			}
 			if lag := line["lag_seconds"].(float64); lag < tc.lag[0] || lag > tc.lag[1] {
 				t.Errorf("lag_seconds = %v, want %v..%v", lag, tc.lag[0], tc.lag[1])
+			}
+		})
+	}
+}
+
+// buildingLifecycleStore puts the organization in a build of the given
+// required sources that never flips.
+type buildingLifecycleStore struct {
+	contextfabric.GraphLifecycleStore
+	required []string
+}
+
+func (b buildingLifecycleStore) Get(context.Context, string) (contextfabric.OrgGraphLifecycle, bool, error) {
+	target := int64(1)
+	return contextfabric.OrgGraphLifecycle{Status: contextfabric.LifecycleStatusBuilding, ActiveEpoch: 0, TargetEpoch: &target, RequiredSources: b.required}, true, nil
+}
+
+func (buildingLifecycleStore) SourceProgress(context.Context, string, int64) ([]contextfabric.BuildSourceProgress, error) {
+	return nil, nil
+}
+
+func (buildingLifecycleStore) RecordSourceProgress(context.Context, string, int64, string, contextfabric.BuildCompletionMode, int64, time.Time) error {
+	return nil
+}
+
+func (buildingLifecycleStore) Flip(context.Context, string, int64, time.Duration, time.Time) (contextfabric.OrgGraphLifecycle, error) {
+	return contextfabric.OrgGraphLifecycle{}, errors.New("this fixture does not flip")
+}
+
+// aheadThenFailing says rows lie ahead after its first batch and fails on the
+// next read.
+type aheadThenFailing struct{ *catchUpSource }
+
+func (s aheadThenFailing) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+	if checkpoint.Cursor != "" {
+		return contextfabric.ProjectionBatch{}, false, contextfabric.ErrUnavailable
+	}
+	return s.catchUpSource.NextProjectionBatch(ctx, checkpoint)
+}
+
+// A build whose source ended the tick with rows still to read left work. The
+// organization is catching up, not "building, nothing to say" (backoff), and
+// the tick is not complete. A required source that finished its read is not
+// named.
+func TestTickSummaryReportsABuildThatEndedWithWorkLeft(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	behind := contextfabric.ProjectionCatchUp{CursorKnown: true, CursorAt: now.Add(-time.Hour)}
+	ahead := behind
+	ahead.WorkAhead = true
+	endless := func(name string) contextfabric.ProjectionSource {
+		return &catchUpSource{fakeSource: &fakeSource{name: name}, catchUp: behind}
+	}
+	for _, tc := range []struct {
+		name                               string
+		sources                            []contextfabric.ProjectionSource
+		budget                             int
+		catchingUp, backoff, failed, pairs float64
+		names                              []string
+		lagMin, lagMax                     float64
+		complete                           bool
+	}{
+		{name: "the drain budget is spent with batches left", sources: []contextfabric.ProjectionSource{endless("source-a")}, budget: 2, catchingUp: 1, pairs: 1, names: []string{"source-a"}, lagMin: 3600, lagMax: 3660},
+		{name: "one source finished, the next has batches left", sources: []contextfabric.ProjectionSource{&fakeSource{name: "source-a", pages: 1}, endless("source-b")}, budget: 2, catchingUp: 1, pairs: 1, names: []string{"source-b"}, lagMin: 3600, lagMax: 3660},
+		{name: "one attempt per tick, the source says rows lie ahead", sources: []contextfabric.ProjectionSource{&catchUpSource{fakeSource: &fakeSource{name: "source-a"}, catchUp: ahead}}, budget: -1, catchingUp: 1, pairs: 1, names: []string{"source-a"}, lagMin: 3600, lagMax: 3660},
+		{name: "one attempt per tick, the source does not say", sources: []contextfabric.ProjectionSource{endless("source-a")}, budget: -1, backoff: 1, names: []string{}, complete: true},
+		{name: "a read that fails after rows lay ahead is a failure, not work left", sources: []contextfabric.ProjectionSource{aheadThenFailing{&catchUpSource{fakeSource: &fakeSource{name: "source-a"}, catchUp: ahead}}}, budget: 2, failed: 1, names: []string{}, complete: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var buffer bytes.Buffer
+			checkpoints := newFakeCheckpointStore()
+			var pairs []projectionrun.SourcePair
+			var required []string
+			for i, src := range tc.sources {
+				name := "source-" + string(rune('a'+i))
+				pairs = append(pairs, projectionrun.SourcePair{Name: name, Source: src})
+				required = append(required, name)
+			}
+			backend := newFakeBackend()
+			coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+				OrgIDs: []string{"org-1"}, Sources: pairs, Backend: backend, Checkpoints: checkpoints,
+				RebuildMarkers: newFakeRebuildMarker(), DrainBatchBudget: tc.budget, Logger: slog.New(slog.NewJSONHandler(&buffer, nil)),
+				Lifecycle:        buildingLifecycleStore{required: required},
+				EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+			})
+			if err != nil {
+				t.Fatalf("new coordinator: %v", err)
+			}
+			coordinator.Tick(context.Background())
+			if backend.appliedCount() == 0 {
+				t.Fatal("precondition: nothing was applied; the build tick did not drain")
+			}
+			summary := freshnessSummary(t, &buffer)
+			requireBucketIdentity(t, summary)
+			for key, want := range map[string]float64{
+				"orgs_catching_up": tc.catchingUp, "orgs_backoff": tc.backoff, "orgs_source_failed": tc.failed, "sources_catching_up": tc.pairs, "orgs_ok": 0,
+			} {
+				if got := summaryNumber(t, summary, key); got != want {
+					t.Errorf("%s = %v, want %v; line: %v", key, got, want, summary)
+				}
+			}
+			if lag := summaryNumber(t, summary, "catch_up_lag_seconds_max"); lag < tc.lagMin || lag > tc.lagMax {
+				t.Errorf("catch_up_lag_seconds_max = %v, want %v..%v", lag, tc.lagMin, tc.lagMax)
+			}
+			if names := stringList(summary["catching_up_sources"]); !reflect.DeepEqual(names, tc.names) {
+				t.Errorf("catching_up_sources = %v, want %v", names, tc.names)
+			}
+			if complete, _ := summary["tick_complete"].(bool); complete != tc.complete {
+				t.Errorf("tick_complete = %v, want %v; line: %v", complete, tc.complete, summary)
 			}
 		})
 	}

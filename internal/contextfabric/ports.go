@@ -1469,6 +1469,11 @@ type ProjectionCatchUp struct {
 	// cursor reaches it or the source is caught up.
 	PassOpen bool
 	PassEdge time.Time
+	// WorkAhead: the source's last read for this scope stopped with rows
+	// beyond it that it did not hand out (a page cut at its row limit, or a
+	// read that ended without a batch before the rows ran out). It is false
+	// after a read that took every row there was.
+	WorkAhead bool
 }
 
 // ProjectionCatchUpReporter is an OPTIONAL capability a ProjectionSource

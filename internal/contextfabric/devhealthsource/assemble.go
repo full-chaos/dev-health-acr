@@ -337,8 +337,12 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 	for skips := 0; ; skips++ {
 		var all []candidate
 		var bound pageBound
+		// ahead: rows lie beyond what this iteration hands out, because a
+		// table had more than the read asked for or the merged page was cut.
+		ahead := false
 		for _, table := range p.tables {
 			rows, truncated, err := readTable(ctx, table, p.client, orgID, state, incrementalBatchCap)
+			ahead = ahead || truncated
 			if err == nil {
 				err = p.boundRead(ctx, orgID, table.name, state, &bound, rows, truncated)
 			}
@@ -360,7 +364,10 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			return p.overlapBatch(ctx, orgID, cursor, state)
 		}
 		sortCandidates(all)
+		read := len(all)
 		all, bounded := truncateToCompleteRows(all, incrementalBatchCap, bound)
+		ahead = ahead || len(all) < read
+		p.window.setAhead(p.windowScope, ahead)
 		if len(all) == 0 {
 			p.noteYield()
 			return contextfabric.ProjectionBatch{}, false, nil
