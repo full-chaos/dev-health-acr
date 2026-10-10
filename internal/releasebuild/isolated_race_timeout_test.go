@@ -237,4 +237,25 @@ func TestDevhealthsourceIsolation_ownRaceJobAndBudget(t *testing.T) {
 	if !regexp.MustCompile(`(?m)^      - race-devhealthsource\s*$`).MatchString(ciSrc) {
 		t.Fatal("aggregate verify job must list race-devhealthsource in its needs")
 	}
+	if !regexp.MustCompile(`(?m)^      - race-devhealthsource-heavy\s*$`).MatchString(ciSrc) {
+		t.Fatal("aggregate verify job must list race-devhealthsource-heavy in its needs")
+	}
+	heavyStart := strings.Index(ciSrc, "\n  race-devhealthsource-heavy:\n")
+	if heavyStart < 0 {
+		t.Fatal("ci.yml must define a race-devhealthsource-heavy job")
+	}
+	heavy := ciSrc[heavyStart+1:]
+	if next := regexp.MustCompile(`(?m)^  [A-Za-z0-9_-]+:\s*$`).FindStringIndex(heavy[3:]); next != nil {
+		heavy = heavy[:next[0]+3]
+	}
+	for _, want := range []string{
+		"name: race (devhealthsource heavy, isolated scope)",
+		"needs: mirror-preflight",
+		"isolated-dedicated devhealthsource",
+		"race-split.sh devhealthsource heavy",
+	} {
+		if !strings.Contains(heavy, want) {
+			t.Fatalf("race-devhealthsource-heavy job must contain %q; block:\n%s", want, heavy)
+		}
+	}
 }

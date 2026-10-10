@@ -808,8 +808,8 @@ jobs:
   # so a creeping suite is caught loudly here instead of being eaten by the
   # timeout. Re-measure from the first hosted run and retune the Makefile.
   # Measured on run 38086240597's non-race go-test.json: 438 top-level tests,
-  # 216s summed; the 10 tests of scripts/ci/devhealthsource-heavy-tests.txt
-  # sum to 126s. The single race job ran 477s wall (395s tests plus ~82s
+  # 216s summed; the 18 tests of scripts/ci/devhealthsource-heavy-tests.txt
+  # sum to 157s. The single race job ran 477s wall (395s tests plus ~82s
   # build) against its 510s guard (85% of 600s). Each half has its own job
   # and the same 600s budget; the rest half is `-skip` of the heavy regex,
   # so a test absent from the list runs there.
@@ -852,7 +852,7 @@ jobs:
           limit=${timeout%s}
           printf 'devhealthsource (rest half) race wall time: %ss (budget %ss)\n' "$elapsed" "$limit"
           if [ $((elapsed * 100)) -gt $((limit * 85)) ]; then
-            printf '::error::devhealthsource (rest half) took %ss, over 85%% of its %ss budget (GOTEST_DEVHEALTHSOURCE_TIMEOUT); rebalance scripts/ci/devhealthsource-heavy-tests.txt\n' "$elapsed" "$limit"
+            printf '::error::CHAOS-6342: devhealthsource (rest half) took %ss, over 85%% of its %ss budget (GOTEST_DEVHEALTHSOURCE_TIMEOUT); rebalance scripts/ci/devhealthsource-heavy-tests.txt\n' "$elapsed" "$limit"
             exit 1
           fi
 
@@ -895,7 +895,7 @@ jobs:
           limit=${timeout%s}
           printf 'devhealthsource (heavy half) race wall time: %ss (budget %ss)\n' "$elapsed" "$limit"
           if [ $((elapsed * 100)) -gt $((limit * 85)) ]; then
-            printf '::error::devhealthsource (heavy half) took %ss, over 85%% of its %ss budget (GOTEST_DEVHEALTHSOURCE_TIMEOUT); rebalance scripts/ci/devhealthsource-heavy-tests.txt\n' "$elapsed" "$limit"
+            printf '::error::CHAOS-6342: devhealthsource (heavy half) took %ss, over 85%% of its %ss budget (GOTEST_DEVHEALTHSOURCE_TIMEOUT); rebalance scripts/ci/devhealthsource-heavy-tests.txt\n' "$elapsed" "$limit"
             exit 1
           fi
 
