@@ -459,6 +459,8 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		p.noteYield()
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
+	// The cursor buildBatchIn derives here is replaced below by the frontier.
+	all[len(all)-1].passOver = true
 	batch, err := buildBatchIn(p.cursorSpace(), orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
@@ -473,6 +475,13 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		digest = sha256.Sum256(append(digest[:], []byte(rowMemoKey(c))...))
 	}
 	frontier := state
+	if !cursorKeyFits(p.cursorSpace(), frontier.Since, frontier.After) {
+		if frontier.After >= cursorSentinelKey {
+			// No cursor can land after this key: nothing is built, nothing fails.
+			return contextfabric.ProjectionBatch{}, false, nil
+		}
+		frontier.After = cursorSentinelKey
+	}
 	frontier.Ack = hex.EncodeToString(digest[:8])
 	next, err := encodeCursorIn(p.cursorSpace(), frontier)
 	if err != nil {
