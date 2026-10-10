@@ -39,6 +39,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -77,11 +78,18 @@ const (
 // RefusalCodeVocabulary: the policy artifact never assigns it.
 const RefusalDeniedOrNotFound RefusalCode = PublicDeniedOrNotFound
 
+// RefusalTeamInactive is run_operation's answer for a named team id the
+// caller may read whose team row is inactive. It is never given for a subject
+// the caller may not read. Like RefusalDeniedOrNotFound it is not assigned by
+// the policy artifact.
+const RefusalTeamInactive RefusalCode = contractsv1.TeamInactiveReason
+
 // OperationRefusalCodes is every code an OperationResponse refusal can
-// carry: the policy's closed vocabulary plus denied_or_not_found.
+// carry: the policy's closed vocabulary plus denied_or_not_found and
+// team_inactive.
 func OperationRefusalCodes() []RefusalCode {
 	vocab := RefusalCodeVocabulary()
-	return append(vocab[:], RefusalDeniedOrNotFound)
+	return append(vocab[:], RefusalDeniedOrNotFound, RefusalTeamInactive)
 }
 
 // UpstreamErrorClass is the closed vocabulary of the safe error class an
@@ -715,8 +723,14 @@ func (x *run) gateAndScope(ctx context.Context, op *OperationPolicy, scope Calle
 	}
 	requested = append(requested, fromGrant...)
 	admitted := map[string]bool{}
+	inactive := map[string]GatedSubject{}
 	if len(requested) > 0 {
 		proof, decision := r.gate.Authorize(ctx, x.principal, requested)
+		for _, gated := range decision.Outcomes {
+			if gated.Inactive {
+				inactive[string(gated.Subject.Kind)+"\x00"+gated.Subject.CanonicalID] = gated
+			}
+		}
 		if decision.Decision == DecisionUnavailable {
 			return nil, nil, ErrOperationAuthorizationUnavailable
 		}
@@ -730,6 +744,14 @@ func (x *run) gateAndScope(ctx context.Context, op *OperationPolicy, scope Calle
 	// ONE public answer, with no id echoed and no distinction.
 	for _, use := range subjects {
 		if !admitted[use.kind+"\x00"+strings.TrimSpace(use.id)] {
+			if gated, ok := inactive[use.kind+"\x00"+strings.TrimSpace(use.id)]; ok {
+				message := "a named team is inactive"
+				if gated.ActiveTwinID != "" {
+					message += "; its active replacement is " + gated.ActiveTwinID
+				}
+				resp := x.refuse(RefusalTeamInactive, message, "")
+				return nil, &resp, nil
+			}
 			resp := x.refuse(RefusalDeniedOrNotFound, "a named subject is denied or not found", "")
 			return nil, &resp, nil
 		}

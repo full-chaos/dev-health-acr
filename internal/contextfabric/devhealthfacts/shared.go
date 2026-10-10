@@ -622,7 +622,13 @@ import (
 // only, and an inactive team id is absent to an explicit read. A candidate saved
 // under v126 may hold a second team, a doubled or diluted aggregate, or a
 // cohort refused as ambiguous, and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v127"
+//
+// v127 -> v128: a team id the caller may read whose team row is inactive
+// answers team_inactive (read_facts, read_relationships, run_operation), naming
+// the one active team of the same name when the caller may read it, instead of
+// denied_or_not_found. A candidate saved under v127 may hold the plain denial
+// and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v128"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

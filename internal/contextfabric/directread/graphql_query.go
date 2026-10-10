@@ -79,11 +79,11 @@ const (
 
 // GraphQLRefusalCodes is the closed set of refusal codes graphql_query can
 // answer: run_operation's codes (unknown_operation excepted: there is no
-// operation name) plus the query codes.
+// operation name; team_inactive excepted: graphql_query names no team id) plus the query codes.
 func GraphQLRefusalCodes() []RefusalCode {
 	out := []RefusalCode{}
 	for _, code := range OperationRefusalCodes() {
-		if code != RefusalUnknownOperation {
+		if code != RefusalUnknownOperation && code != RefusalTeamInactive {
 			out = append(out, code)
 		}
 	}

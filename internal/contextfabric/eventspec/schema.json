@@ -3639,7 +3639,8 @@
           "scope_required",
           "row_outside_grant",
           "policy_stale",
-          "denied_or_not_found"
+          "denied_or_not_found",
+          "team_inactive"
         ],
         "applicability": "written when the call is refused"
       },

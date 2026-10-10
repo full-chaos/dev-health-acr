@@ -97,6 +97,10 @@
               },
               "answer": {
                 "type": "string"
+              },
+              "active_canonical_id": {
+                "type": "string",
+                "description": "With answer team_inactive: the one active team of the same name the caller may read."
               }
             }
           }
