@@ -108,27 +108,56 @@ func TestTickSummaryReportsTheTrailingWindowPass(t *testing.T) {
 	}
 }
 
-// The pass state is where the drain STOPPED. A source that applied a batch on
-// its last attempt reports none, whatever its capability would say.
-func TestAnAppliedRunCarriesNoWindowPass(t *testing.T) {
+// A drain can end on an applied batch: its budget is spent, or the projector
+// applies one batch per tick. A pass left open is then walked by no call, and
+// it still ages: the summary must report it on such a tick too.
+func TestATickThatEndsOnAnAppliedBatchStillReportsTheOpenPass(t *testing.T) {
 	t.Parallel()
+	open := contextfabric.ProjectionWindowPass{Open: true, Age: time.Minute, Bound: 15 * time.Minute}
 	overdue := contextfabric.ProjectionWindowPass{Open: true, Age: 16 * time.Minute, Bound: 15 * time.Minute, Overdue: true}
-	var buffer bytes.Buffer
-	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
-		OrgIDs: []string{"org-1"},
-		Sources: []projectionrun.SourcePair{{Name: "source-a", Source: &windowReportingSource{
-			fakeSource: &fakeSource{name: "source-a"}, pass: overdue,
-		}}},
-		Backend: newFakeBackend(), Checkpoints: newFakeCheckpointStore(), RebuildMarkers: newFakeRebuildMarker(),
-		DrainBatchBudget: -1, Logger: slog.New(slog.NewJSONHandler(&buffer, nil)),
-	})
-	if err != nil {
-		t.Fatalf("new coordinator: %v", err)
-	}
-	coordinator.Tick(context.Background())
-	summary := freshnessSummary(t, &buffer)
-	requireBucketIdentity(t, summary)
-	if ok, behind, open := summaryNumber(t, summary, "orgs_ok"), summaryNumber(t, summary, "orgs_window_behind"), summaryNumber(t, summary, "orgs_window_pass_open"); ok != 1 || behind != 0 || open != 0 {
-		t.Fatalf("a tick that ended on an applied batch: orgs_ok=%v orgs_window_behind=%v orgs_window_pass_open=%v, want 1/0/0", ok, behind, open)
+	for _, tc := range []struct {
+		name             string
+		pass             contextfabric.ProjectionWindowPass
+		ok, behind, open float64
+	}{
+		{"no pass open", contextfabric.ProjectionWindowPass{}, 1, 0, 0},
+		{"a pass open inside its bound", open, 1, 0, 1},
+		{"a pass open past its bound", overdue, 0, 1, 1},
+	} {
+		for _, lifecycle := range []bool{false, true} {
+			path := map[bool]string{false: "legacy path", true: "lifecycle path"}[lifecycle]
+			t.Run(tc.name+" ("+path+")", func(t *testing.T) {
+				t.Parallel()
+				var buffer bytes.Buffer
+				backend := newFakeBackend()
+				checkpoints := newFakeCheckpointStore()
+				source := &windowReportingSource{fakeSource: &fakeSource{name: "source-a"}, pass: tc.pass}
+				config := projectionrun.Config{
+					OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
+					Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+					// One attempt per tick: the tick ends on the applied batch.
+					DrainBatchBudget: -1, Logger: slog.New(slog.NewJSONHandler(&buffer, nil)),
+				}
+				if lifecycle {
+					config.Lifecycle = servingLifecycleStore{}
+					config.EpochCheckpoints = func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints }
+				}
+				coordinator, err := projectionrun.NewCoordinator(config)
+				if err != nil {
+					t.Fatalf("new coordinator: %v", err)
+				}
+				coordinator.Tick(context.Background())
+				if source.calls.Load() != 1 || backend.appliedCount() != 1 {
+					t.Fatalf("precondition: %d source calls, %d batches applied; want the tick to end on its one applied batch", source.calls.Load(), backend.appliedCount())
+				}
+				summary := freshnessSummary(t, &buffer)
+				requireBucketIdentity(t, summary)
+				for key, want := range map[string]float64{"orgs_ok": tc.ok, "orgs_window_behind": tc.behind, "orgs_window_pass_open": tc.open} {
+					if got := summaryNumber(t, summary, key); got != want {
+						t.Errorf("%s = %v, want %v; line: %v", key, got, want, summary)
+					}
+				}
+			})
+		}
 	}
 }

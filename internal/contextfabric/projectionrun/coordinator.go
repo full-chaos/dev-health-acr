@@ -3303,8 +3303,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 		}
 		evaluated = true
 		// The LAST attempt's reading, overwritten: the pass state is a fact
-		// about where the drain stopped, and an attempt that applied or
-		// failed reports none.
+		// about where the drain stopped. An attempt that failed reports none.
 		window = pairWindow
 		// failed describes THIS attempt, overwritten rather than OR-ed:
 		// a drain whose later attempt succeeds has recovered within the

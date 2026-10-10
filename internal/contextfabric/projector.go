@@ -59,11 +59,13 @@ type ProjectionRun struct {
 	// writes, including the finalizing retry, all failing while the
 	// checkpoint itself keeps advancing).
 	RowsApplied int64
-	// WindowPass is the source's trailing re-read as it stood when the source
-	// reported nothing available: "caught up" and "stopped at this call's
-	// bound with the window not walked to its end" both arrive as
-	// Applied=false, and only this field tells them apart. The zero value on
-	// an applied run, and for a source without the capability.
+	// WindowPass is the source's trailing re-read as it stood after this
+	// call. "Caught up" and "stopped at this call's bound with the window not
+	// walked to its end" both arrive as Applied=false, and only this field
+	// tells them apart. It is read after an applied batch too: a drain that
+	// ends on an applied batch (its budget spent, or one batch per tick) can
+	// leave a pass open that no call is walking, and that pass still ages.
+	// The zero value for a source without the capability.
 	WindowPass ProjectionWindowPass
 }
 
@@ -200,6 +202,9 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	if err != nil {
 		return ProjectionRun{}, markPair(PairStageCheckpointLoad, err, "load projection checkpoint")
 	}
+	// The checkpoint as the store loaded it names the pass's scope
+	// (organization and epoch); the claim below rebuilds the value.
+	loaded := checkpoint
 	batch, available, err := w.source.NextProjectionBatch(ctx, checkpoint)
 	if err != nil {
 		return ProjectionRun{}, fmt.Errorf("read projection batch: %w", markPair(PairStageSourceRead, err, ""))
@@ -221,10 +226,7 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		if err != nil {
 			return ProjectionRun{}, err
 		}
-		var windowPass ProjectionWindowPass
-		if reporter, ok := w.source.(ProjectionWindowReporter); ok {
-			windowPass = reporter.ProjectionWindowPass(checkpoint)
-		}
+		windowPass := w.windowPass(loaded)
 		if progressed {
 			return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: advanced, RowsApplied: checkpoint.RowsApplied, WindowPass: windowPass}, nil
 		}
@@ -317,7 +319,17 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		CompleteEnumeration: batch.CompleteEnumeration,
 		ItemsApplied:        itemsApplied,
 		RowsApplied:         updated.RowsApplied,
+		WindowPass:          w.windowPass(loaded),
 	}, nil
+}
+
+// windowPass reads the source's trailing re-read for the checkpoint's scope,
+// when the source can report it.
+func (w *ProjectionWorker) windowPass(checkpoint ProjectionCheckpoint) ProjectionWindowPass {
+	if reporter, ok := w.source.(ProjectionWindowReporter); ok {
+		return reporter.ProjectionWindowPass(checkpoint)
+	}
+	return ProjectionWindowPass{}
 }
 
 // PeekAvailable reports whether the source would offer a batch at the current
