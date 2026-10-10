@@ -186,8 +186,24 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 
 	unitsCut := false
 	if unitsRequest, wanted := contextfabric.InvestmentUnitsFrom(ctx); wanted {
+		ownOrganization, _ := organizationSubjectsOfCaller(query.Subjects, orgID)
 		for _, subject := range query.Subjects {
 			prefix := teamPrefix
+			if subject.Kind == contextfabric.SubjectOrganization {
+				// Only the caller's own organization, one listing, and never for
+				// a repository-bound grant (the organization fact is withheld
+				// for it too: a partial total is not an organization's).
+				if len(ownOrganization) == 0 || subject.CanonicalID != ownOrganization[0].CanonicalID || sourceHealthRestricted(principal) {
+					continue
+				}
+				unitFacts, more, unitErr := p.readInvestmentUnits(ctx, orgID, subject, orgID, unitsRequest, timeBound)
+				if unitErr != nil {
+					return contextfabric.FactProviderResult{}, readFailure("query investment units", unitErr)
+				}
+				facts = append(facts, unitFacts...)
+				unitsCut = unitsCut || more
+				continue
+			}
 			if subject.Kind == contextfabric.SubjectRepository {
 				prefix = repositoryPrefix
 			} else if subject.Kind != contextfabric.SubjectTeam {

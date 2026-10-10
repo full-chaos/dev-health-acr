@@ -593,7 +593,7 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 	return response, nil
 }
 
-// validateUnits checks a units page request: one team or repository subject,
+// validateUnits checks a units page request: one team, repository or organization subject,
 // kind investment named, a page size within bounds, a cursor this server issued.
 func validateUnits(request FactsRequest, plan readPlan) (*contextfabric.InvestmentUnitsRequest, *EffectiveUnits, error) {
 	if !slices.Contains(plan.kinds, contextfabric.FactInvestment) {
@@ -602,8 +602,8 @@ func validateUnits(request FactsRequest, plan readPlan) (*contextfabric.Investme
 	if len(plan.subjects) != 1 {
 		return nil, nil, invalid("units takes exactly one subject")
 	}
-	if kind := plan.subjects[0].Kind; kind != contextfabric.SubjectTeam && kind != contextfabric.SubjectRepository {
-		return nil, nil, invalid("units takes a team or a repository subject")
+	if kind := plan.subjects[0].Kind; kind != contextfabric.SubjectTeam && kind != contextfabric.SubjectRepository && kind != contextfabric.SubjectOrganization {
+		return nil, nil, invalid("units takes a team, a repository or an organization subject")
 	}
 	size := request.Units.MaxUnits
 	switch {
@@ -1213,6 +1213,7 @@ func unitRowNotVisible(item GatedFact) bool {
 // resolved to no repository, each as a count, never dropped silently.
 func noteUnitsCoverage(rows []CoverageRow, facts []ServedFact, notVisible int) {
 	unresolved := int64(0)
+	unattributedRows, unattributedShare := int64(0), 0.0
 	for _, fact := range facts {
 		if fact.Kind != string(contextfabric.FactInvestment) {
 			continue
@@ -1225,6 +1226,14 @@ func noteUnitsCoverage(rows []CoverageRow, facts []ServedFact, notVisible int) {
 				unresolved += n
 			}
 		}
+		if text, ok := fact.Fields["scope_unattributed_rows"].(string); ok {
+			if n, err := strconv.ParseInt(text, 10, 64); err == nil {
+				unattributedRows = n
+			}
+		}
+		if share, ok := fact.Fields["scope_unattributed_total"].(float64); ok {
+			unattributedShare = share
+		}
 	}
 	for i := range rows {
 		if rows[i].Kind != string(contextfabric.FactInvestment) {
@@ -1236,6 +1245,9 @@ func noteUnitsCoverage(rows []CoverageRow, facts []ServedFact, notVisible int) {
 		}
 		if unresolved > 0 {
 			notes = append(notes, fmt.Sprintf("refs_unresolved %d (aggregate over every owned repository)", unresolved))
+		}
+		if unattributedRows > 0 {
+			notes = append(notes, fmt.Sprintf("units_unattributed %d rows, effort %s reaches no resolved repository (rows without repository_id; included in scope_share_total and in the organization's unattributed_effort_share)", unattributedRows, strconv.FormatFloat(unattributedShare, 'g', 6, 64)))
 		}
 		if len(notes) == 0 {
 			continue

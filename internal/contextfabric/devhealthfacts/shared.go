@@ -655,13 +655,22 @@ import (
 // under v130 may hold a refusal stamped with a stale digest and must not be
 // reused.
 //
-// v131 -> v132: repository and team metrics serve the incident-based change
+// v131 -> v132: the organization subject has a work-unit listing (read_facts units
+// for kind investment): every repository's unit rows plus rows with no
+// repository_id and unit_attribution_basis unattributed_no_resolved_repository
+// for effort that reaches no resolved repository; the page fact carries
+// scope_unattributed_rows and scope_unattributed_total and the coverage reason
+// states units_unattributed. A candidate saved under v131 holds the refusal "units
+// takes a team or a repository subject" for an organization and must not be
+// reused.
+//
+// v132 -> v133: repository and team metrics serve the incident-based change
 // failure rate over the summed repo_change_failure_daily counts of the window
 // (change_failure_rate, change_failure_rate_state, the two counts and the link
 // tier), never the deprecated repo_metrics_daily.change_failure_rate; revert_rate
-// replaces it in the daily series. A candidate saved under v131 may hold the
+// replaces it in the daily series. A candidate saved under v132 may hold the
 // deprecated value (often 0) as a change failure rate and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v132"
+const QueryVersion = "devhealthfacts.clickhouse.v133"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

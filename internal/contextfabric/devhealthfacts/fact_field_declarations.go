@@ -839,7 +839,7 @@ func investmentFields() []fieldDecl {
 		declOn(declTeamProject, investmentThemeFields(true)...),
 		declOn(declOrganizationOnly, investmentThemeFields(false)...),
 		declOn(declRepoTeamOrg, themeBreakdown, fStr("mix_source"), fStr("attribution_basis")),
-		declOn(declRepoTeam, investmentUnitFields()...),
+		declOn(declRepoTeamOrg, investmentUnitFields()...),
 		declOn(declOrganizationOnly, fStr("scope"), fInt("repositories_in_scope", "count"), fNum("unattributed_effort_share", "ratio")),
 		declOn([]contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectOrganization}, fInt("work_unit_count", "count")),
 		declOn(declTeamOnly, declAggregate(fInt("owned_repository_count", "count"))),
@@ -879,6 +879,7 @@ func investmentUnitFields() []fieldDecl {
 		declRef(declUnresolvedHandleRef, fStr("unit_unresolved_refs")), fStr("unit_mix_source"), fStr("unit_attribution_basis"),
 		fInt("units_returned", "count"), fNum("page_share_total", ""), fInt("units_refs_unresolved", "count"),
 		fNum("scope_share_total", ""), fInt("scope_unit_rows", "count"), fStr("next_cursor"), fStr("units_limitation"),
+		fNum("scope_unattributed_total", ""), fInt("scope_unattributed_rows", "count"),
 	}
 	for _, theme := range canonicalInvestmentThemes {
 		fields = append(fields, fNum("unit_"+contextfabric.FactFieldTheme(theme), "ratio"))
@@ -890,6 +891,7 @@ func investmentUnitFields() []fieldDecl {
 	pageAggregates := map[string]bool{
 		"units_returned": true, "page_share_total": true, "units_refs_unresolved": true,
 		"scope_share_total": true, "scope_unit_rows": true,
+		"scope_unattributed_total": true, "scope_unattributed_rows": true,
 	}
 	for i := range fields {
 		fields[i].Nullable = true
