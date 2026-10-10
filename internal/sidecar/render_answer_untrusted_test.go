@@ -540,6 +540,7 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 		Warnings:          []string{"a warning"},
 		EvidenceRefIDs:    []string{"evidence_inject01"},
 		SubjectReceipts:   []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_injection1", ReceiptID: "receipt_injection1"}},
+		InactiveHints:     []contractsv1.ContextFabricInactiveHint{{Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team_inactive1", Label: "a team label"}, Answer: contractsv1.TeamInactiveReason, ActiveCanonicalID: "team_active1"}},
 		// CHAOS-3972 P3+W2: populated so the reflection-based planting walk
 		// below can reach every declared structure_needs/confirmed_structure/
 		// window_clarification leaf -- a nil block here is exactly the "path

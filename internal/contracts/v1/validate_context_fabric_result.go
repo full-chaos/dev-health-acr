@@ -111,6 +111,9 @@ func (r ContextFabricSubjectResolution) validate(bounds contextFabricBounds) err
 	if !stringLengthBetween(r.ClarificationPrompt, 0, 2000) || strings.TrimSpace(r.ClarificationPrompt) != r.ClarificationPrompt {
 		return fmt.Errorf("clarification prompt violates v1 bounds")
 	}
+	if err := validateInactiveHints(r.InactiveHints); err != nil {
+		return err
+	}
 	// PriorSubjectReceiptDispositions (CHAOS-3478/CHAOS-3813) is
 	// additive-optional exactly like CommitDecisionDigests above: nil is
 	// valid and the ONLY way to omit it. Once present, bounded to the same
@@ -2064,6 +2067,24 @@ func validateFactScopeCensus(records []ContextFabricFactScopeCensusRecord) error
 			if field.value != "" && !field.valid(field.value) {
 				return fmt.Errorf("fact_scope_census[%d]: %s %q is not a member of its closed vocabulary", i, field.name, field.value)
 			}
+		}
+	}
+	return nil
+}
+
+func validateInactiveHints(hints []ContextFabricInactiveHint) error {
+	if len(hints) > ContextFabricInactiveHintsMax {
+		return fmt.Errorf("inactive hints exceed v1 bounds")
+	}
+	for _, hint := range hints {
+		if err := hint.Subject.Validate(); err != nil {
+			return fmt.Errorf("inactive hints: %w", err)
+		}
+		if hint.Answer != TeamInactiveReason || hint.Subject.Kind != ContextFabricSubjectTeam {
+			return fmt.Errorf("inactive hints must answer %s for a team", TeamInactiveReason)
+		}
+		if hint.ActiveCanonicalID != "" && !stringLengthBetween(hint.ActiveCanonicalID, 1, 512) {
+			return fmt.Errorf("inactive hint active canonical id violates v1 bounds")
 		}
 	}
 	return nil

@@ -914,6 +914,27 @@
           ],
           "type": "object"
         },
+        "InactiveHint": {
+          "additionalProperties": false,
+          "properties": {
+            "active_canonical_id": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "answer": {
+              "const": "team_inactive"
+            },
+            "subject": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/SubjectRef"
+            }
+          },
+          "required": [
+            "subject",
+            "answer"
+          ],
+          "type": "object"
+        },
         "KindOption": {
           "additionalProperties": false,
           "description": "CHAOS-3900 P1: one server-offered census-kind choice, minted onto a stored result so a later turn can confirm it via kindr_ receipt redemption.",
@@ -2996,6 +3017,13 @@
           "maxItems": 50,
           "type": "array"
         },
+        "inactive_hints": {
+          "items": {
+            "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/InactiveHint"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
         "prior_subject_receipt_dispositions": {
           "items": {
             "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/PriorSubjectReceiptDispositionEntry"
@@ -3828,6 +3856,27 @@
             "require_drivers",
             "require_ranking",
             "budget"
+          ],
+          "type": "object"
+        },
+        "InactiveHint": {
+          "additionalProperties": false,
+          "properties": {
+            "active_canonical_id": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "answer": {
+              "const": "team_inactive"
+            },
+            "subject": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectRef"
+            }
+          },
+          "required": [
+            "subject",
+            "answer"
           ],
           "type": "object"
         },
@@ -8155,6 +8204,13 @@
             },
             "graph_not_projected": {
               "type": "boolean"
+            },
+            "inactive_hints": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/InactiveHint"
+              },
+              "maxItems": 50,
+              "type": "array"
             },
             "prior_subject_receipt_dispositions": {
               "items": {

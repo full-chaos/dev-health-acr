@@ -676,7 +676,7 @@ func (s *Store) reuseColumnsFor(result contextfabric.InvestigationResult, reuseS
 	// (different or no receipts) could legitimately inherit. Serving it
 	// as a reuse source would leak one caller's receipt-resolution
 	// disclosure into an unrelated caller's response verbatim.
-	if len(result.SubjectResolution.PriorSubjectReceiptDispositions) > 0 {
+	if len(result.SubjectResolution.PriorSubjectReceiptDispositions) > 0 || len(result.SubjectResolution.InactiveHints) > 0 {
 		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil, sql.NullInt64{}
 	}
 	// Codex round-2 finding #4: a punctuation-only (or otherwise
@@ -1099,7 +1099,7 @@ LIMIT 1`,
 	// reject on the READ side too, so a PriorSubjectReceiptDispositions
 	// disclosure computed for one caller's own receipts can never be
 	// served verbatim as a reuse hit to an unrelated caller.
-	if len(result.SubjectResolution.PriorSubjectReceiptDispositions) > 0 {
+	if len(result.SubjectResolution.PriorSubjectReceiptDispositions) > 0 || len(result.SubjectResolution.InactiveHints) > 0 {
 		return contextfabric.StoredInvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
 	var graphEpochPtr *int64
