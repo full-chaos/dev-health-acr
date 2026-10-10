@@ -76,6 +76,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}()
 
 	var mixUnavailable string
+	var projectNoMix int
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		// CHAOS-6559: a team's investment is ONLY the canonical theme mix
 		// (work_unit_investments via owned repositories). The deprecated
@@ -124,6 +125,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			return contextfabric.FactProviderResult{}, mixReadFailure("query project native theme mix", nativeScanErr)
 		}
 		truncated = truncated || nativeRowCount > maxFactRowsPerQuery
+		// Missing is not healthy: a project with no canonical mix serves no
+		// fact, and says so by a NAMED reason instead of a silent absence.
+		projectNoMix = projectsWithoutInvestmentFact(projectSubjects, &facts)
 	}
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
@@ -193,6 +197,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
 	if mixUnavailable != "" {
 		mergeFactReadReason(&result, mixUnavailable)
+	}
+	if projectNoMix > 0 {
+		mergeFactReadReason(&result, investmentProjectNoCanonicalMixReason(projectNoMix, len(subjectsOfKind(query.Subjects, contextfabric.SubjectProject))-rejectedProjectCount(query.Subjects)))
 	}
 	if timeBound.active && len(subjectsOfKind(query.Subjects, contextfabric.SubjectTeam)) > 0 {
 		mergeFactReadReason(&result, investmentOwnershipAsSynced)
@@ -348,6 +355,47 @@ const (
 	investmentTeamNoUnitInWindow    = "investment_team_no_unit_in_window"
 	investmentOwnershipAsSynced     = "investment_ownership_as_synced: team ownership is read from the synced ownership assertions (not historical); a past window includes every assertion not ended before the window start"
 )
+
+// investmentProjectNoCanonicalMix is the closed reason token of a project that has no
+// canonical theme mix in the requested window (CHAOS-9195): no owning-team roll-up and no
+// native attribution carries positive effort. It is not a zero mix and not a healthy project.
+const investmentProjectNoCanonicalMix = "investment_project_no_canonical_mix"
+
+func investmentProjectNoCanonicalMixReason(noMix, requested int) string {
+	return fmt.Sprintf("%s for %d of %d requested projects: no canonical theme mix (work_unit_investments) for the project in the requested window; the deprecated per-team investment_area breakdown is not served", investmentProjectNoCanonicalMix, noMix, requested)
+}
+
+// projectsWithoutInvestmentFact counts the project subjects of valid shape that have no
+// FactInvestment fact after the project reads.
+func projectsWithoutInvestmentFact(subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) int {
+	have := map[string]bool{}
+	for _, f := range *facts {
+		if f.Kind == contextfabric.FactInvestment {
+			have[contextfabric.FactSubjectKey(f.Subject)] = true
+		}
+	}
+	missing := 0
+	for _, subject := range subjects {
+		if projectSpanKey(subject) == "" {
+			continue
+		}
+		if !have[contextfabric.FactSubjectKey(subject)] {
+			missing++
+		}
+	}
+	return missing
+}
+
+// rejectedProjectCount: project subjects whose id has no project v2 shape.
+func rejectedProjectCount(subjects []contextfabric.SubjectRef) int {
+	n := 0
+	for _, subject := range subjects {
+		if subject.Kind == contextfabric.SubjectProject && projectSpanKey(subject) == "" {
+			n++
+		}
+	}
+	return n
+}
 
 // investmentMixUnavailableReason is the disclosure for teams that have no
 // canonical mix: unknown is not healthy and is not a zero mix (North Star

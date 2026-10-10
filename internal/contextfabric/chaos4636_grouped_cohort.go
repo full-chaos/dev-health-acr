@@ -31,7 +31,7 @@ import (
 //
 // What IS available, free, at exactly the right moment: the project-subject
 // facts the plan already reads carry their owning team INSIDE their declared
-// table's Key columns -- metrics' team_breakdown keys on
+// table's Key columns -- metrics' team_breakdown (generic here, not investment: a project's investment fact has none, CHAOS-9195) keys on
 // (team_id, team_name, day), workload's breakdown on
 // (team_id, team_name, work_scope_id, computed_at), health's risk_breakdown
 // carries scope/scope_id/scope_name rows where scope == "team", and flow

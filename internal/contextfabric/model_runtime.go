@@ -1244,7 +1244,7 @@ func canonicalFactGroupSize(facts []CanonicalFact, claim ClaimedFact) int {
 // Rows nil. For each claim, it looks up the SAME canonical fact
 // ValidateAgainst grounded Value against (identical Kind+Subject lookup)
 // and, if that fact carries a renderable table on any of its OWN fields
-// (e.g. a project rollup's team_breakdown), copies it onto the claim
+// (e.g. the metrics project rollup's team_breakdown; generic, not investment: a project's investment fact carries no team_breakdown, CHAOS-9195), copies it onto the claim
 // verbatim -- never derived, reworded, or recomputed by either the model or
 // this function. A claim whose canonical fact carries no Rows-shaped field
 // is left with Rows nil, byte-identical to pre-CHAOS-4355 behavior.
@@ -1345,7 +1345,7 @@ func attachCanonicalRowsWithDualTableTelemetry(claims []ClaimedFact, facts []Can
 // it were authoritative -- worse than a claim's Rows simply staying nil).
 // A fact could in principle carry more than one renderable table (e.g. a
 // future producer alongside MetricsProvider's project rollup, which emits
-// exactly one, team_breakdown); until a claim can name which field it
+// exactly one, team_breakdown; investment's project fact carries none since CHAOS-9195); until a claim can name which field it
 // means, this fails closed rather than guesses, the identical "retract
 // rather than trust an unverified assertion" posture the rest of this file
 // already applies elsewhere -- and reports the drop via the second return
