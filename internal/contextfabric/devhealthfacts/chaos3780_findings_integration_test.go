@@ -133,7 +133,7 @@ func createCHAOS3780Tables(t *testing.T, ctx context.Context, connection clickho
 	// exercises the zero-current-effort skip path (readTeamThemeMix emits
 	// no fact, never affecting these tests' own `len(result.Facts)`
 	// assertions).
-	for _, statement := range devhealthschema.DDL("repo_metrics_daily", "compounding_risk_daily", "capacity_forecasts", "investment_metrics_daily", "estimate_coverage_metrics_daily", "recommendations_daily", "work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership", "work_item_team_attributions", "repos", "team_repo_ownership", "git_pull_requests") {
+	for _, statement := range devhealthschema.DDL("repo_metrics_daily", "repo_change_failure_daily", "compounding_risk_daily", "capacity_forecasts", "investment_metrics_daily", "estimate_coverage_metrics_daily", "recommendations_daily", "work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership", "work_item_team_attributions", "repos", "team_repo_ownership", "git_pull_requests") {
 		if err := connection.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}

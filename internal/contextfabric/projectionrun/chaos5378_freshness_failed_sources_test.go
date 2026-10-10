@@ -481,9 +481,10 @@ func requireBucketIdentity(t *testing.T, record map[string]any) {
 		summaryNumber(t, record, "orgs_pair_failed") +
 		summaryNumber(t, record, "orgs_divergence_recovered") +
 		summaryNumber(t, record, "orgs_window_behind") +
+		summaryNumber(t, record, "orgs_catching_up") +
 		summaryNumber(t, record, "orgs_unevaluated")
 	if configured != sum {
-		t.Errorf("bucket identity BROKEN: orgs_configured=%v but ok+rebuild_required+backoff+source_failed+pair_failed+divergence_recovered+window_behind+unevaluated=%v -- an organization is unaccounted for on this line; %v", configured, sum, record)
+		t.Errorf("bucket identity BROKEN: orgs_configured=%v but ok+rebuild_required+backoff+source_failed+pair_failed+divergence_recovered+window_behind+catching_up+unevaluated=%v -- an organization is unaccounted for on this line; %v", configured, sum, record)
 	}
 }
 
