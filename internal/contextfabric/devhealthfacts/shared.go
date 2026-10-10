@@ -649,15 +649,21 @@ import (
 // under v129 carries the old wording or no per-project start and must not be
 // reused.
 //
-// v130 -> v131: the organization subject has a work-unit listing (read_facts units
+// v130 -> v131: a refused run_operation or graphql_query reply reports the
+// pinned schema digest of the policy that refused it, not a cached served
+// digest that may be older than the last registry watch. A candidate saved
+// under v130 may hold a refusal stamped with a stale digest and must not be
+// reused.
+//
+// v131 -> v132: the organization subject has a work-unit listing (read_facts units
 // for kind investment): every repository's unit rows plus rows with no
 // repository_id and unit_attribution_basis unattributed_no_resolved_repository
 // for effort that reaches no resolved repository; the page fact carries
 // scope_unattributed_rows and scope_unattributed_total and the coverage reason
-// states units_unattributed. A candidate saved under v130 holds the refusal "units
+// states units_unattributed. A candidate saved under v131 holds the refusal "units
 // takes a team or a repository subject" for an organization and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v131"
+const QueryVersion = "devhealthfacts.clickhouse.v132"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
