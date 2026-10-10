@@ -640,7 +640,15 @@ import (
 // newest row is a closed duplicate keeps its repositories. A candidate saved
 // under v128 may hold an empty window or a team without its repositories, and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v129"
+//
+// v129 -> v130: a project investment read whose window starts before the
+// project's earliest linked unit among the units overlapping the window names
+// that start (investment_project_window_first_unit) and says the history before
+// the window was not read; the organization-wide beyond-stored-history reason no
+// longer ends with "this project's own span is not derived". A candidate saved
+// under v129 carries the old wording or no per-project start and must not be
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v130"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
