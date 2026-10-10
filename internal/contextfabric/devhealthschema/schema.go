@@ -277,6 +277,25 @@ var ProductionColumns = map[string][]Column{
 		{Name: "pr_first_review_p90_hours", Type: "Nullable(Float64)"},
 		{Name: "pr_review_time_p50_hours", Type: "Nullable(Float64)"},
 		{Name: "pr_pickup_time_p50_hours", Type: "Nullable(Float64)"},
+		// ops migration 112: revert_rate is reverted / merged pull requests,
+		// NULL where nothing was measured. change_failure_rate above is the
+		// deprecated revert ratio with a forced denominator; no reader reads
+		// it, it stays declared so the table replica keeps its column.
+		{Name: "revert_rate", Type: "Nullable(Float64)"},
+	},
+	// ops migration 112: the stored inputs of the incident-based change
+	// failure rate, one row per repository and day with a deployment or an
+	// incident; ReplacingMergeTree(computed_at), read with FINAL.
+	"repo_change_failure_daily": {
+		{Name: "org_id", Type: "String"},
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "day", Type: "Date"},
+		{Name: "deployments_count", Type: "UInt32"},
+		{Name: "failed_deployments_native", Type: "UInt32"},
+		{Name: "failed_deployments_heuristic", Type: "UInt32"},
+		{Name: "incidents_direct", Type: "UInt32"},
+		{Name: "incidents_via_deployment", Type: "UInt32"},
+		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
 	},
 	// CHAOS-4347: team_metrics_daily/cicd_metrics_daily/deploy_metrics_daily
 	// read live from the kiac trial ClickHouse (system.columns, 2026-08-26)
@@ -667,6 +686,7 @@ var EngineFull = map[string]string{
 	"projects":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, id) SETTINGS index_granularity = 8192",
 	"operational_service_repository_mappings": "ReplacingMergeTree(source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"recommendations_daily":                   "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(window_end) ORDER BY (org_id, team_id, rule_id, window_end) SETTINGS index_granularity = 8192",
+	"repo_change_failure_daily":               "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repo_metrics_daily":                      "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repos":                                   "ReplacingMergeTree(last_synced) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	// CHAOS-3802: valid_from is IN team_project_ownership's sorting key, so

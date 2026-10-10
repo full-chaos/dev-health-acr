@@ -21,7 +21,7 @@ import (
 func TestWindowPRCycleMedianIsOverPullRequestsNotDailyMedians(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
-	for _, statement := range devhealthschema.DDL("repos", "team_repo_ownership", "git_pull_requests", "repo_metrics_daily", "team_metrics_daily") {
+	for _, statement := range devhealthschema.DDL("repos", "team_repo_ownership", "git_pull_requests", "repo_metrics_daily", "repo_change_failure_daily", "team_metrics_daily") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
