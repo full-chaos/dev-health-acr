@@ -380,6 +380,9 @@ func acceptanceGateNullRepoID(t *testing.T) {
 		}
 		return out
 	}()) {
+		if teamDeniedForInvestment(manifest, candidate) {
+			continue
+		}
 		for _, r := range sortedKeys(owned[candidate]) {
 			total := 0.0
 			for _, v := range cleanOracle.RepositoryEffort[r] {
@@ -456,6 +459,9 @@ func teamRollupLossWithNoNullRowIsAFinding(t *testing.T) {
 	}
 	team, repo, best := "", "", 0.0
 	for name, repos := range owned {
+		if teamDeniedForInvestment(manifest, name) {
+			continue
+		}
 		for r := range repos {
 			total := 0.0
 			for _, v := range cleanOracle.RepositoryEffort[r] {
@@ -616,4 +622,16 @@ func aReplyThatIsNotOfTheStoreIsAFinding(t *testing.T) {
 	if found == 0 {
 		t.Fatalf("a reply of another store is not a finding: %+v", rr.Findings)
 	}
+}
+
+// teamDeniedForInvestment is true for a team the venue token had no grant
+// for on the investment facts: its rollup is not compared, so a plant on its
+// repositories cannot be seen.
+func teamDeniedForInvestment(manifest Manifest, team string) bool {
+	for _, id := range manifest.DeniedTeams["investment"] {
+		if id == team {
+			return true
+		}
+	}
+	return false
 }
