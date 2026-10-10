@@ -313,6 +313,7 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 				reason = "load_timeout"
 			}
 			slog.WarnContext(ctx, "devhealthfacts.membership_scope_fallback", "reason", contextfabric.SanitizeLogAttr(reason), "path", contextfabric.SanitizeLogAttr("scope_subqueries"), "elapsed_ms", clock().Sub(started).Milliseconds(), "load_timeout_ms", loadTimeout.Milliseconds())
+			projectMixEvent(ctx, membershipScopeFallbackReader, res.Err)
 			return subqueryMembershipScope, nil
 		}
 		loaded = res.Val

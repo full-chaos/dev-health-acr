@@ -760,6 +760,9 @@ func (e *ProjectMixContendedError) Retryable() bool { return true }
 const (
 	projectMixRetryReader     = "ProjectMixInputsRetry"
 	projectMixContendedReader = "ProjectMixContended"
+	// membershipScopeFallbackReader names the event of a scope load that failed
+	// and degraded to the scope subqueries.
+	membershipScopeFallbackReader = "MembershipScopeFallback"
 )
 
 type projectMixInstrumentationKey struct{}

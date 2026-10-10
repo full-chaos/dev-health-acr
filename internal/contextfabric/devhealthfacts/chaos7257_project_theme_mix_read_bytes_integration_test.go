@@ -20,8 +20,10 @@ package devhealthfacts_test
 // not happen (no log row, no statement) fails; it never skips.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -433,7 +435,17 @@ func checkProjectThemeMixByteBudget(t *testing.T, units int, growth bool) {
 	createCHAOS7257Tables(t, ctx, direct)
 	const orgID = "org-7257-bytes"
 	shape := seedCHAOS7257ProdShape(t, ctx, direct, orgID, units)
-	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
+	events := &recordingInstrumentation{}
+	statsLog := &bytes.Buffer{}
+	statsLogger := slog.New(slog.NewTextHandler(statsLog, nil))
+	instrumented := devhealthfacts.NewInstrumentedProviders(query, devhealthfacts.NewReadStatsInstrumentation(events, statsLogger, time.Now))
+	provider := findProvider(t, instrumented, contextfabric.FactInvestment)
+	defer func() {
+		t.Logf("read_stats of the read:\n%s", statsLog.String())
+		if events.sawReader("MembershipScopeFallback") {
+			t.Errorf("the membership scope load fell back to the subqueries: the read passed on the slow path")
+		}
+	}()
 
 	var table uint64
 	if err := direct.QueryRow(ctx, `SELECT sum(data_uncompressed_bytes) FROM system.parts WHERE database = currentDatabase() AND table = 'work_unit_investments' AND active`).Scan(&table); err != nil {
