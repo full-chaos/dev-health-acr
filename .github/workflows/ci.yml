@@ -743,7 +743,7 @@ jobs:
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
-          export GOFLAGS="-skip=$(scripts/ci/devhealthfacts-split.sh rest)"
+          export GOFLAGS="-trimpath -skip=$(scripts/ci/devhealthfacts-split.sh rest)"
           start=$SECONDS
           make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
           elapsed=$((SECONDS - start))
@@ -785,7 +785,7 @@ jobs:
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
-          export GOFLAGS="-run=$(scripts/ci/devhealthfacts-split.sh heavy)"
+          export GOFLAGS="-trimpath -run=$(scripts/ci/devhealthfacts-split.sh heavy)"
           start=$SECONDS
           make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
           elapsed=$((SECONDS - start))
