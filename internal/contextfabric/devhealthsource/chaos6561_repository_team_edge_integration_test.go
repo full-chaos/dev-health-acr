@@ -108,3 +108,55 @@ func subRepositoryTeamEdgeReemittedWhenReposRowArrives(t *testing.T, ctx context
 		t.Fatalf("a read after convergence re-emitted the edge again: %+v", third)
 	}
 }
+
+// subRepositoryTeamEdgeFollowsTheOpenRowOfAFact: a fact is current when an
+// open row exists for its key. The ownership writers keep the EARLIEST open
+// row and close later duplicates, but a duplicate is closed only on a run with
+// proof of its end, so two open rows of one fact can coexist; the edge then
+// takes its attributes from the earliest open row. A fact with no open row
+// ends at its latest close.
+func subRepositoryTeamEdgeFollowsTheOpenRowOfAFact(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	const teamID = "TEAM-GITHUB"
+	base := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	seedRepo := func(id, slug string) {
+		mustExec(t, ctx, fixture.direct,
+			`INSERT INTO repos (id, repo, ref, created_at, tags, last_synced, org_id, provider) VALUES (?,?,?,?,?,?,?,?)`,
+			id, slug, nil, base, nil, base, fixture.orgID, "github")
+	}
+	own := func(repoID, slug string, priority int32, validFrom time.Time, validTo any) {
+		mustExec(t, ctx, fixture.direct,
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			fixture.orgID, "github", teamID, repoID, slug, "exact", "native", uint8(1), uint16(1), priority, validFrom, validTo, validFrom)
+	}
+	const (
+		dupID    = "9021a000-0000-4000-8000-000000000001"
+		closedID = "9021a000-0000-4000-8000-000000000002"
+	)
+	seedRepo(dupID, "acme/two-open-rows")
+	own(dupID, "acme/two-open-rows", 1, base, nil)
+	own(dupID, "acme/two-open-rows", 9, base.Add(time.Hour), nil)
+	own(dupID, "acme/two-open-rows", 5, base.Add(2*time.Hour), base.Add(3*time.Hour))
+	seedRepo(closedID, "acme/no-open-row")
+	own(closedID, "acme/no-open-row", 1, base, base.Add(5*time.Hour))
+	own(closedID, "acme/no-open-row", 1, base.Add(time.Hour), base.Add(3*time.Hour))
+
+	edges, _ := fixture.convergeRepositoryTeamEdges(t, ctx, "", teamID)
+	byLabel := map[string]contractsv1.ContextFabricRelationshipProjection{}
+	for _, edge := range edges {
+		byLabel[edge.From.Label] = edge
+	}
+	if len(edges) != 2 {
+		t.Fatalf("edges = %d, want 2 (one per fact): %+v", len(edges), edges)
+	}
+	open := byLabel["acme/two-open-rows"]
+	if open.ValidTo != nil {
+		t.Errorf("two open rows and a later closed one: ValidTo = %v, want nil (an open row exists)", open.ValidTo)
+	}
+	if got := open.Properties["priority"]; got.Integer == nil || *got.Integer != 1 {
+		t.Errorf("two open rows: priority = %+v, want 1 from the EARLIEST open row", got)
+	}
+	closed := byLabel["acme/no-open-row"]
+	if closed.ValidTo == nil || !closed.ValidTo.Equal(base.Add(5*time.Hour)) {
+		t.Errorf("no open row: ValidTo = %v, want the latest close %v", closed.ValidTo, base.Add(5*time.Hour))
+	}
+}

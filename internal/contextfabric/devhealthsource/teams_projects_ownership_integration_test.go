@@ -466,6 +466,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"retraction follows a project inserted below the key partition max", "30000000-0000-4000-8000-000000000012", subRetractionFollowsAProjectInsertedBelowTheKeyPartitionMax},
 		{"the row-key SQL agrees with Go byte for byte", "30000000-0000-4000-8000-000000000013", subRowKeySQLAgreesWithGoByteForByte},
 		{"two groups sharing a project id get distinct cursor keys", "30000000-0000-4000-8000-000000000014", subTwoGroupsSharingAProjectIDGetDistinctCursorKeys},
+		{"a repository->team edge follows the open row of its fact", "30000000-0000-4000-8000-000000009021", subRepositoryTeamEdgeFollowsTheOpenRowOfAFact},
 		{"a repository->team edge is re-emitted when its repos row arrives", "30000000-0000-4000-8000-000000000016", subRepositoryTeamEdgeReemittedWhenReposRowArrives},
 		// CHAOS-7119: NULL repo_id ownership rows resolved by name in the edge.
 		{"CHAOS-7119 a NULL repo_id name resolves case-insensitively", "30000000-0000-4000-8000-000000000017", subCHAOS7119NameResolvesCaseInsensitively},
