@@ -123,6 +123,8 @@ func (s *fakeScanner) Scan(dest ...any) error {
 			*value = row[index].([]int64)
 		case *[][]string:
 			*value = row[index].([][]string)
+		case *[]time.Time:
+			*value = row[index].([]time.Time)
 		case *[]float64:
 			*value = row[index].([]float64)
 		case *[]uint8:

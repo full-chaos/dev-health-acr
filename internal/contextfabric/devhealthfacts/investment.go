@@ -224,7 +224,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	// with no overlapping unit serves no fact and must still say the window
 	// starts before the stored history.
 	for _, subject := range query.Subjects {
-		if reason := span.reasonFor(subject.CanonicalID, subject.Kind == contextfabric.SubjectProject, timeBound); reason != "" {
+		if reason := span.reasonFor(subject.CanonicalID, projectSpanKey(subject), subject.Kind == contextfabric.SubjectProject, timeBound); reason != "" {
 			mergeFactReadReason(&result, reason)
 		}
 	}
@@ -645,6 +645,9 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 	}
 	serve := func(mix projectRollupMixRow) error {
 		rowCount++
+		if mix.WorkUnits > 0 {
+			recordInvestmentProjectSpan(ctx, mix.ProjectKey, mix.FirstUnitFrom)
+		}
 		projectKey, featureDelivery, operational, maintenance, quality, risk, bugfixWeighted := mix.ProjectKey, mix.FeatureDelivery, mix.Operational, mix.Maintenance, mix.Quality, mix.Risk, mix.BugfixWeighted
 		workUnits, repoCount, teamCount, excludedNoRepoLink := mix.WorkUnits, mix.Repos, mix.Teams, mix.ExcludedNoRepoLink
 		// The probe row (maxFactRowsProbe = maxFactRowsPerQuery+1) is
@@ -852,4 +855,17 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		mergeProjectInvestmentFact(facts, subject, row.ProjectSubjectKey, fields, []string{"team_count", "repo_count", "work_units_without_repo_link"})
 	}
 	return rowCount, nil
+}
+
+// projectSpanKey is the "provider:id" key the project mixes name a project by
+// (v2Index's key), empty for a subject that is not a project v2 id.
+func projectSpanKey(subject contextfabric.SubjectRef) string {
+	if subject.Kind != contextfabric.SubjectProject {
+		return ""
+	}
+	segments, ok := identity.Segments(identity.KindProject, subject.CanonicalID)
+	if !ok || len(segments) < 2 {
+		return ""
+	}
+	return segments[0] + ":" + segments[len(segments)-1]
 }
