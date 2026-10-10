@@ -625,7 +625,7 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 			byProject[key] = r
 		}
 		r.WorkUnits++
-		if !v.from.IsZero() {
+		if v.from.Unix() > 0 {
 			if prev, seen := firstFrom[key]; !seen || v.from.Before(prev) {
 				firstFrom[key] = v.from
 			}

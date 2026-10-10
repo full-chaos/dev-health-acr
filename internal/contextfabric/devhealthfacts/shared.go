@@ -622,7 +622,15 @@ import (
 // only, and an inactive team id is absent to an explicit read. A candidate saved
 // under v126 may hold a second team, a doubled or diluted aggregate, or a
 // cohort refused as ambiguous, and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v127"
+//
+// v128 -> v129: a project investment read whose window starts before the
+// project's earliest linked unit among the units overlapping the window names
+// that start (investment_project_window_first_unit) and says the history before
+// the window was not read; the organization-wide beyond-stored-history reason no
+// longer ends with "this project's own span is not derived". A candidate saved
+// under v128 carries the old wording or no per-project start and must not be
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v129"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
