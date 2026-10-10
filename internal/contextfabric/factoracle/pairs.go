@@ -273,7 +273,7 @@ func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
 // Its named class is null_repo_id: a team that lacks exactly the mix of the
 // repositories only an ownership row with no repo_id names.
 func compareTeamRollup(ctx context.Context, o *Oracle, rr *RootReport, byRepo map[string]map[string]float64) error {
-	owned, byNameOnly, err := o.Store.ownedRepositories(o.Window.End)
+	owned, byNameOnly, err := o.Store.ownedRepositories(o.Window.Start)
 	if err != nil {
 		return err
 	}

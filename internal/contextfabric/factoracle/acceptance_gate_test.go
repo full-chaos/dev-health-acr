@@ -368,7 +368,7 @@ func acceptanceGateNullRepoID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned, _, err := store.ownedRepositories(manifest.Window.End)
+	owned, _, err := store.ownedRepositories(manifest.Window.Start)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,13 +403,9 @@ func acceptanceGateNullRepoID(t *testing.T) {
 		if rowTeam != team || !hasRepo || strings.ToLower(rowRepo) != repo {
 			return false
 		}
-		from, ferr := rowTime(row, "valid_from")
-		if ferr != nil || from.After(manifest.Window.End) {
-			return false
-		}
 		if to, ok := rowString(row, "valid_to"); ok {
 			until, terr := parseInstant(to)
-			return terr == nil && until.After(manifest.Window.End)
+			return terr == nil && until.After(manifest.Window.Start)
 		}
 		return true
 	}
@@ -454,7 +450,7 @@ func teamRollupLossWithNoNullRowIsAFinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned, _, err := store.ownedRepositories(manifest.Window.End)
+	owned, _, err := store.ownedRepositories(manifest.Window.Start)
 	if err != nil {
 		t.Fatal(err)
 	}
