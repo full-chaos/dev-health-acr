@@ -191,10 +191,10 @@ func subCHAOS7139TeamCrossesBackUnderTheBound(t *testing.T, ctx context.Context,
 	if first.edges["team-cross"] != over {
 		t.Fatalf("precondition: %d edges, want %d", first.edges["team-cross"], over)
 	}
-	// Close ONE ownership: a later assertion for the same (team, repo, source)
-	// with valid_to in the past (latest assertion wins; the team row itself is
-	// untouched).
-	closedFrom, closedTo, updated := seedAt.Add(time.Minute), seedAt.Add(2*time.Minute), time.Now().UTC().Add(-time.Second).Truncate(time.Second)
+	// Close ONE ownership: the same row (same valid_from, so the newer
+	// updated_at replaces it) now carries a valid_to in the past, leaving no
+	// open row for the fact; the team row itself is untouched.
+	closedFrom, closedTo, updated := seedAt, seedAt.Add(2*time.Minute), time.Now().UTC().Add(-time.Second).Truncate(time.Second)
 	mustExec(t, ctx, f.direct, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		f.orgID, "github", "team-cross", nil, "acme/cross-0", "exact", "native", uint8(1), uint16(100), int32(0), closedFrom, closedTo, updated)
 	second := chaos7139RunFrom(t, ctx, f, first.cursor)

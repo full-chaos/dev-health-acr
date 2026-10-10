@@ -863,11 +863,14 @@ WHERE a.org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicat
 // valid_from alone leaves two assertions stamped at the same instant
 // unordered, so a group holding one open and one closed assertion at that
 // instant could project either, flipping with merge order. The key is
-// (valid_from, valid_to IS NULL, ifNull(valid_to, epoch)):
+// (valid_to IS NULL, valid_from, ifNull(valid_to, epoch)):
 //
-//   - latest valid_from wins -- the latest-assertion rule;
-//   - on a tie, OPEN outranks CLOSED, so a same-instant assertion of ongoing
-//     ownership is never hidden by a simultaneous closure;
+//   - an OPEN assertion outranks every closed one: a fact is current when an
+//     open row exists for its key, whatever later rows closed (ownership
+//     writers keep the earliest open row of a fact and close its duplicates,
+//     so the newest row of a current fact is routinely the closed one), and a
+//     fact that was closed and came back is a new open row;
+//   - among assertions of the same kind the latest valid_from wins;
 //   - among tied closed assertions, the latest valid_to wins, so even that
 //     case is ordered rather than arbitrary.
 //
@@ -1533,8 +1536,8 @@ func projectTeamsStatementFor(cursor cursorState, ingest bool) string {
 	}
 	return `SELECT o.project_id, o.team_id, o.source_name,
        minIf(o.valid_from, o.unassertable = 0) AS first_valid_from,
-       argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.unassertable = 0).1 IS NULL AS latest_is_open,
-       ifNull(argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.unassertable = 0).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
+       argMaxIf(tuple(o.valid_to), ` + ownershipFactOrder + `, o.unassertable = 0).1 IS NULL AS latest_is_open,
+       ifNull(argMaxIf(tuple(o.valid_to), ` + ownershipFactOrder + `, o.unassertable = 0).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
        ` + projectTeamsWatermark + ` AS observed_at, o.provider,
        toUInt8(countIf(o.unassertable = 0) = 0) AS edge_suppressed,
        groupUniqArrayIf(concat(o.ownership_ref, '\0', o.ownership_key, '\0', o.team_id, '\0', o.source_name), o.unassertable = 1 AND o.retraction_only = 0) AS conflict_identities,
@@ -1733,8 +1736,8 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 //     without it a duplicate RelationshipID rejects the batch and wedges the
 //     organization's projection.
 //   - THE VALIDITY RULE. The window runs from the earliest assertion to what
-//     the LATEST assertion says, ordered by (valid_from, valid_to IS NULL,
-//     valid_to) with the argMax(tuple(valid_to)) NULL-preserving spelling --
+//     the winning assertion says, ordered by (valid_to IS NULL, valid_from,
+//     valid_to), an open assertion first, with the argMax(tuple(valid_to)) NULL-preserving spelling --
 //     see queryProjectTeams' FOURTH note, verified there against this
 //     ClickHouse version. A closed latest assertion ENDS the edge (ValidTo),
 //     exactly as ownershipValidity ends a project->team edge. It is history,
@@ -1852,9 +1855,31 @@ var repositoryTeamsOwnershipSource = ownershipresolve.OwnedRepositoriesSource(" 
 	KeepUnresolved: true,
 })
 
-// repositoryTeamsLatestOrder is the latest-assertion ordering key, identical
-// to queryProjectTeams' and ownedRepositoriesJoinSQL's.
-const repositoryTeamsLatestOrder = "(o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))"
+// ownershipFactOrder is the ONE ordering that collapses the rows of an
+// ownership fact (a project/repository, team and source) to the row that
+// represents it. Every collapse of team_*_ownership rows uses it, so the rule
+// cannot drift between the edge builders and the team authorization list:
+//
+//   - a fact is current when an OPEN row (valid_to IS NULL) exists, whatever
+//     later rows closed: the ownership writers keep the earliest open row and
+//     close later duplicates, so the newest row of a current fact is routinely
+//     the closed one;
+//   - among open rows the EARLIEST valid_from wins (first seen), because a
+//     duplicate is closed only on a run with proof of its end and two open rows
+//     can coexist;
+//   - with no open row the LATEST valid_to wins (the fact ended at its last
+//     close), then the latest valid_from;
+//   - a fact that was closed and came back is a new open row, so it wins.
+//
+// The columns are DateTime64(3): the key is built from toUnixTimestamp64Micro,
+// never from an integer cast, which would drop the fractional second and let
+// rows within one second tie.
+const ownershipFactOrder = "(o.valid_to IS NULL, if(o.valid_to IS NULL, -toUnixTimestamp64Micro(o.valid_from), toUnixTimestamp64Micro(o.valid_to)), toUnixTimestamp64Micro(o.valid_from))"
+
+// repositoryTeamsLatestOrder is the ordering key of the repository edge's
+// collapse: ownershipFactOrder, the same as queryProjectTeams' and
+// ownedRepositoriesJoinSQL's.
+const repositoryTeamsLatestOrder = ownershipFactOrder
 
 // repositoryTeamsStatement. Inner column aliases never reuse a source column's
 // own name (match_type_name, not match_type; repo_synced_at, not
@@ -2066,18 +2091,19 @@ func countAmbiguousProjectKeysInCatalog(ctx context.Context, client contextpacke
 	return nil
 }
 
-// ownershipValidity states a project->team edge's window explicitly in both
-// directions, the same owned-write discipline queryTeams/queryProjects apply
-// to entities (CHAOS-3785 R3-1). Ownership begins at the earliest assertion
-// ever observed for the edge and ends per the LATEST assertion -- open if that
-// assertion left it open, otherwise at its valid_to.
-func ownershipValidity(validFrom time.Time, latestIsOpen uint8, latestValidTo time.Time) (*time.Time, *time.Time) {
-	from := validFrom
+// ownershipValidity states an ownership edge's end and never its start.
+// team_*_ownership.valid_from is the sync stamp of the assertion, not the
+// moment ownership began, so projecting it as the edge's start would hide a
+// synced ownership from every read of a window that ended before the stamp.
+// The start is therefore explicitly absent (CHAOS-3785 R3-1: asserted nil, not
+// left stale); the end follows the LATEST assertion -- open if that assertion
+// left it open, otherwise its valid_to.
+func ownershipValidity(_ time.Time, latestIsOpen uint8, latestValidTo time.Time) (*time.Time, *time.Time) {
 	if latestIsOpen != 0 {
-		return &from, nil
+		return nil, nil
 	}
 	to := latestValidTo
-	return &from, &to
+	return nil, &to
 }
 
 // retractionReason is the CLOSED vocabulary of why an OWNED_BY_TEAM edge
