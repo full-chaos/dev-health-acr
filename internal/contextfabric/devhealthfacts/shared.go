@@ -629,14 +629,26 @@ import (
 // denied_or_not_found. A candidate saved under v127 may hold the plain denial
 // and must not be reused.
 //
-// v128 -> v129: a project investment read whose window starts before the
+// v128 -> v129: ownership is read as synced state by every window form. A past
+// range window counts an ownership row that has not ended before the window
+// start (valid_from, a sync stamp, is never a window filter), so a team,
+// health, landscape and rollup read of a window that ended before the sync no
+// longer returns no fact; an empty team investment window names
+// investment_team_no_owned_repository or investment_team_no_unit_in_window,
+// and a bounded team read states investment_ownership_as_synced. A fact is
+// current when an open ownership row exists for its key, so a team whose
+// newest row is a closed duplicate keeps its repositories. A candidate saved
+// under v128 may hold an empty window or a team without its repositories, and
+// must not be reused.
+//
+// v129 -> v130: a project investment read whose window starts before the
 // project's earliest linked unit among the units overlapping the window names
 // that start (investment_project_window_first_unit) and says the history before
 // the window was not read; the organization-wide beyond-stored-history reason no
 // longer ends with "this project's own span is not derived". A candidate saved
-// under v128 carries the old wording or no per-project start and must not be
+// under v129 carries the old wording or no per-project start and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v129"
+const QueryVersion = "devhealthfacts.clickhouse.v130"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1002,9 +1014,18 @@ func projectIdentityMatchSQL(alias, column string) string {
 	return readers.ProjectIdentityMatchSQL(alias, column)
 }
 
+// ownershipValidityPredicate is the one ownership rule of a bounded read.
+// Ownership is synced state, and valid_from is the sync stamp, not the start
+// of ownership: it is never a window filter. A row counts for a window when it
+// has not ended before the window start (a point-in-time bound uses its
+// instant). An unbounded read keeps the currently-owned rule.
 func ownershipValidityPredicate(timeBound factTimeBound) string {
 	if timeBound.active {
-		return fmt.Sprintf(" AND valid_from <= {%s:DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", boundEndParam, boundEndParam)
+		param := boundEndParam
+		if timeBound.hasStart {
+			param = boundStartParam
+		}
+		return fmt.Sprintf(" AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", param)
 	}
 	return " AND valid_from <= now64(3) AND valid_to IS NULL"
 }

@@ -162,8 +162,8 @@ func TestChaos6561_OwnershipRowProjectsOneRepositoryToTeamEdge(t *testing.T) {
 	if edge.SourceVersion != devhealthsource.TeamsProjectsSourceVersion {
 		t.Fatalf("source version = %q, want %q", edge.SourceVersion, devhealthsource.TeamsProjectsSourceVersion)
 	}
-	if edge.ValidFrom == nil || !edge.ValidFrom.Equal(fixture.validFrom) || edge.ValidTo != nil {
-		t.Fatalf("validity = %v..%v, want %v..open", edge.ValidFrom, edge.ValidTo, fixture.validFrom)
+	if edge.ValidFrom != nil || edge.ValidTo != nil {
+		t.Fatalf("validity = %v..%v, want no start and open end (valid_from %v is a sync stamp)", edge.ValidFrom, edge.ValidTo, fixture.validFrom)
 	}
 }
 
@@ -215,8 +215,8 @@ func TestChaos6561_ClosedLatestAssertionEndsTheEdge(t *testing.T) {
 	if edge.ValidTo == nil || !edge.ValidTo.Equal(closed.latestValidTo) {
 		t.Fatalf("ValidTo = %v, want the latest assertion's valid_to %v", edge.ValidTo, closed.latestValidTo)
 	}
-	if edge.ValidFrom == nil || !edge.ValidFrom.Equal(closed.validFrom) {
-		t.Fatalf("ValidFrom = %v, want %v", edge.ValidFrom, closed.validFrom)
+	if edge.ValidFrom != nil {
+		t.Fatalf("ValidFrom = %v, want nil (valid_from %v is a sync stamp)", edge.ValidFrom, closed.validFrom)
 	}
 	if len(batch.Tombstones) != 0 {
 		t.Fatalf("a closed ownership is history, not a retraction: tombstones = %+v", batch.Tombstones)
@@ -313,6 +313,8 @@ func TestChaos6561_V11CheckpointForcesARebuild(t *testing.T) {
 		{"v14 marker forces a rebuild (CHAOS-7130 resolved team authorization list)", "devhealthsource.teams_projects.v14", true},
 		{"v15 marker forces a rebuild (CHAOS-7242 legacy stubs keep their pre-fix scope on top of an old graph)", "devhealthsource.teams_projects.v15", true},
 		{"v16 marker forces a rebuild (CHAOS-7252 edges cite retired bare-':' evidence refs)", "devhealthsource.teams_projects.v16", true},
+		{"v19 marker forces a rebuild (inactive teams are not edge ends)", "devhealthsource.teams_projects.v19", true},
+		{"v20 marker forces a rebuild (ownership edges drop the sync-stamp start)", "devhealthsource.teams_projects.v20", true},
 		{"current marker advances", devhealthsource.TeamsProjectsSourceVersion, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

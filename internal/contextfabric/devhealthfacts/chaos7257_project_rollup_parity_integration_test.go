@@ -360,7 +360,7 @@ func TestProjectRollupSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHo
 		wantKeys []string // oracle's rows: proves the fixture reaches each project it claims to
 	}{
 		{"current axis", devhealthfacts.ProjectMixWindow{}, []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}},
-		{"range over the last 10 days", devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-10 * day), End: at}, []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}},
+		{"range over the last 10 days", devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-10 * day), End: at}, []string{"linear:proj-1", "linear:proj-2", "linear:proj-3", "linear:proj-6"}},
 		{"point in time before proj-6's ownership ended", devhealthfacts.ProjectMixWindow{Active: true, End: at.Add(-50 * day)}, []string{"linear:proj-6"}},
 		{"range around the old work", devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-70 * day), End: at.Add(-50 * day)}, []string{"linear:proj-6"}},
 		{"range over the old unit", devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-45 * day), End: at.Add(-30 * day)}, []string{"linear:proj-1", "linear:proj-3", "linear:proj-6"}},

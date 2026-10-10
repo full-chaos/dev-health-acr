@@ -503,8 +503,9 @@ type ownershipRow struct {
 	repoID               *string
 }
 
-// ownedRepositories is the reference reading of team ownership at instant at:
-// the rows valid then (valid_from <= at, valid_to NULL or after at), a row's
+// ownedRepositories is the reference reading of team ownership for a window
+// starting at instant at: the rows that have not ended by then (valid_to NULL
+// or after at; valid_from is a sync stamp and never filters), a row's
 // own repo_id first, else the repository whose provider and lower-cased name
 // match (design K11). byNameOnly lists, per team, the repositories that only
 // a row with no repo_id names.
@@ -522,13 +523,6 @@ func (s *Store) ownedRepositories(at time.Time) (owned map[string]map[string]boo
 	owned, byNameOnly = map[string]map[string]bool{}, map[string]map[string]bool{}
 	byID := map[string]map[string]bool{}
 	for _, row := range s.extract.Tables[tableTeamRepoOwnership] {
-		from, ferr := rowTime(row, "valid_from")
-		if ferr != nil {
-			return nil, nil, ferr
-		}
-		if from.After(at) {
-			continue
-		}
 		if to, ok := rowString(row, "valid_to"); ok {
 			until, terr := parseInstant(to)
 			if terr != nil {

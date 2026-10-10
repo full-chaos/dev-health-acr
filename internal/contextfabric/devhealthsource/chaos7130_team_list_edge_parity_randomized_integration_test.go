@@ -2,8 +2,8 @@ package devhealthsource_test
 
 // CHAOS-7130: deterministic randomized parity between the team authorization
 // list, the repository->team open-edge set and a small Go reference oracle of
-// "latest effective assertion per (provider, repo, team, source), listed when
-// any stream's latest is open". Three review rounds each found one more
+// "a fact per (provider, repo, team, source) is current when an open row
+// exists for it, listed when any stream is current". Three review rounds each found one more
 // disagreement between two hand-written derivations; this exercises the whole
 // input space (future-dated, closed, reopened, multi-source, multi-provider,
 // unresolved, orphan repo_id, missing team row) against BOTH sides.
@@ -68,7 +68,7 @@ func subCHAOS7130RandomizedListEdgeParity(t *testing.T, ctx context.Context, f *
 				row.repoID = orphanID
 			}
 		}
-		// A unique valid_from per row: no latest-assertion ties.
+		// A unique valid_from per row: no ties.
 		minute++
 		offset := time.Duration(minute) * time.Minute
 		switch rng.Intn(3) {
@@ -124,9 +124,8 @@ func subCHAOS7130RandomizedListEdgeParity(t *testing.T, ctx context.Context, f *
 			continue // ghost, glob or orphan id: unresolved
 		}
 		key := streamKey{r.provider, repo.id, r.team, r.source}
-		if cur, seen := streams[key]; !seen || r.validFrom.After(cur.from) {
-			streams[key] = latest{from: r.validFrom, open: r.validTo == nil, slug: repo.slug}
-		}
+		cur := streams[key]
+		streams[key] = latest{from: r.validFrom, open: cur.open || r.validTo == nil, slug: repo.slug}
 	}
 	want := map[string][]string{}
 	for key, l := range streams {
