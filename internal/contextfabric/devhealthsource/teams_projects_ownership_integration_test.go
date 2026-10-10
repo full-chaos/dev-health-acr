@@ -103,6 +103,10 @@ func subOwnershipWindowTakesTheLatestAssertion(t *testing.T, ctx context.Context
 	if stillOpen.ValidTo != nil {
 		t.Errorf("PROJ-OPEN: ValidTo = %v, want nil -- the latest assertion left the window open, and a NULL valid_to must not be skipped in favour of an older closed row", stillOpen.ValidTo)
 	}
+	duplicated := relationshipByID(t, batch, devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-DUP", "TEAM-GITHUB", "native"))
+	if duplicated.ValidTo != nil {
+		t.Errorf("PROJ-DUP: ValidTo = %v, want nil -- an open row exists for the fact, so the newer closed duplicate must not end the edge", duplicated.ValidTo)
+	}
 	if stillOpen.ValidFrom != nil {
 		t.Errorf("PROJ-OPEN: ValidFrom = %v, want nil: valid_from is a sync stamp (first seen %v), not the start of ownership", stillOpen.ValidFrom, ownershipFirstSeen)
 	}
@@ -162,36 +166,34 @@ func subTeamAuthorizationCarriesCurrentOwnedRepositories(t *testing.T, ctx conte
 	}
 }
 
-// subTeamAuthorizationCollapsesStaleOpenAssertion is codex round-1's HIGH
-// finding on this PR: team_repo_ownership's ReplacingMergeTree key includes
-// valid_from, so FINAL keeps an OLDER open assertion (valid_from=t1,
-// valid_to=NULL) and a LATER assertion that actually closed the SAME
-// (team, repo, source) (valid_from=t2>t1, valid_to=<past>) as two DISTINCT
-// rows -- they differ only in valid_from. A naive `valid_to IS NULL`
-// filter after FINAL would still surface the repository through the stale
-// open row even though the org's most recent assertion revoked it. This
-// seeds exactly that sequence and proves the repository is excluded.
-func subTeamAuthorizationCollapsesStaleOpenAssertion(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
-	seedResolvableRepo(t, ctx, fixture, fixture.orgID, "acme/revoked-repo")
+// subTeamAuthorizationKeepsAnOpenAssertionWhenALaterRowClosesItsDuplicate:
+// team_repo_ownership's ReplacingMergeTree key includes valid_from, so FINAL
+// keeps an OLDER open assertion and a LATER row that closes a duplicate of the
+// SAME (team, repo, source) as two distinct rows. The ownership writers keep
+// the earliest open row of a fact and close its later duplicates, so for a
+// current fact the newest row is the closed one. A fact is current when an
+// open row exists for its key: the repository stays in the authorization list
+// (the list aggregates the same per-fact rows the OWNED_BY_TEAM edge projects).
+func subTeamAuthorizationKeepsAnOpenAssertionWhenALaterRowClosesItsDuplicate(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	seedResolvableRepo(t, ctx, fixture, fixture.orgID, "acme/duplicated-repo")
 	seed := func(validFrom time.Time, validTo any) {
 		if err := fixture.direct.Exec(ctx,
 			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			fixture.orgID, "github", "TEAM-GITHUB", nil, "acme/revoked-repo", "exact", "native", uint8(1), uint16(1), int32(1), validFrom, validTo, validFrom); err != nil {
+			fixture.orgID, "github", "TEAM-GITHUB", nil, "acme/duplicated-repo", "exact", "native", uint8(1), uint16(1), int32(1), validFrom, validTo, validFrom); err != nil {
 			t.Fatalf("seed team_repo_ownership: %v", err)
 		}
 	}
-	// Older assertion: open.
 	seed(ownershipFirstSeen, nil)
-	// LATER assertion (different valid_from -- FINAL keeps both rows):
-	// closes it, before "now".
 	seed(ownershipLaterAssertion, ownershipLatestClose)
 
 	batch := fixture.project(t, ctx)
 	entity := entityByCanonicalID(t, batch, "team:TEAM-GITHUB")
+	found := false
 	for _, repo := range entity.Authorization.RepositorySlugs {
-		if repo == "acme/revoked-repo" {
-			t.Fatalf("RepositorySlugs = %v, want acme/revoked-repo excluded -- the LATEST assertion closed it, but a stale FINAL-surviving open row leaked it back in", entity.Authorization.RepositorySlugs)
-		}
+		found = found || repo == "acme/duplicated-repo"
+	}
+	if !found {
+		t.Fatalf("RepositorySlugs = %v, want acme/duplicated-repo: an open row exists for the fact, so a later row closing its duplicate must not revoke it", entity.Authorization.RepositorySlugs)
 	}
 }
 
@@ -451,7 +453,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"ambiguity guard is scoped to one organization", "30000000-0000-4000-8000-000000000006", subAmbiguityGuardIsScopedToOneOrganization},
 		{"omitted rows beyond the skip bound still converge", "30000000-0000-4000-8000-000000000007", subOmittedRowsBeyondTheSkipBoundStillConverge},
 		{"team authorization carries current owned repositories", "30000000-0000-4000-8000-000000000008", subTeamAuthorizationCarriesCurrentOwnedRepositories},
-		{"team authorization collapses a stale open assertion superseded by a later close", "30000000-0000-4000-8000-000000000009", subTeamAuthorizationCollapsesStaleOpenAssertion},
+		{"team authorization keeps an open assertion when a later row closes its duplicate", "30000000-0000-4000-8000-000000000009", subTeamAuthorizationKeepsAnOpenAssertionWhenALaterRowClosesItsDuplicate},
 		{"team authorization is refreshed by an ownership-only change", "30000000-0000-4000-8000-00000000000a", subTeamAuthorizationRefreshedByOwnershipOnlyChange},
 		{"team authorization is refreshed by revoking the last open repository", "30000000-0000-4000-8000-00000000000c", subTeamAuthorizationRefreshedByRevokingLastOpenRepository},
 		{"team authorization ownership join is scoped to one organization", "30000000-0000-4000-8000-00000000000b", subTeamAuthorizationOwnershipJoinScopedToOneOrganization},
@@ -558,6 +560,12 @@ func newOwnershipFixture(t *testing.T, ctx context.Context, query contextpacket.
 	seedProject("PROJ-OPEN", "github", "OPEN-KEY")
 	seedOwnership("github", "TEAM-GITHUB", "PROJ-OPEN", "OPEN-KEY", ownershipFirstSeen, ownershipSupersededEarlyClose)
 	seedOwnership("github", "TEAM-GITHUB", "PROJ-OPEN", "OPEN-KEY", ownershipLaterAssertion, nil)
+
+	// An older OPEN row and a newer CLOSED duplicate of the same fact: the
+	// fact is current, because an open row exists.
+	seedProject("PROJ-DUP", "github", "DUP-KEY")
+	seedOwnership("github", "TEAM-GITHUB", "PROJ-DUP", "DUP-KEY", ownershipFirstSeen, nil)
+	seedOwnership("github", "TEAM-GITHUB", "PROJ-DUP", "DUP-KEY", ownershipLaterAssertion, ownershipLatestClose)
 
 	seedOwnership("github", "TEAM-GITHUB", "PROJ-AMBIG-A", "AMBIG-KEY", ownershipFirstSeen, nil)
 

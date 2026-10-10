@@ -31,9 +31,9 @@ import (
 //	        (devhealthsource.TeamsProjectsSource -> falkorgraph
 //	        ApplyProjectionBatch) built from seeded ClickHouse rows.
 //	Path 2: the team_repo_ownership population, read straight from
-//	        ClickHouse: the latest assertion per (provider, repository, team,
-//	        source) decides, and it is current when it has started and has
-//	        not ended.
+//	        ClickHouse: per (provider, repository, team, source) a fact is
+//	        current when it has started and an open row exists for it, or,
+//	        with no open row, when its latest closed row has not ended.
 //	Contract: equal MULTISETS of repository ids (a repeated id on path 1 is
 //	        a failure, not a set collapse), every leaf tagged {"t","v"}.
 //
@@ -150,9 +150,9 @@ func o3Seed(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, org
 	own("T1", 2, "acme/r2", "exact", "manual", longAgo, nil)                   //   two edges, one id
 	own("T1", 3, "acme/r3", "exact", "native", longAgo, past)                  // ended
 	own("T1", 4, "acme/r4", "exact", "native", longAgo, nil)                   // older open ...
-	own("T1", 4, "acme/r4", "exact", "native", pastLater, now.Add(-time.Hour)) // ... latest assertion ended
+	own("T1", 4, "acme/r4", "exact", "native", pastLater, now.Add(-time.Hour)) // ... a later duplicate closed: still open
 	own("T1", 5, "acme/r5", "exact", "native", longAgo, past)                  // older ended ...
-	own("T1", 5, "acme/r5", "exact", "native", pastLater, nil)                 // ... latest assertion open
+	own("T1", 5, "acme/r5", "exact", "native", pastLater, nil)                 // ... reopened by a new open row
 	own("T1", 6, "acme/*", "pattern", "inferred", longAgo, nil)                // pattern match, open
 	own("T1", 7, "acme/r7", "exact", "native", longAgo, nil)                   // open
 	own("T1", 8, "acme/r8", "exact", "provider_access", longAgo, nil)          // open
@@ -184,12 +184,13 @@ SELECT provider, repo_key, repo_name FROM (
   SELECT provider, ifNull(toString(repo_id), '') AS repo_key,
          if(isNull(repo_id), repo_full_name, '') AS repo_name,
          min(valid_from) AS first_from,
-         argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1 AS latest_to
+         countIf(isNull(valid_to)) > 0 AS open_exists,
+         argMaxIf(valid_to, valid_from, isNotNull(valid_to)) AS latest_closed_to
   FROM team_repo_ownership FINAL
   WHERE org_id = ? AND team_id = ?
   GROUP BY provider, repo_id, team_id, source, if(isNull(repo_id), repo_full_name, '')
 )
-WHERE first_from <= now64(3) AND (latest_to IS NULL OR latest_to > now64(3))`, orgID, teamID)
+WHERE first_from <= now64(3) AND (open_exists OR latest_closed_to > now64(3))`, orgID, teamID)
 	if err != nil {
 		t.Fatalf("path 2 query: %v", err)
 	}
