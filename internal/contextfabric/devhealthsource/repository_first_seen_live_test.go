@@ -68,12 +68,15 @@ func TestLiveRepositoryStartIsTheFirstSeenNotTheSyncStamp(t *testing.T) {
 		if name == "real" {
 			created = realCreated
 		}
+		// devhealthschema:not-a-production-replica these are INSERT statements seeding rows into tables the production DDL created; no column, type or engine is declared here.
 		if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, id, orgID, "acme/"+name, "github", created, synced); err != nil {
 			t.Fatalf("seed repo %s: %v", name, err)
 		}
 	}
 	const pulls = 20000
+	// devhealthschema:not-a-production-replica these are INSERT statements seeding rows into tables the production DDL created; no column, type or engine is declared here.
 	for _, name := range []string{"both", "pull"} {
+		// devhealthschema:not-a-production-replica these are INSERT statements seeding rows into tables the production DDL created; no column, type or engine is declared here.
 		if err := direct.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, body, created_at, last_synced)
 SELECT toUUID(?), ?, toUInt32(number + 1), 'PR', 'open', repeat('b', 1000), toDateTime64(?, 3, 'UTC') + toIntervalSecond(number), toDateTime64(?, 3, 'UTC')
 FROM numbers(?)`, repos[name], orgID, firstPull, synced, pulls/2); err != nil {
@@ -84,10 +87,12 @@ FROM numbers(?)`, repos[name], orgID, firstPull, synced, pulls/2); err != nil {
 VALUES (toUUID(?), ?, 1, 'PR', 'open', toDateTime64(0, 3, 'UTC'), ?)`, repos["epoch"], orgID, synced); err != nil {
 		t.Fatalf("seed an unset-created_at pull request: %v", err)
 	}
+	// devhealthschema:not-a-production-replica these are INSERT statements seeding rows into tables the production DDL created; no column, type or engine is declared here.
 	if err := direct.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, created_at, updated_at, last_synced, org_id)
 VALUES (toUUID(?), 'ITEM-1', 'github', 'first', 'task', 'open', ?, ?, ?, ?)`, repos["both"], firstItem, synced, synced, orgID); err != nil {
 		t.Fatalf("seed work item: %v", err)
 	}
+	// devhealthschema:not-a-production-replica these are INSERT statements seeding rows into tables the production DDL created; no column, type or engine is declared here.
 	for _, table := range []string{"git_pull_requests", "work_items", "repos"} {
 		if err := direct.Exec(ctx, "OPTIMIZE TABLE "+table+" FINAL"); err != nil {
 			t.Fatalf("merge the seeded parts of %s: %v", table, err)

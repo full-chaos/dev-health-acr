@@ -260,18 +260,9 @@ func fetchIngest(ctx context.Context, client contextpacket.ClickHouseQueryClient
 }
 
 func queryRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	items, truncated, err := queryRepositoryRows(ctx, client, orgID, cursor, limit)
-	if err != nil {
-		return nil, false, err
-	}
-	applyRepositoryFirstSeen(ctx, client, orgID, items)
-	return items, truncated, nil
-}
-
-func queryRepositoryRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	statement := `SELECT toString(id), repo, ifNull(provider, ''), last_synced, created_at, ifNull(tags, '') FROM repos FINAL
 WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + orderBy("last_synced", "id")
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+	items, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var id, slug, provider, rawTags string
 		var observedAt, createdAt time.Time
 		if err := r.Scan(&id, &slug, &provider, &observedAt, &createdAt, &rawTags); err != nil {
@@ -317,6 +308,11 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 		}
 		return []candidate{{observedAt: observedAt, sortKey: id, entity: &entity}}, nil
 	})
+	if err != nil {
+		return nil, false, err
+	}
+	applyRepositoryFirstSeen(ctx, client, orgID, items)
+	return items, truncated, nil
 }
 
 // queryWorkItems LEFT JOINs repos (CHAOS-3785; was INNER JOIN): Linear-sourced
