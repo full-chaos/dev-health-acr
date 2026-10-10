@@ -66,6 +66,22 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 	}
 
+	if len(projection.InactiveHints) > 0 {
+		b.writeLine("")
+		if !b.writeLine("## Inactive teams") {
+			return b.finishWithTruncation()
+		}
+		for _, hint := range projection.InactiveHints {
+			line := fmt.Sprintf("- team `%s` is inactive; no data was read for it", untrustedInline(hint.Subject.Label))
+			if hint.ActiveCanonicalID != "" {
+				line += fmt.Sprintf("; an active team of the same name is `%s`", safeInline(hint.ActiveCanonicalID))
+			}
+			if !b.writeLine(line) {
+				return b.finishWithTruncation()
+			}
+		}
+	}
+
 	if projection.DirectJudgment != "" {
 		b.writeLine("")
 		if !b.writeLine(fmt.Sprintf("## Judgment (%s)", untrustedDataHeader)) {
