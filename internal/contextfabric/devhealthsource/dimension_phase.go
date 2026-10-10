@@ -44,10 +44,6 @@ type dimensionPosition struct {
 	Rows int `json:"r"`
 }
 
-// cursorMaxLength is the contract's bound on a batch cursor
-// (ContextFabricProjectionBatch.Validate).
-const cursorMaxLength = 512
-
 // dimensionPositionOf is the dimension position a decoded cursor carries.
 func dimensionPositionOf(state cursorState) dimensionPosition {
 	at := *state.Dim
@@ -66,7 +62,7 @@ func dimensionSpace(space string) string { return "d." + space }
 // space. ok is false when it does not fit the contract's cursor length.
 func (at dimensionPosition) encode(space string) (cursor string, ok bool, err error) {
 	cursor, err = encodeCursorIn(dimensionSpace(space), cursorState{Since: at.Since, After: at.After, Dim: &at})
-	return cursor, len(cursor) <= cursorMaxLength, err
+	return cursor, len(cursor) <= contractsv1.ContextFabricProjectionCursorMaxLength, err
 }
 
 // dimensionPagesPerBatch bounds the pages one dimension batch reads.
@@ -221,7 +217,7 @@ func (p sourcePlan) walkWithoutDimensions(ctx context.Context, orgID, cursor str
 			"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
 			"dimension_tables", contextfabric.SanitizeLogStrings(at.Tables),
 			"table", contextfabric.SanitizeLogAttr(at.Tables[min(at.At, len(at.Tables)-1)]),
-			"cursor_max_length", cursorMaxLength, "phase_rows", at.Rows)
+			"cursor_max_length", contractsv1.ContextFabricProjectionCursorMaxLength, "phase_rows", at.Rows)
 	}
 	p.complete, p.truncatedTables = complete, truncatedTables
 	return p.pagedBatch(ctx, orgID, cursor, cursorState{}, cursor == "")
