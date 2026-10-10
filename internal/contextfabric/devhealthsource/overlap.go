@@ -5,7 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
+	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,8 +35,16 @@ import (
 // at the ordinary page size, at most overlapWindowPagesPerCall pages per call.
 // A pass that does not reach the window's end in one call stops at the last
 // fully read row and resumes from exactly there on the next call (logged);
-// it never skips the rest of the window and never restarts short of it. A page
-// on which no table had rows past its LIMIT is the window's end, so a window
+// it never skips the rest of the window and never restarts short of it.
+//
+// EVERY PASS ENDS. The window's upper edge is the frontier as it stood when
+// the pass started (windowPass.high), a fixed keyset position. Rows after it
+// are not the pass's: they lie beyond the frontier of that moment, so the
+// paged read emits them. Without the edge the walk follows the frontier, and
+// a writer that lands more rows per tick than one tick walks keeps the pass
+// open for as long as it writes: rows that land behind the walk then wait for
+// a next pass that never starts. A page that holds a row past the edge, or on
+// which no table had rows past its LIMIT, is the window's end, so a window
 // smaller than one page costs one statement per table. A pass this call
 // started ends the call when it completes; a pass resumed from an earlier
 // call is followed at once by a new pass (rows may have landed behind it
@@ -102,9 +113,32 @@ type pendingWindow struct {
 // windowPass is the pass state overlapBatch reads and writes as one value.
 type windowPass struct {
 	low       time.Time   // lower edge of the walk (ingest-stamp clock); zero = no pass yet
+	high      cursorState // upper edge of the current pass: the frontier when it started
 	walk      cursorState // the pass resumes AFTER this position
 	passStart time.Time   // this process's clock when the current pass started
 	walking   bool        // a pass is in progress
+	pages     int         // pages the current pass has read
+	rows      int         // source rows the current pass has read
+}
+
+// pastEdge reports whether c sorts after the keyset position edge, in the
+// order the readers page in: position first, row key second.
+func pastEdge(c candidate, edge cursorState) bool {
+	if !c.position().Equal(edge.Since) {
+		return c.position().After(edge.Since)
+	}
+	return c.sortKey > edge.After
+}
+
+// withinEdge returns the leading rows of a sorted page that lie at or before
+// edge, and whether the page held a row past it.
+func withinEdge(page []candidate, edge cursorState) ([]candidate, bool) {
+	for i, c := range page {
+		if pastEdge(c, edge) {
+			return page[:i], true
+		}
+	}
+	return page, false
 }
 
 // windowScopeFor keys the memo by organization AND checkpoint epoch: the
@@ -310,6 +344,8 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	}
 	start := func() {
 		pass.walking, pass.passStart, pass.walk = true, now, cursorState{Since: pass.low}
+		pass.high = cursorState{Since: state.Since, After: state.After}
+		pass.pages, pass.rows = 0, 0
 	}
 	// A pass resumed from an earlier call may have been passed by rows that
 	// landed behind its position meanwhile, so when it completes a new pass
@@ -334,16 +370,11 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	}
 	completed := false
 	var all []candidate
-	for page := 0; ; page++ {
+	page := 0
+	for ; ; page++ {
 		if page == pagesPerCall {
 			p.window.setPass(p.windowScope, pass)
-			if p.logger != nil {
-				p.logger.WarnContext(ctx, "devhealthsource overlap window pass continues on the next tick; late rows deeper in the window are not skipped, only delayed",
-					"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
-					"pages_this_call", pagesPerCall, "page_rows", incrementalBatchCap,
-					"window_low", contextfabric.SanitizeLogAttr(pass.low.UTC().Format(time.RFC3339Nano)), "resume_after", contextfabric.SanitizeLogAttr(pass.walk.Since.UTC().Format(time.RFC3339Nano)),
-					"frontier", contextfabric.SanitizeLogAttr(state.Since.UTC().Format(time.RFC3339Nano)), "pass_age_seconds", int64(now.Sub(pass.passStart).Seconds()))
-			}
+			p.logOpenPass(ctx, orgID, pass, state, now, page)
 			p.noteYield()
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
@@ -374,7 +405,18 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 				p.logBoundedPage(ctx, orgID, bound)
 			}
 			more = more || len(complete) < len(pageRows)
-			pageRows = complete
+			// The pass ends at its upper edge. A row past it lies beyond the
+			// frontier this pass started at: the paged read's row, and the
+			// proof that nothing of the window is left behind it.
+			inside, edged := withinEdge(complete, pass.high)
+			if edged {
+				more = false
+			}
+			pageRows = inside
+		}
+		pass.pages++
+		if len(pageRows) > 0 {
+			pass.rows += sourceRows(pageRows)
 			last := pageRows[len(pageRows)-1]
 			pass.walk = cursorState{Since: last.position(), After: last.sortKey}
 			if all = p.window.unseen(p.windowScope, pageRows); len(all) > 0 {
@@ -390,6 +432,9 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 			pass.low = edge
 		}
 		pass.walking = false
+		if resumed && !completed {
+			p.logEndedPass(ctx, orgID, pass, now)
+		}
 		if completed || !resumed || pass.low.After(state.Since) {
 			p.window.setPass(p.windowScope, pass)
 			return contextfabric.ProjectionBatch{}, false, nil
@@ -406,6 +451,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		p.window.record(p.windowScope, all, p.overlap)
 		// The walk read a page and stopped; it is unfinished until a call
 		// reaches the window's end, so the pass is not over.
+		p.logOpenPass(ctx, orgID, pass, state, now, page+1)
 		p.noteYield()
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
@@ -437,4 +483,104 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	p.forgetConsumed(orgID)
 	p.observeBatch(ctx, batch, all)
 	return batch, true, nil
+}
+
+// sourceRows counts the source rows in a sorted page: one row can carry
+// several candidates, which share its position and row key.
+func sourceRows(page []candidate) int {
+	rows := 0
+	for i, c := range page {
+		if i == 0 || !c.position().Equal(page[i-1].position()) || c.sortKey != page[i-1].sortKey {
+			rows++
+		}
+	}
+	return rows
+}
+
+// overduePass reports whether an OPEN pass is older than the lateness the
+// window absorbs (one overlap). Past that, the walk itself delays a late row
+// for longer than the row was late. Callers ask only about an open pass.
+func overduePass(pass windowPass, overlap time.Duration, now time.Time) bool {
+	return now.Sub(pass.passStart) > overlap
+}
+
+const (
+	openPassMessage    = "devhealthsource overlap window pass continues on the next tick; late rows deeper in the window are not skipped, only delayed"
+	overduePassMessage = "devhealthsource overlap window pass is older than the lateness the window absorbs; late rows wait longer than they were late"
+	endedPassMessage   = "devhealthsource overlap window pass ended"
+)
+
+// logOpenPass writes the one line a call writes when it ends with the pass
+// still open: where the pass stands and how much of the window is left. It is
+// a warning only once the pass is overdue (overduePass).
+func (p sourcePlan) logOpenPass(ctx context.Context, orgID string, pass windowPass, frontier cursorState, now time.Time, pagesThisCall int) {
+	if p.logger == nil {
+		return
+	}
+	stamp := func(at time.Time) string { return contextfabric.SanitizeLogAttr(at.UTC().Format(time.RFC3339Nano)) }
+	// The walk never stands past the edge: a page is cut there.
+	remainingSpan := pass.high.Since.Sub(pass.walk.Since)
+	// A linear estimate from the rows read so far over the span read so far;
+	// -1 when the pass has not moved yet.
+	remainingRows := int64(-1)
+	if walked := pass.walk.Since.Sub(pass.low); walked > 0 && pass.rows > 0 {
+		remainingRows = int64(math.Round(float64(pass.rows) * float64(remainingSpan) / float64(walked)))
+	}
+	level, message := slog.LevelInfo, openPassMessage
+	if overduePass(pass, p.overlap, now) {
+		level, message = slog.LevelWarn, overduePassMessage
+	}
+	p.logger.Log(ctx, level, message,
+		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
+		"pages_this_call", pagesThisCall, "page_rows", incrementalBatchCap,
+		"window_low", stamp(pass.low), "window_high", stamp(pass.high.Since), "resume_after", stamp(pass.walk.Since),
+		"frontier", stamp(frontier.Since), "pass_age_seconds", int64(now.Sub(pass.passStart).Seconds()),
+		"pass_bound_seconds", int64(p.overlap.Seconds()), "pass_pages", pass.pages, "pass_rows", pass.rows,
+		"remaining_span_seconds", int64(remainingSpan.Seconds()), "remaining_rows_estimate", remainingRows)
+}
+
+// logEndedPass closes the lines of a pass that spanned more than one call.
+func (p sourcePlan) logEndedPass(ctx context.Context, orgID string, pass windowPass, now time.Time) {
+	if p.logger == nil {
+		return
+	}
+	p.logger.InfoContext(ctx, endedPassMessage,
+		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
+		"pass_seconds", int64(now.Sub(pass.passStart).Seconds()), "pass_pages", pass.pages, "pass_rows", pass.rows,
+		"window_low", contextfabric.SanitizeLogAttr(pass.low.UTC().Format(time.RFC3339Nano)),
+		"window_high", contextfabric.SanitizeLogAttr(pass.high.Since.UTC().Format(time.RFC3339Nano)))
+}
+
+// reportWindowPass is ProjectionWindowPass for both sources: the state of the
+// checkpoint scope's pass, read from the memo and never changed.
+func reportWindowPass(memo *windowMemo, overlap time.Duration, now time.Time, checkpoint contextfabric.ProjectionCheckpoint) contextfabric.ProjectionWindowPass {
+	pass := memo.pass(windowScopeFor(strings.TrimSpace(checkpoint.OrgID), checkpoint.Epoch))
+	if !pass.walking {
+		return contextfabric.ProjectionWindowPass{}
+	}
+	return contextfabric.ProjectionWindowPass{
+		Open: true, StartedAt: pass.passStart, Age: now.Sub(pass.passStart), Bound: overlap,
+		Overdue: overduePass(pass, overlap, now),
+	}
+}
+
+var (
+	_ contextfabric.ProjectionWindowReporter = (*ClickHouseProjectionSource)(nil)
+	_ contextfabric.ProjectionWindowReporter = (*TeamsProjectsSource)(nil)
+)
+
+// ProjectionWindowPass implements contextfabric.ProjectionWindowReporter.
+func (s *ClickHouseProjectionSource) ProjectionWindowPass(checkpoint contextfabric.ProjectionCheckpoint) contextfabric.ProjectionWindowPass {
+	if s == nil {
+		return contextfabric.ProjectionWindowPass{}
+	}
+	return reportWindowPass(s.window, s.overlap, sourcePlan{now: s.now}.clock(), checkpoint)
+}
+
+// ProjectionWindowPass implements contextfabric.ProjectionWindowReporter.
+func (s *TeamsProjectsSource) ProjectionWindowPass(checkpoint contextfabric.ProjectionCheckpoint) contextfabric.ProjectionWindowPass {
+	if s == nil {
+		return contextfabric.ProjectionWindowPass{}
+	}
+	return reportWindowPass(s.window, s.overlap, sourcePlan{now: s.now}.clock(), checkpoint)
 }

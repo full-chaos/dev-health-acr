@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -1427,6 +1428,32 @@ type ProjectionGraphCounts interface {
 // conservative budget_exceeded reason: the answer is unknown, never guessed.
 type ProjectionPeeker interface {
 	PeekProjectionBatch(context.Context, ProjectionCheckpoint) (available bool, err error)
+}
+
+// ProjectionWindowPass is where a source's trailing late-arrival re-read
+// stands for one checkpoint scope. The zero value means no pass is open.
+type ProjectionWindowPass struct {
+	// Open: a pass over the trailing window has started and has not reached
+	// the window's end. Rows that landed behind the frontier inside the
+	// window may still be unprojected.
+	Open bool
+	// StartedAt is the source's clock when the open pass started.
+	StartedAt time.Time
+	// Age is how long the pass has been open; Bound is the lateness the
+	// window absorbs. Overdue is Open with Age above Bound: the re-read
+	// itself now delays a late row for longer than the row was late.
+	Age, Bound time.Duration
+	Overdue    bool
+}
+
+// ProjectionWindowReporter is an OPTIONAL capability a ProjectionSource
+// implements when a call that reports nothing available can still have work
+// open behind the frontier: a re-read of the trailing window that one call
+// did not finish. NextProjectionBatch answers available=false for "caught up"
+// and for "stopped at this call's bound" alike; this capability tells them
+// apart. Read-only: it reads the pass state, never advances it.
+type ProjectionWindowReporter interface {
+	ProjectionWindowPass(ProjectionCheckpoint) ProjectionWindowPass
 }
 
 // ProjectionSourceEnablement is an OPTIONAL capability (CHAOS-3898 S2a-2,

@@ -639,12 +639,30 @@ re-emits the same batch on the retry. The walk runs
 in passes of ordinary 200-row pages (the ClickHouse client's `max_result_rows`
 is 1,000 and a larger read would fail the tick), at most 5 pages per call; a
 pass that does not reach the window's end stops at the last fully read row and
-resumes there on the next tick, logging `devhealthsource overlap window pass
-continues on the next tick`, so depth never drops a row, it only delays it.
+resumes there on the next tick, so depth never drops a row, it only delays it.
+Every pass ends: its upper edge is the cursor position (the frontier) at the
+moment the pass started. Rows after that edge belong to the ordinary paged
+read, so a writer that lands rows faster than the walk reads them cannot keep
+a pass open; rows that landed behind the walk are found by the next pass. A
+tick that ends with a pass open logs one INFO line, `devhealthsource overlap
+window pass continues on the next tick` (`window_low`, `window_high`,
+`resume_after`, `pass_age_seconds`, `pass_pages`, `pass_rows`,
+`remaining_span_seconds`, `remaining_rows_estimate`; the estimate is linear
+and is `-1` before the pass has moved), and a pass that spanned several ticks
+logs `devhealthsource overlap window pass ended`. A pass older than one
+overlap logs the same fields at WARN, `devhealthsource overlap window pass is
+older than the lateness the window absorbs`: late rows then wait longer than
+they were late. The tick freshness summary carries both readings:
+`orgs_window_pass_open` counts organizations that ended the tick with a pass
+open (the ordinary state when the window holds more rows than one tick
+walks), and `orgs_window_behind` is a bucket: an organization whose open pass
+is older than one overlap is counted there and NOT in `orgs_ok`. A sustained
+ingest above 1,000 rows per tick per source makes each pass longer than the
+one before; that is the state `orgs_window_behind` reports.
 One tick walks one pass at most (plus a new pass when a pass resumed from an
-earlier tick completes); a page on which every table reports its end closes
-the pass, so an idle tick over a window smaller than one page costs one extra
-statement per table. After a full pass the window's lower edge moves to (pass start - 2 x overlap),
+earlier tick completes); a page that reaches the upper edge, or on which
+every table reports its end, closes the pass, so an idle tick over a window
+smaller than one page costs one extra statement per table. After a full pass the window's lower edge moves to (pass start - 2 x overlap),
 so a row that lands more than about 2 x overlap after its own ingest stamp is
 not re-read (a rebuild recovers it), and a quiet organization's window closes
 by itself. After a projector restart the first caught-up ticks re-emit the
@@ -1485,7 +1503,8 @@ Steps (namespace `dev-health`):
 4. Delete the Job: `kubectl -n dev-health delete job/acr-projector-rebuild-v13`.
 5. Scale the projector to 1, then read back the projector log until
    `orgs_rebuild_required=0`, `orgs_ok` equals `orgs_configured`, and
-   `tick_complete` is true.
+   `tick_complete` is true. (`orgs_window_pass_open` above zero is normal
+   after a rebuild; `orgs_window_behind` above zero is not.)
 
 Job shape (secrets by reference only; take the image digest and env from the
 live projector Deployment, do not copy values into a ticket or a doc):

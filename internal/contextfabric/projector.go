@@ -59,6 +59,12 @@ type ProjectionRun struct {
 	// writes, including the finalizing retry, all failing while the
 	// checkpoint itself keeps advancing).
 	RowsApplied int64
+	// WindowPass is the source's trailing re-read as it stood when the source
+	// reported nothing available: "caught up" and "stopped at this call's
+	// bound with the window not walked to its end" both arrive as
+	// Applied=false, and only this field tells them apart. The zero value on
+	// an applied run, and for a source without the capability.
+	WindowPass ProjectionWindowPass
 }
 
 func NewProjectionWorker(source ProjectionSource, backend ProjectionBackend, checkpoints ProjectionCheckpointStore, options ProjectionWorkerOptions) (*ProjectionWorker, error) {
@@ -215,10 +221,14 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		if err != nil {
 			return ProjectionRun{}, err
 		}
-		if progressed {
-			return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: advanced, RowsApplied: checkpoint.RowsApplied}, nil
+		var windowPass ProjectionWindowPass
+		if reporter, ok := w.source.(ProjectionWindowReporter); ok {
+			windowPass = reporter.ProjectionWindowPass(checkpoint)
 		}
-		return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, RowsApplied: checkpoint.RowsApplied}, nil
+		if progressed {
+			return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: advanced, RowsApplied: checkpoint.RowsApplied, WindowPass: windowPass}, nil
+		}
+		return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, RowsApplied: checkpoint.RowsApplied, WindowPass: windowPass}, nil
 	}
 	if err := batch.Validate(); err != nil {
 		return ProjectionRun{}, markPair(PairStageSourceRead, err, "projection batch")
