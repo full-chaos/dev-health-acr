@@ -641,10 +641,18 @@ import (
 // under v128 may hold an empty window or a team without its repositories, and
 // must not be reused.
 //
-// v129 -> v131: a refused run_operation or graphql_query reply reports the
+// v129 -> v130: a project investment read whose window starts before the
+// project's earliest linked unit among the units overlapping the window names
+// that start (investment_project_window_first_unit) and says the history before
+// the window was not read; the organization-wide beyond-stored-history reason no
+// longer ends with "this project's own span is not derived". A candidate saved
+// under v129 carries the old wording or no per-project start and must not be
+// reused.
+//
+// v130 -> v131: a refused run_operation or graphql_query reply reports the
 // pinned schema digest of the policy that refused it, not a cached served
 // digest that may be older than the last registry watch. A candidate saved
-// under v129 may hold a refusal stamped with a stale digest and must not be
+// under v130 may hold a refusal stamped with a stale digest and must not be
 // reused.
 const QueryVersion = "devhealthfacts.clickhouse.v131"
 

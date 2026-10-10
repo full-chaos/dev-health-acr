@@ -319,7 +319,7 @@ func t4Cases() []t4Case {
 		{match: "AS unit_ids", rows: [][]any{{[]string{"unit-1"}, []int64{1}, clockSpanStart}}},
 		{match: "groupArray(link_kind)", rows: [][]any{{[]string{"linear"}, []string{"proj-1"}, []string{"repo"}, []string{"r:repo-1"}, [][]string{{"team-1"}}}}},
 		{match: "uniqExactIf(u.repo_id", rows: [][]any{
-			{"linear:proj-1", 60.0, 20.0, 10.0, 6.0, 4.0, uint64(9), uint64(2), uint64(2)},
+			{"linear:proj-1", 60.0, 20.0, 10.0, 6.0, 4.0, uint64(9), uint64(2), uint64(2), clockSpanStart},
 		}},
 		{match: "sumIf(u.bugfix_share", rows: [][]any{{"linear:proj-1", 1.0}}},
 		{match: "excluded_no_repo_link", rows: [][]any{{"linear:proj-1", uint64(3)}}},

@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -70,8 +71,12 @@ func lastMixStatement(t *testing.T, client *fakeClient) capturedQuery {
 
 func scopeIDsBinding(q capturedQuery) ([]string, bool) {
 	for _, b := range q.bindings {
-		if b.Name == "scope_ids" {
-			ids, _ := b.Value.([]string)
+		if b.Name == "scope_json" {
+			var ids []string
+			text, _ := b.Value.(string)
+			if err := json.Unmarshal([]byte(text), &ids); err != nil {
+				return nil, false
+			}
 			return ids, true
 		}
 	}
@@ -90,12 +95,12 @@ func TestMembershipScopeOfARealRunIsReadOnceAndBoundToTheMixStatement(t *testing
 	}
 	mix := lastMixStatement(t, client)
 	if ids, ok := scopeIDsBinding(mix); !ok || strings.Join(ids, ",") != "wu-1,wu-2" {
-		t.Fatalf("mix statement scope_ids = %v (bound %v), want [wu-1 wu-2]", ids, ok)
+		t.Fatalf("mix statement scope_json = %v (bound %v), want [wu-1 wu-2]", ids, ok)
 	}
 	if strings.Contains(mix.statement, "work_unit_membership") {
 		t.Fatal("the mix statement still names work_unit_membership: the scope must come from the bound ids")
 	}
-	if !strings.Contains(mix.statement, "work_unit_id IN {scope_ids:Array(String)}") {
+	if !strings.Contains(mix.statement, "JSONExtract({scope_json:String}, 'Array(String)')") {
 		t.Fatal("the mix statement does not filter on the bound scope ids")
 	}
 }
@@ -122,7 +127,7 @@ func TestMembershipScopeIsKeyedByOrganizationAndReplacedWhenTheRunChanges(t *tes
 		t.Fatalf("unit reads = %d after the run changed, want 3", got)
 	}
 	if ids, _ := scopeIDsBinding(lastMixStatement(t, client)); strings.Join(ids, ",") != "wu-9" {
-		t.Fatalf("scope_ids after the run changed = %v, want [wu-9]: a stale run's ids must not be served", ids)
+		t.Fatalf("scope_json after the run changed = %v, want [wu-9]: a stale run's ids must not be served", ids)
 	}
 }
 
@@ -140,7 +145,7 @@ func TestMembershipScopeOfALegacyRunKeepsTheScopeSubqueries(t *testing.T) {
 	}
 	mix := lastMixStatement(t, client)
 	if _, bound := scopeIDsBinding(mix); bound {
-		t.Fatal("a legacy run must not bind scope_ids")
+		t.Fatal("a legacy run must not bind scope_json")
 	}
 	if !strings.Contains(mix.statement, "work_unit_membership AS m") {
 		t.Fatal("a legacy run's mix statement lost the scope subqueries")
@@ -157,7 +162,7 @@ func TestMembershipScopeWithNoCompleteRunFiltersNothing(t *testing.T) {
 	}
 	readScoped(t, provider, "org-scope-none", query)
 	mix := lastMixStatement(t, client)
-	if strings.Contains(mix.statement, "work_unit_membership") || strings.Contains(mix.statement, "scope_ids") {
+	if strings.Contains(mix.statement, "work_unit_membership") || strings.Contains(mix.statement, "scope_json") {
 		t.Fatal("an organization with no complete run must read every work unit: no membership filter")
 	}
 }
