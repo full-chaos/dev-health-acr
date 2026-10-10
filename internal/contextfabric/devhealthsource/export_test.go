@@ -376,3 +376,13 @@ func DrainPullRequestPagesForTest(ctx context.Context, client contextpacket.Clic
 	}
 	return rows, fmt.Errorf("pull request pages did not end")
 }
+
+// CursorFactPositionMovedForTest reports whether a cursor carries a fact
+// position (the walk has moved it from zero).
+func CursorFactPositionMovedForTest(t interface{ Fatalf(string, ...any) }, cursor string) bool {
+	state, err := decodeCursor(cursor)
+	if err != nil {
+		t.Fatalf("decode cursor: %v", err)
+	}
+	return !state.Since.IsZero()
+}

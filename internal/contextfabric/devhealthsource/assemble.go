@@ -220,6 +220,9 @@ func (p sourcePlan) nextBatchPage(ctx context.Context, checkpoint contextfabric.
 	}
 	p.window.settle(p.windowScope, state.Ack)
 	state.Ack = ""
+	if state.Dim != nil {
+		return p.dimensionBatch(ctx, orgID, checkpoint.Cursor, *state.Dim)
+	}
 	return p.pagedBatch(ctx, orgID, checkpoint.Cursor, state, false)
 }
 
@@ -246,23 +249,15 @@ func (p sourcePlan) nextBatchPage(ctx context.Context, checkpoint contextfabric.
 // for the per-table case, just triggered by an aggregate rather than a
 // single oversized table.
 func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabric.ProjectionBatch, bool, error) {
-	var all []candidate
-	oversized := false
-	var complete []completeTable
-	var truncatedTables []string
-	for _, table := range p.tables {
-		rows, truncated, err := readTable(ctx, table, p.client, orgID, cursorState{}, snapshotPerQueryCap)
-		if err != nil {
-			logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
-			return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
-		}
-		if truncated {
-			oversized = true
-			truncatedTables = append(truncatedTables, table.name)
-		} else if len(rows) > 0 {
-			complete = append(complete, completeTable{name: table.name, rows: rows})
-		}
-		all = append(all, rows...)
+	all, complete, truncatedTables, err := p.snapshotRead(ctx, orgID)
+	if err != nil {
+		return contextfabric.ProjectionBatch{}, false, err
+	}
+	oversized := len(truncatedTables) > 0
+	if dimensions := p.dimensionTablesIn(truncatedTables); len(dimensions) > 0 {
+		// The organization holds more rows of a dimension table than the
+		// read asked for: those tables are read whole before the fact walk.
+		return p.dimensionBatch(ctx, orgID, "", dimensionPosition{Tables: dimensions})
 	}
 	seeded := p.seedCandidates(orgID)
 	if !oversized {
@@ -320,6 +315,26 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 	p.window.record(p.windowScope, all, p.overlap)
 	p.observeBatch(ctx, batch, all)
 	return batch, true, nil
+}
+
+// snapshotRead asks every table for its first rows at the snapshot cap. It
+// returns the rows, the tables that came back whole (with rows) and the names
+// of the tables that did not.
+func (p sourcePlan) snapshotRead(ctx context.Context, orgID string) (all []candidate, complete []completeTable, truncatedTables []string, err error) {
+	for _, table := range p.tables {
+		rows, truncated, err := readTable(ctx, table, p.client, orgID, cursorState{}, snapshotPerQueryCap)
+		if err != nil {
+			logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
+			return nil, nil, nil, &tableReadError{table: table.name, cause: err}
+		}
+		if truncated {
+			truncatedTables = append(truncatedTables, table.name)
+		} else if len(rows) > 0 {
+			complete = append(complete, completeTable{name: table.name, rows: rows})
+		}
+		all = append(all, rows...)
+	}
+	return all, complete, truncatedTables, nil
 }
 
 // pagedBatch is the shared bounded-per-tick paging path for both ordinary

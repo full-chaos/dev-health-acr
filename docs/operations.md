@@ -694,7 +694,18 @@ a from-zero walk also carries every table the from-zero read returned whole
 with the first batch` names them, and names the tables over that size that it
 left to the walk): a repository, a team or a project of such a table has its
 node on the first tick, although its row is rewritten by every sync and so
-is the last one the walk reaches. A table over 150 rows gets no row early. The walk emits those rows again when it
+is the last one the walk reaches. A fact table over 150 rows gets no row early.
+A dimension table over 150 rows (repositories; teams and projects) is read
+whole before the fact walk: batches of keyset pages of that table alone, up to
+the batch bounds (`devhealthsource from-zero read emits dimension tables before
+the fact walk`, with `phase_complete`, `batch_rows`, `phase_batches` and
+`phase_rows`). The position of that read is in the checkpoint cursor, so a
+batch the backend did not apply is read again and a restart reads on after the
+last applied batch; the fact position stays at zero and the pair counts as
+catching up. `devhealthsource dimension phase ended: every dimension table was
+read whole` is logged by the call that starts the fact walk, and
+`tables_left_truncated` of the walk's first line then names no dimension
+table. The walk emits those rows again when it
 gets there. A table that does not fit the batch, or that makes the batch
 invalid beside the page (WARN, `fallback=batch_invalid_with_tables`), is left
 to the walk.
