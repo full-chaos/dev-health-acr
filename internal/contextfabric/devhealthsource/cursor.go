@@ -26,7 +26,8 @@ type cursorState struct {
 	// then do its rows count as emitted (windowMemo.settle).
 	Ack string `json:"ack,omitempty"`
 	// Dim is set while a from-zero build reads its dimension tables
-	// (dimension_phase.go). Since and After stay zero then: the fact walk has
+	// (dimension_phase.go). Since and After are then the keyset position in
+	// the dimension table being read, not a fact position: the fact walk has
 	// not started. The worker stores a cursor only after the backend applied
 	// its batch, so the stored position is always an applied one.
 	Dim *dimensionPosition `json:"dim,omitempty"`

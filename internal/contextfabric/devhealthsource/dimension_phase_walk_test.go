@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -84,6 +85,12 @@ func mustDecode(t *testing.T, cursor string) cursorState {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if state.Dim != nil {
+		// A dimension cursor: Since and After are the dimension table's
+		// position. Hand them back in Dim, and the fact position as zero.
+		at := dimensionPositionOf(state)
+		state.Dim, state.Since, state.After = &at, time.Time{}, ""
+	}
 	return state
 }
 
@@ -106,7 +113,7 @@ func TestDimensionTableOverTheCapIsReadWholeBeforeTheFirstFactRow(t *testing.T) 
 	if got, want := entitiesPerTable(first), (map[string]int{"org": 1, "02": 800}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("batch 1 entities = %v, want %v", got, want)
 	}
-	if state := mustDecode(t, first.NextCursor); !state.Since.IsZero() || state.After != "" || state.Dim == nil || state.Dim.At != 0 || state.Dim.Rows != 800 || state.Dim.Batches != 1 {
+	if state := mustDecode(t, first.NextCursor); !state.Since.IsZero() || state.After != "" || state.Dim == nil || state.Dim.At != 0 || state.Dim.Rows != 800 {
 		t.Fatalf("batch 1 next cursor = %+v (dim %+v), want a zero fact position and the dimension position after 800 rows", state, state.Dim)
 	}
 	if len(first.NextCursor) > 512 {
@@ -123,7 +130,7 @@ func TestDimensionTableOverTheCapIsReadWholeBeforeTheFirstFactRow(t *testing.T) 
 	if first.BatchID == second.BatchID {
 		t.Fatal("two dimension batches share one batch id")
 	}
-	if state := mustDecode(t, second.NextCursor); !state.Since.IsZero() || state.Dim == nil || state.Dim.At != 1 || state.Dim.Rows != 1300 || state.Dim.Batches != 2 {
+	if state := mustDecode(t, second.NextCursor); !state.Since.IsZero() || state.Dim == nil || state.Dim.At != 1 || state.Dim.Rows != 1300 {
 		t.Fatalf("batch 2 next cursor = %+v (dim %+v), want a zero fact position and every dimension table read", state, state.Dim)
 	}
 	if report := reportCatchUp(plan.window, checkpoint); !report.WorkAhead {
@@ -147,7 +154,7 @@ func TestDimensionTableOverTheCapIsReadWholeBeforeTheFirstFactRow(t *testing.T) 
 		t.Fatalf("dimension batch lines = %v", batches)
 	}
 	ended := logLinesWith(t, logs.String(), dimensionEndedMessage)
-	if len(ended) != 1 || ended[0]["phase_rows"] != float64(1300) || ended[0]["phase_batches"] != float64(2) || !reflect.DeepEqual(stringsOf(ended[0]["dimension_tables"]), []string{"dims"}) {
+	if len(ended) != 1 || ended[0]["phase_rows"] != float64(1300) || !reflect.DeepEqual(stringsOf(ended[0]["dimension_tables"]), []string{"dims"}) {
 		t.Fatalf("dimension phase end lines = %v", ended)
 	}
 	walk := logLinesWith(t, logs.String(), completeTablesMessage)
@@ -300,7 +307,7 @@ func TestDimensionPagesWithNothingToProjectMoveThePosition(t *testing.T) {
 		t.Fatalf("available=%v err=%v, want no batch", available, err)
 	}
 	state := mustDecode(t, consumed)
-	if last := rows[(dimensionPagesPerBatch+maxOmittedPageSkips)*incrementalBatchCap-1]; state.Dim == nil || state.Dim.At != 0 || !state.Dim.Since.Equal(last.at) || state.Dim.After != last.key || !state.Since.IsZero() {
+	if last := rows[(dimensionPagesPerBatch+maxOmittedPageSkips)*incrementalBatchCap-1]; state.Dim == nil || state.Dim.At != 0 || state.Dim.Rows != (dimensionPagesPerBatch+maxOmittedPageSkips)*incrementalBatchCap || !state.Dim.Since.Equal(last.at) || state.Dim.After != last.key || !state.Since.IsZero() {
 		t.Fatalf("consumed cursor = %+v (dim %+v), want the dimension position after the pages read", state, state.Dim)
 	}
 	if !reportCatchUp(plan.window, checkpoint).WorkAhead {
@@ -317,7 +324,7 @@ func TestDimensionPagesWithNothingToProjectMoveThePosition(t *testing.T) {
 func TestDimensionPhasePassesOverATableThePlanDoesNotRead(t *testing.T) {
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	plan := dimensionPlan(now, nil, catchUpRows(2, 300, now.Add(-10*time.Minute), time.Millisecond))
-	cursor, err := encodeCursorIn(plan.cursorSpace(), cursorState{Dim: &dimensionPosition{Tables: []string{"gone", "dims"}}})
+	cursor, _, err := dimensionPosition{Tables: []string{"gone", "dims"}}.encode(plan.cursorSpace())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,5 +459,101 @@ func TestDimensionRowsAreNormalizedBeforeTheyAreJudged(t *testing.T) {
 		if e.Subject.Label != strings.TrimSpace(e.Subject.Label) {
 			t.Fatalf("label %q was emitted with blanks around it", e.Subject.Label)
 		}
+	}
+}
+
+// The longest position a row the contract accepts can give: two table names,
+// a nanosecond stamp, a row key of the natural-key bound, a large count. It
+// fits the contract's cursor length in both position spaces.
+func TestDimensionPositionOfTheLongestRowKeyFitsTheCursor(t *testing.T) {
+	at := dimensionPosition{
+		Tables: []string{"teams", "projects"}, At: 1,
+		Since: time.Date(2026, 10, 10, 3, 55, 0, 123456789, time.UTC), After: strings.Repeat("k", identity.MaxNaturalKeyBytes),
+		Rows: 9999999,
+	}
+	for _, space := range []string{cursorSpaceIngest, cursorSpaceIngestColumns} {
+		cursor, fits, err := at.encode(space)
+		if err != nil || !fits || len(cursor) > 512 {
+			t.Fatalf("space %s: the cursor is %d characters, fits=%v err=%v; want at most 512", space, len(cursor), fits, err)
+		}
+		state, err := decodeCursor(cursor)
+		if err != nil || state.Dim == nil {
+			t.Fatalf("space %s: the cursor does not decode to a dimension position: %v", space, err)
+		}
+		if got := dimensionPositionOf(state); !reflect.DeepEqual(got, at) {
+			t.Fatalf("space %s: decoded %+v, want %+v", space, got, at)
+		}
+	}
+	at.After = strings.Repeat("k", 2*identity.MaxNaturalKeyBytes)
+	if cursor, fits, _ := at.encode(cursorSpaceIngest); fits || len(cursor) <= 512 {
+		t.Fatalf("a %d-character cursor is said to fit", len(cursor))
+	}
+}
+
+// A dimension row key so long that the position after its page does not fit a
+// cursor: the phase stops, says so, and the fact walk starts with the table
+// still named as not read whole. No batch carries an over-long cursor. The
+// walk's first page carries the seed only when no dimension batch carried it.
+func TestDimensionPhaseStopsWhenItsPositionDoesNotFitTheCursor(t *testing.T) {
+	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
+	long := strings.Repeat("x", 400)
+	for _, tc := range []struct {
+		name          string
+		longRow       int // index of the row whose key is too long: the last row of a batch
+		batchesBefore int
+		wantWalk      map[string]int
+	}{
+		{name: "in the first batch", longRow: 799, batchesBefore: 0, wantWalk: map[string]int{"org": 1, "01": incrementalBatchCap - 1}},
+		{name: "in the second batch", longRow: 1799, batchesBefore: 1, wantWalk: map[string]int{"01": incrementalBatchCap}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := catchUpRows(2, 2300, now.Add(-10*time.Minute), time.Millisecond)
+			store.rows[tc.longRow].key += long
+			var logs bytes.Buffer
+			plan := dimensionPlan(now, &logs, store)
+			checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org", Source: plan.source}
+			for n := 0; n < tc.batchesBefore; n++ {
+				if state := mustDecode(t, nextApplied(t, plan, &checkpoint).NextCursor); state.Dim == nil {
+					t.Fatalf("batch %d is not a dimension batch", n+1)
+				}
+			}
+			batch := nextApplied(t, plan, &checkpoint)
+			if got := entitiesPerTable(batch); !reflect.DeepEqual(got, tc.wantWalk) {
+				t.Fatalf("the batch after the stop = %v, want the first fact page %v", got, tc.wantWalk)
+			}
+			if state := mustDecode(t, batch.NextCursor); state.Dim != nil || state.Since.IsZero() {
+				t.Fatalf("next cursor = %+v, want a fact position", state)
+			}
+			if left := logLinesWith(t, logs.String(), dimensionLeftMessage); len(left) != 1 || left[0]["level"] != "WARN" || left[0]["table"] != "dims" {
+				t.Fatalf("lines of the stopped phase = %v, want one WARN that names the table", left)
+			}
+			if ended := logLinesWith(t, logs.String(), dimensionEndedMessage); len(ended) != 0 {
+				t.Fatalf("the phase is said to have read every table whole: %v", ended)
+			}
+			walk := logLinesWith(t, logs.String(), completeTablesMessage)
+			if len(walk) != 1 || !reflect.DeepEqual(stringsOf(walk[0]["tables_left_truncated"]), []string{"facts", "dims"}) {
+				t.Fatalf("the walk's first line = %v, want tables_left_truncated to name the dimension table too", walk)
+			}
+		})
+	}
+}
+
+// The same stop when the pages before the over-long position held nothing to
+// project: no consumed-progress cursor is recorded for it, and the walk starts.
+func TestDimensionPagesWithNothingToProjectStopAtAPositionThatDoesNotFit(t *testing.T) {
+	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
+	rows := progressRows((dimensionPagesPerBatch+maxOmittedPageSkips)*incrementalBatchCap+300, now.Add(-10*time.Minute), time.Microsecond)
+	rows[(dimensionPagesPerBatch+maxOmittedPageSkips)*incrementalBatchCap-1].key += strings.Repeat("x", 400)
+	plan := dimensionPlan(now, nil, nil)
+	plan.seed = nil
+	dims := keysetTable("dims", rows)
+	dims.dimension = true
+	plan.tables[1] = dims
+	consumed := 0
+	plan.recordConsumed = func(string, string) { consumed++ }
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org", Source: plan.source}
+	batch := nextApplied(t, plan, &checkpoint)
+	if got, want := entitiesPerTable(batch), (map[string]int{"01": incrementalBatchCap}); !reflect.DeepEqual(got, want) || consumed != 0 {
+		t.Fatalf("batch = %v with %d consumed-progress cursors, want the first fact page %v and none", got, consumed, want)
 	}
 }

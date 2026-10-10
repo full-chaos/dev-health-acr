@@ -266,7 +266,8 @@ func (p sourcePlan) logCompleteTables(ctx context.Context, orgID string, emitted
 func reportCatchUp(memo *windowMemo, checkpoint contextfabric.ProjectionCheckpoint) contextfabric.ProjectionCatchUp {
 	var report contextfabric.ProjectionCatchUp
 	// An empty cursor and one that does not decode are both the zero state.
-	if state, _ := decodeCursor(checkpoint.Cursor); !state.Since.IsZero() &&
+	// A dimension-phase cursor holds no fact position.
+	if state, _ := decodeCursor(checkpoint.Cursor); !state.Since.IsZero() && state.Dim == nil &&
 		(state.Space == cursorSpaceIngest || state.Space == cursorSpaceIngestColumns) {
 		report.CursorKnown, report.CursorAt = true, state.Since.UTC()
 	}

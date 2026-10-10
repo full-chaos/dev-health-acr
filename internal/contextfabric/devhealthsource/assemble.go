@@ -221,7 +221,7 @@ func (p sourcePlan) nextBatchPage(ctx context.Context, checkpoint contextfabric.
 	p.window.settle(p.windowScope, state.Ack)
 	state.Ack = ""
 	if state.Dim != nil {
-		return p.dimensionBatch(ctx, orgID, checkpoint.Cursor, *state.Dim)
+		return p.dimensionBatch(ctx, orgID, checkpoint.Cursor, dimensionPositionOf(state))
 	}
 	return p.pagedBatch(ctx, orgID, checkpoint.Cursor, state, false)
 }

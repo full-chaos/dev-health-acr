@@ -17,10 +17,14 @@ import (
 // for the whole walk. Such a table is read here instead: keyset pages of the
 // ordinary page size, table after table, before any fact row.
 //
-// The position of that read is part of the cursor (cursorState.Dim), with the
-// fact position still zero. A batch's cursor is stored only after the backend
-// applied the batch, so a failed apply reads the same pages again and a
-// restart continues after the last applied page. The phase ends when a read of
+// The position of that read is the cursor: cursorState.Dim names the tables,
+// and while it is set Since and After are the keyset position in the
+// dimension table being read, not a fact position (the fact walk has not
+// started). A batch's cursor is stored only after the backend applied the
+// batch, so a failed apply reads the same pages again and a restart continues
+// after the last applied page. A position that does not fit the contract's
+// cursor length ends the phase early: the walk starts and the tables stay
+// named as not read whole. The phase ends when a read of
 // the last table returns every row it has left; only then does the fact walk
 // start, from zero, and it emits the same rows again when it reaches them.
 
@@ -28,14 +32,34 @@ import (
 type dimensionPosition struct {
 	// Tables are the dimension tables of the phase, in read order; At indexes
 	// the one being read. At == len(Tables): every table was read whole.
-	Tables []string `json:"tables"`
-	At     int      `json:"at"`
-	// Since and After are the keyset position in Tables[At]; zero at its start.
-	Since time.Time `json:"since"`
-	After string    `json:"after"`
-	// Batches and Rows count what the phase emitted before this position.
-	Batches int `json:"batches"`
-	Rows    int `json:"rows"`
+	Tables []string `json:"t"`
+	At     int      `json:"i"`
+	// Since and After are the keyset position in Tables[At]; zero at its
+	// start. In a cursor they are cursorState's own Since and After.
+	Since time.Time `json:"-"`
+	After string    `json:"-"`
+	// Rows counts the source rows the phase read before this position. (The
+	// cursor has no room for more: a row key of the natural-key bound must
+	// still fit it.)
+	Rows int `json:"r"`
+}
+
+// cursorMaxLength is the contract's bound on a batch cursor
+// (ContextFabricProjectionBatch.Validate).
+const cursorMaxLength = 512
+
+// dimensionPositionOf is the dimension position a decoded cursor carries.
+func dimensionPositionOf(state cursorState) dimensionPosition {
+	at := *state.Dim
+	at.Since, at.After = state.Since, state.After
+	return at
+}
+
+// encode is the cursor of the position. ok is false when it does not fit the
+// contract's cursor length.
+func (at dimensionPosition) encode(space string) (cursor string, ok bool, err error) {
+	cursor, err = encodeCursorIn(space, cursorState{Since: at.Since, After: at.After, Dim: &at})
+	return cursor, len(cursor) <= cursorMaxLength, err
 }
 
 // dimensionPagesPerBatch bounds the pages one dimension batch reads.
@@ -44,6 +68,7 @@ const dimensionPagesPerBatch = 5
 const (
 	dimensionBatchMessage = "devhealthsource from-zero read emits dimension tables before the fact walk"
 	dimensionEndedMessage = "devhealthsource dimension phase ended: every dimension table was read whole"
+	dimensionLeftMessage  = "devhealthsource dimension phase stopped before every dimension table was read whole: the position does not fit the cursor; the fact walk reads the rest"
 )
 
 // dimensionTablesIn returns the plan's dimension tables among names, in plan
@@ -128,17 +153,26 @@ func (p sourcePlan) dimensionBatch(ctx context.Context, orgID, cursor string, at
 		}
 		// Pages were read and hold nothing to project: the position moves
 		// without a batch, and the next call reads on.
-		p.window.setAhead(p.windowScope, true)
-		if next, err := encodeCursorIn(p.cursorSpace(), cursorState{Dim: &at}); err == nil {
-			p.noteConsumed(orgID, next)
+		at.Rows += rows
+		next, fits, err := at.encode(p.cursorSpace())
+		if err != nil {
+			return contextfabric.ProjectionBatch{}, false, err
 		}
+		if !fits {
+			return p.walkWithoutDimensions(ctx, orgID, cursor, at)
+		}
+		p.window.setAhead(p.windowScope, true)
+		p.noteConsumed(orgID, next)
 		p.noteYield()
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
-	at.Batches, at.Rows = at.Batches+1, at.Rows+rows
-	next, err := encodeCursorIn(p.cursorSpace(), cursorState{Dim: &at})
+	at.Rows += rows
+	next, fits, err := at.encode(p.cursorSpace())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
+	}
+	if !fits {
+		return p.walkWithoutDimensions(ctx, orgID, cursor, at)
 	}
 	batch, err := buildBatchTo(orgID, p.source, p.version, cursor, next, items, false, false, p.clock())
 	if err != nil {
@@ -166,6 +200,26 @@ func (p sourcePlan) walkAfterDimensions(ctx context.Context, orgID, cursor strin
 	return p.pagedBatch(ctx, orgID, cursor, cursorState{}, false)
 }
 
+// walkWithoutDimensions starts the fact walk when the phase cannot go on: its
+// next position does not fit a cursor (a row key of the table is too long).
+// Nothing is said to be read whole; the walk reaches every row of the
+// dimension tables in stamp order, as it did before the phase existed.
+func (p sourcePlan) walkWithoutDimensions(ctx context.Context, orgID, cursor string, at dimensionPosition) (contextfabric.ProjectionBatch, bool, error) {
+	_, complete, truncatedTables, err := p.snapshotRead(ctx, orgID)
+	if err != nil {
+		return contextfabric.ProjectionBatch{}, false, err
+	}
+	if p.logger != nil {
+		p.logger.WarnContext(ctx, dimensionLeftMessage,
+			"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
+			"dimension_tables", contextfabric.SanitizeLogStrings(at.Tables),
+			"table", contextfabric.SanitizeLogAttr(at.Tables[min(at.At, len(at.Tables)-1)]),
+			"cursor_max_length", cursorMaxLength, "phase_rows", at.Rows)
+	}
+	p.complete, p.truncatedTables = complete, truncatedTables
+	return p.pagedBatch(ctx, orgID, cursor, cursorState{}, cursor == "")
+}
+
 func (p sourcePlan) logDimensionBatch(ctx context.Context, orgID string, at dimensionPosition, rows int) {
 	if p.logger == nil {
 		return
@@ -175,7 +229,7 @@ func (p sourcePlan) logDimensionBatch(ctx context.Context, orgID string, at dime
 		"dimension_tables", contextfabric.SanitizeLogStrings(at.Tables),
 		"tables_read_whole", contextfabric.SanitizeLogStrings(at.Tables[:min(at.At, len(at.Tables))]),
 		"phase_complete", at.At >= len(at.Tables),
-		"batch_rows", rows, "phase_batches", at.Batches, "phase_rows", at.Rows)
+		"batch_rows", rows, "phase_rows", at.Rows)
 }
 
 func (p sourcePlan) logDimensionEnded(ctx context.Context, orgID string, at dimensionPosition) {
@@ -185,5 +239,5 @@ func (p sourcePlan) logDimensionEnded(ctx context.Context, orgID string, at dime
 	p.logger.InfoContext(ctx, dimensionEndedMessage,
 		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
 		"dimension_tables", contextfabric.SanitizeLogStrings(at.Tables),
-		"phase_batches", at.Batches, "phase_rows", at.Rows)
+		"phase_rows", at.Rows)
 }

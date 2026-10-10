@@ -384,5 +384,5 @@ func CursorFactPositionMovedForTest(t interface{ Fatalf(string, ...any) }, curso
 	if err != nil {
 		t.Fatalf("decode cursor: %v", err)
 	}
-	return !state.Since.IsZero()
+	return state.Dim == nil && !state.Since.IsZero()
 }
