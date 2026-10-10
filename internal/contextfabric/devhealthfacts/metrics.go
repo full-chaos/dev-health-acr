@@ -514,17 +514,10 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		}
 		// The window median is over every pull request merged in the
 		// window (window_pr_cycle.go); absent when none merged.
-		if c, ok := windowCycles[repoID]; ok {
-			setWindowPRCycle(fields, c)
-		}
 		// The window change failure rate is over the summed stored counts
 		// of repo_change_failure_daily (window_change_failure.go); the
 		// state is always served, the rate only when it is measured.
-		var failure *changeFailureCounts
-		if c, ok := windowFailures[repoID]; ok {
-			failure = &c
-		}
-		setChangeFailure(fields, failure)
+		setWindowFamilies(fields, windowCycles, windowFailures, repoID)
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, repoID)},
@@ -541,13 +534,8 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		if _, done := emitted[repoID]; done {
 			continue
 		}
-		counts, ok := windowFailures[repoID]
-		if !ok {
-			continue
-		}
-		emitted[repoID] = struct{}{}
 		fields := map[string]contextfabric.FactValue{}
-		setChangeFailure(fields, &counts)
+		setWindowFamilies(fields, windowCycles, windowFailures, repoID)
 		if len(fields) == 0 {
 			continue
 		}
@@ -592,33 +580,21 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 		// One median over the union of the pull requests merged in the
 		// window in the repositories the team owns, never a combination of
 		// per-repository or per-day medians; absent when none merged.
-		cycles, cycleErr := readWindowPRCycle(ctx, p.facts.client, orgID, repoKeysOf(map[string][]teamOwnedRepo{r.TeamID: owned[r.TeamID]}), window, false)
-		if cycleErr != nil {
-			return 0, rejected, cycleErr
-		}
-		if c, ok := cycles[""]; ok {
-			setWindowPRCycle(fields, c)
-		}
 		// A team that owns no repository has nothing to count, so no state
 		// is served for it (applyNoOwnedRepositories says why).
 		if len(owned[r.TeamID]) > 0 {
-			failures, failureErr := readWindowChangeFailure(ctx, p.facts.client, orgID, repoKeysOf(map[string][]teamOwnedRepo{r.TeamID: owned[r.TeamID]}), window, false)
-			if failureErr != nil {
-				return 0, rejected, failureErr
+			if err := p.setTeamWindowFamilies(ctx, orgID, r.TeamID, owned[r.TeamID], window, fields); err != nil {
+				return 0, rejected, err
 			}
-			var failure *changeFailureCounts
-			if c, ok := failures[""]; ok {
-				failure = &c
-			}
-			setChangeFailure(fields, failure)
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID)},
 		})
 	}
-	// A team whose owned repositories have stored change failure counts keeps
-	// its rate when team_metrics_daily has no row for it.
+	// A team whose owned repositories have merged pull requests or stored
+	// change failure counts keeps those window fields when
+	// team_metrics_daily has no row for it; the wellbeing fields stay absent.
 	seen := make(map[string]struct{}, len(rows))
 	for _, r := range rows {
 		seen[r.TeamID] = struct{}{}
@@ -628,16 +604,10 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 			continue
 		}
 		seen[teamID] = struct{}{}
-		failures, failureErr := readWindowChangeFailure(ctx, p.facts.client, orgID, repoKeysOf(map[string][]teamOwnedRepo{teamID: owned[teamID]}), window, false)
-		if failureErr != nil {
-			return 0, rejected, failureErr
-		}
-		counts, ok := failures[""]
-		if !ok {
-			continue
-		}
 		fields := map[string]contextfabric.FactValue{}
-		setChangeFailure(fields, &counts)
+		if err := p.setTeamWindowFamilies(ctx, orgID, teamID, owned[teamID], window, fields); err != nil {
+			return 0, rejected, err
+		}
 		if len(fields) == 0 {
 			continue
 		}
@@ -732,4 +702,34 @@ func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, 
 		})
 	}
 	return rowCount, rejected, nil
+}
+
+// setTeamWindowFamilies reads and attaches every window family a team's
+// owned repositories can serve, whether or not team_metrics_daily has a row.
+func (p *MetricsProvider) setTeamWindowFamilies(ctx context.Context, orgID, teamID string, owned []teamOwnedRepo, window rollupWindow, fields map[string]contextfabric.FactValue) error {
+	keys := repoKeysOf(map[string][]teamOwnedRepo{teamID: owned})
+	cycles, err := readWindowPRCycle(ctx, p.facts.client, orgID, keys, window, false)
+	if err != nil {
+		return err
+	}
+	failures, err := readWindowChangeFailure(ctx, p.facts.client, orgID, keys, window, false)
+	if err != nil {
+		return err
+	}
+	setWindowFamilies(fields, cycles, failures, "")
+	return nil
+}
+
+// setWindowFamilies is the one attach site for the window families, shared
+// by the daily-row and no-daily-row paths of the repository and team
+// readers: no family's presence gates another's.
+func setWindowFamilies(fields map[string]contextfabric.FactValue, cycles map[string]windowPRCycle, failures map[string]changeFailureCounts, key string) {
+	if c, ok := cycles[key]; ok {
+		setWindowPRCycle(fields, c)
+	}
+	var failure *changeFailureCounts
+	if c, ok := failures[key]; ok {
+		failure = &c
+	}
+	setChangeFailure(fields, failure)
 }
