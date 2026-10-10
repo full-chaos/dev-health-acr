@@ -160,7 +160,7 @@ func TestOpenPassIsReportedAndLoggedUntilItEnds(t *testing.T) {
 			}
 			view.level, view.msg = line["level"].(string), line["msg"].(string)
 			view.age, view.line = line["pass_age_seconds"].(float64), line
-			for _, field := range []string{"source", "org_id", "window_low", "window_high", "resume_after", "frontier", "pages_this_call", "pass_bound_seconds", "pass_pages", "pass_rows", "remaining_span_seconds", "remaining_rows_estimate"} {
+			for _, field := range []string{"source", "org_id", "window_low", "window_high", "resume_after", "resume_after_key_digest", "window_high_key_digest", "frontier", "pages_this_call", "pass_bound_seconds", "pass_pages", "pass_rows", "remaining_span_seconds", "remaining_rows_estimate"} {
 				if _, ok := line[field]; !ok {
 					t.Fatalf("tick %d: the open-pass line has no %q field: %v", tick+1, field, line)
 				}
@@ -247,17 +247,23 @@ func TestAPassThatStartsAndEndsInOneCallWritesNoEndedLine(t *testing.T) {
 	}
 }
 
-// One source row can carry several candidates; the pass counts rows.
+// One source row can carry several candidates; the pass counts rows. A row is
+// its table, its position and its row key.
 func TestSourceRowsCountsEachRowOnce(t *testing.T) {
 	at := pageCutStamp
-	page := []candidate{
-		edgeRow(at, "a"), edgeRow(at, "a"), // one row, two candidates
-		edgeRow(at, "b"),                  // the same position, another key
-		edgeRow(at.Add(time.Second), "b"), // the same key, another position
-		edgeRow(at.Add(time.Second), "b"),
+	in := func(table string, c candidate) candidate {
+		c.table = table
+		return c
 	}
-	if got := sourceRows(page); got != 3 {
-		t.Fatalf("sourceRows = %d, want 3", got)
+	page := []candidate{
+		in("left", edgeRow(at, "a")), in("left", edgeRow(at, "a")), // one row, two candidates
+		in("right", edgeRow(at, "a")),                  // the same position and key in another table
+		in("right", edgeRow(at, "b")),                  // the same position, another key
+		in("right", edgeRow(at.Add(time.Second), "b")), // the same key, another position
+		in("right", edgeRow(at.Add(time.Second), "b")),
+	}
+	if got := sourceRows(page); got != 4 {
+		t.Fatalf("sourceRows = %d, want 4", got)
 	}
 	if got := sourceRows(nil); got != 0 {
 		t.Fatalf("sourceRows(nil) = %d, want 0", got)
@@ -439,5 +445,39 @@ func TestAFailedWindowBatchAcrossAPassBoundaryIsEmittedAgain(t *testing.T) {
 			t.Fatalf("the late row was emitted again after its batch was applied")
 		}
 		r.cursor = batch.NextCursor
+	}
+}
+
+// Rows that share one stamp move the walk only in its row key. The line shows
+// that movement (the key digests), and it gives no estimate where the walk
+// stands on the edge's own stamp: a remaining span of zero does not say that
+// no row is left.
+func TestOpenPassLineOnTiedStampsShowsTheKeyAndNoEstimate(t *testing.T) {
+	r := newChurnRig(t, churnStart)
+	r.plan.overlap, r.plan.windowPagesPerCall = time.Minute, 1
+	at := churnStart.Add(-30 * time.Second)
+	var keys []string
+	for i := 0; i < 450; i++ {
+		keys = append(keys, r.landOne(at))
+	}
+	r.runTick() // drains the three pages, then walks page 1 of the pass
+	lines := passLines(t, r.logs.String())
+	if len(lines) != 1 || lines[0]["msg"] != openPassMessage {
+		t.Fatalf("pass lines = %v, want one open-pass line", lines)
+	}
+	line := lines[0]
+	// The keys were issued in ascending order: the walk stands after the 200th
+	// row, the edge is the 450th, and 250 rows of the window are not read yet.
+	for field, want := range map[string]any{
+		"pass_rows": float64(200), "remaining_span_seconds": float64(0), "remaining_rows_estimate": float64(-1),
+		"resume_after": at.Format(time.RFC3339Nano), "window_high": at.Format(time.RFC3339Nano),
+		"resume_after_key_digest": keyDigest(keys[199]), "window_high_key_digest": keyDigest(keys[449]),
+	} {
+		if got := line[field]; got != want {
+			t.Errorf("%s = %v, want %v", field, got, want)
+		}
+	}
+	if keyDigest(keys[199]) == keyDigest(keys[449]) {
+		t.Fatal("precondition: the two key digests are equal; the row cannot tell them apart")
 	}
 }

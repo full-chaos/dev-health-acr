@@ -657,8 +657,11 @@ a pass open; rows that landed behind the walk are found by the next pass. A
 tick that ends with a pass open logs one INFO line, `devhealthsource overlap
 window pass continues on the next tick` (`window_low`, `window_high`,
 `resume_after`, `pass_age_seconds`, `pass_pages`, `pass_rows`,
-`remaining_span_seconds`, `remaining_rows_estimate`; the estimate is linear
-and is `-1` before the pass has moved), and a pass that spanned several ticks
+`remaining_span_seconds`, `remaining_rows_estimate`, and the digests of the
+two row keys, `resume_after_key_digest` and `window_high_key_digest`: on
+rows that share one stamp only the key moves; the estimate is linear and is
+`-1` when there is none, before the pass has moved or while the walk stands
+on the edge's own stamp), and a pass that spanned several ticks
 logs `devhealthsource overlap window pass ended`. A pass older than one
 overlap logs the same fields at WARN, `devhealthsource overlap window pass is
 older than the lateness the window absorbs`: late rows then wait longer than

@@ -486,11 +486,12 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 }
 
 // sourceRows counts the source rows in a sorted page: one row can carry
-// several candidates, which share its position and row key.
+// several candidates, which share its table, position and row key. Rows of
+// two tables can share a position and a row key; they are two rows.
 func sourceRows(page []candidate) int {
 	rows := 0
 	for i, c := range page {
-		if i == 0 || !c.position().Equal(page[i-1].position()) || c.sortKey != page[i-1].sortKey {
+		if i == 0 || c.table != page[i-1].table || !c.position().Equal(page[i-1].position()) || c.sortKey != page[i-1].sortKey {
 			rows++
 		}
 	}
@@ -519,10 +520,12 @@ func (p sourcePlan) logOpenPass(ctx context.Context, orgID string, pass windowPa
 	}
 	// The walk never stands past the edge: a page is cut there.
 	remainingSpan := pass.high.Since.Sub(pass.walk.Since)
-	// A linear estimate from the rows read so far over the span read so far;
-	// -1 when the pass has not moved yet.
+	// A linear estimate from the rows read so far over the span read so far.
+	// -1 means no estimate: the pass has not moved yet, or the walk stands on
+	// the edge's own stamp, where the rows left differ only in their row key
+	// and a span of zero says nothing about how many there are.
 	remainingRows := int64(-1)
-	if walked := pass.walk.Since.Sub(pass.low); walked > 0 && pass.rows > 0 {
+	if walked := pass.walk.Since.Sub(pass.low); walked > 0 && pass.rows > 0 && remainingSpan > 0 {
 		remainingRows = int64(math.Round(float64(pass.rows) * float64(remainingSpan) / float64(walked)))
 	}
 	level, message := slog.LevelInfo, openPassMessage
@@ -535,6 +538,10 @@ func (p sourcePlan) logOpenPass(ctx context.Context, orgID string, pass windowPa
 		"window_low", contextfabric.SanitizeLogAttr(pass.low.UTC().Format(time.RFC3339Nano)),
 		"window_high", contextfabric.SanitizeLogAttr(pass.high.Since.UTC().Format(time.RFC3339Nano)),
 		"resume_after", contextfabric.SanitizeLogAttr(pass.walk.Since.UTC().Format(time.RFC3339Nano)),
+		// The walk and the edge are keyset positions: stamp AND row key. On
+		// tied stamps only the key moves, so the line carries both digests.
+		"resume_after_key_digest", contextfabric.SanitizeLogAttr(keyDigest(pass.walk.After)),
+		"window_high_key_digest", contextfabric.SanitizeLogAttr(keyDigest(pass.high.After)),
 		"frontier", contextfabric.SanitizeLogAttr(frontier.Since.UTC().Format(time.RFC3339Nano)),
 		"pass_age_seconds", int64(now.Sub(pass.passStart).Seconds()),
 		"pass_bound_seconds", int64(p.overlap.Seconds()), "pass_pages", pass.pages, "pass_rows", pass.rows,
