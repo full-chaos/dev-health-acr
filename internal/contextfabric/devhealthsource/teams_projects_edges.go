@@ -1870,7 +1870,11 @@ var repositoryTeamsOwnershipSource = ownershipresolve.OwnedRepositoriesSource(" 
 //   - with no open row the LATEST valid_to wins (the fact ended at its last
 //     close), then the latest valid_from;
 //   - a fact that was closed and came back is a new open row, so it wins.
-const ownershipFactOrder = "(o.valid_to IS NULL, if(o.valid_to IS NULL, -toInt64(o.valid_from), toInt64(o.valid_to)), o.valid_from)"
+//
+// The columns are DateTime64(3): the key is built from toUnixTimestamp64Micro,
+// never from an integer cast, which would drop the fractional second and let
+// rows within one second tie.
+const ownershipFactOrder = "(o.valid_to IS NULL, if(o.valid_to IS NULL, -toUnixTimestamp64Micro(o.valid_from), toUnixTimestamp64Micro(o.valid_to)), toUnixTimestamp64Micro(o.valid_from))"
 
 // repositoryTeamsLatestOrder is the ordering key of the repository edge's
 // collapse: ownershipFactOrder, the same as queryProjectTeams' and

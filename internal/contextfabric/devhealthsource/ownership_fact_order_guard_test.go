@@ -35,6 +35,15 @@ func TestOwnershipRowsCollapseThroughOneOrderingOnly(t *testing.T) {
 		}
 		order += strings.Count(text, "o.valid_to IS NULL, if(")
 	}
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		raw, _ := os.ReadFile(file)
+		if strings.Contains(string(raw), "-toInt64(o.valid_from)") {
+			t.Errorf("%s: the ownership ordering casts DateTime64(3) with toInt64, which drops the milliseconds", file)
+		}
+	}
 	if order != 1 {
 		t.Fatalf("the ownership fact ordering is spelled %d times, want exactly once (ownershipFactOrder)", order)
 	}
