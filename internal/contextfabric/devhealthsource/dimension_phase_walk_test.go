@@ -604,3 +604,63 @@ func TestDimensionCursorOfAnotherSpaceIsAReset(t *testing.T) {
 		t.Fatal("a cursor in the dimension space without a dimension position was not taken as a reset")
 	}
 }
+
+// A projector binary from before the dimension phase that gets a checkpoint
+// with a dimension cursor: it does not know the cursor's space, so it pages
+// the facts from zero and stores a fact cursor. The build then goes on as it
+// did before the phase existed: no dimension batch any more, no row lost, and
+// the walk ends.
+func TestOlderBinaryOnADimensionCursorLosesNoRowAndTheWalkEnds(t *testing.T) {
+	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
+	store := catchUpRows(2, 1300, now.Add(-10*time.Minute), time.Millisecond)
+	plan := dimensionPlan(now, nil, store)
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org", Source: plan.source}
+	seen := entityKeys(nextApplied(t, plan, &checkpoint))
+	if mustDecode(t, checkpoint.Cursor).Dim == nil {
+		t.Fatal("precondition: the checkpoint holds no dimension cursor")
+	}
+
+	// The older binary's read of a cursor in a space it does not know: the
+	// paged read from zero, under the checkpoint's own cursor.
+	older := dimensionPlan(now, nil, store)
+	older.windowScope = windowScopeFor("org", 0)
+	batch, available, err := older.pagedBatch(context.Background(), "org", checkpoint.Cursor, cursorState{}, false)
+	if err != nil || !available || batch.Cursor != checkpoint.Cursor {
+		t.Fatalf("the older read: available=%v err=%v, want a batch under the checkpoint's cursor", available, err)
+	}
+	for key := range entityKeys(batch) {
+		seen[key] = true
+	}
+	checkpoint.Cursor = batch.NextCursor
+
+	current := dimensionPlan(now, nil, store)
+	for call := 1; ; call++ {
+		if call > 60 {
+			t.Fatal("the walk did not end in 60 calls")
+		}
+		batch, available, err := current.nextBatch(context.Background(), checkpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !available {
+			break
+		}
+		if state := mustDecode(t, batch.NextCursor); state.Dim != nil {
+			t.Fatalf("call %d: a dimension batch after the older binary stored a fact cursor", call)
+		}
+		for key := range entityKeys(batch) {
+			seen[key] = true
+		}
+		checkpoint.Cursor = batch.NextCursor
+	}
+	for n := 1; n <= 400; n++ {
+		if !seen[catchUpKey(1, n)] {
+			t.Fatalf("fact row %d was never emitted", n)
+		}
+	}
+	for _, row := range store.rows {
+		if !seen[row.key] {
+			t.Fatalf("dimension row %s was never emitted", row.key)
+		}
+	}
+}

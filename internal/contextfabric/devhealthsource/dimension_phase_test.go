@@ -3,6 +3,7 @@ package devhealthsource_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -141,5 +142,114 @@ func TestTeamsAndProjectsOfALargeOrganizationAreEmittedBeforeTheFactWalk(t *test
 	}
 	if kinds["team"] != 200 || kinds["project"] != 200 {
 		t.Fatalf("entities before the fact position moved: %v, want 200 teams and 200 projects", kinds)
+	}
+}
+
+// refuseFirstBackend refuses its first apply (a graph write failure) and
+// applies every later batch. It records the id of every batch it was handed.
+type refuseFirstBackend struct {
+	recordingBackend
+	attempted []string
+}
+
+func (b *refuseFirstBackend) ApplyProjectionBatch(ctx context.Context, batch contextfabric.ProjectionBatch) (contextfabric.ProjectionReceipt, error) {
+	b.attempted = append(b.attempted, batch.BatchID)
+	if len(b.attempted) == 1 {
+		return contextfabric.ProjectionReceipt{}, errors.New("simulated graph write failure")
+	}
+	return b.recordingBackend.ApplyProjectionBatch(ctx, batch)
+}
+
+// dimensionPhaseRun is what a from-zero build left in the backend up to its
+// first fact batch.
+type dimensionPhaseRun struct {
+	before           map[string]int // entities by kind, applied before the fact position moved
+	firstFact        map[string]int // entities by kind in the first batch that moved it
+	dimensionBatches int
+	attempted        []string // batch ids in the order the backend was handed them
+	applied          []string // batch ids in the order the backend applied them
+}
+
+// runDimensionPhaseThroughWorker drives the production worker over source
+// from an empty checkpoint, one RunOnce per tick, until the first applied
+// batch that moves the fact position. The backend refuses the first apply.
+func runDimensionPhaseThroughWorker(t *testing.T, ctx context.Context, source contextfabric.ProjectionSource, sourceName, orgID string) dimensionPhaseRun {
+	t.Helper()
+	checkpoints := &memoryCheckpoints{checkpoint: contextfabric.ProjectionCheckpoint{OrgID: orgID, Source: sourceName}}
+	backend := &refuseFirstBackend{}
+	worker, err := contextfabric.NewProjectionWorker(source, backend, checkpoints, contextfabric.ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker: %v", err)
+	}
+	run := dimensionPhaseRun{before: map[string]int{}, firstFact: map[string]int{}}
+	for tick := 0; tick < 40; tick++ {
+		before := checkpoints.checkpoint.Cursor
+		_, err := worker.RunOnce(ctx, orgID, sourceName)
+		if tick == 0 {
+			if err == nil || checkpoints.checkpoint.Cursor != before {
+				t.Fatalf("tick 0: err=%v cursor moved=%v; the refused apply must fail the run and leave the cursor", err, checkpoints.checkpoint.Cursor != before)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("tick %d: %v", tick, err)
+		}
+		applied := backend.applied
+		backend.applied = nil
+		for _, batch := range applied {
+			run.applied = append(run.applied, batch.BatchID)
+			into := run.before
+			moved := devhealthsource.CursorFactPositionMovedForTest(t, batch.NextCursor)
+			if moved {
+				into = run.firstFact
+			} else {
+				run.dimensionBatches++
+			}
+			for _, e := range batch.Entities {
+				into[string(e.Subject.Kind)]++
+			}
+			if moved {
+				run.attempted = backend.attempted
+				return run
+			}
+		}
+	}
+	t.Fatalf("no batch moved the fact position in 40 ticks; applied before it: %v", run.before)
+	return run
+}
+
+// The production worker over the production source, with a backend that
+// refuses the first apply: the refused dimension batch is handed to the
+// backend again (same id) and the checkpoint did not move; every repository
+// is applied before the first fact row.
+func TestWorkerAppliesEveryRepositoryBeforeTheFirstFactRowAfterARefusedApply(t *testing.T) {
+	const repositories = 1100
+	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
+	repoID := func(n int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", n) }
+	var repos, items [][]any
+	for n := 1; n <= repositories; n++ {
+		at := now.Add(-5 * time.Minute).Add(time.Duration(n) * time.Millisecond)
+		repos = append(repos, []any{repoID(n), "acme/repo-" + repoID(n)[30:], "github", at, at, ""})
+	}
+	for n := 0; n < 600; n++ {
+		at := now.Add(-90 * 24 * time.Hour).Add(time.Duration(n) * time.Hour)
+		items = append(items, []any{fmt.Sprintf("WI-%04d", n), repoID(1), "acme/repo-" + repoID(1)[30:], fmt.Sprintf("item %d", n), "open", "", at, at, uint8(0), zeroTime, "bug", "ACME", "Acme", []string{}})
+	}
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: []fakeTable{
+		{match: "FROM repos", rows: repos, cursorOf: repoCursorOf},
+		{match: "FROM work_items AS w", rows: items, cursorOf: workItemCursorOf},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runDimensionPhaseThroughWorker(t, context.Background(), source, devhealthsource.SourceName, "org-1")
+	if run.before[string(contextfabric.SubjectRepository)] != repositories || run.before[string(contextfabric.SubjectWorkItem)] != 0 {
+		t.Fatalf("applied before the fact position moved: %v, want %d repositories and no work item", run.before, repositories)
+	}
+	if run.dimensionBatches != 2 || run.firstFact[string(contextfabric.SubjectWorkItem)] == 0 {
+		t.Fatalf("%d dimension batches, first fact batch %v; want 2 and a batch of work items", run.dimensionBatches, run.firstFact)
+	}
+	if len(run.attempted) != len(run.applied)+1 || run.attempted[0] != run.attempted[1] || run.attempted[1] != run.applied[0] {
+		t.Fatalf("attempted %v, applied %v; want the refused batch handed over again and applied first", run.attempted, run.applied)
 	}
 }
