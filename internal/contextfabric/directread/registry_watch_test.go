@@ -320,12 +320,12 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 	}
 }
 
-// Fixture: the GET /registry body of ops 754d86cf, written from the output of
+// Fixture: the GET /registry body of ops 7a0a22a9, written from the output of
 // ops go run ./cmd/registrydump (the current text of every operation, the
 // legacy texts left out, as the route serves them), not captured from a host.
 // The catalogue pinned from that commit must match it with zero drift.
 func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_754d86cf.json")
+	body, err := os.ReadFile("testdata/query_registry_7a0a22a9.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	w, cat, buf := newWatch(t, f, nil)
 	w.Start()
 	w.Wait()
-	const want = "sha256:340709af6f7b8f1609ea8cb34c676a2882a1fd1b791b75007c08e3834ccf1d5a"
+	const want = "sha256:608a6270255afcbd86fde5889e67102b3cb22b49280c77a53102269e6f2d60a6"
 	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
 		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
 	}
@@ -347,14 +347,14 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 }
 
 // The prod fact before the roll: the catalogue pinned at ops 5c9a3d32
-// against the registry ops 754d86cf serves logs one schema digest drift
-// warning plus the five operations whose document text moved (CHAOS-8991).
+// against the registry ops 7a0a22a9 serves logs one schema digest drift
+// warning plus the seven operations whose document text moved.
 func TestRegistryWatch_previous_pin_against_the_served_registry_shows_the_digest_drift_only(t *testing.T) {
 	oldPin, err := os.ReadFile("testdata/operations_5c9a3d32.v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile("testdata/query_registry_754d86cf.json")
+	body, err := os.ReadFile("testdata/query_registry_7a0a22a9.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,10 +377,10 @@ func TestRegistryWatch_previous_pin_against_the_served_registry_shows_the_digest
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 6 {
-		t.Fatalf("%d warnings, want 6 (digest drift + 5 changed documents): %q", len(ws), ws)
+	if len(ws) != 8 {
+		t.Fatalf("%d warnings, want 8 (digest drift + 7 changed documents): %q", len(ws), ws)
 	}
-	if !strings.Contains(ws[0], "registry digest drift") || !strings.Contains(ws[0], "sha256:340709af6f7b8f1609ea8cb34c676a2882a1fd1b791b75007c08e3834ccf1d5a") {
+	if !strings.Contains(ws[0], "registry digest drift") || !strings.Contains(ws[0], "sha256:608a6270255afcbd86fde5889e67102b3cb22b49280c77a53102269e6f2d60a6") {
 		t.Errorf("no schema digest drift line: %s", ws[0])
 	}
 }
@@ -405,16 +405,16 @@ func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_di
 			digest++
 		}
 	}
-	if digest != 1 || len(ws) != 6 {
-		t.Fatalf("want one digest drift warning + 5 changed documents: %q", ws)
+	if digest != 1 || len(ws) != 8 {
+		t.Fatalf("want one digest drift warning + 7 changed documents: %q", ws)
 	}
 }
 
-// The registry ops 658531dd served (pin 19), against the catalogue pinned now:
-// the schema digest is the same, so the only drift is the five operations
-// whose registered document text moved. No digest drift line.
-func TestRegistryWatch_pin19_served_registry_against_the_new_pin_shows_five_changed_documents_only(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_658531dd.json")
+// The registry ops 754d86cf served (pin 21), against the catalogue pinned now:
+// the schema digest moved (deltaPct nullable, rateState added) and the two
+// operations whose registered document text moved are home and operatingReview.
+func TestRegistryWatch_pin21_served_registry_against_the_new_pin_shows_digest_drift_and_two_changed_documents(t *testing.T) {
+	body, err := os.ReadFile("testdata/query_registry_754d86cf.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,15 +424,15 @@ func TestRegistryWatch_pin19_served_registry_against_the_new_pin_shows_five_chan
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 5 {
-		t.Fatalf("want 5 operation drift warnings: %q", ws)
+	if len(ws) != 3 {
+		t.Fatalf("want digest drift + 2 operation drift warnings: %q", ws)
 	}
-	for _, op := range []string{"aiAttributionOverview", "aiGovernanceSummary", "dataHealthIdentity", "improveOpportunities", "testopsRisk"} {
+	if !strings.Contains(buf.String(), "registry digest drift") {
+		t.Errorf("no schema digest drift line: %s", buf)
+	}
+	for _, op := range []string{"home", "operatingReview"} {
 		if !strings.Contains(buf.String(), "operation="+op+" ") {
 			t.Errorf("no drift line for %s", op)
 		}
-	}
-	if strings.Contains(buf.String(), "registry digest drift") {
-		t.Errorf("unexpected schema digest drift: %s", buf)
 	}
 }
