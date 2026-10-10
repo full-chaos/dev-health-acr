@@ -915,6 +915,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// the exhaustive census ran and was not itself cut, it already holds
 	// every candidate of every servable cohort kind and a clipped full-text
 	// arm costs the cohort nothing.
+	// An inactive hint answered for the caller keeps its same-name active twin
+	// out of EVERY discovery arm below (CHAOS-9092).
+	excludeInactiveHintTeam, err := a.inactiveHintExclusion(ctx, key, principal.OrgID, request.Resolution.InactiveHints)
+	if err != nil {
+		return contextfabric.GraphContext{}, err
+	}
+	inactiveHintExcluded := func(n graphrank.CandidateNode) bool {
+		return excludeInactiveHintTeam != nil && excludeInactiveHintTeam(n)
+	}
 	textNodes, fulltextTruncated, err := a.fulltextSearchNodes(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal)
 	if err != nil {
 		// CHAOS-4077: see graphNotProjectedError's own doc comment and the
@@ -944,6 +953,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	for _, n := range textNodes {
 		subject, ok := graphrank.NodeSubject(n)
 		if !ok {
+			continue
+		}
+		if inactiveHintExcluded(n) {
 			continue
 		}
 		if deploymentAnchor != nil && subject.Kind == contextfabric.SubjectDeployment {
@@ -1128,6 +1140,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			for _, n := range kindTextNodes {
 				subject, ok := graphrank.NodeSubject(n)
 				if !ok {
+					continue
+				}
+				if inactiveHintExcluded(n) {
 					continue
 				}
 				nk := graphrank.SubjectKey(subject)
@@ -1371,6 +1386,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// AuthorizedAttributes below still applies the caller's own scope/
 	// principal restriction, exactly as it does for every other arm; it is
 	// never widened or replaced for this pairing.
+	if excludeInactiveHintTeam != nil {
+		kept := make([]graphrank.CandidateNode, 0, len(cohortNodes))
+		for _, n := range cohortNodes {
+			if !inactiveHintExcluded(n) {
+				kept = append(kept, n)
+			}
+		}
+		cohortNodes = kept
+	}
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	cohortKindScopedAuthzDropped, anchorReachDenied := anchorReachDeniedCount(cohortKind, cohortNodes, principal, request, edgeFilters.ReachDenied, cohortKindScopedAuthzDropped)
 	if cohort != nil && deploymentAnchor != nil {

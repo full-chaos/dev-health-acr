@@ -609,7 +609,7 @@ const ContextFabricSubjectTermsFrameOverBoundLimitation = "The supplied interpre
 // not searched for under its name, so no same-named active team is served in
 // its place; the id of the active team of that name, when there is one, is in
 // subject_resolution.inactive_hints.
-const ContextFabricInactiveTeamHintLimitation = "The team named in this request is inactive, so no canonical facts were read for it. The server did not search for a team of the same name. Where an active team of the same name exists, its id is in subject_resolution.inactive_hints; ask again naming that id to read that team."
+const ContextFabricInactiveTeamHintLimitation = "The team named in this request is inactive, so no canonical facts were read for it. The server did not search for a team of the same name. When a single readable active team of the same name exists, its id is in subject_resolution.inactive_hints and you can ask again naming that id; otherwise no id is given."
 
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
