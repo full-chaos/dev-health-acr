@@ -476,6 +476,10 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	}
 	frontier := state
 	if !cursorKeyFits(p.cursorSpace(), frontier.Since, frontier.After) {
+		if frontier.After >= cursorSentinelKey {
+			// No cursor can land after this key: nothing is built, nothing fails.
+			return contextfabric.ProjectionBatch{}, false, nil
+		}
 		frontier.After = cursorSentinelKey
 	}
 	frontier.Ack = hex.EncodeToString(digest[:8])

@@ -292,9 +292,14 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 	// The snapshot holds every row: a last row whose key the cursor cannot
 	// carry is passed over, nothing after it exists.
 	var passedOver bool
-	all, _, passedOver = fitCursorTail(p.cursorSpace(), all, false)
+	var cutRows int
+	snapshot := all
+	all, cutRows, passedOver = fitCursorTail(p.cursorSpace(), all, false)
 	if passedOver {
 		p.logCursorKeyPass(ctx, orgID, all[len(all)-1], "passed_over")
+	}
+	if cutRows > 0 {
+		quarantineOversizeCursorKeyRows(snapshot[len(all):], p.quarantineObserver(orgID))
 	}
 	p.notePage(all)
 	// Normalize BEFORE quarantine: an item repaired to a contract bound is
@@ -402,10 +407,10 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			state = cursorState{Since: last.position(), After: last.sortKey}
 			p.window.record(p.windowScope, full, p.overlap)
 			p.notePagedPage(ctx, orgID, full)
-			if skips >= maxOmittedPageSkips {
-				p.noteYield()
-				return contextfabric.ProjectionBatch{}, false, nil
-			}
+			// No cursor can record this progress, so this branch never yields:
+			// yielding would repeat these pages every tick. Each iteration is
+			// one ordinary page read and the walk is bounded by the rows that
+			// exist.
 			continue
 		}
 		p.notePage(all)

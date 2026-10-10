@@ -64,7 +64,8 @@ func encodeTailCursor(space string, last candidate) (string, error) {
 // A page that was read to its end (ahead false) holds every row after its
 // starting cursor, so a last row whose key cannot be carried is passed over:
 // it is marked and its cursor lands after its whole timestamp, with nothing
-// quarantined. A page with rows beyond it cuts the trailing over-long rows
+// quarantined. A key that does not sort below cursorSentinelKey cannot be
+// passed over, so it is cut like the rows of a page with rows beyond it. A page with rows beyond it cuts the trailing over-long rows
 // instead; the next page starts at them and they are no longer its tail.
 // cut counts the candidates removed.
 func fitCursorTail(space string, all []candidate, ahead bool) (kept []candidate, cut int, passed bool) {
@@ -72,7 +73,7 @@ func fitCursorTail(space string, all []candidate, ahead bool) (kept []candidate,
 	if n == 0 || cursorKeyFits(space, all[n-1].position(), all[n-1].sortKey) {
 		return all, 0, false
 	}
-	if !ahead {
+	if !ahead && all[n-1].sortKey < cursorSentinelKey {
 		all[n-1].passOver = true
 		return all, 0, true
 	}

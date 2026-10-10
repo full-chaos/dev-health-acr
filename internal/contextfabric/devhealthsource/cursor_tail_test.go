@@ -2,10 +2,13 @@ package devhealthsource
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -155,4 +158,140 @@ func TestOversizeCursorKeyRowsAreQuarantinedByKindAndMarkersAreNot(t *testing.T)
 		t.Fatalf("observations = %+v, want one entity quarantined as oversize_cursor_key", seen)
 	}
 	quarantineOversizeCursorKeyRows([]candidate{entity}, nil)
+}
+
+func TestAKeyThatDoesNotSortBelowTheSentinelIsCutNotPassedOver(t *testing.T) {
+	t.Parallel()
+	key := cursorSentinelKey + strings.Repeat("z", maxCursorKeyBytes(cursorSpaceIngest, cursorTailAt))
+	kept, cut, passed := fitCursorTail(cursorSpaceIngest, []candidate{cursorTailRow("a"), cursorTailRow(key)}, false)
+	if len(kept) != 1 || cut != 1 || passed || kept[0].passOver {
+		t.Fatalf("kept=%d cut=%d passed=%v: a key at or after the sentinel must not be passed over (the cursor would land before it)", len(kept), cut, passed)
+	}
+}
+
+func TestAnOverlapFrontierKeyThatDoesNotSortBelowTheSentinelBuildsNothingAndDoesNotFail(t *testing.T) {
+	at := pageCutStamp
+	plan := overlongOverlapPlan(&liveKeysetRows{rows: keysetRows{{at: at.Add(-time.Minute), key: "00000000-0000-4000-8000-000000000001"}}})
+	frontier := cursorState{Since: at, After: cursorSentinelKey + strings.Repeat("z", maxCursorKeyBytes(plan.cursorSpace(), at))}
+	batch, available, err := plan.overlapBatch(context.Background(), "org", "unused", frontier)
+	if err != nil || available || len(batch.Entities) != 0 {
+		t.Fatalf("available=%v err=%v entities=%d, want no batch and no error", available, err, len(batch.Entities))
+	}
+}
+
+// A valid item whose row key is longer than the cursor can carry: the paged
+// walk must report it as quarantined (oversize_cursor_key) and still reach the
+// rows beyond. Seeded rows: cap+3 over-long keys, then two ordinary ones.
+func pagedWalkOverOverlongKeys(t *testing.T, overlong int) (batch contextfabric.ProjectionBatch, available bool, err error, observed []quarantineObservation) {
+	t.Helper()
+	at := pageCutStamp
+	long := strings.Repeat("x", maxCursorKeyBytes(cursorSpaceIngest, at)+10)
+	var rows keysetRows
+	for i := 0; i < overlong; i++ {
+		rows = append(rows, keysetRow{at: at, key: fmt.Sprintf("a%04d", i) + long})
+	}
+	rows = append(rows, keysetRow{at: at, key: "z0001"}, keysetRow{at: at, key: "z0002"})
+	scan := overlongKeyScan
+	plan := sourcePlan{
+		client: rows, source: "cursor_tail_test", version: ClickHouseSourceVersion,
+		tables: []entityTable{{name: "repos", query: func(ctx context.Context, _ contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+			return fetch(ctx, rows, "", rowLimitBindings(orgID, cursor, limit), limit, scan)
+		}}},
+		observeQuarantine: func(o quarantineObservation) { observed = append(observed, o) },
+	}
+	batch, available, err = plan.pagedBatch(context.Background(), "org", "", cursorState{}, false)
+	return batch, available, err, observed
+}
+
+func TestAPagedWalkQuarantinesValidItemsWhoseKeysTheCursorCannotCarry(t *testing.T) {
+	t.Parallel()
+	batch, available, err, observed := pagedWalkOverOverlongKeys(t, incrementalBatchCap+3)
+	if err != nil || !available {
+		t.Fatalf("available=%v err=%v, want the batch of the rows beyond the over-long ones", available, err)
+	}
+	var ids []string
+	for _, e := range batch.Entities {
+		ids = append(ids, e.Subject.CanonicalID)
+	}
+	if got := strings.Join(ids, ","); !strings.HasSuffix(got, "repository:z0001,repository:z0002") {
+		t.Fatalf("entities = %v, want the two ordinary rows reached", ids)
+	}
+	var oversize int
+	for _, o := range observed {
+		if o.Reason == quarantineOversizeCursorKey && o.Kind == "entity" {
+			oversize++
+		}
+	}
+	if oversize == 0 {
+		t.Fatalf("no entity quarantined as oversize_cursor_key: %+v", observed)
+	}
+}
+
+// More consecutive pages of over-long keys than one tick may skip: no cursor can
+// record that progress, so yielding would repeat them every tick.
+func TestAPagedWalkDoesNotYieldOnManyConsecutivePagesOfOverlongKeys(t *testing.T) {
+	t.Parallel()
+	batch, available, err, _ := pagedWalkOverOverlongKeys(t, incrementalBatchCap*(maxOmittedPageSkips+2))
+	if err != nil || !available {
+		t.Fatalf("available=%v err=%v, want the walk to reach the rows beyond %d pages of over-long keys", available, err, maxOmittedPageSkips+2)
+	}
+	if len(batch.Entities) != 2 {
+		t.Fatalf("entities = %d, want the two ordinary rows", len(batch.Entities))
+	}
+}
+
+// overlongKeyScan reads (position, key) rows into a valid repository entity named
+// by the first five characters of the key, so the key can be as long as a test needs.
+func overlongKeyScan(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+	var rowAt time.Time
+	var key string
+	if err := r.Scan(&rowAt, &key); err != nil {
+		return nil, err
+	}
+	id := key[:5]
+	slug := "acme/" + id
+	entity := contractsv1.ContextFabricEntityProjection{
+		Subject:        contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository:" + id, Label: slug},
+		Authorization:  repoAuthorization(slug),
+		EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, id)},
+		ObservedAt:     rowAt, ValidFrom: requiredTime(rowAt), SourceVersion: ClickHouseSourceVersion,
+	}
+	return []candidate{{observedAt: rowAt, sortKey: key, entity: &entity}}, nil
+}
+
+// A from-scratch snapshot cannot pass over a last row whose key sorts at or after
+// the sentinel; that row is quarantined and the rest of the snapshot is published.
+func TestASnapshotQuarantinesAValidItemWhoseKeyCannotBePassedOver(t *testing.T) {
+	t.Parallel()
+	at := pageCutStamp
+	rows := keysetRows{
+		{at: at, key: "a0001"},
+		{at: at, key: cursorSentinelKey + strings.Repeat("z", maxCursorKeyBytes(cursorSpaceIngest, at))},
+	}
+	var observed []quarantineObservation
+	plan := sourcePlan{
+		client: rows, source: "cursor_tail_test", version: ClickHouseSourceVersion,
+		tables: []entityTable{{name: "repos", query: func(ctx context.Context, _ contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+			return fetch(ctx, rows, "", rowLimitBindings(orgID, cursor, limit), limit, overlongKeyScan)
+		}}},
+		observeQuarantine: func(o quarantineObservation) { observed = append(observed, o) },
+		now:               func() time.Time { return at.Add(time.Minute) },
+	}
+	batch, available, err := plan.nextBatchPage(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org", Source: "cursor_tail_test"})
+	if err != nil || !available {
+		t.Fatalf("available=%v err=%v, want the snapshot batch", available, err)
+	}
+	found := false
+	for _, e := range batch.Entities {
+		found = found || e.Subject.CanonicalID == "repository:a0001"
+	}
+	if !found {
+		t.Fatalf("the ordinary row is missing from the snapshot")
+	}
+	for _, o := range observed {
+		if o.Reason == quarantineOversizeCursorKey {
+			return
+		}
+	}
+	t.Fatalf("no oversize_cursor_key quarantine: %+v", observed)
 }
