@@ -1,8 +1,10 @@
 package devhealthsource
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -182,7 +184,7 @@ func TestAnOverlapFrontierKeyThatDoesNotSortBelowTheSentinelBuildsNothingAndDoes
 // A valid item whose row key is longer than the cursor can carry: the paged
 // walk must report it as quarantined (oversize_cursor_key) and still reach the
 // rows beyond. Seeded rows: cap+3 over-long keys, then two ordinary ones.
-func pagedWalkOverOverlongKeys(t *testing.T, overlong int) (batch contextfabric.ProjectionBatch, available bool, err error, observed []quarantineObservation) {
+func pagedWalkOverOverlongKeys(t *testing.T, overlong, pageBound int, logs *bytes.Buffer) (batch contextfabric.ProjectionBatch, available bool, err error, observed []quarantineObservation) {
 	t.Helper()
 	at := pageCutStamp
 	long := strings.Repeat("x", maxCursorKeyBytes(cursorSpaceIngest, at)+10)
@@ -198,6 +200,10 @@ func pagedWalkOverOverlongKeys(t *testing.T, overlong int) (batch contextfabric.
 			return fetch(ctx, rows, "", rowLimitBindings(orgID, cursor, limit), limit, scan)
 		}}},
 		observeQuarantine: func(o quarantineObservation) { observed = append(observed, o) },
+		overlongPageBound: pageBound,
+	}
+	if logs != nil {
+		plan.logger = slog.New(slog.NewJSONHandler(logs, nil))
 	}
 	batch, available, err = plan.pagedBatch(context.Background(), "org", "", cursorState{}, false)
 	return batch, available, err, observed
@@ -205,7 +211,7 @@ func pagedWalkOverOverlongKeys(t *testing.T, overlong int) (batch contextfabric.
 
 func TestAPagedWalkQuarantinesValidItemsWhoseKeysTheCursorCannotCarry(t *testing.T) {
 	t.Parallel()
-	batch, available, err, observed := pagedWalkOverOverlongKeys(t, incrementalBatchCap+3)
+	batch, available, err, observed := pagedWalkOverOverlongKeys(t, incrementalBatchCap+3, 0, nil)
 	if err != nil || !available {
 		t.Fatalf("available=%v err=%v, want the batch of the rows beyond the over-long ones", available, err)
 	}
@@ -227,16 +233,29 @@ func TestAPagedWalkQuarantinesValidItemsWhoseKeysTheCursorCannotCarry(t *testing
 	}
 }
 
-// More consecutive pages of over-long keys than one tick may skip: no cursor can
-// record that progress, so yielding would repeat them every tick.
-func TestAPagedWalkDoesNotYieldOnManyConsecutivePagesOfOverlongKeys(t *testing.T) {
+// Many consecutive pages of over-long keys: the walk goes past more pages than
+// one tick may skip of omitted rows, up to its own hard bound, and then yields
+// with a WARN that names the pages and rows.
+func TestAPagedWalkGoesPastManyPagesOfOverlongKeysUpToItsOwnBound(t *testing.T) {
 	t.Parallel()
-	batch, available, err, _ := pagedWalkOverOverlongKeys(t, incrementalBatchCap*(maxOmittedPageSkips+2))
+	batch, available, err, _ := pagedWalkOverOverlongKeys(t, incrementalBatchCap*(maxOmittedPageSkips+2), 0, nil)
 	if err != nil || !available {
 		t.Fatalf("available=%v err=%v, want the walk to reach the rows beyond %d pages of over-long keys", available, err, maxOmittedPageSkips+2)
 	}
 	if len(batch.Entities) != 2 {
 		t.Fatalf("entities = %d, want the two ordinary rows", len(batch.Entities))
+	}
+}
+
+func TestAPagedWalkYieldsWithAWarnAtTheOverlongPageBound(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	_, available, err, _ := pagedWalkOverOverlongKeys(t, incrementalBatchCap*6, 3, &logs)
+	if err != nil || available {
+		t.Fatalf("available=%v err=%v, want a yield at the bound", available, err)
+	}
+	if !strings.Contains(logs.String(), `"pages":3`) || !strings.Contains(logs.String(), `"rows":600`) {
+		t.Fatalf("no WARN naming the pages and rows skipped: %s", logs.String())
 	}
 }
 

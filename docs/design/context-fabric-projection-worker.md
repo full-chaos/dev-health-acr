@@ -498,8 +498,10 @@ ordinary string, so a projector without this change reads it the same way) and
 nothing is dropped (`action=passed_over`). When rows lie beyond the page, the
 trailing over-long rows are left for the next page (`action=deferred`); if the
 whole page is over-long, its items are quarantined with reason
-`oversize_cursor_key` and the walk goes on in the process; this branch never
-yields, because no cursor could record the progress. A process restart reads that
+`oversize_cursor_key` and the walk goes on in the process. No cursor could
+record that progress, so these pages do not count toward the omitted-page skip
+bound; a call still stops after 1000 such pages and writes a WARN naming the
+pages and rows it walked, and the next tick resumes from the saved cursor. A process restart reads that
 page, and quarantines it, once more. A key that does not sort below the sentinel
 (it begins with the sentinel, or has invalid UTF-8 bytes at or above 0xF5) is
 never passed over: it takes the same cut-and-quarantine path.

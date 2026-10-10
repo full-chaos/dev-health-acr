@@ -20,6 +20,9 @@ const cursorSentinelKey = "\U0010FFFF\U0010FFFF\U0010FFFF\U0010FFFF"
 // cursor, so one limit holds for every cursor this package encodes.
 const cursorAckHeadroom = 16
 
+// maxOverlongPages bounds the pages of over-long keys one call walks past.
+const maxOverlongPages = 1000
+
 const quarantineOversizeCursorKey = "oversize_cursor_key"
 
 // errCursorKeyTooLong is the unreachable guard: a page tail whose key cannot
@@ -106,4 +109,20 @@ func quarantineOversizeCursorKeyRows(rows []candidate, observe func(quarantineOb
 			observe(quarantineObservation{Reason: quarantineOversizeCursorKey, Kind: kind})
 		}
 	}
+}
+
+func (p sourcePlan) maxOverlongPages() int {
+	if p.overlongPageBound > 0 {
+		return p.overlongPageBound
+	}
+	return maxOverlongPages
+}
+
+func (p sourcePlan) logOverlongPageYield(ctx context.Context, orgID string, pages, rows int) {
+	if p.logger == nil {
+		return
+	}
+	p.logger.WarnContext(ctx, "devhealthsource walked the per-call bound of pages whose row keys exceed the projection cursor bound; the next tick resumes from the saved cursor",
+		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
+		"pages", pages, "rows", rows, "limit_bytes", contractsv1.ContextFabricProjectionCursorMaxLength)
 }

@@ -39,6 +39,8 @@ type sourcePlan struct {
 	version string
 	tables  []entityTable
 	now     func() time.Time
+	// overlongPageBound overrides maxOverlongPages when positive (tests).
+	overlongPageBound int
 
 	// seed contributes candidates that belong to a from-scratch projection
 	// as a whole rather than to any one source row, emitted exactly once on
@@ -346,6 +348,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 	// Only state advances as fully-omitted pages are skipped, so the
 	// coordinator moves from where it was straight to the first page with
 	// real content, and deterministicBatchID stays stable for replay.
+	overlongPages, overlongRows := 0, 0
 	for skips := 0; ; skips++ {
 		var all []candidate
 		var bound pageBound
@@ -407,10 +410,16 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			state = cursorState{Since: last.position(), After: last.sortKey}
 			p.window.record(p.windowScope, full, p.overlap)
 			p.notePagedPage(ctx, orgID, full)
-			// No cursor can record this progress, so this branch never yields:
-			// yielding would repeat these pages every tick. Each iteration is
-			// one ordinary page read and the walk is bounded by the rows that
-			// exist.
+			// No cursor can record this progress, so yielding repeats these
+			// pages next tick: they do not count toward maxOmittedPageSkips.
+			// A hard per-call bound still holds, and says what it skipped.
+			overlongPages++
+			overlongRows += sourceRows(full)
+			if overlongPages >= p.maxOverlongPages() {
+				p.logOverlongPageYield(ctx, orgID, overlongPages, overlongRows)
+				p.noteYield()
+				return contextfabric.ProjectionBatch{}, false, nil
+			}
 			continue
 		}
 		p.notePage(all)
