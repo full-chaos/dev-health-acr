@@ -218,7 +218,7 @@ FactMembership
   fields             organization_id repository_id repository_name
 
 FactMetrics
-  reached_funcs      96
+  reached_funcs      98
   dynamic_key_sites  1
   leaked_call_sites  7
     leak interface_method     4
@@ -226,7 +226,7 @@ FactMetrics
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            743
+    calls followed            741
     calls accounted           13
     calls not_a_call          4
     calls excluded_by_design  171

@@ -365,8 +365,19 @@ func periodTotal(t *testing.T, c *client, one string) {
 	}
 	outcome := str(cov[0], "outcome")
 	if seededDays == "0" {
-		if outcome != "read_no_fact" {
-			t.Fatalf("%s: no daily rows are seeded, coverage says %q, want read_no_fact (a missing period is not measured): %.1500s", one, outcome, raw)
+		// A repository with merged pull requests in the window keeps its window
+		// PR cycle fields without a daily row; the daily series and every daily
+		// field stay absent (a missing period is not measured, never zero).
+		if outcome != "read_no_fact" && outcome != "fact_served" {
+			t.Fatalf("%s: no daily rows are seeded, coverage says %q, want read_no_fact or fact_served from window pull request facts: %.1500s", one, outcome, raw)
+		}
+		for _, f := range list(d, "facts") {
+			if rows := list(get(f, "tables", "daily_metrics"), "rows"); len(rows) != 0 {
+				t.Fatalf("%s: no daily rows are seeded, a daily series of %d rows was served: %.1500s", one, len(rows), raw)
+			}
+			if fields, _ := get(f, "fields").(map[string]any); fields["commits_count"] != nil {
+				t.Fatalf("%s: no daily rows are seeded, commits_count was served: %.1500s", one, raw)
+			}
 		}
 		return
 	}
