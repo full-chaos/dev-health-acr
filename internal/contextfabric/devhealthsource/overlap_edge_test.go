@@ -311,3 +311,133 @@ func TestBothSourcesReportTheirOwnWindowPass(t *testing.T) {
 		t.Error("a nil source reports an open pass")
 	}
 }
+
+// The edge is one keyset position for every table: the page it cuts is the
+// merged page. Two tables hold rows on the frontier's own position, on both
+// sides of the frontier's row key.
+func TestOverlapEdgeCutsTheMergedPageOfSeveralTables(t *testing.T) {
+	at := pageCutStamp
+	key := func(n int) string { return "00000000-0000-4000-8000-00000000000" + string(rune('0'+n)) }
+	left := &liveKeysetRows{rows: keysetRows{{at: at.Add(-time.Minute), key: key(1)}, {at: at, key: key(3)}, {at: at, key: key(7)}}}
+	right := &liveKeysetRows{rows: keysetRows{{at: at, key: key(2)}, {at: at, key: key(5)}, {at: at, key: key(6)}, {at: at.Add(time.Second), key: key(0)}}}
+	now := at.Add(time.Minute)
+	named := func(name string, store *liveKeysetRows) entityTable {
+		table := repositoryKeysetTable(store)
+		table.name = name
+		return table
+	}
+	plan := sourcePlan{
+		client: keysetRows{}, source: "overlap_edge_test", version: ClickHouseSourceVersion,
+		tables: []entityTable{named("left", left), named("right", right)},
+		now:    func() time.Time { return now }, overlap: 15 * time.Minute, window: newWindowMemo(), windowScope: windowScopeFor("org", 0),
+	}
+	// The frontier is the row with key 5, in the right table.
+	frontier := cursorState{Since: at, After: key(5)}
+	cursor, err := encodeCursor(frontier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, available, err := plan.overlapBatch(context.Background(), "org", cursor, frontier)
+	if err != nil || !available {
+		t.Fatalf("available=%v err=%v, want the window batch", available, err)
+	}
+	var got []string
+	for _, e := range batch.Entities {
+		got = append(got, strings.TrimPrefix(e.Subject.CanonicalID, "repository:"))
+	}
+	want := []string{key(1), key(2), key(3), key(5)}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("the window batch carries %v, want the rows of both tables at or before the frontier %v (keys 6 and 7 on its position and key 0 after it are the paged read's)", got, want)
+	}
+}
+
+// A window batch that the backend did not apply puts the pass back where it
+// stood before the call: its position, its edge and its counters. When that
+// call had ended one pass and started the next, the retry ends the first pass
+// again (same edge, same counts), starts the next one again at the current
+// frontier and emits the same batch: the late row is not lost, not skipped,
+// and nothing of the two passes drifts.
+func TestAFailedWindowBatchAcrossAPassBoundaryIsEmittedAgain(t *testing.T) {
+	const overlap = time.Minute
+	r := newChurnRig(t, churnStart)
+	r.plan.overlap, r.plan.windowPagesPerCall = overlap, 2
+	// Three pages inside the window; the first drain emits them all. The
+	// frontier is the stamp of the last row.
+	r.land(450, churnStart.Add(-110*time.Second), churnStart.Add(-10*time.Second))
+	firstFrontier := r.store.rows[len(r.store.rows)-1].at
+	r.runTick() // drains, then walks pages 1-2 of the first pass
+	first := r.pass()
+	if !first.walking || first.pages != 2 || !first.high.Since.Equal(firstFrontier) {
+		t.Fatalf("precondition: after tick 1 walking=%v pages=%d edge=%s, want the first pass open after 2 pages with its edge at the frontier", first.walking, first.pages, first.high.Since)
+	}
+	// A late row lands behind the walk, inside the next pass's window, and
+	// five new rows land beyond the frontier.
+	late := r.landOne(churnStart.Add(-115 * time.Second))
+	r.land(5, churnStart.Add(-9*time.Second), churnStart.Add(-4*time.Second))
+	secondFrontier := r.store.rows[len(r.store.rows)-1].at
+	r.advance()
+	call := func() (contextfabric.ProjectionBatch, bool, []map[string]any) {
+		t.Helper()
+		r.logs.Reset()
+		batch, available, err := r.plan.nextBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org", Source: r.plan.source, Cursor: r.cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return batch, available, passLines(t, r.logs.String())
+	}
+	carries := func(batch contextfabric.ProjectionBatch) bool {
+		for _, e := range batch.Entities {
+			if e.Subject.CanonicalID == "repository:"+late {
+				return true
+			}
+		}
+		return false
+	}
+	// The paged read emits the five new rows and moves the frontier.
+	paged, available, _ := call()
+	if !available || len(paged.Entities) != 5 || carries(paged) {
+		t.Fatalf("precondition: the paged batch has %d entities (available=%v), want the 5 new rows", len(paged.Entities), available)
+	}
+	r.cursor = paged.NextCursor
+	// The first pass's line when it ends: three pages, 450 rows, the edge it
+	// started at. The five rows past that edge are not its rows.
+	requireFirstPassEnded := func(step string, lines []map[string]any) {
+		t.Helper()
+		if len(lines) != 1 || lines[0]["msg"] != endedPassMessage || lines[0]["pass_pages"].(float64) != 3 || lines[0]["pass_rows"].(float64) != 450 ||
+			lines[0]["window_high"] != firstFrontier.Format(time.RFC3339Nano) {
+			t.Fatalf("%s: pass lines = %v, want one ended line: 3 pages, 450 rows, window_high %s", step, lines, firstFrontier.Format(time.RFC3339Nano))
+		}
+	}
+	// This call reads page 3, ends the first pass, starts the second at the
+	// current frontier and finds the late row on its first page.
+	emitted, available, lines := call()
+	if !available || !carries(emitted) || len(emitted.Entities) != 1 {
+		t.Fatalf("available=%v carries the late row=%v entities=%d, want the window batch with the late row only", available, carries(emitted), len(emitted.Entities))
+	}
+	requireFirstPassEnded("the call that ends the first pass", lines)
+	second := r.pass()
+	if !second.walking || !second.passStart.Equal(r.now) || !second.high.Since.Equal(secondFrontier) || second.pages != 1 {
+		t.Fatalf("precondition: the second pass = %+v, want open, started now, edge at the new frontier, 1 page", second)
+	}
+	// The apply fails: the checkpoint keeps its cursor, and the call repeats.
+	again, available, lines := call()
+	if !available || again.BatchID != emitted.BatchID || !carries(again) || len(again.Entities) != 1 {
+		t.Fatalf("retry: available=%v same batch=%v carries the late row=%v, want the same batch again", available, again.BatchID == emitted.BatchID, carries(again))
+	}
+	requireFirstPassEnded("the retry", lines)
+	if retried := r.pass(); retried != second {
+		t.Fatalf("the second pass after the retry = %+v, want it exactly as after the first attempt %+v", retried, second)
+	}
+	// Applied this time: the row counts as emitted and is not emitted again.
+	r.cursor = again.NextCursor
+	for i := 0; i < 10; i++ {
+		batch, available, _ := call()
+		if !available {
+			break
+		}
+		if carries(batch) {
+			t.Fatalf("the late row was emitted again after its batch was applied")
+		}
+		r.cursor = batch.NextCursor
+	}
+}
