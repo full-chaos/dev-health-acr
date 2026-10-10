@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -293,6 +294,7 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 		return membershipScope{}, ctx.Err()
 	case res := <-result:
 		if res.Err != nil {
+			slog.WarnContext(ctx, "DEBUGTMP membership scope load failed", "err", res.Err.Error())
 			return membershipScope{}, res.Err
 		}
 		loaded = res.Val
