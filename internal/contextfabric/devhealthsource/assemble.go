@@ -289,6 +289,13 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	sortCandidates(all)
+	// The snapshot holds every row: a last row whose key the cursor cannot
+	// carry is passed over, nothing after it exists.
+	var passedOver bool
+	all, _, passedOver = fitCursorTail(p.cursorSpace(), all, false)
+	if passedOver {
+		p.logCursorKeyPass(ctx, orgID, all[len(all)-1], "passed_over")
+	}
 	p.notePage(all)
 	// Normalize BEFORE quarantine: an item repaired to a contract bound is
 	// never offered to quarantine at all, which is what makes the quarantine
@@ -375,6 +382,32 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		if bounded {
 			p.logBoundedPage(ctx, orgID, bound)
 		}
+		full := all
+		var cut int
+		var passed bool
+		all, cut, passed = fitCursorTail(p.cursorSpace(), all, ahead)
+		if passed {
+			p.logCursorKeyPass(ctx, orgID, all[len(all)-1], "passed_over")
+		}
+		if cut > 0 {
+			p.logCursorKeyPass(ctx, orgID, full[len(full)-1], "deferred")
+		}
+		if len(all) == 0 {
+			// Every row of the page has a key the cursor cannot carry and
+			// more rows lie beyond it: nothing can be published to carry the
+			// cursor past them, so they are quarantined and the walk goes on
+			// in-process from the exact key, like any other consumed page.
+			quarantineOversizeCursorKeyRows(full, p.quarantineObserver(orgID))
+			last := full[len(full)-1]
+			state = cursorState{Since: last.position(), After: last.sortKey}
+			p.window.record(p.windowScope, full, p.overlap)
+			p.notePagedPage(ctx, orgID, full)
+			if skips >= maxOmittedPageSkips {
+				p.noteYield()
+				return contextfabric.ProjectionBatch{}, false, nil
+			}
+			continue
+		}
 		p.notePage(all)
 		// Per-item quarantine BEFORE the payload check: an item the
 		// contract validator rejects must not reach buildBatch, and a page
@@ -431,7 +464,7 @@ func noteConsumedFrom(p sourcePlan, orgID string, consumed []candidate) {
 		return
 	}
 	last := consumed[len(consumed)-1]
-	if encoded, err := encodeCursorIn(p.cursorSpace(), cursorState{Since: last.position(), After: last.sortKey}); err == nil {
+	if encoded, err := encodeTailCursor(p.cursorSpace(), last); err == nil {
 		p.noteConsumed(orgID, encoded)
 	}
 }

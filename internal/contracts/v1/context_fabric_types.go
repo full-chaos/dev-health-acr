@@ -21,6 +21,10 @@ const (
 	ContextFabricProjectionBatchSchema      = "context_fabric_projection_batch.v1"
 )
 
+// ContextFabricProjectionCursorMaxLength bounds a projection batch's Cursor
+// and NextCursor, in bytes of the opaque string.
+const ContextFabricProjectionCursorMaxLength = 512
+
 // ContextFabricProjectionBatch{Max...} are the v1 semantic (Go-level)
 // per-batch item bounds ContextFabricProjectionBatch.Validate() enforces
 // -- stricter than the JSON Schema's wire-format maxItems ceiling, which

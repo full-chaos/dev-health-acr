@@ -314,6 +314,9 @@ type candidate struct {
 	// already an ingest stamp).
 	cursorAt time.Time
 	sortKey  string
+	// passOver marks a page's last row whose key the cursor cannot carry; its
+	// cursor lands after the whole timestamp (cursorSentinelKey).
+	passOver bool
 	// table (CHAOS-7263) is the producer registry entry (entityTable.name)
 	// the candidate was read from, set by every read loop. The shared keyset
 	// orders rows of all tables by (position, sortKey), and two tables can
@@ -646,7 +649,7 @@ func buildBatch(orgID, source, version, cursor string, cursorSource, items []can
 // buildBatchIn is buildBatch with the NextCursor encoded in space.
 func buildBatchIn(space, orgID, source, version, cursor string, cursorSource, items []candidate, fullSnapshot, completeEnumeration bool, generatedAt time.Time) (contextfabric.ProjectionBatch, error) {
 	last := cursorSource[len(cursorSource)-1]
-	nextCursor, err := encodeCursorIn(space, cursorState{Since: last.position(), After: last.sortKey})
+	nextCursor, err := encodeTailCursor(space, last)
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, err
 	}

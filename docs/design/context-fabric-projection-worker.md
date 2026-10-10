@@ -485,6 +485,23 @@ consumes rows that are not new (`shared_position_rows` counts the rows on
 a shared position). Proven by `page_cut_test.go` and, on a real
 ClickHouse, `TestPageCutKeepsEveryRowWhenTwoStatementRowsShareStampAndKey`.
 
+**The cursor bound.** A batch's `Cursor` and `NextCursor` are at most
+`ContextFabricProjectionCursorMaxLength` (512) bytes. The cursor is
+`base64(JSON{since, after, space, ack})` and `after` is the last row's key, so a
+key longer than the limit (296 bytes of plain ASCII with the ingest space; the
+WARN line `devhealthsource row key exceeds the projection cursor bound` prints
+`limit_bytes`, `max_key_bytes` and `key_bytes`) cannot be the cursor. The row is
+never skipped and the batch never fails for it. When the page was read to its
+end, its last row's cursor lands after the whole timestamp (`after` is four
+U+10FFFF characters, which sorts after every valid UTF-8 key; the field is an
+ordinary string, so a projector without this change reads it the same way) and
+nothing is dropped (`action=passed_over`). When rows lie beyond the page, the
+trailing over-long rows are left for the next page (`action=deferred`); if the
+whole page is over-long, its items are quarantined with reason
+`oversize_cursor_key` and the walk goes on in the process. A process restart
+reads that page, and quarantines it, once more. A key with invalid UTF-8 bytes
+at or above 0xF5 would sort after the sentinel; no id this source mints is one.
+
 **K3 -- the episode source must page too, not just ClickHouse.**
 `EpisodesProjectionSource.NextProjectionBatch` still hard-errored when a
 from-scratch (`cursor == ""`) read exceeded `episodesSnapshotCap` (500)
