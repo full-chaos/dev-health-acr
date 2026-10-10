@@ -288,12 +288,12 @@ type ProjectRollupMixRow = projectRollupMixRow
 
 // RunProjectRollupMix runs the roll-up mix exactly as readProjectThemeMix does.
 func RunProjectRollupMix(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, w ProjectMixWindow) ([]ProjectRollupMixRow, error) {
-	return readProjectRollupMixRows(ctx, client, orgID, ids, w.bound())
+	return readProjectRollupMixRows(ctx, client, orgID, ids, w.bound(), nil)
 }
 
 // RunProjectNativeMix runs the native mix exactly as readProjectNativeThemeMix does.
 func RunProjectNativeMix(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, w ProjectMixWindow, rowLimit int) ([]readers.ProjectThemeMixRow, error) {
-	return readProjectNativeThemeMixRows(ctx, client, orgID, ids, w.bound(), rowLimit)
+	return readProjectNativeThemeMixRows(ctx, client, orgID, ids, w.bound(), rowLimit, nil)
 }
 
 // WithProjectMixBetweenPhases returns a context whose hook runs after phase 0 of

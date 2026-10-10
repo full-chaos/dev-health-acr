@@ -20,11 +20,11 @@ import (
 // (follow-up), keep this copy in step with it. It does not read repo_id, so the
 // NULL-preserving argMax does not apply here. Row type, reader name, bindings
 // and row limit are the library's.
-func readProjectNativeThemeMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int) ([]readers.ProjectThemeMixRow, error) {
+func readProjectNativeThemeMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int, resolve *InvestmentProvider) ([]readers.ProjectThemeMixRow, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	return readProjectNativeMixRows(ctx, client, orgID, ids, timeBound, rowLimit)
+	return readProjectNativeMixRows(ctx, client, orgID, ids, timeBound, rowLimit, resolve)
 }
 
 // projectNativeMixStatement is the project-native mix, one pass over
