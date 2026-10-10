@@ -212,11 +212,13 @@ type membershipScopeEntry struct {
 type membershipScopeCache struct {
 	mu      sync.Mutex
 	entries map[string]membershipScopeEntry
-	loads   singleflight.Group
+	// logged holds the organizations whose cold load was already reported.
+	logged map[string]struct{}
+	loads  singleflight.Group
 }
 
 func newMembershipScopeCache() *membershipScopeCache {
-	return &membershipScopeCache{entries: map[string]membershipScopeEntry{}}
+	return &membershipScopeCache{entries: map[string]membershipScopeEntry{}, logged: map[string]struct{}{}}
 }
 
 func (c *membershipScopeCache) get(orgID, runID string, now time.Time) ([]string, bool) {
@@ -227,6 +229,17 @@ func (c *membershipScopeCache) get(orgID, runID string, now time.Time) ([]string
 		return nil, false
 	}
 	return entry.ids, true
+}
+
+// firstLoad reports true once per organization.
+func (c *membershipScopeCache) firstLoad(orgID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.logged[orgID]; ok {
+		return false
+	}
+	c.logged[orgID] = struct{}{}
+	return true
 }
 
 func (c *membershipScopeCache) put(orgID, runID string, ids []string, now time.Time) {
@@ -303,6 +316,9 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 			return []string(nil), nil
 		}
 		p.scopes.put(orgID, runID, ids, clock())
+		if p.scopes.firstLoad(orgID) {
+			slog.InfoContext(ctx, "investment membership scope cold load", "duration_ms", clock().Sub(started).Milliseconds(), "units", len(ids))
+		}
 		return ids, nil
 	})
 	var loaded any

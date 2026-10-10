@@ -84,6 +84,24 @@ func (p *InvestmentProvider) Capability() contextfabric.FactCapability {
 	return capability
 }
 
+// LoadPrerequisites loads the membership scope a project, repository or team
+// read applies, so a cold load runs under its own bound and not inside the
+// capability's budget.
+func (p *InvestmentProvider) LoadPrerequisites(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) error {
+	orgID, err := requireOrgID(principal.OrgID)
+	if err != nil {
+		return err
+	}
+	for _, subject := range query.Subjects {
+		switch subject.Kind {
+		case contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository:
+			_, err := p.resolveMembershipScope(ctx, orgID)
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {

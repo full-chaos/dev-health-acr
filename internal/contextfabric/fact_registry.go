@@ -418,6 +418,15 @@ type FactProvider interface {
 	ReadFacts(context.Context, storage.Principal, FactQuery) (FactProviderResult, error)
 }
 
+// FactPrerequisiteLoader is implemented by a provider whose read depends on a
+// cached prerequisite that is loaded cold once and is bounded on its own. The
+// registry runs it BEFORE the capability's clock starts, so a cold load never
+// spends the capability budget. Its error is not served: the provider's own
+// read keeps its failure paths.
+type FactPrerequisiteLoader interface {
+	LoadPrerequisites(context.Context, storage.Principal, FactQuery) error
+}
+
 type FactReadFailure struct {
 	State  SourceState
 	Reason string
@@ -1256,6 +1265,9 @@ func (r *FactCapabilityRegistry) readProvider(ctx context.Context, principal sto
 	timeout := registered.capability.Timeout
 	if timeout <= 0 {
 		timeout = r.defaultTimeout
+	}
+	if loader, ok := registered.provider.(FactPrerequisiteLoader); ok {
+		_ = loader.LoadPrerequisites(ctx, principal, query)
 	}
 	providerCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
