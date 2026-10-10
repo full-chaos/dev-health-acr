@@ -7,7 +7,6 @@ import (
 	"time"
 
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
-	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 const defaultHostedPostgresPingTimeout = 5 * time.Second
@@ -17,6 +16,14 @@ const (
 	defaultHostedPostgresStartupAttempts = 5
 	defaultHostedPostgresStartupBackoff  = 2 * time.Second
 )
+
+// DefaultClickHouseMaxBytesToRead is the per-statement max_bytes_to_read when
+// ACR_CLICKHOUSE_MAX_BYTES_TO_READ is unset: 256 MiB. The investment mix
+// statement reads work_unit_investments plus the membership scope in one pass
+// (measured 56.5 MB against a 64 MiB cap on a production-sized organization,
+// growing linearly with its work units); 256 MiB is about four times that, and a
+// statement that still exceeds it is refused by name, never retried.
+const DefaultClickHouseMaxBytesToRead uint64 = 256 << 20
 
 // loadHostedRuntimeValues loads the Postgres/ClickHouse/backing-store knobs
 // shared by acr-api (Config) and acr-projector (ProjectorConfig).
@@ -63,7 +70,7 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 		}
 	}
 	cfg.ClickHouseCACertPath = stringValue(lookup, "ACR_CLICKHOUSE_CA_BUNDLE", "")
-	if cfg.ClickHouseMaxBytesToRead, err = uint64Value(lookup, "ACR_CLICKHOUSE_MAX_BYTES_TO_READ", runtimeclickhouse.DefaultMaxBytesToRead); err != nil {
+	if cfg.ClickHouseMaxBytesToRead, err = uint64Value(lookup, "ACR_CLICKHOUSE_MAX_BYTES_TO_READ", DefaultClickHouseMaxBytesToRead); err != nil {
 		return err
 	}
 	if cfg.PostgresDSN, err = SecretValue(lookup, "ACR_POSTGRES_DSN"); err != nil {

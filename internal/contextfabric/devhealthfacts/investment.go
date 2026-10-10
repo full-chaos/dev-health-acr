@@ -58,10 +58,13 @@ import (
 // same gap CHAOS-4347's disposition inventory found for cognitive load
 // (user_metrics_daily) -- inventing one would be exactly the "stub data for
 // a kind with no canonical source" §19.6.3 forbids.
-type InvestmentProvider struct{ facts clickhouseFacts }
+type InvestmentProvider struct {
+	facts  clickhouseFacts
+	scopes *membershipScopeCache
+}
 
 func newInvestmentProvider(client contextpacket.ClickHouseQueryClient) *InvestmentProvider {
-	return &InvestmentProvider{facts: clickhouseFacts{client: client}}
+	return &InvestmentProvider{facts: clickhouseFacts{client: client}, scopes: newMembershipScopeCache()}
 }
 
 func (p *InvestmentProvider) Capability() contextfabric.FactCapability {
