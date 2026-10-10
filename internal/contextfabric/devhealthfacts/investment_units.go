@@ -101,7 +101,7 @@ WHERE share < toFloat64({` + unitCursorShareParam + `:String})
 	OR (share = toFloat64({` + unitCursorShareParam + `:String}) AND (work_unit_id > {` + unitCursorIDParam + `:String}
 		OR (work_unit_id = {` + unitCursorIDParam + `:String} AND repo_uuid > {` + unitCursorRepoParam + `:String})))`
 	}
-	return `SELECT work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs, scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows
+	statement := `SELECT work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs, scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows
 FROM (
 	SELECT work_unit_id, repo_uuid, c / n * effort_value AS share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs,
 		sum(c / n * effort_value) OVER () AS scope_total, count() OVER () AS scope_units,
@@ -119,6 +119,17 @@ FROM (
 )` + keyset + `
 ORDER BY share DESC, work_unit_id ASC, repo_uuid ASC
 LIMIT {` + unitLimitParam + `:UInt32}`
+	if organization {
+		// The placeholder row of a unit with no reference at all stays in the
+		// allocation (c, n) but is not an unresolved reference: only the refs the
+		// unit really names that matched no repository are counted and listed.
+		realRefs := "arrayFilter(x -> x != concat('unit:', work_unit_id), ref_texts)"
+		statement = strings.Replace(statement, "sum(if(repo_uuid = '', c, 0)) OVER (PARTITION BY win, work_unit_id) AS unresolved_n",
+			"sum(if(repo_uuid = '', length("+realRefs+"), 0)) OVER (PARTITION BY win, work_unit_id) AS unresolved_n", 1)
+		statement = strings.Replace(statement, "arrayFlatten(groupArray(if(repo_uuid = '', ref_texts, [])) OVER (PARTITION BY win, work_unit_id)) AS unresolved_refs",
+			"arrayFlatten(groupArray(if(repo_uuid = '', "+realRefs+", [])) OVER (PARTITION BY win, work_unit_id)) AS unresolved_refs", 1)
+	}
+	return statement
 }
 
 // readInvestmentUnits reads one page of the units behind the allocation of

@@ -21,8 +21,8 @@ func TestOrganizationUnitsStatementKeepsUnattributedRowsAndNoRepositoryFilter(t 
 	if strings.Contains(repository, "unit:") || !strings.Contains(repository, "WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}") {
 		t.Error("the repository and team listing changed: it must keep selecting only resolved repositories of its set")
 	}
-	if !strings.Contains(organization, "x -> x != concat('unit:', work_unit_id)") {
-		t.Error("the organization statement counts its no-reference placeholder as an unresolved reference")
+	if strings.Count(organization, "x -> x != concat('unit:', work_unit_id)") != 2 {
+		t.Error("the organization statement counts its no-reference placeholder as an unresolved reference (count and handles)")
 	}
 	if strings.Contains(repository, "concat('unit:'") {
 		t.Error("the repository and team listing carries the organization placeholder filter")
