@@ -318,6 +318,7 @@ func catchUpWorkItems(count int, id func(int) string) [][]any {
 // With extra draining disabled a tick makes one attempt. A from-zero walk of
 // three pages then takes three ticks, and the first two left rows unread.
 func TestTickSummaryIsNotOKWithOneAttemptPerTickAndRowsUnread(t *testing.T) {
+	t.Parallel()
 	repoAt := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	client := &fakeClient{tables: []fakeTable{
 		repoRow("00000000-0000-4000-8000-000000000001", "acme/repo-1", "github", repoAt),
@@ -330,6 +331,7 @@ func TestTickSummaryIsNotOKWithOneAttemptPerTickAndRowsUnread(t *testing.T) {
 // batch after a bounded number of pages. Rows it did not reach are work left:
 // the tick is not ok and not complete because the read gave up early.
 func TestTickSummaryIsNotOKWhenTheReadStopsWithoutABatchBeforeTheRowsEnd(t *testing.T) {
+	t.Parallel()
 	repoAt := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	// 10,600 work items whose identity is over the natural-key bound (each
 	// is consumed and emits nothing), then 5 that project.

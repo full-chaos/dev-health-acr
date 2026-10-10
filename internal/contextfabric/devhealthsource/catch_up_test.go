@@ -675,6 +675,7 @@ func TestCatchUpReportSaysWhenRowsLieAhead(t *testing.T) {
 // A read that skips its bounded number of pages with nothing publishable
 // returns no batch. Rows it did not reach are still ahead, and it says so.
 func TestAReadThatStopsWithoutABatchSaysRowsLieAhead(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org", Source: "catch_up_test"}
 	pages := maxOmittedPageSkips + 1
