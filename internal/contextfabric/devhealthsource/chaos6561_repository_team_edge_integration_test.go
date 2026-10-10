@@ -2,6 +2,7 @@ package devhealthsource_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -158,5 +159,54 @@ func subRepositoryTeamEdgeFollowsTheOpenRowOfAFact(t *testing.T, ctx context.Con
 	closed := byLabel["acme/no-open-row"]
 	if closed.ValidTo == nil || !closed.ValidTo.Equal(base.Add(5*time.Hour)) {
 		t.Errorf("no open row: ValidTo = %v, want the latest close %v", closed.ValidTo, base.Add(5*time.Hour))
+	}
+}
+
+// subRepositoryTeamEdgeOrdersRowsThatDifferOnlyInMilliseconds: the ownership
+// columns are DateTime64(3), so rows of one fact can differ only by
+// milliseconds. The earliest open row still decides the attributes, and with
+// no open row the latest close still ends the edge.
+func subRepositoryTeamEdgeOrdersRowsThatDifferOnlyInMilliseconds(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	const (
+		teamID   = "TEAM-GITHUB"
+		openID   = "9021b000-0000-4000-8000-000000000001"
+		closedID = "9021b000-0000-4000-8000-000000000002"
+	)
+	base := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	at := func(offset time.Duration) string { return base.Add(offset).Format("2006-01-02 15:04:05.000") }
+	for id, slug := range map[string]string{openID: "acme/ms-open", closedID: "acme/ms-closed"} {
+		mustExec(t, ctx, fixture.direct,
+			`INSERT INTO repos (id, repo, ref, created_at, tags, last_synced, org_id, provider) VALUES (?,?,?,?,?,?,?,?)`,
+			id, slug, nil, base, nil, base, fixture.orgID, "github")
+	}
+	own := func(repoID, slug string, priority int, validFrom time.Duration, validTo any) {
+		to := "NULL"
+		if offset, ok := validTo.(time.Duration); ok {
+			to = "toDateTime64('" + at(offset) + "', 3, 'UTC')"
+		}
+		mustExec(t, ctx, fixture.direct, fmt.Sprintf(
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('%s','github','%s','%s','%s','exact','native',1,1,%d,toDateTime64('%s', 3, 'UTC'),%s,toDateTime64('%s', 3, 'UTC'))`,
+			fixture.orgID, teamID, repoID, slug, priority, at(validFrom), to, at(validFrom)))
+	}
+	own(openID, "acme/ms-open", 9, 500*time.Millisecond, nil)
+	own(openID, "acme/ms-open", 1, 100*time.Millisecond, nil)
+	own(closedID, "acme/ms-closed", 1, 100*time.Millisecond, 900*time.Millisecond)
+	own(closedID, "acme/ms-closed", 1, 300*time.Millisecond, 400*time.Millisecond)
+	own(closedID, "acme/ms-closed", 1, 200*time.Millisecond, 700*time.Millisecond)
+
+	edges, _ := fixture.convergeRepositoryTeamEdges(t, ctx, "", teamID)
+	byLabel := map[string]contractsv1.ContextFabricRelationshipProjection{}
+	for _, edge := range edges {
+		byLabel[edge.From.Label] = edge
+	}
+	if len(edges) != 2 {
+		t.Fatalf("edges = %d, want 2 (one per fact): %+v", len(edges), edges)
+	}
+	if got := byLabel["acme/ms-open"].Properties["priority"]; got.Integer == nil || *got.Integer != 1 {
+		t.Errorf("two open rows 400ms apart: priority = %+v, want 1 from the EARLIEST open row", got)
+	}
+	want := base.Add(900 * time.Millisecond)
+	if got := byLabel["acme/ms-closed"].ValidTo; got == nil || !got.Equal(want) {
+		t.Errorf("no open row: ValidTo = %v, want the latest close %v", got, want)
 	}
 }
