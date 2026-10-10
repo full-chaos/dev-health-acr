@@ -45,6 +45,7 @@ func TestInactiveTeamsNamesTheOneActiveTwinTheCallerMayRead(t *testing.T) {
 	}{
 		{"one readable active twin", []row{old}, []row{inactiveTestTeamRow("team:jira:platform", true, "acme/api")}, principal, directread.InactiveTeam{Inactive: true, ActiveTwinID: "team:jira:platform"}},
 		{"two active twins are ambiguous", []row{old}, []row{inactiveTestTeamRow("team:jira:platform", true, "acme/api"), inactiveTestTeamRow("team:linear:platform", true, "acme/api")}, principal, directread.InactiveTeam{Inactive: true}},
+		{"a readable twin beside an unreadable one is ambiguous", []row{old}, []row{inactiveTestTeamRow("team:jira:platform", true, "acme/api"), inactiveTestTeamRow("team:linear:platform", true, "acme/other")}, principal, directread.InactiveTeam{Inactive: true}},
 		{"twin the caller may not read is not named", []row{old}, []row{inactiveTestTeamRow("team:jira:platform", true, "acme/other")}, principal, directread.InactiveTeam{Inactive: true}},
 		{"a name query row that is inactive is no twin", []row{old}, []row{inactiveTestTeamRow("team:other", false, "acme/api")}, principal, directread.InactiveTeam{Inactive: true}},
 		{"a row of another name is no twin", []row{old}, []row{lookupRow("org-1", "team", "team:jira:other", "Other", map[string]interface{}{propPropertyPrefix + "is_active": true})}, principal, directread.InactiveTeam{Inactive: true}},

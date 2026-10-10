@@ -33,6 +33,12 @@ type Authorization struct {
 	OwnershipUnprovenCount    int
 	OrganizationMismatchCount int
 	InvalidCount              int
+	// InactiveTeamCount counts the subjects answered as an inactive team the
+	// caller may read (they are also counted in DeniedCount).
+	InactiveTeamCount int
+	// InactiveLookupFailures is 1 when the inactive-team lookup failed and its
+	// subjects were left absent.
+	InactiveLookupFailures int
 	// RefusedKinds is the sorted set of known subject kinds that were not
 	// admitted.
 	RefusedKinds []string
@@ -385,6 +391,7 @@ func (g *SubjectGate) markInactiveTeams(ctx context.Context, principal storage.P
 	}
 	found, err := authority.InactiveTeams(ctx, principal, binding, teams)
 	if err != nil || len(found) != len(teams) {
+		decision.InactiveLookupFailures++
 		return
 	}
 	restricted := needsOwnershipReach(decision.PrincipalClass, contractsv1.ContextFabricSubjectTeam)
@@ -408,6 +415,7 @@ func (g *SubjectGate) markInactiveTeams(ctx context.Context, principal storage.P
 			}
 		}
 		decision.Outcomes[index].Outcome = SubjectDenied
+		decision.InactiveTeamCount++
 		decision.Outcomes[index].Inactive = true
 		decision.Outcomes[index].ActiveTwinID = twin
 	}

@@ -15,7 +15,8 @@ import (
 var _ directread.InactiveTeamAuthority = (*Adapter)(nil)
 
 // maxTwinCandidates bounds the active teams read to find the twin of an
-// inactive team; more than one match is ambiguous and names none.
+// inactive team; more than one match (readable or not) is ambiguous and names
+// none.
 const maxTwinCandidates = 2
 
 // InactiveTeams implements directread.InactiveTeamAuthority. For each team
@@ -95,7 +96,11 @@ func (a *Adapter) activeTwin(ctx context.Context, principal storage.Principal, k
 	if err != nil {
 		return "", err
 	}
-	twins := make([]string, 0, maxTwinCandidates)
+	// Every active team of the same name counts toward uniqueness whether or
+	// not the caller may read it: a readable twin beside an unreadable one is
+	// ambiguous, and naming it would disclose which of the two the caller sees.
+	var sole *node
+	matches := 0
 	for _, r := range rows {
 		n, ok := r["n"].(*node)
 		if !ok || n == nil || inactiveTeamNode(n) ||
@@ -103,18 +108,20 @@ func (a *Adapter) activeTwin(ctx context.Context, principal storage.Principal, k
 			propStringValue(n.Properties[propKind]) != string(contractsv1.ContextFabricSubjectTeam) {
 			continue
 		}
-		candidate := toCandidateNode(n)
-		if exactNameMatchClass(term, candidate) == "" {
+		if exactNameMatchClass(term, toCandidateNode(n)) == "" {
 			continue
 		}
-		subject := contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: propStringValue(n.Properties[propCanonicalID])}
-		decided := graphrank.AuthorizeStoredSubjectNodes(principal, []contextfabric.SubjectRef{subject}, map[string][]graphrank.CandidateNode{graphrank.SubjectKey(subject): {candidate}})
-		if len(decided) == 1 && decided[0] == contextfabric.StoredSubjectAdmitted {
-			twins = append(twins, subject.CanonicalID)
-		}
+		matches++
+		sole = n
 	}
-	if len(twins) != 1 {
+	if matches != 1 {
 		return "", nil
 	}
-	return twins[0], nil
+	candidate := toCandidateNode(sole)
+	subject := contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: propStringValue(sole.Properties[propCanonicalID])}
+	decided := graphrank.AuthorizeStoredSubjectNodes(principal, []contextfabric.SubjectRef{subject}, map[string][]graphrank.CandidateNode{graphrank.SubjectKey(subject): {candidate}})
+	if len(decided) != 1 || decided[0] != contextfabric.StoredSubjectAdmitted {
+		return "", nil
+	}
+	return subject.CanonicalID, nil
 }

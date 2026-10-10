@@ -2222,6 +2222,8 @@ var DirectReadAuthorization = Event{
 		{Key: "ownership_unproven_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "organization_mismatch_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "invalid_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "inactive_team_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "inactive_lookup_failures", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "refused_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
 		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the decision is unavailable because a graph read failed", ClosedVocabulary: directReadErrorClassArr[:]},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},

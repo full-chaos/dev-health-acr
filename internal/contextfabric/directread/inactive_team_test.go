@@ -159,3 +159,37 @@ func TestReadRelationshipsAnswersTeamInactiveForAnExplicitInactiveTeam(t *testin
 		t.Fatalf("%v %+v", err, response)
 	}
 }
+
+type failingInactiveTeams struct{ *fakeGraph }
+
+func (failingInactiveTeams) InactiveTeams(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, []contextfabric.SubjectRef) ([]InactiveTeam, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func logArg(args []any, key string) any {
+	for i := 0; i+1 < len(args); i += 2 {
+		if args[i] == key {
+			return args[i+1]
+		}
+	}
+	return nil
+}
+
+func TestInactiveTeamClassificationAndLookupFailureAreInTheAuthorizationTrace(t *testing.T) {
+	graph, inactive := inactiveFixture()
+	_, ok := NewSubjectGate(inactiveFactsGraph{graph, inactive}, nil).Authorize(requestContext(), unrestricted, []contextfabric.SubjectRef{teamOld, teamT})
+	args := AuthorizationLogArgs(unrestricted, ok)
+	if got := logArg(args, "inactive_team_count"); got != 1 {
+		t.Fatalf("inactive_team_count = %v, want 1", got)
+	}
+	if got := logArg(args, "inactive_lookup_failures"); got != 0 {
+		t.Fatalf("inactive_lookup_failures = %v, want 0", got)
+	}
+	_, failed := NewSubjectGate(failingInactiveTeams{graph}, nil).Authorize(requestContext(), unrestricted, []contextfabric.SubjectRef{teamOld})
+	if failed.Outcomes[0].Inactive || failed.Outcomes[0].Outcome != SubjectAbsent {
+		t.Fatalf("a failed lookup must leave the subject absent: %+v", failed.Outcomes[0])
+	}
+	if got := logArg(AuthorizationLogArgs(unrestricted, failed), "inactive_lookup_failures"); got != 1 {
+		t.Fatalf("inactive_lookup_failures = %v, want 1", got)
+	}
+}

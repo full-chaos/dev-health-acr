@@ -1882,6 +1882,16 @@
         "presence": "required"
       },
       {
+        "key": "inactive_team_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "inactive_lookup_failures",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "refused_kinds",
         "type": "string_slice",
         "presence": "required",
