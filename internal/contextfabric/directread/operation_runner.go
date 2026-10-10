@@ -455,9 +455,10 @@ func (r *OperationRunner) Run(ctx context.Context, principal storage.Principal, 
 		return OperationResponse{}, err
 	}
 	if resp.Call == CallRefused {
-		// A refusal is decided against the pinned policy and never reaches the
-		// query service, so it reports the digest of the policy that refused,
-		// not a cached served digest that may be older than the last watch.
+		// A refusal is decided against the pinned policy, whether before the
+		// query service was called or after its answer was checked, so it
+		// reports the digest of the policy that refused, not a cached served
+		// digest that may be older than the last watch.
 		resp.Source.SchemaDigest = r.catalogue.SchemaDigest()
 		x.read.SchemaDigest = resp.Source.SchemaDigest
 	}

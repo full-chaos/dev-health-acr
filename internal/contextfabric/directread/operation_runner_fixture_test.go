@@ -228,6 +228,7 @@ type opHarnessOptions struct {
 	grants    directread.GrantedRepositories
 	timeout   time.Duration
 	catalogue *directread.Catalogue
+	recorder  directread.OperationRecorder
 }
 
 func newOpHarness(t *testing.T, respond func(rec opRecorded) (int, string), opts opHarnessOptions) *opHarness {
@@ -257,6 +258,7 @@ func newOpHarness(t *testing.T, respond func(rec opRecorded) (int, string), opts
 		Client:    client,
 		Logger:    logger,
 		Now:       func() time.Time { return opNow },
+		Recorder:  opts.recorder,
 	}
 	switch {
 	case opts.grants != nil:
