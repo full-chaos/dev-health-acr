@@ -10,7 +10,7 @@ import (
 
 // The embedded SDL wrapper is GENERATED from the vendored SDL: its bytes
 // equal EncodeOpsSchemaFile(contracts/mcp/ops-catalogue/schema.graphql), its
-// digest is the catalogue's (0faa6eb0...), and a wrapper whose SDL does not
+// digest is the catalogue's (a5bb8eca...), and a wrapper whose SDL does not
 // match its own digest, or names another contract, yields no SDL and no
 // policy (fail closed).
 func TestEmbeddedOpsSchemaWrapperIsGeneratedAndFailsClosed(t *testing.T) {
@@ -29,7 +29,7 @@ func TestEmbeddedOpsSchemaWrapperIsGeneratedAndFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const pinned = "sha256:0faa6eb033aa32c7793dc547a778649379afb75db53606d37637e0bac46938a0"
+	const pinned = "sha256:a5bb8eca55047d939f39fc3317e0bb016a485fb79d5f42b0c440786cfa8ac45b"
 	if SchemaDigestOf(EmbeddedOpsSchema()) != pinned || cat.SchemaDigest() != pinned || SchemaDigestOf(vendored) != pinned {
 		t.Fatalf("digests differ: embedded %s, catalogue %s, vendored %s", SchemaDigestOf(EmbeddedOpsSchema()), cat.SchemaDigest(), SchemaDigestOf(vendored))
 	}
