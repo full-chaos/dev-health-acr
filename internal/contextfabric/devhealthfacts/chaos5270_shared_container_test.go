@@ -53,7 +53,7 @@ import (
 // per test -- devhealthschema.DDL's CREATE TABLE is not idempotent, so a
 // second call for an already-created table errors.
 var sharedClickHouseTables = []string{
-	"repo_metrics_daily", "compounding_risk_daily", "capacity_forecasts",
+	"repo_metrics_daily", "repo_change_failure_daily", "compounding_risk_daily", "capacity_forecasts",
 	"investment_metrics_daily", "estimate_coverage_metrics_daily", "recommendations_daily",
 	"work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
 	"work_item_team_attributions", "repos",
