@@ -1547,6 +1547,18 @@ type tickFreshnessStats struct {
 	// was withheld this tick by the refused build cap. A fact beside the
 	// buckets, outside the bucket identity.
 	orgsBuildRefusedCapped int64
+	// orgsWindowBehind is the window_behind bucket: a source's re-read of the
+	// trailing window has been open for longer than the lateness the window
+	// absorbs, so a row that landed behind the frontier can be unprojected
+	// for longer than the source promises. A source that stops at its
+	// per-call bound reports nothing available, exactly as a caught-up source
+	// does; without this bucket such an organization reads ok on every tick.
+	orgsWindowBehind int64
+	// orgsWindowPassOpen counts organizations that ended the tick with such a
+	// re-read open, overdue or not. A fact beside the buckets, outside the
+	// bucket identity: an open pass inside its bound is the ordinary state of
+	// an organization whose window holds more rows than one tick walks.
+	orgsWindowPassOpen int64
 }
 
 func (s *tickFreshnessStats) recordOK()              { atomic.AddInt64(&s.orgsOK, 1) }
@@ -1557,6 +1569,7 @@ func (s *tickFreshnessStats) recordBuildRefusedCapped() {
 func (s *tickFreshnessStats) recordBackoff()         { atomic.AddInt64(&s.orgsBackoff, 1) }
 func (s *tickFreshnessStats) recordSourceFailedOrg() { atomic.AddInt64(&s.orgsSourceFailed, 1) }
 func (s *tickFreshnessStats) recordPairFailedOrg()   { atomic.AddInt64(&s.orgsPairFailed, 1) }
+func (s *tickFreshnessStats) recordWindowBehind()    { atomic.AddInt64(&s.orgsWindowBehind, 1) }
 
 // orgOutcome is the CLOSED vocabulary of per-organization freshness buckets.
 // An organization sits in exactly one, which is what makes the buckets sum to
@@ -1570,6 +1583,7 @@ const (
 	orgOutcomeSourceFailed    orgOutcome = "source_failed"
 	orgOutcomePairFailed      orgOutcome = "pair_failed"
 	orgOutcomeUnevaluated     orgOutcome = "unevaluated"
+	orgOutcomeWindowBehind    orgOutcome = "window_behind"
 )
 
 // orgSignals is what one per-organization path OBSERVED. It carries no
@@ -1596,6 +1610,10 @@ type orgSignals struct {
 	// deferred organization unlock is one), so reading it any earlier
 	// would answer a question about the wrong moment.
 	truncated bool
+	// windowOpen: a source ended this tick with its trailing-window re-read
+	// open. windowBehind: that re-read is older than its bound
+	// (contextfabric.ProjectionWindowPass.Overdue).
+	windowOpen, windowBehind bool
 	// healthy names the bucket for "evaluated, and nothing was wrong".
 	// Steady state is ok. A build in progress is backoff, because "still
 	// building" is not a claim of health and never was one.
@@ -1650,6 +1668,8 @@ func orgOutcomeOf(signals orgSignals) orgOutcome {
 		return orgOutcomeBackoff
 	case signals.stale:
 		return orgOutcomeRebuildRequired
+	case signals.windowBehind:
+		return orgOutcomeWindowBehind
 	default:
 		return signals.healthy
 	}
@@ -1677,6 +1697,8 @@ func (s *tickFreshnessStats) recorderFor(outcome orgOutcome) func() {
 		return s.recordPairFailedOrg
 	case orgOutcomeUnevaluated:
 		return s.recordUnevaluated
+	case orgOutcomeWindowBehind:
+		return s.recordWindowBehind
 	}
 	return nil
 }
@@ -1861,6 +1883,11 @@ func (o *orgScope) finish() {
 			// failure outranks it, and an operator still has to be told a
 			// rebuild is owed.
 			atomic.AddInt64(&o.stats.orgsStale, 1)
+		}
+		if signals.windowOpen {
+			// Counted beside the bucket, like stale: the bucket says whether
+			// the open pass is overdue, this says that one is open.
+			atomic.AddInt64(&o.stats.orgsWindowPassOpen, 1)
 		}
 		if bucket := o.stats.recorderFor(orgOutcomeOf(signals)); bucket != nil {
 			bucket()
@@ -2089,7 +2116,8 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		"summary_scope", freshnessSummaryScope,
 		// The bucket IDENTITY, stated on the line so a consumer can check it
 		// rather than trust it: orgs_configured == ok + rebuild_required +
-		// backoff + source_failed + divergence_recovered + unevaluated.
+		// backoff + source_failed + pair_failed + divergence_recovered +
+		// window_behind + unevaluated.
 		// It did NOT hold before this: divergence recovery returned after
 		// recording orgs_divergence_recovered and no bucket at all, so one
 		// configured organization summed to zero and simply vanished from
@@ -2118,6 +2146,7 @@ func (c *Coordinator) Tick(ctx context.Context) {
 				atomic.LoadInt64(&stats.orgsSourceFailed)+
 				atomic.LoadInt64(&stats.orgsPairFailed)+
 				atomic.LoadInt64(&stats.orgsDivergenceRecovered)+
+				atomic.LoadInt64(&stats.orgsWindowBehind)+
 				atomic.LoadInt64(&stats.orgsUnevaluated),
 		"orgs_unevaluated", atomic.LoadInt64(&stats.orgsUnevaluated),
 		// NOT a bucket, and deliberately outside the identity above: an
@@ -2163,6 +2192,12 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// checkpoint-vs-store divergence and drove an automatic recovery
 		// for -- see checkpointStoreDiverged's doc comment.
 		"orgs_divergence_recovered", atomic.LoadInt64(&stats.orgsDivergenceRecovered),
+		// The trailing-window re-read. orgs_window_behind is a bucket: an
+		// organization there is NOT in orgs_ok. orgs_window_pass_open is the
+		// count of organizations that ended the tick with a pass open,
+		// overdue or not. Both present on every tick, at zero.
+		"orgs_window_behind", atomic.LoadInt64(&stats.orgsWindowBehind),
+		"orgs_window_pass_open", atomic.LoadInt64(&stats.orgsWindowPassOpen),
 	)
 	// CHAOS-3898 S2a-2 (design brief §3.1 step 5/§3.5): sweep organizations
 	// whose grace window has elapsed into begin_retire (creating the
@@ -2289,6 +2324,7 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 
 	evaluated, stale, sourceFailed := false, false, false
 	pairBrokeAny := false
+	windowOpen, windowBehind := false, false
 	for _, source := range c.sourceNames {
 		if scope.done() {
 			// No bookkeeping here on purpose: the org-scope finalizer
@@ -2302,13 +2338,16 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 		budget := c.drainBudget
 		var pairEvaluated, pairStale, pairFailed, pairWithheld, pairBroke bool
 		var pairStage contextfabric.PairStage
+		var pairWindow contextfabric.ProjectionWindowPass
 		_ = scope.run(func(ctx context.Context) error {
 			var err error
-			pairEvaluated, pairStale, pairFailed, pairWithheld, pairStage, pairBroke, err = c.runPair(ctx, orgID, source, c.checkpoints, &budget)
+			pairEvaluated, pairStale, pairFailed, pairWithheld, pairStage, pairBroke, pairWindow, err = c.runPair(ctx, orgID, source, c.checkpoints, &budget)
 			return err
 		})
 		evaluated = evaluated || pairEvaluated || pairStale
 		stale = stale || pairStale
+		windowOpen = windowOpen || pairWindow.Open
+		windowBehind = windowBehind || pairWindow.Overdue
 		pairBrokeAny = pairBrokeAny || pairBroke
 		// A pair withheld by its own failure backoff counts as a failing
 		// source for the organization's bucket too. Otherwise a healthy
@@ -2333,6 +2372,8 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 		stale:        stale,
 		sourceFailed: sourceFailed,
 		pairBroke:    pairBrokeAny,
+		windowOpen:   windowOpen,
+		windowBehind: windowBehind,
 		healthy:      orgOutcomeOK,
 	})
 }
@@ -2387,6 +2428,7 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 
 	evaluated, stale, sourceFailed := false, false, false
 	pairBrokeAny := false
+	windowOpen, windowBehind := false, false
 	for _, source := range c.sourceNames {
 		if scope.done() {
 			// No bookkeeping here on purpose: the org-scope finalizer
@@ -2400,13 +2442,16 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 		budget := c.drainBudget
 		var pairEvaluated, pairStale, pairFailed, pairWithheld, pairBroke bool
 		var pairStage contextfabric.PairStage
+		var pairWindow contextfabric.ProjectionWindowPass
 		_ = scope.run(func(ctx context.Context) error {
 			var err error
-			pairEvaluated, pairStale, pairFailed, pairWithheld, pairStage, pairBroke, err = c.runPair(ctx, orgID, source, checkpoints, &budget)
+			pairEvaluated, pairStale, pairFailed, pairWithheld, pairStage, pairBroke, pairWindow, err = c.runPair(ctx, orgID, source, checkpoints, &budget)
 			return err
 		})
 		evaluated = evaluated || pairEvaluated || pairStale
 		stale = stale || pairStale
+		windowOpen = windowOpen || pairWindow.Open
+		windowBehind = windowBehind || pairWindow.Overdue
 		pairBrokeAny = pairBrokeAny || pairBroke
 		// A pair withheld by its own failure backoff counts as a failing
 		// source for the organization's bucket too. Otherwise a healthy
@@ -2431,6 +2476,8 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 		stale:        stale,
 		sourceFailed: sourceFailed,
 		pairBroke:    pairBrokeAny,
+		windowOpen:   windowOpen,
+		windowBehind: windowBehind,
 		healthy:      orgOutcomeOK,
 	})
 }
@@ -3176,7 +3223,7 @@ func (c *Coordinator) budgetSpentReasonFor(ctx context.Context, orgID, source st
 // F2) can classify cancellation by inspecting THIS error's own identity
 // rather than the ambient ctx.Err(), which could coincidentally be set by
 // an unrelated cancellation and mislabel a genuine backend error.
-func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, applied bool, err error, stale, withheldByBackoff, complete bool) {
+func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, applied bool, err error, stale, withheldByBackoff, complete bool, window contextfabric.ProjectionWindowPass) {
 	key := orgID + "\x00" + source
 	// ONE clock read decides both "may it attempt" and "is it withheld by its
 	// own failure backoff" -- see dueState's own doc comment for the race two
@@ -3184,14 +3231,14 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	c.hydrateRebuildOwed(ctx, key, orgID, source, checkpoints)
 	due, withheld, withheldRebuild := c.dueState(key)
 	if !due {
-		return false, false, nil, withheldRebuild, withheld, false
+		return false, false, nil, withheldRebuild, withheld, false, contextfabric.ProjectionWindowPass{}
 	}
 	started := c.now()
 	worker, werr := c.workerFor(source, checkpoints)
 	if werr != nil {
 		c.recordBackoff(key, werr)
 		c.logger.WarnContext(ctx, "projection worker construction failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(werr)))
-		return true, false, werr, false, false, false
+		return true, false, werr, false, false, false, contextfabric.ProjectionWindowPass{}
 	}
 	run, runErr := worker.RunOnce(ctx, orgID, source)
 	outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: runErr, Duration: c.now().Sub(started), At: c.now()}
@@ -3200,7 +3247,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	c.observer.ObserveProjectionOutcome(outcome)
 	if runErr != nil {
 		c.logger.WarnContext(ctx, "projection pair failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(runErr)), "duration_ms", outcome.Duration.Milliseconds())
-		return true, false, runErr, c.rebuildOwed(key), false, false
+		return true, false, runErr, c.rebuildOwed(key), false, false, contextfabric.ProjectionWindowPass{}
 	}
 	if run.Applied {
 		c.clearRebuildOwed(key)
@@ -3214,7 +3261,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	// complete: the applied batch itself claims the source has nothing more, so
 	// a drain that stops here has no backlog whatever its budget says.
 	freshnessStale := c.emitProjectionFreshness(ctx, orgID, source)
-	return true, run.Applied, nil, freshnessStale || c.rebuildOwed(key), false, run.Applied && run.CompleteEnumeration
+	return true, run.Applied, nil, freshnessStale || c.rebuildOwed(key), false, run.Applied && run.CompleteEnumeration, run.WindowPass
 }
 
 // runPair drains (org, source)'s pending batches within THIS tick
@@ -3235,13 +3282,13 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 // in the same Tick (Tick.wg.Wait blocks the next poll on every dispatched
 // runOrg returning). The 200-row page cap (batch size) is unchanged --
 // only the inter-batch idle inside one tick is removed.
-func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, stale, failed, withheld bool, pairStage contextfabric.PairStage, pairBroke bool, yieldErr error) {
+func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, stale, failed, withheld bool, pairStage contextfabric.PairStage, pairBroke bool, window contextfabric.ProjectionWindowPass, yieldErr error) {
 	started := c.now()
 	batches, applied := 0, 0
 	reason := DrainYieldExhausted
 	var lastErr error
 	for {
-		pairEvaluated, pairApplied, pairErr, pairStale, pairWithheld, pairComplete := c.runPairOnce(ctx, orgID, source, checkpoints)
+		pairEvaluated, pairApplied, pairErr, pairStale, pairWithheld, pairComplete, pairWindow := c.runPairOnce(ctx, orgID, source, checkpoints)
 		if !pairEvaluated {
 			if batches == 0 {
 				// Nothing ran at all. If the pair is serving its own
@@ -3250,11 +3297,14 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 				// keep saying so on every tick. The withheld fact comes
 				// from the SAME clock read that refused the attempt, so
 				// the two can no longer disagree.
-				return false, pairStale, false, pairWithheld, "", false, nil
+				return false, pairStale, false, pairWithheld, "", false, contextfabric.ProjectionWindowPass{}, nil
 			}
 			break
 		}
 		evaluated = true
+		// The LAST attempt's reading, overwritten: the pass state is a fact
+		// about where the drain stopped. An attempt that failed reports none.
+		window = pairWindow
 		// failed describes THIS attempt, overwritten rather than OR-ed:
 		// a drain whose later attempt succeeds has recovered within the
 		// tick, and reporting it as failed would make the disclosure fire
@@ -3332,7 +3382,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 	// tick has failed and is named as a failing source; a cancellation with
 	// no error of its own is still caught, because the context is what is
 	// read.
-	return evaluated, stale, failed, false, pairStage, pairBroke, lastErr
+	return evaluated, stale, failed, false, pairStage, pairBroke, window, lastErr
 }
 
 // emitProjectionFreshness is the CHAOS-3887 (H1) per-org, per-source

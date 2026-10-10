@@ -43,7 +43,7 @@ func TestIngestTimeCursor(t *testing.T) {
 			}
 		}
 		if logs != nil {
-			src.WithLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+			src.WithLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
 		}
 		// The clock dates overlap passes; pinning it makes every window edge
 		// below exact.

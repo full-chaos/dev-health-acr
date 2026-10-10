@@ -622,7 +622,48 @@ import (
 // only, and an inactive team id is absent to an explicit read. A candidate saved
 // under v126 may hold a second team, a doubled or diluted aggregate, or a
 // cohort refused as ambiguous, and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v127"
+//
+// v127 -> v128: a team id the caller may read whose team row is inactive
+// answers team_inactive (read_facts, read_relationships, run_operation), naming
+// the one active team of the same name when the caller may read it, instead of
+// denied_or_not_found. A candidate saved under v127 may hold the plain denial
+// and must not be reused.
+//
+// v128 -> v129: ownership is read as synced state by every window form. A past
+// range window counts an ownership row that has not ended before the window
+// start (valid_from, a sync stamp, is never a window filter), so a team,
+// health, landscape and rollup read of a window that ended before the sync no
+// longer returns no fact; an empty team investment window names
+// investment_team_no_owned_repository or investment_team_no_unit_in_window,
+// and a bounded team read states investment_ownership_as_synced. A fact is
+// current when an open ownership row exists for its key, so a team whose
+// newest row is a closed duplicate keeps its repositories. A candidate saved
+// under v128 may hold an empty window or a team without its repositories, and
+// must not be reused.
+//
+// v129 -> v130: a project investment read whose window starts before the
+// project's earliest linked unit among the units overlapping the window names
+// that start (investment_project_window_first_unit) and says the history before
+// the window was not read; the organization-wide beyond-stored-history reason no
+// longer ends with "this project's own span is not derived". A candidate saved
+// under v129 carries the old wording or no per-project start and must not be
+// reused.
+//
+// v130 -> v131: a refused run_operation or graphql_query reply reports the
+// pinned schema digest of the policy that refused it, not a cached served
+// digest that may be older than the last registry watch. A candidate saved
+// under v130 may hold a refusal stamped with a stale digest and must not be
+// reused.
+//
+// v131 -> v132: the organization subject has a work-unit listing (read_facts units
+// for kind investment): every repository's unit rows plus rows with no
+// repository_id and unit_attribution_basis unattributed_no_resolved_repository
+// for effort that reaches no resolved repository; the page fact carries
+// scope_unattributed_rows and scope_unattributed_total and the coverage reason
+// states units_unattributed. A candidate saved under v131 holds the refusal "units
+// takes a team or a repository subject" for an organization and must not be
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v132"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -988,9 +1029,18 @@ func projectIdentityMatchSQL(alias, column string) string {
 	return readers.ProjectIdentityMatchSQL(alias, column)
 }
 
+// ownershipValidityPredicate is the one ownership rule of a bounded read.
+// Ownership is synced state, and valid_from is the sync stamp, not the start
+// of ownership: it is never a window filter. A row counts for a window when it
+// has not ended before the window start (a point-in-time bound uses its
+// instant). An unbounded read keeps the currently-owned rule.
 func ownershipValidityPredicate(timeBound factTimeBound) string {
 	if timeBound.active {
-		return fmt.Sprintf(" AND valid_from <= {%s:DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", boundEndParam, boundEndParam)
+		param := boundEndParam
+		if timeBound.hasStart {
+			param = boundStartParam
+		}
+		return fmt.Sprintf(" AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", param)
 	}
 	return " AND valid_from <= now64(3) AND valid_to IS NULL"
 }

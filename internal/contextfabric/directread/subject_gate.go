@@ -33,6 +33,12 @@ type Authorization struct {
 	OwnershipUnprovenCount    int
 	OrganizationMismatchCount int
 	InvalidCount              int
+	// InactiveTeamCount counts the subjects answered as an inactive team the
+	// caller may read (they are also counted in DeniedCount).
+	InactiveTeamCount int
+	// InactiveLookupFailures is 1 when the inactive-team lookup failed and its
+	// subjects were left absent.
+	InactiveLookupFailures int
 	// RefusedKinds is the sorted set of known subject kinds that were not
 	// admitted.
 	RefusedKinds []string
@@ -47,6 +53,33 @@ type Authorization struct {
 type GatedSubject struct {
 	Subject contextfabric.SubjectRef
 	Outcome SubjectOutcome
+	// Inactive is set on a team subject the caller may read whose team row
+	// is inactive. Its Outcome is SubjectDenied (nothing of it is ever
+	// served); only the answer differs: team_inactive instead of
+	// denied_or_not_found. It is never set for a subject the caller may not
+	// read, so the answer does not reveal whether an id exists.
+	Inactive bool
+	// ActiveTwinID is the canonical id of the active team that replaces an
+	// inactive one, when exactly one exists and the caller may read it.
+	ActiveTwinID string
+}
+
+// InactiveTeam is the decision of an InactiveTeamAuthority for one team
+// subject.
+type InactiveTeam struct {
+	// Inactive: the team row is inactive and the node predicate admits the
+	// caller to it.
+	Inactive bool
+	// ActiveTwinID is the one active team of the same name the node predicate
+	// admits the caller to, or "".
+	ActiveTwinID string
+}
+
+// InactiveTeamAuthority is the optional graph side of the team_inactive
+// answer. InactiveTeams returns one entry per subject (all team subjects, in
+// order); the zero value means "not an inactive team the caller may read".
+type InactiveTeamAuthority interface {
+	InactiveTeams(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]InactiveTeam, error)
 }
 
 // ErrorClass names Err for the trace, or "" when there is none.
@@ -229,6 +262,9 @@ func (g *SubjectGate) decide(ctx context.Context, principal storage.Principal, r
 					decision.Outcomes[index].Outcome = SubjectAbsent
 				}
 			}
+			if inactive, ok := g.graph.(InactiveTeamAuthority); ok {
+				g.markInactiveTeams(ctx, principal, binding, inactive, &decision, graphIndexes)
+			}
 			if len(groupIndexes) > 0 {
 				groups := make([]contextfabric.SubjectRef, len(groupIndexes))
 				for position, index := range groupIndexes {
@@ -334,4 +370,53 @@ func finish(decision Authorization) Authorization {
 		decision.Reason = ReasonSubjectInvalid
 	}
 	return decision
+}
+
+// markInactiveTeams sets Inactive on an absent team subject the caller may
+// read whose team row is inactive. A restricted caller must also reach the
+// team (and its twin) by ownership, as for an admitted team. A failure leaves
+// the subject absent: the plain denied_or_not_found answer is always safe.
+func (g *SubjectGate) markInactiveTeams(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, authority InactiveTeamAuthority, decision *Authorization, graphIndexes []int) {
+	var indexes []int
+	var teams []contextfabric.SubjectRef
+	for _, index := range graphIndexes {
+		gated := decision.Outcomes[index]
+		if gated.Outcome == SubjectAbsent && gated.Subject.Kind == contractsv1.ContextFabricSubjectTeam {
+			indexes = append(indexes, index)
+			teams = append(teams, gated.Subject)
+		}
+	}
+	if len(teams) == 0 {
+		return
+	}
+	found, err := authority.InactiveTeams(ctx, principal, binding, teams)
+	if err != nil || len(found) != len(teams) {
+		decision.InactiveLookupFailures++
+		return
+	}
+	restricted := needsOwnershipReach(decision.PrincipalClass, contractsv1.ContextFabricSubjectTeam)
+	for position, index := range indexes {
+		entry := found[position]
+		if !entry.Inactive {
+			continue
+		}
+		twin := entry.ActiveTwinID
+		if restricted {
+			ids := []contextfabric.SubjectRef{teams[position]}
+			if twin != "" {
+				ids = append(ids, contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: twin})
+			}
+			reached, err := g.graph.OwnershipReachedRepositories(ctx, principal, binding, ids)
+			if err != nil || len(reached) != len(ids) || !ownershipReachAdmits(principal, reached[0]) {
+				continue
+			}
+			if twin != "" && !ownershipReachAdmits(principal, reached[1]) {
+				twin = ""
+			}
+		}
+		decision.Outcomes[index].Outcome = SubjectDenied
+		decision.InactiveTeamCount++
+		decision.Outcomes[index].Inactive = true
+		decision.Outcomes[index].ActiveTwinID = twin
+	}
 }

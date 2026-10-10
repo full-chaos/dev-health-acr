@@ -64,7 +64,7 @@ func TestProjectMixPhaseZeroReadsTheRememberedScopeIdsNotTheMembershipTable(t *t
 		}
 		ids, ok := scopeIDsBinding(q)
 		if !ok || strings.Join(ids, ",") != "wu-1,wu-2" {
-			t.Fatalf("phase 0 scope_ids = %v (bound %v), want [wu-1 wu-2]", ids, ok)
+			t.Fatalf("phase 0 scope_json = %v (bound %v), want [wu-1 wu-2]", ids, ok)
 		}
 	}
 	if got := countStatements(client, "groupUniqArray(100001)(work_unit_id)"); got != 1 {
@@ -105,7 +105,7 @@ func TestProjectMixWithNoCompleteRunFiltersNothing(t *testing.T) {
 		t.Fatal("no phase 0 statement")
 	}
 	for _, q := range phase0 {
-		if strings.Contains(q.statement, "work_unit_membership") || strings.Contains(q.statement, "scope_ids") {
+		if strings.Contains(q.statement, "work_unit_membership") || strings.Contains(q.statement, "scope_json") {
 			t.Fatal("no complete run: phase 0 must carry no scope predicate")
 		}
 	}

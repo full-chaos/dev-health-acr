@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -21,6 +22,7 @@ type nativePhasedUnit struct {
 	other              bool
 	multi              uint8
 	effort, fd, op, bg float64
+	from               time.Time
 }
 
 // nativeMixUnitsFor builds the units of one project whose phased read
@@ -57,10 +59,16 @@ func nativePhasedTables(groups ...[]nativePhasedUnit) []fakeTable {
 	var pMulti []uint8
 	var effort, fd, op, zero, bugfix []float64
 	var versions []int64
+	var froms []time.Time
 	for _, units := range groups {
 		for _, u := range units {
 			ids = append(ids, u.id)
 			versions = append(versions, 1)
+			if u.from.IsZero() {
+				froms = append(froms, clockSpanStart)
+			} else {
+				froms = append(froms, u.from)
+			}
 			effort, fd, op, zero, bugfix = append(effort, u.effort), append(fd, u.fd), append(op, u.op), append(zero, 0.0), append(bugfix, u.bg)
 			pUnit, pProvider, pProject, pMulti = append(pUnit, u.id), append(pProvider, "linear"), append(pProject, u.project), append(pMulti, u.multi)
 			if u.other {
@@ -71,7 +79,7 @@ func nativePhasedTables(groups ...[]nativePhasedUnit) []fakeTable {
 	return []fakeTable{
 		{match: "AS unit_ids", rows: [][]any{{ids, versions, clockSpanStart}}},
 		{match: "groupArray(multi_placed)", rows: [][]any{{pUnit, pProvider, pProject, pMulti}}},
-		{match: "groupArray(theme_feature_delivery)", rows: [][]any{{ids, effort, fd, op, zero, zero, zero}}},
+		{match: "groupArray(theme_feature_delivery)", rows: [][]any{{ids, effort, fd, op, zero, zero, zero, froms}}},
 		{match: "groupArray(bugfix_share)", rows: [][]any{{ids, bugfix}}},
 	}
 }
@@ -235,7 +243,7 @@ func TestProjectInvestmentWindowBeforeTheStoredSpanNamesIt(t *testing.T) {
 		return result
 	}
 	// The stored span starts 2026-01-01.
-	if reason := read(time.Date(2025, 9, 28, 0, 0, 0, 0, time.UTC)).Reason; !strings.Contains(reason, "investment_window_beyond_stored_history") || !strings.Contains(reason, "2026-01-01T00:00:00Z") || !strings.Contains(reason, "earliest persisted work unit of the organization starts") || !strings.Contains(reason, "this project's own span is not derived") {
+	if reason := read(time.Date(2025, 9, 28, 0, 0, 0, 0, time.UTC)).Reason; !strings.Contains(reason, "investment_window_beyond_stored_history") || !strings.Contains(reason, "2026-01-01T00:00:00Z") || !strings.Contains(reason, "earliest persisted work unit of the organization starts") || strings.Contains(reason, "own span is not derived") || !strings.Contains(reason, "investment_project_window_first_unit") {
 		t.Errorf("window before the span: reason %q", reason)
 	}
 	if reason := read(time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)).Reason; strings.Contains(reason, "investment_window_beyond_stored_history") {
@@ -257,5 +265,135 @@ func TestProjectInvestmentSpanIsStatedWhenNoUnitOverlapsTheWindow(t *testing.T) 
 	}
 	if len(result.Facts) != 0 || !strings.Contains(result.Reason, "investment_window_beyond_stored_history") {
 		t.Errorf("facts=%d reason=%q, want no fact and the organization span reason", len(result.Facts), result.Reason)
+	}
+}
+
+// A project's own earliest linked unit among the units overlapping the window:
+// when the window starts before it, the reason names that start and says the
+// history before the window was not read; it is never a stored-history claim.
+func TestProjectInvestmentNamesTheProjectsOwnEarliestLinkedUnitInTheWindow(t *testing.T) {
+	t.Parallel()
+	read := func(start time.Time, units []nativePhasedUnit) string {
+		t.Helper()
+		client := &fakeClient{tables: nativePhasedTables(units)}
+		end := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+		provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+		result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, Kind: contextfabric.FactInvestment,
+			Subjects: []contextfabric.SubjectRef{projectSubject("linear", "a")},
+		})
+		if err != nil || len(result.Facts) != 1 {
+			t.Fatalf("read: err=%v facts=%d reason=%q", err, len(result.Facts), result.Reason)
+		}
+		return result.Reason
+	}
+	march := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	units := nativeMixUnits("a", 7)
+	for i := range units {
+		units[i].from = march.Add(time.Duration(i) * 24 * time.Hour)
+	}
+	// The organization's earliest unit starts 2026-01-01 (before the window), the
+	// project's own earliest linked unit 2026-03-01 (after it).
+	reason := read(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), units)
+	if !strings.Contains(reason, "investment_project_window_first_unit") || !strings.Contains(reason, "2026-03-01T00:00:00Z") || !strings.Contains(reason, "history before the window was not read") {
+		t.Errorf("reason %q, want the project's own first linked unit 2026-03-01 and the not-read statement", reason)
+	}
+	if strings.Contains(reason, "investment_window_beyond_stored_history") || strings.Contains(reason, "stored history starts") {
+		t.Errorf("reason %q makes a stored-history claim for a window inside the organization's span", reason)
+	}
+	// A window that starts after the project's earliest unit says nothing about it.
+	if reason := read(time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC), units); strings.Contains(reason, "investment_project_window_first_unit") {
+		t.Errorf("window after the project's first unit carries its own-span reason: %q", reason)
+	}
+}
+
+// A unit whose start is the epoch default (no real start) never becomes the
+// project's earliest; a window starting exactly at the earliest unit's start is
+// not before it.
+func TestProjectInvestmentOwnEarliestSkipsAnEpochStartAndIsStrictlyBefore(t *testing.T) {
+	t.Parallel()
+	march := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	read := func(start time.Time) string {
+		t.Helper()
+		units := nativeMixUnits("a", 7)
+		for i := range units {
+			units[i].from = march.Add(time.Duration(i) * 24 * time.Hour)
+		}
+		units[0].from = time.Unix(0, 0).UTC()
+		client := &fakeClient{tables: nativePhasedTables(units)}
+		end := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+		provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+		result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, Kind: contextfabric.FactInvestment,
+			Subjects: []contextfabric.SubjectRef{projectSubject("linear", "a")},
+		})
+		if err != nil || len(result.Facts) != 1 {
+			t.Fatalf("read: err=%v facts=%d reason=%q", err, len(result.Facts), result.Reason)
+		}
+		return result.Reason
+	}
+	if reason := read(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)); !strings.Contains(reason, "investment_project_window_first_unit") || !strings.Contains(reason, "starts 2026-03-02T00:00:00Z") {
+		t.Errorf("reason %q, want the earliest real start 2026-03-02 (unit 0 has an epoch start and is skipped)", reason)
+	}
+	if reason := read(time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC)); strings.Contains(reason, "investment_project_window_first_unit") {
+		t.Errorf("a window starting exactly at the earliest unit's start carries the own-span reason: %q", reason)
+	}
+}
+
+// flipInputsClient makes the first read attempt see its inputs change (the
+// closing digests differ from the baseline) and serves that attempt's unit
+// values from an older start; the second attempt is stable and serves March.
+type flipInputsClient struct {
+	stale, stable *fakeClient
+	digests       int
+	values        int
+}
+
+func (c *flipInputsClient) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if strings.Contains(statement, "sum(cityHash64(") {
+		value := []uint64{1, 2, 2, 2}[c.digests%4]
+		c.digests++
+		row := make([]any, 64)
+		for i := range row {
+			row[i] = value
+		}
+		return &fakeScanner{rows: [][]any{row}}, nil
+	}
+	if strings.Contains(statement, "groupArray(theme_feature_delivery)") {
+		c.values++
+		if c.values == 1 {
+			return c.stale.Query(ctx, statement, bindings)
+		}
+	}
+	return c.stable.Query(ctx, statement, bindings)
+}
+
+// A span read on an attempt whose inputs then changed is discarded: only the
+// attempt that is served may name the project's earliest unit.
+func TestProjectInvestmentOwnEarliestComesOnlyFromTheServedAttempt(t *testing.T) {
+	t.Parallel()
+	march := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	mk := func(from time.Time) *fakeClient {
+		units := nativeMixUnits("a", 7)
+		for i := range units {
+			units[i].from = from
+		}
+		return &fakeClient{tables: nativePhasedTables(units)}
+	}
+	client := &flipInputsClient{stale: mk(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)), stable: mk(march)}
+	start, end := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}, Kind: contextfabric.FactInvestment,
+		Subjects: []contextfabric.SubjectRef{projectSubject("linear", "a")},
+	})
+	if err != nil || len(result.Facts) != 1 {
+		t.Fatalf("read: err=%v facts=%d reason=%q", err, len(result.Facts), result.Reason)
+	}
+	if client.values != 2 {
+		t.Fatalf("unit values were read %d times, want 2 (one changed attempt, one served)", client.values)
+	}
+	if !strings.Contains(result.Reason, "investment_project_window_first_unit") || !strings.Contains(result.Reason, "starts 2026-03-01T00:00:00Z") {
+		t.Errorf("reason %q, want the served attempt's earliest unit 2026-03-01", result.Reason)
 	}
 }

@@ -47,8 +47,8 @@ var declaredButNotExercised = map[contextfabric.FactKind]map[string]string{
 func investmentUnitFieldsNotExercised() map[string]string {
 	const reason = "work-unit listing field, emitted only when read_facts asks for units; exercised by investment_units_integration_test.go"
 	out := map[string]string{}
-	for _, subject := range []string{"team", "repository"} {
-		for _, name := range []string{"next_cursor", "page_share_total", "repository_id", "scope_share_total", "scope_unit_rows", "share_in_scope", "unit_attribution_basis", "unit_effort_value", "unit_from", "unit_kind", "unit_mix_source", "unit_pull_request_count", "unit_refs_unresolved", "unit_theme_feature_delivery", "unit_theme_maintenance", "unit_theme_operational", "unit_theme_quality", "unit_theme_risk", "unit_to", "unit_unresolved_refs", "unit_weight", "units_limitation", "units_refs_unresolved", "units_returned", "work_unit_id"} {
+	for _, subject := range []string{"team", "repository", "organization"} {
+		for _, name := range []string{"next_cursor", "scope_unattributed_rows", "scope_unattributed_total", "page_share_total", "repository_id", "scope_share_total", "scope_unit_rows", "share_in_scope", "unit_attribution_basis", "unit_effort_value", "unit_from", "unit_kind", "unit_mix_source", "unit_pull_request_count", "unit_refs_unresolved", "unit_theme_feature_delivery", "unit_theme_maintenance", "unit_theme_operational", "unit_theme_quality", "unit_theme_risk", "unit_to", "unit_unresolved_refs", "unit_weight", "units_limitation", "units_refs_unresolved", "units_returned", "work_unit_id"} {
 			out[subject+":"+name] = reason
 		}
 	}
@@ -319,7 +319,7 @@ func t4Cases() []t4Case {
 		{match: "AS unit_ids", rows: [][]any{{[]string{"unit-1"}, []int64{1}, clockSpanStart}}},
 		{match: "groupArray(link_kind)", rows: [][]any{{[]string{"linear"}, []string{"proj-1"}, []string{"repo"}, []string{"r:repo-1"}, [][]string{{"team-1"}}}}},
 		{match: "uniqExactIf(u.repo_id", rows: [][]any{
-			{"linear:proj-1", 60.0, 20.0, 10.0, 6.0, 4.0, uint64(9), uint64(2), uint64(2)},
+			{"linear:proj-1", 60.0, 20.0, 10.0, 6.0, 4.0, uint64(9), uint64(2), uint64(2), clockSpanStart},
 		}},
 		{match: "sumIf(u.bugfix_share", rows: [][]any{{"linear:proj-1", 1.0}}},
 		{match: "excluded_no_repo_link", rows: [][]any{{"linear:proj-1", uint64(3)}}},

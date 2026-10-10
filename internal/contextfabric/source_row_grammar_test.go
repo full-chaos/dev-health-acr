@@ -207,7 +207,7 @@ func producerGrammars() []producerGrammar {
 			facts+"readiness.go|readProjectReadiness", facts+"workitems.go|readProjectActualCompletion", facts+"workload.go|readProjectWorkload")},
 
 		// organization, episode: no canonical row.
-		{kind: contractsv1.ContextFabricEvidenceEntityOrganization, shape: "concat/1", sites: sites(facts+"investment_org_mix.go|readOrganizationThemeMix", facts+"source_health.go|read", source+"clickhouse.go|organizationCandidate")},
+		{kind: contractsv1.ContextFabricEvidenceEntityOrganization, shape: "concat/1", sites: sites(facts+"investment_org_mix.go|readOrganizationThemeMix", facts+"investment_units.go|readInvestmentUnits", facts+"investment_units.go|unitFact", facts+"source_health.go|read", source+"clickhouse.go|organizationCandidate")},
 		{kind: contractsv1.ContextFabricEvidenceEntityEpisode, shape: "concat/1", sites: sites(source + "episodes.go|episodeCandidate")},
 
 		// Packet catalog locators of kinds no Context Fabric producer mints.

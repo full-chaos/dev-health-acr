@@ -117,7 +117,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		// beside the mix they buried it (the model answered from the day rows
 		// and said no shares existed), and without a mix they stood in for
 		// it. A team with no mix is disclosed as unavailable instead.
-		teamRejected, unavailable, scanErr := p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound)
+		teamRejected, unavailable, noOwned, scanErr := p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team theme mix", scanErr)
 		}
@@ -127,7 +127,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			if watermarkErr != nil {
 				return contextfabric.FactProviderResult{}, readFailure("query investment watermark", watermarkErr)
 			}
-			mixUnavailable = investmentMixUnavailableReason(unavailable, len(teamSubjects)-teamRejected, watermark)
+			mixUnavailable = investmentMixUnavailableReason(unavailable, noOwned, len(teamSubjects)-teamRejected, watermark)
 		}
 	}
 
@@ -186,8 +186,24 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 
 	unitsCut := false
 	if unitsRequest, wanted := contextfabric.InvestmentUnitsFrom(ctx); wanted {
+		ownOrganization, _ := organizationSubjectsOfCaller(query.Subjects, orgID)
 		for _, subject := range query.Subjects {
 			prefix := teamPrefix
+			if subject.Kind == contextfabric.SubjectOrganization {
+				// Only the caller's own organization, one listing, and never for
+				// a repository-bound grant (the organization fact is withheld
+				// for it too: a partial total is not an organization's).
+				if len(ownOrganization) == 0 || subject.CanonicalID != ownOrganization[0].CanonicalID || sourceHealthRestricted(principal) {
+					continue
+				}
+				unitFacts, more, unitErr := p.readInvestmentUnits(ctx, orgID, subject, orgID, unitsRequest, timeBound)
+				if unitErr != nil {
+					return contextfabric.FactProviderResult{}, readFailure("query investment units", unitErr)
+				}
+				facts = append(facts, unitFacts...)
+				unitsCut = unitsCut || more
+				continue
+			}
 			if subject.Kind == contextfabric.SubjectRepository {
 				prefix = repositoryPrefix
 			} else if subject.Kind != contextfabric.SubjectTeam {
@@ -217,11 +233,14 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if mixUnavailable != "" {
 		mergeFactReadReason(&result, mixUnavailable)
 	}
+	if timeBound.active && len(subjectsOfKind(query.Subjects, contextfabric.SubjectTeam)) > 0 {
+		mergeFactReadReason(&result, investmentOwnershipAsSynced)
+	}
 	// Every requested subject is checked, with or without a fact: a window
 	// with no overlapping unit serves no fact and must still say the window
 	// starts before the stored history.
 	for _, subject := range query.Subjects {
-		if reason := span.reasonFor(subject.CanonicalID, subject.Kind == contextfabric.SubjectProject, timeBound); reason != "" {
+		if reason := span.reasonFor(subject.CanonicalID, projectSpanKey(subject), subject.Kind == contextfabric.SubjectProject, timeBound); reason != "" {
 			mergeFactReadReason(&result, reason)
 		}
 	}
@@ -231,10 +250,8 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if orgRestricted {
 		if len(facts) == 0 {
 			result.State = contextfabric.SourceNotApplicable
-			result.Reason = investmentOrgRestrictedReason
-		} else {
-			mergeFactReadReason(&result, investmentOrgRestrictedReason)
 		}
+		mergeFactReadReason(&result, investmentOrgRestrictedReason)
 	}
 	if unitsCut {
 		result.Truncated = true
@@ -280,10 +297,10 @@ var canonicalInvestmentThemes = [...]string{
 // exactly nothing" rather than "we have no mix to report". Such teams are
 // counted in unavailable so the caller can say so; shapeRejected counts
 // subjects whose id did not have the team shape (CHAOS-5026).
-func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (shapeRejected, unavailable int, err error) {
+func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (shapeRejected, unavailable, noOwned int, err error) {
 	ids, bySubject, shapeRejected := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
-		return shapeRejected, 0, nil
+		return shapeRejected, 0, 0, nil
 	}
 	// CHAOS-6559 (chris ruling 2026-09-24): a team's mix is the SUM of the
 	// mixes of the repositories the team OWNS (team_repo_ownership), each
@@ -295,9 +312,9 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		duration := timeBound.end.Sub(timeBound.start)
 		priorBound = &factTimeBound{active: true, hasStart: true, start: timeBound.start.Add(-duration), end: timeBound.start}
 	}
-	current, prior, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
+	current, prior, owned, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
 	if err != nil {
-		return shapeRejected, 0, err
+		return shapeRejected, 0, 0, err
 	}
 
 	teamIDs := make([]string, 0, len(ids))
@@ -312,6 +329,9 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		m, ok := current[teamID]
 		if !ok || m.total() <= 0 {
 			unavailable++
+			if len(owned[teamID]) == 0 {
+				noOwned++
+			}
 			continue
 		}
 		currentTotal := m.total()
@@ -336,7 +356,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
-	return shapeRejected, unavailable, nil
+	return shapeRejected, unavailable, noOwned, nil
 }
 
 // investmentWatermarkStatement reads the newest computed_at of the org's
@@ -361,11 +381,24 @@ func (p *InvestmentProvider) readInvestmentWatermark(ctx context.Context, orgID 
 	return watermark, err
 }
 
+// Closed reason set of an empty team window.
+const (
+	investmentTeamNoOwnedRepository = "investment_team_no_owned_repository"
+	investmentTeamNoUnitInWindow    = "investment_team_no_unit_in_window"
+	investmentOwnershipAsSynced     = "investment_ownership_as_synced: team ownership is read from the synced ownership assertions (not historical); a past window includes every assertion not ended before the window start"
+)
+
 // investmentMixUnavailableReason is the disclosure for teams that have no
 // canonical mix: unknown is not healthy and is not a zero mix (North Star
 // check 12), and the watermark says how fresh the data that was searched is.
-func investmentMixUnavailableReason(unavailable, requested int, watermark string) string {
-	reason := fmt.Sprintf("investment mix unavailable for %d of %d requested teams: no repository the team owns has persisted work unit effort in the requested window", unavailable, requested)
+func investmentMixUnavailableReason(unavailable, noOwned, requested int, watermark string) string {
+	reason := fmt.Sprintf("investment mix unavailable for %d of %d requested teams", unavailable, requested)
+	if noOwned > 0 {
+		reason += fmt.Sprintf("; %s for %d: the team owns no repository", investmentTeamNoOwnedRepository, noOwned)
+	}
+	if noUnit := unavailable - noOwned; noUnit > 0 {
+		reason += fmt.Sprintf("; %s for %d: no repository the team owns has persisted work unit effort in the requested window", investmentTeamNoUnitInWindow, noUnit)
+	}
 	if watermark == "" {
 		return reason + "; work_unit_investments holds no rows for this organization"
 	}
@@ -628,6 +661,9 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 	}
 	serve := func(mix projectRollupMixRow) error {
 		rowCount++
+		if mix.WorkUnits > 0 {
+			recordInvestmentProjectSpan(ctx, mix.ProjectKey, mix.FirstUnitFrom)
+		}
 		projectKey, featureDelivery, operational, maintenance, quality, risk, bugfixWeighted := mix.ProjectKey, mix.FeatureDelivery, mix.Operational, mix.Maintenance, mix.Quality, mix.Risk, mix.BugfixWeighted
 		workUnits, repoCount, teamCount, excludedNoRepoLink := mix.WorkUnits, mix.Repos, mix.Teams, mix.ExcludedNoRepoLink
 		// The probe row (maxFactRowsProbe = maxFactRowsPerQuery+1) is
@@ -835,4 +871,17 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		mergeProjectInvestmentFact(facts, subject, row.ProjectSubjectKey, fields, []string{"team_count", "repo_count", "work_units_without_repo_link"})
 	}
 	return rowCount, nil
+}
+
+// projectSpanKey is the "provider:id" key the project mixes name a project by
+// (v2Index's key), empty for a subject that is not a project v2 id.
+func projectSpanKey(subject contextfabric.SubjectRef) string {
+	if subject.Kind != contextfabric.SubjectProject {
+		return ""
+	}
+	segments, ok := identity.Segments(identity.KindProject, subject.CanonicalID)
+	if !ok || len(segments) < 2 {
+		return ""
+	}
+	return segments[0] + ":" + segments[len(segments)-1]
 }
