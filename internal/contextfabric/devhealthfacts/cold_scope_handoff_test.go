@@ -13,6 +13,22 @@ import (
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
+const runIDStatementPrefix = "SELECT argMax(run_id, completed_at) FROM work_unit_membership_runs"
+
+func isRunIDRead(statement string) bool {
+	return strings.HasPrefix(strings.TrimSpace(statement), runIDStatementPrefix)
+}
+
+func countRunIDReads(client *fakeClient) int {
+	n := 0
+	for _, q := range client.queries {
+		if isRunIDRead(q.statement) {
+			n++
+		}
+	}
+	return n
+}
+
 const scopeLoadStatement = "groupUniqArray(100001)(work_unit_id)"
 
 func readThroughProduction(t *testing.T, client contextpacket.ClickHouseQueryClient, org string) []contextfabric.SourceObservation {
@@ -53,8 +69,11 @@ func TestUnrememberedScopeIsLoadedOncePerReadThroughTheProductionComposition(t *
 			if got := countStatements(client, scopeLoadStatement); got != 1 {
 				t.Fatalf("scope loads in one read = %d, want 1", got)
 			}
-			if runs := countStatements(client, "work_unit_membership_runs"); runs < 2 {
-				t.Fatalf("run-id reads = %d: the statements must still read the run id: measurement did not happen", runs)
+			if runs := countRunIDReads(client); runs != 1 {
+				t.Fatalf("run-id reads in one read = %d, want 1 (pinned by the prerequisite step)", runs)
+			}
+			if len(phaseZeroStatements(client)) == 0 {
+				t.Fatal("no phase-0 statement ran: measurement did not happen")
 			}
 		})
 	}
@@ -67,7 +86,7 @@ type flipRunClient struct {
 }
 
 func (c *flipRunClient) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
-	if strings.Contains(statement, scopeRunMatch) {
+	if isRunIDRead(statement) {
 		c.runReads++
 		run := "run-1"
 		if c.runReads > 1 {
@@ -82,13 +101,16 @@ func (c *flipRunClient) Query(ctx context.Context, statement string, bindings []
 	return c.fakeClient.Query(ctx, statement, bindings)
 }
 
-// A run that changes after the prerequisite step is a new state: the carried
-// scope is not served for it, the scope loads anew.
-func TestRunChangeAfterThePrerequisiteStepLoadsTheNewRunsScope(t *testing.T) {
+// A run that changes after the prerequisite step is not read inside the
+// clock: the phases keep the carried scope, one request serves one run.
+func TestRunChangeAfterThePrerequisiteStepIsNotReadInsideTheClock(t *testing.T) {
 	client := &flipRunClient{fakeClient: &fakeClient{tables: coldScopeTables()}}
 	readThroughProduction(t, client, "org-handoff-runchange")
-	if got := countStatements(client.fakeClient, scopeLoadStatement); got != 2 {
-		t.Fatalf("scope loads = %d, want 2 (run-1 by the prerequisite step, run-2 by the read)", got)
+	if got := countStatements(client.fakeClient, scopeLoadStatement); got != 1 {
+		t.Fatalf("scope loads = %d, want 1 (the prerequisite step only)", got)
+	}
+	if client.runReads != 1 {
+		t.Fatalf("run-id reads = %d, want 1: measurement did not happen or the phases re-read the run", client.runReads)
 	}
 }
 

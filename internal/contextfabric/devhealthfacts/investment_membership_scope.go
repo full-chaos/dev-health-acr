@@ -273,10 +273,10 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 }
 
 // loadedMembershipScopeKey carries the scope LoadPrerequisites resolved, with
-// the run it was resolved for. A statement of the same read that meets the
-// same run uses it as is, whatever the cache could keep: a run too large to
-// remember, an empty run and a failed load are loaded once, never again inside
-// the capability's clock. A different run id is a new state and loads anew.
+// the run it was resolved for. A statement of the same read uses it as is,
+// whatever the cache could keep: a run too large to remember, an empty run and
+// a failed load are loaded once, never again inside the capability's clock, and
+// the run id is not read again either.
 type loadedMembershipScopeKey struct{}
 
 type loadedMembershipScope struct {
@@ -289,6 +289,13 @@ type loadedMembershipScope struct {
 func (p *InvestmentProvider) resolveMembershipScopeRun(ctx context.Context, orgID string) (membershipScope, string, error) {
 	if p.scopes == nil {
 		return subqueryMembershipScope, "", nil
+	}
+	// One request serves one run snapshot: the prerequisite step pinned the run
+	// (outside the capability's clock), so a statement of the read uses that
+	// scope as is and never reads the run id or loads again. A run that changes
+	// during the request is seen by the next request's prerequisite step.
+	if loaded, ok := ctx.Value(loadedMembershipScopeKey{}).(loadedMembershipScope); ok && loaded.orgID == orgID {
+		return loaded.scope, loaded.runID, nil
 	}
 	runID := ""
 	runs := 0
@@ -312,9 +319,6 @@ func (p *InvestmentProvider) resolveMembershipScopeRun(ctx context.Context, orgI
 		return membershipScope{mode: membershipScopeNone}, "", nil
 	case legacyRunID:
 		return subqueryMembershipScope, "", nil
-	}
-	if loaded, ok := ctx.Value(loadedMembershipScopeKey{}).(loadedMembershipScope); ok && loaded.orgID == orgID && loaded.runID == runID {
-		return loaded.scope, runID, nil
 	}
 	// The shared read must not die with the first caller: it runs on a context
 	// that keeps the caller's values but not its cancellation, under its own
