@@ -737,13 +737,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify the heavy-test list names real tests
-        run: scripts/ci/devhealthfacts-split.sh verify
+        run: scripts/ci/race-split.sh devhealthfacts verify
       - name: Run isolated devhealthfacts race suite (rest half)
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
-          export GOFLAGS="-trimpath -skip=$(scripts/ci/devhealthfacts-split.sh rest)"
+          export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts rest)"
           start=$SECONDS
           make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
           elapsed=$((SECONDS - start))
@@ -779,13 +779,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify the heavy-test list names real tests
-        run: scripts/ci/devhealthfacts-split.sh verify
+        run: scripts/ci/race-split.sh devhealthfacts verify
       - name: Run isolated devhealthfacts race suite (heavy half)
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
-          export GOFLAGS="-trimpath -run=$(scripts/ci/devhealthfacts-split.sh heavy)"
+          export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts heavy)"
           start=$SECONDS
           make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
           elapsed=$((SECONDS - start))
@@ -807,6 +807,12 @@ jobs:
   # package's measured wall time and FAILS if it exceeds 85% of the budget,
   # so a creeping suite is caught loudly here instead of being eaten by the
   # timeout. Re-measure from the first hosted run and retune the Makefile.
+  # Measured on run 38086240597's non-race go-test.json: 438 top-level tests,
+  # 216s summed; the 18 tests of scripts/ci/devhealthsource-heavy-tests.txt
+  # sum to 157s. The single race job ran 477s wall (395s tests plus ~82s
+  # build) against its 510s guard (85% of 600s). Each half has its own job
+  # and the same 600s budget; the rest half is `-skip` of the heavy regex,
+  # so a test absent from the list runs there.
   race-devhealthsource:
     name: race (devhealthsource, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -831,19 +837,65 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Run isolated devhealthsource race suite
+      - name: Verify the heavy-test list names real tests
+        run: scripts/ci/race-split.sh devhealthsource verify
+      - name: Run isolated devhealthsource race suite (rest half)
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthsource)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
+          export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthsource rest)"
           start=$SECONDS
           make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT="$timeout"
           elapsed=$((SECONDS - start))
           limit=${timeout%s}
-          printf 'devhealthsource race wall time: %ss (budget %ss)\n' "$elapsed" "$limit"
+          printf 'devhealthsource (rest half) race wall time: %ss (budget %ss)\n' "$elapsed" "$limit"
           if [ $((elapsed * 100)) -gt $((limit * 85)) ]; then
-            printf '::error::CHAOS-6342: devhealthsource took %ss, over 85%% of its %ss budget (GOTEST_DEVHEALTHSOURCE_TIMEOUT); retune the budget or shrink the suite\n' "$elapsed" "$limit"
+            printf '::error::CHAOS-6342: devhealthsource (rest half) took %ss, over 85%% of its %ss budget (GOTEST_DEVHEALTHSOURCE_TIMEOUT); rebalance scripts/ci/devhealthsource-heavy-tests.txt\n' "$elapsed" "$limit"
+            exit 1
+          fi
+
+  race-devhealthsource-heavy:
+    name: race (devhealthsource heavy, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as race-devhealthfacts -- needs mirror-preflight.
+    needs: mirror-preflight
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: true
+      # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
+      # job above.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the heavy-test list names real tests
+        run: scripts/ci/race-split.sh devhealthsource verify
+      - name: Run isolated devhealthsource race suite (heavy half)
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthsource)"
+          printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          timeout="$(make -s isolated-timeout PKG="$packages")"
+          export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource heavy)"
+          start=$SECONDS
+          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT="$timeout"
+          elapsed=$((SECONDS - start))
+          limit=${timeout%s}
+          printf 'devhealthsource (heavy half) race wall time: %ss (budget %ss)\n' "$elapsed" "$limit"
+          if [ $((elapsed * 100)) -gt $((limit * 85)) ]; then
+            printf '::error::CHAOS-6342: devhealthsource (heavy half) took %ss, over 85%% of its %ss budget (GOTEST_DEVHEALTHSOURCE_TIMEOUT); rebalance scripts/ci/devhealthsource-heavy-tests.txt\n' "$elapsed" "$limit"
             exit 1
           fi
 
@@ -1378,6 +1430,7 @@ jobs:
       - race-devhealthfacts
       - race-devhealthfacts-heavy
       - race-devhealthsource
+      - race-devhealthsource-heavy
       - race-factoracle
       - build
       - contracts
