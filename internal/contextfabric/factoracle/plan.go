@@ -274,6 +274,8 @@ var factPlan = map[string]map[string]string{
 		"repository_id":                   "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",
 		"scope_share_total":               "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",
 		"scope_unit_rows":                 "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",
+		"scope_unattributed_rows":         "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",
+		"scope_unattributed_total":        "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",
 		"share_in_scope":                  "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",
 		"unit_attribution_basis":          "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",
 		"unit_effort_value":               "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",

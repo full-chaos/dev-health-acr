@@ -56,7 +56,14 @@ type unitRow struct {
 	UnresolvedRefs []string
 	ScopeTotal     float64
 	ScopeUnits     uint64
+	// ScopeUnattributed* are the window-wide share and row count of effort that
+	// reaches no resolved repository (organization listing only; zero for a team
+	// or a repository, whose statement never selects those rows).
+	ScopeUnattributedTotal float64
+	ScopeUnattributedRows  uint64
 }
+
+const investmentUnitAttributionUnattributed = contextfabric.InvestmentUnitAttributionUnattributed
 
 // investmentUnitsStatement lists one window's unit rows of the repositories in
 // {ids}, ordered by share descending, work unit, repository, one page.
@@ -67,9 +74,26 @@ func investmentUnitsStatement(b factTimeBound, withCursor bool) string {
 // investmentUnitsStatementScoped is investmentUnitsStatement with the resolved
 // membership scope.
 func investmentUnitsStatementScoped(b factTimeBound, withCursor bool, scope membershipScope) string {
+	return investmentUnitsStatementFor(b, withCursor, scope, false)
+}
+
+// investmentOrgUnitsStatement is the organization's listing: every repository,
+// and the rows of effort that reach no resolved repository (repo_uuid ”), which
+// the repository and team listings never select.
+func investmentOrgUnitsStatement(b factTimeBound, withCursor bool, scope membershipScope) string {
+	return investmentUnitsStatementFor(b, withCursor, scope, true)
+}
+
+func investmentUnitsStatementFor(b factTimeBound, withCursor bool, scope membershipScope, organization bool) string {
 	memberships := []string{fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(0, b), 0)}
 	core := repoSplitCoreScoped(memberships, " from_ts, to_ts,",
 		",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts", false, scope)
+	rowFilter := "WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}"
+	if organization {
+		core = strings.Replace(core, repoRefsExpression+" AS refs",
+			"if(empty("+repoRefsExpression+"), "+orgNoRefUnit+", "+repoRefsExpression+") AS refs", 1)
+		rowFilter = "WHERE win >= 0"
+	}
 	keyset := ""
 	if withCursor {
 		keyset = `
@@ -77,10 +101,11 @@ WHERE share < toFloat64({` + unitCursorShareParam + `:String})
 	OR (share = toFloat64({` + unitCursorShareParam + `:String}) AND (work_unit_id > {` + unitCursorIDParam + `:String}
 		OR (work_unit_id = {` + unitCursorIDParam + `:String} AND repo_uuid > {` + unitCursorRepoParam + `:String})))`
 	}
-	return `SELECT work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs, scope_total, scope_units
+	return `SELECT work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs, scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows
 FROM (
 	SELECT work_unit_id, repo_uuid, c / n * effort_value AS share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs,
-		sum(c / n * effort_value) OVER () AS scope_total, count() OVER () AS scope_units
+		sum(c / n * effort_value) OVER () AS scope_total, count() OVER () AS scope_units,
+		sumIf(c / n * effort_value, repo_uuid = '') OVER () AS scope_unattributed_total, countIf(repo_uuid = '') OVER () AS scope_unattributed_rows
 	FROM (
 		SELECT win, repo_uuid, work_unit_id, c,
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
@@ -90,17 +115,22 @@ FROM (
 		FROM (
 ` + core + `		)
 	)
-	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
+	` + rowFilter + `
 )` + keyset + `
 ORDER BY share DESC, work_unit_id ASC, repo_uuid ASC
 LIMIT {` + unitLimitParam + `:UInt32}`
 }
 
 // readInvestmentUnits reads one page of the units behind the allocation of
-// subject (a team: the repositories it owns; a repository: itself).
+// subject (a team: the repositories it owns; a repository: itself; the
+// organization: every repository, plus the effort that reaches none, served as
+// rows with no repository_id and the unattributed basis).
 func (p *InvestmentProvider) readInvestmentUnits(ctx context.Context, orgID string, subject contextfabric.SubjectRef, rawID string, request contextfabric.InvestmentUnitsRequest, timeBound factTimeBound) (facts []contextfabric.CanonicalFact, more bool, err error) {
 	var repoIDs []string
+	organization := false
 	switch subject.Kind {
+	case contextfabric.SubjectOrganization:
+		organization = true
 	case contextfabric.SubjectRepository:
 		repoIDs = []string{rawID}
 	case contextfabric.SubjectTeam:
@@ -127,7 +157,7 @@ func (p *InvestmentProvider) readInvestmentUnits(ctx context.Context, orgID stri
 		pageSize = contextfabric.InvestmentUnitsMaxMax
 	}
 	var rows []unitRow
-	if len(repoIDs) > 0 {
+	if organization || len(repoIDs) > 0 {
 		var extra []readers.Binding
 		for _, tb := range timeBound.bindings() {
 			extra = append(extra, readers.Binding{Name: tb.Name, Value: tb.Value})
@@ -137,7 +167,7 @@ func (p *InvestmentProvider) readInvestmentUnits(ctx context.Context, orgID stri
 			extra = append(extra,
 				readers.Binding{Name: unitCursorShareParam, Value: strconv.FormatFloat(request.Cursor.Share, 'g', -1, 64)},
 				readers.Binding{Name: unitCursorIDParam, Value: request.Cursor.WorkUnitID},
-				readers.Binding{Name: unitCursorRepoParam, Value: request.Cursor.RepoID},
+				readers.Binding{Name: unitCursorRepoParam, Value: cursorRepoOf(request.Cursor.RepoID)},
 			)
 		}
 		scope, scopeErr := p.resolveMembershipScope(ctx, orgID)
@@ -145,9 +175,14 @@ func (p *InvestmentProvider) readInvestmentUnits(ctx context.Context, orgID stri
 			return nil, false, scopeErr
 		}
 		extra = append(extra, scope.bindings()...)
-		scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadInvestmentUnits", investmentUnitsStatementScoped(timeBound, request.Cursor != nil, scope), orgID, repoIDs, func(row contextpacket.ClickHouseRowScanner) error {
+		statement, reader := investmentUnitsStatementScoped(timeBound, request.Cursor != nil, scope), "ReadInvestmentUnits"
+		if organization {
+			statement, reader = investmentOrgUnitsStatement(timeBound, request.Cursor != nil, scope), "ReadOrganizationInvestmentUnits"
+			repoIDs = []string{}
+		}
+		scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, reader, statement, orgID, repoIDs, func(row contextpacket.ClickHouseRowScanner) error {
 			var r unitRow
-			if err := row.Scan(&r.WorkUnitID, &r.RepoID, &r.Share, &r.Effort, &r.Theme, &r.From, &r.To, &r.PRs, &r.UnresolvedN, &r.UnresolvedRefs, &r.ScopeTotal, &r.ScopeUnits); err != nil {
+			if err := row.Scan(&r.WorkUnitID, &r.RepoID, &r.Share, &r.Effort, &r.Theme, &r.From, &r.To, &r.PRs, &r.UnresolvedN, &r.UnresolvedRefs, &r.ScopeTotal, &r.ScopeUnits, &r.ScopeUnattributedTotal, &r.ScopeUnattributedRows); err != nil {
 				return err
 			}
 			r.PRs = withoutEmpty(r.PRs)
@@ -183,26 +218,33 @@ func (p *InvestmentProvider) readInvestmentUnits(ctx context.Context, orgID stri
 	if len(rows) > 0 {
 		page["scope_share_total"] = contextfabric.NumberFactValue(rows[0].ScopeTotal)
 		page["scope_unit_rows"] = contextfabric.IntegerFactValue(int64(rows[0].ScopeUnits))
+		if organization {
+			page["scope_unattributed_total"] = contextfabric.NumberFactValue(rows[0].ScopeUnattributedTotal)
+			page["scope_unattributed_rows"] = contextfabric.IntegerFactValue(int64(rows[0].ScopeUnattributedRows))
+		}
 	}
 	if more && len(rows) > 0 {
 		last := rows[len(rows)-1]
-		page["next_cursor"] = contextfabric.StringFactValue(contextfabric.EncodeInvestmentUnitsCursor(contextfabric.InvestmentUnitsCursor{Share: last.Share, WorkUnitID: last.WorkUnitID, RepoID: last.RepoID}))
+		page["next_cursor"] = contextfabric.StringFactValue(contextfabric.EncodeInvestmentUnitsCursor(contextfabric.InvestmentUnitsCursor{Share: last.Share, WorkUnitID: last.WorkUnitID, RepoID: cursorRepoFor(last.RepoID)}))
 	}
 	ownRef := evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, rawID)
 	if subject.Kind == contextfabric.SubjectRepository {
 		ownRef = evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, rawID)
+	}
+	if organization {
+		ownRef = evidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, orgID)
 	}
 	facts = append(facts, contextfabric.CanonicalFact{
 		Kind: contextfabric.FactInvestment, Subject: subject, Fields: page,
 		EvidenceRefIDs: []string{ownRef},
 	})
 	for _, r := range rows {
-		facts = append(facts, unitFact(subject, r))
+		facts = append(facts, unitFact(subject, r, orgID))
 	}
 	return facts, more, nil
 }
 
-func unitFact(subject contextfabric.SubjectRef, r unitRow) contextfabric.CanonicalFact {
+func unitFact(subject contextfabric.SubjectRef, r unitRow, orgID string) contextfabric.CanonicalFact {
 	fields := map[string]contextfabric.FactValue{
 		"unit_kind":               contextfabric.StringFactValue(contextfabric.InvestmentUnitKind),
 		"work_unit_id":            contextfabric.StringFactValue(r.WorkUnitID),
@@ -218,6 +260,11 @@ func unitFact(subject contextfabric.SubjectRef, r unitRow) contextfabric.Canonic
 	}
 	for _, theme := range canonicalInvestmentThemes {
 		fields["unit_"+contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(r.Theme[theme])
+	}
+	unattributed := r.RepoID == ""
+	if unattributed {
+		delete(fields, "repository_id")
+		fields["unit_attribution_basis"] = contextfabric.StringFactValue(investmentUnitAttributionUnattributed)
 	}
 	if len(r.UnresolvedRefs) > 0 {
 		handles := append([]string(nil), r.UnresolvedRefs...)
@@ -235,6 +282,10 @@ func unitFact(subject contextfabric.SubjectRef, r unitRow) contextfabric.Canonic
 	prs := append([]string(nil), r.PRs...)
 	sort.Strings(prs)
 	refs := []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, r.RepoID)}
+	if unattributed {
+		refs = []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, orgID)}
+		prs = nil
+	}
 	for i, number := range prs {
 		if i >= unitRefsPerFact {
 			break
@@ -258,4 +309,22 @@ func withoutEmpty(values []string) []string {
 		}
 	}
 	return out
+}
+
+// cursorRepoFor is the repository a cursor carries for a unit row: the
+// unattributed word for a row with no resolved repository (a cursor refuses an
+// empty repository).
+func cursorRepoFor(repoID string) string {
+	if repoID == "" {
+		return contextfabric.InvestmentUnitsUnattributedRepo
+	}
+	return repoID
+}
+
+// cursorRepoOf is cursorRepoFor's inverse, for the keyset bound.
+func cursorRepoOf(cursorRepo string) string {
+	if cursorRepo == contextfabric.InvestmentUnitsUnattributedRepo {
+		return ""
+	}
+	return cursorRepo
 }
