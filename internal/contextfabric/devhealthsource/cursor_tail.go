@@ -89,7 +89,7 @@ func (p sourcePlan) logCursorKeyPass(ctx context.Context, orgID string, last can
 	}
 	p.logger.WarnContext(ctx, "devhealthsource row key exceeds the projection cursor bound",
 		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
-		"action", action, "limit_bytes", contractsv1.ContextFabricProjectionCursorMaxLength,
+		"action", contextfabric.SanitizeLogAttr(action), "limit_bytes", contractsv1.ContextFabricProjectionCursorMaxLength,
 		"max_key_bytes", maxCursorKeyBytes(p.cursorSpace(), last.position()), "key_bytes", len(last.sortKey),
 		"key_digest", contextfabric.SanitizeLogAttr(keyDigest(last.sortKey)))
 }
