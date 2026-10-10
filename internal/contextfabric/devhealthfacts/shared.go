@@ -678,15 +678,19 @@ import (
 // existed then. A candidate saved under v133 may hold an as-of answer that
 // missed them and must not be reused.
 //
-// v134 -> v135: a project's FactInvestment is only the canonical theme mix (one standalone
+// v135: a team or repository without a team_metrics_daily or
+// repo_metrics_daily row serves its window PR cycle and change failure
+// fields; a candidate saved under v134 may hold an answer that lacked them.
+//
+// v135 -> v136: a project's FactInvestment is only the canonical theme mix (one standalone
 // fact per project: the owning-team roll-up or the project's own attribution); the legacy
 // per-team (investment_area, project_stream, day) breakdown of investment_metrics_daily
 // (the deprecated rule classifier's keys: team_breakdown, investment_area, project_stream,
 // delivery_units, work_items_completed, prs_merged, churn_loc) is no longer served for a
 // project, and a project with no canonical mix has no investment fact (CHAOS-9195, D5932).
-// A candidate saved under v134 carries the legacy breakdown (and a mix merged onto it) and
+// A candidate saved under v135 carries the legacy breakdown (and a mix merged onto it) and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v135"
+const QueryVersion = "devhealthfacts.clickhouse.v136"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

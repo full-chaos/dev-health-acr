@@ -218,7 +218,7 @@ FactMembership
   fields             organization_id repository_id repository_name
 
 FactMetrics
-  reached_funcs      96
+  reached_funcs      99
   dynamic_key_sites  1
   leaked_call_sites  7
     leak interface_method     4
