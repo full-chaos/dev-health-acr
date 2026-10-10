@@ -357,7 +357,7 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 	}
 }
 
-// TestClickHouseSourceVersionIsV8ForTheIssuePullRequestLinkRebuild pins the constant,
+// TestClickHouseSourceVersionIsV9ForTheRepositoryFirstSeenRebuild pins the constant,
 // with the reason, so a later bump is a deliberate act rather than a side
 // effect.
 //
@@ -382,11 +382,11 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // all -- they wedged), so the existing graph stays valid and batch 62
 // replays with no operator action. Bumping this constant would throw that
 // away and force a full rebuild of every organization.
-func TestClickHouseSourceVersionIsV8ForTheIssuePullRequestLinkRebuild(t *testing.T) {
+func TestClickHouseSourceVersionIsV9ForTheRepositoryFirstSeenRebuild(t *testing.T) {
 	t.Parallel()
-	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v8" {
+	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v9" {
 		t.Fatalf("ClickHouseSourceVersion = %q, want %q -- see this test's doc comment: bumping it forces a rebuild instead of replaying the held checkpoint",
-			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v8")
+			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v9")
 	}
 }
 
