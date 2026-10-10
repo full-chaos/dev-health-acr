@@ -3,6 +3,7 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +24,10 @@ import (
 // they retire. (A tombstone never retires an edge of the complete table: the
 // contract refuses a batch that asserts and retracts one edge, and the source
 // then leaves the tables to the walk.)
-func EarlyRowsWalksForTest(t *testing.T, orgID string) (with, alone []contextfabric.ProjectionBatch) {
+//
+// untombstoned is the walk alone over the same tables less the tombstone
+// table: what a walk emits when no tombstone ever comes with a page.
+func EarlyRowsWalksForTest(t *testing.T, orgID string) (with, alone, untombstoned []contextfabric.ProjectionBatch) {
 	t.Helper()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	repoKey := func(n int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", n) }
@@ -146,11 +150,15 @@ func EarlyRowsWalksForTest(t *testing.T, orgID string) (with, alone []contextfab
 	with = drain(plan(), func(p sourcePlan) (contextfabric.ProjectionBatch, bool, error) {
 		return p.nextBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: orgID, Source: p.source})
 	})
-	alone = drain(plan(), func(p sourcePlan) (contextfabric.ProjectionBatch, bool, error) {
+	walkAlone := func(p sourcePlan) (contextfabric.ProjectionBatch, bool, error) {
 		p.windowScope = windowScopeFor(orgID, 0)
 		return p.pagedBatch(context.Background(), orgID, "", cursorState{}, true)
-	})
-	return with, alone
+	}
+	alone = drain(plan(), walkAlone)
+	less := plan()
+	less.tables = less.tables[:len(less.tables)-1]
+	untombstoned = drain(less, walkAlone)
+	return with, alone, untombstoned
 }
 
 // The fixture of the container-backed row does what that row says, with no
@@ -158,7 +166,15 @@ func EarlyRowsWalksForTest(t *testing.T, orgID string) (with, alone []contextfab
 // every edge and every tombstone, ahead of most of the entities they name,
 // and the walk alone carries none of them in its first batch.
 func TestEarlyRowsWalksFixture(t *testing.T) {
-	with, alone := EarlyRowsWalksForTest(t, "org")
+	with, alone, untombstoned := EarlyRowsWalksForTest(t, "org")
+	for _, batch := range untombstoned {
+		if len(batch.Tombstones) != 0 {
+			t.Fatalf("the walk without the tombstone table carries %d tombstones", len(batch.Tombstones))
+		}
+	}
+	if !reflect.DeepEqual(untombstoned[0].Entities, alone[0].Entities) || !reflect.DeepEqual(untombstoned[0].Relationships, alone[0].Relationships) {
+		t.Fatal("the first page of the walk without the tombstone table is not the first page of the walk alone: its later batches would not continue the first batch")
+	}
 	if len(with) != len(alone) || len(with) < 4 {
 		t.Fatalf("batches: %d with the complete tables, %d alone; want the same number, 4 or more", len(with), len(alone))
 	}

@@ -171,13 +171,14 @@ func TestEarlyRowsLeaveTheGraphTheWalkAloneLeaves(t *testing.T) {
 		}
 		return readGraphState(t, ctx, raw, created[0])
 	}
-	_, aloneA := devhealthsource.EarlyRowsWalksForTest(t, "early-rows-alone-a")
-	_, aloneB := devhealthsource.EarlyRowsWalksForTest(t, "early-rows-alone-b")
-	with, _ := devhealthsource.EarlyRowsWalksForTest(t, "early-rows-with")
-	once, _ := devhealthsource.EarlyRowsWalksForTest(t, "early-rows-once")
-	for i := range once[1:] {
-		once[i+1].Tombstones = nil
-	}
+	_, aloneA, _ := devhealthsource.EarlyRowsWalksForTest(t, "early-rows-alone-a")
+	_, aloneB, _ := devhealthsource.EarlyRowsWalksForTest(t, "early-rows-alone-b")
+	with, _, _ := devhealthsource.EarlyRowsWalksForTest(t, "early-rows-with")
+	// The control: the first batch with the early rows, then a walk that
+	// carries no tombstone. Its tombstones came only early, never where the
+	// walk reaches them.
+	onceFirst, _, onceRest := devhealthsource.EarlyRowsWalksForTest(t, "early-rows-once")
+	once := append(onceFirst[:1:1], onceRest[1:]...)
 
 	stateA, stateB := apply("early-rows-alone-a", aloneA), apply("early-rows-alone-b", aloneB)
 	if len(stateA.nodes) < 400 || len(stateA.edges) < 150 {
