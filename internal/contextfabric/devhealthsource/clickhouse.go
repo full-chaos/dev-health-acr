@@ -659,6 +659,12 @@ func buildBatchIn(space, orgID, source, version, cursor string, cursorSource, it
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, err
 	}
+	return buildBatchTo(orgID, source, version, cursor, nextCursor, items, fullSnapshot, completeEnumeration, generatedAt)
+}
+
+// buildBatchTo assembles the batch that moves the checkpoint from cursor to
+// nextCursor.
+func buildBatchTo(orgID, source, version, cursor, nextCursor string, items []candidate, fullSnapshot, completeEnumeration bool, generatedAt time.Time) (contextfabric.ProjectionBatch, error) {
 	batch := contextfabric.ProjectionBatch{
 		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, OrgID: orgID, Source: source, SourceVersion: version,
 		Cursor: cursor, NextCursor: nextCursor, GeneratedAt: generatedAt,

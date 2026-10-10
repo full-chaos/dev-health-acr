@@ -15,8 +15,12 @@ import (
 )
 
 type entityTable struct {
-	name  string
-	query func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) (rows []candidate, truncated bool, err error)
+	name string
+	// dimension marks a table of entities other producers' rows refer to. A
+	// from-zero build reads such a table whole before the fact walk when the
+	// first read did not return all of it (dimension_phase.go).
+	dimension bool
+	query     func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) (rows []candidate, truncated bool, err error)
 	// subjectKinds names the ENTITY subject kinds this producer emits, and
 	// it is declared here rather than in any consumer because a consumer's
 	// copy is a second list that drifts. A relationship-only producer
@@ -51,7 +55,7 @@ type entityTable struct {
 // ClickHouse table -- it self-joins work_items on parent_id, a column
 // work_item_dependencies never carries, to project the PART_OF edge type.
 var entityTables = []entityTable{
-	{name: "repos", query: queryRepositories, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}},
+	{name: "repos", dimension: true, query: queryRepositories, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}},
 	{name: "work_items", query: queryWorkItems, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem}},
 	{name: "git_pull_requests", query: queryPullRequests, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}},
 	{name: "deployments", query: queryDeployments, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectDeployment}},
