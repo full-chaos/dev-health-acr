@@ -102,17 +102,20 @@ var ErrRelationshipsInternal = errors.New("direct relationship read internal err
 
 // RelationshipsResponse is one page.
 type RelationshipsResponse struct {
-	ContractVersion string                      `json:"contract_version"`
-	Status          RelationshipsStatus         `json:"status"`
-	Reason          string                      `json:"reason,omitempty"`
-	Effective       EffectiveRelationshipsRead  `json:"effective"`
-	Edges           []ServedEdge                `json:"edges"`
-	Withheld        RelationshipsWithheld       `json:"withheld"`
-	Page            RelationshipsPage           `json:"page"`
-	TruncatedBy     string                      `json:"truncated_by,omitempty"`
-	Meaning         string                      `json:"meaning"`
-	Consistency     string                      `json:"consistency"`
-	Untrusted       RelationshipsUntrustedLabel `json:"untrusted_content"`
+	ContractVersion string              `json:"contract_version"`
+	Status          RelationshipsStatus `json:"status"`
+	Reason          string              `json:"reason,omitempty"`
+	// ActiveCanonicalID is set with reason team_inactive when exactly one
+	// active team of the same name exists and the caller may read it.
+	ActiveCanonicalID string                      `json:"active_canonical_id,omitempty"`
+	Effective         EffectiveRelationshipsRead  `json:"effective"`
+	Edges             []ServedEdge                `json:"edges"`
+	Withheld          RelationshipsWithheld       `json:"withheld"`
+	Page              RelationshipsPage           `json:"page"`
+	TruncatedBy       string                      `json:"truncated_by,omitempty"`
+	Meaning           string                      `json:"meaning"`
+	Consistency       string                      `json:"consistency"`
+	Untrusted         RelationshipsUntrustedLabel `json:"untrusted_content"`
 }
 
 // EffectiveRelationshipsRead echoes the request the server executed.
@@ -441,6 +444,11 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 	}
 	if proof.Len() == 0 {
 		response.Status, response.Reason = RelationshipsDenied, RelationshipsRefusalDeniedOrNotFound
+		for _, gated := range decision.Outcomes {
+			if gated.Inactive {
+				response.Reason, response.ActiveCanonicalID = contractsv1.TeamInactiveReason, gated.ActiveTwinID
+			}
+		}
 		response.Page.Complete = true
 		return response, nil
 	}

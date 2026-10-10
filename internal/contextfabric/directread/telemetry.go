@@ -26,6 +26,8 @@ func AuthorizationLogArgs(principal storage.Principal, decision Authorization) [
 		"ownership_unproven_count", decision.OwnershipUnprovenCount,
 		"organization_mismatch_count", decision.OrganizationMismatchCount,
 		"invalid_count", decision.InvalidCount,
+		"inactive_team_count", decision.InactiveTeamCount,
+		"inactive_lookup_failures", decision.InactiveLookupFailures,
 		"refused_kinds", contextfabric.SanitizeLogStrings(append([]string{}, decision.RefusedKinds...)),
 	}
 	if class := decision.ErrorClass(); class != "" {
