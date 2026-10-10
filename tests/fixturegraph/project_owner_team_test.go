@@ -24,8 +24,9 @@ ORDER BY p.name LIMIT 1`, org))
 	}
 	project, team := rows[0][0], rows[0][1]
 	args := doc{
-		"question":       fmt.Sprintf("Which team owns the %s project?", project),
-		"expected_kinds": []string{"project"},
+		"question":        fmt.Sprintf("Which team owns the %s project?", project),
+		"expected_kinds":  []string{"project"},
+		"evidence_window": doc{"relative_id": "trailing_365d"},
 		"interpretation": doc{
 			"shape": "single_subject", "requested_judgment": "the team that owns the project",
 			"subject_terms": []string{project}, "requested_subject_kind": "project",
