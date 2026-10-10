@@ -1877,6 +1877,13 @@
           "type": "string",
           "maxLength": 2000
         },
+        "inactive_hints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InactiveHint"
+          },
+          "maxItems": 20
+        },
         "retrieval_degraded": {
           "type": "boolean"
         },
@@ -1901,6 +1908,27 @@
       "required": [
         "candidates",
         "committed"
+      ]
+    },
+    "InactiveHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subject": {
+          "$ref": "#/$defs/SubjectRef"
+        },
+        "answer": {
+          "const": "team_inactive"
+        },
+        "active_canonical_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "subject",
+        "answer"
       ]
     },
     "CommitDecisionDigest": {

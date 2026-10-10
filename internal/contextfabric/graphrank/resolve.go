@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -111,6 +112,12 @@ type ResolveDeps struct {
 	// the calling organization. ok=false with a nil error means "not
 	// found" -- a safe non-match, not an error.
 	ExactHint func(ctx context.Context, subject contextfabric.SubjectRef) (node CandidateNode, ok bool, err error)
+	// ExactHintInactive is optional. After ExactHint found nothing for a team
+	// hint, it reports whether the hint names an inactive team the caller may
+	// read, and the one active team of the same name the caller may read
+	// ("" when none or more than one). nil means no hint is ever reported
+	// inactive.
+	ExactHintInactive func(ctx context.Context, subject contextfabric.SubjectRef) (activeTwinID string, inactive bool, err error)
 	// Search performs bounded node-scoped hybrid search for term.
 	//
 	// degraded reports that a retrieval MECHANISM was unavailable for this
@@ -2748,6 +2755,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// an invalid or internal-bookkeeping node, neither of which is an
 	// authorization event) so this count never over-reports.
 	subjectCandidatesAuthzDropped := 0
+	var inactiveHints []contractsv1.ContextFabricInactiveHint
 	for _, hint := range request.RequestedScope.SubjectHints {
 		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {
 			continue
@@ -2780,6 +2788,18 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 		}
 		if !ok {
+			// A caller-named team that is inactive is answered as that team:
+			// the miss is terminal for this hint, so the hybrid search below
+			// never reaches a same-named active team in its place.
+			if hintAttributes.ShortCircuitEligible.Eligible() && subject.Kind == contextfabric.SubjectTeam && deps.ExactHintInactive != nil {
+				twin, inactive, inactiveErr := deps.ExactHintInactive(ctx, subject)
+				if inactiveErr != nil {
+					return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
+				}
+				if inactive {
+					inactiveHints = append(inactiveHints, contractsv1.ContextFabricInactiveHint{Subject: subject, Answer: contractsv1.TeamInactiveReason, ActiveCanonicalID: twin})
+				}
+			}
 			continue
 		}
 		// allowExactMatch=true: subject.Label here is the caller's own
@@ -2836,12 +2856,16 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// which merges into the same map, so a conversational follow-up naming
 	// a different subject than the one a prior receipt bound can still be
 	// found and compete on its own terms.
+	if len(inactiveHints) > 0 && !AnyCallerSourced(candidatesBySubject, callerSourced) {
+		return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}, InactiveHints: inactiveHints}, contextfabric.StructureOfferMaterial{}, nil
+	}
 	if AnyCallerSourced(candidatesBySubject, callerSourced) {
 		// CHAOS-4085 commit-basis write site 1 of 3: the caller-hint short
 		// circuit. Everything this exit commits was named by canonical id,
 		// re-read from the graph by keyed lookup and re-authorized in the
 		// hint loop above -- CommitBasisCallerCanonicalID for all of it.
 		exactResolution, exactBases, exactDigests := FinalizeExactResolutionWithBasis(candidatesBySubject, callerSourced, request.Options.MaxSubjectCandidates)
+		exactResolution.InactiveHints = inactiveHints
 		commitBases.ResetTo(exactBases)
 		commitDigests.ResetTo(exactDigests)
 		// CHAOS-4096: this short circuit never reaches

@@ -189,6 +189,10 @@ type ContextFabricAnswerProjection struct {
 	// drop this field exists to close, even though the canonical result
 	// carried the disclosure correctly).
 	PriorSubjectReceiptDispositions []ContextFabricPriorSubjectReceiptEntry `json:"prior_subject_receipt_dispositions,omitempty"`
+	// InactiveHints mirrors the canonical result's
+	// SubjectResolution.InactiveHints verbatim: a caller who named an inactive
+	// team is told so, with the active team of that name by id. Never dropped.
+	InactiveHints []ContextFabricInactiveHint `json:"inactive_hints,omitempty"`
 	// RenderShapes (CHAOS-4415 slice 1) mirrors the canonical result's
 	// own field verbatim -- the SAME ContextFabricRenderShape type, not a
 	// narrowed copy, for the same reason Temporal is the canonical label

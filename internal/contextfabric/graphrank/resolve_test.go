@@ -102,6 +102,10 @@ type fakeGraphBackend struct {
 	confirmedKindVectorCensusResult ConfirmedKindVectorCensusOutcome
 	confirmedKindVectorCensusCalls  []confirmedKindVectorCensusCall
 
+	// exactInactive maps SubjectKey -> active twin id for a hint the exact
+	// read finds inactive; nil leaves ExactHintInactive unset.
+	exactInactive map[string]string
+
 	// CHAOS-4348 ExactNameCandidates fixture. enableExactNameCandidates
 	// defaults to false, so every pre-existing test in this file -- which
 	// never sets it -- gets ResolveDeps.ExactNameCandidates == nil, exactly
@@ -165,6 +169,12 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 		VectorMarginCommitThreshold: f.vectorMarginCommitThreshold,
 		RawSignalObserver:           f.rawSignalObserver,
 		VectorMechanismConfigured:   f.vectorMechanismConfigured,
+	}
+	if f.exactInactive != nil {
+		deps.ExactHintInactive = func(ctx context.Context, subject contextfabric.SubjectRef) (string, bool, error) {
+			twin, ok := f.exactInactive[SubjectKey(subject)]
+			return twin, ok, nil
+		}
 	}
 	if f.enableSearchQuestion {
 		deps.SearchQuestion = func(ctx context.Context, question string, limit int) ([]CandidateNode, bool, bool, error) {

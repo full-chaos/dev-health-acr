@@ -109,6 +109,16 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			candidate, found := exactHintCandidate(ctx, rows)
 			return candidate, found, nil
 		},
+		ExactHintInactive: func(ctx context.Context, subject contextfabric.SubjectRef) (string, bool, error) {
+			inactive, err := a.InactiveTeams(ctx, principal, binding, []contextfabric.SubjectRef{subject})
+			if err != nil {
+				return "", false, err
+			}
+			if len(inactive) != 1 || !inactive[0].Inactive {
+				return "", false, nil
+			}
+			return inactive[0].ActiveTwinID, true, nil
+		},
 		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
 			return a.hybridSearchNodes(ctx, key, principal.OrgID, term, limit, fence, temporal)
 		},

@@ -792,6 +792,27 @@
           ],
           "type": "object"
         },
+        "InactiveHint": {
+          "additionalProperties": false,
+          "properties": {
+            "active_canonical_id": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "answer": {
+              "const": "team_inactive"
+            },
+            "subject": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectRef"
+            }
+          },
+          "required": [
+            "subject",
+            "answer"
+          ],
+          "type": "object"
+        },
         "PlanRequirement": {
           "description": "One derived requirement: the obligation/role/subject coordinate, what serves it, and -- for a computation -- what that step consumes and whether anything runs it. Derived once before any narrowing, so it says what the answer was PLANNED to contain; the completeness outcome rows say what became of each, joined by the same coordinate string. Carries no member kind: that is written after subject resolution, and these rows are derived before it.",
           "type": "object",
@@ -5116,6 +5137,13 @@
             },
             "graph_not_projected": {
               "type": "boolean"
+            },
+            "inactive_hints": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/InactiveHint"
+              },
+              "maxItems": 20,
+              "type": "array"
             },
             "prior_subject_receipt_dispositions": {
               "items": {
