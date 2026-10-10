@@ -99,6 +99,7 @@ func mustDecode(t *testing.T, cursor string) cursorState {
 // holds the other 500 rows; no fact row is in either. The third batch is the
 // first fact page. The fact position does not move before it.
 func TestDimensionTableOverTheCapIsReadWholeBeforeTheFirstFactRow(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	var logs bytes.Buffer
 	plan := dimensionPlan(now, &logs, catchUpRows(2, 1300, now.Add(-10*time.Minute), time.Millisecond))
@@ -166,6 +167,7 @@ func TestDimensionTableOverTheCapIsReadWholeBeforeTheFirstFactRow(t *testing.T) 
 // A restart in the middle of the phase (a new process: an empty memo) reads on
 // after the last applied dimension batch and still reads every row.
 func TestDimensionPhaseContinuesAfterARestart(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	store := catchUpRows(2, 1300, now.Add(-10*time.Minute), time.Millisecond)
 	seen := map[string]bool{}
@@ -196,6 +198,7 @@ func TestDimensionPhaseContinuesAfterARestart(t *testing.T) {
 // A dimension batch the backend did not apply leaves the checkpoint where it
 // was: the next call returns the same batch, not the pages after it.
 func TestDimensionBatchThatWasNotAppliedIsReadAgain(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	plan := dimensionPlan(now, nil, catchUpRows(2, 1300, now.Add(-10*time.Minute), time.Millisecond))
 	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org", Source: plan.source}
@@ -212,6 +215,7 @@ func TestDimensionBatchThatWasNotAppliedIsReadAgain(t *testing.T) {
 // A dimension table at the cap goes with the first fact page; a fact table
 // over the cap starts no phase. (The seed takes one row of the page.)
 func TestNoDimensionPhaseWhenEveryDimensionTableCameBackWhole(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	var logs bytes.Buffer
 	plan := dimensionPlan(now, &logs, catchUpRows(2, snapshotPerQueryCap, now.Add(-10*time.Minute), time.Millisecond))
@@ -230,6 +234,7 @@ func TestNoDimensionPhaseWhenEveryDimensionTableCameBackWhole(t *testing.T) {
 
 // A small organization is one full snapshot, as before.
 func TestNoDimensionPhaseForAFullSnapshot(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	plan := dimensionPlan(now, nil, catchUpRows(2, 20, now.Add(-10*time.Minute), time.Millisecond))
 	plan.tables[0] = namedRepositoryTable("facts", catchUpRows(1, 30, now.Add(-24*time.Hour), time.Minute))
@@ -244,6 +249,7 @@ func TestNoDimensionPhaseForAFullSnapshot(t *testing.T) {
 // (one after the other, in one batch here), and the whole one goes with the
 // first fact page.
 func TestDimensionPhaseReadsEveryTruncatedDimensionTable(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	plan := dimensionPlan(now, nil, catchUpRows(2, 300, now.Add(-10*time.Minute), time.Millisecond))
 	plan.tables = append(plan.tables,
@@ -267,6 +273,7 @@ func TestDimensionPhaseReadsEveryTruncatedDimensionTable(t *testing.T) {
 // A page limit ends a batch in the middle of a table; the next batch starts
 // after the last row of that page, in the same table.
 func TestDimensionPhaseStopsAndResumesInsideATable(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	// Every row on ONE stamp, as one sync run leaves them: the row key alone
 	// orders them.
@@ -292,6 +299,7 @@ func TestDimensionPhaseStopsAndResumesInsideATable(t *testing.T) {
 // still moves (the consumed-progress cursor), the call says work is left, and
 // the read goes on from there to the fact walk.
 func TestDimensionPagesWithNothingToProjectMoveThePosition(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	rows := progressRows((dimensionPagesPerBatch+maxOmittedPageSkips)*incrementalBatchCap+300, now.Add(-10*time.Minute), time.Microsecond)
 	plan := dimensionPlan(now, nil, nil)
@@ -322,6 +330,7 @@ func TestDimensionPagesWithNothingToProjectMoveThePosition(t *testing.T) {
 // A cursor that names a table this plan does not read: the table is passed
 // over and the phase reads the tables it knows.
 func TestDimensionPhasePassesOverATableThePlanDoesNotRead(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	plan := dimensionPlan(now, nil, catchUpRows(2, 300, now.Add(-10*time.Minute), time.Millisecond))
 	cursor, _, err := dimensionPosition{Tables: []string{"gone", "dims"}}.encode(plan.cursorSpace())
@@ -336,6 +345,7 @@ func TestDimensionPhasePassesOverATableThePlanDoesNotRead(t *testing.T) {
 
 // A dimension read that fails is a table read failure, with no batch.
 func TestDimensionReadFailureIsATableReadError(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	plan := dimensionPlan(now, nil, catchUpRows(2, 300, now.Add(-10*time.Minute), time.Millisecond))
 	// 300 rows on ONE cursor position and row key: the keyset cannot step.
@@ -355,6 +365,7 @@ func TestDimensionReadFailureIsATableReadError(t *testing.T) {
 //
 // devhealthschema:not-a-production-replica this names producer-registry tables to pin which of them are dimension tables; it declares no column, type, engine or sort key.
 func TestProductionDimensionTables(t *testing.T) {
+	t.Parallel()
 	names := func(tables []entityTable) []string {
 		var all []string
 		for _, table := range tables {
@@ -378,6 +389,7 @@ func TestProductionDimensionTables(t *testing.T) {
 // One batch reads a bounded number of pages even when its rows are far from
 // the contract's bounds: 1,300 rows of which only the first is an entity.
 func TestDimensionBatchReadsABoundedNumberOfPages(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	store := catchUpRows(2, 1300, now.Add(-10*time.Minute), time.Millisecond)
 	first := store.rows[0].key
@@ -402,6 +414,7 @@ func TestDimensionBatchReadsABoundedNumberOfPages(t *testing.T) {
 
 // A batch holds at most the contract's entities, relationships and tombstones.
 func TestWithinBatchBoundsCountsEveryKind(t *testing.T) {
+	t.Parallel()
 	of := func(entities, relationships, tombstones int) []candidate {
 		var all []candidate
 		for i := 0; i < entities; i++ {
@@ -428,6 +441,7 @@ func TestWithinBatchBoundsCountsEveryKind(t *testing.T) {
 // judgement as the walk's rows: a label with blanks around it is trimmed and
 // the row is emitted; an item the contract refuses is dropped alone.
 func TestDimensionRowsAreNormalizedBeforeTheyAreJudged(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	store := catchUpRows(2, 300, now.Add(-10*time.Minute), time.Millisecond)
 	unprojectable := store.rows[7].key
@@ -468,6 +482,7 @@ func TestDimensionRowsAreNormalizedBeforeTheyAreJudged(t *testing.T) {
 // a nanosecond stamp, a row key of the natural-key bound, a large count. It
 // fits the contract's cursor length in both position spaces.
 func TestDimensionPositionOfTheLongestRowKeyFitsTheCursor(t *testing.T) {
+	t.Parallel()
 	plan := sourcePlan{tables: teamsProjectsTablesFor(nil, nil, nil, nil, true)}
 	var every []string
 	for _, table := range plan.tables {
@@ -506,6 +521,7 @@ func TestDimensionPositionOfTheLongestRowKeyFitsTheCursor(t *testing.T) {
 // still named as not read whole. No batch carries an over-long cursor. The
 // walk's first page carries the seed only when no dimension batch carried it.
 func TestDimensionPhaseStopsWhenItsPositionDoesNotFitTheCursor(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	long := strings.Repeat("x", 400)
 	for _, tc := range []struct {
@@ -552,6 +568,7 @@ func TestDimensionPhaseStopsWhenItsPositionDoesNotFitTheCursor(t *testing.T) {
 // The same stop when the pages before the over-long position held nothing to
 // project: no consumed-progress cursor is recorded for it, and the walk starts.
 func TestDimensionPagesWithNothingToProjectStopAtAPositionThatDoesNotFit(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	rows := progressRows((dimensionPagesPerBatch+maxOmittedPageSkips)*incrementalBatchCap+300, now.Add(-10*time.Minute), time.Microsecond)
 	rows[(dimensionPagesPerBatch+maxOmittedPageSkips)*incrementalBatchCap-1].key += strings.Repeat("x", 400)
@@ -574,6 +591,7 @@ func TestDimensionPagesWithNothingToProjectStopAtAPositionThatDoesNotFit(t *test
 // neither) takes it as a reset: it pages the facts from zero and never reads
 // the dimension table's stamp as a fact position.
 func TestDimensionCursorOfAnotherSpaceIsAReset(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	store := catchUpRows(2, 1300, now.Add(-10*time.Minute), time.Millisecond)
 	plan := dimensionPlan(now, nil, store)
@@ -611,6 +629,7 @@ func TestDimensionCursorOfAnotherSpaceIsAReset(t *testing.T) {
 // did before the phase existed: no dimension batch any more, no row lost, and
 // the walk ends.
 func TestOlderBinaryOnADimensionCursorLosesNoRowAndTheWalkEnds(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	store := catchUpRows(2, 1300, now.Add(-10*time.Minute), time.Millisecond)
 	plan := dimensionPlan(now, nil, store)

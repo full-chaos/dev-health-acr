@@ -20,6 +20,7 @@ import (
 // tick, and 90 days of work items that name only the first. Every repository
 // must have a node after the first tick of the build.
 func TestEveryRepositoryOfALargeOrganizationHasANodeEarlyInAFromZeroBuild(t *testing.T) {
+	t.Parallel()
 	const orgID, repositories = "org-1", 200
 	start := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	now := start
@@ -99,6 +100,7 @@ func TestEveryRepositoryOfALargeOrganizationHasANodeEarlyInAFromZeroBuild(t *tes
 // before the fact position moves, and the dimension batches do not share an
 // id.
 func TestTeamsAndProjectsOfALargeOrganizationAreEmittedBeforeTheFactWalk(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 10, 10, 3, 55, 0, 0, time.UTC)
 	var teams, projects [][]any
 	for n := 0; n < 200; n++ {
@@ -223,6 +225,7 @@ func runDimensionPhaseThroughWorker(t *testing.T, ctx context.Context, source co
 // backend again (same id) and the checkpoint did not move; every repository
 // is applied before the first fact row.
 func TestWorkerAppliesEveryRepositoryBeforeTheFirstFactRowAfterARefusedApply(t *testing.T) {
+	t.Parallel()
 	const repositories = 1100
 	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	repoID := func(n int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", n) }
