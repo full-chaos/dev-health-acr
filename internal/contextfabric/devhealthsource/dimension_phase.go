@@ -55,10 +55,17 @@ func dimensionPositionOf(state cursorState) dimensionPosition {
 	return at
 }
 
-// encode is the cursor of the position. ok is false when it does not fit the
-// contract's cursor length.
+// dimensionSpace is the position space of a dimension-phase cursor of a plan
+// whose fact cursors are in space. It is a space of its own because Since and
+// After are not a fact position there: a reader that does not know the space
+// (a binary from before the phase) takes the cursor as a reset and pages from
+// zero, and never as a fact position.
+func dimensionSpace(space string) string { return "d." + space }
+
+// encode is the cursor of the position for a plan whose fact cursors are in
+// space. ok is false when it does not fit the contract's cursor length.
 func (at dimensionPosition) encode(space string) (cursor string, ok bool, err error) {
-	cursor, err = encodeCursorIn(space, cursorState{Since: at.Since, After: at.After, Dim: &at})
+	cursor, err = encodeCursorIn(dimensionSpace(space), cursorState{Since: at.Since, After: at.After, Dim: &at})
 	return cursor, len(cursor) <= cursorMaxLength, err
 }
 

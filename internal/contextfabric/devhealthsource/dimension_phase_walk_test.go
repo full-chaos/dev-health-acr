@@ -557,3 +557,39 @@ func TestDimensionPagesWithNothingToProjectStopAtAPositionThatDoesNotFit(t *test
 		t.Fatalf("batch = %v with %d consumed-progress cursors, want the first fact page %v and none", got, consumed, want)
 	}
 }
+
+// A dimension-phase cursor is in a position space of its own. A plan in the
+// other position space (and so a binary from before the phase, which knows
+// neither) takes it as a reset: it pages the facts from zero and never reads
+// the dimension table's stamp as a fact position.
+func TestDimensionCursorOfAnotherSpaceIsAReset(t *testing.T) {
+	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
+	store := catchUpRows(2, 1300, now.Add(-10*time.Minute), time.Millisecond)
+	plan := dimensionPlan(now, nil, store)
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org", Source: plan.source}
+	first := nextApplied(t, plan, &checkpoint)
+	raw, err := decodeCursor(first.NextCursor)
+	if err != nil || raw.Space != dimensionSpace(cursorSpaceIngest) || raw.Space == cursorSpaceIngest || raw.Since.IsZero() {
+		t.Fatalf("dimension cursor = %+v (err %v), want the dimension space of the plan and the table's stamp", raw, err)
+	}
+	other := dimensionPlan(now, nil, store)
+	other.space = cursorSpaceIngestColumns
+	batch := nextApplied(t, other, &checkpoint)
+	if got := entitiesPerTable(batch); got["01"] != incrementalBatchCap {
+		t.Fatalf("the batch of the plan in the other space = %v, want the first fact page from zero", got)
+	}
+	if got := entityKeys(batch); !got[catchUpKey(1, 1)] {
+		t.Fatal("the oldest fact row is not in the batch: the dimension stamp was read as a fact position")
+	}
+
+	// A cursor in the dimension space with no dimension position is not a
+	// phase cursor either: a reset.
+	bare, err := encodeCursorIn(dimensionSpace(cursorSpaceIngest), cursorState{Since: now, After: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint.Cursor = bare
+	if got := entityKeys(nextApplied(t, dimensionPlan(now, nil, store), &checkpoint)); !got[catchUpKey(1, 1)] {
+		t.Fatal("a cursor in the dimension space without a dimension position was not taken as a reset")
+	}
+}

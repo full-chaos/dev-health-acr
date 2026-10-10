@@ -27,8 +27,8 @@ type cursorState struct {
 	Ack string `json:"ack,omitempty"`
 	// Dim is set while a from-zero build reads its dimension tables
 	// (dimension_phase.go). Since and After are then the keyset position in
-	// the dimension table being read, not a fact position: the fact walk has
-	// not started. The worker stores a cursor only after the backend applied
+	// the dimension table being read, not a fact position (the fact walk has
+	// not started), and Space is dimensionSpace of the plan's space. The worker stores a cursor only after the backend applied
 	// its batch, so the stored position is always an applied one.
 	Dim *dimensionPosition `json:"dim,omitempty"`
 }
