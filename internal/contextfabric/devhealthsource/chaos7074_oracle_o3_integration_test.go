@@ -358,8 +358,8 @@ func TestChaos7074OracleO3OwnedRepositories(t *testing.T) {
 	// and superseded ownership that path 2 excludes, and more repositories
 	// than one page.
 	all, _, _ := o3Population(t, ctx, direct, orgID, "T1")
-	if len(all) != 8 {
-		t.Fatalf("T1 current population = %d, want 8 (R1 R2 R5 R6 R7 R8 R9 + R11 by name; none of R3 R4); fixture drifted", len(all))
+	if len(all) != 9 {
+		t.Fatalf("T1 current population = %d, want 9 (R1 R2 R4 R5 R6 R7 R8 R9 + R11 by name; not R3); fixture drifted", len(all))
 	}
 }
 

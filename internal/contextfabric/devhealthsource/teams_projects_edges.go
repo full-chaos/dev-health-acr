@@ -1536,8 +1536,8 @@ func projectTeamsStatementFor(cursor cursorState, ingest bool) string {
 	}
 	return `SELECT o.project_id, o.team_id, o.source_name,
        minIf(o.valid_from, o.unassertable = 0) AS first_valid_from,
-       argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.unassertable = 0).1 IS NULL AS latest_is_open,
-       ifNull(argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.unassertable = 0).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
+       argMaxIf(tuple(o.valid_to), ` + ownershipFactOrder + `, o.unassertable = 0).1 IS NULL AS latest_is_open,
+       ifNull(argMaxIf(tuple(o.valid_to), ` + ownershipFactOrder + `, o.unassertable = 0).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
        ` + projectTeamsWatermark + ` AS observed_at, o.provider,
        toUInt8(countIf(o.unassertable = 0) = 0) AS edge_suppressed,
        groupUniqArrayIf(concat(o.ownership_ref, '\0', o.ownership_key, '\0', o.team_id, '\0', o.source_name), o.unassertable = 1 AND o.retraction_only = 0) AS conflict_identities,
@@ -1855,10 +1855,27 @@ var repositoryTeamsOwnershipSource = ownershipresolve.OwnedRepositoriesSource(" 
 	KeepUnresolved: true,
 })
 
+// ownershipFactOrder is the ONE ordering that collapses the rows of an
+// ownership fact (a project/repository, team and source) to the row that
+// represents it. Every collapse of team_*_ownership rows uses it, so the rule
+// cannot drift between the edge builders and the team authorization list:
+//
+//   - a fact is current when an OPEN row (valid_to IS NULL) exists, whatever
+//     later rows closed: the ownership writers keep the earliest open row and
+//     close later duplicates, so the newest row of a current fact is routinely
+//     the closed one;
+//   - among open rows the EARLIEST valid_from wins (first seen), because a
+//     duplicate is closed only on a run with proof of its end and two open rows
+//     can coexist;
+//   - with no open row the LATEST valid_to wins (the fact ended at its last
+//     close), then the latest valid_from;
+//   - a fact that was closed and came back is a new open row, so it wins.
+const ownershipFactOrder = "(o.valid_to IS NULL, if(o.valid_to IS NULL, -toInt64(o.valid_from), toInt64(o.valid_to)), o.valid_from)"
+
 // repositoryTeamsLatestOrder is the ordering key of the repository edge's
 // collapse: ownershipFactOrder, the same as queryProjectTeams' and
 // ownedRepositoriesJoinSQL's.
-const repositoryTeamsLatestOrder = "(o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))"
+const repositoryTeamsLatestOrder = ownershipFactOrder
 
 // repositoryTeamsStatement. Inner column aliases never reuse a source column's
 // own name (match_type_name, not match_type; repo_synced_at, not
