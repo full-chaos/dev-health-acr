@@ -218,10 +218,20 @@ func TestEarlyRowsLeaveTheGraphTheWalkAloneLeaves(t *testing.T) {
 	}
 	t.Logf("properties that differ between two walks alone, not compared: %v", volatile)
 
-	if diff := graphDifferences(stateA, apply("early-rows-with", with), volatile); len(diff) != 0 {
+	tombstones := 0
+	for _, batch := range aloneA {
+		tombstones += len(batch.Tombstones)
+	}
+	stateWith := apply("early-rows-with", with)
+	t.Logf("compared graphs: the walk alone left %d nodes and %d edges after %d tombstones; the walk with the early rows left %d nodes and %d edges (first batch: %d edges and %d tombstones)",
+		len(stateA.nodes), len(stateA.edges), tombstones, len(stateWith.nodes), len(stateWith.edges), len(with[0].Relationships), len(with[0].Tombstones))
+	if diff := graphDifferences(stateA, stateWith, volatile); len(diff) != 0 {
 		t.Fatalf("the walk with the early rows left a different graph (%d differences), first: %v", len(diff), diff[:min(len(diff), 10)])
 	}
-	if diff := graphDifferences(stateA, apply("early-rows-once", once), volatile); len(diff) == 0 {
+	stateOnce := apply("early-rows-once", once)
+	diff := graphDifferences(stateA, stateOnce, volatile)
+	t.Logf("control: a walk whose tombstones came only with the first batch left %d nodes and %d edges, %d differences from the walk alone", len(stateOnce.nodes), len(stateOnce.edges), len(diff))
+	if len(diff) == 0 {
 		t.Fatal("a walk whose tombstones came only with the first batch left the same graph: the comparison cannot see an apply-order fault")
 	}
 }
