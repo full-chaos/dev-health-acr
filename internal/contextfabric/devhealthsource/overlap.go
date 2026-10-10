@@ -517,7 +517,6 @@ func (p sourcePlan) logOpenPass(ctx context.Context, orgID string, pass windowPa
 	if p.logger == nil {
 		return
 	}
-	stamp := func(at time.Time) string { return contextfabric.SanitizeLogAttr(at.UTC().Format(time.RFC3339Nano)) }
 	// The walk never stands past the edge: a page is cut there.
 	remainingSpan := pass.high.Since.Sub(pass.walk.Since)
 	// A linear estimate from the rows read so far over the span read so far;
@@ -533,8 +532,11 @@ func (p sourcePlan) logOpenPass(ctx context.Context, orgID string, pass windowPa
 	p.logger.Log(ctx, level, message,
 		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
 		"pages_this_call", pagesThisCall, "page_rows", incrementalBatchCap,
-		"window_low", stamp(pass.low), "window_high", stamp(pass.high.Since), "resume_after", stamp(pass.walk.Since),
-		"frontier", stamp(frontier.Since), "pass_age_seconds", int64(now.Sub(pass.passStart).Seconds()),
+		"window_low", contextfabric.SanitizeLogAttr(pass.low.UTC().Format(time.RFC3339Nano)),
+		"window_high", contextfabric.SanitizeLogAttr(pass.high.Since.UTC().Format(time.RFC3339Nano)),
+		"resume_after", contextfabric.SanitizeLogAttr(pass.walk.Since.UTC().Format(time.RFC3339Nano)),
+		"frontier", contextfabric.SanitizeLogAttr(frontier.Since.UTC().Format(time.RFC3339Nano)),
+		"pass_age_seconds", int64(now.Sub(pass.passStart).Seconds()),
 		"pass_bound_seconds", int64(p.overlap.Seconds()), "pass_pages", pass.pages, "pass_rows", pass.rows,
 		"remaining_span_seconds", int64(remainingSpan.Seconds()), "remaining_rows_estimate", remainingRows)
 }

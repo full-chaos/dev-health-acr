@@ -63,7 +63,11 @@ func newChurnRig(t *testing.T, start time.Time) *churnRig {
 			return fetch(ctx, r.store, "", rowLimitBindings(orgID, cursor, limit), limit, scanRepositoryKeysetRow)
 		}}},
 		now: func() time.Time { return r.now }, overlap: defaultReprojectOverlap, window: newWindowMemo(),
-		logger: slog.New(slog.NewJSONHandler(&r.logs, nil)),
+		// One page (200 rows) per tick instead of five: the same walk at a
+		// fifth of the rows, so a window deeper than one tick's walk and a
+		// writer faster than the walk need hundreds of rows, not thousands.
+		windowPagesPerCall: 1,
+		logger:             slog.New(slog.NewJSONHandler(&r.logs, nil)),
 	}
 	return r
 }
@@ -156,21 +160,22 @@ func (r *churnRig) logTick(res churnTickResult) {
 
 var churnStart = time.Date(2026, 10, 10, 3, 0, 0, 0, time.UTC)
 
-// A window of 3,000 rows (three ticks of walk at 5 pages x 200 rows) and a
-// writer that lands 20 new rows beyond the frontier every tick. A late row
-// lands inside the window, behind the walk: the next pass finds it.
+// A window of 600 rows (three ticks of walk at 200 rows per tick) and a writer
+// that lands 4 new rows beyond the frontier every tick. A late row lands
+// inside the window, behind the walk: the next pass finds it.
 func TestOverlapProjectsALateRowBehindTheWalkOfADeepWindow(t *testing.T) {
+	t.Parallel()
 	r := newChurnRig(t, churnStart)
-	r.land(3000, churnStart.Add(-20*time.Minute), churnStart.Add(-time.Minute))
+	r.land(600, churnStart.Add(-20*time.Minute), churnStart.Add(-time.Minute))
 	r.logTick(r.runTick())
-	if len(r.projected) != 3000 {
+	if len(r.projected) != 600 {
 		t.Fatalf("first drain projected %d rows", len(r.projected))
 	}
 	late, landed := "", 0
 	for i := 0; i < 40; i++ {
 		prev := r.now
 		r.advance()
-		r.land(20, prev, r.now.Add(-time.Second))
+		r.land(4, prev, r.now.Add(-time.Second))
 		if i == 1 {
 			late, landed = r.landOne(churnStart.Add(-19*time.Minute)), r.tick+1
 		}
@@ -187,14 +192,15 @@ func TestOverlapProjectsALateRowBehindTheWalkOfADeepWindow(t *testing.T) {
 // it. This is the documented bound of the window, pinned so that a change to
 // it is made on purpose.
 func TestALateRowBelowTheWindowEdgeIsOutsideTheWindow(t *testing.T) {
+	t.Parallel()
 	r := newChurnRig(t, churnStart)
-	r.land(3000, churnStart.Add(-20*time.Minute), churnStart.Add(-time.Minute))
+	r.land(600, churnStart.Add(-20*time.Minute), churnStart.Add(-time.Minute))
 	r.runTick()
 	inside, below := "", ""
 	for i := 0; i < 60; i++ {
 		prev := r.now
 		r.advance()
-		r.land(20, prev, r.now.Add(-time.Second))
+		r.land(4, prev, r.now.Add(-time.Second))
 		if i == 1 {
 			inside = r.landOne(churnStart.Add(-25 * time.Minute))
 			below = r.landOne(churnStart.Add(-45 * time.Minute))
@@ -209,20 +215,21 @@ func TestALateRowBelowTheWindowEdgeIsOutsideTheWindow(t *testing.T) {
 	}
 }
 
-// A writer that lands more rows per tick (1,200) than one tick of walk reads
-// (5 pages x 200). A late row lands inside the window, behind the walk. It is
-// reached only if the pass in progress ends, so that the next one starts.
+// A writer that lands more rows per tick (240) than one tick of walk reads
+// (200). A late row lands inside the window, behind the walk. It is reached
+// only if the pass in progress ends, so that the next one starts.
 func TestOverlapPassEndsUnderAWriterFasterThanTheWalk(t *testing.T) {
+	t.Parallel()
 	r := newChurnRig(t, churnStart)
-	r.land(3000, churnStart.Add(-20*time.Minute), churnStart.Add(-time.Minute))
+	r.land(600, churnStart.Add(-20*time.Minute), churnStart.Add(-time.Minute))
 	r.runTick()
 	late, landed := "", 0
 	open, oldest := 0, 0.0
 	starts := map[time.Time]bool{}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 40; i++ {
 		prev := r.now
 		r.advance()
-		r.land(1200, prev, r.now.Add(-time.Second))
+		r.land(240, prev, r.now.Add(-time.Second))
 		if i == 1 {
 			late, landed = r.landOne(churnStart.Add(-19*time.Minute)), r.tick+1
 		}
@@ -236,19 +243,19 @@ func TestOverlapPassEndsUnderAWriterFasterThanTheWalk(t *testing.T) {
 		if p := r.pass(); p.walking {
 			starts[p.passStart] = true
 		}
-		if i < 6 || i%20 == 0 || i == 99 {
+		if i < 6 || i%10 == 0 || i == 39 {
 			r.logTick(res)
 		}
 	}
 	at, ok := r.projected[late]
 	t.Logf("late row: projected=%v at tick %d (landed at tick %d); ticks that ended with the pass open=%d; passes started=%d; oldest pass=%vs", ok, at, landed, open, len(starts), oldest)
 	if !ok {
-		t.Fatalf("the late row inside the window was never projected in 100 ticks (25 min): the pass in progress never ended (%d passes started, oldest %vs)", len(starts), oldest)
+		t.Fatalf("the late row inside the window was never projected in 40 ticks (10 min): the pass in progress never ended (%d passes started, oldest %vs)", len(starts), oldest)
 	}
 	if at > landed+10 {
 		t.Fatalf("the late row was projected at tick %d, %d ticks after it landed; want within 10", at, at-landed)
 	}
 	if len(starts) < 3 {
-		t.Fatalf("%d passes started in 100 ticks; want the passes to keep ending and starting", len(starts))
+		t.Fatalf("%d passes started in 40 ticks; want the passes to keep ending and starting", len(starts))
 	}
 }
