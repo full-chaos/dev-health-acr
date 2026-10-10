@@ -26,6 +26,15 @@ func TestProjectOwnEarliestLinkedUnitIsServedAgainstRealClickHouse(t *testing.T)
 	day := 24 * time.Hour
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 
+	// A repo-linked unit of proj-1 whose start is the epoch default, overlapping
+	// the window and listed by the current membership run: the earliest REAL start
+	// must still be served (a minimum taken over the epoch would lose it).
+	insertRawUnit(t, ctx, direct, orgID, "wu-epoch", "r1a", 3, rawMapSQL(contextfabric.ThemeFeatureDelivery, 1.0), rawMapSQL(), `{"issues":[],"prs":[]}`, time.Unix(0, 0).UTC(), at.Add(-5*day), at)
+	if err := direct.Exec(ctx, `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
+		orgID, "issue", "ISS-wu-epoch", "wu-epoch", "theme", "feature_delivery", at.Add(-day), "run-2"); err != nil {
+		t.Fatalf("seed membership of the epoch unit: %v", err)
+	}
+
 	read := func(start time.Time) contextfabric.FactProviderResult {
 		t.Helper()
 		end := at
