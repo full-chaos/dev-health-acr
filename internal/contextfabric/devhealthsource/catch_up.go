@@ -183,8 +183,8 @@ func (p sourcePlan) completeTableItems(orgID string, page []candidate) earlyTabl
 	if len(p.complete) == 0 && len(p.truncatedTables) == 0 {
 		return earlyTables{}
 	}
+	// The rows keep the order the tables returned them in, table after table.
 	rows, emitted, leftForBounds := selectCompleteTables(page, p.complete)
-	sortCandidates(rows)
 	normalizeCandidates(rows, p.observeNormalization)
 	return earlyTables{
 		items:   partitionProjectableCandidates(rows, p.quarantineObserver(orgID)),

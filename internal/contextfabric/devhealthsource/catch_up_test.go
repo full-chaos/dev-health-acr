@@ -534,3 +534,70 @@ func TestFromZeroWalkWithNoCompleteTableSaysSo(t *testing.T) {
 		t.Fatalf("complete-tables lines = %v, want one INFO line: nothing emitted, [history] truncated", lines)
 	}
 }
+
+// What the complete tables add is a copy, made early, of what the walk emits
+// anyway. Against the same walk without them: the first batch has the same
+// page and the same next cursor, plus the tables' rows; every later batch is
+// the same batch; and every early row comes again, unchanged, where the walk
+// reaches it. So whatever a backend holds after the walk alone, it holds after
+// this walk too.
+func TestEarlyRowsAreACopyOfWhatTheWalkEmits(t *testing.T) {
+	now := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
+	drain := func(first func(sourcePlan) (contextfabric.ProjectionBatch, bool, error)) []contextfabric.ProjectionBatch {
+		t.Helper()
+		plan, _ := catchUpPlan(t, now, nil)
+		var batches []contextfabric.ProjectionBatch
+		batch, available, err := first(plan)
+		for calls := 0; available && calls < 50; calls++ {
+			if err != nil {
+				t.Fatal(err)
+			}
+			batches = append(batches, batch)
+			batch, available, err = plan.nextBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org", Source: plan.source, Cursor: batch.NextCursor})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return batches
+	}
+	with := drain(func(p sourcePlan) (contextfabric.ProjectionBatch, bool, error) {
+		return p.nextBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org", Source: p.source})
+	})
+	// The same walk from zero with no table handed to it.
+	alone := drain(func(p sourcePlan) (contextfabric.ProjectionBatch, bool, error) {
+		p.windowScope = windowScopeFor("org", 0)
+		return p.pagedBatch(context.Background(), "org", "", cursorState{}, true)
+	})
+	if len(with) != len(alone) || len(with) < 3 {
+		t.Fatalf("the walk built %d batches with the complete tables and %d without, want the same number (3 or more)", len(with), len(alone))
+	}
+	// The clock is pinned, so two builds of one batch are equal value for value.
+	if with[0].BatchID != alone[0].BatchID || with[0].NextCursor != alone[0].NextCursor {
+		t.Fatalf("first batch: id %q next %q with the tables, id %q next %q without", with[0].BatchID, with[0].NextCursor, alone[0].BatchID, alone[0].NextCursor)
+	}
+	page := len(alone[0].Entities)
+	if !reflect.DeepEqual(with[0].Entities[:page], alone[0].Entities) {
+		t.Fatal("the page part of the first batch differs from the walk's own first batch")
+	}
+	early := with[0].Entities[page:]
+	if len(early) != snapshotPerQueryCap {
+		t.Fatalf("the first batch adds %d rows to the page, want the complete table's %d", len(early), snapshotPerQueryCap)
+	}
+	for i := 1; i < len(with); i++ {
+		if !reflect.DeepEqual(with[i], alone[i]) {
+			t.Fatalf("batch %d differs between the walk with the complete tables and the walk without", i+1)
+		}
+	}
+	later := map[string]contractsv1.ContextFabricEntityProjection{}
+	for _, batch := range with[1:] {
+		for _, e := range batch.Entities {
+			later[e.Subject.CanonicalID] = e
+		}
+	}
+	for _, e := range early {
+		again, ok := later[e.Subject.CanonicalID]
+		if !ok || !reflect.DeepEqual(again, e) {
+			t.Fatalf("early row %s: emitted again by the walk=%v, unchanged=%v", e.Subject.CanonicalID, ok, reflect.DeepEqual(again, e))
+		}
+	}
+}
