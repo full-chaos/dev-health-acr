@@ -262,7 +262,7 @@ func fetchIngest(ctx context.Context, client contextpacket.ClickHouseQueryClient
 func queryRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	statement := `SELECT toString(id), repo, ifNull(provider, ''), last_synced, created_at, ifNull(tags, '') FROM repos FINAL
 WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + orderBy("last_synced", "id")
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+	items, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var id, slug, provider, rawTags string
 		var observedAt, createdAt time.Time
 		if err := r.Scan(&id, &slug, &provider, &observedAt, &createdAt, &rawTags); err != nil {
@@ -280,10 +280,13 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 			properties = nil
 		}
 		// repos records no deletion column, so a repository's window is
-		// open-ended: valid from creation, with no recorded end.
+		// open-ended, with no recorded end. Its start is settled after the
+		// page is read (applyRepositoryFirstSeen): created_at alone is
+		// rewritten to the sync stamp on every sync, so it is only a start
+		// while it is earlier than the sync.
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(slug), EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, id)},
-			ObservedAt: observedAt, ValidFrom: requiredTime(createdAt), SourceVersion: ClickHouseSourceVersion,
+			ObservedAt: observedAt, ValidFrom: repositoryCreatedStart(createdAt, observedAt), SourceVersion: ClickHouseSourceVersion,
 		}
 		if provider != "" {
 			entity.ProviderIDs = map[string]string{provider: id}
@@ -305,6 +308,11 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 		}
 		return []candidate{{observedAt: observedAt, sortKey: id, entity: &entity}}, nil
 	})
+	if err != nil {
+		return nil, false, err
+	}
+	applyRepositoryFirstSeen(ctx, client, orgID, cursor, items)
+	return items, truncated, nil
 }
 
 // queryWorkItems LEFT JOINs repos (CHAOS-3785; was INNER JOIN): Linear-sourced

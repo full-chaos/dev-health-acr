@@ -352,10 +352,30 @@ func authorizationValue(values []string) interface{} {
 	return cleaned
 }
 
+// A repository's validity start is the first time it was seen, so it never
+// moves later: a write keeps the earlier of the held start and the incoming
+// one, and an incoming write with no start leaves a held one alone. The map is
+// evaluated before it is assigned, so both keys compare against the held pair.
+const (
+	repositoryValidFromParam   = "repoValidFrom"
+	repositoryValidFromNsParam = "repoValidFromNs"
+)
+
+var repositoryValidFromMinCypher = fmt.Sprintf(
+	" SET n += {%[1]s: CASE WHEN $%[3]s IS NULL THEN n.%[1]s WHEN n.%[2]s IS NULL OR $%[3]s < n.%[2]s THEN $%[4]s ELSE n.%[1]s END, %[2]s: CASE WHEN $%[3]s IS NULL THEN n.%[2]s WHEN n.%[2]s IS NULL OR $%[3]s < n.%[2]s THEN $%[3]s ELSE n.%[2]s END}",
+	propValidFrom, propValidFromNs, repositoryValidFromNsParam, repositoryValidFromParam,
+)
+
 func (a *Adapter) projectEntity(ctx context.Context, key, orgID string, entity contextfabric.EntityProjection) error {
 	attrs := subjectMergeAttrs(entity.Subject, entity.Authorization, entity.EvidenceRefIDs, entity.ObservedAt, entity.ValidFrom, entity.ValidTo, entity.SourceVersion, &entity, a.config.IncludeEmbedBodies)
 	cypher := ownedSubjectMergeCypher("n", kindLabel(entity.Subject.Kind)) + " SET n += $attrs"
 	params := subjectMergeParams("n", entity.Subject, orgID)
+	if entity.Subject.Kind == contextfabric.SubjectRepository {
+		cypher += repositoryValidFromMinCypher
+		params[repositoryValidFromParam], params[repositoryValidFromNsParam] = attrs[propValidFrom], attrs[propValidFromNs]
+		delete(attrs, propValidFrom)
+		delete(attrs, propValidFromNs)
+	}
 	params["attrs"] = attrs
 	_, err := a.api.query(ctx, key, cypher, params, false)
 	return classifyProjectionError("project entity", err)
