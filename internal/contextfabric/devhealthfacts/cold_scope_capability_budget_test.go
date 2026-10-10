@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,25 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
+
+// syncBuffer is a log sink safe against the scope load's own goroutine, which
+// can outlive the call that started it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // delayClient makes each statement take a fixed time (honouring the caller's
 // context) and records when each branch started and ended.
@@ -114,7 +134,7 @@ func TestColdMembershipScopeLoadFailureNeverReportsACapabilityTimeout(t *testing
 			tables[i].err = errors.New("scope load failed")
 		}
 	}
-	var logs bytes.Buffer
+	var logs syncBuffer
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(old) })
@@ -139,7 +159,7 @@ func TestColdMembershipScopeLoadFailureNeverReportsACapabilityTimeout(t *testing
 }
 
 func TestColdMembershipScopeLoadIsLoggedOncePerOrganization(t *testing.T) {
-	var buf bytes.Buffer
+	var buf syncBuffer
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(old) })
@@ -189,7 +209,7 @@ func TestInvestmentPrerequisiteLoadCoversEverySubjectKindThatReadsTheScope(t *te
 }
 
 func TestPrerequisiteLoadFailureIsLoggedNotSwallowed(t *testing.T) {
-	var logs bytes.Buffer
+	var logs syncBuffer
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(old) })
