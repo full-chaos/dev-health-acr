@@ -1024,13 +1024,25 @@ func subOmittedRowsBeyondTheSkipBoundStillConverge(t *testing.T, ctx context.Con
 type cursorPosition struct {
 	Since time.Time `json:"since"`
 	After string    `json:"after"`
+	// Dim is set on a cursor of the dimension phase of a from-zero build:
+	// Since and After are then a position in dimension table number At, and
+	// every such cursor comes before every fact position.
+	Dim *struct {
+		At int `json:"i"`
+	} `json:"dim"`
 }
 
-func (c cursorPosition) zero() bool { return c.Since.IsZero() && c.After == "" }
+func (c cursorPosition) zero() bool { return c.Since.IsZero() && c.After == "" && c.Dim == nil }
 
 func (c cursorPosition) after(previous cursorPosition) bool {
 	if previous.zero() {
 		return !c.zero()
+	}
+	if (c.Dim == nil) != (previous.Dim == nil) {
+		return c.Dim == nil
+	}
+	if c.Dim != nil && c.Dim.At != previous.Dim.At {
+		return c.Dim.At > previous.Dim.At
 	}
 	if c.Since.After(previous.Since) {
 		return true

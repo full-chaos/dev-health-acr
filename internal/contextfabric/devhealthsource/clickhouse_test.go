@@ -1124,6 +1124,7 @@ func TestClickHouseProjectionSourceFullSnapshotPagesToCompletionWhenOversized(t 
 
 	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName}
 	seenRepos := map[string]bool{}
+	seenDimensionRepos := map[string]bool{}
 	seenWorkItemEntities := map[string]bool{}
 	seenWorkItemRelationships := map[string]bool{}
 	sawOrganization := false
@@ -1142,6 +1143,7 @@ func TestClickHouseProjectionSourceFullSnapshotPagesToCompletionWhenOversized(t 
 		if err := batch.Validate(); err != nil {
 			t.Fatalf("page %d: batch failed contract validation: %v", pages, err)
 		}
+		dimensionBatch := !devhealthsource.CursorFactPositionMovedForTest(t, batch.NextCursor)
 		for _, entity := range batch.Entities {
 			switch entity.Subject.Kind {
 			case contextfabric.SubjectOrganization:
@@ -1155,10 +1157,18 @@ func TestClickHouseProjectionSourceFullSnapshotPagesToCompletionWhenOversized(t 
 				}
 				seenWorkItemEntities[entity.Subject.CanonicalID] = true
 			default:
-				if seenRepos[entity.Subject.CanonicalID] {
-					t.Fatalf("page %d: repository %s was projected twice -- pagination skipped or replayed a row", pages, entity.Subject.CanonicalID)
+				// The repositories table is over the from-zero read's cap, so
+				// it is read whole before the walk (dimension_phase.go) and
+				// the walk emits its rows again: once per stage, never twice
+				// in one.
+				seen := seenRepos
+				if dimensionBatch {
+					seen = seenDimensionRepos
 				}
-				seenRepos[entity.Subject.CanonicalID] = true
+				if seen[entity.Subject.CanonicalID] {
+					t.Fatalf("page %d: repository %s was projected twice in one stage -- pagination skipped or replayed a row", pages, entity.Subject.CanonicalID)
+				}
+				seen[entity.Subject.CanonicalID] = true
 			}
 		}
 		for _, relationship := range batch.Relationships {
@@ -1177,8 +1187,8 @@ func TestClickHouseProjectionSourceFullSnapshotPagesToCompletionWhenOversized(t 
 		}
 		checkpoint.Cursor = batch.NextCursor
 	}
-	if len(seenRepos) != repoCount {
-		t.Fatalf("expected all %d repositories to be projected across %d pages, got %d: missing >= 1", repoCount, pages, len(seenRepos))
+	if len(seenRepos) != repoCount || len(seenDimensionRepos) != repoCount {
+		t.Fatalf("expected all %d repositories to be projected before the walk and by the walk across %d pages, got %d and %d", repoCount, pages, len(seenDimensionRepos), len(seenRepos))
 	}
 	if len(seenWorkItemEntities) != workItemCount || len(seenWorkItemRelationships) != workItemCount {
 		t.Fatalf("expected all %d work items and their relationships to be projected across %d pages, got %d entities / %d relationships",
