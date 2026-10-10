@@ -1,8 +1,10 @@
 package devhealthsource_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -74,12 +76,15 @@ func TestRepositoryStartIsNeverTheSyncStamp(t *testing.T) {
 		{"restamped", "example-org/restamped", "synthetic", synced, synced, ""},
 		{"later", "example-org/later", "synthetic", synced, synced.Add(time.Hour), ""},
 		{"epoch", "example-org/epoch", "synthetic", synced, time.Unix(0, 0).UTC(), ""},
+		{"subsecond", "example-org/subsecond", "synthetic", synced, time.Unix(0, 500_000_000).UTC(), ""},
 		{"real", "example-org/real", "synthetic", synced, early, ""},
 	}, fakeTable{match: firstSeenMarker})
 	requireStart(t, starts, "repository:restamped", nil)
 	requireStart(t, starts, "repository:later", nil)
 	requireStart(t, starts, "repository:epoch", nil)
 	requireStart(t, starts, "repository:real", &early)
+	subsecond := time.Unix(0, 500_000_000).UTC()
+	requireStart(t, starts, "repository:subsecond", &subsecond)
 }
 
 func TestRepositoryStartTakesTheEarliestEvidence(t *testing.T) {
@@ -94,9 +99,9 @@ func TestRepositoryStartTakesTheEarliestEvidence(t *testing.T) {
 		{"evidence-later", "example-org/later", "synthetic", synced, created, ""},
 		{"no-evidence", "example-org/none", "synthetic", synced, synced, ""},
 	}, fakeTable{match: firstSeenMarker, rows: [][]any{
-		{"restamped", firstPull},
-		{"evidence-earlier", firstPull},
-		{"evidence-later", laterEvidence},
+		{"restamped", firstPull, "pull_request"},
+		{"evidence-earlier", firstPull, "work_item"},
+		{"evidence-later", laterEvidence, "pull_request"},
 	}})
 	requireStart(t, starts, "repository:restamped", &firstPull)
 	requireStart(t, starts, "repository:evidence-earlier", &firstPull)
@@ -137,5 +142,69 @@ func TestRepositoryEvidenceIsNotReadForAnEmptyPage(t *testing.T) {
 	_, reads := repositoryStarts(t, nil, fakeTable{match: firstSeenMarker})
 	if reads != 0 {
 		t.Fatalf("evidence statements for a page with no repository = %d, want 0", reads)
+	}
+}
+
+func TestRepositoryStartDecisionIsLoggedByBasisOncePerPage(t *testing.T) {
+	t.Parallel()
+	synced := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	created := synced.Add(-30 * 24 * time.Hour)
+	firstPull := synced.Add(-200 * 24 * time.Hour)
+	firstItem := synced.Add(-100 * 24 * time.Hour)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM repos", cursorOf: repoCursorOf, rows: [][]any{
+			{"a", "example-org/a", "synthetic", synced, created, ""},
+			{"b", "example-org/b", "synthetic", synced, synced, ""},
+			{"c", "example-org/c", "synthetic", synced, synced, ""},
+			{"d", "example-org/d", "synthetic", synced, synced, ""},
+		}},
+		{match: firstSeenMarker, rows: [][]any{{"b", firstPull, "pull_request"}, {"c", firstItem, "work_item"}}},
+	}}
+	source, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	if _, _, err := source.WithLogger(logger).NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName}); err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	lines := decodeLines(t, buf.String(), "devhealthsource repository start decided")
+	if len(lines) != 1 {
+		t.Fatalf("decision lines = %d, want 1 per page: %s", len(lines), buf.String())
+	}
+	want := map[string]float64{"repositories": 4, "basis_created_at": 1, "basis_pull_request": 1, "basis_work_item": 1, "basis_none": 1}
+	for key, value := range want {
+		if got, _ := lines[0][key].(float64); got != value {
+			t.Fatalf("%s = %v, want %v (line %v)", key, lines[0][key], value, lines[0])
+		}
+	}
+	if lines[0]["evidence_read"] != true {
+		t.Fatalf("evidence_read = %v, want true", lines[0]["evidence_read"])
+	}
+}
+
+func TestRepositoryStartDecisionLineSaysWhenTheEvidenceReadFailed(t *testing.T) {
+	t.Parallel()
+	synced := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM repos", cursorOf: repoCursorOf, rows: [][]any{{"a", "example-org/a", "synthetic", synced, synced, ""}}},
+		{match: firstSeenMarker, err: errors.New("connection reset")},
+	}}
+	source, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	if _, _, err := source.WithLogger(logger).NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName}); err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	lines := decodeLines(t, buf.String(), "devhealthsource repository start decided")
+	if len(lines) != 1 || lines[0]["evidence_read"] != false || lines[0]["basis_none"] != float64(1) {
+		t.Fatalf("decision lines = %v, want one with evidence_read=false and basis_none=1", lines)
+	}
+	if failures := decodeLines(t, buf.String(), "devhealthsource table read failed"); len(failures) != 1 || failures[0]["table"] != "repository_first_seen" {
+		t.Fatalf("failure lines = %v, want one for table repository_first_seen", failures)
 	}
 }
