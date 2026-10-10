@@ -110,7 +110,13 @@ const SourceName = "dev_health_clickhouse"
 // every link row on the strength of other tables' rows: incremental catch-up
 // would never project them. The bump forces ErrProjectionSourceVersionChanged
 // until the operator-prescribed rebuild (acr-projector rebuild --org) runs.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v8"
+//
+// (v9, repository validity start: repos.created_at is rewritten to the sync
+// stamp on every sync, so the start of a repository is now its created_at only
+// while that is earlier than last_synced, or the earliest pull request or work
+// item created for it, and absent otherwise. Already-projected repositories
+// hold a re-stamped start; the bump forces the rebuild that replaces it.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v9"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and

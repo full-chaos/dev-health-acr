@@ -153,7 +153,7 @@ func logTableReadFailure(ctx context.Context, logger *slog.Logger, source, orgID
 }
 
 func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
-	ctx = withReadByteLimit(ctx, p.readByteLimit)
+	ctx = withStartLogger(withReadByteLimit(ctx, p.readByteLimit), p.logger)
 	yielded := false
 	p.yielded = &yielded
 	batch, available, err := p.nextBatchPage(ctx, checkpoint)
