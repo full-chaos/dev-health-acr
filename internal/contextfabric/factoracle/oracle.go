@@ -240,7 +240,17 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 			return nil, fmt.Errorf("read_facts %s: truncated by %s", kind, answer.Truncation.TruncatedBy)
 		}
 		if len(answer.Coverage) != end-start {
-			return nil, fmt.Errorf("read_facts %s: %d coverage rows for %d subjects", kind, len(answer.Coverage), end-start)
+			covered := map[string]bool{}
+			for _, row := range answer.Coverage {
+				covered[strings.ToLower(row.Subject.CanonicalID)] = true
+			}
+			var missing []string
+			for _, subject := range request.Subjects {
+				if !covered[strings.ToLower(subject.CanonicalID)] {
+					missing = append(missing, subject.CanonicalID)
+				}
+			}
+			return nil, fmt.Errorf("read_facts %s: %d coverage rows for %d subjects (no coverage row for: %s)", kind, len(answer.Coverage), end-start, strings.Join(missing, ", "))
 		}
 		// The answer is about the subjects that were asked: each is covered
 		// once, and no fact or coverage row names another subject.
