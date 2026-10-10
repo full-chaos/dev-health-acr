@@ -183,6 +183,9 @@ const (
 	membershipScopeMaxUnits = 100000
 	// membershipScopeMaxOrgs bounds how many organizations are remembered.
 	membershipScopeMaxOrgs = 64
+	// membershipScopeMaxLogged bounds the set of cold loads already reported
+	// (one key per organization and outcome); an evicted key reports again.
+	membershipScopeMaxLogged = 4 * membershipScopeMaxOrgs
 	// membershipScopeTTL bounds how long a remembered scope is served. A
 	// completed run is immutable, so a fresh entry is exact; the bound only
 	// limits how long a set read while the run's rows were still becoming
@@ -238,6 +241,12 @@ func (c *membershipScopeCache) firstLoad(orgID string) bool {
 	if _, ok := c.logged[orgID]; ok {
 		return false
 	}
+	if len(c.logged) >= membershipScopeMaxLogged {
+		for key := range c.logged {
+			delete(c.logged, key)
+			break
+		}
+	}
 	c.logged[orgID] = struct{}{}
 	return true
 }
@@ -259,8 +268,27 @@ func (c *membershipScopeCache) put(orgID, runID string, ids []string, now time.T
 // remember and a missing scope cache keep the subquery text, so the answer is
 // the same in every case.
 func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID string) (membershipScope, error) {
+	scope, _, err := p.resolveMembershipScopeRun(ctx, orgID)
+	return scope, err
+}
+
+// loadedMembershipScopeKey carries the scope LoadPrerequisites resolved, with
+// the run it was resolved for. A statement of the same read that meets the
+// same run uses it as is, whatever the cache could keep: a run too large to
+// remember, an empty run and a failed load are loaded once, never again inside
+// the capability's clock. A different run id is a new state and loads anew.
+type loadedMembershipScopeKey struct{}
+
+type loadedMembershipScope struct {
+	orgID, runID string
+	scope        membershipScope
+}
+
+// resolveMembershipScopeRun is resolveMembershipScope that also names the run
+// the scope belongs to ("" when the scope came from no resolvable run).
+func (p *InvestmentProvider) resolveMembershipScopeRun(ctx context.Context, orgID string) (membershipScope, string, error) {
 	if p.scopes == nil {
-		return subqueryMembershipScope, nil
+		return subqueryMembershipScope, "", nil
 	}
 	runID := ""
 	runs := 0
@@ -269,21 +297,24 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 		return row.Scan(&runID)
 	}); err != nil {
 		if ctx.Err() != nil {
-			return membershipScope{}, err
+			return membershipScope{}, "", err
 		}
 		// The run could not be resolved: never serve a remembered set for a run
 		// that may have been replaced. The scope subqueries decide in the
 		// statement itself, exactly as before.
-		return subqueryMembershipScope, nil
+		return subqueryMembershipScope, "", nil
 	}
 	if runs > 1 {
-		return subqueryMembershipScope, nil
+		return subqueryMembershipScope, "", nil
 	}
 	switch runID {
 	case "":
-		return membershipScope{mode: membershipScopeNone}, nil
+		return membershipScope{mode: membershipScopeNone}, "", nil
 	case legacyRunID:
-		return subqueryMembershipScope, nil
+		return subqueryMembershipScope, "", nil
+	}
+	if loaded, ok := ctx.Value(loadedMembershipScopeKey{}).(loadedMembershipScope); ok && loaded.orgID == orgID && loaded.runID == runID {
+		return loaded.scope, runID, nil
 	}
 	// The shared read must not die with the first caller: it runs on a context
 	// that keeps the caller's values but not its cancellation, under its own
@@ -312,7 +343,16 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 		if overflow || len(ids) == 0 {
 			// Too large to remember, or no row visible for the run yet (a run
 			// marker can be seen before its rows, and an organization's rows
-			// can be deleted): an empty set is never remembered.
+			// can be deleted): an empty set is never remembered. The load is
+			// still reported once per organization and outcome, so a cold
+			// load that cannot be remembered is not silent.
+			outcome, units := "empty", 0
+			if rows > 0 && len(ids) > 0 {
+				outcome, units = "overflow", membershipScopeMaxUnits
+			}
+			if p.scopes.firstLoad(orgID + "\x00" + outcome) {
+				slog.InfoContext(ctx, "investment membership scope cold load", "outcome", outcome, "duration_ms", clock().Sub(started).Milliseconds(), "units", units)
+			}
 			return []string(nil), nil
 		}
 		p.scopes.put(orgID, runID, ids, clock())
@@ -324,7 +364,7 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 	var loaded any
 	select {
 	case <-ctx.Done():
-		return membershipScope{}, ctx.Err()
+		return membershipScope{}, "", ctx.Err()
 	case res := <-result:
 		if res.Err != nil {
 			// The scope ids are an optimization of the scope subqueries: a load
@@ -332,7 +372,7 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 			// them, so the read costs more but still answers. A caller that is
 			// itself cancelled is not degraded.
 			if err := ctx.Err(); err != nil {
-				return membershipScope{}, err
+				return membershipScope{}, "", err
 			}
 			reason := "load_failed"
 			if errors.Is(res.Err, context.DeadlineExceeded) {
@@ -340,13 +380,13 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 			}
 			slog.WarnContext(ctx, "devhealthfacts.membership_scope_fallback", "reason", contextfabric.SanitizeLogAttr(reason), "path", contextfabric.SanitizeLogAttr("scope_subqueries"), "elapsed_ms", clock().Sub(started).Milliseconds(), "load_timeout_ms", loadTimeout.Milliseconds())
 			projectMixEvent(ctx, membershipScopeFallbackReader, res.Err)
-			return subqueryMembershipScope, nil
+			return subqueryMembershipScope, runID, nil
 		}
 		loaded = res.Val
 	}
 	ids, _ := loaded.([]string)
 	if ids == nil {
-		return subqueryMembershipScope, nil
+		return subqueryMembershipScope, runID, nil
 	}
-	return membershipScope{mode: membershipScopeIDs, ids: ids}, nil
+	return membershipScope{mode: membershipScopeIDs, ids: ids}, runID, nil
 }

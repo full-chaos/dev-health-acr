@@ -88,17 +88,19 @@ func (p *InvestmentProvider) Capability() contextfabric.FactCapability {
 
 // LoadPrerequisites loads the membership scope a project, repository or team
 // read applies, so a cold load runs under its own bound and not inside the
-// capability's budget.
-func (p *InvestmentProvider) LoadPrerequisites(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) error {
+// capability's budget. The returned context carries the resolved scope; the
+// read's statements use it and never load it again.
+func (p *InvestmentProvider) LoadPrerequisites(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (context.Context, error) {
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
-		return err
+		return ctx, err
 	}
 	for _, subject := range query.Subjects {
 		switch subject.Kind {
 		case contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository:
 			started := clock()
-			if _, err := p.resolveMembershipScope(ctx, orgID); err != nil {
+			scope, runID, err := p.resolveMembershipScopeRun(ctx, orgID)
+			if err != nil {
 				reason := "error"
 				switch {
 				case errors.Is(err, context.DeadlineExceeded):
@@ -107,12 +109,15 @@ func (p *InvestmentProvider) LoadPrerequisites(ctx context.Context, principal st
 					reason = "canceled"
 				}
 				slog.WarnContext(ctx, "investment membership scope prerequisite load failed", "reason", contextfabric.SanitizeLogAttr(reason), "duration_ms", clock().Sub(started).Milliseconds())
-				return err
+				return ctx, err
 			}
-			return nil
+			if runID == "" {
+				return ctx, nil
+			}
+			return context.WithValue(ctx, loadedMembershipScopeKey{}, loadedMembershipScope{orgID: orgID, runID: runID, scope: scope}), nil
 		}
 	}
-	return nil
+	return ctx, nil
 }
 
 func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {

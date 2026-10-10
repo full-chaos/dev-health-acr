@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // syncBuffer is a log sink safe against the scope load's own goroutine, which
@@ -65,8 +66,21 @@ func (c *delayClient) Query(ctx context.Context, statement string, bindings []co
 
 func coldScopeRegistry(t *testing.T, client *delayClient) (*contextfabric.FactCapabilityRegistry, contextfabric.CanonicalFactRequest) {
 	t.Helper()
+	return coldScopeRegistryFrom(t, devhealthfacts.NewProviders(client))
+}
+
+// coldScopeRegistryProduction builds the providers the way the hosted runtime
+// does (internal/runtime/hosted/open.go): through the instrumenting decorator.
+func coldScopeRegistryProduction(t *testing.T, client contextpacket.ClickHouseQueryClient) (*contextfabric.FactCapabilityRegistry, contextfabric.CanonicalFactRequest) {
+	t.Helper()
+	providers := devhealthfacts.NewInstrumentedProvidersWithOperations(client, readers.NoopInstrumentation{}, nil)
+	return coldScopeRegistryFrom(t, providers)
+}
+
+func coldScopeRegistryFrom(t *testing.T, providers []contextfabric.FactProvider) (*contextfabric.FactCapabilityRegistry, contextfabric.CanonicalFactRequest) {
+	t.Helper()
 	var provider contextfabric.FactProvider
-	for _, p := range devhealthfacts.NewProviders(client) {
+	for _, p := range providers {
 		if p.Capability().Kind == contextfabric.FactInvestment {
 			provider = p
 		}
@@ -199,7 +213,7 @@ func TestInvestmentPrerequisiteLoadCoversEverySubjectKindThatReadsTheScope(t *te
 			t.Fatal("the investment provider does not implement FactPrerequisiteLoader")
 		}
 		query := contextfabric.FactQuery{Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{{Kind: kind, CanonicalID: "x", Label: "x"}}}
-		if err := loader.LoadPrerequisites(context.Background(), storage.Principal{OrgID: "org-kinds-" + string(kind)}, query); err != nil {
+		if _, err := loader.LoadPrerequisites(context.Background(), storage.Principal{OrgID: "org-kinds-" + string(kind)}, query); err != nil {
 			t.Fatalf("%s: %v", kind, err)
 		}
 		if got := countStatements(client.inner, "groupUniqArray(100001)(work_unit_id)"); got != wantLoads {
@@ -223,11 +237,30 @@ func TestPrerequisiteLoadFailureIsLoggedNotSwallowed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	query := contextfabric.FactQuery{Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectProject, CanonicalID: "x", Label: "x"}}}
-	if err := loader.LoadPrerequisites(ctx, storage.Principal{OrgID: "org-prereq-fail"}, query); err == nil {
+	if _, err := loader.LoadPrerequisites(ctx, storage.Principal{OrgID: "org-prereq-fail"}, query); err == nil {
 		t.Fatal("a cancelled caller must surface its error: measurement did not happen")
 	}
 	out := logs.String()
 	if !strings.Contains(out, "investment membership scope prerequisite load failed") || !strings.Contains(out, "reason=canceled") || !strings.Contains(out, "duration_ms=") {
 		t.Fatalf("prerequisite failure not logged with a reason class:\n%s", out)
+	}
+}
+
+// The production composition wraps every provider in the instrumenting
+// decorator; the prerequisite step must survive it (CHAOS-9128 review r1 P1).
+func TestFirstProjectInvestmentReadThroughTheProductionCompositionDoesNotSpendTheCapabilityBudget(t *testing.T) {
+	client := &delayClient{inner: &fakeClient{tables: coldScopeTables()}, delays: map[string]time.Duration{
+		"groupUniqArray(100001)(work_unit_id)": 3500 * time.Millisecond,
+		projectScopePhaseZero:                  2 * time.Second,
+	}}
+	registry, request := coldScopeRegistryProduction(t, client)
+	first := readColdScope(t, registry, client, request, "org-cold-scope-prod")
+	if len(first) == 0 {
+		t.Fatal("no coverage source: measurement did not happen")
+	}
+	for _, s := range first {
+		if strings.Contains(s.Reason, "timed out") {
+			t.Errorf("first read: %s reason=%q", s.Source, s.Reason)
+		}
 	}
 }

@@ -13,10 +13,10 @@ type loaderProviderStub struct {
 	loads                            int
 }
 
-func (p *loaderProviderStub) LoadPrerequisites(ctx context.Context, _ storage.Principal, _ FactQuery) error {
+func (p *loaderProviderStub) LoadPrerequisites(ctx context.Context, _ storage.Principal, _ FactQuery) (context.Context, error) {
 	_, p.loadHasDeadline = ctx.Deadline()
 	p.loads++
-	return nil
+	return ctx, nil
 }
 
 func (p *loaderProviderStub) ReadFacts(ctx context.Context, principal storage.Principal, query FactQuery) (FactProviderResult, error) {
