@@ -98,6 +98,53 @@ type Oracle struct {
 	// OperationCalls every run_operation call.
 	Calls          []ShapeCase
 	OperationCalls []ShapeCase
+
+	// SubjectTeam is, after Run, the team the team-scoped shapes ran for: the
+	// first team in id order whose capacityForecast answer holds a backlog
+	// size in the window. SubjectTeamsSkipped counts the teams before it.
+	SubjectTeam         string
+	SubjectTeamsSkipped int
+	generated           []ShapeCase
+}
+
+// measurableTeam returns the first team, in the order given, for which the
+// capacityForecast root answers with a backlog size. The probe is a plain
+// plane call: it is neither cached nor recorded as a call of the run.
+func (o *Oracle) measurableTeam(ctx context.Context, teams []string) (string, int, error) {
+	if len(teams) == 0 {
+		return "", 0, nil
+	}
+	var probe *Shape
+	for i := range o.shapes {
+		if o.shapes[i].Operation == "capacityForecast" {
+			probe = &o.shapes[i]
+			break
+		}
+	}
+	if probe == nil {
+		return "", 0, fmt.Errorf("no capacityForecast shape to choose a measurable team with")
+	}
+	for i, id := range teams {
+		variables := map[string]any{"input": map[string]any{"teamId": "team:" + id, "historyDays": 90, "simulations": 1000}}
+		raw, err := o.Planes.GraphQL(ctx, *probe, variables)
+		if err != nil {
+			return "", 0, fmt.Errorf("choosing the subject team: %w", err)
+		}
+		var answer GraphQLAnswer
+		if err := decodeNumbered(raw, &answer); err != nil || answer.Call != string(directread.CallServed) {
+			continue
+		}
+		data, err := decodeJSON(answer.Data)
+		if err != nil {
+			continue
+		}
+		root, _ := data.(map[string]any)
+		forecast, _ := root["capacityForecast"].(map[string]any)
+		if forecast != nil && forecast["backlogSize"] != nil {
+			return id, i, nil
+		}
+	}
+	return "", 0, fmt.Errorf("no team with measured wip in the window: %d candidate teams, none gave a capacityForecast backlog size", len(teams))
 }
 
 func (o *Oracle) graphQL(ctx context.Context, shape Shape, variables map[string]any) (GraphQLAnswer, error) {
@@ -357,7 +404,7 @@ func (o *Oracle) Run(ctx context.Context) (*Report, error) {
 	o.shapes, o.answers, o.opAnswers, o.Calls, o.OperationCalls = shapes, map[string]json.RawMessage{}, map[string]json.RawMessage{}, nil, nil
 	cases := o.ShapeCases
 	if cases == nil {
-		if cases, err = o.generatedCases(); err != nil {
+		if cases, err = o.generatedCases(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -530,12 +577,20 @@ func dateTime(day string) string { return day + "T00:00:00Z" }
 // generatedCases builds the shape pass from the store and the window: one
 // variable set per shape (five for catalogValues, one per dimension). Each
 // variable path is checked against the policy before it is used.
-func (o *Oracle) generatedCases() ([]ShapeCase, error) {
+func (o *Oracle) generatedCases(ctx context.Context) ([]ShapeCase, error) {
+	if o.generated != nil {
+		return o.generated, nil
+	}
 	start, last := o.Window.startDate(), o.Window.lastDay()
 	teams := o.Store.TeamIDs()
 	team := ""
 	if len(teams) > 0 {
-		team = "team:" + teams[0]
+		chosen, skipped, err := o.measurableTeam(ctx, teams)
+		if err != nil {
+			return nil, err
+		}
+		team = "team:" + chosen
+		o.SubjectTeam, o.SubjectTeamsSkipped = chosen, skipped
 	}
 	var out []ShapeCase
 	for _, shape := range o.shapes {
@@ -583,6 +638,7 @@ func (o *Oracle) generatedCases() ([]ShapeCase, error) {
 			out = append(out, ShapeCase{ShapeID: shape.ID(), Variables: variables})
 		}
 	}
+	o.generated = out
 	return out, nil
 }
 

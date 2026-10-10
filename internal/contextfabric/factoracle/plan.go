@@ -101,6 +101,7 @@ var valuePaths = map[string][]pathRule{
 		{Path: "compoundingRisk.rows[*].components.singleOwnerRatio", Reason: "raw component; " + noField},
 		{Path: "compoundingRisk.rows[*].components.reviewLatencyP90h", Reason: "raw component; " + noField},
 		{Path: "compoundingRisk.rows[*].thresholds", Reason: noField},
+		{Path: "compoundingRisk.rows[*].coverage", Reason: noField},
 		{Path: "compoundingRisk.trend", Reason: "an organization average per day; no acr fact"},
 	},
 	"throughputForecast": {
@@ -550,7 +551,7 @@ var temporaryAllowances = map[string]temporaryAllowance{
 		Contract: "sha256:ad5d774fa899197d84842001d2f9fcee48155c5356a27238e1d726e1aff4db51",
 	},
 	"capacityForecast": {
-		Operation: "capacityForecast", Window: "input.historyDays", Narrow: 30, Echo: "capacityForecast.historyDays", WideStated: 60, NarrowStated: 28,
+		Operation: "capacityForecast", Window: "input.historyDays", Narrow: 30, Echo: "capacityForecast.historyDays", WideStated: 91, NarrowStated: 31,
 		Paths:    []string{"capacityForecast.backlogSize"},
 		Contract: "sha256:f93d3cf5c8b5ecd443fbacaeeb7a21aa84a06d7177f748732c2c06a13a8478dc",
 	},
