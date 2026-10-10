@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"testing"
 
@@ -100,6 +101,39 @@ func TestADegradedAnswerStopsAtTheEvidenceBound(t *testing.T) {
 
 	if !truncated || len(evidence) > contractsv1.ContextFabricEvidenceRefIDsMaxCount || len(evidence) != 3*len(claims) || len(claims) != contractsv1.ContextFabricEvidenceRefIDsMaxCount/3 {
 		t.Fatalf("claims = %d evidence = %d truncated = %v, want a claim only with its evidence inside the bound", len(claims), len(evidence), truncated)
+	}
+}
+
+func TestADegradedAnswerEvidenceBoundIsInclusive(t *testing.T) {
+	perFact := 5
+	atBound := contractsv1.ContextFabricEvidenceRefIDsMaxCount / perFact
+	for _, tc := range []struct {
+		facts         int
+		wantTruncated bool
+	}{{atBound, false}, {atBound + 1, true}} {
+		facts := make([]CanonicalFact, 0, tc.facts)
+		for index := 0; index < tc.facts; index++ {
+			facts = append(facts, degradedScalarFact(index, perFact))
+		}
+		claims, evidence, truncated := mintDegradedFactClaims(facts)
+		if truncated != tc.wantTruncated || len(claims) != atBound || len(evidence) != atBound*perFact {
+			t.Fatalf("%d facts: claims = %d evidence = %d truncated = %v, want %d claims, %d evidence and %v", tc.facts, len(claims), len(evidence), truncated, atBound, atBound*perFact, tc.wantTruncated)
+		}
+	}
+}
+
+func TestADegradedAnswerSkipsAFieldNoClaimCanCarry(t *testing.T) {
+	nan := math.NaN()
+	facts := []CanonicalFact{degradedClaimFact(1, 1, map[string]FactValue{
+		" padded": StringFactValue("x"),
+		"nan":     {Number: &nan},
+		"kept":    StringFactValue("y"),
+	})}
+
+	claims, _, _ := mintDegradedFactClaims(facts)
+
+	if len(claims) != 1 || claims[0].Field != "kept" {
+		t.Fatalf("claims = %+v, want only the field a valid, grounded claim can carry", claims)
 	}
 }
 
