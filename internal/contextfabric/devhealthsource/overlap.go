@@ -99,6 +99,10 @@ type windowScope struct {
 	// pending is the window batch this scope emitted last, not yet known to
 	// be applied (settle decides on the next call).
 	pending *pendingWindow
+	// catchUp is the scope's catch-up pass (catch_up.go).
+	catchUp catchUpPass
+	// ahead says the scope's last paged read stopped with rows beyond it.
+	ahead bool
 }
 
 // pendingWindow is an emitted window batch whose rows are not yet "seen":

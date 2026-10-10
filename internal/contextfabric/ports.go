@@ -1456,6 +1456,34 @@ type ProjectionWindowReporter interface {
 	ProjectionWindowPass(ProjectionCheckpoint) ProjectionWindowPass
 }
 
+// ProjectionCatchUp is how far a source's cursor is from the rows it has still
+// to read, for one checkpoint scope.
+type ProjectionCatchUp struct {
+	// CursorKnown says CursorAt is the stamp the checkpoint's cursor stands
+	// on. It is false for a checkpoint that has no cursor yet and for a
+	// cursor the source cannot place on its clock.
+	CursorKnown bool
+	CursorAt    time.Time
+	// PassOpen: a stretch of paged work is in progress. PassEdge is the
+	// source's clock when that stretch started; the pass ends when the
+	// cursor reaches it or the source is caught up.
+	PassOpen bool
+	PassEdge time.Time
+	// WorkAhead: the source's last read for this scope stopped with rows
+	// beyond it that it did not hand out (a page cut at its row limit, or a
+	// read that ended without a batch before the rows ran out). It is false
+	// after a read that took every row there was.
+	WorkAhead bool
+}
+
+// ProjectionCatchUpReporter is an OPTIONAL capability a ProjectionSource
+// implements when it can say where a checkpoint's cursor stands on its own
+// clock. A drain that ends with work left knows only THAT work is left; this
+// says how far behind the cursor is. Read-only.
+type ProjectionCatchUpReporter interface {
+	ProjectionCatchUp(ProjectionCheckpoint) ProjectionCatchUp
+}
+
 // ProjectionSourceEnablement is an OPTIONAL capability (CHAOS-3898 S2a-2,
 // design brief §3.3/item 5's BuildCompletionDisabledAtFreeze) a
 // ProjectionSource may implement to report whether it is currently

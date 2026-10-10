@@ -1559,6 +1559,19 @@ type tickFreshnessStats struct {
 	// bucket identity: an open pass inside its bound is the ordinary state of
 	// an organization whose window holds more rows than one tick walks.
 	orgsWindowPassOpen int64
+	// orgsCatchingUp is the catching_up bucket: a source of the organization
+	// ended the tick with work left (endedWithWorkLeft). The tick did not read
+	// everything there was to read, so the organization is not ok and the
+	// tick is not complete, however healthy every attempt was.
+	orgsCatchingUp int64
+	// catchingUpSources names the sources behind it; sourcesCatchingUp counts
+	// the (org, source) pairs; catchUpLagMax is the largest distance between
+	// such a pair's cursor and now, in seconds, and catchUpLagKnown says
+	// one of them could place its cursor. Guarded by mu.
+	sourcesCatchingUp int64
+	catchingUpSources []string
+	catchUpLagMax     int64
+	catchUpLagKnown   bool
 }
 
 func (s *tickFreshnessStats) recordOK()              { atomic.AddInt64(&s.orgsOK, 1) }
@@ -1570,6 +1583,39 @@ func (s *tickFreshnessStats) recordBackoff()         { atomic.AddInt64(&s.orgsBa
 func (s *tickFreshnessStats) recordSourceFailedOrg() { atomic.AddInt64(&s.orgsSourceFailed, 1) }
 func (s *tickFreshnessStats) recordPairFailedOrg()   { atomic.AddInt64(&s.orgsPairFailed, 1) }
 func (s *tickFreshnessStats) recordWindowBehind()    { atomic.AddInt64(&s.orgsWindowBehind, 1) }
+func (s *tickFreshnessStats) recordCatchingUp()      { atomic.AddInt64(&s.orgsCatchingUp, 1) }
+
+// recordPairCatchingUp notes one (org, source) pair that ended the tick with
+// work left. lagSeconds is negative when the source could not place its
+// cursor.
+func (s *tickFreshnessStats) recordPairCatchingUp(source string, lagSeconds int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sourcesCatchingUp++
+	s.catchingUpSources = appendDistinctSourceName(s.catchingUpSources, source)
+	if lagSeconds < 0 {
+		return
+	}
+	s.catchUpLagKnown = true
+	if lagSeconds > s.catchUpLagMax {
+		s.catchUpLagMax = lagSeconds
+	}
+}
+
+// snapshotCatchUp returns the catch-up fields of the summary line. The lag is
+// -1 when pairs are catching up and none could place its cursor: an unknown
+// lag must not read as zero, and a known lag of zero must not read as unknown.
+func (s *tickFreshnessStats) snapshotCatchUp() (pairs int64, names []string, lagMax int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	names = make([]string, len(s.catchingUpSources))
+	copy(names, s.catchingUpSources)
+	lagMax = s.catchUpLagMax
+	if s.sourcesCatchingUp > 0 && !s.catchUpLagKnown {
+		lagMax = -1
+	}
+	return s.sourcesCatchingUp, names, lagMax
+}
 
 // orgOutcome is the CLOSED vocabulary of per-organization freshness buckets.
 // An organization sits in exactly one, which is what makes the buckets sum to
@@ -1584,6 +1630,7 @@ const (
 	orgOutcomePairFailed      orgOutcome = "pair_failed"
 	orgOutcomeUnevaluated     orgOutcome = "unevaluated"
 	orgOutcomeWindowBehind    orgOutcome = "window_behind"
+	orgOutcomeCatchingUp      orgOutcome = "catching_up"
 )
 
 // orgSignals is what one per-organization path OBSERVED. It carries no
@@ -1614,6 +1661,9 @@ type orgSignals struct {
 	// open. windowBehind: that re-read is older than its bound
 	// (contextfabric.ProjectionWindowPass.Overdue).
 	windowOpen, windowBehind bool
+	// catchingUp: a source ended this tick with work left (runPair's
+	// workLeft).
+	catchingUp bool
 	// healthy names the bucket for "evaluated, and nothing was wrong".
 	// Steady state is ok. A build in progress is backoff, because "still
 	// building" is not a claim of health and never was one.
@@ -1668,6 +1718,8 @@ func orgOutcomeOf(signals orgSignals) orgOutcome {
 		return orgOutcomeBackoff
 	case signals.stale:
 		return orgOutcomeRebuildRequired
+	case signals.catchingUp:
+		return orgOutcomeCatchingUp
 	case signals.windowBehind:
 		return orgOutcomeWindowBehind
 	default:
@@ -1699,6 +1751,8 @@ func (s *tickFreshnessStats) recorderFor(outcome orgOutcome) func() {
 		return s.recordUnevaluated
 	case orgOutcomeWindowBehind:
 		return s.recordWindowBehind
+	case orgOutcomeCatchingUp:
+		return s.recordCatchingUp
 	}
 	return nil
 }
@@ -2091,6 +2145,7 @@ func (c *Coordinator) Tick(ctx context.Context) {
 	sourcesEvaluated, sourcesFailed, sourcesWithheld, failedSources, withheldSources := stats.snapshotSources()
 	buildSourcesFailed, buildFailedSources := stats.snapshotBuild()
 	pairFailures, pairFailedNames := stats.snapshotPairFailures()
+	sourcesCatchingUp, catchingUpSources, catchUpLagMax := stats.snapshotCatchUp()
 	c.logger.InfoContext(ctx, "context_fabric: projection tick freshness summary",
 		"orgs_ok", atomic.LoadInt64(&stats.orgsOK),
 		"orgs_rebuild_required", atomic.LoadInt64(&stats.orgsRebuildRequired),
@@ -2117,7 +2172,7 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// The bucket IDENTITY, stated on the line so a consumer can check it
 		// rather than trust it: orgs_configured == ok + rebuild_required +
 		// backoff + source_failed + pair_failed + divergence_recovered +
-		// window_behind + unevaluated.
+		// window_behind + catching_up + unevaluated.
 		// It did NOT hold before this: divergence recovery returned after
 		// recording orgs_divergence_recovered and no bucket at all, so one
 		// configured organization summed to zero and simply vanished from
@@ -2138,6 +2193,12 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// no longer unevaluated -- and a tick cancelled mid-flight must
 		// still report itself unfinished. orgs_truncated is the input the
 		// bucket no longer supplies.
+		// catching_up is a bucket of the identity above and is deliberately
+		// NOT in the sum below: a tick that left a source with work to read
+		// evaluated every organization and still did not read everything, so
+		// an organization in that bucket makes the sum fall short and the
+		// tick incomplete. "Complete" said of such a tick is the claim this
+		// line exists to refuse.
 		"tick_complete", atomic.LoadInt64(&stats.orgsUnevaluated) == 0 &&
 			atomic.LoadInt64(&stats.orgsTruncated) == 0 &&
 			int64(len(orgIDs)) == atomic.LoadInt64(&stats.orgsOK)+
@@ -2198,6 +2259,15 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// overdue or not. Both present on every tick, at zero.
 		"orgs_window_behind", atomic.LoadInt64(&stats.orgsWindowBehind),
 		"orgs_window_pass_open", atomic.LoadInt64(&stats.orgsWindowPassOpen),
+		// The catch-up. orgs_catching_up is a bucket: an organization there
+		// is NOT in orgs_ok, and tick_complete is false while it is not zero.
+		// catch_up_lag_seconds_max is the largest distance between a
+		// catching-up pair's cursor and now; -1 when the only such pairs
+		// could not place their cursor. All present on every tick.
+		"orgs_catching_up", atomic.LoadInt64(&stats.orgsCatchingUp),
+		"sources_catching_up", sourcesCatchingUp,
+		"catching_up_sources", contextfabric.SanitizeLogStrings(catchingUpSources),
+		"catch_up_lag_seconds_max", catchUpLagMax,
 	)
 	// CHAOS-3898 S2a-2 (design brief §3.1 step 5/§3.5): sweep organizations
 	// whose grace window has elapsed into begin_retire (creating the
@@ -2324,7 +2394,7 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 
 	evaluated, stale, sourceFailed := false, false, false
 	pairBrokeAny := false
-	windowOpen, windowBehind := false, false
+	windowOpen, windowBehind, catchingUp := false, false, false
 	for _, source := range c.sourceNames {
 		if scope.done() {
 			// No bookkeeping here on purpose: the org-scope finalizer
@@ -2338,16 +2408,17 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 		budget := c.drainBudget
 		var pairEvaluated, pairStale, pairFailed, pairWithheld, pairBroke bool
 		var pairStage contextfabric.PairStage
-		var pairWindow contextfabric.ProjectionWindowPass
+		var reading pairReading
 		_ = scope.run(func(ctx context.Context) error {
 			var err error
-			pairEvaluated, pairStale, pairFailed, pairWithheld, pairStage, pairBroke, pairWindow, err = c.runPair(ctx, orgID, source, c.checkpoints, &budget)
+			pairEvaluated, pairStale, pairFailed, pairWithheld, pairStage, pairBroke, reading, err = c.runPair(ctx, orgID, source, c.checkpoints, &budget)
 			return err
 		})
 		evaluated = evaluated || pairEvaluated || pairStale
 		stale = stale || pairStale
-		windowOpen = windowOpen || pairWindow.Open
-		windowBehind = windowBehind || pairWindow.Overdue
+		windowOpen = windowOpen || reading.window.Open
+		windowBehind = windowBehind || reading.window.Overdue
+		catchingUp = catchingUp || reading.workLeft
 		pairBrokeAny = pairBrokeAny || pairBroke
 		// A pair withheld by its own failure backoff counts as a failing
 		// source for the organization's bucket too. Otherwise a healthy
@@ -2359,6 +2430,9 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 			scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld, truncated)
 			if pairBroke {
 				scope.stats.recordPairFailure(source, pairStage)
+			}
+			if reading.workLeft {
+				scope.stats.recordPairCatchingUp(source, catchUpLagSeconds(c.now(), reading.catchUp))
 			}
 		})
 	}
@@ -2374,6 +2448,7 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 		pairBroke:    pairBrokeAny,
 		windowOpen:   windowOpen,
 		windowBehind: windowBehind,
+		catchingUp:   catchingUp,
 		healthy:      orgOutcomeOK,
 	})
 }
@@ -2428,7 +2503,7 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 
 	evaluated, stale, sourceFailed := false, false, false
 	pairBrokeAny := false
-	windowOpen, windowBehind := false, false
+	windowOpen, windowBehind, catchingUp := false, false, false
 	for _, source := range c.sourceNames {
 		if scope.done() {
 			// No bookkeeping here on purpose: the org-scope finalizer
@@ -2442,16 +2517,17 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 		budget := c.drainBudget
 		var pairEvaluated, pairStale, pairFailed, pairWithheld, pairBroke bool
 		var pairStage contextfabric.PairStage
-		var pairWindow contextfabric.ProjectionWindowPass
+		var reading pairReading
 		_ = scope.run(func(ctx context.Context) error {
 			var err error
-			pairEvaluated, pairStale, pairFailed, pairWithheld, pairStage, pairBroke, pairWindow, err = c.runPair(ctx, orgID, source, checkpoints, &budget)
+			pairEvaluated, pairStale, pairFailed, pairWithheld, pairStage, pairBroke, reading, err = c.runPair(ctx, orgID, source, checkpoints, &budget)
 			return err
 		})
 		evaluated = evaluated || pairEvaluated || pairStale
 		stale = stale || pairStale
-		windowOpen = windowOpen || pairWindow.Open
-		windowBehind = windowBehind || pairWindow.Overdue
+		windowOpen = windowOpen || reading.window.Open
+		windowBehind = windowBehind || reading.window.Overdue
+		catchingUp = catchingUp || reading.workLeft
 		pairBrokeAny = pairBrokeAny || pairBroke
 		// A pair withheld by its own failure backoff counts as a failing
 		// source for the organization's bucket too. Otherwise a healthy
@@ -2463,6 +2539,9 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 			scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld, truncated)
 			if pairBroke {
 				scope.stats.recordPairFailure(source, pairStage)
+			}
+			if reading.workLeft {
+				scope.stats.recordPairCatchingUp(source, catchUpLagSeconds(c.now(), reading.catchUp))
 			}
 		})
 	}
@@ -2478,6 +2557,7 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 		pairBroke:    pairBrokeAny,
 		windowOpen:   windowOpen,
 		windowBehind: windowBehind,
+		catchingUp:   catchingUp,
 		healthy:      orgOutcomeOK,
 	})
 }
@@ -2580,8 +2660,9 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 		budget := c.drainBudget // CHAOS-7171: per-source, see runOrgLegacy
 		var buildEvaluated, buildFailed, buildWithheld, buildRebuild, buildBroke bool
 		var buildStage contextfabric.PairStage
+		var buildReading pairReading
 		_ = scope.run(func(ctx context.Context) error {
-			buildEvaluated, buildFailed, buildWithheld, buildRebuild, buildStage, buildBroke = c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
+			buildEvaluated, buildFailed, buildWithheld, buildRebuild, buildStage, buildBroke, buildReading = c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
 			return nil
 		})
 		// Folded into signals AS OBSERVED, never into locals copied out
@@ -2598,10 +2679,14 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 		signals.pairBroke = signals.pairBroke || buildBroke
 		signals.stale = signals.stale || buildRebuild
 		signals.sourceFailed = signals.sourceFailed || buildFailed || buildWithheld
+		signals.catchingUp = signals.catchingUp || buildReading.workLeft
 		scope.recordPair(func(truncated bool) {
 			scope.stats.recordBuildPairOutcome(source, buildEvaluated, buildFailed, buildWithheld, truncated)
 			if buildBroke {
 				scope.stats.recordPairFailure(source, buildStage)
+			}
+			if buildReading.workLeft {
+				scope.stats.recordPairCatchingUp(source, catchUpLagSeconds(c.now(), buildReading.catchUp))
 			}
 		})
 	}
@@ -2760,7 +2845,7 @@ func (c *Coordinator) abortRefusedBuild(scope *orgScope, orgID string, targetEpo
 // cf_build_source_progress's own last-successful (now stale) value, with
 // no way to recover the lost batches' rows once the checkpoint had already
 // advanced past them.
-func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, failed, withheld, rebuild bool, pairStage contextfabric.PairStage, pairBroke bool) {
+func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, failed, withheld, rebuild bool, pairStage contextfabric.PairStage, pairBroke bool, reading pairReading) {
 	key := orgID + "\x00build\x00" + source
 	started := c.now()
 	var total int64
@@ -2795,6 +2880,9 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			break
 		}
 		batches++ // Codex round-2 F3: every attempt counts, matching runPair -- a worker-construction or RunOnce failure is still a real round-trip.
+		// The last attempt's reading, as in runPair: an attempt that fails
+		// reports none.
+		reading = pairReading{}
 		attemptStarted := c.now()
 		worker, werr := c.workerFor(source, checkpoints)
 		if werr != nil {
@@ -2831,6 +2919,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		// not -- on a no-op attempt (available=false) it is simply the
 		// unchanged pre-existing count, still correct.
 		total = run.RowsApplied
+		reading = pairReading{window: run.WindowPass, catchUp: run.CatchUp}
 		if run.Applied {
 			applied++
 			c.clearRebuildOwed(key)
@@ -2916,7 +3005,13 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	if c.rebuildOwed(key) {
 		rebuild = true
 	}
-	return batches > 0, buildFailed, withheld, rebuild, buildStage, buildBroke
+	// A build that stopped with rows still to read is not "still building,
+	// nothing to say": its tick left work, exactly as a steady-state drain's.
+	if c.endedWithWorkLeft(reason, reading) {
+		reading.workLeft = true
+		c.logWorkLeft(ctx, orgID, source, batches, applied, reading.catchUp)
+	}
+	return batches > 0, buildFailed, withheld, rebuild, buildStage, buildBroke, reading
 }
 
 // classifyBuildCompletion maps one build tick's ProjectionRun onto design
@@ -3211,6 +3306,66 @@ func (c *Coordinator) budgetSpentReasonFor(ctx context.Context, orgID, source st
 	return c.budgetSpentReason(ctx, worker, orgID, source, false)
 }
 
+// pairReading is what a pair's drain left behind besides its verdict: the
+// source's trailing-window pass and catch-up as the last attempt read them,
+// and whether the drain ended with work left.
+type pairReading struct {
+	window   contextfabric.ProjectionWindowPass
+	catchUp  contextfabric.ProjectionCatchUp
+	workLeft bool
+}
+
+// endedWithWorkLeft says a pair's drain, steady state or build, stopped with
+// rows still to read. Two readings say so. The source says it: its last read
+// stopped with rows beyond it (WorkAhead), whatever made the drain stop, so a
+// read that ends without a batch and a drain of one attempt per tick are both
+// covered. Or the drain says it: budget_exceeded is the one yield reason that
+// says a further batch exists (a peek proved it) or could not be ruled out.
+// With extra draining disabled that reason is a constant and proves nothing,
+// so there only the source's word counts.
+func (c *Coordinator) endedWithWorkLeft(reason DrainYieldReason, reading pairReading) bool {
+	return reading.catchUp.WorkAhead || (reason == DrainYieldBudgetExceeded && c.drainBudget > 0)
+}
+
+// catchUpLagSeconds is the distance between a cursor and now. Negative means
+// unknown: the source could not place the cursor on its clock.
+func catchUpLagSeconds(now time.Time, catchUp contextfabric.ProjectionCatchUp) int64 {
+	if !catchUp.CursorKnown {
+		return -1
+	}
+	lag := int64(now.Sub(catchUp.CursorAt).Seconds())
+	if lag < 0 {
+		return 0
+	}
+	return lag
+}
+
+// logWorkLeft writes the line of a pair that ended the tick with work left:
+// how far its cursor is behind, and how far from the edge of its catch-up
+// pass. -1 means the source did not say.
+func (c *Coordinator) logWorkLeft(ctx context.Context, orgID, source string, batches, applied int, catchUp contextfabric.ProjectionCatchUp) {
+	cursorAt, passEdge, toEdge := "", "", int64(-1)
+	if catchUp.CursorKnown {
+		cursorAt = catchUp.CursorAt.UTC().Format(time.RFC3339Nano)
+	}
+	if catchUp.PassOpen {
+		passEdge = catchUp.PassEdge.UTC().Format(time.RFC3339Nano)
+		if catchUp.CursorKnown {
+			toEdge = int64(catchUp.PassEdge.Sub(catchUp.CursorAt).Seconds())
+			if toEdge < 0 {
+				toEdge = 0
+			}
+		}
+	}
+	c.logger.InfoContext(ctx, "context_fabric: projection pair ended the tick with work left",
+		"org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source),
+		"batches", batches, "applied", applied,
+		"cursor_known", catchUp.CursorKnown, "cursor_at", contextfabric.SanitizeLogAttr(cursorAt),
+		"lag_seconds", catchUpLagSeconds(c.now(), catchUp),
+		"pass_open", catchUp.PassOpen, "pass_edge", contextfabric.SanitizeLogAttr(passEdge),
+		"remaining_to_edge_seconds", toEdge)
+}
+
 // runPairOnce attempts exactly ONE RunOnce call for (orgID, source),
 // gated by the due()/recordBackoff per-pair schedule -- the same
 // single-attempt body this function always was before CHAOS-3826.
@@ -3223,7 +3378,7 @@ func (c *Coordinator) budgetSpentReasonFor(ctx context.Context, orgID, source st
 // F2) can classify cancellation by inspecting THIS error's own identity
 // rather than the ambient ctx.Err(), which could coincidentally be set by
 // an unrelated cancellation and mislabel a genuine backend error.
-func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, applied bool, err error, stale, withheldByBackoff, complete bool, window contextfabric.ProjectionWindowPass) {
+func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, applied bool, err error, stale, withheldByBackoff, complete bool, reading pairReading) {
 	key := orgID + "\x00" + source
 	// ONE clock read decides both "may it attempt" and "is it withheld by its
 	// own failure backoff" -- see dueState's own doc comment for the race two
@@ -3231,14 +3386,14 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	c.hydrateRebuildOwed(ctx, key, orgID, source, checkpoints)
 	due, withheld, withheldRebuild := c.dueState(key)
 	if !due {
-		return false, false, nil, withheldRebuild, withheld, false, contextfabric.ProjectionWindowPass{}
+		return false, false, nil, withheldRebuild, withheld, false, pairReading{}
 	}
 	started := c.now()
 	worker, werr := c.workerFor(source, checkpoints)
 	if werr != nil {
 		c.recordBackoff(key, werr)
 		c.logger.WarnContext(ctx, "projection worker construction failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(werr)))
-		return true, false, werr, false, false, false, contextfabric.ProjectionWindowPass{}
+		return true, false, werr, false, false, false, pairReading{}
 	}
 	run, runErr := worker.RunOnce(ctx, orgID, source)
 	outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: runErr, Duration: c.now().Sub(started), At: c.now()}
@@ -3247,7 +3402,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	c.observer.ObserveProjectionOutcome(outcome)
 	if runErr != nil {
 		c.logger.WarnContext(ctx, "projection pair failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(runErr)), "duration_ms", outcome.Duration.Milliseconds())
-		return true, false, runErr, c.rebuildOwed(key), false, false, contextfabric.ProjectionWindowPass{}
+		return true, false, runErr, c.rebuildOwed(key), false, false, pairReading{}
 	}
 	if run.Applied {
 		c.clearRebuildOwed(key)
@@ -3261,7 +3416,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	// complete: the applied batch itself claims the source has nothing more, so
 	// a drain that stops here has no backlog whatever its budget says.
 	freshnessStale := c.emitProjectionFreshness(ctx, orgID, source)
-	return true, run.Applied, nil, freshnessStale || c.rebuildOwed(key), false, run.Applied && run.CompleteEnumeration, run.WindowPass
+	return true, run.Applied, nil, freshnessStale || c.rebuildOwed(key), false, run.Applied && run.CompleteEnumeration, pairReading{window: run.WindowPass, catchUp: run.CatchUp}
 }
 
 // runPair drains (org, source)'s pending batches within THIS tick
@@ -3282,13 +3437,13 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 // in the same Tick (Tick.wg.Wait blocks the next poll on every dispatched
 // runOrg returning). The 200-row page cap (batch size) is unchanged --
 // only the inter-batch idle inside one tick is removed.
-func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, stale, failed, withheld bool, pairStage contextfabric.PairStage, pairBroke bool, window contextfabric.ProjectionWindowPass, yieldErr error) {
+func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, stale, failed, withheld bool, pairStage contextfabric.PairStage, pairBroke bool, reading pairReading, yieldErr error) {
 	started := c.now()
 	batches, applied := 0, 0
 	reason := DrainYieldExhausted
 	var lastErr error
 	for {
-		pairEvaluated, pairApplied, pairErr, pairStale, pairWithheld, pairComplete, pairWindow := c.runPairOnce(ctx, orgID, source, checkpoints)
+		pairEvaluated, pairApplied, pairErr, pairStale, pairWithheld, pairComplete, pairReadingNow := c.runPairOnce(ctx, orgID, source, checkpoints)
 		if !pairEvaluated {
 			if batches == 0 {
 				// Nothing ran at all. If the pair is serving its own
@@ -3297,14 +3452,15 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 				// keep saying so on every tick. The withheld fact comes
 				// from the SAME clock read that refused the attempt, so
 				// the two can no longer disagree.
-				return false, pairStale, false, pairWithheld, "", false, contextfabric.ProjectionWindowPass{}, nil
+				return false, pairStale, false, pairWithheld, "", false, pairReading{}, nil
 			}
 			break
 		}
 		evaluated = true
-		// The LAST attempt's reading, overwritten: the pass state is a fact
-		// about where the drain stopped. An attempt that failed reports none.
-		window = pairWindow
+		// The LAST attempt's reading, overwritten: the pass state and the
+		// cursor are facts about where the drain stopped. An attempt that
+		// failed reports none.
+		reading = pairReadingNow
 		// failed describes THIS attempt, overwritten rather than OR-ed:
 		// a drain whose later attempt succeeds has recovered within the
 		// tick, and reporting it as failed would make the disclosure fire
@@ -3382,7 +3538,11 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 	// tick has failed and is named as a failing source; a cancellation with
 	// no error of its own is still caught, because the context is what is
 	// read.
-	return evaluated, stale, failed, false, pairStage, pairBroke, window, lastErr
+	if c.endedWithWorkLeft(reason, reading) {
+		reading.workLeft = true
+		c.logWorkLeft(ctx, orgID, source, batches, applied, reading.catchUp)
+	}
+	return evaluated, stale, failed, false, pairStage, pairBroke, reading, lastErr
 }
 
 // emitProjectionFreshness is the CHAOS-3887 (H1) per-org, per-source

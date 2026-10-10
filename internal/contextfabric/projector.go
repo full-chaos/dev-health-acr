@@ -67,6 +67,10 @@ type ProjectionRun struct {
 	// leave a pass open that no call is walking, and that pass still ages.
 	// The zero value for a source without the capability.
 	WindowPass ProjectionWindowPass
+	// CatchUp is where the cursor this run left in the checkpoint stands on
+	// the source's clock, and the source's open catch-up pass. The zero
+	// value for a source without the capability.
+	CatchUp ProjectionCatchUp
 }
 
 func NewProjectionWorker(source ProjectionSource, backend ProjectionBackend, checkpoints ProjectionCheckpointStore, options ProjectionWorkerOptions) (*ProjectionWorker, error) {
@@ -228,9 +232,9 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		}
 		windowPass := w.windowPass(loaded)
 		if progressed {
-			return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: advanced, RowsApplied: checkpoint.RowsApplied, WindowPass: windowPass}, nil
+			return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: advanced, RowsApplied: checkpoint.RowsApplied, WindowPass: windowPass, CatchUp: w.catchUp(loaded, advanced)}, nil
 		}
-		return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, RowsApplied: checkpoint.RowsApplied, WindowPass: windowPass}, nil
+		return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, RowsApplied: checkpoint.RowsApplied, WindowPass: windowPass, CatchUp: w.catchUp(loaded, checkpoint.Cursor)}, nil
 	}
 	if err := batch.Validate(); err != nil {
 		return ProjectionRun{}, markPair(PairStageSourceRead, err, "projection batch")
@@ -320,7 +324,19 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		ItemsApplied:        itemsApplied,
 		RowsApplied:         updated.RowsApplied,
 		WindowPass:          w.windowPass(loaded),
+		CatchUp:             w.catchUp(loaded, batch.NextCursor),
 	}, nil
+}
+
+// catchUp reads where cursor stands for the loaded checkpoint's scope, when
+// the source can report it. cursor is the one this run left in the checkpoint.
+func (w *ProjectionWorker) catchUp(loaded ProjectionCheckpoint, cursor string) ProjectionCatchUp {
+	reporter, ok := w.source.(ProjectionCatchUpReporter)
+	if !ok {
+		return ProjectionCatchUp{}
+	}
+	loaded.Cursor = cursor
+	return reporter.ProjectionCatchUp(loaded)
 }
 
 // windowPass reads the source's trailing re-read for the checkpoint's scope,

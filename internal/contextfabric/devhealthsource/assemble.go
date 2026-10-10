@@ -103,6 +103,12 @@ type sourcePlan struct {
 	// means cursorSpaceIngest.
 	space string
 
+	// complete and truncatedTables are set by fullSnapshot for the paged walk
+	// it falls back to: the tables the from-zero read returned whole, which go
+	// with the first batch (catch_up.go), and the names of the others.
+	complete        []completeTable
+	truncatedTables []string
+
 	// readByteLimit is the client's max_bytes_to_read; every read of a pass
 	// (paged, snapshot, overlap window, and a peek) carries it in its context,
 	// so key-named reads size their statements from it. Zero: the client
@@ -242,6 +248,8 @@ func (p sourcePlan) nextBatchPage(ctx context.Context, checkpoint contextfabric.
 func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabric.ProjectionBatch, bool, error) {
 	var all []candidate
 	oversized := false
+	var complete []completeTable
+	var truncatedTables []string
 	for _, table := range p.tables {
 		rows, truncated, err := readTable(ctx, table, p.client, orgID, cursorState{}, snapshotPerQueryCap)
 		if err != nil {
@@ -250,6 +258,9 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 		}
 		if truncated {
 			oversized = true
+			truncatedTables = append(truncatedTables, table.name)
+		} else if len(rows) > 0 {
+			complete = append(complete, completeTable{name: table.name, rows: rows})
 		}
 		all = append(all, rows...)
 	}
@@ -268,6 +279,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 		}
 	}
 	if oversized {
+		p.complete, p.truncatedTables = complete, truncatedTables
 		return p.pagedBatch(ctx, orgID, "", cursorState{}, true)
 	}
 	all = append(all, seeded...)
@@ -325,8 +337,12 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 	for skips := 0; ; skips++ {
 		var all []candidate
 		var bound pageBound
+		// ahead: rows lie beyond what this iteration hands out, because a
+		// table had more than the read asked for or the merged page was cut.
+		ahead := false
 		for _, table := range p.tables {
 			rows, truncated, err := readTable(ctx, table, p.client, orgID, state, incrementalBatchCap)
+			ahead = ahead || truncated
 			if err == nil {
 				err = p.boundRead(ctx, orgID, table.name, state, &bound, rows, truncated)
 			}
@@ -341,12 +357,17 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			includeSeed = false
 		}
 		if len(all) == 0 {
-			// Caught up: re-read the trailing overlap window for rows that
-			// landed behind the frontier (CHAOS-7263).
+			// Caught up: the catch-up pass, if one is open, ends here; then
+			// re-read the trailing overlap window for rows that landed
+			// behind the frontier (CHAOS-7263).
+			p.noteCaughtUp(ctx, orgID)
 			return p.overlapBatch(ctx, orgID, cursor, state)
 		}
 		sortCandidates(all)
+		read := len(all)
 		all, bounded := truncateToCompleteRows(all, incrementalBatchCap, bound)
+		ahead = ahead || len(all) < read
+		p.window.setAhead(p.windowScope, ahead)
 		if len(all) == 0 {
 			p.noteYield()
 			return contextfabric.ProjectionBatch{}, false, nil
@@ -362,11 +383,17 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		// path below, which advances past them and keeps looking.
 		normalizeCandidates(all, p.observeNormalization)
 		items := partitionProjectableCandidates(all, p.quarantineObserver(orgID))
-		if carriesPayload(items) {
-			batch, err := buildBatchIn(p.cursorSpace(), orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
+		// The first page of a from-zero walk takes the complete tables with
+		// it (catch_up.go). They are judged as a page of their own; all stays
+		// the page, and it alone moves the cursor.
+		early := p.completeTableItems(orgID, all)
+		p.complete, p.truncatedTables = nil, nil
+		if carriesPayload(items) || carriesPayload(early.items) {
+			batch, err := p.buildPageBatch(ctx, orgID, cursor, all, items, early)
 			if err != nil {
 				return contextfabric.ProjectionBatch{}, false, err
 			}
+			p.notePagedPage(ctx, orgID, all)
 			// This call published something, so any progress memo recorded by
 			// an earlier iteration no longer describes it -- see
 			// forgetConsumed for the invariant.
@@ -387,6 +414,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		// Consumed (and judged): the overlap re-read must not re-judge them.
 		p.window.record(p.windowScope, all, p.overlap)
 		noteConsumedFrom(p, orgID, all)
+		p.notePagedPage(ctx, orgID, all)
 		if skips >= maxOmittedPageSkips {
 			p.noteYield()
 			return contextfabric.ProjectionBatch{}, false, nil
