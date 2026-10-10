@@ -31,7 +31,10 @@ type gqlHarnessOptions struct {
 	limits   *directread.GraphQLLimits
 	fake     func(cfg *fakeMCPConfig)
 	noGrants bool
-	recorder directread.GraphQLQueryRecorder
+	// ownCatalogue builds the policy over a catalogue of its own, so a test
+	// that attaches a registry watch to it cannot change the shared default.
+	ownCatalogue bool
+	recorder     directread.GraphQLQueryRecorder
 	// clientTimeout is the MCP listener client's deadline (default 5 s).
 	clientTimeout time.Duration
 }
@@ -41,6 +44,16 @@ func newGQLHarness(t *testing.T, opts gqlHarnessOptions) *gqlHarness {
 	policy, err := directread.DefaultGraphQLPolicy()
 	if err != nil {
 		t.Fatalf("DefaultGraphQLPolicy: %v", err)
+	}
+	if opts.ownCatalogue {
+		cat, catErr := directread.LoadCatalogue(directread.EmbeddedCatalogueJSON())
+		if catErr != nil {
+			t.Fatalf("LoadCatalogue: %v", catErr)
+		}
+		policy, err = directread.NewGraphQLPolicy(cat, directread.EmbeddedOpsSchema(), directread.DefaultGraphQLLimits())
+		if err != nil {
+			t.Fatalf("NewGraphQLPolicy: %v", err)
+		}
 	}
 	if opts.limits != nil {
 		policy, err = directread.NewGraphQLPolicy(policy.Catalogue(), directread.EmbeddedOpsSchema(), *opts.limits)
