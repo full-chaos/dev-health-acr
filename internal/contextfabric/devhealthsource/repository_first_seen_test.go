@@ -208,3 +208,68 @@ func TestRepositoryStartDecisionLineSaysWhenTheEvidenceReadFailed(t *testing.T) 
 		t.Fatalf("failure lines = %v, want one for table repository_first_seen", failures)
 	}
 }
+
+func TestRepositoryStartDecisionIsInfoOnlyOnAFromZeroPageWithEvidence(t *testing.T) {
+	t.Parallel()
+	synced := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	firstPull := synced.Add(-200 * 24 * time.Hour)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM repos", cursorOf: repoCursorOf, rows: [][]any{
+			{"a", "example-org/a", "synthetic", synced, synced, ""},
+			{"b", "example-org/b", "synthetic", synced.Add(time.Hour), synced.Add(time.Hour), ""},
+		}},
+		{match: firstSeenMarker, rows: [][]any{{"a", firstPull, "pull_request"}, {"b", firstPull, "work_item"}}},
+	}}
+	source, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	source = source.WithLogger(logger)
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName}
+	first, _, err := source.NextProjectionBatch(context.Background(), checkpoint)
+	if err != nil {
+		t.Fatalf("from-zero batch: %v", err)
+	}
+	lines := decodeLines(t, buf.String(), "devhealthsource repository start decided")
+	if len(lines) != 1 || lines[0]["level"] != "INFO" || lines[0]["from_zero"] != true {
+		t.Fatalf("from-zero page lines = %v, want one INFO line with from_zero=true", lines)
+	}
+	buf.Reset()
+	if first.NextCursor == "" {
+		t.Fatal("the from-zero batch carried no next cursor, so the steady-state page cannot be read")
+	}
+	checkpoint.Cursor = first.NextCursor
+	if _, _, err := source.NextProjectionBatch(context.Background(), checkpoint); err != nil {
+		t.Fatalf("steady-state batch: %v", err)
+	}
+	if lines := decodeLines(t, buf.String(), "devhealthsource repository start decided"); len(lines) != 0 {
+		t.Fatalf("a steady-state page logged %v at the default level, want none", lines)
+	}
+}
+
+func TestRepositoryStartEvidenceOfEitherKindMakesAFromZeroPageInfo(t *testing.T) {
+	t.Parallel()
+	synced := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	for _, source := range []string{"pull_request", "work_item"} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			client := &fakeClient{tables: []fakeTable{
+				{match: "FROM repos", cursorOf: repoCursorOf, rows: [][]any{{"a", "example-org/a", "synthetic", synced, synced, ""}}},
+				{match: firstSeenMarker, rows: [][]any{{"a", synced.Add(-24 * time.Hour), source}}},
+			}}
+			src, err := devhealthsource.NewClickHouseProjectionSource(client)
+			if err != nil {
+				t.Fatalf("new source: %v", err)
+			}
+			if _, _, err := src.WithLogger(slog.New(slog.NewJSONHandler(&buf, nil))).NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName}); err != nil {
+				t.Fatalf("next projection batch: %v", err)
+			}
+			if lines := decodeLines(t, buf.String(), "devhealthsource repository start decided"); len(lines) != 1 || lines[0]["level"] != "INFO" {
+				t.Fatalf("a from-zero page decided by %s logged %v, want one INFO line", source, lines)
+			}
+		})
+	}
+}

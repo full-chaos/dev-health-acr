@@ -72,9 +72,11 @@ func startLogger(ctx context.Context) *slog.Logger {
 // earlier than the sync, and the earliest pull request or work item created
 // for it. One grouped statement serves the whole page. When that read fails
 // the page keeps the start the row states on its own, and the failure is
-// logged. One DEBUG line per page (a re-stamped repository is read again every sync, so this is per tick) counts the repositories by what decided
-// their start.
-func applyRepositoryFirstSeen(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, items []candidate) {
+// logged. One line per page counts the repositories by what decided their start: INFO
+// on a page of a from-zero build where evidence decided a start, DEBUG on every
+// other page (a re-stamped repository is read again on every sync, so a steady
+// tick would log one INFO line per page forever).
+func applyRepositoryFirstSeen(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, items []candidate) {
 	ids := make([]string, 0, len(items))
 	for _, item := range items {
 		ids = append(ids, item.sortKey)
@@ -101,9 +103,13 @@ func applyRepositoryFirstSeen(ctx context.Context, client contextpacket.ClickHou
 		}
 		basis[decided]++
 	}
-	logger.DebugContext(ctx, "devhealthsource repository start decided",
+	level := slog.LevelDebug
+	if cursor.Since.IsZero() && basis[startBasisPullRequest]+basis[startBasisWorkItem] > 0 {
+		level = slog.LevelInfo
+	}
+	logger.Log(ctx, level, "devhealthsource repository start decided",
 		"source", contextfabric.SanitizeLogAttr("clickhouse"), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
-		"repositories", len(items), "evidence_read", evidenceRead,
+		"from_zero", cursor.Since.IsZero(), "repositories", len(items), "evidence_read", evidenceRead,
 		"basis_created_at", basis[startBasisCreatedAt], "basis_pull_request", basis[startBasisPullRequest],
 		"basis_work_item", basis[startBasisWorkItem], "basis_none", basis[startBasisNone])
 }

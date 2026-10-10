@@ -311,7 +311,7 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 	if err != nil {
 		return nil, false, err
 	}
-	applyRepositoryFirstSeen(ctx, client, orgID, items)
+	applyRepositoryFirstSeen(ctx, client, orgID, cursor, items)
 	return items, truncated, nil
 }
 
