@@ -30,6 +30,7 @@ func TestChangeFailureReadsStoredCountsAgainstRealClickHouse(t *testing.T) {
 		"unknown":    "77777777-7777-7777-7777-000000000002",
 		"notapplic":  "77777777-7777-7777-7777-000000000003",
 		"nostoredrw": "77777777-7777-7777-7777-000000000004",
+		"nometrics":  "77777777-7777-7777-7777-000000000005",
 	}
 	if err := direct.Exec(ctx, "DROP DATABASE IF EXISTS "+database); err != nil {
 		t.Fatalf("drop stale database: %v", err)
@@ -64,7 +65,12 @@ func TestChangeFailureReadsStoredCountsAgainstRealClickHouse(t *testing.T) {
 	insert(repos["measured"], day(2), 2, 0, 1, 0, 1, day(2)+" 09:00:00")
 	insert(repos["unknown"], day(1), 3, 0, 0, 0, 0, day(1)+" 09:00:00")
 	insert(repos["notapplic"], day(1), 0, 0, 0, 1, 0, day(1)+" 09:00:00")
+	// nometrics has stored counts and no repo_metrics_daily row at all.
+	insert(repos["nometrics"], day(1), 4, 1, 0, 1, 0, day(1)+" 09:00:00")
 	for name, repo := range repos {
+		if name == "nometrics" {
+			continue
+		}
 		stmt := fmt.Sprintf(`INSERT INTO %s.repo_metrics_daily (repo_id, org_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini, computed_at) VALUES ('%s', '%s', '%s', 1, 1, 1.0, 0.9, NULL, 1, 0.1, '%s 10:00:00')`,
 			database, repo, orgID, day(1), day(1))
 		if err := direct.Exec(ctx, stmt); err != nil {
@@ -96,17 +102,23 @@ func TestChangeFailureReadsStoredCountsAgainstRealClickHouse(t *testing.T) {
 	}
 	for name, want := range map[string]string{
 		"measured": "measured", "unknown": "unknown_no_incident_evidence",
-		"notapplic": "not_applicable_no_deployments", "nostoredrw": "no_stored_counts",
+		"notapplic": "not_applicable_no_deployments", "nostoredrw": "", "nometrics": "measured",
 	} {
 		fact, ok := byRepo["repository:"+repos[name]]
 		if !ok {
 			t.Fatalf("%s: no fact", name)
 		}
+		if want == "" {
+			if _, has := fact.Fields["change_failure_rate_state"]; has {
+				t.Fatalf("%s: a view with no stored row has no state", name)
+			}
+			continue
+		}
 		if got := stringField(t, fact, "change_failure_rate_state"); got != want {
 			t.Fatalf("%s: state %q, want %q", name, got, want)
 		}
 		_, hasRate := fact.Fields["change_failure_rate"]
-		if hasRate != (name == "measured") {
+		if hasRate != (name == "measured" || name == "nometrics") {
 			t.Fatalf("%s: rate present = %v", name, hasRate)
 		}
 	}

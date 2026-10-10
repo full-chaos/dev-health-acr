@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"os"
 	"testing"
 
@@ -48,11 +49,7 @@ func TestChangeFailureRuleAgreesWithTheOpsRuleOnEveryCount(t *testing.T) {
 								},
 								StoredRows: uint64(stored),
 							})
-							wantState := string(theirs.State)
-							if theirs.State == opschangefailure.StateNoStoredCounts {
-								wantState = changeFailureStateNoCounts
-							}
-							if mine.state != wantState || mine.linkTier != theirs.LinkTier || mine.measured != (theirs.Value != nil) || (theirs.Value != nil && mine.value != *theirs.Value) {
+							if mine.state != string(theirs.State) || mine.linkTier != theirs.LinkTier || mine.measured != (theirs.Value != nil) || (theirs.Value != nil && mine.value != *theirs.Value) {
 								t.Fatalf("stored=%d dep=%d native=%d heur=%d direct=%d via=%d: acr %+v, ops %+v", stored, deployments, failedNative, failedHeuristic, direct, via, mine, theirs)
 							}
 							points++
@@ -80,7 +77,7 @@ func TestChangeFailureRuleKeepsTheStatesApart(t *testing.T) {
 		value    float64
 		tier     string
 	}{
-		{"no stored row", changeFailureCounts{}, changeFailureStateNoCounts, false, 0, ""},
+		{"no stored row", changeFailureCounts{}, "", false, 0, ""},
 		{"incidents without a deployment", changeFailureCounts{storedRows: 1, incidentsDirect: 2}, changeFailureStateNotApplicable, false, 0, ""},
 		{"deployments without incident evidence", changeFailureCounts{storedRows: 1, deployments: 4}, changeFailureStateUnknown, false, 0, ""},
 		{"failed deployments without incident evidence", changeFailureCounts{storedRows: 1, deployments: 4, failedNative: 1}, changeFailureStateUnknown, false, 0, ""},
@@ -93,5 +90,15 @@ func TestChangeFailureRuleKeepsTheStatesApart(t *testing.T) {
 		if got.state != tc.state || got.measured != tc.measured || got.value != tc.value || got.linkTier != tc.tier {
 			t.Errorf("%s: got %+v, want state %s measured %v value %v tier %q", tc.name, got, tc.state, tc.measured, tc.value, tc.tier)
 		}
+	}
+}
+
+// Counts with no stored row behind them (an ungrouped aggregate over nothing)
+// serve no field at all, whatever the sums say.
+func TestSetChangeFailureServesNothingForCountsWithNoStoredRow(t *testing.T) {
+	fields := map[string]contextfabric.FactValue{}
+	setChangeFailure(fields, &changeFailureCounts{deployments: 4, failedNative: 1, incidentsDirect: 1})
+	if len(fields) != 0 {
+		t.Fatalf("fields served with no stored row: %v", fields)
 	}
 }

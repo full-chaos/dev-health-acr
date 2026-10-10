@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -78,10 +79,18 @@ func TestRepositoryChangeFailureStatesNeverServeAZeroRate(t *testing.T) {
 	}{
 		{"no deployments in the window", [][]any{failureRow("repo-1", 2, 0, 0, 0, 1, 0)}, "not_applicable_no_deployments"},
 		{"deployments without incident evidence", [][]any{failureRow("repo-1", 2, 5, 0, 0, 0, 0)}, "unknown_no_incident_evidence"},
-		{"no stored row", nil, "no_stored_counts"},
+		{"no stored row", nil, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fact, _ := readFailure(t, repoSubject("repo-1"), repoFailureTables(tc.rows...)...)
+			if tc.state == "" {
+				for _, name := range []string{"change_failure_rate_state", "change_failure_rate", "change_failure_deployments_count", "change_failure_failed_deployments_count"} {
+					if _, ok := fact.Fields[name]; ok {
+						t.Fatalf("%s served for a view with no stored row", name)
+					}
+				}
+				return
+			}
 			if got := stringField(t, fact, "change_failure_rate_state"); got != tc.state {
 				t.Fatalf("state = %q, want %q", got, tc.state)
 			}
@@ -168,7 +177,7 @@ func TestTeamWithNoOwnedRepositoryServesNoChangeFailureState(t *testing.T) {
 }
 
 // An ungrouped aggregate returns one all-zero row when nothing is stored: the
-// team has no stored count, which is not "not applicable".
+// team has no stored count, so it has no state at all (the ops rule: no state).
 func TestTeamWithNoStoredCountsHasNoStateOfItsOwn(t *testing.T) {
 	tables := []fakeTable{
 		{match: "FROM team_metrics_daily", rows: [][]any{teamMetricsRow("CHAOS")}},
@@ -176,12 +185,61 @@ func TestTeamWithNoStoredCountsHasNoStateOfItsOwn(t *testing.T) {
 		{match: "FROM repo_change_failure_daily", rows: [][]any{failureRow("", 0, 0, 0, 0, 0, 0)}},
 	}
 	fact, _ := readFailure(t, teamSubject("CHAOS"), tables...)
-	if got := stringField(t, fact, "change_failure_rate_state"); got != "no_stored_counts" {
-		t.Fatalf("state = %q, want no_stored_counts", got)
-	}
-	for _, name := range []string{"change_failure_rate", "change_failure_deployments_count", "change_failure_failed_deployments_count"} {
+	for _, name := range []string{"change_failure_rate_state", "change_failure_rate", "change_failure_deployments_count", "change_failure_failed_deployments_count"} {
 		if _, ok := fact.Fields[name]; ok {
 			t.Fatalf("%s served for a view with no stored count", name)
 		}
+	}
+}
+
+// repo_change_failure_daily holds days that repo_metrics_daily and
+// team_metrics_daily may have no row for; the rate is still served.
+func TestRepositoryChangeFailureIsServedWithoutARepoMetricsRow(t *testing.T) {
+	tables := []fakeTable{{match: "FROM repo_change_failure_daily", rows: [][]any{failureRow("repo-1", 1, 4, 1, 0, 1, 0)}}}
+	fact, _ := readFailure(t, repoSubject("repo-1"), tables...)
+	if v := fact.Fields["change_failure_rate"]; v.Number == nil || *v.Number != 0.25 {
+		t.Fatalf("rate = %#v, want 0.25", v)
+	}
+	if got := stringField(t, fact, "change_failure_rate_state"); got != "measured" {
+		t.Fatalf("state = %q", got)
+	}
+	if _, ok := fact.Fields["daily_metrics"]; ok {
+		t.Fatal("no series exists for this repository")
+	}
+}
+
+func TestTeamChangeFailureIsServedWithoutATeamMetricsRow(t *testing.T) {
+	tables := []fakeTable{
+		{match: "GROUP BY team_id, repo_key", rows: [][]any{{"CHAOS", "repo-a", "acme/a"}}},
+		{match: "FROM repo_change_failure_daily", rows: [][]any{failureRow("", 2, 4, 2, 0, 1, 0)}},
+	}
+	fact, _ := readFailure(t, teamSubject("CHAOS"), tables...)
+	if v := fact.Fields["change_failure_rate"]; v.Number == nil || *v.Number != 0.5 {
+		t.Fatalf("rate = %#v, want 0.5", v)
+	}
+}
+
+// One window serves the rate and the pull request cycle read: a default
+// trailing window is resolved once, so both statements bind the same days.
+func TestChangeFailureAndPRCycleReadsBindTheSameWindow(t *testing.T) {
+	_, client := readFailure(t, repoSubject("repo-1"), repoFailureTables(failureRow("repo-1", 1, 4, 1, 0, 1, 0))...)
+	bound := func(match string) map[string]any {
+		for _, q := range client.queries {
+			if strings.Contains(q.statement, match) {
+				out := map[string]any{}
+				for _, b := range q.bindings {
+					if strings.HasPrefix(b.Name, "rollup_") || strings.HasPrefix(b.Name, "window_") {
+						out[b.Name] = b.Value
+					}
+				}
+				return out
+			}
+		}
+		t.Fatalf("no statement over %s", match)
+		return nil
+	}
+	cycle, failure := bound("FROM git_pull_requests"), bound("FROM repo_change_failure_daily")
+	if len(cycle) == 0 || !reflect.DeepEqual(cycle, failure) {
+		t.Fatalf("window bindings differ: cycle %v, failure %v", cycle, failure)
 	}
 }

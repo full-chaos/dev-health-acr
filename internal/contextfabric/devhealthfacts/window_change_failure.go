@@ -16,7 +16,7 @@ import (
 // rule is applied (the rule of the ops writer, vendored as an oracle in
 // internal/contextfabric/devhealthfacts/internal/opschangefailure):
 //
-//   - no stored row in the window            -> no rate, state no_stored_counts
+//   - no stored row in the window            -> no rate and no state (the fields are absent)
 //   - no deployments in the window           -> no rate, state not_applicable_no_deployments
 //   - deployments, no incident tied          -> no rate, state unknown_no_incident_evidence
 //   - else (failed native + heuristic) / deployments; 0 is a measured 0
@@ -33,7 +33,7 @@ const (
 	changeFailureStateMeasured      = "measured"
 	changeFailureStateNotApplicable = "not_applicable_no_deployments"
 	changeFailureStateUnknown       = "unknown_no_incident_evidence"
-	changeFailureStateNoCounts      = "no_stored_counts"
+	changeFailureStateNoCounts      = ""
 
 	changeFailureTierNative    = "native"
 	changeFailureTierHeuristic = "heuristic"
@@ -120,14 +120,16 @@ WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}
 }
 
 // setChangeFailure adds the window change failure fields to a metrics fact.
-// counts is nil for a view with no stored row: the state says so and no rate
-// or count is served.
+// counts is nil for a view with no stored row: nothing was counted, so no
+// state, rate or count is served (the same answer the ops rule gives: no state).
 func setChangeFailure(fields map[string]contextfabric.FactValue, counts *changeFailureCounts) {
 	if counts == nil {
-		fields[changeFailureStateField] = contextfabric.StringFactValue(changeFailureStateNoCounts)
 		return
 	}
 	outcome := evaluateChangeFailure(*counts)
+	if outcome.state == changeFailureStateNoCounts {
+		return
+	}
 	fields[changeFailureStateField] = contextfabric.StringFactValue(outcome.state)
 	fields[changeFailureDeploymentsField] = contextfabric.IntegerFactValue(counts.deployments)
 	fields[changeFailureFailedField] = contextfabric.IntegerFactValue(counts.failedNative + counts.failedHeuristic)

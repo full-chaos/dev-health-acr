@@ -387,11 +387,12 @@ ORDER BY repo_id, day DESC
 LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 	// Read before the series statement so that statement stays the last
 	// query this provider issues for the repository path.
-	windowCycles, err := readWindowPRCycle(ctx, p.facts.client, orgID, ids, resolveRollupWindow(timeBound, evidenceWindow, clock()), true)
+	rateWindow := resolveRollupWindow(timeBound, evidenceWindow, clock())
+	windowCycles, err := readWindowPRCycle(ctx, p.facts.client, orgID, ids, rateWindow, true)
 	if err != nil {
 		return 0, rejected, false, err
 	}
-	windowFailures, err := readWindowChangeFailure(ctx, p.facts.client, orgID, ids, resolveRollupWindow(timeBound, evidenceWindow, clock()), true)
+	windowFailures, err := readWindowChangeFailure(ctx, p.facts.client, orgID, ids, rateWindow, true)
 	if err != nil {
 		return 0, rejected, false, err
 	}
@@ -529,6 +530,32 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, repoID)},
 		})
 	}
+	// repo_change_failure_daily holds days with a deployment or an incident
+	// that repo_metrics_daily may not have a row for: a requested repository
+	// with stored counts and no series still has its change failure rate.
+	emitted := make(map[string]struct{}, len(repoOrder))
+	for _, repoID := range repoOrder {
+		emitted[repoID] = struct{}{}
+	}
+	for _, repoID := range ids {
+		if _, done := emitted[repoID]; done {
+			continue
+		}
+		counts, ok := windowFailures[repoID]
+		if !ok {
+			continue
+		}
+		emitted[repoID] = struct{}{}
+		fields := map[string]contextfabric.FactValue{}
+		setChangeFailure(fields, &counts)
+		if len(fields) == 0 {
+			continue
+		}
+		*facts = append(*facts, contextfabric.CanonicalFact{
+			Kind: contextfabric.FactMetrics, Subject: bySubject[repoID], Fields: fields,
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, repoID)},
+		})
+	}
 	return rowCount, rejected, breakdownTruncated, nil
 }
 
@@ -544,12 +571,9 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 	if err != nil {
 		return 0, rejected, err
 	}
-	var owned map[string][]teamOwnedRepo
-	if len(rows) > 0 {
-		owned, err = teamOwnedRepositories(ctx, p.facts.client, orgID, ids, timeBound)
-		if err != nil {
-			return 0, rejected, err
-		}
+	owned, err := teamOwnedRepositories(ctx, p.facts.client, orgID, ids, timeBound)
+	if err != nil {
+		return 0, rejected, err
 	}
 	window := resolveRollupWindow(timeBound, evidenceWindow, clock())
 	for _, r := range rows {
@@ -591,6 +615,35 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID)},
+		})
+	}
+	// A team whose owned repositories have stored change failure counts keeps
+	// its rate when team_metrics_daily has no row for it.
+	seen := make(map[string]struct{}, len(rows))
+	for _, r := range rows {
+		seen[r.TeamID] = struct{}{}
+	}
+	for _, teamID := range ids {
+		if _, done := seen[teamID]; done || len(owned[teamID]) == 0 {
+			continue
+		}
+		seen[teamID] = struct{}{}
+		failures, failureErr := readWindowChangeFailure(ctx, p.facts.client, orgID, repoKeysOf(map[string][]teamOwnedRepo{teamID: owned[teamID]}), window, false)
+		if failureErr != nil {
+			return 0, rejected, failureErr
+		}
+		counts, ok := failures[""]
+		if !ok {
+			continue
+		}
+		fields := map[string]contextfabric.FactValue{}
+		setChangeFailure(fields, &counts)
+		if len(fields) == 0 {
+			continue
+		}
+		*facts = append(*facts, contextfabric.CanonicalFact{
+			Kind: contextfabric.FactMetrics, Subject: bySubject[teamID], Fields: fields,
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
 	return len(rows), rejected, nil
