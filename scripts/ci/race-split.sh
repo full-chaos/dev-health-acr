@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Splits the devhealthfacts race suite across two CI jobs by test name.
+# Splits one package's race suite across two CI jobs by test name.
+# Usage: race-split.sh <package> heavy|rest|verify, where <package> is a
+# directory name under internal/contextfabric with a
+# scripts/ci/<package>-heavy-tests.txt list.
 #   heavy  prints the anchored regex of the tests listed in
-#          devhealthfacts-heavy-tests.txt (job: container-heavy half).
+#          <package>-heavy-tests.txt (job: container-heavy half).
 #   rest   prints the same regex; the other job passes it as -skip, so any
 #          test not listed (new tests included) runs there. Nothing can drop.
 #   verify fails unless every listed name is a real top-level test, so a
@@ -9,8 +12,13 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-list="$root/scripts/ci/devhealthfacts-heavy-tests.txt"
-pkg=./internal/contextfabric/devhealthfacts
+name="${1:-}"
+case "$name" in
+  devhealthfacts|devhealthsource) ;;
+  *) printf 'usage: %s devhealthfacts|devhealthsource heavy|rest|verify\n' "${0##*/}" >&2; exit 2 ;;
+esac
+list="$root/scripts/ci/$name-heavy-tests.txt"
+pkg="./internal/contextfabric/$name"
 
 names() { grep -v '^[[:space:]]*$' "$list" | LC_ALL=C sort -u; }
 
@@ -21,7 +29,7 @@ regex() {
   printf '^(%s)$' "$joined"
 }
 
-case "${1:-}" in
+case "${2:-}" in
   heavy|rest) regex ;;
   verify)
     cd "$root"
@@ -33,5 +41,5 @@ case "${1:-}" in
     fi
     printf 'heavy list ok: %s tests\n' "$(names | wc -l | tr -d ' ')"
     ;;
-  *) printf 'usage: %s heavy|rest|verify\n' "${0##*/}" >&2; exit 2 ;;
+  *) printf 'usage: %s <package> heavy|rest|verify\n' "${0##*/}" >&2; exit 2 ;;
 esac
