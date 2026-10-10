@@ -72,7 +72,7 @@ func startLogger(ctx context.Context) *slog.Logger {
 // earlier than the sync, and the earliest pull request or work item created
 // for it. One grouped statement serves the whole page. When that read fails
 // the page keeps the start the row states on its own, and the failure is
-// logged. One INFO line per page counts the repositories by what decided
+// logged. One DEBUG line per page (a re-stamped repository is read again every sync, so this is per tick) counts the repositories by what decided
 // their start.
 func applyRepositoryFirstSeen(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, items []candidate) {
 	ids := make([]string, 0, len(items))
@@ -101,7 +101,7 @@ func applyRepositoryFirstSeen(ctx context.Context, client contextpacket.ClickHou
 		}
 		basis[decided]++
 	}
-	logger.InfoContext(ctx, "devhealthsource repository start decided",
+	logger.DebugContext(ctx, "devhealthsource repository start decided",
 		"source", contextfabric.SanitizeLogAttr("clickhouse"), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
 		"repositories", len(items), "evidence_read", evidenceRead,
 		"basis_created_at", basis[startBasisCreatedAt], "basis_pull_request", basis[startBasisPullRequest],
