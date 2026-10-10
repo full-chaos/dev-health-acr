@@ -111,6 +111,9 @@ func unitPositionOf(fact ServedFact) (string, bool) {
 	share, ok := fact.Fields["share_in_scope"].(float64)
 	id, okID := fact.Fields["work_unit_id"].(string)
 	repo, okRepo := fact.Fields["repository_id"].(string)
+	if basis, _ := fact.Fields["unit_attribution_basis"].(string); !okRepo && basis == contextfabric.InvestmentUnitAttributionUnattributed {
+		repo, okRepo = contextfabric.InvestmentUnitsUnattributedRepo, true
+	}
 	if !ok || !okID || !okRepo || id == "" || repo == "" {
 		return "", false
 	}

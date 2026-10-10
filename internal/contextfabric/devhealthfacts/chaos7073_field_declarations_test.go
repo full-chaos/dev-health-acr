@@ -47,8 +47,8 @@ var declaredButNotExercised = map[contextfabric.FactKind]map[string]string{
 func investmentUnitFieldsNotExercised() map[string]string {
 	const reason = "work-unit listing field, emitted only when read_facts asks for units; exercised by investment_units_integration_test.go"
 	out := map[string]string{}
-	for _, subject := range []string{"team", "repository"} {
-		for _, name := range []string{"next_cursor", "page_share_total", "repository_id", "scope_share_total", "scope_unit_rows", "share_in_scope", "unit_attribution_basis", "unit_effort_value", "unit_from", "unit_kind", "unit_mix_source", "unit_pull_request_count", "unit_refs_unresolved", "unit_theme_feature_delivery", "unit_theme_maintenance", "unit_theme_operational", "unit_theme_quality", "unit_theme_risk", "unit_to", "unit_unresolved_refs", "unit_weight", "units_limitation", "units_refs_unresolved", "units_returned", "work_unit_id"} {
+	for _, subject := range []string{"team", "repository", "organization"} {
+		for _, name := range []string{"next_cursor", "scope_unattributed_rows", "scope_unattributed_total", "page_share_total", "repository_id", "scope_share_total", "scope_unit_rows", "share_in_scope", "unit_attribution_basis", "unit_effort_value", "unit_from", "unit_kind", "unit_mix_source", "unit_pull_request_count", "unit_refs_unresolved", "unit_theme_feature_delivery", "unit_theme_maintenance", "unit_theme_operational", "unit_theme_quality", "unit_theme_risk", "unit_to", "unit_unresolved_refs", "unit_weight", "units_limitation", "units_refs_unresolved", "units_returned", "work_unit_id"} {
 			out[subject+":"+name] = reason
 		}
 	}
