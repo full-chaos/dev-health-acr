@@ -274,7 +274,13 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // an identity claimant: the work item, project and repository edges to a team
 // join only active team rows. Edges projected before v20 still point at the
 // retired team id of a team-id carry; only the rebuild removes them.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v20"
+//
+// v20 -> v21: project -> team and repository -> team ownership edges carry no
+// start. team_*_ownership.valid_from is the sync stamp of the assertion, not
+// the start of ownership, so the edges projected before v21 hide a synced
+// ownership from every graph read of a window that ended before the stamp;
+// only the rebuild clears their stored start.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v21"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -1297,6 +1303,9 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 // ownership window, so a closed/superseded ownership row must not leave a
 // repository in a team's authorization_repositories list.
 //
+// SUPERSEDED where it says the LATEST assertion decides: a fact is current
+// when an open row exists for its key (see queryProjectTeams' FOURTH note).
+//
 // Codex round-1 finding (HIGH): a bare `WHERE valid_to IS NULL` after FINAL
 // is not enough to express "currently owned". team_repo_ownership's
 // ReplacingMergeTree key is (org_id, provider, repo_full_name, team_id,
@@ -1311,7 +1320,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 // notes already established for team_project_ownership: collapse to ONE
 // row per (team_id, repo_full_name) [CHAOS-7130: now per (team_id, resolved
 // repository, SOURCE), below] using the SAME NULL-preserving
-// "latest assertion by (valid_from, valid_to IS NULL, valid_to) wins" rule
+// "an open assertion wins, then the latest by (valid_from, valid_to)" rule
 // -- verified live against this ClickHouse version there, not re-derived
 // here -- and only keep the repository when THAT latest assertion is open.
 // CHAOS-7130 (supersedes the per-(team, repo_full_name) collapse above): the

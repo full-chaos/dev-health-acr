@@ -66,7 +66,7 @@ func subCHAOS7130TeamListUsesResolvedOwnership(t *testing.T, ctx context.Context
 	closeRow := func(team, provider, name string, repoID any) {
 		mustExec(t, ctx, f.direct,
 			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			f.orgID, provider, team, repoID, name, "exact", "native", uint8(1), uint16(100), int32(0), at.Add(-time.Minute), at.Add(-30*time.Second), at)
+			f.orgID, provider, team, repoID, name, "exact", "native", uint8(1), uint16(100), int32(0), at.Add(-time.Hour), at.Add(-30*time.Second), at)
 	}
 	chaos7119Team(t, ctx, f, "team-dimprov", at)
 	chaos7119Own(t, ctx, f, "team-dimprov", "github", "acme/repo-b", chaos7119RepoB, at.Add(-time.Hour))

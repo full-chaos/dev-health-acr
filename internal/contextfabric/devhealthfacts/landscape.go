@@ -2,7 +2,6 @@ package devhealthfacts
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -225,10 +224,7 @@ func (p *LandscapeProvider) readProjectLandscape(ctx context.Context, orgID stri
 	if len(ids) == 0 {
 		return 0, 0, rejected, nil
 	}
-	ownershipPredicate := " AND valid_from <= now64(3) AND valid_to IS NULL"
-	if timeBound.active {
-		ownershipPredicate = fmt.Sprintf(" AND valid_from <= {%s:DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", boundEndParam, boundEndParam)
-	}
+	ownershipPredicate := ownershipValidityPredicate(timeBound)
 	// CHAOS-4521b, self-found after codex R3: this reader carried its OWN
 	// inline copy of the ownership join and never called the shared helper,
 	// so it silently missed the move onto the project identity -- it would
