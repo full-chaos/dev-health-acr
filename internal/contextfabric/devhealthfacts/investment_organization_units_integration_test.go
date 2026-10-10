@@ -63,6 +63,8 @@ func TestOrganizationUnitsPageTiesToTheOrganizationFactAgainstRealClickHouse(t *
 	type unitKey struct{ unit, repo string }
 	shares := map[unitKey]float64{}
 	unattributed := map[string]float64{}
+	unresolvedRefs := map[string]int64{}
+	unresolvedHandles := map[string]string{}
 	var order []string
 	cursor := (*contextfabric.InvestmentUnitsCursor)(nil)
 	for page := 0; page < 10; page++ {
@@ -99,6 +101,10 @@ func TestOrganizationUnitsPageTiesToTheOrganizationFactAgainstRealClickHouse(t *
 				t.Fatalf("unit %s without a repository has basis %q", id, basis)
 			}
 			unattributed[id] += share
+			unresolvedRefs[id] = *row.Fields["unit_refs_unresolved"].Integer
+			if handles, has := row.Fields["unit_unresolved_refs"]; has {
+				unresolvedHandles[id] = *handles.String
+			}
 		}
 		next := pages[0].Fields["next_cursor"]
 		if next.String == nil {
@@ -126,6 +132,14 @@ func TestOrganizationUnitsPageTiesToTheOrganizationFactAgainstRealClickHouse(t *
 	}
 	if math.Abs(unattributed["wu5"]-10) > 1e-9 || math.Abs(unattributed["wu6"]-10) > 1e-9 {
 		t.Errorf("unattributed shares = %v, want wu5 10 and wu6 10", unattributed)
+	}
+	// The synthetic row of a unit with no reference at all is not an unresolved
+	// reference: wu6 names none, wu5 names the one repository that is not synced.
+	if unresolvedRefs["wu6"] != 0 || unresolvedHandles["wu6"] != "" {
+		t.Errorf("wu6 (no reference) reports %d unresolved references %q, want none", unresolvedRefs["wu6"], unresolvedHandles["wu6"])
+	}
+	if unresolvedRefs["wu5"] != 1 || unresolvedHandles["wu5"] != "ghpr:acme/not-synced#7" {
+		t.Errorf("wu5 reports %d unresolved references %q, want 1 and ghpr:acme/not-synced#7", unresolvedRefs["wu5"], unresolvedHandles["wu5"])
 	}
 	// The listing ties to the organization fact: resolved 74 is the mix's total
 	// weight and 20 of 94 is its unattributed_effort_share.

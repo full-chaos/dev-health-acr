@@ -19,7 +19,7 @@ func organizationUnitsTable() []fakeTable {
 	theme := map[string]float64{"feature_delivery": 1}
 	return []fakeTable{{match: "scope_unattributed_rows", rows: [][]any{
 		{"wu-b", repoUUID("org-units-a"), 4.0, 4.0, theme, from, from, []string{"7"}, uint64(0), []string{}, 9.0, uint64(3), 2.0, uint64(1)},
-		{"wu-a", "", 2.0, 2.0, theme, from, from, []string{""}, uint64(1), []string{"unit:wu-a"}, 9.0, uint64(3), 2.0, uint64(1)},
+		{"wu-a", "", 2.0, 2.0, theme, from, from, []string{""}, uint64(0), []string{}, 9.0, uint64(3), 2.0, uint64(1)},
 		{"wu-c", repoUUID("org-units-a"), 3.0, 3.0, theme, from, from, []string{"8"}, uint64(0), []string{}, 9.0, uint64(3), 2.0, uint64(1)},
 	}}}
 }
