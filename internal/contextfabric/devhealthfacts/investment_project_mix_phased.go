@@ -122,7 +122,7 @@ func projectMixScopeStatementScoped(timeBound factTimeBound, scope membershipSco
             argMax(from_ts, computed_at) AS from_ts,
             argMax(to_ts, computed_at) AS to_ts
         FROM work_unit_investments
-        WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filterJSON() + `
+        WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
         GROUP BY work_unit_id
     )
 )`
@@ -135,7 +135,7 @@ func readProjectMixScope(ctx context.Context, client contextpacket.ClickHouseQue
 		return scope, err
 	}
 	extra := make([]readers.Binding, 0, 3)
-	extra = append(extra, membership.bindingsJSON()...)
+	extra = append(extra, membership.bindings()...)
 	for _, b := range timeBound.bindings() {
 		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
 	}

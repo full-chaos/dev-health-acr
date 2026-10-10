@@ -2,7 +2,6 @@ package devhealthfacts_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -63,7 +62,7 @@ func TestProjectMixPhaseZeroReadsTheRememberedScopeIdsNotTheMembershipTable(t *t
 		if strings.Contains(q.statement, "work_unit_membership") {
 			t.Fatal("phase 0 still names work_unit_membership: the scope must come from the bound ids")
 		}
-		ids, ok := scopeJSONBinding(q)
+		ids, ok := scopeIDsBinding(q)
 		if !ok || strings.Join(ids, ",") != "wu-1,wu-2" {
 			t.Fatalf("phase 0 scope_json = %v (bound %v), want [wu-1 wu-2]", ids, ok)
 		}
@@ -83,7 +82,7 @@ func TestProjectMixOfALegacyRunKeepsTheScopeSubqueries(t *testing.T) {
 	}
 	projectScopeRead(t, client, provider, "org-project-scope-legacy")
 	for _, q := range phaseZeroStatements(client) {
-		if _, ok := scopeJSONBinding(q); ok {
+		if _, ok := scopeIDsBinding(q); ok {
 			t.Fatal("a legacy run must keep the subqueries; ids were bound")
 		}
 		if !strings.Contains(q.statement, "work_unit_membership") {
@@ -130,24 +129,11 @@ func TestProjectMixScopeAboveTheBoundKeepsTheScopeSubqueries(t *testing.T) {
 		t.Fatal("no phase 0 statement")
 	}
 	for _, q := range phase0 {
-		if _, bound := scopeJSONBinding(q); bound {
+		if _, bound := scopeIDsBinding(q); bound {
 			t.Fatal("a scope above the bound must not be bound as one array")
 		}
 		if !strings.Contains(q.statement, "work_unit_membership AS m") {
 			t.Fatal("an oversize scope must keep the scope subqueries, so the answer is the same")
 		}
 	}
-}
-
-func scopeJSONBinding(q capturedQuery) ([]string, bool) {
-	for _, b := range q.bindings {
-		if b.Name == "scope_json" {
-			var ids []string
-			if err := json.Unmarshal([]byte(b.Value.(string)), &ids); err != nil {
-				return nil, false
-			}
-			return ids, true
-		}
-	}
-	return nil, false
 }
