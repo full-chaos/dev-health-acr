@@ -352,6 +352,8 @@ func TestDimensionReadFailureIsATableReadError(t *testing.T) {
 }
 
 // The production registries: repositories; teams and projects.
+//
+// devhealthschema:not-a-production-replica this names producer-registry tables to pin which of them are dimension tables; it declares no column, type, engine or sort key.
 func TestProductionDimensionTables(t *testing.T) {
 	names := func(tables []entityTable) []string {
 		var all []string
@@ -466,8 +468,17 @@ func TestDimensionRowsAreNormalizedBeforeTheyAreJudged(t *testing.T) {
 // a nanosecond stamp, a row key of the natural-key bound, a large count. It
 // fits the contract's cursor length in both position spaces.
 func TestDimensionPositionOfTheLongestRowKeyFitsTheCursor(t *testing.T) {
+	plan := sourcePlan{tables: teamsProjectsTablesFor(nil, nil, nil, nil, true)}
+	var every []string
+	for _, table := range plan.tables {
+		every = append(every, table.name)
+	}
+	tables := plan.dimensionTablesIn(every)
+	if len(tables) != 2 {
+		t.Fatalf("the teams/projects source has %d dimension tables, want 2", len(tables))
+	}
 	at := dimensionPosition{
-		Tables: []string{"teams", "projects"}, At: 1,
+		Tables: tables, At: 1,
 		Since: time.Date(2026, 10, 10, 3, 55, 0, 123456789, time.UTC), After: strings.Repeat("k", identity.MaxNaturalKeyBytes),
 		Rows: 9999999,
 	}

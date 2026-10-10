@@ -272,7 +272,9 @@ SELECT ?, 'linear', 'T-bulk', concat('P-', toString(number)), concat('K', toStri
 	if got := relationshipsOfType(drain, contractsv1.ContextFabricRelationshipOwnedByTeam); got != projects {
 		t.Fatalf("%d OWNED_BY_TEAM edges projected, want %d: rows were lost at the shared migration stamp", got, projects)
 	}
-	if counting.statements > 80 {
+	// 80 for the paged walk, and 10 for the dimension read of the projects
+	// (three pages) and the first read of every table the walk starts with.
+	if counting.statements > 90 {
 		t.Fatalf("%d statements for %d rows: the bulk window is not paging in bounded steps", counting.statements, projects)
 	}
 }
