@@ -1219,10 +1219,29 @@ type ContextFabricSubjectCandidate struct {
 	MatchMechanisms []ContextFabricSubjectMatchMechanism `json:"match_mechanisms,omitempty"`
 }
 
+// ContextFabricInactiveHint is the answer for one subject hint that names an
+// inactive team. Answer is always TeamInactiveReason. ActiveCanonicalID is the
+// one active team of the same name the caller may read, as a pointer only: no
+// fact of it is read for this answer.
+type ContextFabricInactiveHint struct {
+	Subject           ContextFabricSubjectRef `json:"subject"`
+	Answer            string                  `json:"answer"`
+	ActiveCanonicalID string                  `json:"active_canonical_id,omitempty"`
+}
+
+// ContextFabricInactiveHintsMax bounds inactive_hints.
+const ContextFabricInactiveHintsMax = 50
+
 type ContextFabricSubjectResolution struct {
 	Candidates          []ContextFabricSubjectCandidate `json:"candidates"`
 	Committed           []ContextFabricSubjectRef       `json:"committed"`
 	ClarificationPrompt string                          `json:"clarification_prompt,omitempty"`
+	// InactiveHints names each caller-supplied subject hint that resolved to
+	// an inactive team the caller may read. The hint is answered as that team
+	// and is never searched for, so a same-named active team is not served in
+	// its place; the active team of that name is named only by id.
+	// Additive-optional: absent means no hint named an inactive team.
+	InactiveHints []ContextFabricInactiveHint `json:"inactive_hints,omitempty"`
 	// PriorSubjectReceiptDispositions (CHAOS-3478/CHAOS-3813) is the
 	// wire-visible fate of every PriorSubjectReceipts entry THIS request
 	// carried -- additive-optional: nil means "the request carried none, or

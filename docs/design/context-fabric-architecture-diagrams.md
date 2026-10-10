@@ -2858,3 +2858,5 @@ on retries. Save, reuse, by-id and response-owner boundaries remain those in §1
   `.remember/context-fabric/cf-rulings.md`, `.remember/now.md`,
   `.remember/today-2026-08-26.md`, `.remember/retro-4061-diagrams-draft.md`
   (diagram-style precedent reused here).
+
+**Updated 2026-10-10: a caller hint that names an inactive team is answered as that team.** In `resolveSubjects` (`graphrank/resolve.go`), a caller-sourced team hint whose exact read finds nothing asks `ResolveDeps.ExactHintInactive` (falkorgraph: the `InactiveTeams` authority, which applies the caller's read predicate and names the one same-name active team as a pointer). A hint reported inactive is terminal for that hint: it is recorded in `SubjectResolution.inactive_hints` (`answer: team_inactive`, optional `active_canonical_id`), no hybrid search runs for it, and the same-named active team is never committed. The engine serves a no_match with a service-authored limitation and the terminal reason `team_inactive`; the projection mirrors `inactive_hints` verbatim. Receipt-sourced hints keep the search they had. Results that carry inactive hints are never stored as answer-reuse sources.
