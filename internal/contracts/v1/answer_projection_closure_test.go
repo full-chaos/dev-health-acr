@@ -350,7 +350,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// deterministic_answer: 242 -> 243 -- the projection now serves the
 		// server-composed answer text; untrusted like direct_judgment because
 		// it names subjects by their graph labels.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 244},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 248},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -418,7 +418,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// 351 -> 352 -- InterpretedQuestion's new requested_judgment_kind
 		// string leaf. answer_projection is unaffected: the projection
 		// carries no Interpretation at all.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 356},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 360},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)

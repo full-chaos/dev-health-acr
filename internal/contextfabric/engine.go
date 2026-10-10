@@ -3263,6 +3263,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			}
 			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
 		}
+		// A caller hint was answered team_inactive and nothing else resolved:
+		// discovery here would run a cohort census that reads the active team
+		// of the same name, so the answer ends before it.
+		if len(resolution.InactiveHints) > 0 && len(resolution.Committed) == 0 {
+			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
+		}
 		if uncommittedTeamAnchorNamed(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind, resolution) {
 			resolution.ClarificationPrompt = uncommittedTeamAnchorPrompt(resolution)
 			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))

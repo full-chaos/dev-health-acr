@@ -137,6 +137,9 @@ func (p ContextFabricAnswerProjection) Validate() error {
 		}
 		seenConfirmedMembers[entry.Member] = struct{}{}
 	}
+	if err := validateInactiveHints(p.InactiveHints); err != nil {
+		return err
+	}
 	// CHAOS-3478/CHAOS-3813: same bound as
 	// ContextFabricSubjectResolution.Validate's own block for this field.
 	if len(p.PriorSubjectReceiptDispositions) > 20 {

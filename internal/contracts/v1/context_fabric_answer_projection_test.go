@@ -471,7 +471,7 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 		// copy honest: it asserts the projected def is byte-equal to the
 		// canonical one.
 		"FactScopeCensusRecord",
-		"HandleOption", "KindOption",
+		"HandleOption", "InactiveHint", "KindOption",
 		// S7c: PlanRequirementOutcomeRow joins deliberately. The
 		// projection carries the SAME outcome rows the canonical result
 		// does and appends its own cuts to them -- it does not hold a

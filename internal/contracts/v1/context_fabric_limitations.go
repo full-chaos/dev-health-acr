@@ -604,6 +604,13 @@ const ContextFabricSubjectTermsMissingLimitation = "The supplied interpretation 
 // more subjects than subject_terms may hold, so none were read from it.
 const ContextFabricSubjectTermsFrameOverBoundLimitation = "The supplied interpretation had no subject_terms, and its question_frame names more subjects than subject_terms may hold, so none were read from it. This is not a search result. Send subject_terms with at most 50 names and ask again."
 
+// ContextFabricInactiveTeamHintLimitation is the sentence a no_match answer
+// carries when a team the caller named by id is inactive. The inactive team is
+// not searched for under its name, so no same-named active team is served in
+// its place; the id of the active team of that name, when there is one, is in
+// subject_resolution.inactive_hints.
+const ContextFabricInactiveTeamHintLimitation = "The team named in this request is inactive, so no canonical facts were read for it. The server did not search for a team of the same name. When a single readable active team of the same name exists, its id is in subject_resolution.inactive_hints and you can ask again naming that id; otherwise no id is given."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -647,6 +654,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSubjectTermsFromFrameLimitation,
 		ContextFabricSubjectTermsMissingLimitation,
 		ContextFabricSubjectTermsFrameOverBoundLimitation,
+		ContextFabricInactiveTeamHintLimitation,
 	}
 }
 
