@@ -114,6 +114,10 @@ func TestColdMembershipScopeLoadFailureNeverReportsACapabilityTimeout(t *testing
 			tables[i].err = errors.New("scope load failed")
 		}
 	}
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
 	client := &delayClient{inner: &fakeClient{tables: tables}, delays: map[string]time.Duration{}}
 	registry, request := coldScopeRegistry(t, client)
 	got := readColdScope(t, registry, client, request, "org-cold-scope-fail")
@@ -124,6 +128,9 @@ func TestColdMembershipScopeLoadFailureNeverReportsACapabilityTimeout(t *testing
 		if strings.Contains(s.Reason, "timed out") {
 			t.Errorf("%s reason=%q", s.Source, s.Reason)
 		}
+	}
+	if !strings.Contains(logs.String(), "devhealthfacts.membership_scope_fallback") || !strings.Contains(logs.String(), "reason=load_failed") {
+		t.Fatalf("a failed scope load must emit the scope fallback WARN with reason=load_failed:\n%s", logs.String())
 	}
 	phase0 := phaseZeroStatements(client.inner)
 	if len(phase0) == 0 || !strings.Contains(phase0[0].statement, "work_unit_membership") {
@@ -178,5 +185,29 @@ func TestInvestmentPrerequisiteLoadCoversEverySubjectKindThatReadsTheScope(t *te
 		if got := countStatements(client.inner, "groupUniqArray(100001)(work_unit_id)"); got != wantLoads {
 			t.Errorf("%s: scope loads = %d, want %d", kind, got, wantLoads)
 		}
+	}
+}
+
+func TestPrerequisiteLoadFailureIsLoggedNotSwallowed(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	client := &delayClient{inner: &fakeClient{tables: coldScopeTables()}, delays: map[string]time.Duration{}}
+	var loader contextfabric.FactPrerequisiteLoader
+	for _, p := range devhealthfacts.NewProviders(client) {
+		if p.Capability().Kind == contextfabric.FactInvestment {
+			loader, _ = p.(contextfabric.FactPrerequisiteLoader)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	query := contextfabric.FactQuery{Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectProject, CanonicalID: "x", Label: "x"}}}
+	if err := loader.LoadPrerequisites(ctx, storage.Principal{OrgID: "org-prereq-fail"}, query); err == nil {
+		t.Fatal("a cancelled caller must surface its error: measurement did not happen")
+	}
+	out := logs.String()
+	if !strings.Contains(out, "investment membership scope prerequisite load failed") || !strings.Contains(out, "reason=canceled") || !strings.Contains(out, "duration_ms=") {
+		t.Fatalf("prerequisite failure not logged with a reason class:\n%s", out)
 	}
 }

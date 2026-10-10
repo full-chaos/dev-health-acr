@@ -2,7 +2,9 @@ package devhealthfacts
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -95,8 +97,19 @@ func (p *InvestmentProvider) LoadPrerequisites(ctx context.Context, principal st
 	for _, subject := range query.Subjects {
 		switch subject.Kind {
 		case contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository:
-			_, err := p.resolveMembershipScope(ctx, orgID)
-			return err
+			started := clock()
+			if _, err := p.resolveMembershipScope(ctx, orgID); err != nil {
+				reason := "error"
+				switch {
+				case errors.Is(err, context.DeadlineExceeded):
+					reason = "deadline_exceeded"
+				case errors.Is(err, context.Canceled):
+					reason = "canceled"
+				}
+				slog.WarnContext(ctx, "investment membership scope prerequisite load failed", "reason", contextfabric.SanitizeLogAttr(reason), "duration_ms", clock().Sub(started).Milliseconds())
+				return err
+			}
+			return nil
 		}
 	}
 	return nil
