@@ -670,7 +670,14 @@ import (
 // tier), never the deprecated repo_metrics_daily.change_failure_rate; revert_rate
 // replaces it in the daily series. A candidate saved under v132 may hold the
 // deprecated value (often 0) as a change failure rate and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v133"
+//
+// v133 -> v134: a repository's validity start is its first-seen time (the
+// earliest of its created_at while that is earlier than the sync, and its first
+// pull request or work item), never the sync stamp, and never moves later; a
+// read as of an instant before the last sync finds the repositories that
+// existed then. A candidate saved under v133 may hold an as-of answer that
+// missed them and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v134"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
