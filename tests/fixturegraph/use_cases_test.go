@@ -372,11 +372,16 @@ func periodTotal(t *testing.T, c *client, one string) {
 			t.Fatalf("%s: no daily rows are seeded, coverage says %q, want read_no_fact or fact_served from window pull request facts: %.1500s", one, outcome, raw)
 		}
 		for _, f := range list(d, "facts") {
-			if rows := list(get(f, "tables", "daily_metrics"), "rows"); len(rows) != 0 {
-				t.Fatalf("%s: no daily rows are seeded, a daily series of %d rows was served: %.1500s", one, len(rows), raw)
+			fields, _ := get(f, "fields").(map[string]any)
+			for _, name := range []string{"commits_count", "prs_merged", "median_pr_cycle_hours", "day"} {
+				if _, present := fields[name]; present {
+					t.Fatalf("%s: no daily rows are seeded, the field %q is present in the served fact: %.1500s", one, name, raw)
+				}
 			}
-			if fields, _ := get(f, "fields").(map[string]any); fields["commits_count"] != nil {
-				t.Fatalf("%s: no daily rows are seeded, commits_count was served: %.1500s", one, raw)
+			if tables, _ := get(f, "tables").(map[string]any); tables != nil {
+				if _, present := tables["daily_metrics"]; present {
+					t.Fatalf("%s: no daily rows are seeded, the daily series table is present: %.1500s", one, raw)
+				}
 			}
 		}
 		return

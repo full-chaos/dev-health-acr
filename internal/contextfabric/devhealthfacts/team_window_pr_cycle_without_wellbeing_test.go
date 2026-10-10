@@ -34,8 +34,10 @@ func TestTeamWindowPRCycleServedWithoutWellbeingRow(t *testing.T) {
 	if got := f["window_pr_count"].Integer; got == nil || *got != 5 {
 		t.Fatalf("window_pr_count = %#v, want 5", f["window_pr_count"])
 	}
-	if _, ok := f["commits_count"]; ok {
-		t.Fatalf("commits_count served without a wellbeing row: %#v", f["commits_count"])
+	for _, name := range []string{"day", "commits_count", "after_hours_commits_count", "weekend_commits_count", "after_hours_commit_ratio", "weekend_commit_ratio"} {
+		if _, ok := f[name]; ok {
+			t.Fatalf("%s served without a wellbeing row: %#v", name, f[name])
+		}
 	}
 }
 
@@ -52,8 +54,10 @@ func TestRepositoryWindowPRCycleServedWithoutDailyRow(t *testing.T) {
 	if got := fact.Fields["window_pr_count"].Integer; got == nil || *got != 3 {
 		t.Fatalf("window_pr_count = %#v, want 3", fact.Fields["window_pr_count"])
 	}
-	if _, ok := fact.Fields["commits_count"]; ok {
-		t.Fatalf("daily field served without a daily row")
+	for _, name := range []string{"day", "commits_count", "prs_merged", "median_pr_cycle_hours", "daily_metrics"} {
+		if _, ok := fact.Fields[name]; ok {
+			t.Fatalf("%s served without a daily row: %#v", name, fact.Fields[name])
+		}
 	}
 }
 

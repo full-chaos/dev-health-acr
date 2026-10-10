@@ -580,12 +580,11 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 		// One median over the union of the pull requests merged in the
 		// window in the repositories the team owns, never a combination of
 		// per-repository or per-day medians; absent when none merged.
-		// A team that owns no repository has nothing to count, so no state
-		// is served for it (applyNoOwnedRepositories says why).
-		if len(owned[r.TeamID]) > 0 {
-			if err := p.setTeamWindowFamilies(ctx, orgID, r.TeamID, owned[r.TeamID], window, fields); err != nil {
-				return 0, rejected, err
-			}
+		// A team that owns no repository has no repository keys, so the
+		// readers return empty and no window field is served for it
+		// (applyNoOwnedRepositories says why).
+		if err := p.setTeamWindowFamilies(ctx, orgID, r.TeamID, owned[r.TeamID], window, fields); err != nil {
+			return 0, rejected, err
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
@@ -600,7 +599,7 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 		seen[r.TeamID] = struct{}{}
 	}
 	for _, teamID := range ids {
-		if _, done := seen[teamID]; done || len(owned[teamID]) == 0 {
+		if _, done := seen[teamID]; done {
 			continue
 		}
 		seen[teamID] = struct{}{}
