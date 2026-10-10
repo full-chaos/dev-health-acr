@@ -50,8 +50,10 @@ func opRestrictedA() storage.Principal {
 type opGraph struct {
 	nodes map[string]map[string]map[string]interface{} // org -> SubjectKey -> attributes
 	reach map[string]map[string][]string
-	calls int
-	mu    sync.Mutex
+	// inactiveTeams: org -> team canonical id -> inactive team row.
+	inactiveTeams map[string]map[string]opInactiveTeam
+	calls         int
+	mu            sync.Mutex
 }
 
 func newOpGraph() *opGraph {
@@ -101,6 +103,29 @@ func (g *opGraph) OwnershipReachedRepositories(_ context.Context, principal stor
 		out[i] = g.reach[principal.OrgID][graphrank.SubjectKey(subject)]
 	}
 	return out, nil
+}
+
+// InactiveTeams makes opGraph the optional inactive-team authority: a team id
+// registered in inactiveTeams is an inactive team, decided by the real node
+// predicate over its attributes.
+func (g *opGraph) InactiveTeams(_ context.Context, principal storage.Principal, _ contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]directread.InactiveTeam, error) {
+	out := make([]directread.InactiveTeam, len(subjects))
+	for i, subject := range subjects {
+		entry, ok := g.inactiveTeams[principal.OrgID][subject.CanonicalID]
+		if !ok {
+			continue
+		}
+		decided := graphrank.AuthorizeStoredSubjectNodes(principal, []contextfabric.SubjectRef{subject}, map[string][]graphrank.CandidateNode{graphrank.SubjectKey(subject): {{Attributes: entry.attributes}}})
+		if decided[0] == contextfabric.StoredSubjectAdmitted {
+			out[i] = directread.InactiveTeam{Inactive: true, ActiveTwinID: entry.twin}
+		}
+	}
+	return out, nil
+}
+
+type opInactiveTeam struct {
+	attributes map[string]interface{}
+	twin       string
 }
 
 func (g *opGraph) gateCalls() int {
