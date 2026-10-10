@@ -131,3 +131,11 @@ func TestRepositoryStartFallsBackWhenTheEvidenceReadFails(t *testing.T) {
 	requireStart(t, starts, "repository:restamped", nil)
 	requireStart(t, starts, "repository:real", &created)
 }
+
+func TestRepositoryEvidenceIsNotReadForAnEmptyPage(t *testing.T) {
+	t.Parallel()
+	_, reads := repositoryStarts(t, nil, fakeTable{match: firstSeenMarker})
+	if reads != 0 {
+		t.Fatalf("evidence statements for a page with no repository = %d, want 0", reads)
+	}
+}

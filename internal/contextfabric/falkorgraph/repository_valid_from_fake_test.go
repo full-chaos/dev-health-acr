@@ -35,9 +35,11 @@ func TestRepositoryEntityWriteKeepsTheEarlierValidityStart(t *testing.T) {
 	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r", Label: "acme/r"}
 	write := captureOwnedEntityWrite(t, repo, &start)
-	if !strings.Contains(write.cypher, "CASE WHEN $"+repositoryValidFromNsParam+" IS NULL THEN n."+propValidFromNs) ||
-		!strings.Contains(write.cypher, "$"+repositoryValidFromNsParam+" < n."+propValidFromNs) {
-		t.Fatalf("repository write does not keep the earlier start: %s", write.cypher)
+	const want = "MERGE (n:Subject {org_id:$org, subject_kind:$nKind, canonical_id:$nId}) SET n:Repository SET n += $attrs" +
+		" SET n += {valid_from: CASE WHEN $repoValidFromNs IS NULL THEN n.valid_from WHEN n.valid_from_ns IS NULL OR $repoValidFromNs < n.valid_from_ns THEN $repoValidFrom ELSE n.valid_from END," +
+		" valid_from_ns: CASE WHEN $repoValidFromNs IS NULL THEN n.valid_from_ns WHEN n.valid_from_ns IS NULL OR $repoValidFromNs < n.valid_from_ns THEN $repoValidFromNs ELSE n.valid_from_ns END}"
+	if write.cypher != want {
+		t.Fatalf("repository write cypher =\n%s\nwant\n%s", write.cypher, want)
 	}
 	attrs := write.params["attrs"].(map[string]interface{})
 	for _, name := range []string{propValidFrom, propValidFromNs} {

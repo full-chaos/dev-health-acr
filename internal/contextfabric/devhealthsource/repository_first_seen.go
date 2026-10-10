@@ -14,7 +14,7 @@ import (
 // that is not earlier than last_synced says nothing about when the repository
 // began; it yields no start at all.
 func repositoryCreatedStart(createdAt, lastSynced time.Time) *time.Time {
-	if createdAt.IsZero() || createdAt.Unix() <= 0 || !createdAt.Before(lastSynced) {
+	if createdAt.Unix() <= 0 || !createdAt.Before(lastSynced) {
 		return nil
 	}
 	return requiredTime(createdAt)
@@ -41,9 +41,7 @@ WHERE created_at > toDateTime64(0, 3, 'UTC')
 func applyRepositoryFirstSeen(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, items []candidate) {
 	ids := make([]string, 0, len(items))
 	for _, item := range items {
-		if item.entity != nil {
-			ids = append(ids, item.sortKey)
-		}
+		ids = append(ids, item.sortKey)
 	}
 	if len(ids) == 0 {
 		return
@@ -54,9 +52,6 @@ func applyRepositoryFirstSeen(ctx context.Context, client contextpacket.ClickHou
 		return
 	}
 	for _, item := range items {
-		if item.entity == nil {
-			continue
-		}
 		item.entity.ValidFrom = earlierStart(item.entity.ValidFrom, evidence[strings.ToLower(item.sortKey)])
 	}
 }

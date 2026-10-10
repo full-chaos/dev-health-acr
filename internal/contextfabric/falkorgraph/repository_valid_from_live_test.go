@@ -102,3 +102,36 @@ func TestLiveRepositoryValidityStartNeverMovesLater(t *testing.T) {
 		t.Fatalf("work item start after a write with no start = %v, want it cleared", got)
 	}
 }
+
+// TestLiveRebuildPurgeShedsAHeldRepositoryStart: the rebuild a source-version
+// bump owes purges the organization graph before the first batch, so a start
+// held from before the fix (a re-stamped one) does not survive the keep-earlier
+// rule: the first repository write after the purge lands whatever it carries.
+func TestLiveRebuildPurgeShedsAHeldRepositoryStart(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	orgID := "live-repo-purge-" + time.Now().UTC().Format("20060102T150405.000000000")
+	key := graphKey(adapter.config.GraphPrefix, orgID)
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+
+	first := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	restamp := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:purge", Label: "acme/purge"}
+
+	if _, err := adapter.ApplyProjectionBatch(ctx, repositoryStartBatch(orgID, "batch_purge_1", "", "cursor-1", restamp, repo, &restamp)); err != nil {
+		t.Fatalf("held-start ApplyProjectionBatch() error = %v", err)
+	}
+	if err := adapter.PurgeOrganization(ctx, orgID); err != nil {
+		t.Fatalf("PurgeOrganization() error = %v", err)
+	}
+	if _, err := adapter.ApplyProjectionBatch(ctx, repositoryStartBatch(orgID, "batch_purge_2", "", "cursor-1", first, repo, &first)); err != nil {
+		t.Fatalf("rebuilt ApplyProjectionBatch() error = %v", err)
+	}
+	found, err := adapter.nodeByKindID(ctx, key, orgID, string(repo.Kind), repo.CanonicalID, temporalFilter{})
+	if err != nil || found == nil {
+		t.Fatalf("nodeByKindID() = %v, %v", found, err)
+	}
+	if got := found.Properties[propValidFromNs]; fmt.Sprint(got) != fmt.Sprint(nsTimestamp(first)) {
+		t.Fatalf("repository start after purge and rebuild = %v, want %v", got, nsTimestamp(first))
+	}
+}

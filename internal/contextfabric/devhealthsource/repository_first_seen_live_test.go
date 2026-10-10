@@ -57,6 +57,7 @@ func TestLiveRepositoryStartIsTheFirstSeenNotTheSyncStamp(t *testing.T) {
 		"pull":    "86830000-0000-4000-8000-0000000091a2",
 		"nothing": "86830000-0000-4000-8000-0000000091a3",
 		"real":    "86830000-0000-4000-8000-0000000091a4",
+		"epoch":   "86830000-0000-4000-8000-0000000091a5",
 	}
 	synced := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 	firstPull := time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC)
@@ -78,6 +79,10 @@ SELECT toUUID(?), ?, toUInt32(number + 1), 'PR', 'open', repeat('b', 1000), toDa
 FROM numbers(?)`, repos[name], orgID, firstPull, synced, pulls/2); err != nil {
 			t.Fatalf("seed pull requests of %s: %v", name, err)
 		}
+	}
+	if err := direct.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, last_synced)
+VALUES (toUUID(?), ?, 1, 'PR', 'open', toDateTime64(0, 3, 'UTC'), ?)`, repos["epoch"], orgID, synced); err != nil {
+		t.Fatalf("seed an unset-created_at pull request: %v", err)
 	}
 	if err := direct.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, created_at, updated_at, last_synced, org_id)
 VALUES (toUUID(?), 'ITEM-1', 'github', 'first', 'task', 'open', ?, ?, ?, ?)`, repos["both"], firstItem, synced, synced, orgID); err != nil {
@@ -107,6 +112,7 @@ VALUES (toUUID(?), 'ITEM-1', 'github', 'first', 'task', 'open', ?, ?, ?, ?)`, re
 	requireStart(t, starts, "repository:"+repos["pull"], &firstPull)
 	requireStart(t, starts, "repository:"+repos["nothing"], nil)
 	requireStart(t, starts, "repository:"+repos["real"], &realCreated)
+	requireStart(t, starts, "repository:"+repos["epoch"], nil)
 
 	if err := direct.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Logf("read_stats unavailable: flush logs: %v", err)
