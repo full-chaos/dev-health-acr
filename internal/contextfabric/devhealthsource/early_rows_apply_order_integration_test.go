@@ -23,24 +23,21 @@ type graphState struct {
 	edges map[string]map[string]any
 }
 
-func readGraphState(t *testing.T, ctx context.Context, raw *redis.Client, orgID string) graphState {
+func graphKeys(t *testing.T, ctx context.Context, raw *redis.Client) map[string]bool {
 	t.Helper()
 	keys, err := raw.Do(ctx, "GRAPH.LIST").StringSlice()
 	if err != nil {
 		t.Fatalf("GRAPH.LIST: %v", err)
 	}
-	var key string
-	for _, k := range keys {
-		if strings.Contains(k, orgID) {
-			if key != "" {
-				t.Fatalf("two graphs name the organization %s: %s and %s", orgID, key, k)
-			}
-			key = k
-		}
+	out := map[string]bool{}
+	for _, key := range keys {
+		out[key] = true
 	}
-	if key == "" {
-		t.Fatalf("no graph names the organization %s (graphs: %v)", orgID, keys)
-	}
+	return out
+}
+
+func readGraphState(t *testing.T, ctx context.Context, raw *redis.Client, key string) graphState {
+	t.Helper()
 	rows := func(query string) []map[string]any {
 		reply, err := raw.Do(ctx, "GRAPH.RO_QUERY", key, query).Slice()
 		if err != nil || len(reply) < 2 {
@@ -156,12 +153,23 @@ func TestEarlyRowsLeaveTheGraphTheWalkAloneLeaves(t *testing.T) {
 	apply := func(orgID string, batches []contextfabric.ProjectionBatch) graphState {
 		t.Helper()
 		t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+		// The organization's graph is the one graph this apply creates.
+		before := graphKeys(t, ctx, raw)
 		for i, batch := range batches {
 			if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
 				t.Fatalf("%s: apply batch %d of %d: %v", orgID, i+1, len(batches), err)
 			}
 		}
-		return readGraphState(t, ctx, raw, orgID)
+		var created []string
+		for key := range graphKeys(t, ctx, raw) {
+			if !before[key] {
+				created = append(created, key)
+			}
+		}
+		if len(created) != 1 {
+			t.Fatalf("%s: the apply created %d graphs (%v), want 1", orgID, len(created), created)
+		}
+		return readGraphState(t, ctx, raw, created[0])
 	}
 	_, aloneA := devhealthsource.EarlyRowsWalksForTest(t, "early-rows-alone-a")
 	_, aloneB := devhealthsource.EarlyRowsWalksForTest(t, "early-rows-alone-b")
