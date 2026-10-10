@@ -705,6 +705,12 @@ jobs:
   # env (see below) as the `race` job uses -- devhealthfacts has no
   # psql/pg_isready dependency, so the Postgres-client install step the
   # `race` job carries is not needed here.
+  # Measured on a green main run's go-test.json (non-race): 663 top-level tests,
+  # 1146s summed; the 29 tests of scripts/ci/devhealthfacts-heavy-tests.txt
+  # (>= 9s each, one ClickHouse container per test) sum to 553s, the remaining
+  # 634 tests to 593s. The single job ran 1260s against its 20m (1200s) cap.
+  # Each half has its own job and the same 20m cap; the rest half is
+  # `-skip` of the heavy regex, so a test absent from the list runs there.
   race-devhealthfacts:
     name: race (devhealthfacts, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -730,12 +736,64 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Run isolated devhealthfacts race suite
+      - name: Verify the heavy-test list names real tests
+        run: scripts/ci/devhealthfacts-split.sh verify
+      - name: Run isolated devhealthfacts race suite (rest half)
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          export GOFLAGS="-trimpath -skip=$(scripts/ci/devhealthfacts-split.sh rest)"
+          start=$SECONDS
           make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
+          elapsed=$((SECONDS - start))
+          printf 'devhealthfacts (rest half) race wall time: %ss (budget 1200s)\n' "$elapsed"
+          if [ $((elapsed * 100)) -gt $((1200 * 85)) ]; then
+            printf '::error::devhealthfacts (rest half) took %ss, over 85%% of its 1200s budget; rebalance scripts/ci/devhealthfacts-heavy-tests.txt\n' "$elapsed"
+            exit 1
+          fi
+
+  race-devhealthfacts-heavy:
+    name: race (devhealthfacts heavy, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as the `race` job above -- needs mirror-preflight so it cannot
+    # start before every mirrored image is confirmed resolvable.
+    needs: mirror-preflight
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: true
+      # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
+      # job above.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the heavy-test list names real tests
+        run: scripts/ci/devhealthfacts-split.sh verify
+      - name: Run isolated devhealthfacts race suite (heavy half)
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
+          printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          export GOFLAGS="-trimpath -run=$(scripts/ci/devhealthfacts-split.sh heavy)"
+          start=$SECONDS
+          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
+          elapsed=$((SECONDS - start))
+          printf 'devhealthfacts (heavy half) race wall time: %ss (budget 1200s)\n' "$elapsed"
+          if [ $((elapsed * 100)) -gt $((1200 * 85)) ]; then
+            printf '::error::devhealthfacts (heavy half) took %ss, over 85%% of its 1200s budget; rebalance scripts/ci/devhealthfacts-heavy-tests.txt\n' "$elapsed"
+            exit 1
+          fi
 
   # CHAOS-6342: devhealthsource is the OTHER shared-container HEAVY package
   # (see race-devhealthfacts above) and used to round-robin into race shard 1
@@ -1318,6 +1376,7 @@ jobs:
       - race
       - race-devhealthschema
       - race-devhealthfacts
+      - race-devhealthfacts-heavy
       - race-devhealthsource
       - race-factoracle
       - build
