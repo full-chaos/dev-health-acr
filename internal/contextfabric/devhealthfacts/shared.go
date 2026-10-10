@@ -681,7 +681,12 @@ import (
 // v135: a team or repository without a team_metrics_daily or
 // repo_metrics_daily row serves its window PR cycle and change failure
 // fields; a candidate saved under v134 may hold an answer that lacked them.
-const QueryVersion = "devhealthfacts.clickhouse.v135"
+//
+// v135 -> v136: the first project investment read after a pod start loads the
+// membership scope before the capability clock starts, so it serves the full
+// answer, not a partial "canonical fact capability timed out". A candidate saved
+// under v135 may hold that partial answer and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v136"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
