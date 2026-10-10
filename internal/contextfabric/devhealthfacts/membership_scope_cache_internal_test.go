@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 func TestMembershipScopeCacheServesAnEntryOnlyWithinItsTTLAndForItsRun(t *testing.T) {
@@ -148,7 +149,9 @@ func TestMembershipScopeLoadTimeoutFallsBackToTheSubqueriesWithAWarning(t *testi
 	provider := newInvestmentProvider(client)
 	provider.scopeLoadTimeout = time.Millisecond
 
-	scope, err := provider.resolveMembershipScope(context.Background(), "org-timeout")
+	events := &fallbackEventRecorder{}
+	ctx := context.WithValue(context.Background(), projectMixInstrumentationKey{}, readers.Instrumentation(events))
+	scope, err := provider.resolveMembershipScope(ctx, "org-timeout")
 	if err != nil {
 		t.Fatalf("a timed-out scope load failed the read: %v", err)
 	}
@@ -175,4 +178,25 @@ func TestMembershipScopeLoadTimeoutFallsBackToTheSubqueriesWithAWarning(t *testi
 	if fallbacks != 1 {
 		t.Fatalf("fallback warnings = %d, want 1", fallbacks)
 	}
+	if got := events.names(); len(got) != 1 || got[0] != membershipScopeFallbackReader {
+		t.Fatalf("instrumentation events = %v, want exactly one %s", got, membershipScopeFallbackReader)
+	}
+}
+
+type fallbackEventRecorder struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (r *fallbackEventRecorder) StartQuery(ctx context.Context, reader string, _ bool) (context.Context, func(error)) {
+	r.mu.Lock()
+	r.seen = append(r.seen, reader)
+	r.mu.Unlock()
+	return ctx, func(error) {}
+}
+
+func (r *fallbackEventRecorder) names() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.seen...)
 }

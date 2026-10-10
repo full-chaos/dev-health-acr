@@ -740,10 +740,9 @@ func (f clickhouseFacts) query(ctx context.Context, statement, orgID string, ids
 // fragments -- must never reach it). This mirrors
 // internal/contextfabric/falkorgraph/client.go's safeDependencyError, which
 // classifies to a fixed reason and never embeds the raw SDK error either.
-// contextfabric.FactReadFailure carries no field for the original err, and
-// this package has no server-side logging seam to hand it to (inventing one
-// here is out of scope for this fix), so err is accepted for call sites'
-// context but intentionally never reaches the returned error at all.
+// err rides on FactReadFailure.Cause for logs and tests (errors.Is/As reach
+// it) but never in Error() or the served Reason, and the read_failed log line
+// names only its Go type.
 // mixReadFailure is readFailure for the project mix reads: a read that stayed
 // contended through every attempt (ProjectMixContendedError) is a retryable
 // unavailable source with a "contended" reason, not a generic failure.

@@ -305,8 +305,8 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 			// that failed on its own (its timeout, a server error) degrades to
 			// them, so the read costs more but still answers. A caller that is
 			// itself cancelled is not degraded.
-			if ctx.Err() != nil {
-				return membershipScope{}, res.Err
+			if err := ctx.Err(); err != nil {
+				return membershipScope{}, err
 			}
 			reason := "load_failed"
 			if errors.Is(res.Err, context.DeadlineExceeded) {
