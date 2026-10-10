@@ -185,7 +185,7 @@ SELECT provider, repo_key, repo_name FROM (
          if(isNull(repo_id), repo_full_name, '') AS repo_name,
          min(valid_from) AS first_from,
          countIf(isNull(valid_to)) > 0 AS open_exists,
-         argMaxIf(valid_to, valid_from, isNotNull(valid_to)) AS latest_closed_to
+         maxIf(valid_to, isNotNull(valid_to)) AS latest_closed_to
   FROM team_repo_ownership FINAL
   WHERE org_id = ? AND team_id = ?
   GROUP BY provider, repo_id, team_id, source, if(isNull(repo_id), repo_full_name, '')

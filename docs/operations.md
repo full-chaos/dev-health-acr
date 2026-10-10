@@ -608,10 +608,10 @@ assertions are no longer projected as edges. Already-projected team nodes keep
 the old raw list, and old future-dated edges remain, until a full rebuild.
 
 **A rebuild is likewise REQUIRED after the ownership edges drop their start**
-(`TeamsProjectsSourceVersion` v19 → v20). Project → team and repository → team
+(`TeamsProjectsSourceVersion` v20 → v21). Project → team and repository → team
 `OWNED_BY_TEAM` edges no longer project `team_*_ownership.valid_from` as the
 edge start: that column is the sync stamp of the assertion, not the start of
-ownership. Edges projected before v20 carry the stamp and are excluded from a
+ownership. Edges projected before v21 carry the stamp and are excluded from a
 graph read of a window that ended before it, until one
 `acr-projector rebuild --org <organization-id>` per organization. The
 checkpoint refuses the incremental tick with

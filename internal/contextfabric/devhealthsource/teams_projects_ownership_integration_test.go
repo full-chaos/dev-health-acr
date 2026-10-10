@@ -92,11 +92,11 @@ func subOwnershipWindowTakesTheLatestAssertion(t *testing.T, ctx context.Context
 
 	closedLate := relationshipByID(t, batch, devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-CLOSED", "TEAM-GITHUB", "native"))
 	if closedLate.ValidTo == nil {
-		t.Fatal("PROJ-CLOSED: the latest assertion closed the ownership, so the edge must carry an end")
+		t.Fatal("PROJ-CLOSED: no open row exists, so the edge must carry an end")
 	}
-	if !closedLate.ValidTo.Equal(ownershipLatestClose) {
-		t.Errorf("PROJ-CLOSED: ValidTo = %v, want the LATEST assertion's valid_to %v (max() would wrongly report the older assertion's later date %v)",
-			closedLate.ValidTo, ownershipLatestClose, ownershipStaleFarFutureClose)
+	if !closedLate.ValidTo.Equal(ownershipStaleFarFutureClose) {
+		t.Errorf("PROJ-CLOSED: ValidTo = %v, want %v: with no open row the fact ended at its latest close (the later row closed earlier, %v)",
+			closedLate.ValidTo, ownershipStaleFarFutureClose, ownershipLatestClose)
 	}
 
 	stillOpen := relationshipByID(t, batch, devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-OPEN", "TEAM-GITHUB", "native"))

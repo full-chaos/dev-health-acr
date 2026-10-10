@@ -102,26 +102,44 @@ func projectMixBetweenPhases(ctx context.Context) {
 	}
 }
 
+// resolveProjectMixScope resolves the membership scope of one read attempt. A
+// nil provider keeps the scope subqueries in the statement.
+func resolveProjectMixScope(ctx context.Context, p *InvestmentProvider, orgID string) (membershipScope, error) {
+	if p == nil {
+		return subqueryMembershipScope, nil
+	}
+	return p.resolveMembershipScope(ctx, orgID)
+}
+
 func projectMixScopeStatement(timeBound factTimeBound) string {
+	return projectMixScopeStatementScoped(timeBound, subqueryMembershipScope)
+}
+
+func projectMixScopeStatementScoped(timeBound factTimeBound, scope membershipScope) string {
 	return `SELECT groupArrayIf(work_unit_id, in_window) AS unit_ids, groupArrayIf(toUnixTimestamp64Milli(latest_at), in_window) AS version_ms, min(span_from) AS span_from FROM (
     SELECT work_unit_id, latest_at, from_ts, to_ts, min(from_ts) OVER () AS span_from, (1` + themeInvestmentRangePredicate(timeBound, "from_ts", "to_ts") + `) AS in_window FROM (
         SELECT work_unit_id, max(computed_at) AS latest_at,
             argMax(from_ts, computed_at) AS from_ts,
             argMax(to_ts, computed_at) AS to_ts
         FROM work_unit_investments
-        WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + investmentMembershipScopeFilter() + `
+        WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
         GROUP BY work_unit_id
     )
 )`
 }
 
-func readProjectMixScope(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound) (projectMixScope, error) {
+func readProjectMixScope(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, resolve *InvestmentProvider) (projectMixScope, error) {
 	var scope projectMixScope
-	extra := make([]readers.Binding, 0, 2)
+	membership, err := resolveProjectMixScope(ctx, resolve, orgID)
+	if err != nil {
+		return scope, err
+	}
+	extra := make([]readers.Binding, 0, 3)
+	extra = append(extra, membership.bindings()...)
 	for _, b := range timeBound.bindings() {
 		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
 	}
-	err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixScope", projectMixScopeStatement(timeBound), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	err = readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixScope", projectMixScopeStatementScoped(timeBound, membership), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var spanFrom time.Time
 		if err := row.Scan(&scope.unitIDs, &scope.versionsMs, &spanFrom); err != nil {
 			return err
@@ -295,11 +313,11 @@ repo_lookup AS (
 wita AS (
 	SELECT work_item_id, team_id
 	FROM work_item_team_attributions FINAL
-	WHERE org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicate("", devhealthschema.AttributionScopeOrg) + `
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicate("", devhealthschema.AttributionScopeOrg) + ` AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + `
 	  AND (work_item_id, computed_at) IN (
 		  SELECT work_item_id, max(computed_at)
 		  FROM work_item_team_attributions
-		  WHERE org_id = {org_id:String}
+		  WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + `
 		  GROUP BY work_item_id
 	  )
 )
@@ -358,7 +376,7 @@ ORDER BY project_key`)
 // readProjectRollupMixRows runs the roll-up mix: phase 0, then the two arms. A
 // project is a row only when its repo arm counted a work unit (the old
 // statement's HAVING work_units > 0); the evidence arm only adds its count.
-func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound) ([]projectRollupMixRow, bool, error) {
+func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, resolve *InvestmentProvider) ([]projectRollupMixRow, bool, error) {
 	// Nothing is read before the baseline marks: every input below is read after
 	// them and checked against the marks read again at the end.
 	before, err := readProjectMixInputs(ctx, client, orgID, ids, projectRollupInputSources)
@@ -366,7 +384,7 @@ func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.Clic
 		return nil, false, err
 	}
 	projectMixAfterBaseline(ctx)
-	scope, err := readProjectMixScope(ctx, client, orgID, ids, timeBound)
+	scope, err := readProjectMixScope(ctx, client, orgID, ids, timeBound, resolve)
 	if err != nil {
 		return nil, false, err
 	}
@@ -516,14 +534,14 @@ type projectNativeUnitValues struct {
 // unit values, then the per-project aggregation the single statement did in
 // SQL: a unit counts in full for every requested project it is placed in,
 // spanning when it is placed in more than one project (requested or not).
-func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int) ([]readers.ProjectThemeMixRow, bool, error) {
+func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int, resolve *InvestmentProvider) ([]readers.ProjectThemeMixRow, bool, error) {
 	// Nothing is read before the baseline marks (see the roll-up).
 	before, err := readProjectMixInputs(ctx, client, orgID, ids, projectNativeInputSources)
 	if err != nil {
 		return nil, false, err
 	}
 	projectMixAfterBaseline(ctx)
-	scope, err := readProjectMixScope(ctx, client, orgID, ids, timeBound)
+	scope, err := readProjectMixScope(ctx, client, orgID, ids, timeBound, resolve)
 	if err != nil {
 		return nil, false, err
 	}
@@ -742,6 +760,9 @@ func (e *ProjectMixContendedError) Retryable() bool { return true }
 const (
 	projectMixRetryReader     = "ProjectMixInputsRetry"
 	projectMixContendedReader = "ProjectMixContended"
+	// membershipScopeFallbackReader names the event of a scope load that failed
+	// and degraded to the scope subqueries.
+	membershipScopeFallbackReader = "MembershipScopeFallback"
 )
 
 type projectMixInstrumentationKey struct{}
@@ -757,9 +778,9 @@ func projectMixEvent(ctx context.Context, reader string, err error) {
 	finish(err)
 }
 
-func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound) ([]projectRollupMixRow, error) {
+func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, resolve *InvestmentProvider) ([]projectRollupMixRow, error) {
 	for attempt := 1; attempt <= projectMixMaxAttempts; attempt++ {
-		rows, changed, err := readProjectRollupMixRowsOnce(ctx, client, orgID, ids, timeBound)
+		rows, changed, err := readProjectRollupMixRowsOnce(ctx, client, orgID, ids, timeBound, resolve)
 		if err != nil || !changed {
 			return rows, err
 		}
@@ -774,9 +795,9 @@ func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHou
 	return nil, contended
 }
 
-func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int) ([]readers.ProjectThemeMixRow, error) {
+func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int, resolve *InvestmentProvider) ([]readers.ProjectThemeMixRow, error) {
 	for attempt := 1; attempt <= projectMixMaxAttempts; attempt++ {
-		rows, changed, err := readProjectNativeMixRowsOnce(ctx, client, orgID, ids, timeBound, rowLimit)
+		rows, changed, err := readProjectNativeMixRowsOnce(ctx, client, orgID, ids, timeBound, rowLimit, resolve)
 		if err != nil || !changed {
 			return rows, err
 		}

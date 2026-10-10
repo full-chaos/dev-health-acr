@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
@@ -88,8 +89,8 @@ func cohortKindCensusDecision(censusAdmitted bool, servableKind contextfabric.Su
 // every call, so the cohort a truncated population yields is reproducible.
 func (a *Adapter) cohortKindCensusCandidates(ctx context.Context, key, orgID string, kinds []string, temporal temporalFilter) ([]graphrank.CandidateNode, bool, error) {
 	cypher := fmt.Sprintf(
-		"MATCH (n:%s) WHERE n.%s = $org AND n.%s IN $kinds%s RETURN n ORDER BY n.%s LIMIT %d",
-		labelSubject, propOrgID, propKind, temporal.predicate("n"), propCanonicalID, exactNameCandidateQueryLimit+1,
+		"MATCH (n:%s) WHERE n.%s = $org AND n.%s IN $kinds%s%s RETURN n ORDER BY n.%s LIMIT %d",
+		labelSubject, propOrgID, propKind, temporal.predicate("n"), activeTeamCypher("n"), propCanonicalID, exactNameCandidateQueryLimit+1,
 	)
 	rows, err := a.api.query(ctx, key, cypher, temporal.bind(map[string]interface{}{"org": orgID, "kinds": kinds}), true)
 	if err != nil {
@@ -100,9 +101,17 @@ func (a *Adapter) cohortKindCensusCandidates(ctx context.Context, key, orgID str
 		rows = rows[:exactNameCandidateQueryLimit]
 	}
 	candidates := make([]graphrank.CandidateNode, 0, len(rows))
+	omitted := 0
+	defer func() {
+		devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedCohortKindCensus, omitted)
+	}()
 	for _, r := range rows {
 		n, ok := r["n"].(*node)
 		if !ok || n == nil {
+			continue
+		}
+		if inactiveTeamNode(n) {
+			omitted++
 			continue
 		}
 		candidates = append(candidates, toCandidateNode(n))

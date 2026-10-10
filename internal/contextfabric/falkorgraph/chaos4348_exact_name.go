@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
@@ -77,8 +78,8 @@ const exactNameCandidateQueryLimit = 2000
 // was complete -- see exactNameCandidateQueryLimit's own doc comment).
 func (a *Adapter) chaos4348ExactNameCandidates(ctx context.Context, key, orgID string, temporal temporalFilter) ([]graphrank.CandidateNode, bool, error) {
 	cypher := fmt.Sprintf(
-		"MATCH (n:%s) WHERE n.%s = $org AND n.%s IN $kinds%s RETURN n LIMIT %d",
-		labelSubject, propOrgID, propKind, temporal.predicate("n"), exactNameCandidateQueryLimit+1,
+		"MATCH (n:%s) WHERE n.%s = $org AND n.%s IN $kinds%s%s RETURN n LIMIT %d",
+		labelSubject, propOrgID, propKind, temporal.predicate("n"), activeTeamCypher("n"), exactNameCandidateQueryLimit+1,
 	)
 	rows, err := a.api.query(ctx, key, cypher, temporal.bind(map[string]interface{}{"org": orgID, "kinds": exactNameKinds}), true)
 	if err != nil {
@@ -89,9 +90,15 @@ func (a *Adapter) chaos4348ExactNameCandidates(ctx context.Context, key, orgID s
 		rows = rows[:exactNameCandidateQueryLimit]
 	}
 	candidates := make([]graphrank.CandidateNode, 0, len(rows))
+	omitted := 0
+	defer func() { devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedExactNameCensus, omitted) }()
 	for _, r := range rows {
 		n, ok := r["n"].(*node)
 		if !ok || n == nil {
+			continue
+		}
+		if inactiveTeamNode(n) {
+			omitted++
 			continue
 		}
 		candidates = append(candidates, toCandidateNode(n))

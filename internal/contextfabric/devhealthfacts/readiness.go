@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -325,7 +326,7 @@ INNER JOIN (
 	SELECT team_id, provider, work_scope_id, day, estimated_count, unestimated_count, backlog_size,
 		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size)) DESC) AS rn
 	FROM estimate_coverage_metrics_daily FINAL
-	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
 ) AS ec ON ` + projectIdentityMatchSQL("ec", "work_scope_id") + ` AND ec.rn = 1
 GROUP BY p.provider, p.id, ec.day
 ORDER BY p.id, ec.day DESC`)
@@ -360,6 +361,13 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 	if err != nil {
 		return 0, rejected, false, err
 	}
+	inactive, err := p.inactiveTeamIDs(ctx, orgID, readinessTeamIDs(scanned))
+	if err != nil {
+		return 0, rejected, false, err
+	}
+	before := len(scanned)
+	scanned = dropInactiveTeamReadinessRows(scanned, inactive)
+	devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedProjectReadiness, before-len(scanned))
 	// CHAOS-4645, design doc §5.2: additive, off the SAME project-identity
 	// join -- never changing an existing field.
 	//
@@ -529,4 +537,56 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 		})
 	}
 	return rowCount, rejected, breakdownTruncated, nil
+}
+
+// dropInactiveTeamReadinessRows removes the rows of a known-inactive team: a
+// team-id carry leaves a retraction row over the retired key, and the shared
+// reader cannot take the active-team predicate. Estimate coverage has no marker
+// that tells a retraction row from a measured empty backlog (a real all-zero row
+// exists), so a row is dropped by its team, never by its values. An unattributed
+// row stays.
+func dropInactiveTeamReadinessRows(rows []readers.ReadinessProjectRow, inactive map[string]bool) []readers.ReadinessProjectRow {
+	kept := rows[:0:0]
+	for _, row := range rows {
+		if row.HasTeam != 0 && inactive[row.TeamID] {
+			continue
+		}
+		kept = append(kept, row)
+	}
+	return kept
+}
+
+// readinessTeamIDs is the distinct team ids of the team-attributed rows.
+func readinessTeamIDs(rows []readers.ReadinessProjectRow) []string {
+	seen := map[string]bool{}
+	var ids []string
+	for _, row := range rows {
+		if row.HasTeam != 0 && !seen[row.TeamID] {
+			seen[row.TeamID] = true
+			ids = append(ids, row.TeamID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// inactiveTeamIDs is the subset of ids that are inactive teams of the
+// organization (teams read with FINAL, so the newest row per team decides). The
+// lookup is bound to the ids of the rows in hand, never the organization's whole
+// inactive list, so no row limit can hide an inactive team behind its page.
+func (p *ReadinessProvider) inactiveTeamIDs(ctx context.Context, orgID string, ids []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	statement := `SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {ids:Array(String)} AND ` + devhealthschema.InactiveTeamPredicate("") + ` ORDER BY id`
+	err := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var id string
+		if err := row.Scan(&id); err != nil {
+			return err
+		}
+		out[id] = true
+		return nil
+	})
+	return out, err
 }

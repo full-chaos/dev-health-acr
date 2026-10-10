@@ -740,7 +740,7 @@ func queryWorkItemTeams(ctx context.Context, client contextpacket.ClickHouseQuer
 	statement := `SELECT a.work_item_id, ifNull(a.team_id, ''), toString(a.source), toString(a.confidence), toString(w.repo_id), ifNull(r.repo, ''), a.computed_at, toString(a.repo_id)
 FROM work_item_team_attributions AS a FINAL
 INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
-INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = ifNull(a.team_id, '')
+INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = ifNull(a.team_id, '')
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE a.org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam) + ` AND ifNull(a.team_id, '') != ''` + sincePredicate(cursor, "a.computed_at", rowKey) + orderBy("a.computed_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
@@ -863,11 +863,14 @@ WHERE a.org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicat
 // valid_from alone leaves two assertions stamped at the same instant
 // unordered, so a group holding one open and one closed assertion at that
 // instant could project either, flipping with merge order. The key is
-// (valid_from, valid_to IS NULL, ifNull(valid_to, epoch)):
+// (valid_to IS NULL, valid_from, ifNull(valid_to, epoch)):
 //
-//   - latest valid_from wins -- the latest-assertion rule;
-//   - on a tie, OPEN outranks CLOSED, so a same-instant assertion of ongoing
-//     ownership is never hidden by a simultaneous closure;
+//   - an OPEN assertion outranks every closed one: a fact is current when an
+//     open row exists for its key, whatever later rows closed (ownership
+//     writers keep the earliest open row of a fact and close its duplicates,
+//     so the newest row of a current fact is routinely the closed one), and a
+//     fact that was closed and came back is a new open row;
+//   - among assertions of the same kind the latest valid_from wins;
 //   - among tied closed assertions, the latest valid_to wins, so even that
 //     case is ordered rather than arbitrary.
 //
@@ -1154,7 +1157,7 @@ func projectTeamsAssertingArm(resolved string, ingest bool) string {
 		       p.project_updated_at AS project_updated_at, p.provider_updated_at AS provider_updated_at` + ingestStampSQL(ingest, "p.project_ingest_at AS project_ingest_at, p.provider_ingest_at AS provider_ingest_at") + `, toUInt8(0) AS retraction_only
 		FROM ` + resolved + `
 		INNER JOIN ` + ownership + ` ON o.provider = p.provider AND ` + readers.ProjectIdentityMatchSQL("o", "scope_value") + `
-		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
+		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = o.team_id
 		WHERE o.required_scope_kind = '' OR p.scope_kind = o.required_scope_kind`
 }
 
@@ -1194,7 +1197,7 @@ func projectTeamsRetractionArm(ambiguous string, ingest bool) string {
 		       p.project_updated_at AS project_updated_at, p.provider_updated_at AS provider_updated_at` + ingestStampSQL(ingest, "p.project_ingest_at AS project_ingest_at, p.provider_ingest_at AS provider_ingest_at") + `, toUInt8(1) AS retraction_only
 		FROM ` + ambiguous + `
 		INNER JOIN ` + ownership + ` ON o.provider = p.provider AND o.match_value = p.project_key
-		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
+		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = o.team_id
 		WHERE p.key_project_count > 1`
 }
 
@@ -1733,8 +1736,8 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 //     without it a duplicate RelationshipID rejects the batch and wedges the
 //     organization's projection.
 //   - THE VALIDITY RULE. The window runs from the earliest assertion to what
-//     the LATEST assertion says, ordered by (valid_from, valid_to IS NULL,
-//     valid_to) with the argMax(tuple(valid_to)) NULL-preserving spelling --
+//     the winning assertion says, ordered by (valid_to IS NULL, valid_from,
+//     valid_to), an open assertion first, with the argMax(tuple(valid_to)) NULL-preserving spelling --
 //     see queryProjectTeams' FOURTH note, verified there against this
 //     ClickHouse version. A closed latest assertion ENDS the edge (ValidTo),
 //     exactly as ownershipValidity ends a project->team edge. It is history,
@@ -1852,8 +1855,9 @@ var repositoryTeamsOwnershipSource = ownershipresolve.OwnedRepositoriesSource(" 
 	KeepUnresolved: true,
 })
 
-// repositoryTeamsLatestOrder is the latest-assertion ordering key, identical
-// to queryProjectTeams' and ownedRepositoriesJoinSQL's.
+// repositoryTeamsLatestOrder is the ordering key of the repository edge's
+// collapse: ownershipFactOrder, the same as queryProjectTeams' and
+// ownedRepositoriesJoinSQL's.
 const repositoryTeamsLatestOrder = "(o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))"
 
 // repositoryTeamsStatement. Inner column aliases never reuse a source column's
@@ -1894,7 +1898,7 @@ FROM (
 	       ifNull(r.last_synced, toDateTime64(0, 3, 'UTC')) AS repo_synced_at
 	FROM ` + repositoryTeamsOwnershipSource + ` AS rto
 	LEFT JOIN repos AS r FINAL ON toString(r.id) = rto.repo_key AND r.org_id = rto.org_id
-	INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = rto.team_id
+	INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = rto.team_id
 	WHERE rto.org_id = {org_id:String}
 ) AS o
 GROUP BY ` + strings.Join(repositoryTeamsGroupColumns, ", ")

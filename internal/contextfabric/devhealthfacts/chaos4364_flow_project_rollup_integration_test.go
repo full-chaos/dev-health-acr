@@ -28,7 +28,7 @@ import (
 func TestFlowProviderProjectRollupSumsAcrossTeamOwnScopesAndProviders(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
-	for _, statement := range devhealthschema.DDL("projects", "team_project_ownership", "work_item_metrics_daily") {
+	for _, statement := range devhealthschema.DDL("projects", "team_project_ownership", "work_item_metrics_daily", "teams") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}

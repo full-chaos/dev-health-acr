@@ -207,7 +207,13 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	//
 	// v18 -> v19: work item -> team edges include the co-owner rows
 	// (is_primary = 2); only the rebuild projects them.
-	if want := "devhealthsource.teams_projects.v20"; TeamsProjectsSourceVersion != want {
+	//
+	// v19 -> v20: edges to an inactive team are not emitted; only the rebuild
+	// removes the ones already projected.
+	//
+	// v20 -> v21: ownership edges carry no start (the sync stamp is not the start
+	// of ownership); only the rebuild clears the stored start.
+	if want := "devhealthsource.teams_projects.v21"; TeamsProjectsSourceVersion != want {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -61,6 +62,8 @@ import (
 type InvestmentProvider struct {
 	facts  clickhouseFacts
 	scopes *membershipScopeCache
+	// scopeLoadTimeout overrides membershipScopeLoadTimeout (tests only).
+	scopeLoadTimeout time.Duration
 }
 
 func newInvestmentProvider(client contextpacket.ClickHouseQueryClient) *InvestmentProvider {
@@ -636,7 +639,7 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 	// subject), never conflated with that reader's own instrumentation.
 	// CHAOS-7271: phased reads (investment_project_mix_phased.go); every
 	// phase reports through readers.QueryOrgScopedNamed.
-	mixRows, readErr := readProjectRollupMixRows(ctx, p.facts.client, orgID, ids, timeBound)
+	mixRows, readErr := readProjectRollupMixRows(ctx, p.facts.client, orgID, ids, timeBound, p)
 	if readErr != nil {
 		return 0, readErr
 	}
@@ -779,7 +782,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	rows, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxFactRowsProbe)
+	rows, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxFactRowsProbe, p)
 	if err != nil {
 		return 0, err
 	}
