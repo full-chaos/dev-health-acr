@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -151,7 +152,18 @@ func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal
 	if !failure.DeferEvent {
 		r.recordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Attempts: failure.Attempts, ElapsedMS: failure.Elapsed.Milliseconds(), Rule: failure.Rule, Stage: failure.Stage})
 	}
-	return r.composeSynthesisResult(ctx, principal, input, degradedSynthesisDraft(failure.Class), failure.Receipt, failure.InputBounded, true)
+	draft := degradedSynthesisDraft(failure.Class)
+	claims, evidence, truncated := mintDegradedFactClaims(input.Facts.Facts)
+	if len(claims) > 0 {
+		draft.ClaimedFacts = claims
+		draft.EvidenceRefIDs = evidence
+		additions := []string{contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation}
+		if truncated {
+			additions = append(additions, contractsv1.ContextFabricSynthesisFailedFactsTruncatedLimitation)
+		}
+		draft.Limitations, _ = appendBoundedLimitations(draft.Limitations, additions)
+	}
+	return r.composeSynthesisResult(ctx, principal, input, draft, failure.Receipt, failure.InputBounded, true)
 }
 
 // synthesisVersionOf is the receipt's prompt and model version pair. A call
