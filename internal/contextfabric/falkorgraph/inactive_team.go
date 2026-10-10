@@ -125,3 +125,59 @@ func (a *Adapter) activeTwin(ctx context.Context, principal storage.Principal, k
 	}
 	return subject.CanonicalID, nil
 }
+
+// inactiveHintExclusion reports the team nodes that no discovery path may
+// admit once a caller's hint was answered team_inactive: the inactive team
+// itself, the twin the answer pointed at, and any team carrying the inactive
+// team's name (a twin the answer omitted because it was ambiguous or
+// unreadable). An answered inactive hint is about THAT team only; the same-name
+// active team is never searched, served, or counted in a cohort. Returns nil
+// when no hint was answered inactive.
+func (a *Adapter) inactiveHintExclusion(ctx context.Context, key, orgID string, hints []contractsv1.ContextFabricInactiveHint) (func(graphrank.CandidateNode) bool, error) {
+	if len(hints) == 0 {
+		return nil, nil
+	}
+	ids := map[string]struct{}{}
+	names := map[string]struct{}{}
+	targets := make([]interface{}, 0, len(hints))
+	for _, h := range hints {
+		ids[h.Subject.CanonicalID] = struct{}{}
+		if h.ActiveCanonicalID != "" {
+			ids[h.ActiveCanonicalID] = struct{}{}
+		}
+		targets = append(targets, map[string]interface{}{"kind": string(contractsv1.ContextFabricSubjectTeam), "id": h.Subject.CanonicalID})
+	}
+	keyed := fmt.Sprintf("UNWIND $targets AS t MATCH (n:%s {%s:$org, %s:t.kind, %s:t.id}) RETURN n",
+		labelSubject, propOrgID, propKind, propCanonicalID)
+	rows, err := a.api.query(ctx, key, keyed, map[string]interface{}{"org": orgID, "targets": targets}, true)
+	if err != nil {
+		return nil, graphNotProjectedError(safeDependencyError("inactive hint exclusion lookup", err))
+	}
+	for _, r := range rows {
+		n, ok := r["n"].(*node)
+		if !ok || n == nil {
+			continue
+		}
+		candidate := toCandidateNode(n)
+		for _, name := range []string{candidate.Name, graphrank.StringAttribute(candidate.Attributes, propLabel)} {
+			if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
+				names[name] = struct{}{}
+			}
+		}
+	}
+	return func(n graphrank.CandidateNode) bool {
+		subject, ok := graphrank.NodeSubject(n)
+		if !ok || subject.Kind != contractsv1.ContextFabricSubjectTeam {
+			return false
+		}
+		if _, hit := ids[subject.CanonicalID]; hit {
+			return true
+		}
+		for _, name := range []string{n.Name, graphrank.StringAttribute(n.Attributes, propLabel)} {
+			if _, hit := names[strings.ToLower(strings.TrimSpace(name))]; hit && strings.TrimSpace(name) != "" {
+				return true
+			}
+		}
+		return false
+	}, nil
+}

@@ -166,6 +166,13 @@
       },
       "maxItems": 4
     },
+    "inactive_hints": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/InactiveHint"
+      },
+      "maxItems": 50
+    },
     "prior_subject_receipt_dispositions": {
       "type": "array",
       "items": {
@@ -2151,6 +2158,27 @@
         "skipped_no_match",
         "skipped_stale_graph_epoch",
         "skipped_failed_reauth"
+      ]
+    },
+    "InactiveHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subject": {
+          "$ref": "#/$defs/SubjectRef"
+        },
+        "answer": {
+          "const": "team_inactive"
+        },
+        "active_canonical_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "subject",
+        "answer"
       ]
     },
     "PriorSubjectReceiptDispositionEntry": {

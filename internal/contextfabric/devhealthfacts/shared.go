@@ -682,11 +682,16 @@ import (
 // repo_metrics_daily row serves its window PR cycle and change failure
 // fields; a candidate saved under v134 may hold an answer that lacked them.
 //
-// v135 -> v136: the first project investment read after a pod start loads the
+// v136 (CHAOS-9092): a team hint answered team_inactive carries inactive_hints
+// in the served contract and keeps its same-name active team out of cohort
+// discovery; a candidate saved under v135 may hold an answer that served that
+// twin or lacked the field.
+//
+// v136 -> v137: the first project investment read after a pod start loads the
 // membership scope before the capability clock starts, so it serves the full
 // answer, not a partial "canonical fact capability timed out". A candidate saved
-// under v135 may hold that partial answer and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v136"
+// under v136 may hold that partial answer and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v137"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

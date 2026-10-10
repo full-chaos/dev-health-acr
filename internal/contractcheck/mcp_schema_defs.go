@@ -48,6 +48,7 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	"#/$defs/CohortMemberDriver":   "#/$defs/context_fabric_common.v1/$defs/CohortMemberDriver",
 	"#/$defs/CommitDecisionDigest": "#/$defs/context_fabric_common.v1/$defs/CommitDecisionDigest",
 	"#/$defs/FactRequirement":      "#/$defs/context_fabric_common.v1/$defs/FactRequirement",
+	"#/$defs/InactiveHint":         "#/$defs/context_fabric_common.v1/$defs/InactiveHint",
 	"#/$defs/RelationshipEdge":     "#/$defs/context_fabric_common.v1/$defs/RelationshipEdge",
 	// S7c: AnswerCompleteness.outcomes[] points at this row definition, so
 	// it needs the same relocation every other locally-$ref'd def gets --
@@ -221,6 +222,7 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	// disposition pair (prior_subject_receipt_dispositions).
 	"#/$defs/PriorSubjectReceiptDisposition":      "#/$defs/context_fabric_answer_projection.v1/$defs/PriorSubjectReceiptDisposition",
 	"#/$defs/PriorSubjectReceiptDispositionEntry": "#/$defs/context_fabric_answer_projection.v1/$defs/PriorSubjectReceiptDispositionEntry",
+	"#/$defs/InactiveHint":                        "#/$defs/context_fabric_answer_projection.v1/$defs/InactiveHint",
 	// CHAOS-4314: window_expand_options' own new projection-local $defs entry.
 	"#/$defs/WindowExpandOption": "#/$defs/context_fabric_answer_projection.v1/$defs/WindowExpandOption",
 	// CHAOS-4347: ProjectedFact.rows' own new projection-local $defs entry.
