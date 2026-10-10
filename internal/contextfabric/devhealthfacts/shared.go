@@ -654,7 +654,16 @@ import (
 // digest that may be older than the last registry watch. A candidate saved
 // under v130 may hold a refusal stamped with a stale digest and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v131"
+//
+// v131 -> v132: the organization subject has a work-unit listing (read_facts units
+// for kind investment): every repository's unit rows plus rows with no
+// repository_id and unit_attribution_basis unattributed_no_resolved_repository
+// for effort that reaches no resolved repository; the page fact carries
+// scope_unattributed_rows and scope_unattributed_total and the coverage reason
+// states units_unattributed. A candidate saved under v131 holds the refusal "units
+// takes a team or a repository subject" for an organization and must not be
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v132"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

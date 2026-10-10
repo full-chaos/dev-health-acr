@@ -148,7 +148,7 @@
           "description": "Work-unit rows in one page, 1 to 150. 0 or absent means 100."
         }
       },
-      "description": "Also list the work units behind an investment allocation, one page. Needs kind investment and exactly one team or repository subject. The listing comes back as extra investment facts: one work_unit_page fact (page totals and next_cursor) and one work_unit_share fact per unit and repository."
+      "description": "Also list the work units behind an investment allocation, one page. Needs kind investment and exactly one team, repository or organization subject. The listing comes back as extra investment facts: one work_unit_page fact (page totals and next_cursor) and one work_unit_share fact per unit and repository."
     }
   }
 }

@@ -79,7 +79,7 @@ func TestUnitFactsWeightedSumIsTheMix(t *testing.T) {
 		for theme, p := range u.Theme {
 			totals.theme[theme] += u.Share * p
 		}
-		fact := unitFact(team, u)
+		fact := unitFact(team, u, "org-1")
 		share := *fact.Fields["share_in_scope"].Number
 		shares += share
 		for _, theme := range canonicalInvestmentThemes {
@@ -109,7 +109,7 @@ func TestUnitFactFieldsAreDeclaredAndRefsAreBounded(t *testing.T) {
 	for i := 0; i < unitUnresolvedRefsPerFact+5; i++ {
 		unresolved = append(unresolved, long+strconv.Itoa(i))
 	}
-	fact := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Share: 1, Effort: 2, Theme: map[string]float64{"risk": 1}, PRs: prs, UnresolvedN: 25, UnresolvedRefs: unresolved})
+	fact := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Share: 1, Effort: 2, Theme: map[string]float64{"risk": 1}, PRs: prs, UnresolvedN: 25, UnresolvedRefs: unresolved}, "org-1")
 	for name := range fact.Fields {
 		if _, ok := capability.FieldDeclaration(name, contextfabric.SubjectTeam); !ok {
 			t.Errorf("unit fact field %q is not declared for a team subject; the reader would drop it", name)
@@ -142,25 +142,25 @@ func TestUnitFactBoundsHoldAtTheirEdges(t *testing.T) {
 		return out
 	}
 	for n, want := range map[int]int{unitUnresolvedRefsPerFact - 1: unitUnresolvedRefsPerFact - 1, unitUnresolvedRefsPerFact: unitUnresolvedRefsPerFact, unitUnresolvedRefsPerFact + 1: unitUnresolvedRefsPerFact} {
-		fact := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Theme: map[string]float64{"risk": 1}, UnresolvedN: uint64(n), UnresolvedRefs: handles(n)})
+		fact := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Theme: map[string]float64{"risk": 1}, UnresolvedN: uint64(n), UnresolvedRefs: handles(n)}, "org-1")
 		if got := len(strings.Split(*fact.Fields["unit_unresolved_refs"].String, ",")); got != want {
 			t.Errorf("%d unresolved handles served as %d, want %d", n, got, want)
 		}
 	}
 	for length, want := range map[int]int{unitUnresolvedRefMaxBytes: unitUnresolvedRefMaxBytes, unitUnresolvedRefMaxBytes + 1: unitUnresolvedRefMaxBytes} {
-		fact := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Theme: map[string]float64{"risk": 1}, UnresolvedN: 1, UnresolvedRefs: []string{strings.Repeat("h", length)}})
+		fact := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Theme: map[string]float64{"risk": 1}, UnresolvedN: 1, UnresolvedRefs: []string{strings.Repeat("h", length)}}, "org-1")
 		if got := len(*fact.Fields["unit_unresolved_refs"].String); got != want {
 			t.Errorf("a %d byte handle served as %d bytes, want %d", length, got, want)
 		}
 	}
-	fact := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Theme: map[string]float64{"risk": 1}, PRs: []string{"12", "not-a-number", "7"}})
+	fact := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Theme: map[string]float64{"risk": 1}, PRs: []string{"12", "not-a-number", "7"}}, "org-1")
 	if got := len(fact.EvidenceRefIDs); got != 3 {
 		t.Errorf("refs = %v, want the repository ref and the two numeric pull requests", fact.EvidenceRefIDs)
 	}
 	if got := *fact.Fields["unit_pull_request_count"].Integer; got != 3 {
 		t.Errorf("unit_pull_request_count = %d, want 3 (the count is of stored references)", got)
 	}
-	share := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Share: 3, Effort: 11, Theme: map[string]float64{"risk": 1}})
+	share := unitFact(team, unitRow{WorkUnitID: "u", RepoID: "r", Share: 3, Effort: 11, Theme: map[string]float64{"risk": 1}}, "org-1")
 	if got := *share.Fields["share_in_scope"].Number; got != 3 {
 		t.Errorf("share_in_scope = %v, want the row share 3 (not the effort)", got)
 	}
@@ -198,7 +198,7 @@ func TestUnresolvedHandlesAreAnOpaqueReference(t *testing.T) {
 			t.Errorf("%s: unit_unresolved_refs declared=%v ref=%+v, want an opaque reference", kind, ok, field.SubjectRef)
 		}
 	}
-	fact := unitFact(contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:t"}, unitRow{WorkUnitID: "u", RepoID: "r", Theme: map[string]float64{"risk": 1}, PRs: []string{"", "5"}, UnresolvedN: 1, UnresolvedRefs: []string{"ghpr:x/y#1"}})
+	fact := unitFact(contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:t"}, unitRow{WorkUnitID: "u", RepoID: "r", Theme: map[string]float64{"risk": 1}, PRs: []string{"", "5"}, UnresolvedN: 1, UnresolvedRefs: []string{"ghpr:x/y#1"}}, "org-1")
 	if got := *fact.Fields["unit_pull_request_count"].Integer; got != 2 {
 		t.Errorf("unit_pull_request_count = %d on the raw row; the scan removes the empty fallback number before unitFact", got)
 	}

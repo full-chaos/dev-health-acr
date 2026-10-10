@@ -59,6 +59,16 @@ func EncodeInvestmentUnitsCursor(c InvestmentUnitsCursor) string {
 }
 
 // DecodeInvestmentUnitsCursor parses a token EncodeInvestmentUnitsCursor made.
+// InvestmentUnitsUnattributedRepo stands for the empty repository of a unit row
+// whose effort reaches no resolved repository, in a cursor (a cursor refuses an
+// empty repository). A repository id is a UUID, never this word.
+const InvestmentUnitsUnattributedRepo = "unattributed"
+
+// InvestmentUnitAttributionUnattributed is unit_attribution_basis of a unit row
+// whose effort reaches no resolved repository (organization listing): the row
+// has no repository_id.
+const InvestmentUnitAttributionUnattributed = "unattributed_no_resolved_repository"
+
 func DecodeInvestmentUnitsCursor(token string) (InvestmentUnitsCursor, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
