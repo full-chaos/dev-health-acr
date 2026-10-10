@@ -161,7 +161,7 @@ func producerGrammars() []producerGrammar {
 		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "concat/1", repoAnchored: true, sites: sites(
 			facts+"ci.go|readRepositoryAggregate", facts+"deployments.go|readRepositoryAggregate", facts+"flow.go|readRepositoryFlow",
 			facts+"health.go|ReadFacts", facts+"health.go|readProjectHealth*2", facts+"identity.go|ReadFacts*2",
-			facts+"investment_repo_mix.go|readRepositoryThemeMix", facts+"investment_units.go|readInvestmentUnits", facts+"investment_units.go|unitFact", facts+"metrics.go|readRepositoryMetrics",
+			facts+"investment_repo_mix.go|readRepositoryThemeMix", facts+"investment_units.go|readInvestmentUnits", facts+"investment_units.go|unitFact", facts+"metrics.go|readRepositoryMetrics*2",
 			source+"tables.go|queryRepositories", source+"teams_projects_edges.go|queryRepositoryTeams")},
 		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "sql/1", sites: sites(catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "literal", fixture: true, sites: sites("internal/contextfabric/pginvestigation/paritytest/paritytest.go|RunCitedEvidenceSuite*2")},
@@ -190,7 +190,7 @@ func producerGrammars() []producerGrammar {
 			facts+"dependencies.go|readTeamRollup", facts+"deployments.go|readTeamRollup", facts+"incidents.go|readTeamRollup", facts+"pullrequests.go|readTeamRollup",
 			facts+"flow.go|readProjectFlow", facts+"flow.go|readTeamFlow", facts+"health.go|ReadFacts", facts+"health.go|readProjectHealth*2",
 			facts+"investment.go|readProjectInvestment", facts+"investment.go|readTeamThemeMix", facts+"investment_units.go|readInvestmentUnits", facts+"landscape.go|readProjectLandscape",
-			facts+"landscape.go|readTeamLandscape", facts+"metrics.go|readProjectMetrics", facts+"metrics.go|readTeamMetrics",
+			facts+"landscape.go|readTeamLandscape", facts+"metrics.go|readProjectMetrics", facts+"metrics.go|readTeamMetrics*2",
 			facts+"readiness.go|readProjectReadiness", facts+"readiness.go|readTeamReadiness", facts+"workload.go|readProjectWorkload*2",
 			facts+"workload.go|readTeamWorkload", source+"teams_projects.go|queryTeams", source+"teams_projects_edges.go|queryRepositoryTeams")},
 		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "sql/1", rowQuery: "teams.v1", keyColumns: []string{"id"}, sites: sites(organizationRows)},
