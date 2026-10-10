@@ -306,10 +306,10 @@ func subTeamAuthorizationRefreshedByRevokingLastOpenRepository(t *testing.T, ctx
 	}
 	converge()
 
-	// Revoke the team's ONLY open repository: a NEW assertion (later
-	// valid_from, later updated_at) that closes it.
+	// Revoke the team's ONLY open repository: the same row (same valid_from,
+	// later updated_at) now carries a valid_to, leaving no open row.
 	revokedAt := time.Now().UTC()
-	seed(revokedAt, revokedAt, revokedAt)
+	seed(grantedAt, revokedAt, revokedAt)
 
 	found := false
 	excluded := false
