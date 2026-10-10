@@ -13,9 +13,11 @@ import (
 
 const watchServedDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 
-// CHAOS-7194: run_operation and data_catalog stamp the SERVED digest once a
-// registry watch knows it, the pinned one before.
-func TestRegistryWatchStampsRunOperationAndDataCatalog(t *testing.T) {
+// data_catalog stamps the SERVED digest once a registry watch knows it, the
+// pinned one before. A refused run_operation never reaches the query service,
+// so it always reports the pinned digest of the policy that refused it, never a
+// cached served digest that may be older than the last watch.
+func TestRegistryWatchStampsDataCatalogAndARefusalReportsThePinnedDigest(t *testing.T) {
 	cat, err := directread.LoadCatalogue(directread.EmbeddedCatalogueJSON())
 	if err != nil {
 		t.Fatal(err)
@@ -53,10 +55,32 @@ func TestRegistryWatchStampsRunOperationAndDataCatalog(t *testing.T) {
 	}
 	watch.Start()
 	watch.Wait()
-	if got := run().Source.SchemaDigest; got != watchServedDigest {
-		t.Fatalf("run_operation stamp %s, want served %s", got, watchServedDigest)
+	if got := run().Source.SchemaDigest; got != cat.SchemaDigest() {
+		t.Fatalf("refused run_operation stamp %s, want pinned %s", got, cat.SchemaDigest())
 	}
 	if got := catalog(); got != watchServedDigest {
 		t.Fatalf("data_catalog stamp %s, want served %s", got, watchServedDigest)
+	}
+}
+
+func TestRefusedGraphQLQueryReportsThePinnedDigestNotACachedServedOne(t *testing.T) {
+	h := newGQLHarness(t, gqlHarnessOptions{})
+	cat := h.policy.Catalogue()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"schema_digest": watchServedDigest, "operations": []any{}})
+	}))
+	defer srv.Close()
+	watch, err := directread.NewRegistryWatch(directread.RegistryWatchConfig{Catalogue: cat, BaseURL: srv.URL, Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	watch.Start()
+	watch.Wait()
+	resp := h.run(t, opUnrestricted("org-a"), "{ not a query", nil)
+	if resp.Call != directread.CallRefused {
+		t.Fatalf("want a refusal, got %s", resp.Call)
+	}
+	if resp.Source.SchemaDigest != cat.SchemaDigest() {
+		t.Fatalf("refused graphql_query stamp %s, want pinned %s", resp.Source.SchemaDigest, cat.SchemaDigest())
 	}
 }
