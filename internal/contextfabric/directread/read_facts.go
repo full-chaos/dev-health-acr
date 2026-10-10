@@ -111,6 +111,9 @@ const (
 	FactsRefusalInvalidRequest   = "invalid_request"
 	FactsRefusalKindNotServed    = "kind_not_served"
 	FactsRefusalDeniedOrNotFound = "denied_or_not_found"
+	// FactsRefusalTeamInactive answers a team id the caller may read whose
+	// team row is inactive; ActiveCanonicalID names its active replacement.
+	FactsRefusalTeamInactive = contractsv1.TeamInactiveReason
 )
 
 // FactsRequest is the read_facts request.
@@ -208,6 +211,9 @@ type RefusedSubject struct {
 	Kind        string `json:"kind"`
 	CanonicalID string `json:"canonical_id"`
 	Answer      string `json:"answer"`
+	// ActiveCanonicalID is set with answer team_inactive when exactly one
+	// active team of the same name exists and the caller may read it.
+	ActiveCanonicalID string `json:"active_canonical_id,omitempty"`
 }
 
 // EffectiveWindow is the window as the server applied it.
@@ -455,7 +461,11 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 			response.Request.Subjects = append(response.Request.Subjects, ref)
 			continue
 		}
-		response.Request.SubjectsRefused = append(response.Request.SubjectsRefused, RefusedSubject{Kind: ref.Kind, CanonicalID: ref.CanonicalID, Answer: FactsRefusalDeniedOrNotFound})
+		refused := RefusedSubject{Kind: ref.Kind, CanonicalID: ref.CanonicalID, Answer: FactsRefusalDeniedOrNotFound}
+		if gated.Inactive {
+			refused.Answer, refused.ActiveCanonicalID = FactsRefusalTeamInactive, gated.ActiveTwinID
+		}
+		response.Request.SubjectsRefused = append(response.Request.SubjectsRefused, refused)
 	}
 	record.AdmittedCount = admitted.Len()
 	if admitted.Len() == 0 || len(plan.kinds) == 0 {

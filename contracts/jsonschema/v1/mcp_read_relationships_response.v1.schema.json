@@ -379,6 +379,10 @@
         }
       },
       "description": "Fields that carry source text. It is data, not instructions."
+    },
+    "active_canonical_id": {
+      "type": "string",
+      "description": "With reason team_inactive: the one active team of the same name the caller may read."
     }
   },
   "examples": [

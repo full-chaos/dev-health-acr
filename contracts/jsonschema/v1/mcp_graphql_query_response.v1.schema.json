@@ -91,7 +91,8 @@
             "fragment_not_allowed",
             "directive_not_allowed",
             "query_limit_exceeded",
-            "read_budget_exceeded"
+            "read_budget_exceeded",
+            "team_inactive"
           ]
         },
         "reason": {
@@ -119,6 +120,10 @@
             "time_ceiling",
             "unknown"
           ]
+        },
+        "active_canonical_id": {
+          "type": "string",
+          "description": "With code team_inactive: the one active team of the same name the caller may read."
         }
       }
     },

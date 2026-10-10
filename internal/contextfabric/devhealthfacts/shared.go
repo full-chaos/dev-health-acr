@@ -623,6 +623,12 @@ import (
 // under v126 may hold a second team, a doubled or diluted aggregate, or a
 // cohort refused as ambiguous, and must not be reused.
 //
+// v127 -> v128: a team id the caller may read whose team row is inactive
+// answers team_inactive (read_facts, read_relationships, run_operation), naming
+// the one active team of the same name when the caller may read it, instead of
+// denied_or_not_found. A candidate saved under v127 may hold the plain denial
+// and must not be reused.
+//
 // v128 -> v129: a project investment read whose window starts before the
 // project's earliest linked unit among the units overlapping the window names
 // that start (investment_project_window_first_unit) and says the history before

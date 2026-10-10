@@ -1008,6 +1008,7 @@ func (x *gqlRun) finishRoot(ctx context.Context, index int, root rootSel, cand *
 	}
 	if refusalResp != nil {
 		resp := x.refuse(refusalResp.Refusal.Code, refusalResp.Refusal.Reason, "")
+		resp.Refusal.ActiveCanonicalID = refusalResp.Refusal.ActiveCanonicalID
 		return plannedRoot{}, &resp, nil
 	}
 	// 7e.

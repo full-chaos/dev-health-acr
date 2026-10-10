@@ -1882,6 +1882,16 @@
         "presence": "required"
       },
       {
+        "key": "inactive_team_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "inactive_lookup_failures",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "refused_kinds",
         "type": "string_slice",
         "presence": "required",
@@ -3416,6 +3426,7 @@
           "row_outside_grant",
           "policy_stale",
           "denied_or_not_found",
+          "team_inactive",
           "query_invalid",
           "operation_type_not_allowed",
           "root_field_not_allowed",
@@ -3639,7 +3650,8 @@
           "scope_required",
           "row_outside_grant",
           "policy_stale",
-          "denied_or_not_found"
+          "denied_or_not_found",
+          "team_inactive"
         ],
         "applicability": "written when the call is refused"
       },
