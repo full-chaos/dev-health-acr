@@ -57,6 +57,7 @@ var orgOutcomeByConstName = map[string]orgOutcome{
 	"orgOutcomePairFailed":      orgOutcomePairFailed,
 	"orgOutcomeUnevaluated":     orgOutcomeUnevaluated,
 	"orgOutcomeWindowBehind":    orgOutcomeWindowBehind,
+	"orgOutcomeCatchingUp":      orgOutcomeCatchingUp,
 }
 
 func declaredOrgOutcomes(t *testing.T, filename string) []string {
@@ -258,15 +259,18 @@ func TestOrgOutcomeOfPrecedence(t *testing.T) {
 					for _, pairBroke := range []bool{false, true} {
 						for _, truncated := range []bool{false, true} {
 							for _, windowBehind := range []bool{false, true} {
-								signals := orgSignals{
-									evaluated: evaluated, stale: stale,
-									sourceFailed: sourceFailed, pairBroke: pairBroke,
-									truncated: truncated, healthy: healthy,
-									windowOpen: windowBehind, windowBehind: windowBehind,
-								}
-								want := expectedOutcome(signals)
-								if got := orgOutcomeOf(signals); got != want {
-									t.Errorf("orgOutcomeOf(%+v) = %q, want %q", signals, got, want)
+								for _, catchingUp := range []bool{false, true} {
+									signals := orgSignals{
+										evaluated: evaluated, stale: stale,
+										sourceFailed: sourceFailed, pairBroke: pairBroke,
+										truncated: truncated, healthy: healthy,
+										windowOpen: windowBehind, windowBehind: windowBehind,
+										catchingUp: catchingUp,
+									}
+									want := expectedOutcome(signals)
+									if got := orgOutcomeOf(signals); got != want {
+										t.Errorf("orgOutcomeOf(%+v) = %q, want %q", signals, got, want)
+									}
 								}
 							}
 						}
@@ -321,6 +325,9 @@ func expectedOutcome(s orgSignals) orgOutcome {
 	}
 	if s.stale {
 		return orgOutcomeRebuildRequired
+	}
+	if s.catchingUp {
+		return orgOutcomeCatchingUp
 	}
 	if s.windowBehind {
 		return orgOutcomeWindowBehind

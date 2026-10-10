@@ -672,6 +672,28 @@ walks), and `orgs_window_behind` is a bucket: an organization whose open pass
 is older than one overlap is counted there and NOT in `orgs_ok`. A sustained
 ingest above 1,000 rows per tick per source makes each pass longer than the
 one before; that is the state `orgs_window_behind` reports.
+A source that is NOT caught up (a rebuild from zero, or a projector that was
+down) walks every table with one cursor, in stamp order, and a tick stops at
+its drain budget. Such a tick is not a healthy one: the pair that ended with
+work left is logged (`context_fabric: projection pair ended the tick with work
+left`: `cursor_at`, `lag_seconds`, `pass_edge`, `remaining_to_edge_seconds`;
+`-1` and empty mean the source could not say), its organization is counted in
+the bucket `orgs_catching_up` and NOT in `orgs_ok`, `tick_complete` is false,
+and the summary carries `sources_catching_up`, `catching_up_sources` and
+`catch_up_lag_seconds_max`. With extra draining disabled
+(`ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET` below zero) the projector makes
+one attempt per tick by design and does not classify a pair this way. A
+stretch of paged work is a catch-up pass with a fixed edge (the source clock
+when it started); it ends when the cursor reaches the edge or the source is
+caught up, and logs `devhealthsource catch-up pass ended`. The first batch of
+a from-zero walk also carries every table the from-zero read returned whole
+(at most 150 rows; `devhealthsource from-zero read emits its complete tables
+with the first batch` names them): a repository, a team or a project has its
+node on the first tick, although its row is rewritten by every sync and so
+is the last one the walk reaches. The walk emits those rows again when it
+gets there. A table that does not fit the batch, or that makes the batch
+invalid beside the page (WARN, `fallback=batch_invalid_with_tables`), is left
+to the walk.
 One tick walks one pass at most (plus a new pass when a pass resumed from an
 earlier tick completes); a page that reaches the upper edge, or on which
 every table reports its end, closes the pass, so an idle tick over a window
@@ -1516,8 +1538,11 @@ Steps (namespace `dev-health`):
 4. Delete the Job: `kubectl -n dev-health delete job/acr-projector-rebuild-v13`.
 5. Scale the projector to 1, then read back the projector log until
    `orgs_rebuild_required=0`, `orgs_ok` equals `orgs_configured`, and
-   `tick_complete` is true. (`orgs_window_pass_open` above zero is normal
-   after a rebuild; `orgs_window_behind` above zero is not.)
+   `tick_complete` is true. While the rebuild is still walking the history,
+   `orgs_catching_up` is 1, `tick_complete` is false and
+   `catch_up_lag_seconds_max` falls from tick to tick. (`orgs_window_pass_open`
+   above zero is normal after a rebuild; `orgs_window_behind` above zero is
+   not.)
 
 Job shape (secrets by reference only; take the image digest and env from the
 live projector Deployment, do not copy values into a ticket or a doc):
