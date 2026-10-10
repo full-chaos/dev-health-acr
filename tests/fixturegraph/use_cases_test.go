@@ -371,8 +371,12 @@ func periodTotal(t *testing.T, c *client, one string) {
 		if outcome != "read_no_fact" && outcome != "fact_served" {
 			t.Fatalf("%s: no daily rows are seeded, coverage says %q, want read_no_fact or fact_served from window pull request facts: %.1500s", one, outcome, raw)
 		}
+		windowCycleServed := false
 		for _, f := range list(d, "facts") {
 			fields, _ := get(f, "fields").(map[string]any)
+			if _, present := fields["window_pr_count"]; present {
+				windowCycleServed = true
+			}
 			for _, name := range []string{"commits_count", "prs_merged", "median_pr_cycle_hours", "day"} {
 				if _, present := fields[name]; present {
 					t.Fatalf("%s: no daily rows are seeded, the field %q is present in the served fact: %.1500s", one, name, raw)
@@ -383,6 +387,9 @@ func periodTotal(t *testing.T, c *client, one string) {
 					t.Fatalf("%s: no daily rows are seeded, the daily series table is present: %.1500s", one, raw)
 				}
 			}
+		}
+		if outcome == "fact_served" && !windowCycleServed {
+			t.Fatalf("%s: the fact was served without a daily row but carries no window_pr_count (the window pull request facts are its only source): %.1500s", one, raw)
 		}
 		return
 	}

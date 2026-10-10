@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -97,5 +98,27 @@ func TestTeamWithOwnedRepositoriesAndNoWindowEvidenceServesNoFact(t *testing.T) 
 	}
 	if len(result.Facts) != 0 {
 		t.Fatalf("facts = %#v, want none: no merged pull request, no change failure counts, no wellbeing row", result.Facts)
+	}
+}
+
+func TestTeamWithoutOwnedRepositoryAndWithoutWellbeingRowNamesTheReason(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_metrics_daily", rows: nil},
+		{match: "GROUP BY team_id, repo_key", rows: nil},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{teamSubject("team-1")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != contextfabric.SourceNotApplicable {
+		t.Fatalf("state = %q, want %q for a team that owns no repository", result.State, contextfabric.SourceNotApplicable)
+	}
+	if !strings.Contains(result.Reason, "owns no repositor") {
+		t.Fatalf("reason = %q, want the no-owned-repositories reason", result.Reason)
 	}
 }
