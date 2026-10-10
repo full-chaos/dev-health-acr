@@ -79,11 +79,11 @@ const (
 
 // GraphQLRefusalCodes is the closed set of refusal codes graphql_query can
 // answer: run_operation's codes (unknown_operation excepted: there is no
-// operation name; team_inactive excepted: graphql_query names no team id) plus the query codes.
+// operation name) plus the query codes.
 func GraphQLRefusalCodes() []RefusalCode {
 	out := []RefusalCode{}
 	for _, code := range OperationRefusalCodes() {
-		if code != RefusalUnknownOperation && code != RefusalTeamInactive {
+		if code != RefusalUnknownOperation {
 			out = append(out, code)
 		}
 	}
@@ -1008,6 +1008,7 @@ func (x *gqlRun) finishRoot(ctx context.Context, index int, root rootSel, cand *
 	}
 	if refusalResp != nil {
 		resp := x.refuse(refusalResp.Refusal.Code, refusalResp.Refusal.Reason, "")
+		resp.Refusal.ActiveCanonicalID = refusalResp.Refusal.ActiveCanonicalID
 		return plannedRoot{}, &resp, nil
 	}
 	// 7e.

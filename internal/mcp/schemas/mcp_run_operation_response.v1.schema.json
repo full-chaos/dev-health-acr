@@ -107,6 +107,10 @@
         "max_bytes": {
           "type": "integer",
           "description": "The bound, for response_budget."
+        },
+        "active_canonical_id": {
+          "type": "string",
+          "description": "With code team_inactive: the one active team of the same name the caller may read."
         }
       }
     },

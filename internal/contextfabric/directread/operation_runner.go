@@ -159,6 +159,9 @@ type OperationRefusal struct {
 	Path          string      `json:"path,omitempty"`
 	MeasuredBytes int         `json:"measured_bytes,omitempty"`
 	MaxBytes      int         `json:"max_bytes,omitempty"`
+	// ActiveCanonicalID is set with code team_inactive: the one active team
+	// of the same name the caller may read.
+	ActiveCanonicalID string `json:"active_canonical_id,omitempty"`
 }
 
 // OperationError is one safe upstream error entry.
@@ -745,11 +748,8 @@ func (x *run) gateAndScope(ctx context.Context, op *OperationPolicy, scope Calle
 	for _, use := range subjects {
 		if !admitted[use.kind+"\x00"+strings.TrimSpace(use.id)] {
 			if gated, ok := inactive[use.kind+"\x00"+strings.TrimSpace(use.id)]; ok {
-				message := "a named team is inactive"
-				if gated.ActiveTwinID != "" {
-					message += "; its active replacement is " + gated.ActiveTwinID
-				}
-				resp := x.refuse(RefusalTeamInactive, message, "")
+				resp := x.refuse(RefusalTeamInactive, "a named team is inactive", "")
+				resp.Refusal.ActiveCanonicalID = gated.ActiveTwinID
 				return nil, &resp, nil
 			}
 			resp := x.refuse(RefusalDeniedOrNotFound, "a named subject is denied or not found", "")

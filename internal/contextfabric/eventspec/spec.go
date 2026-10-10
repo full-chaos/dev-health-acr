@@ -2292,7 +2292,7 @@ var (
 	graphqlQueryRefusalCodes = []string{
 		"variable_not_allowed", "variable_out_of_range", "person_scope_not_served",
 		"basis_dependent_shape", "no_granted_scope", "operation_not_served_for_caller", "response_budget",
-		"invalid_request", "scope_required", "row_outside_grant", "policy_stale", "denied_or_not_found",
+		"invalid_request", "scope_required", "row_outside_grant", "policy_stale", "denied_or_not_found", "team_inactive",
 		"query_invalid", "operation_type_not_allowed", "root_field_not_allowed", "field_not_allowed",
 		"fragment_not_allowed", "directive_not_allowed", "query_limit_exceeded", "read_budget_exceeded",
 	}
