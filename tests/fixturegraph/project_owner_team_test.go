@@ -16,7 +16,7 @@ func TestProjectOwnerQuestionNamesTheOwningTeam(t *testing.T) {
 	rows := ch(t, fmt.Sprintf(`SELECT p.name, t.name FROM team_project_ownership AS o FINAL
 INNER JOIN projects AS p FINAL ON p.org_id = o.org_id AND p.id = o.project_id
 INNER JOIN teams AS t FINAL ON t.org_id = o.org_id AND t.id = o.team_id
-WHERE o.org_id = %[1]s AND o.valid_to IS NULL AND p.is_active = 1 AND t.is_active = 1
+WHERE o.org_id = %[1]s AND o.valid_to IS NULL AND p.is_active = 1 AND p.name NOT IN (SELECT repo FROM repos FINAL WHERE org_id = %[1]s) AND t.is_active = 1
 AND o.project_id IN (SELECT project_id FROM team_project_ownership FINAL WHERE org_id = %[1]s AND valid_to IS NULL GROUP BY project_id HAVING uniqExact(team_id) = 1)
 ORDER BY p.name LIMIT 1`, org))
 	if len(rows) != 1 {
