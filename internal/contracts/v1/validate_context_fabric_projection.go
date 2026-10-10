@@ -36,7 +36,7 @@ func (v ContextFabricScalarValue) Validate() error {
 }
 
 func (b ContextFabricProjectionBatch) Validate() error {
-	if b.SchemaVersion != ContextFabricProjectionBatchSchema || !stringLengthBetween(b.BatchID, 8, 256) || !stringLengthBetween(b.OrgID, 1, 256) || !stringLengthBetween(b.Source, 1, 128) || !stringLengthBetween(b.SourceVersion, 1, 256) || !stringLengthBetween(b.Cursor, 0, 512) || !stringLengthBetween(b.NextCursor, 0, 512) || b.GeneratedAt.IsZero() || b.Entities == nil || b.Relationships == nil || b.Contents == nil || b.Episodes == nil || b.Tombstones == nil {
+	if b.SchemaVersion != ContextFabricProjectionBatchSchema || !stringLengthBetween(b.BatchID, 8, 256) || !stringLengthBetween(b.OrgID, 1, 256) || !stringLengthBetween(b.Source, 1, 128) || !stringLengthBetween(b.SourceVersion, 1, 256) || !stringLengthBetween(b.Cursor, 0, ContextFabricProjectionCursorMaxLength) || !stringLengthBetween(b.NextCursor, 0, ContextFabricProjectionCursorMaxLength) || b.GeneratedAt.IsZero() || b.Entities == nil || b.Relationships == nil || b.Contents == nil || b.Episodes == nil || b.Tombstones == nil {
 		return fmt.Errorf("projection batch identity or arrays violate v1 bounds")
 	}
 	if b.FullSnapshot && !b.CompleteEnumeration {

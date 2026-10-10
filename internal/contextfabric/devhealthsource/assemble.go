@@ -39,6 +39,8 @@ type sourcePlan struct {
 	version string
 	tables  []entityTable
 	now     func() time.Time
+	// overlongPageBound overrides maxOverlongPages when positive (tests).
+	overlongPageBound int
 
 	// seed contributes candidates that belong to a from-scratch projection
 	// as a whole rather than to any one source row, emitted exactly once on
@@ -289,6 +291,18 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	sortCandidates(all)
+	// The snapshot holds every row: a last row whose key the cursor cannot
+	// carry is passed over, nothing after it exists.
+	var passedOver bool
+	var cutRows int
+	snapshot := all
+	all, cutRows, passedOver = fitCursorTail(p.cursorSpace(), all, false)
+	if passedOver {
+		p.logCursorKeyPass(ctx, orgID, all[len(all)-1], "passed_over")
+	}
+	if cutRows > 0 {
+		quarantineOversizeCursorKeyRows(snapshot[len(all):], p.quarantineObserver(orgID))
+	}
 	p.notePage(all)
 	// Normalize BEFORE quarantine: an item repaired to a contract bound is
 	// never offered to quarantine at all, which is what makes the quarantine
@@ -334,6 +348,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 	// Only state advances as fully-omitted pages are skipped, so the
 	// coordinator moves from where it was straight to the first page with
 	// real content, and deterministicBatchID stays stable for replay.
+	overlongPages, overlongRows := 0, 0
 	for skips := 0; ; skips++ {
 		var all []candidate
 		var bound pageBound
@@ -374,6 +389,38 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		}
 		if bounded {
 			p.logBoundedPage(ctx, orgID, bound)
+		}
+		full := all
+		var cut int
+		var passed bool
+		all, cut, passed = fitCursorTail(p.cursorSpace(), all, ahead)
+		if passed {
+			p.logCursorKeyPass(ctx, orgID, all[len(all)-1], "passed_over")
+		}
+		if cut > 0 {
+			p.logCursorKeyPass(ctx, orgID, full[len(full)-1], "deferred")
+		}
+		if len(all) == 0 {
+			// Every row of the page has a key the cursor cannot carry and
+			// more rows lie beyond it: nothing can be published to carry the
+			// cursor past them, so they are quarantined and the walk goes on
+			// in-process from the exact key, like any other consumed page.
+			quarantineOversizeCursorKeyRows(full, p.quarantineObserver(orgID))
+			last := full[len(full)-1]
+			state = cursorState{Since: last.position(), After: last.sortKey}
+			p.window.record(p.windowScope, full, p.overlap)
+			p.notePagedPage(ctx, orgID, full)
+			// No cursor can record this progress, so yielding repeats these
+			// pages next tick: they do not count toward maxOmittedPageSkips.
+			// A hard per-call bound still holds, and says what it skipped.
+			overlongPages++
+			overlongRows += sourceRows(full)
+			if overlongPages >= p.maxOverlongPages() {
+				p.logOverlongPageYield(ctx, orgID, overlongPages, overlongRows)
+				p.noteYield()
+				return contextfabric.ProjectionBatch{}, false, nil
+			}
+			continue
 		}
 		p.notePage(all)
 		// Per-item quarantine BEFORE the payload check: an item the
@@ -431,7 +478,7 @@ func noteConsumedFrom(p sourcePlan, orgID string, consumed []candidate) {
 		return
 	}
 	last := consumed[len(consumed)-1]
-	if encoded, err := encodeCursorIn(p.cursorSpace(), cursorState{Since: last.position(), After: last.sortKey}); err == nil {
+	if encoded, err := encodeTailCursor(p.cursorSpace(), last); err == nil {
 		p.noteConsumed(orgID, encoded)
 	}
 }
