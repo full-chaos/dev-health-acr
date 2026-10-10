@@ -20,7 +20,7 @@ import (
 func createCHAOS4347Tables(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) {
 	t.Helper()
 	for _, statement := range devhealthschema.DDL(
-		"repo_metrics_daily", "team_metrics_daily", "git_pull_requests", "repos", "team_repo_ownership", "team_project_ownership",
+		"repo_metrics_daily", "repo_change_failure_daily", "team_metrics_daily", "git_pull_requests", "repos", "team_repo_ownership", "team_project_ownership",
 		"cicd_metrics_daily", "deploy_metrics_daily", "projects",
 	) {
 		if err := connection.Exec(ctx, statement); err != nil {
