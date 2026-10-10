@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -518,7 +519,7 @@ func compoundingRiskLatestSubquery(scope string, timeBound factTimeBound) string
 	return `SELECT scope_id, severity, compounding_risk, computed_at, day,
 		row_number() OVER (PARTITION BY scope_id ORDER BY (severity != 'unknown') DESC, day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
 	FROM compounding_risk_daily
-	WHERE org_id = {org_id:String} AND scope = '` + scope + `'` + timeBound.dayPredicate("day")
+	WHERE org_id = {org_id:String} AND scope = '` + scope + `'` + activeTeamScopeFor(scope, "scope_id") + timeBound.dayPredicate("day")
 }
 
 // compoundingRiskDailySubquery is compoundingRiskLatestSubquery's CHAOS-4645
@@ -531,7 +532,7 @@ func compoundingRiskDailySubquery(scope string, timeBound factTimeBound) string 
 	return `SELECT scope_id, day, severity, compounding_risk,
 		row_number() OVER (PARTITION BY scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
 	FROM compounding_risk_daily
-	WHERE org_id = {org_id:String} AND scope = '` + scope + `'` + timeBound.dayPredicate("day")
+	WHERE org_id = {org_id:String} AND scope = '` + scope + `'` + activeTeamScopeFor(scope, "scope_id") + timeBound.dayPredicate("day")
 }
 
 // healthRollupRow is one (project, scope, scope_id) triple's contribution to
@@ -633,7 +634,7 @@ FROM (
 	SELECT concat(p.provider, ':', p.id) AS project_key, 'team' AS scope, p.team_id AS scope_id, ifNull(t.name, '') AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at, toString(cr.day) AS day, toUInt8(` + freshnessIsKnownSQL("cr.severity") + `) AS is_known, toUInt8(` + freshnessIsKnownSQL("cr.severity") + ` AND ` + freshnessIsFreshSQL("cr.day", timeBound) + `) AS is_fresh
 	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
 	INNER JOIN (` + compoundingRiskLatestSubquery("team", timeBound) + `) AS cr ON cr.scope_id = p.team_id AND cr.rn = 1
-	LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = p.team_id
+	LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = p.team_id
 
 	UNION ALL
 
@@ -1095,4 +1096,13 @@ ORDER BY project_key`)
 		return nil
 	}, timeBound.bindings()...)
 	return byProject, order, rowCount, scanErr
+}
+
+// activeTeamScopeFor is the active-team scope predicate for a compounding-risk
+// scope whose scope_id is a team id; other scopes carry none.
+func activeTeamScopeFor(scope, column string) string {
+	if scope != "team" {
+		return ""
+	}
+	return " AND " + devhealthschema.ActiveTeamScopePredicate(column)
 }

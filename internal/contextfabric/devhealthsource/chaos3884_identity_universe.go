@@ -4,8 +4,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // identityUniverseKinds is the CHAOS-3884 Option C source-table coverage:
@@ -129,6 +131,10 @@ func fetchIdentityKind(ctx context.Context, client contextpacket.ClickHouseQuery
 			if c.entity == nil {
 				continue // relationship/episode/tombstone/progress-marker candidate
 			}
+			if inactiveTeamEntity(c.entity) {
+				devhealthschema.NoteInactiveTeamsOmitted(ctx, devhealthschema.OmittedIdentityUniverse, 1)
+				continue // an inactive team is not a claimant: it must not make a name ambiguous
+			}
 			if c.entity.ObservedAt.After(observedAt) {
 				observedAt = c.entity.ObservedAt
 			}
@@ -158,4 +164,14 @@ func fetchIdentityKind(ctx context.Context, client contextpacket.ClickHouseQuery
 		last := page[len(page)-1]
 		cursor = cursorState{Since: last.observedAt, After: last.sortKey}
 	}
+}
+
+// inactiveTeamEntity reports a team entity the source marks inactive
+// (teams.is_active = 0). Only an explicit false is inactive.
+func inactiveTeamEntity(e *contractsv1.ContextFabricEntityProjection) bool {
+	if e == nil || e.Subject.Kind != contractsv1.ContextFabricSubjectTeam {
+		return false
+	}
+	active, ok := e.Properties["is_active"]
+	return ok && active.Boolean != nil && !*active.Boolean
 }

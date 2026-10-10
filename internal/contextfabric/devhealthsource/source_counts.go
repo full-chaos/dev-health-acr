@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -44,7 +45,7 @@ WHERE c.org_id = {org_id:String}`},
 }
 
 var teamsProjectsKindCountStatements = []kindCountStatement{
-	{contractsv1.ContextFabricSubjectTeam, `SELECT uniqExact(id) FROM teams FINAL WHERE org_id = {org_id:String}`},
+	{contractsv1.ContextFabricSubjectTeam, `SELECT uniqExact(id) FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("")},
 	{contractsv1.ContextFabricSubjectProject, `SELECT uniqExact(provider, id) FROM projects FINAL WHERE org_id = {org_id:String}`},
 }
 
