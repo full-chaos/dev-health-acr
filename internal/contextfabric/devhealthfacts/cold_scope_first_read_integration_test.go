@@ -12,8 +12,33 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
+
+// timedClient logs the wall time of every statement, labelled by branch, so a
+// run's artifact carries the measured cold durations.
+type timedClient struct {
+	inner contextpacket.ClickHouseQueryClient
+	t     *testing.T
+	t0    time.Time
+}
+
+func (c *timedClient) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	label := "other"
+	switch {
+	case strings.Contains(statement, "groupUniqArray(100001)(work_unit_id)"):
+		label = "scope_units_load"
+	case strings.Contains(statement, "FROM work_unit_membership_runs"):
+		label = "scope_run_id"
+	case strings.Contains(statement, "min(span_from) AS span_from"):
+		label = "phase0"
+	}
+	began := time.Now()
+	scanner, err := c.inner.Query(ctx, statement, bindings)
+	c.t.Logf("statement=%s start_ms=%d duration_ms=%d", label, began.Sub(c.t0).Milliseconds(), time.Since(began).Milliseconds())
+	return scanner, err
+}
 
 func TestFirstProjectInvestmentReadOnAColdScopeIsNotATimeoutAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
@@ -22,8 +47,9 @@ func TestFirstProjectInvestmentReadOnAColdScopeIsNotATimeoutAgainstRealClickHous
 	const org = "org-cold-first-read"
 	seedBudgetFixtureOrg(t, ctx, direct, org, budgetFixtureUnits, true)
 
+	timed := &timedClient{inner: query, t: t}
 	var provider contextfabric.FactProvider
-	for _, p := range devhealthfacts.NewProviders(query) {
+	for _, p := range devhealthfacts.NewProviders(timed) {
 		if p.Capability().Kind == contextfabric.FactInvestment {
 			provider = p
 		}
@@ -44,6 +70,7 @@ func TestFirstProjectInvestmentReadOnAColdScopeIsNotATimeoutAgainstRealClickHous
 	}
 	for _, name := range []string{"first", "second"} {
 		began := time.Now()
+		timed.t0 = began
 		bundle, err := registry.ReadFacts(ctx, storage.Principal{OrgID: org}, request)
 		t.Logf("%s read wall=%s", name, time.Since(began).Round(time.Millisecond))
 		if err != nil {
