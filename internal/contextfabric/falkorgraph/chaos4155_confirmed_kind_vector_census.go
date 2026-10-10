@@ -376,9 +376,9 @@ func watermarkSnapshotsEqual(before, after map[string]watermarkSnapshotEntry) bo
 func (a *Adapter) countKindEmbedderFenceCorpus(ctx context.Context, key, orgID, kind, identity string) (int64, error) {
 	cypher := fmt.Sprintf(
 		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity "+
-			"AND n.%s = $kind AND n.%s IS NOT NULL "+
+			"AND n.%s = $kind AND n.%s IS NOT NULL%s "+
 			"RETURN count(n) AS total",
-		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID,
+		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID, activeTeamCypher("n"),
 	)
 	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "identity": identity, "kind": kind}, true)
 	if err != nil {
@@ -404,9 +404,9 @@ func (a *Adapter) countKindEmbedderFenceCorpus(ctx context.Context, key, orgID, 
 func (a *Adapter) fetchKindEmbedderFenceCorpus(ctx context.Context, key, orgID, kind, identity string) (corpus []oracleVector, enumeratedCount int64, malformedCount int64, err error) {
 	cypher := fmt.Sprintf(
 		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity "+
-			"AND n.%s = $kind AND n.%s IS NOT NULL "+
+			"AND n.%s = $kind AND n.%s IS NOT NULL%s "+
 			"RETURN n ORDER BY n.%s SKIP $skip LIMIT $limit",
-		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID, propCanonicalID,
+		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID, activeTeamCypher("n"), propCanonicalID,
 	)
 	for skip := 0; ; skip += oracleFetchBatchSize {
 		rows, qerr := a.api.query(ctx, key, cypher, map[string]interface{}{

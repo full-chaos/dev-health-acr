@@ -117,12 +117,12 @@ FactFlow
     calls followed            748
     calls accounted           13
     calls not_a_call          11
-    calls excluded_by_design  195
+    calls excluded_by_design  198
     calls leaked              12
   fields             bug_completed_ratio cycle_time_p50_hours cycle_time_p90_hours daily_flow daily_flow_omitted_count daily_flow_omitted_reason day items_completed items_completed_latest_day items_completed_window items_started items_started_latest_day items_started_window lead_time_p50_hours lead_time_p90_hours pr_first_review_p50_hours pr_first_review_p90_hours pr_pickup_time_p50_hours pr_review_time_p50_hours provider prs_merged prs_with_first_review rollup_basis scope_breakdown scope_breakdown_omitted_count scope_count story_points_completed team_breakdown team_breakdown_omitted_count team_count team_id window_days window_days_with_data window_end window_mode window_start wip_age_p50_hours wip_age_p90_hours wip_count_end_of_day work_scope_id
 
 FactHealth
-  reached_funcs      99
+  reached_funcs      100
   dynamic_key_sites  0
   leaked_call_sites  10
     leak interface_method     9
@@ -130,10 +130,10 @@ FactHealth
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            759
+    calls followed            761
     calls accounted           13
     calls not_a_call          9
-    calls excluded_by_design  161
+    calls excluded_by_design  163
     calls leaked              10
   fields             compounding_risk computed_at daily_health daily_health_omitted_count day norm_value repo_count risk_breakdown risk_breakdown_rows_shown risk_breakdown_rows_total risk_rules rollup_basis scope scope_id scope_name severity severity_as_of severity_basis severity_freshness_window_days severity_unavailable_reason signal team_count weight weighted_contribution
 
@@ -181,7 +181,7 @@ FactInvestment
     calls followed            868
     calls accounted           14
     calls not_a_call          26
-    calls excluded_by_design  455
+    calls excluded_by_design  457
     calls leaked              38
   fields             attribution attribution_basis churn_loc cycle_p50_hours cycle_p50_hours_weighted_mean day delivery_units effort_unit_count investment_area investment_mix_source mix_source native_multi_placed_unit_count next_cursor owned_repository_count owning_team_rollup_work_unit_count page_share_total population_window project_stream prs_merged repo_count repositories_in_scope repository_id rollup_basis scope scope_share_total scope_unit_rows share share_in_scope source spanning_unit_count team_breakdown team_count team_id team_name theme theme_breakdown theme_quality_bugfix unattributed_effort_share unit_attribution_basis unit_effort_value unit_from unit_kind unit_mix_source unit_pull_request_count unit_refs_unresolved unit_to unit_unresolved_refs unit_weight units_refs_unresolved units_returned weighted_effort work_items_completed work_unit_count work_unit_id work_units_without_repo_link
 
@@ -266,19 +266,19 @@ FactPullRequests
   fields             owned_repositories owned_repositories_omitted_count owned_repository_count pull_requests_closed_unmerged_window pull_requests_merged_window pull_requests_opened_window repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_name rollup_basis state window_basis window_end window_start
 
 FactReadiness
-  reached_funcs      91
+  reached_funcs      94
   dynamic_key_sites  1
-  leaked_call_sites  7
-    leak interface_method     6
+  leaked_call_sites  8
+    leak interface_method     7
     leak external_func_value  1
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            714
+    calls followed            718
     calls accounted           13
     calls not_a_call          6
-    calls excluded_by_design  130
-    calls leaked              7
+    calls excluded_by_design  139
+    calls leaked              8
   fields             backlog_size basis daily_readiness daily_readiness_omitted_count day estimate_coverage_ratio estimated_count provider rollup_basis team_breakdown team_count team_id team_name unestimated_count work_scope_id
 
 FactRequiredChildren

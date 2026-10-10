@@ -50,7 +50,7 @@ var factSchemaTables = []string{
 	// landscape.go). projects/team_project_ownership back their PROJECT
 	// subject branches specifically (codex R3 P2: those branches were
 	// otherwise never parity-tested against production typing).
-	"work_item_metrics_daily", "ic_landscape_rolling_30d", "projects", "team_project_ownership",
+	"work_item_metrics_daily", "ic_landscape_rolling_30d", "projects", "team_project_ownership", "teams",
 	// CHAOS-4398: readTeamThemeMix's canonical theme-mix source (never
 	// investment_metrics_daily, above -- see that reader's own doc
 	// comment).
