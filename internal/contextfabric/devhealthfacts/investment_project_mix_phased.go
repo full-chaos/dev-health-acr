@@ -122,7 +122,7 @@ func projectMixScopeStatementScoped(timeBound factTimeBound, scope membershipSco
             argMax(from_ts, computed_at) AS from_ts,
             argMax(to_ts, computed_at) AS to_ts
         FROM work_unit_investments
-        WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
+        WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filterJSON() + `
         GROUP BY work_unit_id
     )
 )`
@@ -135,7 +135,7 @@ func readProjectMixScope(ctx context.Context, client contextpacket.ClickHouseQue
 		return scope, err
 	}
 	extra := make([]readers.Binding, 0, 3)
-	extra = append(extra, membership.bindings()...)
+	extra = append(extra, membership.bindingsJSON()...)
 	for _, b := range timeBound.bindings() {
 		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
 	}
@@ -241,7 +241,7 @@ SELECT
 	uniqExactIf(u.work_unit_id, l.link_kind = 'repo') AS work_units,
 	uniqExactIf(u.repo_id, l.link_kind = 'repo') AS repos,
 	length(groupUniqArrayArrayIf(l.link_teams, l.link_kind = 'repo')) AS team_count,
-	minIf(u.from_ts, l.link_kind = 'repo') AS first_unit_from
+	minIf(u.from_ts, l.link_kind = 'repo' AND toUnixTimestamp(u.from_ts) > 0) AS first_unit_from
 FROM (
 	SELECT work_unit_id, repo_id, effort_value, from_ts,
 		` + themeEntrySumSQL(contextfabric.ThemeFeatureDelivery) + ` AS theme_feature_delivery,

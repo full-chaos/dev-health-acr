@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -147,6 +148,7 @@ const (
 var subqueryMembershipScope = membershipScope{mode: membershipScopeSubquery}
 
 const membershipScopeIDsParam = "scope_ids"
+const membershipScopeJSONParam = "scope_json"
 
 // filter is the scope predicate spliced after supersededWorkUnitIDsFilter.
 func (s membershipScope) filter() string {
@@ -158,6 +160,29 @@ func (s membershipScope) filter() string {
 	default:
 		return investmentMembershipScopeFilter()
 	}
+}
+
+// filterJSON is filter for the project mixes' phase 0: the ids ride as ONE
+// JSON string parsed by JSONExtract, the way the later phases take their pin,
+// not as a literal Array(String) parameter (36,000 ids as a literal array did not
+// finish inside the server's execution limit on the growth fixture; the same ids
+// as JSON do, in every later phase).
+func (s membershipScope) filterJSON() string {
+	if s.mode != membershipScopeIDs {
+		return s.filter()
+	}
+	return "\n              AND work_unit_id IN (SELECT arrayJoin(JSONExtract({" + membershipScopeJSONParam + ":String}, 'Array(String)')))"
+}
+
+func (s membershipScope) bindingsJSON() []readers.Binding {
+	if s.mode != membershipScopeIDs {
+		return nil
+	}
+	encoded, err := json.Marshal(s.ids)
+	if err != nil {
+		encoded = []byte("[]")
+	}
+	return []readers.Binding{{Name: membershipScopeJSONParam, Value: string(encoded)}}
 }
 
 func (s membershipScope) bindings() []readers.Binding {
