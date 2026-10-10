@@ -275,7 +275,7 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 			return row.Scan(&ids)
 		}, readers.Binding{Name: "scope_run", Value: runID})
 		if scanErr != nil {
-			return nil, scanErr
+			return nil, fmt.Errorf("read membership scope units: %w", scanErr)
 		}
 		overflow := rows != 1 || len(ids) > membershipScopeMaxUnits
 		if overflow || len(ids) == 0 {
