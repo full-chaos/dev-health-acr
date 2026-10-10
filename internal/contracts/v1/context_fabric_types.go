@@ -1230,7 +1230,7 @@ type ContextFabricInactiveHint struct {
 }
 
 // ContextFabricInactiveHintsMax bounds inactive_hints.
-const ContextFabricInactiveHintsMax = 20
+const ContextFabricInactiveHintsMax = 50
 
 type ContextFabricSubjectResolution struct {
 	Candidates          []ContextFabricSubjectCandidate `json:"candidates"`

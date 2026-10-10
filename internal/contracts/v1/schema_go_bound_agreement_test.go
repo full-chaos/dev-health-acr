@@ -794,7 +794,7 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.SubjectCandidate.properties.match_mechanisms.maxItems":                      6,
 		"common#$defs.SubjectCandidate.properties.match_reasons.minItems":                         1,
 		"common#$defs.SubjectResolution.properties.commit_decision_digests.maxItems":              250,
-		"common#$defs.SubjectResolution.properties.inactive_hints.maxItems":                       20,
+		"common#$defs.SubjectResolution.properties.inactive_hints.maxItems":                       50,
 		"common#$defs.SubjectResolution.properties.prior_subject_receipt_dispositions.maxItems":   20,
 		"common#$defs.WindowBoundReceipt.properties.receipt_id.maxLength":                         256,
 		"common#$defs.WindowBoundReceipt.properties.receipt_id.minLength":                         8,

@@ -1882,7 +1882,7 @@
           "items": {
             "$ref": "#/$defs/InactiveHint"
           },
-          "maxItems": 20
+          "maxItems": 50
         },
         "retrieval_degraded": {
           "type": "boolean"

@@ -2664,6 +2664,44 @@ func nonNil(values []string) []string {
 	return values
 }
 
+// answerInactiveTeamHint reports whether a caller-named team hint names an
+// inactive team the caller may read, as the hint's answer. Only a caller-named
+// hint is answered; an engine-minted source keeps its search.
+func answerInactiveTeamHint(ctx context.Context, deps ResolveDeps, attributes hintsource.Attributes, subject contextfabric.SubjectRef) (contractsv1.ContextFabricInactiveHint, bool, error) {
+	if !attributes.ShortCircuitEligible.Eligible() || subject.Kind != contextfabric.SubjectTeam || deps.ExactHintInactive == nil {
+		return contractsv1.ContextFabricInactiveHint{}, false, nil
+	}
+	twin, inactive, err := deps.ExactHintInactive(ctx, subject)
+	if err != nil || !inactive {
+		return contractsv1.ContextFabricInactiveHint{}, false, err
+	}
+	return contractsv1.ContextFabricInactiveHint{Subject: subject, Answer: contractsv1.TeamInactiveReason, ActiveCanonicalID: twin}, true, nil
+}
+
+// inactiveCallerTeamHints answers every caller-named team hint of the request
+// that names an inactive team. It runs before a dispatch that resolves terms
+// without the hint loop.
+func inactiveCallerTeamHints(ctx context.Context, deps ResolveDeps, request contextfabric.InvestigationRequest) ([]contractsv1.ContextFabricInactiveHint, error) {
+	var answered []contractsv1.ContextFabricInactiveHint
+	for _, hint := range request.RequestedScope.SubjectHints {
+		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {
+			continue
+		}
+		subject := contextfabric.SubjectRef{Kind: hint.Kind, CanonicalID: strings.TrimSpace(hint.ID), Label: strings.TrimSpace(hint.Label)}
+		if subject.Label == "" {
+			subject.Label = subject.CanonicalID
+		}
+		item, inactive, err := answerInactiveTeamHint(ctx, deps, hintsource.Lookup(hint.Source), subject)
+		if err != nil {
+			return nil, err
+		}
+		if inactive {
+			answered = append(answered, item)
+		}
+	}
+	return answered, nil
+}
+
 func resolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, commitBases contextfabric.CommitBasisSet, commitDigests contextfabric.CommitDecisionDigestSet, frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind, admission *contestAdmission) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, errors.New("authenticated organization is required")
@@ -2694,6 +2732,11 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		comparison := contextfabric.ClassifyComparisonOperands(frame)
 		switch comparison.Admission {
 		case contextfabric.ComparisonAdmittedNamedPair, contextfabric.ComparisonHeldScopedOperand:
+			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil {
+				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
+			} else if len(inactive) > 0 {
+				return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}, InactiveHints: inactive}, contextfabric.StructureOfferMaterial{}, nil
+			}
 			resolution, bases, digests, err := resolveNamedComparison(ctx, principal, request, deps, comparison, admission)
 			if err != nil {
 				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
@@ -2791,14 +2834,12 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// A caller-named team that is inactive is answered as that team:
 			// the miss is terminal for this hint, so the hybrid search below
 			// never reaches a same-named active team in its place.
-			if hintAttributes.ShortCircuitEligible.Eligible() && subject.Kind == contextfabric.SubjectTeam && deps.ExactHintInactive != nil {
-				twin, inactive, inactiveErr := deps.ExactHintInactive(ctx, subject)
-				if inactiveErr != nil {
-					return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
-				}
-				if inactive {
-					inactiveHints = append(inactiveHints, contractsv1.ContextFabricInactiveHint{Subject: subject, Answer: contractsv1.TeamInactiveReason, ActiveCanonicalID: twin})
-				}
+			answered, inactive, inactiveErr := answerInactiveTeamHint(ctx, deps, hintAttributes, subject)
+			if inactiveErr != nil {
+				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
+			}
+			if inactive {
+				inactiveHints = append(inactiveHints, answered)
 			}
 			continue
 		}

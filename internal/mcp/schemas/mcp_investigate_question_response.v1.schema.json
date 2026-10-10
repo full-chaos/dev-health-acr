@@ -3021,7 +3021,7 @@
           "items": {
             "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/InactiveHint"
           },
-          "maxItems": 20,
+          "maxItems": 50,
           "type": "array"
         },
         "prior_subject_receipt_dispositions": {
@@ -8209,7 +8209,7 @@
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/InactiveHint"
               },
-              "maxItems": 20,
+              "maxItems": 50,
               "type": "array"
             },
             "prior_subject_receipt_dispositions": {
