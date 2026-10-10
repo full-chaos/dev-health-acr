@@ -307,6 +307,11 @@ type Manifest struct {
 	// extract) the venue token had no grant for: the capture left them out,
 	// and so does a recorded run.
 	DeniedTeams map[string][]string `json:"denied_teams,omitempty"`
+	// SubjectTeam is the team (id scrubbed like the extract) the team-scoped
+	// shapes ran for: the first measurable team. SubjectTeamsSkipped counts
+	// the teams before it that gave no backlog size.
+	SubjectTeam         string `json:"subject_team,omitempty"`
+	SubjectTeamsSkipped int    `json:"subject_teams_skipped,omitempty"`
 }
 
 // Capture file names under the capture directory.
@@ -417,7 +422,7 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 		}
 		recording.Replies[OperationKey(shape, scrubVariables(scrubber, call.Variables))] = reply
 	}
-	generated, err := run.Oracle.generatedCases()
+	generated, err := run.Oracle.generatedCases(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -441,6 +446,13 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 				rr.NotJoined[i] = strings.Replace(note, d.kind+": team "+d.id+" is denied", d.kind+": team "+id+" is denied", 1)
 			}
 		}
+	}
+	if run.Oracle.SubjectTeam != "" {
+		id := run.Oracle.SubjectTeam
+		if mapped, ok := scrubber.SubjectID("team:" + id); ok {
+			id = strings.TrimPrefix(mapped, "team:")
+		}
+		manifest.SubjectTeam, manifest.SubjectTeamsSkipped = id, run.Oracle.SubjectTeamsSkipped
 	}
 	for _, c := range generated {
 		manifest.ShapeCases = append(manifest.ShapeCases, ShapeCase{ShapeID: c.ShapeID, Variables: scrubVariables(scrubber, c.Variables)})

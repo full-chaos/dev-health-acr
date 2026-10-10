@@ -19,8 +19,8 @@ import (
 const captureDir = "testdata/venue"
 
 // captureSchemaDigest is the SDL digest the recorded capture was taken at
-// (the venue at ops 5c9a3d32, pin 18).
-const captureSchemaDigest = "sha256:54a0f7d6ee428bc2f8c8ef6329680c8efeb4be94a7b41bdc12655006069335e4"
+// (the venue at ops b1d7e1f1, pin 31).
+const captureSchemaDigest = "sha256:a5bb8eca55047d939f39fc3317e0bb016a485fb79d5f42b0c440786cfa8ac45b"
 
 // contractsAtCapture is contractDigest of every served operation under the SDL
 // the capture was taken at. A build that pins another SDL may replay the
@@ -35,8 +35,8 @@ var contractsAtCapture = map[string]string{
 	"catalogValues":                  "sha256:00ad023c9a2febf03c47ca10f24c66bdcc7916bac2e5ffc688a2a65d8e3d0258",
 	"cognitiveLoad":                  "sha256:52ce7277e9e7033d638b213773e41b478f6cd9af0c540655998dad13dabc4dfb",
 	"complexityTimeseries":           "sha256:5795ecd7c05b216647191e6eca4b6b397c4612a21e2225137590930bf1c65569",
-	"compoundingRisk":                "sha256:77ac36ec578a347763cf97ea1946219d43481774b06878514f34c2f166042525",
-	"home":                           "sha256:342fa4e571ab2bd02005a65a7fe68a3f2ae8c1fce6ab9b1fefaf5fc1a4bb48f6",
+	"compoundingRisk":                "sha256:ded079a60583d070f41a5d5682bd77c32b22923d21843c2c9f2bdfe1ce0360e2",
+	"home":                           "sha256:0c33644264dc63095441379db29060939e8d351fbcbfe2c3a1e8e7ade2a0c86a",
 	"hotspots":                       "sha256:30999b82cd7e907ea1711e271b90aae84e66e60f9e93bbee835acf377cdbab23",
 	"investmentBreakdown":            "sha256:8742ea2b7d3c3014c7a429a115108e167caf8a250230f5e59c16e3332f7b1749",
 	"investmentFull":                 "sha256:179a09e19ce83802c67b1b40fe4c2c1b3c003617d4b49acca225146db3737111",
