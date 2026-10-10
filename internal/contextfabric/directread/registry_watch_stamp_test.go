@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 )
 
@@ -34,8 +36,9 @@ func TestRegistryWatchStampsDataCatalogAndARefusalReportsThePinnedDigest(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	opRec := &opDigestRecorder{}
 	runner, err := directread.NewOperationRunner(directread.OperationRunnerConfig{
-		Catalogue: cat, Gate: directread.NewSubjectGate(newOpGraph(), nil), Client: client,
+		Catalogue: cat, Gate: directread.NewSubjectGate(newOpGraph(), nil), Client: client, Recorder: opRec,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -58,13 +61,29 @@ func TestRegistryWatchStampsDataCatalogAndARefusalReportsThePinnedDigest(t *test
 	if got := run().Source.SchemaDigest; got != cat.SchemaDigest() {
 		t.Fatalf("refused run_operation stamp %s, want pinned %s", got, cat.SchemaDigest())
 	}
+	if last := opRec.reads[len(opRec.reads)-1]; last.SchemaDigest != cat.SchemaDigest() {
+		t.Fatalf("the run_operation read log carries %s, want the pinned digest %s", last.SchemaDigest, cat.SchemaDigest())
+	}
 	if got := catalog(); got != watchServedDigest {
 		t.Fatalf("data_catalog stamp %s, want served %s", got, watchServedDigest)
 	}
 }
 
+type opDigestRecorder struct{ reads []directread.OperationRead }
+
+func (r *opDigestRecorder) RecordOperationRead(_ context.Context, _ storage.Principal, read directread.OperationRead) {
+	r.reads = append(r.reads, read)
+}
+
+type digestRecorder struct{ reads []directread.GraphQLQueryRead }
+
+func (r *digestRecorder) RecordGraphQLQuery(_ context.Context, _ storage.Principal, read directread.GraphQLQueryRead) {
+	r.reads = append(r.reads, read)
+}
+
 func TestRefusedGraphQLQueryReportsThePinnedDigestNotACachedServedOne(t *testing.T) {
-	h := newGQLHarness(t, gqlHarnessOptions{})
+	rec := &digestRecorder{}
+	h := newGQLHarness(t, gqlHarnessOptions{recorder: rec})
 	cat := h.policy.Catalogue()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"schema_digest": watchServedDigest, "operations": []any{}})
@@ -82,5 +101,8 @@ func TestRefusedGraphQLQueryReportsThePinnedDigestNotACachedServedOne(t *testing
 	}
 	if resp.Source.SchemaDigest != cat.SchemaDigest() {
 		t.Fatalf("refused graphql_query stamp %s, want pinned %s", resp.Source.SchemaDigest, cat.SchemaDigest())
+	}
+	if len(rec.reads) != 1 || rec.reads[0].SchemaDigest != cat.SchemaDigest() {
+		t.Fatalf("the read log carries %+v, want the pinned digest %s", rec.reads, cat.SchemaDigest())
 	}
 }
