@@ -83,7 +83,7 @@ func (r *digestRecorder) RecordGraphQLQuery(_ context.Context, _ storage.Princip
 
 func TestRefusedGraphQLQueryReportsThePinnedDigestNotACachedServedOne(t *testing.T) {
 	rec := &digestRecorder{}
-	h := newGQLHarness(t, gqlHarnessOptions{recorder: rec})
+	h := newGQLHarness(t, gqlHarnessOptions{recorder: rec, ownCatalogue: true})
 	cat := h.policy.Catalogue()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"schema_digest": watchServedDigest, "operations": []any{}})
