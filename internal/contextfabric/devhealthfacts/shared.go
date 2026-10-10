@@ -648,7 +648,13 @@ import (
 // longer ends with "this project's own span is not derived". A candidate saved
 // under v129 carries the old wording or no per-project start and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v130"
+//
+// v130 -> v131: a refused run_operation or graphql_query reply reports the
+// pinned schema digest of the policy that refused it, not a cached served
+// digest that may be older than the last registry watch. A candidate saved
+// under v130 may hold a refusal stamped with a stale digest and must not be
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v131"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
