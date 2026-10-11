@@ -550,6 +550,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// before the commit-affirmation gate, Validate and Save, so the sentence,
 	// its Coverage.Partial flag and the answer are one object throughout.
 	applyGroupingRefusalDisclosure(&result, params.GroupingRefusal)
+	if cohort := params.Graph.Cohort; cohort != nil {
+		// Over the SERVED cohort: narrowing has already run, so a member the
+		// answer dropped is never counted.
+		applyGroupCoverageDisclosure(&result, CohortGroupCoverageOf(cohort, cohort.Groups, params.Facts.Facts))
+	}
 	// The group read's half: groups this answer did not read, or a group
 	// list too large to carry, said on the wire beside the grouping refusal
 	// and for the same reason -- telemetry alone is not disclosure.
