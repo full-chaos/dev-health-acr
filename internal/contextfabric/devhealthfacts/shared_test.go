@@ -3,6 +3,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -577,5 +578,33 @@ func TestQueryVersionMovedPastTheOwnRepositoryScope(t *testing.T) {
 		if devhealthfacts.QueryVersion == versionBeforeTheScopeFollowedTheLink {
 			t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when a requested repository scope was tested on a work item's own repository holds the old relation and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheScopeFollowedTheLink)
 		}
+	}
+}
+
+func TestQueryVersionMovedPastTheGraphLagLabelCount(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	if !strings.HasPrefix(devhealthfacts.QueryVersion, prefix) {
+		t.Fatalf("QueryVersion = %q, want the %q form", devhealthfacts.QueryVersion, prefix)
+	}
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 149 {
+		t.Fatalf("QueryVersion = %q, want v149 or later -- an answer saved when a label-named repository count was withheld over a same-label claimant missing from the graph holds that refusal and must not be reused", devhealthfacts.QueryVersion)
+	}
+}
+
+// TestQueryVersionMovedPastThePriorReadFailedBump pins the CURRENT query
+// version away from v146 (main before this fix), under which a prior-period health read whose
+// provider did not complete was served as unknown_prior (CHAOS-7404). Answer
+// reuse keys on this version, so a candidate saved under v146 must never be
+// served.
+func TestQueryVersionMovedPastThePriorReadFailedBump(t *testing.T) {
+	t.Parallel()
+	const versionBeforeThePriorReadFailedFix = "devhealthfacts.clickhouse.v146"
+	if devhealthfacts.QueryVersion == versionBeforeThePriorReadFailedFix {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer stored under that version may serve a false unknown_prior", devhealthfacts.QueryVersion, versionBeforeThePriorReadFailedFix)
 	}
 }
