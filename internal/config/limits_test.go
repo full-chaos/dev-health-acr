@@ -146,3 +146,24 @@ func TestAuthMaxInFlightDefaultsOverridesAndRejectsNegative(t *testing.T) {
 		t.Fatal("negative in-flight cap was accepted")
 	}
 }
+
+func TestLimitOptionsGiveCapabilitiesItsOwnPolicy(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.RequestControls.Capabilities; got.Requests != 240 || got.Window != time.Minute {
+		t.Fatalf("default capabilities class = %+v, want 240 per 1m", got)
+	}
+	if cfg.RequestControls.Auth.Requests == 240 {
+		t.Fatalf("auth class must not inherit the capabilities default")
+	}
+	cfg, err = load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true", "ACR_CAPABILITIES_REQUESTS_PER_WINDOW": "7", "ACR_CAPABILITIES_LIMIT_WINDOW": "30s"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.LimitOptions().Policies.Capabilities
+	if got.PerOrgLimit != 7 || got.PerCredentialLimit != 7 || got.Window != 30*time.Second {
+		t.Fatalf("capabilities policy = %+v, want 7 per 30s per org and credential", got)
+	}
+}
