@@ -1062,6 +1062,14 @@ func (t SlogTelemetry) RecordTeamAnchorWalk(ctx context.Context, orgID string, d
 
 // RecordOwnershipRouting logs at Info. The read counts ride only on an
 // outcome whose ownership read finished, and error only on a failed read.
+// RecordOwnershipDisclosureBounded reports counts only: owners left out of the
+// disclosure because their assertion has not started, because the list is at
+// its bound, or because the caller may not read them, and a cut read.
+func (t SlogTelemetry) RecordOwnershipDisclosureBounded(ctx context.Context, orgID string, notStarted, overCap, unreadable int, cut bool) {
+	t.logger().Info("context_fabric: ownership disclosure bounded", "org_id", contextfabric.SanitizeLogAttr(orgID),
+		"not_started", notStarted, "over_cap", overCap, "unreadable", unreadable, "read_cut", cut)
+}
+
 func (t SlogTelemetry) RecordOwnershipRouting(ctx context.Context, orgID string, decision OwnershipRoutingDecision) {
 	anchorKind := string(decision.AnchorKind)
 	if anchorKind == "" {

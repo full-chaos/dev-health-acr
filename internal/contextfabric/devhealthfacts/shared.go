@@ -762,13 +762,17 @@ import (
 // excluded-by-status count and the status basis; a candidate saved under an earlier
 // version holds the unfiltered counts.
 //
-// v156 -> v157: the members of a project or repository anchor are the nodes
+// v156 -> v157: a repository count with no current active owner over a complete ownership read
+// serves 0 with the inactive and ended owners disclosed, where it served no count; a candidate
+// saved under an earlier version may hold the unavailable count and must not be reused.
+//
+// v157 -> v158: the members of a project or repository anchor are the nodes
 // with an entity-tree path to the anchor (and a team anchor's pull requests the
 // ones of its repositories), each stating the tier of the issue and pull
 // request link that reached it; a text-matched member with no path is no
-// longer served. A candidate saved under v156 may hold such a member and must
+// longer served. A candidate saved under v157 may hold such a member and must
 // not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v157"
+const QueryVersion = "devhealthfacts.clickhouse.v158"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
