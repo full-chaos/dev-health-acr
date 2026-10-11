@@ -77,9 +77,10 @@ func TestDiscoverContextTeamAnchorServesOnlyOwnedProjects(t *testing.T) {
 	}
 }
 
-// A repository anchor keeps the lexical arm: only a team anchor is bound to
-// its own reach.
-func TestDiscoverContextNonTeamAnchorKeepsTextMatchedProjects(t *testing.T) {
+// A repository anchor binds its project members to the entity tree too: a
+// project the question text matches but no linked pull request of the
+// repository reaches is not a member.
+func TestDiscoverContextRepositoryAnchorDropsTextMatchedProjectsWithNoTreePath(t *testing.T) {
 	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:platform", Label: "full-chaos/platform"}
 	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		if strings.Contains(cypher, "fulltext") {
@@ -94,13 +95,8 @@ func TestDiscoverContextNonTeamAnchorKeepsTextMatchedProjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
-	if !cohortIDs(result.Cohort)["project:text-only"] {
-		t.Fatalf("members = %v, want the text-matched project kept for a non-team anchor", cohortIDs(result.Cohort))
-	}
-	for _, m := range result.Cohort.Members {
-		if len(m.InclusionReasons) != 1 || m.InclusionReasons[0] == teamAnchorInclusionReason {
-			t.Fatalf("inclusion reasons = %v, want the pool's own reason for a non-team anchor", m.InclusionReasons)
-		}
+	if cohortIDs(result.Cohort)["project:text-only"] {
+		t.Fatalf("members = %v, want the text-matched project dropped: it has no entity-tree path to the repository anchor", cohortIDs(result.Cohort))
 	}
 }
 

@@ -691,6 +691,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		})
 	}
 	var teamWalkTally teamAnchorWalkTally
+	anchoredMemberTiers := map[string]string{}
 	projectDeploymentsUnlinked := -1
 	projectDeploymentsDenied := -1
 	// deploymentAnchorReadCut: the read of the deployment anchor's own reach
@@ -733,9 +734,14 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			walk, err = a.teamAnchorMembers(ctx, key, principal.OrgID, principal, scope, subject, position, collectLimit, temporal)
 			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
 			if err != nil && a.config.Telemetry != nil {
-				a.config.Telemetry.RecordTeamAnchorWalk(ctx, principal.OrgID, teamWalkTally.decision(declaredCohortKindForRouting, len(request.Resolution.Committed), err))
+				a.config.Telemetry.RecordTeamAnchorWalk(ctx, principal.OrgID, teamWalkTally.decision(teamAnchors[0].Kind, declaredCohortKindForRouting, len(request.Resolution.Committed), err))
 			}
 			teamWalkTally.add(walk)
+			for id, tier := range walk.memberTiers {
+				if best, has := anchoredMemberTiers[id]; !has || tierRank(tier) < tierRank(best) {
+					anchoredMemberTiers[id] = tier
+				}
+			}
 		} else {
 			nodes, edges, failed, filters, walkTruncated, err = a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
 		}
@@ -808,7 +814,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 
 	if teamWalkTally.ran && a.config.Telemetry != nil {
-		a.config.Telemetry.RecordTeamAnchorWalk(ctx, principal.OrgID, teamWalkTally.decision(declaredCohortKindForRouting, len(request.Resolution.Committed), nil))
+		a.config.Telemetry.RecordTeamAnchorWalk(ctx, principal.OrgID, teamWalkTally.decision(teamAnchors[0].Kind, declaredCohortKindForRouting, len(request.Resolution.Committed), nil))
 	}
 
 	// cohortMemberSource travels onto GraphContext so the count scope
@@ -1419,12 +1425,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	if cohort != nil && teamAnchoredMembers {
 		states := ownedMemberStates(cohortNodes)
 		for i := range cohort.Members {
-			cohort.Members[i].InclusionReasons = []string{teamAnchorInclusionReasonFor(declaredCohortKindForRouting)}
+			cohort.Members[i].InclusionReasons = []string{teamAnchorInclusionReasonFor(teamAnchors[0].Kind, declaredCohortKindForRouting)}
 			if state, ok := states[graphrank.SubjectKey(cohort.Members[i].Subject)]; ok {
 				cohort.Members[i].InclusionReasons = append(cohort.Members[i].InclusionReasons, state)
 			}
+			if reason := anchorLinkTierReason(anchoredMemberTiers[cohort.Members[i].Subject.CanonicalID]); reason != "" {
+				cohort.Members[i].InclusionReasons = append(cohort.Members[i].InclusionReasons, reason)
+			}
 		}
-		cohort.Rationale = teamAnchorCohortRationaleFor(declaredCohortKindForRouting)
+		cohort.Rationale = teamAnchorCohortRationaleFor(teamAnchors[0].Kind, declaredCohortKindForRouting)
 	}
 	if cohort == nil && ownershipZeroOwnersResolved {
 		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectTeam, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{}, Rationale: ownershipZeroOwnersRationaleFor(ownershipExcludedOverCap), Complete: true}
