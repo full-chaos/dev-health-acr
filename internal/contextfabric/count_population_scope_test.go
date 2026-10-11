@@ -1140,8 +1140,8 @@ func TestDecideCountPopulationScopeNormalizesMemberSource(t *testing.T) {
 
 // TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch
 // lists every clause of the one admission a label-named repository has beyond
-// an identity proof: the exact-label commit, an untruncated search, a complete
-// alias lookup, a match to the anchor term, no other possible anchor matching
+// an identity proof: the exact-label commit, a complete alias lookup (a truncated
+// lexical search refuses only beside an alias lookup that was not complete), a match to the anchor term, no other possible anchor matching
 // the term, and a repository the reading does not contradict.
 func TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch(t *testing.T) {
 	t.Parallel()
