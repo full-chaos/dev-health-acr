@@ -388,11 +388,6 @@ type CanonicalFactRequest struct {
 	// boundary; it is internal dispatch state, never a request or model field.
 	workItemTuple bool
 
-	// blockerStatus is the work-item status the question's frame names, set by
-	// the engine (never by the model) and handed to the blockers provider as its
-	// one system-authored parameter.
-	blockerStatus string
-
 	Question     InterpretedQuestion `json:"question"`
 	Subjects     []SubjectRef        `json:"subjects"`
 	Cohort       *Cohort             `json:"cohort,omitempty"`

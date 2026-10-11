@@ -2,7 +2,6 @@ package devhealthfacts
 
 import (
 	"context"
-	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
@@ -102,7 +101,7 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	var teamOutcome teamRollupOutcome
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		var teamErr error
-		teamOutcome, teamErr = p.readTeamRollup(ctx, principal, orgID, query.RequestedRepositoryScope, query.Parameters, teamSubjects, &facts)
+		teamOutcome, teamErr = p.readTeamRollup(ctx, principal, orgID, query.RequestedRepositoryScope, teamSubjects, &facts)
 		if teamErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team blockers", teamErr)
 		}
@@ -321,30 +320,20 @@ func dependencyEvidenceRefID(sourceID, targetID, relationKey string) string {
 // target work item lives in it.
 type blockerRollupRepo struct{ blockedItems, blockerEdges, excludedEdges int64 }
 
-// blockerStatusParameter names the one optional status a caller may ask the
-// team rollup to count blockers in; without it a blocker counts while it is
-// open (any status but done or canceled).
-const blockerStatusParameter = contextfabric.BlockerStatusParameter
-
 const blockerStatusBasisOpen = "open"
 
-// blockerStatusPredicate is the SQL over the blocking item's normalized
-// status. A blocker with no work item row reads as unknown, which is open.
-func blockerStatusPredicate(named string) string {
-	if named == "" {
-		return "ifNull(lower(s.status), 'unknown') NOT IN ('done', '" + workItemCancelledStatus + "')"
-	}
-	return "ifNull(lower(s.status), 'unknown') = {blocker_status:String}"
-}
+// blockerOpenPredicate is the SQL over the blocking item's normalized status:
+// a blocker counts while it is not done or canceled. A blocker with no
+// work_items row reads as unknown, which is open.
+const blockerOpenPredicate = "ifNull(lower(s.status), 'unknown') NOT IN ('done', '" + workItemCancelledStatus + "')"
 
 // readTeamRollup serves a team subject on the current axis only:
 // work_item_dependencies carries no event time, so no window is claimed and
 // the counts are *_current. A blocker edge counts while the blocking item is
-// open (not done or canceled), or in the one status the caller names; the
-// edges the status excluded are counted apart. Both ends pass the shared
+// open (not done or canceled); the edges the status excluded are counted apart. Both ends pass the shared
 // work-item authorization rule, so the counts cover the caller's authorized
 // items and are declared caller-scoped.
-func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage.Principal, orgID string, requestedScope []string, parameters map[string]string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) (outcome teamRollupOutcome, err error) {
+func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage.Principal, orgID string, requestedScope []string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) (outcome teamRollupOutcome, err error) {
 	teamIDs, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	outcome.rejected = rejected
 	if len(teamIDs) == 0 {
@@ -354,15 +343,7 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 	if err != nil {
 		return outcome, err
 	}
-	namedStatus := strings.ToLower(strings.TrimSpace(parameters[blockerStatusParameter]))
-	if !contextfabric.InWorkItemStatusVocabulary(namedStatus) {
-		namedStatus = ""
-	}
-	statusBasis := blockerStatusBasisOpen
-	if namedStatus != "" {
-		statusBasis = namedStatus
-	}
-	statusPredicate := blockerStatusPredicate(namedStatus)
+	statusPredicate := blockerOpenPredicate
 	byRepo := map[string]blockerRollupRepo{}
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 {
 		authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, requestedScope))
@@ -386,7 +367,7 @@ ORDER BY t.repo_id`, settings)
 			}
 			byRepo[repoID] = r
 			return nil
-		}, append(authorizationBindings, statusBindings(namedStatus)...)...); scanErr != nil {
+		}, authorizationBindings...); scanErr != nil {
 			return outcome, scanErr
 		}
 	}
@@ -421,7 +402,7 @@ ORDER BY t.repo_id`, settings)
 		}
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),
-			"blocker_status_basis":            contextfabric.StringFactValue(statusBasis),
+			"blocker_status_basis":            contextfabric.StringFactValue(blockerStatusBasisOpen),
 			"owned_repository_count":          contextfabric.IntegerFactValue(int64(len(repos))),
 			"repositories_with_data_count":    contextfabric.IntegerFactValue(withData),
 			"repositories_without_data_count": contextfabric.IntegerFactValue(int64(len(repos)) - withData),
@@ -452,11 +433,4 @@ ORDER BY t.repo_id`, settings)
 		})
 	}
 	return outcome, nil
-}
-
-func statusBindings(namedStatus string) []readers.Binding {
-	if namedStatus == "" {
-		return nil
-	}
-	return []readers.Binding{{Name: "blocker_status", Value: namedStatus}}
 }

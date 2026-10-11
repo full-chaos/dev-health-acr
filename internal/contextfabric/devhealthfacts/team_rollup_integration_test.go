@@ -292,23 +292,6 @@ func TestTeamRollupsAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("blockers named status", func(t *testing.T) {
-		provider := findProvider(t, f.providers, contextfabric.FactBlockers)
-		result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: teamRollupOrg}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{two},
-			Parameters: map[string]string{"blocker_status": "done"},
-		})
-		if err != nil {
-			t.Fatalf("ReadFacts: %v", err)
-		}
-		fields := factFor(t, result, two).Fields
-		wantInt(t, fields, "blocked_work_items_current", 1)
-		wantInt(t, fields, "blocker_dependencies_current", 1)
-		if got := fields["blocker_status_basis"].String; got == nil || *got != "done" {
-			t.Fatalf("blocker_status_basis = %#v, want done", fields["blocker_status_basis"])
-		}
-	})
-
 	t.Run("incident org-wide figure is withheld from a repository-restricted caller", func(t *testing.T) {
 		restricted := f.readAs(storage.Principal{OrgID: teamRollupOrg, RepositoryScopes: []string{"acme/repo-a"}}, contextfabric.FactIncidents, f.window, two)
 		fields := factFor(t, restricted, two).Fields
