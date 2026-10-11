@@ -1,6 +1,7 @@
 package contextpacket
 
 import (
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -57,6 +58,31 @@ func explicitRuleOutcome(metadata map[string]any) (ruleOutcome, bool) {
 		return ruleOutcome{id: ruleID, claim: contractsv1.ClaimKind(claim)}, true
 	default:
 		return ruleOutcome{}, false
+	}
+}
+
+func explicitRuleRejection(metadata map[string]any) (reason string, idLength int, rejected bool) {
+	raw, present := metadata["acr_rule_id"]
+	if !present {
+		return "", 0, false
+	}
+	if _, ok := explicitRuleOutcome(metadata); ok {
+		return "", 0, false
+	}
+	id, isString := raw.(string)
+	switch {
+	case !isString:
+		return "rule_id_not_string", 0, true
+	case !explicitRuleIDPattern.MatchString(id):
+		return "rule_id_grammar", len(id), true
+	default:
+		return "claim_kind", len(id), true
+	}
+}
+
+func logExplicitRuleRejection(ref contractsv1.EvidenceRef) {
+	if reason, idLength, rejected := explicitRuleRejection(ref.Metadata); rejected {
+		slog.Info("context packet dropped explicit rule metadata", "event", "explicit_rule_id_rejected", "reason", reason, "rule_id_length", idLength)
 	}
 }
 
