@@ -158,7 +158,10 @@ func TestWorkItemFreshEngineAgainstRealClickHouse(t *testing.T) {
 			phases := []string{"s1"}
 			if !unmeasured && population > 0 {
 				phases = append(phases, "status")
-				if failurePhase != "status" {
+				// The probe runs only when the status read returned rows; a
+				// failed status read and a repository that moved after S1
+				// (the item leaves the authorized population) return none.
+				if failurePhase != "status" && !tc.move {
 					phases = append(phases, "status_since")
 				}
 				phases = append(phases, "work")
