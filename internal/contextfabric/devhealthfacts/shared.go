@@ -742,12 +742,17 @@ import (
 // truncated and the identity read was complete; a candidate saved under an earlier version
 // may hold the uncertified count and must not be reused.
 //
-// v152 -> v153: a model call that ends on a transient class once the runtime's
+// v152 -> v153: a stored answer is reused only when its project and team
+// selector identity equals the request's; a candidate saved under an earlier
+// version carries no selector identity and must not be reused for a request
+// that names project or team selectors.
+//
+// v153 -> v154: a model call that ends on a transient class once the runtime's
 // attempts are used, or that the composition reserve ends before the request
 // deadline, is served as a degraded answer with failure class
 // model_call_not_completed and retry_may_succeed, where it was an error with no
 // stored answer; a candidate saved under an earlier version cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v153"
+const QueryVersion = "devhealthfacts.clickhouse.v154"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
