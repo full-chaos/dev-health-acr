@@ -59,3 +59,30 @@ func TestBudgetRefusalLogNamesTheStageAndTheMeasuredSections(t *testing.T) {
 		t.Fatal("no answer text may reach the refusal line")
 	}
 }
+
+// A refusal's own metadata is validated where it is logged: a stage outside the
+// closed vocabulary is reported as unknown, an overrun outside items|bytes as
+// unrecognized, and neither value's text reaches the line.
+func TestBudgetRefusalLogRejectsMalformedRefusalMetadata(t *testing.T) {
+	refusal := contextfabric.AnswerBudgetRefusal{
+		Overrun: contractsv1.ContextFabricBudgetOverrun("not-an-axis\nforged=1"), MeasuredBytes: 70_000, MaxSerializedBytes: 65_536,
+		Stage: contextfabric.InvestigationStage("not-a-stage\nforged=1"),
+	}
+	app, token, logs := newContextFabricTestAppWithLogs(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		return contextfabric.InvestigationResult{}, refusal
+	}))
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+	entry := decodeFailureLog(t, logs.String())
+	if got := entry["failure_stage"]; got != "unknown" {
+		t.Fatalf("failure_stage = %v, want unknown for a stage outside the vocabulary", got)
+	}
+	if got := entry["budget_overrun"]; got != "unrecognized" {
+		t.Fatalf("budget_overrun = %v, want unrecognized", got)
+	}
+	if strings.Contains(logs.String(), "forged") {
+		t.Fatalf("a malformed value reached the log line: %s", logs.String())
+	}
+}

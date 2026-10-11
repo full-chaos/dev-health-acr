@@ -150,6 +150,23 @@ func TestARefusalSaysWhenNothingWasLeftToCut(t *testing.T) {
 	if !refusal.NothingLeftToCut || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
 		t.Fatalf("refusal = %+v, want a bytes refusal that says nothing was left to cut", refusal)
 	}
+	// The refusal names where it was raised and what filled the document, as
+	// the engine builds it (not as a test constructs it).
+	if refusal.Stage != StageValidation {
+		t.Fatalf("refusal stage = %q, want %q (the served-document assertion)", refusal.Stage, StageValidation)
+	}
+	if len(refusal.Sections) == 0 {
+		t.Fatalf("refusal carries no sections: %+v", refusal)
+	}
+	var largest int64
+	for _, section := range refusal.Sections {
+		if section.Bytes > largest {
+			largest = section.Bytes
+		}
+	}
+	if refusal.Sections[0].Bytes != largest || refusal.Sections[0].Name != "warnings" {
+		t.Fatalf("sections = %+v, want the 60,000-byte warnings section first", refusal.Sections)
+	}
 }
 
 // Each served-document event is emitted once per request, for the document

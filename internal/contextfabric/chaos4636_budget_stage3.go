@@ -1060,7 +1060,7 @@ func (e *Engine) refusalFromAxis(plan *AnswerPlan, measurement ResponseMeasureme
 		Family:                   plan.Family,
 		NarrowerContinuationAxis: axis,
 		RetryAttempted:           retryAttempted,
-		Sections:                 measurement.Sections,
+		Sections:                 measurement.Sections(),
 		Stage:                    StageSynthesis,
 	}
 }

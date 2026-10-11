@@ -255,23 +255,25 @@ ORDER BY repo_id`
 			withData++
 			total += r.deployments
 			failed += r.failed
-			cells := map[string]contextfabric.FactValue{
-				"repository_id":                   contextfabric.StringFactValue(repo.key),
-				"deployments_count_window":        contextfabric.IntegerFactValue(r.deployments),
-				"failed_deployments_count_window": contextfabric.IntegerFactValue(r.failed),
-				"days_with_data_window":           contextfabric.IntegerFactValue(r.days),
-				"latest_day":                      contextfabric.StringFactValue(r.latestDay),
+			if tables {
+				cells := map[string]contextfabric.FactValue{
+					"repository_id":                   contextfabric.StringFactValue(repo.key),
+					"deployments_count_window":        contextfabric.IntegerFactValue(r.deployments),
+					"failed_deployments_count_window": contextfabric.IntegerFactValue(r.failed),
+					"days_with_data_window":           contextfabric.IntegerFactValue(r.days),
+					"latest_day":                      contextfabric.StringFactValue(r.latestDay),
+				}
+				if repo.name != "" {
+					cells["repository_name"] = contextfabric.StringFactValue(repo.name)
+				}
+				if r.hasDeployTime {
+					cells["deploy_time_p50_hours_latest_day"] = contextfabric.NumberFactValue(r.deployTime)
+				}
+				if r.hasLead {
+					cells["lead_time_p50_hours_latest_day"] = contextfabric.NumberFactValue(r.leadTime)
+				}
+				breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 			}
-			if repo.name != "" {
-				cells["repository_name"] = contextfabric.StringFactValue(repo.name)
-			}
-			if r.hasDeployTime {
-				cells["deploy_time_p50_hours_latest_day"] = contextfabric.NumberFactValue(r.deployTime)
-			}
-			if r.hasLead {
-				cells["lead_time_p50_hours_latest_day"] = contextfabric.NumberFactValue(r.leadTime)
-			}
-			breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 		}
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),

@@ -201,15 +201,17 @@ WHERE org_id = {org_id:String} AND is_deleted = 0 AND ` + window.timestampExpr("
 			}
 			outcome.contributed++
 			withData++
-			cells := map[string]contextfabric.FactValue{
-				"repository_id":                   contextfabric.StringFactValue(repo.key),
-				"incidents_count_window":          contextfabric.IntegerFactValue(r.incidents),
-				"resolved_incidents_count_window": contextfabric.IntegerFactValue(r.resolved),
+			if tables {
+				cells := map[string]contextfabric.FactValue{
+					"repository_id":                   contextfabric.StringFactValue(repo.key),
+					"incidents_count_window":          contextfabric.IntegerFactValue(r.incidents),
+					"resolved_incidents_count_window": contextfabric.IntegerFactValue(r.resolved),
+				}
+				if repo.name != "" {
+					cells["repository_name"] = contextfabric.StringFactValue(repo.name)
+				}
+				breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 			}
-			if repo.name != "" {
-				cells["repository_name"] = contextfabric.StringFactValue(repo.name)
-			}
-			breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 		}
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),

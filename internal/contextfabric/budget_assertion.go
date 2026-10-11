@@ -255,7 +255,7 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 		// already ran and its outcome is on its own narrowing event; the
 		// other four exits have no synthesis to re-run.
 		RetryAttempted: false,
-		Sections:       measurement.Sections,
+		Sections:       measurement.Sections(),
 		Stage:          StageValidation,
 	}
 }

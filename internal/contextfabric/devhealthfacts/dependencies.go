@@ -381,15 +381,17 @@ ORDER BY t.repo_id`, settings)
 			withData++
 			blockedItems += r.blockedItems
 			blockerEdges += r.blockerEdges
-			cells := map[string]contextfabric.FactValue{
-				"repository_id":                contextfabric.StringFactValue(repo.key),
-				"blocked_work_items_current":   contextfabric.IntegerFactValue(r.blockedItems),
-				"blocker_dependencies_current": contextfabric.IntegerFactValue(r.blockerEdges),
+			if tables {
+				cells := map[string]contextfabric.FactValue{
+					"repository_id":                contextfabric.StringFactValue(repo.key),
+					"blocked_work_items_current":   contextfabric.IntegerFactValue(r.blockedItems),
+					"blocker_dependencies_current": contextfabric.IntegerFactValue(r.blockerEdges),
+				}
+				if repo.name != "" {
+					cells["repository_name"] = contextfabric.StringFactValue(repo.name)
+				}
+				breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 			}
-			if repo.name != "" {
-				cells["repository_name"] = contextfabric.StringFactValue(repo.name)
-			}
-			breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 		}
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),

@@ -209,11 +209,18 @@ type ContextFabricResponseMeasurement struct {
 	// reports both would otherwise have to be trusted to pass the same
 	// result to two functions. Here it cannot pass two.
 	Attribution ContextFabricItemAttribution `json:"attribution"`
-	// Sections is the byte size of every top-level section of the SAME
-	// encoded document, largest first. It exists so a refusal can name what it
-	// measured: "the answer did not fit" without the sections that filled it
-	// is not diagnosable.
-	Sections []ContextFabricSectionBytes `json:"sections,omitempty"`
+	// encoded is the SAME document's encoding, kept so Sections can split it
+	// when (and only when) a refusal needs to name what filled the answer.
+	encoded []byte
+}
+
+// Sections is the byte size of every top-level section of the measured
+// document, largest first. It is computed on demand: a measurement taken by a
+// budget search does not pay for a split nobody reads, and a refusal can still
+// name what it measured ("the answer did not fit" without the sections that
+// filled it is not diagnosable).
+func (m ContextFabricResponseMeasurement) Sections() []ContextFabricSectionBytes {
+	return contextFabricSectionBytes(m.encoded)
 }
 
 // ContextFabricSectionBytes is one top-level section of an encoded result and
@@ -262,7 +269,7 @@ func MeasureContextFabricResponse(result ContextFabricInvestigationResult) (Cont
 		// Items.Budgeted() by construction here, and
 		// TestAMeasurementSplitsExactlyTheQuantityItCharges asserts it.
 		Attribution: AttributeContextFabricResultItems(result),
-		Sections:    contextFabricSectionBytes(encoded),
+		encoded:     encoded,
 	}, nil
 }
 

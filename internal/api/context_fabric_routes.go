@@ -608,7 +608,7 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	stage, _ := contextfabric.FailureStage(err)
 	var budgetRefusal contextfabric.AnswerBudgetRefusal
 	refusedOnBudget := errors.As(err, &budgetRefusal)
-	if refusedOnBudget && stage == contextfabric.StageUnknown && budgetRefusal.Stage != "" {
+	if refusedOnBudget && stage == contextfabric.StageUnknown && contextfabric.ValidInvestigationStage(budgetRefusal.Stage) {
 		stage = budgetRefusal.Stage
 	}
 	level := slog.LevelWarn
@@ -1073,8 +1073,15 @@ func contextFabricBudgetRefusalFields(refusal contextfabric.AnswerBudgetRefusal)
 			sections = append(sections, fmt.Sprintf("%s=%d", contextfabric.SanitizeLogAttr(section.Name), section.Bytes))
 		}
 	}
+	// The overrun axis is a closed two-value vocabulary; a value outside it is
+	// not logged as if it were one.
+	overrun := "unrecognized"
+	switch refusal.Overrun {
+	case contractsv1.ContextFabricBudgetOverrunItems, contractsv1.ContextFabricBudgetOverrunBytes:
+		overrun = string(refusal.Overrun)
+	}
 	return []any{
-		"budget_overrun", string(refusal.Overrun),
+		"budget_overrun", overrun,
 		"budget_measured_bytes", refusal.MeasuredBytes,
 		"budget_max_serialized_bytes", refusal.MaxSerializedBytes,
 		"budget_measured_items", refusal.MeasuredItems,

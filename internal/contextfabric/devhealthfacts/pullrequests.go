@@ -222,16 +222,18 @@ ORDER BY repo_id`
 			opened += r.opened
 			merged += r.merged
 			closedUnmerged += r.closedUnmerged
-			cells := map[string]contextfabric.FactValue{
-				"repository_id":                        contextfabric.StringFactValue(repo.key),
-				"pull_requests_opened_window":          contextfabric.IntegerFactValue(r.opened),
-				"pull_requests_merged_window":          contextfabric.IntegerFactValue(r.merged),
-				"pull_requests_closed_unmerged_window": contextfabric.IntegerFactValue(r.closedUnmerged),
+			if tables {
+				cells := map[string]contextfabric.FactValue{
+					"repository_id":                        contextfabric.StringFactValue(repo.key),
+					"pull_requests_opened_window":          contextfabric.IntegerFactValue(r.opened),
+					"pull_requests_merged_window":          contextfabric.IntegerFactValue(r.merged),
+					"pull_requests_closed_unmerged_window": contextfabric.IntegerFactValue(r.closedUnmerged),
+				}
+				if repo.name != "" {
+					cells["repository_name"] = contextfabric.StringFactValue(repo.name)
+				}
+				breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 			}
-			if repo.name != "" {
-				cells["repository_name"] = contextfabric.StringFactValue(repo.name)
-			}
-			breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 		}
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),
