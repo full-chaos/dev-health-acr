@@ -8,6 +8,8 @@ package devhealthsource_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -129,6 +131,12 @@ SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString
 	if keysetPosition(t, one.NextCursor) != keysetPosition(t, first.cursor) || one.NextCursor == first.cursor {
 		t.Fatalf("a reconcile batch must keep the cursor position and carry its own ack")
 	}
+	// A checkpoint that carries some OTHER ack than the page's own never
+	// applied it either: the same page again, not the next one.
+	wrong, ok := next(chaos7246WithAck(t, first.cursor, "00ff00ff00ff00ff"))
+	if !ok || !reflect.DeepEqual(ids(wrong), ids(one)) {
+		t.Fatalf("a foreign ack advanced the reconcile pass")
+	}
 	again, ok := next(first.cursor)
 	if !ok || again.BatchID != one.BatchID || !reflect.DeepEqual(ids(again), ids(one)) {
 		t.Fatalf("an unapplied reconcile page was not served again unchanged")
@@ -147,7 +155,27 @@ SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString
 	if len(seen) != 252 {
 		t.Fatalf("pass served %d distinct teams, want 252", len(seen))
 	}
-	if _, ok := next(two.NextCursor); ok {
-		t.Fatalf("a finished reconcile pass served another batch")
+	for call := 0; call < 3; call++ {
+		if _, ok := next(two.NextCursor); ok {
+			t.Fatalf("call %d: a finished reconcile pass served another batch", call)
+		}
 	}
+}
+
+func chaos7246WithAck(t *testing.T, cursor, ack string) string {
+	t.Helper()
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields["ack"] = ack
+	out, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(out)
 }

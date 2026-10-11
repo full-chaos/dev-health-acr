@@ -27,8 +27,7 @@ const teamOwnershipReconcilePeriod = time.Hour
 type reconcilePass struct {
 	lastDone time.Time // end of the last completed pass; zero = never ran in this process
 	after    string    // the pass resumes AFTER this row key; empty = not walking
-	walking  bool
-	teams    int // rows emitted by the pass so far
+	teams    int       // rows emitted by the pass so far
 	pending  *pendingReconcile
 }
 
@@ -36,7 +35,6 @@ type reconcilePass struct {
 type pendingReconcile struct {
 	ack   string
 	after string
-	final bool
 	rows  int
 }
 
@@ -80,18 +78,11 @@ func (m *windowMemo) settleReconcile(scope, ack string, now time.Time) {
 	if ack == "" || ack != pending.ack {
 		return
 	}
-	if pending.final {
-		sc.recon = reconcilePass{lastDone: now}
-		return
-	}
-	sc.recon.after, sc.recon.walking = pending.after, true
+	sc.recon.after = pending.after
 	sc.recon.teams += pending.rows
 }
 
 func (p sourcePlan) reconcileDue(rs reconcilePass, now time.Time) bool {
-	if rs.walking {
-		return true
-	}
 	// A zero lastDone (never ran in this process) is due: Sub saturates.
 	return now.Sub(rs.lastDone) >= p.reconcilePeriod
 }
@@ -107,12 +98,13 @@ func (p sourcePlan) reconcileBatch(ctx context.Context, orgID, cursor string, st
 	if !p.reconcileDue(rs, now) {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
-	rows, truncated, err := p.reconcile(ctx, p.client, orgID, rs.after, incrementalBatchCap)
+	rows, _, err := p.reconcile(ctx, p.client, orgID, rs.after, incrementalBatchCap)
 	if err != nil {
 		logTableReadFailure(ctx, p.logger, p.source, orgID, reconcileTable, err)
 		return contextfabric.ProjectionBatch{}, false, &tableReadError{table: reconcileTable, cause: err}
 	}
-	final := !truncated
+	// The pass ends on the read that returns no rows: a page that came back
+	// short is followed by one more cheap read rather than a second code path.
 	if len(rows) == 0 {
 		p.window.setReconcileState(p.windowScope, reconcilePass{lastDone: now})
 		p.logReconcile(ctx, orgID, rs.teams, true)
@@ -123,12 +115,8 @@ func (p sourcePlan) reconcileBatch(ctx context.Context, orgID, cursor string, st
 	items := partitionProjectableCandidates(rows, p.quarantineObserver(orgID))
 	if !carriesPayload(items) {
 		// Nothing to apply on this page: the pass moves on in memory.
-		next := rs
-		next.after, next.walking = last, true
-		if final {
-			next = reconcilePass{lastDone: now}
-		}
-		p.window.setReconcileState(p.windowScope, next)
+		rs.after = last
+		p.window.setReconcileState(p.windowScope, rs)
 		p.noteYield()
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
@@ -156,11 +144,11 @@ func (p sourcePlan) reconcileBatch(ctx context.Context, orgID, cursor string, st
 	if err := batch.Validate(); err != nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("%w: devhealthsource: built an invalid reconcile batch: %w", contextfabric.ErrInvalidResult, err)
 	}
-	rs.pending = &pendingReconcile{ack: frontier.Ack, after: last, final: final, rows: len(rows)}
+	rs.pending = &pendingReconcile{ack: frontier.Ack, after: last, rows: len(rows)}
 	p.window.setReconcileState(p.windowScope, rs)
 	p.forgetConsumed(orgID)
 	p.observeBatch(ctx, batch, rows)
-	p.logReconcile(ctx, orgID, rs.teams+len(rows), final)
+	p.logReconcile(ctx, orgID, rs.teams+len(rows), false)
 	return batch, true, nil
 }
 
