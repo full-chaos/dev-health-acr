@@ -185,3 +185,38 @@ func equalStrings(got, want []string) bool {
 func contains(values []string, want string) bool {
 	return slices.Contains(values, want)
 }
+
+func TestAssembler_gives_each_rule_its_own_check_and_step_labels(t *testing.T) {
+	assembler := fixtureAssembler(t)
+	request := fixtureRequest("req-actions-once", "main", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2")
+
+	packet, err := assembler.Assemble(context.Background(), fixturePrincipal(), request)
+
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	rules := map[string]bool{}
+	for _, item := range packet.Items {
+		rules[item.RuleID] = true
+	}
+	if len(rules) < 2 {
+		t.Fatalf("fixture must carry at least two rule ids, got %v", rules)
+	}
+	if len(packet.RequiredChecks) != len(rules) || len(packet.RecommendedNextSteps) != len(rules) {
+		t.Fatalf("checks=%+v steps=%+v, want one per rule", packet.RequiredChecks, packet.RecommendedNextSteps)
+	}
+	seen := map[string]bool{}
+	for _, check := range packet.RequiredChecks {
+		if seen[check.Label] {
+			t.Fatalf("repeated check label %q: %+v", check.Label, packet.RequiredChecks)
+		}
+		seen[check.Label] = true
+	}
+	seen = map[string]bool{}
+	for _, step := range packet.RecommendedNextSteps {
+		if seen[step.Label] {
+			t.Fatalf("repeated step label %q: %+v", step.Label, packet.RecommendedNextSteps)
+		}
+		seen[step.Label] = true
+	}
+}
