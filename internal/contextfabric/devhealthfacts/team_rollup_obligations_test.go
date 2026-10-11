@@ -33,3 +33,22 @@ func TestTeamRollupKindsDeclareDerivedObligations(t *testing.T) {
 		t.Errorf("team rollup kinds = %d, expected rows = %d", len(teamRollupObligationKinds), len(want))
 	}
 }
+
+// The team entry follows the subject-level declarations: change a subject
+// entry and the derived team list changes with it, so a hard-coded team list
+// cannot satisfy this row.
+func TestTeamRollupObligationsFollowTheSubjectDeclarations(t *testing.T) {
+	declared := map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
+		contextfabric.SubjectRepository: {contextfabric.ObligationState, contextfabric.ObligationTrendSeries, contextfabric.ObligationReadiness},
+		contextfabric.SubjectIncident:   {contextfabric.ObligationPeriodDelta, contextfabric.ObligationTrendSeries},
+		contextfabric.SubjectWorkItem:   {contextfabric.ObligationRemainingWork},
+	}
+	got := deriveTeamRollupObligations(declared)
+	want := []contextfabric.AnswerObligation{contextfabric.ObligationPeriodDelta, contextfabric.ObligationTrendSeries, contextfabric.ObligationRemainingWork}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("derived = %v, want %v (union in subject-kind order, state and readiness dropped, no duplicates)", got, want)
+	}
+	if got := deriveTeamRollupObligations(nil); len(got) != 0 {
+		t.Fatalf("no subject declarations derived %v", got)
+	}
+}

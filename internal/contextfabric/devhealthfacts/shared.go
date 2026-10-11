@@ -1229,6 +1229,22 @@ func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectK
 	if !teamRollupObligationKinds[kind] || len(declared[contextfabric.SubjectTeam]) > 0 {
 		return declared
 	}
+	derived := deriveTeamRollupObligations(declared)
+	if len(derived) == 0 {
+		return declared
+	}
+	out := make(map[contextfabric.SubjectKind][]contextfabric.AnswerObligation, len(declared)+1)
+	for subjectKind, obligations := range declared {
+		out[subjectKind] = obligations
+	}
+	out[contextfabric.SubjectTeam] = derived
+	return out
+}
+
+// deriveTeamRollupObligations is the union of the obligations the other subject
+// kinds declare for the same fact kind, minus the ones a rollup cannot
+// establish, in subject-kind then declaration order.
+func deriveTeamRollupObligations(declared map[contextfabric.SubjectKind][]contextfabric.AnswerObligation) []contextfabric.AnswerObligation {
 	var derived []contextfabric.AnswerObligation
 	seen := map[contextfabric.AnswerObligation]bool{}
 	for _, subjectKind := range sortedSubjectKinds(declared) {
@@ -1240,15 +1256,7 @@ func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectK
 			derived = append(derived, obligation)
 		}
 	}
-	if len(derived) == 0 {
-		return declared
-	}
-	out := make(map[contextfabric.SubjectKind][]contextfabric.AnswerObligation, len(declared)+1)
-	for subjectKind, obligations := range declared {
-		out[subjectKind] = obligations
-	}
-	out[contextfabric.SubjectTeam] = derived
-	return out
+	return derived
 }
 
 func sortedSubjectKinds(m map[contextfabric.SubjectKind][]contextfabric.AnswerObligation) []contextfabric.SubjectKind {
