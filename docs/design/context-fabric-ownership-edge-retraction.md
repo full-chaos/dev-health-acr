@@ -72,7 +72,7 @@ flowchart TD
     PRJ --> C
     PRJ --> D
 
-    A --> W["window layer, per ownership identity<br/>unassertable = retraction_only OR min(project_id) != max(project_id)<br/>row_watermark = greatest(o.updated_at, max(project_updated_at))"]
+    A --> W["window layer, per ownership identity<br/>unassertable = retraction_only OR min(project_id) != max(project_id)<br/>row_watermark = greatest(o.updated_at, max(project_updated_at), max(provider_updated_at))"]
     B --> W
     C --> W
     D --> W
@@ -187,9 +187,14 @@ identity that arrives because some OTHER project's `project_key` changed.
 
 So the watermark is `greatest(the ownership row's own updated_at, the newest
 updated_at among every project this ownership row's identity values can
-reach)`. The window partition is the ownership row's own identity and the arms
-are unioned BEFORE it, so "every project this row can reach" is not a second
-query — it is exactly the rows already present.
+reach, the newest updated_at of any project of the same provider)`. The window
+partition is the ownership row's own identity and the arms are unioned BEFORE
+it, so "every project this row can reach" is not a second query — it is exactly
+the rows already present. The provider-wide term widens which groups a cursor
+revisits and nothing else: it sits in the cursor position only, never in the
+edge's `ObservedAt` or a tombstone's `EffectiveAt`, which an unrelated project's
+write must not move. On the ingest cursor the position is the same fold over
+`last_synced` stamps.
 
 **The bound on that claim, stated because an earlier draft of this note
 over-promised it.** A `max` over a MUTABLE SET only detects changes that RAISE
@@ -287,27 +292,20 @@ after this deploy, and that path is rebuild-free.
 - It does not change `BELONGS_TO_PROJECT`, `queryWorkItemTeams`, or the team
   authorization scope. Only the project↔team ownership producer suppresses, so
   only it needs to retract.
-- **It does not close the REVERSE direction: re-asserting an edge after the
-  ambiguity is resolved.** Say key `K` becomes ambiguous because project `Q`
-  starts sharing it, the edge to `P` is retracted, and the cursor advances past
-  that group. If `Q` is later re-keyed away, `K` is unambiguous again and `P`'s
-  edge should come back — but `Q` has left the key partition, so the group's
-  watermark falls back to values already behind the checkpoint and nothing
-  re-reads it until the ownership row itself is written.
-
-  This is stated plainly rather than glossed, but note what it is and is not.
-  It is not a regression: on the parent commit a `projects`-side write moved
-  this producer's cursor for NO group at all, so re-assertion after healing was
-  equally unreachable, and the edge was simply left stale instead. What changes
-  is the shape of the wrong answer — from "a stale edge is present" to "a
-  correct edge is absent until the next ownership write" — which is the safer
-  of the two, because the graph no longer makes a claim it cannot substantiate.
-  Closing it properly needs a watermark over every project that has EVER shared
-  a key, which is not derivable from current state, so it is a separate piece of
-  work and not a patch to this one.
+- **Re-asserting an edge after the ambiguity is resolved is reached, with a
+  bound.** Say key `K` becomes ambiguous because project `Q` starts sharing it,
+  the edge to `P` is retracted, and the cursor advances past that group. When `Q`
+  is later re-keyed away, `K` is unambiguous again and `P`'s edge should come
+  back. `Q` has left the key partition, so the key-partition maximum alone would
+  fall back to values already behind the checkpoint. The provider-wide project
+  stamp closes that: re-keying `Q` is a write to `projects`, which raises the
+  newest `updated_at` of the provider, and that value is part of every group's
+  watermark for the provider, so the group is read again and the edge is
+  re-asserted. The bound is the one in §2.3: it holds when the write raises the
+  provider's maximum, and not for an INSERT whose `updated_at` sits below it.
 - **It does not detect a projects-side change that fails to RAISE the key
-  partition's maximum `updated_at`** — see §2.3's bound. Same root cause as the
-  bullet above: the cursor is a max over a mutable set, so it sees membership
+  partition's maximum `updated_at`** — see §2.3's bound. The root cause is
+  the one the bullet above states: the cursor is a max over a mutable set, so it sees membership
   and value changes only when they push the maximum up. Membership LEAVING and
   membership JOINING BELOW THE MAX are the two faces of it, and they are
   tracked together as one follow-up rather than as two symptoms.
