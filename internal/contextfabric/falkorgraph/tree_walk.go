@@ -272,14 +272,18 @@ type treeWalk struct {
 	// strongest tier among its admitted link rows (linkSegment). It is
 	// recorded for every link read; memberTiers is its part that matters.
 	endTiers map[string]string
-	// memberTiers is set only when the link ends the path (linkMembers): the
-	// strongest admitted link tier of each member, by canonical id.
+	// memberTiers is set when the path crosses the link: the strongest admitted
+	// link tier of each member, by canonical id (linkMembers when the link ends
+	// the path, members when it feeds the last hop).
 	memberTiers map[string]string
 	// linkSubjects are the members when the link ends the path. The link read
 	// returns projections of the walk properties (walk_projection.go), so
 	// these members are identities, a distinct type from nodes: a reader
 	// cannot ask them for a property the read did not return.
 	linkSubjects []contextfabric.SubjectRef
+	// linkNodes are the same members as nodes, for a caller that serves them as
+	// a cohort.
+	linkNodes []graphrank.CandidateNode
 	// heuristicOnly counts the members whose strongest tier is heuristic.
 	heuristicOnly int
 }
@@ -399,9 +403,8 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 	return a.treeMembersOf(ctx, key, orgID, principal, scope, anchor, member, collectLimit, temporal, false, false)
 }
 
-// teamAnchorMembers is treeMembers for a team anchor's repositories or
-// projects: ownership edges are authorized as the generic walk authorizes
-// every edge.
+// teamAnchorMembers is treeMembers for an anchor's members as a cohort:
+// ownership edges are authorized as the generic walk authorizes every edge.
 func (a *Adapter) teamAnchorMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter) (treeWalk, error) {
 	// The step read returns the member and the edge, never the team: the
 	// anchor is read here, in the caller's window, and decided by the same
@@ -416,7 +419,12 @@ func (a *Adapter) teamAnchorMembers(ctx context.Context, key, orgID string, prin
 		return treeWalk{anchorKind: anchor.Kind}, nil
 	}
 	denied := !authorizedNodeAttributes(principal, scope, toCandidateNode(team).Attributes)
-	return a.treeMembersOf(ctx, key, orgID, principal, scope, anchor, member, collectLimit, temporal, true, denied)
+	walk, err := a.treeMembersOf(ctx, key, orgID, principal, scope, anchor, member, collectLimit, temporal, true, denied)
+	if err == nil && len(walk.linkNodes) > 0 {
+		walk.nodes = append(walk.nodes, walk.linkNodes...)
+		sortCandidateNodesBySubjectKey(walk.nodes)
+	}
+	return walk, err
 }
 
 func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter, ownershipEdges, anchorDenied bool) (treeWalk, error) {
@@ -525,6 +533,14 @@ func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]c
 			continue
 		}
 		id := canonicalIDOf(h.to)
+		if tier, ok := s.out.endTiers[h.from]; ok {
+			if s.out.memberTiers == nil {
+				s.out.memberTiers = map[string]string{}
+			}
+			if best, has := s.out.memberTiers[id]; !has || tierRank(tier) < tierRank(best) {
+				s.out.memberTiers[id] = tier
+			}
+		}
 		if seen[id] {
 			continue
 		}
@@ -553,6 +569,7 @@ func (s treeWalkState) linkMembers(ends []string, far map[string]*node) {
 			continue
 		}
 		s.out.linkSubjects = append(s.out.linkSubjects, subject)
+		s.out.linkNodes = append(s.out.linkNodes, toCandidateNode(far[id]))
 		tier := s.out.endTiers[id]
 		s.out.memberTiers[id] = tier
 		if tier == contextfabric.TreeLinkTierHeuristic {

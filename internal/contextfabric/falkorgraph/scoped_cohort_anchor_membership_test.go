@@ -231,3 +231,65 @@ func TestScopedCohortAnchorMembership(t *testing.T) {
 		})
 	}
 }
+
+// TestScopedCohortAnchorMemberNamesItsLinkTier: a member reached over the issue
+// and pull request link carries the tier of that link in its inclusion reasons,
+// whether the link ends the path (pull requests of a project) or feeds the last
+// hop (repositories of a project), and a text or inferred link is never stated
+// as native.
+func TestScopedCohortAnchorMemberNamesItsLinkTier(t *testing.T) {
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project:alpha", Label: "Alpha"}
+	tiers := map[string]string{
+		"native":        "Reached through a native issue and pull request link.",
+		"explicit_text": "Reached through an issue and pull request link read from text, not a native link.",
+		"heuristic":     "Reached through an inferred issue and pull request link, not a native link.",
+	}
+	for _, shape := range []string{"link_ends_path", "link_feeds_last_hop"} {
+		for tier, want := range tiers {
+			shape, tier, want := shape, tier, want
+			t.Run(shape+"/"+tier, func(t *testing.T) {
+				nodes := []scopedAnchorNode{{"project", "project:alpha", "Alpha"}, {"work_item", "issue:1", "ALPHA-1"}}
+				edges := []scopedAnchorEdge{
+					{rel: "BELONGS_TO_PROJECT", srcKind: "work_item", srcID: "issue:1", dstKind: "project", dstID: "project:alpha"},
+				}
+				member, memberID, question := contextfabric.SubjectPullRequest, "pull_request:owned", "which pull requests does project Alpha have?"
+				if shape == "link_ends_path" {
+					nodes = append(nodes, scopedAnchorNode{"pull_request", memberID, "Alpha fix"})
+					edges = append(edges, scopedAnchorEdge{rel: "LINKS_PULL_REQUEST", srcKind: "work_item", srcID: "issue:1", dstKind: "pull_request", dstID: memberID, linkTier: tier})
+				} else {
+					member, memberID, question = contextfabric.SubjectRepository, "repository:owned", "which repositories does project Alpha have?"
+					nodes = append(nodes, scopedAnchorNode{"pull_request", "pr:1", "PR 1"}, scopedAnchorNode{"repository", memberID, "full-chaos/alpha"})
+					edges = append(edges,
+						scopedAnchorEdge{rel: "LINKS_PULL_REQUEST", srcKind: "work_item", srcID: "issue:1", dstKind: "pull_request", dstID: "pr:1", linkTier: tier},
+						scopedAnchorEdge{rel: "BELONGS_TO_REPOSITORY", srcKind: "pull_request", srcID: "pr:1", dstKind: "repository", dstID: memberID})
+				}
+				frame := projectsOfAnchorFrame(anchor.Label)
+				frame.SubjectExpression.Scoped.MemberKind = member
+				request := ownershipRoutingRequest(frame, anchor)
+				request.ScopeAnchorKind = anchor.Kind
+				request.Request.Question = question
+				result, err := newTeamAdapter(t, scopedAnchorFake(nodes, edges, nil)).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+				if err != nil {
+					t.Fatalf("DiscoverContext() error = %v", err)
+				}
+				if result.Cohort == nil || len(result.Cohort.Members) != 1 || result.Cohort.Members[0].Subject.CanonicalID != memberID {
+					t.Fatalf("cohort = %+v, want exactly %s", result.Cohort, memberID)
+				}
+				var got []string
+				for _, reason := range result.Cohort.Members[0].InclusionReasons {
+					got = append(got, reason)
+				}
+				found := false
+				for _, reason := range got {
+					found = found || reason == want
+					if tier != "native" && strings.Contains(reason, "native issue") {
+						t.Errorf("reason %q presents a %s link as native", reason, tier)
+					}
+				}
+				if !found {
+					t.Errorf("inclusion reasons = %v, want %q", got, want)
+				}
+			})
+		}
+	}
+}
