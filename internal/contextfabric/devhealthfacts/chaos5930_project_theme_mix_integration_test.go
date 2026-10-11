@@ -44,7 +44,6 @@ func createCHAOS5930Tables(t *testing.T, ctx context.Context, connection clickho
 	for _, statement := range devhealthschema.DDL(
 		"projects", "teams", "team_project_ownership", "team_repo_ownership",
 		"repos", "work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
-		"investment_metrics_daily",
 		"work_item_team_attributions", "work_items", "project_membership_transitions",
 	) {
 		if err := connection.Exec(ctx, statement); err != nil {
@@ -421,14 +420,6 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 		seedRepo("repo-m", orgID)
 		seedRepoOwnership(orgID, "team-m", "repo-m")
 		seedWorkUnit("wu-m", orgID, "repo-m", 10, map[string]float64{"maintenance": 1.0})
-		// A LEGACY investment_metrics_daily row for the SAME team (the deprecated
-		// rule classifier's keys). CHAOS-9195 (D5932): a project's investment is ONLY the
-		// canonical theme mix; the legacy per-team breakdown is not read, so the project's fact
-		// is the standalone theme-mix fact, with no team_breakdown and no investment_area.
-		if err := direct.Exec(ctx, `INSERT INTO investment_metrics_daily (day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			date(2026, 9, 18), "team-m", "product", "growth", uint32(5), uint32(2), uint32(1), uint64(10), at, orgID); err != nil {
-			t.Fatalf("seed legacy investment row: %v", err)
-		}
 
 		fact := readInvestmentFact(t, providers, orgID, projectSubject("linear", "proj-m"))
 		if fact == nil {

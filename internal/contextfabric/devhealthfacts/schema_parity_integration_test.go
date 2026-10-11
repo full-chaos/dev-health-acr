@@ -45,15 +45,13 @@ var factSchemaTables = []string{
 	"repos", "work_items", "git_pull_requests", "git_pull_request_reviews",
 	"ci_pipeline_runs", "deployments", "operational_incidents", "work_item_dependencies",
 	"repo_metrics_daily", "repo_change_failure_daily", "compounding_risk_daily", "estimate_coverage_metrics_daily",
-	"capacity_forecasts", "investment_metrics_daily", "recommendations_daily",
+	"capacity_forecasts", "recommendations_daily",
 	// CHAOS-4364: FlowProvider/LandscapeProvider's tables (flow.go,
 	// landscape.go). projects/team_project_ownership back their PROJECT
 	// subject branches specifically (codex R3 P2: those branches were
 	// otherwise never parity-tested against production typing).
 	"work_item_metrics_daily", "ic_landscape_rolling_30d", "projects", "team_project_ownership", "teams",
-	// CHAOS-4398: readTeamThemeMix's canonical theme-mix source (never
-	// investment_metrics_daily, above -- see that reader's own doc
-	// comment).
+	// CHAOS-4398: readTeamThemeMix's canonical theme-mix source.
 	"work_unit_investments", "work_item_team_attributions", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
 	// The shared work-item authorization relation joins the project
 	// ownership chain and the issue-to-pull-request links into every
@@ -136,8 +134,6 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 	// the table name selects a destination, it declares nothing.
 	seed("capacity_forecasts", `INSERT INTO capacity_forecasts (org_id, team_id, computed_at) VALUES (?, ?, ?)`,
 		orgID, "CHAOS", at)
-	seed("investment_metrics_daily", `INSERT INTO investment_metrics_daily (org_id, team_id, day, computed_at) VALUES (?, ?, ?, ?)`,
-		orgID, "CHAOS", day, at)
 	seed("recommendations_daily", `INSERT INTO recommendations_daily (org_id, team_id, window_end, computed_at) VALUES (?, ?, ?, ?)`,
 		orgID, "CHAOS", at, at)
 	// CHAOS-4364: FlowProvider/LandscapeProvider's own tables. uint32/
