@@ -581,13 +581,13 @@ func TestQueryVersionMovedPastTheOwnRepositoryScope(t *testing.T) {
 }
 
 // TestQueryVersionMovedPastThePriorReadFailedBump pins the CURRENT query
-// version away from v143, under which a prior-period health read whose
+// version away from v146 (main before this fix), under which a prior-period health read whose
 // provider did not complete was served as unknown_prior (CHAOS-7404). Answer
-// reuse keys on this version, so a candidate saved under v143 must never be
+// reuse keys on this version, so a candidate saved under v146 must never be
 // served.
 func TestQueryVersionMovedPastThePriorReadFailedBump(t *testing.T) {
 	t.Parallel()
-	const versionBeforeThePriorReadFailedFix = "devhealthfacts.clickhouse.v143"
+	const versionBeforeThePriorReadFailedFix = "devhealthfacts.clickhouse.v146"
 	if devhealthfacts.QueryVersion == versionBeforeThePriorReadFailedFix {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer stored under that version may serve a false unknown_prior", devhealthfacts.QueryVersion, versionBeforeThePriorReadFailedFix)
 	}
