@@ -749,6 +749,17 @@
         "source_state": "available",
         "origin_kind": "team",
         "label": "Workload facts, read for each team: available"
+      },
+      {
+        "detail_id": "cov-bound-01",
+        "source": "context-fabric:synthesis",
+        "code": "synthesis_input_bounded",
+        "degrading": false,
+        "fact_kind": "workload",
+        "declared": 120,
+        "served": 48,
+        "label": "48 of 120 workload facts read were given to answer synthesis",
+        "raw": "synthesis_input_bounded:workload"
       }
     ]
   },

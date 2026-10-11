@@ -710,14 +710,18 @@ import (
 // kinds by display noun and carry no basis token, so a candidate saved under an
 // earlier version may hold the old wording and must not be reused.
 //
-// v143 -> v148: a team rollup kind declares answer obligations, so a team driver or
+// v146: an answer whose synthesis input was bounded serves one
+// synthesis_input_bounded coverage detail per fact kind read (given N of M); a
+// candidate saved under an earlier version carries only the prose limitation.
+//
+// v146 -> v147: a team rollup kind declares answer obligations, so a team driver or
 // remaining-work question plans the blockers, pull request, incident and deployment
 // rollups; a candidate saved under an earlier version holds an answer without them.
 //
-// v148 -> v149: the team blockers rollup counts only open blockers (or the status the
-// question names) and serves the excluded-by-status count and the status basis; a
-// candidate saved under an earlier version holds the unfiltered counts.
-const QueryVersion = "devhealthfacts.clickhouse.v149"
+// v147 -> v148: the team blockers rollup counts only open blockers and serves the
+// excluded-by-status count and the status basis; a candidate saved under an earlier
+// version holds the unfiltered counts.
+const QueryVersion = "devhealthfacts.clickhouse.v148"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1229,6 +1233,22 @@ func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectK
 	if !teamRollupObligationKinds[kind] || len(declared[contextfabric.SubjectTeam]) > 0 {
 		return declared
 	}
+	derived := deriveTeamRollupObligations(declared)
+	if len(derived) == 0 {
+		return declared
+	}
+	out := make(map[contextfabric.SubjectKind][]contextfabric.AnswerObligation, len(declared)+1)
+	for subjectKind, obligations := range declared {
+		out[subjectKind] = obligations
+	}
+	out[contextfabric.SubjectTeam] = derived
+	return out
+}
+
+// deriveTeamRollupObligations is the union of the obligations the other subject
+// kinds declare for the same fact kind, minus the ones a rollup cannot
+// establish, in subject-kind then declaration order.
+func deriveTeamRollupObligations(declared map[contextfabric.SubjectKind][]contextfabric.AnswerObligation) []contextfabric.AnswerObligation {
 	var derived []contextfabric.AnswerObligation
 	seen := map[contextfabric.AnswerObligation]bool{}
 	for _, subjectKind := range sortedSubjectKinds(declared) {
@@ -1240,15 +1260,7 @@ func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectK
 			derived = append(derived, obligation)
 		}
 	}
-	if len(derived) == 0 {
-		return declared
-	}
-	out := make(map[contextfabric.SubjectKind][]contextfabric.AnswerObligation, len(declared)+1)
-	for subjectKind, obligations := range declared {
-		out[subjectKind] = obligations
-	}
-	out[contextfabric.SubjectTeam] = derived
-	return out
+	return derived
 }
 
 func sortedSubjectKinds(m map[contextfabric.SubjectKind][]contextfabric.AnswerObligation) []contextfabric.SubjectKind {
