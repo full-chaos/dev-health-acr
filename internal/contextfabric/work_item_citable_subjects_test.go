@@ -93,7 +93,12 @@ func (f fixedDegradedComposer) ComposeDegraded(_ context.Context, principal stor
 	if !failure.DeferEvent {
 		f.telemetry.RecordSynthesisModelFailure(context.Background(), principal, SynthesisModelFailureEvent{Class: failure.Class, Rule: failure.Rule, Stage: failure.Stage})
 	}
-	return InvestigationResult{Status: InvestigationDegraded, Coverage: Coverage{Partial: true, Sources: []SourceObservation{}, DegradedReasons: []string{}}, DirectJudgment: "degraded", CurrentState: synthesisFailureCurrentState, DeterministicAnswer: "degraded", StrongestPressures: []string{}, EvidenceRefIDs: []string{}, Warnings: []string{synthesisFailureWarning(failure.Class)}}, nil
+	failureDetail, err := newSynthesisModelFailureDetail(failure.Class)
+	if err != nil {
+		return InvestigationResult{}, err
+	}
+	failureDetail.DetailID = "cov-01"
+	return InvestigationResult{Status: InvestigationDegraded, Coverage: Coverage{Partial: true, Sources: []SourceObservation{}, DegradedReasons: []string{}, Details: []CoverageDetail{failureDetail}}, DirectJudgment: "degraded", CurrentState: synthesisFailureCurrentState, DeterministicAnswer: "degraded", StrongestPressures: []string{}, EvidenceRefIDs: []string{}, Warnings: []string{synthesisFailureWarning(failure.Class)}}, nil
 }
 
 func validationStageFixture(t *testing.T) (*Engine, *recordingTelemetry, InvestigationResult, *workItemDegradeBasis) {

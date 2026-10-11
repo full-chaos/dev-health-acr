@@ -311,12 +311,15 @@ func newSynthesisInputBound(read, given []CanonicalFact) *synthesisInputBound {
 	return &synthesisInputBound{Details: details}
 }
 
-// appendSynthesisInputBoundDetails files the bounded-input details after the
-// coverage the model was shown, so no id the model saw moves and the model can
+// appendServerCoverageDetails files the server-authored synthesis details
+// (bounded input, model failure) after the coverage the model was shown, so no id the model saw moves and the model can
 // neither phrase a row it never saw nor count it in the phrasing totals. It
 // files nothing when the details already carried do not pair with
 // degraded_reasons (a fail-open drop): a write would be refused.
-func appendSynthesisInputBoundDetails(result *InvestigationResult, bound *synthesisInputBound, orgID string) {
+func appendServerCoverageDetails(result *InvestigationResult, added []CoverageDetail, orgID string) {
+	if len(added) == 0 {
+		return
+	}
 	degrading := 0
 	for _, detail := range result.Coverage.Details {
 		if detail.Degrading {
@@ -324,12 +327,12 @@ func appendSynthesisInputBoundDetails(result *InvestigationResult, bound *synthe
 		}
 	}
 	if degrading != len(result.Coverage.DegradedReasons) {
-		slog.Default().Warn("context_fabric: synthesis input bound details not filed, coverage details do not pair with degraded_reasons",
+		slog.Default().Warn("context_fabric: synthesis coverage details not filed, coverage details do not pair with degraded_reasons",
 			"org_id", SanitizeLogAttr(orgID), "degrading_details", degrading, "degraded_reasons", len(result.Coverage.DegradedReasons))
 		return
 	}
 	details := slices.Clone(result.Coverage.Details)
-	for _, detail := range bound.Details {
+	for _, detail := range added {
 		detail.DetailID = fmt.Sprintf("cov-%02d", len(details)+1)
 		details = append(details, detail)
 	}

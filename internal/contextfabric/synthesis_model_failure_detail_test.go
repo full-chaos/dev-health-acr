@@ -1,0 +1,169 @@
+package contextfabric
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+func failureDetailsOf(coverage Coverage) []CoverageDetail {
+	var details []CoverageDetail
+	for _, detail := range coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed {
+			details = append(details, detail)
+		}
+	}
+	return details
+}
+
+// One row per served failure class, with the expected hint written out here,
+// not read from the producer.
+func TestADegradedAnswerNamesTheFailureClassAndWhetherARetryMayHelp(t *testing.T) {
+	cases := []struct {
+		class SynthesisFailureClass
+		want  contractsv1.ContextFabricRetryHint
+	}{
+		{SynthesisFailureModelOutputInvalid, contractsv1.ContextFabricRetryMaySucceed},
+		{SynthesisFailureReceiptUnrecorded, contractsv1.ContextFabricRetryMaySucceed},
+		{SynthesisFailureRejected, contractsv1.ContextFabricRetryUnlikelyToHelp},
+	}
+	for _, testCase := range cases {
+		t.Run(string(testCase.class), func(t *testing.T) {
+			result, err := RuntimeAnswerSynthesizer{}.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, largeSynthesisInputFixture(3), &SynthesisFailure{Class: testCase.class, cause: errors.New("x")})
+			if err != nil {
+				t.Fatalf("ComposeDegraded() error = %v", err)
+			}
+			details := failureDetailsOf(result.Coverage)
+			if len(details) != 1 || details[0].FailureClass != testCase.class || details[0].RetryHint != testCase.want || details[0].Degrading {
+				t.Fatalf("failure details = %+v, want one non-degrading %s with %s", details, testCase.class, testCase.want)
+			}
+			if details[0].DetailID != "cov-01" {
+				t.Fatalf("detail id = %q, want the served id", details[0].DetailID)
+			}
+			if err := details[0].Validate(); err != nil {
+				t.Fatalf("detail does not validate: %v", err)
+			}
+			if result.Status != InvestigationDegraded || !result.Coverage.Partial || !IsSynthesisModelFailureAnswer(result) {
+				t.Fatalf("status = %q partial = %v, want a degraded partial answer recognised as a model failure", result.Status, result.Coverage.Partial)
+			}
+		})
+	}
+}
+
+// A class that has no retry hint ends the answer with an error: no default.
+func TestAFailureClassWithoutARetryHintIsAnError(t *testing.T) {
+	if _, err := contractsv1.ContextFabricRetryHintFor("unknown_class"); err == nil {
+		t.Fatal("ContextFabricRetryHintFor accepted an unknown class")
+	}
+	_, err := RuntimeAnswerSynthesizer{}.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, largeSynthesisInputFixture(3), &SynthesisFailure{Class: "unknown_class", cause: errors.New("x")})
+	if err == nil {
+		t.Fatal("ComposeDegraded served an answer for a class with no retry hint")
+	}
+}
+
+// With claims the answer carries the facts-only sentence of the failure; with
+// none it carries the no-facts sentence. Never both.
+func TestTheFailureLimitationMatchesWhetherFactsWereShown(t *testing.T) {
+	withFacts, err := RuntimeAnswerSynthesizer{}.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, largeSynthesisInputFixture(3), &SynthesisFailure{Class: SynthesisFailureRejected, cause: errors.New("x")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withFacts.ClaimedFacts) == 0 {
+		t.Fatal("fixture minted no claims, want the facts-only case")
+	}
+	if !slices.Contains(withFacts.Limitations, contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation) || slices.Contains(withFacts.Limitations, contractsv1.ContextFabricSynthesisFailedNoFactsLimitation) {
+		t.Fatalf("limitations = %q, want the facts-only sentence alone", withFacts.Limitations)
+	}
+	empty := largeSynthesisInputFixture(3)
+	empty.Facts.Facts = nil
+	withoutFacts, err := RuntimeAnswerSynthesizer{}.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, empty, &SynthesisFailure{Class: SynthesisFailureRejected, cause: errors.New("x")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(withoutFacts.Limitations, contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation) || !slices.Contains(withoutFacts.Limitations, contractsv1.ContextFabricSynthesisFailedNoFactsLimitation) {
+		t.Fatalf("limitations = %q, want the no-facts sentence alone", withoutFacts.Limitations)
+	}
+	if !contractsv1.IsContextFabricServiceAuthoredLimitation(contractsv1.ContextFabricSynthesisFailedNoFactsLimitation) {
+		t.Fatal("the no-facts sentence is not service-authored: a later disclosure could displace it")
+	}
+}
+
+// The code is the one source: the warning alone, a detail on an answer that is
+// not degraded, and a degraded answer with neither are not model-failure answers.
+func TestAModelFailureAnswerIsRecognisedByItsCodeAlone(t *testing.T) {
+	detail, err := newSynthesisModelFailureDetail(SynthesisFailureModelOutputInvalid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]struct {
+		result InvestigationResult
+		want   bool
+	}{
+		"degraded with the code":     {InvestigationResult{Status: InvestigationDegraded, Coverage: Coverage{Details: []CoverageDetail{detail}}}, true},
+		"degraded with the warning":  {InvestigationResult{Status: InvestigationDegraded, Warnings: []string{synthesisFailureWarning(SynthesisFailureModelOutputInvalid)}}, false},
+		"complete with the code":     {InvestigationResult{Status: InvestigationComplete, Coverage: Coverage{Details: []CoverageDetail{detail}}}, false},
+		"degraded with another code": {InvestigationResult{Status: InvestigationDegraded, Coverage: Coverage{Details: []CoverageDetail{{Code: contractsv1.ContextFabricCoverageDetailSynthesisInputBounded}}}}, false},
+		"degraded with neither":      {InvestigationResult{Status: InvestigationDegraded}, false},
+	}
+	for name, testCase := range cases {
+		if got := IsSynthesisModelFailureAnswer(testCase.result); got != testCase.want {
+			t.Errorf("%s: IsSynthesisModelFailureAnswer = %v, want %v", name, got, testCase.want)
+		}
+	}
+}
+
+func TestTheCoverageCapKeepsTheModelFailureDetail(t *testing.T) {
+	var details []CoverageDetail
+	for i := 0; i < 120; i++ {
+		details = append(details, syntheticNonDegradingDetail(i))
+	}
+	detail, err := newSynthesisModelFailureDetail(SynthesisFailureRejected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := &InvestigationResult{Status: InvestigationDegraded, Coverage: Coverage{Details: append(details, detail)}}
+
+	capCoverageEntriesToWriteBound(result)
+
+	if len(result.Coverage.Details) != contractsv1.ContextFabricCoverageEntriesMaxCount || len(failureDetailsOf(result.Coverage)) != 1 || !IsSynthesisModelFailureAnswer(*result) {
+		t.Fatalf("details = %d, failure details = %d, want the cap at %d keeping the failure detail", len(result.Coverage.Details), len(failureDetailsOf(result.Coverage)), contractsv1.ContextFabricCoverageEntriesMaxCount)
+	}
+}
+
+func TestTheModelFailureDetailRequiresBothFieldsAndNothingElse(t *testing.T) {
+	one := 1
+	valid, err := newSynthesisModelFailureDetail(SynthesisFailureRejected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid.DetailID = "cov-01"
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid detail: %v", err)
+	}
+	cases := map[string]func(*CoverageDetail){
+		"no class":      func(d *CoverageDetail) { d.FailureClass = "" },
+		"no hint":       func(d *CoverageDetail) { d.RetryHint = "" },
+		"unknown class": func(d *CoverageDetail) { d.FailureClass = "other" },
+		"unknown hint":  func(d *CoverageDetail) { d.RetryHint = "other" },
+		"a fact kind":   func(d *CoverageDetail) { d.FactKind = FactWork },
+		"declared":      func(d *CoverageDetail) { d.Declared = &one; d.Served = &one },
+		"degrading":     func(d *CoverageDetail) { d.Degrading = true },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			detail := valid
+			mutate(&detail)
+			if err := detail.Validate(); err == nil {
+				t.Fatalf("detail %+v validated, want it refused", detail)
+			}
+		})
+	}
+	other := CoverageDetail{DetailID: "cov-01", Source: "s", Code: contractsv1.ContextFabricCoverageDetailGraphNoMemberFound, Kind: SubjectProject, Label: "x", FailureClass: SynthesisFailureRejected}
+	if err := other.Validate(); err == nil {
+		t.Fatal("another code carrying failure_class validated")
+	}
+}

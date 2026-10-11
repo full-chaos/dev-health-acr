@@ -94,9 +94,9 @@ func capCoverageEntriesToWriteBound(result *InvestigationResult) int {
 }
 
 // coverageDetailNeverYields names the non-degrading rows the cap keeps ahead of
-// the rest: the per-kind disclosure of a bounded synthesis input, which the
-// answer's own limitation promises. Its count is the number of fact kinds
-// read, a small closed set.
+// the rest: the per-kind disclosure of a bounded synthesis input and the failure of the
+// model call, which the answer's own limitation or warning promises. Their
+// count is the number of fact kinds read plus one, a small closed set.
 func coverageDetailNeverYields(d CoverageDetail) bool {
-	return d.Code == contractsv1.ContextFabricCoverageDetailSynthesisInputBounded
+	return d.Code == contractsv1.ContextFabricCoverageDetailSynthesisInputBounded || d.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed
 }

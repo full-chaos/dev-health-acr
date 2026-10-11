@@ -633,7 +633,8 @@
                 "computed_population_absent",
                 "requirement_not_evaluable",
                 "graph_no_member_found",
-                "synthesis_input_bounded"
+                "synthesis_input_bounded",
+                "synthesis_model_failed"
               ],
               "type": "string"
             },
@@ -726,6 +727,21 @@
             "served": {
               "type": "integer",
               "minimum": 0
+            },
+            "failure_class": {
+              "type": "string",
+              "enum": [
+                "model_output_invalid",
+                "synthesis_rejected",
+                "model_receipt_unrecorded"
+              ]
+            },
+            "retry_hint": {
+              "type": "string",
+              "enum": [
+                "retry_may_succeed",
+                "retry_unlikely_to_help"
+              ]
             }
           },
           "required": [
@@ -5761,7 +5777,8 @@
                 "computed_population_absent",
                 "requirement_not_evaluable",
                 "graph_no_member_found",
-                "synthesis_input_bounded"
+                "synthesis_input_bounded",
+                "synthesis_model_failed"
               ],
               "type": "string"
             },
@@ -5854,6 +5871,21 @@
             "served": {
               "type": "integer",
               "minimum": 0
+            },
+            "failure_class": {
+              "type": "string",
+              "enum": [
+                "model_output_invalid",
+                "synthesis_rejected",
+                "model_receipt_unrecorded"
+              ]
+            },
+            "retry_hint": {
+              "type": "string",
+              "enum": [
+                "retry_may_succeed",
+                "retry_unlikely_to_help"
+              ]
             }
           },
           "required": [
