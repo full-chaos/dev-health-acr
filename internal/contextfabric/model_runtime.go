@@ -2414,7 +2414,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		}
 		return InvestigationResult{}, err
 	}
-	return r.composeSynthesisResult(ctx, principal, input, draft, receipt, bound, false)
+	return r.composeSynthesisResult(ctx, principal, input, draft, receipt, bound, nil)
 }
 
 // vetSynthesisDraft is the one sequence both the service's own model draft
@@ -2475,7 +2475,7 @@ func (r RuntimeAnswerSynthesizer) vetSynthesisDraft(ctx context.Context, princip
 
 // composeSynthesisResult composes the served result from a validated draft,
 // or, with modelFailed, from the draft a failed call is served with.
-func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, principal storage.Principal, input SynthesisInput, draft SynthesisDraft, receipt ModelExecutionReceipt, bound *synthesisInputBound, modelFailed bool) (InvestigationResult, error) {
+func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, principal storage.Principal, input SynthesisInput, draft SynthesisDraft, receipt ModelExecutionReceipt, bound *synthesisInputBound, failure *SynthesisFailure) (InvestigationResult, error) {
 	// CHAOS-4355: attachCanonicalRows is the ONLY place a ClaimedFact.Rows
 	// is ever set. ValidateAgainst has just rejected any draft claim that
 	// carried a non-empty Rows of its own, so every claim reaching this
@@ -2577,7 +2577,7 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 			result.Status = InvestigationPartial
 		}
 	}
-	if modelFailed {
+	if failure != nil {
 		result.Coverage.Partial = true
 		result.CurrentState = composeFailedSynthesisCurrentState(claimedFacts)
 	}
@@ -2596,8 +2596,20 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 		phrased, total := coverageDisclosurePhrasedCount(result.Coverage.Details)
 		r.Telemetry.RecordCoverageDisclosurePhrasing(ctx, principal, outcome, violation, phrased, total)
 	}
+	var serverDetails []CoverageDetail
 	if bound != nil {
-		appendSynthesisInputBoundDetails(&result, bound, principal.OrgID)
+		serverDetails = append(serverDetails, bound.Details...)
+	}
+	if failure != nil {
+		detail, err := newSynthesisModelFailureDetail(failure.Class)
+		if err != nil {
+			return InvestigationResult{}, err
+		}
+		serverDetails = append(serverDetails, detail)
+	}
+	if !appendServerCoverageDetails(&result, serverDetails, principal.OrgID) && failure != nil {
+		slog.Default().Error("context_fabric: model failure coverage detail not filed, the answer is recognised by its warning",
+			"org_id", SanitizeLogAttr(principal.OrgID), "failure_class", SanitizeLogAttr(string(failure.Class)))
 	}
 	return result, nil
 }
