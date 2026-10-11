@@ -632,7 +632,8 @@
                 "graph_walk_cut_before_member",
                 "computed_population_absent",
                 "requirement_not_evaluable",
-                "graph_no_member_found"
+                "graph_no_member_found",
+                "synthesis_input_bounded"
               ],
               "type": "string"
             },
@@ -5769,7 +5770,8 @@
                 "graph_walk_cut_before_member",
                 "computed_population_absent",
                 "requirement_not_evaluable",
-                "graph_no_member_found"
+                "graph_no_member_found",
+                "synthesis_input_bounded"
               ],
               "type": "string"
             },

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -364,7 +363,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		if err == nil && params.WorkItemCensus != nil && ctx.Err() == nil {
 			if rule, breach := workItemModelBreach(result, synthesisInput, resolution, principal); breach {
 				if degraded, ok := e.synthesizer.(DegradedSynthesizer); ok {
-					result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, workItemModelBreachFailure(rule, "synthesis", slices.Contains(result.Limitations, contractsv1.ContextFabricSynthesisInputBoundedLimitation)))
+					result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, workItemModelBreachFailure(rule, "synthesis", synthesisInputBoundOf(result)))
 				}
 			}
 		}

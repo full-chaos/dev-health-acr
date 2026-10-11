@@ -487,6 +487,34 @@ func TestClientSynthesisInputIsBoundedToTheAssemblyBound(t *testing.T) {
 	var decoded struct {
 		Facts []json.RawMessage `json:"facts"`
 	}
+	// The per-kind disclosure agrees with the bundle the caller received: the
+	// facts given, counted by kind from the bytes, and the 42 read in all.
+	var wire struct {
+		Facts []struct {
+			Kind string `json:"kind"`
+		} `json:"facts"`
+	}
+	if err := json.Unmarshal(bundle.Input, &wire); err != nil {
+		t.Fatalf("bundle input: %v", err)
+	}
+	givenByKind := map[string]int{}
+	for _, fact := range wire.Facts {
+		givenByKind[fact.Kind]++
+	}
+	details := boundDetailsOf(result.Coverage)
+	readTotal := 0
+	if len(details) == 0 {
+		t.Fatal("no bounded-input detail in the served coverage")
+	}
+	for _, detail := range details {
+		readTotal += *detail.Declared
+		if *detail.Served != givenByKind[string(detail.FactKind)] {
+			t.Fatalf("detail %s served = %d, bundle holds %d", detail.FactKind, *detail.Served, givenByKind[string(detail.FactKind)])
+		}
+	}
+	if readTotal != 42 {
+		t.Fatalf("details declare %d facts read, want 42", readTotal)
+	}
 	if err := json.Unmarshal(bundle.Input, &decoded); err != nil || len(decoded.Facts) == 0 || len(decoded.Facts) >= 42 {
 		t.Fatalf("facts in bundle = %d (%v), want some but fewer than the 42 read", len(decoded.Facts), err)
 	}

@@ -231,7 +231,7 @@ func (e *Engine) runClientSynthesis(ctx context.Context, principal storage.Princ
 // the bound, reduces the facts and builds it again. It returns the input the
 // bytes were built from, so a later change can check a caller's draft
 // against the same facts.
-func (r RuntimeAnswerSynthesizer) encodeWithinInputBound(ctx context.Context, principal storage.Principal, input SynthesisInput, encode func(string, SynthesisInput, int) ([]byte, error), maxBytes int) (given SynthesisInput, encoded []byte, bounded bool, err error) {
+func (r RuntimeAnswerSynthesizer) encodeWithinInputBound(ctx context.Context, principal storage.Principal, input SynthesisInput, encode func(string, SynthesisInput, int) ([]byte, error), maxBytes int) (given SynthesisInput, encoded []byte, bound *synthesisInputBound, err error) {
 	given = input
 	var event SynthesisInputBoundEvent
 	ranking := newFactRanking(input)
@@ -243,7 +243,10 @@ func (r RuntimeAnswerSynthesizer) encodeWithinInputBound(ctx context.Context, pr
 				event.Outcome = SynthesisInputBoundFitted
 				r.recordSynthesisInputBound(ctx, principal, event, input, given)
 			}
-			return given, encoded, event.Passes > 0, err
+			if event.Passes > 0 {
+				return given, encoded, newSynthesisInputBound(input.Facts.Facts, given.Facts.Facts), err
+			}
+			return given, encoded, nil, err
 		}
 		if event.Passes == 0 {
 			event.InputBytes, event.MaxInputBytes = overflow.Bytes, overflow.MaxBytes
@@ -255,7 +258,7 @@ func (r RuntimeAnswerSynthesizer) encodeWithinInputBound(ctx context.Context, pr
 		if !reduced || event.Passes == maxSynthesisInputBoundPasses {
 			event.Outcome = SynthesisInputBoundExhausted
 			r.recordSynthesisInputBound(ctx, principal, event, input, given)
-			return given, nil, false, err
+			return given, nil, nil, err
 		}
 		event.Passes++
 		given.Facts.Facts = reducedFacts
@@ -296,7 +299,8 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 	}
 	assembly := r.ClientSynthesis
 	measure.MaxBytes = assembly.MaxBytes
-	given, encoded, bounded, err := r.encodeWithinInputBound(ctx, principal, input, assembly.Encode, assembly.MaxBytes)
+	given, encoded, bound, err := r.encodeWithinInputBound(ctx, principal, input, assembly.Encode, assembly.MaxBytes)
+	bounded := bound != nil
 	measure.FactsGiven, measure.Bounded = len(given.Facts.Facts), bounded
 	if err != nil {
 		return InvestigationResult{}, nil, measure, err
@@ -304,11 +308,11 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 	sum := sha256.Sum256(encoded)
 	inputSHA := hex.EncodeToString(sum[:])
 	if supplied := input.Request.SuppliedSynthesis; supplied != nil {
-		result, err := r.composeSuppliedSynthesis(ctx, principal, given, encoded, bounded, inputSHA, supplied)
+		result, err := r.composeSuppliedSynthesis(ctx, principal, given, encoded, bound, inputSHA, supplied)
 		return result, nil, measure, err
 	}
 	draft := clientSynthesisDraft(given)
-	result, err := r.composeSynthesisResult(ctx, principal, given, draft, ModelExecutionReceipt{}, bounded, false)
+	result, err := r.composeSynthesisResult(ctx, principal, given, draft, ModelExecutionReceipt{}, bound, false)
 	if err != nil {
 		return InvestigationResult{}, nil, measure, err
 	}
@@ -395,13 +399,13 @@ func declaredSynthesisModel(supplied *contractsv1.ContextFabricSuppliedSynthesis
 
 // composeSuppliedSynthesis checks a caller's draft against the input this turn
 // rebuilt and composes the served result from it. It makes no model call.
-func (r RuntimeAnswerSynthesizer) composeSuppliedSynthesis(ctx context.Context, principal storage.Principal, given SynthesisInput, encoded []byte, bounded bool, inputSHA string, supplied *contractsv1.ContextFabricSuppliedSynthesis) (InvestigationResult, error) {
+func (r RuntimeAnswerSynthesizer) composeSuppliedSynthesis(ctx context.Context, principal storage.Principal, given SynthesisInput, encoded []byte, bound *synthesisInputBound, inputSHA string, supplied *contractsv1.ContextFabricSuppliedSynthesis) (InvestigationResult, error) {
 	assembly := r.ClientSynthesis
 	if assembly.ParseDraft == nil {
 		return InvestigationResult{}, ErrClientSynthesisUnavailable
 	}
 	if inputSHA != supplied.InputSHA256 {
-		bundle, err := assembly.newInputBundle(encoded, inputSHA, bounded)
+		bundle, err := assembly.newInputBundle(encoded, inputSHA, bound != nil)
 		if err != nil {
 			return InvestigationResult{}, err
 		}
@@ -433,7 +437,7 @@ func (r RuntimeAnswerSynthesizer) composeSuppliedSynthesis(ctx context.Context, 
 	if err != nil {
 		return InvestigationResult{}, err
 	}
-	result, err := r.composeSynthesisResult(ctx, principal, given, draft, receipt, bounded, false)
+	result, err := r.composeSynthesisResult(ctx, principal, given, draft, receipt, bound, false)
 	if err != nil {
 		return InvestigationResult{}, err
 	}
