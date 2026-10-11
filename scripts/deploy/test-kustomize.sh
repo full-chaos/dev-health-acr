@@ -131,6 +131,9 @@ if [[ "$overlay" == *-mcp ]]; then
   for token in 'args:' '- serve' 'path: /healthz' 'path: /readyz' 'containerPort: 8081' 'runAsNonRoot: true' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'type: RuntimeDefault' 'automountServiceAccountToken: false' '- ALL'; do
     grep -qF -- "$token" <<<"$mcp_deploy" || fail_gate "acr-mcp: Deployment is missing $token"
   done
+  mcp_probe_path() { awk -v p="$1" '$1 == p":"{f=1;next} f&&$1=="path:"{print $2;exit}' <<<"$mcp_deploy"; }
+  [[ "$(mcp_probe_path startupProbe)" == "/healthz" ]] || fail_gate "acr-mcp: startup probe must use /healthz"
+  [[ "$(mcp_probe_path readinessProbe)" == "/readyz" ]] || fail_gate "acr-mcp: readiness probe must stay on /readyz"
   grep -qE 'image: [^ ]*/acr-mcp@sha256:[a-f0-9]{64}' <<<"$mcp_deploy" || fail_gate "acr-mcp: image is not the digest-pinned acr-mcp image"
   if grep -qE 'secretKeyRef|secretName|secretRef|projected:|ACR_API_TOKEN|serviceAccountToken' <<<"$mcp_deploy"; then
     fail_gate "acr-mcp: Deployment mounts a Secret, projected token, or ACR_API_TOKEN; the pod must hold no credential"

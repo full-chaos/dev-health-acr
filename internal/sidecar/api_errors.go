@@ -184,6 +184,10 @@ type APIError struct {
 	// SynthesisRejectionReason is set only for a 422 synthesis_rejected whose
 	// details carry a rejection reason of the closed token shape.
 	SynthesisRejectionReason string
+	// RateLimit is set only for a 429 rate_limited whose error.details.limit
+	// is a member of contractsv1's closed rate-limit vocabulary; never
+	// hosted text.
+	RateLimit string
 
 	sentinel error
 }
@@ -377,6 +381,11 @@ func newAPIError(status int, detail contractsv1.ErrorDetail, requestID, retryAft
 				apiErr.MaxDays = days
 				apiErr.Message = contractsv1.WindowRefusalMessage(days)
 			}
+		}
+	}
+	if detail.Code == "rate_limited" && status == 429 {
+		if limit, ok := detail.Details[contractsv1.RateLimitDetailsLimitKey].(string); ok && contractsv1.IsRateLimitLimit(limit) {
+			apiErr.RateLimit = limit
 		}
 	}
 	if detail.Code == "synthesis_rejected" && status == 422 {
