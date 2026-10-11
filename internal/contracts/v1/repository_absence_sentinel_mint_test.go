@@ -6,26 +6,22 @@ import (
 	"go/token"
 	"io/fs"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // Every value a producer mints into a repository authorization list under the
 // reserved namespace must be one the graph gate names as repository-absence,
 // and a producer must take it from this package rather than spell it.
 func TestEveryMintedRepositoryAbsenceSentinelIsNamedHere(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the source tree")
-	}
-	root := filepath.Join(filepath.Dir(thisFile), "..", "..", "..")
-	declaring := filepath.Join(filepath.Dir(thisFile), "context_fabric_types.go")
+	declaring := repopath.Path(t, "internal", "contracts", "v1", "context_fabric_types.go")
 	const namespace = "acr-context-fabric:"
 	found := 0
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(repopath.Path(t, "internal"), func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
