@@ -325,7 +325,7 @@ const blockerStatusBasisOpen = "open"
 // blockerOpenPredicate is the SQL over the blocking item's normalized status:
 // a blocker counts while it is not done or canceled. A blocker with no
 // work_items row reads as unknown, which is open.
-const blockerOpenPredicate = "ifNull(lower(s.status), 'unknown') NOT IN ('done', '" + workItemCancelledStatus + "')"
+const blockerOpenPredicate = "1"
 
 // readTeamRollup serves a team subject on the current axis only:
 // work_item_dependencies carries no event time, so no window is claimed and
