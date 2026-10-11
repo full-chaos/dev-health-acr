@@ -774,7 +774,7 @@ func (s *Store) currentSourceWatermarks(ctx context.Context, orgID string) (map[
 	rows, err := s.db.QueryContext(ctx, `
 SELECT source, backend_watermark FROM acr.context_fabric_projection_checkpoints
 WHERE org_id = $1
-  AND epoch = COALESCE((SELECT active_epoch FROM acr.context_fabric_graph_lifecycle WHERE org_id = $1), 0)`, orgID)
+  AND epoch = (SELECT active_epoch FROM acr.context_fabric_graph_lifecycle WHERE org_id = $1)`, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("query projection checkpoints: %w", sanitizeError(err))
 	}
