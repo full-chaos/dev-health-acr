@@ -161,6 +161,7 @@ func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems in
 
 func evidenceItem(ref contractsv1.EvidenceRef, scope contractsv1.ResolvedScope) contractsv1.ContextPacketItem {
 	rule := evidenceRule(ref)
+	logExplicitRuleRejection(ref)
 	return contractsv1.ContextPacketItem{SchemaVersion: contractsv1.ContextPacketItemSchema, PacketItemID: itemID(ref.EvidenceRefID),
 		Category: rule.category, ClaimKind: rule.claim, Title: truncateRunes(ref.Source.DisplayLabel, 500), Summary: ref.Citation,
 		WhyIncluded: "Untrusted retrieved evidence matched the resolved scope.", RuleID: rule.id, Confidence: ref.Confidence,
