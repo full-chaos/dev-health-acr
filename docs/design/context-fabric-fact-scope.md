@@ -777,3 +777,9 @@ sheds at composition time (`shedFactScopeCensus`) to
 question did not make go first; then rows that merely expanded; rows recording
 a gap, a refusal or a cut-short traversal are kept. At the default budget
 nothing is shed and the count is absent.
+
+These five policies are traversed by `devhealthfacts/fact_scope_entity_tree_policies.go`. The project and team
+repository chains of the earlier policies follow the same tree through `fact_scope_entity_tree.go`; the two
+read a link of record slightly differently (these policies read a link only with its pull request, skip
+pull-request-typed work items, and count every unlinked issue), so a change to what the link of record means
+must be made in both.
