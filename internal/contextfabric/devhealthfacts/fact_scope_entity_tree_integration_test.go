@@ -477,3 +477,62 @@ func TestEntityTree_EveryUnlinkedIssueIsCounted(t *testing.T) {
 		t.Fatalf("MissingNextHopCount = %d, want 13 (every unlinked issue)", result.Counts.MissingNextHopCount)
 	}
 }
+
+// A work item typed as a pull request is not an issue: the canonical link
+// projection skips it, so its link reaches no repository here either.
+func TestEntityTree_PullRequestTypedWorkItemReachesNoRepository(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	at := time.Now().UTC()
+	seedEntityTree(t, ctx, direct, at)
+	if err := direct.Exec(ctx, `TRUNCATE TABLE work_graph_issue_pr`); err != nil {
+		t.Fatalf("truncate links: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"PR-typed", entityTreeRepoC, entityTreeOrgID, "a pull request", "open", "", "", entityTreeProject, at, "pr"); err != nil {
+		t.Fatalf("seed pr-typed work item: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		entityTreeRepoD, "PR-typed", uint32(7), float32(0.9), "native", "", at, entityTreeOrgID); err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+		entityTreeRepoD, entityTreeOrgID, uint32(7), "PR", "open", at, at, "feat/x", ""); err != nil {
+		t.Fatalf("seed pull request: %v", err)
+	}
+	expander := devhealthfacts.NewScopeExpander(query)
+	result := entityTreeExpand(t, ctx, expander, storage.Principal{OrgID: entityTreeOrgID, RepositoryScopes: []string{"*"}},
+		contextfabric.FactScopePolicyProjectIssuePullRequestContinuousIntegration, contextfabric.FactContinuousIntegration,
+		entityTreeProjectOrigin(t), contextfabric.SubjectRepository)
+	for _, target := range result.Targets {
+		if target.CanonicalID == "repository:"+entityTreeRepoD {
+			t.Fatalf("targets = %v: a pull-request-typed work item's link reached its repository", entityTreeLabels(result.Targets))
+		}
+	}
+}
+
+// An edge with no deployment is not a deployment-incident edge: the canonical
+// projection requires one, so such a row makes no incident reachable.
+func TestEntityTree_EdgeWithNoDeploymentReachesNoIncident(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	at := time.Now().UTC()
+	seedEntityTree(t, ctx, direct, at)
+	if err := direct.Exec(ctx, `INSERT INTO operational_incidents (org_id, source_version_at, id, observed_at, last_synced, service_id, title, started_at, is_deleted) VALUES (?,?,?,?,?,?,?,?,?)`,
+		entityTreeOrgID, at, "INC-BLANK", at, at, "svc", "Blank", at, uint8(0)); err != nil {
+		t.Fatalf("seed incident: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, repo_id, confidence, source, evidence, observed_at, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		"e-blank", entityTreeOrgID, "", "INC-BLANK", entityTreeRepoA, float32(0.9), "native", "", at, at); err != nil {
+		t.Fatalf("seed edge: %v", err)
+	}
+	expander := devhealthfacts.NewScopeExpander(query)
+	result := entityTreeExpand(t, ctx, expander, storage.Principal{OrgID: entityTreeOrgID, RepositoryScopes: []string{"*"}},
+		contextfabric.FactScopePolicyProjectIssuePullRequestIncidents, contextfabric.FactIncidents,
+		entityTreeProjectOrigin(t), contextfabric.SubjectIncident)
+	for _, target := range result.Targets {
+		if target.CanonicalID == "incident:INC-BLANK" {
+			t.Fatalf("targets = %v: an edge with no deployment made an incident reachable", entityTreeLabels(result.Targets))
+		}
+	}
+}
