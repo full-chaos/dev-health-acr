@@ -1,0 +1,14 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR005",
+  "error": {
+    "code": "rate_limited",
+    "message": "Request rate limit exceeded",
+    "http_status": 429,
+    "retryable": true,
+    "details": {
+      "limit": "capabilities_budget",
+      "retry_after_seconds": 9
+    }
+  }
+}

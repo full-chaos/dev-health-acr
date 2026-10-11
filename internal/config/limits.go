@@ -13,6 +13,11 @@ const (
 	defaultMaxCredentialsPerOrg    = 128
 	defaultAuthTrackedKeys         = 4096
 	defaultAuthMaxInFlight         = 64
+	// defaultCapabilitiesRequests is the per-window budget of the
+	// capabilities class. Every MCP request resolves its caller with one
+	// capabilities call, so the class is sized for the discovery rate of a
+	// busy org, not for the lifecycle rate the Auth class bounds.
+	defaultCapabilitiesRequests = 240
 )
 
 type ClassLimitConfig struct {
@@ -27,6 +32,7 @@ type RequestControlsConfig struct {
 	Snapshot        ClassLimitConfig
 	Episode         ClassLimitConfig
 	Data            ClassLimitConfig
+	Capabilities    ClassLimitConfig
 	AuthFailures    int
 	AuthTrackedKeys int
 	// AuthMaxInFlight bounds concurrent undecided authentication attempts per
@@ -45,7 +51,7 @@ func requestControlsValue(lookup lookupEnv, fallback int) (RequestControlsConfig
 	if err != nil {
 		return RequestControlsConfig{}, err
 	}
-	readClass := func(prefix string) (ClassLimitConfig, error) {
+	readClass := func(prefix string, fallback int) (ClassLimitConfig, error) {
 		window, err := durationValue(lookup, "ACR_"+prefix+"_LIMIT_WINDOW", sharedWindow)
 		if err != nil {
 			return ClassLimitConfig{}, err
@@ -53,9 +59,15 @@ func requestControlsValue(lookup lookupEnv, fallback int) (RequestControlsConfig
 		requests, err := intValue(lookup, "ACR_"+prefix+"_REQUESTS_PER_WINDOW", fallback)
 		return ClassLimitConfig{Window: window, Requests: requests}, err
 	}
-	classes := make([]ClassLimitConfig, 6)
-	for index, prefix := range []string{"AUTH", "CONTEXT", "EVIDENCE", "SNAPSHOT", "EPISODE", "DATA"} {
-		classes[index], err = readClass(prefix)
+	classes := make([]ClassLimitConfig, 7)
+	for index, entry := range []struct {
+		prefix   string
+		fallback int
+	}{
+		{"AUTH", fallback}, {"CONTEXT", fallback}, {"EVIDENCE", fallback}, {"SNAPSHOT", fallback}, {"EPISODE", fallback}, {"DATA", fallback},
+		{"CAPABILITIES", defaultCapabilitiesRequests},
+	} {
+		classes[index], err = readClass(entry.prefix, entry.fallback)
 		if err != nil {
 			return RequestControlsConfig{}, err
 		}
@@ -99,7 +111,7 @@ func requestControlsValue(lookup lookupEnv, fallback int) (RequestControlsConfig
 		return RequestControlsConfig{}, err
 	}
 	return RequestControlsConfig{
-		Auth: classes[0], Context: classes[1], Evidence: classes[2], Snapshot: classes[3], Episode: classes[4], Data: classes[5],
+		Auth: classes[0], Context: classes[1], Evidence: classes[2], Snapshot: classes[3], Episode: classes[4], Data: classes[5], Capabilities: classes[6],
 		AuthFailures: values[0], AuthTrackedKeys: values[1], PerOrgConcurrency: values[2],
 		MaxTrackedOrganizations: values[3], MaxCredentialsPerOrg: values[4], AuthMaxInFlight: values[5], StateRetention: stateRetention,
 		ConcurrencyRetryAfter: concurrencyRetry, MaximumRetryAfter: maximumRetry,
@@ -111,7 +123,7 @@ func (c RequestControlsConfig) validate() error {
 		name  string
 		class ClassLimitConfig
 	}{
-		{"AUTH", c.Auth}, {"CONTEXT", c.Context}, {"EVIDENCE", c.Evidence}, {"SNAPSHOT", c.Snapshot}, {"EPISODE", c.Episode}, {"DATA", c.Data},
+		{"AUTH", c.Auth}, {"CONTEXT", c.Context}, {"EVIDENCE", c.Evidence}, {"SNAPSHOT", c.Snapshot}, {"EPISODE", c.Episode}, {"DATA", c.Data}, {"CAPABILITIES", c.Capabilities},
 	} {
 		if entry.class.Window <= 0 || entry.class.Requests < 1 {
 			return fmt.Errorf("ACR_%s limit window and requests must be positive", entry.name)
@@ -138,12 +150,13 @@ func (c Config) LimitOptions() limits.Options {
 	contextPolicy.Resources = resources
 	return limits.Options{
 		Policies: limits.PolicySet{
-			Auth:     limits.AuthPolicy(limitPolicy(c.RequestControls.Auth)),
-			Context:  contextPolicy,
-			Evidence: limits.EvidencePolicy(limitPolicy(c.RequestControls.Evidence)),
-			Snapshot: limits.SnapshotPolicy(limitPolicy(c.RequestControls.Snapshot)),
-			Episode:  limits.EpisodePolicy(limitPolicy(c.RequestControls.Episode)),
-			Data:     limits.DataPolicy(limitPolicy(c.RequestControls.Data)),
+			Auth:         limits.AuthPolicy(limitPolicy(c.RequestControls.Auth)),
+			Context:      contextPolicy,
+			Evidence:     limits.EvidencePolicy(limitPolicy(c.RequestControls.Evidence)),
+			Snapshot:     limits.SnapshotPolicy(limitPolicy(c.RequestControls.Snapshot)),
+			Episode:      limits.EpisodePolicy(limitPolicy(c.RequestControls.Episode)),
+			Data:         limits.DataPolicy(limitPolicy(c.RequestControls.Data)),
+			Capabilities: limits.CapabilitiesPolicy(limitPolicy(c.RequestControls.Capabilities)),
 		},
 		PerOrgConcurrency:             c.RequestControls.PerOrgConcurrency,
 		MaxTrackedOrganizations:       c.RequestControls.MaxTrackedOrganizations,

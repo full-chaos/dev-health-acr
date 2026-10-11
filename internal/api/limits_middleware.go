@@ -33,7 +33,7 @@ func LimitMiddleware(manager *limits.Manager, class limits.RequestClass, next ht
 			return
 		}
 		if !decision.Allowed || claim == nil {
-			writeRateLimitError(w, r, decision.RetryAfter)
+			writeRateLimitError(w, r, decision.RetryAfter, limitTokenForClass(class))
 			return
 		}
 		defer claim.DoneClaim()
@@ -56,8 +56,18 @@ func CompleteUsageWithBudget(ctx context.Context, usage limits.ResourceUsage, ov
 	return claim.CompleteWithBudget(usage, override)
 }
 
-func writeRateLimitError(w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
-	details := map[string]any{contractsv1.RateLimitDetailsLimitKey: contractsv1.RateLimitRequestBudget}
+// limitTokenForClass names the budget a refusal came from: the capabilities
+// class has its own token so a caller can tell the discovery budget from the
+// organization's request budget.
+func limitTokenForClass(class limits.RequestClass) string {
+	if class == limits.RequestClassCapabilities {
+		return contractsv1.RateLimitCapabilitiesBudget
+	}
+	return contractsv1.RateLimitRequestBudget
+}
+
+func writeRateLimitError(w http.ResponseWriter, r *http.Request, retryAfter time.Duration, limit string) {
+	details := map[string]any{contractsv1.RateLimitDetailsLimitKey: limit}
 	if retryAfter > 0 {
 		seconds := max(1, int((retryAfter+time.Second-1)/time.Second))
 		w.Header().Set("Retry-After", strconv.Itoa(seconds))
