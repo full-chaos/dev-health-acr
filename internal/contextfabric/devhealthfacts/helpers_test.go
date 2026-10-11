@@ -48,6 +48,11 @@ type fakeClient struct {
 
 func (c *fakeClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	c.queries = append(c.queries, capturedQuery{statement: statement, bindings: bindings})
+	// A repository identity read also asks who owns the repositories. A test
+	// that did not seed ownership gets "no owners", never a repos table row.
+	if strings.Contains(statement, "owners_total") && !c.seedsOwnership() {
+		return &fakeScanner{}, nil
+	}
 	for _, table := range c.tables {
 		if strings.Contains(statement, table.match) {
 			if table.err != nil {
@@ -57,6 +62,15 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 		}
 	}
 	return &fakeScanner{}, nil
+}
+
+func (c *fakeClient) seedsOwnership() bool {
+	for _, table := range c.tables {
+		if strings.Contains(table.match, "team_repo_ownership") {
+			return true
+		}
+	}
+	return false
 }
 
 // idsBinding returns the "ids" binding value of the last captured query, so
