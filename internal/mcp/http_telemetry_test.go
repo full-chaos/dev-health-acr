@@ -71,6 +71,8 @@ func TestHTTPRequestLineCertifiesEveryAuthOutcomeAndResultClass(t *testing.T) {
 			want: map[string]any{"auth_outcome": "insufficient_entitlement", "result_class": "auth_denied", "status": 403}},
 		{id: "req-rate", body: rawToolsList(), header: bearerHeader(valid.token), bearer: true, wantHTTP: 429, setup: func() { hosted.blocked.Store(true) },
 			want: map[string]any{"auth_outcome": "rate_limited", "result_class": "auth_denied", "status": 429}},
+		{id: "req-budget", body: rawToolsList(), header: bearerHeader(valid.token), bearer: true, wantHTTP: 429, setup: func() { hosted.requestBudget.Store(true) },
+			want: map[string]any{"auth_outcome": "request_budget_exceeded", "result_class": "auth_unavailable", "status": 429}},
 		{id: "req-incompatible", body: rawToolsList(), header: bearerHeader(incompatible.token), bearer: true, wantHTTP: 502,
 			want: map[string]any{"auth_outcome": "upstream_incompatible", "result_class": "auth_unavailable", "status": 502}},
 		{id: "req-unavailable", body: rawToolsList(), header: bearerHeader(valid.token), bearer: true, wantHTTP: 503, down: true,
@@ -89,6 +91,7 @@ func TestHTTPRequestLineCertifiesEveryAuthOutcomeAndResultClass(t *testing.T) {
 			target = eDown
 		}
 		hosted.blocked.Store(false)
+		hosted.requestBudget.Store(false)
 		if d.setup != nil {
 			d.setup()
 		}
