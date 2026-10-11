@@ -1440,6 +1440,10 @@
             },
             "value": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/ScalarValue"
+            },
+            "fact_id": {
+              "type": "string",
+              "maxLength": 256
             }
           },
           "required": [

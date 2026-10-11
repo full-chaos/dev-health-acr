@@ -571,7 +571,8 @@
         "field": "release_ready",
         "value": {
           "boolean": false
-        }
+        },
+        "fact_id": "fact_9b1deb4d3b7d9d5a1c0e2f4a"
       }
     ],
     "coverage": {

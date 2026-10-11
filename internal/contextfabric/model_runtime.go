@@ -731,6 +731,8 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		case claimGrounded:
 		case claimNoCanonicalFact:
 			return rejectSynthesisClaim(RejectionReasonClaimNoCanonicalFact, 0, "claimed fact %s/%s has no canonical observation to ground it", claim.Kind, claim.Field)
+		case claimFactIDUnknown:
+			return rejectSynthesisClaim(RejectionReasonClaimNoCanonicalFact, canonicalFactGroupSize(input.Facts.Facts, claim), "claimed fact %s/%s cites fact_id %q, which names no supplied canonical fact of that kind and subject", claim.Kind, claim.Field, claim.FactID)
 		case claimFieldUnobserved:
 			return rejectSynthesisClaim(RejectionReasonClaimFieldUnobserved, canonicalFactGroupSize(input.Facts.Facts, claim), "claimed fact field %q was not canonically observed", claim.Field)
 		default:
@@ -1076,6 +1078,9 @@ const (
 	// claimValueContradicts: some fact carries the Field, but no fact
 	// carries it with the claimed Value.
 	claimValueContradicts
+	// claimFactIDUnknown: the claim cites a fact_id that names no supplied
+	// canonical fact of the claim's Kind and Subject.
+	claimFactIDUnknown
 	// claimGrounded: a canonical fact of this Kind/Subject observed this
 	// Field with exactly this Value.
 	claimGrounded
@@ -1127,6 +1132,9 @@ func groundClaim(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, claim
 // Only a match at position > 0 was impossible before.
 func groundClaimAt(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, claimGroundingOutcome, int) {
 	key := subjectKeyForModel(claim.Subject)
+	if claim.FactID != "" {
+		return groundClaimByFactID(facts, claim, key)
+	}
 	outcome := claimNoCanonicalFact
 	var fieldMatch CanonicalFact
 	position := 0
@@ -1150,6 +1158,31 @@ func groundClaimAt(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, cla
 		position++
 	}
 	return fieldMatch, outcome, -1
+}
+
+// groundClaimByFactID grounds a claim against the ONE fact it names. An id
+// that names no fact of the claim's Kind and Subject is claimFactIDUnknown:
+// the claim is ungrounded, never silently widened to the group.
+func groundClaimByFactID(facts []CanonicalFact, claim ClaimedFact, key string) (CanonicalFact, claimGroundingOutcome, int) {
+	position := 0
+	for _, fact := range facts {
+		if fact.Kind != claim.Kind || subjectKeyForModel(fact.Subject) != key {
+			continue
+		}
+		if fact.ID != claim.FactID {
+			position++
+			continue
+		}
+		observed, present := fact.Fields[claim.Field]
+		switch {
+		case !present:
+			return fact, claimFieldUnobserved, -1
+		case !factValueEqualsScalar(observed, claim.Value):
+			return fact, claimValueContradicts, -1
+		}
+		return fact, claimGrounded, position
+	}
+	return CanonicalFact{}, claimFactIDUnknown, -1
 }
 
 // claimSourceFact returns the canonical fact a claim's Rows must come from
@@ -1224,6 +1257,11 @@ func MaxClaimFactGroupSize(facts []CanonicalFact, claims []ClaimedFact) int {
 func ClaimsGroundedBeyondFirstGroupMember(facts []CanonicalFact, claims []ClaimedFact) int {
 	count := 0
 	for _, claim := range claims {
+		// A claim that names its fact by id was not decided by the group
+		// closure at all, whatever position that fact holds.
+		if claim.FactID != "" {
+			continue
+		}
 		if _, outcome, position := groundClaimAt(facts, claim); outcome == claimGrounded && position > 0 {
 			count++
 		}

@@ -3217,6 +3217,10 @@
         "value": {
           "$ref": "#/$defs/ScalarValue"
         },
+        "fact_id": {
+          "type": "string",
+          "maxLength": 256
+        },
         "rows": {
           "description": "CHAOS-4347, additive: a renderable table for a fact whose evidence is genuinely a set of rows (e.g. a project's per-team metrics rollup) rather than one scalar. Optional; a claim carries `field`/`value` as its primary scalar either way.",
           "type": "array",
