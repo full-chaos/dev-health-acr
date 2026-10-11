@@ -152,6 +152,11 @@ func newCutRigWithBytes(t *testing.T, walk contextfabric.TreeWorkItemWalk, maxBy
 	app.config.MaxItems = 30
 	if maxBytes > 0 {
 		app.config.MaxSerializedBytes = maxBytes
+		// A deployment advertises the ceiling it serves against; the sidecar
+		// asks the service for that ceiling, so the rig must say the same.
+		advertised := realHostedCapabilities()
+		advertised.Limits.MaxSerializedBytes = maxBytes
+		app.capabilities = StaticCapabilitiesProvider{Now: func() time.Time { return time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC) }, Value: advertised}
 	}
 	server := httptest.NewTLSServer(app.InstrumentedHandler(app.Handler()))
 	t.Cleanup(server.Close)

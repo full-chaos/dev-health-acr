@@ -4040,7 +4040,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// tupleCensus included, so the served document and its refusal boundary
 	// are unaffected.
 	cover.events = pendingTelemetry.ObservationCover
+	planBeforeFit, resultBeforeFit, telemetryBeforeFit := plan, result, pendingTelemetry
 	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase, cardinality)
+	if e.refusedOnlyAtCallerByteOption(err, plan.Budget.MaxSerializedBytes) {
+		// The caller's max_serialized_bytes is the target the narrowing
+		// levers shed toward; the service ceiling is the only refusal
+		// line. The answer overran the option with nothing left to cut, so
+		// the fit runs once more against the service ceiling. The plan
+		// then states the ceiling the answer was actually fitted to.
+		plan = planBeforeFit
+		plan.Budget.MaxSerializedBytes = e.maxSerializedBytes
+		result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, resultBeforeFit, consumedAllocation, telemetryBeforeFit, retryBase, cardinality)
+	}
 	// Read BEFORE the error check: a stage-3 refusal returns the telemetry of
 	// the passes it evaluated, so a refused answer still shows every decision
 	// it made (published with AnswerWithheld by the deferred publisher).
@@ -4152,7 +4163,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}
 	decisiveBudget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
+	fittedBeforeFinal := result
 	result, budgetErr := e.finalizeServedFitting(ctx, principal, BudgetAssertDecisive, result, decisiveBudget)
+	if e.refusedOnlyAtCallerByteOption(budgetErr, decisiveBudget.MaxSerializedBytes) {
+		// Same line as the stage-3 fit above: the option shed what it
+		// could, and the ceiling decides.
+		decisiveBudget.MaxSerializedBytes = e.maxSerializedBytes
+		result, budgetErr = e.finalizeServedFitting(ctx, principal, BudgetAssertDecisive, fittedBeforeFinal, decisiveBudget)
+	}
 	if cover.disclosure != nil {
 		if budgetErr != nil {
 			cover.disclosureMeasured = refusalMeasurementOf(budgetErr)
@@ -4783,3 +4801,15 @@ var isRetrievalDegradedLimitation = contractsv1.IsContextFabricRetrievalDegraded
 // LimitationsDisplaced's coherence rule, and a second copy here would be a
 // second thing that can drift from the vocabulary it scans for.
 var hasRetrievalDegradedLimitation = contractsv1.HasContextFabricRetrievalDegradedLimitation
+
+// refusedOnlyAtCallerByteOption reports whether err is a byte refusal that was
+// decided against a ceiling the caller's max_serialized_bytes narrowed below
+// the service's own, so that fitting again against the service ceiling is
+// still open. A refusal at the service ceiling itself is final.
+func (e *Engine) refusedOnlyAtCallerByteOption(err error, fittedBytes int64) bool {
+	if err == nil || fittedBytes <= 0 || (e.maxSerializedBytes > 0 && fittedBytes >= e.maxSerializedBytes) {
+		return false
+	}
+	var refusal AnswerBudgetRefusal
+	return errors.As(err, &refusal) && refusal.Overrun == contractsv1.ContextFabricBudgetOverrunBytes
+}

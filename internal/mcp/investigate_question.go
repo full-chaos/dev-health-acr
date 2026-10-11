@@ -115,6 +115,16 @@ const clientSynthesisFlowLine = "\n\nThe service wrote no answer text on this tu
 func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *CallerContext, surface string, input contractsv1.MCPInvestigateQuestionRequest, supplied *contractsv1.ContextFabricSuppliedInterpretation, suppliedSynthesis *contractsv1.ContextFabricSuppliedSynthesis) (*mcpsdk.CallToolResult, error) {
 	budget := answerBudget(input.Budget, caller.Capabilities().Limits)
 	hosted := hostedInvestigationRequest(input, budget)
+	// The answer budget bounds what this tool returns, and the tool projects
+	// to it below. The hosted option is asked for at the service's own
+	// serving ceiling so the canonical result always comes back here (the
+	// service delivers a bounded projection instead of the canonical result
+	// to a caller whose option is smaller than it, and this tool reads the
+	// canonical result). When the service advertised no ceiling the answer
+	// budget is forwarded as before.
+	if ceiling := caller.Capabilities().Limits.MaxSerializedBytes; ceiling > 0 {
+		hosted.Options.MaxSerializedBytes = min(ceiling, contractsv1.ContextFabricSerializedBytesMax)
+	}
 	hosted.SuppliedInterpretation = supplied
 	hosted.SuppliedSynthesis = suppliedSynthesis
 
