@@ -280,7 +280,7 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 	fmt.Fprintf(&b, "- A stored result read later by id (tool %s) names its interpreter in `versions` in the same way. That is tested over an in-memory result store only.\n\n", q(c.ResultTool))
 
 	b.WriteString("## Follow-up turns\n\n")
-	fmt.Fprintf(&b, "- Send %s and %s on every call, also on a follow-up. Each call needs its own interpretation; we do not take one from an earlier turn.\n", q(c.ArgInterpretation), q(c.ArgContract))
+	fmt.Fprintf(&b, "- Send %s and %s on every call, also on a follow-up. Each call needs its own interpretation; we do not take one from an earlier turn. Use only receipts from the latest answer; a receipt from an earlier turn is superseded and returns `no_match`.\n", q(c.ArgInterpretation), q(c.ArgContract))
 	b.WriteString("- The prompt input of step 1 holds your question, the current time context, and an empty `requested_scope` object. It holds no conversation, no prior subject receipts, and no subject hints. Your model reads a follow-up only as well as the question you pass to `prompts/get`: write the whole question in it.\n")
 	fmt.Fprintf(&b, "- Tested today: a window confirmation. The first turn asks to confirm a window; the second turn sends the receipt, with the result id of the answer that offered it, in %s, and is decided as on the %s path. That test calls the hosted API route over an in-memory result store.\n",
 		q(c.WindowReceipts), q(c.ServerSideTool))
