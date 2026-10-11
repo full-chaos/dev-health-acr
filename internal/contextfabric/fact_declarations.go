@@ -93,10 +93,10 @@ func (form FactSubjectIDForm) CanonicalSubjectID(raw string) (string, bool) {
 		}
 		return "repository:" + raw, true
 	case FactSubjectIDTeamID:
-		if strings.HasPrefix(raw, "team:") {
-			return "", false
-		}
-		return "team:" + raw, true
+		// A raw team key is never a canonical id (TeamCanonicalID), so a key
+		// that itself begins "team:" is a different team from the key after
+		// the prefix, and both canonicalise injectively.
+		return TeamCanonicalID(raw), true
 	default:
 		return "", false
 	}

@@ -889,3 +889,84 @@ func applyGroupingRefusalDisclosure(result *InvestigationResult, outcome CohortG
 	result.LimitationsDisplaced += displaced
 	result.Coverage.Partial = true
 }
+
+// CohortGroupCoverage is what a built grouping says about the members it did
+// and did not place, counted over the SERVED (narrowed) cohort: members under
+// more than one group, members under none, and members whose group list the
+// facts cut short. All zero means nothing to disclose.
+type CohortGroupCoverage struct {
+	Overlap    int
+	Ungrouped  int
+	Cut        int
+	MemberKind SubjectKind
+	GroupKind  SubjectKind
+}
+
+// ownersOmittedField is the repository identity field that carries how many
+// owning teams the per-repository cap left out.
+const ownersOmittedField = "owning_teams_omitted_count"
+
+// CohortGroupCoverageOf counts over the served cohort. Call it after narrowing.
+// A member whose facts name an omitted-owner count above zero is "cut"; a member
+// listed in no group is "ungrouped"; one listed in several is "overlap".
+func CohortGroupCoverageOf(cohort *Cohort, groups []contractsv1.ContextFabricCohortGroup, facts []CanonicalFact) CohortGroupCoverage {
+	if cohort == nil || len(groups) == 0 {
+		return CohortGroupCoverage{}
+	}
+	served := make(map[string]struct{}, len(cohort.Members))
+	for _, member := range cohort.Members {
+		served[member.Subject.CanonicalID] = struct{}{}
+	}
+	placed := make(map[string]int, len(cohort.Members))
+	for _, group := range groups {
+		for _, id := range group.MemberCanonicalIDs {
+			if _, ok := served[id]; ok {
+				placed[id]++
+			}
+		}
+	}
+	cut := make(map[string]struct{})
+	for _, fact := range facts {
+		if _, ok := served[fact.Subject.CanonicalID]; !ok {
+			continue
+		}
+		if value, present := fact.Fields[ownersOmittedField]; present && value.Integer != nil && *value.Integer > 0 {
+			cut[fact.Subject.CanonicalID] = struct{}{}
+		}
+	}
+	out := CohortGroupCoverage{MemberKind: cohort.Kind, GroupKind: groups[0].Subject.Kind, Cut: len(cut)}
+	for id := range served {
+		switch n := placed[id]; {
+		case n == 0:
+			out.Ungrouped++
+		case n > 1:
+			out.Overlap++
+		}
+	}
+	return out
+}
+
+// applyGroupCoverageDisclosure states on the wire what the grouping left out or
+// doubled. It does not mark the answer partial: the grouping is complete for the
+// members it placed.
+func applyGroupCoverageDisclosure(result *InvestigationResult, coverage CohortGroupCoverage) {
+	if result == nil {
+		return
+	}
+	var sentences []string
+	if coverage.Ungrouped > 0 {
+		sentences = append(sentences, contractsv1.ContextFabricGroupingUngroupedLimitation(coverage.MemberKind, coverage.GroupKind, coverage.Ungrouped))
+	}
+	if coverage.Cut > 0 {
+		sentences = append(sentences, contractsv1.ContextFabricGroupingCutLimitation(coverage.MemberKind, coverage.GroupKind, coverage.Cut))
+	}
+	if coverage.Overlap > 0 {
+		sentences = append(sentences, contractsv1.ContextFabricGroupingOverlapLimitation(coverage.MemberKind, coverage.GroupKind, coverage.Overlap))
+	}
+	if len(sentences) == 0 {
+		return
+	}
+	composed, displaced := appendBoundedLimitations(result.Limitations, sentences)
+	result.Limitations = composed
+	result.LimitationsDisplaced += displaced
+}
