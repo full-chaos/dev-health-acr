@@ -299,6 +299,8 @@ func blockersFields() []fieldDecl {
 		declOn(declTeamOnly,
 			declCallerScoped(fInt("blocked_work_items_current", "count")),
 			declCallerScoped(fInt("blocker_dependencies_current", "count")),
+			declCallerScoped(fInt("blocker_dependencies_excluded_by_status_current", "count")),
+			fStr("blocker_status_basis"),
 			fTable("repository_breakdown",
 				cRef(declRepositoryRef, cStr("repository_id")),
 				cNullable(cStr("repository_name")),

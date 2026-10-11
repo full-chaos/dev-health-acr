@@ -758,10 +758,20 @@ import (
 // budget refusal names its stage and measured sections; a candidate saved under an
 // earlier version carries the tables.
 //
-// v155 -> v156: a request whose repository selector is "*" no longer admits a graph node
-// that records only a repository-absence sentinel (no repository, orphaned, unresolved,
-// no ownership); an organization-wide caller receives fewer graph items under that scope.
-const QueryVersion = "devhealthfacts.clickhouse.v156"
+// v155 -> v156: the team blockers rollup counts only open blockers and serves the
+// excluded-by-status count and the status basis; a candidate saved under an earlier
+// version holds the unfiltered counts.
+//
+// v156 -> v157: a repository count with no current active owner over a complete ownership read
+// serves 0 with the inactive and ended owners disclosed, where it served no count; a candidate
+// saved under an earlier version may hold the unavailable count and must not be reused.
+
+//
+// v157 -> v158: a request whose repository selector is "*", or names a repository-absence
+// sentinel, no longer admits a graph node that records only repository-absence sentinels
+// (no repository, orphaned, unresolved, no ownership); an organization-wide caller receives
+// fewer graph items under that scope.
+const QueryVersion = "devhealthfacts.clickhouse.v158"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
