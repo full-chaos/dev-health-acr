@@ -68,7 +68,7 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 			pairs = append(pairs, [2]string{row.RepoID, row.ID})
 		}
 	}
-	entries, entriesErr := p.readStatusEntries(ctx, orgID, pairs)
+	entries, entriesErr := p.readStatusEntries(ctx, orgID, pairs, settings)
 	if entriesErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item status since", entriesErr)
 	}

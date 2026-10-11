@@ -157,7 +157,11 @@ func TestWorkItemFreshEngineAgainstRealClickHouse(t *testing.T) {
 			unmeasured := tc.excluded || failurePhase == "s1"
 			phases := []string{"s1"}
 			if !unmeasured && population > 0 {
-				phases = append(phases, "status", "work")
+				phases = append(phases, "status")
+				if failurePhase != "status" {
+					phases = append(phases, "status_since")
+				}
+				phases = append(phases, "work")
 			}
 			if !reflect.DeepEqual(client.phases, phases) {
 				t.Fatalf("statements=%v want=%v", client.phases, phases)
@@ -423,6 +427,9 @@ func (c *freshLiveQuery) Query(ctx context.Context, sql string, bindings []conte
 	}
 	if strings.Contains(sql, "w.title") {
 		phase = "work"
+	}
+	if strings.Contains(sql, "work_item_transitions") {
+		phase = "status_since"
 	}
 	c.phases = append(c.phases, phase)
 	c.statements = append(c.statements, sql)

@@ -60,8 +60,12 @@ func TestWorkItemFreshPartialRowsDoNotBecomeContent(t *testing.T) {
 			if f.client.scanned[phase] != 1 {
 				t.Fatalf("partial error did not follow a real scanned row: %v", f.client.scanned)
 			}
-			if !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "work"}) {
-				t.Fatalf("phases=%v", f.client.phases)
+			wantPhases := []string{"s1", "status", "status_since", "work"}
+			if phase == "status" {
+				wantPhases = []string{"s1", "status", "work"}
+			}
+			if !reflect.DeepEqual(f.client.phases, wantPhases) {
+				t.Fatalf("phases=%v want=%v", f.client.phases, wantPhases)
 			}
 			counts := map[contextfabric.FactKind]int{}
 			for _, claim := range result.ClaimedFacts {
@@ -177,7 +181,7 @@ func runFreshTupleCanonicalBound(t *testing.T, mode string) {
 	if !observed {
 		t.Fatal("actual synthesis did not run")
 	}
-	if !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "work"}) {
+	if !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "status_since", "work"}) {
 		t.Fatalf("phases=%v", f.client.phases)
 	}
 	for _, query := range f.client.queries {
@@ -266,7 +270,7 @@ func TestWorkItemFreshCurrentRepositoryScopeReachesReadersAndCensus(t *testing.T
 	body.TimeContext.EvidenceWindow = &contextfabric.RequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing90D}
 	body.RequestedScope.RepositorySlugs = []string{hostedTestRepository}
 	result := serveFreshTupleRequest(t, f, body)
-	if !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "work"}) {
+	if !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "status_since", "work"}) {
 		t.Fatalf("phases=%v", f.client.phases)
 	}
 	for _, query := range f.client.queries {

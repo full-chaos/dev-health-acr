@@ -26,8 +26,8 @@ const (
 // (repository, work item) pair named by {keys}, each "<repository uuid>:<work
 // item id>" like the work item subject ids. Ties on occurred_at break on last_synced and then to_status,
 // so the pick is deterministic.
-func statusSinceStatement() string {
-	return withRowLimit(`SELECT toString(t.repo_id) AS repo_key, t.work_item_id AS item_key,
+func statusSinceStatement(settings readers.Settings) string {
+	return readers.WithSettings(withRowLimit(`SELECT toString(t.repo_id) AS repo_key, t.work_item_id AS item_key,
 	argMax(ifNull(t.to_status, ''), tuple(t.occurred_at, t.last_synced, ifNull(t.to_status, ''))) AS latest_to_status,
 	max(t.occurred_at) AS entered_at
 FROM work_item_transitions AS t FINAL
@@ -35,7 +35,7 @@ WHERE t.org_id = {org_id:String}
 	AND t.work_item_id IN {ids:Array(String)}
 	AND concat(toString(t.repo_id), ':', t.work_item_id) IN {keys:Array(String)}
 GROUP BY t.repo_id, t.work_item_id
-ORDER BY repo_key, item_key`)
+ORDER BY repo_key, item_key`), settings)
 }
 
 type statusEntry struct {
@@ -46,7 +46,7 @@ type statusEntry struct {
 // readStatusEntries reads the latest transition of every (repo, item) pair in
 // pairs. The caller passes only items the scoped status read already
 // returned, so an item the caller may not read is never probed.
-func (p *StatusProvider) readStatusEntries(ctx context.Context, orgID string, pairs [][2]string) (map[string]statusEntry, error) {
+func (p *StatusProvider) readStatusEntries(ctx context.Context, orgID string, pairs [][2]string, settings readers.Settings) (map[string]statusEntry, error) {
 	out := make(map[string]statusEntry, len(pairs))
 	if len(pairs) == 0 {
 		return out, nil
@@ -61,7 +61,7 @@ func (p *StatusProvider) readStatusEntries(ctx context.Context, orgID string, pa
 			ids = append(ids, pair[1])
 		}
 	}
-	err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemStatusSince", statusSinceStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemStatusSince", statusSinceStatement(settings), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var repoKey, itemKey, toStatus string
 		var enteredAt time.Time
 		if err := row.Scan(&repoKey, &itemKey, &toStatus, &enteredAt); err != nil {

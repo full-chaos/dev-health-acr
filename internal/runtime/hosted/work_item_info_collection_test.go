@@ -351,7 +351,7 @@ func runWorkItemInfoChild(t *testing.T, scenario string) {
 	if err != nil {
 		t.Fatalf("fresh investigation: %v", err)
 	}
-	want := []string{"s1", "status", "work"}
+	want := []string{"s1", "status", "status_since", "work"}
 	if scenario == "zero" || scenario == "s1" {
 		want = []string{"s1"}
 	}
@@ -401,6 +401,10 @@ func (c *infoTupleQueryClient) Query(_ context.Context, sql string, bindings []c
 	if strings.Contains(sql, "w.title") {
 		phase = "work"
 		rows = [][]any{{"work-1", "Implement the thing", "repo-1"}}
+	}
+	if strings.Contains(sql, "work_item_transitions") {
+		phase = "status_since"
+		rows = nil
 	}
 	if configured, ok := c.rowsByPhase[phase]; ok {
 		rows = configured
