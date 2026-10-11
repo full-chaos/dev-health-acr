@@ -35,7 +35,7 @@ principal_drivers
   pull_request         pull_requests
   pull_request_review  reviews
   repository           continuous_integration deployments flow health metrics
-  team                 flow health investment landscape metrics operational_deficiencies readiness workload
+  team                 deployments flow health incidents investment landscape metrics operational_deficiencies pull_requests readiness workload
 
 readiness
   project              readiness
@@ -43,6 +43,7 @@ readiness
   team                 readiness
 
 remaining_work
+  team                 blockers
   work_item            blockers required_children
 
 state
