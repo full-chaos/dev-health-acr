@@ -279,6 +279,14 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		}
 		return workItemExpansionResult(request.Principal, candidates, counts), nil
 
+	// --- The five entity-tree policies (current axis only) ---
+	case contextfabric.FactScopePolicyTeamRepositoryOwnershipContinuousIntegration,
+		contextfabric.FactScopePolicyProjectIssuePullRequestContinuousIntegration,
+		contextfabric.FactScopePolicyProjectIssuePullRequestDeployments,
+		contextfabric.FactScopePolicyProjectIssuePullRequestIncidents,
+		contextfabric.FactScopePolicyProjectTeamOwnershipOperationalDeficiencies:
+		return e.expandEntityTree(ctx, orgID, request, limit)
+
 	default:
 		return contextfabric.FactScopeExpansionResult{}, fmt.Errorf("devhealthfacts: scope expander does not implement policy %q", request.Policy)
 	}

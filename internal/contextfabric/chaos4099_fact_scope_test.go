@@ -3096,12 +3096,19 @@ func TestChaos4099_OnlyTheRuledPoliciesAreEverActivatable(t *testing.T) {
 		FactScopePolicyTeamPrimaryAttributionWorkItemRequiredChildren: SubjectTeam,
 		FactScopePolicyTeamPrimaryAttributionWorkItemIdentity:         SubjectTeam,
 		FactScopePolicyTeamPrimaryAttributionWorkItemMembership:       SubjectTeam,
+
+		// The five entity-tree policies.
+		FactScopePolicyTeamRepositoryOwnershipContinuousIntegration: SubjectTeam,
+		FactScopePolicyProjectIssuePullRequestContinuousIntegration: SubjectProject,
+		FactScopePolicyProjectIssuePullRequestDeployments:           SubjectProject,
+		FactScopePolicyProjectIssuePullRequestIncidents:             SubjectProject,
+		FactScopePolicyProjectTeamOwnershipOperationalDeficiencies:  SubjectProject,
 	}
 	// CARDINALITY, in the guard itself: a one-way membership check certifies
 	// nothing about a present-and-unexpected member, and this map is the
 	// only place the ruled set is written down.
-	if len(wantOrigin) != 20 {
-		t.Fatalf("ruled activation set = %d policies, want 20 (6 CHAOS-4099/4101 + 14 CHAOS-5405)", len(wantOrigin))
+	if len(wantOrigin) != 25 {
+		t.Fatalf("ruled activation set = %d policies, want 25 (6 CHAOS-4099/4101 + 14 CHAOS-5405 + 5 entity-tree)", len(wantOrigin))
 	}
 	seen := make(map[FactScopePolicy]bool, len(wantOrigin))
 	for _, row := range factScopeEligibility {
@@ -3158,6 +3165,12 @@ func TestChaos4099_OnlyTheRatifiedPoliciesAppearForEachOrigin(t *testing.T) {
 			FactScopePolicyProjectWorkItemRequiredChildren: true,
 			FactScopePolicyProjectWorkItemIdentity:         true,
 			FactScopePolicyProjectWorkItemMembership:       true,
+
+			// The entity-tree project half.
+			FactScopePolicyProjectIssuePullRequestContinuousIntegration: true,
+			FactScopePolicyProjectIssuePullRequestDeployments:           true,
+			FactScopePolicyProjectIssuePullRequestIncidents:             true,
+			FactScopePolicyProjectTeamOwnershipOperationalDeficiencies:  true,
 		},
 		SubjectTeam: {
 			FactScopePolicyTeamPrimaryAttributionRepository:        true,
@@ -3172,6 +3185,9 @@ func TestChaos4099_OnlyTheRatifiedPoliciesAppearForEachOrigin(t *testing.T) {
 			FactScopePolicyTeamPrimaryAttributionWorkItemRequiredChildren: true,
 			FactScopePolicyTeamPrimaryAttributionWorkItemIdentity:         true,
 			FactScopePolicyTeamPrimaryAttributionWorkItemMembership:       true,
+
+			// The entity-tree team half.
+			FactScopePolicyTeamRepositoryOwnershipContinuousIntegration: true,
 		},
 	}
 	for _, row := range factScopeEligibility {
@@ -3240,11 +3256,13 @@ func TestChaos4099_ReachableWorkItemFamiliesNoLongerClaimAProofOfAbsence(t *test
 // project <- work_item -OWNED_BY_TEAM-> team, through the same computed
 // attribution CHAOS-4101 is holding back. Approaching it from the other
 // direction does not make it stronger, so no chain is claimed and
-// CHAOS-3783's proof of absence stands.
+// CHAOS-3783's proof of absence stands. operational_deficiencies is not in
+// this list: it reaches a project's teams through the ownership rows, and has
+// its own row.
 func TestChaos4099_TeamScopedFamiliesFromAProjectStayPruned(t *testing.T) {
 	t.Parallel()
 
-	for _, kind := range []FactKind{FactWorkload, FactInvestment, FactReadiness, FactOperationalDeficiencies} {
+	for _, kind := range []FactKind{FactWorkload, FactInvestment, FactReadiness} {
 		provider := &factProviderStub{
 			capability: planCapability(kind, string(kind), SubjectTeam),
 			result:     FactProviderResult{State: SourceAvailable},

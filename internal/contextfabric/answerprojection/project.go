@@ -189,15 +189,16 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		CoverageDetails:   coverageDetails,
 		// CHAOS-5405 (D-d): carried through verbatim. See the field's own
 		// doc comment for why it is not clamped like its neighbours.
-		FactScopeCensus:   result.FactScopeCensus,
-		EvidenceRefLabels: evidenceRefLabels,
-		Temporal:          projectTemporal(result),
-		CoveragePartial:   result.Coverage.Partial,
-		Limitations:       limitations,
-		Warnings:          warnings,
-		EvidenceRefIDs:    evidence,
-		SubjectReceipts:   projectReceipts(result),
-		Versions:          result.Versions,
+		FactScopeCensus:        result.FactScopeCensus,
+		FactScopeCensusOmitted: result.FactScopeCensusOmitted,
+		EvidenceRefLabels:      evidenceRefLabels,
+		Temporal:               projectTemporal(result),
+		CoveragePartial:        result.Coverage.Partial,
+		Limitations:            limitations,
+		Warnings:               warnings,
+		EvidenceRefIDs:         evidence,
+		SubjectReceipts:        projectReceipts(result),
+		Versions:               result.Versions,
 		// EffectiveEvidenceWindow, WindowClarification, StructureNeeds, and
 		// ConfirmedStructure (CHAOS-3972 P3+W2) are copied verbatim, joining
 		// the SAME never-dropped discipline Temporal/Limitations already

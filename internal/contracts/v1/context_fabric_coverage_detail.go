@@ -444,6 +444,14 @@ var contextFabricFactScopePolicies = [...]string{
 	"team_primary_attribution_work_item_required_children_v1",
 	"team_primary_attribution_work_item_identity_v1",
 	"team_primary_attribution_work_item_membership_v1",
+	// The five entity-tree policies: a team reaches repositories through
+	// ownership rows, a project through its issues' linked pull request rows,
+	// and a project reaches teams through ownership rows.
+	"team_repository_ownership_continuous_integration_v1",
+	"project_issue_pull_request_continuous_integration_v1",
+	"project_issue_pull_request_deployments_v1",
+	"project_issue_pull_request_incidents_v1",
+	"project_team_ownership_operational_deficiencies_v1",
 }
 
 // ContextFabricFactScopeCensusMaxCount bounds

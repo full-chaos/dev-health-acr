@@ -2066,9 +2066,22 @@ type ContextFabricInvestigationResult struct {
 	//
 	// Optional-first: nil on every result written before this field existed,
 	// and on any path that resolved no scope at all.
-	FactScopeCensus   []ContextFabricFactScopeCensusRecord `json:"fact_scope_census,omitempty"`
-	EvidenceRefLabels map[string]string                    `json:"evidence_ref_labels,omitempty"`
-	Versions          ContextFabricVersionSet              `json:"versions"`
+	FactScopeCensus []ContextFabricFactScopeCensusRecord `json:"fact_scope_census,omitempty"`
+	// FactScopeCensusOmitted counts the scope decisions the census does NOT
+	// list because the request's serialized byte budget could not carry every
+	// row beside the smallest valid answer (ContextFabricFactScopeCensusRowCeiling).
+	// A reader who sees N records and a positive count here knows the census is
+	// a bounded sample of the decisions made, never the whole set; the rows
+	// kept are the ones that explain the served answer first. Zero, and absent
+	// from the wire, whenever every decision fits -- which is every request at
+	// the default budget.
+	//
+	// Optional-first, additive: absent on every result written before this
+	// field existed. The only cause is the byte budget, so there is no reason
+	// code to carry.
+	FactScopeCensusOmitted int                     `json:"fact_scope_census_omitted,omitempty"`
+	EvidenceRefLabels      map[string]string       `json:"evidence_ref_labels,omitempty"`
+	Versions               ContextFabricVersionSet `json:"versions"`
 	// DeterministicAnswer is the service's own answer sentence. Required on
 	// every SUPPORTED result (ContextFabricResultSupported: a claimed fact
 	// AND a citable evidence ref) and on every complete/partial one; may be

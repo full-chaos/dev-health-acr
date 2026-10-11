@@ -26,6 +26,7 @@ package contextfabric
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"testing"
 	"time"
 
@@ -190,7 +191,7 @@ func TestChaos5405_ControlAPathThatResolvedNoScopeServesNoCensus(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			result := scopeServableResult()
-			applyFactScopeCensus(&result, tc.scope)
+			applyFactScopeCensus(&result, tc.scope, 0)
 			if result.FactScopeCensus != nil {
 				t.Fatalf("FactScopeCensus = %+v, want nil -- an empty array is a claim that decisions were made and none had a population", result.FactScopeCensus)
 			}
@@ -233,7 +234,7 @@ func TestChaos5405_EveryServedCensusRowIsCarriedByTheProjection(t *testing.T) {
 		Outcome:         FactScopeExpanded,
 		CensusComplete:  true,
 		AuthorizedCount: 3,
-	}}})
+	}}}, 0)
 	if len(result.FactScopeCensus) != 1 {
 		t.Fatalf("producer wrote %d rows, want 1", len(result.FactScopeCensus))
 	}
@@ -259,7 +260,7 @@ func TestChaos5405_TwoDecisionsGetTwoRowsAndDoNotShareAPopulationPointer(t *test
 	applyFactScopeCensus(&result, &FactReadScope{Events: []FactScopeExpansionEvent{
 		{RequirementKind: FactMetrics, OriginKind: SubjectProject, CensusComplete: true, AuthorizedCount: 7},
 		{RequirementKind: FactStatus, OriginKind: SubjectTeam, CensusComplete: true, AuthorizedCount: 11},
-	}})
+	}}, 0)
 	if len(result.FactScopeCensus) != 2 {
 		t.Fatalf("census rows = %d, want 2 -- one per decision", len(result.FactScopeCensus))
 	}
@@ -285,73 +286,126 @@ func TestChaos5405_TwoDecisionsGetTwoRowsAndDoNotShareAPopulationPointer(t *test
 // the response-shape measurement, written as an ASSERTION rather than as a
 // number in a PR body.
 //
-// Any change that grows the served response has to be measured against the
-// per-request budgets, and the census is the first field this ticket adds to
-// the served document. The measurement is only worth having if it cannot go
-// stale, so nothing here is a literal: the row ceiling is derived from the
-// LIVE eligibility table (the resolver emits at most one decision per
-// requirement/origin pair in it) and the policy and basis strings are the
-// real ones, so adding a policy or lengthening a name moves this test rather
-// than moving a sentence nobody re-measures.
-//
-// The bound compared against is the SMALLEST budget a caller may request
-// (ContextFabricSerializedBytesMin), not the 256 KiB default, because the
-// minimum is where a fixed-size addition actually bites -- against the
-// default the whole census is under 3%. The headroom is that minimum less the
-// smallest valid answer (ContextFabricMinimumAnswerBytes): a census that ate
-// more than that would let a legitimate answer be refused for being too large
-// on account of its own diagnostics, which is the #413 shape.
-//
-// MEASURED at this tip: 21 rows, 6304 bytes keyed, against 7169 bytes of
-// headroom -- it fits, with about 12% of the headroom to spare. That margin
-// is thin enough to be worth a test rather than a note.
+// The worst case is derived from the LIVE eligibility table: the resolver
+// emits at most one decision per requirement/origin pair in it, and the
+// strings are the real policy, basis, axis and outcome tokens. At the smallest
+// budget a caller may request, the whole table no longer fits beside the
+// smallest valid answer, so the census SHEDS: it serves the rows that fit, and
+// the count of the rest. It must never be refused for its own diagnostics and
+// never be cut without saying so.
 func TestChaos5405_TheWorstCaseCensusFitsTheSmallestBudgetACallerMayRequest(t *testing.T) {
 	t.Parallel()
 
-	// The resolver walks each requirement kind's origin kinds and emits at
-	// most one event per eligible pair, so the live table's size IS the row
-	// ceiling. Derived, never typed.
-	population := 200
-	rows := []contractsv1.ContextFabricFactScopeCensusRecord{}
+	events := []FactScopeExpansionEvent{}
 	for kind, byOrigin := range factScopePolicies {
 		for origin, rule := range byOrigin {
-			rows = append(rows, contractsv1.ContextFabricFactScopeCensusRecord{
-				RequirementKind: string(kind),
-				OriginKind:      string(origin),
-				Policy:          string(rule.Policy),
-				Basis:           string(rule.Basis),
-				// The longest axis and outcome tokens in their own closed
-				// vocabularies, so the row is the widest one that can be
-				// served rather than a typical one.
-				Axis:                      string(contractsv1.ContextFabricTemporalObservedTime),
-				Outcome:                   string(FactScopeTargetKindMismatch),
-				TargetLimit:               maxFactScopeTargets,
-				PopulationMeasured:        true,
-				AuthorizedPopulationCount: &population,
-				AdmittedCount:             maxFactScopeTargets,
-				Truncated:                 true,
+			events = append(events, FactScopeExpansionEvent{
+				RequirementKind: kind, OriginKind: origin, Policy: rule.Policy, Basis: rule.Basis,
+				Axis: contractsv1.ContextFabricTemporalObservedTime, Outcome: FactScopeTargetKindMismatch,
+				TargetLimit: maxFactScopeTargets, CensusComplete: true, AuthorizedCount: 200,
+				AdmittedCount: maxFactScopeTargets, Truncated: true,
 			})
 		}
 	}
-	if len(rows) == 0 {
+	if len(events) == 0 {
 		t.Fatal("the eligibility table is empty -- this measurement would be vacuous")
 	}
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].RequirementKind != events[j].RequirementKind {
+			return events[i].RequirementKind < events[j].RequirementKind
+		}
+		return events[i].OriginKind < events[j].OriginKind
+	})
 
-	document, err := json.Marshal(map[string]any{"fact_scope_census": rows})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+	measure := func(budget int64) (served InvestigationResult, bytes int) {
+		served = InvestigationResult{}
+		applyFactScopeCensus(&served, &FactReadScope{Events: events}, budget)
+		document, err := json.Marshal(map[string]any{
+			"fact_scope_census":         served.FactScopeCensus,
+			"fact_scope_census_omitted": served.FactScopeCensusOmitted,
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return served, len(document)
 	}
-	// Less the surrounding object's own two braces: what is measured is the
-	// key and its value as they sit on a result, not a document of one field.
-	censusBytes := len(document) - 2
 
 	headroom := contractsv1.ContextFabricSerializedBytesMin - contractsv1.ContextFabricMinimumAnswerBytes
+	served, censusBytes := measure(contractsv1.ContextFabricSerializedBytesMin)
 	if censusBytes >= headroom {
-		t.Fatalf("the worst-case census is %d bytes over %d rows, against %d bytes of headroom (%d minimum budget less the %d-byte smallest valid answer) -- a caller requesting the smallest permitted budget could be refused an answer because of the diagnostics attached to it",
-			censusBytes, len(rows), headroom,
+		t.Fatalf("the census is %d bytes over %d rows, against %d bytes of headroom (%d minimum budget less the %d-byte smallest valid answer) -- a caller requesting the smallest permitted budget could be refused an answer because of the diagnostics attached to it",
+			censusBytes, len(served.FactScopeCensus), headroom,
 			contractsv1.ContextFabricSerializedBytesMin, contractsv1.ContextFabricMinimumAnswerBytes)
 	}
-	t.Logf("worst-case census: rows=%d bytes=%d headroom=%d spare=%d", len(rows), censusBytes, headroom, headroom-censusBytes)
+	if len(served.FactScopeCensus) == 0 {
+		t.Fatal("the census was shed to nothing -- the rows that explain the answer must survive")
+	}
+	if served.FactScopeCensusOmitted != len(events)-len(served.FactScopeCensus) {
+		t.Fatalf("omitted = %d, want %d: a cut census must say exactly how many decisions it cut (listed %d of %d)",
+			served.FactScopeCensusOmitted, len(events)-len(served.FactScopeCensus), len(served.FactScopeCensus), len(events))
+	}
+	if served.FactScopeCensusOmitted == 0 {
+		t.Fatalf("nothing was shed at the smallest budget with %d cells (%d bytes) -- either the table shrank under the headroom, and this test should assert the unshed census, or shedding is not engaged", len(events), censusBytes)
+	}
+	t.Logf("smallest budget: rows=%d omitted=%d bytes=%d headroom=%d", len(served.FactScopeCensus), served.FactScopeCensusOmitted, censusBytes, headroom)
+
+	// The default budget carries the whole census and says nothing was cut.
+	full, _ := measure(contractsv1.ContextFabricSerializedBytesMax)
+	if len(full.FactScopeCensus) != len(events) || full.FactScopeCensusOmitted != 0 {
+		t.Fatalf("at the largest budget: rows=%d omitted=%d, want %d and 0 -- shedding must engage only when the budget cannot carry the census",
+			len(full.FactScopeCensus), full.FactScopeCensusOmitted, len(events))
+	}
+}
+
+// TestChaos5405_SheddingKeepsTheRowsThatExplainTheQuestion pins the order: a
+// row for a requirement the question never made goes before one it did, and a
+// row that records a gap or a cut-short traversal goes after one that simply
+// expanded.
+func TestChaos5405_SheddingKeepsTheRowsThatExplainTheQuestion(t *testing.T) {
+	t.Parallel()
+
+	records := []contractsv1.ContextFabricFactScopeCensusRecord{
+		{RequirementKind: string(FactMetrics), OriginKind: string(SubjectProject), Outcome: string(FactScopeExpanded)},
+		{RequirementKind: string(FactWorkload), OriginKind: string(SubjectProject), Outcome: string(FactScopeExpanded)},
+		{RequirementKind: string(FactPullRequests), OriginKind: string(SubjectProject), Outcome: string(FactScopePolicyUnavailable)},
+		{RequirementKind: string(FactReviews), OriginKind: string(SubjectProject), Outcome: string(FactScopeExpanded), Truncated: true},
+	}
+	asked := []FactRequirement{{Kind: FactMetrics}, {Kind: FactPullRequests}, {Kind: FactReviews}}
+	// budgetFor is the smallest budget whose ceiling is n rows, found through
+	// the exported ceiling so the test measures the contract, not a copy of it.
+	budgetFor := func(n int) int64 {
+		for budget := int64(contractsv1.ContextFabricMinimumAnswerBytes); budget <= int64(contractsv1.ContextFabricSerializedBytesMax); budget++ {
+			if contractsv1.ContextFabricFactScopeCensusRowCeiling(budget) >= n {
+				return budget
+			}
+		}
+		t.Fatalf("no budget carries %d rows", n)
+		return 0
+	}
+	budget := budgetFor(3)
+	if got := contractsv1.ContextFabricFactScopeCensusRowCeiling(budget); got != 3 {
+		t.Fatalf("test budget carries %d rows, want 3", got)
+	}
+	kept, omitted := shedFactScopeCensus(records, asked, budget)
+	if omitted != 1 || len(kept) != 3 {
+		t.Fatalf("kept=%d omitted=%d, want 3 and 1", len(kept), omitted)
+	}
+	for _, record := range kept {
+		if record.RequirementKind == string(FactWorkload) {
+			t.Fatalf("the unasked requirement survived: %+v", kept)
+		}
+	}
+
+	// Two rows fit: the unasked one and the plain expansion go first; the gap
+	// and the cut-short traversal that explain the answer stay.
+	budget = budgetFor(2)
+	kept, omitted = shedFactScopeCensus(records, asked, budget)
+	if omitted != 2 || len(kept) != 2 {
+		t.Fatalf("kept=%d omitted=%d, want 2 and 2", len(kept), omitted)
+	}
+	if kept[0].RequirementKind != string(FactPullRequests) || kept[1].RequirementKind != string(FactReviews) {
+		t.Fatalf("kept = %+v, want the gap and the truncated traversal in their original order", kept)
+	}
 }
 
 // TestChaos5405_TheCensusIsNotChargedAgainstTheItemBudget pins the DECISION
@@ -378,7 +432,7 @@ func TestChaos5405_TheCensusIsNotChargedAgainstTheItemBudget(t *testing.T) {
 	applyFactScopeCensus(&result, &FactReadScope{Events: []FactScopeExpansionEvent{
 		{RequirementKind: FactStatus, OriginKind: SubjectProject, CensusComplete: true, AuthorizedCount: 9},
 		{RequirementKind: FactWork, OriginKind: SubjectTeam, CensusComplete: false},
-	}})
+	}}, 0)
 	if len(result.FactScopeCensus) != 2 {
 		t.Fatalf("fixture wrote %d census rows, want 2 -- this test would otherwise measure the absence of a census", len(result.FactScopeCensus))
 	}

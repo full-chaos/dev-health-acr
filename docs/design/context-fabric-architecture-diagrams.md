@@ -1076,7 +1076,12 @@ project and team policies both ruled and shipped, `context-fabric-fact-scope.md`
 §9-10) sits one seam earlier, expanding a project/team origin to its
 activity-proxy repositories/PRs/reviews so the honest "unexpanded, but
 reachable" disclosure replaces a false "pruned, proven absent" one where a
-verified typed chain exists.
+verified typed chain exists. Five more pairs (continuous integration from a
+team or project, deployments, incidents and operational deficiencies from a
+project) are reached through the entity tree: ownership rows, and a project's
+issues' linked pull request rows, never an issue's own repository column
+(`context-fabric-fact-scope.md` §12). The served census sheds rows when a small
+byte budget cannot carry every cell, and serves the count it cut.
 
 ---
 

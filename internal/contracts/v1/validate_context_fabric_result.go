@@ -1758,6 +1758,9 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	if err := validateFactScopeCensus(r.FactScopeCensus); err != nil {
 		return err
 	}
+	if err := validateFactScopeCensusOmitted(r.FactScopeCensus, r.FactScopeCensusOmitted); err != nil {
+		return err
+	}
 	// One entry per CARRIED member (design brief §2.1) -- bounded by the
 	// closed frame-member vocabulary's own size, not an offer-list cap.
 	if len(r.ConfirmedStructure) > ContextFabricStructureNeedKindCount {
@@ -1999,6 +2002,20 @@ func validateRowAgainstPlanRequirement(row ContextFabricPlanRequirementOutcomeRo
 		return fmt.Errorf(
 			"outcome row for requirement %q is for the computed obligation %q, but the answer plan declares the requirement as %q",
 			row.Requirement, row.Obligation, requirement.Kind)
+	}
+	return nil
+}
+
+// validateFactScopeCensusOmitted is the one rule for the omitted count that
+// accompanies a census: non-negative, and the listed rows plus the omitted
+// ones can never exceed the number of decisions the resolver can make (each
+// named policy identifies exactly one cell).
+func validateFactScopeCensusOmitted(records []ContextFabricFactScopeCensusRecord, omitted int) error {
+	if omitted < 0 {
+		return fmt.Errorf("fact_scope_census_omitted must be non-negative")
+	}
+	if len(records)+omitted > ContextFabricFactScopeCensusMaxCount {
+		return fmt.Errorf("fact_scope_census exceeds v1 bounds")
 	}
 	return nil
 }

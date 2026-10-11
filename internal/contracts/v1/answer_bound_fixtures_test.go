@@ -316,6 +316,14 @@ func answerBoundTable() []answerBound {
 				records := maximalFactScopeCensus()
 				r.FactScopeCensus = append(records, records[0])
 			}},
+		{Field: "FactScopeCensusOmitted", Why: "0..ContextFabricFactScopeCensusMaxCount, COUPLED to FactScopeCensus: the listed rows plus the omitted ones can never exceed the number of decisions the resolver can make, so at the census maximum the count is zero and the maximal document carries the full census with no omission (the count is omitempty, so it adds nothing there)",
+			Min: func(r *ContextFabricInvestigationResult) { r.FactScopeCensusOmitted = 0 },
+			Max: func(r *ContextFabricInvestigationResult) {
+				r.FactScopeCensusOmitted = ContextFabricFactScopeCensusMaxCount - len(r.FactScopeCensus)
+			},
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				r.FactScopeCensusOmitted = ContextFabricFactScopeCensusMaxCount - len(r.FactScopeCensus) + 1
+			}},
 		{Field: "StructureOfferSnapshot", Why: "bounded PER MEMBER rather than by a flat cap: ContextFabricStructureNeedKindCount times each member's own mint-time offer cap (contextFabricStructureNeedsMaxOptions)",
 			Min: func(r *ContextFabricInvestigationResult) { r.StructureOfferSnapshot = nil },
 			Max: func(r *ContextFabricInvestigationResult) { r.StructureOfferSnapshot = maximalOfferSnapshot() },
@@ -479,7 +487,11 @@ const irreducibleAnswerBytes = 1023
 // 521162181 -> 521162209 (+28): the version set carries the synthesis
 // source.
 // 521162209 -> 521166109 (+3900): the candidate provider cue, 64 runes on 50 candidates and the field name.
-const maximalAnswerBytes = 521166109
+//
+// 521166109 -> 521167862 (+1753): the fact-scope census carries one record per
+// policy and the vocabulary gained five entity-tree policies; the census row
+// ceiling and the omitted count are additive and add nothing at the maximum.
+const maximalAnswerBytes = 521167862
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
@@ -762,6 +774,7 @@ var expectedRejection = map[string]string{
 	"WindowClarification":     "window clarification options violate v1 bounds",
 	"StructureNeeds":          "structure needs offer lists violate v1 bounds",
 	"FactScopeCensus":         "fact_scope_census exceeds v1 bounds",
+	"FactScopeCensusOmitted":  "fact_scope_census exceeds v1 bounds",
 	"ConfirmedStructure":      "confirmed_structure exceeds v1 bounds",
 	"StructureOfferSnapshot":  "structure_offer_snapshot exceeds v1 bounds",
 }
