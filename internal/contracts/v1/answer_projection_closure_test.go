@@ -426,7 +426,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// (replaced_status, direction, deciding_requirement, deciding_outcome):
 		// once on the projection (completeness mirror) and twice on the
 		// canonical result (top-level field and mirror).
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 371},
+		// 371 -> 372 -- claimed_facts[].fact_id, the optional id of the cited
+		// canonical fact; classified untrusted like claimed_facts[].field.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 372},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
