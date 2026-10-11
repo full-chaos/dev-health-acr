@@ -3406,6 +3406,10 @@ var AnchorBindingTransition = Event{
 		// that point and on a reuse serve. What it acquired follows, in the same
 		// form as the parent's.
 		{Key: "freshness_acquisition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("freshness_acquisition")},
+		// Whether the binding's anchor kind (a redeemed anchor receipt, else an
+		// admitted carried binding) replaced the model's on the reading every
+		// stage read this turn; switch_off while the count switch is off.
+		{Key: "bound_anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("bound_anchor_kind")},
 		{Key: "freshness_serving_epoch", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "freshness_ownership_digest", Type: FieldString, Presence: PresenceRequired},
 		{Key: "to_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("to_state")},

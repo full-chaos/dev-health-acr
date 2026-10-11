@@ -407,6 +407,21 @@
         ]
       },
       {
+        "key": "bound_anchor_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "switch_off",
+          "not_evaluated",
+          "none",
+          "agrees",
+          "rejected_by_frame",
+          "applied_receipt",
+          "applied_carried",
+          "undeclared"
+        ]
+      },
+      {
         "key": "freshness_serving_epoch",
         "type": "int",
         "presence": "required"

@@ -763,7 +763,7 @@ func validateSemanticState(s PersistedSemanticState) error {
 	if s.ScopeAnchor.Kind != "" && !contractsv1.ValidContextFabricSubjectKind(s.ScopeAnchor.Kind) {
 		return reject("scope_anchor.kind %q is not a vocabulary member", s.ScopeAnchor.Kind)
 	}
-	if s.ScopeAnchor.KindSource != "" && s.ScopeAnchor.KindSource != ScopeAnchorKindCommittedHint {
+	if s.ScopeAnchor.KindSource != "" && s.ScopeAnchor.KindSource != ScopeAnchorKindCommittedHint && s.ScopeAnchor.KindSource != ScopeAnchorKindAnchorBinding {
 		return reject("scope_anchor.kind_source %q is not a vocabulary member", s.ScopeAnchor.KindSource)
 	}
 	if len(s.ScopeAnchor.Term) > SemanticStateMaxTermBytes {

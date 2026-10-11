@@ -420,6 +420,9 @@ func AnchorBindingTransitionLineVocabulary(key string) []string {
 	case "binding_admission":
 		admissions := anchorBindingAdmissions()
 		return strs(len(admissions), func(i int) string { return string(admissions[i]) })
+	case "bound_anchor_kind":
+		decisions := boundAnchorKindDecisions()
+		return strs(len(decisions), func(i int) string { return string(decisions[i]) })
 	case "admission_remembered_check":
 		checks := SubjectSubstitutionRememberedCheckVocabulary()
 		return strs(len(checks), func(i int) string { return string(checks[i]) })
@@ -828,6 +831,9 @@ type anchorBindingTracker struct {
 	admission           AnchorBindingAdmission
 	admissionRemembered rememberedSubjectCheck
 	admissionAgeSeconds int64
+	// boundKind is whether the binding's kind was applied to the reading
+	// (anchor_binding_kind.go); empty until decided.
+	boundKind BoundAnchorKindDecision
 }
 
 // admissionOutcome is the admission as the line publishes it.
@@ -1025,6 +1031,9 @@ type AnchorBindingTransitionEvent struct {
 	FreshnessAcquisition AnchorFreshnessAcquisition
 	Freshness            AnchorFreshness
 	OwnershipMovement    AnchorOwnershipMovement
+	// BoundAnchorKind is whether the binding's kind replaced the model's on
+	// the reading every stage read this turn.
+	BoundAnchorKind BoundAnchorKindDecision
 }
 
 // decide runs the binder for one Save and returns the binding and the line
@@ -1060,6 +1069,7 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 	event := t.lineFor(site, result, in, proposal, to)
 	event.SubstitutionGuard = t.substitutionGuard()
 	event.FreshnessAcquisition = t.acquisition()
+	event.BoundAnchorKind = t.boundKindDecision()
 	if state == nil {
 		event.Agreement, event.DisagreementField = AnchorBindingNotEvaluated, AnchorBindingFieldNone
 		return to, event
@@ -1304,7 +1314,7 @@ func unrecordedAnchorBindingEvent(site BudgetAssertStage, result InvestigationRe
 		ParentGraphEpoch: -1, CommittedSubjects: []string{}, CallerHintIDs: []string{}, ProvenAnchorIDs: []string{},
 		Agreement: AnchorBindingNotEvaluated, DisagreementField: AnchorBindingFieldNone, ServedCount: "not_evaluated",
 		SubstitutionGuard:    SubjectSubstitutionNotEvaluated,
-		FreshnessAcquisition: AnchorFreshnessNotAttempted, OwnershipMovement: AnchorOwnershipNotApplicable,
+		FreshnessAcquisition: AnchorFreshnessNotAttempted, OwnershipMovement: AnchorOwnershipNotApplicable, BoundAnchorKind: BoundAnchorKindNotEvaluated,
 	}
 }
 
@@ -1325,6 +1335,7 @@ func (t *anchorBindingTracker) reuseEvent(result InvestigationResult, reading st
 	event.SubstitutionGuard = t.substitutionGuard()
 	// A reuse serve reads no graph and acquires nothing.
 	event.FreshnessAcquisition = AnchorFreshnessNotAttempted
+	event.BoundAnchorKind = t.boundKindDecision()
 	return event
 }
 
@@ -1380,6 +1391,7 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"caller_hint_ids", SanitizeLogStrings(nonNilStrings(event.CallerHintIDs)),
 		"proven_anchor_ids", SanitizeLogStrings(nonNilStrings(event.ProvenAnchorIDs)),
 		"effective_kind", SanitizeLogAttr(string(event.EffectiveKind)),
+		"bound_anchor_kind", SanitizeLogAttr(closed("bound_anchor_kind", string(event.BoundAnchorKind))),
 		"freshness_acquisition", SanitizeLogAttr(closed("freshness_acquisition", string(event.FreshnessAcquisition))),
 		"freshness_serving_epoch", anchorFreshnessEpoch(event.Freshness),
 		"freshness_ownership_digest", SanitizeLogAttr(anchorFreshnessDigest(event.Freshness)),
