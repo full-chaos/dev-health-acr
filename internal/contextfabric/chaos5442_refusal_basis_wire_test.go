@@ -58,7 +58,7 @@ func TestTheRefusalSentenceNamesTheKindAndIsServiceAuthored(t *testing.T) {
 		RefuseBasis:        CohortMemberKindUnservable,
 		DeclaredMemberKind: contractsv1.ContextFabricSubjectRepository,
 	})
-	want := contractsv1.ContextFabricRefusalBasisLimitation(contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricRefusalBasisMemberKindUnservable)
+	want := contractsv1.ContextFabricRefusalBasisLimitation(contractsv1.ContextFabricSubjectRepository)
 	found := false
 	for _, limitation := range result.Limitations {
 		if limitation == want {
@@ -232,7 +232,7 @@ func TestTheDeclaredMemberKindReachesTheServedDisclosureThroughTheReceipt(t *tes
 	// THE CALLER-FACING OBSERVABLE. The sentence must name the population
 	// the question declared; the invariant fallback names none, and a
 	// caller told that one learns nothing they can act on.
-	want := contractsv1.ContextFabricRefusalBasisLimitation(declared, contractsv1.ContextFabricRefusalBasisMemberKindUnservable)
+	want := contractsv1.ContextFabricRefusalBasisLimitation(declared)
 	served := false
 	for _, limitation := range result.Limitations {
 		if limitation == want {

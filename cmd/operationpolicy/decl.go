@@ -36,8 +36,10 @@ type operationDecl struct {
 	AdditionalOutputs []string
 	OutputExceptions  map[string]string
 	WithheldOutputs   map[string]string
-	Disclosure        []directread.DisclosureField
-	Notes             []string
+	// EmitSubjects names the outputs served in the acr subject form.
+	EmitSubjects map[string]directread.SubjectEmit
+	Disclosure   []directread.DisclosureField
+	Notes        []string
 }
 
 type variableDecl struct {

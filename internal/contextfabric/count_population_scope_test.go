@@ -285,7 +285,7 @@ func scopeCells() []scopeCell {
 			bases:      provenCommitBases(scopeTeamAnchor()),
 			cohort:     kindCohort(SubjectRepository, 2), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 2, wantAnchors: 1, wantAnchorID: "team:SCOPE_ANCHOR",
-			wantSentence: "Counted 2 repositorys.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
+			wantSentence: "Counted 2 repositories.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
 			wantSubjectKind: SubjectTeam, wantSubjectID: "team:SCOPE_ANCHOR",
 		},
 		{
