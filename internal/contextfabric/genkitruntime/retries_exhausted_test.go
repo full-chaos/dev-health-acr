@@ -24,6 +24,7 @@ func TestWithRetryNamesAnExhaustedAttemptBudget(t *testing.T) {
 	}{
 		{"every attempt retryable", 2, []error{retryable, retryable}, 2, true},
 		{"one attempt allowed, retryable", 1, []error{retryable}, 1, true},
+		{"retryable then cancelled on the last attempt", 2, []error{retryable, context.Canceled}, 2, true},
 		{"first of two attempts not retryable", 2, []error{core.NewError(core.INVALID_ARGUMENT, "bad")}, 1, false},
 		{"a later attempt serves", 2, []error{retryable, nil}, 2, false},
 	}
