@@ -41,8 +41,7 @@ func TestTeamScopedCohortStatementsReadCoOwnerRows(t *testing.T) {
 		policy contextfabric.FactScopePolicy
 		target contextfabric.SubjectKind
 	}{
-		"team repositories": {contextfabric.FactScopePolicyTeamPrimaryAttributionRepository, contextfabric.SubjectRepository},
-		"team work items":   {contextfabric.FactScopePolicyTeamPrimaryAttributionWorkItemWork, contextfabric.SubjectWorkItem},
+		"team work items": {contextfabric.FactScopePolicyTeamPrimaryAttributionWorkItemWork, contextfabric.SubjectWorkItem},
 	} {
 		client := &recordingClient{}
 		_, err := NewScopeExpander(client).ExpandFactScope(context.Background(), contextfabric.FactScopeExpansionRequest{

@@ -13,8 +13,9 @@ import (
 const coOwnerTeamID = "COOWNER"
 
 // A work item with a primary row for one team and a co-owner row
-// (is_primary = 2) for another is in BOTH teams' cohorts, and the primary
-// team's cohort does not change.
+// (is_primary = 2) for another is in BOTH teams' work-item cohorts, and the
+// primary team's cohort does not change. Repository reach follows ownership
+// rows, not attributions.
 func TestScopeExpander_TeamScopeReadsCoOwnerRows(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
@@ -44,9 +45,11 @@ func TestScopeExpander_TeamScopeReadsCoOwnerRows(t *testing.T) {
 		return result
 	}
 
+	// A co-owner attribution is an attribution of an issue; it owns no
+	// repository, so the co-owner team reaches none.
 	repos := expand(coOwnerTeamID, contextfabric.FactScopePolicyTeamPrimaryAttributionRepository, contextfabric.SubjectRepository)
-	if len(repos.Targets) != 1 || repos.Targets[0].Label != chaos4101RepoBSlug {
-		t.Fatalf("co-owner team repositories = %+v, want only %s", repos.Targets, chaos4101RepoBSlug)
+	if len(repos.Targets) != 0 {
+		t.Fatalf("co-owner team repositories = %+v, want none: it owns no repository and no project", repos.Targets)
 	}
 	items := expand(coOwnerTeamID, contextfabric.FactScopePolicyTeamPrimaryAttributionWorkItemWork, contextfabric.SubjectWorkItem)
 	if len(items.Targets) != 1 || items.Targets[0].Label != "wi-b-heuristic" {

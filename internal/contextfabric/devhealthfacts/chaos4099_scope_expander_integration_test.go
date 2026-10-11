@@ -153,6 +153,7 @@ func seedChaos4099Fixture(t *testing.T, ctx context.Context, direct interface {
 	// verified finding).
 	mustSeed("real work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"gitlab:acme/api#42", chaos4099GitLabRepoID, orgID, "GitLab issue", "open", "", "", chaos4099GitLabProjectKey, at)
+	seedIssueLink(t, ctx, direct, orgID, "gitlab:acme/api#42", chaos4099GitLabRepoID, 1, "native", at)
 	mustSeed("zero-uuid work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"gitlab:acme/api#43", chaos4099ZeroRepositoryID, orgID, "GitLab issue (repo-less)", "open", "", "", chaos4099GitLabProjectKey, at)
 	mustSeed("orphan work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -252,6 +253,8 @@ func TestScopeExpander_ProjectToRepository_ZeroUUIDNeverAdmitsEvenIfARepoRowClai
 		chaos4099ZeroRepositoryID, chaos4099OrgID, "phantom/repo", "gitlab", at); err != nil {
 		t.Fatalf("seed pathological zero-uuid repos row: %v", err)
 	}
+	// A link row that names the sentinel as the pull request's repository.
+	seedIssueLink(t, ctx, direct, chaos4099OrgID, "gitlab:acme/api#43", chaos4099ZeroRepositoryID, 9, "native", at)
 
 	expander := devhealthfacts.NewScopeExpander(query)
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
@@ -387,6 +390,7 @@ func TestScopeExpander_ProjectToPullRequest_MixedAuthorizationOnlyAdmitsTheAutho
 		"gitlab:acme/api#46", mixedUnauthorizedRepoID, chaos4099OrgID, "GitLab issue (second repo)", "open", "", "", chaos4099GitLabProjectKey, at); err != nil {
 		t.Fatalf("seed second-repo work item: %v", err)
 	}
+	seedIssueLink(t, ctx, direct, chaos4099OrgID, "gitlab:acme/api#46", mixedUnauthorizedRepoID, 1, "native", at)
 	if err := direct.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
 		mixedUnauthorizedRepoID, chaos4099OrgID, uint32(1), "Unauthorized PR", "open", at, at, "feat/unauth", ""); err != nil {
 		t.Fatalf("seed second repo's pull request: %v", err)
@@ -458,6 +462,7 @@ func TestScopeExpander_ProjectToRepository_CrossProviderIDCollisionIsOmittedNotG
 		"gitlab:acme/api#47", crossProviderRepoID, chaos4099OrgID, "GitLab issue (own-id arm, now poisoned)", "open", "", "", chaos4099GitLabProjectID, at); err != nil {
 		t.Fatalf("seed own-id-arm work item: %v", err)
 	}
+	seedIssueLink(t, ctx, direct, chaos4099OrgID, "gitlab:acme/api#47", crossProviderRepoID, 1, "native", at)
 
 	expander := devhealthfacts.NewScopeExpander(query)
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
@@ -604,6 +609,7 @@ func TestScopeExpander_ProjectToRepository_AmbiguousJoinKeyIsOmittedNotGuessed(t
 		"gitlab:acme/api#45", unambiguousRepoID, chaos4099OrgID, "GitLab issue (own-id arm)", "open", "", "", chaos4099GitLabProjectID, at); err != nil {
 		t.Fatalf("seed own-id-arm work item: %v", err)
 	}
+	seedIssueLink(t, ctx, direct, chaos4099OrgID, "gitlab:acme/api#45", unambiguousRepoID, 1, "native", at)
 
 	// The second, unrequested project: its own id collides with the
 	// requested project's project_key ("acme/api"). This poisons that
@@ -624,6 +630,7 @@ func TestScopeExpander_ProjectToRepository_AmbiguousJoinKeyIsOmittedNotGuessed(t
 		"gitlab:unrelated#1", ambiguousRepoID, chaos4099OrgID, "Ambiguous work item", "open", "", "", chaos4099AmbiguousProjectID, at); err != nil {
 		t.Fatalf("seed ambiguous work item: %v", err)
 	}
+	seedIssueLink(t, ctx, direct, chaos4099OrgID, "gitlab:unrelated#1", ambiguousRepoID, 1, "native", at)
 
 	expander := devhealthfacts.NewScopeExpander(query)
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
