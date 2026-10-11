@@ -680,3 +680,36 @@ func TestPeriodDeltaPriorBranchFailure(t *testing.T) {
 		}
 	}
 }
+
+// End to end through the REAL registry: a health provider that errors on the
+// prior window returns a nil-error bundle whose ledger records the failed
+// branch; the comparison must serve prior_read_failed, not unknown_prior.
+func TestApplyPeriodDelta_RegistryProviderFailsOnPriorWindow_PriorReadFailed(t *testing.T) {
+	t.Parallel()
+	teamSubject := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:T1"}
+	health := &factProviderStub{
+		capability: FactCapability{Kind: FactHealth, Name: "devhealthfacts.health", Version: "health-v1", SupportedSubjectKinds: []SubjectKind{SubjectTeam}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
+		err:        errors.New("provider exploded"),
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{health}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+	telemetry := &recordingTelemetry{}
+	engine := &Engine{facts: registry, telemetry: telemetry}
+	currentFacts := []CanonicalFact{periodDeltaHealthFact(teamSubject, map[string]FactValue{"severity": StringFactValue("low")})}
+	frame := QuestionFrame{Obligations: []AnswerObligation{ObligationPeriodDelta}}
+
+	engine.applyPeriodDelta(context.Background(), periodDeltaTestPrincipal(), frame, []SubjectRef{teamSubject}, currentFacts, time.Now(), true)
+
+	if len(health.queries) != 1 {
+		t.Fatalf("health provider read %d times, want exactly 1 (the prior window)", len(health.queries))
+	}
+	fields := currentFacts[0].Fields
+	if got := factValueString(fields["period_delta_transition"]); got != string(PeriodDeltaTransitionPriorReadFailed) {
+		t.Errorf("period_delta_transition = %q, want prior_read_failed", got)
+	}
+	if got := factValueString(fields["period_delta_unavailable_reason"]); got != string(PeriodDeltaFailureReadFailed) {
+		t.Errorf("period_delta_unavailable_reason = %q, want read_failed", got)
+	}
+}
