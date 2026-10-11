@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/version"
@@ -348,6 +349,12 @@ func serveHTTPOn(ctx context.Context, listener net.Listener, cfg *ProcessConfig,
 // hosted API call forwards.
 func newServeProcessConfig(sidecarCfg sidecar.Config, identity version.Info, diagnostics io.Writer, opts ServeOptions) (*ProcessConfig, error) {
 	sidecarCfg.Resource = opts.ResourceURL
+	// The answer a wait budget produces is written to the caller; a write
+	// deadline inside the budget cuts it off.
+	reserve := time.Duration(contractsv1.ContextFabricSynthesisCompositionReserveSeconds) * time.Second
+	if sidecarCfg.InvestigationWait > 0 && opts.WriteTimeout < sidecarCfg.InvestigationWait+reserve {
+		return nil, &ErrServeOptionInvalid{Setting: HTTPWriteTimeoutEnvironment}
+	}
 	return NewHTTPProcessConfig(sidecarCfg, identity, diagnostics)
 }
 

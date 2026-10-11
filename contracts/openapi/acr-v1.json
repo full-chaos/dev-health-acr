@@ -443,6 +443,9 @@
           },
           {
             "$ref": "#/components/parameters/ClientVersion"
+          },
+          {
+            "$ref": "#/components/parameters/WaitBudget"
           }
         ],
         "requestBody": {
@@ -3017,6 +3020,17 @@
         "schema": {
           "type": "string",
           "maxLength": 256
+        }
+      },
+      "WaitBudget": {
+        "name": "X-ACR-Wait-Budget-Seconds",
+        "in": "header",
+        "required": false,
+        "description": "Optional longest wait, in whole seconds, the caller will give one investigation. At least 10. The request ends by then, narrowing the service's own request timeout and never extending it: when the synthesis model call has not finished, the answer is served degraded with its result_id and coverage.details[code=synthesis_model_failed]. Stages before synthesis that run past the budget still end as 504 deadline_exceeded. A value that is not a whole number of seconds of at least 10 is ignored.",
+        "schema": {
+          "type": "integer",
+          "minimum": 10,
+          "example": 45
         }
       },
       "ClientVersion": {
