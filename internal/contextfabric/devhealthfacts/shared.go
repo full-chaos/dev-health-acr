@@ -758,13 +758,17 @@ import (
 // budget refusal names its stage and measured sections; a candidate saved under an
 // earlier version carries the tables.
 //
-// v155 -> v156: the members of a project or repository anchor are the nodes
+// v155 -> v156: the team blockers rollup counts only open blockers and serves the
+// excluded-by-status count and the status basis; a candidate saved under an earlier
+// version holds the unfiltered counts.
+//
+// v156 -> v157: the members of a project or repository anchor are the nodes
 // with an entity-tree path to the anchor (and a team anchor's pull requests the
 // ones of its repositories), each stating the tier of the issue and pull
 // request link that reached it; a text-matched member with no path is no
-// longer served. A candidate saved under v155 may hold such a member and must
+// longer served. A candidate saved under v156 may hold such a member and must
 // not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v156"
+const QueryVersion = "devhealthfacts.clickhouse.v157"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
