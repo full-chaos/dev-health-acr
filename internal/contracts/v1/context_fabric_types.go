@@ -74,6 +74,7 @@ const (
 	ContextFabricNoProjectOwnershipSentinel     = "acr-context-fabric:no-project-repository-ownership"
 	ContextFabricNoTeamOwnershipSentinel        = "acr-context-fabric:no-team-repository-ownership"
 	ContextFabricTeamOwnershipOverBoundSentinel = "acr-context-fabric:team-repository-ownership-over-bound"
+	ContextFabricReferencedEndpointStubSentinel = "acr-context-fabric:unresolved-referenced-endpoint"
 )
 
 // ContextFabricIsRepositoryAbsenceSentinel reports whether entry is one of the
@@ -85,7 +86,8 @@ func ContextFabricIsRepositoryAbsenceSentinel(entry string) bool {
 		ContextFabricUnresolvedRepositorySentinel,
 		ContextFabricNoProjectOwnershipSentinel,
 		ContextFabricNoTeamOwnershipSentinel,
-		ContextFabricTeamOwnershipOverBoundSentinel:
+		ContextFabricTeamOwnershipOverBoundSentinel,
+		ContextFabricReferencedEndpointStubSentinel:
 		return true
 	}
 	return false
