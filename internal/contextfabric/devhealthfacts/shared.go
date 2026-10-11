@@ -695,6 +695,15 @@ import (
 // project, and a project with no canonical mix has no investment fact (CHAOS-9195, D5932).
 // A candidate saved under v136 carries the legacy breakdown (and a mix merged onto it) and
 // must not be reused.
+//
+// v137 -> v138: the first project investment read after a pod start loads the
+// membership scope before the capability clock starts, so it serves the full
+// answer, not a partial "canonical fact capability timed out". A candidate saved
+// under v137 may hold that partial answer and must not be reused.
+//
+// v138 -> v143: served limitation sentences name kinds by display noun and carry no
+// basis token, so a candidate saved under an earlier version may hold the old wording
+// and must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v143"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
