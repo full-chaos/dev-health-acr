@@ -106,7 +106,8 @@ func TestTheHeldBindingCarriesTheOwnershipItWasProvenUnderAcrossTurns(t *testing
 		{"same ownership", set(probeOwnershipW1, nil), set(probeOwnershipW1, nil), AnchorOwnershipUnmoved, AnchorFreshnessAcquired, proven},
 		{"ownership moved", set(probeOwnershipW1, nil), set(w2, nil), AnchorOwnershipMoved, AnchorFreshnessAcquired, proven},
 		{"read failed", set(probeOwnershipW1, nil), set(AnchorFreshnessRead{}, errors.New("read failed")), AnchorOwnershipNotAcquired, AnchorFreshnessReadFailed, proven},
-		{"another epoch", set(probeOwnershipW1, nil), set(otherEpoch, nil), AnchorOwnershipNotAcquired, AnchorFreshnessEpochMismatch, proven},
+		{"another serving epoch, read live", set(probeOwnershipW1, nil), set(otherEpoch, nil), AnchorOwnershipMoved, AnchorFreshnessAcquired, proven},
+		{"a serving epoch a lease ahead of the graph epoch on both turns", set(otherEpoch, nil), set(otherEpoch, nil), AnchorOwnershipUnmoved, AnchorFreshnessAcquired, AnchorFreshness{Recorded: true, ServingEpoch: otherEpoch.ServingEpoch, OwnershipWatermark: "ownership-w1"}},
 		{"proven under no recorded ownership", set(AnchorFreshnessRead{Recorded: false}, nil), set(probeOwnershipW1, nil), AnchorOwnershipProvenUnrecorded, AnchorFreshnessAcquired, AnchorFreshness{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -143,7 +144,7 @@ func TestAcquireAnchorFreshnessNamesEveryReadOutcome(t *testing.T) {
 		{"read failed", anchorFreshnessFunc(func(context.Context, string) (AnchorFreshnessRead, error) {
 			return probeOwnershipW1, errors.New("boom")
 		}), AnchorFreshnessReadFailed, AnchorFreshness{}},
-		{"epoch mismatch", &probeOwnership{read: AnchorFreshnessRead{ServingEpoch: 8, OwnershipWatermark: "w", Recorded: true}}, AnchorFreshnessEpochMismatch, AnchorFreshness{}},
+		{"a serving epoch other than the cached graph epoch is stamped as read", &probeOwnership{read: AnchorFreshnessRead{ServingEpoch: 8, OwnershipWatermark: "w", Recorded: true}}, AnchorFreshnessAcquired, AnchorFreshness{Recorded: true, ServingEpoch: 8, OwnershipWatermark: "w"}},
 		{"source absent", &probeOwnership{read: AnchorFreshnessRead{ServingEpoch: 7}}, AnchorFreshnessSourceAbsent, AnchorFreshness{}},
 		{"unstorable", &probeOwnership{read: AnchorFreshnessRead{ServingEpoch: 7, OwnershipWatermark: oversize.OwnershipWatermark, Recorded: true}}, AnchorFreshnessUnstorable, AnchorFreshness{}},
 		{"at the bound", &probeOwnership{read: AnchorFreshnessRead{ServingEpoch: 7, OwnershipWatermark: atBound.OwnershipWatermark, Recorded: true}}, AnchorFreshnessAcquired, AnchorFreshness{Recorded: true, ServingEpoch: 7, OwnershipWatermark: atBound.OwnershipWatermark}},
