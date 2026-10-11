@@ -737,7 +737,11 @@ import (
 // synthesis_model_failed coverage detail (failure class and retry hint) and is
 // recognised by it; a no-facts failure serves its own limitation. A candidate
 // saved under an earlier version carries only the warning.
-const QueryVersion = "devhealthfacts.clickhouse.v151"
+//
+// v151 -> v152: a repository count named by its label certifies when the lexical search was
+// truncated and the identity read was complete; a candidate saved under an earlier version
+// may hold the uncertified count and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v152"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
