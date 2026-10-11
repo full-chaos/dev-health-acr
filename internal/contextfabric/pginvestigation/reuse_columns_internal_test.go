@@ -274,11 +274,15 @@ func TestReuseColumnsFor_AModelFailureAnswerNeverPopulatesReuseColumns(t *testin
 	if hash.Valid || watermarks != nil || invalidationEpoch.Valid {
 		t.Fatalf("reuseColumnsFor(model failure answer) = (%+v, %v, %+v), want all-NULL/nil", hash, watermarks, invalidationEpoch)
 	}
-	// The code is the one key: the warning text alone no longer marks the answer.
-	for name, ordinary := range map[string]contextfabric.InvestigationResult{"ordinary warning": build("a coverage warning"), "failure warning without the code": build(failureWarning)} {
-		hash, _, _, _, watermarks, invalidationEpoch = store.reuseColumnsFor(ordinary, snapshot, &epoch)
-		if !hash.Valid || watermarks == nil || !invalidationEpoch.Valid {
-			t.Fatalf("reuseColumnsFor(%s) = (%+v, %v, %+v), want populated", name, hash, watermarks, invalidationEpoch)
-		}
+	// The failure warning marks the answer when its code could not be filed.
+	unfiled := build(failureWarning)
+	hash, _, _, _, watermarks, invalidationEpoch = store.reuseColumnsFor(unfiled, snapshot, &epoch)
+	if hash.Valid || watermarks != nil || invalidationEpoch.Valid {
+		t.Fatalf("reuseColumnsFor(failure answer without its code) = (%+v, %v, %+v), want all-NULL/nil", hash, watermarks, invalidationEpoch)
+	}
+	ordinary := build("a coverage warning")
+	hash, _, _, _, watermarks, invalidationEpoch = store.reuseColumnsFor(ordinary, snapshot, &epoch)
+	if !hash.Valid || watermarks == nil || !invalidationEpoch.Valid {
+		t.Fatalf("reuseColumnsFor(ordinary degraded answer) = (%+v, %v, %+v), want populated", hash, watermarks, invalidationEpoch)
 	}
 }

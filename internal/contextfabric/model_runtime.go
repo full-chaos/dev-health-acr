@@ -2607,7 +2607,10 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 		}
 		serverDetails = append(serverDetails, detail)
 	}
-	appendServerCoverageDetails(&result, serverDetails, principal.OrgID)
+	if !appendServerCoverageDetails(&result, serverDetails, principal.OrgID) && failure != nil {
+		slog.Default().Error("context_fabric: model failure coverage detail not filed, the answer is recognised by its warning",
+			"org_id", SanitizeLogAttr(principal.OrgID), "failure_class", SanitizeLogAttr(string(failure.Class)))
+	}
 	return result, nil
 }
 

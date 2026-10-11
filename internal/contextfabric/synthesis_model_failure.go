@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -102,7 +103,8 @@ func synthesisFailureDegradeClass(ctx context.Context, callErr, sinkErr error) (
 }
 
 // IsSynthesisModelFailureAnswer reports whether a result is the degraded
-// answer served for a failed model call. Such an answer says nothing about
+// answer served for a failed model call: it carries the code detail or, when
+// that detail could not be filed, the fixed failure warning. Such an answer says nothing about
 // the question that a recovered model would not say better, so it is never a
 // reuse source.
 func IsSynthesisModelFailureAnswer(result InvestigationResult) bool {
@@ -111,6 +113,14 @@ func IsSynthesisModelFailureAnswer(result InvestigationResult) bool {
 	}
 	for _, detail := range result.Coverage.Details {
 		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed {
+			return true
+		}
+	}
+	// The code detail is not filed when the coverage it would sit beside does
+	// not pair with degraded_reasons. The fixed warning names the failure class
+	// the same way, so such an answer is still never a reuse source.
+	for _, class := range contractsv1.ContextFabricSynthesisFailureClasses() {
+		if slices.Contains(result.Warnings, synthesisFailureWarning(class)) {
 			return true
 		}
 	}

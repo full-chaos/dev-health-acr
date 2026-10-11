@@ -970,6 +970,12 @@ var contextFabricRetryHints = [...]ContextFabricRetryHint{
 	ContextFabricRetryUnlikelyToHelp,
 }
 
+// ContextFabricSynthesisFailureClasses returns the closed class vocabulary in
+// published order (array return = caller gets a copy).
+func ContextFabricSynthesisFailureClasses() [len(contextFabricSynthesisFailureClasses)]ContextFabricSynthesisFailureClass {
+	return contextFabricSynthesisFailureClasses
+}
+
 func validSynthesisFailureClass(class ContextFabricSynthesisFailureClass) bool {
 	for _, known := range contextFabricSynthesisFailureClasses {
 		if known == class {

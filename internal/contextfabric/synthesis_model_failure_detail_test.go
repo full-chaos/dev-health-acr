@@ -1,9 +1,12 @@
 package contextfabric
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -92,9 +95,10 @@ func TestTheFailureLimitationMatchesWhetherFactsWereShown(t *testing.T) {
 	}
 }
 
-// The code is the one source: the warning alone, a detail on an answer that is
-// not degraded, and a degraded answer with neither are not model-failure answers.
-func TestAModelFailureAnswerIsRecognisedByItsCodeAlone(t *testing.T) {
+// The code marks the answer, and the fixed failure warning marks it when the
+// code could not be filed. A detail on an answer that is not degraded, another
+// code and no marker at all are not model-failure answers.
+func TestAModelFailureAnswerIsRecognisedByItsCodeOrItsWarning(t *testing.T) {
 	detail, err := newSynthesisModelFailureDetail(SynthesisFailureModelOutputInvalid)
 	if err != nil {
 		t.Fatal(err)
@@ -103,11 +107,13 @@ func TestAModelFailureAnswerIsRecognisedByItsCodeAlone(t *testing.T) {
 		result InvestigationResult
 		want   bool
 	}{
-		"degraded with the code":     {InvestigationResult{Status: InvestigationDegraded, Coverage: Coverage{Details: []CoverageDetail{detail}}}, true},
-		"degraded with the warning":  {InvestigationResult{Status: InvestigationDegraded, Warnings: []string{synthesisFailureWarning(SynthesisFailureModelOutputInvalid)}}, false},
-		"complete with the code":     {InvestigationResult{Status: InvestigationComplete, Coverage: Coverage{Details: []CoverageDetail{detail}}}, false},
-		"degraded with another code": {InvestigationResult{Status: InvestigationDegraded, Coverage: Coverage{Details: []CoverageDetail{{Code: contractsv1.ContextFabricCoverageDetailSynthesisInputBounded}}}}, false},
-		"degraded with neither":      {InvestigationResult{Status: InvestigationDegraded}, false},
+		"degraded with the code":        {InvestigationResult{Status: InvestigationDegraded, Coverage: Coverage{Details: []CoverageDetail{detail}}}, true},
+		"degraded with the warning":     {InvestigationResult{Status: InvestigationDegraded, Warnings: []string{synthesisFailureWarning(SynthesisFailureModelOutputInvalid)}}, true},
+		"complete with the warning":     {InvestigationResult{Status: InvestigationComplete, Warnings: []string{synthesisFailureWarning(SynthesisFailureModelOutputInvalid)}}, false},
+		"degraded with another warning": {InvestigationResult{Status: InvestigationDegraded, Warnings: []string{"a coverage warning"}}, false},
+		"complete with the code":        {InvestigationResult{Status: InvestigationComplete, Coverage: Coverage{Details: []CoverageDetail{detail}}}, false},
+		"degraded with another code":    {InvestigationResult{Status: InvestigationDegraded, Coverage: Coverage{Details: []CoverageDetail{{Code: contractsv1.ContextFabricCoverageDetailSynthesisInputBounded}}}}, false},
+		"degraded with neither":         {InvestigationResult{Status: InvestigationDegraded}, false},
 	}
 	for name, testCase := range cases {
 		if got := IsSynthesisModelFailureAnswer(testCase.result); got != testCase.want {
@@ -165,5 +171,33 @@ func TestTheModelFailureDetailRequiresBothFieldsAndNothingElse(t *testing.T) {
 	other := CoverageDetail{DetailID: "cov-01", Source: "s", Code: contractsv1.ContextFabricCoverageDetailGraphNoMemberFound, Kind: SubjectProject, Label: "x", FailureClass: SynthesisFailureRejected}
 	if err := other.Validate(); err == nil {
 		t.Fatal("another code carrying failure_class validated")
+	}
+}
+
+// Coverage whose degraded_reasons have no paired degrading detail cannot take
+// a server detail: the failure answer is still recognised, by its warning, and
+// the miss is logged at error level with the class.
+func TestAModelFailureWhoseDetailCannotBeFiledIsStillRecognisedAndLogged(t *testing.T) {
+	logs := &bytes.Buffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	input := largeSynthesisInputFixture(3)
+	input.Facts.Coverage.DegradedReasons = []string{"a read failed"}
+
+	result, err := RuntimeAnswerSynthesizer{}.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, input, &SynthesisFailure{Class: SynthesisFailureRejected, cause: errors.New("x")})
+
+	if err != nil {
+		t.Fatalf("ComposeDegraded() error = %v", err)
+	}
+	if len(failureDetailsOf(result.Coverage)) != 0 {
+		t.Fatalf("details = %+v, want no failure detail filed over unpaired coverage", result.Coverage.Details)
+	}
+	if !IsSynthesisModelFailureAnswer(result) {
+		t.Fatal("the failure answer without its code is not recognised: it could be reused as a good answer")
+	}
+	line := logs.String()
+	if !strings.Contains(line, "level=ERROR") || !strings.Contains(line, "model failure coverage detail not filed") || !strings.Contains(line, "failure_class=synthesis_rejected") {
+		t.Fatalf("log = %q, want one error line naming the class", line)
 	}
 }
