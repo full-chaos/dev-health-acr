@@ -18,8 +18,10 @@ package contextfabric
 // factStateDegrades on exactly that ground -- nothing is missing, so the
 // answer is not partial. That reasoning is sound for a subject kind nothing
 // could ever reach from. It is FALSE for a project: the typed chain
-// `project <-BELONGS_TO_PROJECT- work_item -BELONGS_TO_REPOSITORY-> repository`
-// exists in prod projection code (devhealthsource/tables.go), and
+// `project <-BELONGS_TO_PROJECT- work_item -LINKS_PULL_REQUEST-> pull_request
+// -BELONGS_TO_REPOSITORY-> repository` exists in prod projection code
+// (devhealthsource/issue_pull_request_link.go; the entity tree replaced the earlier
+// reading through the work item's own repository column), and
 // `pull_request -BELONGS_TO_REPOSITORY-> repository` plus
 // `pull_request_review -BELONGS_TO_PULL_REQUEST-> pull_request` complete it.
 // The facts are reachable; the planner simply has no step that reaches them.
@@ -102,13 +104,11 @@ const (
 	// name across all three target kinds was actually intended, correct this
 	// deviation -- these three constants are the place to do it.)
 	//
-	// THE CHAIN they traverse is the team half of factScopeChainWorkItem,
-	// continued exactly like the project chain (work_item -OWNED_BY_TEAM->
-	// team, then work_item -BELONGS_TO_REPOSITORY-> repository, etc). What is
-	// NEW relative to the project policies is not the chain shape but the
-	// epistemic standing of its first hop: OWNED_BY_TEAM is Ops' own
-	// precedence-resolved attribution (work_item_team_attributions), asserted
-	// by the provider only for a `native_team` row and inferred by a
+	// THE CHAIN they traverse to a repository is the entity tree:
+	// team ownership rows, then owned project -> issue -> linked pull request
+	// -> repository. The team half of factScopeChainWorkItem (OWNED_BY_TEAM,
+	// Ops' own precedence-resolved attribution in work_item_team_attributions,
+	// asserted by the provider only for a `native_team` row and inferred by a
 	// heuristic (Python team_autoimport, CHAOS-4198 still unported) for
 	// every other source. See FactScopeBasisAttributedPrimaryTeam.
 	FactScopePolicyTeamPrimaryAttributionRepository FactScopePolicy = "team_primary_attribution_repository_v1"
@@ -719,11 +719,14 @@ const (
 	// right there, which is why this row stayed in the eligibility table
 	// (disclosed, policy_unavailable) even before that ruling.
 	factScopeChainWorkItem = "work_item -BELONGS_TO_PROJECT-> project / work_item -OWNED_BY_TEAM-> team (devhealthsource/teams_projects_edges.go: querySubjectProjectMemberships, queryWorkItemTeams)"
-	// factScopeChainRepository continues one hop through the work item's own
-	// repository. The zero-UUID sentinel lives on this hop: a Linear-sourced
-	// work item carries repo_id = the zero UUID and is repo-LESS by design,
-	// never an orphan, and must never expand to a fake repository.
-	factScopeChainRepository = factScopeChainWorkItem + "; work_item -BELONGS_TO_REPOSITORY-> repository (devhealthsource/tables.go: queryWorkItems)"
+	// factScopeChainRepository is the entity tree's route to a repository.
+	// A project reaches a repository only through its issues' linked pull
+	// request rows (work_graph_issue_pr, whose repo_id is the pull request's
+	// repository; tier native > explicit_text > heuristic, carried per
+	// target). A team reaches a repository through its ownership rows and,
+	// one hop further, through its owned projects' issues. The issue's own
+	// repository column and a computed team attribution are NOT the relation.
+	factScopeChainRepository = "work_item -BELONGS_TO_PROJECT-> project (devhealthsource/teams_projects_edges.go: querySubjectProjectMemberships); work_item -LINKS_PULL_REQUEST-> pull_request (devhealthsource/issue_pull_request_link.go: queryIssuePullRequestLinks); pull_request -BELONGS_TO_REPOSITORY-> repository (devhealthsource/tables.go: queryPullRequests); team -OWNS-> repository (devhealthsource/teams_projects_edges.go: queryRepositoryTeams); team -OWNS-> project (devhealthsource/teams_projects_edges.go: queryProjectTeams)"
 	// factScopeChainPullRequest reaches the pull requests of those
 	// repositories.
 	factScopeChainPullRequest = factScopeChainRepository + "; pull_request -BELONGS_TO_REPOSITORY-> repository (devhealthsource/tables.go: queryPullRequests)"
@@ -2208,11 +2211,11 @@ func (r *FactReadScopeResolver) expand(
 		return
 	}
 	scope.DerivedSubjects[event.RequirementKind] = append(existing, kept...)
-	// mixedBasis and sourceCounts are BOTH derived from `kept` -- the same
+	// summaryBasis and sourceCounts are BOTH derived from `kept` -- the same
 	// set the loop below binds provenance to -- rather than from
 	// result.Targets, for the same overflow/dedup reason the copy above was
 	// removed (codex xhigh review round 1, confirmed real, MEDIUM x2).
-	mixedBasis := false
+	summaryBasis := rule.Basis
 	sourceCounts := map[string]int{}
 	for _, target := range kept {
 		// Provenance binds every admitted target to the policy that admitted
@@ -2230,8 +2233,8 @@ func (r *FactReadScopeResolver) expand(
 		basis := rule.Basis
 		if override, ok := result.TargetBasis[key]; ok {
 			basis = override
-			if override != rule.Basis {
-				mixedBasis = true
+			if factScopeBasisWeaker(override, summaryBasis) {
+				summaryBasis = override
 			}
 		}
 		if source, ok := result.TargetAttributionSource[key]; ok && source != "" {
@@ -2271,9 +2274,7 @@ func (r *FactReadScopeResolver) expand(
 	// admitted target carried that override, so a reader who only sees the
 	// event (not the per-target Derivations) is never told a heuristic-only
 	// or mixed expansion is as solid as a pure native_team one.
-	if mixedBasis {
-		event.Basis = FactScopeBasisAttributedPrimaryTeam
-	}
+	event.Basis = summaryBasis
 	if len(sourceCounts) > 0 {
 		event.AttributionSourceCounts = sourceCounts
 	}

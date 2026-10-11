@@ -792,7 +792,15 @@ import (
 // deadline, is served as a degraded answer with failure class
 // model_call_not_completed and retry_may_succeed, where it was an error with no
 // stored answer; a candidate saved under an earlier version cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v162"
+//
+// v162 -> v163: the repositories a project or team scope reaches follow the
+// entity tree. A project reaches the repositories of its issues' linked pull
+// request rows (work_graph_issue_pr), not the issue's own repository column; a
+// team reaches the repositories it owns and those its owned projects' issues
+// link to, not the repositories of its attributed issues. Issues with no link
+// row are counted as a missing next hop. A project or team answer saved under
+// v162 may rest on a repository the tree does not reach.
+const QueryVersion = "devhealthfacts.clickhouse.v163"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

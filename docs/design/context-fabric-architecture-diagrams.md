@@ -558,14 +558,15 @@ matched an anchor term by an identity mechanism. A truncated lexical search
 refuses only beside an identity lookup that was not complete; `incomplete`,
 `not_run_time_axis` and `not_wired` admit nothing.
 
-**Code that does not yet follow the tree.** Some reads still reach a
-repository through a work item's own `repo_id`, as an activity proxy
-(`FactScopeBasisActivityProxy`), not as tree membership: the CHAOS-4099
-fact-scope expander (`devhealthfacts/chaos4099_scope_expander.go`,
-`projectRepositories`, `projectRepositoriesAsOf`, `teamRepositories`; chains
-declared in `fact_scope.go`) and the team blocker rollup
-(`devhealthfacts/dependencies.go`). Until they move to the tree, their answers
-carry the activity-proxy disclosure. `incident` is a supported `SubjectKind`
+**Code that does not yet follow the tree.** The team blocker rollup
+(`devhealthfacts/dependencies.go`) still reaches a repository through a work
+item's own `repo_id`. The CHAOS-4099 fact-scope expander
+(`devhealthfacts/chaos4099_scope_expander.go`, `projectRepositories`,
+`projectRepositoriesAsOf`; `teamRepositories` in
+`devhealthfacts/fact_scope_entity_tree.go`) follows the tree:
+a project reaches repositories through its issues' linked pull request rows
+(tier carried per target), a team through ownership rows and its owned
+projects' linked pull requests. `incident` is a supported `SubjectKind`
 with its own producer; it is not part of the tree.
 
 **Wildcard authorization closed (2026-09-28, CHAOS-7080):** the shared

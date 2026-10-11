@@ -104,13 +104,34 @@ func seedChaos4101TeamFixture(t *testing.T, ctx context.Context, direct interfac
 		"review-a-1", chaos4101RepoAID, chaos4099OrgID, uint32(1), "approved", at)
 	mustSeed("repo B pull request", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
 		chaos4101RepoBID, chaos4099OrgID, uint32(3), "Repo B PR", "open", at, at, "feat/b", "")
+
+	// The entity tree: the team directly owns repo A, and owns a project
+	// whose issues reach repo B through a linked pull request (the issue's
+	// own repository column deliberately names repo A) and an orphaned
+	// repository; one issue of the project has no link row at all.
+	const projectID = "P4101"
+	mustSeed("project", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		projectID, chaos4099OrgID, "Platform project", "", "linear", "", "", uint8(1), at)
+	mustSeed("team owns repo A", `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		chaos4099OrgID, "github", chaos4101TeamID, chaos4101RepoAID, chaos4101RepoASlug, "exact", "native", uint8(1), uint16(1), int32(1), at.Add(-time.Hour), nil, at)
+	mustSeed("team owns project", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		chaos4099OrgID, "linear", chaos4101TeamID, projectID, nil, "native", at.Add(-time.Hour), nil, at)
+	projectIssue := func(id string) {
+		mustSeed("project issue "+id, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, chaos4101RepoAID, chaos4099OrgID, "issue "+id, "open", "", "", "linear", projectID, at)
+	}
+	projectIssue("wi-p-linked")
+	seedIssueLink(t, ctx, direct, chaos4099OrgID, "wi-p-linked", chaos4101RepoBID, 3, "explicit_text", at)
+	projectIssue("wi-p-orphan-link")
+	seedIssueLink(t, ctx, direct, chaos4099OrgID, "wi-p-orphan-link", chaos4099OrphanRepoID, 5, "native", at)
+	projectIssue("wi-p-unlinked")
 }
 
 func chaos4101TeamSubject() contextfabric.SubjectRef {
 	return contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:" + chaos4101TeamID, Label: "Platform"}
 }
 
-// TestScopeExpander_TeamToRepository_BasisVariesByWinningSourceAndSentinelsExcluded
+// TestScopeExpander_TeamToRepository_FollowsOwnershipAndLinkedPullRequestsAndDisclosesTheGaps
 // is CHAOS-4101's headline proof: ONE traversal admitting two repositories
 // with DIFFERENT bases (repo A wins native_team over its own
 // project_ownership row -- native_team wins REGARDLESS of which work item
@@ -147,17 +168,17 @@ func TestScopeExpander_TeamToRepository_BasisVariesByWinningSourceAndSentinelsEx
 	if !seen[repoATarget] || !seen[repoBTarget] {
 		t.Fatalf("targets = %+v, want both %+v and %+v", result.Targets, repoATarget, repoBTarget)
 	}
-	if got := result.TargetBasis[contextfabric.FactSubjectKey(repoATarget)]; got != contextfabric.FactScopeBasisActivityProxy {
-		t.Fatalf("repo A basis = %q, want activity_proxy: its native_team row must win over its project_ownership row", got)
+	if got := result.TargetBasis[contextfabric.FactSubjectKey(repoATarget)]; got != contextfabric.FactScopeBasisDirect {
+		t.Fatalf("repo A basis = %q, want direct: the team owns it through a team_repo_ownership row", got)
 	}
-	if got := result.TargetBasis[contextfabric.FactSubjectKey(repoBTarget)]; got != contextfabric.FactScopeBasisAttributedPrimaryTeam {
-		t.Fatalf("repo B basis = %q, want attributed_primary_team: no native_team row reaches it", got)
+	if got := result.TargetBasis[contextfabric.FactSubjectKey(repoBTarget)]; got != contextfabric.FactScopeBasisActivityProxy {
+		t.Fatalf("repo B basis = %q, want activity_proxy: it is reached only through an owned project's linked pull request", got)
 	}
 	if result.Counts.CandidateCount != 2 {
-		t.Fatalf("CandidateCount = %d, want 2 (the zero-UUID and orphan rows are NOT candidates)", result.Counts.CandidateCount)
+		t.Fatalf("CandidateCount = %d, want 2 (the orphan link repository and the unlinked issue are NOT candidates)", result.Counts.CandidateCount)
 	}
 	if result.Counts.MissingNextHopCount != 2 {
-		t.Fatalf("MissingNextHopCount = %d, want 2 (zero-UUID + orphan)", result.Counts.MissingNextHopCount)
+		t.Fatalf("MissingNextHopCount = %d, want 2 (the orphan link repository + the issue with no link row)", result.Counts.MissingNextHopCount)
 	}
 	// AttributionSourceCounts itself is a RESOLVER-derived field (CHAOS-4101
 	// codex xhigh review round 1, confirmed real, MEDIUM x2): the resolver
@@ -167,16 +188,11 @@ func TestScopeExpander_TeamToRepository_BasisVariesByWinningSourceAndSentinelsEx
 	// actually owns instead; TestChaos4101_AttributionSourceCountsExcludeTheOverflowedTarget
 	// in the contextfabric package (unit test, fake expander) proves the
 	// resolver's own overflow-safe derivation from that map.
-	if got := result.TargetAttributionSource[contextfabric.FactSubjectKey(repoATarget)]; got != "native_team" {
-		t.Fatalf("TargetAttributionSource[repo A] = %q, want native_team", got)
+	if got := result.TargetAttributionSource[contextfabric.FactSubjectKey(repoATarget)]; got != "team_repo_ownership" {
+		t.Fatalf("TargetAttributionSource[repo A] = %q, want team_repo_ownership", got)
 	}
-	if got := result.TargetAttributionSource[contextfabric.FactSubjectKey(repoBTarget)]; got != "repo_ownership" {
-		t.Fatalf("TargetAttributionSource[repo B] = %q, want repo_ownership", got)
-	}
-	for key, source := range result.TargetAttributionSource {
-		if source == "project_ownership" {
-			t.Fatalf("TargetAttributionSource[%s] = project_ownership, must not appear: it lost to native_team on repo A and was never the winner anywhere", key)
-		}
+	if got := result.TargetAttributionSource[contextfabric.FactSubjectKey(repoBTarget)]; got != "explicit_text" {
+		t.Fatalf("TargetAttributionSource[repo B] = %q, want the link tier explicit_text, never presented as native", got)
 	}
 }
 
@@ -251,8 +267,8 @@ func TestScopeExpander_TeamToPullRequest_InheritsRepositoryBasisAndDropsUnauthor
 		if target.CanonicalID == "pull_request:"+chaos4101RepoBID+":3" {
 			t.Fatalf("targets = %+v, the unauthorized repository's pull request was admitted", result.Targets)
 		}
-		if got := result.TargetBasis[contextfabric.FactSubjectKey(target)]; got != contextfabric.FactScopeBasisActivityProxy {
-			t.Fatalf("target %+v basis = %q, want activity_proxy (inherited from repo A, which has a native_team row)", target, got)
+		if got := result.TargetBasis[contextfabric.FactSubjectKey(target)]; got != contextfabric.FactScopeBasisDirect {
+			t.Fatalf("target %+v basis = %q, want direct (inherited from repo A, which the team owns)", target, got)
 		}
 	}
 	if result.Counts.AuthorizationDroppedCount != 1 {
@@ -294,37 +310,30 @@ func TestScopeExpander_TeamToPullRequestReview_InheritsRepositoryBasisAndDropsUn
 		t.Fatalf("targets = %+v, want repo A's one review only", result.Targets)
 	}
 	target := result.Targets[0]
-	if got := result.TargetBasis[contextfabric.FactSubjectKey(target)]; got != contextfabric.FactScopeBasisActivityProxy {
-		t.Fatalf("target %+v basis = %q, want activity_proxy (inherited from repo A, which has a native_team row)", target, got)
+	if got := result.TargetBasis[contextfabric.FactSubjectKey(target)]; got != contextfabric.FactScopeBasisDirect {
+		t.Fatalf("target %+v basis = %q, want direct (inherited from repo A, which the team owns)", target, got)
 	}
-	if got := result.TargetAttributionSource[contextfabric.FactSubjectKey(target)]; got != "native_team" {
-		t.Fatalf("TargetAttributionSource[review] = %q, want native_team (repo A's winning source)", got)
+	if got := result.TargetAttributionSource[contextfabric.FactSubjectKey(target)]; got != "team_repo_ownership" {
+		t.Fatalf("TargetAttributionSource[review] = %q, want team_repo_ownership (repo A's reaching source)", got)
 	}
 	if result.Counts.AuthorizationDroppedCount != 1 {
 		t.Fatalf("AuthorizationDroppedCount = %d, want 1 (repo B, dropped before its reviews were ever queried)", result.Counts.AuthorizationDroppedCount)
 	}
 }
 
-// TestScopeExpander_TeamToRepository_CrossRepoWorkItemIDCollisionExcludesTheWrongRepo
-// is the direct reproduction for codex xhigh review round 2's first
-// confirmed MEDIUM: work_items' declared sort key is (org_id, repo_id,
-// work_item_id) -- work_item_id alone is NOT the table's natural key, and a
-// bare id is cross-repo-collidable (two different repositories, e.g. two
-// different GitHub repos, can each have their own issue "42"). Before this
-// fix, teamRepositories' join matched work_items to
-// work_item_team_attributions on work_item_id alone, so an attribution
-// naming repo A's issue could ALSO match an unrelated repo's own,
-// differently-attributed (or entirely unattributed) issue sharing the same
-// bare id -- admitting a repository into the team's scope that no
-// attribution row ever actually named.
-func TestScopeExpander_TeamToRepository_CrossRepoWorkItemIDCollisionExcludesTheWrongRepo(t *testing.T) {
+// TestScopeExpander_TeamToRepository_AttributionNamingAnUnownedRepositoryIsNotReached
+// pins that a work_item_team_attributions row is an attribution of an ISSUE to
+// a team, never a relation of the team to a repository: an attributed issue
+// whose repository column names repo C does not put repo C in the team's
+// scope when the team neither owns repo C nor owns a project linked into it.
+func TestScopeExpander_TeamToRepository_AttributionNamingAnUnownedRepositoryIsNotReached(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
 	at := time.Now().UTC()
 	seedChaos4101TeamFixture(t, ctx, direct, at)
 
-	const collidingRepoID = "a3398fbc-1945-3717-05d8-eb78866b4e92"
-	const collidingRepoSlug = "acme/repo-c-unrelated"
+	const unownedRepoID = "a3398fbc-1945-3717-05d8-eb78866b4e92"
+	const unownedRepoSlug = "acme/repo-c-unowned"
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -332,16 +341,11 @@ func TestScopeExpander_TeamToRepository_CrossRepoWorkItemIDCollisionExcludesTheW
 		}
 	}
 	mustSeed("repo C", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
-		collidingRepoID, chaos4099OrgID, collidingRepoSlug, "github", at)
-	// SAME bare work_item_id ("collide-42") as repo A's native_team-attributed
-	// work item below, but belonging to a DIFFERENT repository and carrying
-	// NO team attribution row of its own.
-	mustSeed("repo A colliding work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"collide-42", chaos4101RepoAID, chaos4099OrgID, "issue collide-42 in repo A", "open", "", "", "", at)
-	mustSeed("repo C colliding work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"collide-42", collidingRepoID, chaos4099OrgID, "issue collide-42 in repo C", "open", "", "", "", at)
-	mustSeed("repo A colliding attribution", `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		chaos4099OrgID, chaos4101RepoAID, "collide-42", chaos4101TeamID, "native_team", uint8(1), "high", at)
+		unownedRepoID, chaos4099OrgID, unownedRepoSlug, "github", at)
+	mustSeed("repo C attributed work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"attributed-c", unownedRepoID, chaos4099OrgID, "issue attributed-c in repo C", "open", "", "", "", at)
+	mustSeed("repo C attribution", `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		chaos4099OrgID, unownedRepoID, "attributed-c", chaos4101TeamID, "native_team", uint8(1), "high", at)
 
 	expander := devhealthfacts.NewScopeExpander(query)
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
@@ -356,28 +360,12 @@ func TestScopeExpander_TeamToRepository_CrossRepoWorkItemIDCollisionExcludesTheW
 		t.Fatalf("ExpandFactScope: %v", err)
 	}
 	for _, target := range result.Targets {
-		if target.CanonicalID == "repository:"+collidingRepoID {
-			t.Fatalf("targets = %+v, repo C was admitted despite carrying no team attribution of its own -- its ONLY connection to the team is sharing a bare work_item_id with repo A's real attribution", result.Targets)
+		if target.CanonicalID == "repository:"+unownedRepoID {
+			t.Fatalf("targets = %+v, repo C was admitted through a team attribution of an issue; the tree reaches it through no ownership row and no linked pull request", result.Targets)
 		}
 	}
 }
 
-// TestScopeExpander_TeamToRepository_RootIsPerTargetAcrossTwoTeamOrigins is
-// CHAOS-4260's real-ClickHouse proof, the exact scenario the ticket names:
-// "an investigation names multiple same-kind subjects as roots (e.g. two
-// teams) and they are traversed together in one expand() call". Two teams,
-// each with its own primary attribution reaching its OWN, otherwise
-// unrelated repository, requested together as Origins in ONE
-// ExpandFactScope call. Before the fix, teamRepositories never populated a
-// per-target root at all (repositoryCandidate had no such field), so
-// fact_scope.go's expand() attributed EVERY admitted repository to
-// origins[0] regardless of which team's own edge reached it --
-// TestChaos4260_RootIsPerTargetAcrossMultipleSameKindOrigins (fake-expander
-// unit test, contextfabric package) proves the resolver-side half of that
-// fix; this proves the ClickHouse-backed teamRepositories query itself now
-// resolves the correct origin per repository, including through the
-// `min(a.team_id)` aggregate's tiebreak when both teams reach the SAME
-// repository.
 func TestScopeExpander_TeamToRepository_RootIsPerTargetAcrossTwoTeamOrigins(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
@@ -403,39 +391,18 @@ func TestScopeExpander_TeamToRepository_RootIsPerTargetAcrossTwoTeamOrigins(t *t
 	const repoSharedID = "b3398fbc-1945-3717-05d8-eb78866b4ea2"
 	const repoSharedSlug = "acme/root-repo-shared"
 
-	mustSeed("team A", `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		teamAID, "Root Team A", "", at, chaos4099OrgID, "linear", teamAID, uint8(1))
-	mustSeed("team B", `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		teamBID, "Root Team B", "", at, chaos4099OrgID, "linear", teamBID, uint8(1))
-	mustSeed("repo only-A", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
-		repoOnlyAID, chaos4099OrgID, repoOnlyASlug, "github", at)
-	mustSeed("repo only-B", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
-		repoOnlyBID, chaos4099OrgID, repoOnlyBSlug, "github", at)
-	mustSeed("repo shared", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
-		repoSharedID, chaos4099OrgID, repoSharedSlug, "github", at)
-
-	workItem := func(id, repoID string) {
-		mustSeed("work item "+id, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, repoID, chaos4099OrgID, "issue "+id, "open", "", "", "", at)
+	for id, slug := range map[string]string{repoOnlyAID: repoOnlyASlug, repoOnlyBID: repoOnlyBSlug, repoSharedID: repoSharedSlug} {
+		mustSeed("repo "+slug, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+			id, chaos4099OrgID, slug, "github", at)
 	}
-	attribution := func(label, workItemID, repoID, teamID string) {
-		mustSeed(label, `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			chaos4099OrgID, repoID, workItemID, teamID, "native_team", uint8(1), "high", at)
+	owns := func(teamID, repoID, slug string) {
+		mustSeed("ownership "+teamID+" "+slug, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			chaos4099OrgID, "github", teamID, repoID, slug, "exact", "native", uint8(1), uint16(1), int32(1), at.Add(-time.Hour), nil, at)
 	}
-
-	workItem("wi-only-a", repoOnlyAID)
-	attribution("team A -> repo only-A", "wi-only-a", repoOnlyAID, teamAID)
-	workItem("wi-only-b", repoOnlyBID)
-	attribution("team B -> repo only-B", "wi-only-b", repoOnlyBID, teamBID)
-	// The shared repo is reached by BOTH teams, on two DIFFERENT work items
-	// (a repo/work_item pair is the join's natural key, so this is two
-	// distinct, independently real attributions, not a duplicate row).
-	// teamAID < teamBID lexicographically, so min(a.team_id) -- and
-	// therefore this repo's root -- must resolve to team A.
-	workItem("wi-shared-a", repoSharedID)
-	attribution("team A -> repo shared", "wi-shared-a", repoSharedID, teamAID)
-	workItem("wi-shared-b", repoSharedID)
-	attribution("team B -> repo shared", "wi-shared-b", repoSharedID, teamBID)
+	owns(teamAID, repoOnlyAID, repoOnlyASlug)
+	owns(teamBID, repoOnlyBID, repoOnlyBSlug)
+	owns(teamAID, repoSharedID, repoSharedSlug)
+	owns(teamBID, repoSharedID, repoSharedSlug)
 
 	teamASubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:" + teamAID, Label: "Root Team A"}
 	teamBSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:" + teamBID, Label: "Root Team B"}
@@ -444,12 +411,10 @@ func TestScopeExpander_TeamToRepository_RootIsPerTargetAcrossTwoTeamOrigins(t *t
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
 		Principal:       storage.Principal{OrgID: chaos4099OrgID, RepositoryScopes: []string{"*"}},
 		RequirementKind: contextfabric.FactMetrics,
-		// BOTH teams in ONE call -- this is the exact shape resolveRequirement
-		// produces when an investigation names two same-kind roots.
-		Origins:    []contextfabric.SubjectRef{teamASubject, teamBSubject},
-		Policy:     contextfabric.FactScopePolicyTeamPrimaryAttributionRepository,
-		TargetKind: contextfabric.SubjectRepository,
-		Limit:      20,
+		Origins:         []contextfabric.SubjectRef{teamASubject, teamBSubject},
+		Policy:          contextfabric.FactScopePolicyTeamPrimaryAttributionRepository,
+		TargetKind:      contextfabric.SubjectRepository,
+		Limit:           20,
 	})
 	if err != nil {
 		t.Fatalf("ExpandFactScope: %v", err)
@@ -462,12 +427,12 @@ func TestScopeExpander_TeamToRepository_RootIsPerTargetAcrossTwoTeamOrigins(t *t
 	repoSharedTarget := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoSharedID, Label: repoSharedSlug}
 
 	if got := result.TargetRoot[contextfabric.FactSubjectKey(repoOnlyATarget)]; got != teamASubject {
-		t.Fatalf("TargetRoot[repo only-A] = %+v, want team A (%+v): its ONLY attribution is from team A", got, teamASubject)
+		t.Fatalf("TargetRoot[repo only-A] = %+v, want team A (%+v): only team A owns it", got, teamASubject)
 	}
 	if got := result.TargetRoot[contextfabric.FactSubjectKey(repoOnlyBTarget)]; got != teamBSubject {
-		t.Fatalf("TargetRoot[repo only-B] = %+v, want team B (%+v): its ONLY attribution is from team B -- BEFORE the CHAOS-4260 fix this collapsed to origins[0] (team A) regardless", got, teamBSubject)
+		t.Fatalf("TargetRoot[repo only-B] = %+v, want team B (%+v): only team B owns it", got, teamBSubject)
 	}
 	if got := result.TargetRoot[contextfabric.FactSubjectKey(repoSharedTarget)]; got != teamASubject {
-		t.Fatalf("TargetRoot[repo shared] = %+v, want team A (%+v): min(a.team_id) tiebreaks to the lexicographically smaller of the two teams reaching it", got, teamASubject)
+		t.Fatalf("TargetRoot[repo shared] = %+v, want team A (%+v): min(origin team id) tiebreaks to the lexicographically smaller owner", got, teamASubject)
 	}
 }
