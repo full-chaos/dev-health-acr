@@ -154,6 +154,11 @@ def validate_corpus_row(row):
     if not isinstance(nonexistent, bool):
         return False, f"nonexistent must be a bool, got {type(nonexistent).__name__}"
 
+    # The same bool-only rule: "false" is a truthy string.
+    conditional = row.get("decline_if_shape_emitted", False)
+    if not isinstance(conditional, bool):
+        return False, f"decline_if_shape_emitted must be a bool, got {type(conditional).__name__}"
+
     return True, None
 
 

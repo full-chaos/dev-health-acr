@@ -27,6 +27,7 @@ var exampleSchemaPairs = map[string]string{
 	"error_context_fabric_upstream_invalid_output.v1.json":         "error.v1.schema.json",
 	"error_store_unavailable.v1.json":                              "error.v1.schema.json",
 	"error_rate_limited_request_budget.v1.json":                    "error.v1.schema.json",
+	"error_rate_limited_capabilities_budget.v1.json":               "error.v1.schema.json",
 	"mcp_context_for_task_request.v1.json":                         "mcp_context_for_task_request.v1.schema.json",
 	"mcp_context_for_task_request_full.v1.json":                    "mcp_context_for_task_request.v1.schema.json",
 	"mcp_context_for_task_response.v1.json":                        "mcp_context_for_task_response.v1.schema.json",
