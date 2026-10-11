@@ -124,8 +124,9 @@ type SynthesisFailure struct {
 	Attempts int
 	Elapsed  time.Duration
 	Receipt  ModelExecutionReceipt
-	// InputBounded: the call that failed was placed with a reduced fact set.
-	InputBounded bool
+	// Bound is set when the call that failed was placed with a reduced fact
+	// set: the disclosure the degraded answer carries.
+	Bound *synthesisInputBound
 	// Rule and Stage name a work-item tuple rule breach that was served as this
 	// failure, and the stage that served it (synthesis or validation).
 	Rule  string
@@ -163,7 +164,7 @@ func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal
 		}
 		draft.Limitations, _ = appendBoundedLimitations(draft.Limitations, additions)
 	}
-	return r.composeSynthesisResult(ctx, principal, input, draft, failure.Receipt, failure.InputBounded, true)
+	return r.composeSynthesisResult(ctx, principal, input, draft, failure.Receipt, failure.Bound, true)
 }
 
 // synthesisVersionOf is the receipt's prompt and model version pair. A call
