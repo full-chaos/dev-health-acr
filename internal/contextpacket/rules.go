@@ -69,8 +69,24 @@ func actionsFor(items []contractsv1.ContextPacketItem) ([]contractsv1.RequiredCh
 	sort.Strings(rules)
 	checks, steps := make([]contractsv1.RequiredCheck, 0, len(rules)), make([]contractsv1.RecommendedStep, 0, len(rules))
 	for _, ruleID := range rules {
-		checks = append(checks, contractsv1.RequiredCheck{CheckID: "check." + ruleID, Label: "Validate retrieved evidence", Reason: "Retrieved content is untrusted.", RuleID: ruleID})
-		steps = append(steps, contractsv1.RecommendedStep{StepID: "step." + ruleID, Label: "Investigate retrieved evidence", Reason: "Use cited evidence before changing code.", RuleID: ruleID})
+		subject := ruleSubject(ruleID)
+		checks = append(checks, contractsv1.RequiredCheck{CheckID: "check." + ruleID, Label: "Validate retrieved evidence for " + subject, Reason: "Retrieved content for " + subject + " is untrusted.", RuleID: ruleID})
+		steps = append(steps, contractsv1.RecommendedStep{StepID: "step." + ruleID, Label: "Investigate retrieved evidence for " + subject, Reason: "Use cited evidence for " + subject + " before changing code.", RuleID: ruleID})
 	}
 	return checks, steps
+}
+
+var ruleSubjects = map[string]string{
+	"evidence.observed.pressure.v1":  "the pressure rule",
+	"evidence.observed.cause.v1":     "the cause rule",
+	"evidence.observed.action.v1":    "the action rule",
+	"evidence.observed.state.v1":     "the state rule",
+	"evidence.observed.reference.v1": "the reference rule",
+}
+
+func ruleSubject(ruleID string) string {
+	if subject, ok := ruleSubjects[ruleID]; ok {
+		return subject
+	}
+	return "rule " + ruleID
 }

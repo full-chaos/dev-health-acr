@@ -695,7 +695,7 @@ import (
 // project, and a project with no canonical mix has no investment fact (CHAOS-9195, D5932).
 // A candidate saved under v136 carries the legacy breakdown (and a mix merged onto it) and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v137"
+const QueryVersion = "devhealthfacts.clickhouse.v141"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
