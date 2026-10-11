@@ -3061,7 +3061,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			}
 			if shadowsHandle && hintGate.Validate() == nil {
 				if attestedKey, merged := mergeCensusAttestedSatisfier(ctx, principal, request, deps, attestation, candidatesBySubject, make(map[string]string), make(map[string]bool), identityClaimants{}, identityMatchTerms{}, admission); merged {
-					commitCensusAttestedBesideScopeAnchor(&exactResolution, candidatesBySubject[attestedKey], request, deps, commitBases, commitDigests, false, false, request.Options.MaxSubjectCandidates, 2)
+					commitCensusAttestedBesideScopeAnchor(&exactResolution, candidatesBySubject[attestedKey], request, deps, commitBases, commitDigests, false, "", request.Options.MaxSubjectCandidates, 2)
 				}
 			}
 		}
@@ -3981,7 +3981,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// whether the scoped re-decision above did).
 				if !stalledForCensus {
 					pass++
-					commitCensusAttestedBesideScopeAnchor(&resolution, candidatesBySubject[attestedKey], request, deps, commitBases, commitDigests, searchTruncated, aliasIdentityComplete, effectiveSearchLimit, pass)
+					commitCensusAttestedBesideScopeAnchor(&resolution, candidatesBySubject[attestedKey], request, deps, commitBases, commitDigests, searchTruncated, identityLookup, effectiveSearchLimit, pass)
 				} else {
 					pass++
 					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, &exactRefusal, kindRescue, pass)
@@ -5177,8 +5177,8 @@ func evidenceRoundTrigger(resolution contextfabric.SubjectResolution, callerHint
 // to a resolution that already committed only scope anchors, and records the
 // outcome as a decision event: "committed" when appended, "no_commit" when the
 // candidate cap or a duplicate refuses it.
-func commitCensusAttestedBesideScopeAnchor(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, request contextfabric.InvestigationRequest, deps ResolveDeps, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated, aliasComplete bool, searchCandidateLimit, pass int) bool {
-	appended, displaced := appendCensusAttestedCommit(resolution, candidate, request.Options.MaxSubjectCandidates, bases, digests, searchTruncated, aliasComplete)
+func commitCensusAttestedBesideScopeAnchor(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, request contextfabric.InvestigationRequest, deps ResolveDeps, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated bool, identityLookup IdentityLookupState, searchCandidateLimit, pass int) bool {
+	appended, displaced := appendCensusAttestedCommit(resolution, candidate, request.Options.MaxSubjectCandidates, bases, digests, searchTruncated, identityLookup)
 	if deps.ResolutionTracer == nil {
 		return appended
 	}
@@ -5222,7 +5222,7 @@ func commitCensusAttestedBesideScopeAnchor(resolution *contextfabric.SubjectReso
 // already-committed scope anchor. The basis is statistical, exactly like the
 // stalled evidence_census path, so the commit-affirmation gate still has to
 // see the answer stand on that subject.
-func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, maxCandidates int, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated, aliasComplete bool) (appended bool, displaced contextfabric.SubjectRef) {
+func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, maxCandidates int, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated bool, identityLookup IdentityLookupState) (appended bool, displaced contextfabric.SubjectRef) {
 	if candidate.Subject.CanonicalID == "" {
 		return false, contextfabric.SubjectRef{}
 	}
@@ -5260,7 +5260,8 @@ func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, can
 	bases.Record(candidate.Subject, contextfabric.CommitBasisStatistical)
 	digests.Record(candidate.Subject, contextfabric.CommitDecisionDigest{
 		CommitGate: "evidence_census", IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
-		SearchTruncated: searchTruncated, AliasLookupComplete: aliasComplete,
+		SearchTruncated: searchTruncated, AliasLookupComplete: identityLookup == IdentityLookupComplete,
+		IdentityLookup: string(identityLookup),
 	})
 	return true, displaced
 }

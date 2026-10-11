@@ -1365,6 +1365,12 @@ type ContextFabricCommitDecisionDigest struct {
 	// CommitGate != "".
 	SearchTruncated     bool `json:"search_truncated,omitempty"`
 	AliasLookupComplete bool `json:"alias_lookup_complete,omitempty"`
+	// IdentityLookup is the state the keyed identity read established for
+	// this resolution: complete, incomplete, graph_lag, not_run_time_axis or
+	// not_wired. Empty means unrecorded (a stored digest from before the
+	// field, or a gate that runs no identity read). AliasLookupComplete is
+	// true exactly when it is complete.
+	IdentityLookup string `json:"identity_lookup,omitempty"`
 }
 
 type ContextFabricCohort struct {

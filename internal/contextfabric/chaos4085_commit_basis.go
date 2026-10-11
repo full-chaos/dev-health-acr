@@ -259,7 +259,21 @@ type CommitDecisionDigest struct {
 	// IdentityProven, only meaningful when CommitGate != "".
 	SearchTruncated     bool
 	AliasLookupComplete bool
+	// IdentityLookup is the graphrank IdentityLookupState token of the
+	// resolution's keyed identity read; "" is unrecorded.
+	IdentityLookup string
 }
+
+// The identity lookup tokens a digest records. graphrank's
+// IdentityLookupState constants are defined from these, so there is one
+// spelling.
+const (
+	IdentityLookupTokenComplete       = "complete"
+	IdentityLookupTokenIncomplete     = "incomplete"
+	IdentityLookupTokenGraphLag       = "graph_lag"
+	IdentityLookupTokenNotRunTimeAxis = "not_run_time_axis"
+	IdentityLookupTokenNotWired       = "not_wired"
+)
 
 // CommitDecisionDigestSet maps a subject's SubjectMapKey to the digest its
 // commit stood on -- CommitBasisSet's own exact shape and safety
@@ -355,6 +369,7 @@ func CommitDigestSetFromWire(digests []contractsv1.ContextFabricCommitDecisionDi
 		set.Record(digest.Subject, CommitDecisionDigest{
 			CommitGate: digest.CommitGate, IdentityProven: digest.IdentityProven,
 			SearchTruncated: digest.SearchTruncated, AliasLookupComplete: digest.AliasLookupComplete,
+			IdentityLookup: digest.IdentityLookup,
 		})
 	}
 	return set
