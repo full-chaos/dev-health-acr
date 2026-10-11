@@ -113,3 +113,45 @@ func TestCHAOS9197ProjectInvestmentAtTheReadFactsBoundary(t *testing.T) {
 	}
 	_ = time.Second
 }
+
+// The 4521b property, on the new basis (MCP's ack condition): a pseudo-project ownership row, one whose
+// `projects` row does not exist, attributes to NOTHING. Executed on a real ClickHouse through the provider:
+// no FactInvestment for the project and the named reason, though the owning team owns a repository with work.
+func TestCHAOS9197APseudoProjectOwnershipRowAttributesToNothingOnTheCanonicalBasis(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	createCHAOS5930Tables(t, ctx, direct)
+	at := ts(2026, 9, 18, 0, 0, 0)
+	const orgID = "org-9197-pseudo"
+	exec := func(stmt string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, stmt, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, stmt)
+		}
+	}
+	exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
+		"team-ghost", "team-ghost", at, orgID, "linear", uint8(1))
+	// The ownership row names a project id that has NO row in `projects`.
+	exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		orgID, "linear", "team-ghost", "ghost-project", nil, "native", at, nil, at)
+	exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID("repo-ghost"), orgID, "acme/repo-ghost", "github", at)
+	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		orgID, "linear", "team-ghost", repoUUID("repo-ghost"), "acme/repo-ghost", "exact", "native", uint8(1), uint16(100), int32(0), at, nil, at)
+	exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		"wu-ghost", at, at, repoUUID("repo-ghost"), 10.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{}, "{}", at, orgID)
+
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
+	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "ghost-project")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(result.Facts) != 0 {
+		t.Fatalf("facts = %#v, want none: a pseudo-project ownership row must attribute to nothing", result.Facts)
+	}
+	if !strings.Contains(result.Reason, "investment_project_no_canonical_mix") {
+		t.Fatalf("reason = %q, want the named investment_project_no_canonical_mix", result.Reason)
+	}
+}
