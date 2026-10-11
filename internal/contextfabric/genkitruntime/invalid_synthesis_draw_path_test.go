@@ -217,8 +217,15 @@ func TestRejectedSynthesisDrawsServeADegradedAnswerThatSaysSo(t *testing.T) {
 	if !contextfabric.IsSynthesisModelFailureAnswer(result) || result.Status != contextfabric.InvestigationDegraded {
 		t.Fatalf("result status %s warnings %v, want a degraded answer naming the model failure", result.Status, result.Warnings)
 	}
-	if len(result.ClaimedFacts) != 0 {
-		t.Fatalf("claimed facts = %d, want none from a refused draw", len(result.ClaimedFacts))
+	// Nothing the refused draw wrote is served: every claim is one the server
+	// minted from the canonical values it read, and no driver is served.
+	if len(result.ClaimedFacts) == 0 || len(result.Drivers) != 0 {
+		t.Fatalf("claimed facts = %d drivers = %d, want the canonical values read and no judgment", len(result.ClaimedFacts), len(result.Drivers))
+	}
+	for _, claim := range result.ClaimedFacts {
+		if !strings.HasPrefix(claim.ClaimID, "server:fact:") {
+			t.Fatalf("claim %q is not server-minted", claim.ClaimID)
+		}
 	}
 }
 

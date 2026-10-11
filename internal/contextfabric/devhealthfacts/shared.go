@@ -701,12 +701,17 @@ import (
 // answer, not a partial "canonical fact capability timed out". A candidate saved
 // under v137 may hold that partial answer and must not be reused.
 //
-// v138 -> v144: a prior-period health read whose provider did not complete
+// v139: a degraded answer for a failed model call serves the canonical values
+// it read as claims; a candidate saved under an earlier version may hold one
+// with none.
+//
+// v139 -> v144: a prior-period health read whose provider did not complete
 // (failed, cancelled, rejected, unconfigured, gapped, pruned) is served as
 // period_delta_transition=prior_read_failed with its reason, not as
-// unknown_prior (CHAOS-7404). A candidate saved under v138 may carry the false
+// unknown_prior (CHAOS-7404). A candidate saved under v139 may carry the false
 // unknown_prior and must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v144"
+
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

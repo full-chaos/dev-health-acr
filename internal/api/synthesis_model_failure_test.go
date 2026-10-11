@@ -43,15 +43,28 @@ func TestAModelCallThatFailsIsServedAsADegradedAnswer(t *testing.T) {
 			if result.Status != cf.InvestigationDegraded || result.Completeness.TerminalStatus != cf.InvestigationDegraded {
 				t.Fatalf("status = %q terminal_status = %q, want degraded", result.Status, result.Completeness.TerminalStatus)
 			}
-			// The reason names the first disclosure channel in the contract's
-			// precedence. The answer has no claim to keep the team committed,
-			// so the engine's commit gate adds its limitation, which outranks
-			// the warning. The warning below is what names the cause.
-			if !hasLimitation(result, contractsv1.ContextFabricCommitRetractionLimitation) || len(result.Limitations) != 1 {
-				t.Fatalf("limitations = %q, want only the commit retraction", result.Limitations)
+			// The facts that were read are served as claims, and the one
+			// limitation names the mechanism.
+			if !hasLimitation(result, contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation) || len(result.Limitations) != 1 {
+				t.Fatalf("limitations = %q, want only the facts-only disclosure", result.Limitations)
 			}
 			if result.Completeness.TerminalReason != contractsv1.ContextFabricTerminalReasonLimitationDisclosed {
 				t.Fatalf("terminal_reason = %q, want limitation_disclosed", result.Completeness.TerminalReason)
+			}
+			if result.Completeness.ClaimedFactsCount == 0 || len(result.ClaimedFacts) != result.Completeness.ClaimedFactsCount || len(result.EvidenceRefIDs) == 0 {
+				t.Fatalf("claimed_facts = %d count = %d evidence = %d, want the facts that were read", len(result.ClaimedFacts), result.Completeness.ClaimedFactsCount, len(result.EvidenceRefIDs))
+			}
+			var completion *cf.ClaimedFact
+			for index := range result.ClaimedFacts {
+				if claim := &result.ClaimedFacts[index]; claim.Kind == cf.FactActualCompletion && claim.Field == "completed" && claim.Subject.Label == "PLAT-0000" {
+					completion = claim
+				}
+			}
+			if completion == nil || completion.Value.Boolean == nil || !*completion.Value.Boolean {
+				t.Fatalf("claimed_facts = %+v, want actual_completion.completed=true for PLAT-0000", result.ClaimedFacts)
+			}
+			if !strings.Contains(result.CurrentState, "actual_completion.completed=true for") || !strings.Contains(result.CurrentState, "PLAT-0000") {
+				t.Fatalf("current_state = %q, want the canonical values read", result.CurrentState)
 			}
 			if !result.Coverage.Partial {
 				t.Fatal("coverage.partial = false, want true")

@@ -557,9 +557,10 @@ func TestClientSynthesisRetractsACommitNothingProvesAndSaysSo(t *testing.T) {
 	}
 }
 
-// The model failure path has no draft either and retracts the same commit
-// with the existing limitation only.
-func TestModelFailureAnswerRetractsAnUnprovenCommitWithoutTheClientLimitation(t *testing.T) {
+// The model failure path serves the canonical values it read as claims, so a
+// commit those claims are about stays, with the facts-only disclosure and
+// without either retraction limitation.
+func TestModelFailureAnswerKeepsACommitItsFactsProve(t *testing.T) {
 	t.Parallel()
 	rig := newClientRig(t, func(r *clientRig) {
 		r.graph.bases = nil
@@ -569,11 +570,11 @@ func TestModelFailureAnswerRetractsAnUnprovenCommitWithoutTheClientLimitation(t 
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
-	if result.Status != InvestigationDegraded || len(result.SubjectResolution.Committed) != 0 {
-		t.Fatalf("Status = %q Committed = %v, want the degraded answer with the commit retracted", result.Status, result.SubjectResolution.Committed)
+	if result.Status != InvestigationDegraded || len(result.SubjectResolution.Committed) != 1 || len(result.ClaimedFacts) == 0 {
+		t.Fatalf("Status = %q Committed = %v claims = %d, want the degraded answer with its facts and the commit they prove", result.Status, result.SubjectResolution.Committed, len(result.ClaimedFacts))
 	}
-	if !hasLimitation(result.Limitations, commitRetractionLimitation) || hasLimitation(result.Limitations, contractsv1.ContextFabricClientSynthesisCommitNotAffirmedLimitation) {
-		t.Fatalf("limitations = %v, want the retraction limitation without the client one", result.Limitations)
+	if !hasLimitation(result.Limitations, contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation) || hasLimitation(result.Limitations, commitRetractionLimitation) || hasLimitation(result.Limitations, contractsv1.ContextFabricClientSynthesisCommitNotAffirmedLimitation) {
+		t.Fatalf("limitations = %v, want the facts-only disclosure and no retraction", result.Limitations)
 	}
 }
 
