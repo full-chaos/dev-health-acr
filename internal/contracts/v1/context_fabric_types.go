@@ -1737,6 +1737,27 @@ type ContextFabricFinding struct {
 // SynthesisDraft.ValidateAgainst in internal/contextfabric does, before a
 // result is ever built. See docs/design/context-fabric-result-semantics.md
 // for the full four-way evidence distinction this type is part of.
+// ContextFabricDerivationOperation is the CLOSED set of arithmetic a derived
+// claim may state. sum takes two or more inputs; difference (first minus
+// second) and ratio (first over second) take exactly two.
+type ContextFabricDerivationOperation string
+
+const (
+	ContextFabricDerivationSum        ContextFabricDerivationOperation = "sum"
+	ContextFabricDerivationDifference ContextFabricDerivationOperation = "difference"
+	ContextFabricDerivationRatio      ContextFabricDerivationOperation = "ratio"
+
+	// ContextFabricDerivationInputsMaxItems bounds DerivedFrom.
+	ContextFabricDerivationInputsMaxItems = 8
+)
+
+// ContextFabricDerivationInput names one served canonical fact value a
+// derived claim is computed from: the fact's id and the field read on it.
+type ContextFabricDerivationInput struct {
+	FactID string `json:"fact_id"`
+	Field  string `json:"field"`
+}
+
 type ContextFabricClaimedFact struct {
 	ClaimID string                   `json:"claim_id"`
 	Kind    ContextFabricFactKind    `json:"kind"`
@@ -1750,6 +1771,16 @@ type ContextFabricClaimedFact struct {
 	// claim's whole (Kind, Subject) group as before. Additive: a consumer
 	// that ignores it is unaffected.
 	FactID string `json:"fact_id,omitempty"`
+	// DerivedFrom and Operation are the OPTIONAL, additive pair that makes a
+	// claim a DERIVATION: Value is the result of Operation applied to the
+	// named canonical facts' field values, in order. Present together or not
+	// at all. A derivation is grounded only when every input resolves to a
+	// supplied numeric fact of this claim's Subject and Value is
+	// reproducible from them; it never carries FactID (the inputs are the
+	// citation). Field names what the derived value measures and is not
+	// looked up on a fact.
+	DerivedFrom []ContextFabricDerivationInput   `json:"derived_from,omitempty"`
+	Operation   ContextFabricDerivationOperation `json:"operation,omitempty"`
 	// Rows is an OPTIONAL, additive renderable table (CHAOS-4347): a fact
 	// whose evidence is genuinely a set of rows -- e.g. a project's
 	// per-team metrics rollup, where summing counts across teams is sound

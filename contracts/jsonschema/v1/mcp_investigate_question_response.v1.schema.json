@@ -4574,6 +4574,25 @@
             "fact_id": {
               "type": "string",
               "maxLength": 256
+            },
+            "derived_from": {
+              "description": "Additive: the served facts a derived value is computed from, in order. Set together with operation; excludes fact_id. sum takes two or more inputs, difference and ratio exactly two.",
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["fact_id", "field"],
+                "properties": {
+                  "fact_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+                  "field": { "type": "string", "minLength": 1, "maxLength": 128 }
+                }
+              }
+            },
+            "operation": {
+              "type": "string",
+              "enum": ["sum", "difference", "ratio"]
             }
           },
           "required": [

@@ -2136,7 +2136,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 			}
 		}
 		clause, _ := contextfabric.SynthesisRejectionClauseOf(err)
-		draws = append(draws, synthesisDraw{Index: draw, Outcome: "invalid_output", OutputDigest: rejectedDigest, Claims: rejectedClaims, Clause: clause})
+		draws = append(draws, synthesisDraw{Index: draw, Outcome: "invalid_output", OutputDigest: rejectedDigest, Claims: rejectedClaims, Clause: clause, Reason: contextfabric.SynthesisRejectionReasonOf(err)})
 	}
 	// A redraw that was rejected or failed in transport serves the valid
 	// zero-claim draft it followed: an honest degraded answer, never a failure
@@ -2591,6 +2591,9 @@ type synthesisDraw struct {
 	// see SynthesisRejection.Clause's own doc comment for which three
 	// reasons carry one.
 	Clause contractsv1.ContextFabricRejectedClause
+	// Reason is the closed rejection-reason word of a rejected draw (the
+	// rule that refused it); empty for a successful draw, rendered "none". Fixed identifiers only, never model content.
+	Reason contextfabric.SynthesisRejectionReason
 }
 
 // formatSynthesisDraws renders the sequence as "1:invalid_output,2:success",
@@ -2631,6 +2634,22 @@ func formatSynthesisDrawClauses(draws []synthesisDraw) string {
 // formatSynthesisDrawClaims renders "1:0,2:3", index-aligned with
 // formatSynthesisDraws: the claimed-fact count of each draw's raw output, "?"
 // for a draw whose text never decoded.
+// formatSynthesisDrawReasons renders "1:claim_value_contradicts_canonical,2:none",
+// index-aligned with formatSynthesisDraws: the validator rule that refused
+// each rejected draw ("none" for a draw that was admitted), so a retry is
+// never silent about why it ran.
+func formatSynthesisDrawReasons(draws []synthesisDraw) string {
+	parts := make([]string, 0, len(draws))
+	for _, draw := range draws {
+		reason := string(draw.Reason)
+		if reason == "" {
+			reason = "none"
+		}
+		parts = append(parts, fmt.Sprintf("%d:%s", draw.Index, reason))
+	}
+	return strings.Join(parts, ",")
+}
+
 func formatSynthesisDrawClaims(draws []synthesisDraw) string {
 	parts := make([]string, 0, len(draws))
 	for _, draw := range draws {
@@ -2724,6 +2743,7 @@ func (r *Runtime) logSynthesizeInput(ctx context.Context, orgID, requestID strin
 		formatSynthesisDraws(draws),
 		formatSynthesisDrawClaims(draws),
 		formatSynthesisDrawDigests(draws),
+		formatSynthesisDrawReasons(draws),
 		grounding.Claims,
 		grounding.Drivers,
 		grounding.EvidenceRefs,
@@ -2745,7 +2765,7 @@ func drawsRetried(draws []synthesisDraw) int {
 // drawLogFieldKeys mirrors attemptLogFieldKeys's own single-declaration
 // discipline -- see that var's doc comment for why a pin must reference this
 // directly rather than a hand-typed key list or a call to drawLogFields.
-var drawLogFieldKeys = []string{"draws_total", "draws_retried", "draw_outcomes", "draw_output_digests", "draw_rejected_clauses"}
+var drawLogFieldKeys = []string{"draws_total", "draws_retried", "draw_outcomes", "draw_output_digests", "draw_rejected_clauses", "draw_rejected_reasons"}
 
 // drawLogFields renders the draw sequence onto the synthesize decision line,
 // mirroring attemptLogFields's shape and emission discipline. It is
@@ -2756,7 +2776,7 @@ var drawLogFieldKeys = []string{"draws_total", "draws_retried", "draw_outcomes",
 // unconditional there (a synthesize call always attempts a generation call,
 // but does not always reach a draft to judge).
 func drawLogFields(draws []synthesisDraw) []any {
-	values := []any{len(draws), drawsRetried(draws), contextfabric.SanitizeLogAttr(formatSynthesisDraws(draws)), contextfabric.SanitizeLogAttr(formatSynthesisDrawDigests(draws)), contextfabric.SanitizeLogAttr(formatSynthesisDrawClauses(draws))}
+	values := []any{len(draws), drawsRetried(draws), contextfabric.SanitizeLogAttr(formatSynthesisDraws(draws)), contextfabric.SanitizeLogAttr(formatSynthesisDrawDigests(draws)), contextfabric.SanitizeLogAttr(formatSynthesisDrawClauses(draws)), contextfabric.SanitizeLogAttr(formatSynthesisDrawReasons(draws))}
 	fields := make([]any, 0, len(drawLogFieldKeys)*2)
 	for i, key := range drawLogFieldKeys {
 		fields = append(fields, key, values[i])

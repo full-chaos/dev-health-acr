@@ -2038,6 +2038,7 @@ var SynthesisInput = Event{
 		{Key: "draw_outcomes", Type: FieldString, Presence: PresenceRequired},
 		{Key: "draw_claims", Type: FieldString, Presence: PresenceRequired},
 		{Key: "draw_output_digests", Type: FieldString, Presence: PresenceRequired},
+		{Key: "draw_rejected_reasons", Type: FieldString, Presence: PresenceRequired},
 		{Key: "claims", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "drivers", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "evidence_refs", Type: FieldInt, Presence: PresenceRequired},

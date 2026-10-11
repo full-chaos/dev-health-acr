@@ -33,7 +33,7 @@ const (
 	// change to what the model is told.
 	PromptVersion = "context-fabric-interpretation.v23"
 	// OutputVersion names the model-output contract the prompt asks for.
-	OutputVersion = "context-fabric-model-output.v8"
+	OutputVersion = "context-fabric-model-output.v9"
 )
 
 type interpretationInput struct {
