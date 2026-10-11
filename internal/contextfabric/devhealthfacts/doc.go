@@ -43,8 +43,8 @@
 //   - FactInvestment from the canonical categorization (work_unit_investments:
 //     the five themes and fifteen subcategories of the Jev categorizer): a
 //     team's mix over its owned repositories, a project's roll-up and a
-//     repository's mix. investment_metrics_daily (the deprecated rule
-//     classifier's keys) is read for no subject any more (CHAOS-9195).
+//     repository's mix. The deprecated rule classifier's table is no longer
+//     read for any subject or declared in devhealthschema (CHAOS-9195).
 //     investment_classifications_daily is NOT read for this: its live schema
 //     (verified 2026-08-27) carries no team_id column.
 //   - FactReadiness from estimate_coverage_metrics_daily (per-team backlog
