@@ -259,6 +259,7 @@ def expectation_for(row):
             "expectation": INVALID,
             "expectation_basis": None,
             "declares_nonexistent": False,
+            "decline_if_shape_emitted": False,
             "declared_anchor_name": None,
             "declared_anchor_kind": None,
             "invalid_reason": reason,
@@ -270,6 +271,10 @@ def expectation_for(row):
         "expectation": row.get("expect") or UNSCORED,
         "expectation_basis": row.get("basis"),
         "declares_nonexistent": bool(row.get("nonexistent")),
+        # A decline that is owed only when the model emitted the refusing shape
+        # (an intentionally illegal probe): a served legal reading is then scored
+        # by the quality axis like a serve row, not as a fabrication.
+        "decline_if_shape_emitted": bool(row.get("decline_if_shape_emitted")),
         "declared_anchor_name": (anchor or {}).get("label"),
         "declared_anchor_kind": (anchor or {}).get("kind"),
         "note": row.get("note") or "",
