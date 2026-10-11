@@ -149,6 +149,18 @@ func (d ContextFabricCommitDecisionDigest) Validate() error {
 	if !validCommitDecisionDigestIdentityProven(d.CommitGate, d.IdentityProven) {
 		return fmt.Errorf("identity proven is not consistent with the commit gate")
 	}
+	switch d.IdentityLookup {
+	case "":
+	case "complete", "incomplete", "graph_lag", "not_run_time_axis", "not_wired":
+		if d.CommitGate == "" {
+			return fmt.Errorf("identity lookup is recorded without a commit gate")
+		}
+		if d.AliasLookupComplete != (d.IdentityLookup == "complete") {
+			return fmt.Errorf("alias lookup complete is not consistent with the identity lookup state")
+		}
+	default:
+		return fmt.Errorf("identity lookup is not a recognized value")
+	}
 	return nil
 }
 
