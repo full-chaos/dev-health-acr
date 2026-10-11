@@ -776,10 +776,14 @@ import (
 // epochs, where a building or grace epoch's watermark stood in for the serving
 // one, and must not be reused.
 //
-// v159 -> v160: a work item's status fact adds status_since, status_duration_seconds and
-// status_since_basis; a candidate saved under v159 holds a status fact without the time in
+// v159 -> v160: a continuation turn carrying a subject hint keeps the remembered confirmed-need
+// ledger (the hint contests a carried anchor of its own kind instead of dropping the ledger);
+// a candidate saved under an earlier version for such a turn was answered without it.
+//
+// v160 -> v161: a work item's status fact adds status_since, status_duration_seconds and
+// status_since_basis; a candidate saved under v160 holds a status fact without the time in
 // the current status and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v160"
+const QueryVersion = "devhealthfacts.clickhouse.v161"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
