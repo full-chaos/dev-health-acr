@@ -75,7 +75,9 @@ func (storedOrgModelConfig) ResolveOrgModelConfig(context.Context, string) (cont
 func TestOfferPhrasingResolvesThroughTheOrganizationFirstAndHonorsAWithheldTurn(t *testing.T) {
 	deployment := &phrasingRuntime{fakeRuntime: fakeRuntime{name: "deployment"}}
 	own := &phrasingRuntime{fakeRuntime: fakeRuntime{name: "own"}}
-	build := func(context.Context, contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) { return own, nil }
+	build := func(context.Context, contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
+		return own, nil
+	}
 	principal := storage.Principal{OrgID: "org_1"}
 	withheld := contextfabric.WithPlatformModelWithheld(context.Background())
 
