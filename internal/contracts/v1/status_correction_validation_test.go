@@ -31,6 +31,10 @@ func TestStatusCorrectionValidationClauses(t *testing.T) {
 		{"mirror_missing", func(r *ContextFabricInvestigationResult) {
 			r.StatusCorrection = &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded}
 		}, "must equal the result's status_correction"},
+		{"mirror_differs", func(r *ContextFabricInvestigationResult) {
+			r.StatusCorrection = &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded}
+			r.Completeness.StatusCorrection = &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationPartial, Direction: ContextFabricStatusCorrectionPartialToDegraded}
+		}, "must equal the result's status_correction"},
 		{"served_complete", func(r *ContextFabricInvestigationResult) {
 			r.Status = ContextFabricInvestigationComplete
 			r.Completeness.TerminalStatus = ContextFabricInvestigationComplete

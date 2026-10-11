@@ -32,6 +32,9 @@ func TestServerCorrectedCompletenessLabelIsDisclosedOnTheDocument(t *testing.T) 
 	if wantRequirement == "" {
 		t.Fatal("setup: the turn derived no unavailable outcome row")
 	}
+	if n := len(turn.telemetry.completenessAuthorities); n == 0 || !turn.telemetry.completenessAuthorities[n-1].StatusCorrectionDisclosed {
+		t.Fatalf("the completeness authority line must state status_correction_disclosed for a corrected served document: %+v", turn.telemetry.completenessAuthorities)
+	}
 	for name, got := range map[string]InvestigationResult{"served": result, "saved": turn.store.saved} {
 		correction := got.StatusCorrection
 		if correction == nil {
