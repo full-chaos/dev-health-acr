@@ -61,3 +61,38 @@ func TestWorkItemTeamV2TeamEndpointIsDecidedByTheSubjectGate(t *testing.T) {
 		})
 	}
 }
+
+// The gate is asked for a refused row and for an absent one alike, and an
+// unavailable gate is a retryable failure, never a refusal or a serve.
+func TestWorkItemTeamV2GateIsAskedForAnAbsentRowAndFailsClosedWhenUnavailable(t *testing.T) {
+	kind := contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2
+	values := []string{zeroRepoID, "jira:ABC-1", "ari:cloud:identity::team/1", "native_team"}
+	team := contextfabric.TeamCanonicalID(values[2])
+	_, id := mustMint(t, kind, values...)
+	t.Run("absent work item", func(t *testing.T) {
+		w := newWorld()
+		w.gate = &fakeGate{world: w, outcomes: map[string]directread.SubjectOutcome{team: directread.SubjectAdmitted}}
+		_, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, string(kind), id)
+		want := []string{fmt.Sprintf("discover(%s,work_item_repositories,jira:ABC-1)", orgID), fmt.Sprintf("gate(%s,team,%s)", orgID, team)}
+		if decision.Reason != contextfabric.SourceRowNoRow || !reflect.DeepEqual(w.calls, want) {
+			t.Fatalf("%+v, calls %v", decision, w.calls)
+		}
+	})
+	t.Run("gate unavailable", func(t *testing.T) {
+		w := newWorld()
+		w.discovered[workItemDiscovery+"|jira:ABC-1"] = []contractsv1.ResolvedScope{scope(grantedID, grantedRep)}
+		w.gate = &fakeGate{world: w, decision: directread.DecisionUnavailable, err: fmt.Errorf("graph down")}
+		for _, principal := range []storage.Principal{restricted, unrestricted} {
+			w.calls = nil
+			_, decision := resolver(t, w).ResolveSourceRow(context.Background(), principal, string(kind), id)
+			if decision.Reason != contextfabric.SourceRowUnavailable || decision.Err == nil {
+				t.Fatalf("%v: %+v, calls %v", principal.RepositoryScopes, decision, w.calls)
+			}
+			for _, call := range w.calls {
+				if len(call) >= 3 && call[:3] == "row" {
+					t.Fatalf("a row was read behind an unavailable gate: %v", w.calls)
+				}
+			}
+		}
+	})
+}

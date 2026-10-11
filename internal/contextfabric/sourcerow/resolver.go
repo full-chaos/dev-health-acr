@@ -730,12 +730,13 @@ type encodedSpec struct {
 	anchorSegment   int
 	anchorDiscovery contextpacket.SourceRowDiscovery
 	endpoints       []endpoint
-	// wildcardOnly: the row names a subject this resolver cannot decide yet
-	// -- a team, whose ownership-derived gate CHAOS-7227 composes -- so the
-	// row is served only to a caller that a "*" repository list admits
-	// (unrestricted and "*" callers), and every repository-restricted caller
-	// is refused (fail closed; strictly stronger than the edge gate).
-	wildcardOnly bool
+	// teamSegment is the index of the team id in the ref when the row names a
+	// team (hasTeam). The team is an ownership subject: it is decided by the
+	// direct data tools' subject gate (OWNERSHIP reach, never membership,
+	// CHAOS-7227), live on every read, together with the repository the row
+	// is read in.
+	teamSegment int
+	hasTeam     bool
 }
 
 var encodedSpecs = map[contractsv1.ContextFabricEvidenceEntityType]encodedSpec{
@@ -753,10 +754,10 @@ var encodedSpecs = map[contractsv1.ContextFabricEvidenceEntityType]encodedSpec{
 	},
 	// (attribution repo_id, work item, team, source): read where the work
 	// item lives (the attribution's own repo_id is mostly the zero UUID);
-	// the team is decided fail closed until CHAOS-7227.
+	// the team is decided by the subject gate.
 	contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2: {
 		anchorDiscovery: contextpacket.SourceRowDiscoveryWorkItem, anchorSegment: 1,
-		wildcardOnly: true,
+		teamSegment: 2, hasTeam: true,
 	},
 	// (repository, deployment, incident, source): read in the repository
 	// the row names (the edge and its deployment); the incident must be
@@ -809,6 +810,12 @@ func (r *Resolver) encodedTargets(ctx context.Context, principal storage.Princip
 			return nil, err
 		}
 	}
+	teamAdmitted := true
+	if spec.hasTeam {
+		if teamAdmitted, err = r.teamAdmitted(ctx, principal, values[spec.teamSegment]); err != nil {
+			return nil, err
+		}
+	}
 	anchorWorkItem := ""
 	if !spec.anchorByID {
 		anchorWorkItem = values[spec.anchorSegment]
@@ -839,9 +846,7 @@ func (r *Resolver) encodedTargets(ctx context.Context, principal storage.Princip
 		}
 		allowed = allowed && len(admittedEnds) > 0
 	}
-	if spec.wildcardOnly && !admitsWildcard(principal) {
-		allowed = false
-	}
+	allowed = allowed && teamAdmitted
 	if !allowed {
 		return nil, nil
 	}
@@ -850,6 +855,25 @@ func (r *Resolver) encodedTargets(ctx context.Context, principal storage.Princip
 		targets = append(targets, target{scope: scope, read: read, grammar: contextfabric.SourceRowGrammarEncoded})
 	}
 	return targets, nil
+}
+
+// teamAdmitted asks the subject gate whether the caller may read the team, by
+// the team's ownership reach. The gate is asked on every read, for a refused
+// row and an absent one alike. Without a gate only a caller a "*" repository
+// list admits is served (the team cannot be decided for anyone else).
+func (r *Resolver) teamAdmitted(ctx context.Context, principal storage.Principal, teamID string) (bool, error) {
+	if r.gate == nil {
+		return admitsWildcard(principal), nil
+	}
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: contextfabric.TeamCanonicalID(teamID)}
+	_, authorization := r.gate.Authorize(ctx, principal, []contextfabric.SubjectRef{subject})
+	if authorization.Decision == directread.DecisionUnavailable {
+		if authorization.Err != nil {
+			return false, authorization.Err
+		}
+		return false, fmt.Errorf("sourcerow: subject gate unavailable: %s", authorization.Reason)
+	}
+	return len(authorization.Outcomes) == 1 && authorization.Outcomes[0].Outcome == directread.SubjectAdmitted, nil
 }
 
 // discover runs one repository discovery and refuses a saturated list.
