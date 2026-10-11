@@ -98,7 +98,7 @@ LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows+1)
 	}, extra...); err != nil {
 		return nil, err
 	}
-	if rows > maxTeamOwnedRepositoryRows {
+	if rows >= maxTeamOwnedRepositoryRows {
 		return nil, fmt.Errorf("%s", teamOwnedRepositoriesOverflowReason)
 	}
 	return owned, nil
