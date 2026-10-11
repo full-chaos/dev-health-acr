@@ -640,8 +640,6 @@ const ContextFabricInactiveTeamHintLimitation = "The team named in this request 
 // been answered on a different axis than it asked for.
 func ContextFabricServiceAuthoredLimitations() []string {
 	return []string{
-		ContextFabricSynthesisFailedFactsOnlyLimitation,
-		ContextFabricSynthesisFailedFactsTruncatedLimitation,
 		ContextFabricRetrievalDegradedLimitation,
 		ContextFabricRetrievalDegradedLimitationLegacy,
 		ContextFabricTemporalProjectionLimitation,
@@ -667,6 +665,8 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSubjectTermsMissingLimitation,
 		ContextFabricSubjectTermsFrameOverBoundLimitation,
 		ContextFabricInactiveTeamHintLimitation,
+		ContextFabricSynthesisFailedFactsOnlyLimitation,
+		ContextFabricSynthesisFailedFactsTruncatedLimitation,
 	}
 }
 
