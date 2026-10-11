@@ -15,10 +15,17 @@ package contextfabric
 // digest, different question: the turn takes the fresh path.
 //
 // WHAT IT COVERS, and why the list is exactly this:
-//   - all four requested_scope parts. A stated scope is independently a
-//     disqualifier at admission, so the digest does not decide those turns --
-//     it records what turn one was asked, so the identity is complete and a
-//     later relaxation of that disqualifier cannot silently widen it.
+//   - three of the four requested_scope parts: repository_slugs, project_ids
+//     and team_ids. A stated scope is independently a disqualifier at
+//     admission, so the digest does not decide those turns -- it records what
+//     turn one was asked, so the identity is complete and a later relaxation
+//     of that disqualifier cannot silently widen it.
+//   - NOT subject_hints. A caller-supplied hint is a contest, never a change of
+//     question: it reaches the carry's contest-before-injection path, which
+//     supersedes a carried anchor of the hint's own kind and leaves every other
+//     remembered need to its own reverify. Digesting it made a hint turn read
+//     as a changed question and dropped the whole remembered ledger before
+//     that contest could run (recipe v1).
 //   - the seven answer-shaping options no other field records:
 //     max_subject_candidates, max_cohort_members, max_relationship_paths,
 //     max_drivers, max_evidence_refs, allow_clarification and
@@ -48,7 +55,7 @@ import (
 
 // SemanticRequestIdentityVersion is the recipe in force. Bump it whenever the
 // covered set or the canonical form changes.
-const SemanticRequestIdentityVersion = "request-identity.v1"
+const SemanticRequestIdentityVersion = "request-identity.v2"
 
 // SemanticRequestIdentity is the turn-one request identity: a digest over the
 // answer-shaping request inputs nothing else records, plus the version of the
@@ -64,10 +71,9 @@ type SemanticRequestIdentity struct {
 // or silently miss it. Every field is present on every turn -- no omitempty --
 // so a zero value and an absent one cannot collide.
 type requestIdentityDocument struct {
-	RepositorySlugs []string                               `json:"repository_slugs"`
-	ProjectIDs      []string                               `json:"project_ids"`
-	TeamIDs         []string                               `json:"team_ids"`
-	SubjectHints    []contractsv1.ContextFabricSubjectHint `json:"subject_hints"`
+	RepositorySlugs []string `json:"repository_slugs"`
+	ProjectIDs      []string `json:"project_ids"`
+	TeamIDs         []string `json:"team_ids"`
 
 	MaxSubjectCandidates   int                                             `json:"max_subject_candidates"`
 	MaxCohortMembers       int                                             `json:"max_cohort_members"`
@@ -147,7 +153,6 @@ func SemanticRequestIdentityOf(request InvestigationRequest, referencedQuestion 
 		RepositorySlugs:        append([]string{}, scope.RepositorySlugs...),
 		ProjectIDs:             append([]string{}, scope.ProjectIDs...),
 		TeamIDs:                append([]string{}, scope.TeamIDs...),
-		SubjectHints:           append([]contractsv1.ContextFabricSubjectHint{}, scope.SubjectHints...),
 		MaxSubjectCandidates:   request.Options.MaxSubjectCandidates,
 		MaxCohortMembers:       request.Options.MaxCohortMembers,
 		MaxRelationshipPaths:   request.Options.MaxRelationshipPaths,
