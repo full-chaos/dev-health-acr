@@ -61,6 +61,9 @@ type claimDepthAttempt struct {
 	ClaimsAfter  int
 	ClaimsCited  int
 	PerMember    int
+	// Reduced is the cut document, set only when the item axis fits after the
+	// cut and the byte axis does not: the byte levers continue from it.
+	Reduced InvestigationResult
 }
 
 // claimDepthPlan is the per-member view of one document's claims.
