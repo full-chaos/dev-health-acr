@@ -368,13 +368,15 @@ func anchorBound(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRe
 // readers carry the anchor as an identity.
 //
 // Every fact comes from the resolution that ran: the commit gate is the exact
-// label tier, the lookup was not truncated and the alias lookup was complete
-// (read off the persisted digest, so reuse decides the same), the subject
-// matched an anchor term, and no other subject that could be the anchor
-// (not of the member kind, and of the reading's anchor kind when one is
-// stated) matched an anchor term by an identity mechanism, committed or not. A truncated or incomplete
-// lookup cannot rule out a second repository with the label, so it admits
-// nothing. No text is read and no repository is guessed from the question.
+// label tier, the alias lookup was complete or lagging the graph (read off the
+// persisted digest, so reuse decides the same), the subject matched an anchor
+// term, and no other subject that could be the anchor (not of the member kind,
+// and of the reading's anchor kind when one is stated) matched an anchor term
+// by an identity mechanism, committed or not. An incomplete identity lookup
+// cannot rule out a second repository with the label, so it admits nothing. A
+// truncated lexical search cuts only candidates no identity mechanism matched,
+// which this decision ignores; it refuses only beside an identity lookup that
+// was not complete. No text is read and no repository is guessed from the question.
 func labelUniqueAnchor(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRef, resolution SubjectResolution, digests CommitDecisionDigestSet) bool {
 	if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil {
 		return false
@@ -383,7 +385,7 @@ func labelUniqueAnchor(frame *QuestionFrame, anchorKind SubjectKind, subject Sub
 		return false
 	}
 	digest := digests.For(subject)
-	if digest.CommitGate != "exact_index" || digest.IdentityProven || digest.SearchTruncated || !(digest.AliasLookupComplete || digest.IdentityLookup == IdentityLookupTokenGraphLag) {
+	if digest.CommitGate != "exact_index" || digest.IdentityProven || (digest.SearchTruncated && !digest.AliasLookupComplete) || !(digest.AliasLookupComplete || digest.IdentityLookup == IdentityLookupTokenGraphLag) {
 		return false
 	}
 	if !anchorTermMatched(frame, subject, resolution) {
