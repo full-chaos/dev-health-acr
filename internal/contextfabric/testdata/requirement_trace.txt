@@ -26,7 +26,7 @@ Q1'  [named subject (project), assess_state]
 
 Q2  [discovered team, rank + explain]
   health                 member    team           each_member     at_least_one  health
-  principal_drivers      member    team           each_member     corroborated  flow health investment landscape metrics operational_deficiencies readiness workload
+  principal_drivers      member    team           each_member     corroborated  deployments flow health incidents investment landscape metrics operational_deficiencies pull_requests readiness workload
   ranking                member    team           each_member     all           step:rank_cohort
   state                  member    team           each_member     corroborated  flow health investment landscape readiness workload
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -719,11 +720,15 @@ import (
 // unknown_prior (CHAOS-7404). A candidate saved under v146 may carry the false
 // unknown_prior and must not be reused.
 //
-// v147 -> v148: a repository's identity fact carries owning_teams (its current
+// v147 -> v148: a team rollup kind declares answer obligations, so a team driver or
+// remaining-work question plans the blockers, pull request, incident and deployment
+// rollups; a candidate saved under an earlier version holds an answer without them.
+//
+// v148 -> v149: a repository's identity fact carries owning_teams (its current
 // team_repo_ownership teams), and a grouped repository answer groups under those
 // teams and discloses members that sit under more than one. A candidate saved
-// under v147 holds an ungrouped repository answer and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v148"
+// under v148 holds an ungrouped repository answer and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v149"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1209,7 +1214,72 @@ func factKindDimension(kind contextfabric.FactKind) contextfabric.HealthDimensio
 	}
 }
 
-// factKindObligations is the obligation half of the same declaration:
+// teamRollupObligationKinds are the kinds whose team subject is served as a
+// rollup over the team's owned repositories (team_rollup.go).
+var teamRollupObligationKinds = map[contextfabric.FactKind]bool{
+	contextfabric.FactBlockers:     true,
+	contextfabric.FactPullRequests: true,
+	contextfabric.FactIncidents:    true,
+	contextfabric.FactDeployments:  true,
+}
+
+// teamRollupExcludedObligations are the subject-level obligations a rollup of
+// counts cannot establish: `state` and `readiness` describe the one thing
+// itself (a pull request, an incident, a repository's release signal), and a
+// count over owned repositories is neither. The rollup keeps the rest.
+var teamRollupExcludedObligations = map[contextfabric.AnswerObligation]bool{
+	contextfabric.ObligationState:     true,
+	contextfabric.ObligationReadiness: true,
+}
+
+// factKindObligations is the declared obligation table. A team rollup kind
+// owes what the same kind owes at the subject level, so its SubjectTeam entry
+// is derived from the other subject kinds' entries, never hand-copied.
+func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectKind][]contextfabric.AnswerObligation {
+	declared := factKindSubjectObligations(kind)
+	if !teamRollupObligationKinds[kind] || len(declared[contextfabric.SubjectTeam]) > 0 {
+		return declared
+	}
+	derived := deriveTeamRollupObligations(declared)
+	if len(derived) == 0 {
+		return declared
+	}
+	out := make(map[contextfabric.SubjectKind][]contextfabric.AnswerObligation, len(declared)+1)
+	for subjectKind, obligations := range declared {
+		out[subjectKind] = obligations
+	}
+	out[contextfabric.SubjectTeam] = derived
+	return out
+}
+
+// deriveTeamRollupObligations is the union of the obligations the other subject
+// kinds declare for the same fact kind, minus the ones a rollup cannot
+// establish, in subject-kind then declaration order.
+func deriveTeamRollupObligations(declared map[contextfabric.SubjectKind][]contextfabric.AnswerObligation) []contextfabric.AnswerObligation {
+	var derived []contextfabric.AnswerObligation
+	seen := map[contextfabric.AnswerObligation]bool{}
+	for _, subjectKind := range sortedSubjectKinds(declared) {
+		for _, obligation := range declared[subjectKind] {
+			if teamRollupExcludedObligations[obligation] || seen[obligation] {
+				continue
+			}
+			seen[obligation] = true
+			derived = append(derived, obligation)
+		}
+	}
+	return derived
+}
+
+func sortedSubjectKinds(m map[contextfabric.SubjectKind][]contextfabric.AnswerObligation) []contextfabric.SubjectKind {
+	keys := make([]contextfabric.SubjectKind, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
+// factKindSubjectObligations is the obligation half of the same declaration:
 // which AnswerObligations each registered producer's facts can SERVE, per
 // subject kind.
 //
@@ -1254,7 +1324,7 @@ func factKindDimension(kind contextfabric.FactKind) contextfabric.HealthDimensio
 // mis-answer the design's own B5 row DEFERS rather than ships. It stays
 // empty on purpose, so an organization state requirement derives an
 // explicit `unavailable` instead of a confident wrong answer.
-func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectKind][]contextfabric.AnswerObligation {
+func factKindSubjectObligations(kind contextfabric.FactKind) map[contextfabric.SubjectKind][]contextfabric.AnswerObligation {
 	// The composition family: these producers answer "how is this subject
 	// doing" directly (state), explain it (principal_drivers) and can be
 	// compared across periods (period_delta). trend_series is declared by
