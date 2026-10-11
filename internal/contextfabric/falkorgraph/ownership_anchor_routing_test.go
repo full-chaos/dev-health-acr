@@ -576,7 +576,11 @@ func ownershipTimeConn(census []row, bound *[]map[string]interface{}) *fakeConn 
 		case strings.Contains(cypher, "$kinds"):
 			return census, nil
 		case isOwnershipEdgeRead(params):
-			*bound = append(*bound, params)
+			// The window-free read is the exclusion disclosure's: it names
+			// no owner of the count, so only the bound read is recorded.
+			if _, windowed := params[temporalParamStart]; windowed {
+				*bound = append(*bound, params)
+			}
 		}
 		return nil, nil
 	}}

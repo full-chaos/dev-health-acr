@@ -820,6 +820,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	ownershipCensusTruncated := false
 	ownershipCensusMembers := 0
+	var ownershipExclusions []contextfabric.CohortExclusion
+	ownershipZeroOwnersResolved := false
 	if ownershipRoutedRepoSlug != "" {
 		cohortMemberSource = contextfabric.CohortMemberSourceOwnership
 		ownershipNodes, truncated, ownershipErr := a.cohortKindCensusCandidates(ctx, key, principal.OrgID, []string{string(contextfabric.SubjectTeam)}, temporal)
@@ -858,9 +860,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 				Committed: len(request.Resolution.Committed), Census: len(ownershipNodes), Owners: owners, Truncated: truncated, Err: ownershipErr,
 			})
 		}
+		if ownershipErr == nil && !temporal.active {
+			ownershipExclusions, ownershipErr = a.repositoryOwnerExclusions(ctx, key, principal.OrgID, ownershipRoutedRepoID, edgeOwners)
+		}
 		if ownershipErr != nil {
 			return contextfabric.GraphContext{}, graphNotProjectedError(ownershipErr)
 		}
+		ownershipZeroOwnersResolved = ownershipZeroOwnersAreAnAnswer(owners, len(ownershipNodes), truncated)
 		ownershipCensusTruncated = truncated
 		ownershipCensusMembers = len(ownershipNodes)
 		sortCandidateNodesBySubjectKey(ownershipNodes)
@@ -1416,7 +1422,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		cohort.Rationale = teamAnchorCohortRationaleFor(declaredCohortKindForRouting)
 	}
+	if cohort == nil && ownershipZeroOwnersResolved {
+		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectTeam, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{}, Complete: true}
+	}
 	if cohort != nil && ownershipRoutedRepoSlug != "" {
+		cohort.Exclusions = ownerExclusionsOutsideMembers(ownershipExclusions, cohort.Members)
 		for i := range cohort.Members {
 			cohort.Members[i].InclusionReasons = []string{ownershipInclusionReason}
 		}
