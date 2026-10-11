@@ -616,7 +616,7 @@ func TestQueryVersionMovedPastTheSelectorScopeKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 151 {
-		t.Fatalf("QueryVersion = %q, want v151 or later -- an answer saved before project and team selectors were part of the reuse key carries no selector identity and must not be reused", devhealthfacts.QueryVersion)
+	if number < 152 {
+		t.Fatalf("QueryVersion = %q, want v152 or later -- an answer saved before project and team selectors were part of the reuse key carries no selector identity and must not be reused", devhealthfacts.QueryVersion)
 	}
 }

@@ -1884,6 +1884,11 @@ func TestAStoredModelFailureAnswerIsNotServedFromReuse(t *testing.T) {
 	project, candidate := reusableCandidate()
 	candidate.Status = InvestigationDegraded
 	candidate.Warnings = []string{synthesisFailureWarning(SynthesisFailureModelOutputInvalid)}
+	failureDetail, err := newSynthesisModelFailureDetail(SynthesisFailureModelOutputInvalid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Coverage.Details = append(candidate.Coverage.Details, failureDetail)
 	telemetry := &recordingTelemetry{}
 	synthesized := 0
 	engine := mustReuseTestEngine(t, EngineDependencies{

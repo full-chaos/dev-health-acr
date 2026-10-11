@@ -350,7 +350,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// deterministic_answer: 242 -> 243 -- the projection now serves the
 		// server-composed answer text; untrusted like direct_judgment because
 		// it names subjects by their graph labels.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 248},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 250},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -420,7 +420,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// carries no Interpretation at all.
 		// 360 -> 361 -- CommitDecisionDigest's identity_lookup, a closed
 		// enum validated by the digest's own Validate.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 361},
+		// 361 -> 363 -- the synthesis_model_failed detail's failure_class and
+		// retry_hint, closed enums minted by the service.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 363},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -663,6 +665,9 @@ func trustedBecauseClosed(path string) bool {
 		// NOT here — declared untrusted in both lists.
 		"code", "fact_kind", "scope_outcome", "policy", "origin_kind",
 		"supported_kinds", "skipped_kinds",
+		// "failure_class" and "retry_hint" (closed enums on the synthesis_model_failed
+		// detail, minted by the service from its own failure class).
+		"failure_class", "retry_hint",
 		// CHAOS-5405 D-d: the fact-scope census row's own leaves. Five of
 		// its six -- origin_kind, policy, basis, axis, outcome -- are
 		// ALREADY trusted above, drawn from the very same closed

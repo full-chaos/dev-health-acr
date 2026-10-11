@@ -450,6 +450,12 @@ func (d degradableBudgetTrimSynthesizer) ComposeDegraded(ctx context.Context, pr
 	result.ClaimedFacts = []ClaimedFact{}
 	result.EvidenceRefIDs = []string{}
 	result.Warnings = []string{synthesisFailureWarning(failure.Class)}
+	failureDetail, err := newSynthesisModelFailureDetail(failure.Class)
+	if err != nil {
+		return InvestigationResult{}, err
+	}
+	failureDetail.DetailID = fmt.Sprintf("cov-%02d", len(result.Coverage.Details)+1)
+	result.Coverage.Details = append(result.Coverage.Details, failureDetail)
 	return result, nil
 }
 
