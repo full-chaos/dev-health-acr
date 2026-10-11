@@ -1,8 +1,10 @@
 package falkorgraph
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -269,6 +271,9 @@ func TestMoreExcludedOwnersThanTheContractCarriesStillServeTheExactCount(t *test
 	if n := len(exclusionIDs(answer)); n != 250 {
 		t.Fatalf("exclusions = %d, want the contract's 250", n)
 	}
+	if !strings.Contains(answer.result.Cohort.Rationale, "10 further teams") {
+		t.Fatalf("rationale = %q, want the 10 teams the list does not carry named", answer.result.Cohort.Rationale)
+	}
 }
 
 func TestAnOwnershipAssertionThatHasNotStartedIsNotDisclosedAsEnded(t *testing.T) {
@@ -290,5 +295,34 @@ func TestAZeroOwnerCountIsNotServedForAWindowWhoseOwnerIsInactiveNow(t *testing.
 	answer := askOwningTeamCountWithOwnersAt(t, seedRepositoryWithoutAttributeOwner(), []ownerEdge{{team: "team:former", inactive: true}}, nil, &window)
 	if _, claimed, outcome := servedCount(answer); claimed && outcome == contractsv1.ContextFabricRequirementSatisfied {
 		t.Fatalf("a zero was certified for a window in which an owner existed")
+	}
+}
+
+// The only owner is inactive and the caller may not read it: the zero would
+// hide an owner that exists, so the count is not served.
+func TestAZeroOwnerCountIsNotServedWhenTheOnlyOwnerIsInactiveAndUnreadable(t *testing.T) {
+	s := seedRepositoryWithoutAttributeOwner()
+	s.nodes = append(s.nodes, seededNode{kind: "team", id: "team:hidden", label: "hidden", repos: []string{"hidden/service"}})
+	answer := askOwningTeamCountWithOwners(t, s, []ownerEdge{{team: "team:hidden", inactive: true}}, nil, storage.Principal{OrgID: "org-1", RepositoryScopes: []string{routeOwnedSlug}})
+	if _, claimed, outcome := servedCount(answer); claimed || outcome == contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("count claimed=%t outcome=%q while an owner exists the caller may not read, want none certified", claimed, outcome)
+	}
+}
+
+// The bound the disclosure hit is reported through the adapter's configured
+// telemetry, with counts only.
+func TestTheOwnershipDisclosureBoundIsReportedThroughTheConfiguredTelemetry(t *testing.T) {
+	var logs bytes.Buffer
+	adapter := newFakeAdapter(t, ownershipEdgeConn(nil, 260, nil))
+	adapter.config.Telemetry = SlogTelemetry{Logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	disclosure, err := adapter.repositoryOwnerExclusions(context.Background(), "key", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{}, ownedRepository().CanonicalID, map[string]bool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(disclosure.Exclusions) != maxOwnerExclusions || disclosure.OverCap != 10 {
+		t.Fatalf("exclusions = %d over cap = %d, want 250 and 10", len(disclosure.Exclusions), disclosure.OverCap)
+	}
+	if got := logs.String(); !strings.Contains(got, "over_cap=10") || strings.Contains(got, "team:edge") {
+		t.Fatalf("configured logger received %q, want the over-cap count and no team id", got)
 	}
 }

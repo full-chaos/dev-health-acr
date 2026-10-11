@@ -2,7 +2,6 @@ package falkorgraph
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -91,8 +90,8 @@ func (a *Adapter) repositoryOwningTeams(ctx context.Context, key, orgID, reposit
 // repository's own ownership edges name one (an inactive owner is not in the
 // active census, so the edges are evidence too). A graph with neither is
 // ownership that was never projected and says nothing about this repository.
-func ownershipZeroOwnersAreAnAnswer(owners, census, repositoryEdges int, truncated, historical bool) bool {
-	return !historical && !truncated && owners == 0 && (census > 0 || repositoryEdges > 0)
+func ownershipZeroOwnersAreAnAnswer(owners, census, repositoryEdges, unreadable int, truncated, historical bool) bool {
+	return !historical && !truncated && owners == 0 && unreadable == 0 && (census > 0 || repositoryEdges > 0)
 }
 
 // maxOwnerExclusions is the number of exclusions a cohort carries.
@@ -109,6 +108,9 @@ type ownerDisclosure struct {
 	// their assertion starts in the future, and OverCap how many readable
 	// exclusions did not fit the contract's bound. Counts only.
 	NotStarted, OverCap int
+	// Unreadable is how many left-out owners the caller may not read: the
+	// count cannot say they do not exist.
+	Unreadable int
 	// Cut reports a read the bound stopped.
 	Cut bool
 }
@@ -147,6 +149,7 @@ func (a *Adapter) repositoryOwnerExclusions(ctx context.Context, key string, pri
 		}
 		seen[id] = true
 		if !graphrank.AuthorizedAttributes(principal, scope, h.to.Properties) {
+			out.Unreadable++
 			continue
 		}
 		if len(out.Exclusions) >= maxOwnerExclusions {
@@ -158,9 +161,10 @@ func (a *Adapter) repositoryOwnerExclusions(ctx context.Context, key string, pri
 			Reason:  reason,
 		})
 	}
-	if out.NotStarted > 0 || out.OverCap > 0 || cut {
-		slog.Default().Info("context fabric ownership disclosure bounded",
-			"org_id", contextfabric.SanitizeLogAttr(principal.OrgID), "not_started", out.NotStarted, "over_cap", out.OverCap, "read_cut", cut)
+	if bounded, ok := a.config.Telemetry.(interface {
+		RecordOwnershipDisclosureBounded(ctx context.Context, orgID string, notStarted, overCap, unreadable int, cut bool)
+	}); ok && (out.NotStarted > 0 || out.OverCap > 0 || out.Unreadable > 0 || cut) {
+		bounded.RecordOwnershipDisclosureBounded(ctx, principal.OrgID, out.NotStarted, out.OverCap, out.Unreadable, cut)
 	}
 	return out, nil
 }
