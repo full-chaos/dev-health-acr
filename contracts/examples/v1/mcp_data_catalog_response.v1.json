@@ -86,7 +86,8 @@
    "context:read",
    "data:read"
   ],
-  "grant_class": "unrestricted"
+  "grant_class": "unrestricted",
+  "effective_access": "data_read"
  },
  "consistency": "best_effort",
  "untrusted_content": {
