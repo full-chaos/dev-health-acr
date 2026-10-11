@@ -818,12 +818,17 @@ import (
 // where it was served as 0; a candidate saved under v166 holds that 0 and must
 // not be reused.
 //
-// v167 -> v168: a team or project question for continuous integration, deployments, incidents or
+// v167 -> v168: a read obligation no producer declares for the member kind of
+// a cohort (health for pull requests or incidents) is judged not_applicable
+// instead of unavailable, so the answer is no longer degraded by it; a
+// candidate saved under v167 holds the degraded account and must not be reused.
+//
+// v168 -> v169: a team or project question for continuous integration, deployments, incidents or
 // operational deficiencies reaches those facts through the entity tree (ownership rows, and linked
 // pull request rows) where it was pruned with no reach; a candidate saved under an earlier version
 // carries the pruned answer for such a question. The census also sheds rows under a small byte
 // budget and serves the count it cut.
-const QueryVersion = "devhealthfacts.clickhouse.v168"
+const QueryVersion = "devhealthfacts.clickhouse.v169"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

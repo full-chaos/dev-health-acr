@@ -25,6 +25,7 @@ var exampleSchemaPairs = map[string]string{
 	"error_context_fabric_synthesis_rejected.v1.json":              "error.v1.schema.json",
 	"error_context_fabric_synthesis_contract.v1.json":              "error.v1.schema.json",
 	"error_context_fabric_upstream_invalid_output.v1.json":         "error.v1.schema.json",
+	"error_context_fabric_service_model_not_entitled.v1.json":      "error.v1.schema.json",
 	"error_store_unavailable.v1.json":                              "error.v1.schema.json",
 	"error_rate_limited_request_budget.v1.json":                    "error.v1.schema.json",
 	"error_rate_limited_capabilities_budget.v1.json":               "error.v1.schema.json",

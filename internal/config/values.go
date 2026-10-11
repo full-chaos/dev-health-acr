@@ -77,3 +77,14 @@ func parseLogLevel(value string) (slog.Level, error) {
 		return 0, fmt.Errorf("ACR_LOG_LEVEL must be debug, info, warn, or error")
 	}
 }
+
+func serviceModelDefaultValue(lookup lookupEnv) (bool, error) {
+	switch value := stringValue(lookup, "ACR_MCP_SERVICE_MODEL_DEFAULT", "off"); value {
+	case "", "off":
+		return false, nil
+	case "on":
+		return true, nil
+	default:
+		return false, fmt.Errorf("ACR_MCP_SERVICE_MODEL_DEFAULT must be on or off")
+	}
+}
