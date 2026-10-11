@@ -3487,9 +3487,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			return terminal, terminalErr
 		}
 	}
-	mergedFactRequirements := withBlockerStatusQualifier(mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements), familyOutcome.Frame)
+	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements)
 	factRequest := CanonicalFactRequest{
 		workItemTuple:            workItemTuple,
+		blockerStatus:            blockerStatusQualifier(familyOutcome.Frame),
 		LinkScopedSubjects:       linkScopedFactSubjects(ctx, request, subjects, tupleCensus),
 		Question:                 factReadQuestion(interpretation, effectiveWindow),
 		Subjects:                 subjects,

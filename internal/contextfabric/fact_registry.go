@@ -1382,6 +1382,9 @@ func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, c
 	for key, value := range requirement.Parameters {
 		parameters[key] = value
 	}
+	if requirement.Kind == FactBlockers && request.blockerStatus != "" && parameters[BlockerStatusParameter] == "" {
+		parameters[BlockerStatusParameter] = request.blockerStatus
+	}
 	requested := copyRequestedRepositoryScope(request.RequestedRepositoryScope)
 	if workItemOwnFact(requirement.Kind) && onlyLinkScopedWorkItems(request, subjects) {
 		requested = nil

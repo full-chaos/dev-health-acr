@@ -79,7 +79,6 @@ func (p *BlockersProvider) Capability() contextfabric.FactCapability {
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
 		contextfabric.SubjectTeam: {contextfabric.FactTableBreakdown},
 	}
-	capability.AllowedParameters = []string{blockerStatusParameter}
 	return capability
 }
 
