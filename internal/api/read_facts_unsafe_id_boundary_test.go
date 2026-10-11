@@ -24,7 +24,7 @@ import (
 
 type backslashRefusingStore struct{ rows [][]any }
 
-func (s backslashRefusingStore) Query(_ context.Context, _ string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+func (s backslashRefusingStore) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	for _, b := range bindings {
 		if ids, ok := b.Value.([]string); ok {
 			for _, id := range ids {
@@ -33,6 +33,9 @@ func (s backslashRefusingStore) Query(_ context.Context, _ string, bindings []co
 				}
 			}
 		}
+	}
+	if strings.Contains(statement, "work_item_transitions") {
+		return &stringRowScanner{}, nil
 	}
 	return &stringRowScanner{rows: s.rows}, nil
 }
