@@ -5263,6 +5263,16 @@
             "alias_lookup_complete": {
               "type": "boolean"
             },
+            "identity_lookup": {
+              "type": "string",
+              "enum": [
+                "complete",
+                "incomplete",
+                "graph_lag",
+                "not_run_time_axis",
+                "not_wired"
+              ]
+            },
             "commit_gate": {
               "enum": [
                 "",
