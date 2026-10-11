@@ -31,7 +31,7 @@ func scopedAnchorFake(nodes []scopedAnchorNode, edges []scopedAnchorEdge, textMa
 	}
 	seededByKey := map[string]seededNode{}
 	for _, n := range nodes {
-		sn := seededNode{kind: n.kind, id: n.id, label: n.label}
+		sn := seededNode{kind: n.kind, id: n.id, label: n.label, repos: []string{"acme/granted"}}
 		if n.kind == "work_item" {
 			sn.workItemType = "story"
 		}

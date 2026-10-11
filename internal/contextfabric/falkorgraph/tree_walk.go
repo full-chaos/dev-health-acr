@@ -305,12 +305,12 @@ type treeWalkState struct {
 	principal    storage.Principal
 	scope        contextfabric.RequestedScope
 	collectLimit int
-	// ownershipEdges: an ownership hit must also pass its edge's own
-	// authorization. Set for a team anchor's member read, the rule of the
-	// generic walk it replaces; the other tree walks decide by the node.
+	// ownershipEdges: every hit, and every link, must also pass its edge's own
+	// authorization. Set for an anchor's member read (a cohort), the rule of
+	// the generic walk it replaces; the other tree walks decide by the node.
 	ownershipEdges bool
-	// anchorDenied: the anchor of a team member read is not visible to the
-	// caller, so every ownership hit is a denied member.
+	// anchorDenied: the anchor of a member read is not visible to the caller,
+	// so every hit, over any edge, is a denied member.
 	anchorDenied bool
 }
 
@@ -318,10 +318,10 @@ type treeWalkState struct {
 // an ownership edge the edge's own authorization attributes too, the rule
 // resolveEdge applies to every edge of the generic walk.
 func (s treeWalkState) authorizedHit(hop treeHop, h walkHit) bool {
-	if s.anchorDenied && hop.edge.ownership {
+	if s.anchorDenied {
 		return false
 	}
-	if s.ownershipEdges && hop.edge.ownership && h.rel != nil && !authorizedEdgeAttributes(s.principal, s.scope, h.rel.Properties) {
+	if s.ownershipEdges && h.rel != nil && !authorizedEdgeAttributes(s.principal, s.scope, h.rel.Properties) {
 		return false
 	}
 	return s.authorized(h.to)
@@ -858,6 +858,10 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 			id := canonicalIDOf(far)
 			seen[id] = true
 			switch {
+			case state.anchorDenied:
+				state.deny()
+			case state.ownershipEdges && !authorizedEdgeAttributes(state.principal, state.scope, walkEdge(r["rl"]).Properties):
+				state.deny()
 			case !state.admitted(feed.to, near, tier):
 				state.deny()
 			case !state.admitted(link.to, far, tier):
