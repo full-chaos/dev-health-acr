@@ -771,13 +771,18 @@ import (
 // (no repository, orphaned, unresolved, no ownership); an organization-wide caller receives
 // fewer graph items under that scope.
 //
-// v158 -> v159: the members of a project or repository anchor are the nodes
+// v158 -> v159: the reuse watermark check reads only the serving epoch's
+// checkpoints. A candidate saved under v158 may carry a snapshot taken across
+// epochs, where a building or grace epoch's watermark stood in for the serving
+// one, and must not be reused.
+//
+// v159 -> v160: the members of a project or repository anchor are the nodes
 // with an entity-tree path to the anchor (and a team anchor's pull requests the
 // ones of its repositories), each stating the tier of the issue and pull
 // request link that reached it; a text-matched member with no path is no
-// longer served. A candidate saved under v158 may hold such a member and must
+// longer served. A candidate saved under v159 may hold such a member and must
 // not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v159"
+const QueryVersion = "devhealthfacts.clickhouse.v160"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
