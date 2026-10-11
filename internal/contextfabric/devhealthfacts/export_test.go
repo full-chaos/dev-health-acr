@@ -12,6 +12,6 @@ func SetClockForTest(now func() time.Time) (restore func()) {
 	return func() { clock = previous }
 }
 
-func StatusSinceStatementForTest(scope readers.AuthorizationScope, settings readers.Settings) (string, []readers.Binding) {
-	return statusSinceStatement(scope, settings)
+func StatusSinceStatementForTest(settings readers.Settings) string {
+	return statusSinceStatement(settings)
 }

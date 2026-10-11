@@ -23,26 +23,25 @@ const (
 )
 
 // statusSinceStatement returns the latest recorded status transition of each
-// work item named by {ids} ("<repository uuid>:<work item id>", the subject id
-// form), inside the SAME authorization relation as the status read: the scope
-// join and expression come from readers.WorkItemScopeSQL, so a work item the
-// caller may not read has no row here whatever the status read returned. Ties
-// on occurred_at break on last_synced and then to_status, so the pick is
-// deterministic.
-func statusSinceStatement(scope readers.AuthorizationScope, settings readers.Settings) (string, []readers.Binding) {
-	rendered := readers.WorkItemScopeSQL(scope)
-	return readers.WithSettings(withRowLimit(`SELECT toString(w.repo_id) AS repo_key, w.work_item_id AS item_key, t.latest_to_status AS latest_to_status, t.entered_at AS entered_at
-FROM (
-	SELECT repo_id, work_item_id,
-		argMax(ifNull(to_status, ''), tuple(occurred_at, last_synced, ifNull(to_status, ''))) AS latest_to_status,
-		max(occurred_at) AS entered_at
-	FROM work_item_transitions FINAL
-	WHERE org_id = {org_id:String} AND concat(toString(repo_id), ':', work_item_id) IN {ids:Array(String)}
-	GROUP BY repo_id, work_item_id
-) AS t
-INNER JOIN work_items AS w FINAL ON w.repo_id = t.repo_id AND w.work_item_id = t.work_item_id `+rendered.JoinSQL+`
-WHERE w.org_id = {org_id:String} AND (`+rendered.AuthorizationExpr+`)
-ORDER BY repo_key, item_key`), settings), rendered.Bindings
+// (repository, work item) pair in {keys} ("<repository uuid>:<work item id>").
+// The pairs are the rows the SCOPED status read just returned in the same
+// request, so an item the caller may not read is never named here and the
+// authorization relation is not repeated: repeating it would run the whole
+// project/ownership/link relation a second time per status read. The read is
+// narrowed to the sort key prefix (org_id, repo_id, work_item_id) and bounded
+// by the same SETTINGS and row limit as the status read. Ties on occurred_at
+// break on last_synced and then to_status, so the pick is deterministic.
+func statusSinceStatement(settings readers.Settings) string {
+	return readers.WithSettings(withRowLimit(`SELECT toString(t.repo_id) AS repo_key, t.work_item_id AS item_key,
+	argMax(ifNull(t.to_status, ''), tuple(t.occurred_at, t.last_synced, ifNull(t.to_status, ''))) AS latest_to_status,
+	max(t.occurred_at) AS entered_at
+FROM work_item_transitions AS t FINAL
+WHERE t.org_id = {org_id:String}
+	AND t.repo_id IN {repo_ids:Array(UUID)}
+	AND t.work_item_id IN {ids:Array(String)}
+	AND concat(toString(t.repo_id), ':', t.work_item_id) IN {keys:Array(String)}
+GROUP BY t.repo_id, t.work_item_id
+ORDER BY repo_key, item_key`), settings)
 }
 
 type statusEntry struct {
@@ -50,15 +49,30 @@ type statusEntry struct {
 	enteredAt time.Time
 }
 
-// readStatusEntries reads the latest transition of every authorized work item
-// in ids, keyed "<repository uuid>:<work item id>".
-func (p *StatusProvider) readStatusEntries(ctx context.Context, orgID string, ids []string, scope readers.AuthorizationScope, settings readers.Settings) (map[string]statusEntry, error) {
-	out := make(map[string]statusEntry, len(ids))
-	if len(ids) == 0 {
+// readStatusEntries reads the latest transition of every (repository, item)
+// pair in pairs, keyed "<repository uuid>:<work item id>". pairs come only
+// from the scoped status read.
+func (p *StatusProvider) readStatusEntries(ctx context.Context, orgID string, pairs [][2]string, settings readers.Settings) (map[string]statusEntry, error) {
+	out := make(map[string]statusEntry, len(pairs))
+	if len(pairs) == 0 {
 		return out, nil
 	}
-	statement, scopeBindings := statusSinceStatement(scope, settings)
-	err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemStatusSince", statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	ids := make([]string, 0, len(pairs))
+	repoIDs := make([]string, 0, len(pairs))
+	keys := make([]string, 0, len(pairs))
+	seenID, seenRepo := map[string]bool{}, map[string]bool{}
+	for _, pair := range pairs {
+		keys = append(keys, pair[0]+":"+pair[1])
+		if !seenRepo[pair[0]] {
+			seenRepo[pair[0]] = true
+			repoIDs = append(repoIDs, pair[0])
+		}
+		if !seenID[pair[1]] {
+			seenID[pair[1]] = true
+			ids = append(ids, pair[1])
+		}
+	}
+	err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemStatusSince", statusSinceStatement(settings), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var repoKey, itemKey, toStatus string
 		var enteredAt time.Time
 		if err := row.Scan(&repoKey, &itemKey, &toStatus, &enteredAt); err != nil {
@@ -66,7 +80,7 @@ func (p *StatusProvider) readStatusEntries(ctx context.Context, orgID string, id
 		}
 		out[repoKey+":"+itemKey] = statusEntry{toStatus: toStatus, enteredAt: enteredAt}
 		return nil
-	}, scopeBindings...)
+	}, readers.Binding{Name: "repo_ids", Value: repoIDs}, readers.Binding{Name: "keys", Value: keys})
 	if err != nil {
 		return nil, err
 	}

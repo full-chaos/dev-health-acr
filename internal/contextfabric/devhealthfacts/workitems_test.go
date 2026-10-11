@@ -51,10 +51,13 @@ func TestWorkItemProvidersUseCurrentSelectorScopeAndThrowingSettings(t *testing.
 			}
 			if perRead == 2 {
 				since := client.queries[1].statement
-				for _, fragment := range []string{"LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id", "authorized_repo_slugs", "requested_repo_slugs", "SETTINGS", "timeout_overflow_mode = 'throw'"} {
+				for _, fragment := range []string{"FROM work_item_transitions", "SETTINGS", "timeout_overflow_mode = 'throw'"} {
 					if !strings.Contains(since, fragment) {
 						t.Errorf("transition read = %q, want %q", since, fragment)
 					}
+				}
+				if strings.Contains(since, "authorized_repo_slugs") {
+					t.Errorf("transition read repeats the authorization relation: %q", since)
 				}
 			}
 			statement := client.queries[0].statement
@@ -71,16 +74,16 @@ func TestWorkItemProvidersUseCurrentSelectorScopeAndThrowingSettings(t *testing.
 					t.Errorf("statement = %q, want %q", statement, fragment)
 				}
 			}
-			if got := testBindingValue(t, client, "authorized_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/a", "acme/b"}) {
+			if got := testBindingValueAt(t, client, 0, "authorized_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/a", "acme/b"}) {
 				t.Errorf("authorized_repo_slugs = %#v, want normalized principal selectors", got)
 			}
-			if got := testBindingValue(t, client, "requested_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/b", "acme/c"}) {
+			if got := testBindingValueAt(t, client, 0, "requested_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/b", "acme/c"}) {
 				t.Errorf("requested_repo_slugs = %#v, want normalized request selectors", got)
 			}
-			if got := testBindingValue(t, client, "authorized_repo_owners"); !reflect.DeepEqual(got, []string{}) {
+			if got := testBindingValueAt(t, client, 0, "authorized_repo_owners"); !reflect.DeepEqual(got, []string{}) {
 				t.Errorf("authorized_repo_owners = %#v, want no owner selectors", got)
 			}
-			if got := testBindingValue(t, client, "requested_repo_owners"); !reflect.DeepEqual(got, []string{}) {
+			if got := testBindingValueAt(t, client, 0, "requested_repo_owners"); !reflect.DeepEqual(got, []string{}) {
 				t.Errorf("requested_repo_owners = %#v, want no owner selectors", got)
 			}
 

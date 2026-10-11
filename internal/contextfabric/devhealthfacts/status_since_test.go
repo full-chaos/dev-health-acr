@@ -138,7 +138,7 @@ func TestStatusSinceIsKeyedByRepositoryAndItem(t *testing.T) {
 	}
 }
 
-func TestStatusSinceStatementIsOrgScopedAndInsideTheAuthorizationRelation(t *testing.T) {
+func TestStatusSinceProbeIsOrgScopedBoundedAndKeyedToTheReadRows(t *testing.T) {
 	_, client, err := readStatusSince(t,
 		[][]any{{"W-1", "in_progress", "repo-1", "jira"}},
 		nil,
@@ -148,11 +148,11 @@ func TestStatusSinceStatementIsOrgScopedAndInsideTheAuthorizationRelation(t *tes
 	}
 	var found bool
 	for _, q := range client.queries {
-		if !strings.Contains(q.statement, "work_item_transitions") {
+		if !strings.Contains(q.statement, "FROM work_item_transitions") {
 			continue
 		}
 		found = true
-		for _, want := range []string{"w.org_id = {org_id:String}", "INNER JOIN work_items AS w FINAL", "FROM work_item_transitions FINAL", "org_id = {org_id:String}", "SETTINGS"} {
+		for _, want := range []string{"t.org_id = {org_id:String}", "FINAL", "t.repo_id IN {repo_ids:Array(UUID)}", "t.work_item_id IN {ids:Array(String)}", "LIMIT", "SETTINGS", "result_overflow_mode = 'throw'"} {
 			if !strings.Contains(q.statement, want) {
 				t.Fatalf("statement lacks %q:\n%s", want, q.statement)
 			}
@@ -163,10 +163,20 @@ func TestStatusSinceStatementIsOrgScopedAndInsideTheAuthorizationRelation(t *tes
 				if b.Value != "org-1" {
 					t.Fatalf("org_id = %v", b.Value)
 				}
+			case "keys":
+				keys, _ := b.Value.([]string)
+				if len(keys) != 1 || keys[0] != "repo-1:W-1" {
+					t.Fatalf("keys = %#v, want only the item the scoped status read returned (W-2 was requested and not returned)", keys)
+				}
 			case "ids":
 				ids, _ := b.Value.([]string)
-				if len(ids) != 2 || ids[0] != "repo-1:W-1" || ids[1] != "repo-1:W-2" {
-					t.Fatalf("ids = %#v, want the requested subjects", ids)
+				if len(ids) != 1 || ids[0] != "W-1" {
+					t.Fatalf("ids = %#v, want only the returned item", ids)
+				}
+			case "repo_ids":
+				repos, _ := b.Value.([]string)
+				if len(repos) != 1 || repos[0] != "repo-1" {
+					t.Fatalf("repo_ids = %#v", repos)
 				}
 			}
 		}

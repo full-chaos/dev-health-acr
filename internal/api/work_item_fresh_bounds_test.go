@@ -279,6 +279,14 @@ func TestWorkItemFreshCurrentRepositoryScopeReachesReadersAndCensus(t *testing.T
 			values[binding.Name] = binding.Value
 		}
 		t.Logf("phase=%s bindings=%v", query.phase, values)
+		if query.phase == "status_since" {
+			// The probe is keyed to the rows the scoped status read returned;
+			// it carries no authorization relation of its own.
+			if !reflect.DeepEqual(values["keys"], []string{"repo-1:work-1"}) {
+				t.Fatalf("status_since keys=%v", values["keys"])
+			}
+			continue
+		}
 		for _, name := range []string{"authorized_repo_slugs", "requested_repo_slugs"} {
 			if !reflect.DeepEqual(values[name], []string{hostedTestRepository}) {
 				t.Fatalf("%s %s=%v", query.phase, name, values[name])

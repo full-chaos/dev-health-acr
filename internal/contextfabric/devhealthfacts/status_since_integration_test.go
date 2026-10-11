@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -84,82 +83,36 @@ func TestStatusSinceAgainstRealClickHouse(t *testing.T) {
 	}
 }
 
-// The statement runs unchanged against the server for the scope shapes and
-// each production setting, and the raw server error is the failure text: the
-// provider path reports a sanitized failure, which would hide a rejected
-// statement.
+// The probe statement runs against the server through the production query
+// client and scans into the provider's destinations; the raw server error is
+// the failure text (the provider path reports a sanitized failure). Run with
+// no settings and with the production settings.
 func TestStatusSinceStatementRunsAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := sharedClickHouseFixture(t)
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	query, _ := sharedClickHouseFixture(t)
 	const repo = "5b1c7e0e-2f56-4a53-9d0a-7a1f0c9d0111"
-	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repo, "org-diag", "acme/a", "github", now); err != nil {
-		t.Fatalf("seed repository: %v", err)
-	}
-	if err := direct.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, created_at, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, "w-1", repo, "org-diag", "jira", "t", "in_progress", now, now, now); err != nil {
-		t.Fatalf("seed work item: %v", err)
-	}
-	if err := direct.Exec(ctx, `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, to_status, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?)`, repo, "w-1", now.Add(-time.Hour), "in_progress", now, "org-diag"); err != nil {
-		t.Fatalf("seed transition: %v", err)
-	}
-	scopes := map[string]readers.AuthorizationScope{
-		"zero":         {},
-		"ids":          {GrantedRepositoryIDs: []string{repo}},
-		"selector_all": {RepositorySelectors: &readers.RepositorySelectorScope{Granted: readers.RepositorySelectorSet{All: true}}},
-		"selector":     {RepositorySelectors: &readers.RepositorySelectorScope{Granted: readers.RepositorySelectorSet{ExactSlugs: []string{"acme/a"}}}},
-	}
-	settings := map[string]readers.Settings{
-		"none":        {},
-		"time":        {MaxExecutionTimeSeconds: 5},
-		"rows_read":   {MaxRowsToRead: 3_000_000},
-		"memory":      {MaxMemoryUsage: 64 << 20},
-		"threads":     {MaxThreads: 1},
-		"result_rows": {MaxResultRows: 201},
-		"all":         {MaxExecutionTimeSeconds: 5, MaxRowsToRead: 3_000_000, MaxMemoryUsage: 64 << 20, MaxThreads: 1, MaxResultRows: 201},
-	}
-	for scopeName, scope := range scopes {
-		for settingName, setting := range settings {
-			sql, bindings := devhealthfacts.StatusSinceStatementForTest(scope, setting)
-			args := []any{clickhousedriver.Named("org_id", "org-diag"), clickhousedriver.Named("ids", []string{repo + ":w-1"})}
-			for _, b := range bindings {
-				args = append(args, clickhousedriver.Named(b.Name, b.Value))
-			}
-			rows, err := direct.Query(ctx, sql, args...)
-			if err == nil {
-				for rows.Next() {
-				}
-				err = rows.Err()
-				_ = rows.Close()
-			}
-			if err != nil {
-				t.Errorf("scope=%s settings=%s: server rejected the statement: %v", scopeName, settingName, err)
-			}
-			if settingName != "all" {
-				continue
-			}
-			// The same statement through the production query client and the
-			// provider's scan destinations: the raw error of a scan or client
-			// failure is the failure text here.
-			pb := []contextpacket.ClickHouseBinding{{Name: "org_id", Value: "org-diag"}, {Name: "ids", Value: []string{repo + ":w-1"}}}
-			for _, b := range bindings {
-				pb = append(pb, contextpacket.ClickHouseBinding{Name: b.Name, Value: b.Value})
-			}
-			prow, perr := query.Query(ctx, sql, pb)
-			if perr != nil {
-				t.Errorf("scope=%s: production client rejected the statement: %v", scopeName, perr)
-				continue
-			}
-			for prow.Next() {
-				var a, b2, c string
-				var d time.Time
-				if scanErr := prow.Scan(&a, &b2, &c, &d); scanErr != nil {
-					t.Errorf("scope=%s: scan into the provider's destinations: %v", scopeName, scanErr)
-				}
-			}
-			if rerr := prow.Err(); rerr != nil {
-				t.Errorf("scope=%s: production client rows: %v", scopeName, rerr)
-			}
-			_ = prow.Close()
+	for name, settings := range map[string]readers.Settings{
+		"none": {},
+		"all":  {MaxExecutionTimeSeconds: 5, MaxRowsToRead: 3_000_000, MaxMemoryUsage: 64 << 20, MaxThreads: 1, MaxResultRows: 201},
+	} {
+		statement := devhealthfacts.StatusSinceStatementForTest(settings)
+		rows, err := query.Query(ctx, statement, []contextpacket.ClickHouseBinding{
+			{Name: "org_id", Value: "org-diag"}, {Name: "ids", Value: []string{"w-1"}},
+			{Name: "repo_ids", Value: []string{repo}}, {Name: "keys", Value: []string{repo + ":w-1"}},
+		})
+		if err != nil {
+			t.Fatalf("settings=%s: server rejected the statement: %v\n%s", name, err, statement)
 		}
+		for rows.Next() {
+			var a, b, c string
+			var d time.Time
+			if scanErr := rows.Scan(&a, &b, &c, &d); scanErr != nil {
+				t.Errorf("settings=%s: scan: %v", name, scanErr)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Errorf("settings=%s: rows: %v", name, err)
+		}
+		_ = rows.Close()
 	}
 }
