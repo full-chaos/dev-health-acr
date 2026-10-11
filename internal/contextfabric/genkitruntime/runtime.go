@@ -2821,7 +2821,12 @@ func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error)
 			return outcomes, nil
 		}
 		last = err
-		if !retryable(err) || attempt == r.config.MaxAttempts {
+		// The attempt budget is used when the LAST allowed attempt fails,
+		// whatever its class: the runtime has nothing left to try.
+		if attempt == r.config.MaxAttempts {
+			return outcomes, fmt.Errorf("%w: %w", contextfabric.ErrModelRetriesExhausted, err)
+		}
+		if !retryable(err) {
 			return outcomes, err
 		}
 	}
@@ -3335,6 +3340,16 @@ var contextFabricSanitizedStatusPattern = regexp.MustCompile(`provider response 
 // wrapped, so raw prompt or response content never reaches logs, receipts,
 // or telemetry built from this error.
 func classifyModelError(err error) error {
+	classified := classifyModelErrorKind(err)
+	// The attempt-budget fact is the runtime's own and carries no provider
+	// content, so it survives the classification that drops the cause.
+	if errors.Is(err, contextfabric.ErrModelRetriesExhausted) && !errors.Is(classified, contextfabric.ErrModelRetriesExhausted) {
+		return fmt.Errorf("%w: %w", contextfabric.ErrModelRetriesExhausted, classified)
+	}
+	return classified
+}
+
+func classifyModelErrorKind(err error) error {
 	// CHAOS-5577: withRetry tags a PRE-CALL cancellation with
 	// ErrModelCancelled before this function ever sees it. That error still
 	// also satisfies errors.Is(err, context.Canceled) /
