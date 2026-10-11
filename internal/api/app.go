@@ -224,9 +224,47 @@ func isSafeRequestIDHeaderValue(value string) bool {
 	return true
 }
 
+// requestBudget is the request's deadline: the configured request timeout,
+// narrowed on the investigation route by the caller's wait budget header so
+// the degraded answer is served before the caller's own tool timeout. A
+// budget that is not a whole number of seconds of at least the minimum is
+// ignored and logged; a budget above the request timeout changes nothing.
+func (a *App) requestBudget(r *http.Request) time.Duration {
+	timeout := a.config.RequestTimeout
+	if r.Method != http.MethodPost || r.URL.Path != ContextFabricInvestigationsPath {
+		return timeout
+	}
+	seconds, present, valid := contractsv1.ParseContextFabricWaitBudgetSeconds(r.Header.Get(contractsv1.ContextFabricWaitBudgetHeader))
+	if !present {
+		return timeout
+	}
+	if !valid {
+		a.logger.WarnContext(r.Context(), "investigation wait budget ignored",
+			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+			"reason", "not_whole_seconds_or_below_minimum",
+			"minimum_seconds", contractsv1.ContextFabricWaitBudgetMinSeconds,
+		)
+		return timeout
+	}
+	// Compared as seconds before any conversion: a huge value must read as
+	// "above the timeout", not wrap a time.Duration negative.
+	applied := int64(seconds) < int64(timeout/time.Second)
+	budget := timeout
+	if applied {
+		budget = time.Duration(seconds) * time.Second
+	}
+	a.logger.InfoContext(r.Context(), "investigation wait budget",
+		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+		"budget_seconds", seconds,
+		"request_timeout_seconds", int(timeout/time.Second),
+		"narrowed", applied,
+	)
+	return budget
+}
+
 func (a *App) timeoutMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), a.config.RequestTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), a.requestBudget(r))
 		defer cancel()
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
