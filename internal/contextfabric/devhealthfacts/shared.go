@@ -811,7 +811,13 @@ import (
 // v165 -> v166: a work item's status fact adds status_since, status_duration_seconds and
 // status_since_basis; a candidate saved under v165 holds a status fact without the time in
 // the current status and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v166"
+//
+// v166 -> v167: a flow bug_completed_ratio or story_points_completed that the
+// provider's items do not carry is omitted and named by
+// <measure>_unavailable_reason (not_tracked_by_source, capability_unknown),
+// where it was served as 0; a candidate saved under v166 holds that 0 and must
+// not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v167"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
