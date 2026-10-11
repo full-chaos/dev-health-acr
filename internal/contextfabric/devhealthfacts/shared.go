@@ -812,14 +812,20 @@ import (
 // status_since_basis; a candidate saved under v165 holds a status fact without the time in
 // the current status and must not be reused.
 //
-// v166 -> v167: the repositories a project or team scope reaches follow the
+// v166 -> v167: a flow bug_completed_ratio or story_points_completed that the
+// provider's items do not carry is omitted and named by
+// <measure>_unavailable_reason (not_tracked_by_source, capability_unknown),
+// where it was served as 0; a candidate saved under v166 holds that 0 and must
+// not be reused.
+//
+// v167 -> v168: the repositories a project or team scope reaches follow the
 // entity tree. A project reaches the repositories of its issues' linked pull
 // request rows (work_graph_issue_pr), not the issue's own repository column; a
 // team reaches the repositories it owns and those its owned projects' issues
 // link to, not the repositories of its attributed issues. Issues with no link
 // row are counted as a missing next hop. A project or team answer saved under
-// v166 may rest on a repository the tree does not reach.
-const QueryVersion = "devhealthfacts.clickhouse.v167"
+// v167 may rest on a repository the tree does not reach.
+const QueryVersion = "devhealthfacts.clickhouse.v168"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
