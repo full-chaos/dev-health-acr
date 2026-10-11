@@ -236,6 +236,13 @@ func RepositoryTeamsGroupedSQLForTest() string { return repositoryTeamsGroupedSQ
 // (overlap.go), so a window edge can be asserted to the millisecond.
 func (s *ClickHouseProjectionSource) SetClockForTest(now func() time.Time) { s.now = now }
 
+// SetClockForTest pins the teams source's clock, which dates the reconcile
+// pass (reconcile.go) and the overlap window.
+func (s *TeamsProjectsSource) SetClockForTest(now func() time.Time) { s.now = now }
+
+// TeamOwnershipReconcilePeriodForTest exposes the reconcile cadence.
+const TeamOwnershipReconcilePeriodForTest = teamOwnershipReconcilePeriod
+
 // SetWindowPagesPerCallForTest lowers how many window pages one call walks,
 // so a pass that spans several calls needs a window of a few pages instead
 // of more than overlapWindowPagesPerCall (1,000+ rows). The walk logic is the
