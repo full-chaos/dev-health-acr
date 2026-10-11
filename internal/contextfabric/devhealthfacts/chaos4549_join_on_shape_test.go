@@ -239,14 +239,15 @@ func sweepScopeExpander(ctx context.Context, orgID string) []capturedQuery {
 	)
 	client := &fakeClient{tables: []fakeTable{
 		// projectRepositories' first hop (chaos4099_scope_expander.go).
-		// Column order: toString(w.repo_id), ifNull(r.repo, ''), min(p.id).
-		{match: "FROM work_items AS w FINAL", rows: [][]any{
-			{scopeRepoID, scopeRepoSlug, "proj-4549-scope"},
+		// Column order: toString(l.pr_repo_id), ifNull(r.repo, ''),
+		// min(p.id), argMax(l.provenance, l.link_rank).
+		{match: "argMax(l.provenance, l.link_rank)", rows: [][]any{
+			{scopeRepoID, scopeRepoSlug, "proj-4549-scope", "native"},
 		}},
-		// teamRepositories' first hop. Column order: toString(w.repo_id),
-		// ifNull(r.repo, ''), argMin(source), min(a.team_id).
-		{match: "FROM work_item_team_attributions AS a FINAL", rows: [][]any{
-			{scopeRepoID, scopeRepoSlug, "native_team", "CHAOS"},
+		// teamRepositories' first hop. Column order: repo_id_str,
+		// repo_slug, argMin(source, source_rank), min(origin_team_id).
+		{match: "argMin(source, source_rank)", rows: [][]any{
+			{scopeRepoID, scopeRepoSlug, "team_repo_ownership", "CHAOS"},
 		}},
 	}}
 	expander := devhealthfacts.NewScopeExpander(client)
