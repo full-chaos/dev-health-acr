@@ -322,6 +322,12 @@ const (
 	// row would skip the post-interpretation commit guards a fresh turn applies
 	// to that hint; the request takes the fresh path.
 	AnswerReuseMissHintNotCommitted AnswerReuseOutcome = "miss_hint_not_committed"
+	// AnswerReuseMissScopeIdentity: no row exists under the request's project
+	// and team selector identity, but one exists under the repository-only
+	// key that rows carried before those selectors were keyed. That row names
+	// no selector identity, so it is never served to a selector-scoped
+	// request; the request takes the fresh path.
+	AnswerReuseMissScopeIdentity AnswerReuseOutcome = "miss_scope_identity"
 )
 
 // AnswerReuseBypassReason is the closed vocabulary naming WHY a request
@@ -636,6 +642,14 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 		outcome := AnswerReuseMissNoCandidate
 		if missReason == ReuseMissStaleGraphEpoch {
 			outcome = AnswerReuseMissStaleGraphEpoch
+		} else if err == nil && requestNamesSelectors(request) {
+			legacy := key
+			legacy.TimeAxisKey = GrantScopedTimeAxisKey(principal, repositoryScopeTimeAxisKey(request, composeTimeAxisKey(TimeAxisKeyFor(effectiveTimeContext), windowKey)))
+			if legacy.TimeAxisKey != "" && legacy.TimeAxisKey != key.TimeAxisKey {
+				if _, legacyOK, _, legacyErr := e.reuseGate.FindReusable(ctx, principal, legacy); legacyErr == nil && legacyOK {
+					outcome = AnswerReuseMissScopeIdentity
+				}
+			}
 		}
 		e.recordReuseOutcome(ctx, principal, outcome)
 		return InvestigationResult{}, false, false, storedCountReading{}, nil

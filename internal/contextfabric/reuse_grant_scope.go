@@ -52,6 +52,22 @@ func GrantScopedTimeAxisKey(principal storage.Principal, axisKey string) string 
 // byte for byte. A key that would exceed the stored column's bound returns "",
 // which the lookup misses and Save stores as never reusable.
 func RequestScopeTimeAxisKey(request InvestigationRequest, axisKey string) string {
+	scoped := repositoryScopeTimeAxisKey(request, axisKey)
+	if scoped == "" {
+		return ""
+	}
+	if selectors := requestSelectorDigest(request); selectors != "" {
+		scoped += "+x:" + selectors
+		if len(scoped) > reuseTimeAxisKeyMaxLength {
+			return ""
+		}
+	}
+	return scoped
+}
+
+// repositoryScopeTimeAxisKey is the repository-slug component alone: the key
+// shape every row saved before project and team selectors were keyed carries.
+func repositoryScopeTimeAxisKey(request InvestigationRequest, axisKey string) string {
 	if axisKey == "" || len(request.RequestedScope.RepositorySlugs) == 0 {
 		return axisKey
 	}
@@ -64,6 +80,34 @@ func RequestScopeTimeAxisKey(request InvestigationRequest, axisKey string) strin
 		return ""
 	}
 	return scoped
+}
+
+// requestSelectorDigest digests the project and team selectors the caller
+// named: trimmed, de-duplicated, sorted, case preserved (identifiers are case
+// sensitive), and labelled so a project id never equals a team id. Blank
+// entries are dropped, so an empty list and an absent one key the same and a
+// request naming neither keeps its key byte for byte.
+func requestSelectorDigest(request InvestigationRequest) string {
+	labelled := func(label string, ids []string) []string {
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if id = strings.TrimSpace(id); id != "" {
+				out = append(out, label+id)
+			}
+		}
+		return out
+	}
+	selectors := append(labelled("p:", request.RequestedScope.ProjectIDs), labelled("t:", request.RequestedScope.TeamIDs)...)
+	if len(selectors) == 0 {
+		return ""
+	}
+	return reuseGrantDigest(selectors)
+}
+
+// requestNamesSelectors reports whether the request keys on project or team
+// selectors, for the scope-identity miss attribution.
+func requestNamesSelectors(request InvestigationRequest) bool {
+	return requestSelectorDigest(request) != ""
 }
 
 // reuseGrantDigest is a stable digest of a grant: trimmed, de-duplicated and
