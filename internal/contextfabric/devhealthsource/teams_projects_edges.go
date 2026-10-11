@@ -2222,11 +2222,9 @@ func logConflictingIdentities(ctx context.Context, logger *slog.Logger, orgID st
 // caller keys the row on (provider, project id, team, source), the ref's own
 // segments, and re-mints the ref from them.
 func ProjectTeamSourceRowQuery() contextpacket.OrganizationRowQuery {
-	kind := contractsv1.ContextFabricEvidenceEntityProjectTeamV2
-	segments := []string{"g.provider", "g.project_id", "g.team_id", "g.source_name"}
 	statement := contextpacket.OrganizationRowColumns("provider", "project_id", "team_id", "source") +
-		` SELECT ` + evidenceref.SQL(kind, segments...) + ` evidence_ref_id, 'dev_health' system, 'project_team' entity_type, ` +
-		evidenceref.IDSQL(kind, segments...) + ` entity_id, concat(g.project_id, ' owned by team ', g.team_id) display_label, '' safe_uri, 'heuristic' provenance, 1.0 confidence, ` +
+		` SELECT ` + evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityProjectTeamV2, "g.provider", "g.project_id", "g.team_id", "g.source_name") + ` evidence_ref_id, 'dev_health' system, 'project_team' entity_type, ` +
+		evidenceref.IDSQL(contractsv1.ContextFabricEvidenceEntityProjectTeamV2, "g.provider", "g.project_id", "g.team_id", "g.source_name") + ` entity_id, concat(g.project_id, ' owned by team ', g.team_id) display_label, '' safe_uri, 'heuristic' provenance, 1.0 confidence, ` +
 		`concat('source=', g.source_name, ', provider=', g.provider) citation, g.observed_at observed_at, g.provider provider, g.project_id project_id, g.team_id team_id, g.source_name source ` +
 		`FROM (` + projectTeamsGroupSQL(false) + `) AS g WHERE g.edge_suppressed = 0 )`
 	return contextpacket.OrganizationRowQuery{
