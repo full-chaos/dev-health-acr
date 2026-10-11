@@ -732,7 +732,12 @@ import (
 // scope-expansion gap is admitted by the outcome validator, so an answer that was
 // refused as an invalid result is served; a candidate saved under an earlier
 // version cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v150"
+//
+// v150 -> v151: a team rollup read over more than one team serves each team's totals and
+// counts without the per-repository tables (repository_tables_basis names which), and a
+// budget refusal names its stage and measured sections; a candidate saved under an
+// earlier version carries the tables.
+const QueryVersion = "devhealthfacts.clickhouse.v151"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
