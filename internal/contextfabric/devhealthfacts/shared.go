@@ -771,10 +771,15 @@ import (
 // (no repository, orphaned, unresolved, no ownership); an organization-wide caller receives
 // fewer graph items under that scope.
 //
-// v158 -> v159: a continuation turn carrying a subject hint keeps the remembered confirmed-need
+// v158 -> v159: the reuse watermark check reads only the serving epoch's
+// checkpoints. A candidate saved under v158 may carry a snapshot taken across
+// epochs, where a building or grace epoch's watermark stood in for the serving
+// one, and must not be reused.
+//
+// v159 -> v160: a continuation turn carrying a subject hint keeps the remembered confirmed-need
 // ledger (the hint contests a carried anchor of its own kind instead of dropping the ledger);
 // a candidate saved under an earlier version for such a turn was answered without it.
-const QueryVersion = "devhealthfacts.clickhouse.v159"
+const QueryVersion = "devhealthfacts.clickhouse.v160"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
