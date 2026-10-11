@@ -67,6 +67,17 @@ type OrganizationRowQuery struct {
 // is never read as a source row.
 const organizationProviderPattern = `^[a-z][a-z0-9_-]*$`
 
+// ProjectTeamSourceRowQueryID is the organization row statement of a
+// project-team.v2 ref. Its statement is the projector's ownership group, which
+// lives with the projector (devhealthsource.ProjectTeamSourceRowQuery) and is
+// attached with WithOrganizationRowQuery; only this id may be attached.
+const ProjectTeamSourceRowQueryID = "project_teams.v2"
+
+// OrganizationRowColumns is the column prologue every organization row
+// statement opens with, for a statement another package owns (the project-team
+// group, which lives with its projector and cannot be imported here).
+func OrganizationRowColumns(keys ...string) string { return organizationColumns(keys...) }
+
 func organizationColumns(keys ...string) string {
 	return `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, toFloat64(confidence) confidence, citation, observed_at, ` + strings.Join(keys, ", ") + ` FROM (`
 }
@@ -168,7 +179,7 @@ var SourceRowOnlyQueriesV2 = []SourceQuery{
 // SourceRowQueryIDs lists every source-row statement id: the packet
 // catalog's, the organization rows', then the ".v2" source-row-only ones.
 func SourceRowQueryIDs() []string {
-	ids := make([]string, 0, len(SourceQueryCatalogV1)+len(OrganizationRowQueriesV1)+len(SourceRowOnlyQueriesV2))
+	ids := make([]string, 0, len(SourceQueryCatalogV1)+len(OrganizationRowQueriesV1)+len(SourceRowOnlyQueriesV2)+1)
 	for _, query := range SourceQueryCatalogV1 {
 		ids = append(ids, query.ID)
 	}
@@ -178,7 +189,7 @@ func SourceRowQueryIDs() []string {
 	for _, query := range SourceRowOnlyQueriesV2 {
 		ids = append(ids, query.ID)
 	}
-	return ids
+	return append(ids, ProjectTeamSourceRowQueryID)
 }
 
 func organizationRowQuery(id string) *OrganizationRowQuery {
@@ -271,6 +282,27 @@ type OrganizationRowReference struct {
 	Key       []string
 }
 
+// WithOrganizationRowQuery adds an organization row statement this package
+// does not declare. The statement binds the organization only, as the
+// built-in ones do; an id already declared here is refused.
+func (r *CatalogClickHouseRows) WithOrganizationRowQuery(query OrganizationRowQuery) (*CatalogClickHouseRows, error) {
+	if r == nil || query.ID != ProjectTeamSourceRowQueryID || query.Statement == "" || len(query.KeyColumns) == 0 || organizationRowQuery(query.ID) != nil || r.extraOrganization[query.ID] != nil {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownSourceRowQuery, query.ID)
+	}
+	if r.extraOrganization == nil {
+		r.extraOrganization = map[string]*OrganizationRowQuery{}
+	}
+	r.extraOrganization[query.ID] = &query
+	return r, nil
+}
+
+func (r *CatalogClickHouseRows) organizationQuery(id string) *OrganizationRowQuery {
+	if query := organizationRowQuery(id); query != nil {
+		return query
+	}
+	return r.extraOrganization[id]
+}
+
 // ResolveOrganizationRow reads the organization-level row whose evidence id
 // is read.Locator (an OrganizationRowQueriesV1 statement), up to two (the
 // caller refuses two as ambiguous), with the row's own key columns. It binds
@@ -278,7 +310,10 @@ type OrganizationRowReference struct {
 func (r *CatalogClickHouseRows) ResolveOrganizationRow(ctx context.Context, orgID string, read SourceRowRead) (_ []OrganizationRowReference, err error) {
 	completeObservation := beginStoreQueryObservation(ctx, r.assemblyObserver(), StoreOperationEvidence)
 	defer func() { completeObservation(err) }()
-	query := organizationRowQuery(read.QueryID)
+	var query *OrganizationRowQuery
+	if r != nil {
+		query = r.organizationQuery(read.QueryID)
+	}
 	if r == nil || r.client == nil || query == nil {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownSourceRowQuery, read.QueryID)
 	}

@@ -29,6 +29,8 @@ type CatalogClickHouseRows struct {
 	executor SourceQueryExecutor
 	client   ClickHouseQueryClient
 	observer AssemblyObserver
+	// extraOrganization are organization row statements another package owns.
+	extraOrganization map[string]*OrganizationRowQuery
 }
 
 func NewCatalogClickHouseRows(client ClickHouseQueryClient) *CatalogClickHouseRows {
