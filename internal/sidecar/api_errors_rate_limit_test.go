@@ -14,6 +14,7 @@ func TestAPIErrorRateLimitTokenIsClosedAndScopedTo429RateLimited(t *testing.T) {
 		want    string
 	}{
 		{"budget", http.StatusTooManyRequests, "rate_limited", map[string]any{"limit": "request_budget"}, "request_budget"},
+		{"capabilities budget", http.StatusTooManyRequests, "rate_limited", map[string]any{"limit": "capabilities_budget"}, "capabilities_budget"},
 		{"unknown token", http.StatusTooManyRequests, "rate_limited", map[string]any{"limit": "anything else"}, ""},
 		{"absent", http.StatusTooManyRequests, "rate_limited", map[string]any{"retry_after_seconds": 3}, ""},
 		{"wrong code", http.StatusTooManyRequests, "invalid_request", map[string]any{"limit": "request_budget"}, ""},

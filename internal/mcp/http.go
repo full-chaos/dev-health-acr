@@ -700,7 +700,7 @@ func classifyResolveFailure(err error) (string, time.Duration) {
 			return HTTPAuthInvalidCredential, 0
 		case apiErr.HTTPStatus == http.StatusForbidden:
 			return HTTPAuthInsufficientScope, 0
-		case apiErr.HTTPStatus == http.StatusTooManyRequests && apiErr.RateLimit == contractsv1.RateLimitRequestBudget:
+		case apiErr.HTTPStatus == http.StatusTooManyRequests && contractsv1.IsRateLimitBudgetRefusal(apiErr.RateLimit):
 			return HTTPAuthRequestBudgetExceeded, apiErr.RetryAfter
 		case apiErr.HTTPStatus == http.StatusTooManyRequests:
 			return HTTPAuthRateLimited, apiErr.RetryAfter
@@ -737,7 +737,7 @@ var authRefusal = map[string]struct {
 	HTTPAuthRateLimited:             {http.StatusTooManyRequests, "", "too many authentication attempts"},
 	HTTPAuthUpstreamIncompatible:    {http.StatusBadGateway, "", "the hosted API is incompatible with this server"},
 	HTTPAuthUpstreamUnavailable:     {http.StatusServiceUnavailable, "", "the hosted API could not decide the credential"},
-	HTTPAuthRequestBudgetExceeded:   {http.StatusTooManyRequests, "", "the organization's request budget is spent; the credential was authenticated and the request was refused by the budget; retry after the interval"},
+	HTTPAuthRequestBudgetExceeded:   {http.StatusTooManyRequests, "", "a request budget is spent; the credential was authenticated and the request was refused by the budget; retry after the interval"},
 }
 
 type refusalBody struct {

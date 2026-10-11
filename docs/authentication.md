@@ -387,7 +387,7 @@ Every acr-mcp request line (`mcp http request`, Info) carries `client_ip`, `gate
 | `ACR_AUTH_MAX_TRACKED_KEYS` | `4096` | tracked addresses; at capacity new addresses are refused until windows expire |
 | `ACR_AUTH_MAX_IN_FLIGHT` | `64` | concurrent undecided attempts per address |
 
-`ACR_AUTH_REQUESTS_PER_WINDOW` no longer limits per-address traffic; it bounds only the per-subject budget of web-assertion sessions.
+`ACR_AUTH_REQUESTS_PER_WINDOW` no longer limits per-address traffic; it bounds only the per-subject budget of web-assertion sessions and the request class (`RequestClassAuth`) of the self-credential lifecycle routes. `GET /api/v1/agent-context/capabilities` is not counted there: it is authenticated on every call and has its own request class (`ACR_CAPABILITIES_REQUESTS_PER_WINDOW`, default `240`, per organization and per credential), because every MCP request resolves its caller through it. acr-mcp keeps no caller cache; authorization is re-checked live each turn.
 
 The auth package includes a deterministic in-memory implementation. Production shared rate-limit storage is owned by the platform observability/rate-limit work and must preserve the same failure-only per-address ceiling.
 

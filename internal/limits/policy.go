@@ -30,6 +30,11 @@ const (
 	// analytics reads cannot spend the investigation budget, and the other
 	// way round.
 	RequestClassData
+	// RequestClassCapabilities is the GET capabilities handshake's class.
+	// Every MCP request resolves its caller through it, so it is separate
+	// from Auth (credential lifecycle and device routes) and from Context:
+	// discovery cannot spend either budget, and they cannot starve it.
+	RequestClassCapabilities
 )
 
 type Subject struct {
@@ -71,13 +76,20 @@ type DataPolicy struct {
 	Resources                       ResourceBudget
 }
 
+type CapabilitiesPolicy struct {
+	Window                          time.Duration
+	PerOrgLimit, PerCredentialLimit int
+	Resources                       ResourceBudget
+}
+
 type PolicySet struct {
-	Auth     AuthPolicy
-	Context  ContextPolicy
-	Evidence EvidencePolicy
-	Snapshot SnapshotPolicy
-	Episode  EpisodePolicy
-	Data     DataPolicy
+	Auth         AuthPolicy
+	Context      ContextPolicy
+	Evidence     EvidencePolicy
+	Snapshot     SnapshotPolicy
+	Episode      EpisodePolicy
+	Data         DataPolicy
+	Capabilities CapabilitiesPolicy
 }
 
 type quotaPolicy struct {
@@ -101,6 +113,8 @@ func (p PolicySet) policy(class RequestClass) (quotaPolicy, error) {
 		policy = quotaPolicy(p.Episode)
 	case RequestClassData:
 		policy = quotaPolicy(p.Data)
+	case RequestClassCapabilities:
+		policy = quotaPolicy(p.Capabilities)
 	default:
 		return quotaPolicy{}, ErrInvalidRequestClass
 	}
@@ -121,7 +135,7 @@ func (budget ResourceBudget) allows(usage ResourceUsage) bool {
 }
 
 func (p PolicySet) validate() error {
-	for _, class := range []RequestClass{RequestClassAuth, RequestClassContext, RequestClassEvidence, RequestClassSnapshot, RequestClassEpisode, RequestClassData} {
+	for _, class := range []RequestClass{RequestClassAuth, RequestClassContext, RequestClassEvidence, RequestClassSnapshot, RequestClassEpisode, RequestClassData, RequestClassCapabilities} {
 		if _, err := p.policy(class); err != nil {
 			return err
 		}
