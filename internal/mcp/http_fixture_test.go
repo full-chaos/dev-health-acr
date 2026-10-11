@@ -57,10 +57,11 @@ type hostedAPI struct {
 	service *auth.Service
 	caPath  string
 
-	blocked      atomic.Bool
-	liveStatus   atomic.Int32
-	evidenceWait atomic.Pointer[barrier]
-	bearerHold   atomic.Pointer[bearerHold]
+	blocked       atomic.Bool
+	requestBudget atomic.Bool
+	liveStatus    atomic.Int32
+	evidenceWait  atomic.Pointer[barrier]
+	bearerHold    atomic.Pointer[bearerHold]
 
 	mu        sync.Mutex
 	seen      map[string][]string
@@ -256,6 +257,14 @@ func (h *hostedAPI) pathsSeenBy(credentialID string) []string {
 func (h *hostedAPI) capabilities(w http.ResponseWriter, r *http.Request) {
 	principal, _ := auth.PrincipalFromContext(r.Context())
 	h.record(principal, r.URL.Path)
+	if h.requestBudget.Load() {
+		w.Header().Set("Retry-After", "9")
+		writeHostedJSON(w, http.StatusTooManyRequests, contractsv1.ErrorEnvelope{
+			SchemaVersion: contractsv1.ErrorSchema, RequestID: "req_fixture",
+			Error: contractsv1.ErrorDetail{Code: "rate_limited", Message: "Request rate limit exceeded", HTTPStatus: http.StatusTooManyRequests, Retryable: true, Details: map[string]any{"retry_after_seconds": 9, "limit": "request_budget"}},
+		})
+		return
+	}
 	if slices.Contains(principal.RepositoryScopes, repoUpgrade) {
 		writeHostedJSON(w, http.StatusUpgradeRequired, contractsv1.ErrorEnvelope{
 			SchemaVersion: contractsv1.ErrorSchema, RequestID: "req_fixture",

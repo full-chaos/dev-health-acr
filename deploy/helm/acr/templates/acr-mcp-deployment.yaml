@@ -103,7 +103,7 @@ spec:
             failureThreshold: 3
           startupProbe:
             httpGet:
-              path: /readyz
+              path: /healthz
               port: http
             periodSeconds: 5
             failureThreshold: 30
