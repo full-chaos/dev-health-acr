@@ -178,6 +178,22 @@ func (r *Resolver) SynthesizeAnswer(ctx context.Context, principal storage.Princ
 	return runtime.SynthesizeAnswer(ctx, principal, input)
 }
 
+// PhraseStructureOffers implements contextfabric.OfferPhrasingModelRuntime
+// through the same per-organization resolution as interpretation and
+// synthesis: the organization's own model first, the deployment default only
+// when the turn may use it.
+func (r *Resolver) PhraseStructureOffers(ctx context.Context, principal storage.Principal, input contextfabric.StructureOfferPhrasingInput) (contextfabric.StructureOfferPhrasingDraft, contextfabric.ModelExecutionReceipt, error) {
+	runtime, err := r.runtimeFor(ctx, principal.OrgID)
+	if err != nil {
+		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, err
+	}
+	phraser, ok := runtime.(contextfabric.OfferPhrasingModelRuntime)
+	if !ok || runtime == nil {
+		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, contextfabric.ErrModelUnavailable
+	}
+	return phraser.PhraseStructureOffers(ctx, principal, input)
+}
+
 // EvictOrgModelRuntime immediately purges orgID's cache entry, if any
 // (Codex round-1 finding F4), and fences off any build already in flight
 // for this organization -- no matter how far along, including one still
@@ -304,7 +320,7 @@ func (r *Resolver) runtimeFor(ctx context.Context, orgID string) (contextfabric.
 // errDeploymentModelWithheld refuses the deployment default to a turn that may
 // not run on it: the turn was admitted on the organization's own model, and
 // that configuration is gone by the time the runtime is resolved.
-var errDeploymentModelWithheld = fmt.Errorf("%w: deployment model withheld for this turn", contextfabric.ErrModelUnavailable)
+var errDeploymentModelWithheld = fmt.Errorf("%w: %w: deployment model withheld for this turn", contextfabric.ErrModelUnavailable, contextfabric.ErrPlatformModelWithheld)
 
 // deploymentDefault is the one place a request falls through to the
 // deployment's own model, so it is the one place that honors a withheld turn.
@@ -314,7 +330,7 @@ func (r *Resolver) deploymentDefault(ctx context.Context, orgID string) (context
 		if logger == nil {
 			logger = slog.Default()
 		}
-		logger.WarnContext(ctx, "context fabric deployment model withheld at resolution", "org_id", contextfabric.SanitizeLogAttr(orgID), "org_config_support", r.Configs != nil)
+		logger.WarnContext(ctx, "context fabric deployment model withheld at resolution", "org_id", contextfabric.SanitizeLogAttr(orgID), "org_config_support", r.Configs != nil, "basis", contextfabric.SanitizeLogAttr(contextfabric.PlatformModelWithheldBasis(ctx)))
 		return nil, errDeploymentModelWithheld
 	}
 	return r.Default, nil

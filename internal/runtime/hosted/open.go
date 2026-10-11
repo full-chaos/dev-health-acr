@@ -26,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgclarification"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
@@ -844,22 +845,24 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, err
 	}
-	// CHAOS-4171 PR2: offer phrasing is wired off deploymentDefaultRuntime
-	// (never the per-org-resolved modelRuntime above) -- it is a
-	// deployment-level singleton, not per-organization BYO config, and a
-	// type assertion against modelruntimeresolver.Resolver's own
-	// ModelRuntime-only surface would always fail. A deployment whose
-	// runtime is nil (no model provider configured) or does not
-	// implement contextfabric.OfferPhrasingModelRuntime (e.g. a test-only
-	// ModelRuntimeOverride) simply leaves offerPhraser nil below -- the
-	// same "optional dependency absent" degradation every other
-	// EngineDependencies field uses.
+	// Offer phrasing resolves through the same per-organization resolver as
+	// interpretation and synthesis: the organization's own model first, the
+	// deployment default only when the turn may use it. With no
+	// per-organization support wired, a resolver over the deployment default
+	// alone still honors a withheld turn. No deployment runtime and no
+	// resolver leaves offerPhraser nil, the same "optional dependency
+	// absent" degradation every other EngineDependencies field uses.
 	var offerPhraser contextfabric.OfferPhraser
-	if phrasingRuntime, ok := deploymentDefaultRuntime.(contextfabric.OfferPhrasingModelRuntime); ok && !isNilRuntime(phrasingRuntime) {
-		// Logger wired from the SAME request.options.Logger every other
-		// component in this file uses (codex R2 review finding: omitting
-		// it left RuntimeOfferPhraser's sink-failure WARN falling back to
-		// slog.Default() instead of the service's configured logger).
+	var phrasingRuntime contextfabric.OfferPhrasingModelRuntime
+	switch {
+	case evictor != nil:
+		phrasingRuntime = evictor
+	case deploymentDefaultRuntime != nil && !isNilRuntime(deploymentDefaultRuntime):
+		if _, ok := deploymentDefaultRuntime.(contextfabric.OfferPhrasingModelRuntime); ok {
+			phrasingRuntime = modelruntimeresolver.New(deploymentDefaultRuntime, nil, nil)
+		}
+	}
+	if phrasingRuntime != nil {
 		offerPhraser = contextfabric.RuntimeOfferPhraser{Runtime: phrasingRuntime, Sink: receiptSink, Logger: request.options.Logger}
 	}
 	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil
