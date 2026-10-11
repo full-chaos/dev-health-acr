@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-Private Go 1.23 Agent Context Runtime: hosted `acr-api`, local read-only STDIO `acr-mcp`, and an offline Go contract validator. ACR assembles authorized, evidence-backed context packets; Dev Health Ops remains the evidence/entitlement source and `dev-health-web` remains the human UI.
+Private Go 1.27 Agent Context Runtime: hosted `acr-api`, local read-only STDIO `acr-mcp`, and an offline Go contract validator. ACR assembles authorized, evidence-backed context packets; Dev Health Ops remains the evidence/entitlement source and `dev-health-web` remains the human UI.
 
 ## STRUCTURE
 
@@ -29,7 +29,7 @@ docs/adr/                  # Owned architecture decisions
 | Task | Location | Notes |
 | --- | --- | --- |
 | Hosted startup/routes | `cmd/acr-api`, `internal/api` | Stock binary fails closed without the complete runtime bundle |
-| MCP commands/tools | `cmd/acr-mcp`, `internal/mcp` | `context_for_task`, `source_evidence`, and the advertise-gated `investigate_question` / `investigation_result` |
+| MCP commands/tools | `cmd/acr-mcp`, `internal/mcp` | `context_for_task`, `source_evidence`, and the advertise-gated `investigate_question`, `investigate_with_interpretation`, `investigation_result`, `read_facts`, `read_relationships`, `data_catalog`, `find_subjects`, `run_operation` and `graphql_query`; prompts `investigate`, `continue_investigation`, `expand_evidence`, `interpret_question`, `synthesize_answer`; strict argument decoding in `tool_arguments.go` |
 | Remote (hosted) MCP client configs/plugins | `docs/mcp-sidecar.md` §Remote (hosted) server | Server-side contract only; client configs, plugins, and skill text for every supported client live in the public [`full-chaos/context-fabric-agents`](https://github.com/full-chaos/context-fabric-agents) repo (CHAOS-6209) |
 | Packet behavior | `internal/contextpacket` | Scope → evidence → ranking → budget → validation → snapshot |
 | Local client/security | `internal/sidecar` | HTTPS, credential precedence, Git discovery, inert Markdown |
@@ -50,7 +50,7 @@ docs/adr/                  # Owned architecture decisions
 | Direct data differential oracle (O4) | `internal/contextfabric/factoracle` | graphql_query and run_operation against read_facts for the same subject and window: shapes generated from the root policy, typed leaves, named difference classes. `go test` replays the recorded listener replies over a seeded extract (`testdata/venue`); `make o4-oracle-live` runs it on a venue (never a pull request gate); `make o4-oracle-capture` records again after an SDL or fact query version change |
 | Context Fabric result persistence | `internal/contextfabric/pginvestigation`, `internal/contextfabric/memoryinvestigation` | Immutable `InvestigationResultStore`; org-scoped `Get` is a binding precondition; every Save carries the result's internal semantic snapshot or a closed absence (`semantic_state`, migration 0038) through `Engine.saveResult`; CHAOS-7145 (migration `0044`): every Save also records the computing principal's grant digest (`StoredResultGrantDigest`, the CHAOS-7127 reuse digest) and `StoredResultGate.Authorize` DENIES a repository-restricted reader whose digest differs or whose row has none (`grant_mismatch` / `grant_unrecorded`); unrestricted/universal readers unchanged |
 | Context Fabric investigation endpoint | `internal/api/context_fabric_routes.go`, `internal/runtime/hosted` | `POST /api/v1/context-fabric/investigations`; `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED`; see `docs/design/context-fabric-result-semantics.md` |
-| Context Fabric source-row evidence | `internal/contextfabric/source_row_evidence.go`, `internal/contextfabric/sourcerow`, `internal/contextpacket/source_rows.go`, `internal/api/read_routes.go` | CHAOS-6180 (option S): an `acr:v1:<type>:<id>` ref expands to the Dev Health row its id names before the persisted-record path (`ExpandEvidence`). `sourceRowPlans` is total over the 29 kinds (13 source kinds, 16 on the record; team and project are authorized by ownership through `directread.SubjectGate`, CHAOS-7227); a kind is routed only when its producer grammar is injective and its id carries the table key (`TestSourceRowGrammarsAreInjective`), and every mint site is derived from the source and must be listed there (`TestEveryMintSiteIsInTheSweep`). CHAOS-7252: the five bare-':' edge kinds are retired (never minted, record route forever); their ".v2" successors mint through `internal/contextfabric/evidenceref` (every component escaped; the SQL spelling from the same grammar) and are read with the read_relationships edge gate (every subject the row names must be readable). The grant is decided in Go with the direct data tools' predicate (`graphrank.AuthorizedAttributes`); no statement carries it, so a refused row and an absent one run the same reads. A failed read is a 503, never a fallback. See `docs/mcp-sidecar.md` §source_evidence |
+| Context Fabric source-row evidence | `internal/contextfabric/source_row_evidence.go`, `internal/contextfabric/sourcerow`, `internal/contextpacket/source_rows.go`, `internal/api/read_routes.go` | CHAOS-6180 (option S): an `acr:v1:<type>:<id>` ref expands to the Dev Health row its id names before the persisted-record path (`ExpandEvidence`). `sourceRowPlans` is total over the 29 kinds (14 source kinds, 15 on the record; team and project are authorized by ownership through `directread.SubjectGate`, CHAOS-7227); a kind is routed only when its producer grammar is injective and its id carries the table key (`TestSourceRowGrammarsAreInjective`), and every mint site is derived from the source and must be listed there (`TestEveryMintSiteIsInTheSweep`). CHAOS-7252: the five bare-':' edge kinds are retired (never minted, record route forever); their ".v2" successors mint through `internal/contextfabric/evidenceref` (every component escaped; the SQL spelling from the same grammar) and are read with the read_relationships edge gate (every subject the row names must be readable). The grant is decided in Go with the direct data tools' predicate (`graphrank.AuthorizedAttributes`); no statement carries it, so a refused row and an absent one run the same reads. A failed read is a 503, never a fallback. See `docs/mcp-sidecar.md` §source_evidence |
 | Context Fabric answer surface | `internal/contextfabric/answerprojection`, `internal/api/context_fabric_result_routes.go`, `internal/mcp/investigate_question.go` | CHAOS-3746: one shared projection function behind the API and MCP; `GET /api/v1/context-fabric/investigations/{result_id}` re-reads a stored result |
 | Context Fabric model provider | `internal/contextfabric/modelprovider`, `internal/contextfabric/genkitruntime` | BYO-LLM provider/base-URL/model/credential surface (`ACR_CONTEXT_FABRIC_MODEL_*`); only production `genkit.Genkit` construction; unconfigured means a clean per-request 503 |
 | Context Fabric per-organization model config | `internal/contextfabric/modelconfigcrypto`, `internal/contextfabric/pgmodelconfig`, `internal/contextfabric/modelruntimeresolver`, `internal/contextfabric/pgmodelreceipts` | CHAOS-3775: org-scoped BYO LLM config, AES-256-GCM sealed credential, invalidatable per-request runtime cache, durable `ModelExecutionReceipt` sink; migration `0010` |
@@ -171,9 +171,14 @@ make fullstack-opencode-e2e  # Live gate: Dev Health slice + ACR + real headless
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same gates as `make verify` on pull requests and pushes
-to `main`, split across parallel jobs (`scripts`, `lint`, `unit`, `race`, `build`, `contracts`,
-and three container jobs) behind a single required `verify` gate job that checks every other job
-succeeded. `make verify` remains the local one-command equivalent. Builds land in ignored `.tmp/`.
+to `main`, split across parallel jobs (`mirror-preflight`, `scripts`, `lint`, `docs-mermaid`,
+`unit` (five shards) with `reports`, `race` (four shards), the isolated race jobs `race-devhealthschema`,
+`race-devhealthfacts`, `race-devhealthsource` and `race-factoracle`, `build`, `contracts`, and three
+container jobs) behind a single required `verify` gate job that checks every other job succeeded.
+`devhealthfacts` and `devhealthsource` each race in two jobs, `-heavy` and the rest, split by test
+name through `scripts/ci/race-split.sh` (the heavy lists live beside it; the `rest` half skips them,
+so a new test cannot drop out). `docs-mermaid` renders every fenced mermaid block under `docs/**`;
+the `scripts` job also runs the mutation-battery plan-matrix test (`scripts/battery/test_plan_matrix.py`). `make verify` remains the local one-command equivalent. Builds land in ignored `.tmp/`.
 
 `make fullstack-opencode-e2e` needs Docker, a sibling `full-chaos/dev-health` checkout and the
 pinned OpenCode release; it runs in its own workflow, not in `make verify`. See

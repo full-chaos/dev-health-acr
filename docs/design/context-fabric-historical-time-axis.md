@@ -127,7 +127,7 @@ exist in §0 probes):
 | CI run | `started_at` | `finished_at` (nil if running) |
 | deployment | `started_at` ?? `deployed_at` | `finished_at` (nil if in flight) |
 | incident | `started_at` | `resolved_at` ?? `deleted_at` (nil if open) |
-| repo | `created_at` | nil |
+| repo | first seen: the earliest of `created_at` (only when earlier than the sync stamp, because ingest rewrites it to the sync stamp on every sync), its first pull request's `created_at` and its first work item's `created_at`; nil when none is known | nil |
 | relationship edge | the later ValidFrom of its two endpoints | the earlier non-nil ValidTo of its two endpoints |
 
 `?? ` = first non-null.
@@ -742,7 +742,7 @@ class and all four are REACHED today, not hypothetically:
 | `queryRepositories`, `queryPullRequestReviews` (entity) | n/a | NOT REACHABLE: single-ended windows, no upper bound to invert against |
 | `belongsToRepository` (`clickhouse.go`) | n/a | NOT REACHABLE: passes the member's own window through; the repository end is open-ended and earlier-starting, so the intersection is a no-op |
 | `applyActiveValidity` (`teams_projects.go`) | n/a | NOT REACHABLE: `valid_from` is always nil, so no comparison exists |
-| `ownershipValidity` (`teams_projects_edges.go`) | 0 / 627 (no row carries a `valid_to` at all) | SOURCE-CORRUPTION-ONLY: `valid_to` comes from the argMax-latest row and `valid_from` from `min(valid_from)` group-wide, so `latest_valid_to >= that row's own valid_from >= min(valid_from)` unless one individual `team_project_ownership` row is itself inverted. Left alone deliberately: that would be corrupt input, and the batch rejection is the correct, loud outcome |
+| `ownershipValidity` (`teams_projects_edges.go`) | 0 / 627 (no row carries a `valid_to` at all) | NOT REACHABLE: `valid_from` is never projected (the edge has no start; the column is the sync stamp of the assertion), so there is no start to invert against. `valid_to` comes from the latest assertion, an open one outranking every closed one |
 
 `episodes.go` is out of scope — its window comes straight from a Postgres
 `EpisodeProjectionRecord` and is checked by its own `EndedAt.Before(StartedAt)`
