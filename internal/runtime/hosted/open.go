@@ -297,6 +297,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			DataSubjects:               dataReads.subjects,
 			DirectRelationships:        directRelationships,
 			OrgModelConfigs:            orgModelConfigs,
+			ServiceModelOpen:           request.config.ServiceModelOpen,
 			OrgModelRuntimeEvictor:     orgModelRuntimeEvictor,
 			// CHAOS-3786, codex round-1 P1(b): resultReuseInvalidator is
 			// already nil-or-a-real-*pginvestigation.Store as an interface

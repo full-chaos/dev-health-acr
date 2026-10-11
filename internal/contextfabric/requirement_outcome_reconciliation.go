@@ -35,6 +35,10 @@ import (
 //     assembled_result row says `satisfied` for a requirement that no served
 //     evidence of its own kind and subject backs.
 //
+// ONE PLANNING-ONLY ACCOUNT IS READ: a requirement the plan published as
+// no_declaring_producer whose planning row reads not_applicable has no
+// assembled row by design, and its transition is what the trace discloses.
+//
 // WHAT IT DOES NOT DO. It never writes or rewrites an outcome row: the rows
 // stay APPEND-only, and completeness is still derived from them by the one
 // derivation that owns it. It does not decide what a requirement IS -- the
@@ -178,6 +182,13 @@ func ReconcileRequirementOutcomes(result InvestigationResult) []RequirementOutco
 	var transitions []RequirementOutcomeTransition
 	for _, requirement := range result.AnswerPlan.Requirements {
 		row, found := assembledRequirementAccount(result.Completeness.Outcomes, requirement.Requirement)
+		if !found {
+			// A requirement no producer declares for its subject kind has no
+			// assembled account: its planning row is the whole account, and
+			// the transition from the plan's unavailable token to
+			// not_applicable is what the trace discloses.
+			row, found = notApplicablePlanningAccount(result.Completeness.Outcomes, requirement)
+		}
 		if !found {
 			continue
 		}
@@ -497,4 +508,21 @@ func transitionLineTokenOrNone(value string) string {
 		return transitionLineNone
 	}
 	return value
+}
+
+// notApplicablePlanningAccount returns the planning row of a requirement the
+// plan published as unavailable because no producer declares it, when that row
+// reads not_applicable.
+func notApplicablePlanningAccount(rows []RequirementOutcomeRow, requirement contractsv1.ContextFabricPlanRequirement) (RequirementOutcomeRow, bool) {
+	if RequirementUnavailableReason(requirement.Unavailable) != RequirementReasonNoDeclaringProducer {
+		return RequirementOutcomeRow{}, false
+	}
+	for _, row := range rows {
+		if row.Stage == contractsv1.ContextFabricOutcomeStagePlanning &&
+			row.Requirement == requirement.Requirement &&
+			row.Outcome == contractsv1.ContextFabricRequirementNotApplicable {
+			return row, true
+		}
+	}
+	return RequirementOutcomeRow{}, false
 }

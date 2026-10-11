@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 78067b3ced64b645696b98156d6848a1e277d335a9265d4613741d5c8694b27a
+# canonical-content-sha256: 682ce8fd93709c38ca00f2bb0a729abeb0fe2de6881fb20f0dec901c5284554b
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -636,7 +636,7 @@ paths:
         "401":
           "$ref": "#/components/responses/Error"
         "403":
-          "$ref": "#/components/responses/Error"
+          "$ref": "#/components/responses/ContextFabricInvestigationForbidden"
         "409":
           "$ref": "#/components/responses/ContextFabricInvestigationConflict"
         "413":
@@ -1119,6 +1119,26 @@ components:
                     type: "object"
                 type: "object"
       description: "Structured safe error. A supplied interpretation or supplied synthesis that was made under a contract this service does not run carries details.interpretation_contract or details.synthesis_contract. A supplied synthesis written from an input that is no longer the turn's input carries details.reason input_changed and details.synthesis_input, the new synthesis input."
+    ContextFabricInvestigationForbidden:
+      content:
+        application/json:
+          schema:
+            allOf:
+              -
+                "$ref": "../jsonschema/v1/error.v1.schema.json"
+              -
+                properties:
+                  error:
+                    properties:
+                      details:
+                        properties:
+                          reason:
+                            enum:
+                              - "service_model_not_entitled"
+                        type: "object"
+                    type: "object"
+                type: "object"
+      description: "Structured safe error. feature_not_enabled with details.reason service_model_not_entitled: a credential caller asked for an investigation that runs on the service's own model (interpretation, synthesis, or both), and the organization holds neither the acr_service_model entitlement nor its own model configuration. No model call was made and nothing was stored. The same question is served on the caller's own model with a supplied interpretation and synthesis_mode client. Web assertion callers are not refused for this reason."
     ContextFabricInvestigationUnprocessable:
       content:
         application/json:

@@ -293,10 +293,9 @@
         "stage": "planning",
         "requirement": "health/member/work_item",
         "obligation": "health",
-        "outcome": "unavailable",
-        "impact": "dimension",
-        "cause_coverage": "fact_no_declaring_producer",
-        "cause_observed": true,
+        "outcome": "not_applicable",
+        "impact": "none",
+        "cause_observed": false,
         "served": 0,
         "declared": 0
       },

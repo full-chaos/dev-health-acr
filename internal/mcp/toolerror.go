@@ -110,6 +110,9 @@ func classifyAPIError(err error, apiErr *sidecar.APIError) *classifiedError {
 		category = "repo_forbidden"
 	case errors.Is(err, sidecar.ErrInsufficientScope), errors.Is(err, sidecar.ErrFeatureNotEnabled):
 		category = "entitlement"
+		if apiErr.Reason == contractsv1.ContextFabricServiceModelNotEntitledReason {
+			message = serviceModelNotEntitledMessage
+		}
 	case errors.Is(err, sidecar.ErrVersionMismatch):
 		category = "version"
 		if apiErr.MinimumClientVersion != "" {
@@ -231,6 +234,7 @@ func interpretationContractMessage(refusal contractsv1.ContextFabricInterpretati
 
 const (
 	synthesisInputChangedMessage           = "reason=" + contractsv1.ContextFabricSuppliedSynthesisReasonInputChanged + ": the draft was written from an input that is no longer the current one, so it was not applied and nothing was stored; the new synthesis_input follows in the next content block as JSON; run the prompt synthesize_answer on its input on your own model, then send the same call again with the new synthesis_output and a synthesis_contract made of the new synthesis_input.contract and synthesis_input.input_sha256"
+	serviceModelNotEntitledMessage         = "reason=" + contractsv1.ContextFabricServiceModelNotEntitledReason + ": this organization has neither investigations on the service's model in its plan nor a model configuration of its own; nothing was run and nothing was stored. Use your own model: fetch the prompt " + promptInterpretQuestion + " with prompts/get, run it, and call " + toolInvestigateWithInterpretation + " with synthesis \"client\"; then run the prompt " + promptSynthesizeAnswer + " and send synthesis_output back. Or ask an organization admin to configure the organization's own model provider."
 	synthesisInterpretationRequiredMessage = "reason=" + contractsv1.ContextFabricSuppliedSynthesisReasonInterpretationRequired + ": synthesis_output is accepted only together with your interpretation; send it with investigate_with_interpretation"
 )
 
