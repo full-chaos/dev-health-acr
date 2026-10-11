@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -12,19 +13,39 @@ import (
 
 // SynthesisFailureClass is the closed vocabulary of model call failures that
 // are served as a degraded answer.
-type SynthesisFailureClass string
+type SynthesisFailureClass = contractsv1.ContextFabricSynthesisFailureClass
 
 const (
 	// SynthesisFailureModelOutputInvalid: the provider's output could not be
 	// used and the runtime does not retry it.
-	SynthesisFailureModelOutputInvalid SynthesisFailureClass = "model_output_invalid"
+	SynthesisFailureModelOutputInvalid = contractsv1.ContextFabricSynthesisFailureModelOutputInvalid
 	// SynthesisFailureRejected: every draft the runtime was allowed to ask
 	// for failed ACR's own bounds.
-	SynthesisFailureRejected SynthesisFailureClass = "synthesis_rejected"
+	SynthesisFailureRejected = contractsv1.ContextFabricSynthesisFailureRejected
 	// SynthesisFailureReceiptUnrecorded: the model call ran, but its receipt
 	// was not recorded, so no text from it is served.
-	SynthesisFailureReceiptUnrecorded SynthesisFailureClass = "model_receipt_unrecorded"
+	SynthesisFailureReceiptUnrecorded = contractsv1.ContextFabricSynthesisFailureReceiptUnrecorded
 )
+
+// synthesisModelFailureSource is the coverage source the model-failure detail
+// is filed under: the synthesis step, not a read.
+const synthesisModelFailureSource = "context-fabric:synthesis"
+
+// newSynthesisModelFailureDetail is the one producer of the coverage detail a
+// failed model call is served with. A class without a retry hint is an error.
+func newSynthesisModelFailureDetail(class SynthesisFailureClass) (CoverageDetail, error) {
+	hint, err := contractsv1.ContextFabricRetryHintFor(class)
+	if err != nil {
+		return CoverageDetail{}, err
+	}
+	detail := CoverageDetail{
+		Source: synthesisModelFailureSource, Code: contractsv1.ContextFabricCoverageDetailSynthesisModelFailed,
+		FailureClass: class, RetryHint: hint,
+		Raw: string(contractsv1.ContextFabricCoverageDetailSynthesisModelFailed) + ":" + string(class),
+	}
+	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+	return detail, nil
+}
 
 // synthesisFailureCurrentState replaces the "no canonical facts were observed"
 // sentence an empty claim list would give: facts were read, and the model call
@@ -82,18 +103,25 @@ func synthesisFailureDegradeClass(ctx context.Context, callErr, sinkErr error) (
 }
 
 // IsSynthesisModelFailureAnswer reports whether a result is the degraded
-// answer served for a failed model call. Such an answer says nothing about
+// answer served for a failed model call: it carries the code detail or, when
+// that detail could not be filed, the fixed failure warning. Such an answer says nothing about
 // the question that a recovered model would not say better, so it is never a
 // reuse source.
 func IsSynthesisModelFailureAnswer(result InvestigationResult) bool {
 	if result.Status != InvestigationDegraded {
 		return false
 	}
-	for _, class := range []SynthesisFailureClass{SynthesisFailureModelOutputInvalid, SynthesisFailureRejected, SynthesisFailureReceiptUnrecorded} {
-		for _, warning := range result.Warnings {
-			if warning == synthesisFailureWarning(class) {
-				return true
-			}
+	for _, detail := range result.Coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed {
+			return true
+		}
+	}
+	// The code detail is not filed when the coverage it would sit beside does
+	// not pair with degraded_reasons. The fixed warning names the failure class
+	// the same way, so such an answer is still never a reuse source.
+	for _, class := range contractsv1.ContextFabricSynthesisFailureClasses() {
+		if slices.Contains(result.Warnings, synthesisFailureWarning(class)) {
+			return true
 		}
 	}
 	return false
@@ -163,8 +191,10 @@ func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal
 			additions = append(additions, contractsv1.ContextFabricSynthesisFailedFactsTruncatedLimitation)
 		}
 		draft.Limitations, _ = appendBoundedLimitations(draft.Limitations, additions)
+	} else {
+		draft.Limitations, _ = appendBoundedLimitations(draft.Limitations, []string{contractsv1.ContextFabricSynthesisFailedNoFactsLimitation})
 	}
-	return r.composeSynthesisResult(ctx, principal, input, draft, failure.Receipt, failure.Bound, true)
+	return r.composeSynthesisResult(ctx, principal, input, draft, failure.Receipt, failure.Bound, failure)
 }
 
 // synthesisVersionOf is the receipt's prompt and model version pair. A call

@@ -264,10 +264,21 @@ func TestReuseColumnsFor_AModelFailureAnswerNeverPopulatesReuseColumns(t *testin
 			Versions: contextfabric.VersionSet{ContractVersion: "contract-v1", ProjectionVersion: "projection-v1", ModelIdentity: "test/model-v1"},
 		}
 	}
-	failed := build("answer text unavailable: the model call failed (class: model_output_invalid); the sources that were read are listed in coverage")
+	const failureWarning = "answer text unavailable: the model call failed (class: model_output_invalid); the sources that were read are listed in coverage"
+	failed := build(failureWarning)
+	failed.Coverage.Details = []contractsv1.ContextFabricCoverageDetail{{
+		DetailID: "cov-01", Source: "context-fabric:synthesis", Code: contractsv1.ContextFabricCoverageDetailSynthesisModelFailed,
+		FailureClass: contractsv1.ContextFabricSynthesisFailureModelOutputInvalid, RetryHint: contractsv1.ContextFabricRetryMaySucceed,
+	}}
 	hash, _, _, _, watermarks, invalidationEpoch := store.reuseColumnsFor(failed, snapshot, &epoch)
 	if hash.Valid || watermarks != nil || invalidationEpoch.Valid {
 		t.Fatalf("reuseColumnsFor(model failure answer) = (%+v, %v, %+v), want all-NULL/nil", hash, watermarks, invalidationEpoch)
+	}
+	// The failure warning marks the answer when its code could not be filed.
+	unfiled := build(failureWarning)
+	hash, _, _, _, watermarks, invalidationEpoch = store.reuseColumnsFor(unfiled, snapshot, &epoch)
+	if hash.Valid || watermarks != nil || invalidationEpoch.Valid {
+		t.Fatalf("reuseColumnsFor(failure answer without its code) = (%+v, %v, %+v), want all-NULL/nil", hash, watermarks, invalidationEpoch)
 	}
 	ordinary := build("a coverage warning")
 	hash, _, _, _, watermarks, invalidationEpoch = store.reuseColumnsFor(ordinary, snapshot, &epoch)
