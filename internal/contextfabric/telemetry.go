@@ -775,6 +775,9 @@ func (t SlogEngineTelemetry) RecordSynthesisModelFailure(ctx context.Context, pr
 	if event.Rule != "" {
 		args = append(args, "work_item_rule", SanitizeLogAttr(event.Rule), "stage", SanitizeLogAttr(event.Stage))
 	}
+	if event.ReserveFired {
+		args = append(args, "composition_reserve_ms", synthesisCompositionReserve.Milliseconds(), "composition_reserve_fired", true)
+	}
 	t.logger.Log(ctx, slog.LevelWarn, synthesisModelFailureMessage, args...)
 }
 

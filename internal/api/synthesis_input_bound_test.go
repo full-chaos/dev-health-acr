@@ -538,12 +538,6 @@ func TestASynthesisThatEndsTheInvestigationIsNamed(t *testing.T) {
 			wantStatus: http.StatusInternalServerError, wantClassified: "synthesis_aborted"},
 		{name: "a model input that no bounding fits", model: scriptedSynthesisModel{err: &cf.ModelInputOverflow{Bytes: 900_000, MaxBytes: 524_288}},
 			wantStatus: http.StatusInternalServerError, wantClassified: "model_input_too_large"},
-		{name: "an unavailable model keeps its class", model: scriptedSynthesisModel{err: fmt.Errorf("%w: model generation failed", cf.ErrModelUnavailable)},
-			wantStatus: http.StatusServiceUnavailable, wantClassified: "dependency_unavailable", wantRetryable: true},
-		{name: "a rate-limited model keeps its class", model: scriptedSynthesisModel{err: fmt.Errorf("%w: provider status", cf.ErrModelRateLimited)},
-			wantStatus: http.StatusTooManyRequests, wantClassified: "rate_limited", wantRetryable: true},
-		{name: "an exceeded deadline keeps its class", model: scriptedSynthesisModel{err: context.DeadlineExceeded},
-			wantStatus: http.StatusGatewayTimeout, wantClassified: "deadline_exceeded", wantRetryable: true},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

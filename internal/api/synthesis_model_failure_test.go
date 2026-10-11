@@ -140,18 +140,50 @@ func TestAModelCallThatSucceedsIsNotDegraded(t *testing.T) {
 	}
 }
 
-// The classes whose retry signal is the error itself keep it, and a caller
-// that is gone is never served an answer.
-func TestAModelCallThatFailsTransientlyKeepsItsErrorStatus(t *testing.T) {
+// A transient call class, once the runtime's retries are used, is served as a
+// degraded answer that names the class and says a retry may succeed.
+func TestAModelCallThatFailsTransientlyIsServedAsADegradedAnswer(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "rate limited", err: fmt.Errorf("%w: provider status", cf.ErrModelRateLimited)},
+		{name: "unavailable", err: fmt.Errorf("%w: model generation failed", cf.ErrModelUnavailable)},
+		{name: "deadline exceeded", err: context.DeadlineExceeded},
+		{name: "cancelled before it ended", err: fmt.Errorf("%w: attempt", cf.ErrModelCancelled)},
+		{name: "rate limited beside an unrecorded receipt", err: errors.Join(fmt.Errorf("%w: provider status", cf.ErrModelRateLimited), fmt.Errorf("%w: record", cf.ErrModelReceiptUnrecorded))},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			logs := &bytes.Buffer{}
+			app, token := teamSynthesisApp(t, scriptedSynthesisModel{err: testCase.err}, nil, teamExpander{targets: 3, complete: true, workItemsOnly: true}, logs)
+
+			result := decodeTeamAnswer(t, postTeamQuestion(t, app, token), logs)
+
+			var failures []cf.CoverageDetail
+			for _, detail := range result.Coverage.Details {
+				if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed {
+					failures = append(failures, detail)
+				}
+			}
+			if result.Status != cf.InvestigationDegraded || len(failures) != 1 || string(failures[0].FailureClass) != "model_call_not_completed" || string(failures[0].RetryHint) != "retry_may_succeed" {
+				t.Fatalf("status = %q failure rows = %+v, want degraded with model_call_not_completed and retry_may_succeed", result.Status, failures)
+			}
+			if entries := logLines(t, logs.String(), modelFailureWarn); len(entries) != 1 {
+				t.Fatalf("warn lines = %d, want one", len(entries))
+			}
+		})
+	}
+}
+
+// Inputs no retry helps keep their error, and a caller that is gone is never
+// served an answer.
+func TestAModelCallThatFailsWithoutARetrySignalKeepsItsErrorStatus(t *testing.T) {
 	cases := []struct {
 		name       string
 		err        error
 		wantStatus int
 	}{
-		{name: "rate limited", err: fmt.Errorf("%w: provider status", cf.ErrModelRateLimited), wantStatus: http.StatusTooManyRequests},
-		{name: "unavailable", err: fmt.Errorf("%w: model generation failed", cf.ErrModelUnavailable), wantStatus: http.StatusServiceUnavailable},
-		{name: "deadline exceeded", err: context.DeadlineExceeded, wantStatus: http.StatusGatewayTimeout},
-		{name: "rate limited beside an unrecorded receipt", err: errors.Join(fmt.Errorf("%w: provider status", cf.ErrModelRateLimited), fmt.Errorf("%w: record", cf.ErrModelReceiptUnrecorded)), wantStatus: http.StatusTooManyRequests},
 		{name: "an input no bounding fits", err: &cf.ModelInputOverflow{Bytes: 900_000, MaxBytes: 524_288}, wantStatus: http.StatusInternalServerError},
 		{name: "a bare runtime error", err: errors.New("generator closed"), wantStatus: http.StatusInternalServerError},
 	}

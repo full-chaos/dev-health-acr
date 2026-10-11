@@ -2385,7 +2385,10 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		return InvestigationResult{}, ErrModelUnavailable
 	}
 	started := time.Now()
-	input, draft, receipt, bound, err := r.synthesizeWithinInputBound(ctx, principal, input)
+	callCtx, releaseCall, reserveApplied := boundSynthesisCallContext(ctx)
+	input, draft, receipt, bound, err := r.synthesizeWithinInputBound(callCtx, principal, input)
+	reserveFired := reserveApplied && err != nil && callCtx.Err() != nil && ctx.Err() == nil
+	releaseCall()
 	if err == nil {
 		var validateErr error
 		draft, validateErr = r.vetSynthesisDraft(ctx, principal, input, draft)
@@ -2410,7 +2413,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	}
 	if err != nil {
 		if class, degrade := synthesisFailureDegradeClass(ctx, callErr, sinkErr); degrade {
-			return InvestigationResult{}, &SynthesisFailure{Class: class, Attempts: receipt.Attempts, Elapsed: time.Since(started), Receipt: receipt, Bound: bound, cause: err}
+			return InvestigationResult{}, &SynthesisFailure{Class: class, Attempts: receipt.Attempts, Elapsed: time.Since(started), Receipt: receipt, Bound: bound, ReserveFired: reserveFired, cause: err}
 		}
 		return InvestigationResult{}, err
 	}
