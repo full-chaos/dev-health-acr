@@ -85,6 +85,7 @@ func TestFlowProjectReadsIgnoreARetractionRowOverARetiredKey(t *testing.T) {
 	}
 	insert("team:linear:platform", 5, 3, 0.4)
 	insert("platform", 0, 0, 0)
+	seedFlowCapability(t, ctx, direct, orgID, "linear", "bug_completed_ratio", 1, "2026-08-10", ts(2026, 8, 11, 6, 0, 0))
 
 	provider := findProvider(t, providers, contextfabric.FactFlow)
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{

@@ -77,7 +77,11 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 			return
 		}
-		investigateCtx, collectedSynthesisInput := contextfabric.WithSynthesisInputCollector(r.Context())
+		gatedCtx, served := a.gateServiceModel(w, r, principal, request)
+		if !served {
+			return
+		}
+		investigateCtx, collectedSynthesisInput := contextfabric.WithSynthesisInputCollector(gatedCtx)
 		investigationStarted := a.now()
 		// The latency is recorded once, when the request ends, under the
 		// status of the answer it delivered; every earlier exit (a failure,

@@ -196,6 +196,14 @@ func t4Cases() []t4Case {
 		{match: "work_scope_id ORDER BY day DESC", rows: [][]any{projectWorkItemMetricsRow("linear", "proj-1", "team-1", "scope-a", 10, 6)}},
 		{match: flowDailySeriesMatch, rows: [][]any{flowDailySeriesRow("linear:proj-1", "2026-02-21", 15, 9, 4)}},
 	}})
+	add(t4Case{name: "flow/team_measures_not_tracked", kind: contextfabric.FactFlow, subjects: team, tables: []fakeTable{
+		{match: "work_scope_id ORDER BY day DESC", rows: [][]any{t4MeasuresNotTracked(workItemMetricsDailyRow("CHAOS", "scope-a", 10, 6, 4))}},
+		{match: flowDailySeriesMatch, rows: [][]any{t4MeasuresNotTracked(flowDailySeriesRow("CHAOS", "2026-02-21", 15, 9, 4))}},
+	}})
+	add(t4Case{name: "flow/project_measures_not_tracked", kind: contextfabric.FactFlow, subjects: proj, tables: []fakeTable{
+		{match: "work_scope_id ORDER BY day DESC", rows: [][]any{t4MeasuresNotTracked(projectWorkItemMetricsRow("linear", "proj-1", "team-1", "scope-a", 10, 6))}},
+		{match: flowDailySeriesMatch, rows: [][]any{t4MeasuresNotTracked(flowDailySeriesRow("linear:proj-1", "2026-02-21", 15, 9, 4))}},
+	}})
 	add(t4Case{name: "flow/project_teams_over_cap", kind: contextfabric.FactFlow, subjects: proj, tables: []fakeTable{
 		{match: "work_scope_id ORDER BY day DESC", rows: t4Rows(70, func(i int, _ string) []any {
 			return projectWorkItemMetricsRow("linear", "proj-1", fmt.Sprintf("team-%02d", i), "scope-a", 1, 1)
@@ -784,4 +792,14 @@ func cappedOwnerRows(repoID string) [][]any {
 		rows = append(rows, []any{repoID, fmt.Sprintf("team-%03d", i), "Team", int64(contextfabric.MaxFactValueRows + 1)})
 	}
 	return rows
+}
+
+// t4MeasuresNotTracked marks the bug_completed_ratio and
+// story_points_completed of a flow row (their value/state pairs are its last
+// four cells) as not tracked by the source.
+func t4MeasuresNotTracked(row []any) []any {
+	out := append([]any(nil), row...)
+	n := len(out)
+	out[n-3], out[n-1] = uint8(1), uint8(1)
+	return out
 }

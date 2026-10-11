@@ -98,6 +98,9 @@ const (
 	// (transport, provider, or context deadline). Structural labels ship
 	// unchanged.
 	OfferPhrasingCallFailed OfferPhrasingOutcome = "call_failed"
+	// OfferPhrasingWithheld: the turn may not run on the deployment model,
+	// so no call was made. Structural labels ship unchanged.
+	OfferPhrasingWithheld OfferPhrasingOutcome = "withheld_platform_model"
 )
 
 // StructureOfferPhrasingResult is OfferPhraser.Phrase's own return: the
@@ -345,6 +348,12 @@ func (e *Engine) applyOfferPhrasing(ctx context.Context, principal storage.Princ
 	}
 	options := phrasableOptions(needs)
 	if len(options) == 0 {
+		return needs
+	}
+	if PlatformModelWithheld(ctx) {
+		if e.telemetry != nil {
+			e.telemetry.RecordOfferPhrasing(ctx, principal, OfferPhrasingWithheld)
+		}
 		return needs
 	}
 	result := e.offerPhraser.Phrase(ctx, principal, StructureOfferPhrasingInput{Options: options, RequestID: requestID})

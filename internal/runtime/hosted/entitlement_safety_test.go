@@ -21,9 +21,11 @@ func TestNewEntitlement_local_provider_is_allow_all_and_offline(t *testing.T) {
 	if err := provider.Check(context.Background()); err != nil {
 		t.Fatalf("local readiness = %v", err)
 	}
-	enabled, err := provider.HasEntitlement(context.Background(), "any-org", "agent_context_runtime")
-	if err != nil || !enabled {
-		t.Fatalf("local entitlement = %t, %v; want true, nil", enabled, err)
+	for _, entitlement := range []string{"agent_context_runtime", "acr_service_model"} {
+		enabled, err := provider.HasEntitlement(context.Background(), "any-org", entitlement)
+		if err != nil || !enabled {
+			t.Fatalf("local entitlement %s = %t, %v; want true, nil", entitlement, enabled, err)
+		}
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("local close = %v", err)

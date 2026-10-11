@@ -211,7 +211,7 @@ func (r *Resolver) EvictOrgModelRuntime(orgID string) {
 // ErrModelUnavailable, matching the pre-CHAOS-3775 nil-runtime behavior.
 func (r *Resolver) runtimeFor(ctx context.Context, orgID string) (contextfabric.ModelRuntime, error) {
 	if r.Configs == nil || orgID == "" {
-		return r.Default, nil
+		return r.deploymentDefault(ctx, orgID)
 	}
 
 	// M2 fence, part 1: claim this request's epoch ticket BEFORE resolving
@@ -237,7 +237,7 @@ func (r *Resolver) runtimeFor(ctx context.Context, orgID string) (contextfabric.
 	}
 	if !ok {
 		// AC-3775-3: no configuration at all -> deployment default.
-		return r.Default, nil
+		return r.deploymentDefault(ctx, orgID)
 	}
 
 	r.mu.Lock()
@@ -299,6 +299,25 @@ func (r *Resolver) runtimeFor(ctx context.Context, orgID string) (contextfabric.
 	})
 	result := value.(buildResult)
 	return result.runtime, result.err
+}
+
+// errDeploymentModelWithheld refuses the deployment default to a turn that may
+// not run on it: the turn was admitted on the organization's own model, and
+// that configuration is gone by the time the runtime is resolved.
+var errDeploymentModelWithheld = fmt.Errorf("%w: deployment model withheld for this turn", contextfabric.ErrModelUnavailable)
+
+// deploymentDefault is the one place a request falls through to the
+// deployment's own model, so it is the one place that honors a withheld turn.
+func (r *Resolver) deploymentDefault(ctx context.Context, orgID string) (contextfabric.ModelRuntime, error) {
+	if contextfabric.PlatformModelWithheld(ctx) {
+		logger := r.Logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.WarnContext(ctx, "context fabric deployment model withheld at resolution", "org_id", contextfabric.SanitizeLogAttr(orgID), "org_config_support", r.Configs != nil)
+		return nil, errDeploymentModelWithheld
+	}
+	return r.Default, nil
 }
 
 // isTransientBuildError reports whether err reflects the CALLER's context
