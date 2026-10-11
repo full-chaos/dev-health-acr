@@ -319,28 +319,21 @@ func TestEveryOutcomeTokenIsProducedOrDeclaredUnreachable(t *testing.T) {
 	t.Parallel()
 	// not_attempted is PRODUCED by the read evaluator (every kind pruned, an
 	// unrecognised quantifier, an undeclared code) and by the gap-row builder.
-	// not_applicable is UNREACHABLE in this slice: it needs a requirement the
-	// question did not ask for, which only the post-resolution refinement step
-	// -- owned by the requirement-derivation seam, not landed -- can
-	// distinguish from one it did. The token ships now because the vocabulary
-	// is closed and a later addition to a closed enum is the expensive kind of
-	// change; it is asserted unreachable so the day it becomes reachable this
-	// line fails and a person decides.
-	unreachable := map[contractsv1.ContextFabricPlanRequirementOutcome]string{
-		contractsv1.ContextFabricRequirementNotApplicable: "needs a requirement the question did not ask for, which only the refinement step can distinguish from one it did",
-	}
+	// not_applicable is PRODUCED by the seed for a read obligation no producer
+	// declares for its subject kind. The map stays so the next unreachable
+	// member is declared by name rather than joining a list nobody maintains.
+	unreachable := map[contractsv1.ContextFabricPlanRequirementOutcome]string{}
 
 	produced := map[contractsv1.ContextFabricPlanRequirementOutcome]bool{}
-	// satisfied and unavailable are what seeding produces, from a served
-	// and an unserved requirement row respectively.
-	for _, served := range []bool{true, false} {
+	// satisfied, not_applicable and unavailable are what seeding produces,
+	// from a served row, an undeclared read obligation and a row no producer
+	// reaches respectively.
+	for _, reason := range []RequirementUnavailableReason{"", RequirementReasonNoDeclaringProducer, RequirementReasonSubjectKindUnsupported} {
 		requirement := DerivedRequirement{
 			RequirementCoordinate: RequirementCoordinate{
 				Obligation: ObligationState, Role: SubjectRoleSubject, Subject: SubjectTeam,
 			},
-		}
-		if !served {
-			requirement.Unavailable = RequirementReasonNoDeclaringProducer
+			Unavailable: reason,
 		}
 		for _, row := range seedRequirementOutcomes(&QuestionFrame{}, stubRequirementDeriver{rows: []DerivedRequirement{requirement}}) {
 			produced[row.Outcome] = true

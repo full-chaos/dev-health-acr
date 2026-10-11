@@ -5,9 +5,14 @@ import (
 	"time"
 )
 
+type grants struct {
+	runtime      bool
+	serviceModel bool
+}
+
 type cachedEntitlement struct {
-	entitled bool
-	expires  time.Time
+	grants  grants
+	expires time.Time
 }
 
 type cache struct {
@@ -20,21 +25,21 @@ func newCache(capacity int) cache {
 	return cache{items: make(map[string]cachedEntitlement, capacity), capacity: capacity}
 }
 
-func (c *cache) get(key string, now time.Time) (bool, bool) {
+func (c *cache) get(key string, now time.Time) (grants, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.items[key]
 	if !ok {
-		return false, false
+		return grants{}, false
 	}
 	if !now.Before(entry.expires) {
 		delete(c.items, key)
-		return false, false
+		return grants{}, false
 	}
-	return entry.entitled, true
+	return entry.grants, true
 }
 
-func (c *cache) put(key string, entitled bool, expires time.Time) {
+func (c *cache) put(key string, value grants, expires time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.items) >= c.capacity {
@@ -48,7 +53,7 @@ func (c *cache) put(key string, entitled bool, expires time.Time) {
 		}
 		delete(c.items, oldestKey)
 	}
-	c.items[key] = cachedEntitlement{entitled: entitled, expires: expires}
+	c.items[key] = cachedEntitlement{grants: value, expires: expires}
 }
 
 func (c *cache) delete(key string) {

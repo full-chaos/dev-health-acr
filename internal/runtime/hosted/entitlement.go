@@ -13,7 +13,7 @@ import (
 type localEntitlement struct{}
 
 func (localEntitlement) HasEntitlement(ctx context.Context, orgID, entitlement string) (bool, error) {
-	if strings.TrimSpace(orgID) == "" || entitlement != "agent_context_runtime" {
+	if strings.TrimSpace(orgID) == "" || (entitlement != "agent_context_runtime" && entitlement != "acr_service_model") {
 		return false, errors.New("unsupported entitlement request")
 	}
 	if err := ctx.Err(); err != nil {

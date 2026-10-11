@@ -578,6 +578,17 @@ func TestTheSeedAndTheGapRowAgreeOnIdentityAndDisagreeOnOutcome(t *testing.T) {
 	// the gap path mint `satisfied` for an unservable requirement would have
 	// passed this test. Found by review.
 	rows := requirementRowsIncludingUnservable()
+	// The fixture's own unservable row is an undeclared read obligation, which
+	// seeds not_applicable; a kind no producer reaches is the unavailable arm.
+	rows = append(rows, DerivedRequirement{
+		RequirementCoordinate: RequirementCoordinate{
+			Obligation: ObligationState, Role: SubjectRoleSubject, Subject: SubjectTeam,
+		},
+		Kind:        ObligationKindRead,
+		Scope:       CompletionScopeSingleSubject,
+		Quantifier:  CompletionQuantifierNone,
+		Unavailable: RequirementReasonSubjectKindUnsupported,
+	})
 	fromDerivation := SeedRequirementOutcomes(rows)
 	fromPlan := SeedOutcomesFromPublishedPlanRequirements(PlanRequirementsFromDerived(rows))
 
@@ -619,7 +630,7 @@ func TestTheSeedAndTheGapRowAgreeOnIdentityAndDisagreeOnOutcome(t *testing.T) {
 				t.Errorf("row %d: the gap row claims its cause was OBSERVED; nothing observed it, the answer ended first", index)
 			}
 		}
-		if seed.Outcome == contractsv1.ContextFabricRequirementUnavailable && !reflect.DeepEqual(seed, gap) {
+		if (seed.Outcome == contractsv1.ContextFabricRequirementUnavailable || seed.Outcome == contractsv1.ContextFabricRequirementNotApplicable) && !reflect.DeepEqual(seed, gap) {
 			t.Errorf("row %d: an unservable requirement is reported differently by the two paths:\n seed: %+v\n gap:  %+v",
 				index, seed, gap)
 		}

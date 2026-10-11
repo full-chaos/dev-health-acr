@@ -818,11 +818,16 @@ import (
 // where it was served as 0; a candidate saved under v166 holds that 0 and must
 // not be reused.
 //
-// v167 -> v168: a review fact reads its own pull request's review only (the
+// v167 -> v168: a read obligation no producer declares for the member kind of
+// a cohort (health for pull requests or incidents) is judged not_applicable
+// instead of unavailable, so the answer is no longer degraded by it; a
+// candidate saved under v167 holds the degraded account and must not be reused.
+//
+// v168 -> v169: a review fact reads its own pull request's review only (the
 // key carries the pull request number; a review id recurs across one
 // repository's pull requests) and cites review.v2. A candidate saved under
-// v167 may hold another pull request's review state and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v168"
+// v168 may hold another pull request's review state and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v169"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -167,6 +167,11 @@ type dtStack struct {
 
 func newDTStack(t *testing.T) *dtStack {
 	t.Helper()
+	return newDTStackWith(t, api.EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil }))
+}
+
+func newDTStackWith(t *testing.T, entitlements api.EntitlementProvider) *dtStack {
+	t.Helper()
 	now := time.Now()
 	audit := memory.NewAuditStore()
 	credentials, err := memory.NewCredentialStoreWithOptions(memory.CredentialStoreOptions{Audit: audit, Now: func() time.Time { return now.Add(-time.Hour) }})
@@ -225,7 +230,7 @@ func newDTStack(t *testing.T) *dtStack {
 		Limits: manager, Now: time.Now,
 		Runtime: &api.RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Assembler: assembler, Evidence: evaluation,
-			Entitlements:         api.EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil }),
+			Entitlements:         entitlements,
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device",
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(time.Now)),
 			ReadinessChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "postgres"}, api.CheckFunc{CheckName: "entitlement"}},
