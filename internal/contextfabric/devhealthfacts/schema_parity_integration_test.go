@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -204,7 +205,7 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 				Subjects: []contextfabric.SubjectRef{subject},
 			})
 			if err != nil {
-				t.Fatalf("ReadFacts() against production-typed schema: %v", err)
+				t.Fatalf("ReadFacts() against production-typed schema: %v (cause: %v)", err, errors.Unwrap(err))
 			}
 			// A Scan-destination mismatch surfaces as a read FAILURE,
 			// which the provider reports as unavailable rather than
@@ -236,7 +237,7 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 			Subjects: []contextfabric.SubjectRef{repoSubject(repoID)},
 		})
 		if err != nil {
-			t.Fatalf("ReadFacts() against production-typed schema: %v", err)
+			t.Fatalf("ReadFacts() against production-typed schema: %v (cause: %v)", err, errors.Unwrap(err))
 		}
 		if result.State == contextfabric.SourceUnavailable {
 			t.Fatalf("provider degraded to unavailable against production typing: %s", result.Reason)
@@ -251,7 +252,7 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 			Subjects: []contextfabric.SubjectRef{projectSubject("github", "proj-parity")},
 		})
 		if err != nil {
-			t.Fatalf("ReadFacts() against production-typed schema: %v", err)
+			t.Fatalf("ReadFacts() against production-typed schema: %v (cause: %v)", err, errors.Unwrap(err))
 		}
 		if result.State == contextfabric.SourceUnavailable {
 			t.Fatalf("provider degraded to unavailable against production typing: %s", result.Reason)
@@ -266,7 +267,7 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 			Subjects: []contextfabric.SubjectRef{projectSubject("github", "proj-parity")},
 		})
 		if err != nil {
-			t.Fatalf("ReadFacts() against production-typed schema: %v", err)
+			t.Fatalf("ReadFacts() against production-typed schema: %v (cause: %v)", err, errors.Unwrap(err))
 		}
 		if result.State == contextfabric.SourceUnavailable {
 			t.Fatalf("provider degraded to unavailable against production typing: %s", result.Reason)
@@ -383,7 +384,7 @@ func TestLiveFinalKeepsTheVersionColumnWinner(t *testing.T) {
 		Subjects: []contextfabric.SubjectRef{workItemSubject(repoID, "WI-FINAL")},
 	})
 	if err != nil {
-		t.Fatalf("ReadFacts() error = %v", err)
+		t.Fatalf("ReadFacts() error = %v (cause: %v)", err, errors.Unwrap(err))
 	}
 	if len(result.Facts) != 1 {
 		t.Fatalf("Facts = %#v, want exactly one row after FINAL deduped the two versions", result.Facts)

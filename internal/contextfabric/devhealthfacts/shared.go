@@ -787,10 +787,16 @@ import (
 // longer served. A candidate saved under v160 may hold such a member and must
 // not be reused.
 //
-// v161 -> v162: a work item's status fact adds status_since, status_duration_seconds and
-// status_since_basis; a candidate saved under v161 holds a status fact without the time in
+// v161 -> v162: a model call that ends on a transient class once the runtime's
+// attempts are used, or that the composition reserve ends before the request
+// deadline, is served as a degraded answer with failure class
+// model_call_not_completed and retry_may_succeed, where it was an error with no
+// stored answer; a candidate saved under an earlier version cannot hold it.
+//
+// v162 -> v163: a work item's status fact adds status_since, status_duration_seconds and
+// status_since_basis; a candidate saved under v162 holds a status fact without the time in
 // the current status and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v162"
+const QueryVersion = "devhealthfacts.clickhouse.v163"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

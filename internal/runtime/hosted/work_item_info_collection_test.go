@@ -307,7 +307,8 @@ func runWorkItemInfoChild(t *testing.T, scenario string) {
 	cfg.EnableContextFabricInvestigations = true
 	cfg.MaxItems = 50
 	cfg.MaxSerializedBytes = 262144
-	cfg.RequestTimeout = 5 * time.Second
+	// Above the synthesis composition reserve (5 s); the proof contexts below keep their own 5 s deadlines.
+	cfg.RequestTimeout = 6 * time.Second
 	db, err := runtimepostgres.Open(context.Background(), runtimepostgres.Config{DSN: os.Getenv("ACR_INFO_PROOF_DSN")})
 	if err != nil {
 		t.Fatal(err)
