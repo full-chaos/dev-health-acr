@@ -561,7 +561,7 @@ func decidingUnevaluatedReadRequirement(rows []contractsv1.ContextFabricPlanRequ
 		if row.Requirement == "" || row.Stage != contractsv1.ContextFabricOutcomeStagePlanning {
 			continue
 		}
-		if evaluated[row.Requirement] {
+		if evaluated[row.Requirement] || row.Outcome == contractsv1.ContextFabricRequirementNotApplicable {
 			continue
 		}
 		// READ obligations only, matching hasPlanningOnlyReadRequirement's

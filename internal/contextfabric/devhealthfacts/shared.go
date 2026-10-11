@@ -818,11 +818,16 @@ import (
 // where it was served as 0; a candidate saved under v166 holds that 0 and must
 // not be reused.
 //
-// v167 -> v168: with the anchor binding count switch on, a follow-up whose
+// v167 -> v168: a read obligation no producer declares for the member kind of
+// a cohort (health for pull requests or incidents) is judged not_applicable
+// instead of unavailable, so the answer is no longer degraded by it; a
+// candidate saved under v167 holds the degraded account and must not be reused.
+//
+// v168 -> v169: with the anchor binding count switch on, a follow-up whose
 // admitted carried binding (or redeemed anchor receipt) names another anchor
 // kind than the model states counts, discovers and captures under the
 // binding's kind, so a stored count answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v168"
+const QueryVersion = "devhealthfacts.clickhouse.v169"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -3,6 +3,7 @@
 ACR product entitlement and ACR API authentication are separate controls.
 
 - `agent_context_runtime` answers whether an organization purchased or was granted the product.
+- `acr_service_model` answers whether a credential caller may run an investigation on the service's own model. Without it, only an organization with its own model configuration may; the caller can always supply its own interpretation and synthesis (`ACR_MCP_SERVICE_MODEL_DEFAULT`, `docs/service-shell.md`).
 - An `fcacr_` credential identifies a machine client and grants explicit repository and operation scopes.
 - A Dev Health self-hosted license key is never accepted as an ACR bearer credential.
 
