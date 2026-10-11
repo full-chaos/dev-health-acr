@@ -809,6 +809,11 @@ type assemblyTelemetry struct {
 	// RetryAttempted carries actual second-pass execution to the final
 	// decisive budget assertion; input narrowing alone does not prove it.
 	RetryAttempted bool
+	// CeilingFitted says stage 3 fitted the answer against the service ceiling
+	// because the caller's target could not be reached. The plan keeps the
+	// request's own target (what the next turn compares against); the decisive
+	// fit reads this to fit against the ceiling the same way.
+	CeilingFitted bool
 	// WorkItemDegrade is what the validation stage needs to serve a work-item
 	// tuple answer as the facts-only degraded answer. Nil for a client-supplied
 	// synthesis, which is never rewritten.
