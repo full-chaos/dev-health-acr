@@ -107,7 +107,8 @@ func TestTheHeldBindingCarriesTheOwnershipItWasProvenUnderAcrossTurns(t *testing
 		{"same ownership", set(probeOwnershipW1, nil), set(probeOwnershipW1, nil), AnchorOwnershipUnmoved, AnchorFreshnessAcquired, AnchorBindingAdmissionAdmitted},
 		{"ownership moved", set(probeOwnershipW1, nil), set(w2, nil), AnchorOwnershipMoved, AnchorFreshnessAcquired, AnchorBindingAdmissionRefusedOwnershipMoved},
 		{"read failed", set(probeOwnershipW1, nil), set(AnchorFreshnessRead{}, errors.New("read failed")), AnchorOwnershipNotAcquired, AnchorFreshnessReadFailed, AnchorBindingAdmissionRefusedOwnershipUnverified},
-		{"another epoch", set(probeOwnershipW1, nil), set(otherEpoch, nil), AnchorOwnershipNotAcquired, AnchorFreshnessEpochMismatch, AnchorBindingAdmissionRefusedOwnershipUnverified},
+		{"another serving epoch, read live", set(probeOwnershipW1, nil), set(otherEpoch, nil), AnchorOwnershipMoved, AnchorFreshnessAcquired, AnchorBindingAdmissionRefusedOwnershipMoved},
+		{"a serving epoch a lease ahead of the graph epoch on both turns", set(otherEpoch, nil), set(otherEpoch, nil), AnchorOwnershipUnmoved, AnchorFreshnessAcquired, AnchorBindingAdmissionAdmitted},
 		{"proven under no recorded ownership", set(AnchorFreshnessRead{Recorded: false}, nil), set(probeOwnershipW1, nil), AnchorOwnershipProvenUnrecorded, AnchorFreshnessAcquired, AnchorBindingAdmissionRefusedOwnershipUnverified},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,8 +122,14 @@ func TestTheHeldBindingCarriesTheOwnershipItWasProvenUnderAcrossTurns(t *testing
 			}
 			binding := *bindingMember(turns[1].saved)
 			if tc.admission == AnchorBindingAdmissionAdmitted {
-				if binding.Reason != AnchorBindingReasonCarriedSilent || binding.ProvenFreshness != proven {
-					t.Fatalf("follow-up binding = %+v, want carried_silent keeping proven freshness %+v", binding, proven)
+				want := proven
+				if tc.first != nil {
+					probe := &probeOwnership{}
+					tc.first(probe)
+					want.ServingEpoch = probe.read.ServingEpoch
+				}
+				if binding.Reason != AnchorBindingReasonCarriedSilent || binding.ProvenFreshness != want {
+					t.Fatalf("follow-up binding = %+v, want carried_silent keeping turn one's proven freshness %+v", binding, want)
 				}
 				return
 			}
@@ -150,7 +157,7 @@ func TestAcquireAnchorFreshnessNamesEveryReadOutcome(t *testing.T) {
 		{"read failed", anchorFreshnessFunc(func(context.Context, string) (AnchorFreshnessRead, error) {
 			return probeOwnershipW1, errors.New("boom")
 		}), AnchorFreshnessReadFailed, AnchorFreshness{}},
-		{"epoch mismatch", &probeOwnership{read: AnchorFreshnessRead{ServingEpoch: 8, OwnershipWatermark: "w", Recorded: true}}, AnchorFreshnessEpochMismatch, AnchorFreshness{}},
+		{"a serving epoch other than the cached graph epoch is stamped as read", &probeOwnership{read: AnchorFreshnessRead{ServingEpoch: 8, OwnershipWatermark: "w", Recorded: true}}, AnchorFreshnessAcquired, AnchorFreshness{Recorded: true, ServingEpoch: 8, OwnershipWatermark: "w"}},
 		{"source absent", &probeOwnership{read: AnchorFreshnessRead{ServingEpoch: 7}}, AnchorFreshnessSourceAbsent, AnchorFreshness{}},
 		{"unstorable", &probeOwnership{read: AnchorFreshnessRead{ServingEpoch: 7, OwnershipWatermark: oversize.OwnershipWatermark, Recorded: true}}, AnchorFreshnessUnstorable, AnchorFreshness{}},
 		{"at the bound", &probeOwnership{read: AnchorFreshnessRead{ServingEpoch: 7, OwnershipWatermark: atBound.OwnershipWatermark, Recorded: true}}, AnchorFreshnessAcquired, AnchorFreshness{Recorded: true, ServingEpoch: 7, OwnershipWatermark: atBound.OwnershipWatermark}},

@@ -80,17 +80,13 @@ const (
 	// AnchorFreshnessSourceAbsent: the ownership source holds no checkpoint
 	// at the serving epoch, so ownership has no recorded state.
 	AnchorFreshnessSourceAbsent AnchorFreshnessAcquisition = "source_absent"
-	// AnchorFreshnessEpochMismatch: the read's serving epoch is not the
-	// epoch this turn's graph reads use, so the watermark describes another
-	// graph.
-	AnchorFreshnessEpochMismatch AnchorFreshnessAcquisition = "epoch_mismatch"
 	// AnchorFreshnessUnstorable: the watermark exceeds the snapshot's term
 	// bound, so a binding carrying it would not validate.
 	AnchorFreshnessUnstorable AnchorFreshnessAcquisition = "unstorable"
 )
 
 func anchorFreshnessAcquisitions() []AnchorFreshnessAcquisition {
-	return []AnchorFreshnessAcquisition{AnchorFreshnessNotAttempted, AnchorFreshnessAcquired, AnchorFreshnessUnwired, AnchorFreshnessReadFailed, AnchorFreshnessSourceAbsent, AnchorFreshnessEpochMismatch, AnchorFreshnessUnstorable}
+	return []AnchorFreshnessAcquisition{AnchorFreshnessNotAttempted, AnchorFreshnessAcquired, AnchorFreshnessUnwired, AnchorFreshnessReadFailed, AnchorFreshnessSourceAbsent, AnchorFreshnessUnstorable}
 }
 
 // AnchorOwnershipMovement compares the held binding's proven freshness with
@@ -151,6 +147,13 @@ func validateAnchorFreshness(f AnchorFreshness) error {
 
 // acquireAnchorFreshness reads the ownership freshness for the tracker. A nil
 // tracker is the shadow switched off: nothing is read.
+//
+// The serving epoch and the watermark are stamped from the SAME live read and
+// never compared with the turn's graph binding epoch: that one comes from a
+// leased cache, so right after a swap the two can lag one lease apart. Two
+// stamps are then compared live read against live read, so a lag can only
+// show as moved or unmoved -- never as a refusal on its own. The graph epoch
+// stays on the line beside freshness_serving_epoch, so the lag is visible.
 func (e *Engine) acquireAnchorFreshness(ctx context.Context, orgID string, t *anchorBindingTracker) {
 	if t == nil {
 		return
@@ -163,8 +166,6 @@ func (e *Engine) acquireAnchorFreshness(ctx context.Context, orgID string, t *an
 	switch {
 	case err != nil:
 		t.freshnessAcquisition = AnchorFreshnessReadFailed
-	case read.ServingEpoch != t.epoch:
-		t.freshnessAcquisition = AnchorFreshnessEpochMismatch
 	case !read.Recorded:
 		t.freshnessAcquisition = AnchorFreshnessSourceAbsent
 	case len(read.OwnershipWatermark) > SemanticStateMaxTermBytes:

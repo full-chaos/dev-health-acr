@@ -606,7 +606,7 @@ func TestAnchorBindingLineVocabularyIsClosedOverItsProducers(t *testing.T) {
 		"binding_admission": {"not_applicable", "not_evaluated", "admitted", "refused_policy_version", "refused_question_changed", "refused_question_indeterminate",
 			"refused_origin_unverifiable", "refused_expired", "refused_ownership_moved", "refused_ownership_unverified", "refused_subject_unreadable"},
 		"admission_remembered_check": {"not_checked", "readable", "verifier_unwired", "cancelled_before_check", "cancelled_during_check", "refused"},
-		"freshness_acquisition":      {"not_attempted", "acquired", "unwired", "read_failed", "source_absent", "epoch_mismatch", "unstorable"},
+		"freshness_acquisition":      {"not_attempted", "acquired", "unwired", "read_failed", "source_absent", "unstorable"},
 		"ownership_movement":         {"not_applicable", "proven_unrecorded", "not_acquired", "unmoved", "moved"},
 		"bound_anchor_kind":          {"switch_off", "not_evaluated", "none", "agrees", "rejected_by_frame", "applied_receipt", "applied_carried"},
 	} {

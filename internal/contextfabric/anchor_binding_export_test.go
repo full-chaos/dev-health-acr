@@ -195,7 +195,7 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 	scenarios = append(scenarios,
 		anchorSiteScenario{name: "ownership read failed", run: anchorProbeScenario(firstUnder("request_vocab_own_failed", AnchorFreshnessRead{}, errors.New("checkpoint read failed")))},
 		anchorSiteScenario{name: "ownership source absent", run: anchorProbeScenario(firstUnder("request_vocab_own_absent", absent, nil))},
-		anchorSiteScenario{name: "ownership epoch mismatch", run: anchorProbeScenario(firstUnder("request_vocab_own_epoch", otherEpoch, nil))},
+		anchorSiteScenario{name: "ownership read at another serving epoch", run: anchorProbeScenario(firstUnder("request_vocab_own_epoch", otherEpoch, nil))},
 		anchorSiteScenario{name: "ownership unstorable", run: anchorProbeScenario(firstUnder("request_vocab_own_oversize", oversize, nil))},
 		anchorSiteScenario{name: "ownership unmoved", run: anchorProbeScenario(firstUnder("request_vocab_own_unmoved_one", probeOwnershipW1, nil), followUnder("request_vocab_own_unmoved_two", probeOwnershipW1, nil))},
 		anchorSiteScenario{name: "ownership moved", run: anchorProbeScenario(firstUnder("request_vocab_own_moved_one", probeOwnershipW1, nil), followUnder("request_vocab_own_moved_two", w2, nil))},
