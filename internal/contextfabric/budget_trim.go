@@ -143,7 +143,7 @@ func (e *Engine) planBudgetTrim(
 	pending *assemblyTelemetry,
 	pass int,
 	cardinality MembershipCardinality,
-	census bool,
+	singleSubject bool,
 ) (claimDepthAttempt, error) {
 	depth := newClaimDepthPlan(result)
 	attempt := claimDepthAttempt{Measured: measured, Members: depth.members, ClaimsBefore: depth.declared, ClaimsAfter: depth.declared, ClaimsCited: depth.cites}
@@ -152,7 +152,7 @@ func (e *Engine) planBudgetTrim(
 		return attempt, nil
 	}
 	if depth.members == 0 {
-		if census || result.Cohort != nil {
+		if !singleSubject || result.Cohort != nil {
 			attempt.Declined = ClaimDepthNoCohort
 			return attempt, nil
 		}
