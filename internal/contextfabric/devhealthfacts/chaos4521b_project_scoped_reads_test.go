@@ -104,7 +104,7 @@ func TestChaos4521b_TeamScopedRollupsExplainAnEmptyProjectRead(t *testing.T) {
 		sourceTable string
 	}{
 		{"health", contextfabric.FactHealth, "FROM compounding_risk_daily"},
-		{"investment", contextfabric.FactInvestment, "FROM investment_metrics_daily"},
+		{"investment", contextfabric.FactInvestment, "FROM work_unit_investments"},
 		{"landscape", contextfabric.FactLandscape, "FROM ic_landscape_rolling_30d"},
 	}
 	for _, testCase := range cases {

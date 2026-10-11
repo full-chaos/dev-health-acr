@@ -47,7 +47,7 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 	for _, statement := range devhealthschema.DDL(
 		"projects", "teams", "team_project_ownership", "team_repo_ownership", "repos",
 		"work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
-		"investment_metrics_daily", "work_item_team_attributions",
+		"work_item_team_attributions",
 		"work_items", "project_membership_transitions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
@@ -247,8 +247,6 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		const org = "org-native-legacy"
 		seedProject("proj-l", org)
 		seedOwnedRepo(org, "proj-l", "team-l", "repo-l")
-		exec("legacy investment row", `INSERT INTO investment_metrics_daily (day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			date(2026, 9, 18), "team-l", "product", "growth", uint32(5), uint32(2), uint32(1), uint64(10), at, org)
 		seedItem(org, "linear:L-1", "proj-l")
 		seedIssueUnit(org, "wu-l", 10, map[string]float64{"quality": 1.0}, "linear:L-1")
 
