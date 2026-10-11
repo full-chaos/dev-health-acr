@@ -3602,7 +3602,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// narrowing would leave the surviving members carrying scores computed
 	// against members that are no longer in the answer.
 	var groupingRefusalForDisclosure CohortGroupingOutcome
-	var groupOverlapForDisclosure CohortGroupOverlap
 	var groupReadForDisclosure GroupReadDisclosure
 	var groupReadKindForDisclosure SubjectKind
 	if graphContext.Cohort != nil && plan.GroupKind != "" {
@@ -3617,7 +3616,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// while the refusal came through.
 		groups, _, groupingOutcome := BuildCohortGroups(plan, graphContext.Cohort, facts.Facts)
 		if len(groups) > 0 {
-			groupOverlapForDisclosure = CohortGroupOverlapOf(graphContext.Cohort, groups)
 			cohort := *graphContext.Cohort
 			cohort.Groups = groups
 			ApplyGroupedCohortCompleteness(&cohort)
@@ -3974,7 +3972,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		CommitBases: commitBases, CommitDigests: commitDigests,
 		GroupedNarrowingBasis: stage2GroupedBasis,
 		GroupingRefusal:       groupingRefusalForDisclosure,
-		GroupOverlap:          groupOverlapForDisclosure,
 		GroupReadDisclosure:   groupReadForDisclosure,
 		GroupReadKind:         groupReadKindForDisclosure,
 	}

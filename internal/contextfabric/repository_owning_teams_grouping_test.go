@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -96,5 +97,30 @@ func TestOverlapLimitationParseRejectsLookalikes(t *testing.T) {
 		if contractsv1.IsContextFabricGroupingOverlapLimitation(bad) {
 			t.Fatalf("lookalike %q recognised", bad)
 		}
+	}
+}
+
+// A repository the answer dropped (narrowed away) that has two owners must not
+// raise the overlap: the count is over the served set only.
+func TestOverlapIsCountedOverTheServedSetOnly(t *testing.T) {
+	t.Parallel()
+	served := &Cohort{Kind: SubjectRepository, Complete: true, Members: []CohortMember{repoMember("r1")}}
+	groups := []contractsv1.ContextFabricCohortGroup{
+		{Subject: contractsv1.ContextFabricSubjectRef{Kind: SubjectTeam, CanonicalID: "team:a"}, MemberCanonicalIDs: []string{"repository:r1", "repository:dropped"}},
+		{Subject: contractsv1.ContextFabricSubjectRef{Kind: SubjectTeam, CanonicalID: "team:b"}, MemberCanonicalIDs: []string{"repository:dropped"}},
+	}
+	if got := CohortGroupOverlapOf(served, groups); got.Count != 0 {
+		t.Fatalf("overlap = %d, want 0: the two-owner repository is not in the served cohort", got.Count)
+	}
+}
+
+func TestAssemblyCountsOverlapOverTheNarrowedCohort(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("chaos4636_synthesis_assembly.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "CohortGroupOverlapOf(cohort, cohort.Groups)") {
+		t.Fatal("assembly must count overlap over the served cohort (params.Graph.Cohort), after narrowing")
 	}
 }

@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -45,6 +46,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	// how the two drifted apart.
 	budget := newFactBudget()
 	rejectedCount := 0
+	ownershipUnread := 0
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
 	defer func() {
@@ -89,8 +91,16 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 			})
 		}
 		budget.observe(len(rows))
+		// An ownership read failure never fails the identity read: the facts
+		// are served without owning_teams and the result says ownership is
+		// unknown (owningTeamsUnreadReason), never that there are no owners.
 		if err := p.attachOwningTeams(ctx, orgID, facts); err != nil {
-			return contextfabric.FactProviderResult{}, err
+			ownershipUnread = len(repoIDs)
+			slog.Warn("context_fabric_owning_teams_read_failed",
+				"producer", "devhealthfacts.identity",
+				"repositories", ownershipUnread,
+				"error", contextfabric.SanitizeLogAttr(err.Error()),
+			)
 		}
 	}
 
@@ -130,8 +140,19 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 
 	state, emptyReason := currentAxisReadState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
+	if ownershipUnread > 0 {
+		result.OmittedCount += ownershipUnread
+		result.Truncated = true
+		result.State = contextfabric.SourceTruncated
+		mergeFactReadReason(&result, owningTeamsUnreadReason)
+	}
 	return result, nil
 }
+
+// owningTeamsUnreadReason is the closed-vocabulary reason an identity read
+// discloses when the ownership read failed: the repositories are served
+// without owning_teams, and ownership is unknown rather than empty.
+const owningTeamsUnreadReason = "owning_teams_unread"
 
 // MembershipProvider implements contextfabric.FactProvider for
 // FactMembership. There is no canonical team or project table in this

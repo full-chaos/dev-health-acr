@@ -1,7 +1,10 @@
 package devhealthfacts_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -64,5 +67,39 @@ func TestIdentityProviderEmitsOwningTeamsFromCurrentRepoOwnership(t *testing.T) 
 	}
 	if strings.Contains(last.statement, "team_member") {
 		t.Fatalf("ownership statement reads membership:\n%s", last.statement)
+	}
+}
+
+// Not parallel: it swaps the process default logger to capture the log line.
+func TestIdentityProviderServesFactsWhenTheOwnershipReadFails(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	client := &fakeClient{tables: []fakeTable{
+		{match: "team_repo_ownership", err: errors.New("ownership store down")},
+		{match: "FROM repos", rows: [][]any{{"repo-1", "acme/one", "github"}}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactIdentity)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind:     contextfabric.FactIdentity,
+		Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v, want the identity fact served", err)
+	}
+	if len(result.Facts) != 1 || result.Facts[0].Fields["name"].String == nil {
+		t.Fatalf("facts = %+v, want the repository identity fact", result.Facts)
+	}
+	if _, present := result.Facts[0].Fields["owning_teams"]; present {
+		t.Fatalf("owning_teams present after a failed ownership read")
+	}
+	if result.State != contextfabric.SourceTruncated || result.OmittedCount != 1 || !strings.Contains(result.Reason, "owning_teams_unread") {
+		t.Fatalf("state=%q omitted=%d reason=%q, want truncated, 1, owning_teams_unread: ownership is unknown, not empty", result.State, result.OmittedCount, result.Reason)
+	}
+	if !strings.Contains(logs.String(), "context_fabric_owning_teams_read_failed") {
+		t.Fatalf("no log line for the failed ownership read: %q", logs.String())
 	}
 }

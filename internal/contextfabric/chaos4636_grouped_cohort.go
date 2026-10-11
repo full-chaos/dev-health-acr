@@ -900,15 +900,23 @@ type CohortGroupOverlap struct {
 }
 
 // CohortGroupOverlapOf counts the cohort members listed under more than one
-// of groups.
+// of groups. Call it on the cohort that is SERVED (after narrowing).
 func CohortGroupOverlapOf(cohort *Cohort, groups []contractsv1.ContextFabricCohortGroup) CohortGroupOverlap {
 	if cohort == nil || len(groups) == 0 {
 		return CohortGroupOverlap{}
 	}
+	// Only members the cohort still carries count: the overlap is stated over
+	// the served (narrowed) set, never over members the answer dropped.
+	served := make(map[string]struct{}, len(cohort.Members))
+	for _, member := range cohort.Members {
+		served[member.Subject.CanonicalID] = struct{}{}
+	}
 	placed := make(map[string]int, len(cohort.Members))
 	for _, group := range groups {
 		for _, id := range group.MemberCanonicalIDs {
-			placed[id]++
+			if _, ok := served[id]; ok {
+				placed[id]++
+			}
 		}
 	}
 	count := 0
