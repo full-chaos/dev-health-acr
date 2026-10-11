@@ -37,7 +37,7 @@ func TestQueryVersionMovedPastTheModelFailureDetail(t *testing.T) {
 }
 
 // A transient model call end is served as a degraded answer under its own
-// failure class, so an answer stored before it (v159 and before) must not be
+// failure class, so an answer stored before it (v160 and before) must not be
 // reused.
 func TestQueryVersionMovedPastTheTransientModelCallDegrade(t *testing.T) {
 	const prefix = "devhealthfacts.clickhouse.v"
@@ -45,7 +45,7 @@ func TestQueryVersionMovedPastTheTransientModelCallDegrade(t *testing.T) {
 	if !ok {
 		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
 	}
-	if n, err := strconv.Atoi(version); err != nil || n < 160 {
-		t.Fatalf("QueryVersion = %q: an answer saved before the transient-call degrade (v159 and before) must not be reused", devhealthfacts.QueryVersion)
+	if n, err := strconv.Atoi(version); err != nil || n < 161 {
+		t.Fatalf("QueryVersion = %q: an answer saved before the transient-call degrade (v160 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }

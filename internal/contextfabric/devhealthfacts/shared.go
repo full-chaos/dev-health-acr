@@ -776,12 +776,16 @@ import (
 // epochs, where a building or grace epoch's watermark stood in for the serving
 // one, and must not be reused.
 //
-// v159 -> v160: a model call that ends on a transient class once the runtime's
+// v159 -> v160: a continuation turn carrying a subject hint keeps the remembered confirmed-need
+// ledger (the hint contests a carried anchor of its own kind instead of dropping the ledger);
+// a candidate saved under an earlier version for such a turn was answered without it.
+//
+// v160 -> v161: a model call that ends on a transient class once the runtime's
 // attempts are used, or that the composition reserve ends before the request
 // deadline, is served as a degraded answer with failure class
 // model_call_not_completed and retry_may_succeed, where it was an error with no
 // stored answer; a candidate saved under an earlier version cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v160"
+const QueryVersion = "devhealthfacts.clickhouse.v161"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
