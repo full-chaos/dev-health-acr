@@ -260,6 +260,12 @@ type CompletenessAuthorityObservation struct {
 	// fields stay empty, because nothing was reported -- the gap is an
 	// absence of evaluation, not a mechanism that fired.
 	DecidingReadEvaluationGap bool
+	// StatusCorrectionDisclosed is true when the document SERVED after the
+	// flip carries a status_correction record: the one place the log line
+	// and the wire are tied. Set by the caller that applied the flip, never
+	// by the derivation (the measurement is unconditional, the flip is
+	// gated).
+	StatusCorrectionDisclosed bool
 
 	// OUTCOME ROW COUNTS -- what the model's own status decision (or this
 	// derivation's) had to work with, joinable against ModelStatus without
@@ -675,9 +681,31 @@ func applyServerCompletenessAuthority(result InvestigationResult, enabled bool, 
 	default:
 		return result
 	}
+	result.StatusCorrection = statusCorrectionFor(result, mapped, observation)
 	result.Status = mapped
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
+}
+
+// statusCorrectionFor builds the disclosure record for the one write the
+// authority makes to result.Status. The model's label survives a second
+// correction (a stored result re-applied under changed knobs) so the record
+// always names what the MODEL authored, not an earlier server value.
+func statusCorrectionFor(result InvestigationResult, mapped InvestigationStatus, observation CompletenessAuthorityObservation) *contractsv1.ContextFabricStatusCorrection {
+	modelStatus := result.Status
+	if result.StatusCorrection != nil {
+		modelStatus = result.StatusCorrection.ModelStatus
+	}
+	direction, ok := contractsv1.ContextFabricStatusCorrectionDirectionFor(modelStatus, mapped)
+	if !ok {
+		return nil
+	}
+	return &contractsv1.ContextFabricStatusCorrection{
+		ModelStatus:         modelStatus,
+		Direction:           direction,
+		DecidingRequirement: observation.DecidingRequirement,
+		DecidingOutcome:     observation.DecidingOutcome,
+	}
 }
 
 // CompletenessAuthorityLogArgs is the ONE construction of the completeness
@@ -713,6 +741,7 @@ func CompletenessAuthorityLogArgs(event CompletenessAuthorityObservation, orgID 
 		"deciding_cause_coverage", SanitizeLogAttr(string(event.DecidingCauseCoverage)),
 		"deciding_cause_narrowing", SanitizeLogAttr(string(event.DecidingCauseNarrowing)),
 		"deciding_read_evaluation_gap", event.DecidingReadEvaluationGap,
+		"status_correction_disclosed", event.StatusCorrectionDisclosed,
 		// THE ROWS THE STATUS DECISION HAD TO WORK WITH: what the model was
 		// given (today, nothing -- see genkitruntime's own synthesis input)
 		// and what this derivation itself read, both joinable against
