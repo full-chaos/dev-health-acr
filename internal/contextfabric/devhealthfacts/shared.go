@@ -695,7 +695,12 @@ import (
 // project, and a project with no canonical mix has no investment fact (CHAOS-9195, D5932).
 // A candidate saved under v136 carries the legacy breakdown (and a mix merged onto it) and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v137"
+//
+// v141 -> v142: a repository id an operation serves (securityOverview topRepos, hotspots,
+// workGraphEdges, and the repository scopeId of compoundingRisk and complexityTimeseries)
+// is the acr form "repository:<uuid>" its filters accept, not the bare uuid. A candidate
+// saved under v141 may hold the bare form and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v142"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
