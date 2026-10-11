@@ -175,8 +175,9 @@ func TestDenyOwnedNamesOnlyOwnershipReach(t *testing.T) {
 	}
 }
 
-// An ownership hit is admitted only when both the edge and the node are; an
-// edge of any other hop is decided by its node alone.
+// An anchored member read admits a hit only when both the edge and the node are,
+// over every hop of the path; a read with the edge rule off (deployment walks)
+// decides by the node alone.
 func TestAuthorizedHitDecidesOwnershipByEdgeAndNode(t *testing.T) {
 	allowed := []string{"full-chaos/dev-health-acr"}
 	denied := []string{"other/private"}
@@ -197,7 +198,9 @@ func TestAuthorizedHitDecidesOwnershipByEdgeAndNode(t *testing.T) {
 		{"ownership both allowed", owned, allowed, allowed, true},
 		{"ownership edge denied", owned, denied, allowed, false},
 		{"ownership node denied", owned, allowed, denied, false},
-		{"other hop edge denied, node allowed", other, denied, allowed, true},
+		{"other hop edge denied, node allowed", other, denied, allowed, false},
+		{"other hop both allowed", other, allowed, allowed, true},
+		{"other hop edge denied, edge rule off", other, denied, allowed, true},
 		{"ownership edge denied, edge rule off (deployment walks)", owned, denied, allowed, true},
 		{"other hop node denied", other, allowed, denied, false},
 	} {
