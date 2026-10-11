@@ -24,8 +24,6 @@ func TestTruncatedSourceRowIsAdmittedForEverySourceTruncationCause(t *testing.T)
 	for _, code := range []contractsv1.ContextFabricCoverageDetailCode{
 		contractsv1.ContextFabricCoverageDetailFactProviderReported,
 		contractsv1.ContextFabricCoverageDetailFactScopeUnexpanded,
-		contractsv1.ContextFabricCoverageDetailFactReadFailed,
-		contractsv1.ContextFabricCoverageDetailFactUnconfigured,
 	} {
 		code := code
 		t.Run(string(code), func(t *testing.T) {

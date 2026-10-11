@@ -19,8 +19,6 @@ func sourceTruncationDepthRow(code ContextFabricCoverageDetailCode) ContextFabri
 var frozenSourceTruncationCauses = []ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailFactProviderReported,
 	ContextFabricCoverageDetailFactScopeUnexpanded,
-	ContextFabricCoverageDetailFactReadFailed,
-	ContextFabricCoverageDetailFactUnconfigured,
 }
 
 func TestSourceTruncationCausesAreTheFrozenSet(t *testing.T) {
@@ -46,6 +44,10 @@ func TestSourceTruncationCausesAreTheFrozenSet(t *testing.T) {
 	}
 }
 
+// fact_read_failed and fact_unconfigured are refused on purpose: the registry
+// skips the read for an unconfigured kind and merges no facts for a failed
+// read, so neither can describe a fact-bearing truncated source.
+//
 // Equal counts on a depth row are a truncated source only for a source-level
 // cause; every other code in the vocabulary still reads "not a reduction".
 func TestEqualCountsOnADepthRowAreAdmittedOnlyForSourceTruncationCauses(t *testing.T) {
