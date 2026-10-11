@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -314,12 +315,24 @@ func resolveEvidence(subject SubjectRef, id string) (ref embeddedRef, ok bool, o
 		// "<incident_id>"; the stored id is "incident:<incident_id>"
 		// (devhealthsource/tables.go queryIncidents).
 		return ownOrGated(subject, contractsv1.ContextFabricSubjectIncident, "incident:"+raw)
+	case contractsv1.ContextFabricEvidenceEntityReviewV2:
+		// "<repo_id>:<number>:<review_id>", escaped: the review's full key,
+		// so it derives the stored id and is gated like any other review.
+		values, parsed := evidenceref.Parse(contractsv1.ContextFabricEvidenceEntityReviewV2, raw)
+		if !parsed || values[0] == "" || !decimalDigits(values[1]) || values[2] == "" {
+			return embeddedRef{}, false, false
+		}
+		canonical, omitted, err := identity.Derive(identity.KindPullRequestReview, values, nil)
+		if err != nil || omitted {
+			return embeddedRef{}, false, false
+		}
+		return ownOrGated(subject, contractsv1.ContextFabricSubjectPullRequestReview, canonical)
 	case contractsv1.ContextFabricEvidenceEntityReview:
-		// "<repo_id>:<review_id>" lacks the pull request number the stored
-		// id carries, so no canonical id can be derived. It is recognised
-		// only as the fact's OWN review, by the subject's own segments; any
-		// other review reference is unresolvable (withheld for a
-		// repository-restricted caller).
+		// The retired "<repo_id>:<review_id>" (a stored result's) lacks the
+		// pull request number the stored id carries, so no canonical id can
+		// be derived. It is recognised only as the fact's OWN review, by the
+		// subject's own segments; any other review reference is
+		// unresolvable (withheld for a repository-restricted caller).
 		if subject.Kind == contractsv1.ContextFabricSubjectPullRequestReview {
 			if segments, parsed := identity.Segments(identity.KindPullRequestReview, subject.CanonicalID); parsed && len(segments) == 3 &&
 				segments[0] != "" && segments[2] != "" && raw == segments[0]+":"+segments[2] {

@@ -82,6 +82,10 @@ type SourceRowPlan struct {
 //     persisted record only, forever; no producer mints them any more
 //     (contractsv1.RetiredEvidenceEntityType), and their ".v2" successors
 //     carry an injective grammar (internal/contextfabric/evidenceref).
+//   - review: RETIRED. Its id "<repo>:<review_id>" left out the pull request
+//     number of the review's key, so one ref named a review id on two pull
+//     requests of one repository. Stored refs are served from the persisted
+//     record; review.v2 carries the number.
 //   - project-team.v2 is NOT on the record: it reads the projector's
 //     ownership group (SourceRowRouteProjectTeam), unrestricted callers only.
 //   - commit, commit-file, graph, hotspot, complexity, ai-run, ai-artifact,
@@ -108,7 +112,8 @@ var sourceRowPlans = map[contractsv1.ContextFabricEvidenceEntityType]SourceRowPl
 	contractsv1.ContextFabricEvidenceEntityProjectTeamV2:        {Route: SourceRowRouteProjectTeam, Query: "project_teams.v2"},
 	contractsv1.ContextFabricEvidenceEntityPullRequest:          {Route: SourceRowRouteRepository, Query: "pull_requests.v1"},
 	contractsv1.ContextFabricEvidenceEntityRepository:           {Route: SourceRowRouteRepository, Query: "repository_freshness.v1"},
-	contractsv1.ContextFabricEvidenceEntityReview:               {Route: SourceRowRouteRepository, Query: "pull_request_reviews.v1"},
+	contractsv1.ContextFabricEvidenceEntityReview:               {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityReviewV2:             {Route: SourceRowRouteEncoded, Query: "pull_request_reviews.v2"},
 	contractsv1.ContextFabricEvidenceEntityReviewOutcome:        {Route: SourceRowRouteRecord},
 	contractsv1.ContextFabricEvidenceEntityTeam:                 {Route: SourceRowRouteOwnership, Query: "teams.v1"},
 	contractsv1.ContextFabricEvidenceEntityWorkItem:             {Route: SourceRowRouteRepository, Query: "work_items.v1"},

@@ -227,7 +227,7 @@ func TestHandleSourceEvidenceRowKeyedRefsResolveWithoutResultID(t *testing.T) {
 
 	for _, kind := range []contractsv1.ContextFabricEvidenceEntityType{
 		contractsv1.ContextFabricEvidenceEntityTeam, contractsv1.ContextFabricEvidenceEntityRepository, contractsv1.ContextFabricEvidenceEntityProject,
-		contractsv1.ContextFabricEvidenceEntityReview, contractsv1.ContextFabricEvidenceEntityIncident, contractsv1.ContextFabricEvidenceEntityCI,
+		contractsv1.ContextFabricEvidenceEntityReview, contractsv1.ContextFabricEvidenceEntityReviewV2, contractsv1.ContextFabricEvidenceEntityIncident, contractsv1.ContextFabricEvidenceEntityCI,
 		contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2,
 		contractsv1.ContextFabricEvidenceEntityWorkItemTeam, contractsv1.ContextFabricEvidenceEntityWorkItemDependency, contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy,
 	} {

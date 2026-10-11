@@ -792,7 +792,12 @@ import (
 // deadline, is served as a degraded answer with failure class
 // model_call_not_completed and retry_may_succeed, where it was an error with no
 // stored answer; a candidate saved under an earlier version cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v162"
+//
+// v162 -> v163: a review fact reads its own pull request's review only (the
+// key carries the pull request number; a review id recurs across one
+// repository's pull requests) and cites review.v2. A candidate saved under
+// v162 may hold another pull request's review state and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v163"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1050,7 +1055,8 @@ func bindingSafeKey(key string) bool {
 // id alone is no longer collision-safe across repos in the same org -- the
 // exact defect design brief D-1..D-5 close at the graph-projection
 // producers (internal/contextfabric/devhealthsource). v2Index closes the
-// same class here: it returns repo_id and the raw id JOINED with ':' (a
+// same class here: it returns every segment -- repo_id, then (for a review)
+// the pull request number, then the raw id -- JOINED with ':' (a
 // plain, unescaped composite -- these are Go-side map keys this package's
 // own SQL also builds with concat(toString(repo_id), ':', ...), never a
 // value that leaves this process, so no codec is needed on the join
@@ -1078,7 +1084,10 @@ func v2Index(subjects []contextfabric.SubjectRef, kind string) (ids []string, by
 			rejected++
 			continue
 		}
-		key := repoID + ":" + rawID
+		// Every segment of the key, in order: a review's pull request
+		// number is part of its key, and dropping it named every pull
+		// request's review with the same id.
+		key := strings.Join(segments, ":")
 		if !bindingSafeKey(key) {
 			rejected++
 			continue

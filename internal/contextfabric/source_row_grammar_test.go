@@ -150,6 +150,10 @@ func sites(keys ...string) map[string]int {
 	return out
 }
 
+// readRepository: a catalog locator names the row inside the repository its
+// read binds (repo_id), which is the ref's own repository.
+var readRepository = map[string]string{"repo_id": "bound by the read: the catalog statement filters repo_id = the ref's repository"}
+
 const (
 	noSourceRow = "no Context Fabric producer mints this kind: a packet catalog locator inside ev2 handles only"
 )
@@ -157,30 +161,29 @@ const (
 func producerGrammars() []producerGrammar {
 	return []producerGrammar{
 		// repository: the UUID alone.
-		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "concat/1", repoAnchored: true, sites: sites(
+		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "concat/1", repoAnchored: true, rowQuery: "repository_freshness.v1", keyColumns: []string{"id"}, sites: sites(
 			facts+"ci.go|readRepositoryAggregate", facts+"deployments.go|readRepositoryAggregate", facts+"flow.go|readRepositoryFlow",
 			facts+"health.go|ReadFacts", facts+"health.go|readProjectHealth*2", facts+"identity.go|ReadFacts*2",
 			facts+"investment_repo_mix.go|readRepositoryThemeMix", facts+"investment_units.go|readInvestmentUnits", facts+"investment_units.go|unitFact", facts+"metrics.go|readRepositoryMetrics*2",
 			source+"tables.go|queryRepositories", source+"teams_projects_edges.go|queryRepositoryTeams")},
-		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "sql/1", sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "sql/1", rowQuery: "repository_freshness.v1", keyColumns: []string{"id"}, sites: sites(catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "literal", fixture: true, sites: sites("internal/contextfabric/pginvestigation/paritytest/paritytest.go|RunCitedEvidenceSuite*2")},
-		// work item, pull request, review, CI run, deployment: <repo>:<one id>.
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "concat/2", repoAnchored: true, sites: sites(
+		// work item, pull request, CI run, deployment: <repo>:<one id>; the
+		// catalog's locator is the one id, read in the ref's repository.
+		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "concat/2", repoAnchored: true, rowQuery: "work_items.v1", keyColumns: []string{"repo_id", "work_item_id"}, sites: sites(
 			facts+"identity.go|ReadFacts*2", facts+"workitems.go|ReadFacts*3", source+"tables.go|queryWorkItems",
 			source+"issue_pull_request_link.go|queryIssuePullRequestLinks", source+"teams_projects_edges.go|querySubjectProjectMemberships", "internal/contextfabric/work_item_payload.go|canonicalWorkItemEvidenceRef")},
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "sql/1", sites: sites(catalog)},
-		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "concat/2", repoAnchored: true, sites: sites(
+		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "sql/1", rowQuery: "work_items.v1", keyColumns: []string{"work_item_id"}, keyExceptions: readRepository, sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "concat/2", repoAnchored: true, rowQuery: "pull_requests.v1", keyColumns: []string{"repo_id", "number"}, sites: sites(
 			facts+"investment_units.go|unitFact", facts+"pullrequests.go|ReadFacts", source+"issue_pull_request_link.go|queryIssuePullRequestLinks", source+"tables.go|scanPullRequestRow", source+"teams_projects_edges.go|querySubjectProjectMemberships")},
-		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "sql/1", sites: sites(catalog)},
-		{kind: contractsv1.ContextFabricEvidenceEntityReview, shape: "concat/2", repoAnchored: true, sites: sites(facts+"pullrequests.go|ReadFacts", source+"tables.go|queryPullRequestReviews")},
-		{kind: contractsv1.ContextFabricEvidenceEntityReview, shape: "sql/1", sites: sites(catalog)},
-		{kind: contractsv1.ContextFabricEvidenceEntityCI, shape: "concat/2", repoAnchored: true, sites: sites(facts+"ci.go|readRunStatus", source+"tables.go|queryCIRuns")},
-		{kind: contractsv1.ContextFabricEvidenceEntityCI, shape: "sql/1", sites: sites(catalog)},
-		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, shape: "concat/2", repoAnchored: true, sites: sites(facts+"deployments.go|readDeploymentStatus", source+"tables.go|queryDeployments")},
-		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, shape: "sql/1", sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "sql/1", rowQuery: "pull_requests.v1", keyColumns: []string{"number"}, keyExceptions: readRepository, sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityCI, shape: "concat/2", repoAnchored: true, rowQuery: "ci_pipeline_runs.v1", keyColumns: []string{"repo_id", "run_id"}, sites: sites(facts+"ci.go|readRunStatus", source+"tables.go|queryCIRuns")},
+		{kind: contractsv1.ContextFabricEvidenceEntityCI, shape: "sql/1", rowQuery: "ci_pipeline_runs.v1", keyColumns: []string{"run_id"}, keyExceptions: readRepository, sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, shape: "concat/2", repoAnchored: true, rowQuery: "deployments.v1", keyColumns: []string{"repo_id", "deployment_id"}, sites: sites(facts+"deployments.go|readDeploymentStatus", source+"tables.go|queryDeployments")},
+		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, shape: "sql/1", rowQuery: "deployments.v1", keyColumns: []string{"deployment_id"}, keyExceptions: readRepository, sites: sites(catalog)},
 		// incident: the id alone, keyed (org_id, id).
 		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "concat/1", rowQuery: "incidents.v1", keyColumns: []string{"id"}, sites: sites(facts+"incidents.go|ReadFacts", source+"tables.go|queryIncidents")},
-		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "sql/1", sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "sql/1", rowQuery: "incidents.v1", keyColumns: []string{"id"}, sites: sites(catalog)},
 
 		// team, project: organization rows authorized by ownership through
 		// the subject gate (CHAOS-7227).
@@ -245,6 +248,10 @@ func producerGrammars() []producerGrammar {
 			keyColumns: []string{"repo_id", "deployment_id", "incident_id", "source"}, sites: sites(source + "tables.go|queryDeploymentIncidentEdges")},
 		{kind: contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, shape: "sqlmint/4", repoAnchored: true, rowQuery: "deployment_incident_edges.v2",
 			keyColumns: []string{"repo_id", "deployment_id", "incident_id", "source"}, sites: sites(sourceRows, catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityReviewV2, shape: "mint/3", repoAnchored: true, rowQuery: "pull_request_reviews.v2",
+			keyColumns: []string{"repo_id", "number", "review_id"}, sites: sites(facts+"pullrequests.go|ReadFacts", source+"tables.go|queryPullRequestReviews")},
+		{kind: contractsv1.ContextFabricEvidenceEntityReviewV2, shape: "sqlmint/3", repoAnchored: true, rowQuery: "pull_request_reviews.v2",
+			keyColumns: []string{"repo_id", "number", "review_id"}, sites: sites(sourceRows, catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityProjectTeamV2, shape: "mint/4", keyByColumns: true,
 			keyColumns:    []string{"provider", "project_id", "team_id", "source"},
 			keyExceptions: map[string]string{"valid_from": "the ref names the projector's ownership GROUP: every assertion of (provider, project, team, source) aggregated"},
@@ -427,7 +434,7 @@ func passes(t *testing.T, g producerGrammar) (bool, string) {
 	table := rowTable(t, g)
 	switch {
 	case anchored && table == "":
-		return true, ""
+		return false, "repository-anchored with no row key declared"
 	case table == "":
 		return false, "row-anchored with no single-row key"
 	case len(orderByColumns(table)) == 0:
@@ -514,6 +521,35 @@ func TestSourceRowKeyCheckSeesADroppedKeyColumn(t *testing.T) {
 		return
 	}
 	t.Fatal("deployment-incident.v2 mint/4 is not listed")
+}
+
+// The key check runs on a repository-anchored grammar too. The retired review
+// ref "<repo>:<review_id>" is injective as a string but leaves out number, a
+// column of git_pull_request_reviews' key, so one ref named a review id on two
+// pull requests of one repository. Planted with its true key columns it
+// fails; planted with no row key declared it fails rather than passing
+// unchecked.
+func TestSourceRowKeyCheckSeesTheRetiredReviewGrammar(t *testing.T) {
+	retired := producerGrammar{kind: contractsv1.ContextFabricEvidenceEntityReview, shape: "concat/2", repoAnchored: true,
+		rowQuery: "pull_request_reviews.v2", keyColumns: []string{"repo_id", "review_id"}}
+	if gaps := keyGaps(t, retired); len(gaps) != 1 || gaps[0] != "number" {
+		t.Fatalf("the retired review grammar: gaps %v, want [number]", gaps)
+	}
+	if ok, _ := passes(t, retired); ok {
+		t.Fatal("the retired review grammar passed")
+	}
+	undeclared := retired
+	undeclared.rowQuery, undeclared.keyColumns = "", nil
+	if ok, _ := passes(t, undeclared); ok {
+		t.Fatal("a repository-anchored grammar with no row key declared passed unchecked")
+	}
+	for _, g := range producerGrammars() {
+		if g.kind == contractsv1.ContextFabricEvidenceEntityReviewV2 {
+			if ok, why := passes(t, g); !ok {
+				t.Fatalf("review.v2 (%s) fails: %s", g.shape, why)
+			}
+		}
+	}
 }
 
 // The collision search sees a bare join (codex r2's seed class), and the
