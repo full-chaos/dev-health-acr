@@ -2,12 +2,15 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // The time-in-state fields read through the production provider against real
@@ -36,10 +39,10 @@ func TestStatusSinceAgainstRealClickHouse(t *testing.T) {
 		}
 		subjects = append(subjects, workItemSubject(repoID, id))
 	}
-	transition := func(org, repo, id, from, to string, at time.Time) {
+	transition := func(org, repo, id, _, to string, at time.Time) {
 		t.Helper()
-		if err := direct.Exec(ctx, `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, provider, from_status, to_status, from_status_raw, to_status_raw, actor, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			repo, id, at, "jira", from, to, from, to, "a", now, org); err != nil {
+		if err := direct.Exec(ctx, `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, to_status, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?)`,
+			repo, id, at, to, now, org); err != nil {
 			t.Fatalf("seed transition %s: %v", id, err)
 		}
 	}
@@ -78,5 +81,30 @@ func TestStatusSinceAgainstRealClickHouse(t *testing.T) {
 		if b := f["status_since_basis"].String; b == nil || *b != want || !f["status_since"].Null || !f["status_duration_seconds"].Null {
 			t.Fatalf("%s: fields = %+v, want null since/duration with no_transition_recorded", id, f)
 		}
+	}
+}
+
+// The statement runs unchanged against the server for the two scope shapes,
+// and the raw server error is the failure text: the provider path reports a
+// sanitized failure, which would hide a malformed statement.
+func TestStatusSinceStatementRunsAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	_, direct := sharedClickHouseFixture(t)
+	scopes := map[string]readers.AuthorizationScope{
+		"zero":     {},
+		"ids":      {GrantedRepositoryIDs: []string{"5b1c7e0e-2f56-4a53-9d0a-7a1f0c9d0101"}},
+		"selector": {RepositorySelectors: &readers.RepositorySelectorScope{Granted: readers.RepositorySelectorSet{ExactSlugs: []string{"acme/a"}}}},
+	}
+	for name, scope := range scopes {
+		sql, bindings := devhealthfacts.StatusSinceStatementForTest(scope, readers.Settings{})
+		args := []any{clickhousedriver.Named("org_id", "org-direct"), clickhousedriver.Named("ids", []string{"5b1c7e0e-2f56-4a53-9d0a-7a1f0c9d0101:w-1"})}
+		for _, b := range bindings {
+			args = append(args, clickhousedriver.Named(b.Name, b.Value))
+		}
+		rows, err := direct.Query(ctx, sql, args...)
+		if err != nil {
+			t.Fatalf("%s: server rejected the statement: %v\n%s", name, err, strings.TrimSpace(sql))
+		}
+		_ = rows.Close()
 	}
 }
