@@ -418,6 +418,19 @@ type FactProvider interface {
 	ReadFacts(context.Context, storage.Principal, FactQuery) (FactProviderResult, error)
 }
 
+// FactPrerequisiteLoader is implemented by a provider whose read depends on a
+// cached prerequisite that is loaded cold once and is bounded on its own. The
+// registry runs it BEFORE the capability's clock starts, so a cold load never
+// spends the capability budget. The returned context carries what the load
+// resolved, and the provider's read runs on it, so the read uses the loaded
+// prerequisite and never loads it again inside the clock. Its error is not
+// served: the loader logs it once, and the provider's own read keeps its
+// failure paths. A decorator over a provider must forward this method (the
+// registry reaches it only through the registered value).
+type FactPrerequisiteLoader interface {
+	LoadPrerequisites(context.Context, storage.Principal, FactQuery) (context.Context, error)
+}
+
 type FactReadFailure struct {
 	State  SourceState
 	Reason string
@@ -1256,6 +1269,13 @@ func (r *FactCapabilityRegistry) readProvider(ctx context.Context, principal sto
 	timeout := registered.capability.Timeout
 	if timeout <= 0 {
 		timeout = r.defaultTimeout
+	}
+	if loader, ok := registered.provider.(FactPrerequisiteLoader); ok {
+		// The loader logs its own failure once; the read below takes the
+		// provider's failure path (never "timed out").
+		if loaded, _ := loader.LoadPrerequisites(ctx, principal, query); loaded != nil {
+			ctx = loaded
+		}
 	}
 	providerCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
