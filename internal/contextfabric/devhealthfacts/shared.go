@@ -811,7 +811,12 @@ import (
 // v165 -> v166: a work item's status fact adds status_since, status_duration_seconds and
 // status_since_basis; a candidate saved under v165 holds a status fact without the time in
 // the current status and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v166"
+//
+// v166 -> v167: with the anchor binding count switch on, a follow-up whose
+// admitted carried binding (or redeemed anchor receipt) names another anchor
+// kind than the model states counts, discovers and captures under the
+// binding's kind, so a stored count answer can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v167"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
