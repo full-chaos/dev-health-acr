@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func selectorAsk(t *testing.T, engine *Engine, projects, teams []string) InvestigationResult {
@@ -204,5 +206,56 @@ func TestAnswerReuseScopeIdentityAttributionReadsEachKeyOnce(t *testing.T) {
 	}
 	if len(store.lookups) < 2 {
 		t.Fatalf("lookups = %v, want the scoped key and the unscoped probe", store.lookups)
+	}
+}
+
+type axisKeyRecordingStore struct {
+	*resultStoreStub
+	keys []string
+}
+
+func (s *axisKeyRecordingStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, snapshot SourceWatermarkSnapshot, epoch RebuildEpoch, timeAxisKey string, identity ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64, parent string, semantic SemanticStateWrite) error {
+	s.keys = append(s.keys, timeAxisKey)
+	return s.resultStoreStub.Save(ctx, principal, result, snapshot, epoch, timeAxisKey, identity, prompts, authorities, graphEpoch, parent, semantic)
+}
+
+// A subjectless work-item tuple terminal is keyed without the request scope,
+// as the decisive tuple save is, so a request under other selectors finds it.
+func TestWorkItemTupleTerminalSaveIsKeyedWithoutTheRequestScope(t *testing.T) {
+	t.Parallel()
+	saveKey := func(slugs, projects, teams []string) string {
+		state := validWorkItemTupleSemanticState(t)
+		interpretation := bootstrapInterpretation()
+		interpretation.Shape = ShapeDiscoveredCohort
+		interpretation.SubjectTerms = []string{"Project Alpha"}
+		interpreter := &countingInterpreter{interpretation: interpretation, family: QuestionFamilyOutcome{
+			Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel,
+			Frame: state.Frame, WinningSampleIndex: 0,
+			WinningSample: FamilySample{ModelFamily: QuestionFamilyScopedCohortStatus, ScopeAnchorKind: SubjectProject, ScopeAnchorTerm: "Project Alpha"},
+		}}
+		store := &axisKeyRecordingStore{resultStoreStub: &resultStoreStub{}}
+		graph := graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+		engine := mustReuseTestEngine(t, EngineDependencies{Interpreter: interpreter, Graph: graph, Results: store, Telemetry: &recordingTelemetry{}})
+		request := validInvestigationRequestWithConfirmedWindow()
+		request.Question = "What is the status of the work items in Project Alpha?"
+		request.RequestedScope.RepositorySlugs = slugs
+		request.RequestedScope.ProjectIDs = projects
+		request.RequestedScope.TeamIDs = teams
+		if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
+			t.Fatalf("Investigate error = %v", err)
+		}
+		if len(store.keys) != 1 {
+			t.Fatalf("saves = %v, want one terminal save", store.keys)
+		}
+		return store.keys[0]
+	}
+	unscoped := saveKey(nil, nil, nil)
+	for name, key := range map[string]string{
+		"selectors":  saveKey(nil, []string{"proj-a"}, []string{"team-a"}),
+		"repository": saveKey([]string{"acme/repo-25"}, nil, nil),
+	} {
+		if key != unscoped {
+			t.Errorf("%s: terminal tuple save keyed %q, want the scope-free %q", name, key, unscoped)
+		}
 	}
 }
