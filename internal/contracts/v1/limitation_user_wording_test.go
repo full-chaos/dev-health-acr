@@ -106,3 +106,61 @@ func TestEverySubjectKindNounPairIsExact(t *testing.T) {
 		}
 	}
 }
+
+func TestKindSentenceRecognisersRejectEveryNonNounSegment(t *testing.T) {
+	kind := ContextFabricSubjectRepository
+	other := ContextFabricSubjectTeam
+	singular := ContextFabricSubjectKindNoun(kind, 1)
+	plural := ContextFabricSubjectKindNoun(kind, 2)
+	token := string(ContextFabricSubjectPullRequest)
+	for _, testCase := range []struct {
+		name     string
+		sentence string
+		recog    func(string) bool
+	}{
+		{"grouping refusal planned plural", contextFabricGroupingRefusalLimitationPrefix + plural + contextFabricGroupingRefusalLimitationMiddle + ContextFabricSubjectKindNoun(other, 1) + contextFabricGroupingRefusalLimitationSuffix, IsContextFabricGroupingRefusalLimitation},
+		{"grouping refusal source plural", contextFabricGroupingRefusalLimitationPrefix + ContextFabricSubjectKindNoun(other, 1) + contextFabricGroupingRefusalLimitationMiddle + plural + contextFabricGroupingRefusalLimitationSuffix, IsContextFabricGroupingRefusalLimitation},
+		{"grouping refusal planned empty", contextFabricGroupingRefusalLimitationPrefix + contextFabricGroupingRefusalLimitationMiddle + singular + contextFabricGroupingRefusalLimitationSuffix, IsContextFabricGroupingRefusalLimitation},
+		{"grouping refusal source token", contextFabricGroupingRefusalLimitationPrefix + singular + contextFabricGroupingRefusalLimitationMiddle + token + contextFabricGroupingRefusalLimitationSuffix, IsContextFabricGroupingRefusalLimitation},
+		{"grouping refusal planned token", contextFabricGroupingRefusalLimitationPrefix + token + contextFabricGroupingRefusalLimitationMiddle + singular + contextFabricGroupingRefusalLimitationSuffix, IsContextFabricGroupingRefusalLimitation},
+		{"unplaceable plural", contextFabricGroupingRefusalLimitationPrefix + plural + contextFabricGroupingUnplaceableLimitationSuffix, IsContextFabricGroupingUnplaceableLimitation},
+		{"unplaceable token", contextFabricGroupingRefusalLimitationPrefix + token + contextFabricGroupingUnplaceableLimitationSuffix, IsContextFabricGroupingUnplaceableLimitation},
+		{"unplaceable empty", contextFabricGroupingRefusalLimitationPrefix + contextFabricGroupingUnplaceableLimitationSuffix, IsContextFabricGroupingUnplaceableLimitation},
+		{"unread plural", contextFabricGroupReadUnreadLimitationPrefix + plural + contextFabricGroupReadUnreadLimitationSuffix, IsContextFabricGroupReadUnreadLimitation},
+		{"unread token", contextFabricGroupReadUnreadLimitationPrefix + token + contextFabricGroupReadUnreadLimitationSuffix, IsContextFabricGroupReadUnreadLimitation},
+		{"unread empty", contextFabricGroupReadUnreadLimitationPrefix + contextFabricGroupReadUnreadLimitationSuffix, IsContextFabricGroupReadUnreadLimitation},
+		{"over bound plural", contextFabricGroupListOverBoundLimitationPrefix + plural + contextFabricGroupListOverBoundLimitationSuffix, IsContextFabricGroupListOverBoundLimitation},
+		{"over bound token", contextFabricGroupListOverBoundLimitationPrefix + token + contextFabricGroupListOverBoundLimitationSuffix, IsContextFabricGroupListOverBoundLimitation},
+		{"over bound empty", contextFabricGroupListOverBoundLimitationPrefix + contextFabricGroupListOverBoundLimitationSuffix, IsContextFabricGroupListOverBoundLimitation},
+		{"refusal singular", contextFabricRefusalBasisLimitationPrefix + singular + contextFabricRefusalBasisLimitationMiddle, IsContextFabricRefusalBasisLimitation},
+		{"refusal token", contextFabricRefusalBasisLimitationPrefix + token + contextFabricRefusalBasisLimitationMiddle, IsContextFabricRefusalBasisLimitation},
+		{"refusal empty", contextFabricRefusalBasisLimitationPrefix + contextFabricRefusalBasisLimitationMiddle, IsContextFabricRefusalBasisLimitation},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.recog(testCase.sentence) {
+				t.Fatalf("recognised %q", testCase.sentence)
+			}
+			if IsContextFabricServiceAuthoredLimitation(testCase.sentence) {
+				t.Fatalf("service-authored registry accepts %q", testCase.sentence)
+			}
+		})
+	}
+}
+
+func TestKindNounLookupRejectsNonMembers(t *testing.T) {
+	if got := ContextFabricSubjectKindNoun(ContextFabricSubjectKind("not_a_kind"), 1); got != "" {
+		t.Fatalf("noun for a non-member = %q", got)
+	}
+	if got := ContextFabricSubjectKindNoun("", 2); got != "" {
+		t.Fatalf("noun for the empty kind = %q", got)
+	}
+	if _, ok := contextFabricSubjectKindFromNoun("", 1); ok {
+		t.Fatal("the empty noun resolved to a kind")
+	}
+	if _, ok := contextFabricSubjectKindFromNoun(ContextFabricSubjectKindNoun(ContextFabricSubjectRepository, 2), 1); ok {
+		t.Fatal("a plural noun resolved under the singular form")
+	}
+	if _, ok := contextFabricSubjectKindFromNoun(ContextFabricSubjectKindNoun(ContextFabricSubjectRepository, 1), 2); ok {
+		t.Fatal("a singular noun resolved under the plural form")
+	}
+}

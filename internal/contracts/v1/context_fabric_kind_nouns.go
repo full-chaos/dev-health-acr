@@ -42,9 +42,6 @@ func ContextFabricSubjectKindNoun(kind ContextFabricSubjectKind, count int) stri
 // contextFabricSubjectKindFromNoun inverts ContextFabricSubjectKindNoun for the
 // same count form, so a sentence parse recovers a vocabulary member or nothing.
 func contextFabricSubjectKindFromNoun(noun string, count int) (ContextFabricSubjectKind, bool) {
-	if noun == "" {
-		return "", false
-	}
 	for _, kind := range contextFabricSubjectKinds {
 		if ContextFabricSubjectKindNoun(kind, count) == noun {
 			return kind, true
