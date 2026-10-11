@@ -760,6 +760,16 @@
         "served": 48,
         "label": "48 of 120 workload facts read were given to answer synthesis",
         "raw": "synthesis_input_bounded:workload"
+      },
+      {
+        "detail_id": "cov-failure-01",
+        "source": "context-fabric:synthesis",
+        "code": "synthesis_model_failed",
+        "degrading": false,
+        "failure_class": "model_output_invalid",
+        "retry_hint": "retry_may_succeed",
+        "label": "The model call that writes the answer failed (model output invalid); retry may succeed",
+        "raw": "synthesis_model_failed:model_output_invalid"
       }
     ]
   },

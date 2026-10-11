@@ -73,6 +73,16 @@ func TestAModelCallThatFailsIsServedAsADegradedAnswer(t *testing.T) {
 			if len(result.Warnings) != 1 || result.Warnings[0] != wantWarning {
 				t.Fatalf("warnings = %q, want [%q]", result.Warnings, wantWarning)
 			}
+			wantHint := map[string]string{"model_output_invalid": "retry_may_succeed", "model_receipt_unrecorded": "retry_may_succeed", "synthesis_rejected": "retry_unlikely_to_help"}[testCase.wantClass]
+			var failureDetails []cf.CoverageDetail
+			for _, detail := range result.Coverage.Details {
+				if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed {
+					failureDetails = append(failureDetails, detail)
+				}
+			}
+			if len(failureDetails) != 1 || string(failureDetails[0].FailureClass) != testCase.wantClass || string(failureDetails[0].RetryHint) != wantHint || failureDetails[0].Degrading {
+				t.Fatalf("coverage.details failure rows = %+v, want one non-degrading %s with %s", failureDetails, testCase.wantClass, wantHint)
+			}
 			if len(result.Drivers) != 0 || len(result.StrongestPressures) != 0 || len(result.RemainingWork) != 0 || len(result.ReadinessGaps) != 0 || len(result.Conflicts) != 0 {
 				t.Fatalf("the answer carries model-authored content: %+v", result)
 			}

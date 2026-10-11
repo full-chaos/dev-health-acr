@@ -349,6 +349,8 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		label = fmt.Sprintf("At least %d %s found; %d included", coverageDetailIntOrZero(d.Declared), humanizeVocabularyToken(string(d.Kind)), coverageDetailIntOrZero(d.Served))
 	case ContextFabricCoverageDetailSynthesisInputBounded:
 		label = fmt.Sprintf("%d of %d %s facts read were given to answer synthesis", coverageDetailIntOrZero(d.Served), coverageDetailIntOrZero(d.Declared), kind)
+	case ContextFabricCoverageDetailSynthesisModelFailed:
+		label = "The model call that writes the answer failed (" + humanizeVocabularyToken(string(d.FailureClass)) + "); " + humanizeVocabularyToken(string(d.RetryHint))
 	default:
 		label = "Coverage was limited"
 	}

@@ -344,6 +344,13 @@ const (
 	// is already partial and carries the bounded-input limitation, and a
 	// second degrading row would count the one cut twice.
 	ContextFabricCoverageDetailSynthesisInputBounded ContextFabricCoverageDetailCode = "synthesis_input_bounded"
+
+	// ContextFabricCoverageDetailSynthesisModelFailed: the model call that
+	// writes the answer failed after the facts were read, and the answer is
+	// served without model prose. FailureClass names the failure and
+	// RetryHint says whether asking again may succeed. A disclosure, never a
+	// second degradation: the answer's status already says degraded.
+	ContextFabricCoverageDetailSynthesisModelFailed ContextFabricCoverageDetailCode = "synthesis_model_failed"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -376,6 +383,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailRequirementNotEvaluable,
 	ContextFabricCoverageDetailGraphNoMemberFound,
 	ContextFabricCoverageDetailSynthesisInputBounded,
+	ContextFabricCoverageDetailSynthesisModelFailed,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -554,6 +562,12 @@ type ContextFabricCoverageDetail struct {
 	Declared *int                     `json:"declared,omitempty"`
 	Served   *int                     `json:"served,omitempty"`
 
+	// FailureClass and RetryHint are additive fields for
+	// ContextFabricCoverageDetailSynthesisModelFailed ONLY, required together
+	// when that code is present and absent on every other code.
+	FailureClass ContextFabricSynthesisFailureClass `json:"failure_class,omitempty"`
+	RetryHint    ContextFabricRetryHint             `json:"retry_hint,omitempty"`
+
 	// Label is REQUIRED: the server-composed terse plain-language phrase
 	// (ComposeCoverageDetailLabel) — what renders when no Phrasing exists.
 	Label string `json:"label"`
@@ -594,6 +608,9 @@ type coverageDetailFieldRule struct {
 	// never singly -- only ContextFabricCoverageDetailKindCensusTruncated
 	// uses either field.
 	requireDeclaredServed bool
+	// requireFailure: FailureClass and RetryHint are required TOGETHER; only
+	// ContextFabricCoverageDetailSynthesisModelFailed uses either.
+	requireFailure bool
 }
 
 var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetailFieldRule{
@@ -677,6 +694,9 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailSynthesisInputBounded: {
 		requireFactKind: true, allowFactKind: true, requireDeclaredServed: true,
 	},
+	// Failure class and retry hint, both REQUIRED, and nothing else: the model
+	// call failed in this way, and asking again may or may not help.
+	ContextFabricCoverageDetailSynthesisModelFailed: {requireFailure: true},
 	// Kind, state and origin, all three REQUIRED, and nothing else: the row
 	// says "this kind, read for this population, came back in this state".
 	// No count (the row is per read, not per subject), no scope fields (the
@@ -724,9 +744,9 @@ func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode)
 		// row's own equal-counts exception. Named rather than left to the
 		// default for the same reason `fact_read_origin_state` is above.
 		return false
-	case ContextFabricCoverageDetailSynthesisInputBounded:
-		// A disclosure about what answer synthesis was given, never a
-		// population a value was computed over.
+	case ContextFabricCoverageDetailSynthesisInputBounded, ContextFabricCoverageDetailSynthesisModelFailed:
+		// A disclosure about the synthesis step, never a population a value
+		// was computed over.
 		return false
 	default:
 		// `requirement_read_not_planned` deliberately does NOT qualify. It
@@ -784,7 +804,8 @@ func coverageDetailCodeQualifiesSourceTruncation(code ContextFabricCoverageDetai
 func ContextFabricCoverageDetailCodeMayDegrade(code ContextFabricCoverageDetailCode) bool {
 	switch code {
 	case ContextFabricCoverageDetailFactPruned, ContextFabricCoverageDetailGraphValidityUnbounded,
-		ContextFabricCoverageDetailFactReadOriginState, ContextFabricCoverageDetailSynthesisInputBounded:
+		ContextFabricCoverageDetailFactReadOriginState, ContextFabricCoverageDetailSynthesisInputBounded,
+		ContextFabricCoverageDetailSynthesisModelFailed:
 		return false
 	default:
 		return true
@@ -835,6 +856,12 @@ func (d ContextFabricCoverageDetail) Validate() error {
 	}
 	if d.Kind != "" && !validContextFabricSubjectKind(d.Kind) {
 		return fmt.Errorf("coverage detail kind %q is invalid", d.Kind)
+	}
+	if d.FailureClass != "" && !validSynthesisFailureClass(d.FailureClass) {
+		return fmt.Errorf("coverage detail failure class %q is invalid", d.FailureClass)
+	}
+	if d.RetryHint != "" && !validRetryHint(d.RetryHint) {
+		return fmt.Errorf("coverage detail retry hint %q is invalid", d.RetryHint)
 	}
 	if d.Declared != nil && *d.Declared < 0 {
 		return fmt.Errorf("coverage detail declared must be non-negative")
@@ -922,7 +949,91 @@ func (d ContextFabricCoverageDetail) Validate() error {
 	if !rule.requireDeclaredServed && (d.Declared != nil || d.Served != nil) {
 		return fmt.Errorf("coverage detail code %q forbids declared/served", d.Code)
 	}
+	if rule.requireFailure && (d.FailureClass == "" || d.RetryHint == "") {
+		return fmt.Errorf("coverage detail code %q requires failure_class and retry_hint together", d.Code)
+	}
+	if !rule.requireFailure && (d.FailureClass != "" || d.RetryHint != "") {
+		return fmt.Errorf("coverage detail code %q forbids failure_class/retry_hint", d.Code)
+	}
 	return nil
+}
+
+// ContextFabricSynthesisFailureClass is the closed vocabulary of model call
+// failures served as a degraded answer.
+type ContextFabricSynthesisFailureClass string
+
+const (
+	// ContextFabricSynthesisFailureModelOutputInvalid: the provider's output
+	// could not be used and the runtime does not retry it.
+	ContextFabricSynthesisFailureModelOutputInvalid ContextFabricSynthesisFailureClass = "model_output_invalid"
+	// ContextFabricSynthesisFailureRejected: every draft the runtime was
+	// allowed to ask for failed the service's own bounds.
+	ContextFabricSynthesisFailureRejected ContextFabricSynthesisFailureClass = "synthesis_rejected"
+	// ContextFabricSynthesisFailureReceiptUnrecorded: the model call ran but
+	// its receipt was not recorded, so no text from it is served.
+	ContextFabricSynthesisFailureReceiptUnrecorded ContextFabricSynthesisFailureClass = "model_receipt_unrecorded"
+)
+
+// ContextFabricRetryHint is the closed vocabulary of what a caller may expect
+// from asking the same question again after a model call failure.
+type ContextFabricRetryHint string
+
+const (
+	// ContextFabricRetryMaySucceed: the failure sits in the provider or the
+	// receipt store, not in the question; a later attempt may be answered.
+	ContextFabricRetryMaySucceed ContextFabricRetryHint = "retry_may_succeed"
+	// ContextFabricRetryUnlikelyToHelp: every draft broke the service's bounds
+	// over these facts; the same question over the same facts is likely to
+	// fail the same way.
+	ContextFabricRetryUnlikelyToHelp ContextFabricRetryHint = "retry_unlikely_to_help"
+)
+
+var contextFabricSynthesisFailureClasses = [...]ContextFabricSynthesisFailureClass{
+	ContextFabricSynthesisFailureModelOutputInvalid,
+	ContextFabricSynthesisFailureRejected,
+	ContextFabricSynthesisFailureReceiptUnrecorded,
+}
+
+var contextFabricRetryHints = [...]ContextFabricRetryHint{
+	ContextFabricRetryMaySucceed,
+	ContextFabricRetryUnlikelyToHelp,
+}
+
+// ContextFabricSynthesisFailureClasses returns the closed class vocabulary in
+// published order (array return = caller gets a copy).
+func ContextFabricSynthesisFailureClasses() [len(contextFabricSynthesisFailureClasses)]ContextFabricSynthesisFailureClass {
+	return contextFabricSynthesisFailureClasses
+}
+
+func validSynthesisFailureClass(class ContextFabricSynthesisFailureClass) bool {
+	for _, known := range contextFabricSynthesisFailureClasses {
+		if known == class {
+			return true
+		}
+	}
+	return false
+}
+
+func validRetryHint(hint ContextFabricRetryHint) bool {
+	for _, known := range contextFabricRetryHints {
+		if known == hint {
+			return true
+		}
+	}
+	return false
+}
+
+// ContextFabricRetryHintFor is the one derivation of the retry hint from a
+// failure class. A class it does not know is an error, never a default: a new
+// class must say whether asking again helps.
+func ContextFabricRetryHintFor(class ContextFabricSynthesisFailureClass) (ContextFabricRetryHint, error) {
+	switch class {
+	case ContextFabricSynthesisFailureModelOutputInvalid, ContextFabricSynthesisFailureReceiptUnrecorded:
+		return ContextFabricRetryMaySucceed, nil
+	case ContextFabricSynthesisFailureRejected:
+		return ContextFabricRetryUnlikelyToHelp, nil
+	}
+	return "", fmt.Errorf("synthesis failure class %q has no retry hint", class)
 }
 
 // validateCoverageDetails is the write-path check over the whole Details
