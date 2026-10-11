@@ -595,7 +595,12 @@ func hasPlanningOnlyReadRequirement(rows []ContextFabricPlanRequirementOutcomeRo
 		// validate.
 		switch row.Stage {
 		case ContextFabricOutcomeStagePlanning:
-			seeded[row.Requirement] = true
+			// A read the member kind has no producer for does not apply, and
+			// reading it as an unevaluated read would make an answer that
+			// lost nothing partial.
+			if row.Outcome != ContextFabricRequirementNotApplicable {
+				seeded[row.Requirement] = true
+			}
 		case ContextFabricOutcomeStageAssembledResult:
 			// ASSEMBLED RESULT ONLY. `projection` and `reuse` used to count
 			// here too, and that was wrong: a projection row is a BYTE-BUDGET

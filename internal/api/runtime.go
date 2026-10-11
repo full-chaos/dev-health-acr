@@ -127,6 +127,11 @@ type RuntimeDependencies struct {
 	// audited, and answer a clean 503 for every request, exactly like the
 	// investigations route does with a nil Investigator.
 	OrgModelConfigs contextfabric.OrgModelConfigStore
+	// ServiceModelOpen lets every credential caller run an investigation on
+	// the deployment's own model (ACR_MCP_SERVICE_MODEL_DEFAULT=on). Off,
+	// only an organization with the acr_service_model entitlement or its own
+	// model configuration may; see service_model_gate.go.
+	ServiceModelOpen bool
 	// OrgModelRuntimeEvictor is optional and may be nil even when
 	// OrgModelConfigs is non-nil (e.g. investigations disabled, so no
 	// modelruntimeresolver.Resolver was ever constructed to evict from --
