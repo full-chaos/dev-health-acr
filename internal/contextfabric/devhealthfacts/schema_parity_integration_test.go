@@ -43,7 +43,7 @@ import (
 // from devhealthschema so a column added to a provider's SELECT without
 // being declared there fails loudly rather than silently going unasserted.
 var factSchemaTables = []string{
-	"repos", "work_items", "git_pull_requests", "git_pull_request_reviews",
+	"repos", "work_items", "work_item_transitions", "git_pull_requests", "git_pull_request_reviews",
 	"ci_pipeline_runs", "deployments", "operational_incidents", "work_item_dependencies",
 	"repo_metrics_daily", "repo_change_failure_daily", "compounding_risk_daily", "estimate_coverage_metrics_daily",
 	"capacity_forecasts", "recommendations_daily",
@@ -346,7 +346,7 @@ func TestLiveFinalKeepsTheVersionColumnWinner(t *testing.T) {
 	// selector relation, including for an organization-wide principal. Keep
 	// this FINAL fixture production-shaped by creating the metadata and
 	// ownership/link tables that the same statement joins.
-	for _, statement := range devhealthschema.DDL("repos", "work_items", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
+	for _, statement := range devhealthschema.DDL("repos", "work_items", "work_item_transitions", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
