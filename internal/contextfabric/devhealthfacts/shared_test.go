@@ -615,8 +615,8 @@ func TestQueryVersionMovedPastTheZeroOwnerCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 156 {
-		t.Fatalf("QueryVersion = %q, want v156 or later -- an answer saved when a zero-owner repository count was unavailable holds that refusal and must not be reused", devhealthfacts.QueryVersion)
+	if number < 157 {
+		t.Fatalf("QueryVersion = %q, want v157 or later -- an answer saved when a zero-owner repository count was unavailable holds that refusal and must not be reused", devhealthfacts.QueryVersion)
 	}
 }
 

@@ -65,7 +65,7 @@ func t4TeamRollupCases() []t4Case {
 		{name: "blockers/team", kind: contextfabric.FactBlockers, subjects: team, tables: []fakeTable{
 			ownership(),
 			{match: "FROM work_item_dependencies", rows: perRepo(func(_ int, key string) []any {
-				return []any{key, int64(2), int64(3)}
+				return []any{key, int64(2), int64(3), int64(1)}
 			})},
 		}},
 	}
