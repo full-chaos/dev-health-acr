@@ -83,6 +83,11 @@ type sourcePlan struct {
 	// then, so the ignored line is not flushed (CHAOS-8290).
 	yielded *bool
 
+	// reconcile, when set, re-reads the source's CURRENT derived rows in key
+	// order after `after` (reconcile.go). Optional.
+	reconcile       func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, after string, limit int) ([]candidate, bool, error)
+	reconcilePeriod time.Duration
+
 	// overlap and window (CHAOS-7263) bound the caught-up trailing re-read
 	// (overlap.go). overlap <= 0 or a nil window disables it. windowScope is
 	// the memo key nextBatch derives from the checkpoint: organization AND
@@ -224,6 +229,7 @@ func (p sourcePlan) nextBatchPage(ctx context.Context, checkpoint contextfabric.
 		p.ignored.flush(ctx, p.logger, p.source, orgID, "abandoned")
 	}
 	p.window.settle(p.windowScope, state.Ack)
+	p.window.settleReconcile(p.windowScope, state.Ack, p.clock())
 	state.Ack = ""
 	return p.pagedBatch(ctx, orgID, checkpoint.Cursor, state, false)
 }
@@ -391,6 +397,9 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			// re-read the trailing overlap window for rows that landed
 			// behind the frontier (CHAOS-7263).
 			p.noteCaughtUp(ctx, orgID)
+			if batch, published, err := p.reconcileBatch(ctx, orgID, cursor, state); err != nil || published {
+				return batch, published, err
+			}
 			return p.overlapBatch(ctx, orgID, cursor, state)
 		}
 		sortCandidates(all)
