@@ -1986,8 +1986,8 @@ func validateRequirementJoin(r ContextFabricInvestigationResult) error {
 
 // validateRowAgainstPlanRequirement checks an outcome row against what its plan
 // requirement itself declares, so the join is more than an identity-string
-// match. It reads only fields the requirement carries (its kind and its
-// unavailable reason) and the obligation-to-kind mirror this package already
+// match. It reads only the kind the requirement declares and the
+// obligation-to-kind mirror this package already
 // holds; which coordinates name a countable population stays with the
 // derivation, never here.
 func validateRowAgainstPlanRequirement(row ContextFabricPlanRequirementOutcomeRow, requirement ContextFabricPlanRequirement) error {
@@ -1999,15 +1999,6 @@ func validateRowAgainstPlanRequirement(row ContextFabricPlanRequirementOutcomeRo
 		return fmt.Errorf(
 			"outcome row for requirement %q is for the computed obligation %q, but the answer plan declares the requirement as %q",
 			row.Requirement, row.Obligation, requirement.Kind)
-	}
-	// A population qualification is a claim about a population the requirement
-	// served; a requirement the plan declares unavailable served none. Other
-	// causes on such a row are legal (a budget narrowing applies to every
-	// row), so only the population-qualifying codes are refused.
-	if requirement.Unavailable != "" && coverageDetailCodeQualifiesPopulation(row.CauseCoverage) {
-		return fmt.Errorf(
-			"outcome row for requirement %q qualifies a population (%q), but the answer plan declares the requirement unavailable (%q)",
-			row.Requirement, row.CauseCoverage, requirement.Unavailable)
 	}
 	return nil
 }
