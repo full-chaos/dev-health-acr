@@ -121,9 +121,15 @@ func (f *teamRollupFixture) seed(ctx context.Context, direct clickhousedriver.Co
 		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', '', NULL)`,
 			id, repoUUID(label), teamRollupOrg, "title "+id, at)
 	}
+	itemWithStatus := func(id, label, status string) {
+		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, ?, '', ?, '', 'linear', '', NULL)`,
+			id, repoUUID(label), teamRollupOrg, "title "+id, status, at)
+	}
 	item("wi-a1", "repo-a")
 	item("wi-a2", "repo-a")
 	item("wi-b1", "repo-b")
+	itemWithStatus("wi-a3", "repo-a", "done")
+	itemWithStatus("wi-b2", "repo-b", "canceled")
 	dependency := func(source, target, relationship string) {
 		exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, last_synced) VALUES (?, ?, ?, ?, ?)`,
 			teamRollupOrg, source, target, relationship, at)
@@ -133,6 +139,8 @@ func (f *teamRollupFixture) seed(ctx context.Context, direct clickhousedriver.Co
 	dependency("wi-b1", "wi-a1", "BLOCKS") // the same pair under another case counts once
 	dependency("wi-a2", "wi-b1", "blocks")
 	dependency("wi-a1", "wi-a2", "parent_of") // not a blocker
+	dependency("wi-a3", "wi-a1", "blocks")    // blocker already done
+	dependency("wi-b2", "wi-b1", "blocks")    // blocker canceled
 }
 
 func (f *teamRollupFixture) read(kind contextfabric.FactKind, timeContext contextfabric.TimeContext, subjects ...contextfabric.SubjectRef) contextfabric.FactProviderResult {
@@ -284,6 +292,23 @@ func TestTeamRollupsAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("blockers named status", func(t *testing.T) {
+		provider := findProvider(t, f.providers, contextfabric.FactBlockers)
+		result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: teamRollupOrg}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{two},
+			Parameters: map[string]string{"blocker_status": "done"},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts: %v", err)
+		}
+		fields := factFor(t, result, two).Fields
+		wantInt(t, fields, "blocked_work_items_current", 1)
+		wantInt(t, fields, "blocker_dependencies_current", 1)
+		if got := fields["blocker_status_basis"].String; got == nil || *got != "done" {
+			t.Fatalf("blocker_status_basis = %#v, want done", fields["blocker_status_basis"])
+		}
+	})
+
 	t.Run("incident org-wide figure is withheld from a repository-restricted caller", func(t *testing.T) {
 		restricted := f.readAs(storage.Principal{OrgID: teamRollupOrg, RepositoryScopes: []string{"acme/repo-a"}}, contextfabric.FactIncidents, f.window, two)
 		fields := factFor(t, restricted, two).Fields
@@ -305,6 +330,12 @@ func TestTeamRollupsAgainstRealClickHouse(t *testing.T) {
 		rows := wantTableRows(t, fields, "repository_breakdown")
 		wantInt(t, rows[repoUUID("repo-a")], "blocker_dependencies_current", 2)
 		wantInt(t, rows[repoUUID("repo-b")], "blocker_dependencies_current", 1)
+		// A done or canceled blocker no longer blocks: it is excluded from the
+		// counts and counted apart so the filter is visible.
+		wantInt(t, fields, "blocker_dependencies_excluded_by_status_current", 2)
+		if got := fields["blocker_status_basis"].String; got == nil || *got != "open" {
+			t.Fatalf("blocker_status_basis = %#v, want open", fields["blocker_status_basis"])
+		}
 
 		asOf := ts(2026, 9, 15, 0, 0, 0)
 		historical := f.read(contextfabric.FactBlockers, contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf}, two)
