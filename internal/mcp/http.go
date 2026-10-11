@@ -21,6 +21,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/logsanitize"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/version"
@@ -52,6 +53,7 @@ const (
 	HTTPAuthRateLimited             = eventspec.MCPHTTPAuthRateLimited
 	HTTPAuthUpstreamIncompatible    = eventspec.MCPHTTPAuthUpstreamIncompatible
 	HTTPAuthUpstreamUnavailable     = eventspec.MCPHTTPAuthUpstreamUnavailable
+	HTTPAuthRequestBudgetExceeded   = eventspec.MCPHTTPAuthRequestBudgetExceeded
 )
 
 // Gate decisions of the edge failure gate.
@@ -600,7 +602,7 @@ func (h *HTTPHandler) emitRequestLine(ctx context.Context, line requestLine, rec
 	}
 	result := HTTPResultOK
 	switch {
-	case line.authOutcome == HTTPAuthUpstreamUnavailable || line.authOutcome == HTTPAuthUpstreamIncompatible:
+	case line.authOutcome == HTTPAuthUpstreamUnavailable || line.authOutcome == HTTPAuthUpstreamIncompatible || line.authOutcome == HTTPAuthRequestBudgetExceeded:
 		result = HTTPResultAuthUnavailable
 	case line.authOutcome != HTTPAuthAdmitted:
 		result = HTTPResultAuthDenied
@@ -698,6 +700,8 @@ func classifyResolveFailure(err error) (string, time.Duration) {
 			return HTTPAuthInvalidCredential, 0
 		case apiErr.HTTPStatus == http.StatusForbidden:
 			return HTTPAuthInsufficientScope, 0
+		case apiErr.HTTPStatus == http.StatusTooManyRequests && apiErr.RateLimit == contractsv1.RateLimitRequestBudget:
+			return HTTPAuthRequestBudgetExceeded, apiErr.RetryAfter
 		case apiErr.HTTPStatus == http.StatusTooManyRequests:
 			return HTTPAuthRateLimited, apiErr.RetryAfter
 		case apiErr.HTTPStatus == http.StatusUpgradeRequired:
@@ -733,6 +737,7 @@ var authRefusal = map[string]struct {
 	HTTPAuthRateLimited:             {http.StatusTooManyRequests, "", "too many authentication attempts"},
 	HTTPAuthUpstreamIncompatible:    {http.StatusBadGateway, "", "the hosted API is incompatible with this server"},
 	HTTPAuthUpstreamUnavailable:     {http.StatusServiceUnavailable, "", "the hosted API could not decide the credential"},
+	HTTPAuthRequestBudgetExceeded:   {http.StatusTooManyRequests, "", "the organization's request budget is spent; the credential was authenticated and the request was refused by the budget; retry after the interval"},
 }
 
 type refusalBody struct {

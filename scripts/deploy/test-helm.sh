@@ -807,6 +807,11 @@ grep -qF "image: \"${mcp_image}\"" <<<"$mcp_deploy" || fail_gate "acr-mcp: Deplo
 grep -qF 'args: ["serve"]' <<<"$mcp_deploy" || fail_gate "acr-mcp: Deployment must run the serve command"
 grep -qE '^\s+path: /healthz\s*$' <<<"$mcp_deploy" || fail_gate "acr-mcp: liveness probe must use /healthz"
 grep -qE '^\s+path: /readyz\s*$' <<<"$mcp_deploy" || fail_gate "acr-mcp: readiness probe must use /readyz"
+# The startup probe must not depend on acr-api (/readyz does): a slow acr-api
+# at install would restart the pod. Readiness keeps /readyz.
+mcp_probe_path() { awk -v p="$1" '$1 == p":"{f=1;next} f&&$1=="path:"{print $2;exit}' <<<"$mcp_deploy"; }
+[[ "$(mcp_probe_path startupProbe)" == "/healthz" ]] || fail_gate "acr-mcp: startup probe must use /healthz"
+[[ "$(mcp_probe_path readinessProbe)" == "/readyz" ]] || fail_gate "acr-mcp: readiness probe must stay on /readyz"
 grep -qE '^\s+containerPort: 8081\s*$' <<<"$mcp_deploy" || fail_gate "acr-mcp: container must listen on 8081"
 grep -qF 'automountServiceAccountToken: false' <<<"$mcp_deploy" || fail_gate "acr-mcp: pod must not mount a service-account token"
 if grep -qE 'secretKeyRef|secretName|secretRef|projected:|ACR_API_TOKEN|serviceAccountToken' <<<"$mcp_deploy"; then
