@@ -590,7 +590,7 @@
       "entitlement_requirement": "agentContextRuntimeEntitlement",
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
-        "CHAOS-7072 (S1a) serves data_catalog: the catalogue is built for the caller (grant class decides the operation list; the caller section carries scopes and grant class only, never repository names or grant counts). A caller without data:read sees the operation list with available=false, reason scope_missing_data_read. Unknown sections parameter = 400 invalid_request."
+        "CHAOS-7072 (S1a) serves data_catalog: the catalogue is built for the caller (grant class decides the operation list; the caller section carries scopes, the repository grant class and effective_access, never repository names or grant counts). A caller without data:read gets operations.available=false, reason scope_missing_data_read, and effective_access=no_data_read. Unknown sections parameter = 400 invalid_request."
       ]
     },
     {
