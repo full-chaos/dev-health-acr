@@ -73,3 +73,18 @@ func TestFindReusable_FollowsTheServingEpochWatermarkOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok, "the serving epoch's watermark moved: the answer must expire")
 }
+
+// An organization that never ran a lifecycle build has no lifecycle row and
+// serves epoch 0.
+func TestSourceWatermarkSnapshot_NoLifecycleRowReadsEpochZero(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-serving-epoch-legacy"}
+	setEpochCheckpointWatermark(t, ctx, db, principal.OrgID, 0, "linear", "legacy-wm")
+	setEpochCheckpointWatermark(t, ctx, db, principal.OrgID, 3, "linear", "orphan-wm")
+
+	store := mustReuseStore(t, db, time.Hour)
+	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"linear": "legacy-wm"}, map[string]string(snapshot))
+}
