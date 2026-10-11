@@ -571,10 +571,12 @@ func TestChaos5405_TheCensusGivesWayToTheBytesOfAnOverrunAndSaysSo(t *testing.T)
 		t.Fatalf("rows=%d omitted=%d, want 0 and 3", len(all.FactScopeCensus), all.FactScopeCensusOmitted)
 	}
 
-	// An overrun the whole census cannot cover is left to the answer levers:
-	// cutting the census would cost the disclosure and cure nothing.
-	if _, ok := shedFactScopeCensusToBytes(result, 1<<20); ok {
-		t.Fatal("a census that cannot cover the overrun was shed anyway")
+	// An overrun the whole census cannot cover cuts the whole census anyway:
+	// the answer levers that follow then have less of the answer to cut, and
+	// the count says what was removed.
+	whole, ok := shedFactScopeCensusToBytes(result, 1<<20)
+	if !ok || whole.FactScopeCensus != nil || whole.FactScopeCensusOmitted != 3 {
+		t.Fatalf("ok=%v rows=%v omitted=%d, want the whole census cut and counted (3)", ok, whole.FactScopeCensus, whole.FactScopeCensusOmitted)
 	}
 	if _, ok := shedFactScopeCensusToBytes(InvestigationResult{}, 100); ok {
 		t.Fatal("a result with no census reported a shed")

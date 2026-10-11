@@ -209,6 +209,7 @@ LEFT JOIN work_graph_issue_pr AS l FINAL ON l.org_id = w.org_id AND l.work_item_
 LEFT JOIN git_pull_requests AS pr FINAL ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number
 LEFT JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id
 WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+  AND ifNull(w.type, '') NOT IN ('pr', 'merge_request')
 GROUP BY link_state, repo_id_str, repo_slug
 ORDER BY link_state DESC, repo_id_str
 LIMIT ` + strconv.Itoa(limitPlusOne)
@@ -270,10 +271,10 @@ func (e *ScopeExpander) incidentsForRepositories(ctx context.Context, principal 
 	statement := `SELECT e.incident_id, groupUniqArray(concat(toString(e.repo_id), '|', ifNull(r.repo, '')))
 FROM work_graph_deployment_incident_edges AS e FINAL
 LEFT JOIN (SELECT id, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS r ON r.id = e.repo_id
-WHERE toString(e.org_id) = {org_id:String} AND e.repo_id IS NOT NULL AND e.incident_id NOT IN ('', 'none')
+WHERE toString(e.org_id) = {org_id:String} AND e.repo_id IS NOT NULL AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')
   AND e.incident_id IN (
     SELECT incident_id FROM work_graph_deployment_incident_edges FINAL
-    WHERE toString(org_id) = {org_id:String} AND repo_id IS NOT NULL AND toString(repo_id) IN {repo_ids:Array(String)}
+    WHERE toString(org_id) = {org_id:String} AND repo_id IS NOT NULL AND deployment_id != '' AND toString(repo_id) IN {repo_ids:Array(String)}
   )
   AND e.incident_id IN (SELECT id FROM operational_incidents FINAL WHERE org_id = {org_id:String} AND is_deleted = 0)
 GROUP BY e.incident_id

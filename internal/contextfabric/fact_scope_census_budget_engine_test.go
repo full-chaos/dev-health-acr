@@ -14,7 +14,7 @@ import (
 // censusBudgetEngine serves a small answer over a REAL registry and the
 // production eligibility table, with a project and a team as roots and every
 // requirement kind the table names, at a given byte budget.
-func censusBudgetEngine(t *testing.T, maxSerializedBytes int64) (*Engine, int) {
+func censusBudgetEngine(t *testing.T, maxSerializedBytes int64, maxItems, claims int) (*Engine, int) {
 	t.Helper()
 	var providers []FactProvider
 	var requirements []FactRequirement
@@ -53,6 +53,12 @@ func censusBudgetEngine(t *testing.T, maxSerializedBytes int64) (*Engine, int) {
 			draft.SubjectResolution = SubjectResolution{}
 			draft.Status = InvestigationNoMatch
 			draft.Coverage = Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
+			for i := 0; i < claims; i++ {
+				draft.ClaimedFacts = append(draft.ClaimedFacts, ClaimedFact{
+					ClaimID: "claim_" + string(rune('a'+i)), Kind: FactStatus, Subject: scopeProject, Field: "status",
+					Value: ScalarValue{String: ptrString("green")},
+				})
+			}
 			draft.Versions = VersionSet{
 				Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
 				InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
@@ -61,7 +67,7 @@ func censusBudgetEngine(t *testing.T, maxSerializedBytes int64) (*Engine, int) {
 		}),
 		Telemetry: &recordingTelemetry{},
 	}, EngineOptions{
-		ServiceVersion: "acr-test", MaxSerializedBytes: maxSerializedBytes,
+		ServiceVersion: "acr-test", MaxSerializedBytes: maxSerializedBytes, MaxItems: maxItems,
 		Now:         func() time.Time { return time.Unix(100, 0).UTC() },
 		NewResultID: func() string { return "result_12345678" },
 	})
@@ -78,7 +84,7 @@ func censusBudgetEngine(t *testing.T, maxSerializedBytes int64) (*Engine, int) {
 // rows and say how many, never refuse an answer over its own diagnostics.
 func TestTheCensusGivesWayInsideTheBudgetFitBeforeAnAnswerIsRefused(t *testing.T) {
 	t.Parallel()
-	engine, _ := censusBudgetEngine(t, contractsv1.ContextFabricSerializedBytesMin)
+	engine, _ := censusBudgetEngine(t, contractsv1.ContextFabricSerializedBytesMin, 0, 0)
 	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v -- an answer must not be refused for its census", err)
@@ -96,5 +102,26 @@ func TestTheCensusGivesWayInsideTheBudgetFitBeforeAnAnswerIsRefused(t *testing.T
 	}
 	if err := result.Validate(); err != nil {
 		t.Fatalf("a shed census must still be servable: %v", err)
+	}
+}
+
+// TestTheCensusGivesWayWhenItemsAndBytesAreBothExceeded: the items axis takes
+// the overrun label when both are exceeded, and the census must still give
+// way on the bytes -- the answer is served or cut by the item lever, never
+// refused over census rows it could have shed.
+func TestTheCensusGivesWayWhenItemsAndBytesAreBothExceeded(t *testing.T) {
+	t.Parallel()
+	engine, _ := censusBudgetEngine(t, contractsv1.ContextFabricSerializedBytesMin, 1, 3)
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v -- an answer over on items and bytes must not be refused for its census", err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	t.Logf("served %d bytes, claims=%d census rows=%d omitted=%d", len(encoded), len(result.ClaimedFacts), len(result.FactScopeCensus), result.FactScopeCensusOmitted)
+	if len(encoded) > contractsv1.ContextFabricSerializedBytesMin {
+		t.Fatalf("served %d bytes against a %d-byte budget", len(encoded), contractsv1.ContextFabricSerializedBytesMin)
 	}
 }

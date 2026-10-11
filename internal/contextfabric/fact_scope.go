@@ -2750,10 +2750,12 @@ func keepFactScopeCensusRows(records []contractsv1.ContextFabricFactScopeCensusR
 //
 // The census is diagnostics about the answer, not evidence in it, so it is
 // the first thing to give way, and it gives way DISCLOSED: the count of
-// cells it no longer lists is added to FactScopeCensusOmitted. It reports
-// false, and returns the result unchanged, when the census cannot cover the
-// overrun on its own (shedding then would cost the disclosure and cure
-// nothing).
+// cells it no longer lists is added to FactScopeCensusOmitted. When the whole
+// census is not enough to cover the overrun, it is cut whole anyway: the
+// answer levers that follow then need to cut less of the answer's own
+// content, and a census nobody can read beside a refusal costs nothing. It
+// reports false, and returns the result unchanged, only when there is no
+// census to cut.
 func shedFactScopeCensusToBytes(result InvestigationResult, over int64) (InvestigationResult, bool) {
 	records := result.FactScopeCensus
 	if over <= 0 || len(records) == 0 {
@@ -2774,9 +2776,10 @@ func shedFactScopeCensusToBytes(result InvestigationResult, over int64) (Investi
 		}
 		saved += int64(len(encoded)) + 1
 		cut++
-	}
-	if saved < over {
-		return result, false
+		if cut == len(order) {
+			// Every row gone: the array and its key leave the document too.
+			saved += int64(len(`,"fact_scope_census":[]`))
+		}
 	}
 	shed := result
 	shed.FactScopeCensus = keepFactScopeCensusRows(records, order[:len(order)-cut])

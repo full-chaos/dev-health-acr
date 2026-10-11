@@ -189,7 +189,10 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// diagnostics, not evidence: before any answer lever runs, its least
 	// relevant rows are cut by the bytes of the overrun and the cut is
 	// counted in fact_scope_census_omitted.
-	if measured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes && budget.MaxSerializedBytes > 0 {
+	// The test is the BYTES, not the overrun label: when items and bytes are
+	// both exceeded the items axis takes the label, and an answer that is
+	// also over on bytes still needs the census to give way.
+	if budget.MaxSerializedBytes > 0 && measured.Measurement.Bytes > budget.MaxSerializedBytes {
 		if shed, ok := shedFactScopeCensusToBytes(result, measured.Measurement.Bytes-budget.MaxSerializedBytes); ok {
 			shedInput := shed
 			if params.WorkItemCensus != nil {
@@ -673,7 +676,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		return InvestigationResult{}, retryPending, err
 	}
 	// The census gives way first on the retry pass too; see the first pass.
-	if retryMeasured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes && budget.MaxSerializedBytes > 0 {
+	if budget.MaxSerializedBytes > 0 && retryMeasured.Measurement.Bytes > budget.MaxSerializedBytes {
 		if shed, ok := shedFactScopeCensusToBytes(retried, retryMeasured.Measurement.Bytes-budget.MaxSerializedBytes); ok {
 			shedInput := shed
 			if params.WorkItemCensus != nil {
