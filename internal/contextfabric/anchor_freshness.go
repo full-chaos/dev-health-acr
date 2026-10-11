@@ -14,10 +14,11 @@ package contextfabric
 // serve and never projected. A watermark over those would expire a carried
 // anchor whenever any row in the organization moved, so they are left out.
 //
-// ACQUISITION. The engine reads the freshness once per turn, before the first
-// graph read that can prove an anchor: before the window gate, so the
-// offers-only resolution a gate discards is covered, and before the decisive
-// resolution. It reads it whether or not answer reuse is enabled, and only
+// ACQUISITION. The engine reads the freshness once per turn, as soon as the
+// binding tracker exists and before the first graph read the binder treats as
+// proof: the anchor membership verifier a redeemed receipt runs during
+// structure canonicalization, the window gate's offers-only resolution, and
+// the decisive resolution. It reads it whether or not answer reuse is enabled, and only
 // while the shadow binding runs.
 //
 // UNMOVED IS NOT FRESH. Two equal watermarks mean ownership did not move
@@ -129,6 +130,10 @@ func anchorOwnershipMovement(from AnchorBinding, now AnchorFreshness) AnchorOwne
 }
 
 // validateAnchorFreshness bounds a persisted freshness.
+//
+// A freshness's serving epoch is NOT required to equal the binding's graph
+// epoch: the first is read live, the second comes from a leased cache, and
+// the two can lag one lease apart right after a swap.
 func validateAnchorFreshness(f AnchorFreshness) error {
 	if !f.Recorded {
 		if f != (AnchorFreshness{}) {
