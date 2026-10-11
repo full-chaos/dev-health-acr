@@ -603,7 +603,7 @@ func TestQueryVersionMovedPastTheTruncatedSearchLabelCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 154 {
+	if number < 153 {
 		t.Fatalf("QueryVersion = %q, want v153 or later -- an answer saved when a label-named repository count was withheld after a truncated lexical search holds that refusal and must not be reused", devhealthfacts.QueryVersion)
 	}
 }
@@ -615,8 +615,8 @@ func TestQueryVersionMovedPastTheZeroOwnerCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 154 {
-		t.Fatalf("QueryVersion = %q, want v154 or later -- an answer saved when a zero-owner repository count was unavailable holds that refusal and must not be reused", devhealthfacts.QueryVersion)
+	if number < 155 {
+		t.Fatalf("QueryVersion = %q, want v155 or later -- an answer saved when a zero-owner repository count was unavailable holds that refusal and must not be reused", devhealthfacts.QueryVersion)
 	}
 }
 
@@ -640,7 +640,7 @@ func TestQueryVersionMovedPastTheSelectorScopeKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 154 {
+	if number < 153 {
 		t.Fatalf("QueryVersion = %q, want v153 or later -- an answer saved before project and team selectors were part of the reuse key carries no selector identity and must not be reused", devhealthfacts.QueryVersion)
 	}
 }

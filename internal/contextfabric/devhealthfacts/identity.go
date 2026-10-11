@@ -2,8 +2,12 @@ package devhealthfacts
 
 import (
 	"context"
+	"log/slog"
+	"strconv"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -43,6 +47,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	// how the two drifted apart.
 	budget := newFactBudget()
 	rejectedCount := 0
+	ownershipUnread, ownersCut := 0, 0
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
 	defer func() {
@@ -87,6 +92,19 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 			})
 		}
 		budget.observe(len(rows))
+		// An ownership read failure never fails the identity read: the facts
+		// are served without owning_teams and the result says ownership is
+		// unknown (owningTeamsUnreadReason), never that there are no owners.
+		omitted, err := p.attachOwningTeams(ctx, orgID, facts)
+		if err != nil {
+			ownershipUnread = len(repoIDs)
+			slog.Warn("context_fabric_owning_teams_read_failed",
+				"producer", "devhealthfacts.identity",
+				"repositories", ownershipUnread,
+				"error", contextfabric.SanitizeLogAttr(err.Error()),
+			)
+		}
+		ownersCut = omitted
 	}
 
 	workItemIDs, workItemBySubject, workItemRejected := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
@@ -125,7 +143,37 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 
 	state, emptyReason := currentAxisReadState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
+	if ownersCut > 0 {
+		recordOwningTeamsTruncated(ownersCut)
+		result.OmittedCount += ownersCut
+		result.Truncated = true
+		result.State = contextfabric.SourceTruncated
+		mergeFactReadReason(&result, owningTeamsTruncatedReason)
+	}
+	if ownershipUnread > 0 {
+		result.OmittedCount += ownershipUnread
+		result.Truncated = true
+		result.State = contextfabric.SourceTruncated
+		mergeFactReadReason(&result, owningTeamsUnreadReason)
+	}
 	return result, nil
+}
+
+// owningTeamsUnreadReason is the closed-vocabulary reason an identity read
+// discloses when the ownership read failed: the repositories are served
+// without owning_teams, and ownership is unknown rather than empty.
+const owningTeamsUnreadReason = "owning_teams_unread"
+
+// owningTeamsTruncatedReason is the reason an identity read discloses when a
+// repository has more owning teams than its table carries; the omitted count
+// is on the fact and on the result.
+const owningTeamsTruncatedReason = "owning_teams_truncated"
+
+func recordOwningTeamsTruncated(omitted int) {
+	slog.Warn("context_fabric_owning_teams_truncated",
+		"producer", "devhealthfacts.identity",
+		"omitted", omitted,
+	)
 }
 
 // MembershipProvider implements contextfabric.FactProvider for
@@ -237,4 +285,90 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	state, emptyReason := currentAxisReadState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
 	return result, nil
+}
+
+// ownerChunkRepos is how many repositories one ownership query covers. The
+// per-repository cap (LIMIT .. BY) is the only limit that can bite: the query's
+// own row limit is chunk size times that cap, so it never cuts a repository
+// short, and a repository with more owners than a fact table carries is
+// disclosed with its true owner total.
+const ownerChunkRepos = 100
+
+// ownerRowsPerRepo is the owner rows one repository's table carries.
+const ownerRowsPerRepo = contextfabric.MaxFactValueRows
+
+// owningTeamsStatement lists the active teams that currently own each
+// repository: the one ownership resolver (ownedRepositoriesSource), the
+// current-validity window, and the teams table for the name. Never
+// membership. Each row also carries the repository's true owner total.
+func owningTeamsStatement() string {
+	return withRowLimitOf(`SELECT repo_key, team_id, name, toInt64(count() OVER (PARTITION BY repo_key)) AS owners_total
+FROM (
+	SELECT DISTINCT own.repo_key AS repo_key, toString(own.team_id) AS team_id, t.name AS name
+	FROM `+ownedRepositoriesSource(ownershipValidityPredicate(factTimeBound{}))+` AS own
+	INNER JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String} AND `+devhealthschema.ActiveTeamPredicate("")+`) AS t ON toString(t.id) = toString(own.team_id)
+	WHERE own.repo_key IN {ids:Array(String)}
+)
+ORDER BY repo_key, team_id
+LIMIT `+strconv.Itoa(ownerRowsPerRepo)+` BY repo_key`, ownerChunkRepos*ownerRowsPerRepo)
+}
+
+// attachOwningTeams adds the owning_teams table to every repository identity
+// fact in facts and returns how many owner rows the per-repository cap left
+// out. A repository no team owns keeps no table: missing is not empty.
+func (p *IdentityProvider) attachOwningTeams(ctx context.Context, orgID string, facts []contextfabric.CanonicalFact) (int, error) {
+	byRepo := make(map[string]int, len(facts))
+	ids := make([]string, 0, len(facts))
+	for i, fact := range facts {
+		if fact.Subject.Kind != contextfabric.SubjectRepository {
+			continue
+		}
+		id := strings.TrimPrefix(fact.Subject.CanonicalID, "repository:")
+		byRepo[id] = i
+		ids = append(ids, id)
+	}
+	rowsByRepo := map[string][]contextfabric.FactValueRow{}
+	totalByRepo := map[string]int64{}
+	for start := 0; start < len(ids); start += ownerChunkRepos {
+		end := min(start+ownerChunkRepos, len(ids))
+		err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadRepositoryOwningTeams", owningTeamsStatement(), orgID, ids[start:end], func(row contextpacket.ClickHouseRowScanner) error {
+			var repoID, teamID, teamName string
+			var total int64
+			if err := row.Scan(&repoID, &teamID, &teamName, &total); err != nil {
+				return err
+			}
+			rowsByRepo[repoID] = append(rowsByRepo[repoID], contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
+				"team_id":   contextfabric.StringFactValue(teamID),
+				"team_name": stringOrNull(teamName),
+			}})
+			totalByRepo[repoID] = total
+			return nil
+		})
+		if err != nil {
+			return 0, readFailure("query repository owning teams", err)
+		}
+	}
+	omittedTotal := 0
+	for repoID, i := range byRepo {
+		rows := rowsByRepo[repoID]
+		if len(rows) == 0 {
+			continue
+		}
+		emitted := map[string]contextfabric.FactValue{
+			"owning_teams": contextfabric.TableFactValue(contextfabric.FactTable{
+				Shape:        contextfabric.FactTableBreakdown,
+				Key:          []string{"team_id"},
+				Observations: []string{"team_name"},
+				Rows:         rows,
+			}),
+		}
+		if omitted := int(totalByRepo[repoID]) - len(rows); omitted > 0 {
+			emitted["owning_teams_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+			omittedTotal += omitted
+		}
+		for name, value := range emitted {
+			facts[i].Fields[name] = value
+		}
+	}
+	return omittedTotal, nil
 }

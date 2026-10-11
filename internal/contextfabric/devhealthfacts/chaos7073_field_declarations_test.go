@@ -330,6 +330,14 @@ func t4Cases() []t4Case {
 	add(t4Case{name: "identity/repository", kind: contextfabric.FactIdentity, subjects: repo, tables: []fakeTable{
 		{match: "FROM repos", rows: [][]any{{"repo-1", "example-org/widget-service", "synthetic"}}},
 	}})
+	add(t4Case{name: "identity/repository_owning_teams", kind: contextfabric.FactIdentity, subjects: repo, tables: []fakeTable{
+		{match: "team_repo_ownership", rows: [][]any{{"repo-1", "team-a", "Alpha", int64(1)}}},
+		{match: "FROM repos", rows: [][]any{{"repo-1", "example-org/widget-service", "synthetic"}}},
+	}})
+	add(t4Case{name: "identity/repository_owning_teams_capped", kind: contextfabric.FactIdentity, subjects: repo, tables: []fakeTable{
+		{match: "team_repo_ownership", rows: cappedOwnerRows("repo-1")},
+		{match: "FROM repos", rows: [][]any{{"repo-1", "example-org/widget-service", "synthetic"}}},
+	}})
 	add(t4Case{name: "identity/repository_no_labels", kind: contextfabric.FactIdentity, subjects: repo, tables: []fakeTable{
 		{match: "FROM repos", rows: [][]any{{"repo-1", "", ""}}},
 	}})
@@ -711,7 +719,10 @@ func TestCHAOS7120SafetyMarksOnEntityDeclarations(t *testing.T) {
 			if field.Score || field.Aggregate {
 				t.Errorf("%s %s: Score=%v Aggregate=%v, want neither on an entity kind", kind, field.Name, field.Score, field.Aggregate)
 			}
-			if field.Type == contextfabric.FactFieldTable {
+			// identity.owning_teams is the one entity table: a repository's
+			// owning teams, whose team_id column is a declared team reference
+			// the read gate checks like any other.
+			if field.Type == contextfabric.FactFieldTable && !(kind == contextfabric.FactIdentity && field.Name == "owning_teams") {
 				t.Errorf("%s %s: entity kinds emit no tables", kind, field.Name)
 			}
 		}
@@ -764,4 +775,13 @@ type t4StubProvider struct{ capability contextfabric.FactCapability }
 func (p *t4StubProvider) Capability() contextfabric.FactCapability { return p.capability }
 func (p *t4StubProvider) ReadFacts(context.Context, storage.Principal, contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
 	return contextfabric.FactProviderResult{}, nil
+}
+
+// cappedOwnerRows is a full table of owners for a repository with one more.
+func cappedOwnerRows(repoID string) [][]any {
+	rows := make([][]any, 0, contextfabric.MaxFactValueRows)
+	for i := 0; i < contextfabric.MaxFactValueRows; i++ {
+		rows = append(rows, []any{repoID, fmt.Sprintf("team-%03d", i), "Team", int64(contextfabric.MaxFactValueRows + 1)})
+	}
+	return rows
 }
