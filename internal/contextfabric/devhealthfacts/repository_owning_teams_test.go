@@ -57,7 +57,7 @@ func TestIdentityProviderEmitsOwningTeamsFromCurrentRepoOwnership(t *testing.T) 
 			last = q
 		}
 	}
-	for _, want := range []string{"valid_to IS NULL", "FROM teams FINAL", "is_active = 1", "lower(r.repo) = lower(o.repo_full_name)"} {
+	for _, want := range []string{"valid_to IS NULL", "FROM teams FINAL", "WHERE org_id = {org_id:String} AND is_active = 1) AS t", "lower(r.repo) = lower(o.repo_full_name)"} {
 		if !strings.Contains(last.statement, want) {
 			t.Fatalf("ownership statement lacks %q:\n%s", want, last.statement)
 		}
