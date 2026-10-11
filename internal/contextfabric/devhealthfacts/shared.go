@@ -787,10 +787,16 @@ import (
 // longer served. A candidate saved under v160 may hold such a member and must
 // not be reused.
 //
-// v161 -> v162: every canonical fact the registry accepts carries a deterministic id and a
+// v161 -> v162: a model call that ends on a transient class once the runtime's
+// attempts are used, or that the composition reserve ends before the request
+// deadline, is served as a degraded answer with failure class
+// model_call_not_completed and retry_may_succeed, where it was an error with no
+// stored answer; a candidate saved under an earlier version cannot hold it.
+//
+// v162 -> v163: every canonical fact the registry accepts carries a deterministic id and a
 // synthesized claim may cite it (fact_id); a candidate saved under an earlier version holds
 // facts and claims without ids.
-const QueryVersion = "devhealthfacts.clickhouse.v162"
+const QueryVersion = "devhealthfacts.clickhouse.v163"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

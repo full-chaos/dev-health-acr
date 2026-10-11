@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
@@ -774,6 +775,9 @@ func (t SlogEngineTelemetry) RecordSynthesisModelFailure(ctx context.Context, pr
 	}, requestIDLogAttrs(ctx)...)
 	if event.Rule != "" {
 		args = append(args, "work_item_rule", SanitizeLogAttr(event.Rule), "stage", SanitizeLogAttr(event.Stage))
+	}
+	if event.ReserveFired {
+		args = append(args, "composition_reserve_s", SynthesisCompositionReserveSeconds, "composition_reserve_fired", true, "call_deadline", SanitizeLogAttr(event.CallDeadline.UTC().Format(time.RFC3339Nano)))
 	}
 	t.logger.Log(ctx, slog.LevelWarn, synthesisModelFailureMessage, args...)
 }
