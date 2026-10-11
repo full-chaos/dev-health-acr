@@ -510,7 +510,7 @@ func TestChaos7072CatalogPerCallerClass(t *testing.T) {
 			t.Fatalf("%s: the K14-A refusal is not listed", tc.class)
 		}
 		caller := body["caller"].(map[string]any)
-		if len(caller) != 2 || caller["grant_class"] != tc.class {
+		if len(caller) != 3 || caller["grant_class"] != tc.class || caller["effective_access"] != "data_read" {
 			t.Fatalf("%s: caller section %v", tc.class, caller)
 		}
 		if strings.Contains(response.Body.String(), hostedTestRepository) {

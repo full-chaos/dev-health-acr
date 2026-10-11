@@ -2040,6 +2040,13 @@
                   "unrestricted",
                   "restricted"
                 ]
+              },
+              "effective_access": {
+                "enum": [
+                  "data_read",
+                  "no_data_read",
+                  "not_servable"
+                ]
               }
             }
           },
