@@ -1276,7 +1276,7 @@ func (x *gqlRun) answer(ctx context.Context, planned []plannedRoot, data []byte,
 		}
 		// 9b: only what the client selected (plus the added row ids).
 		narrowed := op.narrowedTo(append(append([]string{}, p.selected...), p.added...))
-		filtered, err := FilterResponse(narrowed, wrapped)
+		filtered, err := FilterResponseFor(narrowed, wrapped, p.tree)
 		if err != nil {
 			return x.upstream(CallUpstreamError, UpstreamDecode), nil
 		}

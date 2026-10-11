@@ -641,6 +641,11 @@ func buildOutputs(schema *ast.Schema, opDef *ast.OperationDefinition, decl opera
 			return nil, nil, fmt.Errorf("output exception %q is not selected by the document", path)
 		}
 	}
+	for path := range decl.EmitSubjects {
+		if !known[path] {
+			return nil, nil, fmt.Errorf("emit subject %q is not selected by the document", path)
+		}
+	}
 	outputs := []directread.OutputPath{}
 	withheld := []directread.WithheldOutput{}
 	var failing []string
@@ -655,7 +660,11 @@ func buildOutputs(schema *ast.Schema, opDef *ast.OperationDefinition, decl opera
 			failing = append(failing, n.Path)
 			continue
 		}
-		outputs = append(outputs, directread.OutputPath{Path: n.Path, Type: n.Type, Leaf: n.Leaf, Exception: exception, BeyondDocument: n.Beyond})
+		var emit *directread.SubjectEmit
+		if e, ok := decl.EmitSubjects[n.Path]; ok {
+			emit = &e
+		}
+		outputs = append(outputs, directread.OutputPath{Path: n.Path, Type: n.Type, Leaf: n.Leaf, Exception: exception, BeyondDocument: n.Beyond, EmitSubject: emit})
 	}
 	if len(failing) > 0 {
 		return nil, nil, fmt.Errorf("%w: %s", errPersonOutput, strings.Join(failing, ", "))
