@@ -51,7 +51,7 @@ var factSchemaTables = []string{
 	// landscape.go). projects/team_project_ownership back their PROJECT
 	// subject branches specifically (codex R3 P2: those branches were
 	// otherwise never parity-tested against production typing).
-	"work_item_metrics_daily", "ic_landscape_rolling_30d", "projects", "team_project_ownership", "teams",
+	"work_item_metrics_daily", "work_item_measure_capability", "ic_landscape_rolling_30d", "projects", "team_project_ownership", "teams",
 	// CHAOS-4398: readTeamThemeMix's canonical theme-mix source.
 	"work_unit_investments", "work_item_team_attributions", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
 	// The shared work-item authorization relation joins the project
