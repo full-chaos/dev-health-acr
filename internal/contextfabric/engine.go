@@ -1664,6 +1664,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// The shadow anchor binding reads the parent through the memo the ledger
 	// load above filled; nil when the shadow is off.
 	anchorShadow := e.newAnchorBindingTracker(carryCtx, request, binding)
+	// The ownership freshness every proof this turn can stand on is read
+	// here, before the first graph read the binder treats as proof: the
+	// anchor membership verifier a redeemed receipt runs during structure
+	// canonicalization below, the window gate's offers-only resolution and
+	// the decisive resolution (anchor_freshness.go).
+	e.acquireAnchorFreshness(ctx, principal.OrgID, anchorShadow)
 	// CHAOS-5734: the ledger line is published at the EXIT, declared here,
 	// above every return that follows the admission, so no gate below --
 	// the two window gates and the structure veto included -- can end the
@@ -2812,10 +2818,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// this point carries no reading: it ended before one was accepted, and
 	// its binding is decided from the carry and the caller alone.
 	anchorShadow.observeReading(familyOutcome, graphRequest.RequestedScope.SubjectHints)
-	// Before the window gate's offers-only resolution and before the
-	// decisive one: every graph read below that can prove an anchor reads
-	// after the ownership state it is stamped with.
-	e.acquireAnchorFreshness(ctx, principal.OrgID, anchorShadow)
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,
 		// but it now composes kind/handle/candidate offers from an
