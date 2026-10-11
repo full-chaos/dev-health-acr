@@ -224,6 +224,13 @@ func identityFields() []fieldDecl {
 		// id is the subject's own repos.id; declared as a reference so the
 		// gate checks it against the admitted root rather than trusting it.
 		declOn(declRepositoryOnly, declRef(declRepositoryRef, fStr("id")), declNullable(fStr("name")), fStr("provider")),
+		// owning_teams: the teams that currently own this repository
+		// (team_repo_ownership), one row per team. Absent, never empty, when
+		// no team owns it.
+		declOn(declRepositoryOnly,
+			fTable("owning_teams", cRef(declTeamRef, cStr("team_id")), cNullable(cStr("team_name"))),
+			fInt("owning_teams_omitted_count", "count"),
+		),
 		// id is the subject's own bare work_item_id (the provider matches the
 		// row to the subject on repo_id + work_item_id), not another subject.
 		declOn(declWorkItemOnly, fStr("id"), declNullable(fStr("title"))),

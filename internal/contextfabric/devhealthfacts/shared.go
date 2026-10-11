@@ -747,11 +747,17 @@ import (
 // version carries no selector identity and must not be reused for a request
 // that names project or team selectors.
 //
-// v153 -> v154: a team rollup read over more than one team serves each team's totals and
+// v153 -> v154: a repository's identity fact carries owning_teams (its current
+// team_repo_ownership teams), and a grouped repository answer groups under those
+// teams and discloses members placed under more than one, under none, or whose
+// owners the facts cut short. A candidate saved under v153 holds an ungrouped
+// repository answer and must not be reused.
+//
+// v154 -> v155: a team rollup read over more than one team serves each team's totals and
 // counts without the per-repository tables (repository_tables_basis names which), and a
 // budget refusal names its stage and measured sections; a candidate saved under an
 // earlier version carries the tables.
-const QueryVersion = "devhealthfacts.clickhouse.v154"
+const QueryVersion = "devhealthfacts.clickhouse.v155"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
