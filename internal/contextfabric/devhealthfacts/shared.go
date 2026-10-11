@@ -780,10 +780,17 @@ import (
 // ledger (the hint contests a carried anchor of its own kind instead of dropping the ledger);
 // a candidate saved under an earlier version for such a turn was answered without it.
 //
-// v160 -> v161: a work item's status fact adds status_since, status_duration_seconds and
-// status_since_basis; a candidate saved under v160 holds a status fact without the time in
+// v160 -> v161: the members of a project or repository anchor are the nodes
+// with an entity-tree path to the anchor (and a team anchor's pull requests the
+// ones of its repositories), each stating the tier of the issue and pull
+// request link that reached it; a text-matched member with no path is no
+// longer served. A candidate saved under v160 may hold such a member and must
+// not be reused.
+//
+// v161 -> v162: a work item's status fact adds status_since, status_duration_seconds and
+// status_since_basis; a candidate saved under v161 holds a status fact without the time in
 // the current status and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v161"
+const QueryVersion = "devhealthfacts.clickhouse.v162"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

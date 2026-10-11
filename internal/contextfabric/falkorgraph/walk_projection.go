@@ -12,10 +12,14 @@ import (
 // carry wide text and an embedding of thousands of numbers, and one link read
 // returns thousands of rows, so the walk's reads return a map of these
 // properties in place of the node. The link edge is read the same way: its tier,
-// its rank and its relationship id.
+// its rank, its relationship id and the three authorization lists.
 var walkNodeProperties = []string{propKind, propCanonicalID, propLabel, propAuthzRepos, propAuthzProjects, propAuthzTeams}
 
-var walkLinkProperties = []string{propPropertyPrefix + linkTierProperty, propPropertyPrefix + linkRankProperty, propRelationshipID}
+var walkLinkProperties = []string{propPropertyPrefix + linkTierProperty, propPropertyPrefix + linkRankProperty, propRelationshipID, propAuthzRepos, propAuthzProjects, propAuthzTeams}
+
+// walkFeedProperties are what an anchored link read returns of the feed edge:
+// its relationship id and the three authorization lists.
+var walkFeedProperties = []string{propRelationshipID, propAuthzRepos, propAuthzProjects, propAuthzTeams}
 
 // walkProjection is the map of a variable's walk properties, returned under
 // the variable's own name so the ORDER BY of a read keeps its text.

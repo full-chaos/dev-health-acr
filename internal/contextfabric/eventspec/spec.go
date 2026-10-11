@@ -2921,7 +2921,7 @@ var ownershipRoutingOutcome = []string{"not_routed", "owners", "no_owner", "read
 var teamAnchorWalkOutcome = []string{"members", "no_members", "denied", "read_failed"}
 
 // TeamAnchorWalk is the Info line of one DiscoverContext call whose question
-// asks for the repositories or projects of a committed team: the team's own
+// asks for the members of a committed team, project or repository (anchor_kind): the team's own
 // ownership edges were read as the member set (never the generic two-hop
 // walk), and what that read found.
 //
@@ -2940,11 +2940,12 @@ var TeamAnchorWalk = Event{
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrOnePerRequest,
 	Attribution:        []string{"org_id"},
-	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the question asks for the repositories or projects of a committed team",
+	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the question asks for the members of a committed team, project or repository",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: teamAnchorWalkOutcome},
-		{Key: "member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"repository", "project"}},
+		{Key: "anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"team", "project", "repository"}},
+		{Key: "member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"repository", "project", "team", "pull_request"}},
 		{Key: "committed", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "members", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read finished (every outcome but read_failed)"},
 		{Key: "denied", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read finished (every outcome but read_failed)"},

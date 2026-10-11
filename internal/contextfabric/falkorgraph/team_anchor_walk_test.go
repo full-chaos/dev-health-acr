@@ -100,7 +100,7 @@ func TestTeamAnchorWalkWritesOneCertifiedLinePerOutcome(t *testing.T) {
 			}
 			if _, cerr := certify.Certify(log, certify.Assertion{
 				Event: eventspec.TeamAnchorWalk,
-				Want:  map[string]any{"org_id": "org-1", "outcome": string(outcome), "member_kind": "repository", "committed": 1},
+				Want:  map[string]any{"org_id": "org-1", "outcome": string(outcome), "anchor_kind": "team", "member_kind": "repository", "committed": 1},
 			}); cerr != nil {
 				t.Fatal(cerr)
 			}
@@ -171,8 +171,8 @@ func TestTeamAnchorWalkTallySumsTheReadsOfOneCall(t *testing.T) {
 	var tally teamAnchorWalkTally
 	tally.add(treeWalk{nodes: make([]graphrank.CandidateNode, 2), denied: 1})
 	tally.add(treeWalk{nodes: make([]graphrank.CandidateNode, 3), denied: 4, truncated: true})
-	got := tally.decision(contextfabric.SubjectProject, 2, nil)
-	want := TeamAnchorWalkDecision{Outcome: TeamAnchorWalkMembers, MemberKind: contextfabric.SubjectProject, Committed: 2, Members: 5, Denied: 5, Truncated: true}
+	got := tally.decision(contextfabric.SubjectTeam, contextfabric.SubjectProject, 2, nil)
+	want := TeamAnchorWalkDecision{Outcome: TeamAnchorWalkMembers, AnchorKind: contextfabric.SubjectTeam, MemberKind: contextfabric.SubjectProject, Committed: 2, Members: 5, Denied: 5, Truncated: true}
 	if got != want {
 		t.Fatalf("decision = %+v, want %+v", got, want)
 	}
