@@ -758,11 +758,19 @@ import (
 // budget refusal names its stage and measured sections; a candidate saved under an
 // earlier version carries the tables.
 //
-// v155 -> v156: the reuse watermark check reads only the serving epoch's
-// checkpoints. A candidate saved under v155 may carry a snapshot taken across
+// v155 -> v156: the team blockers rollup counts only open blockers and serves the
+// excluded-by-status count and the status basis; a candidate saved under an earlier
+// version holds the unfiltered counts.
+//
+// v156 -> v157: a repository count with no current active owner over a complete ownership read
+// serves 0 with the inactive and ended owners disclosed, where it served no count; a candidate
+// saved under an earlier version may hold the unavailable count and must not be reused.
+//
+// v157 -> v158: the reuse watermark check reads only the serving epoch's
+// checkpoints. A candidate saved under v157 may carry a snapshot taken across
 // epochs, where a building or grace epoch's watermark stood in for the serving
 // one, and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v156"
+const QueryVersion = "devhealthfacts.clickhouse.v158"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
