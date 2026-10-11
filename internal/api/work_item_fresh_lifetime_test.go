@@ -101,7 +101,7 @@ func TestWorkItemFreshProducerLeaseThroughHTTPCompletion(t *testing.T) {
 			}()
 			waitForResponseOwnerWrite(t, writer)
 			assertResponseOwnerGateHeld(t, fixture.gate)
-			wantPhases := []string{"s1", "status", "work"}
+			wantPhases := []string{"s1", "status", "status_since", "work"}
 			if name == "engine_error" {
 				wantPhases = []string{"s1"}
 			}
@@ -241,7 +241,7 @@ func TestWorkItemFreshRetryKeepsAuthorizedAnchor(t *testing.T) {
 			if len(served.SubjectResolution.Candidates) != 1 || served.SubjectResolution.Candidates[0].Subject.CanonicalID != f.graph.projectID {
 				t.Errorf("served answer lost its authorized anchor: %+v", served.SubjectResolution)
 			}
-			if !reflect.DeepEqual(sizes, tc.wantSizes) || !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "work"}) {
+			if !reflect.DeepEqual(sizes, tc.wantSizes) || !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "status_since", "work"}) {
 				t.Errorf("synthesis=%v phases=%v", sizes, f.client.phases)
 			}
 			for _, event := range telemetry.plans {

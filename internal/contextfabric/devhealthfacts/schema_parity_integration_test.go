@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ import (
 // from devhealthschema so a column added to a provider's SELECT without
 // being declared there fails loudly rather than silently going unasserted.
 var factSchemaTables = []string{
-	"repos", "work_items", "git_pull_requests", "git_pull_request_reviews",
+	"repos", "work_items", "work_item_transitions", "git_pull_requests", "git_pull_request_reviews",
 	"ci_pipeline_runs", "deployments", "operational_incidents", "work_item_dependencies",
 	"repo_metrics_daily", "repo_change_failure_daily", "compounding_risk_daily", "estimate_coverage_metrics_daily",
 	"capacity_forecasts", "recommendations_daily",
@@ -204,7 +205,7 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 				Subjects: []contextfabric.SubjectRef{subject},
 			})
 			if err != nil {
-				t.Fatalf("ReadFacts() against production-typed schema: %v", err)
+				t.Fatalf("ReadFacts() against production-typed schema: %v (cause: %v)", err, errors.Unwrap(err))
 			}
 			// A Scan-destination mismatch surfaces as a read FAILURE,
 			// which the provider reports as unavailable rather than
@@ -236,7 +237,7 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 			Subjects: []contextfabric.SubjectRef{repoSubject(repoID)},
 		})
 		if err != nil {
-			t.Fatalf("ReadFacts() against production-typed schema: %v", err)
+			t.Fatalf("ReadFacts() against production-typed schema: %v (cause: %v)", err, errors.Unwrap(err))
 		}
 		if result.State == contextfabric.SourceUnavailable {
 			t.Fatalf("provider degraded to unavailable against production typing: %s", result.Reason)
@@ -251,7 +252,7 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 			Subjects: []contextfabric.SubjectRef{projectSubject("github", "proj-parity")},
 		})
 		if err != nil {
-			t.Fatalf("ReadFacts() against production-typed schema: %v", err)
+			t.Fatalf("ReadFacts() against production-typed schema: %v (cause: %v)", err, errors.Unwrap(err))
 		}
 		if result.State == contextfabric.SourceUnavailable {
 			t.Fatalf("provider degraded to unavailable against production typing: %s", result.Reason)
@@ -266,7 +267,7 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 			Subjects: []contextfabric.SubjectRef{projectSubject("github", "proj-parity")},
 		})
 		if err != nil {
-			t.Fatalf("ReadFacts() against production-typed schema: %v", err)
+			t.Fatalf("ReadFacts() against production-typed schema: %v (cause: %v)", err, errors.Unwrap(err))
 		}
 		if result.State == contextfabric.SourceUnavailable {
 			t.Fatalf("provider degraded to unavailable against production typing: %s", result.Reason)
@@ -345,7 +346,7 @@ func TestLiveFinalKeepsTheVersionColumnWinner(t *testing.T) {
 	// selector relation, including for an organization-wide principal. Keep
 	// this FINAL fixture production-shaped by creating the metadata and
 	// ownership/link tables that the same statement joins.
-	for _, statement := range devhealthschema.DDL("repos", "work_items", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
+	for _, statement := range devhealthschema.DDL("repos", "work_items", "work_item_transitions", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -383,7 +384,7 @@ func TestLiveFinalKeepsTheVersionColumnWinner(t *testing.T) {
 		Subjects: []contextfabric.SubjectRef{workItemSubject(repoID, "WI-FINAL")},
 	})
 	if err != nil {
-		t.Fatalf("ReadFacts() error = %v", err)
+		t.Fatalf("ReadFacts() error = %v (cause: %v)", err, errors.Unwrap(err))
 	}
 	if len(result.Facts) != 1 {
 		t.Fatalf("Facts = %#v, want exactly one row after FINAL deduped the two versions", result.Facts)

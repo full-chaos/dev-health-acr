@@ -59,7 +59,7 @@ func TestQueryVersionMovedPastTheFlowNotTrackedMeasure(t *testing.T) {
 	if !ok {
 		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
 	}
-	if n, err := strconv.Atoi(version); err != nil || n < 166 {
-		t.Fatalf("QueryVersion = %q: an answer saved when a not-tracked flow measure served 0 (v165 and before) must not be reused", devhealthfacts.QueryVersion)
+	if n, err := strconv.Atoi(version); err != nil || n < 167 {
+		t.Fatalf("QueryVersion = %q: an answer saved when a not-tracked flow measure served 0 (v166 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }

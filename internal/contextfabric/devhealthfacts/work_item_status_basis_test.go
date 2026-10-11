@@ -90,8 +90,8 @@ func TestStatusProviderComesFromTheSingleStatusRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(client.queries) != 1 {
-		t.Fatalf("queries = %d, want the status read alone", len(client.queries))
+	if len(client.queries) != 2 || !strings.Contains(client.queries[1].statement, "FROM work_item_transitions") {
+		t.Fatalf("queries = %d, want the status read and then the transitions read, nothing else", len(client.queries))
 	}
 	if !strings.Contains(client.queries[0].statement, "ifNull(w.provider, '')") {
 		t.Fatalf("the status read does not select the provider: %s", client.queries[0].statement)

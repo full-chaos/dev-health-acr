@@ -157,7 +157,14 @@ func TestWorkItemFreshEngineAgainstRealClickHouse(t *testing.T) {
 			unmeasured := tc.excluded || failurePhase == "s1"
 			phases := []string{"s1"}
 			if !unmeasured && population > 0 {
-				phases = append(phases, "status", "work")
+				phases = append(phases, "status")
+				// The probe runs only when the status read returned rows; a
+				// failed status read and a repository that moved after S1
+				// (the item leaves the authorized population) return none.
+				if failurePhase != "status" && !tc.move {
+					phases = append(phases, "status_since")
+				}
+				phases = append(phases, "work")
 			}
 			if !reflect.DeepEqual(client.phases, phases) {
 				t.Fatalf("statements=%v want=%v", client.phases, phases)
@@ -387,7 +394,7 @@ func freshLiveDatabase(t *testing.T) (*runtimeclickhouse.Client, clickhousedrive
 			t.Error(err)
 		}
 	})
-	for _, ddl := range devhealthschema.DDL("repos", "work_items", "projects", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
+	for _, ddl := range devhealthschema.DDL("repos", "work_items", "work_item_transitions", "projects", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, ddl); err != nil {
 			t.Fatal(err)
 		}
@@ -423,6 +430,9 @@ func (c *freshLiveQuery) Query(ctx context.Context, sql string, bindings []conte
 	}
 	if strings.Contains(sql, "w.title") {
 		phase = "work"
+	}
+	if strings.Contains(sql, "work_item_transitions") {
+		phase = "status_since"
 	}
 	c.phases = append(c.phases, phase)
 	c.statements = append(c.statements, sql)

@@ -50,6 +50,10 @@ func (c *freshTupleQueryClient) Query(_ context.Context, sql string, bindings []
 		phase = "work"
 		rows = [][]any{{"work-1", "Implement the thing", "repo-1"}}
 	}
+	if strings.Contains(sql, "work_item_transitions") {
+		phase = "status_since"
+		rows = nil
+	}
 	if configured, ok := c.rowsByPhase[phase]; ok {
 		rows = configured
 	}
@@ -272,7 +276,10 @@ func TestWorkItemFreshHTTPUsesActualProducers(t *testing.T) {
 			if graph.resolve != 1 || graph.discover != 0 {
 				t.Fatalf("graph resolve=%d discover=%d", graph.resolve, graph.discover)
 			}
-			wantPhases := []string{"s1", "status", "work"}
+			wantPhases := []string{"s1", "status", "status_since", "work"}
+			if failure == "status" {
+				wantPhases = []string{"s1", "status", "work"}
+			}
 			if failure == "s1" || failure == "zero" {
 				wantPhases = []string{"s1"}
 			}
