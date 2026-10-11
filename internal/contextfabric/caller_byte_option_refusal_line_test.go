@@ -127,3 +127,33 @@ func TestAnAnswerServedUnderTheServiceCeilingAddsNoModelCallAndNamesTheChain(t *
 		t.Fatalf("served %d bytes over the service ceiling", got)
 	}
 }
+
+// The rev 73 shape: a one-subject answer over the item ceiling by one claim
+// and over the byte target as well. The items cut leaves it over the caller's
+// byte option only; the service ceiling admits it, so it is served -- trimmed
+// as disclosed, never refused for a target the caller never made a refusal
+// line.
+func TestAnItemTrimmedAnswerOverOnlyTheCallersByteOptionIsServedUnderTheServiceCeiling(t *testing.T) {
+	calls := 0
+	engine := singleSubjectTrimEngine(t, singleSubjectTrimMaxItems+1, 12, singleSubjectTrimMaxBytes, 0, 0, false, 10, &calls)
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.Options.MaxSerializedBytes = callerByteOption
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		var refusal AnswerBudgetRefusal
+		if errors.As(err, &refusal) {
+			t.Fatalf("refused after %d syntheses: overrun=%s items %d/%d bytes %d/%d", calls, refusal.Overrun, refusal.MeasuredItems, refusal.MaxItems, refusal.MeasuredBytes, refusal.MaxSerializedBytes)
+		}
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	measurement, err := contractsv1.MeasureContextFabricResponse(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := measurement.Items.Budgeted(); got > singleSubjectTrimMaxItems {
+		t.Fatalf("served %d items against the %d item ceiling", got, singleSubjectTrimMaxItems)
+	}
+	if measurement.Bytes <= callerByteOption || measurement.Bytes > singleSubjectTrimMaxBytes {
+		t.Fatalf("served %d bytes; the row needs a document over the option (%d) and under the service ceiling (%d)", measurement.Bytes, callerByteOption, singleSubjectTrimMaxBytes)
+	}
+}

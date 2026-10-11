@@ -476,7 +476,14 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// A refusal is still where a per-group breach matters most, and it
 		// still carries real quota fields rather than the zeros both
 		// refusal arms used to emit.
-		if served, ok, serveErr := e.serveAtServiceCeiling(ctx, principal, plan, params, "assembled_result", result, measurementInput, allocation, params.Facts, &firstPass, answerPassSecond, answerPassFirst, cardinality, budget, overrun); serveErr != nil {
+		// An items cut that left the document over the byte target only is the
+		// document the byte target was refused on, so it is the one fitted
+		// against the service ceiling.
+		ceilingDoc, ceilingInput, ceilingAllocation, ceilingOverrun := result, measurementInput, allocation, overrun
+		if overrun != contractsv1.ContextFabricBudgetOverrunBytes && trim.Reduced.Status != "" && trim.Measured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes {
+			ceilingDoc, ceilingInput, ceilingAllocation, ceilingOverrun = trim.Reduced, trim.Reduced, trim.Measured.Allocation, contractsv1.ContextFabricBudgetOverrunBytes
+		}
+		if served, ok, serveErr := e.serveAtServiceCeiling(ctx, principal, plan, params, "assembled_result", ceilingDoc, ceilingInput, ceilingAllocation, params.Facts, &firstPass, answerPassSecond, answerPassFirst, cardinality, budget, ceilingOverrun); serveErr != nil {
 			return InvestigationResult{}, firstPass, serveErr
 		} else if ok {
 			return served, firstPass, nil
