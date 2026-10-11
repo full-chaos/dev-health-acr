@@ -647,7 +647,13 @@ func (e *Engine) recordGroupedCohortCompleteness(ctx context.Context, principal 
 // behaves precisely as it did before this slice.
 func (e *Engine) effectiveResponseBudget(request InvestigationRequest) ResponseBudget {
 	budget := ResponseBudget{MaxItems: e.maxItems, MaxSerializedBytes: e.maxSerializedBytes}
-	if requested := request.Options.MaxSerializedBytes; requested > 0 {
+	// The shed target is the answer budget when the caller named one, else the
+	// body bound: a caller that sets one knob sees the shedding it always saw.
+	requested := request.Options.AnswerBudgetBytes
+	if requested <= 0 {
+		requested = request.Options.MaxSerializedBytes
+	}
+	if requested > 0 {
 		if budget.MaxSerializedBytes <= 0 || int64(requested) < budget.MaxSerializedBytes {
 			budget.MaxSerializedBytes = int64(requested)
 		}

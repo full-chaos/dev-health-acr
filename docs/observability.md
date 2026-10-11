@@ -71,7 +71,9 @@ last lists every top-level answer section holding at least 5% of the measured
 bytes as `name=bytes`, largest first; section names are the answer contract's
 own keys, never content.
 
-A caller's `options.max_serialized_bytes` below the size of the answer is not a
+A caller's `options.max_serialized_bytes` is the hard bound on the body served;
+`options.answer_budget_bytes` (optional, default the same value) is the target the
+engine sheds the canonical result toward. A result over the body bound is not a
 refusal: the service ceiling (`ACR_MAX_SERIALIZED_BYTES`) is the only 413 line.
 The investigation route then delivers the bounded projection sized to the option
 (`full_result_omitted` true, `result_id` naming the stored result). That turn's

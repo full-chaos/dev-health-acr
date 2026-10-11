@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -52,5 +53,32 @@ func TestAnAnswerOverTheServiceCeilingIsRefusedWhateverTheCallersByteOption(t *t
 	}
 	if refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes || refusal.MaxSerializedBytes != chaos6558MaxBytes {
 		t.Fatalf("refusal = %+v, want a bytes refusal naming the service ceiling %d", refusal, chaos6558MaxBytes)
+	}
+}
+
+// The MCP sidecar asks for the service ceiling as the body bound and names its
+// answer budget as the shedding target. For a result that needs shedding the
+// stored canonical is the document the same request made with the budget as
+// its only knob produced before the split: nothing about MCP shedding moved.
+func TestTheBodyBoundAndTheSheddingTargetAsTwoKnobsServeTheCanonicalOneKnobServed(t *testing.T) {
+	const target = 40000
+	one, err := investigateWithCallerByteOption(t, target, nil)
+	if err != nil {
+		t.Fatalf("one knob: %v", err)
+	}
+	calls := 0
+	engine := chaos6558Engine(t, &calls, &recordingTelemetry{}, chaos6558Shape{maxBytes: chaos6558MaxBytes})
+	request := chaos6558Request()
+	request.Options.MaxSerializedBytes = chaos6558MaxBytes
+	request.Options.AnswerBudgetBytes = target
+	two, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("two knobs: %v", err)
+	}
+	if servedBytes(t, one) > target || len(one.ClaimedFacts) == 0 {
+		t.Fatalf("premise: the result must be shed to the %d byte target (served %d bytes)", target, servedBytes(t, one))
+	}
+	if !reflect.DeepEqual(one, two) {
+		t.Fatalf("two knobs served a different canonical result than one knob: %d vs %d bytes, %d vs %d claims", servedBytes(t, one), servedBytes(t, two), len(one.ClaimedFacts), len(two.ClaimedFacts))
 	}
 }

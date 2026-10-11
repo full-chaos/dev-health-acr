@@ -6,11 +6,11 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// The answer budget bounds what this tool returns and the tool projects to it
-// itself. The hosted option is asked for at the service's advertised ceiling, so
-// the canonical result always comes back here and the service never has to
-// answer this tool with a projection it cannot read.
-func TestAnAnswerByteBudgetIsProjectedHereAndNotForwardedAsTheHostedOption(t *testing.T) {
+// The answer budget is the target the service sheds toward (answer_budget_bytes)
+// and the tool projects to it itself. The body bound is the service's advertised
+// ceiling, so the canonical result always comes back here and the service never
+// answers this tool with a projection it cannot read.
+func TestAnAnswerByteBudgetIsTheSheddingTargetAndTheBodyBoundIsTheServiceCeiling(t *testing.T) {
 	var seen contractsv1.ContextFabricInvestigationRequest
 	result := parityResult()
 	boot := answerFixtureBootstrap(t, result, &seen)
@@ -28,6 +28,11 @@ func TestAnAnswerByteBudgetIsProjectedHereAndNotForwardedAsTheHostedOption(t *te
 
 	if want := min(ceiling, contractsv1.ContextFabricSerializedBytesMax); seen.Options.MaxSerializedBytes != want {
 		t.Errorf("hosted max_serialized_bytes = %d, want the advertised ceiling %d", seen.Options.MaxSerializedBytes, want)
+	}
+	// The shedding target is the caller's answer budget, exactly the number
+	// the service shed toward before the body bound was split from it.
+	if seen.Options.AnswerBudgetBytes != tight.MaxSerializedBytes {
+		t.Errorf("hosted answer_budget_bytes = %d, want the answer budget %d", seen.Options.AnswerBudgetBytes, tight.MaxSerializedBytes)
 	}
 	if response.FullResult != nil || !response.Structured.ProjectionBudget.FullResultOmitted {
 		t.Errorf("a canonical result over the 8192 byte answer budget was not declared omitted")

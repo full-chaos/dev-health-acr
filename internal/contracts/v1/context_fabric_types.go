@@ -1191,14 +1191,22 @@ const (
 const ContextFabricMaxCohortMembersLimit = 250
 
 type ContextFabricInvestigationOptions struct {
-	MaxSubjectCandidates int  `json:"max_subject_candidates"`
-	MaxCohortMembers     int  `json:"max_cohort_members"`
-	MaxRelationshipPaths int  `json:"max_relationship_paths"`
-	MaxDrivers           int  `json:"max_drivers"`
-	MaxEvidenceRefs      int  `json:"max_evidence_refs"`
-	MaxSerializedBytes   int  `json:"max_serialized_bytes"`
-	AllowClarification   bool `json:"allow_clarification"`
-	IncludeDebug         bool `json:"include_debug"`
+	MaxSubjectCandidates int `json:"max_subject_candidates"`
+	MaxCohortMembers     int `json:"max_cohort_members"`
+	MaxRelationshipPaths int `json:"max_relationship_paths"`
+	MaxDrivers           int `json:"max_drivers"`
+	MaxEvidenceRefs      int `json:"max_evidence_refs"`
+	// MaxSerializedBytes is the hard bound on the body served: a result that
+	// measures over it is delivered as the bounded projection sized to it,
+	// and a request above the service ceiling is refused.
+	MaxSerializedBytes int `json:"max_serialized_bytes"`
+	// AnswerBudgetBytes is the target the engine sheds the canonical result
+	// toward (rows, members). Optional; absent means MaxSerializedBytes, so a
+	// caller that sets one knob sees the shedding it always saw. It never
+	// exceeds MaxSerializedBytes.
+	AnswerBudgetBytes  int  `json:"answer_budget_bytes,omitempty"`
+	AllowClarification bool `json:"allow_clarification"`
+	IncludeDebug       bool `json:"include_debug"`
 	// WindowConfirmationMode (CHAOS-3900 W2, design brief §4) selects
 	// whether an INFERRED (non-confirmed) evidence window additionally
 	// nudges the caller via a disclosed Warnings sentence, beside the

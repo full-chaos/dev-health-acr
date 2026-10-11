@@ -292,6 +292,9 @@ func (o ContextFabricInvestigationOptions) Validate() error {
 		o.MaxSerializedBytes < ContextFabricSerializedBytesMin || o.MaxSerializedBytes > ContextFabricSerializedBytesMax {
 		return fmt.Errorf("investigation options violate v1 bounds")
 	}
+	if o.AnswerBudgetBytes != 0 && (o.AnswerBudgetBytes < ContextFabricSerializedBytesMin || o.AnswerBudgetBytes > o.MaxSerializedBytes) {
+		return fmt.Errorf("investigation options answer_budget_bytes violates v1 bounds")
+	}
 	if !ValidContextFabricWindowConfirmationMode(o.WindowConfirmationMode) {
 		return fmt.Errorf("investigation options window_confirmation_mode is invalid")
 	}
