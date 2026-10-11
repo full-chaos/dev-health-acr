@@ -1,6 +1,9 @@
 package v1
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // This file is the ONE definition of "how big is a Context Fabric answer",
 // called by BOTH planes (CHAOS-4636 / intent-engine design §6.3 stage 3).
@@ -206,6 +209,39 @@ type ContextFabricResponseMeasurement struct {
 	// reports both would otherwise have to be trusted to pass the same
 	// result to two functions. Here it cannot pass two.
 	Attribution ContextFabricItemAttribution `json:"attribution"`
+	// Sections is the byte size of every top-level section of the SAME
+	// encoded document, largest first. It exists so a refusal can name what it
+	// measured: "the answer did not fit" without the sections that filled it
+	// is not diagnosable.
+	Sections []ContextFabricSectionBytes `json:"sections,omitempty"`
+}
+
+// ContextFabricSectionBytes is one top-level section of an encoded result and
+// the bytes it occupies.
+type ContextFabricSectionBytes struct {
+	Name  string `json:"name"`
+	Bytes int64  `json:"bytes"`
+}
+
+// contextFabricSectionBytes splits an encoded result into its top-level
+// sections, largest first (ties by name). An encoding that is not an object
+// has no sections.
+func contextFabricSectionBytes(encoded []byte) []ContextFabricSectionBytes {
+	var sections map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &sections); err != nil {
+		return nil
+	}
+	out := make([]ContextFabricSectionBytes, 0, len(sections))
+	for name, raw := range sections {
+		out = append(out, ContextFabricSectionBytes{Name: name, Bytes: int64(len(raw))})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Bytes != out[j].Bytes {
+			return out[i].Bytes > out[j].Bytes
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
 
 // MeasureContextFabricResponse counts and sizes result with the SAME encoder
@@ -226,6 +262,7 @@ func MeasureContextFabricResponse(result ContextFabricInvestigationResult) (Cont
 		// Items.Budgeted() by construction here, and
 		// TestAMeasurementSplitsExactlyTheQuantityItCharges asserts it.
 		Attribution: AttributeContextFabricResultItems(result),
+		Sections:    contextFabricSectionBytes(encoded),
 	}, nil
 }
 
