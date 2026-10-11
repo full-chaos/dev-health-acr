@@ -1556,8 +1556,8 @@ type workItemCandidate struct {
 // organization-wide one, but they are different facts about the source and
 // D-e reports them as separate counts.
 const (
-	noRepositorySentinelForScope       = "acr-context-fabric:no-repository"
-	orphanedRepositorySentinelForScope = "acr-context-fabric:orphaned-repository"
+	noRepositorySentinelForScope       = contractsv1.ContextFabricNoRepositorySentinel
+	orphanedRepositorySentinelForScope = contractsv1.ContextFabricOrphanedRepositorySentinel
 )
 
 // workItemAuthorizationSlug mirrors devhealthsource/clickhouse.go's

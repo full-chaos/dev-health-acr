@@ -809,8 +809,8 @@ const zeroRepositoryID = "00000000-0000-0000-0000-000000000000"
 // one). Neither value can collide with a real Dev Health repo slug
 // ("owner/repo" shaped, always contains '/').
 const (
-	noRepositorySentinel       = "acr-context-fabric:no-repository"
-	orphanedRepositorySentinel = "acr-context-fabric:orphaned-repository"
+	noRepositorySentinel       = contractsv1.ContextFabricNoRepositorySentinel
+	orphanedRepositorySentinel = contractsv1.ContextFabricOrphanedRepositorySentinel
 	// unresolvedRepositorySentinel (CHAOS-7080) is repoAuthorization's value
 	// for a row whose repository slug did not resolve (a LEFT JOIN to repos
 	// that found no row). Before CHAOS-7080 such a row got RepositorySlugs
@@ -818,7 +818,7 @@ const (
 	// authorizationValue wrote the "*" wildcard: every repository-restricted
 	// principal could see it. Same authorization consequence as the two
 	// sentinels above.
-	unresolvedRepositorySentinel = "acr-context-fabric:unresolved-repository"
+	unresolvedRepositorySentinel = contractsv1.ContextFabricUnresolvedRepositorySentinel
 )
 
 // repoAuthorization is every OTHER producer's authorization builder

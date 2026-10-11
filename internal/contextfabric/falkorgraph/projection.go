@@ -222,7 +222,7 @@ func referencedSubjectStubMergeCypher(alias, kindLabelValue, attrsParam string) 
 // wildcard), so every repository-scoped principal is DENIED the stub while an
 // unrestricted principal still sees it. The entity's own write
 // (projectEntity: `SET n += attrs`) overwrites it with the entity's decision.
-const referencedEndpointStubSentinel = "acr-context-fabric:unresolved-referenced-endpoint"
+const referencedEndpointStubSentinel = contractsv1.ContextFabricReferencedEndpointStubSentinel
 
 // stubFailsClosed reports whether a REFERENCED stub of this kind must not
 // inherit the referencing record's authorization scope. Only kinds whose
