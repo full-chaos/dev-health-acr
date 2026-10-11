@@ -40,12 +40,13 @@
 //     forecast; the table has no person-level column at all). CHAOS-4363
 //     widens this to add project (team_project_ownership rollup, per-team
 //     forecast breakdown -- Monte Carlo stats are never summed/averaged).
-//   - FactInvestment from investment_metrics_daily (per team/investment
-//     area/project stream, latest day, passthrough). CHAOS-4363 widens this
-//     to add project (team_project_ownership rollup, per-team breakdown --
-//     investment_area/project_stream partitions are never summed across
-//     teams). investment_classifications_daily is NOT read for this: its
-//     live schema (verified 2026-08-27) carries no team_id column.
+//   - FactInvestment from the canonical categorization (work_unit_investments:
+//     the five themes and fifteen subcategories of the Jev categorizer): a
+//     team's mix over its owned repositories, a project's roll-up and a
+//     repository's mix. investment_metrics_daily (the deprecated rule
+//     classifier's keys) is read for no subject any more (CHAOS-9195).
+//     investment_classifications_daily is NOT read for this: its live schema
+//     (verified 2026-08-27) carries no team_id column.
 //   - FactReadiness from estimate_coverage_metrics_daily (per-team backlog
 //     estimate-coverage ratio -- a narrow, honest slice of "readiness";
 //     no broader canonical readiness signal exists yet). CHAOS-4363 widens
