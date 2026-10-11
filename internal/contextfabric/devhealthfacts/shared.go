@@ -771,10 +771,15 @@ import (
 // (no repository, orphaned, unresolved, no ownership); an organization-wide caller receives
 // fewer graph items under that scope.
 //
-// v158 -> v159: every canonical fact the registry accepts carries a deterministic id and a
+// v158 -> v159: the reuse watermark check reads only the serving epoch's
+// checkpoints. A candidate saved under v158 may carry a snapshot taken across
+// epochs, where a building or grace epoch's watermark stood in for the serving
+// one, and must not be reused.
+//
+// v159 -> v160: every canonical fact the registry accepts carries a deterministic id and a
 // synthesized claim may cite it (fact_id); a candidate saved under an earlier version holds
 // facts and claims without ids.
-const QueryVersion = "devhealthfacts.clickhouse.v159"
+const QueryVersion = "devhealthfacts.clickhouse.v160"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

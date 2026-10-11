@@ -756,7 +756,12 @@ SELECT epoch FROM acr.context_fabric_reuse_invalidations WHERE org_id = $1`, org
 }
 
 // currentSourceWatermarks reads the CURRENT backend_watermark of every
-// source that has a checkpoint row for orgID, keyed by source name. Reads
+// source that has a checkpoint row for orgID at the SERVING epoch
+// (lifecycle active_epoch; an organization with no lifecycle row serves
+// epoch 0), keyed by source name. A building or grace epoch's checkpoints
+// are never read: the table is keyed (org_id, epoch, source), so an
+// unfiltered read would collapse epochs into one map and let a non-serving
+// row stand in for the serving one. Reads
 // straight from acr.context_fabric_projection_checkpoints over the same
 // *sql.DB this Store already owns -- see the Store.reuseEnabled field
 // comment for why this is deliberately not routed through
@@ -767,7 +772,9 @@ SELECT epoch FROM acr.context_fabric_reuse_invalidations WHERE org_id = $1`, org
 // snapshot).
 func (s *Store) currentSourceWatermarks(ctx context.Context, orgID string) (map[string]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT source, backend_watermark FROM acr.context_fabric_projection_checkpoints WHERE org_id = $1`, orgID)
+SELECT source, backend_watermark FROM acr.context_fabric_projection_checkpoints
+WHERE org_id = $1
+  AND epoch = COALESCE((SELECT active_epoch FROM acr.context_fabric_graph_lifecycle WHERE org_id = $1), 0)`, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("query projection checkpoints: %w", sanitizeError(err))
 	}
