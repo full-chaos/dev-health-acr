@@ -27,6 +27,9 @@ data:
   ACR_MCP_HTTP_MAX_BODY_BYTES: {{ $m.http.maxBodyBytes | int | quote }}
   ACR_API_URL: {{ $apiUrl | quote }}
   ACR_API_TIMEOUT: {{ $m.apiTimeout | quote }}
+  {{- if $m.investigationWait }}
+  ACR_MCP_INVESTIGATION_WAIT: {{ $m.investigationWait | quote }}
+  {{- end }}
   {{- if hasPrefix "http://" $apiUrl }}
   ACR_API_ALLOW_INSECURE_INTERNAL_HTTP: "true"
   {{- end }}

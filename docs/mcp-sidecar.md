@@ -53,6 +53,9 @@ Your API credential. Ordinary macOS/Linux setup obtains and persists it with `ac
 **ACR_API_TIMEOUT**
 Request timeout as a Go duration string (for example `20s`, `90s`, `1m30s`) bounding a single hosted API call end to end (dial, TLS, request, response). Default: `20s`. Must be between `1s` and `2m`.
 
+**ACR_MCP_INVESTIGATION_WAIT**
+Longest one investigation call may take, as a whole-second Go duration (for example `45s`). Sent to the hosted API in the `X-ACR-Wait-Budget-Seconds` header, so the investigation ends inside it: a model call that has not finished is ended five seconds before the budget and the answer is served degraded, with its `result_id`. Set it below the tool timeout of the MCP client (a desktop client that gives up at 60 s needs `45s`). Default: unset, no budget sent. At least `10s`, and `ACR_API_TIMEOUT` must be at least five seconds above it; startup fails otherwise. A stage before synthesis that runs past the budget still ends as `deadline_exceeded` with no result.
+
 **ACR_API_MAX_RESPONSE_BYTES**
 Maximum bytes of a hosted response body the sidecar reads before treating the response as too large. Default: `1048576` (1 MiB). Must be between `8192` and `8388608`.
 
