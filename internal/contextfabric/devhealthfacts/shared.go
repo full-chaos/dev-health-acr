@@ -792,7 +792,13 @@ import (
 // deadline, is served as a degraded answer with failure class
 // model_call_not_completed and retry_may_succeed, where it was an error with no
 // stored answer; a candidate saved under an earlier version cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v162"
+//
+// v162 -> v163: an answer whose status the server's completeness authority
+// replaced carries a status_correction record (the model's label, the served
+// pair, the deciding outcome row) on the result and its completeness block; a
+// candidate saved under v162 was served corrected with no such record and the
+// model's label is not recoverable from it.
+const QueryVersion = "devhealthfacts.clickhouse.v163"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
