@@ -35,12 +35,16 @@ func TestRateLimitLimitTokenMatchesTheErrorSchemaEnum(t *testing.T) {
 	if len(enum) == 0 {
 		t.Fatalf("error.v1 schema declares no details.%s enum", RateLimitDetailsLimitKey)
 	}
-	for _, token := range enum {
-		if !IsRateLimitLimit(token) {
-			t.Errorf("schema token %q is not in the Go vocabulary", token)
-		}
+	want := slices.Clone(RateLimitLimits())
+	got := slices.Clone(enum)
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("schema enum %v and Go vocabulary %v differ", got, want)
 	}
-	if !slices.Contains(enum, RateLimitRequestBudget) {
-		t.Errorf("Go token %q is not in the schema enum %v", RateLimitRequestBudget, enum)
+	for _, token := range want {
+		if !IsRateLimitLimit(token) {
+			t.Errorf("vocabulary member %q is rejected by IsRateLimitLimit", token)
+		}
 	}
 }

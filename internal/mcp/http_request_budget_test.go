@@ -11,7 +11,7 @@ import (
 )
 
 // A 429 that acr-api answers from its per-organization request budget is not
-// an authentication attempt limit: the caller's credential was never judged.
+// an authentication attempt limit: the credential was authenticated and the organization's budget refused the request.
 func TestHTTPRequestBudgetRefusalIsNotNamedAnAuthenticationDenial(t *testing.T) {
 	hosted := newHostedAPI(t)
 	valid := hosted.issue(readScopes, []string{repoPlain}, nil)

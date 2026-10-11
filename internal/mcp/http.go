@@ -737,7 +737,7 @@ var authRefusal = map[string]struct {
 	HTTPAuthRateLimited:             {http.StatusTooManyRequests, "", "too many authentication attempts"},
 	HTTPAuthUpstreamIncompatible:    {http.StatusBadGateway, "", "the hosted API is incompatible with this server"},
 	HTTPAuthUpstreamUnavailable:     {http.StatusServiceUnavailable, "", "the hosted API could not decide the credential"},
-	HTTPAuthRequestBudgetExceeded:   {http.StatusTooManyRequests, "", "the organization's request budget is spent; the credential was not judged; retry after the interval"},
+	HTTPAuthRequestBudgetExceeded:   {http.StatusTooManyRequests, "", "the organization's request budget is spent; the credential was authenticated and the request was refused by the budget; retry after the interval"},
 }
 
 type refusalBody struct {

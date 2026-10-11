@@ -10,5 +10,16 @@ const RateLimitDetailsLimitKey = "limit"
 // the budget, not an authentication attempt limit, refused the request.
 const RateLimitRequestBudget = "request_budget"
 
+// RateLimitLimits lists every member of the closed vocabulary. It is the one
+// list IsRateLimitLimit and the published schema's enum are held equal to.
+func RateLimitLimits() []string { return []string{RateLimitRequestBudget} }
+
 // IsRateLimitLimit reports whether limit is a member of the closed vocabulary.
-func IsRateLimitLimit(limit string) bool { return limit == RateLimitRequestBudget }
+func IsRateLimitLimit(limit string) bool {
+	for _, member := range RateLimitLimits() {
+		if limit == member {
+			return true
+		}
+	}
+	return false
+}
