@@ -214,7 +214,7 @@ func TestTeamRollupsAgainstRealClickHouse(t *testing.T) {
 	two, solo, none := teamSubject("team-two"), teamSubject("team-solo"), teamSubject("team-none")
 
 	t.Run("deployments", func(t *testing.T) {
-		result := f.read(contextfabric.FactDeployments, f.window, two, solo)
+		result := f.read(contextfabric.FactDeployments, f.window, two)
 		fields := factFor(t, result, two).Fields
 		wantOwnedPointer(t, fields, "repo-a", "repo-b")
 		// Window totals: repo-a 5+3, repo-b 4; the August row and repo-c are out.
@@ -241,9 +241,27 @@ func TestTeamRollupsAgainstRealClickHouse(t *testing.T) {
 		if got := fields["window_start"].String; got == nil || !strings.HasPrefix(*got, "2026-09-01") {
 			t.Fatalf("window_start = %#v", fields["window_start"])
 		}
-		soloFields := factFor(t, result, solo).Fields
+		soloFields := factFor(t, f.read(contextfabric.FactDeployments, f.window, solo), solo).Fields
 		wantOwnedPointer(t, soloFields, "repo-a")
 		wantInt(t, soloFields, "deployments_count_window", 8)
+
+		// A read over several teams carries each team's totals and counts, and
+		// no per-repository tables: the answer about many teams stays bounded.
+		many := f.read(contextfabric.FactDeployments, f.window, two, solo)
+		for _, subject := range []contextfabric.SubjectRef{two, solo} {
+			manyFields := factFor(t, many, subject).Fields
+			for _, name := range []string{"owned_repositories", "repository_breakdown"} {
+				if _, ok := manyFields[name]; ok {
+					t.Fatalf("multi-team read of %s carries %s", subject.CanonicalID, name)
+				}
+			}
+			if got := manyFields["repository_tables_basis"].String; got == nil || *got != "omitted_multi_team_read" {
+				t.Fatalf("multi-team repository_tables_basis = %#v", manyFields["repository_tables_basis"])
+			}
+		}
+		wantInt(t, factFor(t, many, two).Fields, "deployments_count_window", 12)
+		wantInt(t, factFor(t, many, two).Fields, "owned_repository_count", 2)
+		wantInt(t, factFor(t, many, solo).Fields, "deployments_count_window", 8)
 
 		// Control: the repository subject path still serves its latest-day aggregate.
 		repo := f.read(contextfabric.FactDeployments, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, repositorySubject("repo-a"))
