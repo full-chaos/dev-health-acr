@@ -21,6 +21,7 @@
 package answerprojection
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 
@@ -36,7 +37,19 @@ type Budget struct {
 	MaxCandidates    int
 	MaxFacts         int
 	MaxEvidenceRefs  int
+	// MaxSerializedBytes is the caller's byte ceiling for the whole
+	// answer. Limitations and Warnings each yield to a fixed share of it
+	// (NarrativeByteShareDivisor); every other field keeps its count and
+	// length bounds. A non-positive value means DefaultBudget's.
+	MaxSerializedBytes int
 }
+
+// NarrativeByteShareDivisor names how much of the byte ceiling each of the
+// two free-text arrays, Limitations and Warnings, may spend: ceiling/4
+// apiece, so the two together never take more than half of it. A default,
+// not a derived constant: the projection carries many other arrays and
+// none of them has a measured share.
+const NarrativeByteShareDivisor = 4
 
 // DefaultBudget is the projection budget applied when a caller supplies
 // none. It is deliberately smaller than the canonical contract maxima: the
@@ -48,6 +61,8 @@ var DefaultBudget = Budget{
 	MaxCandidates:    10,
 	MaxFacts:         50,
 	MaxEvidenceRefs:  100,
+	// The hosted service's default ACR_MAX_SERIALIZED_BYTES.
+	MaxSerializedBytes: 262144,
 }
 
 // withDefaults fills unset fields and clamps every field to the contract
@@ -70,6 +85,9 @@ func (b Budget) withDefaults() Budget {
 	}
 	if out.MaxEvidenceRefs <= 0 {
 		out.MaxEvidenceRefs = DefaultBudget.MaxEvidenceRefs
+	}
+	if out.MaxSerializedBytes <= 0 {
+		out.MaxSerializedBytes = DefaultBudget.MaxSerializedBytes
 	}
 	out.MaxDrivers = min(out.MaxDrivers, contractsv1.ContextFabricProjectedDriversMaxCount)
 	out.MaxCohortMembers = min(out.MaxCohortMembers, contractsv1.ContextFabricProjectedCohortMaxCount)
@@ -131,7 +149,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	cohort, cohortOmitted, cohortReasonsOmitted, cohortGroupsOmitted, cohortSelectionBasis := projectCohort(result, bounds, index, clamp, &facts)
 	factsOmitted := countProjectedFactsOmitted(result, facts)
 	clarification, candidatesOmitted, candidateReasonsOmitted := projectClarification(result, bounds, clamp)
-	limitations, limitationsOmitted := boundedLimitations(restateWorkItemListed(result, cohort, bounds), clamp)
+	limitations, limitationsOmitted := boundedLimitationsWithin(restateWorkItemListed(result, cohort, bounds), clamp, bounds.MaxSerializedBytes/NarrativeByteShareDivisor)
 	// The engine's own displacement counts too (CHAOS-3746 round-16).
 	// limitations_omitted means "limitations this investigation produced
 	// that you are not reading", and a caveat the engine dropped at the
@@ -140,7 +158,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	// cannot rediscover it, because a displaced list and a list that had
 	// room are indistinguishable here.
 	limitationsOmitted += result.LimitationsDisplaced
-	warnings, warningsOmitted := boundedNarrative(result.Warnings, clamp)
+	warnings, warningsOmitted := boundedNarrativeWithin(result.Warnings, clamp, bounds.MaxSerializedBytes/NarrativeByteShareDivisor)
 	coverage, coverageOmitted := projectCoverage(result, clamp)
 	// CHAOS-4690: Details share CoverageSummary's own entry cap and its
 	// omission counter -- the design (§7.2) treats the structured detail
@@ -923,7 +941,12 @@ func countUnindexedEvidence(result contractsv1.ContextFabricInvestigationResult,
 // than the crash: a shortened limitations list reads as a more confident
 // answer than the investigation actually gave.
 func boundedNarrative(values []string, clamp *clamper) ([]string, int) {
-	return boundedNarrativeRetaining(values, clamp, nil)
+	return boundedNarrativeRetaining(values, clamp, nil, 0)
+}
+
+// boundedNarrativeWithin is boundedNarrative that also yields to maxBytes.
+func boundedNarrativeWithin(values []string, clamp *clamper, maxBytes int) ([]string, int) {
+	return boundedNarrativeRetaining(values, clamp, nil, maxBytes)
 }
 
 // boundedLimitations is boundedNarrative with a RETENTION PRIORITY: if the
@@ -940,12 +963,19 @@ func boundedNarrative(values []string, clamp *clamper) ([]string, int) {
 // The displacement is counted in limitations_omitted like every other drop,
 // because the entry it displaces is genuinely gone.
 func boundedLimitations(values []string, clamp *clamper) ([]string, int) {
-	return boundedNarrativeRetaining(values, clamp, contractsv1.IsContextFabricRetrievalDegradedLimitation)
+	return boundedNarrativeRetaining(values, clamp, contractsv1.IsContextFabricRetrievalDegradedLimitation, 0)
+}
+
+// boundedLimitationsWithin is boundedLimitations that also yields to maxBytes.
+func boundedLimitationsWithin(values []string, clamp *clamper, maxBytes int) ([]string, int) {
+	return boundedNarrativeRetaining(values, clamp, contractsv1.IsContextFabricRetrievalDegradedLimitation, maxBytes)
 }
 
 // boundedNarrativeRetaining is the shared implementation. retain, when
-// non-nil, names entries that must survive the count cap.
-func boundedNarrativeRetaining(values []string, clamp *clamper, retain func(string) bool) ([]string, int) {
+// non-nil, names entries that must survive the count cap and the byte cap.
+// maxBytes, when positive, additionally bounds the summed UTF-8 length of
+// the survivors; see fitNarrativeBytes.
+func boundedNarrativeRetaining(values []string, clamp *clamper, retain func(string) bool, maxBytes int) ([]string, int) {
 	// Clamp FIRST, then dedupe (codex round-5 R5-4). Deduping first let two
 	// distinct legacy entries sharing a long prefix survive as separate
 	// values, collide once clamped to the same prefix, and produce a
@@ -990,6 +1020,11 @@ func boundedNarrativeRetaining(values []string, clamp *clamper, retain func(stri
 			kept = retainPastTheCut(kept, distinct[contractsv1.ContextFabricProjectedNarrativeMaxCount:], retain)
 		}
 		distinct = kept
+	}
+	if maxBytes > 0 {
+		var dropped int
+		distinct, dropped = fitNarrativeBytes(distinct, maxBytes, retain)
+		omitted += dropped
 	}
 	survivors := make([]string, 0, len(distinct))
 	for _, entry := range distinct {
@@ -1308,6 +1343,77 @@ func copyTimeContext(source contractsv1.ContextFabricTimeContext) contractsv1.Co
 type clampedNarrative struct {
 	value     string
 	shortened bool
+}
+
+// fitNarrativeBytes cuts entries until the JSON array they form fits maxBytes
+// and reports how many it cut.
+//
+// Order of claim on the room: the first retained entry (the retrieval
+// degradation disclosure) is admitted first, then the rest in their given
+// order while they fit. Surviving entries keep their original order. A
+// non-empty list is never emptied: when not even one entry fits, the
+// first is kept whole, because an answer that
+// loses every caveat reads as a cleaner answer than the investigation gave.
+//
+// The measure is the encoded one, because the served ceiling measures the
+// encoded body: an entry costs its json.Marshal length (quotes and escapes
+// included) plus one comma, and the array's brackets cost the one that
+// remains, so the sum equals len(json.Marshal(kept)) exactly.
+func fitNarrativeBytes(entries []clampedNarrative, maxBytes int, retain func(string) bool) ([]clampedNarrative, int) {
+	cost := make([]int, len(entries))
+	total := 1
+	for i, entry := range entries {
+		cost[i] = encodedNarrativeCost(entry.value)
+		total += cost[i]
+	}
+	if total <= maxBytes {
+		return entries, 0
+	}
+	keep := make([]bool, len(entries))
+	used := 1
+	placed := false
+	if retain != nil {
+		for i, entry := range entries {
+			if retain(entry.value) {
+				keep[i] = true
+				used += cost[i]
+				placed = true
+				break
+			}
+		}
+	}
+	for i := range entries {
+		if keep[i] || used+cost[i] > maxBytes {
+			continue
+		}
+		keep[i] = true
+		used += cost[i]
+		placed = true
+	}
+	// Nothing fit, so nothing was kept: an overlarge first entry is kept
+	// whole rather than emptying the list. It is the last resort, taken only
+	// when no entry fits, never ahead of one that does.
+	if !placed {
+		keep[0] = true
+	}
+	out := make([]clampedNarrative, 0, len(entries))
+	for i, entry := range entries {
+		if keep[i] {
+			out = append(out, entry)
+		}
+	}
+	return out, len(entries) - len(out)
+}
+
+// encodedNarrativeCost is one array element's share of the encoded array:
+// the string's JSON encoding plus its separator.
+func encodedNarrativeCost(value string) int {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		// Unreachable for a string; the worst case per byte keeps the bound.
+		return 6*len(value) + 3
+	}
+	return len(encoded) + 1
 }
 
 // retainPastTheCut moves the first dropped entry matching retain into kept,

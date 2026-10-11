@@ -310,6 +310,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 		}
 		var payload any = result
 		if view == investigationViewProjection {
+			budget.MaxSerializedBytes = a.config.MaxSerializedBytes
 			projection := answerprojection.Project(result, budget)
 			// Validate before emitting (codex round-6 F2). The route
 			// serves a DERIVED document, and the derivation runs over
