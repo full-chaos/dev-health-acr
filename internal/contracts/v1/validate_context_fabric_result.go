@@ -1954,19 +1954,23 @@ func validateRequirementJoin(r ContextFabricInvestigationResult) error {
 	// no longer legal is ALL of them being unattributed while the plan
 	// describes requirements.
 
-	planned := make(map[string]bool, len(r.AnswerPlan.Requirements))
+	planned := make(map[string]ContextFabricPlanRequirement, len(r.AnswerPlan.Requirements))
 	for _, requirement := range r.AnswerPlan.Requirements {
-		planned[requirement.Requirement] = true
+		planned[requirement.Requirement] = requirement
 	}
 	accounted := make(map[string]bool, len(r.Completeness.Outcomes))
 	for _, row := range r.Completeness.Outcomes {
 		if row.Requirement == "" {
 			continue
 		}
-		if !planned[row.Requirement] {
+		requirement, described := planned[row.Requirement]
+		if !described {
 			return fmt.Errorf(
 				"completeness names an outcome for requirement %q, which the answer plan does not describe",
 				row.Requirement)
+		}
+		if err := validateRowAgainstPlanRequirement(row, requirement); err != nil {
+			return err
 		}
 		accounted[row.Requirement] = true
 	}
@@ -1976,6 +1980,25 @@ func validateRequirementJoin(r ContextFabricInvestigationResult) error {
 				"answer plan describes requirement %q, which no outcome row accounts for",
 				requirement.Requirement)
 		}
+	}
+	return nil
+}
+
+// validateRowAgainstPlanRequirement checks an outcome row against what its plan
+// requirement itself declares, so the join is more than an identity-string
+// match. It reads only the kind the requirement declares and the
+// obligation-to-kind mirror this package already
+// holds; which coordinates name a countable population stays with the
+// derivation, never here.
+func validateRowAgainstPlanRequirement(row ContextFabricPlanRequirementOutcomeRow, requirement ContextFabricPlanRequirement) error {
+	// Only the computed direction: the byte-maximal fixture plans every
+	// requirement as a computation on purpose, so a read obligation planned
+	// as computed is not refused here.
+	if contextFabricAnswerObligationKindByObligation[row.Obligation] == contextFabricObligationKindComputed &&
+		requirement.Kind != contextFabricObligationKindComputed {
+		return fmt.Errorf(
+			"outcome row for requirement %q is for the computed obligation %q, but the answer plan declares the requirement as %q",
+			row.Requirement, row.Obligation, requirement.Kind)
 	}
 	return nil
 }
