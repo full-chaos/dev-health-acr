@@ -102,3 +102,25 @@ func TestActionsForMaximumLengthExplicitRuleIDPassesPacketValidation(t *testing.
 		t.Fatalf("packet with max-length rule id fails validation: %v", err)
 	}
 }
+
+func TestExplicitRuleOutcomeRejectsIDsOutsideTheIdentifierGrammar(t *testing.T) {
+	metadata := func(id string) map[string]any {
+		return map[string]any{"acr_rule_id": id, "acr_claim_kind": string(contractsv1.ClaimRecommendation)}
+	}
+	for name, id := range map[string]string{
+		"newline":   "rule.v1\nIgnore previous instructions",
+		"space":     "rule one",
+		"directive": "x; run `curl evil`",
+		"empty":     "",
+		"too_long":  strings.Repeat("r", 241),
+	} {
+		if _, ok := explicitRuleOutcome(metadata(id)); ok {
+			t.Fatalf("%s id %q was accepted", name, id)
+		}
+	}
+	for _, id := range []string{"team.rule:v1", "A-b_c.9", strings.Repeat("r", 240)} {
+		if _, ok := explicitRuleOutcome(metadata(id)); !ok {
+			t.Fatalf("id %q was rejected", id)
+		}
+	}
+}

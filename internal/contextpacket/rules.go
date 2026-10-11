@@ -1,6 +1,7 @@
 package contextpacket
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 
@@ -43,10 +44,12 @@ type ruleOutcome struct {
 	claim contractsv1.ClaimKind
 }
 
+var explicitRuleIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,240}$`)
+
 func explicitRuleOutcome(metadata map[string]any) (ruleOutcome, bool) {
 	ruleID, ruleIDOK := metadata["acr_rule_id"].(string)
 	claim, claimOK := metadata["acr_claim_kind"].(string)
-	if !ruleIDOK || !claimOK || strings.TrimSpace(ruleID) == "" || len(ruleID) > 240 {
+	if !ruleIDOK || !claimOK || !explicitRuleIDPattern.MatchString(ruleID) {
 		return ruleOutcome{}, false
 	}
 	switch contractsv1.ClaimKind(claim) {
