@@ -42,8 +42,20 @@ func TestWorkItemProvidersUseCurrentSelectorScopeAndThrowingSettings(t *testing.
 			if len(result.Facts) != 1 {
 				t.Fatalf("facts = %#v, want one scanned fact", result.Facts)
 			}
-			if len(client.queries) != 1 {
-				t.Fatalf("query count = %d, want one scoped content query and no metadata lookup", len(client.queries))
+			perRead := 1
+			if tt.name == contextfabric.FactStatus {
+				perRead = 2
+			}
+			if len(client.queries) != perRead {
+				t.Fatalf("query count = %d, want %d: one scoped content query (status adds its scoped transition read) and no metadata lookup", len(client.queries), perRead)
+			}
+			if perRead == 2 {
+				since := client.queries[1].statement
+				for _, fragment := range []string{"LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id", "authorized_repo_slugs", "requested_repo_slugs", "SETTINGS", "timeout_overflow_mode = 'throw'"} {
+					if !strings.Contains(since, fragment) {
+						t.Errorf("transition read = %q, want %q", since, fragment)
+					}
+				}
 			}
 			statement := client.queries[0].statement
 			for _, fragment := range []string{
@@ -79,7 +91,7 @@ func TestWorkItemProvidersUseCurrentSelectorScopeAndThrowingSettings(t *testing.
 			if _, err := provider.ReadFacts(context.Background(), principal, query); err != nil {
 				t.Fatalf("second ReadFacts() error = %v", err)
 			}
-			if got := testBindingValueAt(t, client, 1, "requested_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/c"}) {
+			if got := testBindingValueAt(t, client, perRead, "requested_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/c"}) {
 				t.Fatalf("second requested_repo_slugs = %#v, want only current query selector", got)
 			}
 		})

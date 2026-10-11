@@ -31,7 +31,7 @@ const (
 // deterministic.
 func statusSinceStatement(scope readers.AuthorizationScope, settings readers.Settings) (string, []readers.Binding) {
 	rendered := readers.WorkItemScopeSQL(scope)
-	statement := `SELECT toString(w.repo_id) AS repo_key, w.work_item_id AS item_key, t.latest_to_status AS latest_to_status, t.entered_at AS entered_at
+	return readers.WithSettings(withRowLimit(`SELECT toString(w.repo_id) AS repo_key, w.work_item_id AS item_key, t.latest_to_status AS latest_to_status, t.entered_at AS entered_at
 FROM (
 	SELECT repo_id, work_item_id,
 		argMax(ifNull(to_status, ''), tuple(occurred_at, last_synced, ifNull(to_status, ''))) AS latest_to_status,
@@ -40,10 +40,9 @@ FROM (
 	WHERE org_id = {org_id:String} AND concat(toString(repo_id), ':', work_item_id) IN {ids:Array(String)}
 	GROUP BY repo_id, work_item_id
 ) AS t
-INNER JOIN work_items AS w FINAL ON w.repo_id = t.repo_id AND w.work_item_id = t.work_item_id ` + rendered.JoinSQL + `
-WHERE w.org_id = {org_id:String} AND (` + rendered.AuthorizationExpr + `)
-ORDER BY repo_key, item_key`
-	return readers.WithSettings(withRowLimit(statement), settings), rendered.Bindings
+INNER JOIN work_items AS w FINAL ON w.repo_id = t.repo_id AND w.work_item_id = t.work_item_id `+rendered.JoinSQL+`
+WHERE w.org_id = {org_id:String} AND (`+rendered.AuthorizationExpr+`)
+ORDER BY repo_key, item_key`), settings), rendered.Bindings
 }
 
 type statusEntry struct {
