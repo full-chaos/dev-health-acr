@@ -752,7 +752,7 @@ import (
 // teams and discloses members placed under more than one, under none, or whose
 // owners the facts cut short. A candidate saved under v153 holds an ungrouped
 // repository answer and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v154"
+const QueryVersion = "devhealthfacts.clickhouse.v155"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

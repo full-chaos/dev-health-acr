@@ -148,22 +148,31 @@ func OwnsRepository(attributes map[string]interface{}, repoSlug string) bool {
 // requestedRepositoriesAdmit is the requested repository selector: the
 // repository must be PRESENT on the node, as in the shared library's requested
 // expression. The "*" selector therefore does not admit a node whose list
-// holds only a sentinel (no-repository, orphaned or unresolved repository).
-// Every sentinel is "acr-context-fabric:..." and never contains '/', which
-// every real owner/repo slug does. Principal grants are tested elsewhere and
-// keep their own "*" meaning.
+// holds only repository-absence sentinels (named in contracts/v1). Principal
+// grants are tested elsewhere and keep their own "*" meaning.
 func requestedRepositoriesAdmit(attributes map[string]interface{}, selectors []string) bool {
 	for _, selector := range selectors {
-		if strings.TrimSpace(selector) == "*" {
-			if entries, isList := attributes[authorizationRepositoriesAttr].([]string); isList && len(entries) > 0 && !slices.ContainsFunc(entries, func(e string) bool { return strings.Contains(e, "/") }) {
-				continue
-			}
+		if strings.TrimSpace(selector) == "*" && !repositoryPresent(attributes) {
+			continue
 		}
 		if scopeContainsAttr(attributes, authorizationRepositoriesAttr, selector) {
 			return true
 		}
 	}
 	return false
+}
+
+// repositoryPresent reports whether the node's repository list names at least
+// one entry that is not a repository-absence sentinel. The "*" list is the
+// unrestricted marker, not a repository, and keeps its existing treatment.
+func repositoryPresent(attributes map[string]interface{}) bool {
+	entries, isList := attributes[authorizationRepositoriesAttr].([]string)
+	if !isList {
+		return true
+	}
+	return slices.ContainsFunc(entries, func(entry string) bool {
+		return !contractsv1.ContextFabricIsRepositoryAbsenceSentinel(entry)
+	})
 }
 
 func anyContainsAttr(attributes map[string]interface{}, key string, values []string) bool {

@@ -4,13 +4,14 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func TestRequestedRepositoryWildcardRequiresPresentRepository(t *testing.T) {
-	const noRepo = "acr-context-fabric:no-repository"
-	const orphan = "acr-context-fabric:orphaned-repository"
-	const unresolved = "acr-context-fabric:unresolved-repository"
+	const noRepo = contractsv1.ContextFabricNoRepositorySentinel
+	const orphan = contractsv1.ContextFabricOrphanedRepositorySentinel
+	const unresolved = contractsv1.ContextFabricUnresolvedRepositorySentinel
 	principals := map[string]storage.Principal{
 		"org_wide":     {OrgID: "o1"},
 		"star_granted": {OrgID: "o1", RepositoryScopes: []string{"*"}},
@@ -47,5 +48,39 @@ func TestRequestedRepositoryWildcardRequiresPresentRepository(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestRequestedRepositoryWildcardAdmitsAMixedListAndRefusesEverySentinelKind(t *testing.T) {
+	requested := contextfabric.RequestedScope{RepositorySlugs: []string{"*"}}
+	principal := storage.Principal{OrgID: "o1"}
+	cases := []struct {
+		name string
+		list []string
+		want bool
+	}{
+		{"real slug", []string{"acme/granted"}, true},
+		{"sentinel and real slug", []string{contractsv1.ContextFabricNoRepositorySentinel, "acme/granted"}, true},
+		{"no project ownership", []string{contractsv1.ContextFabricNoProjectOwnershipSentinel}, false},
+		{"no team ownership", []string{contractsv1.ContextFabricNoTeamOwnershipSentinel}, false},
+		{"team ownership over bound", []string{contractsv1.ContextFabricTeamOwnershipOverBoundSentinel}, false},
+		{"empty list", []string{}, false},
+	}
+	for _, c := range cases {
+		got := AuthorizedAttributes(principal, requested, map[string]interface{}{"authorization_repositories": c.list})
+		if got != c.want {
+			t.Errorf("%s: got=%v want=%v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestRequestedRepositoryWildcardKeepsTheUnrestrictedMarkerAndDeniesAMissingList(t *testing.T) {
+	requested := contextfabric.RequestedScope{RepositorySlugs: []string{"*"}}
+	principal := storage.Principal{OrgID: "o1"}
+	if !AuthorizedAttributes(principal, requested, map[string]interface{}{"authorization_repositories": "*"}) {
+		t.Error("unrestricted marker node must stay admitted by the all-repositories selector")
+	}
+	if AuthorizedAttributes(principal, requested, map[string]interface{}{}) {
+		t.Error("a node with no repository list must be denied")
 	}
 }
