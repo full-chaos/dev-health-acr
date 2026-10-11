@@ -732,7 +732,12 @@ import (
 // scope-expansion gap is admitted by the outcome validator, so an answer that was
 // refused as an invalid result is served; a candidate saved under an earlier
 // version cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v150"
+//
+// v151: a degraded answer for a failed model call serves one
+// synthesis_model_failed coverage detail (failure class and retry hint) and is
+// recognised by it; a no-facts failure serves its own limitation. A candidate
+// saved under an earlier version carries only the warning.
+const QueryVersion = "devhealthfacts.clickhouse.v151"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
