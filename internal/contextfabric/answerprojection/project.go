@@ -1352,7 +1352,7 @@ type clampedNarrative struct {
 // degradation disclosure) is admitted first, then the rest in their given
 // order while they fit. Surviving entries keep their original order. A
 // non-empty list is never emptied: when not even one entry fits, the
-// retained entry, else the first, is kept whole, because an answer that
+// first is kept whole, because an answer that
 // loses every caveat reads as a cleaner answer than the investigation gave.
 //
 // The measure is the encoded one, because the served ceiling measures the
@@ -1383,15 +1383,18 @@ func fitNarrativeBytes(entries []clampedNarrative, maxBytes int, retain func(str
 		}
 	}
 	for i := range entries {
-		if keep[i] {
-			continue
-		}
-		if placed && used+cost[i] > maxBytes {
+		if keep[i] || used+cost[i] > maxBytes {
 			continue
 		}
 		keep[i] = true
 		used += cost[i]
 		placed = true
+	}
+	// Nothing fit, so nothing was kept: an overlarge first entry is kept
+	// whole rather than emptying the list. It is the last resort, taken only
+	// when no entry fits, never ahead of one that does.
+	if !placed {
+		keep[0] = true
 	}
 	out := make([]clampedNarrative, 0, len(entries))
 	for i, entry := range entries {

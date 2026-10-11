@@ -123,3 +123,56 @@ func TestNarrativeByteCutMeasuresTheEncodedLength(t *testing.T) {
 		t.Error("nothing was cut although the encoded array overshoots the allowance")
 	}
 }
+
+// An overlarge entry is the last resort: it is kept only when no entry fits,
+// never ahead of one that does.
+func TestNarrativeByteCutPrefersAFittingEntryToAnOverlargeFirst(t *testing.T) {
+	huge := strings.Repeat("é", contractsv1.ContextFabricProjectedNarrativeMaxLength)
+	result := richResult()
+	result.Limitations = []string{huge, "ok"}
+	result.Warnings = nil
+	p := Project(result, Budget{MaxSerializedBytes: 8192}) // allowance 2048
+	if len(p.Limitations) != 1 || p.Limitations[0] != "ok" {
+		t.Fatalf("limitations = %d entries (first %.8q), want just the fitting entry", len(p.Limitations), strings.Join(p.Limitations, "|"))
+	}
+	if p.ProjectionBudget.LimitationsOmitted != 1 {
+		t.Errorf("limitations_omitted = %d, want 1", p.ProjectionBudget.LimitationsOmitted)
+	}
+}
+
+func logField(args []any, name string) (any, bool) {
+	for i := 0; i+1 < len(args); i += 2 {
+		if args[i] == name {
+			return args[i+1], true
+		}
+	}
+	return nil, false
+}
+
+// The answer-display event names the byte cut, its ceiling and its effect:
+// the byte cut is the part the count cap did not remove.
+func TestDisplayLogNamesTheNarrativeByteCut(t *testing.T) {
+	const ceiling = 262144
+	result := richResult()
+	result.Limitations = bigNarrative("limitation", 100) // count cap does not bite
+	result.Warnings = []string{"short"}
+	budget := Budget{MaxSerializedBytes: ceiling}
+	p := Project(result, budget)
+	args := DisplayLogArgs(result, p, budget, false, false)
+	want := map[string]any{
+		"max_serialized_bytes":     ceiling,
+		"narrative_byte_allowance": ceiling / NarrativeByteShareDivisor,
+		"limitations_omitted":      p.ProjectionBudget.LimitationsOmitted,
+		"warnings_omitted":         0,
+		"warnings_byte_cut":        0,
+	}
+	for name, expected := range want {
+		if got, ok := logField(args, name); !ok || got != expected {
+			t.Errorf("%s = %v (present %v), want %v", name, got, ok, expected)
+		}
+	}
+	got, ok := logField(args, "limitations_byte_cut")
+	if !ok || got.(int) == 0 || got.(int) != p.ProjectionBudget.LimitationsOmitted {
+		t.Errorf("limitations_byte_cut = %v (present %v), want the %d entries only the byte allowance removed", got, ok, p.ProjectionBudget.LimitationsOmitted)
+	}
+}
