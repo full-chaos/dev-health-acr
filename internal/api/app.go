@@ -77,7 +77,7 @@ func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.handleHealth)
 	mux.HandleFunc("GET /readyz", a.handleReady)
-	mux.Handle("GET /api/v1/agent-context/capabilities", a.protectedRuntimeHandler(limits.RequestClassAuth, auth.ScopeContextRead, false, true, http.HandlerFunc(a.handleCapabilities)))
+	mux.Handle("GET /api/v1/agent-context/capabilities", a.protectedRuntimeHandler(limits.RequestClassCapabilities, auth.ScopeContextRead, false, true, http.HandlerFunc(a.handleCapabilities)))
 	mux.Handle("POST /api/v1/agent-context/context-packets", a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, false, true, a.requireDataStoresReady(http.HandlerFunc(a.handleContextPacket))))
 	mux.Handle("GET /api/v1/agent-context/evidence/{evidence_ref_id}", a.protectedRuntimeHandler(limits.RequestClassEvidence, auth.ScopeEvidenceRead, true, true, a.requireDataStoresReady(http.HandlerFunc(a.handleEvidence))))
 	mux.Handle("POST /api/v1/agent-context/episodes", a.protectedRuntimeHandler(limits.RequestClassEpisode, auth.ScopeEpisodeWrite, true, false, http.HandlerFunc(a.handleEpisode)))
