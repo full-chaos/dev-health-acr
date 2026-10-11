@@ -141,6 +141,7 @@ func (f *teamRollupFixture) seed(ctx context.Context, direct clickhousedriver.Co
 	dependency("wi-a1", "wi-a2", "parent_of") // not a blocker
 	dependency("wi-a3", "wi-a1", "blocks")    // blocker already done
 	dependency("wi-b2", "wi-b1", "blocks")    // blocker canceled
+	dependency("wi-ghost", "wi-a1", "blocks") // blocker with no work_items row: outside the authorized population, counted nowhere
 }
 
 func (f *teamRollupFixture) read(kind contextfabric.FactKind, timeContext contextfabric.TimeContext, subjects ...contextfabric.SubjectRef) contextfabric.FactProviderResult {

@@ -322,10 +322,12 @@ type blockerRollupRepo struct{ blockedItems, blockerEdges, excludedEdges int64 }
 
 const blockerStatusBasisOpen = "open"
 
-// blockerOpenPredicate is the SQL over the blocking item's normalized status:
-// a blocker counts while it is not done or canceled. A blocker with no
-// work_items row reads as unknown, which is open.
-const blockerOpenPredicate = "ifNull(lower(s.status), 'unknown') NOT IN ('done', '" + workItemCancelledStatus + "')"
+// blockerOpenPredicate is the SQL over the blocking item's normalized
+// status: a blocker counts while it is not done or canceled. Both ends of an
+// edge pass the work-item authorization rule, which is built from work_items
+// rows, so a blocker with no work_items row is outside the caller's authorized
+// population and is counted nowhere, neither as open nor as excluded.
+const blockerOpenPredicate = "lower(s.status) NOT IN ('done', '" + workItemCancelledStatus + "')"
 
 // readTeamRollup serves a team subject on the current axis only:
 // work_item_dependencies carries no event time, so no window is claimed and
@@ -354,7 +356,7 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 		statement := readers.WithSettings(`SELECT toString(t.repo_id), toInt64(uniqExactIf(d.target_work_item_id, `+statusPredicate+`)), toInt64(uniqExactIf((d.target_work_item_id, d.source_work_item_id), `+statusPredicate+`)), toInt64(uniqExactIf((d.target_work_item_id, d.source_work_item_id), NOT (`+statusPredicate+`)))
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-LEFT JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
+INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
 WHERE d.org_id = {org_id:String} AND toString(t.repo_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'
   AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
 GROUP BY t.repo_id
