@@ -42,6 +42,7 @@ func TestSourceRowPlansAreTotal(t *testing.T) {
 		contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2:  contextfabric.SourceRowRouteEncoded,
 		contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2:       contextfabric.SourceRowRouteEncoded,
 		contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2: contextfabric.SourceRowRouteEncoded,
+		contractsv1.ContextFabricEvidenceEntityProjectTeamV2:        contextfabric.SourceRowRouteProjectTeam,
 	}
 	records := 0
 	for _, kind := range vocabulary {
@@ -71,8 +72,8 @@ func TestSourceRowPlansAreTotal(t *testing.T) {
 			}
 		}
 	}
-	if records != 16 || len(want) != 13 {
-		t.Fatalf("records = %d, source kinds = %d; want 16 and 13", records, len(want))
+	if records != 15 || len(want) != 14 {
+		t.Fatalf("records = %d, source kinds = %d; want 15 and 14", records, len(want))
 	}
 	// Every retired kind stays on the record, forever: its refs sit in stored
 	// results and no source row is read for a bare-':' join.

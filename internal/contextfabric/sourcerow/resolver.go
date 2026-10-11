@@ -204,6 +204,8 @@ func (r *Resolver) ResolveSourceRow(ctx context.Context, principal storage.Princ
 		targets, err = r.discoveredTargets(ctx, principal, discovery, entityID, read, contextfabric.SourceRowGrammarRowAnchored, &decision)
 	case contextfabric.SourceRowRouteOwnership:
 		return r.ownershipRow(ctx, principal, entityType, entityID, plan, decision)
+	case contextfabric.SourceRowRouteProjectTeam:
+		return r.projectTeamRow(ctx, principal, entityType, entityID, plan, decision)
 	case contextfabric.SourceRowRouteEncoded:
 		decision.Grammar = contextfabric.SourceRowGrammarEncoded
 		kind := contractsv1.ContextFabricEvidenceEntityType(entityType)
@@ -563,6 +565,58 @@ func (r *Resolver) ownershipRow(ctx context.Context, principal storage.Principal
 	return expanded, decision
 }
 
+// projectTeamRow serves a project-team.v2 ownership group to a caller whose
+// repository list is "*" (CHAOS-7080: unrestricted and "*" callers). The row
+// names a project and a team and no repository, so a repository-restricted
+// caller has nothing to be granted: it stays on the persisted record
+// (kind_on_record, the record route's own reason), decided from the principal
+// alone before any read, so no refusal depends on whether the group exists.
+func (r *Resolver) projectTeamRow(ctx context.Context, principal storage.Principal, entityType, entityID string, plan contextfabric.SourceRowPlan, decision contextfabric.SourceRowDecision) (contractsv1.ExpandedEvidence, contextfabric.SourceRowDecision) {
+	decision.Grammar = contextfabric.SourceRowGrammarEncoded
+	kind := contractsv1.ContextFabricEvidenceEntityType(entityType)
+	values, ok := evidenceref.Parse(kind, entityID)
+	if !ok || !providerPattern.MatchString(values[0]) {
+		decision.Reason = contextfabric.SourceRowIDMalformed
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	if !admitsWildcard(principal) {
+		decision.Reason = contextfabric.SourceRowKindOnRecord
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	read := contextpacket.SourceRowRead{QueryID: plan.Query, Locator: contractsv1.ContextFabricEvidenceRefPrefix + entityType + ":" + entityID, Components: values}
+	references, err := r.rows.ResolveOrganizationRow(ctx, principal.OrgID, read)
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		decision.Reason, decision.Err = contextfabric.SourceRowUnavailable, err
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	decision.Rows = len(references)
+	switch len(references) {
+	case 0:
+		decision.Reason = contextfabric.SourceRowNoRow
+		return contractsv1.ExpandedEvidence{}, decision
+	case 1:
+	default:
+		decision.Reason = contextfabric.SourceRowAmbiguous
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	decision.Admitted = 1
+	row := found{target: target{read: read, grammar: contextfabric.SourceRowGrammarEncoded}, reference: references[0].Reference, key: references[0].Key}
+	if !rowNamesSubject(entityType, entityID, row) {
+		decision.Reason, decision.SubjectMismatch = contextfabric.SourceRowNoRow, true
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	expanded, err := r.expand(ctx, entityType, entityID, row)
+	if err != nil {
+		decision.Reason, decision.Err = contextfabric.SourceRowInvalid, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			decision.Reason, decision.Err = contextfabric.SourceRowUnavailable, ctxErr
+		}
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	decision.Reason = contextfabric.SourceRowServed
+	return expanded, decision
+}
+
 // rowNamesSubject recomputes the subject of the row a read returned from the
 // row's own columns, with the producer's functions, and reports whether it is
 // the subject the ref names and the grant or gate authorized (#742 r1 P1
@@ -617,6 +671,19 @@ func rowNamesSubject(entityType, entityID string, row found) bool {
 			return false
 		}
 		minted = contractsv1.EvidenceRefID(kind, row.key[0]+":"+row.key[1])
+	case contractsv1.ContextFabricEvidenceEntityProjectTeamV2:
+		// The row's own key columns are the ref's four segments, and the
+		// id the statement rendered re-mints to the requested ref.
+		values, parsed := evidenceref.Parse(kind, rowID)
+		if !parsed || len(row.key) != len(values) {
+			return false
+		}
+		for index := range values {
+			if row.key[index] != values[index] {
+				return false
+			}
+		}
+		minted, _ = evidenceref.Mint(kind, values...)
 	default:
 		// A ".v2" row (CHAOS-7252): its id is the statement's rendering of
 		// the row's own columns (evidenceref.IDSQL). It must parse as the
