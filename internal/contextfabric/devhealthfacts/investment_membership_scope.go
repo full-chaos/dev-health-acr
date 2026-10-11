@@ -355,7 +355,7 @@ func (p *InvestmentProvider) resolveMembershipScopeRun(ctx context.Context, orgI
 				outcome, units = "overflow", membershipScopeMaxUnits
 			}
 			if p.scopes.firstLoad(orgID + "\x00" + outcome) {
-				slog.InfoContext(ctx, "investment membership scope cold load", "outcome", outcome, "duration_ms", clock().Sub(started).Milliseconds(), "units", units)
+				slog.InfoContext(ctx, "investment membership scope cold load", "outcome", contextfabric.SanitizeLogAttr(outcome), "duration_ms", clock().Sub(started).Milliseconds(), "units", units)
 			}
 			return []string(nil), nil
 		}
