@@ -10,9 +10,21 @@ const RateLimitDetailsLimitKey = "limit"
 // the budget, not an authentication attempt limit, refused the request.
 const RateLimitRequestBudget = "request_budget"
 
+// RateLimitCapabilitiesBudget is the limit token of a 429 answered from the
+// capabilities handshake's own budget. Every MCP request resolves its caller
+// through that handshake; the budget is separate from the context budget and
+// from the credential-lifecycle budget. The credential was already decided.
+const RateLimitCapabilitiesBudget = "capabilities_budget"
+
+// IsRateLimitBudgetRefusal reports whether limit names a budget that refused
+// an already-authenticated caller (not an authentication-attempt limit).
+func IsRateLimitBudgetRefusal(limit string) bool {
+	return limit == RateLimitRequestBudget || limit == RateLimitCapabilitiesBudget
+}
+
 // RateLimitLimits lists every member of the closed vocabulary. It is the one
 // list IsRateLimitLimit and the published schema's enum are held equal to.
-func RateLimitLimits() []string { return []string{RateLimitRequestBudget} }
+func RateLimitLimits() []string { return []string{RateLimitRequestBudget, RateLimitCapabilitiesBudget} }
 
 // IsRateLimitLimit reports whether limit is a member of the closed vocabulary.
 func IsRateLimitLimit(limit string) bool {

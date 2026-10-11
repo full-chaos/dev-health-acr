@@ -88,7 +88,7 @@ func TestWriteRateLimitErrorRoundsRetryUp(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(context.WithValue(context.Background(), requestIDContextKey, "req_0123456789abcdef0123456789abcdef"))
 	response := httptest.NewRecorder()
 
-	writeRateLimitError(response, request, 1100*time.Millisecond)
+	writeRateLimitError(response, request, 1100*time.Millisecond, contractsv1.RateLimitRequestBudget)
 
 	if response.Header().Get("Retry-After") != "2" {
 		t.Fatalf("retry-after = %q", response.Header().Get("Retry-After"))
@@ -99,7 +99,7 @@ func TestWriteRateLimitErrorNamesTheRequestBudget(t *testing.T) {
 	for _, retryAfter := range []time.Duration{0, time.Second} {
 		request := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(context.WithValue(context.Background(), requestIDContextKey, "req_0123456789abcdef0123456789abcdef"))
 		response := httptest.NewRecorder()
-		writeRateLimitError(response, request, retryAfter)
+		writeRateLimitError(response, request, retryAfter, contractsv1.RateLimitRequestBudget)
 		var envelope contractsv1.ErrorEnvelope
 		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 			t.Fatal(err)
