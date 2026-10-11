@@ -64,6 +64,12 @@ required fields, and the phrases in `note` that the scorer keys off — is docum
 in `corpus_example.py`, which is a **synthetic** stand-in used by the tests.
 Numbers produced from the example are meaningless by construction.
 
+A corpus with no expectation-bearing row (every row unscored or invalid, or no
+rows at all) would report every row `unscored`, which reads as a score but
+measures nothing. `harness.py`, `run_shard.py` and `merge_corpus.py` therefore
+refuse it before any request is sent or any verdict is written, naming the
+count of rows and invalid rows (`expectations.require_expectation_bearing`).
+
 Row **ids** are safe to print. **Question text must never be copied into a report,
 record, ticket or commit** — rows by id only.
 
@@ -136,6 +142,7 @@ count to zero, which would make a load failure read as a clean run.
 | `reclassify_deadlines.py` | deadline re-run, marked in the artefact |
 | `semantic_verdict_bridge.py` | CHAOS-5625: wires ask-dev's CHAOS-5620 versioned semantic verdict (`expect_schema.py`/`semantic_verdict.py`, imported at whatever pin already supplies the real `corpus.py`) into a row's raw attempts + this repo's own scalar scorer, published beside (never in place of) the five buckets and `expectation_scoring` above |
 | `test_shard_plan.py`, `test_instrument.py` | contract tests; no rig needed |
+| `test_vacuous_corpus_guard.py` | a corpus with no expectation-bearing row makes the run and the merge fail |
 
 A single shard's artefact is never standalone evidence. The merge is the verdict.
 
