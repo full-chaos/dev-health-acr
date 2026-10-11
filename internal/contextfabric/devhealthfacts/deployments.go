@@ -236,6 +236,7 @@ ORDER BY repo_id`
 			return outcome, scanErr
 		}
 	}
+	tables := teamRollupTablesIncluded(len(teamIDs))
 	for _, teamID := range teamIDs {
 		subject := bySubject[teamID]
 		repos := owned[teamID]
@@ -254,26 +255,29 @@ ORDER BY repo_id`
 			withData++
 			total += r.deployments
 			failed += r.failed
-			cells := map[string]contextfabric.FactValue{
-				"repository_id":                   contextfabric.StringFactValue(repo.key),
-				"deployments_count_window":        contextfabric.IntegerFactValue(r.deployments),
-				"failed_deployments_count_window": contextfabric.IntegerFactValue(r.failed),
-				"days_with_data_window":           contextfabric.IntegerFactValue(r.days),
-				"latest_day":                      contextfabric.StringFactValue(r.latestDay),
+			if tables {
+				cells := map[string]contextfabric.FactValue{
+					"repository_id":                   contextfabric.StringFactValue(repo.key),
+					"deployments_count_window":        contextfabric.IntegerFactValue(r.deployments),
+					"failed_deployments_count_window": contextfabric.IntegerFactValue(r.failed),
+					"days_with_data_window":           contextfabric.IntegerFactValue(r.days),
+					"latest_day":                      contextfabric.StringFactValue(r.latestDay),
+				}
+				if repo.name != "" {
+					cells["repository_name"] = contextfabric.StringFactValue(repo.name)
+				}
+				if r.hasDeployTime {
+					cells["deploy_time_p50_hours_latest_day"] = contextfabric.NumberFactValue(r.deployTime)
+				}
+				if r.hasLead {
+					cells["lead_time_p50_hours_latest_day"] = contextfabric.NumberFactValue(r.leadTime)
+				}
+				breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 			}
-			if repo.name != "" {
-				cells["repository_name"] = contextfabric.StringFactValue(repo.name)
-			}
-			if r.hasDeployTime {
-				cells["deploy_time_p50_hours_latest_day"] = contextfabric.NumberFactValue(r.deployTime)
-			}
-			if r.hasLead {
-				cells["lead_time_p50_hours_latest_day"] = contextfabric.NumberFactValue(r.leadTime)
-			}
-			breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 		}
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),
+			"repository_tables_basis":         contextfabric.StringFactValue(teamRollupTablesBasis(tables)),
 			"window_basis":                    contextfabric.StringFactValue(window.basis),
 			"owned_repository_count":          contextfabric.IntegerFactValue(int64(len(repos))),
 			"repositories_with_data_count":    contextfabric.IntegerFactValue(withData),
@@ -285,7 +289,7 @@ ORDER BY repo_id`
 		if value, ok := window.endValue(); ok {
 			fields["window_end"] = value
 		}
-		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok {
+		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok && tables {
 			fields["owned_repositories"] = table
 			if omitted > 0 {
 				outcome.truncated = true
@@ -297,7 +301,7 @@ ORDER BY repo_id`
 			fields["failed_deployments_count_window"] = contextfabric.IntegerFactValue(failed)
 			if table, omitted, ok := repositoryBreakdownFactValue(breakdown, grainDaily,
 				[]string{"deployments_count_window", "failed_deployments_count_window", "days_with_data_window", "deploy_time_p50_hours_latest_day", "lead_time_p50_hours_latest_day"},
-				[]string{"repository_name", "latest_day"}); ok {
+				[]string{"repository_name", "latest_day"}); ok && tables {
 				fields["repository_breakdown"] = table
 				if omitted > 0 {
 					outcome.truncated = true

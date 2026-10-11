@@ -38,6 +38,28 @@ const teamOwnedRepositoriesOverflowReason = "query team owned repositories excee
 // read of exactly this many rows.
 const maxTeamOwnedRepositoryRows = 2000
 
+// The per-repository tables of a team rollup (owned_repositories and the
+// kind's repository_breakdown) serve a single-team read: they let a client
+// continue per repository. A read over several teams carries the scalar
+// totals and counts only, so an answer about many teams stays bounded; the
+// basis field says which one the fact is.
+const (
+	teamRollupTablesIncludedBasis = "included"
+	teamRollupTablesOmittedBasis  = "omitted_multi_team_read"
+)
+
+// teamRollupTablesIncluded says whether a read over teamCount team subjects
+// carries the per-repository tables.
+func teamRollupTablesIncluded(teamCount int) bool { return teamCount <= 1 }
+
+// teamRollupTablesBasis is the repository_tables_basis value for a read.
+func teamRollupTablesBasis(included bool) string {
+	if included {
+		return teamRollupTablesIncludedBasis
+	}
+	return teamRollupTablesOmittedBasis
+}
+
 const (
 	rollupStartParam = "rollup_start"
 	rollupEndParam   = "rollup_end"
