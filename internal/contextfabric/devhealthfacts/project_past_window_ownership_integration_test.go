@@ -47,15 +47,13 @@ func TestProjectRollupsReadOwnershipAsSyncedForAPastWindowAgainstRealClickHouse(
 	computed := inWindow.Add(6 * time.Hour)
 	exec(`INSERT INTO team_metrics_daily (day, team_id, team_name, commits_count, after_hours_commits_count, weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		inWindow, "team-past", "Team Past", uint32(7), uint32(1), uint32(1), 0.1, 0.1, computed, orgID)
-	exec(`INSERT INTO investment_metrics_daily (day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		inWindow, "team-past", "product", "growth", uint32(30), uint32(12), uint32(4), uint64(850), computed, orgID)
 	exec(`INSERT INTO capacity_forecasts (forecast_id, computed_at, team_id, work_scope_id, backlog_size, throughput_mean, throughput_stddev, insufficient_history, high_variance, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		"forecast-past", computed, "team-past", "proj-past", uint32(12), 3.2, 0.8, uint8(0), uint8(1), orgID)
 	exec(`INSERT INTO estimate_coverage_metrics_daily (day, provider, work_scope_id, team_id, estimated_count, unestimated_count, backlog_size, ratio, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		inWindow, "linear", "proj-past", "team-past", uint32(18), uint32(2), uint32(20), 0.9, computed, orgID)
 
 	for _, kind := range []contextfabric.FactKind{
-		contextfabric.FactMetrics, contextfabric.FactInvestment, contextfabric.FactReadiness, contextfabric.FactWorkload,
+		contextfabric.FactMetrics, contextfabric.FactReadiness, contextfabric.FactWorkload,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			provider := findProvider(t, providers, kind)

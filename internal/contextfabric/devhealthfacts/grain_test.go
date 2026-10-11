@@ -2,7 +2,6 @@ package devhealthfacts_test
 
 import (
 	"context"
-	"math"
 	"testing"
 	"time"
 
@@ -148,71 +147,5 @@ func TestCurrentIncidentsStillCarrySeverity(t *testing.T) {
 	}
 	if _, present := result.Facts[0].Fields["severity"]; !present {
 		t.Fatal("a current-axis incident fact lost its severity")
-	}
-}
-
-// TestF2_UnrepresentableUnsignedValuesAreOmittedNotWrapped is CHAOS-3781
-// round-3 F2, red→green.
-//
-// investment_metrics_daily.churn_loc is the
-// only UInt64 column these providers read; every other numeric column is
-// UInt32 and fits int64 by construction. Wrapping a UInt64 with toInt64
-// in SQL turned any value above MaxInt64 NEGATIVE, and FactValue.Validate
-// accepts negatives, so it would have reached a public answer as a
-// silently wrong number.
-//
-// The schema parity guard cannot catch this: it proves a scan does not
-// FAIL, not that a value is right. So the range is checked explicitly and
-// an out-of-range row is OMITTED rather than reported wrong.
-func TestF2_UnrepresentableUnsignedValuesAreOmittedNotWrapped(t *testing.T) {
-	t.Parallel()
-	// One tick above MaxInt64: the smallest value that wraps negative.
-	const overflow = uint64(math.MaxInt64) + 1
-
-	for _, testCase := range []struct {
-		name    string
-		kind    contextfabric.FactKind
-		subject contextfabric.SubjectRef
-		match   string
-		row     []any
-	}{
-		{
-			name: "investment_metrics_daily.churn_loc", kind: contextfabric.FactInvestment,
-			subject: projectSubject("linear", "proj-1"), match: "FROM investment_metrics_daily",
-			row: investmentProjectRollupRow("linear", "proj-1", "team-1", "Team One", "product", "growth", 30, 12, 4, overflow, 18.5),
-		},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			client := &fakeClient{tables: []fakeTable{{match: testCase.match, rows: [][]any{testCase.row}}}}
-			provider := findProvider(t, devhealthfacts.NewProviders(client), testCase.kind)
-			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
-				Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-				Kind:     testCase.kind,
-				Subjects: []contextfabric.SubjectRef{testCase.subject},
-			})
-			if err != nil {
-				t.Fatalf("ReadFacts() error = %v", err)
-			}
-			// The wrong-value outcome: a fact carrying a negative count.
-			for _, fact := range result.Facts {
-				for field, value := range fact.Fields {
-					if value.Integer != nil && *value.Integer < 0 {
-						t.Fatalf("field %q reported %d -- an unsigned source value wrapped negative instead of being omitted", field, *value.Integer)
-					}
-				}
-			}
-			if result.Reason == "" {
-				t.Fatal("an omitted out-of-range value must be stated, not silent")
-			}
-			// Round-4 R4-2: the COUNT travels, and the result is marked
-			// truncated so coverage degrades to partial. Omitting a row
-			// while reporting complete coverage is a measurement that
-			// fails toward "fine" -- the answer looks whole and the
-			// caller cannot tell anything was withheld.
-			if result.OmittedCount != 1 {
-				t.Fatalf("OmittedCount = %d, want 1", result.OmittedCount)
-			}
-		})
 	}
 }

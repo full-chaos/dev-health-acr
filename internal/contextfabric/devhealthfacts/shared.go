@@ -687,11 +687,20 @@ import (
 // discovery; a candidate saved under v135 may hold an answer that served that
 // twin or lacked the field.
 //
-// v136 -> v137: the first project investment read after a pod start loads the
+// v136 -> v137: a project's FactInvestment is only the canonical theme mix (one standalone
+// fact per project: the owning-team roll-up or the project's own attribution); the legacy
+// per-team (investment_area, project_stream, day) breakdown of investment_metrics_daily
+// (the deprecated rule classifier's keys: team_breakdown, investment_area, project_stream,
+// delivery_units, work_items_completed, prs_merged, churn_loc) is no longer served for a
+// project, and a project with no canonical mix has no investment fact (CHAOS-9195, D5932).
+// A candidate saved under v136 carries the legacy breakdown (and a mix merged onto it) and
+// must not be reused.
+//
+// v137 -> v138: the first project investment read after a pod start loads the
 // membership scope before the capability clock starts, so it serves the full
 // answer, not a partial "canonical fact capability timed out". A candidate saved
-// under v136 may hold that partial answer and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v137"
+// under v137 may hold that partial answer and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v138"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

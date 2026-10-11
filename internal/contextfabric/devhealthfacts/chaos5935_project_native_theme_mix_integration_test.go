@@ -243,7 +243,7 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		absent(t, fact, "owning_team_rollup_work_unit_count", "team_count")
 	})
 
-	t.Run("native_mix_merges_onto_the_legacy_breakdown_fact_when_there_is_no_rollup", func(t *testing.T) {
+	t.Run("native_mix_is_the_standalone_fact_and_a_legacy_row_is_never_read", func(t *testing.T) {
 		const org = "org-native-legacy"
 		seedProject("proj-l", org)
 		seedOwnedRepo(org, "proj-l", "team-l", "repo-l")
@@ -253,8 +253,10 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		seedIssueUnit(org, "wu-l", 10, map[string]float64{"quality": 1.0}, "linear:L-1")
 
 		fact := read(org, "proj-l")["proj-l"]
-		if _, has := fact.Fields["team_breakdown"]; !has {
-			t.Errorf("fields = %#v, want the legacy team_breakdown kept on the same fact", fact.Fields)
+		for _, legacy := range []string{"team_breakdown", "investment_area", "project_stream", "delivery_units"} {
+			if _, has := fact.Fields[legacy]; has {
+				t.Errorf("fields = %#v, want no legacy field %q: a legacy row is never read for a project (CHAOS-9195)", fact.Fields, legacy)
+			}
 		}
 		if got := factString(t, fact, "investment_mix_source"); got != "project_native" {
 			t.Errorf("investment_mix_source = %q, want project_native", got)
