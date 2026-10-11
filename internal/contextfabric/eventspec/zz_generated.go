@@ -3066,6 +3066,7 @@ func (f SynthesisRetrySelectionFields) SlogArgs() []any {
 type TeamAnchorWalkFields struct {
 	OrgID      string
 	Outcome    string
+	AnchorKind string
 	MemberKind string
 	Committed  int
 	Members    int
@@ -3086,10 +3087,11 @@ type TeamAnchorWalkFields struct {
 
 // NewTeamAnchorWalkFields is the generated constructor for TeamAnchorWalkFields -- every
 // field TeamAnchorWalk.Fields declares is a required parameter.
-func NewTeamAnchorWalkFields(orgID string, outcome string, memberKind string, committed int, members int, denied int, truncated bool, error string, requestID string) TeamAnchorWalkFields {
+func NewTeamAnchorWalkFields(orgID string, outcome string, anchorKind string, memberKind string, committed int, members int, denied int, truncated bool, error string, requestID string) TeamAnchorWalkFields {
 	return TeamAnchorWalkFields{
 		OrgID:       orgID,
 		Outcome:     outcome,
+		AnchorKind:  anchorKind,
 		MemberKind:  memberKind,
 		Committed:   committed,
 		Members:     members,
@@ -3116,6 +3118,7 @@ func (f TeamAnchorWalkFields) SlogArgs() []any {
 	return []any{
 		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"anchor_kind", contextfabric.SanitizeLogAttr(f.AnchorKind),
 		"member_kind", contextfabric.SanitizeLogAttr(f.MemberKind),
 		"committed", f.Committed,
 		"members", f.Members,

@@ -5426,7 +5426,7 @@
     "attribution": [
       "org_id"
     ],
-    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the question asks for the repositories or projects of a committed team",
+    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the question asks for the members of a committed team, project or repository",
     "fields": [
       {
         "key": "org_id",
@@ -5445,12 +5445,24 @@
         ]
       },
       {
+        "key": "anchor_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "team",
+          "project",
+          "repository"
+        ]
+      },
+      {
         "key": "member_kind",
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
           "repository",
-          "project"
+          "project",
+          "team",
+          "pull_request"
         ]
       },
       {

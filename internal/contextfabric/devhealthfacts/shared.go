@@ -779,7 +779,14 @@ import (
 // v159 -> v160: a continuation turn carrying a subject hint keeps the remembered confirmed-need
 // ledger (the hint contests a carried anchor of its own kind instead of dropping the ledger);
 // a candidate saved under an earlier version for such a turn was answered without it.
-const QueryVersion = "devhealthfacts.clickhouse.v160"
+//
+// v160 -> v161: the members of a project or repository anchor are the nodes
+// with an entity-tree path to the anchor (and a team anchor's pull requests the
+// ones of its repositories), each stating the tier of the issue and pull
+// request link that reached it; a text-matched member with no path is no
+// longer served. A candidate saved under v160 may hold such a member and must
+// not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v161"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
