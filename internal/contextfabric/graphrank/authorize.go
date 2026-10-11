@@ -101,7 +101,7 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 			return false
 		}
 	}
-	if len(requested.RepositorySlugs) > 0 && !anyContainsAttr(attributes, authorizationRepositoriesAttr, requested.RepositorySlugs) {
+	if len(requested.RepositorySlugs) > 0 && !requestedRepositoriesAdmit(attributes, requested.RepositorySlugs) {
 		return false
 	}
 	if len(requested.ProjectIDs) > 0 && !anyContainsAttr(attributes, authorizationProjectsAttr, requested.ProjectIDs) {
@@ -143,6 +143,42 @@ func issueScopeOfLink(requested contextfabric.RequestedScope) contextfabric.Requ
 // node) and must not be conflated with "does this node own repoSlug."
 func OwnsRepository(attributes map[string]interface{}, repoSlug string) bool {
 	return scopeContainsAttr(attributes, authorizationRepositoriesAttr, repoSlug)
+}
+
+// requestedRepositoriesAdmit is the requested repository selector: the
+// repository must be PRESENT on the node, as in the shared library's requested
+// expression. The "*" selector therefore does not admit a node whose list
+// holds only repository-absence sentinels (named in contracts/v1). Principal
+// grants are tested elsewhere and keep their own "*" meaning.
+func requestedRepositoriesAdmit(attributes map[string]interface{}, selectors []string) bool {
+	for _, selector := range selectors {
+		trimmed := strings.TrimSpace(selector)
+		if contractsv1.ContextFabricIsRepositoryAbsenceSentinel(trimmed) {
+			// A sentinel records that no repository is present; naming it is
+			// not naming a repository.
+			continue
+		}
+		if trimmed == "*" && !repositoryPresent(attributes) {
+			continue
+		}
+		if scopeContainsAttr(attributes, authorizationRepositoriesAttr, selector) {
+			return true
+		}
+	}
+	return false
+}
+
+// repositoryPresent reports whether the node's repository list names at least
+// one entry that is not a repository-absence sentinel. The "*" list is the
+// unrestricted marker, not a repository, and keeps its existing treatment.
+func repositoryPresent(attributes map[string]interface{}) bool {
+	entries, isList := attributes[authorizationRepositoriesAttr].([]string)
+	if !isList {
+		return true
+	}
+	return slices.ContainsFunc(entries, func(entry string) bool {
+		return !contractsv1.ContextFabricIsRepositoryAbsenceSentinel(entry)
+	})
 }
 
 func anyContainsAttr(attributes map[string]interface{}, key string, values []string) bool {

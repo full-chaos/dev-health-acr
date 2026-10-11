@@ -1378,7 +1378,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 // deliberately its own distinct literal rather than collapsing into
 // either of those. Cannot collide with a real "owner/repo" slug (always
 // contains '/') or with either work-item sentinel.
-const noTeamOwnershipSentinel = "acr-context-fabric:no-team-repository-ownership"
+const noTeamOwnershipSentinel = contractsv1.ContextFabricNoTeamOwnershipSentinel
 
 // overBoundTeamOwnershipSentinel (CHAOS-7139) is the RepositorySlugs value
 // queryTeams uses for a team whose CURRENT owned-repository list is above the
@@ -1391,7 +1391,7 @@ const noTeamOwnershipSentinel = "acr-context-fabric:no-team-repository-ownership
 // principal still sees it. A loud Warn per run names the team and count. When
 // the team drops back within the bound, its team watermark advances on the
 // ownership change and the real list is re-projected.
-const overBoundTeamOwnershipSentinel = "acr-context-fabric:team-repository-ownership-over-bound"
+const overBoundTeamOwnershipSentinel = contractsv1.ContextFabricTeamOwnershipOverBoundSentinel
 
 var ownedRepositoriesJoinSQL = `LEFT JOIN (
 	SELECT g.owning_team_id AS team_id,

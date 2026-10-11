@@ -766,11 +766,16 @@ import (
 // serves 0 with the inactive and ended owners disclosed, where it served no count; a candidate
 // saved under an earlier version may hold the unavailable count and must not be reused.
 //
-// v157 -> v158: the reuse watermark check reads only the serving epoch's
-// checkpoints. A candidate saved under v157 may carry a snapshot taken across
+// v157 -> v158: a request whose repository selector is "*", or names a repository-absence
+// sentinel, no longer admits a graph node that records only repository-absence sentinels
+// (no repository, orphaned, unresolved, no ownership); an organization-wide caller receives
+// fewer graph items under that scope.
+//
+// v158 -> v159: the reuse watermark check reads only the serving epoch's
+// checkpoints. A candidate saved under v158 may carry a snapshot taken across
 // epochs, where a building or grace epoch's watermark stood in for the serving
 // one, and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v158"
+const QueryVersion = "devhealthfacts.clickhouse.v159"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
