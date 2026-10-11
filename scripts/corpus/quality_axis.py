@@ -34,7 +34,11 @@ RULES THAT ARE EASY TO GET WRONG (read before changing anything)
     decline, answered with a no_match that discloses its basis and commits and claims
     nothing, scores 1.0. Zero facts is the right answer there; scoring it on facts would
     punish the engine for being correct. About a third of the corpus is of this kind.
-  * SERVING A REFUSE-EXPECTED ROW IS A FABRICATION: Q = 0.
+  * SERVING A REFUSE-EXPECTED ROW IS A FABRICATION: Q = 0. One declared exception: a
+    row that declares `decline_if_shape_emitted` owes a decline only when the model
+    emitted the refusing shape; a served result that shows no such shape (no refusal
+    basis, no group kind equal to the member kind) is scored by content like a serve
+    row and carries `conditional_decline`.
   * TIMEOUTS AND FAILED TERMINAL ATTEMPTS ARE NOT MEASURED. They are never scored 0 and
     never enter a mean; they are counted per class as `not_measured`.
   * A ROW THAT WAS NOT SERVED ON A SERVE-EXPECTED ROW has no Q. served -> refused is a
@@ -65,7 +69,7 @@ import expectations as E  # noqa: E402
 from attempt_order import order_attempts  # noqa: E402
 from subject_identity import _norm  # noqa: E402
 
-SCORER_VERSION = "quality-axis.v1"
+SCORER_VERSION = "quality-axis.v2"
 
 SERVED = {"complete", "partial", "degraded"}
 GATES = ("D4", "D5", "D8", "R2")
@@ -368,6 +372,28 @@ def r2_nothing(v):
     return _r(2, "nothing_committed_nothing_claimed")
 
 
+def refusing_shape_emitted(doc, v):
+    """True when a SERVED result itself shows the refusing shape was emitted.
+
+    Read from the stored result only, no question text: the result discloses a
+    refusal basis while being served, or its plan / cohort groups express a group
+    kind equal to the cohort's member kind (a set grouped by itself). A served
+    answer with none of these is a legal reading of the question, not a laundered
+    illegal one: the engine refuses the illegal shape before it serves anything.
+    """
+    if v["refusal_basis"]:
+        return True
+    cohort = v["cohort"] or {}
+    member_kind = cohort.get("kind")
+    plan = doc.get("answer_plan") or {}
+    group_kinds = {plan.get("group_kind")}
+    for g in cohort.get("groups") or []:
+        group_kinds.add(((g or {}).get("subject") or {}).get("kind"))
+    group_kinds.discard(None)
+    group_kinds.discard("")
+    return bool(member_kind and member_kind in group_kinds)
+
+
 def c1_options(v):
     return _r(2, "options_offered") if v["clarification_offered"] \
         else _r(0, "clarification_without_options")
@@ -397,6 +423,22 @@ def score_row(doc, expectation):
 
     if st in SERVED:
         if klass in (E.REFUSE, E.CLARIFY):
+            if (klass == E.REFUSE and expectation.get("decline_if_shape_emitted")
+                    and not refusing_shape_emitted(doc, v)):
+                # The row's own note owes a decline only when the model emitted
+                # the refusing shape. None is shown here, so this is a legal
+                # reading: score its content like any serve row, and keep the
+                # bucket axis (which still says served-on-decline) untouched.
+                dims = {"D1": d1_completeness(v), "D2": d2_coverage(v),
+                        "D3": d3_disclosure(v), "D4": d4_grounding(v),
+                        "D5": d5_subject(v, expectation), "D6": d6_window(v),
+                        "D7": d7_cohort_budget(v), "D8": d8_terminal(v)}
+                q, gates = _fold(dims)
+                if dims["D5"]["score"] == 0:
+                    q = 0.0
+                return dict(out, **{"class": "decline_conditional"}, measured=True,
+                            track="serve", dims=dims, q=q, gates_failed=gates,
+                            conditional_decline="legal_reading_served")
             if klass == E.REFUSE:
                 dims = {"R2": _r(0, "served_on_refuse_expected_row:fabrication"),
                         "D8": d8_terminal(v)}

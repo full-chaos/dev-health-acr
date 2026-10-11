@@ -231,12 +231,66 @@ def test_compare_one_step_single_dim_is_noise():
     assert Q.compare(a, b, reps_agree=True)["verdict"] == "better"
 
 
+EXP_CONDITIONAL = dict(EXP_REFUSE, expectation="decline", expectation_basis=None,
+                       decline_if_shape_emitted=True)
+
+
+def cohort_doc(group_kind=None):
+    cohort = {"kind": "team", "members": [], "total": 3}
+    if group_kind:
+        cohort["groups"] = [{"subject": {"kind": group_kind, "canonical_id": "team:a"},
+                             "member_canonical_ids": []}]
+    return served_doc(cohort=cohort)
+
+
+def test_conditional_decline_scores_a_legal_reading_by_content():
+    # the rev 73 shape: a flat team cohort served on the intentionally illegal row
+    r = Q.score_row(cohort_doc(), EXP_CONDITIONAL)
+    assert r["measured"] and r["track"] == "serve" and r["class"] == "decline_conditional"
+    assert r["conditional_decline"] == "legal_reading_served"
+    assert "R2" not in r["dims"] and r["q"] == 1.0 and r["gates_failed"] == []
+
+
+def test_conditional_decline_kill_pair_shape_shown_or_flag_absent_stays_fabrication():
+    # planted defect 1: the served result shows a team cohort grouped by team
+    shown = Q.score_row(cohort_doc("team"), EXP_CONDITIONAL)
+    assert shown["q"] == 0.0 and shown["gates_failed"] == ["R2"] and shown["track"] == "refusal"
+    # planted defect 2: a served result that discloses a refusal basis
+    disclosed = served_doc()
+    disclosed["completeness"]["refusal_basis"] = "frame_invariant_violated"
+    assert Q.score_row(disclosed, EXP_CONDITIONAL)["gates_failed"] == ["R2"]
+    # planted defect 3: the same legal reading on a row that does NOT declare the condition
+    strict = Q.score_row(cohort_doc(), EXP_REFUSE)
+    assert strict["q"] == 0.0 and strict["gates_failed"] == ["R2"]
+
+
+def test_conditional_decline_still_gates_on_grounding():
+    bad = cohort_doc()
+    bad["drivers"] = [{"driver_id": "d1", "claimed_fact_ids": ["nope"], "evidence_ref_ids": ["e1"]}]
+    r = Q.score_row(bad, EXP_CONDITIONAL)
+    assert r["track"] == "serve" and "D4" in r["gates_failed"] and r["q"] <= 0.5
+
+
+def test_conditional_decline_refusal_is_scored_as_a_refusal():
+    r = Q.score_row(refusal_doc(), EXP_CONDITIONAL)
+    assert r["track"] == "refusal" and r["q"] == 1.0
+
+
+def test_decline_if_shape_emitted_must_be_a_bool():
+    ok, reason = EX.validate_corpus_row({"id": "x", "expect": "decline", "decline_if_shape_emitted": "false"})
+    assert not ok and "decline_if_shape_emitted" in reason
+    assert EX.expectation_for({"id": "x", "expect": "decline",
+                               "decline_if_shape_emitted": True})["decline_if_shape_emitted"] is True
+
+
 def test_golden_vectors():
     cases = {
         "clean_serve": (served_doc(), EXP_SERVE),
         "refusal_correct": (refusal_doc(), EXP_REFUSE),
         "served_on_refuse_row": (served_doc(), EXP_REFUSE),
         "undeclared_refusal": (refusal_doc(), EXP_NONE),
+        "conditional_decline_legal_reading": (cohort_doc(), EXP_CONDITIONAL),
+        "conditional_decline_self_grouped": (cohort_doc("team"), EXP_CONDITIONAL),
     }
     got = {k: {"q": Q.score_row(d, e)["q"],
                "dims": {n: x["score"] for n, x in Q.score_row(d, e)["dims"].items()}}
