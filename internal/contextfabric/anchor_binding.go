@@ -1276,7 +1276,7 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"from_contender_kind", SanitizeLogAttr(string(event.From.ContenderKind)),
 		"from_contender_id", SanitizeLogAttr(event.From.ContenderID),
 		"from_proven_freshness_epoch", anchorFreshnessEpoch(event.From.ProvenFreshness),
-		"from_proven_freshness_digest", anchorFreshnessDigest(event.From.ProvenFreshness),
+		"from_proven_freshness_digest", SanitizeLogAttr(anchorFreshnessDigest(event.From.ProvenFreshness)),
 		"parent_graph_epoch", event.ParentGraphEpoch,
 		"graph_epoch", event.GraphEpoch,
 		// PROPOSAL: what the binder read.
@@ -1294,7 +1294,7 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"effective_kind", SanitizeLogAttr(string(event.EffectiveKind)),
 		"freshness_acquisition", SanitizeLogAttr(closed("freshness_acquisition", string(event.FreshnessAcquisition))),
 		"freshness_serving_epoch", anchorFreshnessEpoch(event.Freshness),
-		"freshness_ownership_digest", anchorFreshnessDigest(event.Freshness),
+		"freshness_ownership_digest", SanitizeLogAttr(anchorFreshnessDigest(event.Freshness)),
 		// DECISION.
 		"to_state", SanitizeLogAttr(closed("to_state", string(event.To.State))),
 		"to_kind", SanitizeLogAttr(string(event.To.Kind)),
@@ -1306,7 +1306,7 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"contender_kind", SanitizeLogAttr(string(event.To.ContenderKind)),
 		"contender_id", SanitizeLogAttr(event.To.ContenderID),
 		"to_proven_freshness_epoch", anchorFreshnessEpoch(event.To.ProvenFreshness),
-		"to_proven_freshness_digest", anchorFreshnessDigest(event.To.ProvenFreshness),
+		"to_proven_freshness_digest", SanitizeLogAttr(anchorFreshnessDigest(event.To.ProvenFreshness)),
 		"ownership_movement", SanitizeLogAttr(closed("ownership_movement", string(event.OwnershipMovement))),
 		// POST-DECISION: its fate and the served decision it is compared to.
 		"persisted", SanitizeLogAttr(closed("persisted", string(event.Persisted))),
