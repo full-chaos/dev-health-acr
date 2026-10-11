@@ -1,18 +1,21 @@
 package answerprojection
 
 import (
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
+// narrativeBytes is what the served ceiling measures: the encoded array.
 func narrativeBytes(values []string) int {
-	total := 0
-	for _, value := range values {
-		total += len(value)
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		panic(err)
 	}
-	return total
+	return len(encoded)
 }
 
 func bigNarrative(prefix string, count int) []string {
@@ -71,7 +74,7 @@ func TestNarrativeByteCutKeepsTheDegradationDisclosureFirst(t *testing.T) {
 }
 
 func TestNarrativeByteCutNeverEmptiesANonEmptyList(t *testing.T) {
-	huge := strings.Repeat("é", contractsv1.ContextFabricProjectedNarrativeMaxLength) // 4000 bytes
+	huge := strings.Repeat("é", contractsv1.ContextFabricProjectedNarrativeMaxLength) // 4000 bytes, more encoded
 	result := richResult()
 	result.Limitations = []string{huge + "a", huge + "b"}
 	result.Warnings = []string{huge + "c"}
@@ -91,5 +94,32 @@ func TestNarrativeUnderTheAllowanceIsUntouched(t *testing.T) {
 	p := Project(result, Budget{MaxSerializedBytes: 8192})
 	if len(p.Limitations) != 3 || p.ProjectionBudget.LimitationsOmitted != 0 || len(p.Warnings) != 1 || p.ProjectionBudget.WarningsOmitted != 0 {
 		t.Fatalf("a list under its allowance was cut: %v %+v", p.Limitations, p.ProjectionBudget)
+	}
+}
+
+// Escapes make the encoded length exceed the raw one: a quote, a newline and
+// an angle bracket each cost 2 to 6 bytes on the wire.
+func TestNarrativeByteCutMeasuresTheEncodedLength(t *testing.T) {
+	const ceiling = 8192 // allowance 2048
+	// 250 characters, 5 raw bytes each is not the point: 250 x '"' is 250
+	// raw bytes and 500 encoded. 8 entries are 2000 raw (fits) and 4000
+	// encoded (does not).
+	entry := func(i int) string { return strconv.Itoa(1000+i) + strings.Repeat("\"", 246) }
+	result := richResult()
+	result.Limitations = filled(8, entry)
+	result.Warnings = nil
+	raw := 0
+	for _, value := range result.Limitations {
+		raw += len(value)
+	}
+	if raw > ceiling/NarrativeByteShareDivisor {
+		t.Fatalf("fixture is over the allowance by the raw measure (%d), so it cannot tell the measures apart", raw)
+	}
+	p := Project(result, Budget{MaxSerializedBytes: ceiling})
+	if n := narrativeBytes(p.Limitations); n > ceiling/NarrativeByteShareDivisor {
+		t.Errorf("limitations encode to %d bytes, want <= %d", n, ceiling/NarrativeByteShareDivisor)
+	}
+	if p.ProjectionBudget.LimitationsOmitted == 0 {
+		t.Error("nothing was cut although the encoded array overshoots the allowance")
 	}
 }

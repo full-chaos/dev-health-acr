@@ -21,6 +21,7 @@
 package answerprojection
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 
@@ -1344,8 +1345,8 @@ type clampedNarrative struct {
 	shortened bool
 }
 
-// fitNarrativeBytes cuts entries until their summed length fits maxBytes and
-// reports how many it cut.
+// fitNarrativeBytes cuts entries until the JSON array they form fits maxBytes
+// and reports how many it cut.
 //
 // Order of claim on the room: the first retained entry (the retrieval
 // degradation disclosure) is admitted first, then the rest in their given
@@ -1353,37 +1354,43 @@ type clampedNarrative struct {
 // non-empty list is never emptied: when not even one entry fits, the
 // retained entry, else the first, is kept whole, because an answer that
 // loses every caveat reads as a cleaner answer than the investigation gave.
-// Length is measured in UTF-8 bytes of the clamped value, not JSON-escaped
-// bytes; the caller's ceiling still gates the serialized body.
+//
+// The measure is the encoded one, because the served ceiling measures the
+// encoded body: an entry costs its json.Marshal length (quotes and escapes
+// included) plus one comma, and the array's brackets cost the one that
+// remains, so the sum equals len(json.Marshal(kept)) exactly.
 func fitNarrativeBytes(entries []clampedNarrative, maxBytes int, retain func(string) bool) ([]clampedNarrative, int) {
-	total := 0
-	for _, entry := range entries {
-		total += len(entry.value)
+	cost := make([]int, len(entries))
+	total := 1
+	for i, entry := range entries {
+		cost[i] = encodedNarrativeCost(entry.value)
+		total += cost[i]
 	}
 	if total <= maxBytes {
 		return entries, 0
 	}
 	keep := make([]bool, len(entries))
-	used := 0
+	used := 1
+	placed := false
 	if retain != nil {
 		for i, entry := range entries {
 			if retain(entry.value) {
 				keep[i] = true
-				used += len(entry.value)
+				used += cost[i]
+				placed = true
 				break
 			}
 		}
 	}
-	placed := used > 0
-	for i, entry := range entries {
+	for i := range entries {
 		if keep[i] {
 			continue
 		}
-		if placed && used+len(entry.value) > maxBytes {
+		if placed && used+cost[i] > maxBytes {
 			continue
 		}
 		keep[i] = true
-		used += len(entry.value)
+		used += cost[i]
 		placed = true
 	}
 	out := make([]clampedNarrative, 0, len(entries))
@@ -1393,6 +1400,17 @@ func fitNarrativeBytes(entries []clampedNarrative, maxBytes int, retain func(str
 		}
 	}
 	return out, len(entries) - len(out)
+}
+
+// encodedNarrativeCost is one array element's share of the encoded array:
+// the string's JSON encoding plus its separator.
+func encodedNarrativeCost(value string) int {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		// Unreachable for a string; the worst case per byte keeps the bound.
+		return 6*len(value) + 3
+	}
+	return len(encoded) + 1
 }
 
 // retainPastTheCut moves the first dropped entry matching retain into kept,
