@@ -70,3 +70,39 @@ func TestEverySubjectKindHasDistinctDisplayNouns(t *testing.T) {
 		t.Fatalf("repository plural = %q", got)
 	}
 }
+
+func TestEverySubjectKindNounPairIsExact(t *testing.T) {
+	pair := func(singular string) [2]string { return [2]string{singular, singular + "s"} }
+	want := map[ContextFabricSubjectKind][2]string{
+		ContextFabricSubjectOrganization:      pair("organization"),
+		ContextFabricSubjectTeam:              pair("team"),
+		ContextFabricSubjectProject:           pair("project"),
+		ContextFabricSubjectRepository:        {"repository", "repositories"},
+		ContextFabricSubjectWorkItem:          pair("work item"),
+		ContextFabricSubjectPullRequest:       pair("pull request"),
+		ContextFabricSubjectDeployment:        pair("deployment"),
+		ContextFabricSubjectIncident:          pair("incident"),
+		ContextFabricSubjectDocument:          pair("document"),
+		ContextFabricSubjectDecision:          pair("decision"),
+		ContextFabricSubjectEpisode:           pair("episode"),
+		ContextFabricSubjectMetric:            pair("metric"),
+		ContextFabricSubjectPullRequestReview: pair("pull request review"),
+		ContextFabricSubjectCIRun:             pair("CI pipeline run"),
+		ContextFabricSubjectWorkItemRef:       pair("work item reference"),
+	}
+	if len(want) != len(contextFabricSubjectKinds) {
+		t.Fatalf("table covers %d kinds, vocabulary has %d", len(want), len(contextFabricSubjectKinds))
+	}
+	for _, kind := range contextFabricSubjectKinds {
+		pair, ok := want[kind]
+		if !ok {
+			t.Fatalf("kind %q missing from the expected table", kind)
+		}
+		if got := ContextFabricSubjectKindNoun(kind, 1); got != pair[0] {
+			t.Errorf("%q singular = %q, want %q", kind, got, pair[0])
+		}
+		if got := ContextFabricSubjectKindNoun(kind, 0); got != pair[1] {
+			t.Errorf("%q plural = %q, want %q", kind, got, pair[1])
+		}
+	}
+}
