@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
@@ -101,7 +102,7 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	var teamOutcome teamRollupOutcome
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		var teamErr error
-		teamOutcome, teamErr = p.readTeamRollup(ctx, principal, orgID, query.RequestedRepositoryScope, teamSubjects, &facts)
+		teamOutcome, teamErr = p.readTeamRollup(ctx, principal, orgID, query.RequestedRepositoryScope, query.Parameters, teamSubjects, &facts)
 		if teamErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team blockers", teamErr)
 		}
@@ -318,15 +319,32 @@ func dependencyEvidenceRefID(sourceID, targetID, relationKey string) string {
 
 // blockerRollupRepo is one owned repository's recorded blocker edges whose
 // target work item lives in it.
-type blockerRollupRepo struct{ blockedItems, blockerEdges int64 }
+type blockerRollupRepo struct{ blockedItems, blockerEdges, excludedEdges int64 }
+
+// blockerStatusParameter names the one optional status a caller may ask the
+// team rollup to count blockers in; without it a blocker counts while it is
+// open (any status but done or canceled).
+const blockerStatusParameter = "blocker_status"
+
+const blockerStatusBasisOpen = "open"
+
+// blockerStatusPredicate is the SQL over the blocking item's normalized
+// status. A blocker with no work item row reads as unknown, which is open.
+func blockerStatusPredicate(named string) string {
+	if named == "" {
+		return "ifNull(lower(s.status), 'unknown') NOT IN ('done', '" + workItemCancelledStatus + "')"
+	}
+	return "ifNull(lower(s.status), 'unknown') = {blocker_status:String}"
+}
 
 // readTeamRollup serves a team subject on the current axis only:
 // work_item_dependencies carries no event time, so no window is claimed and
-// the counts are *_current. Every recorded blocker edge counts, as in the
-// per-item read; no status filter is applied. Both ends pass the shared
+// the counts are *_current. A blocker edge counts while the blocking item is
+// open (not done or canceled), or in the one status the caller names; the
+// edges the status excluded are counted apart. Both ends pass the shared
 // work-item authorization rule, so the counts cover the caller's authorized
 // items and are declared caller-scoped.
-func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage.Principal, orgID string, requestedScope []string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) (outcome teamRollupOutcome, err error) {
+func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage.Principal, orgID string, requestedScope []string, parameters map[string]string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) (outcome teamRollupOutcome, err error) {
 	teamIDs, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	outcome.rejected = rejected
 	if len(teamIDs) == 0 {
@@ -336,6 +354,12 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 	if err != nil {
 		return outcome, err
 	}
+	namedStatus := strings.ToLower(strings.TrimSpace(parameters[blockerStatusParameter]))
+	statusBasis := blockerStatusBasisOpen
+	if namedStatus != "" {
+		statusBasis = namedStatus
+	}
+	statusPredicate := blockerStatusPredicate(namedStatus)
 	byRepo := map[string]blockerRollupRepo{}
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 {
 		authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, requestedScope))
@@ -343,9 +367,10 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 		if settingsErr != nil {
 			return outcome, settingsErr
 		}
-		statement := readers.WithSettings(`SELECT toString(t.repo_id), toInt64(uniqExact(d.target_work_item_id)), toInt64(uniqExact(d.target_work_item_id, d.source_work_item_id))
+		statement := readers.WithSettings(`SELECT toString(t.repo_id), toInt64(uniqExactIf(d.target_work_item_id, `+statusPredicate+`)), toInt64(uniqExactIf((d.target_work_item_id, d.source_work_item_id), `+statusPredicate+`)), toInt64(uniqExactIf((d.target_work_item_id, d.source_work_item_id), NOT (`+statusPredicate+`)))
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
+LEFT JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
 WHERE d.org_id = {org_id:String} AND toString(t.repo_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'
   AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
 GROUP BY t.repo_id
@@ -353,12 +378,12 @@ ORDER BY t.repo_id`, settings)
 		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerRollup", statement, orgID, repoKeys, func(row readers.RowScanner) error {
 			var repoID string
 			var r blockerRollupRepo
-			if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges); err != nil {
+			if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges, &r.excludedEdges); err != nil {
 				return err
 			}
 			byRepo[repoID] = r
 			return nil
-		}, authorizationBindings...); scanErr != nil {
+		}, append(authorizationBindings, statusBindings(namedStatus)...)...); scanErr != nil {
 			return outcome, scanErr
 		}
 	}
@@ -369,7 +394,7 @@ ORDER BY t.repo_id`, settings)
 			outcome.teamsWithoutRepos++
 			continue
 		}
-		var blockedItems, blockerEdges, withData int64
+		var blockedItems, blockerEdges, excludedEdges, withData int64
 		breakdown := make([]contextfabric.FactValueRow, 0, len(repos))
 		for _, repo := range repos {
 			r, ok := byRepo[repo.key]
@@ -380,6 +405,7 @@ ORDER BY t.repo_id`, settings)
 			withData++
 			blockedItems += r.blockedItems
 			blockerEdges += r.blockerEdges
+			excludedEdges += r.excludedEdges
 			cells := map[string]contextfabric.FactValue{
 				"repository_id":                contextfabric.StringFactValue(repo.key),
 				"blocked_work_items_current":   contextfabric.IntegerFactValue(r.blockedItems),
@@ -392,6 +418,7 @@ ORDER BY t.repo_id`, settings)
 		}
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),
+			"blocker_status_basis":            contextfabric.StringFactValue(statusBasis),
 			"owned_repository_count":          contextfabric.IntegerFactValue(int64(len(repos))),
 			"repositories_with_data_count":    contextfabric.IntegerFactValue(withData),
 			"repositories_without_data_count": contextfabric.IntegerFactValue(int64(len(repos)) - withData),
@@ -406,6 +433,7 @@ ORDER BY t.repo_id`, settings)
 		if withData > 0 {
 			fields["blocked_work_items_current"] = contextfabric.IntegerFactValue(blockedItems)
 			fields["blocker_dependencies_current"] = contextfabric.IntegerFactValue(blockerEdges)
+			fields["blocker_dependencies_excluded_by_status_current"] = contextfabric.IntegerFactValue(excludedEdges)
 			if table, omitted, ok := repositoryBreakdownFactValue(breakdown, "",
 				[]string{"blocked_work_items_current", "blocker_dependencies_current"}, []string{"repository_name"}); ok {
 				fields["repository_breakdown"] = table
@@ -421,4 +449,11 @@ ORDER BY t.repo_id`, settings)
 		})
 	}
 	return outcome, nil
+}
+
+func statusBindings(namedStatus string) []readers.Binding {
+	if namedStatus == "" {
+		return nil
+	}
+	return []readers.Binding{{Name: "blocker_status", Value: namedStatus}}
 }
