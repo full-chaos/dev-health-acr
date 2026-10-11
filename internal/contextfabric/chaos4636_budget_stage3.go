@@ -378,7 +378,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			e.recordCandidateNarrowing(ctx, principal, plan, attempt, overrun, grouped, narrowed.Basis, before, after, declined, false, false)
 			return attempt.Result, firstPass, nil
 		}
-		trim, trimErr := e.planBudgetTrim(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality)
+		trim, trimErr := e.planBudgetTrim(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality, params.WorkItemCensus != nil)
 		if trimErr != nil {
 			return InvestigationResult{}, firstPass, trimErr
 		}
@@ -394,6 +394,29 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			event.OutcomeCompletenessState = trim.Result.Completeness.State
 			e.recordPlanNarrowing(ctx, principal, event)
 			return trim.Result, firstPass, nil
+		}
+		// The items cut left a document that fits the item ceiling and not
+		// the byte ceiling (items are reported first when both are over, so
+		// the byte levers above did not run): continue the byte ladder from
+		// the cut document.
+		if trim.Reduced.Status != "" && trim.Measured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes {
+			pathLever, pathErr := e.planPathDrop(ctx, principal, plan, params.Frame, trim.Reduced, budget, trim.Measured, params.Facts, &firstPass, answerPassSecond, cardinality)
+			if pathErr != nil {
+				return InvestigationResult{}, firstPass, pathErr
+			}
+			e.recordPathDrop(ctx, principal, plan, answerPassFirst, trim.Measured, pathLever, budget)
+			if pathLever.Served {
+				members := cohortMemberCount(params.Graph.Cohort)
+				event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
+					members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
+				event.recordMeasurement(measured)
+				event.PredictedItems = PredictedItemsForPlan(*plan, members)
+				event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+				event.RetryDeclined = declined
+				event.OutcomeCompletenessState = pathLever.Result.Completeness.State
+				e.recordPlanNarrowing(ctx, principal, event)
+				return pathLever.Result, firstPass, nil
+			}
 		}
 		// CHAOS-4809 PATH 2: BOTH counts, as narrowSynthesisInput actually
 		// computed them. This used to pass `before` for both, so a refusal
@@ -707,7 +730,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			return InvestigationResult{}, retryPending, accountingErr
 		}
 		if !outcomeAttempt.Served {
-			trim, trimErr := e.planBudgetTrim(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality)
+			trim, trimErr := e.planBudgetTrim(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality, retryParams.WorkItemCensus != nil)
 			if trimErr != nil {
 				return InvestigationResult{}, retryPending, trimErr
 			}
