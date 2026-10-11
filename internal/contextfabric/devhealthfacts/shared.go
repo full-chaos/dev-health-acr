@@ -712,7 +712,6 @@ import (
 // unknown_prior and must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v144"
 
-
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
 // ReadFacts call in a context with this deadline; providers here never add
