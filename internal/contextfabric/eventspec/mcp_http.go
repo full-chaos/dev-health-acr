@@ -28,6 +28,7 @@ const (
 	MCPHTTPAuthInsufficientScope       = "insufficient_scope"
 	MCPHTTPAuthInsufficientEntitlement = "insufficient_entitlement"
 	MCPHTTPAuthRateLimited             = "rate_limited"
+	MCPHTTPAuthRequestBudgetExceeded   = "request_budget_exceeded"
 	MCPHTTPAuthUpstreamIncompatible    = "upstream_incompatible"
 	MCPHTTPAuthUpstreamUnavailable     = "upstream_unavailable"
 )
@@ -85,7 +86,7 @@ func MCPHTTPAuthOutcomeVocabulary() []string {
 	return []string{
 		MCPHTTPAuthAdmitted, MCPHTTPAuthMissingBearer, MCPHTTPAuthMalformedBearer, MCPHTTPAuthInvalidCredential,
 		MCPHTTPAuthInsufficientScope, MCPHTTPAuthInsufficientEntitlement, MCPHTTPAuthRateLimited,
-		MCPHTTPAuthUpstreamIncompatible, MCPHTTPAuthUpstreamUnavailable,
+		MCPHTTPAuthUpstreamIncompatible, MCPHTTPAuthUpstreamUnavailable, MCPHTTPAuthRequestBudgetExceeded,
 	}
 }
 
