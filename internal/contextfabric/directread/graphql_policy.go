@@ -529,6 +529,12 @@ func (op *OperationPolicy) narrowedTo(paths []string) *OperationPolicy {
 			continue
 		}
 		out.outputs[path] = leaf
+		if emit := op.emits[path]; emit != nil {
+			if out.emits == nil {
+				out.emits = map[string]*SubjectEmit{}
+			}
+			out.emits[path] = emit
+		}
 		for prefix := parentPath(path); prefix != ""; prefix = parentPath(prefix) {
 			out.nodes[prefix] = true
 		}
