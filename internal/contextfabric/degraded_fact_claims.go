@@ -14,8 +14,9 @@ const degradedFactClaimIDPrefix = "server:fact:"
 // order the facts were read, with the evidence those facts cite. Only the
 // model's judgment is missing from such an answer, never the values.
 //
-// Each claim is checked against the facts by groundClaim, the same check a
-// model-authored claim passes. The claim count stops at the claimed-fact bound
+// Each claim carries the value of the field it was minted from, so it is
+// grounded in those facts by construction; Validate refuses what a claim cannot
+// carry (a padded field name, a value that is not finite). The claim count stops at the claimed-fact bound
 // and the evidence count at the evidence bound; truncated reports that facts
 // were left out.
 func mintDegradedFactClaims(facts []CanonicalFact) (claims []ClaimedFact, evidence []string, truncated bool) {
@@ -41,9 +42,6 @@ func mintDegradedFactClaims(facts []CanonicalFact) (claims []ClaimedFact, eviden
 				Value:   value,
 			}
 			if claim.Validate() != nil {
-				continue
-			}
-			if _, outcome := groundClaim(facts, claim); outcome != claimGrounded {
 				continue
 			}
 			added := make([]string, 0, len(fact.EvidenceRefIDs))
