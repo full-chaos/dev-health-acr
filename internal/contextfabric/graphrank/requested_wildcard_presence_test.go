@@ -84,3 +84,25 @@ func TestRequestedRepositoryWildcardKeepsTheUnrestrictedMarkerAndDeniesAMissingL
 		t.Error("a node with no repository list must be denied")
 	}
 }
+
+func TestRequestedRepositorySelectorNamingASentinelAdmitsNothing(t *testing.T) {
+	principal := storage.Principal{OrgID: "o1"}
+	for _, sentinel := range []string{
+		contractsv1.ContextFabricNoRepositorySentinel,
+		contractsv1.ContextFabricOrphanedRepositorySentinel,
+		contractsv1.ContextFabricUnresolvedRepositorySentinel,
+		contractsv1.ContextFabricNoProjectOwnershipSentinel,
+		contractsv1.ContextFabricNoTeamOwnershipSentinel,
+		contractsv1.ContextFabricTeamOwnershipOverBoundSentinel,
+		contractsv1.ContextFabricReferencedEndpointStubSentinel,
+	} {
+		attrs := map[string]interface{}{"authorization_repositories": []string{sentinel}}
+		if AuthorizedAttributes(principal, contextfabric.RequestedScope{RepositorySlugs: []string{sentinel}}, attrs) {
+			t.Errorf("selector %q admitted the node that records it", sentinel)
+		}
+		mixed := map[string]interface{}{"authorization_repositories": []string{sentinel, "acme/granted"}}
+		if !AuthorizedAttributes(principal, contextfabric.RequestedScope{RepositorySlugs: []string{"acme/granted"}}, mixed) {
+			t.Errorf("a real repository next to %q must stay admitted", sentinel)
+		}
+	}
+}

@@ -152,7 +152,13 @@ func OwnsRepository(attributes map[string]interface{}, repoSlug string) bool {
 // grants are tested elsewhere and keep their own "*" meaning.
 func requestedRepositoriesAdmit(attributes map[string]interface{}, selectors []string) bool {
 	for _, selector := range selectors {
-		if strings.TrimSpace(selector) == "*" && !repositoryPresent(attributes) {
+		trimmed := strings.TrimSpace(selector)
+		if contractsv1.ContextFabricIsRepositoryAbsenceSentinel(trimmed) {
+			// A sentinel records that no repository is present; naming it is
+			// not naming a repository.
+			continue
+		}
+		if trimmed == "*" && !repositoryPresent(attributes) {
 			continue
 		}
 		if scopeContainsAttr(attributes, authorizationRepositoriesAttr, selector) {
