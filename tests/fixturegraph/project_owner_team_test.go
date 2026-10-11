@@ -24,7 +24,7 @@ ORDER BY p.name LIMIT 1`, org))
 	}
 	project, team := rows[0][0], rows[0][1]
 	args := doc{
-		"question":        fmt.Sprintf("Which team owns the %s project?", project),
+		"question":        fmt.Sprintf("Which team owns the project %s?", project),
 		"expected_kinds":  []string{"project"},
 		"evidence_window": doc{"relative_id": "trailing_365d"},
 		"interpretation": doc{
@@ -38,10 +38,11 @@ ORDER BY p.name LIMIT 1`, org))
 	}
 	d, raw := c.call("investigate_with_interpretation", args)
 	if str(structured(d), "status") == "clarification_required" {
-		for _, o := range list(structured(d), "structure_needs", "candidate_options") {
-			if str(o, "kind") == "project" && str(o, "label") == project {
-				args["parent_result_id"] = str(structured(d), "result_id")
-				args["prior_candidate_receipts"] = []doc{{"result_id": str(structured(d), "result_id"), "receipt_id": str(o, "receipt_id")}}
+		for _, o := range list(structured(d), "structure_needs", "kind_options") {
+			if str(o, "kind") == "project" {
+				rid := str(structured(d), "result_id")
+				args["parent_result_id"] = rid
+				args["prior_kind_receipts"] = []doc{{"result_id": rid, "receipt_id": str(o, "receipt_id")}}
 				d, raw = c.call("investigate_with_interpretation", args)
 				break
 			}
