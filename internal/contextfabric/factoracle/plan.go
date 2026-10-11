@@ -298,9 +298,12 @@ var factPlan = map[string]map[string]string{
 		"work_unit_id":                    "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",
 	},
 	"identity": {
-		"name":     "",
-		"id":       "the subject id of the read",
-		"provider": "the ops catalogue value carries no provider",
+		"name":                       "",
+		"id":                         "the subject id of the read",
+		"provider":                   "the ops catalogue value carries no provider",
+		"owning_teams.team_id":       "the ops catalogue value carries no team ownership; ownership is held against team_repo_ownership by the team investment mix pairs",
+		"owning_teams.team_name":     "the ops catalogue value carries no team ownership; ownership is held against team_repo_ownership by the team investment mix pairs",
+		"owning_teams_omitted_count": "rows the provider row cap left out of the owning_teams table; the ops catalogue value carries no team ownership",
 	},
 	"health": {
 		"compounding_risk":                 "",
