@@ -335,6 +335,15 @@ const (
 	// found none, which is not a proof that none exist, so the row degrades
 	// and the answer says so rather than reading as complete.
 	ContextFabricCoverageDetailGraphNoMemberFound ContextFabricCoverageDetailCode = "graph_no_member_found"
+
+	// ContextFabricCoverageDetailSynthesisInputBounded: the facts read of one
+	// fact kind were reduced to fit the model input bound, so answer
+	// synthesis was given Served of the Declared facts read of that kind.
+	// One detail per fact kind read; a kind that lost nothing carries
+	// Served == Declared. It is a DISCLOSURE, never a degradation: the answer
+	// is already partial and carries the bounded-input limitation, and a
+	// second degrading row would count the one cut twice.
+	ContextFabricCoverageDetailSynthesisInputBounded ContextFabricCoverageDetailCode = "synthesis_input_bounded"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -366,6 +375,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailComputedPopulationAbsent,
 	ContextFabricCoverageDetailRequirementNotEvaluable,
 	ContextFabricCoverageDetailGraphNoMemberFound,
+	ContextFabricCoverageDetailSynthesisInputBounded,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -662,6 +672,11 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailRequirementNotEvaluable: {},
 	// Kind alone: no count (nothing was counted), no Declared/Served.
 	ContextFabricCoverageDetailGraphNoMemberFound: {requireKind: true},
+	// Fact kind, Declared and Served, all three REQUIRED, and nothing else:
+	// "this fact kind: Declared were read, Served were given to synthesis".
+	ContextFabricCoverageDetailSynthesisInputBounded: {
+		requireFactKind: true, allowFactKind: true, requireDeclaredServed: true,
+	},
 	// Kind, state and origin, all three REQUIRED, and nothing else: the row
 	// says "this kind, read for this population, came back in this state".
 	// No count (the row is per read, not per subject), no scope fields (the
@@ -709,6 +724,10 @@ func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode)
 		// row's own equal-counts exception. Named rather than left to the
 		// default for the same reason `fact_read_origin_state` is above.
 		return false
+	case ContextFabricCoverageDetailSynthesisInputBounded:
+		// A disclosure about what answer synthesis was given, never a
+		// population a value was computed over.
+		return false
 	default:
 		// `requirement_read_not_planned` deliberately does NOT qualify. It
 		// says nothing was read, so there is no value computed over any
@@ -736,7 +755,7 @@ func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode)
 func ContextFabricCoverageDetailCodeMayDegrade(code ContextFabricCoverageDetailCode) bool {
 	switch code {
 	case ContextFabricCoverageDetailFactPruned, ContextFabricCoverageDetailGraphValidityUnbounded,
-		ContextFabricCoverageDetailFactReadOriginState:
+		ContextFabricCoverageDetailFactReadOriginState, ContextFabricCoverageDetailSynthesisInputBounded:
 		return false
 	default:
 		return true

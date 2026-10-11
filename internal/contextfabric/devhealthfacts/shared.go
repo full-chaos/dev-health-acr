@@ -710,10 +710,14 @@ import (
 // kinds by display noun and carry no basis token, so a candidate saved under an
 // earlier version may hold the old wording and must not be reused.
 //
-// v143 -> v148: a team rollup kind declares answer obligations, so a team driver or
+// v146: an answer whose synthesis input was bounded serves one
+// synthesis_input_bounded coverage detail per fact kind read (given N of M); a
+// candidate saved under an earlier version carries only the prose limitation.
+//
+// v146 -> v147: a team rollup kind declares answer obligations, so a team driver or
 // remaining-work question plans the blockers, pull request, incident and deployment
 // rollups; a candidate saved under an earlier version holds an answer without them.
-const QueryVersion = "devhealthfacts.clickhouse.v148"
+const QueryVersion = "devhealthfacts.clickhouse.v147"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
