@@ -350,7 +350,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// deterministic_answer: 242 -> 243 -- the projection now serves the
 		// server-composed answer text; untrusted like direct_judgment because
 		// it names subjects by their graph labels.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 250},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 254},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -422,9 +422,13 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// enum validated by the digest's own Validate.
 		// 361 -> 363 -- the synthesis_model_failed detail's failure_class and
 		// retry_hint, closed enums minted by the service.
-		// 363 -> 364 -- claimed_facts[].fact_id, the optional id of the cited
+		// status_correction: 250 -> 254 and 363 -> 371. Four closed leaves
+		// (replaced_status, direction, deciding_requirement, deciding_outcome):
+		// once on the projection (completeness mirror) and twice on the
+		// canonical result (top-level field and mirror).
+		// 371 -> 372 -- claimed_facts[].fact_id, the optional id of the cited
 		// canonical fact; classified untrusted like claimed_facts[].field.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 364},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 372},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -634,6 +638,14 @@ func trustedBecauseClosed(path string) bool {
 		// field and its completeness mirror) and one of the projection,
 		// and the single leaf name covers all three.
 		"refusal_basis",
+		// status_correction: "replaced_status" is the closed investigation
+		// status vocabulary, "direction" one of four closed pairs, and
+		// "deciding_requirement"/"deciding_outcome" name an outcome row the
+		// validator requires the completeness block to carry. All four are
+		// minted by the completeness authority from its own derivation,
+		// never model prose, on two paths of the canonical result and one of
+		// the projection.
+		"replaced_status", "direction", "deciding_requirement", "deciding_outcome",
 		// CHAOS-4636: every string the answer plan carries is either a
 		// closed vocabulary or a service-issued token, because the PLAN IS
 		// COMPOSED BY A DETERMINISTIC STAGE, NEVER BY A MODEL -- that is
