@@ -96,7 +96,8 @@
         },
         "requests_per_minute": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "The context request class's rate per minute. It does not describe the capabilities handshake's own budget (ACR_CAPABILITIES_REQUESTS_PER_WINDOW), the evidence, episode or data classes."
         }
       }
     },

@@ -75,9 +75,10 @@
             },
             "limit": {
               "enum": [
-                "request_budget"
+                "request_budget",
+                "capabilities_budget"
               ],
-              "description": "On a 429 rate_limited: which limit refused the request. request_budget is the organization's request budget; the credential was already decided. A consumer treats a value outside this enum as absent."
+              "description": "On a 429 rate_limited: which limit refused the request. request_budget is the organization's request budget; capabilities_budget is the capabilities handshake's own budget, spent by the caller-resolution call every MCP request makes; the credential was already decided in both cases. A consumer treats a value outside this enum as absent."
             }
           },
           "additionalProperties": true
