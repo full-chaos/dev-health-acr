@@ -174,16 +174,19 @@ func TestHTTPAuthMatrixFailsClosedBeforeTheSDKHandler(t *testing.T) {
 		{name: "upstream_incompatible", header: bearerHeader(incompatible.token), status: 502, outcome: acrmcp.HTTPAuthUpstreamIncompatible},
 		{name: "upstream_version_mismatch", header: bearerHeader(upgrade.token), status: 502, outcome: acrmcp.HTTPAuthUpstreamIncompatible},
 		{name: "rate_limited", header: bearerHeader(valid.token), setup: func() { hosted.blocked.Store(true) }, status: 429, outcome: acrmcp.HTTPAuthRateLimited},
+		{name: "request_budget_exceeded", header: bearerHeader(valid.token), setup: func() { hosted.requestBudget.Store(true) }, status: 429, outcome: acrmcp.HTTPAuthRequestBudgetExceeded},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
 			e := newEndpoint(t, hosted)
 			hosted.blocked.Store(false)
+			hosted.requestBudget.Store(false)
 			if r.setup != nil {
 				r.setup()
 			}
 			resp := postMCP(t, e, http.MethodPost, rawToolsList(), r.header)
 			hosted.blocked.Store(false)
+			hosted.requestBudget.Store(false)
 			var body struct {
 				Error string `json:"error"`
 			}
@@ -198,6 +201,9 @@ func TestHTTPAuthMatrixFailsClosedBeforeTheSDKHandler(t *testing.T) {
 			}
 			if r.outcome == acrmcp.HTTPAuthRateLimited && resp.Header.Get("Retry-After") != "7" {
 				t.Fatalf("Retry-After %q, want 7", resp.Header.Get("Retry-After"))
+			}
+			if r.outcome == acrmcp.HTTPAuthRequestBudgetExceeded && resp.Header.Get("Retry-After") != "9" {
+				t.Fatalf("Retry-After %q, want 9", resp.Header.Get("Retry-After"))
 			}
 			if hits := e.sdkHits.Load(); hits != 0 {
 				t.Fatalf("a refused request reached the SDK handler %d times", hits)
@@ -230,8 +236,8 @@ func TestHTTPAuthMatrixFailsClosedBeforeTheSDKHandler(t *testing.T) {
 			t.Errorf("auth outcome %q has no executed row", outcome)
 		}
 	}
-	if len(rows) != 14 {
-		t.Fatalf("matrix has %d rows, want 14", len(rows))
+	if len(rows) != 15 {
+		t.Fatalf("matrix has %d rows, want 15", len(rows))
 	}
 }
 

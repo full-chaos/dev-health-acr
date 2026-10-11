@@ -9449,7 +9449,8 @@
           "insufficient_entitlement",
           "rate_limited",
           "upstream_incompatible",
-          "upstream_unavailable"
+          "upstream_unavailable",
+          "request_budget_exceeded"
         ]
       },
       {

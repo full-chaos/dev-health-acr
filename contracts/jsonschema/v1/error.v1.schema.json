@@ -72,6 +72,12 @@
               "type": "string",
               "pattern": "^[A-Za-z0-9_.]+$",
               "maxLength": 64
+            },
+            "limit": {
+              "enum": [
+                "request_budget"
+              ],
+              "description": "On a 429 rate_limited: which limit refused the request. request_budget is the organization's request budget; the credential was already decided. A consumer treats a value outside this enum as absent."
             }
           },
           "additionalProperties": true
