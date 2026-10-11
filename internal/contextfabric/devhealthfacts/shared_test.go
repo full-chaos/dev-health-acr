@@ -603,8 +603,8 @@ func TestQueryVersionMovedPastTheTruncatedSearchLabelCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 150 {
-		t.Fatalf("QueryVersion = %q, want v150 or later -- an answer saved when a label-named repository count was withheld after a truncated lexical search holds that refusal and must not be reused", devhealthfacts.QueryVersion)
+	if number < 151 {
+		t.Fatalf("QueryVersion = %q, want v151 or later -- an answer saved when a label-named repository count was withheld after a truncated lexical search holds that refusal and must not be reused", devhealthfacts.QueryVersion)
 	}
 }
 

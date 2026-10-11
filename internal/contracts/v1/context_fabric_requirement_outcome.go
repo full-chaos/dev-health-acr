@@ -859,7 +859,7 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 		row.CauseObserved &&
 		row.CauseNarrowing == "" &&
 		row.CauseOverrun == "" &&
-		row.CauseCoverage == ContextFabricCoverageDetailFactProviderReported
+		coverageDetailCodeQualifiesSourceTruncation(row.CauseCoverage)
 	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared && !censusQualified && !truncationQualified {
 		return fmt.Errorf("outcome narrowed served %d of %d declared, which is not a reduction", row.Served, row.Declared)
 	}
