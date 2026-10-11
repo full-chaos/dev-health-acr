@@ -62,15 +62,13 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item status", scanErr)
 	}
-	pairs := make([][2]string, 0, len(rows))
-	for _, row := range rows {
-		if _, ok := bySubject[row.RepoID+":"+row.ID]; ok {
-			pairs = append(pairs, [2]string{row.RepoID, row.ID})
+	var entries map[string]statusEntry
+	if len(rows) > 0 {
+		var entriesErr error
+		entries, entriesErr = p.readStatusEntries(ctx, orgID, ids, scope, settings)
+		if entriesErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query work item status since", entriesErr)
 		}
-	}
-	entries, entriesErr := p.readStatusEntries(ctx, orgID, pairs, settings)
-	if entriesErr != nil {
-		return contextfabric.FactProviderResult{}, readFailure("query work item status since", entriesErr)
 	}
 	now := clock()
 	sinceBasisCounts := map[string]int{}

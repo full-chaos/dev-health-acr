@@ -196,8 +196,12 @@ func TestWorkItemHostedInfoCollection(t *testing.T) {
 				wantItems = 36
 				wantAttempts = 2
 			}
-			if len(reads) != wantReads || len(sharedReads) != wantReads {
-				t.Errorf("collected registry/shared reader records=%d/%d want %d", len(reads), len(sharedReads), wantReads)
+			wantShared := wantReads
+			if wantReads > 0 {
+				wantShared++
+			}
+			if len(reads) != wantReads || len(sharedReads) != wantShared {
+				t.Errorf("collected registry/shared reader records=%d/%d want %d/%d", len(reads), len(sharedReads), wantReads, wantShared)
 			}
 			if wantReads > 0 {
 				for _, kind := range []string{"status", "work"} {

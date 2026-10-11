@@ -138,7 +138,7 @@ func TestStatusSinceIsKeyedByRepositoryAndItem(t *testing.T) {
 	}
 }
 
-func TestStatusSinceStatementIsOrgScopedAndKeyedToTheReadRows(t *testing.T) {
+func TestStatusSinceStatementIsOrgScopedAndInsideTheAuthorizationRelation(t *testing.T) {
 	_, client, err := readStatusSince(t,
 		[][]any{{"W-1", "in_progress", "repo-1", "jira"}},
 		nil,
@@ -148,12 +148,14 @@ func TestStatusSinceStatementIsOrgScopedAndKeyedToTheReadRows(t *testing.T) {
 	}
 	var found bool
 	for _, q := range client.queries {
-		if !strings.Contains(q.statement, "FROM work_item_transitions") {
+		if !strings.Contains(q.statement, "work_item_transitions") {
 			continue
 		}
 		found = true
-		if !strings.Contains(q.statement, "t.org_id = {org_id:String}") || !strings.Contains(q.statement, "FINAL") {
-			t.Fatalf("statement is not org-scoped/FINAL:\n%s", q.statement)
+		for _, want := range []string{"w.org_id = {org_id:String}", "INNER JOIN work_items AS w FINAL", "FROM work_item_transitions FINAL", "org_id = {org_id:String}", "SETTINGS"} {
+			if !strings.Contains(q.statement, want) {
+				t.Fatalf("statement lacks %q:\n%s", want, q.statement)
+			}
 		}
 		for _, b := range q.bindings {
 			switch b.Name {
@@ -161,10 +163,10 @@ func TestStatusSinceStatementIsOrgScopedAndKeyedToTheReadRows(t *testing.T) {
 				if b.Value != "org-1" {
 					t.Fatalf("org_id = %v", b.Value)
 				}
-			case "keys":
-				keys, _ := b.Value.([]string)
-				if len(keys) != 1 || keys[0] != "repo-1:W-1" {
-					t.Fatalf("keys = %#v, want only the item the scoped status read returned", keys)
+			case "ids":
+				ids, _ := b.Value.([]string)
+				if len(ids) != 2 || ids[0] != "repo-1:W-1" || ids[1] != "repo-1:W-2" {
+					t.Fatalf("ids = %#v, want the requested subjects", ids)
 				}
 			}
 		}
