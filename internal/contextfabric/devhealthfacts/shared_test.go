@@ -591,8 +591,8 @@ func TestQueryVersionMovedPastTheGraphLagLabelCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 148 {
-		t.Fatalf("QueryVersion = %q, want v148 or later -- an answer saved when a label-named repository count was withheld over a same-label claimant missing from the graph holds that refusal and must not be reused", devhealthfacts.QueryVersion)
+	if number < 149 {
+		t.Fatalf("QueryVersion = %q, want v149 or later -- an answer saved when a label-named repository count was withheld over a same-label claimant missing from the graph holds that refusal and must not be reused", devhealthfacts.QueryVersion)
 	}
 }
 
