@@ -136,9 +136,9 @@ func TestIdentityProviderDisclosesOwnersTheCapLeftOut(t *testing.T) {
 func TestIdentityProviderReadsOwnershipInChunks(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{{match: "FROM repos", rows: nil}}}
-	subjects := make([]contextfabric.SubjectRef, 0, 250)
-	repoRows := make([][]any, 0, 250)
-	for i := 0; i < 250; i++ {
+	subjects := make([]contextfabric.SubjectRef, 0, 200)
+	repoRows := make([][]any, 0, 200)
+	for i := 0; i < 200; i++ {
 		id := fmt.Sprintf("repo-%03d", i)
 		subjects = append(subjects, repoSubject(id))
 		repoRows = append(repoRows, []any{id, "acme/" + id, "github"})
@@ -150,7 +150,7 @@ func TestIdentityProviderReadsOwnershipInChunks(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	chunks := 0
+	chunks, covered := 0, 0
 	for _, q := range client.queries {
 		if !strings.Contains(q.statement, "team_repo_ownership") {
 			continue
@@ -158,13 +158,15 @@ func TestIdentityProviderReadsOwnershipInChunks(t *testing.T) {
 		chunks++
 		for _, b := range q.bindings {
 			if b.Name == "ids" {
-				if ids := b.Value.([]string); len(ids) > 100 {
+				ids := b.Value.([]string)
+				if len(ids) > 100 {
 					t.Fatalf("one ownership query covered %d repositories, want at most 100", len(ids))
 				}
+				covered += len(ids)
 			}
 		}
 	}
-	if chunks != 3 {
-		t.Fatalf("ownership queries = %d, want 3 for 250 repositories", chunks)
+	if chunks != 2 || covered != 200 {
+		t.Fatalf("ownership queries = %d covering %d repositories, want 2 covering all 200", chunks, covered)
 	}
 }
