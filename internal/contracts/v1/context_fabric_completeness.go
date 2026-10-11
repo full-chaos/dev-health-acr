@@ -120,6 +120,11 @@ type ContextFabricAnswerCompleteness struct {
 	// verbatim. A refusal a consumer could only learn by also reading a
 	// sibling top-level field would be invisible to the projection.
 	RefusalBasis ContextFabricRefusalBasis `json:"refusal_basis,omitempty"`
+	// StatusCorrection MIRRORS the result's StatusCorrection, copied by
+	// ComputeAnswerCompleteness and checked equal by the validator, for the
+	// reason RefusalBasis is mirrored: the block is the self-contained
+	// disclosure group the answer projection copies verbatim.
+	StatusCorrection *ContextFabricStatusCorrection `json:"status_correction,omitempty"`
 	// State is what the outcome set below adds up to, DERIVED from it by
 	// DeriveContextFabricAnswerCompletenessState and never authored
 	// independently. The validator requires exact agreement, the same
@@ -168,5 +173,5 @@ type ContextFabricAnswerCompleteness struct {
 func (c ContextFabricAnswerCompleteness) IsZero() bool {
 	return c.TerminalStatus == "" && c.TerminalReason == "" &&
 		c.ClaimedFactsCount == 0 && c.RowsCount == 0 &&
-		c.State == "" && len(c.Outcomes) == 0 && c.RefusalBasis == ""
+		c.State == "" && len(c.Outcomes) == 0 && c.RefusalBasis == "" && c.StatusCorrection == nil
 }
