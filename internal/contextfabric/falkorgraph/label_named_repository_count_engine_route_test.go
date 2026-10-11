@@ -134,9 +134,10 @@ func TestACountOverALabelFollowsWhatTheCallerMaySee(t *testing.T) {
 }
 
 // A crowd of repositories whose text matches the label truncates the search.
-// The one exact-label match still commits, but the lookup cannot rule out a
-// second repository with the label, so its count is not certified.
-func TestACountOverALabelIsNotCertifiedWhenTheSearchWasTruncated(t *testing.T) {
+// The one exact-label match still commits, and the complete identity lookup
+// is what rules out a second repository with the label, so a cut lexical
+// search does not stop the count. This reverses the earlier refusal.
+func TestACountOverALabelIsCertifiedWhenTheLexicalSearchWasTruncatedOverACompleteIdentityLookup(t *testing.T) {
 	s := seedOwnedRepository()
 	for i := 0; i < 40; i++ {
 		id := fmt.Sprintf("repository:github:acme/alpha-service-clone-%02d", i)
@@ -147,8 +148,8 @@ func TestACountOverALabelIsNotCertifiedWhenTheSearchWasTruncated(t *testing.T) {
 	if len(answer.committed) != 1 || answer.committed[0].CanonicalID != routeOwnedRepository {
 		t.Fatalf("resolver committed %+v, want the exact-label repository to still commit under truncation", answer.committed)
 	}
-	if _, claimed, outcome := servedCount(answer); claimed || outcome == contractsv1.ContextFabricRequirementSatisfied {
-		t.Fatalf("count claimed=%t outcome=%q after a truncated search, want none certified", claimed, outcome)
+	if value, claimed, outcome := servedCount(answer); !claimed || value != 1 || outcome != contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("count = %d claimed=%t outcome=%q after a truncated lexical search, want a certified 1", value, claimed, outcome)
 	}
 }
 

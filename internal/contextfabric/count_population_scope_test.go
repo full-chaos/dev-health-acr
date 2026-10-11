@@ -1140,8 +1140,8 @@ func TestDecideCountPopulationScopeNormalizesMemberSource(t *testing.T) {
 
 // TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch
 // lists every clause of the one admission a label-named repository has beyond
-// an identity proof: the exact-label commit, an untruncated search, a complete
-// alias lookup, a match to the anchor term, no other possible anchor matching
+// an identity proof: the exact-label commit, a complete alias lookup (a truncated
+// lexical search refuses only beside an alias lookup that was not complete), a match to the anchor term, no other possible anchor matching
 // the term, and a repository the reading does not contradict.
 func TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch(t *testing.T) {
 	t.Parallel()
@@ -1167,7 +1167,7 @@ func TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch
 		{"reading declares repository", SubjectRepository, matched, with(func(*CommitDecisionDigest) {}), CountPopulationScopeAnchorCommitted},
 		{"no digest recorded", "", matched, nil, CountPopulationScopeAnchorUnresolved},
 		{"digest of another subject", "", matched, CommitDecisionDigestSet{SubjectMapKey(twin): labelDigest}, CountPopulationScopeAnchorUnresolved},
-		{"search truncated", "", matched, with(func(d *CommitDecisionDigest) { d.SearchTruncated = true }), CountPopulationScopeAnchorUnresolved},
+		{"search truncated over a complete identity lookup", "", matched, with(func(d *CommitDecisionDigest) { d.SearchTruncated = true }), CountPopulationScopeAnchorCommitted},
 		{"alias lookup incomplete", "", matched, with(func(d *CommitDecisionDigest) { d.AliasLookupComplete = false }), CountPopulationScopeAnchorUnresolved},
 		{"alias lookup incomplete by graph lag", "", matched, with(func(d *CommitDecisionDigest) {
 			d.AliasLookupComplete, d.IdentityLookup = false, IdentityLookupTokenGraphLag
@@ -1180,6 +1180,10 @@ func TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch
 		}), CountPopulationScopeAnchorUnresolved},
 		{"alias lookup not wired", "", matched, with(func(d *CommitDecisionDigest) {
 			d.AliasLookupComplete, d.IdentityLookup = false, IdentityLookupTokenNotWired
+		}), CountPopulationScopeAnchorUnresolved},
+		{"search truncated, another repository holds the exact name", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{identityMatch(anchor, MatchExact), identityMatch(twin, MatchExact)}}, with(func(d *CommitDecisionDigest) { d.SearchTruncated = true }), CountPopulationScopeAnchorAmbiguous},
+		{"search truncated, identity lookup incomplete by budget", "", matched, with(func(d *CommitDecisionDigest) {
+			d.AliasLookupComplete, d.IdentityLookup, d.SearchTruncated = false, IdentityLookupTokenIncomplete, true
 		}), CountPopulationScopeAnchorUnresolved},
 		{"graph lag with a truncated search", "", matched, with(func(d *CommitDecisionDigest) {
 			d.AliasLookupComplete, d.IdentityLookup, d.SearchTruncated = false, IdentityLookupTokenGraphLag, true
@@ -1255,4 +1259,21 @@ func scopeCandidateMatching(subject SubjectRef) SubjectCandidate {
 	candidate := scopeAnchorMatch(subject)
 	candidate.State = ResolutionAmbiguous
 	return candidate
+}
+
+// The count scope decision and the ownership anchor both read one committed
+// repository named by a label. On the same resolution and digest they must
+// name the same anchor, or a count is refused beside a cohort that was served.
+func TestTheCountScopeAndTheOwnershipAnchorAgreeOnALabelNamedRepositoryUnderATruncatedSearch(t *testing.T) {
+	anchor := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:SCOPE_ANCHOR", Label: "scope anchor"}
+	frame := countingFrame(SubjectTeam)
+	resolution := SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}
+	for _, truncated := range []bool{false, true} {
+		digests := CommitDecisionDigestSet{SubjectMapKey(anchor): {CommitGate: "exact_index", AliasLookupComplete: true, IdentityLookup: "complete", SearchTruncated: truncated}}
+		scope := DecideCountPopulationScopeWithDigests(frame, "", resolution, CommitBasisSet{}, digests, CohortMemberSourceOwnership)
+		owner, basis := OwnershipAnchor(frame, "", resolution, CommitBasisSet{})
+		if basis != OwnershipAnchorSoleCommit || owner != anchor || scope.Decision != CountPopulationScopeAnchorCommitted || scope.AnchorID != anchor.CanonicalID {
+			t.Fatalf("truncated=%t: count scope %q anchor %q, ownership anchor %+v basis %q, want the same repository from both", truncated, scope.Decision, scope.AnchorID, owner, basis)
+		}
+	}
 }

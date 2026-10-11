@@ -738,12 +738,16 @@ import (
 // recognised by it; a no-facts failure serves its own limitation. A candidate
 // saved under an earlier version carries only the warning.
 //
-// v151 -> v152: a repository's identity fact carries owning_teams (its current
+// v151 -> v152: a repository count named by its label certifies when the lexical search was
+// truncated and the identity read was complete; a candidate saved under an earlier version
+// may hold the uncertified count and must not be reused.
+//
+// v152 -> v153: a repository's identity fact carries owning_teams (its current
 // team_repo_ownership teams), and a grouped repository answer groups under those
 // teams and discloses members placed under more than one, under none, or whose
-// owners the facts cut short. A candidate saved under v151 holds an ungrouped
+// owners the facts cut short. A candidate saved under v152 holds an ungrouped
 // repository answer and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v152"
+const QueryVersion = "devhealthfacts.clickhouse.v153"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
