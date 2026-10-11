@@ -302,3 +302,69 @@ func TestTheDroppedEntriesDisclosureIsOnlyTheComposedSentence(t *testing.T) {
 		}
 	}
 }
+
+// A nonempty fact bundle with no room for a claim reads values and carries
+// none: the sentence must not say none were read.
+func TestTheNoFactsSentenceDoesNotClaimNothingWasReadWhenNoClaimFits(t *testing.T) {
+	input := largeSynthesisInputFixture(3)
+	input.Allocation.MaxItems = 1
+	result, err := RuntimeAnswerSynthesizer{}.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, input, &SynthesisFailure{Class: SynthesisFailureRejected, cause: errors.New("x")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ClaimedFacts) != 0 || len(input.Facts.Facts) == 0 {
+		t.Fatalf("claims = %d facts read = %d, want a nonempty bundle with no claim carried", len(result.ClaimedFacts), len(input.Facts.Facts))
+	}
+	if !slices.Contains(result.Limitations, contractsv1.ContextFabricSynthesisFailedNoFactsLimitation) {
+		t.Fatalf("limitations = %q, want the sentence for a failure that carries no value", result.Limitations)
+	}
+	if strings.Contains(contractsv1.ContextFabricSynthesisFailedNoFactsLimitation, "read") {
+		t.Fatalf("the sentence %q says nothing was read, which is false when values were read and none fit", contractsv1.ContextFabricSynthesisFailedNoFactsLimitation)
+	}
+}
+
+// The cap's own limitation can displace a caveat when the list is full, and
+// the displaced count is kept.
+func TestTheCapKeepsTheLimitationDisplacementCountWhenItsDisclosureDisplacesACaveat(t *testing.T) {
+	var details []CoverageDetail
+	var reasons []string
+	for i := 0; i < contractsv1.ContextFabricCoverageEntriesMaxCount+3; i++ {
+		detail := syntheticDegradingDetail(i)
+		details = append(details, detail)
+		reasons = append(reasons, detail.Raw)
+	}
+	var limitations []string
+	for i := 0; i < contractsv1.ContextFabricLimitationsMaxCount; i++ {
+		limitations = append(limitations, fmt.Sprintf("model caveat %02d", i))
+	}
+	result := &InvestigationResult{Limitations: limitations, Coverage: Coverage{Details: details, DegradedReasons: reasons}}
+
+	capCoverageEntriesToWriteBound(result)
+
+	if len(result.Limitations) != contractsv1.ContextFabricLimitationsMaxCount || !slices.Contains(result.Limitations, contractsv1.ContextFabricCoverageEntriesDroppedLimitation(3)) {
+		t.Fatalf("limitations = %d, want the full list carrying the dropped-entries sentence", len(result.Limitations))
+	}
+	if result.LimitationsDisplaced != 1 {
+		t.Fatalf("limitations_displaced = %d, want the one caveat the sentence displaced", result.LimitationsDisplaced)
+	}
+}
+
+// The second cap pass of the validation-stage degrade reports what it omits.
+func TestTheValidationStageDegradeReportsTheEntriesItsCapOmits(t *testing.T) {
+	engine, telemetry, result, basis := validationStageFixture(t)
+	var details []CoverageDetail
+	for i := 0; i < contractsv1.ContextFabricCoverageEntriesMaxCount; i++ {
+		d := syntheticNonDegradingDetail(i)
+		d.DetailID = fmt.Sprintf("cov-%02d", i+1)
+		details = append(details, d)
+	}
+	result.Coverage.Details = details
+
+	if _, ok := engine.degradeWorkItemModelBreach(context.Background(), storage.Principal{OrgID: "org-1"}, result, basis); !ok {
+		t.Fatal("not degraded")
+	}
+
+	if len(telemetry.coverageEntriesCapped) != 1 || telemetry.coverageEntriesCapped[0].omitted != 1 {
+		t.Fatalf("cap events = %+v, want one reporting the single omitted entry", telemetry.coverageEntriesCapped)
+	}
+}

@@ -590,9 +590,9 @@ const ContextFabricSynthesisFailedFactsOnlyLimitation = "Synthesis failed; the f
 const ContextFabricSynthesisFailedFactsTruncatedLimitation = "Synthesis failed and more canonical values were read than one answer can carry; the facts shown are a part of them."
 
 // ContextFabricSynthesisFailedNoFactsLimitation is the sentence a degraded
-// answer carries when the model call failed and no canonical value was read
-// to show in its place.
-const ContextFabricSynthesisFailedNoFactsLimitation = "Synthesis failed and no canonical values were read to show in its place."
+// answer carries when the model call failed and no canonical value could be
+// shown in its place: none was read, or none fit the answer.
+const ContextFabricSynthesisFailedNoFactsLimitation = "Synthesis failed and no canonical values could be shown in its place."
 
 // ContextFabricSynthesisInputBoundedLimitation is the sentence an answer
 // carries when the facts read for it did not fit the model input and only

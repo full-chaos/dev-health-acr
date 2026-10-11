@@ -82,7 +82,9 @@ func capCoverageEntriesToWriteBound(result *InvestigationResult) int {
 		if reasons := result.Coverage.DegradedReasons; len(reasons) >= dropped {
 			result.Coverage.DegradedReasons = reasons[:len(reasons)-dropped]
 		}
-		result.Limitations, _ = appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricCoverageEntriesDroppedLimitation(dropped)})
+		var displaced int
+		result.Limitations, displaced = appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricCoverageEntriesDroppedLimitation(dropped)})
+		result.LimitationsDisplaced += displaced
 		slog.Default().Warn("context_fabric: coverage entries over the bound, degrading entries left out",
 			"degrading_dropped", dropped, "degrading_kept", len(degrading), "protected", protected)
 	}

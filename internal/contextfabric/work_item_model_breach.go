@@ -187,7 +187,13 @@ func (e *Engine) degradeWorkItemModelBreach(ctx context.Context, principal stora
 		slog.Default().Error("context_fabric: model failure coverage detail not filed, the answer is recognised by its warning",
 			"org_id", SanitizeLogAttr(principal.OrgID), "failure_class", SanitizeLogAttr(string(failure.Class)))
 	}
-	capCoverageEntriesToWriteBound(&out)
+	if omitted := capCoverageEntriesToWriteBound(&out); omitted > 0 {
+		if e.telemetry != nil {
+			e.telemetry.RecordCoverageEntriesCapped(ctx, principal, len(out.Coverage.Details), omitted)
+		} else {
+			NewSlogEngineTelemetry(slog.Default()).RecordCoverageEntriesCapped(ctx, principal, len(out.Coverage.Details), omitted)
+		}
+	}
 	if ValidateWorkItemTuplePayload(out, principal) != nil {
 		return result, false
 	}
