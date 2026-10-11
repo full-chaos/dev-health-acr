@@ -311,12 +311,7 @@ func t4Cases() []t4Case {
 		}},
 	}})
 	add(t4Case{name: "investment/organization", kind: contextfabric.FactInvestment, subjects: org, tables: organizationMixTable()})
-	nullStream := investmentProjectRollupRow("linear", "proj-1", "team-2", "", "", "", 10, 5, 2, 100, 4.0)
 	projectAB := []fakeTable{
-		{match: "FROM investment_metrics_daily", rows: [][]any{
-			investmentProjectRollupRow("linear", "proj-1", "team-1", "Team One", "product", "growth", 30, 12, 4, 850, 18.5),
-			nullStream,
-		}},
 		// The phased roll-up (CHAOS-7271): scope, repo themes, repo bugfix, evidence arm.
 		{match: "AS unit_ids", rows: [][]any{{[]string{"unit-1"}, []int64{1}, clockSpanStart}}},
 		{match: "groupArray(link_kind)", rows: [][]any{{[]string{"linear"}, []string{"proj-1"}, []string{"repo"}, []string{"r:repo-1"}, [][]string{{"team-1"}}}}},
