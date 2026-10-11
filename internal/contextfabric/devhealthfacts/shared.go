@@ -742,12 +742,17 @@ import (
 // truncated and the identity read was complete; a candidate saved under an earlier version
 // may hold the uncertified count and must not be reused.
 //
-// v152 -> v153: a repository's identity fact carries owning_teams (its current
+// v152 -> v153: a stored answer is reused only when its project and team
+// selector identity equals the request's; a candidate saved under an earlier
+// version carries no selector identity and must not be reused for a request
+// that names project or team selectors.
+//
+// v153 -> v154: a repository's identity fact carries owning_teams (its current
 // team_repo_ownership teams), and a grouped repository answer groups under those
 // teams and discloses members placed under more than one, under none, or whose
-// owners the facts cut short. A candidate saved under v152 holds an ungrouped
+// owners the facts cut short. A candidate saved under v153 holds an ungrouped
 // repository answer and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v153"
+const QueryVersion = "devhealthfacts.clickhouse.v154"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

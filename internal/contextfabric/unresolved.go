@@ -727,7 +727,14 @@ func (e *Engine) terminalResult(
 		// introduce a difference, and a terminal result saved under a key no
 		// lookup will ever form is a row the clarification loop cannot reach.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
-		if err := e.saveTerminalResult(ctx, principal, BudgetAssertSubjectlessTerminal, &result, plan, e.effectiveResponseBudget(request), watermark, epoch, RequestScopeTimeAxisKey(request, composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried))), binding.Epoch, ancestryParent, semantic); err != nil {
+		// A work-item tuple answer is keyed without the request scope, as the
+		// decisive save keys it: its own gate re-measures membership under the
+		// scope of the request that reuses it.
+		terminalAxisKey := composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried))
+		if !workItemTupleSemanticState(semantic.Write.State) {
+			terminalAxisKey = RequestScopeTimeAxisKey(request, terminalAxisKey)
+		}
+		if err := e.saveTerminalResult(ctx, principal, BudgetAssertSubjectlessTerminal, &result, plan, e.effectiveResponseBudget(request), watermark, epoch, terminalAxisKey, binding.Epoch, ancestryParent, semantic); err != nil {
 			// CHAOS-3927 P4 (codex round-2 adversarial review fix): a
 			// subjectless terminal can carry confirmed structure exactly
 			// like a synthesized answer can (result.ConfirmedStructure
