@@ -114,6 +114,8 @@ type synthesisAssemblyParams struct {
 	// so the ANSWER can disclose it. Zero on every request that grouped, and
 	// on every request that never planned a group axis.
 	GroupingRefusal CohortGroupingOutcome
+	// GroupOverlap is the overlap of a grouping that was built; zero when none.
+	GroupOverlap CohortGroupOverlap
 	// GroupReadDisclosure and GroupReadKind are what the served document
 	// must say about the group read (round 2, P1-3), carried like
 	// GroupingRefusal so the ANSWER discloses it.
@@ -551,6 +553,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// before the commit-affirmation gate, Validate and Save, so the sentence,
 	// its Coverage.Partial flag and the answer are one object throughout.
 	applyGroupingRefusalDisclosure(&result, params.GroupingRefusal)
+	applyGroupOverlapDisclosure(&result, params.GroupOverlap)
 	// The group read's half: groups this answer did not read, or a group
 	// list too large to carry, said on the wire beside the grouping refusal
 	// and for the same reason -- telemetry alone is not disclosure.

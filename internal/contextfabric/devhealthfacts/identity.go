@@ -2,8 +2,10 @@ package devhealthfacts
 
 import (
 	"context"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -87,6 +89,9 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 			})
 		}
 		budget.observe(len(rows))
+		if err := p.attachOwningTeams(ctx, orgID, facts); err != nil {
+			return contextfabric.FactProviderResult{}, err
+		}
 	}
 
 	workItemIDs, workItemBySubject, workItemRejected := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
@@ -237,4 +242,67 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	state, emptyReason := currentAxisReadState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
 	return result, nil
+}
+
+// owningTeamsStatement lists the active teams that currently own each
+// repository: the one ownership resolver (ownedRepositoriesSource), the
+// current-validity window, and the teams table for the name. Never
+// membership.
+func owningTeamsStatement() string {
+	return withRowLimit(`SELECT DISTINCT own.repo_key, own.team_id, t.name
+FROM ` + ownedRepositoriesSource(ownershipValidityPredicate(factTimeBound{})) + ` AS own
+INNER JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON toString(t.id) = toString(own.team_id)
+WHERE own.repo_key IN {ids:Array(String)}
+ORDER BY own.repo_key, own.team_id`)
+}
+
+// attachOwningTeams adds the owning_teams table to every repository identity
+// fact in facts. A repository no team owns keeps no table: missing is not
+// empty.
+func (p *IdentityProvider) attachOwningTeams(ctx context.Context, orgID string, facts []contextfabric.CanonicalFact) error {
+	byRepo := make(map[int]string, len(facts))
+	ids := make([]string, 0, len(facts))
+	for i, fact := range facts {
+		if fact.Subject.Kind != contextfabric.SubjectRepository {
+			continue
+		}
+		id := strings.TrimPrefix(fact.Subject.CanonicalID, "repository:")
+		byRepo[i] = id
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rowsByRepo := map[string][]contextfabric.FactValueRow{}
+	err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadRepositoryOwningTeams", owningTeamsStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var repoID, teamID, teamName string
+		if err := row.Scan(&repoID, &teamID, &teamName); err != nil {
+			return err
+		}
+		rowsByRepo[repoID] = append(rowsByRepo[repoID], contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
+			"team_id":   contextfabric.StringFactValue(teamID),
+			"team_name": stringOrNull(teamName),
+		}})
+		return nil
+	})
+	if err != nil {
+		return readFailure("query repository owning teams", err)
+	}
+	for i, repoID := range byRepo {
+		rows := rowsByRepo[repoID]
+		if len(rows) == 0 {
+			continue
+		}
+		rows, omitted := capFactValueRows(rows)
+		facts[i].Fields["owning_teams"] = contextfabric.TableFactValue(contextfabric.FactTable{
+			Shape:        contextfabric.FactTableBreakdown,
+			Key:          []string{"team_id"},
+			Observations: []string{"team_name"},
+			Rows:         rows,
+		})
+		if omitted > 0 {
+			facts[i].Fields["owning_teams_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+		}
+	}
+	return nil
 }

@@ -889,3 +889,46 @@ func applyGroupingRefusalDisclosure(result *InvestigationResult, outcome CohortG
 	result.LimitationsDisplaced += displaced
 	result.Coverage.Partial = true
 }
+
+// CohortGroupOverlap is how many members of a built grouping sit under more
+// than one group (a repository owned by several teams). Zero Count means no
+// overlap and no disclosure.
+type CohortGroupOverlap struct {
+	Count      int
+	MemberKind SubjectKind
+	GroupKind  SubjectKind
+}
+
+// CohortGroupOverlapOf counts the cohort members listed under more than one
+// of groups.
+func CohortGroupOverlapOf(cohort *Cohort, groups []contractsv1.ContextFabricCohortGroup) CohortGroupOverlap {
+	if cohort == nil || len(groups) == 0 {
+		return CohortGroupOverlap{}
+	}
+	placed := make(map[string]int, len(cohort.Members))
+	for _, group := range groups {
+		for _, id := range group.MemberCanonicalIDs {
+			placed[id]++
+		}
+	}
+	count := 0
+	for _, n := range placed {
+		if n > 1 {
+			count++
+		}
+	}
+	return CohortGroupOverlap{Count: count, MemberKind: cohort.Kind, GroupKind: groups[0].Subject.Kind}
+}
+
+// applyGroupOverlapDisclosure states on the wire that some members appear
+// under more than one group. It does not mark the answer partial: the
+// grouping is complete, only its totals overlap.
+func applyGroupOverlapDisclosure(result *InvestigationResult, overlap CohortGroupOverlap) {
+	if result == nil || overlap.Count < 1 {
+		return
+	}
+	sentence := contractsv1.ContextFabricGroupingOverlapLimitation(overlap.MemberKind, overlap.GroupKind, overlap.Count)
+	composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+	result.Limitations = composed
+	result.LimitationsDisplaced += displaced
+}

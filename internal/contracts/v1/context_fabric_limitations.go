@@ -356,6 +356,51 @@ func IsContextFabricGroupingUnplaceableLimitation(limitation string) bool {
 	return ok
 }
 
+// contextFabricGroupingOverlapLimitation* are the fixed segments of the
+// disclosure that some members of a grouped answer sit under more than one
+// group because more than one group owns them. The interpolated values are a
+// count and two members of the closed subject-kind vocabulary, so recognition
+// is a parse that cannot admit model text.
+const (
+	contextFabricGroupingOverlapLimitationMiddle = " in this answer appear under more than one "
+	contextFabricGroupingOverlapLimitationSuffix = " group because each has more than one owner, so group totals overlap."
+)
+
+// ContextFabricGroupingOverlapLimitation composes the overlap disclosure: count
+// members of memberKind appear under more than one group of groupKind. The sole
+// composer; IsContextFabricGroupingOverlapLimitation parses exactly this.
+func ContextFabricGroupingOverlapLimitation(memberKind, groupKind ContextFabricSubjectKind, count int) string {
+	return strconv.Itoa(count) + " " + ContextFabricSubjectKindNoun(memberKind, count) +
+		contextFabricGroupingOverlapLimitationMiddle + ContextFabricSubjectKindNoun(groupKind, 1) +
+		contextFabricGroupingOverlapLimitationSuffix
+}
+
+// IsContextFabricGroupingOverlapLimitation reports whether a limitation is one
+// ContextFabricGroupingOverlapLimitation could have composed.
+func IsContextFabricGroupingOverlapLimitation(limitation string) bool {
+	body, ok := strings.CutSuffix(limitation, contextFabricGroupingOverlapLimitationSuffix)
+	if !ok {
+		return false
+	}
+	head, groupNoun, ok := strings.Cut(body, contextFabricGroupingOverlapLimitationMiddle)
+	if !ok {
+		return false
+	}
+	if _, known := contextFabricSubjectKindFromNoun(groupNoun, 1); !known {
+		return false
+	}
+	countText, memberNoun, ok := strings.Cut(head, " ")
+	if !ok {
+		return false
+	}
+	count, err := strconv.Atoi(countText)
+	if err != nil || count < 1 || strconv.Itoa(count) != countText {
+		return false
+	}
+	_, known := contextFabricSubjectKindFromNoun(memberNoun, count)
+	return known
+}
+
 // contextFabricGroupReadUnreadLimitationPrefix/-Suffix and
 // contextFabricGroupListOverBoundLimitationPrefix/-Suffix are the fixed
 // segments of the two group-read disclosures: a grouped answer some of whose
@@ -672,6 +717,7 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 	// on a different axis than the one asked for. That is the shipped round-3
 	// defect, and it is invisible to any test that drives the composer.
 	return IsContextFabricGroupingRefusalLimitation(limitation) ||
+		IsContextFabricGroupingOverlapLimitation(limitation) ||
 		IsContextFabricGroupingUnplaceableLimitation(limitation) ||
 		IsContextFabricRefusalBasisLimitation(limitation) ||
 		IsContextFabricGroupReadUnreadLimitation(limitation) ||

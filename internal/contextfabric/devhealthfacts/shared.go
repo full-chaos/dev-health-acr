@@ -708,7 +708,12 @@ import (
 // v139 -> v143: served limitation sentences, coverage reasons and render labels name
 // kinds by display noun and carry no basis token, so a candidate saved under an
 // earlier version may hold the old wording and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v143"
+//
+// v143 -> v150: a repository's identity fact carries owning_teams (its current
+// team_repo_ownership teams), and a grouped repository answer groups under those
+// teams and discloses members that sit under more than one. A candidate saved
+// under v143 holds an ungrouped repository answer and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v150"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
