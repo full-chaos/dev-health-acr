@@ -761,6 +761,35 @@ func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode)
 	}
 }
 
+// coverageDetailCodeQualifiesSourceTruncation reports whether a coverage
+// detail code is one a FACT-BEARING PARTIAL READ can carry: a fact source that
+// returned part of what was asked of it and kept those facts, with no larger
+// population to count the gap against. Only such a cause may sit on a depth row
+// whose served and declared counts are equal (truncationQualified in the
+// outcome validator): the counts over what was observed are exact and the
+// source said it did not return everything.
+//
+// Two codes have that property. fact_provider_reported: the provider cut its
+// own answer. fact_scope_unexpanded: a successful partial read was marked
+// truncated and its facts retained (fact_registry.go, the expansion-gap branch).
+// The other `fact_` read codes cannot sit on a fact-bearing row: fact_unconfigured
+// skips the read (fact_registry.go, the unconfigured branch) and fact_read_failed
+// records the failure and continues without merging any facts (the failed-read
+// branch). The planning-time declaration gaps (fact_no_declaring_producer,
+// fact_table_shape_undeclared) read nothing, fact_narrowed is a SUBJECT reduction
+// (equal counts would contradict it), and fact_pruned / fact_read_origin_state
+// are disclosures. All of those keep the "not a reduction" refusal; a code joins
+// only with an executed row of a source that reaches the shape.
+// TestSourceTruncationCausesAreTheFrozenSet writes the set out.
+func coverageDetailCodeQualifiesSourceTruncation(code ContextFabricCoverageDetailCode) bool {
+	switch code {
+	case ContextFabricCoverageDetailFactProviderReported, ContextFabricCoverageDetailFactScopeUnexpanded:
+		return true
+	default:
+		return false
+	}
+}
+
 // ContextFabricCoverageDetailCodeMayDegrade declares, per the settled design,
 // which codes are NEVER degrading regardless of producer state (parity with
 // the string path: fact_pruned and graph_validity_unbounded never enter
