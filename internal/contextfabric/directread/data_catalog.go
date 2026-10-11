@@ -19,7 +19,8 @@ package directread
 //     policy, not data), each entry marked available:false with the reason
 //     scope_missing_data_read. This closes design "found while merging" item
 //     8 (r5 did not say whether a context:read-only caller sees the list).
-//   - The caller section carries the scopes present and the grant class. It
+//   - The caller section carries the scopes present, the repository grant class
+//     and effective_access (what run_operation does for the credential). It
 //     never carries a repository name, a slug or a count of grants.
 //   - The facts section lists the kinds read_facts serves, read from the SAME
 //     capability registry read_facts validates against (CHAOS-7148), never

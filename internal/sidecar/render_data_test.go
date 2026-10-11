@@ -144,3 +144,16 @@ func TestDataCatalogSummaryStatesRunOperationAccessNextToGrant(t *testing.T) {
 		}
 	}
 }
+
+func TestDataCatalogSummaryOldServerWithOperationsSectionNeverClaimsAccess(t *testing.T) {
+	raw := `{"contract_version":"acr-data.v1","sections":["operations"],"operations":{"caller_class":"unrestricted","available":false,"reason":"scope_missing_data_read","operations":[],"not_served":[],"refused_shapes":[]},"caller":{"scopes":["context:read"],"grant_class":"unrestricted"}}`
+	got := RenderDataCatalogSummary([]byte(raw), DataTextMaxBytes)
+	for _, want := range []string{"Repository grant: unrestricted.", "run_operation: unknown.", "run_operation available to you now: no (scope_missing_data_read)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q lacks %q", got, want)
+		}
+	}
+	if strings.Contains(got, "run_operation: allowed") {
+		t.Errorf("claims access: %q", got)
+	}
+}

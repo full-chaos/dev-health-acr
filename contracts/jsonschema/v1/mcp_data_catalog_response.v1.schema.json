@@ -715,7 +715,7 @@
     },
     "caller": {
       "type": "object",
-      "description": "Your scopes and grant class. Never a repository name.",
+      "description": "Your scopes, repository grant class and effective access. Never a repository name.",
       "additionalProperties": false,
       "required": [
         "scopes",
