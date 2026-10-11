@@ -40,15 +40,11 @@ func ownsRepoTable(teamID string) fakeTable {
 // TestInvestmentProviderThemeMixReadsCanonicalSourceNeverLegacy is the
 // RED-first regression guard CHAOS-4398 §0 asks for: the producer must
 // read work_unit_investments' canonical theme_distribution_json (via
-// readers.ReadTeamThemeMix), never investment_metrics_daily -- the
-// deprecated legacy rule set whose investment_area values are not the
-// canonical 5-theme taxonomy. Failing this test the way it would fail
-// before this producer existed (an InvestmentProvider that only ever
-// touched investment_metrics_daily) is the change this PR makes.
+// readers.ReadTeamThemeMix), never the deprecated legacy rule set whose
+// investment_area values are not the canonical 5-theme taxonomy.
 func TestInvestmentProviderThemeMixReadsCanonicalSourceNeverLegacy(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM investment_metrics_daily", rows: nil},
 		ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: [][]any{
 			themeMixRow("CHAOS", "Fullchaos", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 3),
 		}},
@@ -94,10 +90,10 @@ func TestInvestmentProviderThemeMixReadsCanonicalSourceNeverLegacy(t *testing.T)
 		t.Fatalf("quality.bugfix share = %v, want %v", got, wantBugfixShare)
 	}
 
-	// The legacy table must never be the source of these fields.
+	// The legacy table must never be read.
 	for _, query := range client.queries {
-		if strings.Contains(query.statement, "investment_metrics_daily") && strings.Contains(query.statement, "theme_distribution_json") {
-			t.Fatalf("a single statement referenced both the legacy and canonical tables: %q", query.statement)
+		if strings.Contains(query.statement, "investment_metrics_daily") {
+			t.Fatalf("a statement referenced the deprecated legacy table: %q", query.statement)
 		}
 	}
 }
@@ -210,9 +206,8 @@ func TestInvestmentProviderThemeMixZeroCurrentEffortOmitsFact(t *testing.T) {
 }
 
 // TestInvestmentProviderThemeMixQueryErrorReturnsFactReadFailure proves a
-// theme-mix query error fails the whole read the same way the legacy
-// investment_metrics_daily query error already does (readFailure), rather
-// than degrading silently.
+// theme-mix query error fails the whole read (readFailure), rather than
+// degrading silently.
 func TestInvestmentProviderThemeMixQueryErrorReturnsFactReadFailure(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", err: errors.New("boom")}}}
@@ -227,14 +222,12 @@ func TestInvestmentProviderThemeMixQueryErrorReturnsFactReadFailure(t *testing.T
 }
 
 // TestInvestmentProviderTeamMixIsStandaloneNeverMergedOntoALegacyDayRow
-// (CHAOS-6559): a team with legacy investment_metrics_daily rows AND canonical
-// mix data gets exactly ONE fact, the mix, carrying no legacy day-row field.
-// The legacy rows are never read for a team: merged onto a day row, the mix was
-// read by the model as that day's attribute and reported as "no shares".
+// (CHAOS-6559): a team with canonical mix data gets exactly ONE fact, the mix,
+// carrying no legacy day-row field, and no statement names the deprecated
+// legacy table.
 func TestInvestmentProviderTeamMixIsStandaloneNeverMergedOntoALegacyDayRow(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM investment_metrics_daily", rows: [][]any{investmentRow("CHAOS")}},
 		ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: [][]any{
 			themeMixRow("CHAOS", "Fullchaos", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 0),
 		}},
@@ -259,7 +252,7 @@ func TestInvestmentProviderTeamMixIsStandaloneNeverMergedOntoALegacyDayRow(t *te
 		t.Fatalf("mix fact does not carry the canonical theme_feature_delivery field: %#v", fact.Fields)
 	}
 	for _, query := range client.queries {
-		if strings.Contains(query.statement, "FROM investment_metrics_daily") {
+		if strings.Contains(query.statement, "investment_metrics_daily") {
 			t.Fatalf("a team read queried the deprecated investment_metrics_daily: %s", query.statement)
 		}
 	}
@@ -272,7 +265,6 @@ func TestInvestmentProviderTeamMixIsStandaloneNeverMergedOntoALegacyDayRow(t *te
 func TestInvestmentProviderTeamDeclaresAndEmitsThemeBreakdownTable(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM investment_metrics_daily", rows: nil},
 		ownsRepoTable("CHAOS"),
 		{match: "FROM work_unit_investments", rows: [][]any{
 			themeMixRow("CHAOS", "", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 0),

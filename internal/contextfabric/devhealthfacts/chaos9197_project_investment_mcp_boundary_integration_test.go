@@ -51,11 +51,6 @@ func TestCHAOS9197ProjectInvestmentAtTheReadFactsBoundary(t *testing.T) {
 	// The canonical mix exists for proj-mix only.
 	exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		"wu-mix", at, at, repoUUID("repo-mix"), 10.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{}, "{}", at, orgID)
-	// Legacy rule-classifier day rows exist for BOTH teams: they must never be served.
-	for _, team := range []string{"team-mix", "team-nomix"} {
-		exec(`INSERT INTO investment_metrics_daily (day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			ts(2026, 9, 12, 0, 0, 0), team, "product", "growth", uint32(30), uint32(12), uint32(4), uint64(850), ts(2026, 9, 12, 6, 0, 0), orgID)
-	}
 
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{})
 	if err != nil {

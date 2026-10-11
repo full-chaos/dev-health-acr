@@ -151,7 +151,7 @@ func currentAxisReadState(rowCount int) (contextfabric.SourceState, string) {
 // unrepresentableValueReason names a fact omitted because a source column
 // held a value this reader cannot represent (CHAOS-3781 round-3 F2).
 //
-// One column is UInt64 -- investment_metrics_daily.churn_loc -- and every other numeric column
+// One column is UInt64 -- ic_landscape_rolling_30d.churn_loc_30d -- and every other numeric column
 // these providers read is UInt32, which fits int64 by construction. A
 // UInt64 above MaxInt64 wrapped NEGATIVE through toInt64, and
 // FactValue.Validate accepts negatives, so it would have reached a public
