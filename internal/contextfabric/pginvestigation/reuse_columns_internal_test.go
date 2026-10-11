@@ -264,14 +264,21 @@ func TestReuseColumnsFor_AModelFailureAnswerNeverPopulatesReuseColumns(t *testin
 			Versions: contextfabric.VersionSet{ContractVersion: "contract-v1", ProjectionVersion: "projection-v1", ModelIdentity: "test/model-v1"},
 		}
 	}
-	failed := build("answer text unavailable: the model call failed (class: model_output_invalid); the sources that were read are listed in coverage")
+	const failureWarning = "answer text unavailable: the model call failed (class: model_output_invalid); the sources that were read are listed in coverage"
+	failed := build(failureWarning)
+	failed.Coverage.Details = []contractsv1.ContextFabricCoverageDetail{{
+		DetailID: "cov-01", Source: "context-fabric:synthesis", Code: contractsv1.ContextFabricCoverageDetailSynthesisModelFailed,
+		FailureClass: contractsv1.ContextFabricSynthesisFailureModelOutputInvalid, RetryHint: contractsv1.ContextFabricRetryMaySucceed,
+	}}
 	hash, _, _, _, watermarks, invalidationEpoch := store.reuseColumnsFor(failed, snapshot, &epoch)
 	if hash.Valid || watermarks != nil || invalidationEpoch.Valid {
 		t.Fatalf("reuseColumnsFor(model failure answer) = (%+v, %v, %+v), want all-NULL/nil", hash, watermarks, invalidationEpoch)
 	}
-	ordinary := build("a coverage warning")
-	hash, _, _, _, watermarks, invalidationEpoch = store.reuseColumnsFor(ordinary, snapshot, &epoch)
-	if !hash.Valid || watermarks == nil || !invalidationEpoch.Valid {
-		t.Fatalf("reuseColumnsFor(ordinary degraded answer) = (%+v, %v, %+v), want populated", hash, watermarks, invalidationEpoch)
+	// The code is the one key: the warning text alone no longer marks the answer.
+	for name, ordinary := range map[string]contextfabric.InvestigationResult{"ordinary warning": build("a coverage warning"), "failure warning without the code": build(failureWarning)} {
+		hash, _, _, _, watermarks, invalidationEpoch = store.reuseColumnsFor(ordinary, snapshot, &epoch)
+		if !hash.Valid || watermarks == nil || !invalidationEpoch.Valid {
+			t.Fatalf("reuseColumnsFor(%s) = (%+v, %v, %+v), want populated", name, hash, watermarks, invalidationEpoch)
+		}
 	}
 }
