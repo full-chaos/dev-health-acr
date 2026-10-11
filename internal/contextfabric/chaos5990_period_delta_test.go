@@ -607,7 +607,7 @@ func TestApplyPeriodDelta_RequirementsAreDistinctAndDerivedFromTheComposition(t 
 	}
 }
 
-// A prior health provider that FAILED (or was cancelled/unconfigured/gapped)
+// A prior health provider that FAILED (or was unconfigured/gapped/pruned)
 // returns a nil error from ReadFacts with a non-completed branch on the
 // ledger. None of these may be served as unknown_prior.
 func TestApplyPeriodDelta_PriorHealthBranchNotCompleted_PriorReadFailed(t *testing.T) {
