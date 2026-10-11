@@ -61,6 +61,7 @@ func chaos4109ScopeSeed(t *testing.T, ctx context.Context, direct interface {
 	// be resolved through this stale column, on any axis.
 	mustSeed("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		chaos4109ScopeWorkItemID, chaos4109ScopeRepoID, chaos4109ScopeOrgID, "Temporal issue", "open", "", "", "linear", chaos4109ScopeProjectAID, t3)
+	seedIssueLink(t, ctx, direct, chaos4109ScopeOrgID, chaos4109ScopeWorkItemID, chaos4109ScopeRepoID, 1, "native", t1)
 	mustSeed("transition: add to A", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', '', ?, '', '', '', ?, ?, ?)`,
 		chaos4109ScopeOrgID, chaos4109ScopeRepoID, chaos4109ScopeWorkItemID, chaos4109ScopeProjectAID, t1, t1, "ev-4109-scope-1")
 	mustSeed("transition: move A->B", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', ?, ?, '', '', '', ?, ?, ?)`,
@@ -274,6 +275,7 @@ func TestScopeExpanderAsOf_NoHistorySubjectFallsBackUnconditionally(t *testing.T
 		chaos4109ScopeWorkItemID, chaos4109ScopeRepoID, chaos4109ScopeOrgID, "No-history issue", "open", "", "", "linear", chaos4109ScopeProjectAID, at); err != nil {
 		t.Fatalf("seed work item: %v", err)
 	}
+	seedIssueLink(t, ctx, direct, chaos4109ScopeOrgID, chaos4109ScopeWorkItemID, chaos4109ScopeRepoID, 1, "native", at)
 
 	expander := devhealthfacts.NewScopeExpander(query)
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
@@ -350,8 +352,10 @@ func TestScopeExpanderAsOf_TemporalDroppedCountReachesThePullRequestPolicy(t *te
 		repo2ID, orgID, repo2Slug, "linear", tEarly)
 	mustExec("wi1 on repo1", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		wi1ID, repo1ID, orgID, "Stays on A", "open", "", "", "linear", projectAID, tStay)
+	seedIssueLink(t, ctx, direct, orgID, wi1ID, repo1ID, 1, "native", tStay)
 	mustExec("wi2 on repo2", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		wi2ID, repo2ID, orgID, "Leaves A before the window", "open", "", "", "linear", projectAID, tLeave)
+	seedIssueLink(t, ctx, direct, orgID, wi2ID, repo2ID, 1, "native", tLeave)
 	mustExec("pull request on repo1", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
 		repo1ID, orgID, uint32(1), "Widget", "open", tStay, tStay, "feat/widget", "")
 	// wi1: added to A at tStay, OPEN -- covers the query window (asOf).
@@ -499,6 +503,7 @@ func TestScopeExpanderAsOf_DuplicateAddIsCountedAndKeepsAttributing(t *testing.T
 		repoID, orgID, repoSlug, "linear", t1)
 	mustExec("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		workItemID, repoID, orgID, "Duplicate-add history", "open", "", "", "linear", projectAID, t2)
+	seedIssueLink(t, ctx, direct, orgID, workItemID, repoID, 1, "native", t2)
 	// TWO ADD touches of the same (work_item, project A) pair, no REMOVE in
 	// between -- the continuation membershipTouchesAsOfSQL flags via
 	// is_duplicate_add.
@@ -569,6 +574,7 @@ func TestScopeExpanderAsOf_DanglingRemoveIsCountedNotSilentlyDropped(t *testing.
 		projectBID, orgID, "Project B", "", "linear", "backlog", "", uint8(1), t1)
 	mustExec("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		workItemID, chaos4109ScopeRepoID, orgID, "Dangling-remove history", "open", "", "", "linear", projectBID, t1)
+	seedIssueLink(t, ctx, direct, orgID, workItemID, chaos4109ScopeRepoID, 1, "native", t1)
 	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
 		chaos4109ScopeRepoID, orgID, chaos4109ScopeRepoSlug, "linear", t1); err != nil {
 		t.Fatalf("seed repo: %v", err)
