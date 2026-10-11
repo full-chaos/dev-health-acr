@@ -5,6 +5,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/sourcerow"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -31,7 +32,14 @@ func buildSourceRows(client contextpacket.ClickHouseQueryClient, assembly contex
 	} else if logger != nil {
 		logger.Info("context fabric source-row expansion: no subject gate, team and project refs stay on the persisted record")
 	}
-	resolver, err := sourcerow.New(contextpacket.NewObservedCatalogClickHouseRows(client, assembly), contextpacket.NewEvidenceResolver(contextpacket.EvidenceResolverOptions{Observer: expansion}), subjects)
+	rows, err := contextpacket.NewObservedCatalogClickHouseRows(client, assembly).WithOrganizationRowQuery(devhealthsource.ProjectTeamSourceRowQuery())
+	if err != nil {
+		if logger != nil {
+			logger.Error("context fabric source-row expansion not composed", "reason", "project_team_query_rejected")
+		}
+		return nil
+	}
+	resolver, err := sourcerow.New(rows, contextpacket.NewEvidenceResolver(contextpacket.EvidenceResolverOptions{Observer: expansion}), subjects)
 	if err != nil {
 		if logger != nil {
 			logger.Error("context fabric source-row expansion not composed", "reason", "resolver_rejected")
