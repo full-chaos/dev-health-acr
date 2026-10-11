@@ -106,6 +106,11 @@ type AnswerBudgetRefusal struct {
 	// different situations that a caller and an operator both need told
 	// apart.
 	RetryAttempted bool
+	// Sections names what the refused document was made of: every top-level
+	// section's bytes, largest first, so the refusal log can say what filled
+	// the answer. Stage is where the refusal was raised.
+	Sections []contractsv1.ContextFabricSectionBytes
+	Stage    InvestigationStage
 }
 
 func (r AnswerBudgetRefusal) Error() string {
@@ -1055,6 +1060,8 @@ func (e *Engine) refusalFromAxis(plan *AnswerPlan, measurement ResponseMeasureme
 		Family:                   plan.Family,
 		NarrowerContinuationAxis: axis,
 		RetryAttempted:           retryAttempted,
+		Sections:                 measurement.Sections(),
+		Stage:                    StageSynthesis,
 	}
 }
 
