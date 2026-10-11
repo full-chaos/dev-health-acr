@@ -158,11 +158,15 @@ func (e *Engine) degradeWorkItemModelBreach(ctx context.Context, principal stora
 	out.EvidenceRefLabels = labels
 	serverLimitations := slices.DeleteFunc(slices.Clone(result.Limitations), func(limitation string) bool { return slices.Contains(basis.DraftLimitations, limitation) })
 	mintedLimitations := []string{}
-	if len(minted) > 0 {
-		mintedLimitations = slices.DeleteFunc(slices.Clone(composed.Limitations), func(limitation string) bool {
+	// The failure's own sentence follows what the degraded answer keeps: the
+	// facts-only pair when canonical values stay, the no-facts sentence when
+	// none does.
+	mintedLimitations = slices.DeleteFunc(slices.Clone(composed.Limitations), func(limitation string) bool {
+		if len(minted) > 0 {
 			return limitation != contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation && limitation != contractsv1.ContextFabricSynthesisFailedFactsTruncatedLimitation
-		})
-	}
+		}
+		return limitation != contractsv1.ContextFabricSynthesisFailedNoFactsLimitation
+	})
 	composedLimitations, displaced := appendBoundedLimitations([]string{}, append(serverLimitations, mintedLimitations...))
 	out.Limitations = composedLimitations
 	out.LimitationsDisplaced += displaced
@@ -171,6 +175,19 @@ func (e *Engine) degradeWorkItemModelBreach(ctx context.Context, principal stora
 	if len(out.Warnings) > contractsv1.ContextFabricWarningsMaxCount {
 		out.Warnings = out.Warnings[:contractsv1.ContextFabricWarningsMaxCount]
 	}
+	// The composed failure detail is filed onto the coverage the answer keeps,
+	// and the entry cap, which ran before this degrade, runs again.
+	var failureDetails []CoverageDetail
+	for _, detail := range composed.Coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed {
+			failureDetails = append(failureDetails, detail)
+		}
+	}
+	if !appendServerCoverageDetails(&out, failureDetails, principal.OrgID) {
+		slog.Default().Error("context_fabric: model failure coverage detail not filed, the answer is recognised by its warning",
+			"org_id", SanitizeLogAttr(principal.OrgID), "failure_class", SanitizeLogAttr(string(failure.Class)))
+	}
+	capCoverageEntriesToWriteBound(&out)
 	if ValidateWorkItemTuplePayload(out, principal) != nil {
 		return result, false
 	}

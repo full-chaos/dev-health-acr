@@ -63,27 +63,35 @@ func capCoverageEntriesToWriteBound(result *InvestigationResult) int {
 			nonDegrading = append(nonDegrading, d)
 		}
 	}
+	// Degrading rows never yield. A protected row comes next, and the rest fill
+	// what is left, so the total never passes the bound unless the degrading
+	// rows alone do.
+	capacity := bound - len(degrading)
+	if capacity < 0 {
+		capacity = 0
+	}
+	if len(nonDegrading) <= capacity {
+		return 0
+	}
 	protected := 0
 	for _, d := range nonDegrading {
 		if coverageDetailNeverYields(d) {
 			protected++
 		}
 	}
-	remaining := bound - len(degrading) - protected
-	if remaining < 0 {
-		remaining = 0
-	}
-	if len(nonDegrading) <= remaining+protected {
-		return 0
-	}
-	omitted := len(nonDegrading) - remaining - protected
+	protectedRoom := min(protected, capacity)
+	otherRoom := capacity - protectedRoom
+	omitted := len(nonDegrading) - capacity
 	kept := degrading
 	for _, d := range nonDegrading {
 		if coverageDetailNeverYields(d) {
+			if protectedRoom > 0 {
+				kept = append(kept, d)
+				protectedRoom--
+			}
+		} else if otherRoom > 0 {
 			kept = append(kept, d)
-		} else if remaining > 0 {
-			kept = append(kept, d)
-			remaining--
+			otherRoom--
 		}
 	}
 	for i := range kept {
