@@ -33,6 +33,7 @@ func TestADegradedAnswerNamesTheFailureClassAndWhetherARetryMayHelp(t *testing.T
 	}{
 		{SynthesisFailureModelOutputInvalid, contractsv1.ContextFabricRetryMaySucceed},
 		{SynthesisFailureReceiptUnrecorded, contractsv1.ContextFabricRetryMaySucceed},
+		{SynthesisFailureCallNotCompleted, contractsv1.ContextFabricRetryMaySucceed},
 		{SynthesisFailureRejected, contractsv1.ContextFabricRetryUnlikelyToHelp},
 	}
 	for _, testCase := range cases {
