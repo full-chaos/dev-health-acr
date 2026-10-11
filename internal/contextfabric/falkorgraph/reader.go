@@ -820,6 +820,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	ownershipCensusTruncated := false
 	ownershipCensusMembers := 0
+	var ownershipExclusions []contextfabric.CohortExclusion
+	ownershipZeroOwnersResolved := false
+	ownershipExcludedOverCap := 0
 	if ownershipRoutedRepoSlug != "" {
 		cohortMemberSource = contextfabric.CohortMemberSourceOwnership
 		ownershipNodes, truncated, ownershipErr := a.cohortKindCensusCandidates(ctx, key, principal.OrgID, []string{string(contextfabric.SubjectTeam)}, temporal)
@@ -852,6 +855,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 				owners++
 			}
 		}
+		var disclosure ownerDisclosure
+		if ownershipErr == nil && !temporal.active {
+			disclosure, ownershipErr = a.repositoryOwnerExclusions(ctx, key, principal, request.Request.RequestedScope, ownershipRoutedRepoID, edgeOwners)
+		}
 		if a.config.Telemetry != nil {
 			a.config.Telemetry.RecordOwnershipRouting(ctx, principal.OrgID, OwnershipRoutingDecision{
 				Outcome: ownershipRoutingOutcome(owners, ownershipErr), AnchorKind: contextfabric.SubjectRepository, AnchorBasis: ownershipAnchorBasis,
@@ -861,6 +868,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if ownershipErr != nil {
 			return contextfabric.GraphContext{}, graphNotProjectedError(ownershipErr)
 		}
+		ownershipExclusions = disclosure.Exclusions
+		ownershipExcludedOverCap = disclosure.OverCap
+		ownershipZeroOwnersResolved = ownershipZeroOwnersAreAnAnswer(owners, len(ownershipNodes), disclosure.Edges, disclosure.Unreadable, truncated, temporal.active)
 		ownershipCensusTruncated = truncated
 		ownershipCensusMembers = len(ownershipNodes)
 		sortCandidateNodesBySubjectKey(ownershipNodes)
@@ -1416,11 +1426,17 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		cohort.Rationale = teamAnchorCohortRationaleFor(declaredCohortKindForRouting)
 	}
+	if cohort == nil && ownershipZeroOwnersResolved {
+		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectTeam, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{}, Rationale: ownershipZeroOwnersRationaleFor(ownershipExcludedOverCap), Complete: true}
+	}
 	if cohort != nil && ownershipRoutedRepoSlug != "" {
+		cohort.Exclusions = ownerExclusionsOutsideMembers(ownershipExclusions, cohort.Members)
 		for i := range cohort.Members {
 			cohort.Members[i].InclusionReasons = []string{ownershipInclusionReason}
 		}
-		cohort.Rationale = ownershipCohortRationale
+		if len(cohort.Members) > 0 {
+			cohort.Rationale = ownershipCohortRationale
+		}
 	}
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here
@@ -1801,6 +1817,21 @@ func soleCommittedKind(committed []contextfabric.SubjectRef) contextfabric.Subje
 // ownershipInclusionReason is the inclusion reason of a team the ownership
 // read admitted.
 const ownershipInclusionReason = "Team that owns the repository the question names."
+
+// ownershipZeroOwnersRationale is the rationale of an ownership-routed cohort
+// with no member: the repository's ownership edges are projected from the
+// ownership records in a pass of their own, apart from the repository, so the
+// zero is stated beside the projection it was read from.
+const ownershipZeroOwnersRationale = "No active team currently owns the repository in the authorized Context Fabric graph; teams left out are listed as exclusions, up to the bound the answer carries. Repositories and their ownership are projected in separate passes, so an ownership recorded very recently may not be in the graph yet."
+
+// ownershipZeroOwnersRationaleFor adds the number of left-out teams the list
+// does not carry, when the bound cut it.
+func ownershipZeroOwnersRationaleFor(overCap int) string {
+	if overCap <= 0 {
+		return ownershipZeroOwnersRationale
+	}
+	return fmt.Sprintf("%s %d further teams left out are not listed.", ownershipZeroOwnersRationale, overCap)
+}
 
 // ownershipCohortRationale is the rationale of an ownership-routed cohort.
 const ownershipCohortRationale = "Teams were read from the ownership records of the repository the question names in the authorized Context Fabric graph."
