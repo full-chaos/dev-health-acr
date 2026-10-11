@@ -1169,6 +1169,24 @@ func TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch
 		{"digest of another subject", "", matched, CommitDecisionDigestSet{SubjectMapKey(twin): labelDigest}, CountPopulationScopeAnchorUnresolved},
 		{"search truncated", "", matched, with(func(d *CommitDecisionDigest) { d.SearchTruncated = true }), CountPopulationScopeAnchorUnresolved},
 		{"alias lookup incomplete", "", matched, with(func(d *CommitDecisionDigest) { d.AliasLookupComplete = false }), CountPopulationScopeAnchorUnresolved},
+		{"alias lookup incomplete by graph lag", "", matched, with(func(d *CommitDecisionDigest) {
+			d.AliasLookupComplete, d.IdentityLookup = false, IdentityLookupTokenGraphLag
+		}), CountPopulationScopeAnchorCommitted},
+		{"alias lookup incomplete by budget", "", matched, with(func(d *CommitDecisionDigest) {
+			d.AliasLookupComplete, d.IdentityLookup = false, IdentityLookupTokenIncomplete
+		}), CountPopulationScopeAnchorUnresolved},
+		{"alias lookup not run for the time axis", "", matched, with(func(d *CommitDecisionDigest) {
+			d.AliasLookupComplete, d.IdentityLookup = false, IdentityLookupTokenNotRunTimeAxis
+		}), CountPopulationScopeAnchorUnresolved},
+		{"alias lookup not wired", "", matched, with(func(d *CommitDecisionDigest) {
+			d.AliasLookupComplete, d.IdentityLookup = false, IdentityLookupTokenNotWired
+		}), CountPopulationScopeAnchorUnresolved},
+		{"graph lag with a truncated search", "", matched, with(func(d *CommitDecisionDigest) {
+			d.AliasLookupComplete, d.IdentityLookup, d.SearchTruncated = false, IdentityLookupTokenGraphLag, true
+		}), CountPopulationScopeAnchorUnresolved},
+		{"graph lag on a lone floor commit", "", matched, with(func(d *CommitDecisionDigest) {
+			d.AliasLookupComplete, d.IdentityLookup, d.CommitGate = false, IdentityLookupTokenGraphLag, "lone_floor"
+		}), CountPopulationScopeAnchorUnresolved},
 		{"lone floor commit", "", matched, with(func(d *CommitDecisionDigest) { d.CommitGate = "lone_floor" }), CountPopulationScopeAnchorUnresolved},
 		{"top of two commit", "", matched, with(func(d *CommitDecisionDigest) { d.CommitGate = "top_of_two" }), CountPopulationScopeAnchorUnresolved},
 		{"no commit gate", "", matched, with(func(d *CommitDecisionDigest) { d.CommitGate = "" }), CountPopulationScopeAnchorUnresolved},
@@ -1211,7 +1229,7 @@ func TestACountOverALabelNamedAnchorIsCertifiedOnlyForAnExactUniqueCompleteMatch
 			for key, digest := range row.digests {
 				for _, subject := range append(append([]SubjectRef{}, row.resolution.Committed...), twin, project) {
 					if SubjectMapKey(subject) == key {
-						wire = append(wire, contractsv1.ContextFabricCommitDecisionDigest{Subject: subject, CommitGate: digest.CommitGate, IdentityProven: digest.IdentityProven, SearchTruncated: digest.SearchTruncated, AliasLookupComplete: digest.AliasLookupComplete})
+						wire = append(wire, contractsv1.ContextFabricCommitDecisionDigest{Subject: subject, CommitGate: digest.CommitGate, IdentityProven: digest.IdentityProven, SearchTruncated: digest.SearchTruncated, AliasLookupComplete: digest.AliasLookupComplete, IdentityLookup: digest.IdentityLookup})
 					}
 				}
 			}

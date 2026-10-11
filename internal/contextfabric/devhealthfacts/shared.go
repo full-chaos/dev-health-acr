@@ -724,10 +724,14 @@ import (
 // remaining-work question plans the blockers, pull request, incident and deployment
 // rollups; a candidate saved under an earlier version holds an answer without them.
 //
-// v148 -> v149: the team blockers rollup counts only open blockers and serves the
+// v148 -> v149: a repository count named by its label certifies when the identity read was
+// complete and the only gap is a same-label claimant missing from the graph; a candidate
+// saved under an earlier version may hold the uncertified count and must not be reused.
+//
+// v149 -> v150: the team blockers rollup counts only open blockers and serves the
 // excluded-by-status count and the status basis; a candidate saved under an earlier
 // version holds the unfiltered counts.
-const QueryVersion = "devhealthfacts.clickhouse.v149"
+const QueryVersion = "devhealthfacts.clickhouse.v150"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

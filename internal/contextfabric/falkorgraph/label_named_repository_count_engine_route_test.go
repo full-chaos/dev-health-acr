@@ -170,6 +170,7 @@ func TestALabelNamedRepositoryExactLabelCommitFollowsTheIdentityLookupState(t *t
 	current := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
 	named := graphrank.IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: routeOwnedRepository, Label: routeOwnedSlug}
 	notProjected := graphrank.IdentityRow{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:github:other/not-projected", Label: routeOwnedSlug}
+	var lastDigest contextfabric.CommitDecisionDigest
 	resolve := func(t *testing.T, timeContext contextfabric.TimeContext, rows []graphrank.IdentityRow, complete bool) (contextfabric.SubjectResolution, int, []graphrank.ResolutionTraceEvent) {
 		t.Helper()
 		adapter := newFakeAdapter(t, seedOwnedRepository().conn())
@@ -189,10 +190,11 @@ func TestALabelNamedRepositoryExactLabelCommitFollowsTheIdentityLookupState(t *t
 		request.Question = "how many teams own repository " + routeOwnedSlug
 		request.RequestedScope.SubjectHints = nil
 		request.TimeContext = timeContext
-		resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{routeOwnedSlug}}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, outcome.Frame, contextfabric.SubjectRepository)
+		resolution, _, _, digests, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{routeOwnedSlug}}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, outcome.Frame, contextfabric.SubjectRepository)
 		if err != nil {
 			t.Fatalf("ResolveSubjects error = %v", err)
 		}
+		lastDigest = digests.For(contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: routeOwnedRepository})
 		return resolution, lookups, tracer.events
 	}
 	committedNamed := func(resolution contextfabric.SubjectResolution) bool {
@@ -211,11 +213,17 @@ func TestALabelNamedRepositoryExactLabelCommitFollowsTheIdentityLookupState(t *t
 	if !committedNamed(unique) || lookups != 1 || lookupState(events) != "complete" {
 		t.Fatalf("complete read: committed %+v lookups %d state %q, want the repository, 1, complete", unique.Committed, lookups, lookupState(events))
 	}
+	if lastDigest.IdentityLookup != "complete" || !lastDigest.AliasLookupComplete {
+		t.Fatalf("complete read digest = %+v, want identity_lookup complete", lastDigest)
+	}
 	incomplete, lookups, events := resolve(t, current, []graphrank.IdentityRow{named}, false)
 	if len(incomplete.Committed) != 0 || lookups != 1 || lookupState(events) != "incomplete" {
 		t.Fatalf("incomplete read: committed %+v lookups %d state %q, want nothing, 1, incomplete", incomplete.Committed, lookups, lookupState(events))
 	}
 	lagged, lookups, events := resolve(t, current, []graphrank.IdentityRow{named, notProjected}, true)
+	if lastDigest.CommitGate != "exact_index" || lastDigest.IdentityLookup != "graph_lag" || lastDigest.AliasLookupComplete {
+		t.Fatalf("graph lag digest = %+v, want exact_index stamped identity_lookup graph_lag", lastDigest)
+	}
 	if !committedNamed(lagged) || lookups != 1 || lookupState(events) != "graph_lag" {
 		t.Fatalf("same-label claimant missing from the graph: committed %+v lookups %d state %q, want the repository, 1, graph_lag", lagged.Committed, lookups, lookupState(events))
 	}
@@ -290,7 +298,7 @@ func TestTheSameLabelNamedCountQuestionIsCertifiedTheSameWayWhenAskedTwice(t *te
 	}
 }
 
-func TestALabelNamedCountWithASameLabelClaimantMissingFromTheGraphIsNotCertified(t *testing.T) {
+func TestALabelNamedCountWithASameLabelClaimantMissingFromTheGraphIsCertified(t *testing.T) {
 	adapter := newFakeAdapter(t, seedOwnedRepository().conn())
 	adapter.config.IdentityUniverse = func(context.Context, string) ([]graphrank.IdentityRow, time.Time, bool, error) {
 		return []graphrank.IdentityRow{
@@ -303,7 +311,7 @@ func TestALabelNamedCountWithASameLabelClaimantMissingFromTheGraphIsNotCertified
 		"how many teams own repository "+routeOwnedSlug, routeOwnershipMessage)
 	value, claimed, outcome := servedCount(answer)
 	t.Logf("committed %+v; count claimed=%t value=%d outcome=%q", answer.committed, claimed, value, outcome)
-	if claimed || outcome == contractsv1.ContextFabricRequirementSatisfied {
-		t.Fatalf("count claimed=%t outcome=%q with a same-label claimant missing from the graph, want it not certified", claimed, outcome)
+	if !claimed || value != 1 || outcome != contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("count claimed=%t value=%d outcome=%q with a same-label claimant missing from the graph, want a certified 1", claimed, value, outcome)
 	}
 }

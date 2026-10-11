@@ -668,6 +668,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			digests.Record(candidate.Subject, contextfabric.CommitDecisionDigest{
 				CommitGate: commitGate, IdentityProven: contextfabric.CommitBasisCallerCanonicalID.IdentityProven(),
 				SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
+				IdentityLookup: string(identityLookup),
 			})
 		}
 	}
@@ -815,6 +816,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			digests.Record(candidates[index].Subject, contextfabric.CommitDecisionDigest{
 				CommitGate: gate, IdentityProven: basis.IdentityProven(),
 				SearchTruncated: searchTruncated, AliasLookupComplete: aliasIdentityComplete,
+				IdentityLookup: string(identityLookup),
 			})
 			return true
 		}

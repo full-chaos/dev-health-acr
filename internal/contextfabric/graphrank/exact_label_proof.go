@@ -27,19 +27,19 @@ type IdentityLookupState string
 const (
 	// IdentityLookupComplete: the read enumerated every label, alias and
 	// provider-key claimant of the lookup-scoped kinds for the terms.
-	IdentityLookupComplete IdentityLookupState = "complete"
+	IdentityLookupComplete IdentityLookupState = contextfabric.IdentityLookupTokenComplete
 	// IdentityLookupIncomplete: the read ran and cannot prove it saw every
 	// claimant (a kind over the row budget, or a claimant missing from the
 	// graph).
-	IdentityLookupIncomplete IdentityLookupState = "incomplete"
+	IdentityLookupIncomplete IdentityLookupState = contextfabric.IdentityLookupTokenIncomplete
 	// IdentityLookupGraphLag: the identity universe was read complete, and a
 	// claimant it matched is not in the graph yet (projection lag).
-	IdentityLookupGraphLag IdentityLookupState = "graph_lag"
+	IdentityLookupGraphLag IdentityLookupState = contextfabric.IdentityLookupTokenGraphLag
 	// IdentityLookupNotRunTimeAxis: the read did not run because the question
 	// is on a historical time axis.
-	IdentityLookupNotRunTimeAxis IdentityLookupState = "not_run_time_axis"
+	IdentityLookupNotRunTimeAxis IdentityLookupState = contextfabric.IdentityLookupTokenNotRunTimeAxis
 	// IdentityLookupNotWired: the backend has no keyed identity read.
-	IdentityLookupNotWired IdentityLookupState = "not_wired"
+	IdentityLookupNotWired IdentityLookupState = contextfabric.IdentityLookupTokenNotWired
 )
 
 // identityLookupStateOf classifies one AliasLookup call. A non-nil error other

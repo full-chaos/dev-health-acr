@@ -23,6 +23,35 @@ func resolutionWithCommitDecisionDigests(digests []ContextFabricCommitDecisionDi
 	}
 }
 
+func TestCommitDecisionDigestIdentityLookupIsClosedAndConsistent(t *testing.T) {
+	subject := subjectRefForDigestTest("repository:acme/widgets")
+	base := ContextFabricCommitDecisionDigest{Subject: subject, CommitGate: "exact_index", IdentityLookup: "graph_lag"}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("graph_lag digest refused: %v", err)
+	}
+	complete := base
+	complete.IdentityLookup, complete.AliasLookupComplete = "complete", true
+	if err := complete.Validate(); err != nil {
+		t.Fatalf("complete digest refused: %v", err)
+	}
+	for name, mutate := range map[string]func(*ContextFabricCommitDecisionDigest){
+		"unknown token":             func(d *ContextFabricCommitDecisionDigest) { d.IdentityLookup = "lagging" },
+		"complete without flag":     func(d *ContextFabricCommitDecisionDigest) { d.IdentityLookup = "complete" },
+		"graph_lag with flag":       func(d *ContextFabricCommitDecisionDigest) { d.AliasLookupComplete = true },
+		"recorded without the gate": func(d *ContextFabricCommitDecisionDigest) { d.CommitGate = "" },
+	} {
+		d := base
+		mutate(&d)
+		if err := d.Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	legacy := ContextFabricCommitDecisionDigest{Subject: subject, CommitGate: "exact_index", AliasLookupComplete: true}
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("a stored digest with no identity_lookup is refused: %v", err)
+	}
+}
+
 func TestCHAOS4087_CommitDecisionDigestsRoundTripsBothWays(t *testing.T) {
 	subject := subjectRefForDigestTest("repository:acme/widgets")
 	digests := []ContextFabricCommitDecisionDigest{
