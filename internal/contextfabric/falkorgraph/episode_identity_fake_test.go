@@ -12,7 +12,9 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-type episodeRowsFake struct{ rows []storage.EpisodeProjectionRecord }
+type episodeRowsFake struct {
+	rows []storage.EpisodeProjectionRecord
+}
 
 func (f *episodeRowsFake) ListSince(_ context.Context, _ string, _ time.Time, _ string, _ int) ([]storage.EpisodeProjectionRecord, error) {
 	return f.rows, nil
