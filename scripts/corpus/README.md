@@ -141,7 +141,8 @@ count to zero, which would make a load failure read as a clean run.
 | `engine_failures.py` | post-hoc attempt classes with request ids |
 | `reclassify_deadlines.py` | deadline re-run, marked in the artefact |
 | `semantic_verdict_bridge.py` | CHAOS-5625: wires ask-dev's CHAOS-5620 versioned semantic verdict (`expect_schema.py`/`semantic_verdict.py`, imported at whatever pin already supplies the real `corpus.py`) into a row's raw attempts + this repo's own scalar scorer, published beside (never in place of) the five buckets and `expectation_scoring` above |
-| `test_shard_plan.py`, `test_instrument.py` | contract tests; no rig needed |
+| `quality_axis.py` | answer-quality axis Q1: mechanical, per-row dimension scores from the stored result, rolled up per expectation class, with a `--compare` mode; beside the buckets, never in place of them |
+| `test_shard_plan.py`, `test_instrument.py`, `test_quality_axis.py` | contract tests; no rig needed |
 | `test_vacuous_corpus_guard.py` | a corpus with no expectation-bearing row makes the run and the merge fail |
 
 A single shard's artefact is never standalone evidence. The merge is the verdict.
@@ -176,3 +177,33 @@ A corpus module may also supply `CONVERSATIONS`: authored multi-turn conversatio
 - A turn with `redeem: {canonical_id}` selects that offered candidate from the previous turn. Every `clarify` turn must be followed by one: a clarification scores `agree` only when redeemed by a served answer with claimed facts for the declared subject.
 - `merge_conversations.py --in DIR --out FILE --reps 3` writes the verdict file and the report table; exits 2 on a missing rep, a missing conversation, or any `not_measured` turn.
 - `conversation_identity_check` (in `conversation.py`) adds `wrong_subject_carried` / `silent_substitution` per turn.
+
+## Answer-quality axis (`quality_axis.py`)
+
+The buckets say whether a row was served; `quality_axis.py` says what the served result
+contains. It is mechanical (no model call), reads the stored result of each row's terminal
+attempt, and never changes `classify()`, `BUCKETS` or `expectations.py`.
+
+```bash
+python3 quality_axis.py --in RUN_DIR [--corpus-path DIR] [--rep N] --out quality.json
+python3 quality_axis.py --compare quality-A.json quality-B.json [--reps-agree]
+```
+
+Dimensions: D1 completeness, D2 coverage, D3 disclosure, D4 grounding (gate), D5 subject
+(gate), D6 window, D7 cohort/budget honesty, D8 terminal honesty (gate); refusal rows are
+scored on disclosed basis and on committing/claiming nothing (gate). A refusal-correct row
+scores full marks; a timeout or a failed terminal attempt is `not_measured`, never 0; a
+serve-expected row that was not served has no Q (the bucket axis owns that regression).
+Means are per expectation class and never blended. Q1 checks that a result is complete,
+grounded, disclosed and self-consistent; it does not check that the facts are true.
+
+### Every attempt saves its full result file
+
+A run is only scorable on this axis if every attempt's full result is on disk, named
+`<row-id>-rep<N>-t<turn>-a<attempt>.json`, in the same layout the harness writes
+(`<shard>/replicate/`). The harness does this already. A manual run through the MCP tools
+must do the same: save the tool's complete result payload (the `structured` document, or
+the whole file the tool wrote) for EVERY attempt, including clarification turns and
+retries, under that name, in one directory. A row recorded only as extracted fields cannot
+be scored, and a rev that has some rows saved and some not cannot be compared (the
+rev 72 manual run saved 10 of 36).
