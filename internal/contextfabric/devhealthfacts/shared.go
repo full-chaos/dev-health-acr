@@ -753,11 +753,16 @@ import (
 // owners the facts cut short. A candidate saved under v153 holds an ungrouped
 // repository answer and must not be reused.
 //
-// v154 -> v155: the reuse watermark check reads only the serving epoch's
-// checkpoints. A candidate saved under v154 may carry a snapshot taken across
+// v154 -> v155: a team rollup read over more than one team serves each team's totals and
+// counts without the per-repository tables (repository_tables_basis names which), and a
+// budget refusal names its stage and measured sections; a candidate saved under an
+// earlier version carries the tables.
+//
+// v155 -> v156: the reuse watermark check reads only the serving epoch's
+// checkpoints. A candidate saved under v155 may carry a snapshot taken across
 // epochs, where a building or grace epoch's watermark stood in for the serving
 // one, and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v155"
+const QueryVersion = "devhealthfacts.clickhouse.v156"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

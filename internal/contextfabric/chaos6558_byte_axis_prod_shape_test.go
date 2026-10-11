@@ -331,6 +331,9 @@ func TestCHAOS6558RowsOverranButOneRowPerTableStillDoesNotFitRefusesWithoutARetr
 	if string(refusal.NarrowerContinuationAxis) != "evidence_window" {
 		t.Fatalf("refusal advice = %q, want evidence_window: fewer members does not shrink rows the retained facts carry", refusal.NarrowerContinuationAxis)
 	}
+	if refusal.Stage != StageSynthesis || len(refusal.Sections) == 0 {
+		t.Fatalf("refusal stage = %q with %d sections, want the stage-3 refusal naming %q and the measured sections", refusal.Stage, len(refusal.Sections), StageSynthesis)
+	}
 }
 
 // TestCHAOS6558ARetryThatDropsFactsStillRunsAndItsDocumentGetsTheLever pins
