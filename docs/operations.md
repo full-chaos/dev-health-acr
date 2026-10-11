@@ -1366,6 +1366,19 @@ global to the API, not per-route, so raising it also loosens the bound on
 every other route; a per-route timeout is the cleaner fix and is not
 implemented yet.
 
+**A caller's wait budget narrows the request.** acr-mcp sends
+`ACR_MCP_INVESTIGATION_WAIT` as the `X-ACR-Wait-Budget-Seconds` header on an
+investigation. `acr-api` ends that request at the smaller of the budget and
+`ACR_REQUEST_TIMEOUT`; it never extends it, and ignores (and logs) a value that
+is not a whole number of seconds of at least 10. The model call ends five
+seconds before the budget and the degraded answer is served with its
+`result_id`, so a client with a shorter tool timeout than a real investigation
+still receives an answer. Log line: `investigation wait budget`
+(`budget_seconds`, `request_timeout_seconds`, `narrowed`). A stage before
+synthesis that passes the budget still returns 504 `deadline_exceeded`. A
+second synthesis attempt needs a third of `ACR_REQUEST_TIMEOUT` left, so under
+a narrow budget it is refused and the first failure is what is served.
+
 **`ACR_WRITE_TIMEOUT` must be raised alongside it (CHAOS-4330).** This is
 `http.Server.WriteTimeout` — the wire-level deadline for writing the
 response — a completely different budget from `ACR_REQUEST_TIMEOUT`
