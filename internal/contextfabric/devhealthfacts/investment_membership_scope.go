@@ -331,10 +331,13 @@ func (p *InvestmentProvider) resolveMembershipScopeRun(ctx context.Context, orgI
 		loadTimeout = p.scopeLoadTimeout
 	}
 	started := clock()
+	// The shared load outlives the caller: it reads the clock through a copy
+	// taken here, never through the package variable.
+	clk := clock
 	result := p.scopes.loads.DoChan(orgID+"\x00"+runID, func() (any, error) {
 		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), loadTimeout)
 		defer cancel()
-		if ids, ok := p.scopes.get(orgID, runID, clock()); ok {
+		if ids, ok := p.scopes.get(orgID, runID, clk()); ok {
 			return ids, nil
 		}
 		var ids []string
@@ -358,13 +361,13 @@ func (p *InvestmentProvider) resolveMembershipScopeRun(ctx context.Context, orgI
 				outcome, units = "overflow", membershipScopeMaxUnits
 			}
 			if p.scopes.firstLoad(orgID) {
-				slog.InfoContext(ctx, "investment membership scope cold load", "outcome", contextfabric.SanitizeLogAttr(outcome), "duration_ms", clock().Sub(started).Milliseconds(), "units", units)
+				slog.InfoContext(ctx, "investment membership scope cold load", "outcome", contextfabric.SanitizeLogAttr(outcome), "duration_ms", clk().Sub(started).Milliseconds(), "units", units)
 			}
 			return []string(nil), nil
 		}
-		p.scopes.put(orgID, runID, ids, clock())
+		p.scopes.put(orgID, runID, ids, clk())
 		if p.scopes.firstLoad(orgID) {
-			slog.InfoContext(ctx, "investment membership scope cold load", "duration_ms", clock().Sub(started).Milliseconds(), "units", len(ids))
+			slog.InfoContext(ctx, "investment membership scope cold load", "duration_ms", clk().Sub(started).Milliseconds(), "units", len(ids))
 		}
 		return ids, nil
 	})
