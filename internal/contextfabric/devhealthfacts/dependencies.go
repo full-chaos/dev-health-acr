@@ -320,7 +320,7 @@ func dependencyEvidenceRefID(sourceID, targetID, relationKey string) string {
 // target work item lives in it.
 type blockerRollupRepo struct{ blockedItems, blockerEdges, excludedEdges int64 }
 
-const blockerStatusBasisOpen = "open"
+const blockerStatusBasisOpen = "closed"
 
 // blockerOpenPredicate is the SQL over the blocking item's normalized status:
 // a blocker counts while it is not done or canceled. A blocker with no
