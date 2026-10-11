@@ -589,3 +589,114 @@ func TestTheBoundedInputDisclosesAKindThatNoFactSurvived(t *testing.T) {
 	wantBoundDetail(t, bound.Details[0], FactPullRequests, 3, 0)
 	wantBoundDetail(t, bound.Details[1], FactWork, 4, 2)
 }
+
+func lateSourceDetailFixture() CoverageDetail {
+	detail := CoverageDetail{
+		Source: "zz:late-source", Code: contractsv1.ContextFabricCoverageDetailGraphExactNameCandidatesTruncated,
+		Raw: "late disclosure",
+	}
+	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+	return detail
+}
+
+func synthesizeBoundedWithLateDetail(t *testing.T, disclosures []CoverageDisclosure) InvestigationResult {
+	t.Helper()
+	input := largeSynthesisInputFixture(199)
+	input.Facts.Coverage.Details = []CoverageDetail{lateSourceDetailFixture()}
+	draft := validSynthesisDraftFixture(input)
+	draft.CoverageDisclosures = disclosures
+	var given []SynthesisInput
+	synthesizer := RuntimeAnswerSynthesizer{Runtime: sizedModelRuntime{bytesPerFact: 10, maxBytes: 1000, draft: draft, given: &given}}
+	result, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	return result
+}
+
+// The ids the model was shown stay the ids of the same details: the bounded
+// input rows are appended after them, never merged in ahead of them, so a
+// phrasing the model wrote for cov-01 still lands on the detail it saw as cov-01.
+func TestTheBoundedInputDetailsDoNotMoveTheIdsTheModelWasShown(t *testing.T) {
+	result := synthesizeBoundedWithLateDetail(t, []CoverageDisclosure{{DetailID: "cov-01", Text: "The late source was cut."}})
+
+	if len(result.Coverage.Details) != 3 {
+		t.Fatalf("details = %+v, want the late detail and two bounded-input details", result.Coverage.Details)
+	}
+	first := result.Coverage.Details[0]
+	if first.DetailID != "cov-01" || first.Source != "zz:late-source" || first.Phrasing != "The late source was cut." {
+		t.Fatalf("detail 0 = %+v, want cov-01 still the late source, carrying the model's phrasing", first)
+	}
+	for index, detail := range result.Coverage.Details[1:] {
+		if want := fmt.Sprintf("cov-%02d", index+2); detail.DetailID != want || detail.Code != contractsv1.ContextFabricCoverageDetailSynthesisInputBounded || detail.Phrasing != "" {
+			t.Fatalf("detail %d = %+v, want id %s, the bounded-input code and no phrasing", index+1, detail, want)
+		}
+	}
+}
+
+// A draft that names the id of a bounded-input detail names one the model was
+// never shown: the whole disclosure set is discarded.
+func TestADraftCannotPhraseABoundedInputDetailItWasNeverShown(t *testing.T) {
+	result := synthesizeBoundedWithLateDetail(t, []CoverageDisclosure{{DetailID: "cov-02", Text: "Guessed an id."}})
+
+	for _, detail := range result.Coverage.Details {
+		if detail.Phrasing != "" {
+			t.Fatalf("detail %+v carries phrasing, want the guessed-id disclosure set discarded", detail)
+		}
+	}
+}
+
+func TestTheCoverageCapKeepsTheBoundedInputDetails(t *testing.T) {
+	var details []CoverageDetail
+	for i := 0; i < 120; i++ {
+		details = append(details, syntheticNonDegradingDetail(i))
+	}
+	bound := newSynthesisInputBound(boundFixtureFacts(FactWork, SubjectWorkItem, 4), boundFixtureFacts(FactWork, SubjectWorkItem, 2))
+	details = append(details, bound.Details...)
+	result := &InvestigationResult{Coverage: Coverage{Details: details}}
+
+	omitted := capCoverageEntriesToWriteBound(result)
+
+	if len(result.Coverage.Details) != contractsv1.ContextFabricCoverageEntriesMaxCount || omitted != 121-contractsv1.ContextFabricCoverageEntriesMaxCount {
+		t.Fatalf("details = %d omitted = %d, want the cap at %d", len(result.Coverage.Details), omitted, contractsv1.ContextFabricCoverageEntriesMaxCount)
+	}
+	if kept := boundDetailsOf(result.Coverage); len(kept) != 1 {
+		t.Fatalf("bounded-input details after the cap = %+v, want the one the answer owes", kept)
+	}
+}
+
+// The validation-stage degrade keeps the coverage the answer already carries,
+// bounded-input details included.
+func TestTheValidationStageDegradeKeepsTheBoundedInputDetails(t *testing.T) {
+	engine, _, result, basis := validationStageFixture(t)
+	result.Limitations = []string{contractsv1.ContextFabricSynthesisInputBoundedLimitation}
+	bound := newSynthesisInputBound(boundFixtureFacts(FactWork, SubjectWorkItem, 4), boundFixtureFacts(FactWork, SubjectWorkItem, 2))
+	appendSynthesisInputBoundDetails(&result, bound, "org-1")
+	if len(boundDetailsOf(result.Coverage)) != 1 {
+		t.Fatalf("fixture coverage = %+v, want the one bounded-input detail", result.Coverage.Details)
+	}
+
+	out, ok := engine.degradeWorkItemModelBreach(context.Background(), storage.Principal{OrgID: "org-1"}, result, basis)
+
+	if !ok {
+		t.Fatal("not degraded")
+	}
+	details := boundDetailsOf(out.Coverage)
+	if len(details) != 1 {
+		t.Fatalf("bounded-input details after the degrade = %+v, want the one the answer carried", details)
+	}
+	wantBoundDetail(t, details[0], FactWork, 4, 2)
+}
+
+// Details that do not pair with degraded_reasons would make the write refuse
+// the answer, so no bounded-input detail is filed on top of them.
+func TestTheBoundedInputDetailsAreNotFiledOverUnpairedCoverage(t *testing.T) {
+	result := InvestigationResult{Coverage: Coverage{DegradedReasons: []string{"a read failed"}}}
+	bound := newSynthesisInputBound(boundFixtureFacts(FactWork, SubjectWorkItem, 4), boundFixtureFacts(FactWork, SubjectWorkItem, 2))
+
+	appendSynthesisInputBoundDetails(&result, bound, "org_1")
+
+	if len(result.Coverage.Details) != 0 {
+		t.Fatalf("details = %+v, want none filed over unpaired coverage", result.Coverage.Details)
+	}
+}

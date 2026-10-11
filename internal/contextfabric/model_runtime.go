@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2572,7 +2571,6 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 		result.Limitations, displaced = appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricSynthesisInputBoundedLimitation})
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
-		result.Coverage.Details = mergeCoverageDetails(append(slices.Clone(result.Coverage.Details), bound.Details...), result.Coverage.DegradedReasons, principal.OrgID)
 		// Only a complete status is lowered: the answer was written from part
 		// of the facts. A status already weaker than partial says more.
 		if result.Status == InvestigationComplete {
@@ -2597,6 +2595,9 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 	if r.Telemetry != nil {
 		phrased, total := coverageDisclosurePhrasedCount(result.Coverage.Details)
 		r.Telemetry.RecordCoverageDisclosurePhrasing(ctx, principal, outcome, violation, phrased, total)
+	}
+	if bound != nil {
+		appendSynthesisInputBoundDetails(&result, bound, principal.OrgID)
 	}
 	return result, nil
 }

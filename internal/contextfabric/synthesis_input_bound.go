@@ -3,6 +3,8 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"time"
@@ -307,6 +309,31 @@ func newSynthesisInputBound(read, given []CanonicalFact) *synthesisInputBound {
 		details = append(details, detail)
 	}
 	return &synthesisInputBound{Details: details}
+}
+
+// appendSynthesisInputBoundDetails files the bounded-input details after the
+// coverage the model was shown, so no id the model saw moves and the model can
+// neither phrase a row it never saw nor count it in the phrasing totals. It
+// files nothing when the details already carried do not pair with
+// degraded_reasons (a fail-open drop): a write would be refused.
+func appendSynthesisInputBoundDetails(result *InvestigationResult, bound *synthesisInputBound, orgID string) {
+	degrading := 0
+	for _, detail := range result.Coverage.Details {
+		if detail.Degrading {
+			degrading++
+		}
+	}
+	if degrading != len(result.Coverage.DegradedReasons) {
+		slog.Default().Warn("context_fabric: synthesis input bound details not filed, coverage details do not pair with degraded_reasons",
+			"org_id", SanitizeLogAttr(orgID), "degrading_details", degrading, "degraded_reasons", len(result.Coverage.DegradedReasons))
+		return
+	}
+	details := slices.Clone(result.Coverage.Details)
+	for _, detail := range bound.Details {
+		detail.DetailID = fmt.Sprintf("cov-%02d", len(details)+1)
+		details = append(details, detail)
+	}
+	result.Coverage.Details = details
 }
 
 // synthesisInputBoundOf recovers the disclosure from an answer that already
