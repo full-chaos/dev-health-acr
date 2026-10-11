@@ -36,7 +36,7 @@ import (
 // team_id on this table is read exactly as Ops wrote it, the same
 // "Ops-computed columns are trusted, never re-derived" contract every
 // sibling provider in this package already applies to team_metrics_daily.
-// team_id, capacity_forecasts.team_id, and investment_metrics_daily.team_id
+// team_id and capacity_forecasts.team_id
 // (CHAOS-4321 governs how Ops itself may derive a TEAM attribution -- never
 // from person membership alone -- not what this read-only provider does
 // with an already-published column).

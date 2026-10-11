@@ -265,7 +265,7 @@ func createCHAOS7257Tables(t *testing.T, ctx context.Context, direct clickhoused
 	for _, statement := range devhealthschema.DDL(
 		"projects", "teams", "team_project_ownership", "team_repo_ownership", "repos",
 		"work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
-		"investment_metrics_daily", "work_item_team_attributions", "work_items", "project_membership_transitions",
+		"work_item_team_attributions", "work_items", "project_membership_transitions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
