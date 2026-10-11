@@ -191,20 +191,6 @@ var ProductionColumns = map[string][]Column{
 		{Name: "computed_at", Type: "DateTime"},
 		{Name: "org_id", Type: "String"},
 	},
-	"investment_metrics_daily": {
-		{Name: "repo_id", Type: "Nullable(UUID)"},
-		{Name: "day", Type: "Date"},
-		{Name: "team_id", Type: "LowCardinality(Nullable(String))"},
-		{Name: "investment_area", Type: "LowCardinality(String)"},
-		{Name: "project_stream", Type: "LowCardinality(String)"},
-		{Name: "delivery_units", Type: "UInt32"},
-		{Name: "work_items_completed", Type: "UInt32"},
-		{Name: "prs_merged", Type: "UInt32"},
-		{Name: "churn_loc", Type: "UInt64"},
-		{Name: "cycle_p50_hours", Type: "Float64"},
-		{Name: "computed_at", Type: "DateTime"},
-		{Name: "org_id", Type: "String"},
-	},
 	"operational_incidents": {
 		{Name: "org_id", Type: "String"},
 		{Name: "source_version_at", Type: "DateTime64(6, 'UTC')"},
@@ -471,7 +457,7 @@ var ProductionColumns = map[string][]Column{
 	},
 	// work_unit_investments (CHAOS-4398) is the canonical WorkUnit
 	// theme/subcategory distribution source readTeamThemeMix reads --
-	// never investment_metrics_daily, the deprecated legacy rule set.
+	// never the deprecated legacy rule set.
 	// Read from dev-health-clickhouse-1 (database `default`) on
 	// 2026-08-28, matching the same freshness convention as every other
 	// entry above. repo_id/4 (Nullable(UUID)) is read here: the project
@@ -680,7 +666,6 @@ var EngineFull = map[string]string{
 	"git_pull_request_reviews":                "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id) SETTINGS index_granularity = 8192",
 	"git_pull_requests":                       "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number) SETTINGS index_granularity = 8192",
 	"ic_landscape_rolling_30d":                "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(as_of_day) ORDER BY (org_id, repo_id, team_id, map_name, as_of_day, identity_id) SETTINGS index_granularity = 8192",
-	"investment_metrics_daily":                "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, team_id, investment_area, project_stream) SETTINGS allow_nullable_key = 1, index_granularity = 8192",
 	"operational_incidents":                   "ReplacingMergeTree(source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"project_membership_transitions":          "ReplacingMergeTree(last_synced) ORDER BY (org_id, subject_kind, repo_id, subject_id, occurred_at, event_id) SETTINGS index_granularity = 8192",
 	"projects":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, id) SETTINGS index_granularity = 8192",

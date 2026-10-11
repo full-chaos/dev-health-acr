@@ -11,12 +11,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-func investmentRow(teamID string) []any {
-	// churn_loc is uint64, matching the production column -- the reader
-	// scans it raw and range-checks rather than wrapping it in SQL.
-	return []any{teamID, "product", "growth", "2026-02-22", int64(30), int64(12), int64(4), uint64(850), float64(18.5), uint8(1), float64(18.5), uint8(1)}
-}
-
 func teamMixTables(teamID string) []fakeTable {
 	return []fakeTable{watermarkTable(), ownsRepoTable(teamID), {match: "FROM work_unit_investments", rows: [][]any{
 		themeMixRow(teamID, "", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 0),
@@ -64,7 +58,7 @@ func TestInvestmentProviderTwoTeamsOneWithoutAMixServesOneAndDisclosesTheOther(t
 
 func TestInvestmentProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM investment_metrics_daily", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -146,7 +140,7 @@ func TestInvestmentProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
 // metrics.go's identical guard for the investment project path.
 func TestInvestmentProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM investment_metrics_daily", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
