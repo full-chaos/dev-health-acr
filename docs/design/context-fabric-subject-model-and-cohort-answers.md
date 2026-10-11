@@ -77,6 +77,10 @@ team with no ownership row gets an explicit deny sentinel
 (`noTeamOwnershipSentinel`) — never a bare empty list, which would fall back
 to the wildcard and reproduce the exact leak this fix closes.
 
+A cohort whose requested member set authorization cut part of is not served `complete`: the
+degrading `graph_cohort_denied_by_authorization` coverage row floors a complete answer to `partial`,
+whatever shape the plan had, and the floor is applied again when a stored result is read by id.
+
 ### 2b. Cohort retrieval was fulltext-only (CHAOS-4395, in flight)
 
 `DiscoverContext`'s only node source for the subjectless-cohort case was
@@ -596,6 +600,11 @@ per-`(member, family)` availability rule — not the batch-level
 | 0 | `degraded`, `Score=null` (§5b) |
 
 ## 6. Finding: the existing investment producer reads the deprecated source
+
+> **Superseded.** `FactInvestment` no longer reads `investment_metrics_daily` for any subject
+> kind. Team, project and repository investment are served only from the canonical categorization
+> in `work_unit_investments`; a subject with no canonical mix gets no fact. The finding below is the
+> historical state that motivated the change.
 
 `FactInvestment` (CHAOS-4363/#308) reads `investment_metrics_daily`, fed by
 the **deprecated** `ops/src/dev_health_ops/config/investment_areas.yaml` rule
