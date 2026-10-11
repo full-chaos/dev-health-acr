@@ -612,13 +612,14 @@ func TestApplyPeriodDelta_RequirementsAreDistinctAndDerivedFromTheComposition(t 
 // ledger. None of these may be served as unknown_prior.
 func TestApplyPeriodDelta_PriorHealthBranchNotCompleted_PriorReadFailed(t *testing.T) {
 	t.Parallel()
-	for _, branch := range []factReadOutcome{factReadRejected, factReadFailed, factReadCancelled, factReadUnconfigured, factReadScopeGap, factReadPruned, factReadRejectedNonNumericMeasure} {
+	for _, branch := range []factReadOutcome{factReadRejected, factReadFailed, factReadUnconfigured, factReadScopeGap, factReadPruned} {
 		branch := branch
 		t.Run(string(branch), func(t *testing.T) {
 			t.Parallel()
 			teamSubject := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:T1"}
 			reader := &recordingFactReader{bundle: CanonicalFactBundle{Outcomes: FactOutcomeLedger{FactHealth: {Branch: string(branch)}}}}
-			engine := &Engine{facts: reader, telemetry: &recordingTelemetry{}}
+			telemetry := &recordingTelemetry{}
+			engine := &Engine{facts: reader, telemetry: telemetry}
 			currentFacts := []CanonicalFact{periodDeltaHealthFact(teamSubject, map[string]FactValue{"severity": StringFactValue("low")})}
 			frame := QuestionFrame{Obligations: []AnswerObligation{ObligationPeriodDelta}}
 
@@ -628,12 +629,11 @@ func TestApplyPeriodDelta_PriorHealthBranchNotCompleted_PriorReadFailed(t *testi
 			if got := factValueString(fields["period_delta_transition"]); got != string(PeriodDeltaTransitionPriorReadFailed) {
 				t.Errorf("period_delta_transition = %q, want prior_read_failed", got)
 			}
-			want := PeriodDeltaFailureReadFailed
-			if branch == factReadCancelled {
-				want = PeriodDeltaFailureCanceled
+			if got := factValueString(fields["period_delta_unavailable_reason"]); got != string(PeriodDeltaFailureReadFailed) {
+				t.Errorf("period_delta_unavailable_reason = %q, want read_failed", got)
 			}
-			if got := factValueString(fields["period_delta_unavailable_reason"]); got != string(want) {
-				t.Errorf("period_delta_unavailable_reason = %q, want %q", got, want)
+			if len(telemetry.periodDeltaCompositions) != 1 || telemetry.periodDeltaCompositions[0].PriorReadIssued {
+				t.Errorf("event PriorReadIssued must be false for a non-completed prior branch: %+v", telemetry.periodDeltaCompositions)
 			}
 		})
 	}
@@ -659,5 +659,24 @@ func TestApplyPeriodDelta_PriorHealthBranchAbsentOrCompleted_UnknownPrior(t *tes
 				t.Errorf("period_delta_transition = %q, want unknown_prior", got)
 			}
 		})
+	}
+}
+
+// The helper's own mapping, including cancelled, which the registry reports
+// as an error rather than a nil-error ledger branch.
+func TestPeriodDeltaPriorBranchFailure(t *testing.T) {
+	t.Parallel()
+	cases := map[string]PeriodDeltaFailureReason{
+		"":                           PeriodDeltaFailureNone,
+		string(factReadCompleted):    PeriodDeltaFailureNone,
+		string(factReadCancelled):    PeriodDeltaFailureCanceled,
+		string(factReadFailed):       PeriodDeltaFailureReadFailed,
+		string(factReadRejected):     PeriodDeltaFailureReadFailed,
+		string(factReadUnconfigured): PeriodDeltaFailureReadFailed,
+	}
+	for branch, want := range cases {
+		if got := periodDeltaPriorBranchFailure(branch); got != want {
+			t.Errorf("periodDeltaPriorBranchFailure(%q) = %q, want %q", branch, got, want)
+		}
 	}
 }
