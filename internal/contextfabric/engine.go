@@ -4040,18 +4040,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// tupleCensus included, so the served document and its refusal boundary
 	// are unaffected.
 	cover.events = pendingTelemetry.ObservationCover
-	planBeforeFit, resultBeforeFit, telemetryBeforeFit := plan, result, pendingTelemetry
 	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase, cardinality)
-	if e.refusedOnlyAtCallerByteOption(err, plan.Budget.MaxSerializedBytes) {
-		// The caller's max_serialized_bytes is the target the narrowing
-		// levers shed toward; the service ceiling is the only refusal
-		// line. The answer overran the option with nothing left to cut, so
-		// the fit runs once more against the service ceiling. The plan
-		// then states the ceiling the answer was actually fitted to.
-		plan = planBeforeFit
-		plan.Budget.MaxSerializedBytes = e.maxSerializedBytes
-		result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, resultBeforeFit, consumedAllocation, telemetryBeforeFit, retryBase, cardinality)
-	}
 	// Read BEFORE the error check: a stage-3 refusal returns the telemetry of
 	// the passes it evaluated, so a refused answer still shows every decision
 	// it made (published with AnswerWithheld by the deferred publisher).

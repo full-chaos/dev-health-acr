@@ -75,6 +75,12 @@ var decisionEventFunctions = []string{
 	// counts and the pinned-member count only, no measurement and no
 	// prediction, so it holds one document and cannot describe two.
 	"recordServedWalkListCut",
+	// Emits the one event for an answer the service ceiling admits after the
+	// caller's byte target could not be reached. It stamps NO measurement (the
+	// lever events it runs carry the ceiling attempt's own, and the final
+	// budget assertion the served document's), and its prediction is the plan's
+	// own member count, so it holds one document and cannot describe two.
+	"serveAtServiceCeiling",
 }
 
 // TestEveryRefusalSitePairsOneDocument pins the enumeration.

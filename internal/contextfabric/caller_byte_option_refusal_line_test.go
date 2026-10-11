@@ -14,12 +14,20 @@ const callerByteOption = 8192
 
 func investigateWithCallerByteOption(t *testing.T, option int, hook func(InvestigationResult) InvestigationResult) (InvestigationResult, error) {
 	t.Helper()
+	result, _, _, err := investigateWithCallerByteOptionCounted(t, option, hook)
+	return result, err
+}
+
+func investigateWithCallerByteOptionCounted(t *testing.T, option int, hook func(InvestigationResult) InvestigationResult) (InvestigationResult, int, *recordingTelemetry, error) {
+	t.Helper()
 	calls := 0
-	engine := chaos6558Engine(t, &calls, &recordingTelemetry{}, chaos6558Shape{maxBytes: chaos6558MaxBytes})
+	telemetry := &recordingTelemetry{}
+	engine := chaos6558Engine(t, &calls, telemetry, chaos6558Shape{maxBytes: chaos6558MaxBytes})
 	engine.servedLateHook = hook
 	request := chaos6558Request()
 	request.Options.MaxSerializedBytes = option
-	return engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	return result, calls, telemetry, err
 }
 
 // The caller's byte option is the target the narrowing levers shed toward, and
@@ -80,5 +88,42 @@ func TestTheBodyBoundAndTheSheddingTargetAsTwoKnobsServeTheCanonicalOneKnobServe
 	}
 	if !reflect.DeepEqual(one, two) {
 		t.Fatalf("two knobs served a different canonical result than one knob: %d vs %d bytes, %d vs %d claims", servedBytes(t, one), servedBytes(t, two), len(one.ClaimedFacts), len(two.ClaimedFacts))
+	}
+}
+
+// The fit against the service ceiling makes no model call of its own: the two
+// calls are the first synthesis and the one bounded narrowed retry the shed
+// target already costs today, and the answer the retry could not fit is then
+// served instead of refused. The artifacts name the chain.
+func TestAnAnswerServedUnderTheServiceCeilingAddsNoModelCallAndNamesTheChain(t *testing.T) {
+	result, calls, telemetry, err := investigateWithCallerByteOptionCounted(t, callerByteOption, nil)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("synthesis calls = %d, want 2 (first pass and the one bounded retry); the service-ceiling fit must add none", calls)
+	}
+	var served *PlanNarrowingEvent
+	for index := range telemetry.planNarrowings {
+		event := telemetry.planNarrowings[index]
+		if event.Overrun == contractsv1.ContextFabricBudgetOverrunBytes && !event.RefusalPlanned && !event.RetryAttempted {
+			served = &event
+		}
+		if event.RefusalPlanned {
+			t.Fatalf("a refusal was planned on a path that served: %+v", event)
+		}
+	}
+	if served == nil {
+		t.Fatalf("no plan-narrowing event records the byte overrun served without a refusal: %+v", telemetry.planNarrowings)
+	}
+	if len(telemetry.budgetAssertions) == 0 {
+		t.Fatal("no budget assertion recorded")
+	}
+	last := telemetry.budgetAssertions[len(telemetry.budgetAssertions)-1]
+	if !last.Fits || last.MaxSerializedBytes != chaos6558MaxBytes {
+		t.Fatalf("final assertion = fits %v against %d, want fits against the service ceiling %d", last.Fits, last.MaxSerializedBytes, chaos6558MaxBytes)
+	}
+	if got := servedBytes(t, result); got > chaos6558MaxBytes {
+		t.Fatalf("served %d bytes over the service ceiling", got)
 	}
 }

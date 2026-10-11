@@ -96,7 +96,7 @@ func TestWorkItemFinalCensusParticipatesInBudgetRetry(t *testing.T) {
 		{"exact_control_authority_on", false, true, 12, budget, 1, http.StatusOK, false},
 		{"six_member_control", true, true, 6, budget, 1, http.StatusOK, false},
 		{"no_reserve", true, false, 12, budget, 1, http.StatusOK, true},
-		{"impossible_fit", true, true, 12, 8192, 2, http.StatusOK, true},
+		{"impossible_fit", true, true, 12, 8192, 2, http.StatusRequestEntityTooLarge, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, info, attempts := newFinalCensusBudgetFixture(t, tc.floor, tc.reserve)
@@ -122,6 +122,22 @@ func TestWorkItemFinalCensusParticipatesInBudgetRetry(t *testing.T) {
 			assertResponseOwnerGateFree(t, f.gate)
 			if tc.calls == 2 && !reflect.DeepEqual((*attempts)[1], (*attempts)[0][:tc.members/2]) {
 				t.Fatalf("retry did not retain the canonical lexical half: %v", *attempts)
+			}
+			if tc.name == "impossible_fit" {
+				// Not even the projection fits the caller's body bound: the one
+				// refusal left against a caller's option, naming that option.
+				var refusal struct {
+					Error struct {
+						Details map[string]any `json:"details"`
+					} `json:"error"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &refusal); err != nil {
+					t.Fatal(err)
+				}
+				if got, _ := refusal.Error.Details["max_serialized_bytes"].(float64); int(got) != tc.budget {
+					t.Fatalf("impossible_fit refusal names %v, want the caller's %d", refusal.Error.Details["max_serialized_bytes"], tc.budget)
+				}
+				return
 			}
 			if tc.projected {
 				// Over the caller's byte option and under the service

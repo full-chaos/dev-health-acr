@@ -427,6 +427,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// A refusal is still where a per-group breach matters most, and it
 		// still carries real quota fields rather than the zeros both
 		// refusal arms used to emit.
+		if served, ok, serveErr := e.serveAtServiceCeiling(ctx, principal, plan, params, "assembled_result", result, measurementInput, allocation, params.Facts, &firstPass, answerPassSecond, answerPassFirst, cardinality, budget, overrun); serveErr != nil {
+			return InvestigationResult{}, firstPass, serveErr
+		} else if ok {
+			return served, firstPass, nil
+		}
 		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, plan, measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
 	}
 
@@ -762,6 +767,17 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// Declined, and the served/declared counts on the served path -- because
 	// WHY the reduction did not save this answer is a different fact from WHAT
 	// was measured, and it is not a measurement.
+	// Before the refusal event: a document the service ceiling admits is not a
+	// planned refusal, and the artifacts must not say it was.
+	if served, ok, serveErr := e.serveAtServiceCeiling(ctx, principal, plan, retryParams, "re_synthesized_result", retried, retryMeasurementInput, consumedRetryAllocation, retryParams.Facts, &retryPending, answerPassThird, answerPassSecond, retryCardinality, budget, retryOverrun); serveErr != nil {
+		return InvestigationResult{}, retryPending, serveErr
+	} else if ok {
+		retryRanked := narrowed.Ranked
+		if params.WorkItemCensus == nil {
+			retryPending.CohortRanked = &retryRanked
+		}
+		return served, retryPending, nil
+	}
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, retryMeasured.Overrun, narrowed.Basis)
 	event.recordMeasurement(retryMeasured)
 	// `after`, not `before`: this event measures the RE-synthesized answer,
@@ -1032,6 +1048,68 @@ func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, p
 	event.NarrowerContinuationAxis = axis
 	e.recordPlanNarrowing(ctx, principal, event)
 	return e.refusalFromAxis(plan, measured.Measurement, overrun, retryAttempted, axis)
+}
+
+// serveAtServiceCeiling is the last non-model step before a byte refusal. The
+// caller's byte option is the target the levers shed toward; the service
+// ceiling is the only refusal line. A document that overran only the target
+// (and no item ceiling) is fitted once more against the service ceiling with
+// the same model-free levers -- measure, row truncation, path drop -- so a
+// target the caller never made a refusal line does not refuse an answer the
+// service can serve. It never calls the model: it runs after every attempt
+// that could, so the refusal it spares was the only thing left.
+//
+// ok is true when doc (or a lever's result) fits the ceiling; the plan then
+// states the ceiling it was fitted to, and the later fit asserts against it.
+func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Principal, plan *AnswerPlan, params synthesisAssemblyParams, stage string, doc, measurementInput InvestigationResult, allocation ItemAllocation, facts CanonicalFactBundle, pending *assemblyTelemetry, planPass, recordPass int, cardinality MembershipCardinality, budget ResponseBudget, overrun contractsv1.ContextFabricBudgetOverrun) (served InvestigationResult, ok bool, err error) {
+	// A zero service ceiling means unbounded, as everywhere else the engine
+	// reads it; a ceiling at or below the target leaves nothing to widen to.
+	if overrun != contractsv1.ContextFabricBudgetOverrunBytes || budget.MaxSerializedBytes <= 0 ||
+		(e.maxSerializedBytes > 0 && e.maxSerializedBytes <= budget.MaxSerializedBytes) {
+		return InvestigationResult{}, false, nil
+	}
+	ceilingBudget := ResponseBudget{MaxItems: budget.MaxItems, MaxSerializedBytes: e.maxSerializedBytes}
+	measured, err := e.measureAssembledAttempt(ctx, principal, stage, allocation, measurementInput, ceilingBudget)
+	if err != nil {
+		return InvestigationResult{}, false, err
+	}
+	switch {
+	case measured.Overrun == contractsv1.ContextFabricBudgetFits:
+		served, ok = doc, true
+	case measured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes && params.WorkItemCensus == nil:
+		rows, rowErr := e.planFactRowTruncation(ctx, principal, plan, params.Frame, doc, ceilingBudget, measured, facts, pending, planPass, cardinality)
+		if rowErr != nil {
+			return InvestigationResult{}, false, rowErr
+		}
+		e.recordFactRowTruncation(ctx, principal, plan, recordPass, measured, rows, ceilingBudget)
+		if rows.Served {
+			served, ok = rows.Result, true
+			break
+		}
+		paths, pathErr := e.planPathDrop(ctx, principal, plan, params.Frame, doc, ceilingBudget, measured, facts, pending, planPass, cardinality)
+		if pathErr != nil {
+			return InvestigationResult{}, false, pathErr
+		}
+		e.recordPathDrop(ctx, principal, plan, recordPass, measured, paths, ceilingBudget)
+		if paths.Served {
+			served, ok = paths.Result, true
+		}
+	}
+	if ok {
+		// The measurement is not stamped on this event: the lever events carry
+		// the ceiling attempt's own, and the final budget assertion carries the
+		// served document's against the ceiling.
+		members := cohortMemberCount(params.Graph.Cohort)
+		grouped := params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0
+		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
+			members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
+		event.PredictedItems = PredictedItemsForPlan(*plan, members)
+		event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+		event.OutcomeCompletenessState = served.Completeness.State
+		e.recordPlanNarrowing(ctx, principal, event)
+		plan.Budget.MaxSerializedBytes = e.maxSerializedBytes
+	}
+	return served, ok, nil
 }
 
 func (e *Engine) refusalFrom(plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted bool) error {
