@@ -396,6 +396,17 @@ func TestEncodedRefsFromTheRealProducersExpandToTheirRow(t *testing.T) {
 		}
 	}
 
+	// The project-team.v2 ref the projector minted is read as its ownership
+	// group by an unrestricted caller; a restricted caller stays on the record.
+	_, projectTeamID := splitRef(projectTeam)
+	served, projectTeamDecision := resolve.ResolveSourceRow(ctx, orgWide, string(contractsv1.ContextFabricEvidenceEntityProjectTeamV2), projectTeamID)
+	if projectTeamDecision.Reason != contextfabric.SourceRowServed || served.Evidence.EvidenceRefID != projectTeam {
+		t.Errorf("project-team.v2 unrestricted: %+v", projectTeamDecision)
+	}
+	if _, decision := resolve.ResolveSourceRow(ctx, granted, string(contractsv1.ContextFabricEvidenceEntityProjectTeamV2), projectTeamID); decision.Reason != contextfabric.SourceRowKindOnRecord {
+		t.Errorf("project-team.v2 restricted: %+v", decision)
+	}
+
 	// The retired refs of the same rows never reach a source read.
 	for _, retired := range []struct {
 		kind contractsv1.ContextFabricEvidenceEntityType
@@ -406,7 +417,6 @@ func TestEncodedRefsFromTheRealProducersExpandToTheirRow(t *testing.T) {
 		{contractsv1.ContextFabricEvidenceEntityWorkItemTeam, grantedID + ":jira:ABC-1:ari:cloud:identity::team/1"},
 		{contractsv1.ContextFabricEvidenceEntityDeploymentIncident, "edge-1"},
 		{contractsv1.ContextFabricEvidenceEntityProjectTeam, "gitlab:" + integrationOrg + ":gitlab:71133891:gl:full.chaos"},
-		{contractsv1.ContextFabricEvidenceEntityProjectTeamV2, strings.TrimPrefix(projectTeam, contractsv1.ContextFabricEvidenceRefPrefix+string(contractsv1.ContextFabricEvidenceEntityProjectTeamV2)+":")},
 	} {
 		if _, decision := resolve.ResolveSourceRow(ctx, orgWide, string(retired.kind), retired.id); decision.Reason != contextfabric.SourceRowKindOnRecord {
 			t.Errorf("%s %q: %+v", retired.kind, retired.id, decision)
