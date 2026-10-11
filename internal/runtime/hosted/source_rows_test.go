@@ -135,3 +135,97 @@ func TestBuildSourceRowsReadsProjectTeamThroughTheProjectorsGroup(t *testing.T) 
 		t.Fatalf("restricted: %+v, statements %d", decision, len(client.statements))
 	}
 }
+
+type workItemScanner struct {
+	rows [][]string
+	at   int
+}
+
+func (s *workItemScanner) Next() bool   { s.at++; return s.at <= len(s.rows) }
+func (s *workItemScanner) Err() error   { return nil }
+func (s *workItemScanner) Close() error { return nil }
+func (s *workItemScanner) Scan(dest ...any) error {
+	for index, value := range s.rows[s.at-1] {
+		*(dest[index].(*string)) = value
+	}
+	return nil
+}
+
+// workItemClient finds the work item in one repository, and fails the row read
+// so a test sees whether the row statement was reached.
+type workItemClient struct{ statements []string }
+
+func (c *workItemClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	c.statements = append(c.statements, statement)
+	if strings.Contains(statement, "evidence_locator") {
+		return nil, errors.New("row read reached")
+	}
+	return &workItemScanner{rows: [][]string{{"20000000-0000-4000-8000-000000000002", "acme/api"}}}, nil
+}
+
+type teamGraph struct {
+	outcome contextfabric.StoredSubjectOutcome
+	reach   []string
+}
+
+func (g *teamGraph) ResolveInvestigationBinding(context.Context, storage.Principal) (contextfabric.ResolvedGraphBinding, error) {
+	return contextfabric.ResolvedGraphBinding{}, nil
+}
+
+func (g *teamGraph) AuthorizeStoredSubjects(_ context.Context, _ storage.Principal, _ contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]contextfabric.StoredSubjectOutcome, error) {
+	outcomes := make([]contextfabric.StoredSubjectOutcome, len(subjects))
+	for index := range outcomes {
+		outcomes[index] = g.outcome
+	}
+	return outcomes, nil
+}
+
+func (g *teamGraph) OwnershipReachedRepositories(_ context.Context, _ storage.Principal, _ contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([][]string, error) {
+	reached := make([][]string, len(subjects))
+	for index := range reached {
+		reached[index] = g.reach
+	}
+	return reached, nil
+}
+
+// The production composition decides a work-item-team.v2 team through the real
+// directread.SubjectGate: a restricted caller whose repository reaches the team
+// by ownership gets to the row read; one whose repositories do not reach it
+// does not.
+func TestBuildSourceRowsDecidesTheWorkItemTeamThroughTheSubjectGate(t *testing.T) {
+	kind := contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2
+	ref, ok := evidenceref.Mint(kind, "00000000-0000-0000-0000-000000000000", "jira:ABC-1", "ari:cloud:identity::team/1", "native_team")
+	if !ok {
+		t.Fatal("mint")
+	}
+	id := strings.TrimPrefix(ref, contractsv1.ContextFabricEvidenceRefPrefix+string(kind)+":")
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/api"}}
+	for _, tc := range []struct {
+		name    string
+		graph   *teamGraph
+		reached bool
+	}{
+		{"team owned through the granted repository", &teamGraph{outcome: contextfabric.StoredSubjectAdmitted, reach: []string{"acme/api"}}, true},
+		{"team reached only through another repository", &teamGraph{outcome: contextfabric.StoredSubjectAdmitted, reach: []string{"other/secret"}}, false},
+		{"team denied by the graph", &teamGraph{outcome: contextfabric.StoredSubjectDenied}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &workItemClient{}
+			resolver := buildSourceRows(client, nil, nil, directread.NewSubjectGate(tc.graph, nil), nil)
+			_, decision := resolver.ResolveSourceRow(context.Background(), principal, string(kind), id)
+			rowRead := false
+			for _, statement := range client.statements {
+				rowRead = rowRead || strings.Contains(statement, "evidence_locator")
+			}
+			if rowRead != tc.reached {
+				t.Fatalf("row statement reached %v, want %v (%+v)", rowRead, tc.reached, decision)
+			}
+			if tc.reached && decision.Reason != contextfabric.SourceRowUnavailable {
+				t.Fatalf("%+v", decision)
+			}
+			if !tc.reached && decision.Reason != contextfabric.SourceRowNoRow {
+				t.Fatalf("%+v", decision)
+			}
+		})
+	}
+}

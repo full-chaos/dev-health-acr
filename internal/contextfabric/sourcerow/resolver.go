@@ -156,6 +156,9 @@ type target struct {
 	scope   contractsv1.ResolvedScope
 	read    contextpacket.SourceRowRead
 	grammar string
+	// teamLag: the graph holds no node for the row's team yet, and the row is
+	// served to a caller a "*" repository list admits; the expansion says so.
+	teamLag bool
 }
 
 // ResolveSourceRow implements contextfabric.SourceRowResolver.
@@ -443,6 +446,9 @@ func (r *Resolver) expand(ctx context.Context, entityType, entityID string, row 
 	metadata["row_state"] = "current"
 	metadata["row_observed_at"] = evidence.ObservedAt.UTC().Format("2006-01-02T15:04:05.000Z07:00")
 	metadata["source_query"] = row.target.read.QueryID
+	if row.target.teamLag {
+		metadata["team_lookup"] = contextfabric.IdentityLookupTokenGraphLag
+	}
 	metadata["source_query_version"] = contextpacket.SourceRowQueryVersion
 	if contextpacket.CatalogSourceQuery(row.target.read.QueryID) {
 		metadata["catalog_version"] = contextpacket.SourceQueryCatalogVersionV1
@@ -730,12 +736,13 @@ type encodedSpec struct {
 	anchorSegment   int
 	anchorDiscovery contextpacket.SourceRowDiscovery
 	endpoints       []endpoint
-	// wildcardOnly: the row names a subject this resolver cannot decide yet
-	// -- a team, whose ownership-derived gate CHAOS-7227 composes -- so the
-	// row is served only to a caller that a "*" repository list admits
-	// (unrestricted and "*" callers), and every repository-restricted caller
-	// is refused (fail closed; strictly stronger than the edge gate).
-	wildcardOnly bool
+	// teamSegment is the index of the team id in the ref when the row names a
+	// team (hasTeam). The team is an ownership subject: it is decided by the
+	// direct data tools' subject gate (OWNERSHIP reach, never membership,
+	// CHAOS-7227), live on every read, together with the repository the row
+	// is read in.
+	teamSegment int
+	hasTeam     bool
 }
 
 var encodedSpecs = map[contractsv1.ContextFabricEvidenceEntityType]encodedSpec{
@@ -753,10 +760,10 @@ var encodedSpecs = map[contractsv1.ContextFabricEvidenceEntityType]encodedSpec{
 	},
 	// (attribution repo_id, work item, team, source): read where the work
 	// item lives (the attribution's own repo_id is mostly the zero UUID);
-	// the team is decided fail closed until CHAOS-7227.
+	// the team is decided by the subject gate.
 	contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2: {
 		anchorDiscovery: contextpacket.SourceRowDiscoveryWorkItem, anchorSegment: 1,
-		wildcardOnly: true,
+		teamSegment: 2, hasTeam: true,
 	},
 	// (repository, deployment, incident, source): read in the repository
 	// the row names (the edge and its deployment); the incident must be
@@ -809,6 +816,12 @@ func (r *Resolver) encodedTargets(ctx context.Context, principal storage.Princip
 			return nil, err
 		}
 	}
+	teamAdmitted, teamLag := true, false
+	if spec.hasTeam {
+		if teamAdmitted, teamLag, err = r.teamAdmitted(ctx, principal, values[spec.teamSegment]); err != nil {
+			return nil, err
+		}
+	}
 	anchorWorkItem := ""
 	if !spec.anchorByID {
 		anchorWorkItem = values[spec.anchorSegment]
@@ -839,17 +852,47 @@ func (r *Resolver) encodedTargets(ctx context.Context, principal storage.Princip
 		}
 		allowed = allowed && len(admittedEnds) > 0
 	}
-	if spec.wildcardOnly && !admitsWildcard(principal) {
-		allowed = false
-	}
+	allowed = allowed && teamAdmitted
 	if !allowed {
 		return nil, nil
 	}
 	targets := make([]target, 0, len(readable))
 	for _, scope := range readable {
-		targets = append(targets, target{scope: scope, read: read, grammar: contextfabric.SourceRowGrammarEncoded})
+		targets = append(targets, target{scope: scope, read: read, grammar: contextfabric.SourceRowGrammarEncoded, teamLag: teamLag})
 	}
 	return targets, nil
+}
+
+// teamAdmitted asks the subject gate whether the caller may read the team, by
+// the team's ownership reach. The gate is asked on every read, for a refused
+// row and an absent one alike. A restricted caller is served only on an
+// admitted team. A caller a "*" repository list admits holds every
+// repository, so a team the graph has no node for yet (the graph lags the
+// tables) is not an authorization refusal: the row is served and the lag is
+// disclosed (lag). Without a gate only such a caller is served. A gate that
+// cannot answer is an error for everyone.
+func (r *Resolver) teamAdmitted(ctx context.Context, principal storage.Principal, teamID string) (admitted, lag bool, err error) {
+	if r.gate == nil {
+		return admitsWildcard(principal), false, nil
+	}
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: contextfabric.TeamCanonicalID(teamID)}
+	_, authorization := r.gate.Authorize(ctx, principal, []contextfabric.SubjectRef{subject})
+	if authorization.Decision == directread.DecisionUnavailable {
+		if authorization.Err != nil {
+			return false, false, authorization.Err
+		}
+		return false, false, fmt.Errorf("sourcerow: subject gate unavailable: %s", authorization.Reason)
+	}
+	if len(authorization.Outcomes) != 1 {
+		return false, false, nil
+	}
+	switch authorization.Outcomes[0].Outcome {
+	case directread.SubjectAdmitted:
+		return true, false, nil
+	case directread.SubjectAbsent:
+		return admitsWildcard(principal), admitsWildcard(principal), nil
+	}
+	return false, false, nil
 }
 
 // discover runs one repository discovery and refuses a saturated list.
