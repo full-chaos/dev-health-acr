@@ -29,10 +29,15 @@ is false for a project. The full typed chain already exists in projection
 code (`devhealthsource/tables.go`, verified live at `0e662ceb`):
 
 ```
-project <-BELONGS_TO_PROJECT- work_item -BELONGS_TO_REPOSITORY-> repository
+project <-BELONGS_TO_PROJECT- work_item -LINKS_PULL_REQUEST-> pull_request
 pull_request        -BELONGS_TO_REPOSITORY->     repository
 pull_request_review -BELONGS_TO_PULL_REQUEST->   pull_request
 ```
+
+The project reaches a repository only through its issues' linked pull
+request rows (`work_graph_issue_pr`, whose `repo_id` is the pull request's
+repository; tier `native` > `explicit_text` > `heuristic`, carried per
+target). The issue's own `repo_id` is not the relation.
 
 The facts are reachable. The planner simply had no step that reached them,
 and reported the gap as a proof of absence.
@@ -48,8 +53,10 @@ group. There is **no** direct project↔repository edge. The chain above is an
 item" -- and never an ownership claim. That distinction is disclosed, not
 assumed away.
 
-`work_items.repo_id` carries the **zero UUID** for repo-less Linear issues.
-It must never expand to a fake repository.
+A repository a link row names that the `repos` catalog does not hold, or the
+zero UUID, must never expand to a fake repository. An issue with no link row
+reaches no repository: it is counted in `MissingNextHopCount` (the answer is
+partial), never read as "nothing is missing".
 
 ## 3. Architecture (ratified: option D)
 
@@ -186,7 +193,7 @@ The three chains, all verified at `0e662ceb`:
 | Chain | Edges | Producer |
 | --- | --- | --- |
 | work item | `work_item -BELONGS_TO_PROJECT-> project`, `work_item -OWNED_BY_TEAM-> team` | `devhealthsource/teams_projects_edges.go` |
-| repository | + `work_item -BELONGS_TO_REPOSITORY-> repository` | `devhealthsource/tables.go` |
+| repository | project: `work_item -LINKS_PULL_REQUEST-> pull_request -BELONGS_TO_REPOSITORY-> repository` (`work_graph_issue_pr`); team: `team_repo_ownership` rows, plus owned projects (`team_project_ownership`) through the project chain | `devhealthsource/issue_pull_request_link.go`, `devhealthfacts/fact_scope_entity_tree.go` |
 | pull request | + `pull_request -BELONGS_TO_REPOSITORY-> repository` | `devhealthsource/tables.go` |
 | review | + `pull_request_review -BELONGS_TO_PULL_REQUEST-> pull_request` | `devhealthsource/tables.go` |
 
@@ -640,16 +647,23 @@ rule instead, the same discipline the three project policies already honour.
 
 ```mermaid
 flowchart LR
-    T["SubjectTeam"] -->|"OWNED_BY_TEAM<br/>(work_item_team_attributions,<br/>is_primary IN (1, 2))"| WI["work_item"]
-    WI -->|"BELONGS_TO_REPOSITORY"| R["repository"]
-    R -->|"BELONGS_TO_REPOSITORY"| PR["pull_request"]
+    T["SubjectTeam"] -->|"team_repo_ownership<br/>(current rows)"| R["repository"]
+    T -->|"team_project_ownership<br/>(current rows)"| P["project"]
+    P -->|"BELONGS_TO_PROJECT"| WI["work_item"]
+    WI -->|"LINKS_PULL_REQUEST<br/>(work_graph_issue_pr)"| PR["pull_request"]
+    PR -->|"BELONGS_TO_REPOSITORY"| R
     PR -->|"BELONGS_TO_PULL_REQUEST"| RV["pull_request_review"]
 
-    WI -. "source = native_team" .-> B1(["basis: activity_proxy<br/>(same class as the project chain)"])
-    WI -. "source = issue_project / project_ownership /<br/>repo_ownership / assignee_membership /<br/>linked_issue / manual_fallback" .-> B2(["basis: attributed_primary_team<br/>(NEW — team hop is itself inferred)"])
-
-    B1 -. "wins over" .-> B2
+    R -. "owned directly" .-> B1(["basis: direct<br/>source: team_repo_ownership"])
+    PR -. "via an owned project's linked pull request" .-> B2(["basis: activity_proxy<br/>source: link tier native / explicit_text / heuristic"])
 ```
+
+**The entity tree replaced the attribution-based team repository hop.** A team
+reaches a repository through its ownership rows and its owned projects'
+linked pull requests; `work_item_team_attributions` still decides which
+ISSUES a team holds (the team work-item policies) but is no longer a
+relation of a team to a repository. `FactScopeBasisAttributedPrimaryTeam` is
+no longer produced by the repository policies.
 
 **The graph edge itself was also mis-labelled.** `devhealthsource/
 teams_projects_edges.go`'s `queryWorkItemTeams` hardcoded

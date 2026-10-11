@@ -823,12 +823,20 @@ import (
 // instead of unavailable, so the answer is no longer degraded by it; a
 // candidate saved under v167 holds the degraded account and must not be reused.
 //
-// v168 -> v169: a team or project question for continuous integration, deployments, incidents or
+// v168 -> v169: the repositories a project or team scope reaches follow the
+// entity tree. A project reaches the repositories of its issues' linked pull
+// request rows (work_graph_issue_pr), not the issue's own repository column; a
+// team reaches the repositories it owns and those its owned projects' issues
+// link to, not the repositories of its attributed issues. Issues with no link
+// row are counted as a missing next hop. A project or team answer saved under
+// v168 may rest on a repository the tree does not reach.
+//
+// v169 -> v170: a team or project question for continuous integration, deployments, incidents or
 // operational deficiencies reaches those facts through the entity tree (ownership rows, and linked
 // pull request rows) where it was pruned with no reach; a candidate saved under an earlier version
 // carries the pruned answer for such a question. The census also sheds rows under a small byte
 // budget and serves the count it cut.
-const QueryVersion = "devhealthfacts.clickhouse.v169"
+const QueryVersion = "devhealthfacts.clickhouse.v170"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -97,7 +97,8 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
 		targets, targetBasis, targetRoot, authCounts := authorizeRepositories(request.Principal, repos)
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetRoot: targetRoot, Counts: mergeCounts(counts, authCounts)}, nil
+		targetSource := repositoryAttributionSources(repos, targets)
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot, Counts: mergeCounts(counts, authCounts)}, nil
 
 	case contextfabric.FactScopePolicyProjectWorkItemPullRequest:
 		// One hop further than repository. Read the SAME work-item-scoped
@@ -444,22 +445,14 @@ func (e *ScopeExpander) projectRepositories(ctx context.Context, orgID string, o
 	// "first origin in the caller's slice order" because origins order is
 	// not part of any documented contract and SQL has no visibility into it
 	// anyway.
-	statement := `SELECT toString(w.repo_id), ifNull(r.repo, ''), min(p.id)
+	statement := `SELECT toString(l.pr_repo_id), ifNull(r.repo, ''), min(p.id), argMax(l.provenance, l.link_rank)
 FROM work_items AS w FINAL
-INNER JOIN (
-  SELECT id, join_key, count() OVER (PARTITION BY join_key) AS key_resolution_count
-  FROM (
-    SELECT DISTINCT id, provider, join_key FROM (
-      SELECT id, provider, id AS join_key FROM projects FINAL WHERE org_id = {org_id:String}
-      UNION ALL
-      SELECT id, provider, ifNull(project_key, '') AS join_key FROM projects FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != ''
-    )
-  )
-) AS p ON p.join_key = w.project_id
-LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
+INNER JOIN ` + currentResolvedProjectsSQL + ` AS p ON p.join_key = w.project_id
+INNER JOIN ` + issueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
+LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = w.org_id
 WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
-GROUP BY toString(w.repo_id), ifNull(r.repo, '')
-ORDER BY toString(w.repo_id)
+GROUP BY toString(l.pr_repo_id), ifNull(r.repo, '')
+ORDER BY toString(l.pr_repo_id)
 LIMIT ` + strconv.Itoa(limitPlusOne)
 	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
@@ -473,33 +466,24 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	originsByID := projectOriginsByRawID(origins)
 	var candidates []repositoryCandidate
 	counts := contextfabric.FactScopeExpansionCounts{}
+	repositoryRows := 0
 	for rows.Next() {
-		var repoID, repoSlug, originProjectID string
-		if err := rows.Scan(&repoID, &repoSlug, &originProjectID); err != nil {
+		var repoID, repoSlug, originProjectID, tier string
+		if err := rows.Scan(&repoID, &repoSlug, &originProjectID, &tier); err != nil {
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
-		switch {
-		case repoID == zeroRepositoryID:
-			// Repo-less by design (a Linear-sourced work item) -- never a
-			// fake repository target.
-			counts.MissingNextHopCount++
-		case repoSlug == "":
-			// A non-zero repo_id that matched no repos row: an orphan,
-			// same treatment as the zero-UUID sentinel for THIS purpose --
-			// there is no real repository entity to admit.
-			counts.MissingNextHopCount++
-		default:
-			counts.CandidateCount++
-			candidates = append(candidates, repositoryCandidate{
-				repoID: repoID, repoSlug: repoSlug, originRoot: originsByID[originProjectID],
-			})
-		}
+		repositoryRows++
+		classifyLinkedRepository(&counts, &candidates, repoID, repoSlug, tier, originsByID[originProjectID])
 	}
 	if err := rows.Err(); err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
-	totalRows := counts.CandidateCount + counts.MissingNextHopCount
-	counts.Truncated = totalRows >= limitPlusOne
+	counts.Truncated = repositoryRows >= limitPlusOne
+	unlinked, err := e.projectUnlinkedIssueCount(ctx, orgID, projectIDs, nil)
+	if err != nil {
+		return nil, contextfabric.FactScopeExpansionCounts{}, err
+	}
+	counts.MissingNextHopCount += unlinked
 	// NOT trimmed to limit here (codex xhigh review round 1, confirmed
 	// real, MEDIUM): FactScopeExpansionRequest.Limit's own doc comment
 	// requires this port to "read up to Limit+1 rows and return ALL of
@@ -613,19 +597,19 @@ const membershipTouchesAsOfSQL = `(
     WHERE NOT dup_flag
     WINDOW w2 AS (PARTITION BY repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
   )
-  SELECT repo_id, provider, project_id, occurred_at AS observed_at,
+  SELECT repo_id, subject_id, provider, project_id, occurred_at AS observed_at,
     if(rn < touch_count AND next_is_add = 0, next_occurred_at, NULL) AS valid_to,
     0 AS is_malformed, 0 AS is_duplicate_add
   FROM closed
   WHERE is_add = 1
   UNION ALL
-  SELECT repo_id, provider, project_id, occurred_at AS observed_at,
+  SELECT repo_id, subject_id, provider, project_id, occurred_at AS observed_at,
     NULL AS valid_to,
     1 AS is_malformed, 0 AS is_duplicate_add
   FROM classified
   WHERE dangling_flag
   UNION ALL
-  SELECT repo_id, provider, project_id, occurred_at AS observed_at,
+  SELECT repo_id, subject_id, provider, project_id, occurred_at AS observed_at,
     NULL AS valid_to,
     0 AS is_malformed, 1 AS is_duplicate_add
   FROM classified
@@ -684,26 +668,10 @@ func (e *ScopeExpander) projectRepositoriesAsOf(ctx context.Context, orgID strin
 	// BY key (repo_id_str, repo_slug) is unchanged, so this changes neither
 	// which repositories are returned nor how many. See projectRepositories'
 	// own identical comment for why "smallest id" is the tiebreak.
-	statement := `SELECT repo_id_str, repo_slug, max(via_history) AS via_history, min(origin_project_id) AS origin_project_id
-FROM (
-  SELECT toString(iv.repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, 1 AS via_history, p.id AS origin_project_id
-  FROM ` + membershipTouchesAsOfSQL + ` AS iv
-  INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
-  LEFT JOIN repos AS r FINAL ON r.id = iv.repo_id AND r.org_id = {org_id:String}
-  WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
-    AND NOT iv.is_malformed AND NOT iv.is_duplicate_add
-    AND iv.observed_at <= {window_end:DateTime64(6,'UTC')}
-    AND (iv.valid_to IS NULL OR iv.valid_to > {window_start:DateTime64(6,'UTC')})
-  UNION ALL
-  SELECT toString(w.repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, 0 AS via_history, p.id AS origin_project_id
-  FROM work_items AS w FINAL
-  INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = w.provider AND p.join_key = w.project_id
-  LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-  WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
-    AND (w.repo_id, w.work_item_id) NOT IN (
-      SELECT repo_id, subject_id FROM project_membership_transitions FINAL WHERE org_id = {org_id:String} AND subject_kind = 'work_item'
-    )
-)
+	statement := `SELECT toString(l.pr_repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, max(a.via_history) AS via_history, min(a.origin_project_id) AS origin_project_id, argMax(l.provenance, l.link_rank) AS tier
+FROM (` + projectIssueArmsAsOfSQL + `) AS a
+INNER JOIN ` + issueLinksSQL + ` AS l ON l.work_item_id = a.work_item_id
+LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = {org_id:String}
 GROUP BY repo_id_str, repo_slug
 ORDER BY repo_id_str
 LIMIT ` + strconv.Itoa(limitPlusOne)
@@ -721,32 +689,27 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	originsByID := projectOriginsByRawID(origins)
 	var candidates []repositoryCandidate
 	counts := contextfabric.FactScopeExpansionCounts{}
+	repositoryRows := 0
 	for rows.Next() {
-		var repoID, repoSlug, originProjectID string
+		var repoID, repoSlug, originProjectID, tier string
 		var viaHistory uint8
-		if err := rows.Scan(&repoID, &repoSlug, &viaHistory, &originProjectID); err != nil {
+		if err := rows.Scan(&repoID, &repoSlug, &viaHistory, &originProjectID, &tier); err != nil {
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
-		switch {
-		case repoID == zeroRepositoryID:
-			counts.MissingNextHopCount++
-		case repoSlug == "":
-			counts.MissingNextHopCount++
-		default:
-			counts.CandidateCount++
-			candidates = append(candidates, repositoryCandidate{
-				repoID: repoID, repoSlug: repoSlug, originRoot: originsByID[originProjectID],
-			})
-			if viaHistory == 0 {
-				counts.UnboundedValidityCount++
-			}
+		repositoryRows++
+		if classifyLinkedRepository(&counts, &candidates, repoID, repoSlug, tier, originsByID[originProjectID]) && viaHistory == 0 {
+			counts.UnboundedValidityCount++
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
-	totalRows := counts.CandidateCount + counts.MissingNextHopCount
-	counts.Truncated = totalRows >= limitPlusOne
+	counts.Truncated = repositoryRows >= limitPlusOne
+	unlinked, err := e.projectUnlinkedIssueCount(ctx, orgID, projectIDs, &asOfBounds{start: windowStart, end: windowEnd})
+	if err != nil {
+		return nil, contextfabric.FactScopeExpansionCounts{}, err
+	}
+	counts.MissingNextHopCount += unlinked
 	dropped, malformed, duplicateAdd, err := e.historicalDropCount(ctx, orgID, projectIDs, windowStart, windowEnd)
 	if err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
@@ -819,25 +782,49 @@ func (e *ScopeExpander) historicalDropCount(ctx context.Context, orgID string, p
 	// of a match/miss the ORIGINAL (first-add) interval already decides on
 	// its own.
 	statement := `SELECT uniqExactIf(repo_id_str, NOT is_malformed AND NOT is_duplicate_add) AS ever_matched,
-  uniqExactIf(repo_id_str, in_window AND NOT is_malformed AND NOT is_duplicate_add) AS window_matched,
-  countIf(is_malformed) AS malformed_touches,
-  countIf(is_duplicate_add) AS duplicate_add_touches
+  uniqExactIf(repo_id_str, in_window AND NOT is_malformed AND NOT is_duplicate_add) AS window_matched
 FROM (
-  SELECT toString(iv.repo_id) AS repo_id_str, iv.is_malformed AS is_malformed, iv.is_duplicate_add AS is_duplicate_add,
+  SELECT toString(l.pr_repo_id) AS repo_id_str, iv.is_malformed AS is_malformed, iv.is_duplicate_add AS is_duplicate_add,
     (iv.observed_at <= {window_end:DateTime64(6,'UTC')} AND (iv.valid_to IS NULL OR iv.valid_to > {window_start:DateTime64(6,'UTC')})) AS in_window
   FROM ` + membershipTouchesAsOfSQL + ` AS iv
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
-  LEFT JOIN repos AS r FINAL ON r.id = iv.repo_id AND r.org_id = {org_id:String}
+  INNER JOIN ` + issueLinksSQL + ` AS l ON l.work_item_id = iv.subject_id
+  LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = {org_id:String}
   WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
-    AND toString(iv.repo_id) != {zero_repository_id:String} AND ifNull(r.repo, '') != ''
+    AND toString(l.pr_repo_id) != {zero_repository_id:String} AND ifNull(r.repo, '') != ''
 )`
-	rows, queryErr := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
+	bindings := []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
 		{Name: "project_ids", Value: projectIDs},
 		{Name: "window_start", Value: windowStart},
 		{Name: "window_end", Value: windowEnd},
 		{Name: "zero_repository_id", Value: zeroRepositoryID},
+	}
+	// The malformed/duplicate-add counts are about the TOUCHES, never about
+	// which repository a link reaches: read them without the link join so an
+	// issue with several link rows cannot multiply them.
+	const touchCountsStatement = `SELECT countIf(iv.is_malformed) AS malformed_touches, countIf(iv.is_duplicate_add) AS duplicate_add_touches
+FROM ` + membershipTouchesAsOfSQL + ` AS iv
+INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
+WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}`
+	touchRows, touchErr := e.client.Query(ctx, touchCountsStatement, []contextpacket.ClickHouseBinding{
+		{Name: "org_id", Value: orgID},
+		{Name: "project_ids", Value: projectIDs},
 	})
+	if touchErr != nil {
+		return 0, 0, 0, touchErr
+	}
+	defer touchRows.Close()
+	var malformedTouches, duplicateAddTouches uint64
+	if touchRows.Next() {
+		if err := touchRows.Scan(&malformedTouches, &duplicateAddTouches); err != nil {
+			return 0, 0, 0, err
+		}
+	}
+	if err := touchRows.Err(); err != nil {
+		return 0, 0, 0, err
+	}
+	rows, queryErr := e.client.Query(ctx, statement, bindings)
 	if queryErr != nil {
 		return 0, 0, 0, queryErr
 	}
@@ -846,10 +833,10 @@ FROM (
 		if err := rows.Err(); err != nil {
 			return 0, 0, 0, err
 		}
-		return 0, 0, 0, nil
+		return 0, int(malformedTouches), int(duplicateAddTouches), nil
 	}
-	var everMatched, windowMatched, malformedTouches, duplicateAddTouches uint64
-	if err := rows.Scan(&everMatched, &windowMatched, &malformedTouches, &duplicateAddTouches); err != nil {
+	var everMatched, windowMatched uint64
+	if err := rows.Scan(&everMatched, &windowMatched); err != nil {
 		return 0, 0, 0, err
 	}
 	if err := rows.Err(); err != nil {
@@ -1325,136 +1312,6 @@ func repositoryAttributionSources(repos []repositoryCandidate, targets []context
 		source[contextfabric.FactSubjectKey(target)] = repo.attributionSource
 	}
 	return source
-}
-
-// teamAttributionSourceRank mirrors ops' own precedence order
-// (ops/src/dev_health_ops/metrics/compute_work_items.py's _SOURCE_ORDER)
-// for the ONE purpose this expander needs it: when several work items with
-// DIFFERENT attribution sources reach the SAME repository, which source
-// determines that repository's basis. Lower ranks win. unassigned never
-// reaches this query (queryWorkItemTeams' own WHERE clause excludes empty
-// team_id, and this query's WHERE a.team_id IN {team_ids} does identically),
-// so it is not represented here; an unrecognised value ranks last (7),
-// failing toward the WEAKER classification (FactScopeBasisAttributedPrimaryTeam,
-// never the stronger activity_proxy) for a future enum addition this
-// producer has not been updated for.
-const teamAttributionSourceRankSQL = `multiIf(` +
-	`a.source = 'native_team', 0, ` +
-	`a.source = 'issue_project', 1, ` +
-	`a.source = 'project_ownership', 2, ` +
-	`a.source = 'repo_ownership', 3, ` +
-	`a.source = 'assignee_membership', 4, ` +
-	`a.source = 'linked_issue', 5, ` +
-	`a.source = 'manual_fallback', 6, ` +
-	`7)`
-
-// teamRepositories runs CHAOS-4101's activity-proxy chain: team ->
-// work_item (primary attribution only) -> repository, scoped to the
-// SPECIFIC team origins requested. Mirrors projectRepositories' own
-// zero-UUID/orphan handling exactly (repos.go).
-//
-// ONE ROW PER DISTINCT REPOSITORY (GROUP BY), matching projectRepositories'
-// own "row count == candidate count" contract that the Limit+1 overflow
-// detection (FactScopeExpansionRequest.Limit's own doc comment) relies on --
-// a repository reached by several work items with different sources must
-// not multiply the candidate count merely because it has several
-// contributing attributions. best_source is the WINNING source among all of
-// a repository's contributing primary attributions, by teamAttributionSourceRank
-// (argMin picks the source at the minimum rank): native_team if ANY
-// contributing work item carries it, otherwise the highest-precedence
-// heuristic source present. That winning source decides the repository's
-// basis (FactScopeBasisActivityProxy for native_team -- the SAME class the
-// project chain uses, since reaching a repo via a work item is activity
-// either way; FactScopeBasisAttributedPrimaryTeam for every other value,
-// since the team-attribution hop itself is then also an inference) and is
-// carried onto repositoryCandidate.attributionSource for the telemetry
-// breakdown.
-func (e *ScopeExpander) teamRepositories(ctx context.Context, orgID string, origins []contextfabric.SubjectRef, limit int) ([]repositoryCandidate, contextfabric.FactScopeExpansionCounts, error) {
-	teamIDs := decodeTeamOriginIDs(origins)
-	if len(teamIDs) == 0 {
-		// Every origin failed to decode as a team.v1 id -- an invariant
-		// violation upstream (the resolver only ever calls a team policy for
-		// a SubjectTeam origin), not a data statement about THIS team.
-		// Reported as a genuinely empty traversal: no candidate was ever
-		// queried for.
-		return nil, contextfabric.FactScopeExpansionCounts{}, nil
-	}
-	limitPlusOne := limit + 1
-	// The join carries repo_id, not just work_item_id (codex xhigh review
-	// round 2, confirmed real, MEDIUM): work_items' declared sort key is
-	// (org_id, repo_id, work_item_id) -- devhealthschema.go's
-	// "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id,
-	// work_item_id)", and devhealthsource's own census registry documents
-	// work_item_id as NOT the table's natural key on its own: a bare
-	// work_item_id is cross-repo-collidable. work_item_team_attributions
-	// carries its OWN repo_id column (insert_work_item_team_attributions,
-	// ops/storage/clickhouse.py), written from the SAME work item the
-	// attribution was computed for, so joining on work_item_id alone could
-	// match a work_items row from a DIFFERENT repository that happens to
-	// reuse the same bare id -- attributing the wrong repository to the
-	// team, or (worse) attributing an unauthorized repository the team was
-	// never connected to.
-	// CHAOS-4260: min(a.team_id) is an aggregate ADDED alongside the existing
-	// argMin(source) -- the GROUP BY key (repo_id, repo_slug) is unchanged,
-	// so this changes neither which repositories are returned nor how many.
-	// See projectRepositories' own identical comment for why "smallest id"
-	// is the tiebreak among several team origins reaching the same repo.
-	statement := `SELECT toString(w.repo_id), ifNull(r.repo, ''), argMin(toString(a.source), ` + teamAttributionSourceRankSQL + `) AS best_source, min(a.team_id) AS origin_team_id
-FROM work_item_team_attributions AS a FINAL
-INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.repo_id = a.repo_id AND w.org_id = a.org_id
-LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE a.org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam) + ` AND a.team_id IN {team_ids:Array(String)}
-GROUP BY toString(w.repo_id), ifNull(r.repo, '')
-ORDER BY toString(w.repo_id)
-LIMIT ` + strconv.Itoa(limitPlusOne)
-	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
-		{Name: "org_id", Value: orgID},
-		{Name: "team_ids", Value: teamIDs},
-	})
-	if err != nil {
-		return nil, contextfabric.FactScopeExpansionCounts{}, err
-	}
-	defer rows.Close()
-
-	originsByID := teamOriginsByRawID(origins)
-	var candidates []repositoryCandidate
-	counts := contextfabric.FactScopeExpansionCounts{}
-	for rows.Next() {
-		var repoID, repoSlug, bestSource, originTeamID string
-		if err := rows.Scan(&repoID, &repoSlug, &bestSource, &originTeamID); err != nil {
-			return nil, contextfabric.FactScopeExpansionCounts{}, err
-		}
-		switch {
-		case repoID == zeroRepositoryID:
-			// Repo-less by design (a Linear-sourced work item) -- never a
-			// fake repository target.
-			counts.MissingNextHopCount++
-		case repoSlug == "":
-			// A non-zero repo_id that matched no repos row: an orphan, same
-			// treatment as the zero-UUID sentinel for THIS purpose -- there
-			// is no real repository entity to admit.
-			counts.MissingNextHopCount++
-		default:
-			counts.CandidateCount++
-			basis := contextfabric.FactScopeBasisAttributedPrimaryTeam
-			if bestSource == attributionSourceNativeTeamForScope {
-				basis = contextfabric.FactScopeBasisActivityProxy
-			}
-			candidates = append(candidates, repositoryCandidate{
-				repoID: repoID, repoSlug: repoSlug, basis: basis, attributionSource: bestSource,
-				originRoot: originsByID[originTeamID],
-			})
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, contextfabric.FactScopeExpansionCounts{}, err
-	}
-	totalRows := counts.CandidateCount + counts.MissingNextHopCount
-	counts.Truncated = totalRows >= limitPlusOne
-	// NOT trimmed to limit here -- see projectRepositories' own identical
-	// comment; the resolver's own overflow-row detection needs the extra
-	// row intact.
-	return candidates, counts, nil
 }
 
 // attributionSourceNativeTeamForScope mirrors devhealthsource's
