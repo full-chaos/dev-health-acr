@@ -370,6 +370,17 @@ var ProductionColumns = map[string][]Column{
 		{Name: "observed_at", Type: "DateTime64(3, 'UTC')"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
 	},
+	// From the ops migrations (009_raw_work_items.sql plus 024's org_id), not a
+	// live probe: only the columns the status-since reader selects and the
+	// sorting key names, in production position order.
+	"work_item_transitions": {
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "work_item_id", Type: "String"},
+		{Name: "occurred_at", Type: "DateTime64(3)"},
+		{Name: "to_status", Type: "String"},
+		{Name: "last_synced", Type: "DateTime64(3)"},
+		{Name: "org_id", Type: "String"},
+	},
 	"work_item_dependencies": {
 		{Name: "source_work_item_id", Type: "String"},
 		{Name: "target_work_item_id", Type: "String"},
@@ -592,6 +603,21 @@ var ProductionColumns = map[string][]Column{
 		{Name: "computed_at", Type: "DateTime('UTC')"},
 		{Name: "org_id", Type: "String"},
 	},
+	// work_item_measure_capability answers whether a provider tracks a
+	// work_item_metrics_daily measure at all (ops migration 111). The
+	// reader contract is exact-day: the answer for day D is the row with
+	// window_end = D, argMax on computed_at; a missing row is unknown.
+	"work_item_measure_capability": {
+		{Name: "org_id", Type: "String"},
+		{Name: "provider", Type: "LowCardinality(String)"},
+		{Name: "measure", Type: "LowCardinality(String)"},
+		{Name: "tracked", Type: "UInt8"},
+		{Name: "evidence_count", Type: "UInt32"},
+		{Name: "item_count", Type: "UInt32"},
+		{Name: "window_start", Type: "Date"},
+		{Name: "window_end", Type: "Date"},
+		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
+	},
 	"work_items": {
 		{Name: "repo_id", Type: "UUID"},
 		{Name: "work_item_id", Type: "String"},
@@ -686,7 +712,9 @@ var EngineFull = map[string]string{
 	"teams":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"work_graph_issue_pr":                  "ReplacingMergeTree(version_rank) ORDER BY (org_id, repo_id, work_item_id, pr_number) SETTINGS index_granularity = 8192",
 	"work_graph_deployment_incident_edges": "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192",
+	"work_item_transitions":                "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id, occurred_at) SETTINGS index_granularity = 8192",
 	"work_item_dependencies":               "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
+	"work_item_measure_capability":         "ReplacingMergeTree(computed_at) ORDER BY (org_id, provider, measure, window_end) SETTINGS index_granularity = 8192",
 	"work_item_metrics_daily":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id) SETTINGS index_granularity = 8192",
 	"work_item_team_attributions":          "ReplacingMergeTree(computed_at) ORDER BY (org_id, repo_id, work_item_id, ifNull(team_id, ''), source) SETTINGS index_granularity = 8192",
 	"work_items":                           "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id) SETTINGS index_granularity = 8192",

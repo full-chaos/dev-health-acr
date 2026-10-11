@@ -130,6 +130,86 @@ func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principa
 	return result, nil
 }
 
+const (
+	flowMeasureBugCompletedRatio    = "bug_completed_ratio"
+	flowMeasureStoryPointsCompleted = "story_points_completed"
+
+	flowMeasureStateTracked    uint8 = 0
+	flowMeasureStateNotTracked uint8 = 1
+
+	flowMeasureReasonNotTracked = "not_tracked_by_source"
+	flowMeasureReasonUnknown    = "capability_unknown"
+)
+
+// work_item_metrics_daily stores bug_completed_ratio and story_points_completed
+// as non-null Float64, so a stored 0 and "the provider does not track this"
+// read the same. work_item_measure_capability keeps that fact apart, one
+// answer per (provider, measure, window_end); the answer for day D is the row
+// with window_end = D, deduplicated by argMax on computed_at, and a day with no
+// row is unknown -- never an earlier window's answer.
+const flowCapabilityAnswersSQL = `SELECT provider, window_end, measure, argMax(tracked, computed_at) AS answer
+		FROM work_item_measure_capability
+		WHERE org_id = {org_id:String}
+		GROUP BY provider, window_end, measure`
+
+// flowMeasureTrackedSQL / flowMeasureKnownSQL are the row predicates over a
+// metrics row (alias prefix "" or "wm."): the provider tracks the measure on
+// the row's day; the capability job produced an answer for that day at all.
+func flowMeasureTrackedSQL(alias, measure string) string {
+	return "(" + alias + "provider, " + alias + "day, '" + measure + "') IN (SELECT provider, window_end, measure FROM (" + flowCapabilityAnswersSQL + ") WHERE answer = 1)"
+}
+
+func flowMeasureKnownSQL(alias, measure string) string {
+	return "(" + alias + "provider, " + alias + "day, '" + measure + "') IN (SELECT provider, window_end, measure FROM (" + flowCapabilityAnswersSQL + "))"
+}
+
+// flowMeasureRowStateSQL is the state of one un-aggregated row: 0 tracked,
+// 1 not tracked, 2 unknown.
+func flowMeasureRowStateSQL(alias, measure string) string {
+	return "multiIf(" + flowMeasureTrackedSQL(alias, measure) + ", 0, " + flowMeasureKnownSQL(alias, measure) + ", 1, 2)"
+}
+
+// flowMeasureAggregateSQL selects the value over the TRACKED rows of a group
+// and the group's state: tracked when any row is, not tracked when every row
+// has an answer and none is tracked, unknown otherwise. An untracked row never
+// feeds a sum or an average.
+func flowMeasureAggregateSQL(alias, measure, agg string) string {
+	tracked := flowMeasureTrackedSQL(alias, measure)
+	known := flowMeasureKnownSQL(alias, measure)
+	return "toFloat64(ifNull(" + agg + "(" + alias + measure + ", " + tracked + "), 0)),\n\ttoUInt8(multiIf(countIf(" + tracked + ") > 0, 0, countIf(" + known + ") = count(), 1, 2))"
+}
+
+// flowMeasureReason names why a measure carries no value. The writers below
+// spell each key out so the reachable-emission walk sees every field.
+func flowMeasureReason(state uint8) string {
+	if state == flowMeasureStateNotTracked {
+		return flowMeasureReasonNotTracked
+	}
+	return flowMeasureReasonUnknown
+}
+
+// addFlowBugCompletedRatio writes the ratio when its source tracks it, and
+// otherwise omits it and names why, so an absent value is never read as zero.
+func addFlowBugCompletedRatio(fields map[string]contextfabric.FactValue, value float64, state uint8) {
+	if state == flowMeasureStateTracked {
+		fields["bug_completed_ratio"] = contextfabric.NumberFactValue(value)
+		return
+	}
+	fields["bug_completed_ratio_unavailable_reason"] = contextfabric.StringFactValue(flowMeasureReason(state))
+}
+
+func addFlowStoryPointsCompleted(fields map[string]contextfabric.FactValue, value float64, state uint8) {
+	if state == flowMeasureStateTracked {
+		fields["story_points_completed"] = contextfabric.NumberFactValue(value)
+		return
+	}
+	fields["story_points_completed_unavailable_reason"] = contextfabric.StringFactValue(flowMeasureReason(state))
+}
+
+func flowMeasureReasonColumns() []string {
+	return []string{flowMeasureBugCompletedRatio + "_unavailable_reason", flowMeasureStoryPointsCompleted + "_unavailable_reason"}
+}
+
 // flowScopeRow is one (team_id, provider, work_scope_id) partition's latest
 // work_item_metrics_daily row -- never a stitched combination of several
 // rows, the same row_number()-then-scan-one-row discipline every other
@@ -155,19 +235,20 @@ type flowScopeRow struct {
 	hasLeadP90                                     bool
 	leadP90Hours                                   float64
 	bugCompletedRatio, storyPointsCompleted        float64
+	bugState, storyPointsState                     uint8
 }
 
 func (r flowScopeRow) toFactValueRow() contextfabric.FactValueRow {
 	fields := map[string]contextfabric.FactValue{
-		"provider":               contextfabric.StringFactValue(r.provider),
-		"work_scope_id":          contextfabric.StringFactValue(r.workScopeID),
-		"day":                    contextfabric.StringFactValue(r.day),
-		"items_started":          contextfabric.IntegerFactValue(r.itemsStarted),
-		"items_completed":        contextfabric.IntegerFactValue(r.itemsCompleted),
-		"wip_count_end_of_day":   contextfabric.IntegerFactValue(r.wipCountEndOfDay),
-		"bug_completed_ratio":    contextfabric.NumberFactValue(r.bugCompletedRatio),
-		"story_points_completed": contextfabric.NumberFactValue(r.storyPointsCompleted),
+		"provider":             contextfabric.StringFactValue(r.provider),
+		"work_scope_id":        contextfabric.StringFactValue(r.workScopeID),
+		"day":                  contextfabric.StringFactValue(r.day),
+		"items_started":        contextfabric.IntegerFactValue(r.itemsStarted),
+		"items_completed":      contextfabric.IntegerFactValue(r.itemsCompleted),
+		"wip_count_end_of_day": contextfabric.IntegerFactValue(r.wipCountEndOfDay),
 	}
+	addFlowBugCompletedRatio(fields, r.bugCompletedRatio, r.bugState)
+	addFlowStoryPointsCompleted(fields, r.storyPointsCompleted, r.storyPointsState)
 	if r.hasWipAgeP50 {
 		fields["wip_age_p50_hours"] = contextfabric.NumberFactValue(r.wipAgeP50Hours)
 	}
@@ -205,17 +286,19 @@ type flowDailyRow struct {
 	teamID, day                                    string
 	itemsStarted, itemsCompleted, wipCountEndOfDay int64
 	bugCompletedRatioAvg, storyPointsCompletedSum  float64
+	bugState, storyPointsState                     uint8
 }
 
 func (r flowDailyRow) toFactValueRow() contextfabric.FactValueRow {
-	return contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
-		"day":                    contextfabric.StringFactValue(r.day),
-		"items_started":          contextfabric.IntegerFactValue(r.itemsStarted),
-		"items_completed":        contextfabric.IntegerFactValue(r.itemsCompleted),
-		"wip_count_end_of_day":   contextfabric.IntegerFactValue(r.wipCountEndOfDay),
-		"bug_completed_ratio":    contextfabric.NumberFactValue(r.bugCompletedRatioAvg),
-		"story_points_completed": contextfabric.NumberFactValue(r.storyPointsCompletedSum),
-	}}
+	fields := map[string]contextfabric.FactValue{
+		"day":                  contextfabric.StringFactValue(r.day),
+		"items_started":        contextfabric.IntegerFactValue(r.itemsStarted),
+		"items_completed":      contextfabric.IntegerFactValue(r.itemsCompleted),
+		"wip_count_end_of_day": contextfabric.IntegerFactValue(r.wipCountEndOfDay),
+	}
+	addFlowBugCompletedRatio(fields, r.bugCompletedRatioAvg, r.bugState)
+	addFlowStoryPointsCompleted(fields, r.storyPointsCompletedSum, r.storyPointsState)
+	return contextfabric.FactValueRow{Fields: fields}
 }
 
 // queryTeamFlowDailySeries reads work_item_metrics_daily as a genuine
@@ -230,7 +313,9 @@ func (r flowDailyRow) toFactValueRow() contextfabric.FactValueRow {
 // GROUP BY sums each day's scopes into one row per (team_id, day), so a
 // multi-scope team still yields exactly one time_series point per day.
 func (p *FlowProvider) queryTeamFlowDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]flowDailyRow, err error) {
-	statement := withRowLimit(`SELECT toString(team_id), toString(day), toInt64(sum(items_started)), toInt64(sum(items_completed)), toInt64(sum(wip_count_end_of_day)), avg(bug_completed_ratio), toFloat64(sum(story_points_completed))
+	statement := withRowLimit(`SELECT toString(team_id), toString(day), toInt64(sum(items_started)), toInt64(sum(items_completed)), toInt64(sum(wip_count_end_of_day)),
+	` + flowMeasureAggregateSQL("", flowMeasureBugCompletedRatio, "avgIf") + `,
+	` + flowMeasureAggregateSQL("", flowMeasureStoryPointsCompleted, "sumIf") + `
 FROM (
 	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed,
 		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed)) DESC) AS rn
@@ -244,7 +329,7 @@ ORDER BY team_id, day DESC`)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r flowDailyRow
 		var teamID string
-		if err := row.Scan(&teamID, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay, &r.bugCompletedRatioAvg, &r.storyPointsCompletedSum); err != nil {
+		if err := row.Scan(&teamID, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay, &r.bugCompletedRatioAvg, &r.bugState, &r.storyPointsCompletedSum, &r.storyPointsState); err != nil {
 			return err
 		}
 		r.teamID = teamID
@@ -268,11 +353,12 @@ func flowDailyTable(rows []flowDailyRow, grain contextfabric.TemporalGrain) (con
 	}
 	valueRows, omitted := capFactValueRows(valueRows)
 	return contextfabric.TableFactValue(contextfabric.FactTable{
-		Shape:    contextfabric.FactTableTimeSeries,
-		Key:      []string{"day"},
-		Measures: []string{"items_started", "items_completed", "wip_count_end_of_day", "bug_completed_ratio", "story_points_completed"},
-		Grain:    grain,
-		Rows:     valueRows,
+		Shape:        contextfabric.FactTableTimeSeries,
+		Key:          []string{"day"},
+		Measures:     []string{"items_started", "items_completed", "wip_count_end_of_day", "bug_completed_ratio", "story_points_completed"},
+		Observations: flowMeasureReasonColumns(),
+		Grain:        grain,
+		Rows:         valueRows,
 	}), true, omitted
 }
 
@@ -301,7 +387,8 @@ func (p *FlowProvider) queryTeamScopeRows(ctx context.Context, orgID string, ids
 	toUInt8(isNotNull(cycle_time_p90_hours)), toFloat64(ifNull(cycle_time_p90_hours, 0)),
 	toUInt8(isNotNull(lead_time_p50_hours)), toFloat64(ifNull(lead_time_p50_hours, 0)),
 	toUInt8(isNotNull(lead_time_p90_hours)), toFloat64(ifNull(lead_time_p90_hours, 0)),
-	toFloat64(bug_completed_ratio), toFloat64(story_points_completed)
+	toFloat64(bug_completed_ratio), toUInt8(` + flowMeasureRowStateSQL("", flowMeasureBugCompletedRatio) + `),
+	toFloat64(story_points_completed), toUInt8(` + flowMeasureRowStateSQL("", flowMeasureStoryPointsCompleted) + `)
 FROM (
 	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
 		row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
@@ -320,7 +407,7 @@ ORDER BY team_id, work_scope_id, provider`)
 			&hasWipP50, &r.wipAgeP50Hours, &hasWipP90, &r.wipAgeP90Hours,
 			&hasCycleP50, &r.cycleP50Hours, &hasCycleP90, &r.cycleP90Hours,
 			&hasLeadP50, &r.leadP50Hours, &hasLeadP90, &r.leadP90Hours,
-			&r.bugCompletedRatio, &r.storyPointsCompleted); scanErr != nil {
+			&r.bugCompletedRatio, &r.bugState, &r.storyPointsCompleted, &r.storyPointsState); scanErr != nil {
 			return scanErr
 		}
 		r.hasWipAgeP50, r.hasWipAgeP90 = hasWipP50 != 0, hasWipP90 != 0
@@ -412,7 +499,7 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 					"cycle_time_p50_hours", "cycle_time_p90_hours",
 					"lead_time_p50_hours", "lead_time_p90_hours",
 				},
-				Observations: []string{"day"},
+				Observations: append([]string{"day"}, flowMeasureReasonColumns()...),
 				Grain:        timeBound.effectiveGrain(grainDaily),
 				Rows:         valueRows,
 			}),
@@ -496,6 +583,7 @@ type teamFlowAggregateRow struct {
 	hasLeadP90                                     bool
 	leadP90Hours                                   float64
 	bugCompletedRatio, storyPointsCompleted        float64
+	bugState, storyPointsState                     uint8
 }
 
 func (r teamFlowAggregateRow) toFactValueRow() contextfabric.FactValueRow {
@@ -503,9 +591,9 @@ func (r teamFlowAggregateRow) toFactValueRow() contextfabric.FactValueRow {
 		"items_started_latest_day":   contextfabric.IntegerFactValue(r.itemsStarted),
 		"items_completed_latest_day": contextfabric.IntegerFactValue(r.itemsCompleted),
 		"wip_count_end_of_day":       contextfabric.IntegerFactValue(r.wipCountEndOfDay),
-		"bug_completed_ratio":        contextfabric.NumberFactValue(r.bugCompletedRatio),
-		"story_points_completed":     contextfabric.NumberFactValue(r.storyPointsCompleted),
 	}
+	addFlowBugCompletedRatio(fields, r.bugCompletedRatio, r.bugState)
+	addFlowStoryPointsCompleted(fields, r.storyPointsCompleted, r.storyPointsState)
 	if r.hasWipAgeP50 {
 		fields["wip_age_p50_hours"] = contextfabric.NumberFactValue(r.wipAgeP50Hours)
 	}
@@ -562,7 +650,8 @@ func (p *FlowProvider) readProjectFlow(ctx context.Context, orgID string, subjec
 	toUInt8(isNotNull(avg(wm.cycle_time_p90_hours))), toFloat64(ifNull(avg(wm.cycle_time_p90_hours), 0)),
 	toUInt8(isNotNull(avg(wm.lead_time_p50_hours))), toFloat64(ifNull(avg(wm.lead_time_p50_hours), 0)),
 	toUInt8(isNotNull(avg(wm.lead_time_p90_hours))), toFloat64(ifNull(avg(wm.lead_time_p90_hours), 0)),
-	toFloat64(avg(wm.bug_completed_ratio)), toFloat64(sum(wm.story_points_completed))
+	` + flowMeasureAggregateSQL("wm.", flowMeasureBugCompletedRatio, "avgIf") + `,
+	` + flowMeasureAggregateSQL("wm.", flowMeasureStoryPointsCompleted, "sumIf") + `
 FROM ` + projectIdentityJoinSQL() + `
 INNER JOIN (
 	-- One row per (team_id, provider, work_scope_id) triple, latest day
@@ -570,7 +659,7 @@ INNER JOIN (
 	-- one row per team happens OUTSIDE this subquery now, because which
 	-- rows belong to the answer depends on the project each is matched
 	-- against -- a fact this subquery cannot see.
-	SELECT team_id, provider, work_scope_id, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
+	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
 		row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
 	FROM work_item_metrics_daily
 	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
@@ -589,7 +678,7 @@ ORDER BY p.id, wm.team_id`)
 			&hasWipP50, &r.wipAgeP50Hours, &hasWipP90, &r.wipAgeP90Hours,
 			&hasCycleP50, &r.cycleP50Hours, &hasCycleP90, &r.cycleP90Hours,
 			&hasLeadP50, &r.leadP50Hours, &hasLeadP90, &r.leadP90Hours,
-			&r.bugCompletedRatio, &r.storyPointsCompleted); err != nil {
+			&r.bugCompletedRatio, &r.bugState, &r.storyPointsCompleted, &r.storyPointsState); err != nil {
 			return err
 		}
 		r.hasWipAgeP50, r.hasWipAgeP90 = hasWipP50 != 0, hasWipP90 != 0
@@ -680,8 +769,9 @@ ORDER BY p.id, wm.team_id`)
 					"cycle_time_p50_hours", "cycle_time_p90_hours",
 					"lead_time_p50_hours", "lead_time_p90_hours",
 				},
-				Grain: timeBound.effectiveGrain(grainDaily),
-				Rows:  teamRows,
+				Observations: flowMeasureReasonColumns(),
+				Grain:        timeBound.effectiveGrain(grainDaily),
+				Rows:         teamRows,
 			}),
 		}
 		addFlowWindowFields(fields, timeBound, windowByProject[projectKey])
@@ -718,7 +808,9 @@ ORDER BY p.id, wm.team_id`)
 // additive counts only, matching readProjectFlow's own "additive counts
 // summed, percentiles dropped" rule for the analogous team_breakdown.
 func (p *FlowProvider) queryProjectFlowDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string][]flowDailyRow, err error) {
-	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), toString(wm.day), toInt64(sum(wm.items_started)), toInt64(sum(wm.items_completed)), toInt64(sum(wm.wip_count_end_of_day)), avg(wm.bug_completed_ratio), toFloat64(sum(wm.story_points_completed))
+	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), toString(wm.day), toInt64(sum(wm.items_started)), toInt64(sum(wm.items_completed)), toInt64(sum(wm.wip_count_end_of_day)),
+	` + flowMeasureAggregateSQL("wm.", flowMeasureBugCompletedRatio, "avgIf") + `,
+	` + flowMeasureAggregateSQL("wm.", flowMeasureStoryPointsCompleted, "sumIf") + `
 FROM ` + projectIdentityJoinSQL() + `
 INNER JOIN (
 	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed,
@@ -732,7 +824,7 @@ ORDER BY p.id, wm.day DESC`)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r flowDailyRow
 		var projectKey string
-		if err := row.Scan(&projectKey, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay, &r.bugCompletedRatioAvg, &r.storyPointsCompletedSum); err != nil {
+		if err := row.Scan(&projectKey, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay, &r.bugCompletedRatioAvg, &r.bugState, &r.storyPointsCompletedSum, &r.storyPointsState); err != nil {
 			return err
 		}
 		byProject[projectKey] = append(byProject[projectKey], r)

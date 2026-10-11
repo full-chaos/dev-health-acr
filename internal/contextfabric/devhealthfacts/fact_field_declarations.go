@@ -254,6 +254,13 @@ func statusFields() []fieldDecl {
 		fStr("status_basis"),
 		declNullable(fBool("status_in_vocabulary")),
 		fStr("status_provenance"),
+		// status_since is the latest recorded entry into the current status;
+		// null when no transition into it is recorded (never a creation time,
+		// never zero). status_duration_seconds is measured against the
+		// request clock at read time.
+		declNullable(fStr("status_since")),
+		declNullable(fInt("status_duration_seconds", "seconds")),
+		fStr("status_since_basis"),
 	}
 }
 
@@ -611,6 +618,8 @@ func flowMeasureColumns() []columnDecl {
 		cNum("cycle_time_p90_hours", "hours"),
 		cNum("lead_time_p50_hours", "hours"),
 		cNum("lead_time_p90_hours", "hours"),
+		cNullable(cStr("bug_completed_ratio_unavailable_reason")),
+		cNullable(cStr("story_points_completed_unavailable_reason")),
 	}
 }
 
@@ -646,6 +655,8 @@ func flowFields() []fieldDecl {
 		cNon(cInt("wip_count_end_of_day", "count")),
 		cNon(cNum("bug_completed_ratio", "ratio")),
 		cNon(cNum("story_points_completed", "points")),
+		cNullable(cStr("bug_completed_ratio_unavailable_reason")),
+		cNullable(cStr("story_points_completed_unavailable_reason")),
 	)
 	scopeBreakdown := fTable("scope_breakdown", append([]columnDecl{
 		cStr("provider"),

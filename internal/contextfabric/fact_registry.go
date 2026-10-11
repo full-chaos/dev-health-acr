@@ -1119,6 +1119,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		r.recordFactRead(ctx, principal, planned.Kind, factReadCompleted, mergedState, query.Subjects, factsReturned, mergedState == SourceTruncated)
 	}
 	sortCanonicalFacts(bundle.Facts)
+	AssignFactIDs(bundle.Facts)
 	return bundle, nil
 }
 

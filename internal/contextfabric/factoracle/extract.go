@@ -493,6 +493,16 @@ func (t SeedTarget) query(ctx context.Context, database, statement string, body 
 	return strings.TrimSpace(string(text)), nil
 }
 
+// seededEmptyTables are tables a served provider reads that no compared pair
+// does: the seeded store creates them empty so the read runs, and the values
+// they would qualify are excluded from comparison by factPlan.
+// work_item_measure_capability qualifies the flow bug_completed_ratio and
+// story_points_completed, both excluded there; empty, the provider serves them
+// as capability_unknown.
+//
+// devhealthschema:not-a-production-replica the name indexes devhealthschema.ProductionColumns; nothing physical is declared here.
+var seededEmptyTables = []string{"work_item_measure_capability"}
+
 // Seed creates the database and the extract tables, with the declared
 // production types and engines, and loads the rows. ClickHouse parses its own
 // JSONEachRow, so no value passes through a Go type on the way in.
@@ -509,6 +519,11 @@ func (e *Extract) Seed(ctx context.Context, target SeedTarget) error {
 	}
 	names := ExtractTableNames()
 	for _, statement := range devhealthschema.DDL(names...) {
+		if err := target.exec(ctx, target.Database, statement, nil); err != nil {
+			return err
+		}
+	}
+	for _, statement := range devhealthschema.DDL(seededEmptyTables...) {
 		if err := target.exec(ctx, target.Database, statement, nil); err != nil {
 			return err
 		}
