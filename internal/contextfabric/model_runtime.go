@@ -1257,6 +1257,11 @@ func MaxClaimFactGroupSize(facts []CanonicalFact, claims []ClaimedFact) int {
 func ClaimsGroundedBeyondFirstGroupMember(facts []CanonicalFact, claims []ClaimedFact) int {
 	count := 0
 	for _, claim := range claims {
+		// A claim that names its fact by id was not decided by the group
+		// closure at all, whatever position that fact holds.
+		if claim.FactID != "" {
+			continue
+		}
 		if _, outcome, position := groundClaimAt(facts, claim); outcome == claimGrounded && position > 0 {
 			count++
 		}

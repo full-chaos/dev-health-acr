@@ -127,3 +127,13 @@ func TestCanonicalFactAndClaimedFactCarryTheIDOnTheWire(t *testing.T) {
 		t.Fatal("ClaimedFact has no optional fact_id")
 	}
 }
+
+func TestIDTargetedClaimIsNotCountedAsGroupClosure(t *testing.T) {
+	facts := factIDGroup()
+	if got := ClaimsGroundedBeyondFirstGroupMember(facts, []ClaimedFact{factIDClaim(facts, facts[1].ID, 0.75)}); got != 0 {
+		t.Fatalf("an id-targeted claim must not be attributed to the group closure, got %d", got)
+	}
+	if got := ClaimsGroundedBeyondFirstGroupMember(facts, []ClaimedFact{factIDClaim(facts, "", 0.75)}); got != 1 {
+		t.Fatalf("an id-less claim grounded on the second fact is the closure's decision, got %d", got)
+	}
+}

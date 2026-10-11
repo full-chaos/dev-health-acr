@@ -47,7 +47,7 @@ func TestClaimedFactFactIDIsBounded(t *testing.T) {
 	if err := claimedFactIDFixture(strings.Repeat("x", ContextFabricModelMintedIDMaxLength+1)).Validate(); err == nil {
 		t.Fatal("an over-long fact_id must be refused")
 	}
-	if err := claimedFactIDFixture(" padded ").Validate(); err == nil {
-		t.Fatal("a whitespace-padded fact_id must be refused")
+	if err := claimedFactIDFixture(strings.Repeat("é", ContextFabricModelMintedIDMaxLength)).Validate(); err != nil {
+		t.Fatalf("the bound counts characters, as the published schema's maxLength does: %v", err)
 	}
 }

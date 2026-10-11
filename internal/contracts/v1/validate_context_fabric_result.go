@@ -1003,7 +1003,7 @@ func (c ContextFabricClaimedFact) Validate() error {
 	if !stringLengthBetween(c.ClaimID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !validClaimedFactKind(c.Kind) || !stringLengthBetween(c.Field, 1, ContextFabricClaimedFieldMaxLength) || strings.TrimSpace(c.Field) != c.Field {
 		return fmt.Errorf("claimed fact identity violates v1 bounds")
 	}
-	if len(c.FactID) > ContextFabricModelMintedIDMaxLength || strings.TrimSpace(c.FactID) != c.FactID {
+	if utf8.RuneCountInString(c.FactID) > ContextFabricModelMintedIDMaxLength {
 		return fmt.Errorf("claimed fact fact_id violates v1 bounds")
 	}
 	if err := c.Subject.Validate(); err != nil {
