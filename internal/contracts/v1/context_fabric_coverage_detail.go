@@ -972,6 +972,10 @@ const (
 	// ContextFabricSynthesisFailureReceiptUnrecorded: the model call ran but
 	// its receipt was not recorded, so no text from it is served.
 	ContextFabricSynthesisFailureReceiptUnrecorded ContextFabricSynthesisFailureClass = "model_receipt_unrecorded"
+	// ContextFabricSynthesisFailureCallNotCompleted: the model call did not
+	// finish after the runtime's own retries (a per-call timeout, a call
+	// cancelled before it ended, a rate limit or an unavailable provider).
+	ContextFabricSynthesisFailureCallNotCompleted ContextFabricSynthesisFailureClass = "model_call_not_completed"
 )
 
 // ContextFabricRetryHint is the closed vocabulary of what a caller may expect
@@ -992,6 +996,7 @@ var contextFabricSynthesisFailureClasses = [...]ContextFabricSynthesisFailureCla
 	ContextFabricSynthesisFailureModelOutputInvalid,
 	ContextFabricSynthesisFailureRejected,
 	ContextFabricSynthesisFailureReceiptUnrecorded,
+	ContextFabricSynthesisFailureCallNotCompleted,
 }
 
 var contextFabricRetryHints = [...]ContextFabricRetryHint{
@@ -1028,7 +1033,7 @@ func validRetryHint(hint ContextFabricRetryHint) bool {
 // class must say whether asking again helps.
 func ContextFabricRetryHintFor(class ContextFabricSynthesisFailureClass) (ContextFabricRetryHint, error) {
 	switch class {
-	case ContextFabricSynthesisFailureModelOutputInvalid, ContextFabricSynthesisFailureReceiptUnrecorded:
+	case ContextFabricSynthesisFailureModelOutputInvalid, ContextFabricSynthesisFailureReceiptUnrecorded, ContextFabricSynthesisFailureCallNotCompleted:
 		return ContextFabricRetryMaySucceed, nil
 	case ContextFabricSynthesisFailureRejected:
 		return ContextFabricRetryUnlikelyToHelp, nil
