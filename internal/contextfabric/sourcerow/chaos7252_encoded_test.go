@@ -319,17 +319,6 @@ func TestEncodedAmbiguityIsRefused(t *testing.T) {
 	}
 }
 
-// project-team.v2 is minted but its source row is a separate change: it
-// reads nothing and the persisted record answers it.
-func TestProjectTeamV2StaysOnTheRecord(t *testing.T) {
-	w := newWorld()
-	_, id := mustMint(t, contractsv1.ContextFabricEvidenceEntityProjectTeamV2, "gitlab", "org:gitlab:1", "gl:team", "native")
-	_, decision := resolver(t, w).ResolveSourceRow(context.Background(), unrestricted, string(contractsv1.ContextFabricEvidenceEntityProjectTeamV2), id)
-	if decision.Reason != contextfabric.SourceRowKindOnRecord || len(w.calls) != 0 {
-		t.Fatalf("%+v, calls %v", decision, w.calls)
-	}
-}
-
 // Every routed ".v2" plan has a resolver spec, and every spec a routed plan:
 // a route without a spec would read nothing, a spec without a route is dead.
 func TestEncodedSpecsMatchThePlans(t *testing.T) {

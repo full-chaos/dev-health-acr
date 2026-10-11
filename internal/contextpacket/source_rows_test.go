@@ -88,6 +88,7 @@ func TestSourceRowQueryIDsAreTheCatalogTheOrganizationRowsAndTheV2Rows(t *testin
 		}
 		want = append(want, query.ID)
 	}
+	want = append(want, contextpacket.ProjectTeamSourceRowQueryID)
 	if strings.Join(ids, ",") != strings.Join(want, ",") {
 		t.Fatalf("SourceRowQueryIDs = %v, want %v", ids, want)
 	}
