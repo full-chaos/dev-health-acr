@@ -714,10 +714,16 @@ import (
 // synthesis_input_bounded coverage detail per fact kind read (given N of M); a
 // candidate saved under an earlier version carries only the prose limitation.
 //
-// v146 -> v147: a team rollup kind declares answer obligations, so a team driver or
+// v146 -> v147: a prior-period health read whose provider did not complete
+// (failed, cancelled, rejected, unconfigured, gapped, pruned) is served as
+// period_delta_transition=prior_read_failed with its reason, not as
+// unknown_prior (CHAOS-7404). A candidate saved under v146 may carry the false
+// unknown_prior and must not be reused.
+//
+// v147 -> v148: a team rollup kind declares answer obligations, so a team driver or
 // remaining-work question plans the blockers, pull request, incident and deployment
 // rollups; a candidate saved under an earlier version holds an answer without them.
-const QueryVersion = "devhealthfacts.clickhouse.v147"
+const QueryVersion = "devhealthfacts.clickhouse.v148"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
