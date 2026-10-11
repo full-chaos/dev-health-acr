@@ -89,6 +89,7 @@ func commitExplicitHandleSubjects(ctx context.Context, principal storage.Princip
 	digest := contextfabric.CommitDecisionDigest{CommitGate: commitGateExplicitHandleCensus}
 	if prior := digests.For(anchor); prior.CommitGate != "" {
 		digest.SearchTruncated, digest.AliasLookupComplete = prior.SearchTruncated, prior.AliasLookupComplete
+		digest.IdentityLookup = prior.IdentityLookup
 	}
 	resolution.Committed = append(kept, candidate.Subject)
 	resolution.Candidates = append(resolution.Candidates, candidate)

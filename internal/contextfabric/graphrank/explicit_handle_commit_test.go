@@ -325,14 +325,14 @@ func TestExplicitPullRequestHandleDigestCarriesTheResolutionWideFlags(t *testing
 	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: explicitHandleRepoID, Label: "full-chaos/dev-health-acr"}
 	bases := contextfabric.CommitBasisSet{}
 	digests := contextfabric.CommitDecisionDigestSet{}
-	digests.Record(repo, contextfabric.CommitDecisionDigest{CommitGate: "lone_floor", SearchTruncated: true, AliasLookupComplete: true})
+	digests.Record(repo, contextfabric.CommitDecisionDigest{CommitGate: "lone_floor", SearchTruncated: true, AliasLookupComplete: false, IdentityLookup: "graph_lag"})
 	resolution := commitExplicitHandleSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{repo}}, bases, digests)
 	pr := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: explicitHandlePRID}
 	if len(resolution.Committed) != 2 {
 		t.Fatalf("Committed = %#v", resolution.Committed)
 	}
 	got := digests.For(pr)
-	if got.CommitGate != commitGateExplicitHandleCensus || !got.SearchTruncated || !got.AliasLookupComplete {
+	if got.CommitGate != commitGateExplicitHandleCensus || !got.SearchTruncated || got.AliasLookupComplete || got.IdentityLookup != "graph_lag" {
 		t.Fatalf("digest = %#v, want the evidence_census gate carrying the resolution-wide flags", got)
 	}
 }

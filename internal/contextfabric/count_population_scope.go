@@ -383,7 +383,7 @@ func labelUniqueAnchor(frame *QuestionFrame, anchorKind SubjectKind, subject Sub
 		return false
 	}
 	digest := digests.For(subject)
-	if digest.CommitGate != "exact_index" || digest.IdentityProven || digest.SearchTruncated || !digest.AliasLookupComplete {
+	if digest.CommitGate != "exact_index" || digest.IdentityProven || digest.SearchTruncated || !(digest.AliasLookupComplete || digest.IdentityLookup == IdentityLookupTokenGraphLag) {
 		return false
 	}
 	if !anchorTermMatched(frame, subject, resolution) {

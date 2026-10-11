@@ -52,6 +52,9 @@ type graphReaderStub struct {
 	// off across the whole package, and the next test to need real gate
 	// behavior would get it silently wrong.
 	bases CommitBasisSet
+	// digests is the CommitDecisionDigestSet this double reports; nil by
+	// default.
+	digests CommitDecisionDigestSet
 }
 
 // provenCommitBases marks every listed subject as committed on a proven
@@ -105,7 +108,7 @@ func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, Inv
 	// own doc comment. Nil reads back as CommitBasisUnknown for every
 	// subject, the strict (must-be-affirmed) treatment. CHAOS-4087: nil
 	// CommitDecisionDigestSet, the identical nil-is-safe convention.
-	return g.resolution, g.material, g.bases, nil, nil
+	return g.resolution, g.material, g.bases, g.digests, nil
 }
 
 func (g graphReaderStub) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {

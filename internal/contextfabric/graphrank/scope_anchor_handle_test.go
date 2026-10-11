@@ -205,7 +205,10 @@ func TestAppendCensusAttestedCommitHonoursTheCandidateCap(t *testing.T) {
 	}
 	bases := contextfabric.CommitBasisSet{}
 	digests := contextfabric.CommitDecisionDigestSet{}
-	ok, displaced := appendCensusAttestedCommit(&resolution, contextfabric.SubjectCandidate{Subject: pr}, 2, bases, digests, true, true)
+	ok, displaced := appendCensusAttestedCommit(&resolution, contextfabric.SubjectCandidate{Subject: pr}, 2, bases, digests, true, IdentityLookupGraphLag)
+	if got := digests.For(pr); got.IdentityLookup != "graph_lag" || got.AliasLookupComplete || !got.SearchTruncated {
+		t.Fatalf("census digest = %+v, want the lookup state graph_lag carried", got)
+	}
 	if !ok {
 		t.Fatal("append = false, want the pull request committed by displacing the uncommitted candidate")
 	}
@@ -222,7 +225,7 @@ func TestAppendCensusAttestedCommitHonoursTheCandidateCap(t *testing.T) {
 		Candidates: []contextfabric.SubjectCandidate{{Subject: repo, State: contextfabric.ResolutionCommitted}},
 		Committed:  []contextfabric.SubjectRef{repo},
 	}
-	if okFull, gone := appendCensusAttestedCommit(&full, contextfabric.SubjectCandidate{Subject: pr}, 1, bases, digests, true, true); okFull || gone.CanonicalID != "" || len(full.Candidates) != 1 {
+	if okFull, gone := appendCensusAttestedCommit(&full, contextfabric.SubjectCandidate{Subject: pr}, 1, bases, digests, true, IdentityLookupComplete); okFull || gone.CanonicalID != "" || len(full.Candidates) != 1 {
 		t.Fatalf("append over a cap of committed-only candidates must refuse, got %#v", full)
 	}
 }

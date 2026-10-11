@@ -742,6 +742,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			digests = append(digests, contractsv1.ContextFabricCommitDecisionDigest{
 				Subject: subject, CommitGate: d.CommitGate, IdentityProven: d.IdentityProven,
 				SearchTruncated: d.SearchTruncated, AliasLookupComplete: d.AliasLookupComplete,
+				IdentityLookup: d.IdentityLookup,
 			})
 		}
 		result.SubjectResolution.CommitDecisionDigests = digests
