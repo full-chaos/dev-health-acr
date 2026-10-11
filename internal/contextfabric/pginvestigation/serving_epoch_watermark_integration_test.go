@@ -38,6 +38,10 @@ func TestSourceWatermarkSnapshot_ReadsOnlyTheServingEpoch(t *testing.T) {
 	setEpochCheckpointWatermark(t, ctx, db, principal.OrgID, 0, "linear", "legacy-wm")
 	setEpochCheckpointWatermark(t, ctx, db, principal.OrgID, 1, "linear", "serving-wm")
 	setEpochCheckpointWatermark(t, ctx, db, principal.OrgID, 2, "linear", "building-wm")
+	// Sources present only outside the serving epoch: independent of row
+	// order, they must be absent from the serving snapshot.
+	setEpochCheckpointWatermark(t, ctx, db, principal.OrgID, 0, "legacy-only", "legacy-only-wm")
+	setEpochCheckpointWatermark(t, ctx, db, principal.OrgID, 2, "building-only", "building-only-wm")
 
 	store := mustReuseStore(t, db, time.Hour)
 	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
@@ -82,6 +86,7 @@ func TestSourceWatermarkSnapshot_NoLifecycleRowReadsEpochZero(t *testing.T) {
 	principal := storage.Principal{OrgID: "org-serving-epoch-legacy"}
 	setEpochCheckpointWatermark(t, ctx, db, principal.OrgID, 0, "linear", "legacy-wm")
 	setEpochCheckpointWatermark(t, ctx, db, principal.OrgID, 3, "linear", "orphan-wm")
+	setEpochCheckpointWatermark(t, ctx, db, principal.OrgID, 3, "orphan-only", "orphan-only-wm")
 
 	store := mustReuseStore(t, db, time.Hour)
 	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
