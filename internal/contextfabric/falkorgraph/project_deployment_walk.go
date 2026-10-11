@@ -135,7 +135,7 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 
 // noRepositoryScope is the authorization scope a work item with no repository
 // carries.
-const noRepositoryScope = "acr-context-fabric:no-repository"
+const noRepositoryScope = contractsv1.ContextFabricNoRepositorySentinel
 
 func repositoryLess(n *node) bool {
 	repositories, _ := n.Properties[propAuthzRepos].([]string)

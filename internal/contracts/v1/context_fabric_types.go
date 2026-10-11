@@ -63,6 +63,36 @@ func ContextFabricIsReservedOrganizationScopeID(id string) bool {
 	return strings.HasPrefix(id, ContextFabricReservedOrganizationScopePrefix)
 }
 
+// The sentinel values a node or edge carries in its repository authorization
+// list when it has no repository to name. Each says WHY the repository is
+// absent; none is a repository. Minted by the projectors, read by the graph
+// authorization gate, so they are named once here.
+const (
+	ContextFabricNoRepositorySentinel           = "acr-context-fabric:no-repository"
+	ContextFabricOrphanedRepositorySentinel     = "acr-context-fabric:orphaned-repository"
+	ContextFabricUnresolvedRepositorySentinel   = "acr-context-fabric:unresolved-repository"
+	ContextFabricNoProjectOwnershipSentinel     = "acr-context-fabric:no-project-repository-ownership"
+	ContextFabricNoTeamOwnershipSentinel        = "acr-context-fabric:no-team-repository-ownership"
+	ContextFabricTeamOwnershipOverBoundSentinel = "acr-context-fabric:team-repository-ownership-over-bound"
+	ContextFabricReferencedEndpointStubSentinel = "acr-context-fabric:unresolved-referenced-endpoint"
+)
+
+// ContextFabricIsRepositoryAbsenceSentinel reports whether entry is one of the
+// named values above: an entry that records that no repository is present.
+func ContextFabricIsRepositoryAbsenceSentinel(entry string) bool {
+	switch entry {
+	case ContextFabricNoRepositorySentinel,
+		ContextFabricOrphanedRepositorySentinel,
+		ContextFabricUnresolvedRepositorySentinel,
+		ContextFabricNoProjectOwnershipSentinel,
+		ContextFabricNoTeamOwnershipSentinel,
+		ContextFabricTeamOwnershipOverBoundSentinel,
+		ContextFabricReferencedEndpointStubSentinel:
+		return true
+	}
+	return false
+}
+
 type ContextFabricInvestigationStatus string
 
 const (
