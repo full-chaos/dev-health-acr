@@ -65,6 +65,11 @@ var (
 	// ErrModelReceiptUnrecorded identifies a model call whose execution
 	// receipt was refused by its own validation or by the receipt sink.
 	ErrModelReceiptUnrecorded = errors.New("context fabric model receipt not recorded")
+	// ErrModelRetriesExhausted marks a call failure the runtime ended because
+	// its own attempt budget was used on a retryable class. It is the
+	// runtime's own terminal fact: a transient failure without it ended before
+	// the budget was used, and its error stands.
+	ErrModelRetriesExhausted = errors.New("context fabric model runtime retries exhausted")
 )
 
 // ModelInputOverflow is the error a model runtime returns in place of a call
@@ -2412,8 +2417,8 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		}
 	}
 	if err != nil {
-		if class, degrade := synthesisFailureDegradeClass(ctx, callErr, sinkErr); degrade {
-			return InvestigationResult{}, &SynthesisFailure{Class: class, Attempts: receipt.Attempts, Elapsed: time.Since(started), Receipt: receipt, Bound: bound, ReserveFired: reserveFired, cause: err}
+		if class, degrade := synthesisFailureDegradeClass(ctx, callErr, sinkErr, reserveFired); degrade {
+			return InvestigationResult{}, &SynthesisFailure{Class: class, Attempts: receipt.Attempts, Elapsed: time.Since(started), Receipt: receipt, Bound: bound, ReserveFired: reserveFired, CallDeadline: callDeadlineOf(callCtx, reserveFired), cause: err}
 		}
 		return InvestigationResult{}, err
 	}
@@ -3606,4 +3611,12 @@ func modelIdentity(provider, model string) string {
 func DigestModelValue(value []byte) string {
 	sum := sha256.Sum256(value)
 	return hex.EncodeToString(sum[:])
+}
+
+func callDeadlineOf(callCtx context.Context, reserveFired bool) time.Time {
+	if !reserveFired {
+		return time.Time{}
+	}
+	deadline, _ := callCtx.Deadline()
+	return deadline
 }

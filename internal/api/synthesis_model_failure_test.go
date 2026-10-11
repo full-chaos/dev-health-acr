@@ -143,15 +143,16 @@ func TestAModelCallThatSucceedsIsNotDegraded(t *testing.T) {
 // A transient call class, once the runtime's retries are used, is served as a
 // degraded answer that names the class and says a retry may succeed.
 func TestAModelCallThatFailsTransientlyIsServedAsADegradedAnswer(t *testing.T) {
+	exhausted := func(err error) error { return fmt.Errorf("%w: %w", cf.ErrModelRetriesExhausted, err) }
 	cases := []struct {
 		name string
 		err  error
 	}{
-		{name: "rate limited", err: fmt.Errorf("%w: provider status", cf.ErrModelRateLimited)},
-		{name: "unavailable", err: fmt.Errorf("%w: model generation failed", cf.ErrModelUnavailable)},
-		{name: "deadline exceeded", err: context.DeadlineExceeded},
-		{name: "cancelled before it ended", err: fmt.Errorf("%w: attempt", cf.ErrModelCancelled)},
-		{name: "rate limited beside an unrecorded receipt", err: errors.Join(fmt.Errorf("%w: provider status", cf.ErrModelRateLimited), fmt.Errorf("%w: record", cf.ErrModelReceiptUnrecorded))},
+		{name: "rate limited", err: exhausted(fmt.Errorf("%w: provider status", cf.ErrModelRateLimited))},
+		{name: "unavailable", err: exhausted(fmt.Errorf("%w: model generation failed", cf.ErrModelUnavailable))},
+		{name: "deadline exceeded", err: exhausted(context.DeadlineExceeded)},
+		{name: "cancelled before it ended", err: exhausted(fmt.Errorf("%w: attempt", cf.ErrModelCancelled))},
+		{name: "rate limited beside an unrecorded receipt", err: errors.Join(exhausted(fmt.Errorf("%w: provider status", cf.ErrModelRateLimited)), fmt.Errorf("%w: record", cf.ErrModelReceiptUnrecorded))},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -176,14 +177,18 @@ func TestAModelCallThatFailsTransientlyIsServedAsADegradedAnswer(t *testing.T) {
 	}
 }
 
-// Inputs no retry helps keep their error, and a caller that is gone is never
-// served an answer.
-func TestAModelCallThatFailsWithoutARetrySignalKeepsItsErrorStatus(t *testing.T) {
+// A transient end that came before the runtime's retries were used keeps its
+// error and its retry signal, and so do the inputs no retry helps.
+func TestAModelCallThatFailsBeforeRetriesAreUsedKeepsItsErrorStatus(t *testing.T) {
 	cases := []struct {
 		name       string
 		err        error
 		wantStatus int
 	}{
+		{name: "rate limited", err: fmt.Errorf("%w: provider status", cf.ErrModelRateLimited), wantStatus: http.StatusTooManyRequests},
+		{name: "unavailable", err: fmt.Errorf("%w: model generation failed", cf.ErrModelUnavailable), wantStatus: http.StatusServiceUnavailable},
+		{name: "deadline exceeded", err: context.DeadlineExceeded, wantStatus: http.StatusGatewayTimeout},
+		{name: "rate limited beside an unrecorded receipt", err: errors.Join(fmt.Errorf("%w: provider status", cf.ErrModelRateLimited), fmt.Errorf("%w: record", cf.ErrModelReceiptUnrecorded)), wantStatus: http.StatusTooManyRequests},
 		{name: "an input no bounding fits", err: &cf.ModelInputOverflow{Bytes: 900_000, MaxBytes: 524_288}, wantStatus: http.StatusInternalServerError},
 		{name: "a bare runtime error", err: errors.New("generator closed"), wantStatus: http.StatusInternalServerError},
 	}

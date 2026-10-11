@@ -634,6 +634,9 @@ func buildContextFabricGraphReader(request buildRequest, postgres postgresCompon
 }
 
 func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, *pginvestigation.Store, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, *pgclarification.Sink, *pgstructureselection.Sink, error) {
+	if err := contextfabric.ValidateSynthesisCompositionReserve(request.config.RequestTimeout); err != nil {
+		return nil, nil, nil, nil, nil, nil, err
+	}
 	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
 		return nil, nil, nil, nil, nil, nil, nil
 	}

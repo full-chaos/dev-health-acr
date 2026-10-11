@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"time"
@@ -61,13 +62,25 @@ func synthesisFailureWarning(class SynthesisFailureClass) string {
 	return "answer text unavailable: the model call failed (class: " + string(class) + "); the sources that were read are listed in coverage"
 }
 
-// synthesisCompositionReserve is the slice of the request deadline the model
-// call never uses: the degraded answer is composed and stored inside it. A
-// call that is still running when only this slice is left is ended, and the
+// SynthesisCompositionReserveSeconds is the slice of the request deadline the
+// model call never uses: the degraded answer is composed and stored inside
+// it. A call still running when only this slice is left is ended, and the
 // failure that follows is served as a degraded answer, never as a timeout
 // with no answer. A dead context composes nothing, so the slice is held back
 // before the deadline, not after it.
-const synthesisCompositionReserve = 5 * time.Second
+const SynthesisCompositionReserveSeconds = 5
+
+const synthesisCompositionReserve = SynthesisCompositionReserveSeconds * time.Second
+
+// ValidateSynthesisCompositionReserve fails when the request timeout cannot
+// hold the reserve: a reserve at or above the request timeout would end every
+// model call before it began.
+func ValidateSynthesisCompositionReserve(requestTimeout time.Duration) error {
+	if requestTimeout <= synthesisCompositionReserve {
+		return fmt.Errorf("request timeout %s must exceed the synthesis composition reserve of %ds", requestTimeout, SynthesisCompositionReserveSeconds)
+	}
+	return nil
+}
 
 // boundSynthesisCallContext returns the context the model call runs under:
 // the request context ended synthesisCompositionReserve before its deadline.
@@ -94,11 +107,11 @@ func boundSynthesisCallContext(ctx context.Context) (context.Context, context.Ca
 //
 // Served: a call failure the runtime will not retry (invalid output, a draft
 // that fails ACR's bounds after the runtime's own re-draw budget), a transient
-// call class once the runtime's retries are used (timeout, cancel, rate limit,
-// unavailable), and a receipt that was not recorded after a call that itself
+// call class once the runtime says its retries are used (ErrModelRetriesExhausted)
+// or the reserve ended the call (timeout, cancel, rate limit, unavailable), and a receipt that was not recorded after a call that itself
 // succeeded. Not served: a caller that is gone, and an input that no bounding
 // fits.
-func synthesisFailureDegradeClass(ctx context.Context, callErr, sinkErr error) (SynthesisFailureClass, bool) {
+func synthesisFailureDegradeClass(ctx context.Context, callErr, sinkErr error, reserveFired bool) (SynthesisFailureClass, bool) {
 	if ctx.Err() != nil {
 		return "", false
 	}
@@ -114,9 +127,16 @@ func synthesisFailureDegradeClass(ctx context.Context, callErr, sinkErr error) (
 	for _, transient := range []error{
 		context.Canceled, context.DeadlineExceeded, ErrModelCancelled, ErrModelRateLimited, ErrModelUnavailable,
 	} {
-		if errors.Is(callErr, transient) {
+		if !errors.Is(callErr, transient) {
+			continue
+		}
+		// A transient end is served only when it is final: the runtime used
+		// its attempt budget, or the composition reserve ended the call. One
+		// that ended earlier keeps its error and its retry signal.
+		if reserveFired || errors.Is(callErr, ErrModelRetriesExhausted) {
 			return SynthesisFailureCallNotCompleted, true
 		}
+		return "", false
 	}
 	switch {
 	case errors.Is(callErr, ErrSynthesisRejected):
@@ -191,6 +211,9 @@ type SynthesisFailure struct {
 	// and not by its own timeout or the provider: the degraded answer says so
 	// in the log.
 	ReserveFired bool
+	// CallDeadline is the deadline the model call ran under when the reserve
+	// bounded it.
+	CallDeadline time.Time
 	cause        error
 }
 
@@ -208,7 +231,7 @@ type DegradedSynthesizer interface {
 // status and the fixed warning.
 func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal storage.Principal, input SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
 	if !failure.DeferEvent {
-		r.recordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Attempts: failure.Attempts, ElapsedMS: failure.Elapsed.Milliseconds(), Rule: failure.Rule, Stage: failure.Stage, ReserveFired: failure.ReserveFired})
+		r.recordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Attempts: failure.Attempts, ElapsedMS: failure.Elapsed.Milliseconds(), Rule: failure.Rule, Stage: failure.Stage, ReserveFired: failure.ReserveFired, CallDeadline: failure.CallDeadline})
 	}
 	draft := degradedSynthesisDraft(failure.Class)
 	claims, evidence, truncated := mintDegradedFactClaims(input.Facts.Facts, degradedClaimLimit(input))
@@ -247,8 +270,10 @@ type SynthesisModelFailureEvent struct {
 	// this failure: the closed rule token and where it was caught.
 	Rule  string
 	Stage string
-	// ReserveFired is set when the composition reserve ended the call.
+	// ReserveFired is set when the composition reserve ended the call;
+	// CallDeadline is then the deadline the call ran under.
 	ReserveFired bool
+	CallDeadline time.Time
 }
 
 func (r RuntimeAnswerSynthesizer) recordSynthesisModelFailure(ctx context.Context, principal storage.Principal, event SynthesisModelFailureEvent) {
