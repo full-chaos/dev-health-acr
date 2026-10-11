@@ -49,7 +49,7 @@ func TestWorkItemFreshEnginePostgresReuseAcrossInstances(t *testing.T) {
 			if initial.Reused || initial.Cohort == nil || len(initial.Cohort.Members) != 1 {
 				t.Fatalf("fresh producer result=%+v", initial)
 			}
-			if !reflect.DeepEqual(first.fixture.client.phases, []string{"s1", "status", "work"}) || first.interpreter.calls != 1 || first.synthesisCalls != 1 {
+			if !reflect.DeepEqual(first.fixture.client.phases, []string{"s1", "status", "status_since", "work"}) || first.interpreter.calls != 1 || first.synthesisCalls != 1 {
 				t.Fatalf("fresh phases=%v interpret=%d synthesize=%d", first.fixture.client.phases, first.interpreter.calls, first.synthesisCalls)
 			}
 			// A scoped request looks up under its scope key and then under the
@@ -152,12 +152,12 @@ func TestWorkItemFreshEnginePostgresReuseAcrossInstances(t *testing.T) {
 			wantDecision := "hit"
 			wantFresh := 0
 			if scenario == "membership_changed" {
-				wantPhases = []string{"s1", "s1", "status", "work"}
+				wantPhases = []string{"s1", "s1", "status", "status_since", "work"}
 				wantDecision = "membership_changed"
 				wantFresh = 1
 			}
 			if scenario == "requested_scope_changed" {
-				wantPhases = []string{"s1", "status", "work"}
+				wantPhases = []string{"s1", "status", "status_since", "work"}
 				wantDecision = "digest_changed"
 				wantFresh = 1
 			}

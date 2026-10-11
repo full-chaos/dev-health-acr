@@ -230,7 +230,7 @@ func newWorkItemReadLimitFixture(t *testing.T, ctx context.Context) (*runtimecli
 	if err != nil {
 		t.Fatalf("open work-item read-limit production query client (container_id=%q): %v", containerID, err)
 	}
-	for _, statement := range devhealthschema.DDL("repos", "work_items", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
+	for _, statement := range devhealthschema.DDL("repos", "work_items", "work_item_transitions", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create work-item read-limit production table (container_id=%q): %v\n%s", containerID, err, statement)
 		}

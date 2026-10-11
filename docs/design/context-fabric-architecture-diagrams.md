@@ -780,7 +780,7 @@ source for the SAME kind).
 | --- | --- | --- |
 | identity | `repos`, `work_items`; a repository fact also carries an `owning_teams` table (active teams that currently own it: `team_repo_ownership` ⋈ `teams`, never membership), capped per repository with `owning_teams_omitted_count` for the rest | repository, work_item |
 | membership | `repos`, `work_items` ⋈ `repos` | repository, work_item |
-| status | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
+| status | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join; **+`work_item_transitions`** (a second, keyed read over ONLY the (repository, work item) pairs the scoped status read returned in the same request — no authorization relation repeated, same SETTINGS, probe limit one past the output bound): `status_since` is the occurred_at of the item's latest transition when that transition enters its current status, `status_duration_seconds` is measured at read time, `status_since_basis` is `transition_observed`, `no_transition_recorded` (no rows) or `transition_inconsistent` (latest transition went elsewhere or is dated after the clock); null is never zero and never the creation time | work_item |
 | work | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
 | actual_completion | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
 | blockers | `work_item_dependencies`; team: ⋈ `work_items` over the repositories the team owns (`team_repo_ownership`), counting OPEN blockers only (blocking item not done or canceled; `blocker_status_basis`), the excluded edges counted apart | work_item, **team** |

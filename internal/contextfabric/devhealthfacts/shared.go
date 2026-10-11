@@ -808,14 +808,18 @@ import (
 // synthesized claim may cite it (fact_id); a candidate saved under an earlier version holds
 // facts and claims without ids.
 //
-// v165 -> v166: the repositories a project or team scope reaches follow the
+// v165 -> v166: a work item's status fact adds status_since, status_duration_seconds and
+// status_since_basis; a candidate saved under v165 holds a status fact without the time in
+// the current status and must not be reused.
+//
+// v166 -> v167: the repositories a project or team scope reaches follow the
 // entity tree. A project reaches the repositories of its issues' linked pull
 // request rows (work_graph_issue_pr), not the issue's own repository column; a
 // team reaches the repositories it owns and those its owned projects' issues
 // link to, not the repositories of its attributed issues. Issues with no link
 // row are counted as a missing next hop. A project or team answer saved under
-// v165 may rest on a repository the tree does not reach.
-const QueryVersion = "devhealthfacts.clickhouse.v166"
+// v166 may rest on a repository the tree does not reach.
+const QueryVersion = "devhealthfacts.clickhouse.v167"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
