@@ -298,7 +298,7 @@ func TestTheSameLabelNamedCountQuestionIsCertifiedTheSameWayWhenAskedTwice(t *te
 	}
 }
 
-func TestALabelNamedCountWithASameLabelClaimantMissingFromTheGraphIsNotCertified(t *testing.T) {
+func TestALabelNamedCountWithASameLabelClaimantMissingFromTheGraphIsCertified(t *testing.T) {
 	adapter := newFakeAdapter(t, seedOwnedRepository().conn())
 	adapter.config.IdentityUniverse = func(context.Context, string) ([]graphrank.IdentityRow, time.Time, bool, error) {
 		return []graphrank.IdentityRow{
@@ -311,7 +311,7 @@ func TestALabelNamedCountWithASameLabelClaimantMissingFromTheGraphIsNotCertified
 		"how many teams own repository "+routeOwnedSlug, routeOwnershipMessage)
 	value, claimed, outcome := servedCount(answer)
 	t.Logf("committed %+v; count claimed=%t value=%d outcome=%q", answer.committed, claimed, value, outcome)
-	if claimed || outcome == contractsv1.ContextFabricRequirementSatisfied {
-		t.Fatalf("count claimed=%t outcome=%q with a same-label claimant missing from the graph, want it not certified", claimed, outcome)
+	if !claimed || value != 1 || outcome != contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("count claimed=%t value=%d outcome=%q with a same-label claimant missing from the graph, want a certified 1", claimed, value, outcome)
 	}
 }
