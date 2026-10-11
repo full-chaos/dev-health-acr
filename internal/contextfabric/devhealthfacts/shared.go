@@ -758,12 +758,16 @@ import (
 // budget refusal names its stage and measured sections; a candidate saved under an
 // earlier version carries the tables.
 //
-// v155 -> v156: a model call that ends on a transient class once the runtime's
+// v155 -> v156: the team blockers rollup counts only open blockers and serves the
+// excluded-by-status count and the status basis; a candidate saved under an earlier
+// version holds the unfiltered counts.
+//
+// v156 -> v157: a model call that ends on a transient class once the runtime's
 // attempts are used, or that the composition reserve ends before the request
 // deadline, is served as a degraded answer with failure class
 // model_call_not_completed and retry_may_succeed, where it was an error with no
 // stored answer; a candidate saved under an earlier version cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v156"
+const QueryVersion = "devhealthfacts.clickhouse.v157"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
