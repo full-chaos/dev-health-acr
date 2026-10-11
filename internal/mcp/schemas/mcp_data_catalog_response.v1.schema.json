@@ -731,10 +731,19 @@
         },
         "grant_class": {
           "type": "string",
-          "description": "unrestricted, or restricted to a set of repositories.",
+          "description": "Repository grant class only: unrestricted, or restricted to a set of repositories. It does not say whether run_operation can serve you; effective_access does.",
           "enum": [
             "unrestricted",
             "restricted"
+          ]
+        },
+        "effective_access": {
+          "type": "string",
+          "description": "What run_operation does for your credential now: data_read (can run), no_data_read (data:read scope missing), not_servable (not available in this deployment).",
+          "enum": [
+            "data_read",
+            "no_data_read",
+            "not_servable"
           ]
         }
       }

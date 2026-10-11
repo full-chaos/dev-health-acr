@@ -328,8 +328,52 @@ type CatalogVersions struct {
 
 // CatalogCallerView is the caller section: scopes and class only.
 type CatalogCallerView struct {
-	Scopes     []string    `json:"scopes"`
+	Scopes []string `json:"scopes"`
+	// GrantClass is the repository grant class only. It says nothing about
+	// whether the credential can run an operation; EffectiveAccess does.
 	GrantClass CallerClass `json:"grant_class"`
+	// EffectiveAccess is what run_operation does for this credential now,
+	// derived from the same decision as operations.available/reason.
+	EffectiveAccess CatalogEffectiveAccess `json:"effective_access"`
+}
+
+// CatalogEffectiveAccess is the closed vocabulary of the caller's effective
+// run_operation access.
+type CatalogEffectiveAccess string
+
+const (
+	// EffectiveAccessDataRead: run_operation can serve this credential.
+	EffectiveAccessDataRead CatalogEffectiveAccess = "data_read"
+	// EffectiveAccessNoDataRead: the credential lacks the data:read scope.
+	EffectiveAccessNoDataRead CatalogEffectiveAccess = "no_data_read"
+	// EffectiveAccessNotServable: this deployment cannot serve run_operation.
+	EffectiveAccessNotServable CatalogEffectiveAccess = "not_servable"
+)
+
+// catalogOperationsReason is the one decision of whether run_operation can
+// serve the caller: "" when it can, else the unavailable reason. Both the
+// operations section and the caller's effective access read it.
+func catalogOperationsReason(catalogue *Catalogue, caller CatalogCaller) string {
+	switch {
+	case catalogue == nil || !caller.OperationsServable:
+		return CatalogUnavailableQueryNotConfigure
+	case !caller.GateComposed:
+		return CatalogUnavailableGateMissing
+	case !caller.DataRead:
+		return CatalogUnavailableScopeMissing
+	}
+	return ""
+}
+
+func catalogEffectiveAccess(reason string) CatalogEffectiveAccess {
+	switch reason {
+	case "":
+		return EffectiveAccessDataRead
+	case CatalogUnavailableScopeMissing:
+		return EffectiveAccessNoDataRead
+	default:
+		return EffectiveAccessNotServable
+	}
 }
 
 // catalogRelationshipEnds declares the end kinds of the 13 relationship
@@ -428,7 +472,7 @@ func BuildDataCatalog(catalogue *Catalogue, caller CatalogCaller, sections []str
 		ContractVersion: DataContractVersion,
 		Sections:        append([]string{}, sections...),
 		Versions:        CatalogVersions{Contract: DataContractVersion, CatalogueContract: OperationCatalogueContract},
-		Caller:          CatalogCallerView{Scopes: catalogScopes(caller.Scopes), GrantClass: class},
+		Caller:          CatalogCallerView{Scopes: catalogScopes(caller.Scopes), GrantClass: class, EffectiveAccess: catalogEffectiveAccess(catalogOperationsReason(catalogue, caller))},
 		Consistency:     ConsistencyBestEffort,
 		UntrustedContent: CatalogUntrustedLabel{
 			Untrusted: true, Notice: DataCatalogUntrustedNotice,
@@ -501,15 +545,7 @@ func catalogDeadlineSeconds(catalogue *Catalogue) int {
 
 func buildCatalogOperations(catalogue *Catalogue, caller CatalogCaller, class CallerClass) *CatalogOperations {
 	section := &CatalogOperations{CallerClass: class, Available: true, Operations: []CatalogOperation{}, NotServed: []CatalogNotServed{}, RefusedShapes: []CatalogRefusedShape{}}
-	reason := ""
-	switch {
-	case catalogue == nil || !caller.OperationsServable:
-		reason = CatalogUnavailableQueryNotConfigure
-	case !caller.GateComposed:
-		reason = CatalogUnavailableGateMissing
-	case !caller.DataRead:
-		reason = CatalogUnavailableScopeMissing
-	}
+	reason := catalogOperationsReason(catalogue, caller)
 	if reason != "" {
 		section.Available, section.Reason = false, reason
 	}

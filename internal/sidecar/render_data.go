@@ -175,8 +175,9 @@ func RenderDataCatalogSummary(raw json.RawMessage, max int) string {
 			FindPageMax     int `json:"find_page_max"`
 		} `json:"limits"`
 		Caller struct {
-			Scopes     []string `json:"scopes"`
-			GrantClass string   `json:"grant_class"`
+			Scopes          []string `json:"scopes"`
+			GrantClass      string   `json:"grant_class"`
+			EffectiveAccess string   `json:"effective_access"`
 		} `json:"caller"`
 	}
 	if err := json.Unmarshal(raw, &view); err != nil {
@@ -188,7 +189,7 @@ func RenderDataCatalogSummary(raw json.RawMessage, max int) string {
 	for _, scope := range view.Caller.Scopes {
 		scopes = append(scopes, plainToken(scope))
 	}
-	t.line(fmt.Sprintf("Your grant class: %s. Scopes: %s.", plainToken(view.Caller.GrantClass), strings.Join(scopes, ", ")))
+	t.line(fmt.Sprintf("Repository grant: %s. Scopes: %s. run_operation: %s.", plainToken(view.Caller.GrantClass), strings.Join(scopes, ", "), runOperationState(view.Caller.EffectiveAccess)))
 	if ops := view.Operations; ops != nil {
 		state := "yes"
 		if !ops.Available {
@@ -543,4 +544,19 @@ func completenessText(state, reason string) string {
 		return plainToken(state)
 	}
 	return plainToken(state) + " (" + plainToken(reason) + ")"
+}
+
+// runOperationState words the caller's effective run_operation access. An
+// absent or unknown value (an older server) says so and never claims access.
+func runOperationState(access string) string {
+	switch access {
+	case "data_read":
+		return "allowed"
+	case "no_data_read":
+		return "refused (scope_missing_data_read)"
+	case "not_servable":
+		return "not available in this deployment"
+	default:
+		return "unknown"
+	}
 }

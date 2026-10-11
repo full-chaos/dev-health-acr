@@ -188,7 +188,7 @@ func TestDataCatalogAvailabilityAndCaller(t *testing.T) {
 	sections, _ := ParseCatalogSections("")
 	built := BuildDataCatalog(cat, CatalogCaller{PrincipalClass: ClassRestricted, Scopes: []string{"data:read", "context:read", "acme/secret-repo", "data:read"}, DataRead: true, OperationsServable: true, GateComposed: true}, sections)
 	encoded, _ := json.Marshal(built.Caller)
-	if string(encoded) != `{"scopes":["context:read","data:read"],"grant_class":"restricted"}` {
+	if string(encoded) != `{"scopes":["context:read","data:read"],"grant_class":"restricted","effective_access":"data_read"}` {
 		t.Fatalf("caller section %s", encoded)
 	}
 }
