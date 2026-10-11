@@ -111,6 +111,9 @@ func TestACountOverARepositoryNoTeamOwnsIsAZeroWhenTheOwnershipReadWasComplete(t
 	if answer.result.Cohort == nil || !answer.result.Cohort.Complete || len(answer.result.Cohort.Members) != 0 {
 		t.Fatalf("cohort = %+v, want a resolved empty complete cohort", answer.result.Cohort)
 	}
+	if answer.result.Cohort.Rationale != ownershipZeroOwnersRationale {
+		t.Fatalf("rationale = %q, want the zero-owner rationale that names the separate projection pass", answer.result.Cohort.Rationale)
+	}
 }
 
 func TestAnInactiveOwnerIsNotCountedAndIsDisclosed(t *testing.T) {

@@ -1423,14 +1423,16 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		cohort.Rationale = teamAnchorCohortRationaleFor(declaredCohortKindForRouting)
 	}
 	if cohort == nil && ownershipZeroOwnersResolved {
-		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectTeam, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{}, Complete: true}
+		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectTeam, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{}, Rationale: ownershipZeroOwnersRationale, Complete: true}
 	}
 	if cohort != nil && ownershipRoutedRepoSlug != "" {
 		cohort.Exclusions = ownerExclusionsOutsideMembers(ownershipExclusions, cohort.Members)
 		for i := range cohort.Members {
 			cohort.Members[i].InclusionReasons = []string{ownershipInclusionReason}
 		}
-		cohort.Rationale = ownershipCohortRationale
+		if len(cohort.Members) > 0 {
+			cohort.Rationale = ownershipCohortRationale
+		}
 	}
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here
@@ -1811,6 +1813,12 @@ func soleCommittedKind(committed []contextfabric.SubjectRef) contextfabric.Subje
 // ownershipInclusionReason is the inclusion reason of a team the ownership
 // read admitted.
 const ownershipInclusionReason = "Team that owns the repository the question names."
+
+// ownershipZeroOwnersRationale is the rationale of an ownership-routed cohort
+// with no member: the repository's ownership edges are projected from the
+// ownership records in a pass of their own, apart from the repository, so the
+// zero is stated beside the projection it was read from.
+const ownershipZeroOwnersRationale = "No team ownership record names the repository in the authorized Context Fabric graph. Repositories and their ownership are projected in separate passes, so an ownership recorded very recently may not be in the graph yet."
 
 // ownershipCohortRationale is the rationale of an ownership-routed cohort.
 const ownershipCohortRationale = "Teams were read from the ownership records of the repository the question names in the authorized Context Fabric graph."
