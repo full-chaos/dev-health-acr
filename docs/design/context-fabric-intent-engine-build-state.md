@@ -326,7 +326,9 @@ S7c invariants at once — every narrowing stage **appends**, and completeness i
 from the whole set at the surface that serves the answer. The document-level join
 (`validateRequirementJoin`, `internal/contracts/v1/validate_context_fabric_result.go`) is **total**
 in both directions: every attributed outcome identity must name a planned requirement, and every
-planned requirement must be accounted for. Both arrays are bounded at **200**
+planned requirement must be accounted for. It also checks each attributed row against its
+requirement's declared kind: a row for a computed obligation must sit on a requirement the plan
+declares as computed. Both arrays are bounded at **200**
 (`ContextFabricPlanRequirementsMaxCount`, `ContextFabricPlanRequirementOutcomeMaxCount`).
 
 **Four reducing sites, one derivation — the derivation is an OPEN CHANGE.** A sweep of every site
@@ -340,10 +342,20 @@ represent three of four.
 **The four sites do not all append the same number of rows, and the difference is deliberate.**
 Three append one row each. The projection appends **one row per non-zero omission** — it iterates
 its own omission set and appends a row for each — because it cuts by a byte budget over the finished
-document and does not know which requirement a dropped item was serving. Its rows therefore carry
-**no requirement identity at all**, which the code states positively rather than leaving to
+document and does not know which requirement a dropped item was serving. Its omission rows therefore
+carry **no requirement identity at all**, which the code states positively rather than leaving to
 inference: attaching the nearest plausible requirement would be a wrong attribution, and a reader
-acts on those. Verified on `origin/main` at
+acts on those. The one exception is beside a cut member set: for each assembled-result `count` row
+that states more members than the projection serves, the projection also appends a projection-stage
+row that copies that row's own requirement identity (a count is membership-bound, so a cut member
+set is a reduction of exactly that requirement) and carries the served member count. Nothing
+canonical is rewritten; the later row is the requirement's effective account.
+
+When the omission and count rows do not fit under the 200-row cap, canonical rows are never
+rewritten: the omission rows are merged into one row per impact kind, the count rows take whatever
+room remains, and the answer's limitations carry "Projection outcome rows were cut to the 200-row
+cap" with the merged and not-itemized counts, because at a full canonical set no row has room to say
+so. Verified on `origin/main` at
 `internal/contextfabric/answerprojection/outcome_append.go` (`appendProjectionOutcomes`).
 
 The refinement mirrors the enclosing row's full cause model — ordering, ceiling, coverage, at least

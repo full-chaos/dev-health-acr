@@ -1,6 +1,6 @@
 # ACR MCP Sidecar
 
-The ACR MCP sidecar (`acr-mcp`) is a Model Context Protocol server that runs as a subprocess in your IDE or agent environment. It provides read-only access to Dev Health ACR data through four tools: `context_for_task`, `source_evidence`, `investigate_question`, and `investigation_result`.
+The ACR MCP sidecar (`acr-mcp`) is a Model Context Protocol server that runs as a subprocess in your IDE or agent environment. It provides read-only access to Dev Health ACR data through these tools: `context_for_task` and `source_evidence` on every deployment, and, when the hosted API advertises them for the credential, `investigate_question`, `investigate_with_interpretation`, `investigation_result`, `read_facts`, `read_relationships`, `data_catalog`, `find_subjects`, `run_operation` and `graphql_query`. `record_episode` is a disabled-by-default write tool (see [record_episode](#record_episode)).
 
 ## Quick Start
 
@@ -67,6 +67,9 @@ Path to an additional PEM-encoded CA bundle file, layered on top of the system t
 
 **ACR_API_ALLOW_INSECURE_LOOPBACK**
 Deprecated compatibility boolean (`true`/`false`). A plain `http://` `ACR_API_URL` is automatically accepted when its host is loopback (`127.0.0.1`, `::1`, or `localhost`), so this variable is no longer required. Non-loopback HTTP remains rejected regardless of this value.
+
+**ACR_CREDENTIAL_LIFECYCLE_LOCK_PATH**
+macOS/Linux only. Alternate path of the credential lifecycle lock file shared by `login`, `login --refresh`, `logout` and credential loads (see [Credential Management](#credential-management)). Default: `/var/tmp/acr-credential-lifecycle-<uid>.lock`. The directory must be a real directory owned by the user or root and not group- or other-writable unless sticky.
 
 **ACR_SIDECAR_CLIENT_NAME**
 Identifies the sidecar client in the hosted API client-info payload. Default: `dev-health-acr-mcp`.
@@ -235,6 +238,19 @@ that live local contention and tells you to stop the other process or wait for
 it to finish before retrying. A process that has actually terminated releases
 the operating-system lock immediately; an abandoned browser approval does not
 require deleting a lock file or bypassing the concurrency guard.
+
+The same lock is shared with read-only credential loads. A load that reads the
+keyring or token file (an `ACR_API_TOKEN` environment token takes no lock) holds
+the lock in shared mode, so any number of loads run together while a `login`,
+`login --refresh` or `logout` holds it exclusively. A load waits up to 2 seconds
+for such a mutation to finish. A tool call that is still refused after that wait
+(or finds another operation active) returns an `unavailable` tool error,
+"another acr-mcp credential operation is in progress; retry shortly"; `doctor`
+reports the same condition as `credential_unavailable`. On macOS and Linux the
+lock file defaults to `/var/tmp/acr-credential-lifecycle-<uid>.lock`;
+`ACR_CREDENTIAL_LIFECYCLE_LOCK_PATH` names another path, for example to keep a
+process off the host-wide lock. Its directory must be a real directory owned by
+the user or root, and not writable by group or others unless it is sticky.
 
 **The verification address is validated before it is printed.** It is
 server-supplied data that this command renders into your terminal and hands to a
@@ -474,15 +490,19 @@ Outputs the static, network-free default tool surface:
   "commit": "unknown",
   "build_date": "unknown",
   "transport": "stdio",
-  "enabled_tools": ["context_for_task", "source_evidence", "investigate_question", "investigation_result"],
+  "enabled_tools": ["context_for_task", "source_evidence"],
   "disabled_tools": ["record_episode"],
   "status": "read-only"
 }
 ```
 
-`status` is a descriptor of the static, network-free default tool surface: `read-only` means the enabled read tools never write. `enabled_tools` lists only the tools available on every deployment. `investigate_question` and `investigation_result` are deliberately absent from it: they require a hosted API with Context Fabric composed, so an offline binary cannot honestly claim them. They appear in the connected client's tools/list whenever the hosted API advertises them. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; `record_episode` may be enabled at runtime if all four gates pass (see [record_episode](#record_episode) below); plain doctor (or `doctor --live`) diagnoses the hosted gates.
+`status` is a descriptor of the static, network-free default tool surface: `read-only` means the enabled read tools never write. `enabled_tools` lists only the tools available on every deployment. Every other read tool (`investigate_question`, `investigate_with_interpretation`, `investigation_result`, `read_facts`, `read_relationships`, `data_catalog`, `find_subjects`, `run_operation`, `graphql_query`) is deliberately absent from it: each needs a hosted API that advertises it for the credential, so an offline binary cannot honestly claim them. They appear in the connected client's tools/list whenever the hosted API advertises them. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; `record_episode` may be enabled at runtime if all four gates pass (see [record_episode](#record_episode) below); plain doctor (or `doctor --live`) diagnoses the hosted gates.
 
 ## Tools
+
+`context_for_task` and `source_evidence` are registered on every deployment. Every other read tool is registered only when the hosted capabilities response advertises it for the connected credential, so `tools/list` shows exactly what works: `investigate_question`, `investigate_with_interpretation` and `investigation_result` need Context Fabric investigations composed; `read_facts`, `read_relationships`, `data_catalog` and `find_subjects` are the direct data tools of a deployment with a graph composed; `run_operation` and `graphql_query` also need the `data:read` scope.
+
+Every tool decodes its arguments strictly: a key the tool's request schema does not declare, at any depth, is refused with a `validation` tool error that names the key (quoted, at most 64 characters), and so is anything after the one JSON value. A misplaced field is never dropped silently and the default served instead. The wire schemas set `additionalProperties: false`, so a valid call never trips this.
 
 ### context_for_task
 
@@ -585,6 +605,46 @@ names), and the sentence about lower link tiers only when a
 weaker-tier member was cut before a stronger one. Both fields are absent when
 the read did not measure a population.
 
+A flat cohort listing (a "which teams ..." list with no groups; not a work-item
+list, a matched pair or a grouped status list) is the answer itself, so it is
+planned to the caller's `max_cohort_members` (the plan carries at most 100
+members) and `ACR_MAX_ITEMS` does not shorten it either. Its evidence
+references are reserved before any driver is offered: when the caller sets no
+`max_evidence_refs`, this tool's budget is the served member count plus 25
+(the default), up to the ceiling of 500. A member is never dropped for the
+evidence budget; a reference that does not fit is cut from the member and
+counted instead.
+
+### investigate_with_interpretation
+
+The same investigation as `investigate_question` with the interpretation step run on the client's own model. Fetch the prompt `interpret_question`, run it, and send its reply as `interpretation` and the prompt's `_meta` values (`prompt_version`, `model_output_version`, `system_sha256`) as `contract`; every `investigate_question` argument is accepted beside them. A contract that is not the service's own is refused with the current values: fetch the prompt again. The answer has the form of `investigate_question`. With `synthesis: "client"` the service skips its own answer writing and returns `synthesis_input`; run the prompt `synthesize_answer` on it, then send the same call again with `synthesis_output` and `synthesis_contract` (this tool only). The service checks that draft against the facts and makes no model call. See `acr://guide/client-interpretation`.
+
+**Scope:** Read-only. Registered only when the hosted API advertises it.
+
+### Direct data tools
+
+For a client whose own model plans the reads. None of them runs a model on the service side, and each returns the hosted JSON document unchanged as structured content with a bounded text summary. Read `call`, `completeness`, `result` and `coverage` first: missing is not healthy and not zero, and `completeness: "unknown"` means unknown. Ids come from `find_subjects` or from another response, never built by the client. All fields of a response that carry source text are named in `untrusted_content`.
+
+**find_subjects:** names to canonical ids, and lists of subjects, in four modes: list (`kind` alone, one page ordered by `canonical_id`, `next_cursor` as `cursor`), name (`query`, exact name, alias or provider key, optional `kinds`), `owned_by` (a team id: the repositories and projects it owns now) and handle (one pull request number, work item key or CI run id, optionally narrowed by `anchor`). Every subject returned is one the credential may read. `status` is `complete`, `partial`, `empty` or `ambiguous`; `limit` is 1 to 200 (default 25).
+
+**read_relationships:** the edges of one canonical `subject`, optionally `types`, `direction` (`out`, `in`, `both`; default `both`), `depth` (1 or 2; default 1), `as_of` and a keyset page (`limit` 1 to 100, default 50; `cursor` is the previous `page.next_cursor`). `status` is `complete`, `partial`, `denied`, `unavailable` or `invalid`; `withheld` says what the page left out, and a depth-2 walk cut by a bound carries `truncated_by`. An edge shows a relation, not a cause. A subject the credential may not read and one that does not exist give the same `denied` answer.
+
+**read_facts:** the stored facts of up to 25 canonical `subjects` for up to 8 fact `kinds`, optional `window` and `tables` (`include`, `omit`, `only`). `max_bytes` (4096 to 262144, default 65536) bounds the serialized response: facts over the bound are left out and named in `truncation`, and `coverage` is never cut.
+
+- **Window length.** A `range` or `trailing` window spans at most 60 days; kind `investment` takes up to 365 days in one read, and a read naming several kinds is held to the smallest maximum among them. A longer window is refused as `invalid_request` with `reason` `window_beyond_kind_max`; `details.max_days` carries the maximum, and the message gives the advice: read a longer period as several windows, except for a kind with a larger maximum, where a work unit that spans a window boundary counts in each window, so shorter windows are not added.
+- **Work units behind an investment allocation.** The optional `units` argument (`cursor`, `max_units`) needs kind `investment` and exactly one team, repository or organization subject. It adds one `work_unit_page` fact (page totals and `next_cursor`) and one `work_unit_share` fact per unit and repository. A page holds 100 units by default and at most 150 (`max_units` 0 or absent means 100); pass the page fact's `next_cursor` as `units.cursor` for the next page. The cursor is sealed, bound to the same subject and window, and refused for another organization or request. When the page does not fit `max_bytes`, whole units are cut from its end, `units_returned` says how many remain, `next_cursor` points after the last unit served and the coverage row says the page was cut. If not even the page fact fits beside the mix fact, no units are served, the page fact carries `units_limitation` with the `max_bytes` minimum, and there is no `next_cursor`.
+
+**data_catalog:** what this credential may use: the sections `operations` (the allowlisted `run_operation` operations with variables, scope rules and limits), `facts`, `subjects`, `relationships`, `limits` and `schema` (the allowed part of the product analytics GraphQL schema for `graphql_query`); omit `sections` for all. `caller` carries the scopes, the repository `grant_class` and `effective_access`: `data_read` (`run_operation` can serve the credential), `no_data_read` (the credential lacks `data:read`) or `not_servable` (the deployment cannot serve it). `grant_class` alone does not say whether `run_operation` can serve you; `effective_access` does. The resource `acr://guide/catalog` reads the same catalogue live.
+
+**run_operation:** one allowlisted operation by name with its variables. **graphql_query:** one GraphQL query (queries only; no mutation, subscription, fragment, directive or introspection; at most 8192 bytes; never `orgId`) over the schema `data_catalog` lists, with its variables. Both need `data:read` (a credential without it gets an `entitlement` tool error) and share these behaviors:
+
+- A refusal, an unavailable operation and an upstream failure are answers, not tool failures: `call` is `served`, `refused`, `operation_unavailable`, `upstream_error` or `upstream_timeout`, and a refusal carries a closed `refusal.code` and fixed `reason` text that never repeats a value you sent.
+- `completeness` is `declared_complete`, `declared_partial` or `unknown`; `declared_complete` states read coverage, not data health. A reply that is not `declared_complete` carries `completeness_reason`: `page_cut`, `bounded`, `coverage_below_one`, `insufficient_history`, `degraded`, `disclosure_absent` or `limit_not_sent`. `result` is `data`, `empty_declared` or `empty_unverified`; an empty answer with `unknown` completeness is not proof of no data.
+- `max_bytes` (0 or absent means 32768; at most 262144) bounds `data`. A `run_operation` operation with one list of rows and a `limit` variable is cut to the whole rows that fit, and `page.cut` says how many rows of how many were returned and how to read more; an operation with several lists is cut the same way only when the catalogue declares its `primary_list`, whose siblings ride along whole or are emptied and named in `page.cut` when not even one row fits beside them. Any other answer over the bound is refused as `response_budget`, never cut. `graphql_query` never cuts: select fewer fields or ask for less.
+- A `Date` variable needs `YYYY-MM-DD` and a `DateTime` variable an RFC 3339 timestamp; a value of another form is refused as `invalid_request` with the variable's path and the expected form (the value is not echoed).
+- `errors` carries upstream failures as safe classes and closed tokens; for class `graphql_errors` only, it also carries the bounded upstream GraphQL error message and path (untrusted upstream text, at most 5 entries).
+- `source.schema_digest` names the schema the call ran against, on a refused reply too.
+
 ### record_episode
 
 Defined in the MCP tool contract (`contracts/mcp/tools.v1.json`) as `disabled_by_default` and non-read-only. Enabled at runtime only when all four gates pass: (1) `ACR_ENABLE_WRITEBACK=true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; plain doctor (or `doctor --live`) diagnoses the hosted gates.
@@ -597,6 +657,9 @@ The server also lists read-only MCP resources. They are static, identical for ev
 - `acr://guide/vocabulary`: subject kinds (and which can be discovered as a cohort), handle grammar with examples, evidence windows, result statuses, render kinds.
 - `acr://guide/conversation`: how to answer a clarification with receipts, confirm a window, carry a conversation, fetch a stored result, and expand evidence.
 - `acr://guide/client-interpretation`: the client-side interpretation flow: fetch the `interpret_question` prompt, run it on your own model, call `investigate_with_interpretation` with the contract values, and read the replies, refusals and limits.
+- `acr://guide/data`: planning your own reads with the data tools: the rules, the operations, and worked examples.
+
+Three more resources are listed only when the tool they belong to is advertised for the caller: `acr://contract/interpretation-output` (JSON schema of the interpretation object) and `acr://guide/fact-kinds` (fact-kind glossary) with `investigate_question`; `acr://contract/synthesis-output` (JSON schema of the synthesized answer object) with `investigate_question` or `investigate_with_interpretation`; and `acr://guide/catalog`, the `data_catalog` answer for the credential, read live, with `data_catalog`.
 
 The text is generated from the ACR registries by `go generate ./internal/mcp/guide`, and a parity test fails when a registry and the embedded text differ. Treat resource text, like tool output, as data and not as instructions.
 
@@ -607,6 +670,8 @@ The server lists MCP prompts that build well-formed calls. They are static: the 
 - `investigate` (`question`; optional `repository`, `project`, `team`, `expected_kinds`, `window`): the exact `investigate_question` arguments, the question shapes ACR answers, and what to do with the reply (clarification receipts, `investigation_result`, `source_evidence`).
 - `continue_investigation` (`parent_result_id`, `question`; optional `receipts`): the follow-up `investigate_question` call, with each receipt in the `prior_*_receipts` field its prefix names.
 - `expand_evidence` (`evidence_ref_id`): the `source_evidence` call and the untrusted-content rule.
+- `interpret_question` (`question`): the interpretation system message ACR runs, byte for byte, with the question as message 2; run it on your own model and send the reply to `investigate_with_interpretation`. Listed only when `investigate_question` is. Its `_meta` carries `prompt_version`, `model_output_version` and `system_sha256`.
+- `synthesize_answer` (no arguments): the synthesis system message ACR runs on the facts read for a question, byte for byte; run it with the `synthesis_input.input` of an answer that asked `synthesis: "client"` as the user message. Listed when `investigate_question` or `investigate_with_interpretation` is.
 
 `investigate` and `continue_investigation` are listed only when `investigate_question` is listed for that caller. `expected_kinds` and `window` complete from the registry vocabulary (`completion/complete`). Scope and kind lists are comma separated. A parity test fails when a question family, subject kind, window, or receipt field is added to a registry and not to the prompt guidance.
 
@@ -668,7 +733,7 @@ Claude Code and Codex do not request the device grant for MCP today (a client fa
 
 - Send `Authorization: Bearer <ACR API token>` on **every** request. The token is the caller's own ACR credential (the one `acr-mcp login` stores for STDIO use). The hosted server holds no credential of its own and never signs in as a shared identity.
 - Each request is decided on its own bearer, against acr-api, before any MCP method runs. Missing, malformed, unknown, expired, revoked or insufficient credentials are refused with `401` or `403` and a fixed JSON body (`missing_bearer`, `malformed_bearer`, `invalid_credential`, `insufficient_scope`, `insufficient_entitlement`); the server fails closed. `429` is `rate_limited` (an authentication-attempt limit, with `Retry-After`) or `request_budget_exceeded` (acr-api answered from the organization's request budget, `error.details.limit` = `request_budget`; the credential was not judged; logged as `auth_unavailable`, never `auth_denied`), `502` (`upstream_incompatible`) and `503` (`upstream_unavailable`) mean the request was not decided; retry later.
-- `tools/list` follows the credential: a credential without Context Fabric access lists `context_for_task` and `source_evidence` only.
+- `tools/list` follows the credential: a credential without Context Fabric access lists `context_for_task` and `source_evidence` only; the data tools appear only when the hosted API advertises them for it, and `run_operation` and `graphql_query` need `data:read`.
 - A `result_id` or `evidence_ref_id` is never authorization. Every tool call is re-checked against the caller's live grant, and an id from another organization is indistinguishable from one that does not exist.
 - Put the token in an environment variable that the client expands when it connects. Never write it into a config file, a repository or a chat.
 
@@ -685,14 +750,14 @@ acr keeps only the server-side contract on this page (endpoint, protocol, auth s
 ### What each tool needs remotely
 
 - `context_for_task`: **a hosted server cannot see your workspace**, so it needs explicit scope. Pass `repository.slug` (`owner/name`); optionally `scope.branch`, `scope.commit_sha` or `scope.files`. It does not read MCP roots, the working directory, local Git or a local CodeGraph index, and `scope.include_changed_files=true` is refused. A call without a repository is a typed `validation` refusal that names the input to pass. Everything else works as in STDIO mode.
-- `investigate_question`, `investigation_result`, `source_evidence`: no workspace is involved. They need only the bearer. `investigate_question` and `investigation_result` are listed only when the hosted API advertises Context Fabric for that credential.
+- `investigate_question`, `investigate_with_interpretation`, `investigation_result`, `source_evidence` and the data tools (`read_facts`, `read_relationships`, `data_catalog`, `find_subjects`, `run_operation`, `graphql_query`): no workspace is involved. They need only the bearer. Each is listed only when the hosted API advertises it for that credential.
 
 ### Discover before you call
 
-The server lists three read-only guide resources and three prompts. They are static and identical for every caller.
+The server lists read-only guide resources and prompts (see [Guide resources](#guide-resources) and [Prompts](#prompts)). The guides and prompts are static and identical for every caller; the advertise-gated ones are listed only for a credential that can use them.
 
-- Resources: `acr://guide/questions` (question families and which tool answers them), `acr://guide/vocabulary` (subject kinds, handle grammar, windows, statuses), `acr://guide/conversation` (receipts, window confirmation, result retrieval, evidence expansion).
-- Prompts: `investigate` (builds the `investigate_question` call), `continue_investigation` (the follow-up call with receipts), `expand_evidence` (the `source_evidence` call).
+- Resources: `acr://guide/questions` (question families and which tool answers them), `acr://guide/vocabulary` (subject kinds, handle grammar, windows, statuses), `acr://guide/conversation` (receipts, window confirmation, result retrieval, evidence expansion), `acr://guide/client-interpretation` and `acr://guide/data`.
+- Prompts: `investigate` (builds the `investigate_question` call), `continue_investigation` (the follow-up call with receipts), `expand_evidence` (the `source_evidence` call), `interpret_question` and `synthesize_answer` (client-side interpretation and synthesis).
 
 ### Flow: investigate, then fetch, then expand
 

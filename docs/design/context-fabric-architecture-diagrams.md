@@ -86,7 +86,7 @@ flowchart TD
   RESOLVE --> POOL["candidate pool split:<br/>pool (commit-eligible) vs offerOnlyPool (CHAOS-4271)<br/>-- see diagram 2 for why this matters"]
   POOL --> GATE1["ResolveFromMergedCandidatesWithGateAndBasis<br/>resolution.go:401 -- corroboration -> ranked_cut -> commit decision"]
   GATE1 --> TEAMANCHOR{"scope anchor is a team,<br/>zero committed, candidates exist?<br/>uncommitted_team_anchor.go"}
-  TEAMANCHOR -->|"yes: terminal BEFORE DiscoverContext,<br/>clarification_required naming the candidates<br/>(kind cue on a cross-kind label), no cohort"| STATUS
+  TEAMANCHOR -->|"yes: terminal BEFORE DiscoverContext,<br/>clarification_required naming the candidates<br/>(cues: kind on a cross-kind label, provider on a same-label collision,<br/>shortest unique id suffix, then a numbered ordinal), no cohort"| STATUS
   TEAMANCHOR -->|"no"| DISCOVER
   DISCOVER["DiscoverContext<br/>cohort + structure offers, falkorgraph/reader.go"]
   DISCOVER --> SCOPE["FactReadScopeResolver<br/>fact_scope.go -- CHAOS-4099, activated<br/>project/team origin -> activity-proxy / attributed-team expansion"]
@@ -115,7 +115,7 @@ flowchart TD
   LEDGER["recordFactRead ledger (CHAOS-4521)<br/>ONE record per PLANNED capability:<br/>kind · outcome (unconfigured / scope_gap / pruned / failed / completed / rejected / cancelled)<br/>· state · subjects · subject_kinds · facts · truncated<br/>closed vocabulary + counts only, no labels/IDs<br/>a read that ENDS the investigation carries ErrFactReadAborted<br/>-> failure_classification=fact_read_aborted, never unclassified"]
   LEDGER --> BUNDLE["CanonicalFactBundle + Coverage"]
   BUNDLE --> STAGE2["<b>budget stage 2</b> (CHAOS-4636) -- bound what synthesis is GIVEN<br/>chaos4636_grouped_cohort.go<br/>GROUP (owning team read off each member's own fact rows)<br/>-> NARROW (member-first, D2) -> RANK<br/>facts for removed members dropped WITH them<br/>(an ungrounded claim would fail closure)"]
-  STAGE2 --> SYN["Synthesize (model call)<br/>RuntimeAnswerSynthesizer.Synthesize<br/>model_runtime.go:596<br/><b>CHAOS-4355 follow-up:</b> modelFacingFacts<br/>(genkitruntime/runtime.go) drops every<br/>Rows-shaped field from canonical_facts<br/>BEFORE this prompt is sent<br/><b>input bound:</b> an input over the runtime's byte bound<br/>(ModelInputOverflow) is not sent -- synthesis_input_bound.go<br/>gives the model the same share of every fact kind,<br/>first in read order, committed subjects kept, no kind removed<br/>-> coverage.partial + a fixed limitation<br/>WARN 'context fabric synthesis input bounded'<br/>a synthesis that ENDS the investigation carries ErrSynthesisAborted<br/>-> model_input_too_large / model_receipt_unrecorded /<br/>synthesis_aborted, never unclassified"]
+  STAGE2 --> SYN["Synthesize (model call)<br/>RuntimeAnswerSynthesizer.Synthesize<br/>model_runtime.go:596<br/><b>CHAOS-4355 follow-up:</b> modelFacingFacts<br/>(genkitruntime/runtime.go) drops every<br/>Rows-shaped field from canonical_facts<br/>BEFORE this prompt is sent<br/><b>input bound:</b> an input over the runtime's byte bound<br/>(ModelInputOverflow) is not sent -- synthesis_input_bound.go<br/>gives the model the same share of every fact kind,<br/>first in read order, committed subjects kept, no kind removed<br/>-> coverage.partial + a fixed limitation<br/>+ one synthesis_input_bounded coverage detail per fact kind (served of declared)<br/>WARN 'context fabric synthesis input bounded'<br/>a FAILED model call serves a degraded answer without model prose:<br/>synthesis_model_failed detail with failure_class + retry_hint<br/>a synthesis that ENDS the investigation carries ErrSynthesisAborted<br/>-> model_input_too_large / model_receipt_unrecorded /<br/>synthesis_aborted, never unclassified"]
   SYN --> ROWS["attachCanonicalRows (CHAOS-4355)<br/>model-authored Rows STRIPPED + tolerated<br/>(cf_model_rows_stripped), never rejected --<br/>engine copies Rows verbatim from the canonical fact<br/>each claim cites -- model_runtime.go"]
   ROWS --> OVERRIDE["applySynthesisStatusOverride<br/>CHAOS-4098 -- decisive clarification_required -> no_match<br/>runs BEFORE the commit gate"]
   OVERRIDE --> GATE2{"CHAOS-4085 DP9 commit-affirmation gate<br/>applyCommitAffirmation<br/>chaos4085_commit_affirmation.go:447"}
@@ -519,6 +519,45 @@ trimmed, and `owner/` prefixes) and tests each entry of a node's
 `authorization_repositories` against them. The project, team and repository
 deployment walks are instances of this one executor.
 
+**A committed team anchor.** The repositories or projects of a committed team
+are read from the team over its own ownership edges (`OWNED_BY_TEAM`), the one
+executor above. Every owned node and every edge passes the caller's
+authorization; what the caller may not read is not served and is counted as
+denied reach. A read that serves no member and had members, or the team
+itself, hidden by authorization is `denied`, which is not `no_members`. An
+ownership edge is read under the question's window, or under the adapter
+clock for a question about now, because an ended assertion is history. On a
+question about now the window applies to the edge alone: the edge says the
+team owns the node, so an owned project whose own node validity ended is still
+owned.
+
+**A cohort that authorization cut is partial.** A requested member set whose
+members the caller's authorization removed carries the degrading
+`graph_cohort_denied_by_authorization` coverage row (its label counts the
+members excluded by authorization). The served status is floored from
+`complete` to `partial` whatever shape the plan had, so a cut member set is
+never read as the whole one.
+
+**A count of a repository's owning teams.** For a question about now, a read
+that found no owner, was not cut, and found ownership projected for the org
+(the active census holds a team, or the repository's own ownership edges name
+one) is a certified zero, not a gap. Teams the ownership edges name that the
+count leaves out ride the cohort as exclusions with a closed reason:
+`inactive_team` (the source marks the team inactive) or `ended_assertion`
+(the assertion ended). An assertion that has not started is counted, not
+excluded; a team the caller may not read is never named. A historical
+question never certifies a zero.
+
+**A label-named repository anchor.** A count over a repository the question
+names only by label is certified complete when the label resolved to exactly
+that one repository: the commit gate is the exact label tier, the identity
+lookup (`identity_lookup` on the commit decision digest) is `complete` or
+`graph_lag` (the identity universe was read complete and a claimant it matched
+is not in the graph yet), and no other candidate of a possible anchor kind
+matched an anchor term by an identity mechanism. A truncated lexical search
+refuses only beside an identity lookup that was not complete; `incomplete`,
+`not_run_time_axis` and `not_wired` admit nothing.
+
 **Code that does not yet follow the tree.** Some reads still reach a
 repository through a work item's own `repo_id`, as an activity proxy
 (`FactScopeBasisActivityProxy`), not as tree membership: the CHAOS-4099
@@ -738,22 +777,22 @@ source for the SAME kind).
 
 | FactKind | ClickHouse table | Supported subject kinds |
 | --- | --- | --- |
-| identity | `repos`, `work_items` | repository, work_item |
+| identity | `repos`, `work_items`; a repository fact also carries an `owning_teams` table (active teams that currently own it: `team_repo_ownership` ⋈ `teams`, never membership), capped per repository with `owning_teams_omitted_count` for the rest | repository, work_item |
 | membership | `repos`, `work_items` ⋈ `repos` | repository, work_item |
 | status | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
 | work | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
 | actual_completion | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
-| blockers | `work_item_dependencies` | work_item |
+| blockers | `work_item_dependencies`; team: ⋈ `work_items` over the repositories the team owns (`team_repo_ownership`), counting OPEN blockers only (blocking item not done or canceled; `blocker_status_basis`), the excluded edges counted apart | work_item, **team** |
 | required_children | `work_item_dependencies` | work_item |
-| pull_requests | `git_pull_requests` (`state`: member state and drivers) | pull_request |
+| pull_requests | `git_pull_requests` (`state`: member state and drivers); team: rollup over the repositories the team owns | pull_request, **team** |
 | reviews | `git_pull_request_reviews` | pull_request_review |
 | continuous_integration | `ci_pipeline_runs` (per-run status); **+`cicd_metrics_daily`** (repository aggregate, CHAOS-4347) | ci_pipeline_run, **repository** |
-| deployments | `deployments` (per-deployment status/environment); **+`deploy_metrics_daily`** (repository aggregate, CHAOS-4347) | deployment, **repository** |
-| incidents | `operational_incidents` (`status`: member state and drivers) | incident |
-| metrics | `repo_metrics_daily` — **own raw query (not `readers.ReadRepositoryMetrics`, which collapses to one row), `daily_metrics` per-day Rows table over the caller's own evidence window (explicit Start/End verbatim, else the platform's 90-day default policy width — CHAOS-4418)**; **+`team_metrics_daily`** (team, direct, still one-row scalar); **+`team_project_ownership` ⋈ `team_metrics_daily`** (project, summed-counts rollup, CHAOS-4347) | repository, **team, project** |
+| deployments | `deployments` (per-deployment status/environment); **+`deploy_metrics_daily`** (repository aggregate, CHAOS-4347); team: rollup over owned repositories | deployment, **repository, team** |
+| incidents | `operational_incidents` (`status`: member state and drivers); team: rollup over owned repositories | incident, **team** |
+| metrics | `repo_metrics_daily` — **own raw query (not `readers.ReadRepositoryMetrics`, which collapses to one row), `daily_metrics` per-day Rows table over the caller's own evidence window (explicit Start/End verbatim, else the platform's 90-day default policy width — CHAOS-4418)**; **+`team_metrics_daily`** (team, direct, still one-row scalar); **+`team_project_ownership` ⋈ `team_metrics_daily`** (project, summed-counts rollup, CHAOS-4347); **window change failure rate (repository; team = one rate over the union of its owned repositories): `repo_change_failure_daily`, the counts of every stored day in the window summed and one rule applied, never an average of daily rates; `change_failure_rate_state` is `measured`, `not_applicable_no_deployments` or `unknown_no_incident_evidence` (no rate for the last two, so a repository that deploys with no incident evidence never reads 0) and `change_failure_link_tier` is `native` or `heuristic`**; `revert_rate` is a per-day `repo_metrics_daily` value whose NULL days are not applicable (not zero), and a coverage reason names how many days lacked it | repository, **team, project** |
 | health | `compounding_risk_daily` — scalar `severity`/`compounding_risk` **+ `risk_rules` Rows table, one row per formula component (churn/complexity/ownership/review norm × weight, CHAOS-4418)**, repository and team; **+`team_project_ownership` ⋈ `compounding_risk_daily` (team layer) and +`team_project_ownership` ⋈ `team_repo_ownership` ⋈ `compounding_risk_daily` (repo layer, one hop further), both landing in one `risk_breakdown` Rows table (project, CHAOS-4363); the repo layer resolves an ownership row with no `repo_id` by repository name (CHAOS-7073, `ownedRepositoriesSource`)** | repository, team, **project** |
 | workload | `capacity_forecasts`; **+`team_project_ownership` ⋈ `capacity_forecasts`, per-team `team_breakdown` Rows, never summed/averaged (project, CHAOS-4363)** | team, **project** |
-| investment | `work_unit_investments` only (the deprecated `investment_metrics_daily` is read for no subject and is no longer declared in `devhealthschema`, CHAOS-9273); **project (CHAOS-9195, D5932): ONLY the canonical theme mix (`work_unit_investments`, owning-team roll-up or the project's own attribution); NO `team_breakdown` and none of the legacy `investment_metrics_daily` day fields are served for a project, and a project with no canonical mix serves no fact but a named coverage reason `investment_project_no_canonical_mix`**; **+`work_unit_investments` ⋈ `work_item_team_attributions` (CHAOS-4398), the CANONICAL 5-theme distribution — `theme_*`/`theme_quality_bugfix`/`prior_theme_*` SCALAR fields on the SAME team fact, never `investment_metrics_daily`'s deprecated legacy taxonomy; see §7**; **CHAOS-6559: the team mix is now the SUM of its OWNED repositories' mixes (`team_repo_ownership`, once per repo per team), no work-item majority vote, plus a declared `theme_breakdown` table (allocation_breakdown)**; **+repository scope (CHAOS-6560): `work_unit_investments` effort split across the repos of its PR refs by PR-ref share (partition; unresolvable refs null-carrying; `repo_id` fallback when no PR ref), emitted as `theme_*` scalars + a declared `theme_breakdown` table with source/attribution provenance**; **CHAOS-7073: the repository/team mix reads the latest work-unit set ops' `LatestWorkUnitInvestmentsSource` reads (superseded units excluded via `work_unit_supersessions`, only the latest complete membership run, a NULL latest `repo_id` kept NULL), and a `team_repo_ownership` row with no `repo_id` resolves by (provider, lower-cased name) against `repos` as ops `teamscope.RepoCondition` does (`ownedRepositoriesSource`, also used by the project theme mix)**; **CHAOS-8814's project `team_breakdown` investment row (legacy day sums) was removed by CHAOS-9195; `FactMetrics`' own `team_breakdown` is unchanged** | team, **project**, **repository** |
+| investment | `work_unit_investments` only (the deprecated `investment_metrics_daily` is read for no subject and is no longer declared in `devhealthschema`, CHAOS-9273); **project (CHAOS-9195, D5932): ONLY the canonical theme mix (`work_unit_investments`, owning-team roll-up or the project's own attribution); NO `team_breakdown` and none of the legacy `investment_metrics_daily` day fields are served for a project, and a project with no canonical mix serves no fact but a named coverage reason `investment_project_no_canonical_mix`**; **+`work_unit_investments` ⋈ `work_item_team_attributions` (CHAOS-4398), the CANONICAL 5-theme distribution — `theme_*`/`theme_quality_bugfix`/`prior_theme_*` SCALAR fields on the SAME team fact, never `investment_metrics_daily`'s deprecated legacy taxonomy; see §7**; **CHAOS-6559: the team mix is now the SUM of its OWNED repositories' mixes (`team_repo_ownership`, once per repo per team), no work-item majority vote, plus a declared `theme_breakdown` table (allocation_breakdown)**; **+repository scope (CHAOS-6560): `work_unit_investments` effort split across the repos of its PR refs by PR-ref share (partition; unresolvable refs null-carrying; `repo_id` fallback when no PR ref), emitted as `theme_*` scalars + a declared `theme_breakdown` table with source/attribution provenance**; **CHAOS-7073: the repository/team mix reads the latest work-unit set ops' `LatestWorkUnitInvestmentsSource` reads (superseded units excluded via `work_unit_supersessions`, only the latest complete membership run, a NULL latest `repo_id` kept NULL), and a `team_repo_ownership` row with no `repo_id` resolves by (provider, lower-cased name) against `repos` as ops `teamscope.RepoCondition` does (`ownedRepositoriesSource`, also used by the project theme mix)**; **CHAOS-8814's project `team_breakdown` investment row (legacy day sums) was removed by CHAOS-9195; `FactMetrics`' own `team_breakdown` is unchanged**; **organization: the canonical theme mix over every work unit of the organization, with an `unattributed_effort_share` for effort that reaches no resolved repository (withheld from a repository-restricted caller, who gets a named reason instead of a partial total)**; **ownership is read as synced, not historical: an ownership row counts for a window when it has not ended before the window start (`valid_from` is a sync stamp, never a window filter), disclosed by `investment_ownership_as_synced`, and an empty team window names `investment_team_no_owned_repository` or `investment_team_no_unit_in_window`**; **the window may reach 365 days (every other kind: 60; a wider request is refused with `window_beyond_kind_max`), and a window that starts before the stored history is served over the stored span with `investment_window_beyond_stored_history` (organization) or `investment_project_window_first_unit` (the project's own earliest linked unit)**; **a direct read may ask for the work units behind the allocation (`units` argument: page of 100, at most 150, `next_cursor`; a `work_unit_page` summary fact and one `work_unit_share` fact per unit; an organization unit whose effort reaches no resolved repository carries `unattributed_no_resolved_repository`)** | team, **project**, **repository**, **organization** |
 | readiness | `estimate_coverage_metrics_daily`; **+`team_project_ownership` ⋈ `estimate_coverage_metrics_daily`, per-team `team_breakdown` Rows, never summed across work scopes (project, CHAOS-4363)** | team, **project** |
 | operational_deficiencies | `recommendations_daily` | team |
 | source_health | ops `sourceHealth` root via the direct-read operation runner (no ClickHouse table) | organization |
@@ -806,6 +845,19 @@ stream. The thread setting is per statement and does not change the shared
 client pool or server defaults.
 
 **`FactMetrics` serves the window PR cycle time beside the repo-day median.** `window_pr_cycle_hours_median` (hours) with `window_pr_count` is the median of `merged_at - created_at` over EVERY pull request merged in the window (`git_pull_requests FINAL`, merged rows only, one weight per pull request), for a repository subject and for a team subject (one median over the union of the pull requests of the repositories the team owns, never a combination of per-repository medians). Both fields are absent when no pull request merged in the window: never 0, never carried from an earlier window. Never average, or take the median of, the daily `median_pr_cycle_hours` to build a weekly or monthly value; read this field. Project and organization subjects do not carry it.
+
+**A team subject's pull-request, blocker, incident and deployment facts are rollups over its owned repositories.**
+Each fact carries `rollup_basis = team_owned_repositories`, the owned set
+(`team_repo_ownership`, resolved once for all four kinds, never membership) and
+the per-repository counts. A team that owns no resolvable repository is
+`not_applicable`, not a measured zero. The per-repository tables
+(`owned_repositories`, `repository_breakdown`) ride only on a read of one team;
+a read over several teams serves the totals and counts alone, and the fact says
+so with `repository_tables_basis = omitted_multi_team_read` (`included`
+otherwise). Blockers count a blocker edge only while the blocking item is open
+(not done or canceled, `blocker_status_basis = open`) and count the excluded
+edges apart; the repository of an edge is the repository of the blocked work
+item, so this rollup is an activity proxy, not tree membership.
 
 **`FactMetrics`'s project rollup never averages a rate across
 differently-sized teams.** Additive counts (commits, after-hours/weekend
@@ -899,10 +951,12 @@ column types were verified LIVE off the kiac trial ClickHouse
 `acr-trial-data`) and added to `devhealthschema`'s shared production
 declaration, not inferred from the ops migration files alone.
 
-**5 CH tables still have no reading `FactProvider`** (unchanged, repo-wide
-`rg`, zero hits in any `internal/contextfabric/**/*.go` read path):
-`dora_metrics_daily`, `work_item_metrics_daily`, `issue_type_metrics_daily`,
-`user_metrics_daily`, `ai_impact_metrics_daily`. **Correction to this
+**Historical count, no longer current:** this paragraph once listed 5 CH tables
+with no reading `FactProvider`. Today `work_item_metrics_daily` is read by
+`flow`, and `repo_change_failure_daily` (never in that list) by the window
+change failure rate; `dora_metrics_daily`, `issue_type_metrics_daily`,
+`user_metrics_daily` and `ai_impact_metrics_daily` are read by no provider
+and are not declared in `devhealthschema`. **Correction to this
 page's own earlier text:** `dora_metrics_daily` is keyed by
 **`repo_id`**, not `team_id` (`repo_id UUID, day Date, metric_name String,
 value Float64` — verified against both the ops migration
@@ -963,11 +1017,12 @@ route. Unlike `FactMetrics`' commit counts, none of these four sum or
 average across owning teams (investment is no longer one of them for a project: its `team_breakdown` is gone, CHAOS-9195; it carries only the canonical theme mix): each source table partitions by a dimension
 (`investment_area`/`project_stream`, `work_scope_id`, or the forecast's own
 Monte Carlo statistics) that would be meaningless mixed across teams, so
-every project-level fact instead carries a `team_breakdown` (or, for health,
+every other project-level fact instead carries a `team_breakdown` (or, for health,
 `risk_breakdown`) `Rows` table with each contributing team's (and, for
 health, repository's) own row verbatim, disclosed via `rollup_basis`. A
-project-status question now reaches ≥3 `Rows` tables (investment, backlog
-risk via workload/readiness, completion risk via health) with a `team_name`
+project-status question now reaches ≥3 `Rows` tables (backlog
+risk via workload/readiness, completion risk via health; investment no
+longer carries one for a project) with a `team_name`
 axis, per this ticket's acceptance criterion. `investment_classifications_daily`
 is deliberately NOT read for the "classification breakdown" the ticket
 proposed: its live production schema (`system.columns`, kiac trial
@@ -1462,8 +1517,8 @@ with the `work_unit_investments` watermark (max `computed_at`). The paragraph
 below is the history of why the legacy read was never the canonical source.
 
 **The theme-mix producer is a NEW acr fact read, not a reuse of the existing
-`FactInvestment`.** The pre-existing team read (`investment_metrics_daily`,
-`readTeamInvestment`) is fed by a **deprecated** legacy rule set
+`FactInvestment`.** The pre-existing team read (HISTORICAL, since removed: `investment_metrics_daily`
+is no longer read or declared; `readTeamInvestment`) was fed by a **deprecated** legacy rule set
 (`ops/src/dev_health_ops/config/investment_areas.yaml`: "do not use this
 file for canonical WorkUnit categorization") — its `investment_area` values
 are free-form legacy labels, not the canonical 5-theme taxonomy AGENTS.md
@@ -1974,6 +2029,19 @@ authoritative, so a consumer that never learned about groups reads one member
 list rather than two that could disagree; and a grouped cohort is exactly the
 shape that strains the byte budget, so paying for every member twice would
 make the grouping the cause of the refusal it exists to avoid.
+
+**What a grouped cohort says it left out.** A grouped answer does not mark
+itself partial, because the grouping is complete for the members it placed.
+It instead appends one service-authored limitation per count that is not zero
+(through the bounded limitation appender): members placed under no group
+(ungrouped), members whose owning teams exceed what the facts list so each
+appears under only some of them (cut, read off a member's
+`owning_teams_omitted_count`), and members that appear in more than one group
+(overlap). The cut count comes from the repository identity fact's
+`owning_teams_omitted_count`, the rows its `owning_teams` table left out. A
+read that could not load ownership discloses `owning_teams_unread`, and one
+that cut the table `owning_teams_truncated`: ownership is unknown there, not
+empty.
 
 **Where the grouping comes from, and why it is the inverse of the design's own
 phrasing.** §6.2 describes resolving groups then their members. That direction
