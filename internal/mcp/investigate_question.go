@@ -126,9 +126,10 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 	budget.MaxEvidenceRefs = cohortEvidenceRefBudget(budget.MaxEvidenceRefs, input.Budget, result)
 
 	projection := answerprojection.Project(result, answerprojection.Budget{
-		MaxDrivers:       budget.MaxDrivers,
-		MaxCohortMembers: budget.MaxCohortMembers,
-		MaxEvidenceRefs:  budget.MaxEvidenceRefs,
+		MaxDrivers:         budget.MaxDrivers,
+		MaxCohortMembers:   budget.MaxCohortMembers,
+		MaxEvidenceRefs:    budget.MaxEvidenceRefs,
+		MaxSerializedBytes: budget.MaxSerializedBytes,
 	})
 	response := contractsv1.MCPInvestigateQuestionResponse{
 		SchemaVersion: contractsv1.MCPInvestigateQuestionResponseSchema,
@@ -167,7 +168,7 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 	cfg.metrics.Answer(ctx, string(result.Status), surface)
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String(SpanAttributeQueryVersion, result.Versions.QueryVersion))
 	if cfg.diagnostics != nil {
-		args := answerprojection.DisplayLogArgs(result, response.Structured, answerprojection.Budget{MaxDrivers: budget.MaxDrivers, MaxCohortMembers: budget.MaxCohortMembers, MaxEvidenceRefs: budget.MaxEvidenceRefs}, true, truncated)
+		args := answerprojection.DisplayLogArgs(result, response.Structured, answerprojection.Budget{MaxDrivers: budget.MaxDrivers, MaxCohortMembers: budget.MaxCohortMembers, MaxEvidenceRefs: budget.MaxEvidenceRefs, MaxSerializedBytes: budget.MaxSerializedBytes}, true, truncated)
 		args = append(args, "request_id", currentRequestID, "surface", surface)
 		cfg.diagnostics.InfoContext(ctx, "context fabric answer display", args...)
 	}
