@@ -43,3 +43,30 @@ func TestHTTPRequestBudgetRefusalIsNotNamedAnAuthenticationDenial(t *testing.T) 
 		t.Fatalf("budget refusal logged as result_class %v, auth_outcome %v", got, res.Line["auth_outcome"])
 	}
 }
+
+// The capabilities handshake has its own budget token; a refusal from it is a
+// budget refusal of an authenticated caller too, never an authentication
+// denial.
+func TestHTTPCapabilitiesBudgetRefusalIsNotNamedAnAuthenticationDenial(t *testing.T) {
+	hosted := newHostedAPI(t)
+	valid := hosted.issue(readScopes, []string{repoPlain}, nil)
+	e := newEndpoint(t, hosted)
+	hosted.requestBudget.Store(true)
+	hosted.capabilitiesBudget.Store(true)
+	resp := postMCP(t, e, http.MethodPost, rawToolsList(), withRequestID(bearerHeader(valid.token), "req-capbudget"))
+	hosted.requestBudget.Store(false)
+	hosted.capabilitiesBudget.Store(false)
+	if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "9" {
+		t.Fatalf("status %d Retry-After %q, want 429 and 9", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+	res, err := certify.Certify(parseLog(t, e), certify.Assertion{Event: eventspec.MCPHTTPRequest, Want: map[string]any{"request_id": "req-capbudget"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Line["auth_outcome"] != "request_budget_exceeded" {
+		t.Fatalf("auth_outcome %v", res.Line["auth_outcome"])
+	}
+	if got := res.Line["result_class"]; got == "auth_denied" {
+		t.Fatalf("capabilities budget refusal logged as result_class %v", got)
+	}
+}
