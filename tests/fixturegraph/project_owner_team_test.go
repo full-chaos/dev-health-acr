@@ -16,7 +16,7 @@ func TestProjectOwnerQuestionNamesTheOwningTeam(t *testing.T) {
 	rows := ch(t, fmt.Sprintf(`SELECT p.name, t.name FROM team_project_ownership AS o FINAL
 INNER JOIN projects AS p FINAL ON p.org_id = o.org_id AND p.id = o.project_id
 INNER JOIN teams AS t FINAL ON t.org_id = o.org_id AND t.id = o.team_id
-WHERE o.org_id = %[1]s AND o.valid_to IS NULL AND p.is_active = 1 AND p.name NOT IN (SELECT repo FROM repos FINAL WHERE org_id = %[1]s) AND t.is_active = 1
+WHERE o.org_id = %[1]s AND o.valid_to IS NULL AND p.is_active = 1 AND t.is_active = 1
 AND o.project_id IN (SELECT project_id FROM team_project_ownership FINAL WHERE org_id = %[1]s AND valid_to IS NULL GROUP BY project_id HAVING uniqExact(team_id) = 1)
 ORDER BY p.name LIMIT 1`, org))
 	if len(rows) != 1 {
@@ -37,6 +37,16 @@ ORDER BY p.name LIMIT 1`, org))
 		"synthesis": "client",
 	}
 	d, raw := c.call("investigate_with_interpretation", args)
+	if str(structured(d), "status") == "clarification_required" {
+		for _, o := range list(structured(d), "structure_needs", "candidate_options") {
+			if str(o, "kind") == "project" && str(o, "label") == project {
+				args["parent_result_id"] = str(structured(d), "result_id")
+				args["prior_candidate_receipts"] = []doc{{"result_id": str(structured(d), "result_id"), "receipt_id": str(o, "receipt_id")}}
+				d, raw = c.call("investigate_with_interpretation", args)
+				break
+			}
+		}
+	}
 	if !strings.Contains(raw, team) {
 		t.Fatalf("answer for project %q never names its owning team %q: status=%s\n%.3000s", project, team, str(structured(d), "status"), raw)
 	}
