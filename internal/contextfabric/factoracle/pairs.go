@@ -464,7 +464,7 @@ func compareHealth(ctx context.Context, o *Oracle, rr *RootReport) error {
 			rows := map[string]map[string]any{}
 			for _, row := range items(root["rows"]) {
 				if id, isString := row["scopeId"].(string); isString {
-					rows[strings.ToLower(id)] = row
+					rows[strings.ToLower(bareID(id))] = row
 					rr.touch("compoundingRisk.rows[*].scopeId")
 				}
 			}
