@@ -1743,6 +1743,13 @@ type ContextFabricClaimedFact struct {
 	Subject ContextFabricSubjectRef  `json:"subject"`
 	Field   string                   `json:"field"`
 	Value   ContextFabricScalarValue `json:"value"`
+	// FactID is the OPTIONAL id of the one canonical fact this claim
+	// restates (CanonicalFact.ID, as supplied in the synthesis input). When
+	// present and it names a fact of this claim's Kind and Subject, the claim
+	// is grounded against THAT fact alone; absent, grounding closes over the
+	// claim's whole (Kind, Subject) group as before. Additive: a consumer
+	// that ignores it is unaffected.
+	FactID string `json:"fact_id,omitempty"`
 	// Rows is an OPTIONAL, additive renderable table (CHAOS-4347): a fact
 	// whose evidence is genuinely a set of rows -- e.g. a project's
 	// per-team metrics rollup, where summing counts across teams is sound
