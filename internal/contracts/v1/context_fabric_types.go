@@ -2182,6 +2182,13 @@ type ContextFabricInvestigationResult struct {
 	// correct value, because none of them was refused by a gate that did
 	// not yet exist.
 	RefusalBasis ContextFabricRefusalBasis `json:"refusal_basis,omitempty"`
+	// StatusCorrection discloses that the server's outcome-derived
+	// completeness authority replaced the status the model authored: what it
+	// was, what it is served as, and the outcome row that decided it. It is
+	// the source and Completeness.StatusCorrection its mirror, the
+	// RefusalBasis arrangement. Absent when the served status is the model's
+	// own label. Additive and optional.
+	StatusCorrection *ContextFabricStatusCorrection `json:"status_correction,omitempty"`
 	// SemanticReading is present only on a READ of a stored
 	// clarification whose answerability needed the stored accepted reading
 	// and could not load it. See context_fabric_semantic_reading.go.

@@ -260,6 +260,12 @@ type CompletenessAuthorityObservation struct {
 	// fields stay empty, because nothing was reported -- the gap is an
 	// absence of evaluation, not a mechanism that fired.
 	DecidingReadEvaluationGap bool
+	// StatusCorrectionDisclosed is true when the document SERVED after the
+	// flip carries a status_correction record: the one place the log line
+	// and the wire are tied. Set by the caller that applied the flip, never
+	// by the derivation (the measurement is unconditional, the flip is
+	// gated).
+	StatusCorrectionDisclosed bool
 
 	// OUTCOME ROW COUNTS -- what the model's own status decision (or this
 	// derivation's) had to work with, joinable against ModelStatus without
@@ -640,7 +646,31 @@ func answerCompletenessStateToStatus(state contractsv1.ContextFabricAnswerComple
 // the knobs say NOW -- a row saved before either flip was ever turned on
 // must not carry a stale answer forever just because Save already ran once.
 func ApplyServerCompletenessAuthority(result InvestigationResult, enabled bool, symmetricEnabled bool, observation CompletenessAuthorityObservation) InvestigationResult {
-	return restateServedStatusHead(applyServerCompletenessAuthority(result, enabled, symmetricEnabled, observation))
+	return restateServedStatusHead(applyServerCompletenessAuthority(reconcileStatusCorrection(result), enabled, symmetricEnabled, observation))
+}
+
+// reconcileStatusCorrection keeps a carried record true to the status the
+// document now has. A later status floor can lower a stored, already
+// corrected status; the record then names the pair it actually describes, or
+// is dropped when the pair is not one the authority serves (the floor's own
+// limitation discloses that step).
+func reconcileStatusCorrection(result InvestigationResult) InvestigationResult {
+	record := result.StatusCorrection
+	if record == nil {
+		return result
+	}
+	if want, ok := contractsv1.ContextFabricStatusCorrectionServedStatus(record.Direction); ok && want == result.Status {
+		return result
+	}
+	reconciled := *record
+	if direction, ok := contractsv1.ContextFabricStatusCorrectionDirectionFor(record.ReplacedStatus, result.Status); ok {
+		reconciled.Direction = direction
+		result.StatusCorrection = &reconciled
+	} else {
+		result.StatusCorrection = nil
+	}
+	result.Completeness = ComputeAnswerCompleteness(result)
+	return result
 }
 
 func applyServerCompletenessAuthority(result InvestigationResult, enabled bool, symmetricEnabled bool, observation CompletenessAuthorityObservation) InvestigationResult {
@@ -675,9 +705,34 @@ func applyServerCompletenessAuthority(result InvestigationResult, enabled bool, 
 	default:
 		return result
 	}
+	result.StatusCorrection = statusCorrectionFor(result, mapped, observation)
 	result.Status = mapped
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
+}
+
+// statusCorrectionFor builds the disclosure record for the one write the
+// authority makes to result.Status. ReplacedStatus is the status the authority
+// replaced: the model's authored label unless an earlier server step (the
+// claim-depth trim, a served-status floor) had already lowered it, and those
+// steps disclose themselves through their own limitation. A second correction
+// (a stored result re-applied under changed knobs) keeps the first record's
+// replaced status, so the record names the earliest status the authority saw.
+func statusCorrectionFor(result InvestigationResult, mapped InvestigationStatus, observation CompletenessAuthorityObservation) *contractsv1.ContextFabricStatusCorrection {
+	modelStatus := result.Status
+	if result.StatusCorrection != nil {
+		modelStatus = result.StatusCorrection.ReplacedStatus
+	}
+	direction, ok := contractsv1.ContextFabricStatusCorrectionDirectionFor(modelStatus, mapped)
+	if !ok {
+		return nil
+	}
+	return &contractsv1.ContextFabricStatusCorrection{
+		ReplacedStatus:      modelStatus,
+		Direction:           direction,
+		DecidingRequirement: observation.DecidingRequirement,
+		DecidingOutcome:     observation.DecidingOutcome,
+	}
 }
 
 // CompletenessAuthorityLogArgs is the ONE construction of the completeness
@@ -713,6 +768,7 @@ func CompletenessAuthorityLogArgs(event CompletenessAuthorityObservation, orgID 
 		"deciding_cause_coverage", SanitizeLogAttr(string(event.DecidingCauseCoverage)),
 		"deciding_cause_narrowing", SanitizeLogAttr(string(event.DecidingCauseNarrowing)),
 		"deciding_read_evaluation_gap", event.DecidingReadEvaluationGap,
+		"status_correction_disclosed", event.StatusCorrectionDisclosed,
 		// THE ROWS THE STATUS DECISION HAD TO WORK WITH: what the model was
 		// given (today, nothing -- see genkitruntime's own synthesis input)
 		// and what this derivation itself read, both joinable against
