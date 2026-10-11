@@ -90,13 +90,11 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 			"status_in_vocabulary": statusInVocabularyValue(row.Status),
 			"status_provenance":    contextfabric.StringFactValue(note),
 		}
-		sinceFields := statusSinceFields(row.Status, entry, entryFound, now)
-		for name, value := range sinceFields {
-			fields[name] = value
-		}
-		if b := sinceFields["status_since_basis"].String; b != nil {
-			sinceBasisCounts[*b]++
-		}
+		since := statusSinceFields(row.Status, entry, entryFound, now)
+		fields["status_since"] = since.since
+		fields["status_duration_seconds"] = since.seconds
+		fields["status_since_basis"] = contextfabric.StringFactValue(since.basis)
+		sinceBasisCounts[since.basis]++
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactStatus, Subject: subject,
 			Fields:         fields,

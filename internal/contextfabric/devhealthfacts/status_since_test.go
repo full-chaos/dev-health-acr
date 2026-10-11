@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -152,7 +153,7 @@ func TestStatusSinceProbeIsOrgScopedBoundedAndKeyedToTheReadRows(t *testing.T) {
 			continue
 		}
 		found = true
-		for _, want := range []string{"t.org_id = {org_id:String}", "FINAL", "t.repo_id IN {repo_ids:Array(UUID)}", "t.work_item_id IN {ids:Array(String)}", "LIMIT", "SETTINGS", "result_overflow_mode = 'throw'"} {
+		for _, want := range []string{"t.org_id = {org_id:String}", "FINAL", "t.repo_id IN {repo_ids:Array(UUID)}", "t.work_item_id IN {ids:Array(String)}", "concat(toString(t.repo_id), ':', t.work_item_id) IN {keys:Array(String)}", "LIMIT 201\n", "SETTINGS", "result_overflow_mode = 'throw'"} {
 			if !strings.Contains(q.statement, want) {
 				t.Fatalf("statement lacks %q:\n%s", want, q.statement)
 			}
@@ -234,4 +235,62 @@ func TestStatusSinceInconsistentItemsAreCountedInAWarnWithoutIds(t *testing.T) {
 	if strings.Contains(out, "SECRET-ID-1") {
 		t.Fatalf("the warn line carries an id: %q", out)
 	}
+}
+
+func TestStatusSinceProbeNamesExactPairsNotRepositoryAndItemCrossProducts(t *testing.T) {
+	_, client, err := readStatusSince(t,
+		[][]any{{"W-1", "in_progress", "repo-a", "jira"}, {"W-2", "in_progress", "repo-b", "jira"}},
+		nil,
+		workItemSubject("repo-a", "W-1"), workItemSubject("repo-b", "W-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range client.queries {
+		if !strings.Contains(q.statement, "FROM work_item_transitions") {
+			continue
+		}
+		for _, b := range q.bindings {
+			if b.Name != "keys" {
+				continue
+			}
+			keys, _ := b.Value.([]string)
+			if len(keys) != 2 || keys[0] != "repo-a:W-1" || keys[1] != "repo-b:W-2" {
+				t.Fatalf("keys = %#v, want exactly the two returned pairs (not repo-a:W-2 / repo-b:W-1)", keys)
+			}
+			return
+		}
+	}
+	t.Fatal("no keys binding on the transition probe")
+}
+
+func TestStatusSinceProbeLimitCoversEveryPairTheStatusReadCanFeedIt(t *testing.T) {
+	const statusRows = 201
+	var rows [][]any
+	var subjects []contextfabric.SubjectRef
+	for i := 0; i < statusRows; i++ {
+		id := fmt.Sprintf("W-%03d", i)
+		rows = append(rows, []any{id, "in_progress", "repo-1", "jira"})
+		subjects = append(subjects, workItemSubject("repo-1", id))
+	}
+	_, client, err := readStatusSince(t, rows, nil, subjects...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range client.queries {
+		if !strings.Contains(q.statement, "FROM work_item_transitions") {
+			continue
+		}
+		for _, b := range q.bindings {
+			if b.Name == "keys" {
+				if keys, _ := b.Value.([]string); len(keys) != statusRows {
+					t.Fatalf("keys = %d, want %d: every pair the status read returned", len(keys), statusRows)
+				}
+			}
+		}
+		if !strings.Contains(q.statement, "LIMIT 201\n") {
+			t.Fatalf("the probe limit is below the status read's probe limit:\n%s", q.statement)
+		}
+		return
+	}
+	t.Fatal("no transition probe ran")
 }

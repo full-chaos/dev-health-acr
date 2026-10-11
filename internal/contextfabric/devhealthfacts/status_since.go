@@ -29,10 +29,12 @@ const (
 // authorization relation is not repeated: repeating it would run the whole
 // project/ownership/link relation a second time per status read. The read is
 // narrowed to the sort key prefix (org_id, repo_id, work_item_id) and bounded
-// by the same SETTINGS and row limit as the status read. Ties on occurred_at
+// by the same SETTINGS as the status read and by the status read's probe
+// limit (one past the output bound), so every pair it names can return its
+// row whatever order the two statements sort in. Ties on occurred_at
 // break on last_synced and then to_status, so the pick is deterministic.
 func statusSinceStatement(settings readers.Settings) string {
-	return readers.WithSettings(withRowLimit(`SELECT toString(t.repo_id) AS repo_key, t.work_item_id AS item_key,
+	return readers.WithSettings(withRowLimitOf(`SELECT toString(t.repo_id) AS repo_key, t.work_item_id AS item_key,
 	argMax(ifNull(t.to_status, ''), tuple(t.occurred_at, t.last_synced, ifNull(t.to_status, ''))) AS latest_to_status,
 	max(t.occurred_at) AS entered_at
 FROM work_item_transitions AS t FINAL
@@ -41,7 +43,7 @@ WHERE t.org_id = {org_id:String}
 	AND t.work_item_id IN {ids:Array(String)}
 	AND concat(toString(t.repo_id), ':', t.work_item_id) IN {keys:Array(String)}
 GROUP BY t.repo_id, t.work_item_id
-ORDER BY repo_key, item_key`), settings)
+ORDER BY repo_key, item_key`, maxFactRowsProbe), settings)
 }
 
 type statusEntry struct {
@@ -93,13 +95,14 @@ func (p *StatusProvider) readStatusEntries(ctx context.Context, orgID string, pa
 // transition log disagree, and an older matching entry would overstate the
 // time (transition_inconsistent). A recorded entry after the request clock is
 // folded into the same value: no trusted duration exists.
-func statusSinceFields(currentStatus string, entry statusEntry, found bool, now time.Time) map[string]contextfabric.FactValue {
-	absent := func(basis string) map[string]contextfabric.FactValue {
-		return map[string]contextfabric.FactValue{
-			"status_since":            contextfabric.NullFactValue(),
-			"status_duration_seconds": contextfabric.NullFactValue(),
-			"status_since_basis":      contextfabric.StringFactValue(basis),
-		}
+type statusSinceResult struct {
+	since, seconds contextfabric.FactValue
+	basis          string
+}
+
+func statusSinceFields(currentStatus string, entry statusEntry, found bool, now time.Time) statusSinceResult {
+	absent := func(basis string) statusSinceResult {
+		return statusSinceResult{since: contextfabric.NullFactValue(), seconds: contextfabric.NullFactValue(), basis: basis}
 	}
 	if !found || currentStatus == "" {
 		return absent(statusSinceBasisNone)
@@ -107,9 +110,9 @@ func statusSinceFields(currentStatus string, entry statusEntry, found bool, now 
 	if entry.toStatus != currentStatus || entry.enteredAt.IsZero() || entry.enteredAt.After(now) {
 		return absent(statusSinceBasisInconsistent)
 	}
-	return map[string]contextfabric.FactValue{
-		"status_since":            contextfabric.StringFactValue(entry.enteredAt.UTC().Format(time.RFC3339)),
-		"status_duration_seconds": contextfabric.IntegerFactValue(int64(now.Sub(entry.enteredAt) / time.Second)),
-		"status_since_basis":      contextfabric.StringFactValue(statusSinceBasisObserved),
+	return statusSinceResult{
+		since:   contextfabric.StringFactValue(entry.enteredAt.UTC().Format(time.RFC3339)),
+		seconds: contextfabric.IntegerFactValue(int64(now.Sub(entry.enteredAt) / time.Second)),
+		basis:   statusSinceBasisObserved,
 	}
 }
