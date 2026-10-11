@@ -1,9 +1,8 @@
 package devhealthfacts_test
 
-// CHAOS-6559 (prod shape): a team that has legacy investment_metrics_daily
-// day rows AND owns repositories with persisted work. On prod the mix was
-// merged onto the first day row, the model answered from the day rows and
-// reported "no normalized shares". EXECUTED against a real ClickHouse.
+// CHAOS-6559 (prod shape): a team that owns one repository through many
+// ownership rows with persisted work is served its mix as one standalone
+// fact. EXECUTED against a real ClickHouse.
 
 import (
 	"context"
@@ -16,7 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-func TestTeamMixIsStandaloneAndLegacyDayRowsAreNeverServedAgainstRealClickHouse(t *testing.T) {
+func TestTeamMixIsStandaloneAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
@@ -43,14 +42,6 @@ func TestTeamMixIsStandaloneAndLegacyDayRowsAreNeverServedAgainstRealClickHouse(
 		fmt.Sprintf(`{"issues":[],"prs":["%s#pr1"]}`, repoUUID("repo-a")), at, orgID); err != nil {
 		t.Fatalf("seed wu: %v", err)
 	}
-	for i, area := range []string{"quality", "security", "infra", "product"} {
-		day := date(2026, 9, 10+i)
-		if err := direct.Exec(ctx, `INSERT INTO investment_metrics_daily (day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			day, "CHAOS", area, "", uint32(5), uint32(1), uint32(1), uint64(100), 10.0, at, orgID); err != nil {
-			t.Fatalf("seed legacy row: %v", err)
-		}
-	}
-
 	read := func(teams ...string) contextfabric.FactProviderResult {
 		t.Helper()
 		subjects := make([]contextfabric.SubjectRef, 0, len(teams))
@@ -67,7 +58,7 @@ func TestTeamMixIsStandaloneAndLegacyDayRowsAreNeverServedAgainstRealClickHouse(
 		return result
 	}
 
-	t.Run("mix_is_one_standalone_fact_and_no_day_row_is_served", func(t *testing.T) {
+	t.Run("mix_is_one_standalone_fact", func(t *testing.T) {
 		result := read("CHAOS")
 		if len(result.Facts) != 1 {
 			t.Fatalf("facts = %d, want exactly 1 (the mix): %#v", len(result.Facts), result.Facts)
@@ -92,7 +83,7 @@ func TestTeamMixIsStandaloneAndLegacyDayRowsAreNeverServedAgainstRealClickHouse(
 	t.Run("team_without_a_mix_gets_no_fact_and_a_loud_unavailable_reason_with_watermark", func(t *testing.T) {
 		result := read("NOOWNER")
 		if len(result.Facts) != 0 {
-			t.Fatalf("facts = %#v, want none: legacy day rows must not stand in for a missing mix", result.Facts)
+			t.Fatalf("facts = %#v, want none: nothing stands in for a missing mix", result.Facts)
 		}
 		if result.State != contextfabric.SourceNoData {
 			t.Fatalf("state = %q, want %q", result.State, contextfabric.SourceNoData)

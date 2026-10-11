@@ -1635,7 +1635,7 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", rowKey) 
 // teamCanonicalID is NOT a free choice (CHAOS-3802 §4). devhealthfacts minted
 // teamPrefix = "team:" (workload.go) and its subjectIndex strips exactly that
 // prefix to feed `team_id IN {ids:Array(String)}` against capacity_forecasts,
-// investment_metrics_daily, estimate_coverage_metrics_daily and the team
+// estimate_coverage_metrics_daily and the team
 // health tables -- whose team_id values were live-verified to be the teams.id
 // space ({CHAOS} and {gl:full.chaos, CHAOS} respectively, both subsets of
 // teams.id). Any other shape leaves all five existing team fact providers

@@ -9,7 +9,7 @@ import "strings"
 // unexported ones that merely happened to agree textually: devhealthsource's
 // team producer minted "team:" + id in teamCanonicalID, and devhealthfacts
 // declared its own teamPrefix = "team:" to strip back off before querying
-// capacity_forecasts, investment_metrics_daily, estimate_coverage_metrics_daily
+// capacity_forecasts, estimate_coverage_metrics_daily
 // and the team health tables. Two constants that must agree, with nothing
 // making them agree, is a coincidence rather than a contract -- and the
 // grouped-cohort path, which knew about neither, published raw source-row keys

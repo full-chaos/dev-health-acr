@@ -214,7 +214,7 @@ Daily/periodic tables that already pick "latest row"; an as-of query only moves 
 | provider | table | as-of predicate |
 |---|---|---|
 | `metrics.go` | `repo_metrics_daily` | `day <= as_of` |
-| `investment.go` | `investment_metrics_daily` | `day <= as_of` |
+| `investment.go` | `work_unit_investments` | `_ns` validity window |
 | `health.go` | `compounding_risk_daily` | `day <= as_of` |
 | `readiness.go` | `estimate_coverage_metrics_daily` | `day <= as_of` |
 | `deficiencies.go` | `recommendations_daily` | `window_end <= as_of` |
