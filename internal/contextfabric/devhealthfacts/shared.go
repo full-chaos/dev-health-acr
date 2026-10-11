@@ -812,12 +812,18 @@ import (
 // status_since_basis; a candidate saved under v165 holds a status fact without the time in
 // the current status and must not be reused.
 //
-// v166 -> v167: a team or project question for continuous integration, deployments, incidents or
+// v166 -> v167: a flow bug_completed_ratio or story_points_completed that the
+// provider's items do not carry is omitted and named by
+// <measure>_unavailable_reason (not_tracked_by_source, capability_unknown),
+// where it was served as 0; a candidate saved under v166 holds that 0 and must
+// not be reused.
+//
+// v167 -> v168: a team or project question for continuous integration, deployments, incidents or
 // operational deficiencies reaches those facts through the entity tree (ownership rows, and linked
 // pull request rows) where it was pruned with no reach; a candidate saved under an earlier version
 // carries the pruned answer for such a question. The census also sheds rows under a small byte
 // budget and serves the count it cut.
-const QueryVersion = "devhealthfacts.clickhouse.v167"
+const QueryVersion = "devhealthfacts.clickhouse.v168"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

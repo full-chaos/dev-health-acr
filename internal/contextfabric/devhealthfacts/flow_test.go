@@ -32,7 +32,7 @@ func workItemMetricsDailyRow(teamID, workScopeID string, itemsStarted, itemsComp
 		uint8(1), float64(12), uint8(1), float64(30),
 		uint8(1), float64(20), uint8(1), float64(48),
 		uint8(1), float64(24), uint8(1), float64(60),
-		float64(0.1), float64(3.5),
+		float64(0.1), uint8(0), float64(3.5), uint8(0),
 	}
 }
 
@@ -62,7 +62,7 @@ func repoMetricsFlowRow(repoID string, prsMerged, prsWithFirstReview int64) []an
 // items_started, items_completed, wip_count_end_of_day,
 // bug_completed_ratio_avg, story_points_completed_sum).
 func flowDailySeriesRow(key, day string, started, completed, wip int64) []any {
-	return []any{key, day, started, completed, wip, float64(0.2), float64(4)}
+	return []any{key, day, started, completed, wip, float64(0.2), uint8(0), float64(4), uint8(0)}
 }
 
 // flowDailySeriesMatch distinguishes the CHAOS-4645 daily-series queries
