@@ -25,7 +25,7 @@ func ClarificationPrompt(candidates []SubjectCandidate) string {
 	for i, candidate := range shown {
 		cues := make([]string, 0, 3)
 		if crossKind[strings.ToLower(strings.TrimSpace(candidate.Subject.Label))] {
-			cues = append(cues, string(candidate.Subject.Kind))
+			cues = append(cues, renderKindNoun(candidate.Subject.Kind))
 		}
 		if candidate.Provider != "" && colliding[candidateLabelKey(candidate)] {
 			cues = append(cues, candidate.Provider)

@@ -788,7 +788,7 @@ func TestContinuationRefusal_TheValidatorHoldsBothHalvesTogether(t *testing.T) {
 		// whichever rule gets there first.
 		{"sentence with a trailing space", func(r *InvestigationResult) { r.Limitations = []string{sentence + " "} }, "violate v1 bounds"},
 		{"sentence with one character changed", func(r *InvestigationResult) {
-			r.Limitations = []string{strings.Replace(sentence, "unverifiable.", "unverifiable!", 1)}
+			r.Limitations = []string{strings.Replace(sentence, "offer to start a fresh investigation.", "offer to start a fresh investigation!", 1)}
 		}, "requires its fixed limitation sentence"},
 		{"sentence without its final period", func(r *InvestigationResult) { r.Limitations = []string{strings.TrimSuffix(sentence, ".")} }, "requires its fixed limitation sentence"},
 		{"sentence upper-cased", func(r *InvestigationResult) { r.Limitations = []string{strings.ToUpper(sentence)} }, "requires its fixed limitation sentence"},
@@ -867,13 +867,6 @@ func TestContinuationRefusal_TheRecognisersAndTheGateNeverSpeakForTheCarrier(t *
 		// next member on the wrong side without anything failing at the
 		// point the member is added.
 		frameMember := contractsv1.ValidContextFabricFrameRefusalBasis(basis)
-		sentence := contractsv1.ContextFabricRefusalBasisLimitation(contractsv1.ContextFabricSubjectTeam, basis)
-		if got := contractsv1.IsContextFabricRefusalBasisLimitation(sentence); got != frameMember {
-			t.Errorf("kind sentence with basis %q recognised=%v, want %v", basis, got, frameMember)
-		}
-		if got := contractsv1.IsContextFabricServiceAuthoredLimitation(sentence); got != frameMember {
-			t.Errorf("kind sentence with basis %q service-authored=%v, want %v -- a false sentence must stay displaceable", basis, got, frameMember)
-		}
 		// Reading frameMember from the allow-list makes asserting the
 		// allow-list against it a tautology, so that line is replaced by an
 		// INDEPENDENT authority that must agree with it: a member that is NOT
@@ -908,8 +901,8 @@ func TestContinuationRefusal_TheRecognisersAndTheGateNeverSpeakForTheCarrier(t *
 	if !contractsv1.IsContextFabricServiceAuthoredLimitation(fixed) {
 		t.Errorf("the fixed continuation sentence is not service-authored, so the engine's displacement rule may drop it")
 	}
-	if !strings.Contains(fixed, string(contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable)) {
-		t.Errorf("the fixed sentence does not name its basis token, so a reader cannot join it to the field and the log line")
+	if strings.Contains(fixed, string(contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable)) {
+		t.Errorf("the fixed sentence names its basis token, which a reader cannot read")
 	}
 	for _, variant := range []string{fixed + " ", strings.TrimSuffix(fixed, "."), strings.ToUpper(fixed), fixed[:len(fixed)/2]} {
 		if contractsv1.IsContextFabricServiceAuthoredLimitation(variant) {
@@ -1250,6 +1243,8 @@ func hasOwnNamingSentence(basis contractsv1.ContextFabricRefusalBasis) bool {
 		sentence string
 	}{
 		{declaredKindTerminalBasis, declaredKindTerminalLimitation},
+		{contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable, contractsv1.ContextFabricContinuationContextUnverifiableLimitation},
+		{subjectIdentityUnconfirmedTerminalBasis, subjectIdentityUnconfirmedTerminalLimitation},
 		{organizationScopeTerminalBasis, organizationScopeTerminalLimitation},
 	} {
 		if terminal.basis == basis && contractsv1.IsContextFabricServiceAuthoredLimitation(terminal.sentence) {

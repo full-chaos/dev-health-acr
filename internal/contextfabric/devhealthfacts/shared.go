@@ -705,7 +705,11 @@ import (
 // it read as claims; a candidate saved under an earlier version may hold one
 // with none.
 //
-// v145: a repository count named by its label certifies when the identity read was
+// v139 -> v143: served limitation sentences, coverage reasons and render labels name
+// kinds by display noun and carry no basis token, so a candidate saved under an
+// earlier version may hold the old wording and must not be reused.
+//
+// v143 -> v145: a repository count named by its label certifies when the identity read was
 // complete and the only gap is a same-label claimant missing from the graph; a candidate
 // saved under an earlier version may hold the uncertified count and must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v145"
