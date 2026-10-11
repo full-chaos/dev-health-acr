@@ -1,9 +1,13 @@
 package contextpacket
 
 import (
+	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 func itemsWithRules(ids ...string) []contractsv1.ContextPacketItem {
@@ -68,5 +72,33 @@ func TestActionsForEmptyItemsEmitsNothing(t *testing.T) {
 	checks, steps := actionsFor(nil)
 	if len(checks) != 0 || len(steps) != 0 {
 		t.Fatalf("want none: %+v %+v", checks, steps)
+	}
+}
+
+func TestActionsForMaximumLengthExplicitRuleIDPassesPacketValidation(t *testing.T) {
+	raw, err := os.ReadFile(repopath.Path(t, "contracts", "examples", "v1", "context_packet.v1.json"))
+	if err != nil {
+		t.Fatalf("read golden packet: %v", err)
+	}
+	var packet contractsv1.ContextPacket
+	if err := json.Unmarshal(raw, &packet); err != nil {
+		t.Fatalf("decode golden packet: %v", err)
+	}
+	ruleID := strings.Repeat("r", 240)
+	metadata := func(id string) map[string]any {
+		return map[string]any{"acr_rule_id": id, "acr_claim_kind": string(contractsv1.ClaimInferred)}
+	}
+	if _, ok := explicitRuleOutcome(metadata(ruleID)); !ok {
+		t.Fatal("240-char explicit rule id must be accepted")
+	}
+	if _, ok := explicitRuleOutcome(metadata(ruleID + "r")); ok {
+		t.Fatal("241-char explicit rule id must be rejected")
+	}
+	packet.RequiredChecks, packet.RecommendedNextSteps = actionsFor(itemsWithRules(ruleID, "evidence.observed.cause.v1"))
+	if len(packet.RequiredChecks) != 2 || len(packet.RecommendedNextSteps) != 2 {
+		t.Fatalf("want 2 each: %+v", packet.RequiredChecks)
+	}
+	if err := packet.Validate(); err != nil {
+		t.Fatalf("packet with max-length rule id fails validation: %v", err)
 	}
 }
