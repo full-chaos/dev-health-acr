@@ -27,9 +27,11 @@ const (
 	entityTreeRepoA    = "a1000000-0000-4000-8000-000000000001"
 	entityTreeRepoB    = "b2000000-0000-4000-8000-000000000002"
 	entityTreeRepoC    = "c3000000-0000-4000-8000-000000000003"
+	entityTreeRepoD    = "d4000000-0000-4000-8000-000000000004"
 	entityTreeSlugA    = "acme/repo-a"
 	entityTreeSlugB    = "acme/repo-b"
 	entityTreeSlugC    = "acme/repo-c"
+	entityTreeSlugD    = "acme/repo-d"
 	entityTreeProject  = "PROJ-TREE"
 	entityTreeProvider = "linear"
 )
@@ -40,7 +42,7 @@ type entityTreeExec interface {
 
 func seedEntityTree(t *testing.T, ctx context.Context, direct entityTreeExec, at time.Time) {
 	t.Helper()
-	for _, statement := range devhealthschema.DDL("teams", "work_items", "repos", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr", "work_graph_deployment_incident_edges", "operational_incidents") {
+	for _, statement := range devhealthschema.DDL("teams", "work_items", "repos", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr", "work_graph_deployment_incident_edges", "operational_incidents", "git_pull_requests") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -51,7 +53,7 @@ func seedEntityTree(t *testing.T, ctx context.Context, direct entityTreeExec, at
 			t.Fatalf("seed %s: %v", label, err)
 		}
 	}
-	for _, repo := range [][2]string{{entityTreeRepoA, entityTreeSlugA}, {entityTreeRepoB, entityTreeSlugB}, {entityTreeRepoC, entityTreeSlugC}} {
+	for _, repo := range [][2]string{{entityTreeRepoA, entityTreeSlugA}, {entityTreeRepoB, entityTreeSlugB}, {entityTreeRepoC, entityTreeSlugC}, {entityTreeRepoD, entityTreeSlugD}} {
 		exec("repo "+repo[1], `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repo[0], entityTreeOrgID, repo[1], "github", at)
 	}
 	exec("project", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
@@ -63,9 +65,14 @@ func seedEntityTree(t *testing.T, ctx context.Context, direct entityTreeExec, at
 		exec("issue "+id, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, entityTreeRepoC, entityTreeOrgID, "issue "+id, "open", "", "", entityTreeProject, at)
 	}
+	// link writes the link row AND the pull request it names: a link of
+	// record is read only with its pull request, as the canonical link
+	// projection reads it.
 	link := func(label, issueID, repoID string, pr uint32, provenance string) {
 		exec(label, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			repoID, issueID, pr, float32(0.9), provenance, "", at, entityTreeOrgID)
+		exec(label+" pull request", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+			repoID, entityTreeOrgID, pr, "PR", "open", at, at, "feat/x", "")
 	}
 	issue("I-native-a")
 	link("link native to A", "I-native-a", entityTreeRepoA, 1, "native")
@@ -245,6 +252,10 @@ func TestEntityTree_UnknownLinkProvenanceIsCountedNotAdmitted(t *testing.T) {
 		entityTreeRepoA, "I-native-a", uint32(1), float32(0.9), "guessed", "", at, entityTreeOrgID); err != nil {
 		t.Fatalf("seed link: %v", err)
 	}
+	if err := direct.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+		entityTreeRepoA, entityTreeOrgID, uint32(1), "PR", "open", at, at, "feat/x", ""); err != nil {
+		t.Fatalf("seed pull request: %v", err)
+	}
 	expander := devhealthfacts.NewScopeExpander(query)
 	result := entityTreeExpand(t, ctx, expander, storage.Principal{OrgID: entityTreeOrgID, RepositoryScopes: []string{"*"}},
 		contextfabric.FactScopePolicyProjectIssuePullRequestContinuousIntegration, contextfabric.FactContinuousIntegration,
@@ -333,5 +344,136 @@ func TestEntityTree_HistoricalAxisIsRefused(t *testing.T) {
 	})
 	if !errors.Is(err, contextfabric.ErrFactScopeAxisUnsupported) {
 		t.Fatalf("err = %v, want ErrFactScopeAxisUnsupported", err)
+	}
+}
+
+// A link row names a pull request by (repository, number). A link whose pull
+// request does not exist is a stale link: it reaches no repository and is a
+// counted missing hop, exactly as the canonical link projection skips it.
+func TestEntityTree_LinkToAMissingPullRequestReachesNoRepository(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	at := time.Now().UTC()
+	seedEntityTree(t, ctx, direct, at)
+	if err := direct.Exec(ctx, `TRUNCATE TABLE work_graph_issue_pr`); err != nil {
+		t.Fatalf("truncate links: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		entityTreeRepoD, "I-native-a", uint32(99), float32(0.9), "native", "", at, entityTreeOrgID); err != nil {
+		t.Fatalf("seed stale link: %v", err)
+	}
+	expander := devhealthfacts.NewScopeExpander(query)
+	result := entityTreeExpand(t, ctx, expander, storage.Principal{OrgID: entityTreeOrgID, RepositoryScopes: []string{"*"}},
+		contextfabric.FactScopePolicyProjectIssuePullRequestContinuousIntegration, contextfabric.FactContinuousIntegration,
+		entityTreeProjectOrigin(t), contextfabric.SubjectRepository)
+	if len(result.Targets) != 0 {
+		t.Fatalf("targets = %v, want none: the link names a pull request that does not exist", entityTreeLabels(result.Targets))
+	}
+	if result.Counts.MissingNextHopCount == 0 {
+		t.Fatal("MissingNextHopCount = 0 -- a stale link must be counted, not read as an empty project")
+	}
+}
+
+// The ownership join returns one row per (team, source). The limit applies to
+// DISTINCT teams, so a project owned by more teams than the limit is reported
+// as truncated even when every team has several ownership sources.
+func TestEntityTree_ProjectTeamFanoutIsTruncatedByDistinctTeams(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	at := time.Now().UTC()
+	seedEntityTree(t, ctx, direct, at)
+	const project = "PROJ-FAN"
+	if err := direct.Exec(ctx, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		project, entityTreeOrgID, entityTreeProvider, nil, "Fan", uint8(1), "active", "", at); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	for _, team := range []string{"fan-a", "fan-b", "fan-c"} {
+		if err := direct.Exec(ctx, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			team, team, "", at, entityTreeOrgID, entityTreeProvider, team, uint8(1)); err != nil {
+			t.Fatalf("seed team: %v", err)
+		}
+		for _, source := range []string{"native", "manual"} {
+			if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+				entityTreeOrgID, entityTreeProvider, team, project, nil, source, at.Add(-time.Hour), nil, at); err != nil {
+				t.Fatalf("seed ownership: %v", err)
+			}
+		}
+	}
+	id, omitted, err := identity.Derive(identity.KindProject, []string{entityTreeProvider, project}, nil)
+	if err != nil || omitted {
+		t.Fatalf("derive project id: err=%v omitted=%v", err, omitted)
+	}
+	expander := devhealthfacts.NewScopeExpander(query)
+	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
+		Principal: storage.Principal{OrgID: entityTreeOrgID, RepositoryScopes: []string{"*"}}, RequirementKind: contextfabric.FactOperationalDeficiencies,
+		Origins: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectProject, CanonicalID: id, Label: "Fan"}},
+		Policy:  contextfabric.FactScopePolicyProjectTeamOwnershipOperationalDeficiencies, TargetKind: contextfabric.SubjectTeam, Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("ExpandFactScope: %v", err)
+	}
+	if !result.Counts.Truncated {
+		t.Fatalf("Truncated = false with 3 owning teams and a limit of 2 (targets=%v) -- the cut was silent", entityTreeLabels(result.Targets))
+	}
+}
+
+// An edge superseded by a newer row of the same key reads as the newer one:
+// the incident whose edge moved from an unauthorized repository to an
+// authorized one is admitted, not dropped for the stale row.
+func TestEntityTree_SupersededIncidentEdgeReadsAsTheLatest(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	at := time.Now().UTC()
+	seedEntityTree(t, ctx, direct, at)
+	if err := direct.Exec(ctx, `INSERT INTO operational_incidents (org_id, source_version_at, id, observed_at, last_synced, service_id, title, started_at, is_deleted) VALUES (?,?,?,?,?,?,?,?,?)`,
+		entityTreeOrgID, at, "INC-MOVED", at, at, "svc", "Moved", at, uint8(0)); err != nil {
+		t.Fatalf("seed incident: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, repo_id, confidence, source, evidence, observed_at, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		"e-m1", entityTreeOrgID, "dep-m", "INC-MOVED", entityTreeRepoB, float32(0.9), "native", "", at, at.Add(-time.Hour)); err != nil {
+		t.Fatalf("seed edge: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, repo_id, confidence, source, evidence, observed_at, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		"e-m1", entityTreeOrgID, "dep-m", "INC-MOVED", entityTreeRepoA, float32(0.9), "native", "", at, at); err != nil {
+		t.Fatalf("seed edge: %v", err)
+	}
+	expander := devhealthfacts.NewScopeExpander(query)
+	result := entityTreeExpand(t, ctx, expander, storage.Principal{OrgID: entityTreeOrgID, RepositoryScopes: []string{entityTreeSlugA}},
+		contextfabric.FactScopePolicyProjectIssuePullRequestIncidents, contextfabric.FactIncidents,
+		entityTreeProjectOrigin(t), contextfabric.SubjectIncident)
+	found := false
+	for _, target := range result.Targets {
+		if target.CanonicalID == "incident:INC-MOVED" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("targets = %v, want incident:INC-MOVED: its latest edge names an authorized repository", entityTreeLabels(result.Targets))
+	}
+}
+
+// The missing-hop count is the number of issues, not the number of groups.
+func TestEntityTree_EveryUnlinkedIssueIsCounted(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	at := time.Now().UTC()
+	seedEntityTree(t, ctx, direct, at)
+	if err := direct.Exec(ctx, `TRUNCATE TABLE work_graph_issue_pr`); err != nil {
+		t.Fatalf("truncate links: %v", err)
+	}
+	for i := 0; i < 9; i++ {
+		id := "I-extra-" + string(rune('a'+i))
+		if err := direct.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, entityTreeRepoC, entityTreeOrgID, id, "open", "", "", entityTreeProject, at); err != nil {
+			t.Fatalf("seed issue: %v", err)
+		}
+	}
+	expander := devhealthfacts.NewScopeExpander(query)
+	result := entityTreeExpand(t, ctx, expander, storage.Principal{OrgID: entityTreeOrgID, RepositoryScopes: []string{"*"}},
+		contextfabric.FactScopePolicyProjectIssuePullRequestContinuousIntegration, contextfabric.FactContinuousIntegration,
+		entityTreeProjectOrigin(t), contextfabric.SubjectRepository)
+	// 4 seeded issues + 9 extra, none linked.
+	if result.Counts.MissingNextHopCount != 13 {
+		t.Fatalf("MissingNextHopCount = %d, want 13 (every unlinked issue)", result.Counts.MissingNextHopCount)
 	}
 }
