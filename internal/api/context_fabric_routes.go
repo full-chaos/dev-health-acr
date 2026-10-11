@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -605,6 +606,11 @@ func (a *App) writeContextFabricFailure(w http.ResponseWriter, r *http.Request, 
 // branch, where the sentinel already names the cause.
 func (a *App) logContextFabricFailure(r *http.Request, err error, classification string, status int) {
 	stage, _ := contextfabric.FailureStage(err)
+	var budgetRefusal contextfabric.AnswerBudgetRefusal
+	refusedOnBudget := errors.As(err, &budgetRefusal)
+	if refusedOnBudget && stage == contextfabric.StageUnknown && contextfabric.ValidInvestigationStage(budgetRefusal.Stage) {
+		stage = budgetRefusal.Stage
+	}
 	level := slog.LevelWarn
 	if status >= http.StatusInternalServerError || classification == contextFabricClassUnclassified {
 		level = slog.LevelError
@@ -618,6 +624,9 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	}
 	if classification == contextFabricClassUnclassified {
 		fields = append(fields, "failure_error_type", contextFabricInnermostErrorType(err))
+	}
+	if refusedOnBudget {
+		fields = append(fields, contextFabricBudgetRefusalFields(budgetRefusal)...)
 	}
 	// CHAOS-4355 follow-up: violated_bound was previously ONLY in the HTTP
 	// response body (writeContextFabricRejectionError below), never logged
@@ -1045,5 +1054,41 @@ func factReadAbortCause(err error) string {
 		return "no_investigation_subjects"
 	default:
 		return "other"
+	}
+}
+
+// contextFabricBudgetRefusalSectionShare is the smallest share of the measured
+// bytes a section must hold to be named on the refusal line.
+const contextFabricBudgetRefusalSectionShare = 0.05
+
+// contextFabricBudgetRefusalFields is what a budget refusal measured, on the
+// one failure line: the numbers, whether anything was left to cut, and every
+// section holding at least 5% of the measured bytes ("name=bytes", largest
+// first). Section names are the answer contract's own top-level keys, never
+// content.
+func contextFabricBudgetRefusalFields(refusal contextfabric.AnswerBudgetRefusal) []any {
+	var sections []string
+	for _, section := range refusal.Sections {
+		if refusal.MeasuredBytes > 0 && float64(section.Bytes) >= contextFabricBudgetRefusalSectionShare*float64(refusal.MeasuredBytes) {
+			sections = append(sections, fmt.Sprintf("%s=%d", contextfabric.SanitizeLogAttr(section.Name), section.Bytes))
+		}
+	}
+	// The overrun axis is a closed two-value vocabulary; a value outside it is
+	// not logged as if it were one.
+	overrun := "unrecognized"
+	switch refusal.Overrun {
+	case contractsv1.ContextFabricBudgetOverrunItems, contractsv1.ContextFabricBudgetOverrunBytes:
+		overrun = string(refusal.Overrun)
+	}
+	return []any{
+		"budget_overrun", overrun,
+		"budget_measured_bytes", refusal.MeasuredBytes,
+		"budget_max_serialized_bytes", refusal.MaxSerializedBytes,
+		"budget_measured_items", refusal.MeasuredItems,
+		"budget_max_items", refusal.MaxItems,
+		"budget_nothing_left_to_cut", refusal.NothingLeftToCut,
+		"budget_retry_attempted", refusal.RetryAttempted,
+		"budget_question_family", contextfabric.SanitizeLogAttr(string(refusal.Family)),
+		"budget_sections", strings.Join(sections, ","),
 	}
 }
