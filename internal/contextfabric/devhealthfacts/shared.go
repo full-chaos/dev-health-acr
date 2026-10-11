@@ -706,9 +706,13 @@ import (
 // it read as claims; a candidate saved under an earlier version may hold one
 // with none.
 //
-// v139 -> v148: served limitation sentences, coverage reasons and render labels name
+// v139 -> v143: served limitation sentences, coverage reasons and render labels name
 // kinds by display noun and carry no basis token, so a candidate saved under an
 // earlier version may hold the old wording and must not be reused.
+//
+// v143 -> v148: a team rollup kind declares answer obligations, so a team driver or
+// remaining-work question plans the blockers, pull request, incident and deployment
+// rollups; a candidate saved under an earlier version holds an answer without them.
 const QueryVersion = "devhealthfacts.clickhouse.v148"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
