@@ -151,8 +151,7 @@ func sites(keys ...string) map[string]int {
 }
 
 const (
-	noSourceRow  = "no Context Fabric producer mints this kind: a packet catalog locator inside ev2 handles only"
-	projectTeamB = "the project-team.v2 source-row read (the projector's group SQL, unrestricted callers only): the CHAOS-7252 sub-issue"
+	noSourceRow = "no Context Fabric producer mints this kind: a packet catalog locator inside ev2 handles only"
 )
 
 func producerGrammars() []producerGrammar {
@@ -249,7 +248,11 @@ func producerGrammars() []producerGrammar {
 		{kind: contractsv1.ContextFabricEvidenceEntityProjectTeamV2, shape: "mint/4", keyByColumns: true,
 			keyColumns:    []string{"provider", "project_id", "team_id", "source"},
 			keyExceptions: map[string]string{"valid_from": "the ref names the projector's ownership GROUP: every assertion of (provider, project, team, source) aggregated"},
-			onRecord:      projectTeamB, sites: sites(source + "teams_projects_edges.go|queryProjectTeams")},
+			sites:         sites(source + "teams_projects_edges.go|queryProjectTeams")},
+		{kind: contractsv1.ContextFabricEvidenceEntityProjectTeamV2, shape: "sqlmint/4", keyByColumns: true,
+			keyColumns:    []string{"provider", "project_id", "team_id", "source"},
+			keyExceptions: map[string]string{"valid_from": "the ref names the projector's ownership GROUP: every assertion of (provider, project, team, source) aggregated"},
+			sites:         sites(source + "teams_projects_edges.go|ProjectTeamSourceRowQuery")},
 	}
 }
 
