@@ -728,11 +728,17 @@ import (
 // complete and the only gap is a same-label claimant missing from the graph; a candidate
 // saved under an earlier version may hold the uncertified count and must not be reused.
 //
-// v149 -> v150: a repository's identity fact carries owning_teams (its current
+// v149 -> v150: a requirement row over a truncated fact source whose cause is a
+// scope-expansion gap is admitted by the outcome validator, so an answer that was
+// refused as an invalid result is served; a candidate saved under an earlier
+// version cannot hold it.
+//
+// v150 -> v151: a repository's identity fact carries owning_teams (its current
 // team_repo_ownership teams), and a grouped repository answer groups under those
-// teams and discloses members that sit under more than one. A candidate saved
-// under v149 holds an ungrouped repository answer and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v150"
+// teams and discloses members placed under more than one, under none, or whose
+// owners the facts cut short. A candidate saved under v150 holds an ungrouped
+// repository answer and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v151"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
