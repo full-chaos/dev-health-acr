@@ -68,7 +68,7 @@ func synthesisFailureWarning(class SynthesisFailureClass) string {
 // failure that follows is served as a degraded answer, never as a timeout
 // with no answer. A dead context composes nothing, so the slice is held back
 // before the deadline, not after it.
-const SynthesisCompositionReserveSeconds = 5
+const SynthesisCompositionReserveSeconds = contractsv1.ContextFabricSynthesisCompositionReserveSeconds
 
 const synthesisCompositionReserve = SynthesisCompositionReserveSeconds * time.Second
 

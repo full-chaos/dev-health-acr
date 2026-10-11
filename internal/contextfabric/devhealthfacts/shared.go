@@ -793,14 +793,29 @@ import (
 // model_call_not_completed and retry_may_succeed, where it was an error with no
 // stored answer; a candidate saved under an earlier version cannot hold it.
 //
-// v162 -> v163: the repositories a project or team scope reaches follow the
+// v162 -> v163: an answer whose status the server's completeness authority
+// replaced carries a status_correction record (the model's label, the served
+// pair, the deciding outcome row) on the result and its completeness block; a
+// candidate saved under v162 was served corrected with no such record and the
+// model's label is not recoverable from it.
+//
+// v163 -> v164: an answer about one subject (no cohort) whose claimed facts
+// overran the item ceiling is served partial with the claims cut and the cut
+// disclosed, where it was refused; a candidate saved under an earlier version
+// cannot hold it.
+//
+// v164 -> v165: every canonical fact the registry accepts carries a deterministic id and a
+// synthesized claim may cite it (fact_id); a candidate saved under an earlier version holds
+// facts and claims without ids.
+//
+// v165 -> v166: the repositories a project or team scope reaches follow the
 // entity tree. A project reaches the repositories of its issues' linked pull
 // request rows (work_graph_issue_pr), not the issue's own repository column; a
 // team reaches the repositories it owns and those its owned projects' issues
 // link to, not the repositories of its attributed issues. Issues with no link
 // row are counted as a missing next hop. A project or team answer saved under
-// v162 may rest on a repository the tree does not reach.
-const QueryVersion = "devhealthfacts.clickhouse.v163"
+// v165 may rest on a repository the tree does not reach.
+const QueryVersion = "devhealthfacts.clickhouse.v166"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

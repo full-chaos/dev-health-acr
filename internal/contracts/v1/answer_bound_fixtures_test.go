@@ -56,6 +56,20 @@ func answerBoundTable() []answerBound {
 				r.RefusalBasis = ContextFabricRefusalBasisMemberKindUnservable
 				r.Completeness.RefusalBasis = ContextFabricRefusalBasisMemberKindUnservable
 			}},
+		{Field: "StatusCorrection", Why: "optional disclosure that the server replaced the model's status; on a SERVED fixture (status complete) its only legal value is absent, because validateStatusCorrection refuses a record beside status=complete. Min and max are both nil, and PastMax names a correction on this served answer, which the validator must reject",
+			Min: func(r *ContextFabricInvestigationResult) {
+				r.StatusCorrection = nil
+				r.Completeness.StatusCorrection = nil
+			},
+			Max: func(r *ContextFabricInvestigationResult) {
+				r.StatusCorrection = nil
+				r.Completeness.StatusCorrection = nil
+			},
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				correction := &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationPartial, Direction: ContextFabricStatusCorrectionPartialToDegraded}
+				r.StatusCorrection = correction
+				r.Completeness.StatusCorrection = correction
+			}},
 		{Field: "SemanticReading", Why: "optional disclosure a READ of a stored clarification carries when its stored accepted reading could not be loaded; on a SERVED fixture its only legal value is absent, because validateSemanticReadingOnResult refuses it beside any status but clarification_required. Min and max are both nil, and PastMax names a disclosure on this served answer, which the validator must reject",
 			Min: func(r *ContextFabricInvestigationResult) { r.SemanticReading = nil },
 			Max: func(r *ContextFabricInvestigationResult) { r.SemanticReading = nil },
@@ -479,7 +493,8 @@ const irreducibleAnswerBytes = 1023
 // 521162181 -> 521162209 (+28): the version set carries the synthesis
 // source.
 // 521162209 -> 521166109 (+3900): the candidate provider cue, 64 runes on 50 candidates and the field name.
-const maximalAnswerBytes = 521166109
+// 521166109 -> 521553359 (+387250): claimed_facts[].fact_id, 256 escaped runes on 250 claims.
+const maximalAnswerBytes = 521553359
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
@@ -754,6 +769,7 @@ var expectedRejection = map[string]string{
 	// served-answer clause survived on its neighbour's message.
 	"RefusalBasis":            "cannot accompany status",
 	"SemanticReading":         "semantic_reading cannot accompany status",
+	"StatusCorrection":        "status_correction cannot accompany status",
 	"Cohort":                  "cohort violates v1 bounds",
 	"Completeness":            "outcomes exceeds v1 bounds",
 	"EvidenceRefLabels":       "names no evidence ref on the result",

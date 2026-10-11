@@ -1003,6 +1003,9 @@ func (c ContextFabricClaimedFact) Validate() error {
 	if !stringLengthBetween(c.ClaimID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !validClaimedFactKind(c.Kind) || !stringLengthBetween(c.Field, 1, ContextFabricClaimedFieldMaxLength) || strings.TrimSpace(c.Field) != c.Field {
 		return fmt.Errorf("claimed fact identity violates v1 bounds")
 	}
+	if utf8.RuneCountInString(c.FactID) > ContextFabricModelMintedIDMaxLength {
+		return fmt.Errorf("claimed fact fact_id violates v1 bounds")
+	}
 	if err := c.Subject.Validate(); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
@@ -1203,6 +1206,9 @@ func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFab
 	// otherwise be told a different story than one reading the result.
 	if c.RefusalBasis != r.RefusalBasis {
 		return fmt.Errorf("completeness refusal_basis %q must equal the result's refusal_basis %q", c.RefusalBasis, r.RefusalBasis)
+	}
+	if err := r.validateStatusCorrection(); err != nil {
+		return err
 	}
 	// Membership is checked on the NON-EMPTY value only: empty is the
 	// ordinary case (the turn was not refused) and is deliberately not a
@@ -2121,6 +2127,49 @@ func validateInactiveHints(hints []ContextFabricInactiveHint) error {
 		if hint.ActiveCanonicalID != "" && !stringLengthBetween(hint.ActiveCanonicalID, 1, 512) {
 			return fmt.Errorf("inactive hint active canonical id violates v1 bounds")
 		}
+	}
+	return nil
+}
+
+// validateStatusCorrection holds the correction record and its mirror to the
+// document: the mirror equals the source, and a record names a status the
+// authority is allowed to have served (never complete), a direction that
+// starts from the stated model status, and, when it names a deciding row,
+// one the completeness block carries.
+func (r ContextFabricInvestigationResult) validateStatusCorrection() error {
+	source, mirror := r.StatusCorrection, r.Completeness.StatusCorrection
+	if (source == nil) != (mirror == nil) || (source != nil && *source != *mirror) {
+		return fmt.Errorf("completeness status_correction must equal the result's status_correction")
+	}
+	if source == nil {
+		return nil
+	}
+	if r.Status != ContextFabricInvestigationPartial && r.Status != ContextFabricInvestigationDegraded {
+		return fmt.Errorf("status_correction cannot accompany status %q", r.Status)
+	}
+	from, ok := ContextFabricStatusCorrectionModelStatus(source.Direction)
+	if !ok {
+		return fmt.Errorf("status_correction direction %q is not a vocabulary member", source.Direction)
+	}
+	if source.ReplacedStatus != from {
+		return fmt.Errorf("status_correction replaced_status %q does not match direction %q", source.ReplacedStatus, source.Direction)
+	}
+	if to, _ := ContextFabricStatusCorrectionServedStatus(source.Direction); to != r.Status {
+		return fmt.Errorf("status_correction direction %q does not end at the served status %q", source.Direction, r.Status)
+	}
+	if source.DecidingOutcome != "" && !ValidContextFabricPlanRequirementOutcome(source.DecidingOutcome) {
+		return fmt.Errorf("status_correction deciding_outcome %q is not a vocabulary member", source.DecidingOutcome)
+	}
+	if (source.DecidingRequirement == "") != (source.DecidingOutcome == "") {
+		return fmt.Errorf("status_correction deciding_requirement and deciding_outcome are present together or not at all")
+	}
+	if source.DecidingRequirement != "" {
+		for _, row := range r.Completeness.Outcomes {
+			if row.Requirement == source.DecidingRequirement && row.Outcome == source.DecidingOutcome {
+				return nil
+			}
+		}
+		return fmt.Errorf("status_correction deciding_requirement and deciding_outcome name no completeness outcome row")
 	}
 	return nil
 }

@@ -1743,6 +1743,13 @@ type ContextFabricClaimedFact struct {
 	Subject ContextFabricSubjectRef  `json:"subject"`
 	Field   string                   `json:"field"`
 	Value   ContextFabricScalarValue `json:"value"`
+	// FactID is the OPTIONAL id of the one canonical fact this claim
+	// restates (CanonicalFact.ID, as supplied in the synthesis input). When
+	// present and it names a fact of this claim's Kind and Subject, the claim
+	// is grounded against THAT fact alone; absent, grounding closes over the
+	// claim's whole (Kind, Subject) group as before. Additive: a consumer
+	// that ignores it is unaffected.
+	FactID string `json:"fact_id,omitempty"`
 	// Rows is an OPTIONAL, additive renderable table (CHAOS-4347): a fact
 	// whose evidence is genuinely a set of rows -- e.g. a project's
 	// per-team metrics rollup, where summing counts across teams is sound
@@ -2174,6 +2181,13 @@ type ContextFabricInvestigationResult struct {
 	// correct value, because none of them was refused by a gate that did
 	// not yet exist.
 	RefusalBasis ContextFabricRefusalBasis `json:"refusal_basis,omitempty"`
+	// StatusCorrection discloses that the server's outcome-derived
+	// completeness authority replaced the status the model authored: what it
+	// was, what it is served as, and the outcome row that decided it. It is
+	// the source and Completeness.StatusCorrection its mirror, the
+	// RefusalBasis arrangement. Absent when the served status is the model's
+	// own label. Additive and optional.
+	StatusCorrection *ContextFabricStatusCorrection `json:"status_correction,omitempty"`
 	// SemanticReading is present only on a READ of a stored
 	// clarification whose answerability needed the stored accepted reading
 	// and could not load it. See context_fabric_semantic_reading.go.

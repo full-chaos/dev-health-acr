@@ -289,6 +289,7 @@ func repeatClaimedFacts(n int) []ContextFabricClaimedFact {
 			Subject: minimalSubject(),
 			Field:   escaped(ContextFabricClaimedFieldMaxLength),
 			Value:   ContextFabricScalarValue{String: &value},
+			FactID:  escaped(ContextFabricModelMintedIDMaxLength),
 		})
 	}
 	return out
