@@ -3827,6 +3827,11 @@
             "allow_clarification": {
               "type": "boolean"
             },
+            "answer_budget_bytes": {
+              "maximum": 1048576,
+              "minimum": 8192,
+              "type": "integer"
+            },
             "include_debug": {
               "type": "boolean"
             },
