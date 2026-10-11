@@ -44,6 +44,7 @@ func TestScopeExpanderAsOf_NativeEventStoredAtTwoOccurredAtIsOneTouch(t *testing
 		repoID, orgID, repoSlug, "linear", t1)
 	mustExec("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		workItemID, repoID, orgID, "Duplicate-add history", "open", "", "", "linear", projectAID, t2)
+	seedIssueLink(t, ctx, direct, orgID, workItemID, repoID, 1, "native", t2)
 	// TWO ADD touches of the same (work_item, project A) pair, no REMOVE in
 	// between -- the continuation membershipTouchesAsOfSQL flags via
 	// is_duplicate_add.
