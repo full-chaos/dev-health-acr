@@ -28,6 +28,11 @@ type EngineOptions struct {
 	// (anchor_binding.go): no binding is computed, persisted or reported.
 	// Zero value = the shadow runs. Served output is identical either way.
 	DisableAnchorBindingShadow bool
+	// AnchorBindingMaxAge is the age past which a carried anchor proof is not
+	// admitted (anchor_admission.go). Zero selects
+	// DefaultAnchorBindingMaxAge; anything else must lie in
+	// [MinAnchorBindingMaxAge, MaxAnchorBindingMaxAge].
+	AnchorBindingMaxAge time.Duration
 	// MaxItems (CHAOS-4636) is the SERVICE-configured item ceiling the
 	// investigation route's own 413 gate enforces (ACR_MAX_ITEMS, default
 	// 30). The listed members of a work-item walk are outside it
@@ -1280,6 +1285,7 @@ type Engine struct {
 	reuseSnapshotter                            SourceWatermarkSnapshotter
 	reuseEpochSnapshotter                       RebuildEpochSnapshotter
 	anchorFreshness                             AnchorFreshnessReader
+	anchorBindingMaxAgeSetting                  time.Duration
 	reuseModelIdentityResolver                  ReuseModelIdentityResolver
 	reuseProjectionVersion                      string
 	reuseModelIdentities                        []string
@@ -1329,6 +1335,9 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 	if options.NewResultID == nil {
 		return nil, errors.New("context fabric engine result ID generator is required")
 	}
+	if err := validateAnchorBindingMaxAge(options.AnchorBindingMaxAge); err != nil {
+		return nil, err
+	}
 	var recorder StoredResultAuthorizationRecorder
 	if dependencies.Telemetry != nil {
 		recorder = dependencies.Telemetry
@@ -1345,6 +1354,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseGate:        dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		anchorFreshness:            dependencies.AnchorFreshness,
+		anchorBindingMaxAgeSetting: options.AnchorBindingMaxAge,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
 		structureSelectionSink:     dependencies.StructureSelectionSink,
@@ -2816,6 +2826,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// decisive one: every graph read below that can prove an anchor reads
 	// after the ownership state it is stamped with.
 	e.acquireAnchorFreshness(ctx, principal.OrgID, anchorShadow)
+	// The parent binding is admitted (or refused) once, here, after the
+	// ownership read it compares against and before any proof is weighed.
+	e.admitAnchorBindingParent(ctx, principal, request, binding, anchorShadow)
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,
 		// but it now composes kind/handle/candidate offers from an

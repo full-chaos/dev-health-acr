@@ -170,7 +170,10 @@ type AnchorBindingTransitionFields struct {
 	Site                      string
 	Evaluation                string
 	ParentBinding             string
-	CarryChecks               string
+	BindingAdmission          string
+	AdmissionRememberedCheck  string
+	AdmissionRememberedReason string
+	AdmissionAgeSeconds       int
 	FromState                 string
 	FromKind                  string
 	FromID                    string
@@ -182,6 +185,9 @@ type AnchorBindingTransitionFields struct {
 	FromContenderID           string
 	FromProvenFreshnessEpoch  int
 	FromProvenFreshnessDigest string
+	FromPolicyVersion         string
+	FromProvenAt              string
+	FromWitness               []string
 	ParentGraphEpoch          int
 	GraphEpoch                int
 	FrameExpressionKind       string
@@ -210,6 +216,9 @@ type AnchorBindingTransitionFields struct {
 	ContenderID               string
 	ToProvenFreshnessEpoch    int
 	ToProvenFreshnessDigest   string
+	PolicyVersion             string
+	ToProvenAt                string
+	Witness                   []string
 	OwnershipMovement         string
 	Persisted                 string
 	ShadowAgreement           string
@@ -234,8 +243,11 @@ type AnchorBindingTransitionFields struct {
 
 // NewAnchorBindingTransitionFields is the generated constructor for AnchorBindingTransitionFields -- every
 // field AnchorBindingTransition.Fields declares is a required parameter.
-func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResultID string, site string, evaluation string, parentBinding string, carryChecks string, fromState string, fromKind string, fromID string, fromProof string, fromReason string, fromOriginResultID string, fromGraphEpoch int, fromContenderKind string, fromContenderID string, fromProvenFreshnessEpoch int, fromProvenFreshnessDigest string, parentGraphEpoch int, graphEpoch int, frameExpressionKind string, frameMemberKind string, anchorTermCount int, anchorTermMatchedIDs []string, committedSubjects []string, modelAnchorKind string, namedExpectedKind string, receiptAnchorKind string, receiptAnchorID string, callerHintIDs []string, provenAnchorIDs []string, effectiveKind string, freshnessAcquisition string, freshnessServingEpoch int, freshnessOwnershipDigest string, toState string, toKind string, toID string, proof string, reason string, originResultID string, toGraphEpoch int, contenderKind string, contenderID string, toProvenFreshnessEpoch int, toProvenFreshnessDigest string, ownershipMovement string, persisted string, shadowAgreement string, disagreementField string, servedAnchorKind string, servedAnchorID string, servedCountDecision string, servedCountKind string, servedCountID string, substitutionGuard string, requestID string) AnchorBindingTransitionFields {
+func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResultID string, site string, evaluation string, parentBinding string, bindingAdmission string, admissionRememberedCheck string, admissionRememberedReason string, admissionAgeSeconds int, fromState string, fromKind string, fromID string, fromProof string, fromReason string, fromOriginResultID string, fromGraphEpoch int, fromContenderKind string, fromContenderID string, fromProvenFreshnessEpoch int, fromProvenFreshnessDigest string, fromPolicyVersion string, fromProvenAt string, fromWitness []string, parentGraphEpoch int, graphEpoch int, frameExpressionKind string, frameMemberKind string, anchorTermCount int, anchorTermMatchedIDs []string, committedSubjects []string, modelAnchorKind string, namedExpectedKind string, receiptAnchorKind string, receiptAnchorID string, callerHintIDs []string, provenAnchorIDs []string, effectiveKind string, freshnessAcquisition string, freshnessServingEpoch int, freshnessOwnershipDigest string, toState string, toKind string, toID string, proof string, reason string, originResultID string, toGraphEpoch int, contenderKind string, contenderID string, toProvenFreshnessEpoch int, toProvenFreshnessDigest string, policyVersion string, toProvenAt string, witness []string, ownershipMovement string, persisted string, shadowAgreement string, disagreementField string, servedAnchorKind string, servedAnchorID string, servedCountDecision string, servedCountKind string, servedCountID string, substitutionGuard string, requestID string) AnchorBindingTransitionFields {
 	valid := true
+	if fromWitness == nil {
+		valid = false
+	}
 	if anchorTermMatchedIDs == nil {
 		valid = false
 	}
@@ -248,6 +260,9 @@ func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResul
 	if provenAnchorIDs == nil {
 		valid = false
 	}
+	if witness == nil {
+		valid = false
+	}
 	return AnchorBindingTransitionFields{
 		OrgID:                     orgID,
 		ResultID:                  resultID,
@@ -255,7 +270,10 @@ func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResul
 		Site:                      site,
 		Evaluation:                evaluation,
 		ParentBinding:             parentBinding,
-		CarryChecks:               carryChecks,
+		BindingAdmission:          bindingAdmission,
+		AdmissionRememberedCheck:  admissionRememberedCheck,
+		AdmissionRememberedReason: admissionRememberedReason,
+		AdmissionAgeSeconds:       admissionAgeSeconds,
 		FromState:                 fromState,
 		FromKind:                  fromKind,
 		FromID:                    fromID,
@@ -267,6 +285,9 @@ func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResul
 		FromContenderID:           fromContenderID,
 		FromProvenFreshnessEpoch:  fromProvenFreshnessEpoch,
 		FromProvenFreshnessDigest: fromProvenFreshnessDigest,
+		FromPolicyVersion:         fromPolicyVersion,
+		FromProvenAt:              fromProvenAt,
+		FromWitness:               fromWitness,
 		ParentGraphEpoch:          parentGraphEpoch,
 		GraphEpoch:                graphEpoch,
 		FrameExpressionKind:       frameExpressionKind,
@@ -295,6 +316,9 @@ func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResul
 		ContenderID:               contenderID,
 		ToProvenFreshnessEpoch:    toProvenFreshnessEpoch,
 		ToProvenFreshnessDigest:   toProvenFreshnessDigest,
+		PolicyVersion:             policyVersion,
+		ToProvenAt:                toProvenAt,
+		Witness:                   witness,
 		OwnershipMovement:         ownershipMovement,
 		Persisted:                 persisted,
 		ShadowAgreement:           shadowAgreement,
@@ -329,7 +353,10 @@ func (f AnchorBindingTransitionFields) SlogArgs() []any {
 		"site", contextfabric.SanitizeLogAttr(f.Site),
 		"evaluation", contextfabric.SanitizeLogAttr(f.Evaluation),
 		"parent_binding", contextfabric.SanitizeLogAttr(f.ParentBinding),
-		"carry_checks", contextfabric.SanitizeLogAttr(f.CarryChecks),
+		"binding_admission", contextfabric.SanitizeLogAttr(f.BindingAdmission),
+		"admission_remembered_check", contextfabric.SanitizeLogAttr(f.AdmissionRememberedCheck),
+		"admission_remembered_reason", contextfabric.SanitizeLogAttr(f.AdmissionRememberedReason),
+		"admission_age_seconds", f.AdmissionAgeSeconds,
 		"from_state", contextfabric.SanitizeLogAttr(f.FromState),
 		"from_kind", contextfabric.SanitizeLogAttr(f.FromKind),
 		"from_id", contextfabric.SanitizeLogAttr(f.FromID),
@@ -341,6 +368,9 @@ func (f AnchorBindingTransitionFields) SlogArgs() []any {
 		"from_contender_id", contextfabric.SanitizeLogAttr(f.FromContenderID),
 		"from_proven_freshness_epoch", f.FromProvenFreshnessEpoch,
 		"from_proven_freshness_digest", contextfabric.SanitizeLogAttr(f.FromProvenFreshnessDigest),
+		"from_policy_version", contextfabric.SanitizeLogAttr(f.FromPolicyVersion),
+		"from_proven_at", contextfabric.SanitizeLogAttr(f.FromProvenAt),
+		"from_witness", contextfabric.SanitizeLogStrings(f.FromWitness),
 		"parent_graph_epoch", f.ParentGraphEpoch,
 		"graph_epoch", f.GraphEpoch,
 		"frame_expression_kind", contextfabric.SanitizeLogAttr(f.FrameExpressionKind),
@@ -369,6 +399,9 @@ func (f AnchorBindingTransitionFields) SlogArgs() []any {
 		"contender_id", contextfabric.SanitizeLogAttr(f.ContenderID),
 		"to_proven_freshness_epoch", f.ToProvenFreshnessEpoch,
 		"to_proven_freshness_digest", contextfabric.SanitizeLogAttr(f.ToProvenFreshnessDigest),
+		"policy_version", contextfabric.SanitizeLogAttr(f.PolicyVersion),
+		"to_proven_at", contextfabric.SanitizeLogAttr(f.ToProvenAt),
+		"witness", contextfabric.SanitizeLogStrings(f.Witness),
 		"ownership_movement", contextfabric.SanitizeLogAttr(f.OwnershipMovement),
 		"persisted", contextfabric.SanitizeLogAttr(f.Persisted),
 		"shadow_agreement", contextfabric.SanitizeLogAttr(f.ShadowAgreement),

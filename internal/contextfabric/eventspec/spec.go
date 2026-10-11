@@ -3332,10 +3332,18 @@ var AnchorBindingTransition = Event{
 		{Key: "site", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("site")},
 		{Key: "evaluation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("evaluation")},
 		{Key: "parent_binding", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("parent_binding")},
-		// not_evaluated whenever a parent binding was used: the shadow carries
-		// on the parent reference without same-question admission or live
-		// re-authorization.
-		{Key: "carry_checks", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("carry_checks")},
+		// Whether the parent's held binding is what the binder started from:
+		// admitted only when the proving turn asked this question, the proof is
+		// within its maximum age, ownership did not move, and a live re-read
+		// proves the held identity readable; any refusal starts the binder
+		// unbound. not_evaluated on an exit above the admission point, which
+		// keeps the parent's binding as it was. The re-read's class and the
+		// verifier's own reason, and the proof's age in seconds (-1 when none
+		// was measured), follow.
+		{Key: "binding_admission", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("binding_admission")},
+		{Key: "admission_remembered_check", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("admission_remembered_check")},
+		{Key: "admission_remembered_reason", Type: FieldString, Presence: PresenceRequired},
+		{Key: "admission_age_seconds", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "from_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("from_state")},
 		// Open: subject-kind tokens drawn from contextfabric.SubjectKind and
 		// free canonical ids, empty when absent.
@@ -3354,6 +3362,12 @@ var AnchorBindingTransition = Event{
 		// checkpoint cursor and is never written.
 		{Key: "from_proven_freshness_epoch", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "from_proven_freshness_digest", Type: FieldString, Presence: PresenceRequired},
+		// The parent binding's proof provenance: the policy it was decided
+		// under, the proving turn's clock (RFC 3339, empty when none) and the
+		// "<kind>:<canonical id>" identities that turn proved.
+		{Key: "from_policy_version", Type: FieldString, Presence: PresenceRequired},
+		{Key: "from_proven_at", Type: FieldString, Presence: PresenceRequired},
+		{Key: "from_witness", Type: FieldStringSlice, Presence: PresenceRequired},
 		// The graph epoch of the binding the parent row carries, -1 when no
 		// stored binding was read; the stale-parent check compares it with
 		// graph_epoch.
@@ -3405,6 +3419,9 @@ var AnchorBindingTransition = Event{
 		{Key: "contender_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "to_proven_freshness_epoch", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "to_proven_freshness_digest", Type: FieldString, Presence: PresenceRequired},
+		{Key: "policy_version", Type: FieldString, Presence: PresenceRequired},
+		{Key: "to_proven_at", Type: FieldString, Presence: PresenceRequired},
+		{Key: "witness", Type: FieldStringSlice, Presence: PresenceRequired},
 		// The held binding's proven freshness against this turn's. unmoved means
 		// ownership did not move between the two reads, never that the data is
 		// fresh.

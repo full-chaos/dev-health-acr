@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -24,17 +25,21 @@ func anchorBindingCertifyScenarios() map[string][]anchorProbeStep {
 		"window gated pending": {
 			{request: firstTurnRequest("request_cert_gated", false), windowed: true, response: identityProvenResponse(probeAlpha)},
 		},
-		"natural follow-up carried silent": {
+		"same question carried silent": {
 			{request: firstTurnRequest("request_cert_silent_one", true), response: identityProvenResponse(probeAlpha)},
-			{request: followUp("request_cert_silent_two", "And how many teams contribute to it?", nil), response: emptyProbeResponse()},
+			{request: followUp("request_cert_silent_two", "", nil), verified: true, response: emptyProbeResponse()},
+		},
+		"changed question refused": {
+			{request: firstTurnRequest("request_cert_changed_one", true), response: identityProvenResponse(probeAlpha)},
+			{request: followUp("request_cert_changed_two", "And how many teams contribute to it?", nil), verified: true, response: emptyProbeResponse()},
 		},
 		"follow-up alias contested": {
 			{request: firstTurnRequest("request_cert_alias_one", true), response: identityProvenResponse(probeAlpha)},
-			{request: followUp("request_cert_alias_two", "And how many teams contribute to it?", nil), response: identityProvenResponse(probeBeta)},
+			{request: followUp("request_cert_alias_two", "", nil), verified: true, response: identityProvenResponse(probeBeta)},
 		},
 		"model kind conflict": {
 			{request: firstTurnRequest("request_cert_kind_one", true), anchorKind: SubjectRepository, response: identityProvenResponse(probeAlpha)},
-			{request: followUp("request_cert_kind_two", "", nil), anchorKind: SubjectProject, response: needTurnResponse{
+			{request: followUp("request_cert_kind_two", "", nil), anchorKind: SubjectProject, verified: true, response: needTurnResponse{
 				resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}},
 				bases:      provenCommitBases(probeAlpha),
 			}},
@@ -59,6 +64,9 @@ func RunAnchorBindingScenarioForTest(t *testing.T, scenario string) (log []byte,
 		rig.interpreter.read(step.anchorKind, step.windowed)
 		if step.ownership != nil {
 			step.ownership(rig.ownership)
+		}
+		if step.verified {
+			rig.verify()
 		}
 		rig.graph.response = step.response
 		request := step.request(turns)
@@ -112,25 +120,25 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 	first := anchorProbeStep{request: firstTurnRequest("request_vocab_first", true), response: identityProvenResponse(probeAlpha)}
 	refused := FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectTeam}
 	follow := func(id string, seed func(*staticResultStore)) anchorProbeStep {
-		return anchorProbeStep{request: followUp(id, "", nil), seed: seed, response: emptyProbeResponse()}
+		return anchorProbeStep{request: followUp(id, "", nil), seed: seed, verified: true, response: emptyProbeResponse()}
 	}
 	scenarios := []anchorSiteScenario{
 		{name: "caller hint", run: anchorProbeScenario(anchorProbeStep{request: withMutate("request_vocab_hint", alphaHint), response: needTurnResponse{
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}}, bases: provenCommitBases(probeAlpha)}})},
-		{name: "replaced by caller", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_replace", "", betaHint), response: needTurnResponse{
+		{name: "replaced by caller", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_replace", "", betaHint), verified: true, response: needTurnResponse{
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeBeta}}, bases: provenCommitBases(probeBeta)}})},
 		{name: "ambiguous proof", run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_vocab_ambiguous", true), response: identityProvenResponse(probeAlpha, probeBeta)})},
 		{name: "single subject count", run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_vocab_single_subject", true), response: needTurnResponse{
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(probeTeam)}, Committed: []SubjectRef{probeTeam}}, bases: provenCommitBases(probeTeam)}})},
-		{name: "carried not evaluated", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_refused", "", nil), gate: &refused, response: emptyProbeResponse()})},
+		{name: "carried not evaluated", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_refused", "", nil), gate: &refused, verified: true, response: emptyProbeResponse()})},
 		{name: "window confirmed", run: anchorProbeScenario(
 			anchorProbeStep{request: firstTurnRequest("request_vocab_gate_one", false), windowed: true, response: identityProvenResponse(probeAlpha)},
-			anchorProbeStep{request: followUp("request_vocab_gate_two", "", nil), response: emptyProbeResponse()})},
-		{name: "carried reconfirmed", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_reconfirm", "", nil), anchorKind: SubjectProject, response: needTurnResponse{
+			anchorProbeStep{request: followUp("request_vocab_gate_two", "", nil), verified: true, response: emptyProbeResponse()})},
+		{name: "carried reconfirmed", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_reconfirm", "", nil), anchorKind: SubjectProject, verified: true, response: needTurnResponse{
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}}, bases: provenCommitBases(probeAlpha)}})},
 		{name: "contested then silent", run: anchorProbeScenario(first,
-			anchorProbeStep{request: followUp("request_vocab_contest", "And how many teams contribute to it?", nil), response: identityProvenResponse(probeBeta)},
-			anchorProbeStep{request: followUp("request_vocab_contest_silent", "And how many teams contribute to it?", nil), response: emptyProbeResponse()})},
+			anchorProbeStep{request: followUp("request_vocab_contest", "", nil), verified: true, response: identityProvenResponse(probeBeta)},
+			anchorProbeStep{request: followUp("request_vocab_contest_silent", "", nil), verified: true, response: emptyProbeResponse()})},
 		{name: "parent unloadable", run: anchorProbeScenario(anchorProbeStep{request: withMutate("request_vocab_unloadable", func(r *InvestigationRequest) {
 			r.ParentResultID = "result_vocab_missing"
 		}), response: emptyProbeResponse()})},
@@ -191,12 +199,57 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 		anchorSiteScenario{name: "ownership not acquired", run: anchorProbeScenario(firstUnder("request_vocab_own_lost_one", probeOwnershipW1, nil), followUnder("request_vocab_own_lost_two", AnchorFreshnessRead{}, errors.New("checkpoint read failed")))},
 		anchorSiteScenario{name: "ownership proven unrecorded", run: anchorProbeScenario(firstUnder("request_vocab_own_unrec_one", absent, nil), followUnder("request_vocab_own_unrec_two", probeOwnershipW1, nil))},
 	)
+	// Every admission outcome of a held parent binding, through the real
+	// engine.
+	edited := func(id string, edit func(*AnchorBinding)) anchorProbeStep {
+		return follow(id, mutateStoredBindings(func(s *PersistedSemanticState) { editBindingMember(s, edit) }))
+	}
+	unverified := follow("request_vocab_adm_unwired", nil)
+	unverified.verified = false
+	scenarios = append(scenarios,
+		anchorSiteScenario{name: "admission refused policy", run: anchorProbeScenario(first, edited("request_vocab_adm_policy", func(b *AnchorBinding) { b.PolicyVersion = "" }))},
+		anchorSiteScenario{name: "admission refused question changed", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_adm_changed", "And how many teams contribute to it?", nil), verified: true, response: emptyProbeResponse()})},
+		anchorSiteScenario{name: "admission refused question indeterminate", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_adm_indeterminate", "??", nil), verified: true, response: emptyProbeResponse()})},
+		anchorSiteScenario{name: "admission refused origin unverifiable", run: anchorProbeScenario(first, edited("request_vocab_adm_origin", func(b *AnchorBinding) { b.OriginResultID = "result_vocab_origin_missing" }))},
+		anchorSiteScenario{name: "admission refused expired", run: anchorProbeScenario(first, edited("request_vocab_adm_expired", func(b *AnchorBinding) { b.ProvenAt = b.ProvenAt.Add(-DefaultAnchorBindingMaxAge - time.Second) }))},
+		anchorSiteScenario{name: "admission refused subject unreadable unwired", run: anchorProbeScenario(first, unverified)},
+		anchorSiteScenario{name: "admission refused subject unreadable refused", run: func(t *testing.T, sink EngineTelemetry, rec *recordingTelemetry, off bool) InvestigationResult {
+			rig := newAnchorProbeRig(t, off)
+			rig.telemetry, rig.engine.telemetry = rec, sink
+			rig.interpreter.read("", false)
+			one := rig.turn(t, needTurnRequest("request_vocab_adm_refused_one", true), identityProvenResponse(probeAlpha))
+			rig.engine.candidateVerifier = func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string) (bool, CandidateVerificationReason) {
+				return false, CandidateVerificationClaimLost
+			}
+			return rig.turn(t, continuingNeedTurn(needTurnRequest("request_vocab_adm_refused_two", true), one.result.ResultID), emptyProbeResponse()).result
+		}},
+	)
 	// The subject-substitution guard's firing and redeemed outcomes, through
 	// the real engine, so the line's substitution_guard key reaches each one.
 	scenarios = append(scenarios,
 		anchorSiteScenario{name: "guard clarified", run: guardedProbeScenario(true, true, nil)},
 		anchorSiteScenario{name: "guard refused", run: guardedProbeScenario(true, false, nil)},
 		anchorSiteScenario{name: "guard refused remembered unavailable", run: guardedProbeScenario(false, false, nil)},
+		anchorSiteScenario{name: "guard clarified remembered unavailable", run: guardedProbeScenario(false, true, nil)},
+		// The same question, an admitted carry, and the caller redeeming the
+		// parent's own offer for another identity: the caller's choice
+		// replaces the held anchor.
+		anchorSiteScenario{name: "replaced by a redeemed choice", run: func(t *testing.T, sink EngineTelemetry, rec *recordingTelemetry, off bool) InvestigationResult {
+			rig := newAnchorProbeRig(t, off)
+			rig.telemetry, rig.engine.telemetry = rec, sink
+			rig.verify()
+			offering := identityProvenResponse(probeAlpha)
+			offering.resolution.Candidates = append(offering.resolution.Candidates, SubjectCandidate{
+				ReceiptID: "receipt_probe_beta_offer", Subject: probeBeta, State: ResolutionAmbiguous,
+				MatchedTerms: []string{"a"}, MatchReasons: []string{"matched"}, Confidence: 0.4, EvidenceRefIDs: []string{},
+			})
+			rig.interpreter.read("", false)
+			one := rig.turn(t, needTurnRequest("request_vocab_replace_one", true), offering)
+			follow := continuingNeedTurn(needTurnRequest("request_vocab_replace_two", true), one.result.ResultID)
+			follow.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: "receipt_probe_beta_offer"}}
+			rig.interpreter.read("", false)
+			return rig.turn(t, follow, needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeBeta}}, bases: provenCommitBases(probeBeta)}).result
+		}},
 		anchorSiteScenario{name: "guard redeemed choice", run: guardedProbeScenario(false, true, func(first InvestigationResult, r *InvestigationRequest) {
 			r.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: first.ResultID, ReceiptID: "receipt_probe_beta_offer"}}
 		})},
@@ -268,6 +321,18 @@ func RunAnchorBindingVocabularyForTest(t *testing.T) []AnchorBindingVocabularyLo
 	huge := heldBinding(AnchorBindingBound, anchorRef{Kind: SubjectRepository, ID: strings.Repeat(`"`, SemanticStateMaxEncodedBytes)})
 	tracker := &anchorBindingTracker{parent: anchorBindingParent{ResultID: "result_vocab_parent", Status: AnchorBindingParentPresent, Binding: huge}, evaluation: AnchorBindingEvaluationNotResolved, epoch: 7}
 	_ = engine.saveResult(context.Background(), acceptancePrincipal(), BudgetAssertDecisive, InvestigationResult{ResultID: "result_vocab_unencodable"}, nil, nil, "", 0, "", semanticStateCapture{Write: SemanticStateOf(state)}.withAnchorShadow(tracker))
+	// The admission re-read cancelled before and during the verifier: no
+	// Investigate driver controls the turn's context, so the tracker is
+	// built as admission leaves it and saved through saveResult itself.
+	for i, check := range []SubjectSubstitutionRememberedCheck{SubjectSubstitutionRememberedCancelledBefore, SubjectSubstitutionRememberedCancelledDuring} {
+		held := heldBinding(AnchorBindingBound, bindAlpha)
+		cancelled := &anchorBindingTracker{
+			parent:     anchorBindingParent{ResultID: "result_vocab_parent", Status: AnchorBindingParentPresent, Binding: held, StoredEpoch: held.GraphEpoch},
+			evaluation: AnchorBindingEvaluationNotResolved, epoch: held.GraphEpoch,
+			admission: AnchorBindingAdmissionRefusedSubjectUnreadable, admissionRemembered: rememberedSubjectCheck{Check: check, ContextError: context.Canceled.Error()},
+		}
+		_ = engine.saveResult(context.Background(), acceptancePrincipal(), BudgetAssertDecisive, InvestigationResult{ResultID: fmt.Sprintf("result_vocab_cancelled_%d", i)}, nil, nil, "", 0, "", semanticStateCapture{Write: SemanticStateOf(state)}.withAnchorShadow(cancelled))
+	}
 	return append(out, AnchorBindingVocabularyLog{Name: "direct saves", Log: direct.Bytes()})
 }
 

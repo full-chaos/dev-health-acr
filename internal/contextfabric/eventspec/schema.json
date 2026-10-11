@@ -179,14 +179,47 @@
         ]
       },
       {
-        "key": "carry_checks",
+        "key": "binding_admission",
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
           "not_applicable",
           "not_evaluated",
+          "admitted",
+          "refused_policy_version",
+          "refused_question_changed",
+          "refused_question_indeterminate",
+          "refused_origin_unverifiable",
+          "refused_expired",
+          "refused_ownership_moved",
+          "refused_ownership_unverified",
+          "refused_subject_unreadable",
           "undeclared"
         ]
+      },
+      {
+        "key": "admission_remembered_check",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_checked",
+          "readable",
+          "verifier_unwired",
+          "cancelled_before_check",
+          "cancelled_during_check",
+          "refused",
+          "undeclared"
+        ]
+      },
+      {
+        "key": "admission_remembered_reason",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "admission_age_seconds",
+        "type": "int",
+        "presence": "required"
       },
       {
         "key": "from_state",
@@ -271,6 +304,21 @@
       {
         "key": "from_proven_freshness_digest",
         "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "from_policy_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "from_proven_at",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "from_witness",
+        "type": "string_slice",
         "presence": "required"
       },
       {
@@ -451,6 +499,21 @@
       {
         "key": "to_proven_freshness_digest",
         "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "policy_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "to_proven_at",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "witness",
+        "type": "string_slice",
         "presence": "required"
       },
       {

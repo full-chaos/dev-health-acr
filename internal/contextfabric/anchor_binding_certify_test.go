@@ -24,11 +24,13 @@ func TestTheAnchorBindingTransitionLineCertifiesAgainstItsSpecification(t *testi
 	}{
 		{"decisive identity proven", map[string]any{
 			"result_id": "result_5788_0001", "parent_result_id": "", "site": "decisive", "evaluation": "resolved",
-			"parent_binding": "no_reference", "carry_checks": "not_applicable", "from_state": "unbound", "from_kind": "", "from_id": "",
+			"parent_binding": "no_reference", "binding_admission": "not_applicable", "admission_remembered_check": "not_checked", "admission_age_seconds": float64(-1),
+			"from_state": "unbound", "from_kind": "", "from_id": "", "from_policy_version": "", "from_proven_at": "", "from_witness": []any{},
 			"model_anchor_kind": "", "named_expected_kind": "", "receipt_anchor_kind": "", "receipt_anchor_id": "",
 			"caller_hint_ids": []any{}, "proven_anchor_ids": []any{"repository:repository:probe-alpha"}, "effective_kind": "",
 			"to_state": "bound", "to_kind": "repository", "to_id": "repository:probe-alpha", "proof": "identity_proven", "reason": "identity_proven",
 			"origin_result_id": "result_5788_0001", "contender_kind": "", "contender_id": "",
+			"policy_version": "anchor-binding.v2", "to_proven_at": "1970-01-01T00:08:20Z", "witness": []any{"repository:repository:probe-alpha"},
 			"persisted": "persisted", "shadow_agreement": "agree", "disagreement_field": "none",
 			"served_anchor_kind": "repository", "served_anchor_id": "repository:probe-alpha",
 			"served_count_decision": "anchor_committed", "served_count_kind": "repository", "served_count_id": "repository:probe-alpha",
@@ -39,28 +41,38 @@ func TestTheAnchorBindingTransitionLineCertifiesAgainstItsSpecification(t *testi
 			"persisted": "persisted", "shadow_agreement": "disagree", "disagreement_field": "pending_proof",
 			"served_anchor_id": "", "served_count_decision": "not_evaluated",
 		}},
-		{"natural follow-up carried silent", map[string]any{
+		{"same question carried silent", map[string]any{
 			"result_id": "result_5788_0002", "parent_result_id": "result_5788_0001", "site": "subjectless_terminal", "evaluation": "resolved",
-			"parent_binding": "present", "carry_checks": "not_evaluated", "from_state": "bound", "from_kind": "repository", "from_id": "repository:probe-alpha",
+			"parent_binding": "present", "binding_admission": "admitted", "admission_remembered_check": "readable", "admission_age_seconds": float64(0),
+			"from_state": "bound", "from_kind": "repository", "from_id": "repository:probe-alpha", "from_policy_version": "anchor-binding.v2",
+			"from_proven_at": "1970-01-01T00:08:20Z", "to_proven_at": "1970-01-01T00:08:20Z",
 			"proven_anchor_ids": []any{}, "effective_kind": "repository",
 			"to_state": "bound", "to_id": "repository:probe-alpha", "proof": "identity_proven", "reason": "carried_silent", "origin_result_id": "result_5788_0001",
 			"shadow_agreement": "disagree", "disagreement_field": "carried_anchor", "served_anchor_id": "",
 			"served_count_decision": "not_evaluated", "served_count_id": "",
 		}},
+		// The proving turn asked another question: the held alpha is refused
+		// before any re-read and the binder starts unbound.
+		{"changed question refused", map[string]any{
+			"result_id": "result_5788_0002", "parent_result_id": "result_5788_0001", "site": "subjectless_terminal", "parent_binding": "present",
+			"binding_admission": "refused_question_changed", "admission_remembered_check": "not_checked",
+			"from_state": "bound", "from_id": "repository:probe-alpha",
+			"to_state": "unbound", "to_id": "", "reason": "no_proof", "policy_version": "", "to_proven_at": "", "witness": []any{},
+		}},
 		// The subject-substitution guard withholds beta, so the turn is saved
 		// at the subjectless terminal and serves no anchor; the binder still
 		// records the contest the engine proved, and names the guard beside it.
 		{"follow-up alias contested", map[string]any{
-			"result_id": "result_5788_0002", "site": "subjectless_terminal", "carry_checks": "not_evaluated",
+			"result_id": "result_5788_0002", "site": "subjectless_terminal", "binding_admission": "admitted",
 			"parent_binding": "present", "proven_anchor_ids": []any{"repository:repository:probe-beta"},
 			"to_state": "contested", "to_id": "repository:probe-alpha", "reason": "contested_by_resolution",
 			"contender_kind": "repository", "contender_id": "repository:probe-beta",
 			"shadow_agreement": "agree", "disagreement_field": "none",
 			"served_anchor_id": "", "served_count_decision": "not_evaluated", "served_count_id": "",
-			"substitution_guard": "clarified_remembered_unavailable",
+			"substitution_guard": "clarified_subject_changed",
 		}},
 		{"model kind conflict", map[string]any{
-			"result_id": "result_5788_0002", "site": "decisive", "carry_checks": "not_evaluated",
+			"result_id": "result_5788_0002", "site": "decisive", "binding_admission": "admitted",
 			"parent_binding": "present", "model_anchor_kind": "project", "effective_kind": "repository",
 			"to_state": "bound", "to_kind": "repository", "reason": "carried_reconfirmed",
 			"shadow_agreement": "disagree", "disagreement_field": "count_anchor",
