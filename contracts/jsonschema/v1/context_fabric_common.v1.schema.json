@@ -1721,6 +1721,11 @@
           "minimum": 8192,
           "maximum": 1048576
         },
+        "answer_budget_bytes": {
+          "type": "integer",
+          "minimum": 8192,
+          "maximum": 1048576
+        },
         "allow_clarification": {
           "type": "boolean"
         },

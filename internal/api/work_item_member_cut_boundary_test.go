@@ -152,6 +152,11 @@ func newCutRigWithBytes(t *testing.T, walk contextfabric.TreeWorkItemWalk, maxBy
 	app.config.MaxItems = 30
 	if maxBytes > 0 {
 		app.config.MaxSerializedBytes = maxBytes
+		// A deployment advertises the ceiling it serves against; the sidecar
+		// asks the service for that ceiling, so the rig must say the same.
+		advertised := realHostedCapabilities()
+		advertised.Limits.MaxSerializedBytes = maxBytes
+		app.capabilities = StaticCapabilitiesProvider{Now: func() time.Time { return time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC) }, Value: advertised}
 	}
 	server := httptest.NewTLSServer(app.InstrumentedHandler(app.Handler()))
 	t.Cleanup(server.Close)
@@ -599,5 +604,16 @@ func TestTheModelReadsTheStrongestLinksAndThePlanNamesWhatItBounds(t *testing.T)
 	}
 	if !sawSynthesis {
 		t.Fatalf("served plan %+v, want a synthesis_input step 20 to 14 by link_strength_then_id", plan)
+	}
+}
+
+// A caller's answer budget below what the walk list can be cut to is the shed
+// target, not a refusal line: the list is cut against the service ceiling and
+// served, with the size sentence for the cut.
+func TestAnAnswerBudgetBelowTheWalkListCutIsServedUnderTheServiceCeiling(t *testing.T) {
+	rig := newCutRigWithBytes(t, cutWalk(t, 250, 0, func(int) string { return contextfabric.TreeLinkTierNative }), 40_000)
+	got := readServedCohort(t, rig.askWithin(t, 200, contractsv1.ContextFabricSerializedBytesMin))
+	if got.Total < 1 || got.Total >= 200 || got.Population != 250 {
+		t.Fatalf("served cohort = %+v, want a list cut to fit the service ceiling, population 250", got)
 	}
 }
