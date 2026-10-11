@@ -79,6 +79,7 @@ func (p *BlockersProvider) Capability() contextfabric.FactCapability {
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
 		contextfabric.SubjectTeam: {contextfabric.FactTableBreakdown},
 	}
+	capability.AllowedParameters = []string{blockerStatusParameter}
 	return capability
 }
 
@@ -324,7 +325,7 @@ type blockerRollupRepo struct{ blockedItems, blockerEdges, excludedEdges int64 }
 // blockerStatusParameter names the one optional status a caller may ask the
 // team rollup to count blockers in; without it a blocker counts while it is
 // open (any status but done or canceled).
-const blockerStatusParameter = "blocker_status"
+const blockerStatusParameter = contextfabric.BlockerStatusParameter
 
 const blockerStatusBasisOpen = "open"
 
@@ -355,6 +356,9 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 		return outcome, err
 	}
 	namedStatus := strings.ToLower(strings.TrimSpace(parameters[blockerStatusParameter]))
+	if !contextfabric.InWorkItemStatusVocabulary(namedStatus) {
+		namedStatus = ""
+	}
 	statusBasis := blockerStatusBasisOpen
 	if namedStatus != "" {
 		statusBasis = namedStatus

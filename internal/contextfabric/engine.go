@@ -3487,7 +3487,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			return terminal, terminalErr
 		}
 	}
-	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements)
+	mergedFactRequirements := withBlockerStatusQualifier(mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements), familyOutcome.Frame)
 	factRequest := CanonicalFactRequest{
 		workItemTuple:            workItemTuple,
 		LinkScopedSubjects:       linkScopedFactSubjects(ctx, request, subjects, tupleCensus),
