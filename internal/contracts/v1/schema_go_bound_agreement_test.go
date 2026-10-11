@@ -457,6 +457,8 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.InvestigationOptions.properties.max_evidence_refs.maximum":      500,
 		"common#$defs.InvestigationOptions.properties.max_serialized_bytes.minimum":   ContextFabricSerializedBytesMin,
 		"common#$defs.InvestigationOptions.properties.max_serialized_bytes.maximum":   ContextFabricSerializedBytesMax,
+		"common#$defs.InvestigationOptions.properties.answer_budget_bytes.minimum":    ContextFabricSerializedBytesMin,
+		"common#$defs.InvestigationOptions.properties.answer_budget_bytes.maximum":    ContextFabricSerializedBytesMax,
 		// CHAOS-4867 (main's ruling, option A): the request-side substring
 		// case that used to excuse InvestigationOptions above excused these
 		// four sibling shapes with the exact same false claim. An audit

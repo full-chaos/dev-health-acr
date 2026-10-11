@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 682ce8fd93709c38ca00f2bb0a729abeb0fe2de6881fb20f0dec901c5284554b
+# canonical-content-sha256: 427fa614d956f26b4d7995a3d22c2d8714b8177ee849b6b90eeafe853a124737
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -630,7 +630,9 @@ paths:
                     "$ref": "../jsonschema/v1/context_fabric_investigation_response.v1.schema.json"
                   -
                     "$ref": "../jsonschema/v1/context_fabric_investigation_response.v2.schema.json"
-          description: "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042). The body is the result plus, when the request asked synthesis_mode client and the turn reached synthesis, synthesis_input: the input for the caller's model to write the answer from. The result read by id never carries it."
+                  -
+                    "$ref": "../jsonschema/v1/context_fabric_answer_projection.v1.schema.json"
+          description: "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042). The body is the result plus, when the request asked synthesis_mode client and the turn reached synthesis, synthesis_input: the input for the caller's model to write the answer from. The result read by id never carries it. When options.max_serialized_bytes is below the size of the result, the body is instead the bounded consumer projection (context_fabric_answer_projection.v1) sized to that option, with projection_budget.full_result_omitted true and result_id naming the stored result, which GET by id serves whole against the service ceiling. A synthesis_mode client turn is never projected: its synthesis_input is outside options.max_serialized_bytes (the option bounds the result; the input has its own bound, the service ceiling), and a result over the option on such a turn is refused."
         "400":
           "$ref": "#/components/responses/ContextFabricInvestigationBadRequest"
         "401":
