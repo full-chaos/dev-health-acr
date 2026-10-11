@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -61,6 +62,18 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item status", scanErr)
 	}
+	pairs := make([][2]string, 0, len(rows))
+	for _, row := range rows {
+		if _, ok := bySubject[row.RepoID+":"+row.ID]; ok {
+			pairs = append(pairs, [2]string{row.RepoID, row.ID})
+		}
+	}
+	entries, entriesErr := p.readStatusEntries(ctx, orgID, pairs, settings)
+	if entriesErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query work item status since", entriesErr)
+	}
+	now := clock()
+	sinceBasisCounts := map[string]int{}
 	for _, row := range rows {
 		subject, ok := bySubject[row.RepoID+":"+row.ID]
 		if !ok {
@@ -70,18 +83,31 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 			continue
 		}
 		basis, note := statusBasisFor(row.Provider)
+		entry, entryFound := entries[row.RepoID+":"+row.ID]
+		fields := map[string]contextfabric.FactValue{
+			"status":               stringOrNull(row.Status),
+			"status_basis":         contextfabric.StringFactValue(basis),
+			"status_in_vocabulary": statusInVocabularyValue(row.Status),
+			"status_provenance":    contextfabric.StringFactValue(note),
+		}
+		since := statusSinceFields(row.Status, entry, entryFound, now)
+		fields["status_since"] = since.since
+		fields["status_duration_seconds"] = since.seconds
+		fields["status_since_basis"] = contextfabric.StringFactValue(since.basis)
+		sinceBasisCounts[since.basis]++
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactStatus, Subject: subject,
-			Fields: map[string]contextfabric.FactValue{
-				"status":               stringOrNull(row.Status),
-				"status_basis":         contextfabric.StringFactValue(basis),
-				"status_in_vocabulary": statusInVocabularyValue(row.Status),
-				"status_provenance":    contextfabric.StringFactValue(note),
-			},
+			Fields:         fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 		})
 	}
 	budget.observe(len(rows))
+	if n := sinceBasisCounts[statusSinceBasisInconsistent]; n > 0 {
+		slog.WarnContext(ctx, "devhealthfacts.status_since_inconsistent",
+			"inconsistent_items", n,
+			"observed_items", sinceBasisCounts[statusSinceBasisObserved],
+			"no_transition_items", sinceBasisCounts[statusSinceBasisNone])
+	}
 	state, emptyReason := currentAxisReadState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
 	return result, nil
