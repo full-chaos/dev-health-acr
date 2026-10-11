@@ -1253,19 +1253,21 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		space = cursorSpaceIngestColumns
 	}
 	return sourcePlan{
-		client:         s.client,
-		source:         TeamsProjectsSourceName,
-		version:        TeamsProjectsSourceVersion,
-		space:          space,
-		tables:         teamsProjectsTablesFor(ledger, presence, teamAuth, repoOwnership, ingest),
-		windowTables:   teamsProjectsTablesFor(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, ingest),
-		logger:         s.logger,
-		now:            s.now,
-		overlap:        s.overlapDuration(),
-		window:         s.windowMemo(),
-		recordConsumed: s.recordConsumed(checkpoint.Cursor),
-		dropConsumed:   s.forgetConsumed,
-		observePage:    presence.recordConsumed,
+		client:          s.client,
+		source:          TeamsProjectsSourceName,
+		version:         TeamsProjectsSourceVersion,
+		space:           space,
+		tables:          teamsProjectsTablesFor(ledger, presence, teamAuth, repoOwnership, ingest),
+		windowTables:    teamsProjectsTablesFor(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, ingest),
+		logger:          s.logger,
+		now:             s.now,
+		overlap:         s.overlapDuration(),
+		window:          s.windowMemo(),
+		reconcile:       teamsReconcileQuery(&teamAuthorizationLedger{}),
+		reconcilePeriod: teamOwnershipReconcilePeriod,
+		recordConsumed:  s.recordConsumed(checkpoint.Cursor),
+		dropConsumed:    s.forgetConsumed,
+		observePage:     presence.recordConsumed,
 		// Without this the shared engine's per-item quarantine drops items
 		// on THIS source with no signal at all -- a silent loss, which the
 		// standing ruling forbids outright. The ClickHouse source got the
@@ -1439,7 +1441,27 @@ func queryTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient,
 FROM teams AS tm FINAL
 ` + ownedRepositoriesJoinSQL + `
 WHERE tm.org_id = {org_id:String}` + sincePredicate(cursor, queryTeamsIngestExpr, rowKey) + orderBy(queryTeamsIngestExpr, rowKey)
-	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+	return fetchTeams(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, teamAuth)
+}
+
+// teamsReconcileQuery is queryTeams' reconcile-pass read (reconcile.go): the
+// same SELECT, ownership join and row scan over the organization's CURRENT
+// teams, in id order after `after`, without the cursor predicate. A repos row
+// that was hard-deleted is absent from the join, so the team is re-derived
+// without its slug even though no watermark moved.
+func teamsReconcileQuery(ledger *teamAuthorizationLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, string, int) ([]candidate, bool, error) {
+	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, after string, limit int) ([]candidate, bool, error) {
+		statement := `SELECT tm.id, tm.name, ifNull(tm.description, ''), tm.provider, ifNull(tm.native_team_key, ''), tm.is_active, ` + queryTeamsEffectiveUpdatedAtExpr + `, tm.project_keys, ifNull(tro.repos, []), ` + queryTeamsIngestExpr + `
+FROM teams AS tm FINAL
+` + ownedRepositoriesJoinSQL + `
+WHERE tm.org_id = {org_id:String} AND toString(tm.id) > {after:String}
+ORDER BY toString(tm.id) ASC LIMIT {row_limit:UInt32}`
+		return fetchTeams(ctx, client, statement, rowLimitBindings(orgID, cursorState{After: after}, limit), limit, ledger)
+	}
+}
+
+func fetchTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, statement string, bindings []contextpacket.ClickHouseBinding, limit int, teamAuth *teamAuthorizationLedger) ([]candidate, bool, error) {
+	return fetchIngest(ctx, client, statement, bindings, limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var id, name, description, provider, nativeKey string
 		var projectKeys, ownedRepos []string
 		var isActive uint8
