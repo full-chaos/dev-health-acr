@@ -52,3 +52,37 @@ func TestCatalogUnrestrictedGrantWithoutDataReadIsNotFullAccess(t *testing.T) {
 		t.Fatalf("operations %+v", got.Operations)
 	}
 }
+
+func TestCatalogOperationsAndSchemaSectionsShareTheAccessDecision(t *testing.T) {
+	policy := func() *GraphQLPolicy {
+		p, err := DefaultGraphQLPolicy()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}()
+	cat, err := DefaultCatalogue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections, _ := ParseCatalogSections("operations,schema")
+	base := CatalogCaller{PrincipalClass: ClassUnrestricted, Scopes: []string{"context:read"}, DataRead: true, OperationsServable: true, GraphQL: policy, GraphQLServable: true, GateComposed: true}
+	for name, tc := range map[string]struct {
+		mutate func(*CatalogCaller)
+		reason string
+	}{
+		"data_read":    {func(*CatalogCaller) {}, ""},
+		"no data:read": {func(c *CatalogCaller) { c.DataRead = false }, CatalogUnavailableScopeMissing},
+		"no gate":      {func(c *CatalogCaller) { c.GateComposed = false }, CatalogUnavailableGateMissing},
+	} {
+		caller := base
+		tc.mutate(&caller)
+		got := BuildDataCatalog(cat, caller, sections)
+		if got.Operations.Reason != tc.reason {
+			t.Errorf("%s: operations reason %q, want %q", name, got.Operations.Reason, tc.reason)
+		}
+		if got.Operations.Available != got.Schema.Available || got.Operations.Reason != got.Schema.Reason {
+			t.Errorf("%s: operations %v/%q, schema %v/%q", name, got.Operations.Available, got.Operations.Reason, got.Schema.Available, got.Schema.Reason)
+		}
+	}
+}

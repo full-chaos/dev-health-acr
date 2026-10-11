@@ -354,12 +354,20 @@ const (
 // serve the caller: "" when it can, else the unavailable reason. Both the
 // operations section and the caller's effective access read it.
 func catalogOperationsReason(catalogue *Catalogue, caller CatalogCaller) string {
+	return catalogAccessReason(catalogue != nil && caller.OperationsServable, CatalogUnavailableQueryNotConfigure, caller.GateComposed, caller.DataRead)
+}
+
+// catalogAccessReason is the shared order of the three clauses every direct
+// data section applies: the runner is configured, the subject gate is
+// composed, the credential has data:read. The operations and schema sections
+// both use it, so one decision never has two sources.
+func catalogAccessReason(configured bool, notConfigured string, gateComposed, dataRead bool) string {
 	switch {
-	case catalogue == nil || !caller.OperationsServable:
-		return CatalogUnavailableQueryNotConfigure
-	case !caller.GateComposed:
+	case !configured:
+		return notConfigured
+	case !gateComposed:
 		return CatalogUnavailableGateMissing
-	case !caller.DataRead:
+	case !dataRead:
 		return CatalogUnavailableScopeMissing
 	}
 	return ""
