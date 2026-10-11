@@ -34,6 +34,8 @@ func TestWorkItemTeamV2TeamEndpointIsDecidedByTheSubjectGate(t *testing.T) {
 		{"restricted, repository not granted, team owned", restricted, scope(secretID, secretRep), directread.SubjectAdmitted, false},
 		{"unrestricted, team owned", unrestricted, scope(grantedID, grantedRep), directread.SubjectAdmitted, true},
 		{"unrestricted, team not reached", unrestricted, scope(grantedID, grantedRep), directread.SubjectDenied, false},
+		{"unrestricted, team absent from the graph (lag): served, disclosed", unrestricted, scope(grantedID, grantedRep), directread.SubjectAbsent, true},
+		{"universal, team absent from the graph (lag): served, disclosed", universal, scope(grantedID, grantedRep), directread.SubjectAbsent, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ref, id := mustMint(t, kind, values...)
@@ -41,7 +43,13 @@ func TestWorkItemTeamV2TeamEndpointIsDecidedByTheSubjectGate(t *testing.T) {
 			w.discovered[workItemDiscovery+"|jira:ABC-1"] = []contractsv1.ResolvedScope{tc.repo}
 			w.gate = &fakeGate{world: w, outcomes: map[string]directread.SubjectOutcome{team: tc.outcome}}
 			w.addRow(tc.repo.RepoID, query, ref, catalogRow(query, ref, "work_item_team", id, tc.repo.RepoSlug))
-			_, decision := resolver(t, w).ResolveSourceRow(context.Background(), tc.principal, string(kind), id)
+			expanded, decision := resolver(t, w).ResolveSourceRow(context.Background(), tc.principal, string(kind), id)
+			lag := tc.served && tc.outcome == directread.SubjectAbsent
+			if tc.served {
+				if got, has := expanded.Evidence.Metadata["team_lookup"]; has != lag || (lag && got != contextfabric.IdentityLookupTokenGraphLag) {
+					t.Fatalf("team_lookup = %v (%v), want disclosed %v", got, has, lag)
+				}
+			}
 			if got := decision.Reason == contextfabric.SourceRowServed; got != tc.served {
 				t.Fatalf("served %v, want %v (%+v, calls %v)", got, tc.served, decision, w.calls)
 			}
