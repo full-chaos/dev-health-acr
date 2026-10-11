@@ -737,7 +737,13 @@ import (
 // synthesis_model_failed coverage detail (failure class and retry hint) and is
 // recognised by it; a no-facts failure serves its own limitation. A candidate
 // saved under an earlier version carries only the warning.
-const QueryVersion = "devhealthfacts.clickhouse.v151"
+//
+// v151 -> v152: a model call that ends on a transient class once the runtime's
+// attempts are used, or that the composition reserve ends before the request
+// deadline, is served as a degraded answer with failure class
+// model_call_not_completed and retry_may_succeed, where it was an error with no
+// stored answer; a candidate saved under an earlier version cannot hold it.
+const QueryVersion = "devhealthfacts.clickhouse.v152"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
