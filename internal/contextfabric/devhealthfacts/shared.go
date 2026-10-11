@@ -701,9 +701,13 @@ import (
 // answer, not a partial "canonical fact capability timed out". A candidate saved
 // under v137 may hold that partial answer and must not be reused.
 //
-// v138 -> v143: served limitation sentences name kinds by display noun and carry no
-// basis token, so a candidate saved under an earlier version may hold the old wording
-// and must not be reused.
+// v139: a degraded answer for a failed model call serves the canonical values
+// it read as claims; a candidate saved under an earlier version may hold one
+// with none.
+//
+// v139 -> v143: served limitation sentences, coverage reasons and render labels name
+// kinds by display noun and carry no basis token, so a candidate saved under an
+// earlier version may hold the old wording and must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v143"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for

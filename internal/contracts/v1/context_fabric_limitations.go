@@ -548,6 +548,16 @@ const ContextFabricOrganizationScopeUnsupportedLimitation = "This question was r
 // ACCEPTED verbatim (CHAOS-5926, dictations 1998/1999) -- not composed here.
 const ContextFabricSubjectIdentityUnconfirmedLimitation = "This follow-up appears to be about a different subject than the earlier answer it continues, so the server did not guess which one was meant and no canonical facts were read. Name the subject directly, or answer the earlier offer naming it, to continue."
 
+// ContextFabricSynthesisFailedFactsOnlyLimitation is the sentence a degraded
+// answer carries when the model call failed and the service served the
+// canonical values it read, with no judgment applied.
+const ContextFabricSynthesisFailedFactsOnlyLimitation = "Synthesis failed; the facts shown are the canonical values read, with no judgment applied."
+
+// ContextFabricSynthesisFailedFactsTruncatedLimitation is added beside
+// ContextFabricSynthesisFailedFactsOnlyLimitation when more canonical values
+// were read than one answer can carry.
+const ContextFabricSynthesisFailedFactsTruncatedLimitation = "Synthesis failed and more canonical values were read than one answer can carry; the facts shown are a part of them."
+
 // ContextFabricSynthesisInputBoundedLimitation is the sentence an answer
 // carries when the facts read for it did not fit the model input and only
 // part of them was given to answer synthesis. It states the consequence for
@@ -633,6 +643,8 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSubjectTermsMissingLimitation,
 		ContextFabricSubjectTermsFrameOverBoundLimitation,
 		ContextFabricInactiveTeamHintLimitation,
+		ContextFabricSynthesisFailedFactsOnlyLimitation,
+		ContextFabricSynthesisFailedFactsTruncatedLimitation,
 	}
 }
 
