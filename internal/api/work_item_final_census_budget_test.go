@@ -122,7 +122,7 @@ func TestWorkItemFinalCensusParticipatesInBudgetRetry(t *testing.T) {
 			if response.Code != tc.status || len(*attempts) != tc.calls {
 				t.Fatalf("budget retry mechanism: HTTP%d synthesis%d want HTTP%d synthesis%d: %s", response.Code, len(*attempts), tc.status, tc.calls, response.Body.String())
 			}
-			if !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "work"}) || f.graph.resolve != 1 || f.graph.discover != 0 {
+			if !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "status_since", "work"}) || f.graph.resolve != 1 || f.graph.discover != 0 {
 				t.Fatalf("unexpected reads: phases=%v resolve=%d discover=%d", f.client.phases, f.graph.resolve, f.graph.discover)
 			}
 			assertResponseOwnerGateFree(t, f.gate)

@@ -92,8 +92,12 @@ func TestChaos5751WorkItemProvidersUseCurrentRepositoryMetadata(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s ReadFacts() error = %v", kind, err)
 			}
-			if client.calls != 1 {
-				t.Fatalf("%s query calls = %d, want exactly one content query and no metadata lookup", kind, client.calls)
+			wantCalls := 1
+			if kind == contextfabric.FactStatus && len(result.Facts) > 0 {
+				wantCalls = 2
+			}
+			if client.calls != wantCalls {
+				t.Fatalf("%s query calls = %d, want %d: one content query (status adds its transition read when it returned rows) and no metadata lookup", kind, client.calls, wantCalls)
 			}
 			statement := client.statements[0]
 			for _, fragment := range []string{
@@ -382,8 +386,12 @@ func TestChaos5751WorkItemReadersReadK200WithIndependentPhysicalCeilings(t *test
 			if result.Truncated {
 				t.Fatalf("%s Truncated = true for %d admitted rows under the 201-row probe", kind, want)
 			}
-			if client.calls != 1 {
-				t.Fatalf("%s query calls = %d, want exactly one content query", kind, client.calls)
+			wantCalls := 1
+			if kind == contextfabric.FactStatus && len(result.Facts) > 0 {
+				wantCalls = 2
+			}
+			if client.calls != wantCalls {
+				t.Fatalf("%s query calls = %d, want %d: one content query plus status's transition read", kind, client.calls, wantCalls)
 			}
 			statement := client.statements[0]
 			for _, fragment := range []string{

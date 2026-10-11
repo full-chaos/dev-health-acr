@@ -254,6 +254,13 @@ func statusFields() []fieldDecl {
 		fStr("status_basis"),
 		declNullable(fBool("status_in_vocabulary")),
 		fStr("status_provenance"),
+		// status_since is the latest recorded entry into the current status;
+		// null when no transition into it is recorded (never a creation time,
+		// never zero). status_duration_seconds is measured against the
+		// request clock at read time.
+		declNullable(fStr("status_since")),
+		declNullable(fInt("status_duration_seconds", "seconds")),
+		fStr("status_since_basis"),
 	}
 }
 
