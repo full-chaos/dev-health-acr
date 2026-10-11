@@ -114,7 +114,7 @@ func (e *Engine) degradeWorkItemModelBreach(ctx context.Context, principal stora
 	out := result
 	out.Status = composed.Status
 	out.Coverage.Partial = out.Coverage.Partial || composed.Coverage.Partial
-	out.DirectJudgment, out.CurrentState, out.DeterministicAnswer = composed.DirectJudgment, composed.CurrentState, composed.DeterministicAnswer
+	out.DirectJudgment, out.DeterministicAnswer = composed.DirectJudgment, composed.DeterministicAnswer
 	out.StrongestPressures = composed.StrongestPressures
 	out.Drivers, out.RemainingWork, out.ReadinessGaps, out.Conflicts = []DriverJudgment{}, []Finding{}, []Finding{}, []Finding{}
 	claims := make([]ClaimedFact, 0, len(result.ClaimedFacts))
@@ -123,7 +123,6 @@ func (e *Engine) degradeWorkItemModelBreach(ctx context.Context, principal stora
 			claims = append(claims, claim)
 		}
 	}
-	out.ClaimedFacts = claims
 	allowed := map[string]bool{}
 	if out.Cohort != nil {
 		for _, member := range out.Cohort.Members {
@@ -132,6 +131,17 @@ func (e *Engine) degradeWorkItemModelBreach(ctx context.Context, principal stora
 			}
 		}
 	}
+	// The canonical values the degraded answer carries are the ones about the
+	// members that stay; a value about a subject the answer no longer serves is
+	// dropped with it.
+	minted := make([]ClaimedFact, 0, len(composed.ClaimedFacts))
+	for _, claim := range composed.ClaimedFacts {
+		if ref, ok := canonicalWorkItemEvidenceRef(claim.Subject); ok && allowed[ref] {
+			minted = append(minted, claim)
+		}
+	}
+	out.ClaimedFacts = append(claims, minted...)
+	out.CurrentState = composeFailedSynthesisCurrentState(minted)
 	refs := make([]string, 0, len(composed.EvidenceRefIDs))
 	for _, ref := range composed.EvidenceRefIDs {
 		if allowed[ref] {
@@ -147,7 +157,13 @@ func (e *Engine) degradeWorkItemModelBreach(ctx context.Context, principal stora
 	}
 	out.EvidenceRefLabels = labels
 	serverLimitations := slices.DeleteFunc(slices.Clone(result.Limitations), func(limitation string) bool { return slices.Contains(basis.DraftLimitations, limitation) })
-	composedLimitations, displaced := appendBoundedLimitations([]string{}, serverLimitations)
+	mintedLimitations := []string{}
+	if len(minted) > 0 {
+		mintedLimitations = slices.DeleteFunc(slices.Clone(composed.Limitations), func(limitation string) bool {
+			return limitation != contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation && limitation != contractsv1.ContextFabricSynthesisFailedFactsTruncatedLimitation
+		})
+	}
+	composedLimitations, displaced := appendBoundedLimitations([]string{}, append(serverLimitations, mintedLimitations...))
 	out.Limitations = composedLimitations
 	out.LimitationsDisplaced += displaced
 	warnings := slices.DeleteFunc(slices.Clone(result.Warnings), func(warning string) bool { return slices.Contains(basis.DraftWarnings, warning) })

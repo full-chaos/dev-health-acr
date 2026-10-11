@@ -701,7 +701,11 @@ import (
 // membership scope before the capability clock starts, so it serves the full
 // answer, not a partial "canonical fact capability timed out". A candidate saved
 // under v137 may hold that partial answer and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v138"
+//
+// v139: a degraded answer for a failed model call serves the canonical values
+// it read as claims; a candidate saved under an earlier version may hold one
+// with none.
+const QueryVersion = "devhealthfacts.clickhouse.v139"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
