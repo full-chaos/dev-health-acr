@@ -757,7 +757,11 @@ import (
 // counts without the per-repository tables (repository_tables_basis names which), and a
 // budget refusal names its stage and measured sections; a candidate saved under an
 // earlier version carries the tables.
-const QueryVersion = "devhealthfacts.clickhouse.v155"
+//
+// v155 -> v156: the team blockers rollup counts only open blockers and serves the
+// excluded-by-status count and the status basis; a candidate saved under an earlier
+// version holds the unfiltered counts.
+const QueryVersion = "devhealthfacts.clickhouse.v156"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
