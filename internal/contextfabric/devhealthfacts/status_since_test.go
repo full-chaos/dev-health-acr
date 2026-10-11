@@ -1,8 +1,10 @@
 package devhealthfacts_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -78,7 +80,7 @@ func TestStatusSinceLatestTransitionWentElsewhereIsNotAnOlderMatch(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, secs, basis, _, _ := statusSinceFields(t, result, 0); basis != "no_transition_recorded" || secs != nil {
+	if _, secs, basis, _, _ := statusSinceFields(t, result, 0); basis != "transition_inconsistent" || secs != nil {
 		t.Fatalf("secs=%v basis=%q", secs, basis)
 	}
 }
@@ -91,7 +93,7 @@ func TestStatusSinceEntryInTheFutureIsNotADuration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, secs, basis, _, _ := statusSinceFields(t, result, 0); basis != "no_transition_recorded" || secs != nil {
+	if _, secs, basis, _, _ := statusSinceFields(t, result, 0); basis != "transition_inconsistent" || secs != nil {
 		t.Fatalf("secs=%v basis=%q", secs, basis)
 	}
 }
@@ -198,5 +200,26 @@ func TestStatusSinceReadFailureFailsTheFactRead(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("a failed transitions read produced facts: %#v", result.Facts)
+	}
+}
+
+func TestStatusSinceInconsistentItemsAreCountedInAWarnWithoutIds(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	_, _, err := readStatusSince(t,
+		[][]any{{"SECRET-ID-1", "in_progress", "repo-1", "jira"}},
+		[][]any{{"repo-1", "SECRET-ID-1", "done", statusSinceNow.Add(-time.Hour)}},
+		workItemSubject("repo-1", "SECRET-ID-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "devhealthfacts.status_since_inconsistent") || !strings.Contains(out, "inconsistent_items=1") {
+		t.Fatalf("no counted warn line: %q", out)
+	}
+	if strings.Contains(out, "SECRET-ID-1") {
+		t.Fatalf("the warn line carries an id: %q", out)
 	}
 }

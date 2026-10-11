@@ -32,7 +32,7 @@ func workItemMemberSection(in Inputs) (string, error) {
 	b.WriteString("- A period sent with the request, with no verb and no status in the question, gives the current members and this limitation: \"" + contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation + "\" With a status in the question, the members are filtered by that status as of now, and the status limitation says it is read over no period.\n")
 	b.WriteString("- A period filters the members by that one time field. Their status and every other fact stay as of now, not as of the period.\n")
 	b.WriteString("- Each work-item `status` fact carries `status_basis`, `status_in_vocabulary` (null when the status is missing, false when it is outside the set) and `status_provenance`. Read `status_provenance` before you quote a status.\n")
-	b.WriteString("- The same fact carries `status_since` (when the item last entered its current status), `status_duration_seconds` (the time since then, measured when the answer is read) and `status_since_basis`: `transition_observed`, or `no_transition_recorded` when no recorded transition into the current status is the latest one. In that case both values are null. Null is not zero and is not the item's age.\n\n")
+	b.WriteString("- The same fact carries `status_since` (when the item last entered its current status), `status_duration_seconds` (the time since then, measured when the answer is read) and `status_since_basis`: `transition_observed`; `no_transition_recorded` when the item has no recorded transition; or `transition_inconsistent` when its latest recorded transition does not enter its current status. Outside `transition_observed` both values are null. Null is not zero and is not the item's age.\n\n")
 	return b.String(), nil
 }
 

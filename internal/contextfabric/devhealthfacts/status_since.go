@@ -16,6 +16,10 @@ import (
 const (
 	statusSinceBasisObserved = "transition_observed"
 	statusSinceBasisNone     = "no_transition_recorded"
+	// statusSinceBasisInconsistent: the item has recorded transitions but the
+	// latest one does not enter its current status (or is dated after the
+	// request clock), so no entry time is trusted. Distinct from no rows.
+	statusSinceBasisInconsistent = "transition_inconsistent"
 )
 
 // statusSinceStatement returns the latest recorded status transition of each
@@ -76,15 +80,21 @@ func (p *StatusProvider) readStatusEntries(ctx context.Context, orgID string, pa
 // status_since fields. Only a latest transition INTO the current status counts:
 // when the latest transition went elsewhere the item's status column and its
 // transition log disagree, and an older matching entry would overstate the
-// time. A recorded entry after the request clock is not a duration either.
+// time (transition_inconsistent). A recorded entry after the request clock is
+// folded into the same value: no trusted duration exists.
 func statusSinceFields(currentStatus string, entry statusEntry, found bool, now time.Time) map[string]contextfabric.FactValue {
-	none := map[string]contextfabric.FactValue{
-		"status_since":            contextfabric.NullFactValue(),
-		"status_duration_seconds": contextfabric.NullFactValue(),
-		"status_since_basis":      contextfabric.StringFactValue(statusSinceBasisNone),
+	absent := func(basis string) map[string]contextfabric.FactValue {
+		return map[string]contextfabric.FactValue{
+			"status_since":            contextfabric.NullFactValue(),
+			"status_duration_seconds": contextfabric.NullFactValue(),
+			"status_since_basis":      contextfabric.StringFactValue(basis),
+		}
 	}
-	if !found || currentStatus == "" || entry.toStatus != currentStatus || entry.enteredAt.IsZero() || entry.enteredAt.After(now) {
-		return none
+	if !found || currentStatus == "" {
+		return absent(statusSinceBasisNone)
+	}
+	if entry.toStatus != currentStatus || entry.enteredAt.IsZero() || entry.enteredAt.After(now) {
+		return absent(statusSinceBasisInconsistent)
 	}
 	return map[string]contextfabric.FactValue{
 		"status_since":            contextfabric.StringFactValue(entry.enteredAt.UTC().Format(time.RFC3339)),

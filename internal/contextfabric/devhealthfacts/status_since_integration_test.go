@@ -73,9 +73,9 @@ func TestStatusSinceAgainstRealClickHouse(t *testing.T) {
 	if secs == nil || *secs < int64((2*time.Hour).Seconds()) || *secs > int64((2*time.Hour+10*time.Minute).Seconds()) {
 		t.Fatalf("s-reentered duration = %v, want about 2h from the latest entry", secs)
 	}
-	for _, id := range []string{"s-none", "s-elsewhere", "s-foreign"} {
+	for id, want := range map[string]string{"s-none": "no_transition_recorded", "s-elsewhere": "transition_inconsistent", "s-foreign": "no_transition_recorded"} {
 		f := byLabel[id].Fields
-		if b := f["status_since_basis"].String; b == nil || *b != "no_transition_recorded" || !f["status_since"].Null || !f["status_duration_seconds"].Null {
+		if b := f["status_since_basis"].String; b == nil || *b != want || !f["status_since"].Null || !f["status_duration_seconds"].Null {
 			t.Fatalf("%s: fields = %+v, want null since/duration with no_transition_recorded", id, f)
 		}
 	}

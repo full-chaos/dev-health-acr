@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -72,6 +73,7 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		return contextfabric.FactProviderResult{}, readFailure("query work item status since", entriesErr)
 	}
 	now := clock()
+	sinceBasisCounts := map[string]int{}
 	for _, row := range rows {
 		subject, ok := bySubject[row.RepoID+":"+row.ID]
 		if !ok {
@@ -88,8 +90,12 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 			"status_in_vocabulary": statusInVocabularyValue(row.Status),
 			"status_provenance":    contextfabric.StringFactValue(note),
 		}
-		for name, value := range statusSinceFields(row.Status, entry, entryFound, now) {
+		sinceFields := statusSinceFields(row.Status, entry, entryFound, now)
+		for name, value := range sinceFields {
 			fields[name] = value
+		}
+		if b := sinceFields["status_since_basis"].String; b != nil {
+			sinceBasisCounts[*b]++
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactStatus, Subject: subject,
@@ -98,6 +104,12 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		})
 	}
 	budget.observe(len(rows))
+	if n := sinceBasisCounts[statusSinceBasisInconsistent]; n > 0 {
+		slog.WarnContext(ctx, "devhealthfacts.status_since_inconsistent",
+			"inconsistent_items", n,
+			"observed_items", sinceBasisCounts[statusSinceBasisObserved],
+			"no_transition_items", sinceBasisCounts[statusSinceBasisNone])
+	}
 	state, emptyReason := currentAxisReadState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
 	return result, nil
