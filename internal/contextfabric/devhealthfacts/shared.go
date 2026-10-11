@@ -741,7 +741,12 @@ import (
 // v151 -> v152: a repository count named by its label certifies when the lexical search was
 // truncated and the identity read was complete; a candidate saved under an earlier version
 // may hold the uncertified count and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v152"
+//
+// v152 -> v153: a stored answer is reused only when its project and team
+// selector identity equals the request's; a candidate saved under an earlier
+// version carries no selector identity and must not be reused for a request
+// that names project or team selectors.
+const QueryVersion = "devhealthfacts.clickhouse.v153"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
