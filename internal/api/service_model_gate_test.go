@@ -202,7 +202,7 @@ func TestServiceModelDecisionThatCannotBeMadeFailsClosedBeforeAnyModelCall(t *te
 		configs contextfabric.OrgModelConfigStore
 		code    string
 	}{
-		{name: "entitlement service down", grants: &serviceModelGrants{err: errors.New("entitlement down")}, configs: ownModelConfigs{found: true}, code: "upstream_unavailable"},
+		{name: "entitlement service down and no own model", grants: &serviceModelGrants{err: errors.New("entitlement down")}, configs: ownModelConfigs{}, code: "upstream_unavailable"},
 		{name: "model configuration store down", grants: &serviceModelGrants{}, configs: ownModelConfigs{err: errors.New("store down")}, code: "store_unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -318,6 +318,8 @@ func TestEngineRunsWithThePlatformModelWithheldOnlyWhenTheCallerMayNotUseIt(t *t
 		{name: "own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, withheld: true},
 		{name: "client model", grants: &serviceModelGrants{}, supplied: true, withheld: true},
 		{name: "client model with the feature", grants: &serviceModelGrants{feature: true}, supplied: true, withheld: false},
+		{name: "own model with the entitlement unreadable", grants: &serviceModelGrants{err: errors.New("entitlement down")}, configs: ownModelConfigs{found: true}, withheld: true},
+		{name: "client model with the entitlement unreadable", grants: &serviceModelGrants{err: errors.New("entitlement down")}, supplied: true, withheld: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -352,4 +354,35 @@ func TestEngineRunsWithThePlatformModelWithheldOnlyWhenTheCallerMayNotUseIt(t *t
 			}
 		})
 	}
+}
+
+// An unreadable acr_service_model closes only the deployment model: a turn the
+// organization's own model or the caller's own model can serve is still
+// served, with the deployment model withheld.
+func TestUnreadableServiceModelEntitlementStillServesTheOwnAndClientModelPaths(t *testing.T) {
+	t.Run("own model", func(t *testing.T) {
+		rig := gatedClientRouteRig(t, &serviceModelGrants{err: errors.New("entitlement down")}, ownModelConfigs{found: true})
+		decodeEnvelope(t, rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil))
+		if interprets, synthesizes := rig.model.counts(); interprets != 1 || synthesizes != 1 {
+			t.Fatalf("model calls = interpret %d synthesize %d, want 1 and 1 on the organization's model", interprets, synthesizes)
+		}
+		if got := serviceModelDecisionBasis(t, rig.logs); len(got) != 1 || got[0] != "own_model" {
+			t.Fatalf("decision log bases = %v, want [own_model]", got)
+		}
+	})
+	t.Run("client model", func(t *testing.T) {
+		rig := newWriteBackRouteRig(t)
+		rig.app.runtime.Entitlements = &serviceModelGrants{err: errors.New("entitlement down")}
+		rig.app.runtime.OrgModelConfigs = ownModelConfigs{err: errors.New("must not be read on the client path")}
+		first := rig.firstCall(t)
+		if first.SynthesisInput == nil {
+			t.Fatal("the client turn returned no synthesis input")
+		}
+		if interprets, synthesizes := rig.model.counts(); interprets != 0 || synthesizes != 0 {
+			t.Fatalf("model calls = interpret %d synthesize %d, want 0 and 0", interprets, synthesizes)
+		}
+		if got := serviceModelDecisionBasis(t, rig.logs); len(got) != 1 || got[0] != "client_model" {
+			t.Fatalf("decision log bases = %v, want [client_model]", got)
+		}
+	})
 }

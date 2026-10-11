@@ -98,7 +98,7 @@ func dataToolsInstructions(caller *CallerContext) string {
 	}
 	b.WriteString("More data tools are planned.\n")
 	if hostedToolEnabled(caller, toolInvestigateQuestion) {
-		b.WriteString("B. You want our engine's narrative answer: investigate_question. It runs on the service's model, which needs a plan feature or the organization's own model configuration. If you are a model, prefer A, or investigate_with_interpretation with synthesis \"client\".\n")
+		b.WriteString("B. You want our engine's narrative answer: investigate_question. It runs on the service's model, which needs a plan feature, or on the organization's own model configuration when it has one. If you are a model, prefer A, or investigate_with_interpretation with synthesis \"client\".\n")
 	}
 	b.WriteString("Rules for A:\n")
 	b.WriteString("- Read call, completeness, result and coverage first. Missing is not healthy and not zero.\n")

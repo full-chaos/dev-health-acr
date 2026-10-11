@@ -35,9 +35,10 @@ var (
 // serviceModelDecision decides whether an investigation may run on the
 // deployment's own model. Web assertions (Ask Dev) are not decided here. A
 // credential caller may when the deployment is open or the organization holds
-// acr_service_model; otherwise the deployment model is withheld, and a turn
-// that needs a model at all runs only on the organization's own model
-// configuration, or is refused.
+// acr_service_model; otherwise, and also when that entitlement cannot be read,
+// the deployment model is withheld, and a turn that needs a model at all runs
+// only on the organization's own model configuration, or is refused (or, with
+// the entitlement unreadable, answered as unavailable).
 func (a *App) serviceModelDecision(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) (serviceModelBasis, bool, error) {
 	if principal.AuthenticationMethod != storage.AuthenticationMethodCredential {
 		return serviceModelBasisWebAssertion, true, nil
@@ -45,12 +46,12 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 	if a.runtime.ServiceModelOpen {
 		return serviceModelBasisDeploymentOpen, true, nil
 	}
-	entitled, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
-	if err != nil {
-		return "", false, errServiceModelEntitlementUnavailable
-	}
-	if entitled {
+	entitled, featureErr := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
+	if featureErr == nil && entitled {
 		return serviceModelBasisEntitlement, true, nil
+	}
+	if featureErr != nil {
+		a.logger.WarnContext(ctx, "context fabric service model entitlement unavailable; deployment model withheld", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)))
 	}
 	if request.SuppliedInterpretation != nil && request.SynthesisMode == contextfabric.SynthesisModeClient {
 		return serviceModelBasisClientModel, false, nil
@@ -61,6 +62,9 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 	}
 	if own {
 		return serviceModelBasisOwnModel, false, nil
+	}
+	if featureErr != nil {
+		return "", false, errServiceModelEntitlementUnavailable
 	}
 	return serviceModelBasisRefused, false, nil
 }
