@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // TestAWindowGatedTurnStampsItsPendingProofWithTheOwnershipItStoodOn: the
@@ -259,5 +263,42 @@ func TestAnchorOwnershipMovementTable(t *testing.T) {
 	}
 	if a, b := anchorFreshnessDigest(w1), anchorFreshnessDigest(AnchorFreshness{Recorded: true, OwnershipWatermark: "w2"}); a == b || len(a) != 16 || strings.Contains(a, "w1") {
 		t.Errorf("digests %q / %q: want 16 hex digits that differ and never the watermark", a, b)
+	}
+}
+
+// TestTheOwnershipReadPrecedesTheReceiptVerification: a redeemed anchor
+// receipt is proof the binder binds on, and its verification reads the graph
+// during structure canonicalization; the ownership read happens before it,
+// so the receipt is never stamped with ownership read after its proof.
+func TestTheOwnershipReadPrecedesTheReceiptVerification(t *testing.T) {
+	var order []string
+	h := newNeedTurnHarness(t, nil, func(d *EngineDependencies) {
+		d.AnchorVerifier = func(context.Context, string, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+			order = append(order, "receipt_verification")
+			return true, AnchorVerificationValid
+		}
+		d.AnchorMembershipVerifier = func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+			order = append(order, "receipt_verification")
+			return true, AnchorVerificationValid
+		}
+		d.AnchorFreshness = anchorFreshnessFunc(func(context.Context, string) (AnchorFreshnessRead, error) {
+			order = append(order, "ownership")
+			return AnchorFreshnessRead{ServingEpoch: 0, OwnershipWatermark: "ownership-w1", Recorded: true}, nil
+		})
+	})
+	offer := candidateOfferingNeedResponse()
+	offer.material.Missing = []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor}
+	offer.material.CandidateOptions = nil
+	offer.material.AnchorOptions = []AnchorOption{{Label: "need-r2", Kind: SubjectRepository, CanonicalID: "repository:need-r2", MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: "engine"}}
+	one := h.turn(needTurnRequest("request_fresh_receipt_offer", true), offer)
+	order = nil
+	request := needTurnRequest("request_fresh_receipt_redeem", true)
+	request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: one.result.StructureNeeds.AnchorOptions[0].ReceiptID}}
+	two := h.turn(request, committingNeedResponse())
+	if len(order) < 2 || order[0] != "ownership" || !slices.Contains(order, "receipt_verification") {
+		t.Fatalf("read order on the redeeming turn = %v, want the ownership read first, then the receipt's verification", order)
+	}
+	if binding := bindingMember(two.saved); binding == nil || binding.Proof != AnchorBindingProofCallerReceipt || !binding.ProvenFreshness.Recorded {
+		t.Fatalf("binding = %+v, want the receipt bound with the ownership read before its verification", binding)
 	}
 }
