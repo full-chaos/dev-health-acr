@@ -718,30 +718,6 @@
       "value": {
         "number": 0.6
       }
-    },
-    {
-      "claim_id": "claim_open_plus_closed",
-      "kind": "readiness",
-      "subject": {
-        "kind": "project",
-        "canonical_id": "project_ask_dev",
-        "label": "Ask Dev"
-      },
-      "field": "total_requirements",
-      "value": {
-        "integer": 10
-      },
-      "derived_from": [
-        {
-          "fact_id": "fact_9b1deb4d3b7d9d5a1c0e2f4a",
-          "field": "open_requirements"
-        },
-        {
-          "fact_id": "fact_9b1deb4d3b7d9d5a1c0e2f4a",
-          "field": "closed_requirements"
-        }
-      ],
-      "operation": "sum"
     }
   ],
   "coverage": {
