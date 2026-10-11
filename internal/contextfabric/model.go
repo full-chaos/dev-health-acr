@@ -902,7 +902,7 @@ func factValueRowsEqual(a, b FactValueRow) bool {
 type CanonicalFact struct {
 	// ID names this fact so a synthesized claim can cite the one fact it
 	// restates (ClaimedFact.FactID). Minted once by the registry, a pure
-	// function of the fact's content (MintFactID); empty on a fact that never
+	// function of its place in its (kind, subject) group (MintFactID); empty on a fact that never
 	// passed the registry, in which case a claim grounds by (Kind, Subject).
 	ID             string               `json:"id,omitempty"`
 	Kind           FactKind             `json:"kind"`

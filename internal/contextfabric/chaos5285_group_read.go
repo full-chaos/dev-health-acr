@@ -504,6 +504,7 @@ func mergeGroupBundle(into *CanonicalFactBundle, group CanonicalFactBundle, orgI
 	}
 
 	into.Facts = append(into.Facts, group.Facts...)
+	AssignFactIDs(into.Facts)
 	into.Coverage = MergeCoverage(orgID, into.Coverage, group.Coverage)
 	if into.Versions == nil {
 		into.Versions = make(map[FactKind]string, len(group.Versions))

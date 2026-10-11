@@ -10,8 +10,9 @@ func factIDGroup() []CanonicalFact {
 	subject := SubjectRef{Kind: SubjectTeam, CanonicalID: "team.v2:00000000-0000-0000-0000-000000000001", Label: "Platform"}
 	one := CanonicalFact{Kind: FactReadiness, Subject: subject, Fields: map[string]FactValue{"estimate_coverage_ratio": NumberFactValue(0.25)}, EvidenceRefIDs: []string{"acr:v1:work_item:a:1"}, Source: "s", SourceVersion: "v1"}
 	two := CanonicalFact{Kind: FactReadiness, Subject: subject, Fields: map[string]FactValue{"estimate_coverage_ratio": NumberFactValue(0.75)}, EvidenceRefIDs: []string{"acr:v1:work_item:a:2"}, Source: "s", SourceVersion: "v1"}
-	one.ID, two.ID = MintFactID(one), MintFactID(two)
-	return []CanonicalFact{one, two}
+	facts := []CanonicalFact{one, two}
+	AssignFactIDs(facts)
+	return facts
 }
 
 func factIDClaim(facts []CanonicalFact, factID string, value float64) ClaimedFact {
@@ -25,21 +26,38 @@ func factIDClaim(facts []CanonicalFact, factID string, value float64) ClaimedFac
 	}
 }
 
-func TestMintFactIDIsDeterministicAndContentDerived(t *testing.T) {
+func TestFactIDsAreDeterministicAndIndependentOfValues(t *testing.T) {
 	facts := factIDGroup()
 	if facts[0].ID == "" || facts[0].ID == facts[1].ID {
-		t.Fatalf("two facts with different values must carry different non-empty ids: %q %q", facts[0].ID, facts[1].ID)
-	}
-	if again := MintFactID(facts[0]); again != facts[0].ID {
-		t.Fatalf("id is not deterministic: %q vs %q", again, facts[0].ID)
-	}
-	withProvenance := facts[0]
-	withProvenance.Source, withProvenance.SourceVersion, withProvenance.EvidenceRefIDs = "other", "v9", nil
-	if MintFactID(withProvenance) != facts[0].ID {
-		t.Fatal("provenance must not move the id")
+		t.Fatalf("two facts of one group must carry different non-empty ids: %q %q", facts[0].ID, facts[1].ID)
 	}
 	if !strings.HasPrefix(facts[0].ID, "fact_") {
 		t.Fatalf("unexpected id shape %q", facts[0].ID)
+	}
+	again := factIDGroup()
+	if again[0].ID != facts[0].ID || again[1].ID != facts[1].ID {
+		t.Fatal("ids are not deterministic")
+	}
+	// Aggregation noise and a clock-moved window change values, never ids.
+	noisy := factIDGroup()
+	noisy[0].Fields = map[string]FactValue{"estimate_coverage_ratio": NumberFactValue(0.25 + 3e-16)}
+	AssignFactIDs(noisy)
+	if noisy[0].ID != facts[0].ID {
+		t.Fatal("a value change must not move the id")
+	}
+}
+
+func TestFactIDsDoNotCollideAcrossAMergedBundle(t *testing.T) {
+	member := factIDGroup()
+	group := factIDGroup()
+	merged := append(append([]CanonicalFact{}, member...), group...)
+	AssignFactIDs(merged)
+	seen := map[string]bool{}
+	for _, fact := range merged {
+		if seen[fact.ID] {
+			t.Fatalf("duplicate id %q after merging two reads of the same kind and subject", fact.ID)
+		}
+		seen[fact.ID] = true
 	}
 }
 
@@ -76,7 +94,7 @@ func TestClaimWithWrongFactIDIsUngroundedNotWidened(t *testing.T) {
 	}
 	foreign := facts[1]
 	foreign.Subject = SubjectRef{Kind: SubjectTeam, CanonicalID: "team.v2:00000000-0000-0000-0000-000000000002", Label: "Other"}
-	foreign.ID = MintFactID(foreign)
+	foreign.ID = MintFactID(foreign.Kind, foreign.Subject, 0)
 	if _, outcome := groundClaim(append(facts, foreign), factIDClaim(facts, foreign.ID, 0.75)); outcome != claimFactIDUnknown {
 		t.Fatalf("an id of another subject's fact must not ground this subject's claim: %v", outcome)
 	}
