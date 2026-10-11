@@ -35,7 +35,7 @@ import (
 // noProjectOwnershipSentinel is the reach of a project with no current owning
 // team that owns a repository. Like noTeamOwnershipSentinel, it is a list that
 // admits no real repository slug (it has no '/'), never the "*" wildcard.
-const noProjectOwnershipSentinel = "acr-context-fabric:no-project-repository-ownership"
+const noProjectOwnershipSentinel = contractsv1.ContextFabricNoProjectOwnershipSentinel
 
 type projectReachContextKey struct{}
 
