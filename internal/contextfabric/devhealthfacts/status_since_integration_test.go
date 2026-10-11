@@ -8,6 +8,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -89,7 +90,7 @@ func TestStatusSinceAgainstRealClickHouse(t *testing.T) {
 // statement.
 func TestStatusSinceStatementRunsAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	_, direct := sharedClickHouseFixture(t)
+	query, direct := sharedClickHouseFixture(t)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	const repo = "5b1c7e0e-2f56-4a53-9d0a-7a1f0c9d0111"
 	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repo, "org-diag", "acme/a", "github", now); err != nil {
@@ -133,6 +134,32 @@ func TestStatusSinceStatementRunsAgainstRealClickHouse(t *testing.T) {
 			if err != nil {
 				t.Errorf("scope=%s settings=%s: server rejected the statement: %v", scopeName, settingName, err)
 			}
+			if settingName != "all" {
+				continue
+			}
+			// The same statement through the production query client and the
+			// provider's scan destinations: the raw error of a scan or client
+			// failure is the failure text here.
+			pb := []contextpacket.ClickHouseBinding{{Name: "org_id", Value: "org-diag"}, {Name: "ids", Value: []string{repo + ":w-1"}}}
+			for _, b := range bindings {
+				pb = append(pb, contextpacket.ClickHouseBinding{Name: b.Name, Value: b.Value})
+			}
+			prow, perr := query.Query(ctx, sql, pb)
+			if perr != nil {
+				t.Errorf("scope=%s: production client rejected the statement: %v", scopeName, perr)
+				continue
+			}
+			for prow.Next() {
+				var a, b2, c string
+				var d time.Time
+				if scanErr := prow.Scan(&a, &b2, &c, &d); scanErr != nil {
+					t.Errorf("scope=%s: scan into the provider's destinations: %v", scopeName, scanErr)
+				}
+			}
+			if rerr := prow.Err(); rerr != nil {
+				t.Errorf("scope=%s: production client rows: %v", scopeName, rerr)
+			}
+			_ = prow.Close()
 		}
 	}
 }
