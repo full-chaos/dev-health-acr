@@ -89,20 +89,22 @@ func ScopeAnchorRetrievalKind(frame *QuestionFrame, anchorKind SubjectKind) Subj
 	return anchorKind
 }
 
-// ScopeAnchorTeams is the committed team subjects that are the question's
-// scope anchor: the ones a candidate matched an anchor term for or, when none
-// did, the one committed team. Empty when the frame's anchor is not a team or
-// the commit holds several teams and none was matched by an anchor term.
-func ScopeAnchorTeams(frame *QuestionFrame, anchorKind SubjectKind, resolution SubjectResolution) []SubjectRef {
-	if ScopeAnchorRetrievalKind(frame, anchorKind) != SubjectTeam {
+// ScopeAnchorSubjects is the committed subjects of the question's scope anchor
+// kind that are the anchor: the ones a candidate matched an anchor term for or,
+// when none did, the one committed subject of that kind. Empty when the frame
+// has no anchor kind or the commit holds several of it and none was matched by
+// an anchor term.
+func ScopeAnchorSubjects(frame *QuestionFrame, anchorKind SubjectKind, resolution SubjectResolution) []SubjectRef {
+	kind := ScopeAnchorRetrievalKind(frame, anchorKind)
+	if kind == "" {
 		return nil
 	}
-	var teams, matched []SubjectRef
+	var same, matched []SubjectRef
 	for _, subject := range resolution.Committed {
-		if subject.Kind != SubjectTeam {
+		if subject.Kind != kind {
 			continue
 		}
-		teams = append(teams, subject)
+		same = append(same, subject)
 		if anchorTermMatched(frame, subject, resolution) {
 			matched = append(matched, subject)
 		}
@@ -110,8 +112,17 @@ func ScopeAnchorTeams(frame *QuestionFrame, anchorKind SubjectKind, resolution S
 	if len(matched) > 0 {
 		return matched
 	}
-	if len(teams) == 1 {
-		return teams
+	if len(same) == 1 {
+		return same
 	}
 	return nil
+}
+
+// ScopeAnchorTeams is ScopeAnchorSubjects for a team anchor; empty when the
+// frame's anchor is not a team.
+func ScopeAnchorTeams(frame *QuestionFrame, anchorKind SubjectKind, resolution SubjectResolution) []SubjectRef {
+	if ScopeAnchorRetrievalKind(frame, anchorKind) != SubjectTeam {
+		return nil
+	}
+	return ScopeAnchorSubjects(frame, anchorKind, resolution)
 }

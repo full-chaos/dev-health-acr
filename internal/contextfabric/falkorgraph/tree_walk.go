@@ -272,14 +272,18 @@ type treeWalk struct {
 	// strongest tier among its admitted link rows (linkSegment). It is
 	// recorded for every link read; memberTiers is its part that matters.
 	endTiers map[string]string
-	// memberTiers is set only when the link ends the path (linkMembers): the
-	// strongest admitted link tier of each member, by canonical id.
+	// memberTiers is set when the path crosses the link: the strongest admitted
+	// link tier of each member, by canonical id (linkMembers when the link ends
+	// the path, members when it feeds the last hop).
 	memberTiers map[string]string
 	// linkSubjects are the members when the link ends the path. The link read
 	// returns projections of the walk properties (walk_projection.go), so
 	// these members are identities, a distinct type from nodes: a reader
 	// cannot ask them for a property the read did not return.
 	linkSubjects []contextfabric.SubjectRef
+	// linkNodes are the same members as nodes, for a caller that serves them as
+	// a cohort.
+	linkNodes []graphrank.CandidateNode
 	// heuristicOnly counts the members whose strongest tier is heuristic.
 	heuristicOnly int
 }
@@ -301,12 +305,12 @@ type treeWalkState struct {
 	principal    storage.Principal
 	scope        contextfabric.RequestedScope
 	collectLimit int
-	// ownershipEdges: an ownership hit must also pass its edge's own
-	// authorization. Set for a team anchor's member read, the rule of the
-	// generic walk it replaces; the other tree walks decide by the node.
+	// ownershipEdges: every hit, and every link, must also pass its edge's own
+	// authorization. Set for an anchor's member read (a cohort), the rule of
+	// the generic walk it replaces; the other tree walks decide by the node.
 	ownershipEdges bool
-	// anchorDenied: the anchor of a team member read is not visible to the
-	// caller, so every ownership hit is a denied member.
+	// anchorDenied: the anchor of a member read is not visible to the caller,
+	// so every hit, over any edge, is a denied member.
 	anchorDenied bool
 }
 
@@ -314,13 +318,20 @@ type treeWalkState struct {
 // an ownership edge the edge's own authorization attributes too, the rule
 // resolveEdge applies to every edge of the generic walk.
 func (s treeWalkState) authorizedHit(hop treeHop, h walkHit) bool {
-	if s.anchorDenied && hop.edge.ownership {
+	if s.anchorDenied {
 		return false
 	}
-	if s.ownershipEdges && hop.edge.ownership && h.rel != nil && !authorizedEdgeAttributes(s.principal, s.scope, h.rel.Properties) {
+	if s.ownershipEdges && h.rel != nil && !authorizedEdgeAttributes(s.principal, s.scope, h.rel.Properties) {
 		return false
 	}
 	return s.authorized(h.to)
+}
+
+// feedAuthorized is the decision on the feed edge a fused link read returns
+// beside the link: a read that did not return it is not decided, and is denied.
+func (s treeWalkState) feedAuthorized(value interface{}) bool {
+	e := walkEdge(value)
+	return e != nil && authorizedEdgeAttributes(s.principal, s.scope, e.Properties)
 }
 
 func (s treeWalkState) authorized(n *node) bool {
@@ -399,9 +410,8 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 	return a.treeMembersOf(ctx, key, orgID, principal, scope, anchor, member, collectLimit, temporal, false, false)
 }
 
-// teamAnchorMembers is treeMembers for a team anchor's repositories or
-// projects: ownership edges are authorized as the generic walk authorizes
-// every edge.
+// teamAnchorMembers is treeMembers for an anchor's members as a cohort:
+// ownership edges are authorized as the generic walk authorizes every edge.
 func (a *Adapter) teamAnchorMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter) (treeWalk, error) {
 	// The step read returns the member and the edge, never the team: the
 	// anchor is read here, in the caller's window, and decided by the same
@@ -416,7 +426,12 @@ func (a *Adapter) teamAnchorMembers(ctx context.Context, key, orgID string, prin
 		return treeWalk{anchorKind: anchor.Kind}, nil
 	}
 	denied := !authorizedNodeAttributes(principal, scope, toCandidateNode(team).Attributes)
-	return a.treeMembersOf(ctx, key, orgID, principal, scope, anchor, member, collectLimit, temporal, true, denied)
+	walk, err := a.treeMembersOf(ctx, key, orgID, principal, scope, anchor, member, collectLimit, temporal, true, denied)
+	if err == nil && len(walk.linkNodes) > 0 {
+		walk.nodes = append(walk.nodes, walk.linkNodes...)
+		sortCandidateNodesBySubjectKey(walk.nodes)
+	}
+	return walk, err
 }
 
 func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter, ownershipEdges, anchorDenied bool) (treeWalk, error) {
@@ -525,6 +540,14 @@ func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]c
 			continue
 		}
 		id := canonicalIDOf(h.to)
+		if tier, ok := s.out.endTiers[h.from]; ok {
+			if s.out.memberTiers == nil {
+				s.out.memberTiers = map[string]string{}
+			}
+			if best, has := s.out.memberTiers[id]; !has || tierRank(tier) < tierRank(best) {
+				s.out.memberTiers[id] = tier
+			}
+		}
 		if seen[id] {
 			continue
 		}
@@ -553,6 +576,7 @@ func (s treeWalkState) linkMembers(ends []string, far map[string]*node) {
 			continue
 		}
 		s.out.linkSubjects = append(s.out.linkSubjects, subject)
+		s.out.linkNodes = append(s.out.linkNodes, toCandidateNode(far[id]))
 		tier := s.out.endTiers[id]
 		s.out.memberTiers[id] = tier
 		if tier == contextfabric.TreeLinkTierHeuristic {
@@ -667,11 +691,23 @@ func linkSegmentMatch(feed treeHop) string {
 // is not a row, so the read budget is spent on links only, and an anchor none
 // of whose near-side nodes links returns no row at all.
 func linkSegmentCypher(feed, link treeHop, temporal temporalFilter, restricted bool) string {
+	return linkSegmentCypherFor(feed, link, temporal, restricted, false)
+}
+
+// linkSegmentCypherFor is linkSegmentCypher; anchored adds what an anchored
+// member read decides with: the feed edge's own authorization lists, and the
+// far node's evidence references, which the cohort member carries.
+func linkSegmentCypherFor(feed, link treeHop, temporal temporalFilter, restricted, anchored bool) string {
 	mid := treeNodeVar{name: "m", param: "mtypes", position: feed.to}
 	end := treeNodeVar{name: "b", param: "btypes", position: link.to}
 	grants := ""
 	if restricted {
 		grants = end.grantClause() + mid.grantClause()
+	}
+	endProperties, feedColumn := walkNodeProperties, ""
+	if anchored {
+		endProperties = append(append([]string(nil), walkNodeProperties...), propEvidenceRefs)
+		feedColumn = ", " + walkProjection("ra", walkFeedProperties)
 	}
 	order := ""
 	if link.edge.linkOrder != "" {
@@ -680,8 +716,8 @@ func linkSegmentCypher(feed, link treeHop, temporal temporalFilter, restricted b
 	return linkSegmentMatch(feed) + fmt.Sprintf(hopArrow(link.step.direction, "rl")+"(b:%[2]s {%[3]s:$org, %[4]s:$endKind}) ", labelRelation, labelSubject, propOrgID, propKind) +
 		fmt.Sprintf("WHERE ra.%[1]s = $feedRel AND rl.%[1]s = $linkRel AND rl.%[2]s IN $tiers", propRelationType, propPropertyPrefix+linkTierProperty) + mid.typeClause() + end.typeClause() + grants +
 		temporal.predicate("ra") + temporal.predicate("m") + temporal.predicate("rl") + temporal.predicate("b") +
-		fmt.Sprintf(" RETURN %[4]s, %[5]s, %[6]s ORDER BY %[2]sm.%[1]s, b.%[1]s, rl.%[3]s SKIP $skip LIMIT $limit", propCanonicalID, order, propRelationshipID,
-			linkSegmentColumn("m", feed.to, walkNodeProperties), linkSegmentColumn("b", link.to, walkNodeProperties), walkProjection("rl", walkLinkProperties))
+		fmt.Sprintf(" RETURN %[4]s, %[5]s, %[6]s%[7]s ORDER BY %[2]sm.%[1]s, b.%[1]s, rl.%[3]s SKIP $skip LIMIT $limit", propCanonicalID, order, propRelationshipID,
+			linkSegmentColumn("m", feed.to, walkNodeProperties), linkSegmentColumn("b", link.to, endProperties), walkProjection("rl", walkLinkProperties), feedColumn)
 }
 
 // linkSegmentColumn is a node column of the link read: the walk properties of
@@ -810,7 +846,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 			return nil, nil, err
 		}
 	}
-	cypher := linkSegmentCypher(feed, link, temporal, restricted)
+	cypher := linkSegmentCypherFor(feed, link, temporal, restricted, state.ownershipEdges)
 	seen := map[string]bool{}
 	admitted := map[string]*node{}
 	out.endTiers = map[string]string{}
@@ -841,6 +877,12 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 			id := canonicalIDOf(far)
 			seen[id] = true
 			switch {
+			case state.anchorDenied:
+				state.deny()
+			case state.ownershipEdges && !authorizedEdgeAttributes(state.principal, state.scope, walkEdge(r["rl"]).Properties):
+				state.deny()
+			case state.ownershipEdges && !state.feedAuthorized(r["ra"]):
+				state.deny()
 			case !state.admitted(feed.to, near, tier):
 				state.deny()
 			case !state.admitted(link.to, far, tier):
