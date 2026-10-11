@@ -28,14 +28,14 @@ One table of rows (`internal/mcp/authmatrix_test.go`, `matrixRows`) is executed 
 
 Every caller is exercised on every tool it may reach, and D–G on every tool at all.
 
-- `tools/list` per caller: exact catalogue (A, B, C list five tools, H lists six).
+- `tools/list` per caller: exact catalogue (A, B, C list the five answer tools `context_for_task`, `investigate_question`, `investigate_with_interpretation`, `investigation_result` and `source_evidence`; H lists those and `record_episode`). The matrix fixture advertises none of the direct data tools (`read_facts`, `read_relationships`, `data_catalog`, `find_subjects`, `run_operation`, `graphql_query`), so they have no row here.
 - `investigate_question`: A and B are answered on their own identity.
 - `investigate_with_interpretation`: listed with `investigate_question` for the same callers; it has no row of its own beyond the wire denials, because it reaches the same hosted route under the same identity.
 - `investigation_result`: A and B read their own result. B and C reading A's result id, and A reading B's, are denied. The denial must equal the denial of an id that never existed, and carry none of the owner's data. A denial by the organization scope writes no stored-result decision line; a denial by the live grant writes exactly one, `denied`.
 - `source_evidence`: A reads the evidence; B and C are denied like an unknown reference.
 - `context_for_task` with an explicit scope: an out-of-grant repository is refused with the public `repo_forbidden` code before any store is consulted; another organization naming the same repository is refused or answered without the owner's data.
 - `record_episode`: not listed and not callable for A, B and C; the episode sink is never reached.
-- D, E, F, G on `tools/list` and all six tools: HTTP 401 with the fixed body and challenge, before the SDK handler runs. D and E reach acr-api once (its own 401); F and G never reach it.
+- D, E, F, G on `tools/list` and all six tools of the matrix: HTTP 401 with the fixed body and challenge, before the SDK handler runs. D and E reach acr-api once (its own 401); F and G never reach it.
 
 ## Running the matrix against a deployment
 
