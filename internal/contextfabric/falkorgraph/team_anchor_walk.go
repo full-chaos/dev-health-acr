@@ -29,6 +29,7 @@ func TeamAnchorWalkOutcomeVocabulary() []TeamAnchorWalkOutcome {
 // and closed values only, never a name or an id.
 type TeamAnchorWalkDecision struct {
 	Outcome    TeamAnchorWalkOutcome
+	AnchorKind contextfabric.SubjectKind
 	MemberKind contextfabric.SubjectKind
 	// Committed is how many subjects the resolution committed.
 	Committed int
@@ -58,8 +59,8 @@ func (t *teamAnchorWalkTally) add(walk treeWalk) {
 	t.anchorDenied = t.anchorDenied || walk.anchorDenied
 }
 
-func (t teamAnchorWalkTally) decision(memberKind contextfabric.SubjectKind, committed int, err error) TeamAnchorWalkDecision {
-	d := TeamAnchorWalkDecision{MemberKind: memberKind, Committed: committed, Members: t.members, Denied: t.denied, Truncated: t.truncated, Err: err}
+func (t teamAnchorWalkTally) decision(anchorKind, memberKind contextfabric.SubjectKind, committed int, err error) TeamAnchorWalkDecision {
+	d := TeamAnchorWalkDecision{AnchorKind: anchorKind, MemberKind: memberKind, Committed: committed, Members: t.members, Denied: t.denied, Truncated: t.truncated, Err: err}
 	switch {
 	case err != nil:
 		d.Outcome = TeamAnchorWalkReadFailed
