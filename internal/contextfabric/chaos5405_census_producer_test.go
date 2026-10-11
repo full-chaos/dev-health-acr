@@ -524,3 +524,65 @@ func TestChaos5405_TheServedRowCarriesTheAdmittedCountItMeasured(t *testing.T) {
 		t.Fatalf("served admitted_count = %d, the traversal measured %d -- the served census must report what was admitted, not a constant", int(served), measured)
 	}
 }
+
+// TestChaos5405_TheCensusGivesWayToTheBytesOfAnOverrunAndSaysSo pins the
+// stage-3 lever's contract: it cuts the least relevant rows by the bytes of
+// the overrun, counts what it cut, and leaves the result alone when the census
+// cannot cover the overrun by itself.
+func TestChaos5405_TheCensusGivesWayToTheBytesOfAnOverrunAndSaysSo(t *testing.T) {
+	t.Parallel()
+
+	rows := func() []contractsv1.ContextFabricFactScopeCensusRecord {
+		return []contractsv1.ContextFabricFactScopeCensusRecord{
+			{RequirementKind: string(FactMetrics), OriginKind: string(SubjectProject), Policy: "project_work_item_repository_v1", Outcome: string(FactScopePolicyUnavailable)},
+			{RequirementKind: string(FactWorkload), OriginKind: string(SubjectProject), Policy: "project_work_item_repository_v1", Outcome: string(FactScopeExpanded)},
+			{RequirementKind: string(FactReviews), OriginKind: string(SubjectProject), Policy: "project_work_item_repository_v1", Outcome: string(FactScopeExpanded), Truncated: true},
+		}
+	}
+	result := InvestigationResult{FactScopeCensus: rows()}
+	result.Interpretation.FactRequirements = []FactRequirement{{Kind: FactMetrics}, {Kind: FactReviews}}
+	one, err := json.Marshal(result.FactScopeCensus[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// An overrun of a single byte cuts one row: the one for the requirement
+	// the question did not make.
+	shed, ok := shedFactScopeCensusToBytes(result, 1)
+	if !ok {
+		t.Fatal("a one-byte overrun with a census that can cover it was not shed")
+	}
+	if len(shed.FactScopeCensus) != 2 || shed.FactScopeCensusOmitted != 1 {
+		t.Fatalf("rows=%d omitted=%d, want 2 and 1", len(shed.FactScopeCensus), shed.FactScopeCensusOmitted)
+	}
+	for _, record := range shed.FactScopeCensus {
+		if record.RequirementKind == string(FactWorkload) {
+			t.Fatalf("the unasked requirement's row survived the cut: %+v", shed.FactScopeCensus)
+		}
+	}
+	if len(result.FactScopeCensus) != 3 || result.FactScopeCensusOmitted != 0 {
+		t.Fatal("the lever mutated its input")
+	}
+
+	// An overrun of every row's bytes plus the count's own cost cuts them all
+	// and still discloses the number.
+	all, ok := shedFactScopeCensusToBytes(result, int64(3*(len(one)+1)+64))
+	if ok && (len(all.FactScopeCensus) != 0 || all.FactScopeCensusOmitted != 3) {
+		t.Fatalf("rows=%d omitted=%d, want 0 and 3", len(all.FactScopeCensus), all.FactScopeCensusOmitted)
+	}
+
+	// An overrun the whole census cannot cover is left to the answer levers:
+	// cutting the census would cost the disclosure and cure nothing.
+	if _, ok := shedFactScopeCensusToBytes(result, 1<<20); ok {
+		t.Fatal("a census that cannot cover the overrun was shed anyway")
+	}
+	if _, ok := shedFactScopeCensusToBytes(InvestigationResult{}, 100); ok {
+		t.Fatal("a result with no census reported a shed")
+	}
+	// A count already carried is added to, never reset.
+	result.FactScopeCensusOmitted = 4
+	again, ok := shedFactScopeCensusToBytes(result, 1)
+	if !ok || again.FactScopeCensusOmitted != 5 {
+		t.Fatalf("omitted = %d, want 5 (4 earlier + 1)", again.FactScopeCensusOmitted)
+	}
+}

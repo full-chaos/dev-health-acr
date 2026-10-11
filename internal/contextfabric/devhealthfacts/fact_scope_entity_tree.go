@@ -192,8 +192,13 @@ func (e *ScopeExpander) projectLinkedRepositories(ctx context.Context, orgID str
 		return nil, contextfabric.FactScopeExpansionCounts{AmbiguousOriginCount: len(origins)}, nil
 	}
 	limitPlusOne := limit + 1
-	statement := `SELECT if(ifNull(l.work_item_id, '') = '', '', toString(l.repo_id)) AS repo_id_str,
-       ifNull(r.repo, ''),
+	// link_state: 0 the issue has no link row, 1 it has one whose pull request
+	// does not exist (a stale link, skipped by the canonical link projection
+	// too), 2 a link to a pull request that exists. Only state 2 names a
+	// repository.
+	statement := `SELECT multiIf(ifNull(l.work_item_id, '') = '', 0, ifNull(pr.number, 0) = 0, 1, 2) AS link_state,
+       if(link_state = 2, toString(l.repo_id), '') AS repo_id_str,
+       if(link_state = 2, ifNull(r.repo, ''), '') AS repo_slug,
        min(p.id),
        toUInt8(max(` + linkTierRankSQL + `)),
        argMax(ifNull(l.provenance, ''), ` + linkTierRankSQL + `),
@@ -201,10 +206,11 @@ func (e *ScopeExpander) projectLinkedRepositories(ctx context.Context, orgID str
 FROM work_items AS w FINAL
 INNER JOIN ` + projectKeyResolutionSubquery + ` AS p ON p.join_key = w.project_id
 LEFT JOIN work_graph_issue_pr AS l FINAL ON l.org_id = w.org_id AND l.work_item_id = w.work_item_id
+LEFT JOIN git_pull_requests AS pr FINAL ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number
 LEFT JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id
 WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
-GROUP BY repo_id_str, ifNull(r.repo, '')
-ORDER BY repo_id_str
+GROUP BY link_state, repo_id_str, repo_slug
+ORDER BY link_state DESC, repo_id_str
 LIMIT ` + strconv.Itoa(limitPlusOne)
 	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
@@ -220,17 +226,19 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	counts := contextfabric.FactScopeExpansionCounts{}
 	groups := 0
 	for rows.Next() {
+		var linkState, rank uint8
 		var repoID, repoSlug, originProjectID, tier string
-		var rank uint8
 		var issues int64
-		if err := rows.Scan(&repoID, &repoSlug, &originProjectID, &rank, &tier, &issues); err != nil {
+		if err := rows.Scan(&linkState, &repoID, &repoSlug, &originProjectID, &rank, &tier, &issues); err != nil {
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		groups++
 		switch {
-		case repoID == "":
-			// Issues of the project with no link row: the next hop is missing.
-			counts.MissingNextHopCount++
+		case linkState < 2:
+			// Issues of the project with no link row, or whose link names a
+			// pull request that does not exist: the next hop is missing, and
+			// every such issue is counted.
+			counts.MissingNextHopCount += int(issues)
 		case repoID == zeroRepositoryID, repoSlug == "":
 			counts.MissingNextHopCount++
 		case rank == 0:
@@ -260,11 +268,11 @@ func (e *ScopeExpander) incidentsForRepositories(ctx context.Context, principal 
 	}
 	limitPlusOne := limit + 1
 	statement := `SELECT e.incident_id, groupUniqArray(concat(toString(e.repo_id), '|', ifNull(r.repo, '')))
-FROM work_graph_deployment_incident_edges AS e
+FROM work_graph_deployment_incident_edges AS e FINAL
 LEFT JOIN (SELECT id, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS r ON r.id = e.repo_id
 WHERE toString(e.org_id) = {org_id:String} AND e.repo_id IS NOT NULL AND e.incident_id NOT IN ('', 'none')
   AND e.incident_id IN (
-    SELECT incident_id FROM work_graph_deployment_incident_edges
+    SELECT incident_id FROM work_graph_deployment_incident_edges FINAL
     WHERE toString(org_id) = {org_id:String} AND repo_id IS NOT NULL AND toString(repo_id) IN {repo_ids:Array(String)}
   )
   AND e.incident_id IN (SELECT id FROM operational_incidents FINAL WHERE org_id = {org_id:String} AND is_deleted = 0)
@@ -345,11 +353,15 @@ func (e *ScopeExpander) projectOwningTeams(ctx context.Context, principal storag
 		return nil, nil, contextfabric.FactScopeExpansionCounts{AmbiguousOriginCount: len(origins)}, nil
 	}
 	limitPlusOne := limit + 1
-	statement := `SELECT p.team_id, concat(p.provider, ':', p.id) AS project_key, ifNull(t.name, '')
+	// ONE ROW PER DISTINCT TEAM, before the limit: the ownership join returns a
+	// row per (team, source), so limiting its rows would let a few multi-source
+	// teams use the whole limit and cut the set with Truncated unset.
+	statement := `SELECT p.team_id, min(concat(p.provider, ':', p.id)) AS project_key, ifNull(any(t.name), '')
 FROM ` + projectOwnershipJoinSQL(ownershipValidityPredicate(factTimeBound{})) + `
 INNER JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = p.team_id
-ORDER BY p.team_id, project_key
-LIMIT ` + strconv.Itoa(limitPlusOne*len(projectKeys))
+GROUP BY p.team_id
+ORDER BY p.team_id
+LIMIT ` + strconv.Itoa(limitPlusOne)
 	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
 		{Name: "ids", Value: projectKeys},

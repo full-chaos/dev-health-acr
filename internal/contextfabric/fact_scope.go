@@ -46,6 +46,7 @@ package contextfabric
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -2703,34 +2704,85 @@ func shedFactScopeCensus(records []contractsv1.ContextFabricFactScopeCensusRecor
 	if len(records) <= ceiling {
 		return records, 0
 	}
+	keep := factScopeCensusKeepOrder(records, requirements)[:ceiling]
+	return keepFactScopeCensusRows(records, keep), len(records) - len(keep)
+}
+
+// factScopeCensusKeepOrder lists the indices of records from the row to keep
+// LAST-resort-shed (the one that best explains the served answer) to the row
+// to shed first. Deterministic: the sort is stable over the producer's order.
+func factScopeCensusKeepOrder(records []contractsv1.ContextFabricFactScopeCensusRecord, requirements []FactRequirement) []int {
 	asked := make(map[string]bool, len(requirements))
 	for _, requirement := range requirements {
 		asked[string(requirement.Kind)] = true
 	}
-	type ranked struct {
-		index int
-		tier  int
-	}
-	order := make([]ranked, len(records))
+	tiers := make([]int, len(records))
+	order := make([]int, len(records))
 	for i, record := range records {
-		tier := 0
+		order[i] = i
 		if !asked[record.RequirementKind] {
-			tier += 2
+			tiers[i] += 2
 		}
 		if !record.Truncated && record.Outcome == string(FactScopeExpanded) {
-			tier++
+			tiers[i]++
 		}
-		order[i] = ranked{index: i, tier: tier}
 	}
-	sort.SliceStable(order, func(a, b int) bool { return order[a].tier < order[b].tier })
-	keep := make([]int, 0, ceiling)
-	for _, candidate := range order[:ceiling] {
-		keep = append(keep, candidate.index)
-	}
-	sort.Ints(keep)
-	kept := make([]contractsv1.ContextFabricFactScopeCensusRecord, 0, ceiling)
-	for _, index := range keep {
+	sort.SliceStable(order, func(a, b int) bool { return tiers[order[a]] < tiers[order[b]] })
+	return order
+}
+
+// keepFactScopeCensusRows returns the records at the given indices, in their
+// original relative order.
+func keepFactScopeCensusRows(records []contractsv1.ContextFabricFactScopeCensusRecord, keep []int) []contractsv1.ContextFabricFactScopeCensusRecord {
+	sorted := append([]int(nil), keep...)
+	sort.Ints(sorted)
+	kept := make([]contractsv1.ContextFabricFactScopeCensusRecord, 0, len(sorted))
+	for _, index := range sorted {
 		kept = append(kept, records[index])
 	}
-	return kept, len(records) - len(kept)
+	return kept
+}
+
+// shedFactScopeCensusToBytes cuts census rows, least relevant first, until
+// the bytes they carried cover `over`: the bytes by which the composed answer
+// exceeds its budget. It is the stage-3 lever for an answer that is larger
+// than the minimum answer the composition-time ceiling reserves for.
+//
+// The census is diagnostics about the answer, not evidence in it, so it is
+// the first thing to give way, and it gives way DISCLOSED: the count of
+// cells it no longer lists is added to FactScopeCensusOmitted. It reports
+// false, and returns the result unchanged, when the census cannot cover the
+// overrun on its own (shedding then would cost the disclosure and cure
+// nothing).
+func shedFactScopeCensusToBytes(result InvestigationResult, over int64) (InvestigationResult, bool) {
+	records := result.FactScopeCensus
+	if over <= 0 || len(records) == 0 {
+		return result, false
+	}
+	// The omitted count's key and widest value are paid once, on the first
+	// shed; a result that already carries a count pays nothing more.
+	var saved int64
+	if result.FactScopeCensusOmitted == 0 {
+		saved -= int64(len(`,"fact_scope_census_omitted":`)) + 2
+	}
+	order := factScopeCensusKeepOrder(records, result.Interpretation.FactRequirements)
+	cut := 0
+	for cut < len(order) && saved < over {
+		encoded, err := json.Marshal(records[order[len(order)-1-cut]])
+		if err != nil {
+			return result, false
+		}
+		saved += int64(len(encoded)) + 1
+		cut++
+	}
+	if saved < over {
+		return result, false
+	}
+	shed := result
+	shed.FactScopeCensus = keepFactScopeCensusRows(records, order[:len(order)-cut])
+	if len(shed.FactScopeCensus) == 0 {
+		shed.FactScopeCensus = nil
+	}
+	shed.FactScopeCensusOmitted = result.FactScopeCensusOmitted + cut
+	return shed, true
 }
