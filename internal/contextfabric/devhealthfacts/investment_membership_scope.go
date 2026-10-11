@@ -183,6 +183,9 @@ const (
 	membershipScopeMaxUnits = 100000
 	// membershipScopeMaxOrgs bounds how many organizations are remembered.
 	membershipScopeMaxOrgs = 64
+	// membershipScopeMaxLogged bounds the set of organizations whose cold load
+	// was already reported; an evicted organization reports again.
+	membershipScopeMaxLogged = 4 * membershipScopeMaxOrgs
 	// membershipScopeTTL bounds how long a remembered scope is served. A
 	// completed run is immutable, so a fresh entry is exact; the bound only
 	// limits how long a set read while the run's rows were still becoming
@@ -212,11 +215,13 @@ type membershipScopeEntry struct {
 type membershipScopeCache struct {
 	mu      sync.Mutex
 	entries map[string]membershipScopeEntry
-	loads   singleflight.Group
+	// logged holds the organizations whose cold load was already reported.
+	logged map[string]struct{}
+	loads  singleflight.Group
 }
 
 func newMembershipScopeCache() *membershipScopeCache {
-	return &membershipScopeCache{entries: map[string]membershipScopeEntry{}}
+	return &membershipScopeCache{entries: map[string]membershipScopeEntry{}, logged: map[string]struct{}{}}
 }
 
 func (c *membershipScopeCache) get(orgID, runID string, now time.Time) ([]string, bool) {
@@ -227,6 +232,23 @@ func (c *membershipScopeCache) get(orgID, runID string, now time.Time) ([]string
 		return nil, false
 	}
 	return entry.ids, true
+}
+
+// firstLoad reports true once per organization.
+func (c *membershipScopeCache) firstLoad(orgID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.logged[orgID]; ok {
+		return false
+	}
+	if len(c.logged) >= membershipScopeMaxLogged {
+		for key := range c.logged {
+			delete(c.logged, key)
+			break
+		}
+	}
+	c.logged[orgID] = struct{}{}
+	return true
 }
 
 func (c *membershipScopeCache) put(orgID, runID string, ids []string, now time.Time) {
@@ -246,8 +268,34 @@ func (c *membershipScopeCache) put(orgID, runID string, ids []string, now time.T
 // remember and a missing scope cache keep the subquery text, so the answer is
 // the same in every case.
 func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID string) (membershipScope, error) {
+	scope, _, err := p.resolveMembershipScopeRun(ctx, orgID)
+	return scope, err
+}
+
+// loadedMembershipScopeKey carries the scope LoadPrerequisites resolved, with
+// the run it was resolved for. A statement of the same read uses it as is,
+// whatever the cache could keep: a run too large to remember, an empty run and
+// a failed load are loaded once, never again inside the capability's clock, and
+// the run id is not read again either.
+type loadedMembershipScopeKey struct{}
+
+type loadedMembershipScope struct {
+	orgID, runID string
+	scope        membershipScope
+}
+
+// resolveMembershipScopeRun is resolveMembershipScope that also names the run
+// the scope belongs to ("" when the scope came from no resolvable run).
+func (p *InvestmentProvider) resolveMembershipScopeRun(ctx context.Context, orgID string) (membershipScope, string, error) {
 	if p.scopes == nil {
-		return subqueryMembershipScope, nil
+		return subqueryMembershipScope, "", nil
+	}
+	// One request serves one run snapshot: the prerequisite step pinned the run
+	// (outside the capability's clock), so a statement of the read uses that
+	// scope as is and never reads the run id or loads again. A run that changes
+	// during the request is seen by the next request's prerequisite step.
+	if loaded, ok := ctx.Value(loadedMembershipScopeKey{}).(loadedMembershipScope); ok && loaded.orgID == orgID {
+		return loaded.scope, loaded.runID, nil
 	}
 	runID := ""
 	runs := 0
@@ -256,21 +304,24 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 		return row.Scan(&runID)
 	}); err != nil {
 		if ctx.Err() != nil {
-			return membershipScope{}, err
+			return membershipScope{}, "", err
 		}
 		// The run could not be resolved: never serve a remembered set for a run
 		// that may have been replaced. The scope subqueries decide in the
-		// statement itself, exactly as before.
-		return subqueryMembershipScope, nil
+		// statement itself, exactly as before. The failure is reported, never
+		// swallowed.
+		slog.WarnContext(ctx, "devhealthfacts.membership_scope_fallback", "reason", contextfabric.SanitizeLogAttr("run_marker_read_failed"), "path", contextfabric.SanitizeLogAttr("scope_subqueries"))
+		projectMixEvent(ctx, membershipScopeFallbackReader, err)
+		return subqueryMembershipScope, "", nil
 	}
 	if runs > 1 {
-		return subqueryMembershipScope, nil
+		return subqueryMembershipScope, "", nil
 	}
 	switch runID {
 	case "":
-		return membershipScope{mode: membershipScopeNone}, nil
+		return membershipScope{mode: membershipScopeNone}, "", nil
 	case legacyRunID:
-		return subqueryMembershipScope, nil
+		return subqueryMembershipScope, "", nil
 	}
 	// The shared read must not die with the first caller: it runs on a context
 	// that keeps the caller's values but not its cancellation, under its own
@@ -280,10 +331,13 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 		loadTimeout = p.scopeLoadTimeout
 	}
 	started := clock()
+	// The shared load outlives the caller: it reads the clock through a copy
+	// taken here, never through the package variable.
+	clk := clock
 	result := p.scopes.loads.DoChan(orgID+"\x00"+runID, func() (any, error) {
 		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), loadTimeout)
 		defer cancel()
-		if ids, ok := p.scopes.get(orgID, runID, clock()); ok {
+		if ids, ok := p.scopes.get(orgID, runID, clk()); ok {
 			return ids, nil
 		}
 		var ids []string
@@ -299,16 +353,28 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 		if overflow || len(ids) == 0 {
 			// Too large to remember, or no row visible for the run yet (a run
 			// marker can be seen before its rows, and an organization's rows
-			// can be deleted): an empty set is never remembered.
+			// can be deleted): an empty set is never remembered. The load is
+			// still reported once per organization and outcome, so a cold
+			// load that cannot be remembered is not silent.
+			outcome, units := "empty", 0
+			if rows > 0 && len(ids) > 0 {
+				outcome, units = "overflow", membershipScopeMaxUnits
+			}
+			if p.scopes.firstLoad(orgID) {
+				slog.InfoContext(ctx, "investment membership scope cold load", "outcome", contextfabric.SanitizeLogAttr(outcome), "duration_ms", clk().Sub(started).Milliseconds(), "units", units)
+			}
 			return []string(nil), nil
 		}
-		p.scopes.put(orgID, runID, ids, clock())
+		p.scopes.put(orgID, runID, ids, clk())
+		if p.scopes.firstLoad(orgID) {
+			slog.InfoContext(ctx, "investment membership scope cold load", "duration_ms", clk().Sub(started).Milliseconds(), "units", len(ids))
+		}
 		return ids, nil
 	})
 	var loaded any
 	select {
 	case <-ctx.Done():
-		return membershipScope{}, ctx.Err()
+		return membershipScope{}, "", ctx.Err()
 	case res := <-result:
 		if res.Err != nil {
 			// The scope ids are an optimization of the scope subqueries: a load
@@ -316,7 +382,7 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 			// them, so the read costs more but still answers. A caller that is
 			// itself cancelled is not degraded.
 			if err := ctx.Err(); err != nil {
-				return membershipScope{}, err
+				return membershipScope{}, "", err
 			}
 			reason := "load_failed"
 			if errors.Is(res.Err, context.DeadlineExceeded) {
@@ -324,13 +390,13 @@ func (p *InvestmentProvider) resolveMembershipScope(ctx context.Context, orgID s
 			}
 			slog.WarnContext(ctx, "devhealthfacts.membership_scope_fallback", "reason", contextfabric.SanitizeLogAttr(reason), "path", contextfabric.SanitizeLogAttr("scope_subqueries"), "elapsed_ms", clock().Sub(started).Milliseconds(), "load_timeout_ms", loadTimeout.Milliseconds())
 			projectMixEvent(ctx, membershipScopeFallbackReader, res.Err)
-			return subqueryMembershipScope, nil
+			return subqueryMembershipScope, runID, nil
 		}
 		loaded = res.Val
 	}
 	ids, _ := loaded.([]string)
 	if ids == nil {
-		return subqueryMembershipScope, nil
+		return subqueryMembershipScope, runID, nil
 	}
-	return membershipScope{mode: membershipScopeIDs, ids: ids}, nil
+	return membershipScope{mode: membershipScopeIDs, ids: ids}, runID, nil
 }

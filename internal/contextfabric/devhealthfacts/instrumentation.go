@@ -32,9 +32,25 @@ func (p instrumentedProvider) Capability() contextfabric.FactCapability {
 	return p.inner.Capability()
 }
 
-func (p instrumentedProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p instrumentedProvider) withInstrumentation(ctx context.Context) context.Context {
 	ctx = context.WithValue(ctx, projectMixInstrumentationKey{}, p.instr)
-	return p.inner.ReadFacts(readers.ContextWithInstrumentation(ctx, p.instr), principal, query)
+	return readers.ContextWithInstrumentation(ctx, p.instr)
+}
+
+func (p instrumentedProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	return p.inner.ReadFacts(p.withInstrumentation(ctx), principal, query)
+}
+
+// LoadPrerequisites forwards contextfabric.FactPrerequisiteLoader to the
+// wrapped provider, with the same instrumentation a read carries, so the
+// registry (which holds only this decorator) reaches the wrapped provider's
+// prerequisite load. A wrapped provider without one has nothing to load.
+func (p instrumentedProvider) LoadPrerequisites(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (context.Context, error) {
+	loader, ok := p.inner.(contextfabric.FactPrerequisiteLoader)
+	if !ok {
+		return ctx, nil
+	}
+	return loader.LoadPrerequisites(p.withInstrumentation(ctx), principal, query)
 }
 
 // NewInstrumentedProviders wraps NewProviders' result so every fact read
