@@ -63,13 +63,8 @@ type CatalogSchemaArgument struct {
 // derive): the section then lists nothing and says not configured.
 func BuildCatalogSchema(policy *GraphQLPolicy, class CallerClass, servable, gate, dataRead bool) *CatalogSchema {
 	section := &CatalogSchema{CallerClass: class, Available: true, Roots: []CatalogSchemaRoot{}, RefusedRootFields: []string{}}
-	switch {
-	case policy == nil || !servable:
-		section.Available, section.Reason = false, CatalogUnavailableGraphQLNotConfigured
-	case !gate:
-		section.Available, section.Reason = false, CatalogUnavailableGateMissing
-	case !dataRead:
-		section.Available, section.Reason = false, CatalogUnavailableScopeMissing
+	if reason := catalogAccessReason(policy != nil && servable, CatalogUnavailableGraphQLNotConfigured, gate, dataRead); reason != "" {
+		section.Available, section.Reason = false, reason
 	}
 	// No detail at all for a caller graphql_query cannot serve (pr2 r1
 	// P1): without data:read, or without a composed runner, the section
