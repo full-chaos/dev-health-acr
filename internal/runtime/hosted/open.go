@@ -637,7 +637,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
 		return nil, nil, nil, nil, nil, nil, nil
 	}
-	if err := contextfabric.ValidateSynthesisCompositionReserve(request.config.RequestTimeout); err != nil {
+	// An unset request timeout (zero) is defaulted by the route layer to a
+	// value above the reserve; only a set value is checked here.
+	if err := contextfabric.ValidateSynthesisCompositionReserve(request.config.RequestTimeout); request.config.RequestTimeout > 0 && err != nil {
 		return nil, nil, nil, nil, nil, nil, err
 	}
 	graphReader, embedRetrievalIdentity, err := buildContextFabricGraphReader(request, postgres, clickhouse, true)
