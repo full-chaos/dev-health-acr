@@ -59,9 +59,12 @@ type hostedAPI struct {
 
 	blocked       atomic.Bool
 	requestBudget atomic.Bool
-	liveStatus    atomic.Int32
-	evidenceWait  atomic.Pointer[barrier]
-	bearerHold    atomic.Pointer[bearerHold]
+	// capabilitiesBudget makes the refused request answer with the
+	// capabilities budget token instead of the request budget one.
+	capabilitiesBudget atomic.Bool
+	liveStatus         atomic.Int32
+	evidenceWait       atomic.Pointer[barrier]
+	bearerHold         atomic.Pointer[bearerHold]
 
 	mu        sync.Mutex
 	seen      map[string][]string
@@ -258,10 +261,14 @@ func (h *hostedAPI) capabilities(w http.ResponseWriter, r *http.Request) {
 	principal, _ := auth.PrincipalFromContext(r.Context())
 	h.record(principal, r.URL.Path)
 	if h.requestBudget.Load() {
+		limit := "request_budget"
+		if h.capabilitiesBudget.Load() {
+			limit = "capabilities_budget"
+		}
 		w.Header().Set("Retry-After", "9")
 		writeHostedJSON(w, http.StatusTooManyRequests, contractsv1.ErrorEnvelope{
 			SchemaVersion: contractsv1.ErrorSchema, RequestID: "req_fixture",
-			Error: contractsv1.ErrorDetail{Code: "rate_limited", Message: "Request rate limit exceeded", HTTPStatus: http.StatusTooManyRequests, Retryable: true, Details: map[string]any{"retry_after_seconds": 9, "limit": "request_budget"}},
+			Error: contractsv1.ErrorDetail{Code: "rate_limited", Message: "Request rate limit exceeded", HTTPStatus: http.StatusTooManyRequests, Retryable: true, Details: map[string]any{"retry_after_seconds": 9, "limit": limit}},
 		})
 		return
 	}

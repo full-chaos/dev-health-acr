@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -80,6 +82,13 @@ func TestCapabilitiesClassExhaustionLeavesAuthAndContextUntouched(t *testing.T) 
 	}
 	if last.Code != http.StatusTooManyRequests {
 		t.Fatalf("third call status = %d, want 429 body=%s", last.Code, last.Body.String())
+	}
+	var envelope contractsv1.ErrorEnvelope
+	if err := json.Unmarshal(last.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if got := envelope.Error.Details[contractsv1.RateLimitDetailsLimitKey]; got != contractsv1.RateLimitCapabilitiesBudget {
+		t.Fatalf("details.limit = %v, want %q", got, contractsv1.RateLimitCapabilitiesBudget)
 	}
 	capabilities, auth, contextClass := admittedByClass(t, app)
 	if capabilities != 2 || auth != 0 || contextClass != 0 {
