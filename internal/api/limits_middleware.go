@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 )
 
@@ -56,11 +57,11 @@ func CompleteUsageWithBudget(ctx context.Context, usage limits.ResourceUsage, ov
 }
 
 func writeRateLimitError(w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
-	var details map[string]any
+	details := map[string]any{contractsv1.RateLimitDetailsLimitKey: contractsv1.RateLimitRequestBudget}
 	if retryAfter > 0 {
 		seconds := max(1, int((retryAfter+time.Second-1)/time.Second))
 		w.Header().Set("Retry-After", strconv.Itoa(seconds))
-		details = map[string]any{"retry_after_seconds": seconds}
+		details["retry_after_seconds"] = seconds
 	}
 	writeError(w, r, http.StatusTooManyRequests, "rate_limited", "Request rate limit exceeded", true, details)
 }

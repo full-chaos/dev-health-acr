@@ -95,6 +95,21 @@ func TestWriteRateLimitErrorRoundsRetryUp(t *testing.T) {
 	}
 }
 
+func TestWriteRateLimitErrorNamesTheRequestBudget(t *testing.T) {
+	for _, retryAfter := range []time.Duration{0, time.Second} {
+		request := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(context.WithValue(context.Background(), requestIDContextKey, "req_0123456789abcdef0123456789abcdef"))
+		response := httptest.NewRecorder()
+		writeRateLimitError(response, request, retryAfter)
+		var envelope contractsv1.ErrorEnvelope
+		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if got := envelope.Error.Details[contractsv1.RateLimitDetailsLimitKey]; got != contractsv1.RateLimitRequestBudget {
+			t.Fatalf("retry %v: details.limit = %v", retryAfter, got)
+		}
+	}
+}
+
 func TestAppProtectedHandlerUsesInjectedLimitManager(t *testing.T) {
 	// Given
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
