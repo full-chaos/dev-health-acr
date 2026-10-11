@@ -49,3 +49,17 @@ func TestQueryVersionMovedPastTheTransientModelCallDegrade(t *testing.T) {
 		t.Fatalf("QueryVersion = %q: an answer saved before the transient-call degrade (v161 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+// A flow bug_completed_ratio or story_points_completed the source does not
+// track is omitted and named, where v162 and before served it as 0, so an
+// answer stored before it must not be reused.
+func TestQueryVersionMovedPastTheFlowNotTrackedMeasure(t *testing.T) {
+	const prefix = "devhealthfacts.clickhouse.v"
+	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
+	if !ok {
+		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
+	}
+	if n, err := strconv.Atoi(version); err != nil || n < 163 {
+		t.Fatalf("QueryVersion = %q: an answer saved when a not-tracked flow measure served 0 (v162 and before) must not be reused", devhealthfacts.QueryVersion)
+	}
+}
