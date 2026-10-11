@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -42,7 +43,7 @@ func TestADegradedAnswerMintsOneClaimPerScalarFieldRead(t *testing.T) {
 		"f_rows":  {Rows: []FactValueRow{{Fields: map[string]FactValue{"x": StringFactValue("y")}}}},
 	})}
 
-	claims, evidence, truncated := mintDegradedFactClaims(facts)
+	claims, evidence, truncated := mintDegradedFactClaims(facts, contractsv1.ContextFabricClaimedFactsMaxCount)
 
 	if truncated || len(claims) != 5 {
 		t.Fatalf("claims = %d truncated = %v, want the five scalar fields and no truncation: %+v", len(claims), truncated, claims)
@@ -64,7 +65,7 @@ func TestADegradedAnswerMintsOneClaimPerScalarFieldRead(t *testing.T) {
 
 func TestADegradedAnswerCitesEachEvidenceRowOnce(t *testing.T) {
 	first := degradedClaimFact(1, 1, map[string]FactValue{"a": StringFactValue("x"), "b": StringFactValue("y")})
-	_, evidence, _ := mintDegradedFactClaims([]CanonicalFact{first})
+	_, evidence, _ := mintDegradedFactClaims([]CanonicalFact{first}, contractsv1.ContextFabricClaimedFactsMaxCount)
 	if len(evidence) != 1 {
 		t.Fatalf("evidence = %v, want one row for two claims of one fact", evidence)
 	}
@@ -84,7 +85,7 @@ func TestADegradedAnswerStopsAtTheClaimBound(t *testing.T) {
 		for index := 0; index < tc.facts; index++ {
 			facts = append(facts, degradedScalarFact(index, 1))
 		}
-		claims, _, truncated := mintDegradedFactClaims(facts)
+		claims, _, truncated := mintDegradedFactClaims(facts, contractsv1.ContextFabricClaimedFactsMaxCount)
 		if len(claims) != tc.wantClaims || truncated != tc.wantTruncated {
 			t.Fatalf("%d facts: claims = %d truncated = %v, want %d and %v", tc.facts, len(claims), truncated, tc.wantClaims, tc.wantTruncated)
 		}
@@ -97,7 +98,7 @@ func TestADegradedAnswerStopsAtTheEvidenceBound(t *testing.T) {
 		facts = append(facts, degradedScalarFact(index, 3))
 	}
 
-	claims, evidence, truncated := mintDegradedFactClaims(facts)
+	claims, evidence, truncated := mintDegradedFactClaims(facts, contractsv1.ContextFabricClaimedFactsMaxCount)
 
 	if !truncated || len(evidence) > contractsv1.ContextFabricEvidenceRefIDsMaxCount || len(evidence) != 3*len(claims) || len(claims) != contractsv1.ContextFabricEvidenceRefIDsMaxCount/3 {
 		t.Fatalf("claims = %d evidence = %d truncated = %v, want a claim only with its evidence inside the bound", len(claims), len(evidence), truncated)
@@ -115,10 +116,21 @@ func TestADegradedAnswerEvidenceBoundIsInclusive(t *testing.T) {
 		for index := 0; index < tc.facts; index++ {
 			facts = append(facts, degradedScalarFact(index, perFact))
 		}
-		claims, evidence, truncated := mintDegradedFactClaims(facts)
+		claims, evidence, truncated := mintDegradedFactClaims(facts, contractsv1.ContextFabricClaimedFactsMaxCount)
 		if truncated != tc.wantTruncated || len(claims) != atBound || len(evidence) != atBound*perFact {
 			t.Fatalf("%d facts: claims = %d evidence = %d truncated = %v, want %d claims, %d evidence and %v", tc.facts, len(claims), len(evidence), truncated, atBound, atBound*perFact, tc.wantTruncated)
 		}
+	}
+}
+
+func TestADegradedAnswerDisclosesAValidValueTooLongForAClaim(t *testing.T) {
+	long := strings.Repeat("x", 4001)
+	facts := []CanonicalFact{degradedClaimFact(1, 1, map[string]FactValue{"long": StringFactValue(long), "kept": StringFactValue("y")})}
+
+	claims, _, truncated := mintDegradedFactClaims(facts, contractsv1.ContextFabricClaimedFactsMaxCount)
+
+	if len(claims) != 1 || claims[0].Field != "kept" || !truncated {
+		t.Fatalf("claims = %+v truncated = %v, want the long value left out and disclosed", claims, truncated)
 	}
 }
 
@@ -130,10 +142,10 @@ func TestADegradedAnswerSkipsAFieldNoClaimCanCarry(t *testing.T) {
 		"kept":    StringFactValue("y"),
 	})}
 
-	claims, _, _ := mintDegradedFactClaims(facts)
+	claims, _, truncated := mintDegradedFactClaims(facts, contractsv1.ContextFabricClaimedFactsMaxCount)
 
-	if len(claims) != 1 || claims[0].Field != "kept" {
-		t.Fatalf("claims = %+v, want only the field a valid, grounded claim can carry", claims)
+	if len(claims) != 1 || claims[0].Field != "kept" || !truncated {
+		t.Fatalf("claims = %+v truncated = %v, want only the field a valid claim can carry and the omission disclosed", claims, truncated)
 	}
 }
 

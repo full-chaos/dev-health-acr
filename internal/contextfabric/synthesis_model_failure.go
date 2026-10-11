@@ -153,7 +153,7 @@ func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal
 		r.recordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Attempts: failure.Attempts, ElapsedMS: failure.Elapsed.Milliseconds(), Rule: failure.Rule, Stage: failure.Stage})
 	}
 	draft := degradedSynthesisDraft(failure.Class)
-	claims, evidence, truncated := mintDegradedFactClaims(input.Facts.Facts)
+	claims, evidence, truncated := mintDegradedFactClaims(input.Facts.Facts, degradedClaimLimit(input))
 	if len(claims) > 0 {
 		draft.ClaimedFacts = claims
 		draft.EvidenceRefIDs = evidence

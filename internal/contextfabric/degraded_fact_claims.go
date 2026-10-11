@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -18,8 +19,9 @@ const degradedFactClaimIDPrefix = "server:fact:"
 // grounded in those facts by construction; Validate refuses what a claim cannot
 // carry (a padded field name, a value that is not finite). The claim count stops at the claimed-fact bound
 // and the evidence count at the evidence bound; truncated reports that facts
-// were left out.
-func mintDegradedFactClaims(facts []CanonicalFact) (claims []ClaimedFact, evidence []string, truncated bool) {
+// were left out: for the bound, or because a value could not be carried as a claim.
+func mintDegradedFactClaims(facts []CanonicalFact, claimLimit int) (claims []ClaimedFact, evidence []string, truncated bool) {
+	omitted := false
 	claims = []ClaimedFact{}
 	evidence = []string{}
 	seenEvidence := map[string]struct{}{}
@@ -42,6 +44,9 @@ func mintDegradedFactClaims(facts []CanonicalFact) (claims []ClaimedFact, eviden
 				Value:   value,
 			}
 			if claim.Validate() != nil {
+				// A value the contract cannot carry as a claim is left out,
+				// and the answer says part of the facts is missing.
+				omitted = true
 				continue
 			}
 			added := make([]string, 0, len(fact.EvidenceRefIDs))
@@ -50,7 +55,7 @@ func mintDegradedFactClaims(facts []CanonicalFact) (claims []ClaimedFact, eviden
 					added = append(added, ref)
 				}
 			}
-			if len(claims) >= contractsv1.ContextFabricClaimedFactsMaxCount ||
+			if len(claims) >= claimLimit ||
 				len(evidence)+len(added) > contractsv1.ContextFabricEvidenceRefIDsMaxCount {
 				return claims, evidence, true
 			}
@@ -61,7 +66,27 @@ func mintDegradedFactClaims(facts []CanonicalFact) (claims []ClaimedFact, eviden
 			claims = append(claims, claim)
 		}
 	}
-	return claims, evidence, false
+	return claims, evidence, omitted
+}
+
+// degradedClaimLimit is how many claims a degraded answer may carry: the
+// claimed-fact bound, held to what the answer's own item ceiling leaves after the
+// items it already charges (subject candidates, cohort member rows) and the one
+// count claim the engine may add. No ceiling in force (a zero allocation) leaves
+// the claimed-fact bound alone.
+func degradedClaimLimit(input SynthesisInput) int {
+	limit := contractsv1.ContextFabricClaimedFactsMaxCount
+	if input.Allocation.MaxItems <= 0 {
+		return limit
+	}
+	room := input.Allocation.MaxItems - input.Allocation.MemberRowCommitment - len(input.Graph.Resolution.Candidates) - 1
+	if room < limit {
+		limit = room
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	return limit
 }
 
 func scalarFromFactValue(v FactValue) (ScalarValue, bool) {
@@ -78,4 +103,16 @@ func scalarFromFactValue(v FactValue) (ScalarValue, bool) {
 		return ScalarValue{Null: true}, true
 	}
 	return ScalarValue{}, false
+}
+
+// composeFailedSynthesisCurrentState is the current_state of a degraded answer
+// for a failed model call: the canonical values that were read, named for what
+// they are and not as current (the answer may speak for another period), or
+// the failure statement when no value could be carried.
+func composeFailedSynthesisCurrentState(claims []ClaimedFact) string {
+	sentences := claimedFactSentences(claims)
+	if len(sentences) == 0 {
+		return synthesisFailureCurrentState
+	}
+	return truncateAtSentenceBoundary("Canonical values read: "+strings.Join(sentences, "; ")+".", currentStateMaxLength)
 }
