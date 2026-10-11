@@ -312,7 +312,7 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 		return result, nil, measure, err
 	}
 	draft := clientSynthesisDraft(given)
-	result, err := r.composeSynthesisResult(ctx, principal, given, draft, ModelExecutionReceipt{}, bound, false)
+	result, err := r.composeSynthesisResult(ctx, principal, given, draft, ModelExecutionReceipt{}, bound, nil)
 	if err != nil {
 		return InvestigationResult{}, nil, measure, err
 	}
@@ -437,7 +437,7 @@ func (r RuntimeAnswerSynthesizer) composeSuppliedSynthesis(ctx context.Context, 
 	if err != nil {
 		return InvestigationResult{}, err
 	}
-	result, err := r.composeSynthesisResult(ctx, principal, given, draft, receipt, bound, false)
+	result, err := r.composeSynthesisResult(ctx, principal, given, draft, receipt, bound, nil)
 	if err != nil {
 		return InvestigationResult{}, err
 	}

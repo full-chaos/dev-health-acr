@@ -733,10 +733,24 @@ import (
 // refused as an invalid result is served; a candidate saved under an earlier
 // version cannot hold it.
 //
-// v150 -> v151: the team blockers rollup counts only open blockers and serves the
+// v151: a degraded answer for a failed model call serves one
+// synthesis_model_failed coverage detail (failure class and retry hint) and is
+// recognised by it; a no-facts failure serves its own limitation. A candidate
+// saved under an earlier version carries only the warning.
+//
+// v151 -> v152: a repository count named by its label certifies when the lexical search was
+// truncated and the identity read was complete; a candidate saved under an earlier version
+// may hold the uncertified count and must not be reused.
+//
+// v152 -> v153: a stored answer is reused only when its project and team
+// selector identity equals the request's; a candidate saved under an earlier
+// version carries no selector identity and must not be reused for a request
+// that names project or team selectors.
+//
+// v153 -> v154: the team blockers rollup counts only open blockers and serves the
 // excluded-by-status count and the status basis; a candidate saved under an earlier
 // version holds the unfiltered counts.
-const QueryVersion = "devhealthfacts.clickhouse.v151"
+const QueryVersion = "devhealthfacts.clickhouse.v154"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

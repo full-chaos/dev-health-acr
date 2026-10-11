@@ -20,6 +20,8 @@ type scopedReuseStore struct {
 	// tuple names the axis keys whose stored row reads back as a work-item
 	// tuple answer.
 	tuple map[string]bool
+	// lookups records the time-axis key of every reuse lookup.
+	lookups []string
 }
 
 func (s *scopedReuseStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, watermark SourceWatermarkSnapshot, epoch RebuildEpoch, timeAxisKey string, identity ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64, parent string, semantic SemanticStateWrite) error {
@@ -31,6 +33,7 @@ func (s *scopedReuseStore) Save(ctx context.Context, principal storage.Principal
 
 func (s *scopedReuseStore) FindReusable(_ context.Context, principal storage.Principal, key ReuseKey) (StoredInvestigationResult, bool, ReuseMissReason, error) {
 	s.mu.Lock()
+	s.lookups = append(s.lookups, key.TimeAxisKey)
 	result, ok := s.rows[key.TimeAxisKey]
 	s.mu.Unlock()
 	if !ok {
