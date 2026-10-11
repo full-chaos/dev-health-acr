@@ -143,6 +143,7 @@ func (e *Engine) planBudgetTrim(
 	pending *assemblyTelemetry,
 	pass int,
 	cardinality MembershipCardinality,
+	singleSubject bool,
 ) (claimDepthAttempt, error) {
 	depth := newClaimDepthPlan(result)
 	attempt := claimDepthAttempt{Measured: measured, Members: depth.members, ClaimsBefore: depth.declared, ClaimsAfter: depth.declared, ClaimsCited: depth.cites}
@@ -151,8 +152,11 @@ func (e *Engine) planBudgetTrim(
 		return attempt, nil
 	}
 	if depth.members == 0 {
-		attempt.Declined = ClaimDepthNoCohort
-		return attempt, nil
+		if !singleSubject || result.Cohort != nil {
+			attempt.Declined = ClaimDepthNoCohort
+			return attempt, nil
+		}
+		return e.planSingleSubjectTrim(ctx, principal, plan, frame, result, budget, measured, facts, pending, pass, cardinality, attempt)
 	}
 	attempt.Declined = ClaimDepthNothingCuttable
 	for _, step := range budgetTrimSteps {
@@ -202,4 +206,130 @@ func (e *Engine) budgetTrimServedShape(ctx context.Context, result Investigation
 	result = ApplyServedStatusFloors(result)
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(result))
+}
+
+// singleSubjectTrimOrder is the order claims are cut from an answer that has
+// no cohort: claims no driver or finding cites first, then cited ones except
+// the first claim each driver and finding cites, each group from the end of the
+// list. A claim in neither group is never cut.
+func singleSubjectTrimOrder(result InvestigationResult) []int {
+	cited := citedClaimIDs(result)
+	anchors := budgetTrimCitationAnchors(result)
+	var uncited, citedCuttable []int
+	for index := len(result.ClaimedFacts) - 1; index >= 0; index-- {
+		id := result.ClaimedFacts[index].ClaimID
+		switch {
+		case anchors[id]:
+		case cited[id]:
+			citedCuttable = append(citedCuttable, index)
+		default:
+			uncited = append(uncited, index)
+		}
+	}
+	return append(uncited, citedCuttable...)
+}
+
+// singleSubjectTrimCut drops the first count claims of order, strips the
+// citations of the cited ones, and discloses the cut.
+func singleSubjectTrimCut(result InvestigationResult, order []int, count int) InvestigationResult {
+	drop := make(map[int]bool, count)
+	dropped := make(map[string]bool, count)
+	for _, index := range order[:count] {
+		drop[index] = true
+		dropped[result.ClaimedFacts[index].ClaimID] = true
+	}
+	kept := make([]ClaimedFact, 0, len(result.ClaimedFacts)-count)
+	for index, claim := range result.ClaimedFacts {
+		if !drop[index] {
+			kept = append(kept, claim)
+		}
+	}
+	declared := len(result.ClaimedFacts)
+	result.ClaimedFacts = kept
+	result = budgetTrimStripCitations(result, dropped)
+	cut, _ := budgetTrimDisclose(result, declared-count, declared)
+	return cut
+}
+
+// planSingleSubjectTrim is the item-axis trim for an answer with no cohort: the
+// fewest claims cut, in singleSubjectTrimOrder, that bring the item count under
+// the ceiling. When the byte axis still overruns afterwards it hands the cut
+// document back in Reduced so the byte levers can continue from it.
+func (e *Engine) planSingleSubjectTrim(
+	ctx context.Context,
+	principal storage.Principal,
+	plan *AnswerPlan,
+	frame *QuestionFrame,
+	result InvestigationResult,
+	budget ResponseBudget,
+	measured MeasuredAttempt,
+	facts CanonicalFactBundle,
+	pending *assemblyTelemetry,
+	pass int,
+	cardinality MembershipCardinality,
+	attempt claimDepthAttempt,
+) (claimDepthAttempt, error) {
+	order := singleSubjectTrimOrder(result)
+	attempt.ClaimsBefore = len(result.ClaimedFacts)
+	attempt.ClaimsAfter = len(result.ClaimedFacts)
+	if len(order) == 0 {
+		attempt.Declined = ClaimDepthNothingCuttable
+		return attempt, nil
+	}
+	build := func(count int, served *assemblyTelemetry) (InvestigationResult, InvestigationResult, MeasuredAttempt, error) {
+		disclosed := singleSubjectTrimCut(result, order, count)
+		cut := e.finalizeResult(ctx, principal, disclosed, *plan, frame, facts, served, pass, cardinality)
+		trimmed, err := e.measureAssembledAttempt(ctx, principal, "budget_trim", measured.Allocation, e.budgetTrimServedShape(ctx, cut), budget)
+		return disclosed, cut, trimmed, err
+	}
+	fail := func(err error) (claimDepthAttempt, error) {
+		if errors.Is(err, ErrItemAccounting) {
+			return attempt, err
+		}
+		attempt.Declined = ClaimDepthUnmeasurable
+		return attempt, nil
+	}
+	// Fewest claims cut that clear the item axis. Items fall as claims go.
+	low, high, best := 1, len(order), 0
+	for low <= high {
+		mid := low + (high-low)/2
+		_, _, trimmed, err := build(mid, nil)
+		if err != nil {
+			return fail(err)
+		}
+		if trimmed.Overrun != contractsv1.ContextFabricBudgetOverrunItems {
+			best = mid
+			high = mid - 1
+		} else {
+			low = mid + 1
+		}
+	}
+	if best == 0 {
+		attempt.Declined = ClaimDepthInsufficient
+		return attempt, nil
+	}
+	disclosed, cut, trimmed, err := build(best, nil)
+	if err != nil {
+		return fail(err)
+	}
+	attempt.Measured = trimmed
+	attempt.ClaimsAfter = len(result.ClaimedFacts) - best
+	if trimmed.Overrun == contractsv1.ContextFabricBudgetOverrunBytes {
+		attempt.Declined = ClaimDepthInsufficient
+		attempt.Reduced = disclosed
+		return attempt, nil
+	}
+	if trimmed.Overrun != contractsv1.ContextFabricBudgetFits || !trimmed.CertifiedFit() {
+		attempt.Declined = ClaimDepthInsufficient
+		return attempt, nil
+	}
+	if !servableLeverResult(cut) {
+		attempt.Declined = ClaimDepthInvalidResult
+		return attempt, nil
+	}
+	// Only the document that is served records its cover events.
+	attempt.Result = e.finalizeResult(ctx, principal, disclosed, *plan, frame, facts, pending, pass, cardinality)
+	attempt.Served = true
+	attempt.Declined = ClaimDepthNotApplicable
+	return attempt, nil
 }
