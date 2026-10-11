@@ -741,6 +741,26 @@ func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode)
 	}
 }
 
+// coverageDetailCodeQualifiesSourceTruncation reports whether a coverage
+// detail code names a SOURCE-LEVEL shortfall: a fact source that returned part
+// of what was asked of it, with no larger population to count the gap
+// against. Only such a cause may sit on a depth row whose served and declared
+// counts are equal (truncationQualified in the outcome validator): the
+// provider cut its own answer (fact_provider_reported), or scope expansion did
+// not reach every target (fact_scope_unexpanded). Every other code states a
+// different mechanism (a failed or absent read, a prune, a narrowing, a
+// disclosure) and keeps the "not a reduction" refusal. The set is frozen by
+// TestSourceTruncationCausesAreTheFrozenSet, so a new code joins by a
+// conscious edit of both.
+func coverageDetailCodeQualifiesSourceTruncation(code ContextFabricCoverageDetailCode) bool {
+	switch code {
+	case ContextFabricCoverageDetailFactProviderReported, ContextFabricCoverageDetailFactScopeUnexpanded:
+		return true
+	default:
+		return false
+	}
+}
+
 // ContextFabricCoverageDetailCodeMayDegrade declares, per the settled design,
 // which codes are NEVER degrading regardless of producer state (parity with
 // the string path: fact_pruned and graph_validity_unbounded never enter
