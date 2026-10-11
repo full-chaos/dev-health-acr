@@ -1780,6 +1780,69 @@ func TestChaos4099_ATeamPolicyExpandsWithAPerTargetBasisAndDisclosesBoth(t *test
 	}
 }
 
+// TestFactScopeEventBasisIsTheWeakestAdmittedTargetBasis pins the event-level
+// summary: it is the weakest basis among the admitted targets, so a team
+// reached only through direct ownership reports direct (not the rule's
+// activity_proxy default), a direct plus linked mix reports activity_proxy,
+// and a heuristic-attributed target still reports attributed_primary_team.
+func TestFactScopeEventBasisIsTheWeakestAdmittedTargetBasis(t *testing.T) {
+	ownedRepo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:owned-repo"}
+	linkedRepo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:linked-repo"}
+	for name, tc := range map[string]struct {
+		targets []SubjectRef
+		basis   map[string]FactScopeBasis
+		want    FactScopeBasis
+	}{
+		"only direct targets": {
+			targets: []SubjectRef{ownedRepo},
+			basis:   map[string]FactScopeBasis{canonicalFactSubjectKey(ownedRepo): FactScopeBasisDirect},
+			want:    FactScopeBasisDirect,
+		},
+		"direct and activity proxy": {
+			targets: []SubjectRef{ownedRepo, linkedRepo},
+			basis: map[string]FactScopeBasis{
+				canonicalFactSubjectKey(ownedRepo):  FactScopeBasisDirect,
+				canonicalFactSubjectKey(linkedRepo): FactScopeBasisActivityProxy,
+			},
+			want: FactScopeBasisActivityProxy,
+		},
+		"direct and attributed": {
+			targets: []SubjectRef{ownedRepo, linkedRepo},
+			basis: map[string]FactScopeBasis{
+				canonicalFactSubjectKey(ownedRepo):  FactScopeBasisDirect,
+				canonicalFactSubjectKey(linkedRepo): FactScopeBasisAttributedPrimaryTeam,
+			},
+			want: FactScopeBasisAttributedPrimaryTeam,
+		},
+	} {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			metrics := &factProviderStub{
+				capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+				result:     FactProviderResult{State: SourceAvailable},
+			}
+			registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{
+				ScopeExpander: &recordingScopeExpander{targets: tc.targets, targetBasis: tc.basis},
+				ScopePolicies: metricsTeamPolicyTable(0),
+			})
+			if err != nil {
+				t.Fatalf("NewFactCapabilityRegistry: %v", err)
+			}
+			bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+				scopeRequest([]SubjectRef{scopeTeam}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent))
+			if err != nil {
+				t.Fatalf("ReadFacts: %v", err)
+			}
+			if len(bundle.Scope.Events) != 1 {
+				t.Fatalf("events = %+v, want exactly one", bundle.Scope.Events)
+			}
+			if got := bundle.Scope.Events[0].Basis; got != tc.want {
+				t.Fatalf("event.Basis = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestChaos4101_AttributionSourceCountsExcludeTheOverflowedTarget is the
 // direct regression for codex xhigh review round 1's second confirmed
 // MEDIUM: before this fix, AttributionSourceCounts was copied straight from
