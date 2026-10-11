@@ -2062,8 +2062,7 @@ func stringOrNull(value string) contextfabric.FactValue {
 // teamScopedProjectReason explains a zero-row project read on a source that
 // has no project dimension of its own (CHAOS-4521b).
 //
-// compounding_risk_daily (scope='repo'/'team'), investment_metrics_daily
-// (repo_id/team_id) and ic_landscape_rolling_30d (repo_id/identity_id/
+// compounding_risk_daily (scope='repo'/'team') and ic_landscape_rolling_30d (repo_id/identity_id/
 // team_id) carry no project column, so a project reaches them ONLY through
 // team ownership. When that ownership resolves nothing the read is empty --
 // and PR-A's generic "the source was reached and held no rows" is true but

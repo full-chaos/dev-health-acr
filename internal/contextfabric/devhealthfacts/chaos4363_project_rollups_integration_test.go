@@ -26,7 +26,7 @@ func createCHAOS4363Tables(t *testing.T, ctx context.Context, connection clickho
 	t.Helper()
 	for _, statement := range devhealthschema.DDL(
 		"projects", "team_project_ownership", "team_repo_ownership", "teams",
-		"investment_metrics_daily", "capacity_forecasts", "estimate_coverage_metrics_daily",
+		"capacity_forecasts", "estimate_coverage_metrics_daily",
 		"compounding_risk_daily", "work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership", "repos", "work_item_team_attributions",
 		"work_items", "project_membership_transitions",
 	) {
@@ -80,15 +80,11 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 		}
 	}
 
-	t.Run("investment_project_never_serves_the_legacy_breakdown", func(t *testing.T) {
+	t.Run("investment_project_without_a_canonical_mix_serves_no_fact", func(t *testing.T) {
 		const orgID = "org-investment-rollup"
 		seedProject("proj-inv", orgID, "linear", "INV1")
 		seedTeam("team-inv-a", orgID, "Team Inv A")
 		seedOwnership(orgID, "linear", "team-inv-a", "INV1")
-		if err := direct.Exec(ctx, `INSERT INTO investment_metrics_daily (day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			date(2026, 8, 12), "team-inv-a", "product", "growth", uint32(30), uint32(12), uint32(4), uint64(850), ts(2026, 8, 12, 6, 0, 0), orgID); err != nil {
-			t.Fatalf("seed investment row: %v", err)
-		}
 		provider := findProvider(t, providers, contextfabric.FactInvestment)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
 			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -97,11 +93,10 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadFacts() error = %v", err)
 		}
-		// CHAOS-9195 (D5932): the legacy per-team (investment_area, project_stream) rows are not
-		// read for a project; with no work unit behind the project there is no canonical mix and no
-		// fact (never a fabricated one).
+		// CHAOS-9195 (D5932): with no work unit behind the project there is no canonical
+		// mix and no fact (never a fabricated one).
 		if len(result.Facts) != 0 {
-			t.Fatalf("facts = %#v, want none: the legacy investment_metrics_daily row must not be served for a project", result.Facts)
+			t.Fatalf("facts = %#v, want none: a project with no canonical mix serves no fact", result.Facts)
 		}
 	})
 
