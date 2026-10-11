@@ -246,27 +246,65 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	//
 	// A census-bearing tuple is left to its own arms: its payload shape is
 	// pinned by the census, and the lever is not taught it.
+	// serveRows runs the fact-row truncation lever on doc (the assembled
+	// result, or the document an items cut left over the byte ceiling) and,
+	// when it serves, records the one decision event, which describes ONE
+	// document: the assembled result this stage measured and its axis, exactly
+	// as the refusal arms do. What the lever did to it -- after-bytes, rows
+	// before/after -- is on the fact-row truncation line.
+	serveRows := func(doc InvestigationResult, docMeasured MeasuredAttempt, reason RetryDeclinedReason) (factRowTruncationAttempt, bool, error) {
+		lever, rowErr := e.planFactRowTruncation(ctx, principal, plan, params.Frame, doc, budget, docMeasured, params.Facts, &firstPass, answerPassSecond, cardinality)
+		if rowErr != nil {
+			return lever, false, rowErr
+		}
+		e.recordFactRowTruncation(ctx, principal, plan, answerPassFirst, docMeasured, lever, budget)
+		if !lever.Served {
+			return lever, false, nil
+		}
+		members := cohortMemberCount(params.Graph.Cohort)
+		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
+			members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
+		event.recordMeasurement(measured)
+		event.PredictedItems = PredictedItemsForPlan(*plan, members)
+		event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+		event.RetryDeclined = reason
+		event.OutcomeCompletenessState = lever.Result.Completeness.State
+		e.recordPlanNarrowing(ctx, principal, event)
+		return lever, true, nil
+	}
+	// servePathDrop runs the path-drop lever on doc (the assembled result, or
+	// the document an items cut left over the byte ceiling) and, when it
+	// serves, records the one decision event, which describes the ASSEMBLED
+	// result this stage measured.
+	servePathDrop := func(doc InvestigationResult, docMeasured MeasuredAttempt, reason RetryDeclinedReason) (InvestigationResult, bool, error) {
+		pathLever, pathErr := e.planPathDrop(ctx, principal, plan, params.Frame, doc, budget, docMeasured, params.Facts, &firstPass, answerPassSecond, cardinality)
+		if pathErr != nil {
+			return InvestigationResult{}, false, pathErr
+		}
+		e.recordPathDrop(ctx, principal, plan, answerPassFirst, docMeasured, pathLever, budget)
+		if !pathLever.Served {
+			return InvestigationResult{}, false, nil
+		}
+		members := cohortMemberCount(params.Graph.Cohort)
+		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
+			members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
+		event.recordMeasurement(measured)
+		event.PredictedItems = PredictedItemsForPlan(*plan, members)
+		event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+		event.RetryDeclined = reason
+		event.OutcomeCompletenessState = pathLever.Result.Completeness.State
+		e.recordPlanNarrowing(ctx, principal, event)
+		return pathLever.Result, true, nil
+	}
 	var rowLever factRowTruncationAttempt
 	if params.WorkItemCensus == nil {
 		var rowErr error
-		rowLever, rowErr = e.planFactRowTruncation(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality)
+		var rowServed bool
+		rowLever, rowServed, rowErr = serveRows(result, measured, RetryDeclinedNotApplicable)
 		if rowErr != nil {
 			return InvestigationResult{}, firstPass, rowErr
 		}
-		e.recordFactRowTruncation(ctx, principal, plan, answerPassFirst, measured, rowLever, budget)
-		if rowLever.Served {
-			// ONE decision event, describing ONE document: the assembled
-			// result this stage measured and its axis, exactly as the
-			// refusal arms do. What the lever did to it -- after-bytes, rows
-			// before/after -- is on the fact-row truncation line.
-			members := cohortMemberCount(params.Graph.Cohort)
-			event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
-				members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
-			event.recordMeasurement(measured)
-			event.PredictedItems = PredictedItemsForPlan(*plan, members)
-			event.DeadlineReserved = e.synthesisDeadlineReserve > 0
-			event.OutcomeCompletenessState = rowLever.Result.Completeness.State
-			e.recordPlanNarrowing(ctx, principal, event)
+		if rowServed {
 			return rowLever.Result, firstPass, nil
 		}
 		// CHAOS-6558 second lever: the rows could not be cut far enough,
@@ -274,21 +312,12 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// Drop relationship paths in their defined order before any cohort
 		// retry; a 413 is left only for a budget below the minimum answer.
 		if overrun == contractsv1.ContextFabricBudgetOverrunBytes {
-			pathLever, pathErr := e.planPathDrop(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality)
+			served, ok, pathErr := servePathDrop(result, measured, RetryDeclinedNotApplicable)
 			if pathErr != nil {
 				return InvestigationResult{}, firstPass, pathErr
 			}
-			e.recordPathDrop(ctx, principal, plan, answerPassFirst, measured, pathLever, budget)
-			if pathLever.Served {
-				members := cohortMemberCount(params.Graph.Cohort)
-				event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
-					members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
-				event.recordMeasurement(measured)
-				event.PredictedItems = PredictedItemsForPlan(*plan, members)
-				event.DeadlineReserved = e.synthesisDeadlineReserve > 0
-				event.OutcomeCompletenessState = pathLever.Result.Completeness.State
-				e.recordPlanNarrowing(ctx, principal, event)
-				return pathLever.Result, firstPass, nil
+			if ok {
+				return served, firstPass, nil
 			}
 		}
 	}
@@ -397,7 +426,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			e.recordCandidateNarrowing(ctx, principal, plan, attempt, overrun, grouped, narrowed.Basis, before, after, declined, false, false)
 			return attempt.Result, firstPass, nil
 		}
-		trim, trimErr := e.planBudgetTrim(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality)
+		trim, trimErr := e.planBudgetTrim(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality, params.WorkItemCensus == nil)
 		if trimErr != nil {
 			return InvestigationResult{}, firstPass, trimErr
 		}
@@ -413,6 +442,26 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			event.OutcomeCompletenessState = trim.Result.Completeness.State
 			e.recordPlanNarrowing(ctx, principal, event)
 			return trim.Result, firstPass, nil
+		}
+		// The items cut left a document that fits the item ceiling and not
+		// the byte ceiling (items are reported first when both are over, so
+		// the byte levers above did not run): continue the byte ladder from
+		// the cut document.
+		if trim.Reduced.Status != "" && trim.Measured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes {
+			rowLeverOnCut, rowsServed, rowsErr := serveRows(trim.Reduced, trim.Measured, declined)
+			if rowsErr != nil {
+				return InvestigationResult{}, firstPass, rowsErr
+			}
+			if rowsServed {
+				return rowLeverOnCut.Result, firstPass, nil
+			}
+			served, ok, pathErr := servePathDrop(trim.Reduced, trim.Measured, declined)
+			if pathErr != nil {
+				return InvestigationResult{}, firstPass, pathErr
+			}
+			if ok {
+				return served, firstPass, nil
+			}
 		}
 		// CHAOS-4809 PATH 2: BOTH counts, as narrowSynthesisInput actually
 		// computed them. This used to pass `before` for both, so a refusal
@@ -740,7 +789,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			return InvestigationResult{}, retryPending, accountingErr
 		}
 		if !outcomeAttempt.Served {
-			trim, trimErr := e.planBudgetTrim(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality)
+			trim, trimErr := e.planBudgetTrim(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality, false)
 			if trimErr != nil {
 				return InvestigationResult{}, retryPending, trimErr
 			}
