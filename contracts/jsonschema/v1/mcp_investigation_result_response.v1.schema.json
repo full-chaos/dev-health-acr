@@ -2230,6 +2230,73 @@
               "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectRef"
             }
           },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "identity_lookup": {
+                    "const": "complete"
+                  }
+                },
+                "required": [
+                  "identity_lookup"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "alias_lookup_complete": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "alias_lookup_complete"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "identity_lookup": {
+                    "enum": [
+                      "incomplete",
+                      "graph_lag",
+                      "not_run_time_axis",
+                      "not_wired"
+                    ]
+                  }
+                },
+                "required": [
+                  "identity_lookup"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "alias_lookup_complete": {
+                    "const": false
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "required": [
+                  "identity_lookup"
+                ]
+              },
+              "then": {
+                "required": [
+                  "commit_gate"
+                ],
+                "properties": {
+                  "commit_gate": {
+                    "not": {
+                      "const": ""
+                    }
+                  }
+                }
+              }
+            }
+          ],
           "required": [
             "subject"
           ],
