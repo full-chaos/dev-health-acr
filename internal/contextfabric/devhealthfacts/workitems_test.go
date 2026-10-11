@@ -261,8 +261,14 @@ func TestStatusProviderOrgScoped(t *testing.T) {
 	if got := client.orgIDBinding(); got != "org-9" {
 		t.Fatalf("org_id binding = %q", got)
 	}
-	if got := client.idsBinding(); len(got) != 1 || got[0] != "repo-1:WIDGET-101" {
-		t.Fatalf("ids binding = %#v, want exactly the requested subject", got)
+	var got []string
+	for _, binding := range client.queries[0].bindings {
+		if binding.Name == "ids" {
+			got, _ = binding.Value.([]string)
+		}
+	}
+	if len(got) != 1 || got[0] != "repo-1:WIDGET-101" {
+		t.Fatalf("status read ids binding = %#v, want exactly the requested subject", got)
 	}
 }
 

@@ -644,3 +644,10 @@ func TestQueryVersionMovedPastTheSelectorScopeKey(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want v153 or later -- an answer saved before project and team selectors were part of the reuse key carries no selector identity and must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+func TestQueryVersionMovedPastTheStatusWithoutTimeInState(t *testing.T) {
+	t.Parallel()
+	if devhealthfacts.QueryVersion == "devhealthfacts.clickhouse.v157" {
+		t.Fatalf("QueryVersion = %q, want it moved past v157 -- an answer saved with a status fact that carries no time in the current status must not be reused", devhealthfacts.QueryVersion)
+	}
+}

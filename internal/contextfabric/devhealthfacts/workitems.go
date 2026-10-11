@@ -61,6 +61,17 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item status", scanErr)
 	}
+	pairs := make([][2]string, 0, len(rows))
+	for _, row := range rows {
+		if _, ok := bySubject[row.RepoID+":"+row.ID]; ok {
+			pairs = append(pairs, [2]string{row.RepoID, row.ID})
+		}
+	}
+	entries, entriesErr := p.readStatusEntries(ctx, orgID, pairs)
+	if entriesErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query work item status since", entriesErr)
+	}
+	now := clock()
 	for _, row := range rows {
 		subject, ok := bySubject[row.RepoID+":"+row.ID]
 		if !ok {
@@ -70,14 +81,19 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 			continue
 		}
 		basis, note := statusBasisFor(row.Provider)
+		entry, entryFound := entries[row.RepoID+":"+row.ID]
+		fields := map[string]contextfabric.FactValue{
+			"status":               stringOrNull(row.Status),
+			"status_basis":         contextfabric.StringFactValue(basis),
+			"status_in_vocabulary": statusInVocabularyValue(row.Status),
+			"status_provenance":    contextfabric.StringFactValue(note),
+		}
+		for name, value := range statusSinceFields(row.Status, entry, entryFound, now) {
+			fields[name] = value
+		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactStatus, Subject: subject,
-			Fields: map[string]contextfabric.FactValue{
-				"status":               stringOrNull(row.Status),
-				"status_basis":         contextfabric.StringFactValue(basis),
-				"status_in_vocabulary": statusInVocabularyValue(row.Status),
-				"status_provenance":    contextfabric.StringFactValue(note),
-			},
+			Fields:         fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 		})
 	}
