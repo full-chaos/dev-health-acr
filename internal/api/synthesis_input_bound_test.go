@@ -216,6 +216,9 @@ func teamSynthesisApp(t *testing.T, runtime cf.ModelRuntime, sink cf.ModelReceip
 	}, cf.EngineOptions{
 		ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(700, 0).UTC() },
 		NewResultID: func() string { next++; return fmt.Sprintf("result_team_synthesis_%02d", next) },
+		// The ceiling the hosted route enforces below, as the production
+		// wiring hands it to the engine.
+		MaxItems: 50,
 	})
 	if err != nil {
 		t.Fatal(err)
