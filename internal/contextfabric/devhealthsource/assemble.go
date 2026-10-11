@@ -402,7 +402,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			// re-read the trailing overlap window for rows that landed
 			// behind the frontier (CHAOS-7263).
 			p.noteCaughtUp(ctx, orgID)
-			if batch, published, err := p.reconcileBatch(ctx, orgID, cursor, state); err != nil || published {
+			if batch, published, err := p.reconcileBatch(ctx, orgID, cursor); err != nil || published {
 				return batch, published, err
 			}
 			return p.overlapBatch(ctx, orgID, cursor, state)

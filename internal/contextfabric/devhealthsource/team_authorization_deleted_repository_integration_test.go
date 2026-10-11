@@ -179,3 +179,27 @@ func chaos7246WithAck(t *testing.T, cursor, ack string) string {
 	}
 	return base64.RawURLEncoding.EncodeToString(out)
 }
+
+// A reconcile batch never moves the checkpoint, even when the same call
+// skipped a page of rows that emit nothing before it caught up.
+func subTeamReconcileKeepsTheCheckpointAfterASkippedPage(t *testing.T, ctx context.Context, f *ownershipFixture) {
+	now := time.Now().UTC().Truncate(time.Second)
+	f.source.SetClockForTest(func() time.Time { return now })
+	chaos7119Team(t, ctx, f, "team-skip", now.Add(-3*time.Hour))
+	first := chaos7139Run(t, ctx, f)
+	// A project whose natural key is past the identity bound is omitted: its
+	// page publishes nothing, and the walk moves on in-process.
+	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at)
+VALUES (concat('P-SKIP-', repeat('x', 240)), ?, 'github', 'SKIP-0', 'skipped', 1, 'started', '', ?)`, f.orgID, now)
+	now = now.Add(devhealthsource.TeamOwnershipReconcilePeriodForTest)
+	batch, ok, err := f.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: f.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: first.cursor})
+	if err != nil || !ok {
+		t.Fatalf("reconcile batch: available=%v err=%v", ok, err)
+	}
+	if len(batch.Entities) == 0 {
+		t.Fatalf("expected the reconcile batch, got a batch without entities")
+	}
+	if got, want := keysetPosition(t, batch.NextCursor), keysetPosition(t, first.cursor); got != want {
+		t.Fatalf("the reconcile batch moved the checkpoint: %s, want %s", got, want)
+	}
+}

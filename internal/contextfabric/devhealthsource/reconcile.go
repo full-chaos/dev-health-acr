@@ -89,7 +89,7 @@ func (p sourcePlan) reconcileDue(rs reconcilePass, now time.Time) bool {
 
 // reconcileBatch is pagedBatch's caught-up step before the overlap window: when
 // a pass is due or open, emit the next page of the source's current rows.
-func (p sourcePlan) reconcileBatch(ctx context.Context, orgID, cursor string, state cursorState) (contextfabric.ProjectionBatch, bool, error) {
+func (p sourcePlan) reconcileBatch(ctx context.Context, orgID, cursor string) (contextfabric.ProjectionBatch, bool, error) {
 	if p.reconcile == nil || p.window == nil || p.reconcilePeriod <= 0 {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
@@ -120,7 +120,16 @@ func (p sourcePlan) reconcileBatch(ctx context.Context, orgID, cursor string, st
 		p.noteYield()
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
-	frontier := state
+	// A reconcile batch never moves the checkpoint: the position it carries is
+	// the checkpoint's own, not the one this call's skipped pages reached.
+	frontier, err := decodeCursor(cursor)
+	if err != nil {
+		return contextfabric.ProjectionBatch{}, false, err
+	}
+	if frontier.Space != p.cursorSpace() {
+		return contextfabric.ProjectionBatch{}, false, nil
+	}
+	frontier.Ack, frontier.Dim = "", nil
 	if !cursorKeyFits(p.cursorSpace(), frontier.Since, frontier.After) {
 		if frontier.After >= cursorSentinelKey {
 			return contextfabric.ProjectionBatch{}, false, nil
