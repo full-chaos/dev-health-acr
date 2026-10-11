@@ -181,6 +181,7 @@ WHERE org_id = {org_id:String} AND is_deleted = 0 AND ` + window.timestampExpr("
 			return outcome, scanErr
 		}
 	}
+	tables := teamRollupTablesIncluded(len(teamIDs))
 	for _, teamID := range teamIDs {
 		subject := bySubject[teamID]
 		repos := owned[teamID]
@@ -212,6 +213,7 @@ WHERE org_id = {org_id:String} AND is_deleted = 0 AND ` + window.timestampExpr("
 		}
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),
+			"repository_tables_basis":         contextfabric.StringFactValue(teamRollupTablesBasis(tables)),
 			"incident_attribution_basis":      contextfabric.StringFactValue("deployment_linked"),
 			"window_basis":                    contextfabric.StringFactValue(window.basis),
 			"owned_repository_count":          contextfabric.IntegerFactValue(int64(len(repos))),
@@ -227,7 +229,7 @@ WHERE org_id = {org_id:String} AND is_deleted = 0 AND ` + window.timestampExpr("
 		if value, ok := window.endValue(); ok {
 			fields["window_end"] = value
 		}
-		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok {
+		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok && tables {
 			fields["owned_repositories"] = table
 			if omitted > 0 {
 				outcome.truncated = true
@@ -242,7 +244,7 @@ WHERE org_id = {org_id:String} AND is_deleted = 0 AND ` + window.timestampExpr("
 			fields["incidents_count_window"] = contextfabric.IntegerFactValue(distinct)
 			fields["resolved_incidents_count_window"] = contextfabric.IntegerFactValue(resolved)
 			if table, omitted, ok := repositoryBreakdownFactValue(breakdown, grainExact,
-				[]string{"incidents_count_window", "resolved_incidents_count_window"}, []string{"repository_name"}); ok {
+				[]string{"incidents_count_window", "resolved_incidents_count_window"}, []string{"repository_name"}); ok && tables {
 				fields["repository_breakdown"] = table
 				if omitted > 0 {
 					outcome.truncated = true

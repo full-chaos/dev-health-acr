@@ -202,6 +202,7 @@ ORDER BY repo_id`
 			return outcome, scanErr
 		}
 	}
+	tables := teamRollupTablesIncluded(len(teamIDs))
 	for _, teamID := range teamIDs {
 		subject := bySubject[teamID]
 		repos := owned[teamID]
@@ -234,6 +235,7 @@ ORDER BY repo_id`
 		}
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),
+			"repository_tables_basis":         contextfabric.StringFactValue(teamRollupTablesBasis(tables)),
 			"window_basis":                    contextfabric.StringFactValue(window.basis),
 			"owned_repository_count":          contextfabric.IntegerFactValue(int64(len(repos))),
 			"repositories_with_data_count":    contextfabric.IntegerFactValue(withData),
@@ -245,7 +247,7 @@ ORDER BY repo_id`
 		if value, ok := window.endValue(); ok {
 			fields["window_end"] = value
 		}
-		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok {
+		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok && tables {
 			fields["owned_repositories"] = table
 			if omitted > 0 {
 				outcome.truncated = true
@@ -257,7 +259,7 @@ ORDER BY repo_id`
 			fields["pull_requests_merged_window"] = contextfabric.IntegerFactValue(merged)
 			fields["pull_requests_closed_unmerged_window"] = contextfabric.IntegerFactValue(closedUnmerged)
 			if table, omitted, ok := repositoryBreakdownFactValue(breakdown, grainExact,
-				[]string{"pull_requests_opened_window", "pull_requests_merged_window", "pull_requests_closed_unmerged_window"}, []string{"repository_name"}); ok {
+				[]string{"pull_requests_opened_window", "pull_requests_merged_window", "pull_requests_closed_unmerged_window"}, []string{"repository_name"}); ok && tables {
 				fields["repository_breakdown"] = table
 				if omitted > 0 {
 					outcome.truncated = true

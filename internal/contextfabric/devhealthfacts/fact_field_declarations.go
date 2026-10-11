@@ -308,6 +308,9 @@ func blockersFields() []fieldDecl {
 func teamRollupCommonFields(windowed bool) []fieldDecl {
 	fields := []fieldDecl{
 		fStr("rollup_basis"),
+		// included for a single-team read, omitted_multi_team_read when the
+		// per-repository tables were left out to keep a many-team answer bounded.
+		fStr("repository_tables_basis"),
 		declAggregate(fInt("owned_repository_count", "count")),
 		declAggregate(fInt("repositories_with_data_count", "count")),
 		declAggregate(fInt("repositories_without_data_count", "count")),
