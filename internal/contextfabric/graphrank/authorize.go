@@ -101,7 +101,7 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 			return false
 		}
 	}
-	if len(requested.RepositorySlugs) > 0 && !anyContainsAttr(attributes, authorizationRepositoriesAttr, requested.RepositorySlugs) {
+	if len(requested.RepositorySlugs) > 0 && !requestedRepositoriesAdmit(attributes, requested.RepositorySlugs) {
 		return false
 	}
 	if len(requested.ProjectIDs) > 0 && !anyContainsAttr(attributes, authorizationProjectsAttr, requested.ProjectIDs) {
@@ -143,6 +143,27 @@ func issueScopeOfLink(requested contextfabric.RequestedScope) contextfabric.Requ
 // node) and must not be conflated with "does this node own repoSlug."
 func OwnsRepository(attributes map[string]interface{}, repoSlug string) bool {
 	return scopeContainsAttr(attributes, authorizationRepositoriesAttr, repoSlug)
+}
+
+// requestedRepositoriesAdmit is the requested repository selector: the
+// repository must be PRESENT on the node, as in the shared library's requested
+// expression. The "*" selector therefore does not admit a node whose list
+// holds only a sentinel (no-repository, orphaned or unresolved repository).
+// Every sentinel is "acr-context-fabric:..." and never contains '/', which
+// every real owner/repo slug does. Principal grants are tested elsewhere and
+// keep their own "*" meaning.
+func requestedRepositoriesAdmit(attributes map[string]interface{}, selectors []string) bool {
+	for _, selector := range selectors {
+		if strings.TrimSpace(selector) == "*" {
+			if entries, isList := attributes[authorizationRepositoriesAttr].([]string); isList && len(entries) > 0 && !slices.ContainsFunc(entries, func(e string) bool { return strings.Contains(e, "/") }) {
+				continue
+			}
+		}
+		if scopeContainsAttr(attributes, authorizationRepositoriesAttr, selector) {
+			return true
+		}
+	}
+	return false
 }
 
 func anyContainsAttr(attributes map[string]interface{}, key string, values []string) bool {
