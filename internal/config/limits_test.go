@@ -31,6 +31,7 @@ func TestLimitOptionsConfiguresEveryRequestClass(t *testing.T) {
 		limits.RequestClassSnapshot,
 		limits.RequestClassEpisode,
 		limits.RequestClassData,
+		limits.RequestClassCapabilities,
 	} {
 		claim, decision, err := manager.Claim(context.Background(), subject, class)
 
@@ -155,8 +156,8 @@ func TestLimitOptionsGiveCapabilitiesItsOwnPolicy(t *testing.T) {
 	if got := cfg.RequestControls.Capabilities; got.Requests != 240 || got.Window != time.Minute {
 		t.Fatalf("default capabilities class = %+v, want 240 per 1m", got)
 	}
-	if cfg.RequestControls.Auth.Requests == 240 {
-		t.Fatalf("auth class must not inherit the capabilities default")
+	if cfg.RequestControls.Auth.Requests != 60 {
+		t.Fatalf("auth class requests = %d, want 60 (it must not inherit the capabilities default)", cfg.RequestControls.Auth.Requests)
 	}
 	cfg, err = load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true", "ACR_CAPABILITIES_REQUESTS_PER_WINDOW": "7", "ACR_CAPABILITIES_LIMIT_WINDOW": "30s"}))
 	if err != nil {
