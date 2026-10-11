@@ -8,7 +8,6 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -34,11 +33,6 @@ func seedEntityTreeFixture(t *testing.T, ctx context.Context, direct interface {
 	Exec(ctx context.Context, query string, args ...any) error
 }, orgID string, at time.Time) {
 	t.Helper()
-	for _, statement := range devhealthschema.DDL("teams", "work_items", "work_item_team_attributions", "repos", "git_pull_requests", "git_pull_request_reviews", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
-		if err := direct.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v\n%s", err, statement)
-		}
-	}
 	seed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
