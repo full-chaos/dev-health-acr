@@ -92,8 +92,7 @@ func TestEveryRefusalBasisRuleRejectsFromItsOwnSide(t *testing.T) {
 func TestTheRefusalBasisRecogniserRejectsNonMemberSegments(t *testing.T) {
 	t.Parallel()
 	realKind := ContextFabricSubjectRepository
-	realBasis := ContextFabricRefusalBasisMemberKindUnservable
-	genuine := ContextFabricRefusalBasisLimitation(realKind, realBasis)
+	genuine := ContextFabricRefusalBasisLimitation(realKind)
 	if !IsContextFabricRefusalBasisLimitation(genuine) {
 		t.Fatalf("the sentence this package itself composes is not recognised: %q -- every arm below is meaningless if the positive control fails", genuine)
 	}
@@ -101,11 +100,8 @@ func TestTheRefusalBasisRecogniserRejectsNonMemberSegments(t *testing.T) {
 		name     string
 		sentence string
 	}{
-		{"a kind the registry does not name", ContextFabricRefusalBasisLimitation(ContextFabricSubjectKind("a_kind_no_vocabulary_names"), realBasis)},
-		{"a basis the vocabulary does not name", ContextFabricRefusalBasisLimitation(realKind, ContextFabricRefusalBasis("a_basis_nobody_declared"))},
-		{"neither segment is a member", ContextFabricRefusalBasisLimitation(ContextFabricSubjectKind("a_kind_no_vocabulary_names"), ContextFabricRefusalBasis("a_basis_nobody_declared"))},
-		{"an empty kind", ContextFabricRefusalBasisLimitation("", realBasis)},
-		{"an empty basis", ContextFabricRefusalBasisLimitation(realKind, "")},
+		{"a kind the registry does not name", ContextFabricRefusalBasisLimitation(ContextFabricSubjectKind("a_kind_no_vocabulary_names"))},
+		{"an empty kind", ContextFabricRefusalBasisLimitation("")},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()

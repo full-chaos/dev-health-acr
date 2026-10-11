@@ -17,7 +17,7 @@ func uncommittedTeamAnchorPrompt(resolution SubjectResolution) string {
 	}
 	if len(resolution.Candidates) == 1 {
 		subject := resolution.Candidates[0].Subject
-		return "Did you mean " + string(subject.Kind) + " " + subject.Label + "?"
+		return "Did you mean " + renderKindNoun(subject.Kind) + " " + subject.Label + "?"
 	}
 	return ClarificationPrompt(resolution.Candidates)
 }

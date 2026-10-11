@@ -190,16 +190,12 @@ func cardinalityAnswerSentence(cardinality MembershipCardinality) string {
 }
 
 // cardinalityNoun pluralises the counted kind for the answer sentence.
-// Work-item counts use the human label rather than the wire discriminator.
+// Every kind uses its display noun rather than the wire discriminator.
 func cardinalityNoun(kind SubjectKind, count int) string {
-	noun := string(kind)
-	if kind == SubjectWorkItem {
-		noun = "work item"
-	}
-	if count == 1 {
+	if noun := contractsv1.ContextFabricSubjectKindNoun(kind, count); noun != "" {
 		return noun
 	}
-	return noun + "s"
+	return string(kind)
 }
 
 // resultCarriesCardinalityClaim reports whether the served document actually
