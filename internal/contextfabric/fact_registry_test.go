@@ -70,6 +70,11 @@ func TestFactCapabilityRegistryBatchesCapabilitiesAndPreservesEvidenceVersions(t
 	if bundle.Facts[0].Source != "ops-status" || bundle.Facts[0].SourceVersion != "status-v2" {
 		t.Fatalf("normalized status fact = %#v", bundle.Facts[0])
 	}
+	for _, fact := range bundle.Facts {
+		if fact.ID == "" || fact.ID != MintFactID(fact.Kind, fact.Subject, 0) {
+			t.Fatalf("registry must mint the deterministic fact id, got %q for %s", fact.ID, fact.Kind)
+		}
+	}
 	if bundle.Versions[FactStatus] != "status-v2" || bundle.Versions[FactReadiness] != "readiness-v3" {
 		t.Fatalf("versions = %#v", bundle.Versions)
 	}
