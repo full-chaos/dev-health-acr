@@ -181,7 +181,7 @@ func (e *ScopeExpander) teamRepositories(ctx context.Context, orgID string, orig
 	}
 	limitPlusOne := limit + 1
 	current := readers.OwnershipValidityPredicate(readers.TimeBound{})
-	statement := `SELECT repo_id_str, repo_slug, argMin(source, source_rank) AS best_source, min(origin_team_id) AS origin_team_id
+	statement := `SELECT repo_id_str, repo_slug, argMin(source, source_rank) AS best_source, argMin(origin_team_id, (source_rank, origin_team_id)) AS origin_team_id
 FROM (
   SELECT toString(o.repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, '` + teamRepositoryOwnershipSource + `' AS source, 0 AS source_rank, o.team_id AS origin_team_id
   FROM ` + readers.TeamRepositoryOwnershipSQL(current) + ` AS o

@@ -272,3 +272,39 @@ func TestFactScopeEntityTree_TeamReachesOwnedProjectsLinkedRepositories(t *testi
 		}
 	}
 }
+
+// The root names the team that reaches a repository by the strongest source: a
+// team that owns the repository directly wins over a lexicographically smaller
+// team that reaches it only through an owned project's link.
+func TestFactScopeEntityTree_TeamRootFollowsTheStrongestSource(t *testing.T) {
+	ctx := context.Background()
+	orgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
+	at := time.Now().UTC()
+	seedEntityTreeFixture(t, ctx, direct, orgID, at)
+	const linkingTeam = "AAA-LINKING-TEAM"
+	if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		orgID, "jira", linkingTeam, entityTreeProject, nil, "native", at.Add(-time.Hour), nil, at); err != nil {
+		t.Fatalf("seed project ownership: %v", err)
+	}
+	owner := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:" + entityTreeTeam, Label: "Tree team"}
+	linker := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:" + linkingTeam, Label: "Linking team"}
+	result, err := devhealthfacts.NewScopeExpander(query).ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
+		Principal: storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, RequirementKind: contextfabric.FactMetrics,
+		Origins: []contextfabric.SubjectRef{linker, owner}, Policy: contextfabric.FactScopePolicyTeamPrimaryAttributionRepository,
+		TargetKind: contextfabric.SubjectRepository, Limit: 20,
+	})
+	if err != nil {
+		t.Fatalf("ExpandFactScope: %v", err)
+	}
+	if len(result.Targets) != 1 || result.Targets[0].Label != entityTreeSlugB {
+		t.Fatalf("targets = %+v, want only %s", result.Targets, entityTreeSlugB)
+	}
+	key := contextfabric.FactSubjectKey(result.Targets[0])
+	if got := result.TargetBasis[key]; got != contextfabric.FactScopeBasisDirect {
+		t.Fatalf("basis = %q, want direct", got)
+	}
+	if got := result.TargetRoot[key]; got != owner {
+		t.Fatalf("root = %+v, want the owning team %+v: the root must be the origin that produced the strongest source", got, owner)
+	}
+}

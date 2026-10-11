@@ -493,21 +493,19 @@ type FactScopeExpansionEvent struct {
 	Truncated bool
 	// FailureClass is set only for FactScopeFailed.
 	FailureClass FactScopeFailureClass
-	// AttributionSourceCounts is CHAOS-4101's addition: for a team-origin
-	// expansion, how many ADMITTED targets trace back to each
-	// work_item_team_attributions.source value (native_team, issue_project,
-	// project_ownership, repo_ownership, assignee_membership, linked_issue,
-	// manual_fallback -- ops/compute_work_items.py's own closed _SOURCE_ORDER
-	// vocabulary; unassigned never reaches a target and so never appears
-	// here). CONTENT-SAFE by the same discipline as every other field on this
-	// struct: a source name is a closed enum value, never a team identity, a
-	// repository slug or anything else that could re-identify a subject. nil
-	// for every project-origin event -- FactScopeBasis alone already
-	// distinguishes those, and this map exists specifically to let an
-	// operator see the source mix a team-origin expansion drew from, since
-	// FactScopeExpansionEvent.Basis is necessarily a mix summary
-	// (attributed_primary_team fires if EVEN ONE admitted target came from a
-	// heuristic source) rather than the per-target detail this map carries.
+	// AttributionSourceCounts: how many ADMITTED targets trace back to each
+	// reaching source. The vocabulary depends on the policy. Work-item-target
+	// team policies carry work_item_team_attributions.source values
+	// (native_team, issue_project, project_ownership, repo_ownership,
+	// assignee_membership, linked_issue, manual_fallback). The repository
+	// policies carry the link tier of the issue-to-pull-request row that
+	// reached the repository (native, explicit_text, heuristic), or
+	// team_repo_ownership for a repository the team owns. CONTENT-SAFE by the
+	// same discipline as every other field on this struct: a source name is a
+	// closed enum value, never a team identity, a repository slug or anything
+	// else that could re-identify a subject. FactScopeExpansionEvent.Basis is
+	// the weakest basis among the admitted targets, so this map is the
+	// per-target detail behind it.
 	AttributionSourceCounts map[string]int
 
 	// ---- CHAOS-5405 (D-e). The decision record for the work-item class. ----
@@ -2215,7 +2213,7 @@ func (r *FactReadScopeResolver) expand(
 	// set the loop below binds provenance to -- rather than from
 	// result.Targets, for the same overflow/dedup reason the copy above was
 	// removed (codex xhigh review round 1, confirmed real, MEDIUM x2).
-	summaryBasis := rule.Basis
+	var summaryBasis FactScopeBasis
 	sourceCounts := map[string]int{}
 	for _, target := range kept {
 		// Provenance binds every admitted target to the policy that admitted
@@ -2233,9 +2231,9 @@ func (r *FactReadScopeResolver) expand(
 		basis := rule.Basis
 		if override, ok := result.TargetBasis[key]; ok {
 			basis = override
-			if factScopeBasisWeaker(override, summaryBasis) {
-				summaryBasis = override
-			}
+		}
+		if summaryBasis == "" || factScopeBasisWeaker(basis, summaryBasis) {
+			summaryBasis = basis
 		}
 		if source, ok := result.TargetAttributionSource[key]; ok && source != "" {
 			sourceCounts[source]++
@@ -2274,7 +2272,9 @@ func (r *FactReadScopeResolver) expand(
 	// admitted target carried that override, so a reader who only sees the
 	// event (not the per-target Derivations) is never told a heuristic-only
 	// or mixed expansion is as solid as a pure native_team one.
-	event.Basis = summaryBasis
+	if summaryBasis != "" {
+		event.Basis = summaryBasis
+	}
 	if len(sourceCounts) > 0 {
 		event.AttributionSourceCounts = sourceCounts
 	}
