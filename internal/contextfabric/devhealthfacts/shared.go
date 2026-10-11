@@ -738,12 +738,16 @@ import (
 // recognised by it; a no-facts failure serves its own limitation. A candidate
 // saved under an earlier version carries only the warning.
 //
-// v151 -> v152: a model call that ends on a transient class once the runtime's
+// v151 -> v152: a repository count named by its label certifies when the lexical search was
+// truncated and the identity read was complete; a candidate saved under an earlier version
+// may hold the uncertified count and must not be reused.
+//
+// v152 -> v153: a model call that ends on a transient class once the runtime's
 // attempts are used, or that the composition reserve ends before the request
 // deadline, is served as a degraded answer with failure class
 // model_call_not_completed and retry_may_succeed, where it was an error with no
 // stored answer; a candidate saved under an earlier version cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v152"
+const QueryVersion = "devhealthfacts.clickhouse.v153"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
