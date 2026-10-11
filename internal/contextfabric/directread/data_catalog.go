@@ -19,7 +19,8 @@ package directread
 //     policy, not data), each entry marked available:false with the reason
 //     scope_missing_data_read. This closes design "found while merging" item
 //     8 (r5 did not say whether a context:read-only caller sees the list).
-//   - The caller section carries the scopes present and the grant class. It
+//   - The caller section carries the scopes present, the repository grant class
+//     and effective_access (what run_operation does for the credential). It
 //     never carries a repository name, a slug or a count of grants.
 //   - The facts section lists the kinds read_facts serves, read from the SAME
 //     capability registry read_facts validates against (CHAOS-7148), never
@@ -328,8 +329,60 @@ type CatalogVersions struct {
 
 // CatalogCallerView is the caller section: scopes and class only.
 type CatalogCallerView struct {
-	Scopes     []string    `json:"scopes"`
+	Scopes []string `json:"scopes"`
+	// GrantClass is the repository grant class only. It says nothing about
+	// whether the credential can run an operation; EffectiveAccess does.
 	GrantClass CallerClass `json:"grant_class"`
+	// EffectiveAccess is what run_operation does for this credential now,
+	// derived from the same decision as operations.available/reason.
+	EffectiveAccess CatalogEffectiveAccess `json:"effective_access"`
+}
+
+// CatalogEffectiveAccess is the closed vocabulary of the caller's effective
+// run_operation access.
+type CatalogEffectiveAccess string
+
+const (
+	// EffectiveAccessDataRead: run_operation can serve this credential.
+	EffectiveAccessDataRead CatalogEffectiveAccess = "data_read"
+	// EffectiveAccessNoDataRead: the credential lacks the data:read scope.
+	EffectiveAccessNoDataRead CatalogEffectiveAccess = "no_data_read"
+	// EffectiveAccessNotServable: this deployment cannot serve run_operation.
+	EffectiveAccessNotServable CatalogEffectiveAccess = "not_servable"
+)
+
+// catalogOperationsReason is the one decision of whether run_operation can
+// serve the caller: "" when it can, else the unavailable reason. Both the
+// operations section and the caller's effective access read it.
+func catalogOperationsReason(catalogue *Catalogue, caller CatalogCaller) string {
+	return catalogAccessReason(catalogue != nil && caller.OperationsServable, CatalogUnavailableQueryNotConfigure, caller.GateComposed, caller.DataRead)
+}
+
+// catalogAccessReason is the shared order of the three clauses every direct
+// data section applies: the runner is configured, the subject gate is
+// composed, the credential has data:read. The operations and schema sections
+// both use it, so one decision never has two sources.
+func catalogAccessReason(configured bool, notConfigured string, gateComposed, dataRead bool) string {
+	switch {
+	case !configured:
+		return notConfigured
+	case !gateComposed:
+		return CatalogUnavailableGateMissing
+	case !dataRead:
+		return CatalogUnavailableScopeMissing
+	}
+	return ""
+}
+
+func catalogEffectiveAccess(reason string) CatalogEffectiveAccess {
+	switch reason {
+	case "":
+		return EffectiveAccessDataRead
+	case CatalogUnavailableScopeMissing:
+		return EffectiveAccessNoDataRead
+	default:
+		return EffectiveAccessNotServable
+	}
 }
 
 // catalogRelationshipEnds declares the end kinds of the 13 relationship
@@ -428,7 +481,7 @@ func BuildDataCatalog(catalogue *Catalogue, caller CatalogCaller, sections []str
 		ContractVersion: DataContractVersion,
 		Sections:        append([]string{}, sections...),
 		Versions:        CatalogVersions{Contract: DataContractVersion, CatalogueContract: OperationCatalogueContract},
-		Caller:          CatalogCallerView{Scopes: catalogScopes(caller.Scopes), GrantClass: class},
+		Caller:          CatalogCallerView{Scopes: catalogScopes(caller.Scopes), GrantClass: class, EffectiveAccess: catalogEffectiveAccess(catalogOperationsReason(catalogue, caller))},
 		Consistency:     ConsistencyBestEffort,
 		UntrustedContent: CatalogUntrustedLabel{
 			Untrusted: true, Notice: DataCatalogUntrustedNotice,
@@ -501,15 +554,7 @@ func catalogDeadlineSeconds(catalogue *Catalogue) int {
 
 func buildCatalogOperations(catalogue *Catalogue, caller CatalogCaller, class CallerClass) *CatalogOperations {
 	section := &CatalogOperations{CallerClass: class, Available: true, Operations: []CatalogOperation{}, NotServed: []CatalogNotServed{}, RefusedShapes: []CatalogRefusedShape{}}
-	reason := ""
-	switch {
-	case catalogue == nil || !caller.OperationsServable:
-		reason = CatalogUnavailableQueryNotConfigure
-	case !caller.GateComposed:
-		reason = CatalogUnavailableGateMissing
-	case !caller.DataRead:
-		reason = CatalogUnavailableScopeMissing
-	}
+	reason := catalogOperationsReason(catalogue, caller)
 	if reason != "" {
 		section.Available, section.Reason = false, reason
 	}
