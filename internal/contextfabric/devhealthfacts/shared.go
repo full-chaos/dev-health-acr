@@ -808,11 +808,16 @@ import (
 // synthesized claim may cite it (fact_id); a candidate saved under an earlier version holds
 // facts and claims without ids.
 //
-// v165 -> v166: a team or project question for continuous integration, deployments, incidents or
+// v165 -> v166: a work item's status fact adds status_since, status_duration_seconds and
+// status_since_basis; a candidate saved under v165 holds a status fact without the time in
+// the current status and must not be reused.
+//
+// v166 -> v167: a team or project question for continuous integration, deployments, incidents or
 // operational deficiencies reaches those facts through the entity tree (ownership rows, and linked
 // pull request rows) where it was pruned with no reach; a candidate saved under an earlier version
 // carries the pruned answer for such a question. The census also sheds rows under a small byte
 // budget and serves the count it cut.
+const QueryVersion = "devhealthfacts.clickhouse.v167"
 const QueryVersion = "devhealthfacts.clickhouse.v166"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
