@@ -134,4 +134,13 @@ func TestByIDRoute_CompletenessAuthorityCorrectsWhenEnabled(t *testing.T) {
 	if err := served.Validate(); err != nil {
 		t.Fatalf("a flipped served document must still validate as a whole: %v", err)
 	}
+	// The wire carries the disclosure: what was replaced, the served pair,
+	// and the completeness mirror.
+	if served.StatusCorrection == nil || served.StatusCorrection.ReplacedStatus != contractsv1.ContextFabricInvestigationComplete ||
+		served.StatusCorrection.Direction != contractsv1.ContextFabricStatusCorrectionCompleteToDegraded {
+		t.Fatalf("served status_correction = %+v, want complete_to_degraded in %s", served.StatusCorrection, recorder.Body.String())
+	}
+	if served.Completeness.StatusCorrection == nil || *served.Completeness.StatusCorrection != *served.StatusCorrection {
+		t.Fatalf("served completeness.status_correction = %+v, want the result's record", served.Completeness.StatusCorrection)
+	}
 }

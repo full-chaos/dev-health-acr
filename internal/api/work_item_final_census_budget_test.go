@@ -107,6 +107,13 @@ func TestWorkItemFinalCensusParticipatesInBudgetRetry(t *testing.T) {
 				}
 				f.engine = engine
 			}
+			// A corrected status now carries its status_correction record on
+			// the result and its completeness mirror (two copies, under 320
+			// bytes). The exact control fits the document WITHOUT a retry, so
+			// its budget moves by exactly the record the authority adds.
+			if tc.name == "exact_control_authority_on" {
+				tc.budget += 320
+			}
 			request := body
 			request.Options.MaxCohortMembers = tc.members
 			request.Options.MaxSerializedBytes = tc.budget

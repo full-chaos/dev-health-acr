@@ -647,10 +647,10 @@ func TestQueryVersionMovedPastTheSelectorScopeKey(t *testing.T) {
 
 func TestQueryVersionMovedPastTheStatusWithoutTimeInState(t *testing.T) {
 	t.Parallel()
-	for _, before := range []string{"devhealthfacts.clickhouse.v157", "devhealthfacts.clickhouse.v158", "devhealthfacts.clickhouse.v159", "devhealthfacts.clickhouse.v160", "devhealthfacts.clickhouse.v161", "devhealthfacts.clickhouse.v162"} {
+	for _, before := range []string{"devhealthfacts.clickhouse.v157", "devhealthfacts.clickhouse.v158", "devhealthfacts.clickhouse.v159", "devhealthfacts.clickhouse.v160", "devhealthfacts.clickhouse.v161", "devhealthfacts.clickhouse.v162", "devhealthfacts.clickhouse.v163"} {
 		if devhealthfacts.QueryVersion != before {
 			continue
 		}
-		t.Fatalf("QueryVersion = %q, want it moved past v162 -- an answer saved with a status fact that carries no time in the current status must not be reused", devhealthfacts.QueryVersion)
+		t.Fatalf("QueryVersion = %q, want it moved past v163 -- an answer saved with a status fact that carries no time in the current status must not be reused", devhealthfacts.QueryVersion)
 	}
 }
