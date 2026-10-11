@@ -423,7 +423,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// 361 -> 363 -- the synthesis_model_failed detail's failure_class and
 		// retry_hint, closed enums minted by the service.
 		// status_correction: 250 -> 254 and 363 -> 371. Four closed leaves
-		// (model_status, direction, deciding_requirement, deciding_outcome):
+		// (replaced_status, direction, deciding_requirement, deciding_outcome):
 		// once on the projection (completeness mirror) and twice on the
 		// canonical result (top-level field and mirror).
 		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 371},
@@ -636,14 +636,14 @@ func trustedBecauseClosed(path string) bool {
 		// field and its completeness mirror) and one of the projection,
 		// and the single leaf name covers all three.
 		"refusal_basis",
-		// status_correction: "model_status" is the closed investigation
+		// status_correction: "replaced_status" is the closed investigation
 		// status vocabulary, "direction" one of four closed pairs, and
 		// "deciding_requirement"/"deciding_outcome" name an outcome row the
 		// validator requires the completeness block to carry. All four are
 		// minted by the completeness authority from its own derivation,
 		// never model prose, on two paths of the canonical result and one of
 		// the projection.
-		"model_status", "direction", "deciding_requirement", "deciding_outcome",
+		"replaced_status", "direction", "deciding_requirement", "deciding_outcome",
 		// CHAOS-4636: every string the answer plan carries is either a
 		// closed vocabulary or a service-issued token, because the PLAN IS
 		// COMPOSED BY A DETERMINISTIC STAGE, NEVER BY A MODEL -- that is

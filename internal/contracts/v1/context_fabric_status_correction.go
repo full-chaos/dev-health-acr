@@ -15,9 +15,11 @@ const (
 	ContextFabricStatusCorrectionDegradedToPartial  ContextFabricStatusCorrectionDirection = "degraded_to_partial"
 )
 
-// ContextFabricStatusCorrection discloses that the served status is not the
-// label the model authored: the server derived completeness from the answer's
-// own requirement outcome rows and replaced the label.
+// ContextFabricStatusCorrection discloses that the server derived completeness
+// from the answer's own requirement outcome rows and replaced the status the
+// document carried. ReplacedStatus is the model's authored label unless an
+// earlier server step (claim-depth trim, served-status floor) had already
+// lowered it; those steps disclose themselves through their own limitation.
 //
 // IT IS THE SOURCE ON THE RESULT and Completeness.StatusCorrection is its
 // mirror, the RefusalBasis arrangement and for the same reason: the status
@@ -28,9 +30,9 @@ const (
 // ABSENT means the served status is the model's own label (no flag corrected
 // it, or the rows agreed). It never means "unknown".
 type ContextFabricStatusCorrection struct {
-	// ModelStatus is the status the model authored and the server replaced.
-	ModelStatus ContextFabricInvestigationStatus `json:"model_status"`
-	// Direction pairs ModelStatus with the served status.
+	// ReplacedStatus is the status the completeness authority replaced.
+	ReplacedStatus ContextFabricInvestigationStatus `json:"replaced_status"`
+	// Direction pairs ReplacedStatus with the served status.
 	Direction ContextFabricStatusCorrectionDirection `json:"direction"`
 	// DecidingRequirement is the identity of the outcome row the derivation
 	// relied on, as it appears in Completeness.Outcomes. Empty when no single
@@ -74,6 +76,18 @@ func ContextFabricStatusCorrectionModelStatus(direction ContextFabricStatusCorre
 	case ContextFabricStatusCorrectionPartialToDegraded:
 		return ContextFabricInvestigationPartial, true
 	case ContextFabricStatusCorrectionDegradedToPartial:
+		return ContextFabricInvestigationDegraded, true
+	}
+	return "", false
+}
+
+// ContextFabricStatusCorrectionServedStatus is the status a direction ends
+// at.
+func ContextFabricStatusCorrectionServedStatus(direction ContextFabricStatusCorrectionDirection) (ContextFabricInvestigationStatus, bool) {
+	switch direction {
+	case ContextFabricStatusCorrectionCompleteToPartial, ContextFabricStatusCorrectionDegradedToPartial:
+		return ContextFabricInvestigationPartial, true
+	case ContextFabricStatusCorrectionCompleteToDegraded, ContextFabricStatusCorrectionPartialToDegraded:
 		return ContextFabricInvestigationDegraded, true
 	}
 	return "", false

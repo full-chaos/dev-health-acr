@@ -40,7 +40,7 @@ func TestServerCorrectedCompletenessLabelIsDisclosedOnTheDocument(t *testing.T) 
 		if correction == nil {
 			t.Fatalf("%s: status=%q was corrected from the model's complete and the document carries no status_correction", name, got.Status)
 		}
-		if correction.ModelStatus != InvestigationComplete || correction.Direction != contractsv1.ContextFabricStatusCorrectionCompleteToDegraded {
+		if correction.ReplacedStatus != InvestigationComplete || correction.Direction != contractsv1.ContextFabricStatusCorrectionCompleteToDegraded {
 			t.Errorf("%s: correction = %+v, want model_status complete, direction complete_to_degraded", name, *correction)
 		}
 		if correction.DecidingRequirement != wantRequirement || correction.DecidingOutcome != contractsv1.ContextFabricRequirementUnavailable {
@@ -116,7 +116,7 @@ func TestStatusCorrectionIsPresentExactlyWhenTheServedStatusWasCorrected(t *test
 				t.Fatalf("completeness.status_correction = %+v, present want %v", result.Completeness.StatusCorrection, tc.wantPresent)
 			}
 			if tc.wantPresent {
-				if got := result.StatusCorrection; got.ModelStatus != tc.model || got.Direction != tc.wantDir {
+				if got := result.StatusCorrection; got.ReplacedStatus != tc.model || got.Direction != tc.wantDir {
 					t.Fatalf("correction = %+v, want model %q direction %q", *got, tc.model, tc.wantDir)
 				}
 			}
@@ -153,7 +153,7 @@ func TestStatusCorrectionSurvivesReapplyAndNamesTheModelLabel(t *testing.T) {
 	}}
 	third := ApplyServerCompletenessAuthority(once, true, true, DeriveCompletenessAuthority(once))
 	if third.Status != InvestigationDegraded || third.StatusCorrection == nil ||
-		third.StatusCorrection.ModelStatus != InvestigationComplete ||
+		third.StatusCorrection.ReplacedStatus != InvestigationComplete ||
 		third.StatusCorrection.Direction != contractsv1.ContextFabricStatusCorrectionCompleteToDegraded {
 		t.Fatalf("second correction = status %q record %+v, want degraded naming complete", third.Status, third.StatusCorrection)
 	}
@@ -171,5 +171,65 @@ func TestCompletenessAuthorityLineStatesWhetherTheCorrectionWasDisclosed(t *test
 	}
 	if !found {
 		t.Fatal("completeness authority line lacks status_correction_disclosed=true")
+	}
+}
+
+// A claim-depth trim lowers complete to partial before the authority runs; it
+// discloses itself with its own limitation, and the record names the status
+// the authority actually replaced.
+func TestStatusCorrectionNamesTheStatusAnEarlierDisclosedStepLeft(t *testing.T) {
+	t.Parallel()
+	_, candidate := outcomeAuthorityCandidate(InvestigationComplete, contractsv1.ContextFabricAnswerCompletenessDegraded)
+	trimmed, _ := budgetTrimDisclose(candidate, 1, 2)
+	if trimmed.Status != InvestigationPartial {
+		t.Fatalf("setup: trim left status %q, want partial", trimmed.Status)
+	}
+	served := ApplyServerCompletenessAuthority(trimmed, true, true, DeriveCompletenessAuthority(trimmed))
+	if served.Status != InvestigationDegraded || served.StatusCorrection == nil ||
+		served.StatusCorrection.ReplacedStatus != InvestigationPartial ||
+		served.StatusCorrection.Direction != contractsv1.ContextFabricStatusCorrectionPartialToDegraded {
+		t.Fatalf("status %q record %+v, want degraded replacing partial", served.Status, served.StatusCorrection)
+	}
+	trimDisclosed := false
+	for _, limitation := range served.Limitations {
+		if limitation == contractsv1.ContextFabricBudgetTrimClaimedFactsLimitation {
+			trimDisclosed = true
+		}
+	}
+	if !trimDisclosed {
+		t.Fatal("the earlier step's own limitation must stay on the document")
+	}
+}
+
+// A floor that lowers an already corrected, stored status leaves a record
+// that would no longer describe the document: it is restated to the pair it
+// describes, or dropped when that pair is not one the authority serves.
+func TestStatusCorrectionIsReconciledWithALaterStatusChange(t *testing.T) {
+	t.Parallel()
+	_, candidate := outcomeAuthorityCandidate(InvestigationComplete, contractsv1.ContextFabricAnswerCompletenessPartial)
+	corrected := ApplyServerCompletenessAuthority(candidate, true, true, DeriveCompletenessAuthority(candidate))
+	if corrected.StatusCorrection == nil || corrected.Status != InvestigationPartial {
+		t.Fatalf("setup: %q %+v", corrected.Status, corrected.StatusCorrection)
+	}
+	lowered := corrected
+	lowered.Status = InvestigationDegraded
+	lowered.Completeness = ComputeAnswerCompleteness(lowered)
+	restated := reconcileStatusCorrection(lowered)
+	if restated.StatusCorrection == nil || restated.StatusCorrection.Direction != contractsv1.ContextFabricStatusCorrectionCompleteToDegraded ||
+		restated.Completeness.StatusCorrection == nil || *restated.Completeness.StatusCorrection != *restated.StatusCorrection {
+		t.Fatalf("restated = %+v / mirror %+v", restated.StatusCorrection, restated.Completeness.StatusCorrection)
+	}
+	// Through the exported apply, with both flags off: only the reconcile
+	// can move the record.
+	applied := ApplyServerCompletenessAuthority(lowered, false, false, DeriveCompletenessAuthority(lowered))
+	if applied.StatusCorrection == nil || applied.StatusCorrection.Direction != contractsv1.ContextFabricStatusCorrectionCompleteToDegraded {
+		t.Fatalf("apply left the record %+v, want it restated to complete_to_degraded", applied.StatusCorrection)
+	}
+	refused := corrected
+	refused.Status = InvestigationNoMatch
+	refused.Completeness = ComputeAnswerCompleteness(refused)
+	dropped := reconcileStatusCorrection(refused)
+	if dropped.StatusCorrection != nil || dropped.Completeness.StatusCorrection != nil {
+		t.Fatalf("a pair the authority never serves must drop the record: %+v", dropped.StatusCorrection)
 	}
 }

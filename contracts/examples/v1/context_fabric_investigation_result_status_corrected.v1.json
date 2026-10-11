@@ -895,16 +895,16 @@
       }
     ],
     "status_correction": {
-      "model_status": "complete",
       "direction": "complete_to_degraded",
       "deciding_requirement": "evidence/subject/project",
-      "deciding_outcome": "unavailable"
+      "deciding_outcome": "unavailable",
+      "replaced_status": "complete"
     }
   },
   "status_correction": {
-    "model_status": "complete",
     "direction": "complete_to_degraded",
     "deciding_requirement": "evidence/subject/project",
-    "deciding_outcome": "unavailable"
+    "deciding_outcome": "unavailable",
+    "replaced_status": "complete"
   }
 }

@@ -2148,22 +2148,25 @@ func (r ContextFabricInvestigationResult) validateStatusCorrection() error {
 	if !ok {
 		return fmt.Errorf("status_correction direction %q is not a vocabulary member", source.Direction)
 	}
-	if source.ModelStatus != from {
-		return fmt.Errorf("status_correction model_status %q does not match direction %q", source.ModelStatus, source.Direction)
+	if source.ReplacedStatus != from {
+		return fmt.Errorf("status_correction replaced_status %q does not match direction %q", source.ReplacedStatus, source.Direction)
 	}
-	if source.ModelStatus == r.Status {
-		return fmt.Errorf("status_correction model_status %q equals the served status", source.ModelStatus)
+	if to, _ := ContextFabricStatusCorrectionServedStatus(source.Direction); to != r.Status {
+		return fmt.Errorf("status_correction direction %q does not end at the served status %q", source.Direction, r.Status)
 	}
 	if source.DecidingOutcome != "" && !ValidContextFabricPlanRequirementOutcome(source.DecidingOutcome) {
 		return fmt.Errorf("status_correction deciding_outcome %q is not a vocabulary member", source.DecidingOutcome)
 	}
+	if (source.DecidingRequirement == "") != (source.DecidingOutcome == "") {
+		return fmt.Errorf("status_correction deciding_requirement and deciding_outcome are present together or not at all")
+	}
 	if source.DecidingRequirement != "" {
 		for _, row := range r.Completeness.Outcomes {
-			if row.Requirement == source.DecidingRequirement {
+			if row.Requirement == source.DecidingRequirement && row.Outcome == source.DecidingOutcome {
 				return nil
 			}
 		}
-		return fmt.Errorf("status_correction deciding_requirement names no completeness outcome row")
+		return fmt.Errorf("status_correction deciding_requirement and deciding_outcome name no completeness outcome row")
 	}
 	return nil
 }

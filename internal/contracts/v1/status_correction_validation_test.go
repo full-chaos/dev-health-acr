@@ -29,33 +29,47 @@ func TestStatusCorrectionValidationClauses(t *testing.T) {
 		want   string
 	}{
 		{"mirror_missing", func(r *ContextFabricInvestigationResult) {
-			r.StatusCorrection = &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded}
+			r.StatusCorrection = &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded}
 		}, "must equal the result's status_correction"},
 		{"mirror_differs", func(r *ContextFabricInvestigationResult) {
-			r.StatusCorrection = &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded}
-			r.Completeness.StatusCorrection = &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationPartial, Direction: ContextFabricStatusCorrectionPartialToDegraded}
+			r.StatusCorrection = &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded}
+			r.Completeness.StatusCorrection = &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationPartial, Direction: ContextFabricStatusCorrectionPartialToDegraded}
 		}, "must equal the result's status_correction"},
 		{"served_complete", func(r *ContextFabricInvestigationResult) {
 			r.Status = ContextFabricInvestigationComplete
 			r.Completeness.TerminalStatus = ContextFabricInvestigationComplete
 			r.Completeness.TerminalReason = ""
-			setBoth(r, &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationPartial, Direction: ContextFabricStatusCorrectionPartialToDegraded})
+			setBoth(r, &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationPartial, Direction: ContextFabricStatusCorrectionPartialToDegraded})
 		}, "cannot accompany status"},
 		{"direction_not_member", func(r *ContextFabricInvestigationResult) {
-			setBoth(r, &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationPartial, Direction: "partial_to_complete"})
+			setBoth(r, &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationPartial, Direction: "partial_to_complete"})
 		}, "is not a vocabulary member"},
 		{"model_status_off_direction", func(r *ContextFabricInvestigationResult) {
-			setBoth(r, &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationPartial, Direction: ContextFabricStatusCorrectionCompleteToDegraded})
+			setBoth(r, &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationPartial, Direction: ContextFabricStatusCorrectionCompleteToDegraded})
 		}, "does not match direction"},
-		{"model_equals_served", func(r *ContextFabricInvestigationResult) {
-			setBoth(r, &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationDegraded, Direction: ContextFabricStatusCorrectionDegradedToPartial})
-		}, "equals the served status"},
 		{"deciding_outcome_not_member", func(r *ContextFabricInvestigationResult) {
-			setBoth(r, &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded, DecidingOutcome: "bogus"})
+			setBoth(r, &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded, DecidingOutcome: "bogus"})
 		}, "deciding_outcome"},
 		{"deciding_requirement_unknown", func(r *ContextFabricInvestigationResult) {
-			setBoth(r, &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded, DecidingRequirement: "no/such/row"})
-		}, "names no completeness outcome row"},
+			setBoth(r, &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded, DecidingRequirement: "no/such/row", DecidingOutcome: ContextFabricRequirementUnavailable})
+		}, "name no completeness outcome row"},
+		{"direction_ends_elsewhere", func(r *ContextFabricInvestigationResult) {
+			setBoth(r, &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToPartial})
+		}, "does not end at the served status"},
+		{"deciding_requirement_without_outcome", func(r *ContextFabricInvestigationResult) {
+			setBoth(r, &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded, DecidingRequirement: "x/y/z"})
+		}, "present together"},
+		{"deciding_outcome_differs_from_row", func(r *ContextFabricInvestigationResult) {
+			if len(r.Completeness.Outcomes) == 0 {
+				t.Fatal("fixture carries no outcome rows")
+			}
+			row := r.Completeness.Outcomes[0]
+			other := ContextFabricRequirementNarrowed
+			if row.Outcome == other {
+				other = ContextFabricRequirementUnavailable
+			}
+			setBoth(r, &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded, DecidingRequirement: row.Requirement, DecidingOutcome: other})
+		}, "name no completeness outcome row"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -73,7 +87,7 @@ func TestStatusCorrectionValidationClauses(t *testing.T) {
 	t.Run("valid_record_accepted", func(t *testing.T) {
 		t.Parallel()
 		r := degradedResultWithCorrection(t)
-		setBoth(&r, &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded})
+		setBoth(&r, &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationComplete, Direction: ContextFabricStatusCorrectionCompleteToDegraded})
 		if err := r.Validate(); err != nil {
 			t.Fatalf("Validate() = %v, want a valid corrected document", err)
 		}

@@ -66,7 +66,7 @@ func answerBoundTable() []answerBound {
 				r.Completeness.StatusCorrection = nil
 			},
 			PastMax: func(r *ContextFabricInvestigationResult) {
-				correction := &ContextFabricStatusCorrection{ModelStatus: ContextFabricInvestigationPartial, Direction: ContextFabricStatusCorrectionPartialToDegraded}
+				correction := &ContextFabricStatusCorrection{ReplacedStatus: ContextFabricInvestigationPartial, Direction: ContextFabricStatusCorrectionPartialToDegraded}
 				r.StatusCorrection = correction
 				r.Completeness.StatusCorrection = correction
 			}},

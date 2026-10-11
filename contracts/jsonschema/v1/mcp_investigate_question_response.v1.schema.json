@@ -319,19 +319,19 @@
               "type": "object",
               "additionalProperties": false,
               "required": [
-                "model_status",
+                "replaced_status",
                 "direction"
               ],
-              "description": "Present only when the server's outcome-derived completeness authority replaced the status the model authored: what the model authored (model_status), the pair served (direction), and the outcome row the derivation relied on (deciding_requirement, deciding_outcome; a requirement identity that also appears in completeness.outcomes). ABSENT means the served status is the model's own label, never 'unknown'. A status is never corrected up to complete.",
+              "description": "Present only when the server's outcome-derived completeness authority replaced the status the model authored: the status replaced (replaced_status), the pair served (direction), and the outcome row the derivation relied on (deciding_requirement, deciding_outcome; a requirement identity that also appears in completeness.outcomes). ABSENT means the served status is the model's own label, never 'unknown'. A status is never corrected up to complete.",
               "properties": {
-                "model_status": {
+                "replaced_status": {
                   "type": "string",
                   "enum": [
                     "complete",
                     "partial",
                     "degraded"
                   ],
-                  "description": "The status the model authored and the server replaced."
+                  "description": "The status the server replaced: the model's authored status unless an earlier server step (claim-depth trim, served-status floors) had already lowered it, which that step discloses through its own limitation."
                 },
                 "direction": {
                   "type": "string",
@@ -3497,19 +3497,19 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "model_status",
+            "replaced_status",
             "direction"
           ],
-          "description": "Present only when the server's outcome-derived completeness authority replaced the status the model authored: what the model authored (model_status), the pair served (direction), and the outcome row the derivation relied on (deciding_requirement, deciding_outcome; a requirement identity that also appears in completeness.outcomes). ABSENT means the served status is the model's own label, never 'unknown'. A status is never corrected up to complete.",
+          "description": "Present only when the server's outcome-derived completeness authority replaced the status the model authored: the status replaced (replaced_status), the pair served (direction), and the outcome row the derivation relied on (deciding_requirement, deciding_outcome; a requirement identity that also appears in completeness.outcomes). ABSENT means the served status is the model's own label, never 'unknown'. A status is never corrected up to complete.",
           "properties": {
-            "model_status": {
+            "replaced_status": {
               "type": "string",
               "enum": [
                 "complete",
                 "partial",
                 "degraded"
               ],
-              "description": "The status the model authored and the server replaced."
+              "description": "The status the server replaced: the model's authored status unless an earlier server step (claim-depth trim, served-status floors) had already lowered it, which that step discloses through its own limitation."
             },
             "direction": {
               "type": "string",
@@ -3861,19 +3861,19 @@
               "type": "object",
               "additionalProperties": false,
               "required": [
-                "model_status",
+                "replaced_status",
                 "direction"
               ],
-              "description": "Present only when the server's outcome-derived completeness authority replaced the status the model authored: what the model authored (model_status), the pair served (direction), and the outcome row the derivation relied on (deciding_requirement, deciding_outcome; a requirement identity that also appears in completeness.outcomes). ABSENT means the served status is the model's own label, never 'unknown'. A status is never corrected up to complete.",
+              "description": "Present only when the server's outcome-derived completeness authority replaced the status the model authored: the status replaced (replaced_status), the pair served (direction), and the outcome row the derivation relied on (deciding_requirement, deciding_outcome; a requirement identity that also appears in completeness.outcomes). ABSENT means the served status is the model's own label, never 'unknown'. A status is never corrected up to complete.",
               "properties": {
-                "model_status": {
+                "replaced_status": {
                   "type": "string",
                   "enum": [
                     "complete",
                     "partial",
                     "degraded"
                   ],
-                  "description": "The status the model authored and the server replaced."
+                  "description": "The status the server replaced: the model's authored status unless an earlier server step (claim-depth trim, served-status floors) had already lowered it, which that step discloses through its own limitation."
                 },
                 "direction": {
                   "type": "string",
