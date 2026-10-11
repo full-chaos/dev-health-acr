@@ -854,19 +854,21 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 				owners++
 			}
 		}
+		var disclosure ownerDisclosure
+		if ownershipErr == nil && !temporal.active {
+			disclosure, ownershipErr = a.repositoryOwnerExclusions(ctx, key, principal, request.Request.RequestedScope, ownershipRoutedRepoID, edgeOwners)
+		}
 		if a.config.Telemetry != nil {
 			a.config.Telemetry.RecordOwnershipRouting(ctx, principal.OrgID, OwnershipRoutingDecision{
 				Outcome: ownershipRoutingOutcome(owners, ownershipErr), AnchorKind: contextfabric.SubjectRepository, AnchorBasis: ownershipAnchorBasis,
 				Committed: len(request.Resolution.Committed), Census: len(ownershipNodes), Owners: owners, Truncated: truncated, Err: ownershipErr,
 			})
 		}
-		if ownershipErr == nil && !temporal.active {
-			ownershipExclusions, ownershipErr = a.repositoryOwnerExclusions(ctx, key, principal.OrgID, ownershipRoutedRepoID, edgeOwners)
-		}
 		if ownershipErr != nil {
 			return contextfabric.GraphContext{}, graphNotProjectedError(ownershipErr)
 		}
-		ownershipZeroOwnersResolved = ownershipZeroOwnersAreAnAnswer(owners, len(ownershipNodes), truncated)
+		ownershipExclusions = disclosure.Exclusions
+		ownershipZeroOwnersResolved = ownershipZeroOwnersAreAnAnswer(owners, len(ownershipNodes), disclosure.Edges, truncated, temporal.active)
 		ownershipCensusTruncated = truncated
 		ownershipCensusMembers = len(ownershipNodes)
 		sortCandidateNodesBySubjectKey(ownershipNodes)
@@ -1818,7 +1820,7 @@ const ownershipInclusionReason = "Team that owns the repository the question nam
 // with no member: the repository's ownership edges are projected from the
 // ownership records in a pass of their own, apart from the repository, so the
 // zero is stated beside the projection it was read from.
-const ownershipZeroOwnersRationale = "No team ownership record names the repository in the authorized Context Fabric graph. Repositories and their ownership are projected in separate passes, so an ownership recorded very recently may not be in the graph yet."
+const ownershipZeroOwnersRationale = "No active team currently owns the repository in the authorized Context Fabric graph; teams left out are listed as exclusions. Repositories and their ownership are projected in separate passes, so an ownership recorded very recently may not be in the graph yet."
 
 // ownershipCohortRationale is the rationale of an ownership-routed cohort.
 const ownershipCohortRationale = "Teams were read from the ownership records of the repository the question names in the authorized Context Fabric graph."

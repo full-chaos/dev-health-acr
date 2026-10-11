@@ -626,3 +626,29 @@ func TestAStatedWindowDecidesOwnershipByItsEdgesOnly(t *testing.T) {
 		t.Fatalf("members = %v, want none: no ownership edge of the window names a team", got)
 	}
 }
+
+// A failure of the window-free disclosure read is the ownership decision's own
+// failure: the event is emitted after it and carries it.
+func TestAFailedOwnershipDisclosureReadIsTheDecisionsFailure(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	reads := 0
+	conn := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "$kinds") {
+			return []row{teamRow("team:one", ownedSlug)}, nil
+		}
+		if isOwnershipEdgeRead(params) {
+			reads++
+			if _, windowed := params[temporalParamStart]; !windowed {
+				return nil, errors.New("connection reset")
+			}
+		}
+		return nil, nil
+	}}
+	adapter := newFakeAdapterWithTelemetry(t, conn, telemetry)
+	if _, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, namedByLabelRequest(contextfabric.SubjectRepository, true)); err == nil {
+		t.Fatal("DiscoverContext() error = nil, want the failed disclosure read")
+	}
+	if reads != 2 || len(telemetry.ownershipRoutings) != 1 || telemetry.ownershipRoutings[0].Outcome != OwnershipRoutingReadFailed {
+		t.Fatalf("reads = %d decisions = %+v, want both reads and one read_failed decision", reads, telemetry.ownershipRoutings)
+	}
+}

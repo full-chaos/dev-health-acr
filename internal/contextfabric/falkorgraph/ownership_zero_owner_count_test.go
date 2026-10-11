@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ type ownerEdge struct {
 	team     string
 	inactive bool
 	ended    bool
+	future   bool
 }
 
 // askOwningTeamCountWithOwners asks "how many teams own repository <slug>"
@@ -25,6 +27,11 @@ type ownerEdge struct {
 // test. The census read drops inactive teams as the stored query does; the
 // edge read returns the ended edges only when it carries no window.
 func askOwningTeamCountWithOwners(t *testing.T, s routeSeed, owners []ownerEdge, censusFault func() ([]row, error), principals ...storage.Principal) routeAnswer {
+	t.Helper()
+	return askOwningTeamCountWithOwnersAt(t, s, owners, censusFault, nil, principals...)
+}
+
+func askOwningTeamCountWithOwnersAt(t *testing.T, s routeSeed, owners []ownerEdge, censusFault func() ([]row, error), timeContext *contextfabric.TimeContext, principals ...storage.Principal) routeAnswer {
 	principal := storage.Principal{OrgID: "org-1"}
 	if len(principals) > 0 {
 		principal = principals[0]
@@ -40,14 +47,18 @@ func askOwningTeamCountWithOwners(t *testing.T, s routeSeed, owners []ownerEdge,
 			_, windowed := params[temporalParamStart]
 			var rows []row
 			for _, o := range owners {
-				if o.ended && windowed {
+				if (o.ended || o.future) && windowed {
 					continue
 				}
 				n := fakeSubjectNodeRow("team", o.team, strings.TrimPrefix(o.team, "team:"))["n"].(*node)
 				if o.inactive {
 					n.Properties[teamActiveProperty] = false
 				}
-				rows = append(rows, row{"id": routeOwnedRepository, "b": n, "r": &edge{Properties: map[string]interface{}{propRelationType: string(contractsv1.ContextFabricRelationshipOwnedByTeam), propRelationshipID: "rel_" + o.team}}})
+				props := map[string]interface{}{propRelationType: string(contractsv1.ContextFabricRelationshipOwnedByTeam), propRelationshipID: "rel_" + o.team}
+				if o.future {
+					props[propValidFromNs] = nsTimestamp(time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC))
+				}
+				rows = append(rows, row{"id": routeOwnedRepository, "b": n, "r": &edge{Properties: props}})
 			}
 			return rows, nil
 		}
@@ -75,7 +86,7 @@ func askOwningTeamCountWithOwners(t *testing.T, s routeSeed, owners []ownerEdge,
 		return identity, time.Time{}, true, nil
 	}
 	return investigateAnchor(t, adapter, principal,
-		projectDeploymentsInterpreter{name: routeOwnedSlug, kind: contextfabric.SubjectRepository, member: contextfabric.SubjectTeam, count: true},
+		projectDeploymentsInterpreter{name: routeOwnedSlug, kind: contextfabric.SubjectRepository, member: contextfabric.SubjectTeam, count: true, timeContext: timeContext},
 		"how many teams own repository "+routeOwnedSlug, routeOwnershipMessage)
 }
 
@@ -189,5 +200,95 @@ func TestAZeroOwnerCountIsNotCertifiedWhenTheCallerMayNotReadTheOwner(t *testing
 	answer := askOwningTeamCountWithOwners(t, s, []ownerEdge{{team: "team:hidden"}}, nil, storage.Principal{OrgID: "org-1", RepositoryScopes: []string{routeOwnedSlug}})
 	if _, claimed, outcome := servedCount(answer); claimed || outcome == contractsv1.ContextFabricRequirementSatisfied {
 		t.Fatalf("count claimed=%t outcome=%q while the one owner is unreadable to the caller, want none certified", claimed, outcome)
+	}
+}
+
+func exclusionIDs(a routeAnswer) []string {
+	var ids []string
+	if a.result.Cohort != nil {
+		for _, e := range a.result.Cohort.Exclusions {
+			ids = append(ids, e.Subject.CanonicalID)
+		}
+	}
+	return ids
+}
+
+// An owner the caller may not read is not named in the exclusions either.
+func TestAnExcludedOwnerTheCallerMayNotReadIsNotDisclosed(t *testing.T) {
+	s := seedRepositoryWithoutAttributeOwner()
+	s.nodes = append(s.nodes, seededNode{kind: "team", id: "team:hidden", label: "hidden", repos: []string{"hidden/service"}})
+	answer := askOwningTeamCountWithOwners(t, s, []ownerEdge{{team: "team:hidden", inactive: true}}, nil, storage.Principal{OrgID: "org-1", RepositoryScopes: []string{routeOwnedSlug}})
+	if ids := exclusionIDs(answer); len(ids) != 0 {
+		t.Fatalf("exclusions = %v, want none: the caller may not read that team", ids)
+	}
+}
+
+// The only owner is inactive and no other team is in the census: the zero is
+// still an answer, because the repository's own ownership edge shows the
+// ownership was projected.
+func TestAZeroOwnerCountIsServedWhenTheOnlyProjectedTeamIsTheInactiveOwner(t *testing.T) {
+	s := seedRepositoryWithoutAttributeOwner()
+	var kept []seededNode
+	for _, n := range s.nodes {
+		if n.kind != "team" {
+			kept = append(kept, n)
+		}
+	}
+	s.nodes = append(kept, seededNode{kind: "team", id: "team:former", label: "former", repos: []string{routeOwnedSlug}})
+	answer := askOwningTeamCountWithOwners(t, s, []ownerEdge{{team: "team:former", inactive: true}}, nil)
+	value, claimed, outcome := servedCount(answer)
+	if !claimed || value != 0 || outcome != contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("count claimed=%t value=%d outcome=%q, want a certified 0", claimed, value, outcome)
+	}
+	if got := exclusionReasons(answer); got[contractsv1.CohortExclusionReasonInactiveTeam] != 1 {
+		t.Fatalf("exclusions = %v, want inactive_team:1", got)
+	}
+}
+
+// Under a stated window the present-tense ownership read cannot speak for the
+// past, so no zero is served.
+func TestAZeroOwnerCountIsNotServedForAStatedWindow(t *testing.T) {
+	start, end := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	window := contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}
+	answer := askOwningTeamCountWithOwnersAt(t, seedRepositoryWithoutAttributeOwner(), nil, nil, &window)
+	if _, claimed, outcome := servedCount(answer); claimed || outcome == contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("count claimed=%t outcome=%q for a stated window, want none certified", claimed, outcome)
+	}
+}
+
+func TestMoreExcludedOwnersThanTheContractCarriesStillServeTheExactCount(t *testing.T) {
+	var owners []ownerEdge
+	for i := 0; i < 260; i++ {
+		owners = append(owners, ownerEdge{team: fmt.Sprintf("team:former-%03d", i), inactive: true})
+	}
+	answer := askOwningTeamCountWithOwners(t, seedRepositoryWithoutAttributeOwner(), owners, nil)
+	value, claimed, outcome := servedCount(answer)
+	if !claimed || value != 0 || outcome != contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("count claimed=%t value=%d outcome=%q, want a certified 0", claimed, value, outcome)
+	}
+	if n := len(exclusionIDs(answer)); n != 250 {
+		t.Fatalf("exclusions = %d, want the contract's 250", n)
+	}
+}
+
+func TestAnOwnershipAssertionThatHasNotStartedIsNotDisclosedAsEnded(t *testing.T) {
+	answer := askOwningTeamCountWithOwners(t, seedRepositoryWithoutAttributeOwner(), []ownerEdge{{team: "team:matched", future: true}}, nil)
+	value, claimed, outcome := servedCount(answer)
+	if !claimed || value != 0 || outcome != contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("count claimed=%t value=%d outcome=%q, want a certified 0", claimed, value, outcome)
+	}
+	if got := exclusionReasons(answer); len(got) != 0 {
+		t.Fatalf("exclusions = %v, want none: the assertion has not started", got)
+	}
+}
+
+// An owner of the stated window that is inactive now is not in the active
+// census, so the census cannot prove that the window had no owner.
+func TestAZeroOwnerCountIsNotServedForAWindowWhoseOwnerIsInactiveNow(t *testing.T) {
+	start, end := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	window := contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}
+	answer := askOwningTeamCountWithOwnersAt(t, seedRepositoryWithoutAttributeOwner(), []ownerEdge{{team: "team:former", inactive: true}}, nil, &window)
+	if _, claimed, outcome := servedCount(answer); claimed && outcome == contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("a zero was certified for a window in which an owner existed")
 	}
 }
