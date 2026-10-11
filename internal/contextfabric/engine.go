@@ -4165,6 +4165,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// could, and the ceiling decides.
 		decisiveBudget.MaxSerializedBytes = e.maxSerializedBytes
 		result, budgetErr = e.finalizeServedFitting(ctx, principal, BudgetAssertDecisive, fittedBeforeFinal, decisiveBudget)
+		if budgetErr == nil {
+			// Announced like the stage-3 ceiling fit: one event, from the one
+			// place that stamps it, naming the document served over the
+			// request's target and the ceiling it fits.
+			if served, measureErr := MeasureAttempt(consumedAllocation, result, decisiveBudget); measureErr == nil {
+				grouped := result.Cohort != nil && len(result.Cohort.Groups) > 0
+				e.recordCeilingFit(ctx, principal, &plan, cohortMemberCount(result.Cohort), grouped, "", served, result, contractsv1.ContextFabricBudgetOverrunBytes, CeilingFitDecisive)
+			}
+		}
 	}
 	if cover.disclosure != nil {
 		if budgetErr != nil {

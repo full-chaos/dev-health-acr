@@ -754,4 +754,6 @@ const (
 	CeilingFitMeasured      CeilingFitStep = "fits_as_measured"
 	CeilingFitRowTruncation CeilingFitStep = "row_truncation"
 	CeilingFitPathDrop      CeilingFitStep = "path_drop"
+	CeilingFitWalkListCut   CeilingFitStep = "walk_list_cut"
+	CeilingFitDecisive      CeilingFitStep = "decisive_fit"
 )

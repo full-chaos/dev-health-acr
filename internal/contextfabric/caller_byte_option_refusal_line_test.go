@@ -3,7 +3,9 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -197,5 +199,45 @@ func TestARefusalAfterTheCeilingFitCouldNotServeNamesTheServiceCeiling(t *testin
 	}
 	if refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes || refusal.MaxSerializedBytes != ceiling {
 		t.Fatalf("refusal = overrun %q at %d, want a bytes refusal naming the service ceiling %d (measured %d)", refusal.Overrun, refusal.MaxSerializedBytes, ceiling, refusal.MeasuredBytes)
+	}
+}
+
+// A document that crosses the request's target only after the late writers,
+// with nothing left to cut, is served against the service ceiling by the
+// decisive fit -- and announced by the same ceiling-fit event the stage-3 fit
+// emits, with the step named.
+func TestADecisiveFitServedAgainstTheServiceCeilingIsAnnounced(t *testing.T) {
+	const target = 20000
+	result, calls, telemetry, err := investigateWithCallerByteOptionCounted(t, target, padWarnings(20))
+	if err != nil {
+		t.Fatalf("Investigate() error = %v (calls %d)", err, calls)
+	}
+	if got := servedBytes(t, result); got <= target || got > chaos6558MaxBytes {
+		t.Fatalf("premise: served %d bytes, want over the target %d and under the ceiling %d", got, target, chaos6558MaxBytes)
+	}
+	var announced *PlanNarrowingEvent
+	for index := range telemetry.planNarrowings {
+		if telemetry.planNarrowings[index].CeilingFit == CeilingFitDecisive {
+			announced = &telemetry.planNarrowings[index]
+		}
+	}
+	if announced == nil {
+		t.Fatalf("no ceiling_fit=decisive_fit event for a document served over the target: %+v", telemetry.planNarrowings)
+	}
+	if announced.MaxSerializedBytes != chaos6558MaxBytes || announced.MeasuredBytes <= target {
+		t.Fatalf("event = measured_bytes %d against %d, want the served document's bytes over the target and the ceiling %d", announced.MeasuredBytes, announced.MaxSerializedBytes, chaos6558MaxBytes)
+	}
+}
+
+// padWarnings appends count near-maximal valid warnings after the fit, as a
+// late writer would.
+func padWarnings(count int) func(InvestigationResult) InvestigationResult {
+	return func(result InvestigationResult) InvestigationResult {
+		warnings := append([]string{}, result.Warnings...)
+		for i := 0; i < count; i++ {
+			warnings = append(warnings, fmt.Sprintf("pad %03d %s", i, strings.Repeat("p", contractsv1.ContextFabricWarningMaxLength-20)))
+		}
+		result.Warnings = warnings
+		return result
 	}
 }

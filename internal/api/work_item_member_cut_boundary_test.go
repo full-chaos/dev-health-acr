@@ -606,3 +606,14 @@ func TestTheModelReadsTheStrongestLinksAndThePlanNamesWhatItBounds(t *testing.T)
 		t.Fatalf("served plan %+v, want a synthesis_input step 20 to 14 by link_strength_then_id", plan)
 	}
 }
+
+// A caller's answer budget below what the walk list can be cut to is the shed
+// target, not a refusal line: the list is cut against the service ceiling and
+// served, with the size sentence for the cut.
+func TestAnAnswerBudgetBelowTheWalkListCutIsServedUnderTheServiceCeiling(t *testing.T) {
+	rig := newCutRigWithBytes(t, cutWalk(t, 250, 0, func(int) string { return contextfabric.TreeLinkTierNative }), 40_000)
+	got := readServedCohort(t, rig.askWithin(t, 200, contractsv1.ContextFabricSerializedBytesMin))
+	if got.Total < 1 || got.Total >= 200 || got.Population != 250 {
+		t.Fatalf("served cohort = %+v, want a list cut to fit the service ceiling, population 250", got)
+	}
+}

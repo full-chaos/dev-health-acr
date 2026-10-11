@@ -86,7 +86,7 @@ the option on such a turn is refused with the option named.
 
 When the engine could not reach the caller's byte target and fitted the answer against
 the service ceiling instead of refusing, the plan-narrowing line carries
-`ceiling_fit` (`fits_as_measured`, `row_truncation` or `path_drop`) beside the
+`ceiling_fit` (`fits_as_measured`, `row_truncation`, `path_drop`, `walk_list_cut` or `decisive_fit`) beside the
 document's `measured_bytes` and `measured_items` and `max_serialized_bytes` set to
 the ceiling it was fitted to.
 

@@ -479,11 +479,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// An items cut that left the document over the byte target only is the
 		// document the byte target was refused on, so it is the one fitted
 		// against the service ceiling.
-		ceilingDoc, ceilingInput, ceilingAllocation, ceilingOverrun := result, measurementInput, allocation, overrun
+		ceilingDoc, ceilingInput, ceilingAllocation, ceilingOverrun, ceilingFinalize := result, measurementInput, allocation, overrun, false
 		if overrun != contractsv1.ContextFabricBudgetOverrunBytes && trim.Reduced.Status != "" && trim.Measured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes {
-			ceilingDoc, ceilingInput, ceilingAllocation, ceilingOverrun = trim.Reduced, trim.Reduced, trim.Measured.Allocation, contractsv1.ContextFabricBudgetOverrunBytes
+			ceilingDoc, ceilingInput, ceilingAllocation, ceilingOverrun, ceilingFinalize = trim.Reduced, trim.Reduced, trim.Measured.Allocation, contractsv1.ContextFabricBudgetOverrunBytes, true
 		}
-		if served, ok, serveErr := e.serveAtServiceCeiling(ctx, principal, plan, params, "assembled_result", ceilingDoc, ceilingInput, ceilingAllocation, params.Facts, &firstPass, answerPassSecond, answerPassFirst, cardinality, budget, ceilingOverrun); serveErr != nil {
+		if served, ok, serveErr := e.serveAtServiceCeiling(ctx, principal, plan, params, "assembled_result", ceilingDoc, ceilingInput, ceilingFinalize, ceilingAllocation, params.Facts, &firstPass, answerPassSecond, answerPassFirst, cardinality, budget, ceilingOverrun); serveErr != nil {
 			return InvestigationResult{}, firstPass, serveErr
 		} else if ok {
 			return served, firstPass, nil
@@ -825,7 +825,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// was measured, and it is not a measurement.
 	// Before the refusal event: a document the service ceiling admits is not a
 	// planned refusal, and the artifacts must not say it was.
-	if served, ok, serveErr := e.serveAtServiceCeiling(ctx, principal, plan, retryParams, "re_synthesized_result", retried, retryMeasurementInput, consumedRetryAllocation, retryParams.Facts, &retryPending, answerPassThird, answerPassSecond, retryCardinality, budget, retryOverrun); serveErr != nil {
+	if served, ok, serveErr := e.serveAtServiceCeiling(ctx, principal, plan, retryParams, "re_synthesized_result", retried, retryMeasurementInput, false, consumedRetryAllocation, retryParams.Facts, &retryPending, answerPassThird, answerPassSecond, retryCardinality, budget, retryOverrun); serveErr != nil {
 		return InvestigationResult{}, retryPending, serveErr
 	} else if ok {
 		retryRanked := narrowed.Ranked
@@ -1106,6 +1106,23 @@ func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, p
 	return e.refusalFromAxis(plan, measured.Measurement, overrun, retryAttempted, axis)
 }
 
+// recordCeilingFit emits the one event that announces a document served between
+// the request's target and the service ceiling. It is the ONE place that stamps
+// that measurement: the stage-3 fit and the decisive fit both call it, so the
+// trace rebuilds the decision (measured bytes and items, the ceiling it was
+// fitted to, the step) from this event alone.
+func (e *Engine) recordCeilingFit(ctx context.Context, principal storage.Principal, plan *AnswerPlan, members int, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, measured MeasuredAttempt, served InvestigationResult, overrun contractsv1.ContextFabricBudgetOverrun, step CeilingFitStep) {
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
+		members, members, grouped, false, overrun, basis)
+	event.recordMeasurement(measured)
+	event.PredictedItems = PredictedItemsForPlan(*plan, members)
+	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+	event.OutcomeCompletenessState = served.Completeness.State
+	event.CeilingFit = step
+	event.MaxSerializedBytes = e.maxSerializedBytes
+	e.recordPlanNarrowing(ctx, principal, event)
+}
+
 // refusalPlan is the plan a byte refusal is built from. The plan's budget is the
 // request's own target; when the document crossed the service ceiling as well,
 // the line it crossed is the ceiling, and the refusal names that one (the plan
@@ -1130,7 +1147,7 @@ func (e *Engine) refusalPlan(plan *AnswerPlan, measurement ResponseMeasurement) 
 //
 // ok is true when doc (or a lever's result) fits the ceiling; the plan then
 // states the ceiling it was fitted to, and the later fit asserts against it.
-func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Principal, plan *AnswerPlan, params synthesisAssemblyParams, stage string, doc, measurementInput InvestigationResult, allocation ItemAllocation, facts CanonicalFactBundle, pending *assemblyTelemetry, planPass, recordPass int, cardinality MembershipCardinality, budget ResponseBudget, overrun contractsv1.ContextFabricBudgetOverrun) (served InvestigationResult, ok bool, err error) {
+func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Principal, plan *AnswerPlan, params synthesisAssemblyParams, stage string, doc, measurementInput InvestigationResult, finalize bool, allocation ItemAllocation, facts CanonicalFactBundle, pending *assemblyTelemetry, planPass, recordPass int, cardinality MembershipCardinality, budget ResponseBudget, overrun contractsv1.ContextFabricBudgetOverrun) (served InvestigationResult, ok bool, err error) {
 	// A zero service ceiling means unbounded, as everywhere else the engine
 	// reads it; a ceiling at or below the target leaves nothing to widen to.
 	if overrun != contractsv1.ContextFabricBudgetOverrunBytes || budget.MaxSerializedBytes <= 0 ||
@@ -1145,7 +1162,22 @@ func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Pr
 	step := CeilingFitNone
 	switch {
 	case measured.Overrun == contractsv1.ContextFabricBudgetFits:
+		// A document an items cut handed back is the disclosed cut, before the
+		// derived fields (render shapes, completeness, plan stamps) were
+		// recomputed over what it now holds: it is finalized exactly as every
+		// lever's served document is.
 		served, ok, step = doc, true, CeilingFitMeasured
+		if finalize {
+			served = e.finalizeResult(ctx, principal, doc, *plan, params.Frame, facts, pending, planPass, cardinality)
+		}
+	case measured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes && params.WorkItemCensus != nil:
+		fitted, fittedOK, fitErr := e.fitWalkListToBytes(ctx, principal, plan, params.Frame, doc, ceilingBudget, measured, facts, pending, cardinality)
+		if fitErr != nil {
+			return InvestigationResult{}, false, fitErr
+		}
+		if fittedOK {
+			served, ok, step = fitted, true, CeilingFitWalkListCut
+		}
 	case measured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes && params.WorkItemCensus == nil:
 		rows, rowErr := e.planFactRowTruncation(ctx, principal, plan, params.Frame, doc, ceilingBudget, measured, facts, pending, planPass, cardinality)
 		if rowErr != nil {
@@ -1174,15 +1206,7 @@ func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Pr
 		pending.CeilingFitted = true
 		members := cohortMemberCount(params.Graph.Cohort)
 		grouped := params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0
-		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
-			members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
-		event.recordMeasurement(measured)
-		event.PredictedItems = PredictedItemsForPlan(*plan, members)
-		event.DeadlineReserved = e.synthesisDeadlineReserve > 0
-		event.OutcomeCompletenessState = served.Completeness.State
-		event.CeilingFit = step
-		event.MaxSerializedBytes = e.maxSerializedBytes
-		e.recordPlanNarrowing(ctx, principal, event)
+		e.recordCeilingFit(ctx, principal, plan, members, grouped, params.GroupedNarrowingBasis, measured, served, overrun, step)
 	}
 	return served, ok, nil
 }

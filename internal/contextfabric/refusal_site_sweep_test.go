@@ -75,13 +75,13 @@ var decisionEventFunctions = []string{
 	// counts and the pinned-member count only, no measurement and no
 	// prediction, so it holds one document and cannot describe two.
 	"recordServedWalkListCut",
-	// Emits the one event for an answer the service ceiling admits after the
-	// caller's byte target could not be reached. It stamps the measurement of
-	// the ONE document it fitted (the assembled result the ceiling attempt
-	// measured, before any lever) and names the step in ceiling_fit; its
-	// prediction is the plan's own member count. One document, so it cannot
-	// describe two.
-	"serveAtServiceCeiling",
+	// The one place that announces an answer served between the request's
+	// target and the service ceiling (stage-3 fit and decisive fit both call
+	// it). It stamps the measurement of the ONE document it is handed -- the
+	// assembled result the ceiling attempt measured, or the final one -- and
+	// names the step in ceiling_fit; its prediction is the plan's own member
+	// count. One document, so it cannot describe two.
+	"recordCeilingFit",
 }
 
 // TestEveryRefusalSitePairsOneDocument pins the enumeration.
