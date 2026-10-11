@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // Environment variables read by LoadConfig. All are optional except
@@ -16,6 +18,7 @@ import (
 const (
 	APIURLEnvironment                    = "ACR_API_URL"
 	TimeoutEnvironment                   = "ACR_API_TIMEOUT"
+	InvestigationWaitEnvironment         = "ACR_MCP_INVESTIGATION_WAIT"
 	MaxResponseBytesEnvironment          = "ACR_API_MAX_RESPONSE_BYTES"
 	MaxRequestBodyBytesEnvironment       = "ACR_API_MAX_REQUEST_BODY_BYTES"
 	ProxyURLEnvironment                  = "ACR_API_PROXY_URL"
@@ -139,6 +142,11 @@ type Config struct {
 	// request, response). It is applied via context.WithTimeout around the
 	// caller-supplied context, so an already-shorter caller deadline wins.
 	Timeout time.Duration
+	// InvestigationWait is the longest one investigation call may take, sent
+	// to the hosted API as its wait budget so it answers (degraded, with a
+	// result_id) before a caller's own tool timeout. Zero sends none.
+	// Timeout must clear it by the synthesis composition reserve.
+	InvestigationWait time.Duration
 	// MaxResponseBytes bounds how many bytes of a hosted response body the
 	// client will read before treating the response as too large.
 	MaxResponseBytes int64
@@ -225,6 +233,9 @@ func loadConfig(lookup lookupEnv) (Config, error) {
 	if cfg.Timeout, err = durationOrDefault(lookup, TimeoutEnvironment, defaultTimeout); err != nil {
 		return Config{}, err
 	}
+	if cfg.InvestigationWait, err = durationOrDefault(lookup, InvestigationWaitEnvironment, 0); err != nil {
+		return Config{}, err
+	}
 	if cfg.MaxResponseBytes, err = int64OrDefault(lookup, MaxResponseBytesEnvironment, defaultMaxResponseBytes); err != nil {
 		return Config{}, err
 	}
@@ -275,6 +286,16 @@ func (c Config) Validate() error {
 	}
 	if c.Timeout < minTimeout || c.Timeout > maxTimeout {
 		return &ConfigError{Field: TimeoutEnvironment, Detail: fmt.Sprintf("must be between %s and %s", minTimeout, maxTimeout)}
+	}
+	if c.InvestigationWait != 0 {
+		minWait := time.Duration(contractsv1.ContextFabricWaitBudgetMinSeconds) * time.Second
+		reserve := time.Duration(contractsv1.ContextFabricSynthesisCompositionReserveSeconds) * time.Second
+		if c.InvestigationWait < minWait || c.InvestigationWait%time.Second != 0 {
+			return &ConfigError{Field: InvestigationWaitEnvironment, Detail: fmt.Sprintf("must be a whole number of seconds, at least %s", minWait)}
+		}
+		if c.Timeout < c.InvestigationWait+reserve {
+			return &ConfigError{Field: InvestigationWaitEnvironment, Detail: fmt.Sprintf("must be at least %s below %s (%s)", reserve, TimeoutEnvironment, c.Timeout)}
+		}
 	}
 	if c.MaxResponseBytes < minResponseBytes || c.MaxResponseBytes > maxResponseBytesCeil {
 		return &ConfigError{Field: MaxResponseBytesEnvironment, Detail: fmt.Sprintf("must be between %d and %d bytes", minResponseBytes, maxResponseBytesCeil)}
