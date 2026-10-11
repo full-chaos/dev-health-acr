@@ -130,6 +130,16 @@ func (f *teamRollupFixture) seed(ctx context.Context, direct clickhousedriver.Co
 	item("wi-b1", "repo-b")
 	itemWithStatus("wi-a3", "repo-a", "done")
 	itemWithStatus("wi-b2", "repo-b", "canceled")
+	// Blocked items reach repositories through their linked pull request rows.
+	link := func(id, label string, number uint32) {
+		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoUUID(label), id, number, float32(1), "native", "", at, teamRollupOrg)
+	}
+	link("wi-a1", "repo-a", 1)
+	link("wi-a2", "repo-a", 2)
+	link("wi-a3", "repo-a", 3)
+	link("wi-b1", "repo-b", 1)
+	link("wi-b2", "repo-b", 2)
 	dependency := func(source, target, relationship string) {
 		exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, last_synced) VALUES (?, ?, ?, ?, ?)`,
 			teamRollupOrg, source, target, relationship, at)
