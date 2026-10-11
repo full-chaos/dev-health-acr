@@ -176,12 +176,8 @@ func TestTheSubjectIdentityUnconfirmedBasisOverItsWholeVocabularyDomain(t *testi
 			t.Fatalf("the sentence lacks %q: it must name what happened and how to continue", fragment)
 		}
 	}
-	// UNLIKE organization_scope_unsupported/declared_kind_unmatched: this
-	// sentence DOES carry its own basis token, the continuation_context_
-	// unverifiable convention -- chris's exact accepted wording (dictations
-	// 1998/1999) ends with it.
-	if !strings.Contains(sentence, string(basis)) {
-		t.Fatalf("the sentence must carry its basis token, chris's accepted wording: %q", sentence)
+	if strings.Contains(sentence, string(basis)) || strings.Contains(sentence, "on the basis") {
+		t.Fatalf("the sentence must carry no basis token: %q", sentence)
 	}
 }
 
