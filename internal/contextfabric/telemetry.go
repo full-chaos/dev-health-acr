@@ -858,9 +858,10 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 		"target_kind_mismatch_count", event.TargetKindMismatchCount,
 		"truncated", event.Truncated,
 		"failure_class", SanitizeLogAttr(string(event.FailureClass)),
-		// AttributionSourceCounts (CHAOS-4101): closed-vocabulary source
-		// breakdown for a team-origin expansion, nil for every project-origin
-		// one. Logged unconditionally, nil included, for the SAME reason
+		// AttributionSourceCounts: closed-vocabulary breakdown of the
+		// reaching source of each admitted target (team attribution source,
+		// link tier, or team_repo_ownership; see the field's own doc comment).
+		// Logged unconditionally, nil included, for the SAME reason
 		// every zero count above is: "the filter dropped nothing" and
 		// "nobody ever counted" must stay distinguishable in a log
 		// aggregator.
