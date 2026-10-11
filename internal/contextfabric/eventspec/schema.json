@@ -401,7 +401,6 @@
           "unwired",
           "read_failed",
           "source_absent",
-          "epoch_mismatch",
           "unstorable",
           "undeclared"
         ]
