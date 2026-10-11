@@ -792,7 +792,12 @@ import (
 // deadline, is served as a degraded answer with failure class
 // model_call_not_completed and retry_may_succeed, where it was an error with no
 // stored answer; a candidate saved under an earlier version cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v162"
+//
+// v162 -> v163: a read obligation no producer declares for the member kind of
+// a cohort (health for pull requests or incidents) is judged not_applicable
+// instead of unavailable, so the answer is no longer degraded by it; a
+// candidate saved under v162 holds the degraded account and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v163"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

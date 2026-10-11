@@ -65,7 +65,7 @@ func TestStateMemberRequirementKeepsHealthIndependent(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				frame := cf.DeriveFrameObligations(cf.QuestionFrame{Goals: []cf.InvestigationGoal{goal}, SubjectExpression: cf.SubjectExpression{Kind: cf.SubjectExpressionGroupedMembers, Grouped: &cf.GroupedSetExpression{MemberKind: tc.kind, GroupKind: cf.SubjectProject}}, Temporal: cf.TemporalIntentCurrent, Version: cf.QuestionFrameVersion}, nil)
+				frame := cf.DeriveFrameObligations(cf.QuestionFrame{Goals: []cf.InvestigationGoal{goal}, SubjectExpression: cf.SubjectExpression{Kind: cf.SubjectExpressionDiscoveredKind, Discovered: &cf.DiscoveredSetExpression{MemberKind: tc.kind}}, Temporal: cf.TemporalIntentCurrent, Version: cf.QuestionFrameVersion}, nil)
 				subject := cf.SubjectRef{Kind: tc.kind, CanonicalID: tc.id, Label: tc.id}
 				facts, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, cf.CanonicalFactRequest{Subjects: []cf.SubjectRef{subject}, Question: cf.InterpretedQuestion{TimeContext: cf.TimeContext{Axis: cf.TemporalCurrent}}, Requirements: []cf.FactRequirement{{Kind: tc.fact}}})
 				if err != nil {
@@ -89,13 +89,35 @@ func TestStateMemberRequirementKeepsHealthIndependent(t *testing.T) {
 					}
 					if row.Requirement == "health/member/"+string(tc.kind) {
 						healthRows++
-						if row.Outcome != v1.ContextFabricRequirementUnavailable || row.Stage != v1.ContextFabricOutcomeStagePlanning || row.CauseCoverage != v1.ContextFabricCoverageDetailFactNoDeclaringProducer {
-							t.Errorf("required health=%+v", row)
+						if row.Outcome != v1.ContextFabricRequirementNotApplicable || row.Stage != v1.ContextFabricOutcomeStagePlanning || row.Impact != v1.ContextFabricAnswerImpactNone || row.CauseCoverage != "" {
+							t.Errorf("undeclared health=%+v", row)
 						}
 					}
 				}
-				if result.Completeness.State != v1.ContextFabricAnswerCompletenessDegraded {
-					t.Fatalf("unsupported required health must retain degraded completeness: %+v", result.Completeness)
+				// The ranking requirement of rank_or_survey has no inputs in this
+				// fixture and is unavailable for its own reason; the other goals
+				// have nothing else that can degrade the answer.
+				if goal != cf.GoalRankOrSurvey && result.Completeness.State == v1.ContextFabricAnswerCompletenessDegraded {
+					t.Fatalf("an obligation no producer declares for the member kind must not degrade the answer: %+v", result.Completeness)
+				}
+				disclosed := false
+				for _, requirement := range result.AnswerPlan.Requirements {
+					if requirement.Requirement == "health/member/"+string(tc.kind) && requirement.Unavailable == string(cf.RequirementReasonNoDeclaringProducer) {
+						disclosed = true
+					}
+				}
+				if !disclosed {
+					t.Fatalf("plan must keep the no_declaring_producer token as the disclosure: %+v", result.AnswerPlan.Requirements)
+				}
+				transitions := cf.ReconcileRequirementOutcomes(result)
+				traced := false
+				for _, transition := range transitions {
+					if transition.Requirement == "health/member/"+string(tc.kind) && transition.PredictedReason == cf.RequirementReasonNoDeclaringProducer && transition.AssembledOutcome == v1.ContextFabricRequirementNotApplicable {
+						traced = true
+					}
+				}
+				if !traced {
+					t.Fatalf("trace must disclose the not_applicable transition: %+v", transitions)
 				}
 				if stateRows != 1 || healthRows != 1 {
 					t.Fatalf("state rows=%d health rows=%d outcomes=%+v", stateRows, healthRows, result.Completeness.Outcomes)
