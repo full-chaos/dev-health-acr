@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -199,5 +200,78 @@ func TestAModelFailureWhoseDetailCannotBeFiledIsStillRecognisedAndLogged(t *test
 	line := logs.String()
 	if !strings.Contains(line, "level=ERROR") || !strings.Contains(line, "model failure coverage detail not filed") || !strings.Contains(line, "failure_class=synthesis_rejected") {
 		t.Fatalf("log = %q, want one error line naming the class", line)
+	}
+}
+
+// The validation-stage degrade keeps the coverage the answer already carries,
+// so the failure detail the composer minted is filed onto it, and with no
+// canonical value kept the composed no-facts sentence is carried too.
+func TestTheValidationStageDegradeCarriesTheFailureDetailAndTheNoFactsLimitation(t *testing.T) {
+	engine, _, result, basis := validationStageFixture(t)
+	result.Limitations = []string{"server caveat"}
+	result.Coverage.Details = nil
+
+	out, ok := engine.degradeWorkItemModelBreach(context.Background(), storage.Principal{OrgID: "org-1"}, result, basis)
+
+	if !ok {
+		t.Fatal("not degraded")
+	}
+	details := failureDetailsOf(out.Coverage)
+	if len(details) != 1 || details[0].FailureClass != SynthesisFailureRejected || details[0].RetryHint != contractsv1.ContextFabricRetryUnlikelyToHelp || details[0].DetailID != "cov-01" {
+		t.Fatalf("failure details = %+v, want one rejected/retry_unlikely_to_help with the served id", details)
+	}
+	if !IsSynthesisModelFailureAnswer(out) || !slices.Contains(out.Limitations, contractsv1.ContextFabricSynthesisFailedNoFactsLimitation) {
+		t.Fatalf("limitations = %q, want the no-facts sentence beside the server's own", out.Limitations)
+	}
+	for _, detail := range out.Coverage.Details {
+		if err := detail.Validate(); err != nil {
+			t.Fatalf("detail %+v does not validate: %v", detail, err)
+		}
+	}
+}
+
+// The degrade runs after the entry cap, so it caps again: a coverage already at
+// the bound still ends at the bound with the failure detail kept.
+func TestTheValidationStageDegradeKeepsTheCoverageAtTheBound(t *testing.T) {
+	engine, _, result, basis := validationStageFixture(t)
+	var details []CoverageDetail
+	for i := 0; i < contractsv1.ContextFabricCoverageEntriesMaxCount; i++ {
+		d := syntheticNonDegradingDetail(i)
+		d.DetailID = fmt.Sprintf("cov-%02d", i+1)
+		details = append(details, d)
+	}
+	result.Coverage.Details = details
+
+	out, ok := engine.degradeWorkItemModelBreach(context.Background(), storage.Principal{OrgID: "org-1"}, result, basis)
+
+	if !ok {
+		t.Fatal("not degraded")
+	}
+	if len(out.Coverage.Details) != contractsv1.ContextFabricCoverageEntriesMaxCount || len(failureDetailsOf(out.Coverage)) != 1 {
+		t.Fatalf("details = %d, failure details = %d, want the bound kept with the failure detail", len(out.Coverage.Details), len(failureDetailsOf(out.Coverage)))
+	}
+}
+
+// 100 degrading details fill the bound: the bound still holds, the degrading
+// rows are all kept, and the failure detail yields (the answer is then
+// recognised by its warning).
+func TestTheCoverageCapNeverExceedsTheBoundForAProtectedRow(t *testing.T) {
+	var details []CoverageDetail
+	for i := 0; i < contractsv1.ContextFabricCoverageEntriesMaxCount; i++ {
+		details = append(details, syntheticDegradingDetail(i))
+	}
+	failure, err := newSynthesisModelFailureDetail(SynthesisFailureRejected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := &InvestigationResult{Status: InvestigationDegraded, Warnings: []string{synthesisFailureWarning(SynthesisFailureRejected)}, Coverage: Coverage{Details: append(details, failure)}}
+
+	omitted := capCoverageEntriesToWriteBound(result)
+
+	if len(result.Coverage.Details) != contractsv1.ContextFabricCoverageEntriesMaxCount || omitted != 1 {
+		t.Fatalf("details = %d omitted = %d, want the bound with the one protected row omitted", len(result.Coverage.Details), omitted)
+	}
+	if !IsSynthesisModelFailureAnswer(*result) {
+		t.Fatal("the answer is no longer recognised once the failure detail yielded")
 	}
 }

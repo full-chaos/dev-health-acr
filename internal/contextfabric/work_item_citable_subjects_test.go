@@ -98,7 +98,7 @@ func (f fixedDegradedComposer) ComposeDegraded(_ context.Context, principal stor
 		return InvestigationResult{}, err
 	}
 	failureDetail.DetailID = "cov-01"
-	return InvestigationResult{Status: InvestigationDegraded, Coverage: Coverage{Partial: true, Sources: []SourceObservation{}, DegradedReasons: []string{}, Details: []CoverageDetail{failureDetail}}, DirectJudgment: "degraded", CurrentState: synthesisFailureCurrentState, DeterministicAnswer: "degraded", StrongestPressures: []string{}, EvidenceRefIDs: []string{}, Warnings: []string{synthesisFailureWarning(failure.Class)}}, nil
+	return InvestigationResult{Status: InvestigationDegraded, Limitations: []string{contractsv1.ContextFabricSynthesisFailedNoFactsLimitation}, Coverage: Coverage{Partial: true, Sources: []SourceObservation{}, DegradedReasons: []string{}, Details: []CoverageDetail{failureDetail}}, DirectJudgment: "degraded", CurrentState: synthesisFailureCurrentState, DeterministicAnswer: "degraded", StrongestPressures: []string{}, EvidenceRefIDs: []string{}, Warnings: []string{synthesisFailureWarning(failure.Class)}}, nil
 }
 
 func validationStageFixture(t *testing.T) (*Engine, *recordingTelemetry, InvestigationResult, *workItemDegradeBasis) {
@@ -122,8 +122,8 @@ func TestTheValidationStageDegradeServesTheComposedFactsOnlyAnswer(t *testing.T)
 	if len(out.StrongestPressures) != 0 || out.DirectJudgment != "degraded" || out.DeterministicAnswer != "degraded" || out.CurrentState != synthesisFailureCurrentState {
 		t.Fatalf("model-authored text survived: pressures %v judgment %q state %q", out.StrongestPressures, out.DirectJudgment, out.CurrentState)
 	}
-	if !slices.Equal(out.Limitations, []string{"server caveat"}) {
-		t.Fatalf("limitations %v: want the server's only", out.Limitations)
+	if !slices.Equal(out.Limitations, []string{"server caveat", contractsv1.ContextFabricSynthesisFailedNoFactsLimitation}) {
+		t.Fatalf("limitations %v: want the server's own and the no-facts sentence", out.Limitations)
 	}
 	if len(telemetry.synthesisModelFailures) != 1 || telemetry.synthesisModelFailures[0].Rule != string(WorkItemRuleDriverSubjectOutsideMembers) || telemetry.synthesisModelFailures[0].Stage != "validation" {
 		t.Fatalf("validation-stage event %+v", telemetry.synthesisModelFailures)
@@ -138,7 +138,7 @@ func TestTheValidationStageDegradeKeepsTheServerDisclosuresAndMarksCoverageParti
 	if !ok {
 		t.Fatal("not degraded")
 	}
-	if !slices.Equal(out.Limitations, []string{contractsv1.ContextFabricSynthesisInputBoundedLimitation}) {
+	if !slices.Equal(out.Limitations, []string{contractsv1.ContextFabricSynthesisInputBoundedLimitation, contractsv1.ContextFabricSynthesisFailedNoFactsLimitation}) {
 		t.Fatalf("limitations %v: want the bounded-input disclosure kept and the model caveat removed", out.Limitations)
 	}
 	if !out.Coverage.Partial {
