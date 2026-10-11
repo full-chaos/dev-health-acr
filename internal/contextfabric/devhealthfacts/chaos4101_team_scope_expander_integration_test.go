@@ -105,21 +105,21 @@ func seedChaos4101TeamFixture(t *testing.T, ctx context.Context, direct interfac
 	mustSeed("repo B pull request", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
 		chaos4101RepoBID, chaos4099OrgID, uint32(3), "Repo B PR", "open", at, at, "feat/b", "")
 
-	// The entity tree: the team directly owns repo A, and owns a project
-	// whose issues reach repo B through a linked pull request (the issue's
-	// own repository column deliberately names repo A) and an orphaned
-	// repository; one issue of the project has no link row at all.
+	// The entity tree: the team owns a project whose issues reach repo A and
+	// repo B through linked pull requests (the issues' own repository column
+	// deliberately names repo A for both) and an orphaned repository; one
+	// issue of the project has no link row at all.
 	const projectID = "P4101"
 	mustSeed("project", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		projectID, chaos4099OrgID, "Platform project", "", "linear", "", "", uint8(1), at)
-	mustSeed("team owns repo A", `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		chaos4099OrgID, "github", chaos4101TeamID, chaos4101RepoAID, chaos4101RepoASlug, "exact", "native", uint8(1), uint16(1), int32(1), at.Add(-time.Hour), nil, at)
 	mustSeed("team owns project", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
 		chaos4099OrgID, "linear", chaos4101TeamID, projectID, nil, "native", at.Add(-time.Hour), nil, at)
 	projectIssue := func(id string) {
 		mustSeed("project issue "+id, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, chaos4101RepoAID, chaos4099OrgID, "issue "+id, "open", "", "", "linear", projectID, at)
 	}
+	projectIssue("wi-p-linked-a")
+	seedIssueLink(t, ctx, direct, chaos4099OrgID, "wi-p-linked-a", chaos4101RepoAID, 1, "native", at)
 	projectIssue("wi-p-linked")
 	seedIssueLink(t, ctx, direct, chaos4099OrgID, "wi-p-linked", chaos4101RepoBID, 3, "explicit_text", at)
 	projectIssue("wi-p-orphan-link")
@@ -143,6 +143,10 @@ func TestScopeExpander_TeamToRepository_BasisVariesByWinningSourceAndSentinelsEx
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
 	at := time.Now().UTC()
 	seedChaos4101TeamFixture(t, ctx, direct, at)
+	if err := direct.Exec(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		chaos4099OrgID, "github", chaos4101TeamID, chaos4101RepoAID, chaos4101RepoASlug, "exact", "native", uint8(1), uint16(1), int32(1), at.Add(-time.Hour), nil, at); err != nil {
+		t.Fatalf("seed team repository ownership: %v", err)
+	}
 
 	expander := devhealthfacts.NewScopeExpander(query)
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
@@ -267,8 +271,8 @@ func TestScopeExpander_TeamToPullRequest_InheritsRepositoryBasisAndDropsUnauthor
 		if target.CanonicalID == "pull_request:"+chaos4101RepoBID+":3" {
 			t.Fatalf("targets = %+v, the unauthorized repository's pull request was admitted", result.Targets)
 		}
-		if got := result.TargetBasis[contextfabric.FactSubjectKey(target)]; got != contextfabric.FactScopeBasisDirect {
-			t.Fatalf("target %+v basis = %q, want direct (inherited from repo A, which the team owns)", target, got)
+		if got := result.TargetBasis[contextfabric.FactSubjectKey(target)]; got != contextfabric.FactScopeBasisActivityProxy {
+			t.Fatalf("target %+v basis = %q, want activity_proxy (inherited from repo A, reached through an owned project's linked pull request)", target, got)
 		}
 	}
 	if result.Counts.AuthorizationDroppedCount != 1 {
@@ -310,11 +314,11 @@ func TestScopeExpander_TeamToPullRequestReview_InheritsRepositoryBasisAndDropsUn
 		t.Fatalf("targets = %+v, want repo A's one review only", result.Targets)
 	}
 	target := result.Targets[0]
-	if got := result.TargetBasis[contextfabric.FactSubjectKey(target)]; got != contextfabric.FactScopeBasisDirect {
-		t.Fatalf("target %+v basis = %q, want direct (inherited from repo A, which the team owns)", target, got)
+	if got := result.TargetBasis[contextfabric.FactSubjectKey(target)]; got != contextfabric.FactScopeBasisActivityProxy {
+		t.Fatalf("target %+v basis = %q, want activity_proxy (inherited from repo A, reached through an owned project's linked pull request)", target, got)
 	}
-	if got := result.TargetAttributionSource[contextfabric.FactSubjectKey(target)]; got != "team_repo_ownership" {
-		t.Fatalf("TargetAttributionSource[review] = %q, want team_repo_ownership (repo A's reaching source)", got)
+	if got := result.TargetAttributionSource[contextfabric.FactSubjectKey(target)]; got != "native" {
+		t.Fatalf("TargetAttributionSource[review] = %q, want native (repo A's link tier)", got)
 	}
 	if result.Counts.AuthorizationDroppedCount != 1 {
 		t.Fatalf("AuthorizationDroppedCount = %d, want 1 (repo B, dropped before its reviews were ever queried)", result.Counts.AuthorizationDroppedCount)

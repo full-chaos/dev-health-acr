@@ -609,6 +609,7 @@ func TestScopeExpander_ProjectToRepository_AmbiguousJoinKeyIsOmittedNotGuessed(t
 		"gitlab:acme/api#45", unambiguousRepoID, chaos4099OrgID, "GitLab issue (own-id arm)", "open", "", "", chaos4099GitLabProjectID, at); err != nil {
 		t.Fatalf("seed own-id-arm work item: %v", err)
 	}
+	seedIssueLink(t, ctx, direct, chaos4099OrgID, "gitlab:acme/api#45", unambiguousRepoID, 1, "native", at)
 
 	// The second, unrequested project: its own id collides with the
 	// requested project's project_key ("acme/api"). This poisons that
