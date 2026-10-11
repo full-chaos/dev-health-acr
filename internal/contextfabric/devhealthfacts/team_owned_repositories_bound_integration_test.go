@@ -1,9 +1,12 @@
 package devhealthfacts_test
 
-// The ownership read of a team rollup is bounded at 2000 repositories,
-// inclusive: it reads one row past the bound and rejects only on overflow.
-// Executed against a real ClickHouse through the real deployments provider.
-// The container is mandatory: a missing one fails the test, never skips it.
+// The ownership read of a team rollup runs on the production ClickHouse client,
+// whose max_result_rows is 1000 with result_overflow_mode throw. That cap, not
+// the 2000 constant in team_rollup.go, is what a caller meets: a team owning
+// exactly 1000 repositories is served in full; one owning 1001 gets a read
+// failure (never a partial list). Executed against a real ClickHouse through the
+// real deployments provider. The container is mandatory: a missing one fails
+// the test, never skips it.
 
 import (
 	"context"
@@ -19,11 +22,11 @@ import (
 )
 
 const (
-	ownershipBoundOrg  = "6d1f0a52-37c4-4b8e-a9d0-5e2c7b9f1a43"
-	ownershipBoundRows = 2000
+	ownershipBoundOrg = "6d1f0a52-37c4-4b8e-a9d0-5e2c7b9f1a43"
+	clientRowCap      = 1000
 )
 
-func TestTeamOwnershipReadBoundAgainstRealClickHouse(t *testing.T) {
+func TestTeamOwnershipReadMeetsTheClientRowCapOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	for _, statement := range devhealthschema.DDL("repos", "team_repo_ownership", "deploy_metrics_daily") {
@@ -46,8 +49,8 @@ func TestTeamOwnershipReadBoundAgainstRealClickHouse(t *testing.T) {
 			}
 		}
 	}
-	seed("team-at-bound", "at", 0, ownershipBoundRows)
-	seed("team-over-bound", "over", ownershipBoundRows, ownershipBoundRows+1)
+	seed("team-at-bound", "at", 0, clientRowCap)
+	seed("team-over-bound", "over", clientRowCap, clientRowCap+1)
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactDeployments)
 	read := func(team string) (contextfabric.FactProviderResult, error) {
@@ -57,18 +60,18 @@ func TestTeamOwnershipReadBoundAgainstRealClickHouse(t *testing.T) {
 		})
 	}
 
-	t.Run("exactly the bound is served", func(t *testing.T) {
+	t.Run("exactly the client row cap is served in full", func(t *testing.T) {
 		result, err := read("team-at-bound")
 		if err != nil {
-			t.Fatalf("a team owning exactly %d repositories must be served, got %v", ownershipBoundRows, err)
+			t.Fatalf("a team owning exactly %d repositories must be served, got %v", clientRowCap, err)
 		}
-		wantInt(t, factFor(t, result, teamSubject("team-at-bound")).Fields, "owned_repository_count", ownershipBoundRows)
+		wantInt(t, factFor(t, result, teamSubject("team-at-bound")).Fields, "owned_repository_count", clientRowCap)
 	})
 
-	t.Run("one past the bound is rejected with the disclosed reason", func(t *testing.T) {
-		_, err := read("team-over-bound")
+	t.Run("one past the client row cap is a read failure naming the ClickHouse limit", func(t *testing.T) {
+		result, err := read("team-over-bound")
 		if err == nil {
-			t.Fatalf("a team owning %d repositories must be rejected, got a served result", ownershipBoundRows+1)
+			t.Fatalf("a team owning %d repositories must be rejected, got a served result", clientRowCap+1)
 		}
 		var failure *contextfabric.FactReadFailure
 		if !errors.As(err, &failure) {
@@ -80,8 +83,13 @@ func TestTeamOwnershipReadBoundAgainstRealClickHouse(t *testing.T) {
 		if !strings.Contains(failure.Reason, "query team deployments failed") {
 			t.Fatalf("Reason = %q", failure.Reason)
 		}
-		if got := readFailureCause(err); got != "query team owned repositories exceeded its bound" {
-			t.Fatalf("Cause = %q, want the overflow reason", got)
+		// deployments.go turns the readTeamRollup error into readFailure
+		// (shared.go); the cause carries the ClickHouse throw (code 396).
+		if got := readFailureCause(err); !strings.Contains(got, "code: 396") || !strings.Contains(got, "Limit for result exceeded") {
+			t.Fatalf("Cause = %q, want the ClickHouse result-rows limit (code 396)", got)
+		}
+		if len(result.Facts) != 0 {
+			t.Fatalf("a failed read served facts: %#v", result.Facts)
 		}
 	})
 }
