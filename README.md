@@ -71,6 +71,21 @@ MCP tool contract (`contracts/mcp/tools.v1.json`) and its wire schemas:
 - `mcp_investigate_question_response.v1`
 - `mcp_investigation_result_request.v1`
 - `mcp_investigation_result_response.v1`
+- `mcp_investigate_with_interpretation_request.v1` (answers with `mcp_investigate_question_response.v1`)
+- `mcp_read_facts_request.v1`
+- `mcp_read_facts_response.v1`
+- `mcp_read_relationships_request.v1`
+- `mcp_read_relationships_response.v1`
+- `mcp_data_catalog_request.v1`
+- `mcp_data_catalog_response.v1`
+- `mcp_find_subjects_request.v1`
+- `mcp_find_subjects_response.v1`
+- `mcp_run_operation_request.v1`
+- `mcp_run_operation_response.v1`
+- `mcp_graphql_query_request.v1`
+- `mcp_graphql_query_response.v1`
+- `mcp_record_episode_request.v1`
+- `mcp_record_episode_response.v1`
 
 JSON Schema is the wire-contract source of truth. Go DTOs, OpenAPI, MCP definitions, web types, examples, and compatibility tests must remain aligned. Contract checks are Go-only and require no Python runtime.
 

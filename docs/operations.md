@@ -629,6 +629,36 @@ tree walk reads this edge (and no longer `RELATES_TO`), so a project,
 repository or team walk over an organization that has not been rebuilt finds
 no link.
 
+**A rebuild is likewise REQUIRED for each later source-version step** up to the
+current `ClickHouseSourceVersion` v9 and `TeamsProjectsSourceVersion` v21. Each
+one refuses the incremental tick with `ErrProjectionSourceVersionChanged` until
+`acr-projector rebuild --org <organization-id>` runs per projected organization,
+because the affected rows carry an `updated_at` already behind the checkpoint
+watermark:
+
+- `ClickHouseSourceVersion` v8 → v9
+  (`internal/contextfabric/devhealthsource/clickhouse.go`): the validity start
+  of a repository is its `created_at` only while that is earlier than
+  `last_synced`, or the earliest pull request or work item created for it, and
+  absent otherwise (`repos.created_at` is rewritten to the sync stamp on every
+  sync). Repositories projected before v9 hold a re-stamped start.
+- `TeamsProjectsSourceVersion` v13 → v14: a team owning more than 200
+  repositories is no longer quarantined (the entity authorization bound is
+  5000), so its `team_repo_ownership` edges project.
+- v15 → v16: referenced team and project endpoint stubs no longer inherit a
+  relationship's one-repository authorization scope; stubs created by an earlier
+  build keep the old scope until the rebuild.
+- v16 → v17: work item → team and project → team edges cite `.v2` evidence refs
+  (every component escaped) instead of the retired bare-`:` joins.
+- v17 → v18: a duplicate project-membership ADD retracts the interval it would
+  have opened; earlier builds left both intervals open.
+- v18 → v19: work item → team edges include the co-owner attribution rows
+  (`is_primary = 2`), one edge per team; edges projected before v19 lack the
+  co-owner teams.
+- v19 → v20: an inactive team (`teams.is_active = 0`) is not an edge end and not
+  an identity claimant; edges projected before v20 still point at the retired
+  team id.
+
 **Projection cursor space (CHAOS-7263).** The shared projection cursor
 (`devhealthsource`) is positioned on each row's INGEST time (the `last_synced`
 / `computed_at` stamp ops writes when it normalizes the row), not on the row's
@@ -723,6 +753,27 @@ window once (idempotent). Two tables still key on their old column until ops
 adds an ingest stamp: `team_project_ownership` and the
 `project_membership_presence` view (cursor-unsound for late-stamped rows, the
 same hazard as before).
+
+**Team ownership reconcile pass.** A max-watermark cannot see a hard delete: when
+the newest row a derived team value was built from disappears, the watermark
+falls behind the saved cursor and the row is never re-read. Once the source is
+caught up, and at most once per hour per scope (`devhealthsource/reconcile.go`),
+it re-derives the current team rows in key order and emits them without moving
+the cursor position; the batch carries an acknowledgment that the worker
+persists only after the backend applied it, so an unapplied page is read again.
+Pass state lives in the process, so a restart starts one pass on the next
+caught-up call. Each page logs `team ownership reconcile` at Info
+(`teams_re_derived`, `pass_complete`, `period`).
+
+**Column-arm project edge retraction.** A work item has at most one open
+column-arm `BELONGS_TO_PROJECT` edge: the sink keeps only the edge the current
+column row asserts. Two cases retract every open column-arm edge of the work
+item, whatever project it names, with one tombstone of kind
+`column_project_edges` (the work item's canonical id): the column row's project
+resolves to nothing or to several (reason `column_project_unresolved`), and the
+work item also has transition history, which supersedes the column row (reason
+`superseded_by_transition_history`). Pull requests are not covered, because a
+pull request can belong to several boards.
 
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
@@ -1098,7 +1149,17 @@ plus `work_unit_membership` when a membership run is recorded), never from the
 server's cache state, and grow with the organization's work units. The
 repository and team investment mix reads the membership scope once per
 (organization, run id) and remembers it for at most five minutes; the investment
-table is read once per request. Every reader statement logs
+table is read once per request. That cold load runs in the investment provider's
+prerequisite step, before the capability's own clock starts, under its own
+30-second timeout, and every statement of the request reuses the scope it
+resolved. The first cold load per organization logs
+`investment membership scope cold load` at Info (`duration_ms`, `units`, and
+`outcome` = `empty` or `overflow` when the set could not be remembered: a run
+over 100000 units or an empty set is never remembered). When the run marker
+cannot be read or the load fails or times out, the read falls back to the scope
+subqueries (costlier, still answers) and logs
+`devhealthfacts.membership_scope_fallback` at Warn with `reason`
+(`run_marker_read_failed`, `load_failed` or `load_timeout`). Every reader statement logs
 `devhealthfacts.read_stats` at Info (`reader`, `read_rows`, `read_bytes`,
 `elapsed_ms`, `outcome` = `ok`, `budget_exceeded` or `error`); alert on
 `read_bytes` approaching the limit rather than on the refusal. A statement over
@@ -1358,12 +1419,17 @@ Every failure was a clean, correctly classified rejection, never a wrong
 answer: value-level closure rejects what it cannot bind to a canonical fact.
 So the failure mode is availability, not correctness — but at 2 in 33 the
 endpoint is unusable. As of CHAOS-3784, a synthesis-side claim-binding
-rejection like this one is `422 synthesis_rejected` (no `violated_bound`,
-since claim-binding is a business rule, not a length/count bound); a
-provider/schema-level failure keeps the pre-existing `502
-upstream_invalid_output` code (unchanged). Earlier measurements in this
-section predate that split and describe what was then a single opaque `502
-upstream_invalid_output` for both.
+rejection like this one was `422 synthesis_rejected` (no `violated_bound`,
+since claim-binding is a business rule, not a length/count bound) and a
+provider/schema-level failure `502 upstream_invalid_output`. Today a failed
+model synthesis call, and a work-item answer whose model draft breaks a
+work-item tuple rule, are served as a degraded `200` answer instead: the facts,
+paths and coverage that were read, no model-written content, a fixed warning,
+and a `synthesis_model_failed` coverage detail naming the failure class and a
+retry hint (`context fabric synthesis model call failed, degraded answer
+served` is logged). `422 synthesis_rejected` remains for a rejected
+client-supplied synthesis. Earlier measurements in this section predate both changes and
+describe what was then a single opaque `502 upstream_invalid_output`.
 
 **The fallback is required, not optional.** Invalid output is deliberately
 **not** retried (`genkitruntime` fails closed on a schema-shaped failure
@@ -1378,10 +1444,11 @@ rate is the signal to promote the fallback to primary.
 
 The fallback raises the answer rate; it does not make it 1.0. One of those
 17 attempts still failed, so a caller must treat `422 interpretation_rejected`,
-`422 synthesis_rejected`, and `502 upstream_invalid_output` as expected,
+`422 synthesis_rejected`, `502 upstream_invalid_output` and a degraded answer
+(no model-written text, `synthesis_model_failed` in coverage) as expected,
 retryable outcomes even with the fallback configured — do not build a
-client that assumes an investigation always returns an answer on the first
-call.
+client that assumes an investigation always returns a complete answer on the
+first call.
 
 #### Measured model matrix
 
@@ -1829,8 +1896,11 @@ OTLP/gRPC when `OTEL_ENABLED=true`:
 
 What is exported: one server span per HTTP request, named by the matched
 route (never the raw path; `/healthz`, `/readyz`, `/livez` are not traced),
-the `http.server.*` metrics, one `projection tick` span per projector tick,
-and every structured log line the process writes, at the same level and with
+the `http.server.*` metrics, the `acr_*` instruments (answers, budget
+refusals, answer reuse, requirement outcomes, fact read aborts, investigation
+and MCP tool latency; the metric table, labels and the `acr.*` span attributes
+are in [observability](observability.md#metric-mapping)), one `projection tick`
+span per projector tick, and every structured log line the process writes, at the same level and with
 the same fields, correlated to the active span. The STDIO transport of
 `acr-mcp` never exports. Each process writes one `acr otel export` line at
 start with `state` `enabled` or `disabled`, so a dark backend can be told
