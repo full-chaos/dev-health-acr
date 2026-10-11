@@ -1,0 +1,13 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR031",
+  "error": {
+    "code": "feature_not_enabled",
+    "message": "Investigations on the service model are not enabled for this organization",
+    "http_status": 403,
+    "retryable": false,
+    "details": {
+      "reason": "service_model_not_entitled"
+    }
+  }
+}
