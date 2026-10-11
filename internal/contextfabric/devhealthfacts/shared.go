@@ -696,6 +696,11 @@ import (
 // A candidate saved under v136 carries the legacy breakdown (and a mix merged onto it) and
 // must not be reused.
 //
+// v137 -> v138: the first project investment read after a pod start loads the
+// membership scope before the capability clock starts, so it serves the full
+// answer, not a partial "canonical fact capability timed out". A candidate saved
+// under v137 may hold that partial answer and must not be reused.
+//
 // v139: a degraded answer for a failed model call serves the canonical values
 // it read as claims; a candidate saved under an earlier version may hold one
 // with none.
