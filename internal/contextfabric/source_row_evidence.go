@@ -52,6 +52,12 @@ const (
 	// caller may read, and every other subject the row names must be
 	// readable to the caller too (the read_relationships edge gate).
 	SourceRowRouteEncoded SourceRowRoute = "encoded"
+	// SourceRowRouteProjectTeam: the id is the project-team.v2 grammar, an
+	// organization-level ownership group read through the projector's own
+	// group statement. It carries no repository: only a caller whose
+	// repository list is "*" (unrestricted or "*") is served, and every
+	// other caller stays on the persisted record.
+	SourceRowRouteProjectTeam SourceRowRoute = "project_team"
 )
 
 // SourceRowPlan is the route of one entity type and the statement that reads
@@ -76,8 +82,8 @@ type SourceRowPlan struct {
 //     persisted record only, forever; no producer mints them any more
 //     (contractsv1.RetiredEvidenceEntityType), and their ".v2" successors
 //     carry an injective grammar (internal/contextfabric/evidenceref).
-//   - project-team.v2: minted, but its source-row read (the projector's
-//     ownership group, unrestricted callers only) is a separate change.
+//   - project-team.v2 is NOT on the record: it reads the projector's
+//     ownership group (SourceRowRouteProjectTeam), unrestricted callers only.
 //   - commit, commit-file, graph, hotspot, complexity, ai-run, ai-artifact,
 //     review-outcome: no Context Fabric producer mints them. They occur only
 //     as packet-catalog locators inside ev2 handles, so an acr:v1 ref of
@@ -99,7 +105,7 @@ var sourceRowPlans = map[contractsv1.ContextFabricEvidenceEntityType]SourceRowPl
 	contractsv1.ContextFabricEvidenceEntityOrganization:         {Route: SourceRowRouteRecord},
 	contractsv1.ContextFabricEvidenceEntityProject:              {Route: SourceRowRouteOwnership, Query: "projects.v1"},
 	contractsv1.ContextFabricEvidenceEntityProjectTeam:          {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityProjectTeamV2:        {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityProjectTeamV2:        {Route: SourceRowRouteProjectTeam, Query: "project_teams.v2"},
 	contractsv1.ContextFabricEvidenceEntityPullRequest:          {Route: SourceRowRouteRepository, Query: "pull_requests.v1"},
 	contractsv1.ContextFabricEvidenceEntityRepository:           {Route: SourceRowRouteRepository, Query: "repository_freshness.v1"},
 	contractsv1.ContextFabricEvidenceEntityReview:               {Route: SourceRowRouteRepository, Query: "pull_request_reviews.v1"},

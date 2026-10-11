@@ -113,10 +113,12 @@ func seed7252(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 			('edge-1', '%[1]s', 'dep-1', 'INC-1', '%[2]s', 0.4, 'heuristic', 'inferred link', %[3]s, %[3]s),
 			('edge-u', '%[1]s', 'dep:2', 'INC-U', '%[2]s', 0.9, 'native', 'unmapped incident', %[3]s, %[3]s),
 			('edge-s', '%[1]s', 'dep-3', 'INC-S', '%[2]s', 0.9, 'native', 'secret incident', %[3]s, %[3]s)`, org, grantedID, now7252),
-		// One project -> team ownership (project-team.v2 is minted; its
-		// source-row read is a separate change).
-		fmt.Sprintf(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES ('%[1]s:gitlab:71133891', '%[1]s', 'gitlab', 'full.chaos/chaos-ops', 'chaos-ops', 1, 'active', 'https://gitlab.com/full.chaos/chaos-ops', %[2]s)`, org, now7252),
-		fmt.Sprintf(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, updated_at) VALUES ('%[1]s', 'gitlab', 'gl:full.chaos', 'full.chaos/chaos-ops', 'full.chaos/chaos-ops', 'native', %[2]s, %[2]s)`, org, now7252),
+		// One project -> team ownership, and a second project whose only
+		// ownership row names it by id and the first project by key: that
+		// group has no row that can assert, so the projector retracts it and
+		// no ref is minted or readable.
+		fmt.Sprintf(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES ('%[1]s:gitlab:71133891', '%[1]s', 'gitlab', 'full.chaos/chaos-ops', 'chaos-ops', 1, 'active', 'https://gitlab.com/full.chaos/chaos-ops', %[2]s), ('%[1]s:gitlab:2', '%[1]s', 'gitlab', 'full.chaos/other', 'other', 1, 'active', 'https://gitlab.com/full.chaos/other', %[2]s)`, org, now7252),
+		fmt.Sprintf(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, updated_at) VALUES ('%[1]s', 'gitlab', 'gl:full.chaos', 'full.chaos/chaos-ops', 'full.chaos/chaos-ops', 'native', %[2]s, %[2]s), ('%[1]s', 'gitlab', 'gl:full.chaos', '%[1]s:gitlab:2', 'full.chaos/chaos-ops', 'manual', %[2]s, %[2]s)`, org, now7252),
 	} {
 		exec(t, ctx, direct, statement)
 	}
@@ -324,7 +326,11 @@ func TestEncodedRefsFromTheRealProducersExpandToTheirRow(t *testing.T) {
 	// served row equals the Go-minted one -- and only to a caller who may
 	// read every subject that row names.
 	recorder := &recordingClient{inner: query}
-	resolve, err := sourcerow.New(contextpacket.NewCatalogClickHouseRows(recorder), contextpacket.NewEvidenceResolver(contextpacket.EvidenceResolverOptions{}), nil)
+	catalogRows, err := contextpacket.NewCatalogClickHouseRows(recorder).WithOrganizationRowQuery(devhealthsource.ProjectTeamSourceRowQuery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolve, err := sourcerow.New(catalogRows, contextpacket.NewEvidenceResolver(contextpacket.EvidenceResolverOptions{}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,16 +402,7 @@ func TestEncodedRefsFromTheRealProducersExpandToTheirRow(t *testing.T) {
 		}
 	}
 
-	// The project-team.v2 ref the projector minted is read as its ownership
-	// group by an unrestricted caller; a restricted caller stays on the record.
-	_, projectTeamID := splitRef(projectTeam)
-	served, projectTeamDecision := resolve.ResolveSourceRow(ctx, orgWide, string(contractsv1.ContextFabricEvidenceEntityProjectTeamV2), projectTeamID)
-	if projectTeamDecision.Reason != contextfabric.SourceRowServed || served.Evidence.EvidenceRefID != projectTeam {
-		t.Errorf("project-team.v2 unrestricted: %+v", projectTeamDecision)
-	}
-	if _, decision := resolve.ResolveSourceRow(ctx, granted, string(contractsv1.ContextFabricEvidenceEntityProjectTeamV2), projectTeamID); decision.Reason != contextfabric.SourceRowKindOnRecord {
-		t.Errorf("project-team.v2 restricted: %+v", decision)
-	}
+	checkProjectTeamRefs(t, ctx, resolve, minted, orgWide, granted)
 
 	// The retired refs of the same rows never reach a source read.
 	for _, retired := range []struct {
@@ -421,6 +418,41 @@ func TestEncodedRefsFromTheRealProducersExpandToTheirRow(t *testing.T) {
 		if _, decision := resolve.ResolveSourceRow(ctx, orgWide, string(retired.kind), retired.id); decision.Reason != contextfabric.SourceRowKindOnRecord {
 			t.Errorf("%s %q: %+v", retired.kind, retired.id, decision)
 		}
+	}
+}
+
+// The project-team.v2 ref the projector minted is read through the
+// projector's own group statement: the SQL-rendered id equals the Go-minted
+// one, an unrestricted caller is served, a restricted one stays on the record,
+// and the group the projector retracts (no assertable row) is minted by no
+// one and readable by no one.
+func checkProjectTeamRefs(t *testing.T, ctx context.Context, resolve *sourcerow.Resolver, minted map[string]bool, orgWide, granted storage.Principal) {
+	t.Helper()
+	kind := contractsv1.ContextFabricEvidenceEntityProjectTeamV2
+	projectTeam, _ := evidenceref.Mint(kind, "gitlab", integrationOrg+":gitlab:71133891", "gl:full.chaos", "native")
+	retracted, _ := evidenceref.Mint(kind, "gitlab", integrationOrg+":gitlab:2", "gl:full.chaos", "manual")
+	if !minted[projectTeam] || minted[retracted] {
+		t.Fatalf("projector minted the live group %v and the retracted group %v", minted[projectTeam], minted[retracted])
+	}
+	_, id := splitRef(projectTeam)
+	expanded, decision := resolve.ResolveSourceRow(ctx, orgWide, string(kind), id)
+	if decision.Reason != contextfabric.SourceRowServed || decision.Rows != 1 || expanded.Evidence.EvidenceRefID != projectTeam || expanded.Structured["project_team_id"] != id {
+		t.Fatalf("unrestricted: %+v, expansion %+v %v", decision, expanded.Evidence, expanded.Structured)
+	}
+	if err := expanded.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, decision := resolve.ResolveSourceRow(ctx, granted, string(kind), id); decision.Reason != contextfabric.SourceRowKindOnRecord {
+		t.Fatalf("restricted: %+v", decision)
+	}
+	_, retractedID := splitRef(retracted)
+	if _, decision := resolve.ResolveSourceRow(ctx, orgWide, string(kind), retractedID); decision.Reason != contextfabric.SourceRowNoRow || decision.Rows != 0 {
+		t.Fatalf("retracted group: %+v", decision)
+	}
+	other, _ := evidenceref.Mint(kind, "gitlab", integrationOrg+":gitlab:71133891", "gl:full.chaos", "manual")
+	_, otherID := splitRef(other)
+	if _, decision := resolve.ResolveSourceRow(ctx, orgWide, string(kind), otherID); decision.Reason != contextfabric.SourceRowNoRow {
+		t.Fatalf("a source the group has no row for: %+v", decision)
 	}
 }
 

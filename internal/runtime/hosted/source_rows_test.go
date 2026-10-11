@@ -3,12 +3,16 @@ package hosted
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/sourcerow"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -97,5 +101,37 @@ func TestBuildSourceRowsComposesTheRepoLessAdmitter(t *testing.T) {
 	resolver, ok := buildSourceRows(noQueryClient{}, nil, nil, nil, nil).(*sourcerow.Resolver)
 	if !ok || !resolver.HasRepoLessAdmitter() {
 		t.Fatalf("buildSourceRows composed %T without the repo-less admitter", resolver)
+	}
+}
+
+type recordingClient struct{ statements []string }
+
+func (c *recordingClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	c.statements = append(c.statements, statement)
+	return nil, errors.New("recorded, not executed")
+}
+
+// The production composition (buildSourceRows) reads a project-team.v2 ref
+// through the projector's own ownership group statement, for a caller whose
+// repository list is "*", and reads nothing for a restricted caller.
+func TestBuildSourceRowsReadsProjectTeamThroughTheProjectorsGroup(t *testing.T) {
+	ref, ok := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityProjectTeamV2, "gitlab", "p1", "t1", "native")
+	if !ok {
+		t.Fatal("mint")
+	}
+	id := strings.TrimPrefix(ref, contractsv1.ContextFabricEvidenceRefPrefix+string(contractsv1.ContextFabricEvidenceEntityProjectTeamV2)+":")
+	client := &recordingClient{}
+	resolver := buildSourceRows(client, nil, nil, nil, nil)
+	_, decision := resolver.ResolveSourceRow(context.Background(), storage.Principal{OrgID: "org_1"}, string(contractsv1.ContextFabricEvidenceEntityProjectTeamV2), id)
+	if decision.Reason != contextfabric.SourceRowUnavailable || len(client.statements) != 1 {
+		t.Fatalf("unrestricted: %+v, statements %d", decision, len(client.statements))
+	}
+	if want := devhealthsource.ProjectTeamSourceRowQuery().Statement; !strings.Contains(client.statements[0], want) {
+		t.Fatalf("statement is not the projector's group read:\n%s", client.statements[0])
+	}
+	client.statements = nil
+	_, decision = resolver.ResolveSourceRow(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/api"}}, string(contractsv1.ContextFabricEvidenceEntityProjectTeamV2), id)
+	if decision.Reason != contextfabric.SourceRowKindOnRecord || len(client.statements) != 0 {
+		t.Fatalf("restricted: %+v, statements %d", decision, len(client.statements))
 	}
 }

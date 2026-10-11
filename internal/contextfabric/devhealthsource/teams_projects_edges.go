@@ -1523,6 +1523,16 @@ func projectTeamsStatementFor(cursor cursorState, ingest bool) string {
 	if ingest {
 		cursorWatermark = projectTeamsIngestWatermark
 	}
+	return projectTeamsGroupSQL(ingest) + havingSincePredicate(cursor, cursorWatermark, projectTeamsRowKey) + orderBy(cursorWatermark, projectTeamsRowKey)
+}
+
+// projectTeamsGroupSQL is the projector's ownership GROUP statement up to and
+// including its GROUP BY: one row per (project, team, source) group, with no
+// pagination. It is the ONE spelling of that group: the projector pages it
+// (projectTeamsStatementFor) and the project-team source-row read selects one
+// group from it (ProjectTeamSourceRowStatement), so the two cannot disagree
+// on which groups exist.
+func projectTeamsGroupSQL(ingest bool) string {
 	const identityPartition = " OVER (PARTITION BY provider, ownership_ref, ownership_key, retraction_only)"
 	// The provider-wide project stamp widens WHICH groups a cursor revisits. It
 	// belongs in the cursor position only: observed_at is the edge's own
@@ -1549,7 +1559,7 @@ FROM (
 	FROM (` + strings.Join(projectTeamsArmsFor(ingest), "\n\n\t\tUNION ALL\n") + `
 	)
 ) AS o
-GROUP BY o.project_id, o.provider, o.team_id, o.source_name` + havingSincePredicate(cursor, cursorWatermark, projectTeamsRowKey) + orderBy(cursorWatermark, projectTeamsRowKey)
+GROUP BY o.project_id, o.provider, o.team_id, o.source_name`
 }
 
 func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger, ingest bool) ([]candidate, bool, error) {
@@ -2202,4 +2212,25 @@ func logConflictingIdentities(ctx context.Context, logger *slog.Logger, orgID st
 	logger.WarnContext(ctx, "devhealthsource suppressed project ownership edges for conflicting identities",
 		"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 		"reason", "ownership row's project_id and project_key resolve to different projects", "suppressed_conflicting_identities", suppressed)
+}
+
+// ProjectTeamSourceRowQuery is the organization-level row read of one
+// project-team.v2 group. Its group is projectTeamsGroupSQL, the very
+// statement the projector pages, so a group the projector emits is a row this
+// read finds, and a group the projector suppresses (edge_suppressed: every
+// contributing row conflicts or retracts) is a row it never returns. The
+// caller keys the row on (provider, project id, team, source), the ref's own
+// segments, and re-mints the ref from them.
+func ProjectTeamSourceRowQuery() contextpacket.OrganizationRowQuery {
+	kind := contractsv1.ContextFabricEvidenceEntityProjectTeamV2
+	segments := []string{"g.provider", "g.project_id", "g.team_id", "g.source_name"}
+	statement := contextpacket.OrganizationRowColumns("provider", "project_id", "team_id", "source") +
+		` SELECT ` + evidenceref.SQL(kind, segments...) + ` evidence_ref_id, 'dev_health' system, 'project_team' entity_type, ` +
+		evidenceref.IDSQL(kind, segments...) + ` entity_id, concat(g.project_id, ' owned by team ', g.team_id) display_label, '' safe_uri, 'heuristic' provenance, 1.0 confidence, ` +
+		`concat('source=', g.source_name, ', provider=', g.provider) citation, g.observed_at observed_at, g.provider provider, g.project_id project_id, g.team_id team_id, g.source_name source ` +
+		`FROM (` + projectTeamsGroupSQL(false) + `) AS g WHERE g.edge_suppressed = 0 )`
+	return contextpacket.OrganizationRowQuery{
+		SourceQuery: contextpacket.SourceQuery{ID: contextpacket.ProjectTeamSourceRowQueryID, Source: "teams", Scope: contextpacket.EvidenceScopeRepo, Statement: statement},
+		KeyColumns:  []string{"provider", "project_id", "team_id", "source"},
+	}
 }
