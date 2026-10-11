@@ -18,12 +18,12 @@ const (
 
 // singleSubjectTrimEngine is a one-team investigation (no cohort) whose model
 // draft carries `claims` claimed facts about the team itself, none cited.
-func singleSubjectTrimEngine(t *testing.T, claims int, withPaths bool, drivers, citesPer int, emptyCohort bool, calls *int) *Engine {
+func singleSubjectTrimEngine(t *testing.T, claims, pathCount int, maxBytes int64, drivers, citesPer int, emptyCohort bool, calls *int) *Engine {
 	t.Helper()
 	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:platform", Label: "Platform"}
 	paths := []RelationshipPath{}
-	if withPaths {
-		paths = chaos6558Paths()
+	if pathCount > 0 {
+		paths = chaos6558Paths()[:pathCount]
 	}
 	var cohort *Cohort
 	if emptyCohort {
@@ -84,7 +84,7 @@ func singleSubjectTrimEngine(t *testing.T, claims int, withPaths bool, drivers, 
 			}, nil
 		}),
 	}, EngineOptions{
-		ServiceVersion: "acr-test", MaxItems: singleSubjectTrimMaxItems, MaxSerializedBytes: singleSubjectTrimMaxBytes,
+		ServiceVersion: "acr-test", MaxItems: singleSubjectTrimMaxItems, MaxSerializedBytes: maxBytes,
 		SynthesisDeadlineReserve: time.Second,
 		Now:                      func() time.Time { return time.Unix(200, 0).UTC() },
 		NewResultID:              func() string { return "result_trim0001" },
@@ -99,20 +99,26 @@ func singleSubjectTrimEngine(t *testing.T, claims int, withPaths bool, drivers, 
 // with 31 uncited claims about one team is one item over a 30-item ceiling.
 // The answer must be served within the ceiling, partial and disclosed.
 func TestSingleSubjectAnswerOverTheItemCeilingIsTrimmedNotRefused(t *testing.T) {
-	assertSingleSubjectTrimServes(t, false)
+	assertSingleSubjectTrimServes(t, 0, singleSubjectTrimMaxBytes)
 }
 
 // TestSingleSubjectAnswerOverBothCeilingsIsTrimmedNotRefused is the same draft
 // with graph paths that put the BYTES over the ceiling too; the items axis is
 // reported first, and the answer must still be served.
 func TestSingleSubjectAnswerOverBothCeilingsIsTrimmedNotRefused(t *testing.T) {
-	assertSingleSubjectTrimServes(t, true)
+	assertSingleSubjectTrimServes(t, len(chaos6558Paths()), singleSubjectTrimMaxBytes)
 }
 
-func assertSingleSubjectTrimServes(t *testing.T, withPaths bool) {
+// TestSingleSubjectAnswerOverBothCeilingsWithFewerPathsIsTrimmedNotRefused is
+// the same crossing at another size: 12 paths against a 30,000-byte ceiling.
+func TestSingleSubjectAnswerOverBothCeilingsWithFewerPathsIsTrimmedNotRefused(t *testing.T) {
+	assertSingleSubjectTrimServes(t, 12, 30000)
+}
+
+func assertSingleSubjectTrimServes(t *testing.T, pathCount int, maxBytes int64) {
 	t.Helper()
 	calls := 0
-	engine := singleSubjectTrimEngine(t, singleSubjectTrimMaxItems+1, withPaths, 0, 0, false, &calls)
+	engine := singleSubjectTrimEngine(t, singleSubjectTrimMaxItems+1, pathCount, maxBytes, 0, 0, false, &calls)
 	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
 		var refusal AnswerBudgetRefusal
@@ -128,8 +134,8 @@ func assertSingleSubjectTrimServes(t *testing.T, withPaths bool) {
 	if got := measurement.Items.Budgeted(); got > singleSubjectTrimMaxItems {
 		t.Fatalf("served %d items against a %d ceiling", got, singleSubjectTrimMaxItems)
 	}
-	if measurement.Bytes > singleSubjectTrimMaxBytes {
-		t.Fatalf("served %d bytes against a %d ceiling", measurement.Bytes, singleSubjectTrimMaxBytes)
+	if measurement.Bytes > maxBytes {
+		t.Fatalf("served %d bytes against a %d ceiling", measurement.Bytes, maxBytes)
 	}
 	if result.Status != InvestigationPartial {
 		t.Fatalf("Status = %q, want partial: a trimmed answer is disclosed as such", result.Status)
@@ -141,8 +147,8 @@ func assertSingleSubjectTrimServes(t *testing.T, withPaths bool) {
 	if !disclosed {
 		t.Fatalf("Limitations = %q, want the fixed claimed-facts trim disclosure", result.Limitations)
 	}
-	if want := len(chaos6558Paths()); withPaths && len(result.Paths) >= want {
-		t.Fatalf("served %d paths of %d: the byte overrun was not cut", len(result.Paths), want)
+	if pathCount > 0 && len(result.Paths) >= pathCount {
+		t.Fatalf("served %d paths of %d: the byte overrun was not cut", len(result.Paths), pathCount)
 	}
 	if got := len(result.ClaimedFacts); got < singleSubjectTrimMaxItems/2 {
 		t.Fatalf("served %d claims: the trim cut more than the overrun required", got)
@@ -154,7 +160,7 @@ func assertSingleSubjectTrimServes(t *testing.T, withPaths bool) {
 // the anchors and the drivers are never cut), the refusal remains.
 func TestSingleSubjectAnswerBelowTheMinimumAnswerStillRefuses(t *testing.T) {
 	calls := 0
-	engine := singleSubjectTrimEngine(t, singleSubjectTrimMaxItems+1, false, 25, 1, false, &calls)
+	engine := singleSubjectTrimEngine(t, singleSubjectTrimMaxItems+1, 0, singleSubjectTrimMaxBytes, 25, 1, false, &calls)
 	_, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
 	var refusal AnswerBudgetRefusal
 	if !errors.As(err, &refusal) {
@@ -166,7 +172,7 @@ func TestSingleSubjectAnswerBelowTheMinimumAnswerStillRefuses(t *testing.T) {
 // claims, an overrun the uncited claims can absorb leaves every cited claim.
 func TestSingleSubjectTrimCutsUncitedClaimsBeforeCitedOnes(t *testing.T) {
 	calls := 0
-	engine := singleSubjectTrimEngine(t, singleSubjectTrimMaxItems+2, false, 4, 3, false, &calls)
+	engine := singleSubjectTrimEngine(t, singleSubjectTrimMaxItems+2, 0, singleSubjectTrimMaxBytes, 4, 3, false, &calls)
 	// The four drivers cite the LAST twelve claims, the first ones a
 	// from-the-end cut order would take: cutting cited claims first would
 	// break a citation.
@@ -207,7 +213,7 @@ func citedByDriver(claims, index, citesPer int) []string {
 // the refusal of an over-ceiling draft stands.
 func TestAnswerWithACohortObjectIsNotTrimmedAsASingleSubject(t *testing.T) {
 	calls := 0
-	engine := singleSubjectTrimEngine(t, singleSubjectTrimMaxItems+1, false, 0, 0, true, &calls)
+	engine := singleSubjectTrimEngine(t, singleSubjectTrimMaxItems+1, 0, singleSubjectTrimMaxBytes, 0, 0, true, &calls)
 	_, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
 	var refusal AnswerBudgetRefusal
 	if !errors.As(err, &refusal) {
@@ -220,7 +226,7 @@ func TestAnswerWithACohortObjectIsNotTrimmedAsASingleSubject(t *testing.T) {
 // pinned by the census: the item trim declines it as it did before.
 func TestCensusTupleClaimsAreNeverCutAsASingleSubject(t *testing.T) {
 	calls := 0
-	engine := singleSubjectTrimEngine(t, singleSubjectTrimMaxItems+1, false, 0, 0, false, &calls)
+	engine := singleSubjectTrimEngine(t, singleSubjectTrimMaxItems+1, 0, singleSubjectTrimMaxBytes, 0, 0, false, &calls)
 	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:platform", Label: "Platform"}
 	claims := make([]ClaimedFact, 0, singleSubjectTrimMaxItems+1)
 	for index := 0; index <= singleSubjectTrimMaxItems; index++ {
