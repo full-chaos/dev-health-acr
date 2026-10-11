@@ -12,7 +12,11 @@ snapshot through the corresponding `Hooks.Observe*` method. A snapshot has a
 generated request ID for correlation and these bounded dimensions:
 
 - `kind`: `request`, `store`, `ranking`, `evidence`, or `episode`
-- `operation` and HTTP status class: finite endpoint families and `2xx`/`4xx`/`5xx`
+- `operation` and HTTP status class: finite endpoint families and `2xx`/`4xx`/`5xx`.
+  Operations: `health`, `readiness`, `capabilities`, `context`, `evidence`,
+  `snapshot`, `episode`, `investigation`, `investigation_result`, `data_catalog`,
+  `data_subjects`, `data_facts`, `data_relationships`, `data_operations`,
+  `data_graphql`, or `unknown`
 - `outcome`: `success`, `failure`, `denied`, `canceled`, or `unknown`
 - packet: lifecycle `status`, bytes, tokens, schema/baseline versions,
   compatibility, and source coverage
@@ -57,6 +61,15 @@ log line that already certifies the outcome, never on a second path.
 | `acr_requirement_outcomes_total` | counter | `outcome` | acr-api completeness authority line (one count per outcome row; an investigation without a plan adds no rows) |
 | `acr_fact_read_aborts_total` | counter | `cause` | acr-api investigation failure line, fact read abort |
 | `acr_investigation_latency_seconds` | histogram | `status` (`error` when no answer was delivered, including a 413 from a response-size gate) | acr-api investigation route |
+
+The investigation failure line of a budget refusal (the 413 above) carries what
+was measured, for diagnosis without the response body: `budget_overrun` (`items`
+or `bytes`), `budget_measured_bytes`, `budget_max_serialized_bytes`,
+`budget_measured_items`, `budget_max_items`, `budget_nothing_left_to_cut`,
+`budget_retry_attempted`, `budget_question_family` and `budget_sections`. The
+last lists every top-level answer section holding at least 5% of the measured
+bytes as `name=bytes`, largest first; section names are the answer contract's
+own keys, never content.
 
 Both histograms use explicit boundaries (seconds): 0.05, 0.1, 0.25, 0.5, 1, 2.5,
 5, 10, 20, 30, 45, 60, 90, 120, 180, 300. They reach 300 s because the observed

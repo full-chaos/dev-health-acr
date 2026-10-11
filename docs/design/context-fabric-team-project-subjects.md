@@ -114,8 +114,9 @@ naively, that emits 616 relationship candidates carrying 3 distinct
 `RelationshipID`s, `ContextFabricProjectionBatch.Validate()` rejects the batch
 ("relationship IDs must be unique within a batch"), and the org's projection
 wedges permanently. The query must collapse to one row per
-`(provider, project_id, team_id, source)` with `min(valid_from)` /
-`argMax(valid_to, valid_from)` before a candidate is ever built.
+`(provider, project_id, team_id, source)` taking the latest assertion before a
+candidate is ever built; an open window (`valid_to IS NULL`) outranks every closed one,
+then the latest `valid_from`, then the latest `valid_to`.
 
 **Non-trap, resolved — `work_unit_membership`.** The mission flagged the
 `work_unit_id` (SHA space) vs `work_item_id` (`linear:CHAOS-xxxx` space) hazard.
@@ -131,6 +132,11 @@ and this issue does not read it. The id-space question is moot.
 | `work_item` → `project` | `work_items.project_id` INNER JOIN `projects FINAL` on `(org_id, id)` | 3086 of 3304 work items carry a non-empty `project_id`; 18 distinct values, **16 resolve**; **3080 of 3086 rows** join. `work_items.project_key` is empty on every row (0 of 3304) — do not use it. |
 | `work_item` → `team` | `work_item_team_attributions` where `is_primary IN (1, 2) AND team_id IS NOT NULL` | One edge per (work item, team): the primary row and any co-owner row. At the first live measurement 3304 distinct work items resolved against `work_items`, each with exactly one primary team. |
 | `project` → `team` | `team_project_ownership`, collapsed per Trap C, joined to `projects` on `project_key` and to `teams` on `teams.id` | 3 real edges. `team_id` values `{CHAOS, gl:full.chaos}` are 2-for-2 against `teams.id`. |
+
+An inactive team (`is_active = 0`, the superseded copy of a carried team) is never
+the team end of a `work_item` → `team` or `project` → `team` edge: every one of those
+reads joins `teams FINAL` on the active-team predicate, and the identity read joins it
+the same way, so an inactive team claims no identity either.
 
 The two dangling `project_id` values (6 work-item rows) are dropped by the INNER
 JOIN — the same discipline `queryWorkItemHierarchy` already applies to an
@@ -182,8 +188,11 @@ earlier stub write may have seeded. Referenced endpoints stay window-free.
   projects in the ground-truth org are `state = completed`, which is a finished
   project, not a deleted one.
 - **`project` → `team` edge.** This is the one place with real windows:
-  `ValidFrom = min(valid_from)` over open windows (honestly "ownership has been
-  observed continuously since"), `ValidTo = argMax(valid_to, valid_from)`.
+  `ValidFrom` is nil: `valid_from` on the ownership table is the sync stamp of
+  the assertion, not the moment ownership began, so projecting it as a start
+  would hide a synced ownership from a window that ended before the stamp.
+  `ValidTo` is nil when the latest assertion is open, otherwise that assertion's
+  `valid_to`; an open row wins the collapse over any closed one.
 - **`work_item` → project/team edges.** Window-free; neither source table
   carries validity.
 
@@ -361,6 +370,19 @@ Key facts this producer relies on, all decided by Context Fabric rulings on
   `ValidTo` is always `nil`. A `work_item_column` row is a plain canonical
   column passthrough, presence only, no interval — the exact shape
   `work_items.project_id` always had.
+- **A column-arm edge is retracted, never left open beside a better answer.**
+  A work item's column edge carries no start, so it can only go away by a
+  tombstone of kind `column_project_edges` (`CanonicalID` = the work item's
+  canonical id), which retracts every open column-arm `BELONGS_TO_PROJECT` edge
+  of that work item whatever project each names. Two causes, closed reasons:
+  `column_project_unresolved` (the column's project resolves to no project, or
+  to several) and `superseded_by_transition_history` (the work item still
+  carries a project in `work_items` but now has transition history, which the
+  presence view drops the column row for). A column row that resolves needs no
+  tombstone: the sink keeps only the edge that row asserts. Only work items are
+  covered, because a pull request can belong to several boards. The graph
+  backend applies it as a guarded delete that never removes an edge newer than
+  the tombstone.
 - **Presence is keyed per (subject, project)**, not per subject (11:40
   ruling) — a subject can hold several active memberships at once (a PR on
   two boards), and each becomes its own edge. This producer does not
