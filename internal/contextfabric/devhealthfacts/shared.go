@@ -753,10 +753,15 @@ import (
 // owners the facts cut short. A candidate saved under v153 holds an ungrouped
 // repository answer and must not be reused.
 //
-// v154 -> v155: the team blockers rollup counts only open blockers and serves the
+// v154 -> v155: a team rollup read over more than one team serves each team's totals and
+// counts without the per-repository tables (repository_tables_basis names which), and a
+// budget refusal names its stage and measured sections; a candidate saved under an
+// earlier version carries the tables.
+//
+// v155 -> v156: the team blockers rollup counts only open blockers and serves the
 // excluded-by-status count and the status basis; a candidate saved under an earlier
 // version holds the unfiltered counts.
-const QueryVersion = "devhealthfacts.clickhouse.v155"
+const QueryVersion = "devhealthfacts.clickhouse.v156"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

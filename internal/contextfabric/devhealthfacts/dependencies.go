@@ -373,6 +373,7 @@ ORDER BY t.repo_id`, settings)
 			return outcome, scanErr
 		}
 	}
+	tables := teamRollupTablesIncluded(len(teamIDs))
 	for _, teamID := range teamIDs {
 		subject := bySubject[teamID]
 		repos := owned[teamID]
@@ -392,24 +393,27 @@ ORDER BY t.repo_id`, settings)
 			blockedItems += r.blockedItems
 			blockerEdges += r.blockerEdges
 			excludedEdges += r.excludedEdges
-			cells := map[string]contextfabric.FactValue{
-				"repository_id":                contextfabric.StringFactValue(repo.key),
-				"blocked_work_items_current":   contextfabric.IntegerFactValue(r.blockedItems),
-				"blocker_dependencies_current": contextfabric.IntegerFactValue(r.blockerEdges),
+			if tables {
+				cells := map[string]contextfabric.FactValue{
+					"repository_id":                contextfabric.StringFactValue(repo.key),
+					"blocked_work_items_current":   contextfabric.IntegerFactValue(r.blockedItems),
+					"blocker_dependencies_current": contextfabric.IntegerFactValue(r.blockerEdges),
+				}
+				if repo.name != "" {
+					cells["repository_name"] = contextfabric.StringFactValue(repo.name)
+				}
+				breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 			}
-			if repo.name != "" {
-				cells["repository_name"] = contextfabric.StringFactValue(repo.name)
-			}
-			breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 		}
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),
+			"repository_tables_basis":         contextfabric.StringFactValue(teamRollupTablesBasis(tables)),
 			"blocker_status_basis":            contextfabric.StringFactValue(blockerStatusBasisOpen),
 			"owned_repository_count":          contextfabric.IntegerFactValue(int64(len(repos))),
 			"repositories_with_data_count":    contextfabric.IntegerFactValue(withData),
 			"repositories_without_data_count": contextfabric.IntegerFactValue(int64(len(repos)) - withData),
 		}
-		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok {
+		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok && tables {
 			fields["owned_repositories"] = table
 			if omitted > 0 {
 				outcome.truncated = true
@@ -421,7 +425,7 @@ ORDER BY t.repo_id`, settings)
 			fields["blocker_dependencies_current"] = contextfabric.IntegerFactValue(blockerEdges)
 			fields["blocker_dependencies_excluded_by_status_current"] = contextfabric.IntegerFactValue(excludedEdges)
 			if table, omitted, ok := repositoryBreakdownFactValue(breakdown, "",
-				[]string{"blocked_work_items_current", "blocker_dependencies_current"}, []string{"repository_name"}); ok {
+				[]string{"blocked_work_items_current", "blocker_dependencies_current"}, []string{"repository_name"}); ok && tables {
 				fields["repository_breakdown"] = table
 				if omitted > 0 {
 					outcome.truncated = true
