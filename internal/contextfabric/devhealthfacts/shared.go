@@ -818,7 +818,6 @@ import (
 // carries the pruned answer for such a question. The census also sheds rows under a small byte
 // budget and serves the count it cut.
 const QueryVersion = "devhealthfacts.clickhouse.v167"
-const QueryVersion = "devhealthfacts.clickhouse.v166"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
