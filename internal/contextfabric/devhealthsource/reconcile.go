@@ -126,9 +126,6 @@ func (p sourcePlan) reconcileBatch(ctx context.Context, orgID, cursor string) (c
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
-	if frontier.Space != p.cursorSpace() {
-		return contextfabric.ProjectionBatch{}, false, nil
-	}
 	frontier.Ack, frontier.Dim = "", nil
 	if !cursorKeyFits(p.cursorSpace(), frontier.Since, frontier.After) {
 		if frontier.After >= cursorSentinelKey {
