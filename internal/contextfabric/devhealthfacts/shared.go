@@ -770,7 +770,11 @@ import (
 // sentinel, no longer admits a graph node that records only repository-absence sentinels
 // (no repository, orphaned, unresolved, no ownership); an organization-wide caller receives
 // fewer graph items under that scope.
-const QueryVersion = "devhealthfacts.clickhouse.v158"
+//
+// v158 -> v159: every canonical fact the registry accepts carries a deterministic id and a
+// synthesized claim may cite it (fact_id); a candidate saved under an earlier version holds
+// facts and claims without ids.
+const QueryVersion = "devhealthfacts.clickhouse.v159"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

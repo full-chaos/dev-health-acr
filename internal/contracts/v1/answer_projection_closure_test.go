@@ -422,7 +422,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// enum validated by the digest's own Validate.
 		// 361 -> 363 -- the synthesis_model_failed detail's failure_class and
 		// retry_hint, closed enums minted by the service.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 363},
+		// 363 -> 364 -- claimed_facts[].fact_id, the optional id of the cited
+		// canonical fact; classified untrusted like claimed_facts[].field.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 364},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)

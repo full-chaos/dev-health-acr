@@ -1596,6 +1596,9 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 		if err := fact.Validate(capability.RequiresEvidence); err != nil {
 			return rejectFactResult(factResultRejectedFact, fmt.Errorf("provider fact: %w", err))
 		}
+		if fact.ID == "" {
+			fact.ID = MintFactID(fact)
+		}
 		accepted = append(accepted, fact)
 	}
 	// Nothing above this line writes to the bundle: a refused result
