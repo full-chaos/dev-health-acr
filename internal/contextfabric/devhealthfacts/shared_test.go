@@ -603,8 +603,8 @@ func TestQueryVersionMovedPastTheTruncatedSearchLabelCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 152 {
-		t.Fatalf("QueryVersion = %q, want v152 or later -- an answer saved when a label-named repository count was withheld after a truncated lexical search holds that refusal and must not be reused", devhealthfacts.QueryVersion)
+	if number < 154 {
+		t.Fatalf("QueryVersion = %q, want v153 or later -- an answer saved when a label-named repository count was withheld after a truncated lexical search holds that refusal and must not be reused", devhealthfacts.QueryVersion)
 	}
 }
 
@@ -615,8 +615,8 @@ func TestQueryVersionMovedPastTheZeroOwnerCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 153 {
-		t.Fatalf("QueryVersion = %q, want v153 or later -- an answer saved when a zero-owner repository count was unavailable holds that refusal and must not be reused", devhealthfacts.QueryVersion)
+	if number < 154 {
+		t.Fatalf("QueryVersion = %q, want v154 or later -- an answer saved when a zero-owner repository count was unavailable holds that refusal and must not be reused", devhealthfacts.QueryVersion)
 	}
 }
 
@@ -630,5 +630,17 @@ func TestQueryVersionMovedPastThePriorReadFailedBump(t *testing.T) {
 	const versionBeforeThePriorReadFailedFix = "devhealthfacts.clickhouse.v146"
 	if devhealthfacts.QueryVersion == versionBeforeThePriorReadFailedFix {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer stored under that version may serve a false unknown_prior", devhealthfacts.QueryVersion, versionBeforeThePriorReadFailedFix)
+	}
+}
+
+func TestQueryVersionMovedPastTheSelectorScopeKey(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 154 {
+		t.Fatalf("QueryVersion = %q, want v153 or later -- an answer saved before project and team selectors were part of the reuse key carries no selector identity and must not be reused", devhealthfacts.QueryVersion)
 	}
 }

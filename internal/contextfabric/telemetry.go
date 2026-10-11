@@ -68,7 +68,7 @@ func AnswerReuseOutcomeVocabulary() []string {
 		string(AnswerReuseMissEvidenceContainment), string(AnswerReuseMissStaleGraphEpoch),
 		string(AnswerReuseMissGraphNotProjected), string(AnswerReuseHitDegraded),
 		string(AnswerReuseMissRecheckUnavailable), string(AnswerReuseMissDegradeInvalid),
-		string(AnswerReuseMissCountScope), string(AnswerReuseMissHintNotCommitted),
+		string(AnswerReuseMissCountScope), string(AnswerReuseMissHintNotCommitted), string(AnswerReuseMissScopeIdentity),
 	}
 }
 
