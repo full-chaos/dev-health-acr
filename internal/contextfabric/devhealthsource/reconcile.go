@@ -92,13 +92,14 @@ func (p sourcePlan) reconcileDue(rs reconcilePass, now time.Time) bool {
 	if rs.walking {
 		return true
 	}
-	return rs.lastDone.IsZero() || now.Sub(rs.lastDone) >= p.reconcilePeriod
+	// A zero lastDone (never ran in this process) is due: Sub saturates.
+	return now.Sub(rs.lastDone) >= p.reconcilePeriod
 }
 
 // reconcileBatch is pagedBatch's caught-up step before the overlap window: when
 // a pass is due or open, emit the next page of the source's current rows.
 func (p sourcePlan) reconcileBatch(ctx context.Context, orgID, cursor string, state cursorState) (contextfabric.ProjectionBatch, bool, error) {
-	if p.reconcile == nil || p.window == nil || p.reconcilePeriod <= 0 || state.Since.IsZero() {
+	if p.reconcile == nil || p.window == nil || p.reconcilePeriod <= 0 {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	now := p.clock()

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 )
 
@@ -74,7 +75,11 @@ func subTeamAuthorizationDropsANonNewestHardDeletedRepository(t *testing.T, ctx 
 		t.Errorf("the cursor moved while no reconcile was due")
 	}
 
-	now = now.Add(devhealthsource.TeamOwnershipReconcilePeriodForTest + time.Minute)
+	now = now.Add(devhealthsource.TeamOwnershipReconcilePeriodForTest - time.Nanosecond)
+	if justBefore := chaos7139RunFrom(t, ctx, f, early.cursor); len(justBefore.entities) != 0 {
+		t.Fatalf("a reconcile ran one nanosecond before its period elapsed")
+	}
+	now = now.Add(time.Nanosecond)
 	late := chaos7139RunFrom(t, ctx, f, early.cursor)
 	if _, ok := late.entities["team-nn"]; !ok {
 		t.Fatalf("team-nn was not re-projected by the periodic reconcile")
@@ -86,5 +91,63 @@ func subTeamAuthorizationDropsANonNewestHardDeletedRepository(t *testing.T, ctx 
 	again := chaos7139RunFrom(t, ctx, f, late.cursor)
 	if len(again.entities) != 0 {
 		t.Errorf("a finished reconcile pass ran again inside its period: %d entities", len(again.entities))
+	}
+}
+
+// A reconcile pass walks every page of the organization's teams, keeps the
+// cursor position, and re-serves a page whose batch was never applied.
+func subTeamReconcileWalksEveryPageAndRetriesAnUnappliedPage(t *testing.T, ctx context.Context, f *ownershipFixture) {
+	now := time.Now().UTC().Truncate(time.Second)
+	f.source.SetClockForTest(func() time.Time { return now })
+	mustExec(t, ctx, f.direct, `INSERT INTO teams (id, name, description, updated_at, last_synced, org_id, provider, native_team_key, project_keys, is_active)
+SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString(number)), '', ?, ?, ?, 'linear', concat('T-', toString(number)), [], 1 FROM numbers(250)`,
+		now.Add(-24*time.Hour), now.Add(-3*time.Hour), f.orgID)
+	first := chaos7139Run(t, ctx, f)
+	if len(first.entities) < 252 {
+		t.Fatalf("%d of 252 teams projected", len(first.entities))
+	}
+	now = now.Add(devhealthsource.TeamOwnershipReconcilePeriodForTest)
+	next := func(cursor string) (contextfabric.ProjectionBatch, bool) {
+		t.Helper()
+		batch, ok, err := f.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: f.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return batch, ok
+	}
+	ids := func(b contextfabric.ProjectionBatch) []string {
+		var out []string
+		for _, e := range b.Entities {
+			out = append(out, e.Subject.CanonicalID)
+		}
+		return out
+	}
+	one, ok := next(first.cursor)
+	if !ok || len(one.Entities) != 200 {
+		t.Fatalf("first reconcile page: available=%v entities=%d, want 200", ok, len(one.Entities))
+	}
+	if keysetPosition(t, one.NextCursor) != keysetPosition(t, first.cursor) || one.NextCursor == first.cursor {
+		t.Fatalf("a reconcile batch must keep the cursor position and carry its own ack")
+	}
+	again, ok := next(first.cursor)
+	if !ok || again.BatchID != one.BatchID || !reflect.DeepEqual(ids(again), ids(one)) {
+		t.Fatalf("an unapplied reconcile page was not served again unchanged")
+	}
+	two, ok := next(again.NextCursor)
+	if !ok || len(two.Entities) != 52 {
+		t.Fatalf("second reconcile page: available=%v entities=%d, want 52", ok, len(two.Entities))
+	}
+	seen := map[string]bool{}
+	for _, id := range append(ids(one), ids(two)...) {
+		if seen[id] {
+			t.Fatalf("team %s served twice in one pass", id)
+		}
+		seen[id] = true
+	}
+	if len(seen) != 252 {
+		t.Fatalf("pass served %d distinct teams, want 252", len(seen))
+	}
+	if _, ok := next(two.NextCursor); ok {
+		t.Fatalf("a finished reconcile pass served another batch")
 	}
 }
