@@ -118,7 +118,7 @@ func seed7252(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 		// group has no row that can assert, so the projector retracts it and
 		// no ref is minted or readable.
 		fmt.Sprintf(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES ('%[1]s:gitlab:71133891', '%[1]s', 'gitlab', 'full.chaos/chaos-ops', 'chaos-ops', 1, 'active', 'https://gitlab.com/full.chaos/chaos-ops', %[2]s), ('%[1]s:gitlab:2', '%[1]s', 'gitlab', 'full.chaos/other', 'other', 1, 'active', 'https://gitlab.com/full.chaos/other', %[2]s)`, org, now7252),
-		fmt.Sprintf(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, updated_at) VALUES ('%[1]s', 'gitlab', 'gl:full.chaos', 'full.chaos/chaos-ops', 'full.chaos/chaos-ops', 'native', %[2]s, %[2]s), ('%[1]s', 'gitlab', 'gl:full.chaos', '%[1]s:gitlab:2', 'full.chaos/chaos-ops', 'manual', %[2]s, %[2]s)`, org, now7252),
+		fmt.Sprintf(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, updated_at) VALUES ('%[1]s', 'gitlab', 'gl:full.chaos', 'full.chaos/chaos-ops', 'full.chaos/chaos-ops', 'native', %[2]s, %[2]s), ('%[1]s', 'gitlab', 'gl:full.chaos', 'full.chaos/chaos-ops', 'full.chaos/chaos-ops', 'manual', %[2]s, %[2]s), ('%[1]s', 'gitlab', 'gl:full.chaos', '%[1]s:gitlab:2', 'full.chaos/chaos-ops', 'manual', %[2]s, %[2]s)`, org, now7252),
 	} {
 		exec(t, ctx, direct, statement)
 	}
@@ -254,6 +254,7 @@ func TestEncodedRefsFromTheRealProducersExpandToTheirRow(t *testing.T) {
 		want[ref] = row
 	}
 	projectTeam, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityProjectTeamV2, "gitlab", integrationOrg+":gitlab:71133891", "gl:full.chaos", "native")
+	projectTeamManual, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityProjectTeamV2, "gitlab", integrationOrg+":gitlab:71133891", "gl:full.chaos", "manual")
 	for ref := range minted {
 		kind, id := splitRef(ref)
 		values, ok := evidenceref.Parse(kind, id)
@@ -263,7 +264,7 @@ func TestEncodedRefsFromTheRealProducersExpandToTheirRow(t *testing.T) {
 		if again, _ := evidenceref.Mint(kind, values...); again != ref {
 			t.Fatalf("%q parses to %q, which mints %q", ref, values, again)
 		}
-		if row, seeded := want[ref]; ref != projectTeam && (!seeded || !reflect.DeepEqual(row.values, values)) {
+		if row, seeded := want[ref]; ref != projectTeam && ref != projectTeamManual && (!seeded || !reflect.DeepEqual(row.values, values)) {
 			t.Errorf("a producer minted %q (%s %q) for no seeded row", ref, kind, values)
 		}
 	}
@@ -439,8 +440,17 @@ func checkProjectTeamRefs(t *testing.T, ctx context.Context, resolve *sourcerow.
 	if decision.Reason != contextfabric.SourceRowServed || decision.Rows != 1 || expanded.Evidence.EvidenceRefID != projectTeam || expanded.Structured["project_team_id"] != id {
 		t.Fatalf("unrestricted: %+v, expansion %+v %v", decision, expanded.Evidence, expanded.Structured)
 	}
+	if expanded.Evidence.Provenance != "native" {
+		t.Fatalf("a native ownership group is served with provenance %q", expanded.Evidence.Provenance)
+	}
 	if err := expanded.Validate(); err != nil {
 		t.Fatal(err)
+	}
+	manual, _ := evidenceref.Mint(kind, "gitlab", integrationOrg+":gitlab:71133891", "gl:full.chaos", "manual")
+	_, manualID := splitRef(manual)
+	served, manualDecision := resolve.ResolveSourceRow(ctx, orgWide, string(kind), manualID)
+	if !minted[manual] || manualDecision.Reason != contextfabric.SourceRowServed || served.Evidence.Provenance != "heuristic" {
+		t.Fatalf("manual group: minted %v, %+v, provenance %q", minted[manual], manualDecision, served.Evidence.Provenance)
 	}
 	if _, decision := resolve.ResolveSourceRow(ctx, granted, string(kind), id); decision.Reason != contextfabric.SourceRowKindOnRecord {
 		t.Fatalf("restricted: %+v", decision)
@@ -449,7 +459,7 @@ func checkProjectTeamRefs(t *testing.T, ctx context.Context, resolve *sourcerow.
 	if _, decision := resolve.ResolveSourceRow(ctx, orgWide, string(kind), retractedID); decision.Reason != contextfabric.SourceRowNoRow || decision.Rows != 0 {
 		t.Fatalf("retracted group: %+v", decision)
 	}
-	other, _ := evidenceref.Mint(kind, "gitlab", integrationOrg+":gitlab:71133891", "gl:full.chaos", "manual")
+	other, _ := evidenceref.Mint(kind, "gitlab", integrationOrg+":gitlab:71133891", "gl:full.chaos", "inferred")
 	_, otherID := splitRef(other)
 	if _, decision := resolve.ResolveSourceRow(ctx, orgWide, string(kind), otherID); decision.Reason != contextfabric.SourceRowNoRow {
 		t.Fatalf("a source the group has no row for: %+v", decision)

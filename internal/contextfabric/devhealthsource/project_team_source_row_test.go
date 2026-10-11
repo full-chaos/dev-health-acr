@@ -23,6 +23,9 @@ func TestProjectTeamSourceRowReadsTheProjectorsGroup(t *testing.T) {
 			t.Fatalf("the projector's statement does not start with the shared group (cursor %+v)", cursor)
 		}
 	}
+	if !strings.Contains(read.Statement, "if(g.source_name = 'native', 'native', 'heuristic') provenance") {
+		t.Fatal("provenance must follow the group's source: native is the provider's own assertion, every other source is inferred")
+	}
 	if !strings.Contains(read.Statement, "edge_suppressed = 0") {
 		t.Fatal("a suppressed group (retraction) must not be a readable row")
 	}
