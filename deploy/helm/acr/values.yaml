@@ -514,7 +514,7 @@ acrMcp:
   # ACR_MCP_INVESTIGATION_WAIT: longest one investigation call may take, sent
   # to acr-api as its wait budget so a degraded answer with a result_id
   # arrives before the MCP client's own tool timeout. Empty = no budget.
-  # apiTimeout must be at least 5s above it.
+  # apiTimeout and http.writeTimeout must each be at least 5s above it.
   investigationWait: ""
   http:
     readHeaderTimeout: "10s"
