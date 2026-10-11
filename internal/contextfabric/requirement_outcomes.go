@@ -207,6 +207,16 @@ func planningStageOutcomeRow(identity, obligation string, unavailable Requiremen
 		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
 	}
+	if undeclaredReadObligation(obligation, unavailable) {
+		// No producer declares this READ obligation for the subject kind,
+		// so nothing exists that could have served it: it does not apply to
+		// that kind. The plan requirement keeps the derivation's
+		// no_declaring_producer token, which is the disclosure; a lossless
+		// row names no cause.
+		row.Outcome = contractsv1.ContextFabricRequirementNotApplicable
+		row.Impact = contractsv1.ContextFabricAnswerImpactNone
+		return row
+	}
 	if unavailable != "" {
 		row.Outcome = contractsv1.ContextFabricRequirementUnavailable
 		row.Impact = contractsv1.ContextFabricAnswerImpactDimension
@@ -749,4 +759,16 @@ func (e *Engine) recordCandidateNarrowing(
 	event.OutcomeItemsDeclared = attempt.Narrowing.Declared
 	event.OutcomeCompletenessState = attempt.Result.Completeness.State
 	e.recordPlanNarrowing(ctx, principal, event)
+}
+
+// undeclaredReadObligation reports a READ obligation whose cell is empty
+// because no producer declares it for the subject kind. A computed obligation
+// carrying the same token is a vocabulary defect, not an undeclared one, and
+// stays unavailable.
+func undeclaredReadObligation(obligation string, unavailable RequirementUnavailableReason) bool {
+	if unavailable != RequirementReasonNoDeclaringProducer {
+		return false
+	}
+	kind, known := KindOfObligation(AnswerObligation(obligation))
+	return known && kind == ObligationKindRead
 }

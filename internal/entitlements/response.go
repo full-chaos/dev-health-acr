@@ -11,6 +11,7 @@ type response struct {
 	SchemaVersion       string
 	OrgID               string
 	AgentContextRuntime bool
+	ServiceModel        bool
 }
 
 type healthResponse struct {
@@ -42,7 +43,7 @@ func decodeResponse(body io.Reader, maxBytes int64) (response, error) {
 	return parsed, nil
 }
 
-type responseFields struct{ schema, org, entitlement bool }
+type responseFields struct{ schema, org, entitlement, serviceModel bool }
 
 func decodeFields(decoder *json.Decoder) (response, responseFields, error) {
 	var parsed response
@@ -68,6 +69,11 @@ func decodeFields(decoder *json.Decoder) (response, responseFields, error) {
 				return response{}, responseFields{}, errors.New("invalid agent_context_runtime")
 			}
 			seen.entitlement = true
+		case "acr_service_model":
+			if seen.serviceModel || decodeRequiredValue(decoder, &parsed.ServiceModel) != nil {
+				return response{}, responseFields{}, errors.New("invalid acr_service_model")
+			}
+			seen.serviceModel = true
 		default:
 			return response{}, responseFields{}, errors.New("unknown response field")
 		}

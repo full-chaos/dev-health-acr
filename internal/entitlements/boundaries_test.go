@@ -81,11 +81,11 @@ func TestCache_evicts_oldest_entry_at_capacity(t *testing.T) {
 	// Given
 	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	cache := newCache(2)
-	cache.put("oldest", true, now.Add(time.Second))
-	cache.put("newer", true, now.Add(2*time.Second))
+	cache.put("oldest", grants{runtime: true}, now.Add(time.Second))
+	cache.put("newer", grants{runtime: true}, now.Add(2*time.Second))
 
 	// When
-	cache.put("latest", false, now.Add(3*time.Second))
+	cache.put("latest", grants{}, now.Add(3*time.Second))
 
 	// Then
 	if _, found := cache.get("oldest", now); found {

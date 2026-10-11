@@ -169,9 +169,13 @@ func TestAnUnservableStateNarrowedAtAssemblyNamesItsDerivationReason(t *testing.
 		deriver  RequirementDeriver
 		reason   RequirementUnavailableReason
 		seedCode contractsv1.ContextFabricCoverageDetailCode
+		// seedOutcome is the seed's account: a kind no producer reaches is
+		// unavailable; an obligation no producer declares for a reached kind
+		// is not_applicable and names no cause (the plan's token discloses it).
+		seedOutcome contractsv1.ContextFabricPlanRequirementOutcome
 	}{
-		{"no producer reaches teams", registryDeriver{}, RequirementReasonSubjectKindUnsupported, contractsv1.ContextFabricCoverageDetailFactPruned},
-		{"teams reached, state undeclared", registryDeriver{capabilities: teamStatusWithoutStateCapabilities()}, RequirementReasonNoDeclaringProducer, contractsv1.ContextFabricCoverageDetailFactNoDeclaringProducer},
+		{"no producer reaches teams", registryDeriver{}, RequirementReasonSubjectKindUnsupported, contractsv1.ContextFabricCoverageDetailFactPruned, contractsv1.ContextFabricRequirementUnavailable},
+		{"teams reached, state undeclared", registryDeriver{capabilities: teamStatusWithoutStateCapabilities()}, RequirementReasonNoDeclaringProducer, "", contractsv1.ContextFabricRequirementNotApplicable},
 	} {
 		cell := cell
 		t.Run(cell.name, func(t *testing.T) {
@@ -185,8 +189,8 @@ func TestAnUnservableStateNarrowedAtAssemblyNamesItsDerivationReason(t *testing.
 					seed = row
 				}
 			}
-			if seed.Outcome != contractsv1.ContextFabricRequirementUnavailable || seed.CauseCoverage != cell.seedCode {
-				t.Fatalf("seed = %s/%s, want unavailable/%s -- the fixture did not seed the reason under test", seed.Outcome, seed.CauseCoverage, cell.seedCode)
+			if seed.Outcome != cell.seedOutcome || seed.CauseCoverage != cell.seedCode {
+				t.Fatalf("seed = %s/%s, want %s/%s -- the fixture did not seed the reason under test", seed.Outcome, seed.CauseCoverage, cell.seedOutcome, cell.seedCode)
 			}
 
 			assertTransitionSetIsNumbered(t, telemetry.requirementOutcomeTransitions)
