@@ -15,7 +15,7 @@ exists to prevent.
 
 | Kind | What it means | Where it lives on the wire | How closure is enforced |
 | --- | --- | --- | --- |
-| **Canonical observation** | A value ACR read directly from an authoritative Dev Health fact provider (`internal/contextfabric/devhealthfacts`, `FactCapabilityRegistry`) and the model restated verbatim. | `ContextFabricClaimedFact` entries (`result.claimed_facts`), referenced by `driver.claimed_fact_ids` / `finding.claimed_fact_ids`. | **Deterministic, code-only, value-level.** `SynthesisDraft.ValidateAgainst` (`internal/contextfabric/model_runtime.go`) deep-equals every claimed `(kind, subject, field, value)` against the canonical fact bundle the synthesizer actually received. A mismatch, or a claim for a field/kind never observed, rejects the whole draft (`ErrModelOutput` + `ErrSynthesisRejected` -> HTTP 422 `synthesis_rejected`, CHAOS-3784). See §2. |
+| **Canonical observation** | A value ACR read directly from an authoritative Dev Health fact provider (`internal/contextfabric/devhealthfacts`, `FactCapabilityRegistry`) and the model restated verbatim. | `ContextFabricClaimedFact` entries (`result.claimed_facts`), referenced by `driver.claimed_fact_ids` / `finding.claimed_fact_ids`. | **Deterministic, code-only, value-level.** `SynthesisDraft.ValidateAgainst` (`internal/contextfabric/model_runtime.go`) deep-equals every claimed `(kind, subject, field, value)` against the canonical fact bundle the synthesizer actually received. A mismatch, or a claim for a field/kind never observed, rejects the whole draft (`ErrModelOutput` + `ErrSynthesisRejected`, CHAOS-3784). A draft written by the service's own model call is then served as a degraded answer (§2.6); a caller-supplied draft is refused with HTTP 422 `synthesis_rejected`. See §2. |
 | **Graph association** | A relationship the graph backend discovered between subjects (an edge, a path) -- evidence that two things are connected, not a measurement of either one. | `ContextFabricRelationshipPath` entries (`result.paths`), referenced by `driver.path_ids`. | **Structural only.** `ValidateAgainst` checks a cited `path_id` exists in the supplied graph context. It does not, and cannot, verify the association is semantically correct -- that is `internal/contextfabric/falkorgraph`'s and CHAOS-3754's responsibility, proved by their own test suites. |
 | **Source assertion** | A document, episode, or other free-text artifact says something, without ACR having independently measured it. | `evidence_ref_ids` pointing at a document/episode-backed `EvidenceRef` (resolved via the existing evidence boundary, not a Context Fabric-specific type). | **Structural only.** `ValidateAgainst` checks a cited evidence ref ID exists in the allow-set built from the supplied graph paths, candidates, canonical facts, and (CHAOS-4522) the cohort's own per-member `EvidenceRefIDs`. It does not verify the underlying document says what the model claims it says. |
 | **Inference** | The model's own reasoning connecting the above into a judgment, with no further external grounding possible. | Free-text prose: `direct_judgment`, `current_state`, `strongest_pressures`, `limitations`, `qualification`. | **Not independently checkable.** See §3. |
@@ -141,6 +141,34 @@ The fix, concretely:
    acr-mcp sidecar binaries already released, whose embedded validator
    revalidates every result they fetch and still requires the sentence.
 
+6. **A failed model call is served as a degraded answer, with the canonical
+   values still on it.** When the service's own model call fails in a way the
+   runtime will not retry -- unusable output, every permitted draft broke the
+   service's bounds, or the call ran but its receipt was not recorded -- the
+   answer is `degraded`, not an error. A caller gone, a rate limit, an
+   unavailable provider or a deadline stay errors. The coverage carries one
+   `synthesis_model_failed` detail (source `context-fabric:synthesis`) with a
+   closed `failure_class` and a `retry_hint` derived from it, and the two
+   fields appear together or not at all:
+
+   | `failure_class` | `retry_hint` | meaning |
+   |---|---|---|
+   | `model_output_invalid` | `retry_may_succeed` | the provider's output could not be used |
+   | `model_receipt_unrecorded` | `retry_may_succeed` | the call ran; its receipt was not recorded, so no text from it is served |
+   | `synthesis_rejected` | `retry_unlikely_to_help` | every draft broke the service's bounds over these facts |
+
+   No model-authored field is served. Instead each scalar canonical field that
+   was read is minted as a claimed fact (claim id `server:fact:<n>`), grounded
+   by construction in the fact it was read from, with the evidence those facts
+   cite, bounded by the claimed-fact and evidence ceilings. `current_state`
+   names them as "Canonical values read", not as current. The answer carries
+   the limitation "Synthesis failed; the facts shown are the canonical values
+   read, with no judgment applied." and, when facts were left out for a bound,
+   "Synthesis failed and more canonical values were read than one answer can
+   carry; the facts shown are a part of them." With no value to carry it says
+   "Synthesis failed and no canonical values could be shown in its place."
+   Such an answer is never a reuse source.
+
 ## 3. The honest residual limitation
 
 Free-text fields (`direct_judgment`, `current_state`, `limitations`,
@@ -150,6 +178,16 @@ prose without an accompanying `ClaimedFact` -- catching that is an
 NLP/entailment problem (does this sentence assert something a value
 contradicts?), not a deterministic one, and is out of scope for
 `ValidateAgainst`.
+
+One slice of it is closed deterministically: free text may not name a
+calendar day the investigation input does not hold. Every ISO date or
+datetime and every month-name date in the draft's free-text fields is checked
+against the days found in the synthesis input and its evidence window, plus
+one day either side of each instant the input carries (a local zone can shift
+the day); a day with no match
+rejects the draft with reason `free_text_instant_ungrounded`. A bare month or
+year names no day and is not checked. This catches an invented date, not a
+wrong claim about a real one.
 
 This is deliberately accepted, not hidden:
 

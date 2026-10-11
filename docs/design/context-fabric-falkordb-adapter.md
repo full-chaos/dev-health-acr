@@ -824,7 +824,7 @@ break).
 
 **Need a `falkorgraph` twin (~34):** graph identity and org isolation;
 projection of every kind with temporal triples and watermark; idempotent
-replay; tombstones across all four kinds plus the stale and nil-target cases;
+replay; tombstones across every kind (relationship/edge, subject, document/content, episode, `work_item_ref`, and the column-arm `column_project_edges` retraction) plus the stale and nil-target cases;
 purge and idempotent re-purge; watermark not-found; authorization filtering
 including both wildcard forms; alias and previous-name resolution; the six
 observation-traversal tests; cancellation.
