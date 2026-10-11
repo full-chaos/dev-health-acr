@@ -766,12 +766,17 @@ import (
 // serves 0 with the inactive and ended owners disclosed, where it served no count; a candidate
 // saved under an earlier version may hold the unavailable count and must not be reused.
 //
-// v157 -> v158: a model call that ends on a transient class once the runtime's
+// v157 -> v158: a request whose repository selector is "*", or names a repository-absence
+// sentinel, no longer admits a graph node that records only repository-absence sentinels
+// (no repository, orphaned, unresolved, no ownership); an organization-wide caller receives
+// fewer graph items under that scope.
+//
+// v158 -> v159: a model call that ends on a transient class once the runtime's
 // attempts are used, or that the composition reserve ends before the request
 // deadline, is served as a degraded answer with failure class
 // model_call_not_completed and retry_may_succeed, where it was an error with no
 // stored answer; a candidate saved under an earlier version cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v158"
+const QueryVersion = "devhealthfacts.clickhouse.v159"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
