@@ -596,6 +596,18 @@ func TestQueryVersionMovedPastTheGraphLagLabelCount(t *testing.T) {
 	}
 }
 
+func TestQueryVersionMovedPastTheTruncatedSearchLabelCount(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 152 {
+		t.Fatalf("QueryVersion = %q, want v152 or later -- an answer saved when a label-named repository count was withheld after a truncated lexical search holds that refusal and must not be reused", devhealthfacts.QueryVersion)
+	}
+}
+
 // TestQueryVersionMovedPastThePriorReadFailedBump pins the CURRENT query
 // version away from v146 (main before this fix), under which a prior-period health read whose
 // provider did not complete was served as unknown_prior (CHAOS-7404). Answer

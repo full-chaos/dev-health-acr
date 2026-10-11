@@ -209,7 +209,9 @@ func rowCases() []rowCase {
 		{hierarchy, []string{grantedID, "jira:S1", "jira:SP"}, false, true, "child=jira:S1", ""},
 		{hierarchy, []string{grantedID, "a%b:c", "jira:R"}, true, true, "child=a%b:c", ""},
 		// The ARI shift pair (the retired <repo>:<wi>:<team> join collided).
-		// Fail closed for a restricted caller until CHAOS-7227's team gate.
+		// The resolver here has no subject gate, so a restricted caller is
+		// refused (the team cannot be decided for it); the gated cells are in
+		// work_item_team_gate_test.go.
 		{team, []string{zeroRepoID, "jira:ABC-1", "ari:cloud:identity::team/1", "native_team"}, false, true, "source=native_team", ""},
 		{team, []string{zeroRepoID, "jira:ABC-1:ari", "cloud:identity::team/1", "issue_project"}, false, true, "source=issue_project", ""},
 		// A co-owner row (is_primary = 2) is its own edge and its ref resolves.

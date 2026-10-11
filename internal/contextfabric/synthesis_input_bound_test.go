@@ -671,7 +671,7 @@ func TestTheValidationStageDegradeKeepsTheBoundedInputDetails(t *testing.T) {
 	engine, _, result, basis := validationStageFixture(t)
 	result.Limitations = []string{contractsv1.ContextFabricSynthesisInputBoundedLimitation}
 	bound := newSynthesisInputBound(boundFixtureFacts(FactWork, SubjectWorkItem, 4), boundFixtureFacts(FactWork, SubjectWorkItem, 2))
-	appendSynthesisInputBoundDetails(&result, bound, "org-1")
+	appendServerCoverageDetails(&result, bound.Details, "org-1")
 	if len(boundDetailsOf(result.Coverage)) != 1 {
 		t.Fatalf("fixture coverage = %+v, want the one bounded-input detail", result.Coverage.Details)
 	}
@@ -694,7 +694,7 @@ func TestTheBoundedInputDetailsAreNotFiledOverUnpairedCoverage(t *testing.T) {
 	result := InvestigationResult{Coverage: Coverage{DegradedReasons: []string{"a read failed"}}}
 	bound := newSynthesisInputBound(boundFixtureFacts(FactWork, SubjectWorkItem, 4), boundFixtureFacts(FactWork, SubjectWorkItem, 2))
 
-	appendSynthesisInputBoundDetails(&result, bound, "org_1")
+	appendServerCoverageDetails(&result, bound.Details, "org_1")
 
 	if len(result.Coverage.Details) != 0 {
 		t.Fatalf("details = %+v, want none filed over unpaired coverage", result.Coverage.Details)
