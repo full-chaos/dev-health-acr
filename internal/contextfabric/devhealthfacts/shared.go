@@ -705,10 +705,14 @@ import (
 // it read as claims; a candidate saved under an earlier version may hold one
 // with none.
 //
-// v139 -> v144: a prior-period health read whose provider did not complete
+// v139 -> v143: served limitation sentences, coverage reasons and render labels name
+// kinds by display noun and carry no basis token, so a candidate saved under an
+// earlier version may hold the old wording and must not be reused.
+//
+// v143 -> v144: a prior-period health read whose provider did not complete
 // (failed, cancelled, rejected, unconfigured, gapped, pruned) is served as
 // period_delta_transition=prior_read_failed with its reason, not as
-// unknown_prior (CHAOS-7404). A candidate saved under v139 may carry the false
+// unknown_prior (CHAOS-7404). A candidate saved under v143 may carry the false
 // unknown_prior and must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v144"
 

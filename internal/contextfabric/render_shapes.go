@@ -400,7 +400,7 @@ func clampRenderLabel(label string, reserve ...int) string {
 // cohortAttentionScoreShape is rule 1: the per-member attention score, one
 // bar per ranked member, in rank order.
 func cohortAttentionScoreShape(kind contractsv1.ContextFabricSubjectKind, ranked []CohortMember, labels map[string]string) contractsv1.ContextFabricRenderShape {
-	noun := string(kind)
+	noun := renderKindNoun(kind)
 	points := make([]contractsv1.ContextFabricRenderPoint, 0, len(ranked))
 	for _, member := range ranked {
 		points = append(points, contractsv1.ContextFabricRenderPoint{
@@ -497,9 +497,9 @@ func cohortDriverContributionShape(kind contractsv1.ContextFabricSubjectKind, ra
 		Kind:         contractsv1.ContextFabricRenderKindSeries,
 		Presentation: contractsv1.ContextFabricRenderPresentationStackedBars,
 		SelectedBy:   contractsv1.ContextFabricRenderRuleCohortDriverContribution,
-		Title:        clampRenderLabel("Score contribution by driver, per " + string(kind)),
+		Title:        clampRenderLabel("Score contribution by driver, per " + renderKindNoun(kind)),
 		AxisKind:     contractsv1.ContextFabricRenderAxisCategory,
-		AxisLabel:    clampRenderLabel(string(kind)),
+		AxisLabel:    clampRenderLabel(renderKindNoun(kind)),
 		ValueLabel:   "points contributed",
 		Series:       series,
 	}, ""
@@ -922,4 +922,13 @@ func (e RenderShapeSelectionEvent) Accounted() error {
 		}
 	}
 	return nil
+}
+
+// renderKindNoun is the display noun a served label uses for a subject kind;
+// a kind the vocabulary does not name keeps its token rather than an empty label.
+func renderKindNoun(kind contractsv1.ContextFabricSubjectKind) string {
+	if noun := contractsv1.ContextFabricSubjectKindNoun(kind, 1); noun != "" {
+		return noun
+	}
+	return string(kind)
 }

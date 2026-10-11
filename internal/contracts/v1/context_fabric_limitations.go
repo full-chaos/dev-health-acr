@@ -273,8 +273,8 @@ const contextFabricGroupingUnplaceableLimitationSuffix = ", but none of the item
 // a string the parser might not accept -- and an unrecognised service
 // disclosure is silently displaceable, which is the round-3 finding.
 func ContextFabricGroupingRefusalLimitation(plannedKind, sourceKind ContextFabricSubjectKind) string {
-	return contextFabricGroupingRefusalLimitationPrefix + string(plannedKind) +
-		contextFabricGroupingRefusalLimitationMiddle + string(sourceKind) +
+	return contextFabricGroupingRefusalLimitationPrefix + ContextFabricSubjectKindNoun(plannedKind, 1) +
+		contextFabricGroupingRefusalLimitationMiddle + ContextFabricSubjectKindNoun(sourceKind, 1) +
 		contextFabricGroupingRefusalLimitationSuffix
 }
 
@@ -308,8 +308,9 @@ func IsContextFabricGroupingRefusalLimitation(limitation string) bool {
 	if strings.Contains(sourceKind, contextFabricGroupingRefusalLimitationMiddle) {
 		return false
 	}
-	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(plannedKind)) &&
-		ValidContextFabricSubjectKind(ContextFabricSubjectKind(sourceKind))
+	_, plannedOK := contextFabricSubjectKindFromNoun(plannedKind, 1)
+	_, sourceOK := contextFabricSubjectKindFromNoun(sourceKind, 1)
+	return plannedOK && sourceOK
 }
 
 // ContextFabricGroupingUnplaceableLimitation composes the disclosure that a
@@ -323,7 +324,7 @@ func IsContextFabricGroupingRefusalLimitation(limitation string) bool {
 // composer. That is not a hypothetical here -- it is the shipped defect this
 // file's own registry comment records.
 func ContextFabricGroupingUnplaceableLimitation(plannedKind ContextFabricSubjectKind) string {
-	return contextFabricGroupingRefusalLimitationPrefix + string(plannedKind) +
+	return contextFabricGroupingRefusalLimitationPrefix + ContextFabricSubjectKindNoun(plannedKind, 1) +
 		contextFabricGroupingUnplaceableLimitationSuffix
 }
 
@@ -351,7 +352,8 @@ func IsContextFabricGroupingUnplaceableLimitation(limitation string) bool {
 	if !ok {
 		return false
 	}
-	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(plannedKind))
+	_, ok = contextFabricSubjectKindFromNoun(plannedKind, 1)
+	return ok
 }
 
 // contextFabricGroupReadUnreadLimitationPrefix/-Suffix and
@@ -378,7 +380,7 @@ const (
 // failed, could not be authorized, or could not be composed with the member
 // read. THE SOLE COMPOSER: recognition is a parse over exactly these segments.
 func ContextFabricGroupReadUnreadLimitation(groupKind ContextFabricSubjectKind) string {
-	return contextFabricGroupReadUnreadLimitationPrefix + string(groupKind) + contextFabricGroupReadUnreadLimitationSuffix
+	return contextFabricGroupReadUnreadLimitationPrefix + ContextFabricSubjectKindNoun(groupKind, 1) + contextFabricGroupReadUnreadLimitationSuffix
 }
 
 // IsContextFabricGroupReadUnreadLimitation reports whether a limitation is one
@@ -394,7 +396,8 @@ func IsContextFabricGroupReadUnreadLimitation(limitation string) bool {
 	if !ok {
 		return false
 	}
-	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(kind))
+	_, ok = contextFabricSubjectKindFromNoun(kind, 1)
+	return ok
 }
 
 // ContextFabricGroupListOverBoundLimitation composes the disclosure that a
@@ -402,7 +405,7 @@ func IsContextFabricGroupReadUnreadLimitation(limitation string) bool {
 // its group axis was refused before any group was read and the answer is
 // presented ungrouped. THE SOLE COMPOSER, for the same reason.
 func ContextFabricGroupListOverBoundLimitation(groupKind ContextFabricSubjectKind) string {
-	return contextFabricGroupListOverBoundLimitationPrefix + string(groupKind) + contextFabricGroupListOverBoundLimitationSuffix
+	return contextFabricGroupListOverBoundLimitationPrefix + ContextFabricSubjectKindNoun(groupKind, 1) + contextFabricGroupListOverBoundLimitationSuffix
 }
 
 // IsContextFabricGroupListOverBoundLimitation reports whether a limitation is
@@ -416,28 +419,25 @@ func IsContextFabricGroupListOverBoundLimitation(limitation string) bool {
 	if !ok {
 		return false
 	}
-	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(kind))
+	_, ok = contextFabricSubjectKindFromNoun(kind, 1)
+	return ok
 }
 
-// contextFabricRefusalBasisLimitationPrefix/-Middle/-Suffix are the three
+// contextFabricRefusalBasisLimitationPrefix/-Middle are the two
 // FIXED segments of CHAOS-5442's frame-refusal disclosure, and
 // contextFabricFrameInvariantRefusalLimitation is the whole sentence for the
 // refusal that has no kind to name.
 //
 // INTERPOLATED, under the same ruling the grouping-refusal disclosure above
-// records: both interpolated values are members of CLOSED vocabularies the
-// model never writes into (a subject kind and a refusal basis), so the
+// records: the one interpolated value is a member of a CLOSED vocabulary the
+// model never writes into (a subject kind, as its display noun), so the
 // sentence still carries no model text and no corpus content -- the property
 // the "fixed and non-interpolated" discipline exists to guarantee, reached by
 // the same different route.
 //
-// WHY IT NAMES THE BASIS TOKEN and not only the kind. The reader of a
-// refusal has to be able to join the sentence to the machine field beside it
-// (Completeness.RefusalBasis) and to the Info line the server logged, and the
-// only thing all three can share is the token. A sentence that described the
-// refusal in prose alone would leave the operator correlating an English
-// phrase against a snake_case field, which is exactly the translation step
-// that makes a disclosure go unread.
+// THE SENTENCE NAMES NO BASIS TOKEN (a ruling: a wire token is not human
+// readable). The machine field beside it (Completeness.RefusalBasis) and the
+// Info line the server logged carry the token; the kind is a display noun.
 //
 // WHY THE KIND IS IN THE SENTENCE AND NOT IN THE FIELD. The declared kind is
 // what makes the refusal ACTIONABLE -- it is the one thing the asker can
@@ -447,8 +447,7 @@ func IsContextFabricGroupListOverBoundLimitation(limitation string) bool {
 // that varies per question rather than per decision.
 const (
 	contextFabricRefusalBasisLimitationPrefix = "This question asked about a population of "
-	contextFabricRefusalBasisLimitationMiddle = ", which this service has no way to enumerate, so it was not searched and no canonical facts were read. The server refused this question's frame on the basis "
-	contextFabricRefusalBasisLimitationSuffix = "."
+	contextFabricRefusalBasisLimitationMiddle = ", which this service has no way to enumerate, so it was not searched and no canonical facts were read."
 )
 
 // ContextFabricFrameInvariantRefusalLimitation is the fixed disclosure for a
@@ -472,44 +471,32 @@ const ContextFabricFrameInvariantRefusalLimitation = "The server could not act o
 // segments this function writes, and a second hand-rolled Sprintf at a call
 // site would produce a string the parser might not accept. An unrecognised
 // service disclosure is silently displaceable.
-func ContextFabricRefusalBasisLimitation(declaredKind ContextFabricSubjectKind, basis ContextFabricRefusalBasis) string {
-	return contextFabricRefusalBasisLimitationPrefix + string(declaredKind) +
-		contextFabricRefusalBasisLimitationMiddle + string(basis) +
-		contextFabricRefusalBasisLimitationSuffix
+func ContextFabricRefusalBasisLimitation(declaredKind ContextFabricSubjectKind) string {
+	return contextFabricRefusalBasisLimitationPrefix + ContextFabricSubjectKindNoun(declaredKind, 2) +
+		contextFabricRefusalBasisLimitationMiddle
 }
 
 // IsContextFabricRefusalBasisLimitation reports whether a limitation is one
 // ContextFabricRefusalBasisLimitation could have composed.
 //
-// A PARSE, AND BOTH INTERPOLATED SEGMENTS ARE CHECKED FOR MEMBERSHIP, for the
+// A PARSE, AND THE INTERPOLATED NOUN IS CHECKED FOR MEMBERSHIP, for the
 // reason the grouping recogniser states: everything that consults the
 // service-authored registry is deciding whether a string may be DISPLACED,
 // and a loose or prefix match would let a model-authored caveat that merely
 // opens with this wording become undisplaceable and take a real caveat's
-// place. The empty kind and the empty basis are not members, so a
+// place. The empty noun and a wire token are not members, so a
 // half-composed sentence is not recognised either.
 func IsContextFabricRefusalBasisLimitation(limitation string) bool {
 	body, ok := strings.CutPrefix(limitation, contextFabricRefusalBasisLimitationPrefix)
 	if !ok {
 		return false
 	}
-	body, ok = strings.CutSuffix(body, contextFabricRefusalBasisLimitationSuffix)
+	noun, ok := strings.CutSuffix(body, contextFabricRefusalBasisLimitationMiddle)
 	if !ok {
 		return false
 	}
-	declaredKind, basis, ok := strings.Cut(body, contextFabricRefusalBasisLimitationMiddle)
-	if !ok {
-		return false
-	}
-	// Exactly one separator, the same refusal the grouping parse makes:
-	// a second occurrence means the two values are not what Cut returned,
-	// and guessing which split was intended is precisely the ambiguity a
-	// closed vocabulary lets us decline instead.
-	if strings.Contains(basis, contextFabricRefusalBasisLimitationMiddle) {
-		return false
-	}
-	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(declaredKind)) &&
-		ValidContextFabricFrameRefusalBasis(ContextFabricRefusalBasis(basis))
+	_, ok = contextFabricSubjectKindFromNoun(noun, 2)
+	return ok
 }
 
 // ContextFabricContinuationContextUnverifiableLimitation is the fixed
@@ -524,11 +511,7 @@ func IsContextFabricRefusalBasisLimitation(limitation string) bool {
 // Info decision line an operator reads (referenced_result_id and
 // decision_reason, with carrier_read separating an unreadable carrier from one
 // read and proved invalid).
-//
-// IT NAMES THE BASIS TOKEN for the reason the member-kind sentence does: a
-// reader joins the sentence to the machine field and to the log line through
-// the one value all three share.
-const ContextFabricContinuationContextUnverifiableLimitation = "This request continued an earlier answer by confirming only its evidence window, and the server could not verify the earlier answer's reading of the question, so it did not answer under a different reading and no canonical facts were read. Ask the question again without the earlier answer's window offer to start a fresh investigation. The server refused this continuation on the basis continuation_context_unverifiable."
+const ContextFabricContinuationContextUnverifiableLimitation = "This request continued an earlier answer by confirming only its evidence window, and the server could not verify the earlier answer's reading of the question, so it did not answer under a different reading and no canonical facts were read. Ask the question again without the earlier answer's window offer to start a fresh investigation."
 
 // ContextFabricDeclaredKindUnmatchedLimitation is the sentence a turn carries
 // when retrieval offered options and none of them advances a role of the
@@ -563,12 +546,7 @@ const ContextFabricOrganizationScopeUnsupportedLimitation = "This question was r
 // caller declined (or cannot accept) a clarification
 // (ContextFabricRefusalBasisSubjectIdentityUnconfirmed). Chris-worded and
 // ACCEPTED verbatim (CHAOS-5926, dictations 1998/1999) -- not composed here.
-//
-// IT NAMES THE BASIS TOKEN, the same choice
-// ContextFabricContinuationContextUnverifiableLimitation makes and for the
-// same reason: a reader joins the sentence to the machine field and to the
-// log line through the one value all three share.
-const ContextFabricSubjectIdentityUnconfirmedLimitation = "This follow-up appears to be about a different subject than the earlier answer it continues, so the server did not guess which one was meant and no canonical facts were read. Name the subject directly, or answer the earlier offer naming it, to continue. The server refused this follow-up on the basis subject_identity_unconfirmed."
+const ContextFabricSubjectIdentityUnconfirmedLimitation = "This follow-up appears to be about a different subject than the earlier answer it continues, so the server did not guess which one was meant and no canonical facts were read. Name the subject directly, or answer the earlier offer naming it, to continue."
 
 // ContextFabricSynthesisFailedFactsOnlyLimitation is the sentence a degraded
 // answer carries when the model call failed and the service served the

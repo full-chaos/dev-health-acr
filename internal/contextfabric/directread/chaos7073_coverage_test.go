@@ -138,6 +138,9 @@ func TestChaos7073CoveragePerKindAndSubject(t *testing.T) {
 		check(t, response, "health", repoB, expectation{name: "no row", outcome: OutcomeReadNoFact})
 		check(t, response, "health", teamT, expectation{name: "evaluated zero", outcome: OutcomeMeasuredZero})
 		check(t, response, "health", workA, expectation{name: "unsupported kind", outcome: OutcomeNotApplicable})
+		if row := coverageOf(t, response, "health", workA); row.Reason != "this fact kind does not describe work items" {
+			t.Errorf("not-applicable reason = %q, want the display noun and no wire token", row.Reason)
+		}
 		if row := coverageOf(t, response, "health", repoB); row.KindState != string(contextfabric.SourceAvailable) {
 			t.Errorf("read_no_fact row must name the kind-level state, got %+v", row)
 		}
