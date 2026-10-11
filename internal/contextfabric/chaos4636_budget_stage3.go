@@ -1129,9 +1129,10 @@ func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Pr
 	if err != nil {
 		return InvestigationResult{}, false, err
 	}
+	step := CeilingFitNone
 	switch {
 	case measured.Overrun == contractsv1.ContextFabricBudgetFits:
-		served, ok = doc, true
+		served, ok, step = doc, true, CeilingFitMeasured
 	case measured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes && params.WorkItemCensus == nil:
 		rows, rowErr := e.planFactRowTruncation(ctx, principal, plan, params.Frame, doc, ceilingBudget, measured, facts, pending, planPass, cardinality)
 		if rowErr != nil {
@@ -1139,7 +1140,7 @@ func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Pr
 		}
 		e.recordFactRowTruncation(ctx, principal, plan, recordPass, measured, rows, ceilingBudget)
 		if rows.Served {
-			served, ok = rows.Result, true
+			served, ok, step = rows.Result, true, CeilingFitRowTruncation
 			break
 		}
 		paths, pathErr := e.planPathDrop(ctx, principal, plan, params.Frame, doc, ceilingBudget, measured, facts, pending, planPass, cardinality)
@@ -1148,22 +1149,26 @@ func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Pr
 		}
 		e.recordPathDrop(ctx, principal, plan, recordPass, measured, paths, ceilingBudget)
 		if paths.Served {
-			served, ok = paths.Result, true
+			served, ok, step = paths.Result, true, CeilingFitPathDrop
 		}
 	}
 	if ok {
-		// The measurement is not stamped on this event: the lever events carry
-		// the ceiling attempt's own, and the final budget assertion carries the
-		// served document's against the ceiling.
+		// The plan states the ceiling the answer was fitted to, so the event
+		// below carries the ceiling it was measured against, the document's
+		// measured bytes and items (the document as assembled, before any
+		// lever), and the step that fitted it: the decision rebuilds from this
+		// one event.
+		plan.Budget.MaxSerializedBytes = e.maxSerializedBytes
 		members := cohortMemberCount(params.Graph.Cohort)
 		grouped := params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0
 		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
 			members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
+		event.recordMeasurement(measured)
 		event.PredictedItems = PredictedItemsForPlan(*plan, members)
 		event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 		event.OutcomeCompletenessState = served.Completeness.State
+		event.CeilingFit = step
 		e.recordPlanNarrowing(ctx, principal, event)
-		plan.Budget.MaxSerializedBytes = e.maxSerializedBytes
 	}
 	return served, ok, nil
 }

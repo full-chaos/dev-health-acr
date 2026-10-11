@@ -76,10 +76,11 @@ var decisionEventFunctions = []string{
 	// prediction, so it holds one document and cannot describe two.
 	"recordServedWalkListCut",
 	// Emits the one event for an answer the service ceiling admits after the
-	// caller's byte target could not be reached. It stamps NO measurement (the
-	// lever events it runs carry the ceiling attempt's own, and the final
-	// budget assertion the served document's), and its prediction is the plan's
-	// own member count, so it holds one document and cannot describe two.
+	// caller's byte target could not be reached. It stamps the measurement of
+	// the ONE document it fitted (the assembled result the ceiling attempt
+	// measured, before any lever) and names the step in ceiling_fit; its
+	// prediction is the plan's own member count. One document, so it cannot
+	// describe two.
 	"serveAtServiceCeiling",
 }
 

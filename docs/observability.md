@@ -82,6 +82,12 @@ served), `served_bytes` and `caller_max_serialized_bytes`; `measured_bytes` stay
 the canonical result's size. A client synthesis turn is never projected, so its
 input can ride the body, and keeps the option as a refusal line.
 
+When the engine could not reach the caller's byte target and fitted the answer against
+the service ceiling instead of refusing, the plan-narrowing line carries
+`ceiling_fit` (`fits_as_measured`, `row_truncation` or `path_drop`) beside the
+document's `measured_bytes` and `measured_items` and `max_serialized_bytes` set to
+the ceiling it was fitted to.
+
 Both histograms use explicit boundaries (seconds): 0.05, 0.1, 0.25, 0.5, 1, 2.5,
 5, 10, 20, 30, 45, 60, 90, 120, 180, 300. They reach 300 s because the observed
 p99 is about 125 s for an MCP request and about 21 s for an investigation.

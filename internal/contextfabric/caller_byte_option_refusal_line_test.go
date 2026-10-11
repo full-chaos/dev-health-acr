@@ -106,7 +106,7 @@ func TestAnAnswerServedUnderTheServiceCeilingAddsNoModelCallAndNamesTheChain(t *
 	var served *PlanNarrowingEvent
 	for index := range telemetry.planNarrowings {
 		event := telemetry.planNarrowings[index]
-		if event.Overrun == contractsv1.ContextFabricBudgetOverrunBytes && !event.RefusalPlanned && !event.RetryAttempted {
+		if event.CeilingFit != CeilingFitNone {
 			served = &event
 		}
 		if event.RefusalPlanned {
@@ -114,7 +114,12 @@ func TestAnAnswerServedUnderTheServiceCeilingAddsNoModelCallAndNamesTheChain(t *
 		}
 	}
 	if served == nil {
-		t.Fatalf("no plan-narrowing event records the byte overrun served without a refusal: %+v", telemetry.planNarrowings)
+		t.Fatalf("no plan-narrowing event names the ceiling fit: %+v", telemetry.planNarrowings)
+	}
+	// The decision rebuilds from this one event: the document's measured
+	// bytes against the ceiling it was fitted to, its items, and the step.
+	if served.MeasuredBytes <= int64(callerByteOption) || served.MeasuredBytes > chaos6558MaxBytes*2 || served.MaxSerializedBytes != chaos6558MaxBytes || served.MeasuredItems == 0 || served.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+		t.Fatalf("ceiling-fit event does not carry its own measurement: measured_bytes=%d max_serialized_bytes=%d measured_items=%d overrun=%q", served.MeasuredBytes, served.MaxSerializedBytes, served.MeasuredItems, served.Overrun)
 	}
 	if len(telemetry.budgetAssertions) == 0 {
 		t.Fatal("no budget assertion recorded")

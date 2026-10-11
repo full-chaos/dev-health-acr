@@ -236,6 +236,11 @@ type PlanNarrowingEvent struct {
 	// byte cut kept only because cited evidence pins them. Zero when no walk
 	// list was cut.
 	EvidencePinnedMembers int
+	// CeilingFit names how an answer that overran only the caller's byte
+	// target was fitted against the service ceiling instead of refused: the
+	// document fit as measured, or the model-free lever that served it. Empty
+	// on every other event.
+	CeilingFit CeilingFitStep
 	// OutcomeCompletenessState is what the served answer claims about
 	// itself, from the closed vocabulary the outcome set derives. It is on
 	// the event so that a served answer's completeness can be counted
@@ -739,3 +744,14 @@ type MembershipCardinalityEvent struct {
 	CohortComplete  bool
 	CohortTruncated bool
 }
+
+// CeilingFitStep is the closed vocabulary of how serveAtServiceCeiling fitted
+// a document against the service ceiling.
+type CeilingFitStep string
+
+const (
+	CeilingFitNone          CeilingFitStep = ""
+	CeilingFitMeasured      CeilingFitStep = "fits_as_measured"
+	CeilingFitRowTruncation CeilingFitStep = "row_truncation"
+	CeilingFitPathDrop      CeilingFitStep = "path_drop"
+)
