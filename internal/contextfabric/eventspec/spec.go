@@ -3348,6 +3348,12 @@ var AnchorBindingTransition = Event{
 		{Key: "from_graph_epoch", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "from_contender_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "from_contender_id", Type: FieldString, Presence: PresenceRequired},
+		// The parent binding's proven freshness: the serving epoch, -1 when it
+		// carries none, and the first 16 hex digits of the SHA-256 of the
+		// ownership watermark, empty when none. The watermark itself is a
+		// checkpoint cursor and is never written.
+		{Key: "from_proven_freshness_epoch", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "from_proven_freshness_digest", Type: FieldString, Presence: PresenceRequired},
 		// The graph epoch of the binding the parent row carries, -1 when no
 		// stored binding was read; the stale-parent check compares it with
 		// graph_epoch.
@@ -3380,6 +3386,14 @@ var AnchorBindingTransition = Event{
 		{Key: "caller_hint_ids", Type: FieldStringSlice, Presence: PresenceRequired},
 		{Key: "proven_anchor_ids", Type: FieldStringSlice, Presence: PresenceRequired},
 		{Key: "effective_kind", Type: FieldString, Presence: PresenceRequired},
+		// This turn's read of the ownership source's checkpoint at the serving
+		// epoch, taken before the first graph read that can prove an anchor and
+		// whether or not answer reuse is enabled. not_attempted on an exit above
+		// that point and on a reuse serve. What it acquired follows, in the same
+		// form as the parent's.
+		{Key: "freshness_acquisition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("freshness_acquisition")},
+		{Key: "freshness_serving_epoch", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "freshness_ownership_digest", Type: FieldString, Presence: PresenceRequired},
 		{Key: "to_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("to_state")},
 		{Key: "to_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "to_id", Type: FieldString, Presence: PresenceRequired},
@@ -3389,6 +3403,12 @@ var AnchorBindingTransition = Event{
 		{Key: "to_graph_epoch", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "contender_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "contender_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "to_proven_freshness_epoch", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "to_proven_freshness_digest", Type: FieldString, Presence: PresenceRequired},
+		// The held binding's proven freshness against this turn's. unmoved means
+		// ownership did not move between the two reads, never that the data is
+		// fresh.
+		{Key: "ownership_movement", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("ownership_movement")},
 		{Key: "persisted", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("persisted")},
 		{Key: "shadow_agreement", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("shadow_agreement")},
 		{Key: "disagreement_field", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("disagreement_field")},

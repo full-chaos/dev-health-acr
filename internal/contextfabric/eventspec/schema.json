@@ -264,6 +264,16 @@
         "presence": "required"
       },
       {
+        "key": "from_proven_freshness_epoch",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "from_proven_freshness_digest",
+        "type": "string",
+        "presence": "required"
+      },
+      {
         "key": "parent_graph_epoch",
         "type": "int",
         "presence": "required"
@@ -330,6 +340,31 @@
       },
       {
         "key": "effective_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "freshness_acquisition",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_attempted",
+          "acquired",
+          "unwired",
+          "read_failed",
+          "source_absent",
+          "epoch_mismatch",
+          "unstorable",
+          "undeclared"
+        ]
+      },
+      {
+        "key": "freshness_serving_epoch",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "freshness_ownership_digest",
         "type": "string",
         "presence": "required"
       },
@@ -407,6 +442,29 @@
         "key": "contender_id",
         "type": "string",
         "presence": "required"
+      },
+      {
+        "key": "to_proven_freshness_epoch",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "to_proven_freshness_digest",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "ownership_movement",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_applicable",
+          "proven_unrecorded",
+          "not_acquired",
+          "unmoved",
+          "moved",
+          "undeclared"
+        ]
       },
       {
         "key": "persisted",

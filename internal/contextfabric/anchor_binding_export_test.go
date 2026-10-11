@@ -57,6 +57,9 @@ func RunAnchorBindingScenarioForTest(t *testing.T, scenario string) (log []byte,
 	var turns []anchorProbeTurn
 	for i, step := range steps {
 		rig.interpreter.read(step.anchorKind, step.windowed)
+		if step.ownership != nil {
+			step.ownership(rig.ownership)
+		}
 		rig.graph.response = step.response
 		request := step.request(turns)
 		buf.Reset()
@@ -158,6 +161,36 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 			return h.turn(request, committingNeedResponse()).result
 		}},
 	}
+	// Every ownership read outcome, and every comparison of a held binding's
+	// proven freshness with this turn's, through the real engine.
+	reads := func(read AnchorFreshnessRead, err error) func(*probeOwnership) {
+		return func(o *probeOwnership) { o.read, o.err = read, err }
+	}
+	w2 := probeOwnershipW1
+	w2.OwnershipWatermark = "ownership-w2"
+	absent := AnchorFreshnessRead{ServingEpoch: 0, Recorded: false}
+	otherEpoch := probeOwnershipW1
+	otherEpoch.ServingEpoch = 3
+	oversize := probeOwnershipW1
+	oversize.OwnershipWatermark = strings.Repeat("w", SemanticStateMaxTermBytes+1)
+	firstUnder := func(id string, read AnchorFreshnessRead, err error) anchorProbeStep {
+		return anchorProbeStep{request: firstTurnRequest(id, true), ownership: reads(read, err), response: identityProvenResponse(probeAlpha)}
+	}
+	followUnder := func(id string, read AnchorFreshnessRead, err error) anchorProbeStep {
+		step := follow(id, nil)
+		step.ownership = reads(read, err)
+		return step
+	}
+	scenarios = append(scenarios,
+		anchorSiteScenario{name: "ownership read failed", run: anchorProbeScenario(firstUnder("request_vocab_own_failed", AnchorFreshnessRead{}, errors.New("checkpoint read failed")))},
+		anchorSiteScenario{name: "ownership source absent", run: anchorProbeScenario(firstUnder("request_vocab_own_absent", absent, nil))},
+		anchorSiteScenario{name: "ownership epoch mismatch", run: anchorProbeScenario(firstUnder("request_vocab_own_epoch", otherEpoch, nil))},
+		anchorSiteScenario{name: "ownership unstorable", run: anchorProbeScenario(firstUnder("request_vocab_own_oversize", oversize, nil))},
+		anchorSiteScenario{name: "ownership unmoved", run: anchorProbeScenario(firstUnder("request_vocab_own_unmoved_one", probeOwnershipW1, nil), followUnder("request_vocab_own_unmoved_two", probeOwnershipW1, nil))},
+		anchorSiteScenario{name: "ownership moved", run: anchorProbeScenario(firstUnder("request_vocab_own_moved_one", probeOwnershipW1, nil), followUnder("request_vocab_own_moved_two", w2, nil))},
+		anchorSiteScenario{name: "ownership not acquired", run: anchorProbeScenario(firstUnder("request_vocab_own_lost_one", probeOwnershipW1, nil), followUnder("request_vocab_own_lost_two", AnchorFreshnessRead{}, errors.New("checkpoint read failed")))},
+		anchorSiteScenario{name: "ownership proven unrecorded", run: anchorProbeScenario(firstUnder("request_vocab_own_unrec_one", absent, nil), followUnder("request_vocab_own_unrec_two", probeOwnershipW1, nil))},
+	)
 	// The subject-substitution guard's firing and redeemed outcomes, through
 	// the real engine, so the line's substitution_guard key reaches each one.
 	scenarios = append(scenarios,

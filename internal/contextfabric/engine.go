@@ -194,6 +194,12 @@ type EngineDependencies struct {
 	// and so never becomes reusable, exactly as if ReuseGate were also
 	// nil.
 	ReuseEpochSnapshotter RebuildEpochSnapshotter
+	// AnchorFreshness is optional. When set and the shadow anchor binding
+	// runs, Engine reads the ownership freshness once per turn before the
+	// first graph read that can prove an anchor, independently of answer
+	// reuse (anchor_freshness.go). Nil reads nothing, and the transition
+	// line says unwired.
+	AnchorFreshness AnchorFreshnessReader
 	// ReuseModelIdentityResolver is optional (CHAOS-3782, Codex round-2
 	// finding #3; CHAOS-3786). When set, tryReuse resolves the CURRENT
 	// org-effective model CHAIN through it, per call, instead of using
@@ -1273,6 +1279,7 @@ type Engine struct {
 	reuseGate                                   AnswerReuseGate
 	reuseSnapshotter                            SourceWatermarkSnapshotter
 	reuseEpochSnapshotter                       RebuildEpochSnapshotter
+	anchorFreshness                             AnchorFreshnessReader
 	reuseModelIdentityResolver                  ReuseModelIdentityResolver
 	reuseProjectionVersion                      string
 	reuseModelIdentities                        []string
@@ -1337,6 +1344,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		storedResultGate: gate,
 		reuseGate:        dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
+		anchorFreshness:            dependencies.AnchorFreshness,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
 		structureSelectionSink:     dependencies.StructureSelectionSink,
@@ -2804,6 +2812,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// this point carries no reading: it ended before one was accepted, and
 	// its binding is decided from the carry and the caller alone.
 	anchorShadow.observeReading(familyOutcome, graphRequest.RequestedScope.SubjectHints)
+	// Before the window gate's offers-only resolution and before the
+	// decisive one: every graph read below that can prove an anchor reads
+	// after the ownership state it is stamped with.
+	e.acquireAnchorFreshness(ctx, principal.OrgID, anchorShadow)
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,
 		// but it now composes kind/handle/candidate offers from an
