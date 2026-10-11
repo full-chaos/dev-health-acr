@@ -3273,6 +3273,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			resolution.ClarificationPrompt = uncommittedTeamAnchorPrompt(resolution)
 			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
 		}
+		if unboundScopeAnchorNamed(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind, resolution, commitBases) {
+			resolution = unboundScopeAnchorResolution(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind, resolution)
+			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
+		}
 		graphContext, err = e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 			Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
 			ScopeAnchorResolved: scopeAnchorResolved(familyOutcome),
