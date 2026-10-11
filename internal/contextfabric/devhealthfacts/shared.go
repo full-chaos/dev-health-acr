@@ -727,7 +727,17 @@ import (
 // v148 -> v149: a repository count named by its label certifies when the identity read was
 // complete and the only gap is a same-label claimant missing from the graph; a candidate
 // saved under an earlier version may hold the uncertified count and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v150"
+//
+// v149 -> v150: a requirement row over a truncated fact source whose cause is a
+// scope-expansion gap is admitted by the outcome validator, so an answer that was
+// refused as an invalid result is served; a candidate saved under an earlier
+// version cannot hold it.
+//
+// v150 -> v151: a stored answer is reused only when its project and team
+// selector identity equals the request's; a candidate saved under an earlier
+// version carries no selector identity and must not be reused for a request
+// that names project or team selectors.
+const QueryVersion = "devhealthfacts.clickhouse.v151"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

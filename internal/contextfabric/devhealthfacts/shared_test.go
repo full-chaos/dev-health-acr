@@ -608,3 +608,15 @@ func TestQueryVersionMovedPastThePriorReadFailedBump(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer stored under that version may serve a false unknown_prior", devhealthfacts.QueryVersion, versionBeforeThePriorReadFailedFix)
 	}
 }
+
+func TestQueryVersionMovedPastTheSelectorScopeKey(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 151 {
+		t.Fatalf("QueryVersion = %q, want v151 or later -- an answer saved before project and team selectors were part of the reuse key carries no selector identity and must not be reused", devhealthfacts.QueryVersion)
+	}
+}
