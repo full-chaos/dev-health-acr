@@ -445,3 +445,29 @@ func TestAProviderThatEmitsNothingDeclaresNothing(t *testing.T) {
 		t.Fatal("no provider was checked; this guard would be vacuous")
 	}
 }
+
+// TestEveryDeclaredIdentityFieldIsSeenByTheEmissionCollector pins the miss a
+// review found: the collector once recorded only the inner table columns of
+// identity.owning_teams, because the provider wrote the fields through an index
+// on a slice element rather than a local fact-field map.
+func TestEveryDeclaredIdentityFieldIsSeenByTheEmissionCollector(t *testing.T) {
+	recorded, err := os.ReadFile(emissionArtifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line string
+	for _, candidate := range strings.Split(string(recorded), "\n") {
+		if strings.HasPrefix(candidate, "identity\t") {
+			line = candidate
+		}
+	}
+	if line == "" {
+		t.Fatal("no identity row in the declaration/emission artifact")
+	}
+	capability := liveCapabilities(t)[contextfabric.FactIdentity]
+	for _, field := range capability.Fields {
+		if !strings.Contains(line, " "+field.Name+" ") && !strings.Contains(line, "["+field.Name+" ") && !strings.Contains(line, " "+field.Name+"]") {
+			t.Errorf("identity declares %q but the emission collector never saw it written: %s", field.Name, line)
+		}
+	}
+}

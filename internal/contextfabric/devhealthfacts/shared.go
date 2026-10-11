@@ -747,12 +747,18 @@ import (
 // version carries no selector identity and must not be reused for a request
 // that names project or team selectors.
 //
-// v153 -> v154: a model call that ends on a transient class once the runtime's
+// v153 -> v154: a repository's identity fact carries owning_teams (its current
+// team_repo_ownership teams), and a grouped repository answer groups under those
+// teams and discloses members placed under more than one, under none, or whose
+// owners the facts cut short. A candidate saved under v153 holds an ungrouped
+// repository answer and must not be reused.
+//
+// v154 -> v155: a model call that ends on a transient class once the runtime's
 // attempts are used, or that the composition reserve ends before the request
 // deadline, is served as a degraded answer with failure class
 // model_call_not_completed and retry_may_succeed, where it was an error with no
 // stored answer; a candidate saved under an earlier version cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v154"
+const QueryVersion = "devhealthfacts.clickhouse.v155"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
