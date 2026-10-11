@@ -418,7 +418,11 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// 351 -> 352 -- InterpretedQuestion's new requested_judgment_kind
 		// string leaf. answer_projection is unaffected: the projection
 		// carries no Interpretation at all.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 362},
+		// 360 -> 361 -- CommitDecisionDigest's identity_lookup, a closed
+		// enum validated by the digest's own Validate.
+		// 361 -> 363 -- the synthesis_model_failed detail's failure_class and
+		// retry_hint, closed enums minted by the service.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 363},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -565,6 +569,9 @@ func trustedBecauseClosed(path string) bool {
 		// (validCommitGate) before a result is stored -- never model prose,
 		// the same standing as member/offer_source/disposition above.
 		"commit_gate",
+		// identity_lookup (ContextFabricCommitDecisionDigest) is a closed enum
+		// checked by the digest's own Validate, same standing as commit_gate.
+		"identity_lookup",
 		// CHAOS-4398: "data_completeness" (ContextFabricCohortDataCompleteness)
 		// is validated against its own closed registry
 		// (validContextFabricCohortDataCompleteness) before a result is

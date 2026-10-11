@@ -3,6 +3,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -577,6 +578,21 @@ func TestQueryVersionMovedPastTheOwnRepositoryScope(t *testing.T) {
 		if devhealthfacts.QueryVersion == versionBeforeTheScopeFollowedTheLink {
 			t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when a requested repository scope was tested on a work item's own repository holds the old relation and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheScopeFollowedTheLink)
 		}
+	}
+}
+
+func TestQueryVersionMovedPastTheGraphLagLabelCount(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	if !strings.HasPrefix(devhealthfacts.QueryVersion, prefix) {
+		t.Fatalf("QueryVersion = %q, want the %q form", devhealthfacts.QueryVersion, prefix)
+	}
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 149 {
+		t.Fatalf("QueryVersion = %q, want v149 or later -- an answer saved when a label-named repository count was withheld over a same-label claimant missing from the graph holds that refusal and must not be reused", devhealthfacts.QueryVersion)
 	}
 }
 

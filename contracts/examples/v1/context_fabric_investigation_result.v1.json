@@ -80,6 +80,17 @@
         "canonical_id": "project_ask_dev",
         "label": "Ask Dev"
       }
+    ],
+    "commit_decision_digests": [
+      {
+        "subject": {
+          "kind": "project",
+          "canonical_id": "project_ask_dev",
+          "label": "Ask Dev"
+        },
+        "commit_gate": "exact_index",
+        "identity_lookup": "graph_lag"
+      }
     ]
   },
   "direct_judgment": "Ask Dev is not release-ready even though most tracked implementation work is closed.",
