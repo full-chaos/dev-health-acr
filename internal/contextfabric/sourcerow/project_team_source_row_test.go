@@ -82,6 +82,35 @@ func TestProjectTeamV2RefusesAnotherGroupsRow(t *testing.T) {
 			}
 		})
 	}
+	t.Run("short key", func(t *testing.T) {
+		w, ref, id := projectTeamWorld(t, values...)
+		w.orgRows[projectTeamQuery+"|"+ref] = []contextpacket.OrganizationRowReference{orgRowWithKey(projectTeamQuery, ref, "project_team", id, values[:3]...)}
+		_, decision := resolver(t, w).ResolveSourceRow(context.Background(), unrestricted, string(projectTeamKind), id)
+		if decision.Reason != contextfabric.SourceRowNoRow || !decision.SubjectMismatch {
+			t.Fatalf("%+v", decision)
+		}
+	})
+	t.Run("row id is another group", func(t *testing.T) {
+		w, ref, _ := projectTeamWorld(t, values...)
+		_, otherID := mustMint(t, projectTeamKind, "gitlab", "org:gitlab:1", "gl:team", "manual")
+		w.orgRows[projectTeamQuery+"|"+ref] = []contextpacket.OrganizationRowReference{orgRowWithKey(projectTeamQuery, ref, "project_team", otherID, values...)}
+		_, id := mustMint(t, projectTeamKind, values...)
+		_, decision := resolver(t, w).ResolveSourceRow(context.Background(), unrestricted, string(projectTeamKind), id)
+		if decision.Reason != contextfabric.SourceRowNoRow || !decision.SubjectMismatch {
+			t.Fatalf("%+v", decision)
+		}
+	})
+	t.Run("another group under this locator", func(t *testing.T) {
+		w, ref, _ := projectTeamWorld(t, values...)
+		other := []string{"gitlab", "org:gitlab:1", "gl:team", "manual"}
+		_, otherID := mustMint(t, projectTeamKind, other...)
+		w.orgRows[projectTeamQuery+"|"+ref] = []contextpacket.OrganizationRowReference{orgRowWithKey(projectTeamQuery, ref, "project_team", otherID, other...)}
+		_, id := mustMint(t, projectTeamKind, values...)
+		_, decision := resolver(t, w).ResolveSourceRow(context.Background(), unrestricted, string(projectTeamKind), id)
+		if decision.Reason != contextfabric.SourceRowNoRow || !decision.SubjectMismatch {
+			t.Fatalf("%+v", decision)
+		}
+	})
 	t.Run("two rows", func(t *testing.T) {
 		w, ref, _ := projectTeamWorld(t, values...)
 		w.orgRows[projectTeamQuery+"|"+ref] = append(w.orgRows[projectTeamQuery+"|"+ref], w.orgRows[projectTeamQuery+"|"+ref][0])
