@@ -478,9 +478,9 @@ func TestChaos5405_ControlAnUnknownPolicyStillErrors(t *testing.T) {
 // work-item policies treat the same population as a first-class one.
 func TestChaos5405_ControlTheRepositoryHopStillRefusesTheSentinels(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM work_items", rows: [][]any{
-		{chaos5405ZeroRepoID, "", chaos5405ProjectID},
-		{chaos5405OrphanRepoID, "", chaos5405ProjectID},
+	client := &fakeClient{tables: []fakeTable{{match: "argMax(l.provenance, l.link_rank)", rows: [][]any{
+		{chaos5405ZeroRepoID, "", chaos5405ProjectID, "native"},
+		{chaos5405OrphanRepoID, "", chaos5405ProjectID, "native"},
 	}}}}
 	result, err := devhealthfacts.NewScopeExpander(client).ExpandFactScope(context.Background(), contextfabric.FactScopeExpansionRequest{
 		Principal:       orgWidePrincipal(),
