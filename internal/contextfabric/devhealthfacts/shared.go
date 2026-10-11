@@ -803,7 +803,11 @@ import (
 // overran the item ceiling is served partial with the claims cut and the cut
 // disclosed, where it was refused; a candidate saved under an earlier version
 // cannot hold it.
-const QueryVersion = "devhealthfacts.clickhouse.v164"
+//
+// v164 -> v165: every canonical fact the registry accepts carries a deterministic id and a
+// synthesized claim may cite it (fact_id); a candidate saved under an earlier version holds
+// facts and claims without ids.
+const QueryVersion = "devhealthfacts.clickhouse.v165"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
