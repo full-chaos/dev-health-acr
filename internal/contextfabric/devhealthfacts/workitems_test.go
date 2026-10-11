@@ -42,8 +42,23 @@ func TestWorkItemProvidersUseCurrentSelectorScopeAndThrowingSettings(t *testing.
 			if len(result.Facts) != 1 {
 				t.Fatalf("facts = %#v, want one scanned fact", result.Facts)
 			}
-			if len(client.queries) != 1 {
-				t.Fatalf("query count = %d, want one scoped content query and no metadata lookup", len(client.queries))
+			perRead := 1
+			if tt.name == contextfabric.FactStatus {
+				perRead = 2
+			}
+			if len(client.queries) != perRead {
+				t.Fatalf("query count = %d, want %d: one scoped content query (status adds its scoped transition read) and no metadata lookup", len(client.queries), perRead)
+			}
+			if perRead == 2 {
+				since := client.queries[1].statement
+				for _, fragment := range []string{"FROM work_item_transitions", "SETTINGS", "timeout_overflow_mode = 'throw'"} {
+					if !strings.Contains(since, fragment) {
+						t.Errorf("transition read = %q, want %q", since, fragment)
+					}
+				}
+				if strings.Contains(since, "authorized_repo_slugs") {
+					t.Errorf("transition read repeats the authorization relation: %q", since)
+				}
 			}
 			statement := client.queries[0].statement
 			for _, fragment := range []string{
@@ -59,16 +74,16 @@ func TestWorkItemProvidersUseCurrentSelectorScopeAndThrowingSettings(t *testing.
 					t.Errorf("statement = %q, want %q", statement, fragment)
 				}
 			}
-			if got := testBindingValue(t, client, "authorized_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/a", "acme/b"}) {
+			if got := testBindingValueAt(t, client, 0, "authorized_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/a", "acme/b"}) {
 				t.Errorf("authorized_repo_slugs = %#v, want normalized principal selectors", got)
 			}
-			if got := testBindingValue(t, client, "requested_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/b", "acme/c"}) {
+			if got := testBindingValueAt(t, client, 0, "requested_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/b", "acme/c"}) {
 				t.Errorf("requested_repo_slugs = %#v, want normalized request selectors", got)
 			}
-			if got := testBindingValue(t, client, "authorized_repo_owners"); !reflect.DeepEqual(got, []string{}) {
+			if got := testBindingValueAt(t, client, 0, "authorized_repo_owners"); !reflect.DeepEqual(got, []string{}) {
 				t.Errorf("authorized_repo_owners = %#v, want no owner selectors", got)
 			}
-			if got := testBindingValue(t, client, "requested_repo_owners"); !reflect.DeepEqual(got, []string{}) {
+			if got := testBindingValueAt(t, client, 0, "requested_repo_owners"); !reflect.DeepEqual(got, []string{}) {
 				t.Errorf("requested_repo_owners = %#v, want no owner selectors", got)
 			}
 
@@ -79,7 +94,7 @@ func TestWorkItemProvidersUseCurrentSelectorScopeAndThrowingSettings(t *testing.
 			if _, err := provider.ReadFacts(context.Background(), principal, query); err != nil {
 				t.Fatalf("second ReadFacts() error = %v", err)
 			}
-			if got := testBindingValueAt(t, client, 1, "requested_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/c"}) {
+			if got := testBindingValueAt(t, client, perRead, "requested_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/c"}) {
 				t.Fatalf("second requested_repo_slugs = %#v, want only current query selector", got)
 			}
 		})
@@ -261,8 +276,14 @@ func TestStatusProviderOrgScoped(t *testing.T) {
 	if got := client.orgIDBinding(); got != "org-9" {
 		t.Fatalf("org_id binding = %q", got)
 	}
-	if got := client.idsBinding(); len(got) != 1 || got[0] != "repo-1:WIDGET-101" {
-		t.Fatalf("ids binding = %#v, want exactly the requested subject", got)
+	var got []string
+	for _, binding := range client.queries[0].bindings {
+		if binding.Name == "ids" {
+			got, _ = binding.Value.([]string)
+		}
+	}
+	if len(got) != 1 || got[0] != "repo-1:WIDGET-101" {
+		t.Fatalf("status read ids binding = %#v, want exactly the requested subject", got)
 	}
 }
 

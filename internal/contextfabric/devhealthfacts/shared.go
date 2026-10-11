@@ -807,7 +807,11 @@ import (
 // v164 -> v165: every canonical fact the registry accepts carries a deterministic id and a
 // synthesized claim may cite it (fact_id); a candidate saved under an earlier version holds
 // facts and claims without ids.
-const QueryVersion = "devhealthfacts.clickhouse.v165"
+//
+// v165 -> v166: a work item's status fact adds status_since, status_duration_seconds and
+// status_since_basis; a candidate saved under v165 holds a status fact without the time in
+// the current status and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v166"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
