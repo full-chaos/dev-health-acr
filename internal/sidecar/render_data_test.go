@@ -125,3 +125,35 @@ func TestGraphQLSummaryShowsTheCompletenessReasonPerRoot(t *testing.T) {
 		}
 	}
 }
+
+func TestDataCatalogSummaryStatesRunOperationAccessNextToGrant(t *testing.T) {
+	cases := map[string]string{
+		`"effective_access":"no_data_read"`: "Repository grant: unrestricted. Scopes: context:read. run_operation: refused (scope_missing_data_read).",
+		`"effective_access":"data_read"`:    "Repository grant: unrestricted. Scopes: context:read. run_operation: allowed.",
+		`"effective_access":"not_servable"`: "run_operation: not available in this deployment.",
+		`"x":1`:                             "run_operation: unknown.",
+	}
+	for field, want := range cases {
+		raw := `{"contract_version":"acr-data.v1","sections":["limits"],"caller":{"scopes":["context:read"],"grant_class":"unrestricted",` + field + `}}`
+		got := RenderDataCatalogSummary([]byte(raw), DataTextMaxBytes)
+		if !strings.Contains(got, want) {
+			t.Errorf("%s: %q lacks %q", field, got, want)
+		}
+		if strings.Contains(got, "Your grant class") {
+			t.Errorf("%s: old wording %q", field, got)
+		}
+	}
+}
+
+func TestDataCatalogSummaryOldServerWithOperationsSectionNeverClaimsAccess(t *testing.T) {
+	raw := `{"contract_version":"acr-data.v1","sections":["operations"],"operations":{"caller_class":"unrestricted","available":false,"reason":"scope_missing_data_read","operations":[],"not_served":[],"refused_shapes":[]},"caller":{"scopes":["context:read"],"grant_class":"unrestricted"}}`
+	got := RenderDataCatalogSummary([]byte(raw), DataTextMaxBytes)
+	for _, want := range []string{"Repository grant: unrestricted.", "run_operation: unknown.", "run_operation available to you now: no (scope_missing_data_read)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q lacks %q", got, want)
+		}
+	}
+	if strings.Contains(got, "run_operation: allowed") {
+		t.Errorf("claims access: %q", got)
+	}
+}
