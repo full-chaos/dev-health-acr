@@ -212,7 +212,7 @@ func TestTheRealComposerCarriesTheRuleAndStageIntoItsEvent(t *testing.T) {
 	telemetry := &recordingTelemetry{}
 	input := largeSynthesisInputFixture(3)
 	synthesizer := RuntimeAnswerSynthesizer{Telemetry: telemetry}
-	if _, err := synthesizer.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, input, workItemModelBreachFailure(WorkItemRuleDriverSubjectOutsideMembers, "validation", false)); err != nil {
+	if _, err := synthesizer.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, input, workItemModelBreachFailure(WorkItemRuleDriverSubjectOutsideMembers, "validation", nil)); err != nil {
 		t.Fatal(err)
 	}
 	if len(telemetry.synthesisModelFailures) != 1 || telemetry.synthesisModelFailures[0].Rule != "driver_subject_outside_members" || telemetry.synthesisModelFailures[0].Stage != "validation" {
@@ -231,7 +231,7 @@ func TestTheDegradeBasisKeepsTheServiceAuthoredDisclosures(t *testing.T) {
 func TestADeferredEventIsLeftToTheCaller(t *testing.T) {
 	telemetry := &recordingTelemetry{}
 	synthesizer := RuntimeAnswerSynthesizer{Telemetry: telemetry}
-	failure := workItemModelBreachFailure(WorkItemRuleDriverSubjectOutsideMembers, "validation", false)
+	failure := workItemModelBreachFailure(WorkItemRuleDriverSubjectOutsideMembers, "validation", nil)
 	failure.DeferEvent = true
 	if _, err := synthesizer.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, largeSynthesisInputFixture(3), failure); err != nil {
 		t.Fatal(err)

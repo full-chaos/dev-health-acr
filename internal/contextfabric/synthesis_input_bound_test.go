@@ -421,7 +421,7 @@ func TestAModelFailureAfterBoundingStillDisclosesTheBound(t *testing.T) {
 	_, err := synthesizer.Synthesize(context.Background(), principal, input)
 
 	var failure *SynthesisFailure
-	if !errors.As(err, &failure) || !failure.InputBounded {
+	if !errors.As(err, &failure) || failure.Bound == nil {
 		t.Fatalf("Synthesize() error = %v, want a SynthesisFailure from a bounded input", err)
 	}
 	result, err := synthesizer.ComposeDegraded(context.Background(), principal, input, failure)
@@ -435,4 +435,157 @@ func TestAModelFailureAfterBoundingStillDisclosesTheBound(t *testing.T) {
 	if !found {
 		t.Fatalf("limitations = %q, want the bounded-input disclosure", result.Limitations)
 	}
+}
+
+func boundDetailsOf(coverage Coverage) []CoverageDetail {
+	var details []CoverageDetail
+	for _, detail := range coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisInputBounded {
+			details = append(details, detail)
+		}
+	}
+	return details
+}
+
+// wantBoundDetail reads one detail's fact kind and its two counts.
+func wantBoundDetail(t *testing.T, detail CoverageDetail, kind FactKind, declared, served int) {
+	t.Helper()
+	if detail.FactKind != kind || detail.Declared == nil || *detail.Declared != declared || detail.Served == nil || *detail.Served != served {
+		t.Fatalf("detail = %+v, want %s: %d read, %d given", detail, kind, declared, served)
+	}
+	if detail.Degrading {
+		t.Fatalf("detail %s degrades: the bounded input is disclosed, not counted as a second degradation", kind)
+	}
+	if detail.DetailID == "" {
+		detail.DetailID = "cov-01"
+	}
+	if err := detail.Validate(); err != nil {
+		t.Fatalf("detail %s does not validate: %v", kind, err)
+	}
+}
+
+// 199 work facts and the committed project's readiness fact were read; the
+// runtime's bound kept 89 work facts and the readiness fact. The disclosure
+// says so per kind, as numbers.
+func TestABoundedInputIsDisclosedPerKindAsGivenOfRead(t *testing.T) {
+	input := largeSynthesisInputFixture(199)
+	var given []SynthesisInput
+	synthesizer := RuntimeAnswerSynthesizer{Runtime: sizedModelRuntime{bytesPerFact: 10, maxBytes: 1000, draft: validSynthesisDraftFixture(input), given: &given}}
+
+	result, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	details := boundDetailsOf(result.Coverage)
+	if len(details) != 2 {
+		t.Fatalf("bounded-input details = %+v, want one per fact kind read", details)
+	}
+	wantBoundDetail(t, details[0], FactReadiness, 1, 1)
+	wantBoundDetail(t, details[1], FactWork, 199, 89)
+	if got := contractsv1.ComposeCoverageDetailLabel(details[1]); details[1].Label != got || got != "89 of 199 work facts read were given to answer synthesis" {
+		t.Fatalf("label = %q, want the composed %q", details[1].Label, got)
+	}
+}
+
+// An input that fits is not disclosed as bounded.
+func TestAnInputThatFitsHasNoBoundedInputDetail(t *testing.T) {
+	input := largeSynthesisInputFixture(3)
+	var given []SynthesisInput
+	synthesizer := RuntimeAnswerSynthesizer{Runtime: sizedModelRuntime{bytesPerFact: 10, maxBytes: 1000, draft: validSynthesisDraftFixture(input), given: &given}}
+
+	result, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if details := boundDetailsOf(result.Coverage); len(details) != 0 {
+		t.Fatalf("bounded-input details = %+v, want none for an input that fit", details)
+	}
+}
+
+// The degraded answer served after a bounded call carries the same numbers,
+// and so does the degraded answer composed from a stored result's own details.
+func TestAModelFailureAfterBoundingKeepsThePerKindDisclosure(t *testing.T) {
+	input := largeSynthesisInputFixture(199)
+	draft := validSynthesisDraftFixture(input)
+	title := "work_150"
+	workItem := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_150", Label: "work_150"}
+	draft.Drivers[0].AffectedSubjects = append(draft.Drivers[0].AffectedSubjects, workItem)
+	draft.Drivers[0].ClaimedFactIDs = []string{"claim_work_1"}
+	draft.ClaimedFacts = []ClaimedFact{{ClaimID: "claim_work_1", Kind: FactWork, Field: "title", Value: ScalarValue{String: &title}, Subject: workItem}}
+	var given []SynthesisInput
+	synthesizer := RuntimeAnswerSynthesizer{Runtime: sizedModelRuntime{bytesPerFact: 10, maxBytes: 1000, draft: draft, given: &given}}
+	principal := storage.Principal{OrgID: "org_1"}
+
+	_, err := synthesizer.Synthesize(context.Background(), principal, input)
+
+	var failure *SynthesisFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("Synthesize() error = %v, want a SynthesisFailure", err)
+	}
+	result, err := synthesizer.ComposeDegraded(context.Background(), principal, input, failure)
+	if err != nil {
+		t.Fatalf("ComposeDegraded() error = %v", err)
+	}
+	details := boundDetailsOf(result.Coverage)
+	if len(details) != 2 {
+		t.Fatalf("bounded-input details = %+v, want one per fact kind read", details)
+	}
+	wantBoundDetail(t, details[0], FactReadiness, 1, 1)
+	wantBoundDetail(t, details[1], FactWork, 199, 89)
+
+	recovered := synthesisInputBoundOf(result)
+	if recovered == nil || len(recovered.Details) != 2 {
+		t.Fatalf("synthesisInputBoundOf = %+v, want both details recovered from the served answer", recovered)
+	}
+	result.Limitations = nil
+	if synthesisInputBoundOf(result) != nil {
+		t.Fatal("an answer without the bounded-input limitation was read as bounded")
+	}
+}
+
+func TestTheBoundedInputDetailRequiresTheCountsAndTheFactKind(t *testing.T) {
+	two, one := 2, 1
+	valid := CoverageDetail{
+		DetailID: "cov-01", Source: synthesisInputBoundSource, Code: contractsv1.ContextFabricCoverageDetailSynthesisInputBounded,
+		FactKind: FactWork, Declared: &two, Served: &one, Label: "1 of 2 work facts read were given to answer synthesis",
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid detail: %v", err)
+	}
+	cases := map[string]func(*CoverageDetail){
+		"no fact kind":     func(d *CoverageDetail) { d.FactKind = "" },
+		"no declared":      func(d *CoverageDetail) { d.Declared = nil },
+		"no served":        func(d *CoverageDetail) { d.Served = nil },
+		"served over read": func(d *CoverageDetail) { d.Served = &two; d.Declared = &one },
+		"a subject kind":   func(d *CoverageDetail) { d.Kind = SubjectProject },
+		"degrading":        func(d *CoverageDetail) { d.Degrading = true },
+		"a count":          func(d *CoverageDetail) { d.Count = &one },
+		"a source state":   func(d *CoverageDetail) { d.SourceState = SourceAvailable },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			detail := valid
+			mutate(&detail)
+			if err := detail.Validate(); err == nil {
+				t.Fatalf("detail %+v validated, want it refused", detail)
+			}
+		})
+	}
+}
+
+// A kind read whose facts were all cut from the input is still disclosed, at
+// zero given: the kinds come from what was read, not from what was kept.
+func TestTheBoundedInputDisclosesAKindThatNoFactSurvived(t *testing.T) {
+	read := append(boundFixtureFacts(FactWork, SubjectWorkItem, 4), boundFixtureFacts(FactPullRequests, SubjectPullRequest, 3)...)
+	given := boundFixtureFacts(FactWork, SubjectWorkItem, 2)
+
+	bound := newSynthesisInputBound(read, given)
+
+	if len(bound.Details) != 2 {
+		t.Fatalf("details = %+v, want one per kind read", bound.Details)
+	}
+	wantBoundDetail(t, bound.Details[0], FactPullRequests, 3, 0)
+	wantBoundDetail(t, bound.Details[1], FactWork, 4, 2)
 }

@@ -3,9 +3,11 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -271,10 +273,61 @@ func factCountsByKind(facts []CanonicalFact) map[FactKind]int {
 	return counts
 }
 
+// synthesisInputBoundSource is the coverage source a bounded-input detail is
+// filed under: the synthesis step, not a read.
+const synthesisInputBoundSource = "context-fabric:synthesis"
+
+// synthesisInputBound is the disclosure of one bounded synthesis input: the
+// structured per-kind form of "given N of M facts read". It is nil when the
+// input was not bounded. newSynthesisInputBound is its one producer.
+type synthesisInputBound struct {
+	Details []CoverageDetail
+}
+
+// newSynthesisInputBound builds one detail per fact kind read: Declared is the
+// facts read of the kind, Served the facts of the kind synthesis was given.
+// Kinds come in sorted order, so the details are deterministic.
+func newSynthesisInputBound(read, given []CanonicalFact) *synthesisInputBound {
+	readCounts, givenCounts := factCountsByKind(read), factCountsByKind(given)
+	kinds := make([]string, 0, len(readCounts))
+	for kind := range readCounts {
+		kinds = append(kinds, string(kind))
+	}
+	sort.Strings(kinds)
+	details := make([]CoverageDetail, 0, len(kinds))
+	for _, name := range kinds {
+		kind := FactKind(name)
+		declared, served := readCounts[kind], givenCounts[kind]
+		detail := CoverageDetail{
+			Source: synthesisInputBoundSource, Code: contractsv1.ContextFabricCoverageDetailSynthesisInputBounded,
+			FactKind: kind, Declared: &declared, Served: &served,
+			Raw: string(contractsv1.ContextFabricCoverageDetailSynthesisInputBounded) + ":" + name,
+		}
+		detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+		details = append(details, detail)
+	}
+	return &synthesisInputBound{Details: details}
+}
+
+// synthesisInputBoundOf recovers the disclosure from an answer that already
+// carries it, for a degraded answer composed after the call that bounded.
+func synthesisInputBoundOf(result InvestigationResult) *synthesisInputBound {
+	if !slices.Contains(result.Limitations, contractsv1.ContextFabricSynthesisInputBoundedLimitation) {
+		return nil
+	}
+	bound := &synthesisInputBound{}
+	for _, detail := range result.Coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisInputBounded {
+			bound.Details = append(bound.Details, detail)
+		}
+	}
+	return bound
+}
+
 // synthesizeWithinInputBound places the synthesis call and, when the runtime
 // answers that its input does not fit, reduces the facts and places it again.
 // It returns the input the model was given and whether that input was bounded.
-func (r RuntimeAnswerSynthesizer) synthesizeWithinInputBound(ctx context.Context, principal storage.Principal, input SynthesisInput) (SynthesisInput, SynthesisDraft, ModelExecutionReceipt, bool, error) {
+func (r RuntimeAnswerSynthesizer) synthesizeWithinInputBound(ctx context.Context, principal storage.Principal, input SynthesisInput) (SynthesisInput, SynthesisDraft, ModelExecutionReceipt, *synthesisInputBound, error) {
 	given := input
 	var event SynthesisInputBoundEvent
 	ranking := newFactRanking(input)
@@ -286,7 +339,10 @@ func (r RuntimeAnswerSynthesizer) synthesizeWithinInputBound(ctx context.Context
 				event.Outcome = SynthesisInputBoundFitted
 				r.recordSynthesisInputBound(ctx, principal, event, input, given)
 			}
-			return given, draft, receipt, event.Passes > 0, err
+			if event.Passes > 0 {
+				return given, draft, receipt, newSynthesisInputBound(input.Facts.Facts, given.Facts.Facts), err
+			}
+			return given, draft, receipt, nil, err
 		}
 		if event.Passes == 0 {
 			event.InputBytes, event.MaxInputBytes = overflow.Bytes, overflow.MaxBytes
@@ -298,7 +354,7 @@ func (r RuntimeAnswerSynthesizer) synthesizeWithinInputBound(ctx context.Context
 		if !reduced || event.Passes == maxSynthesisInputBoundPasses {
 			event.Outcome = SynthesisInputBoundExhausted
 			r.recordSynthesisInputBound(ctx, principal, event, input, given)
-			return given, draft, receipt, false, err
+			return given, draft, receipt, nil, err
 		}
 		event.Passes++
 		given.Facts.Facts = bounded

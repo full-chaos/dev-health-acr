@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2385,7 +2386,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		return InvestigationResult{}, ErrModelUnavailable
 	}
 	started := time.Now()
-	input, draft, receipt, inputBounded, err := r.synthesizeWithinInputBound(ctx, principal, input)
+	input, draft, receipt, bound, err := r.synthesizeWithinInputBound(ctx, principal, input)
 	if err == nil {
 		var validateErr error
 		draft, validateErr = r.vetSynthesisDraft(ctx, principal, input, draft)
@@ -2410,11 +2411,11 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	}
 	if err != nil {
 		if class, degrade := synthesisFailureDegradeClass(ctx, callErr, sinkErr); degrade {
-			return InvestigationResult{}, &SynthesisFailure{Class: class, Attempts: receipt.Attempts, Elapsed: time.Since(started), Receipt: receipt, InputBounded: inputBounded, cause: err}
+			return InvestigationResult{}, &SynthesisFailure{Class: class, Attempts: receipt.Attempts, Elapsed: time.Since(started), Receipt: receipt, Bound: bound, cause: err}
 		}
 		return InvestigationResult{}, err
 	}
-	return r.composeSynthesisResult(ctx, principal, input, draft, receipt, inputBounded, false)
+	return r.composeSynthesisResult(ctx, principal, input, draft, receipt, bound, false)
 }
 
 // vetSynthesisDraft is the one sequence both the service's own model draft
@@ -2475,7 +2476,7 @@ func (r RuntimeAnswerSynthesizer) vetSynthesisDraft(ctx context.Context, princip
 
 // composeSynthesisResult composes the served result from a validated draft,
 // or, with modelFailed, from the draft a failed call is served with.
-func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, principal storage.Principal, input SynthesisInput, draft SynthesisDraft, receipt ModelExecutionReceipt, inputBounded, modelFailed bool) (InvestigationResult, error) {
+func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, principal storage.Principal, input SynthesisInput, draft SynthesisDraft, receipt ModelExecutionReceipt, bound *synthesisInputBound, modelFailed bool) (InvestigationResult, error) {
 	// CHAOS-4355: attachCanonicalRows is the ONLY place a ClaimedFact.Rows
 	// is ever set. ValidateAgainst has just rejected any draft claim that
 	// carried a non-empty Rows of its own, so every claim reaching this
@@ -2566,11 +2567,12 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 	// projection ships, this is the one line that changes: pass THAT
 	// projection's ids instead, and the guard starts catching a
 	// canonical-but-unshown detail_id it cannot distinguish today.
-	if inputBounded {
+	if bound != nil {
 		var displaced int
 		result.Limitations, displaced = appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricSynthesisInputBoundedLimitation})
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
+		result.Coverage.Details = mergeCoverageDetails(append(slices.Clone(result.Coverage.Details), bound.Details...), result.Coverage.DegradedReasons, principal.OrgID)
 		// Only a complete status is lowered: the answer was written from part
 		// of the facts. A status already weaker than partial says more.
 		if result.Status == InvestigationComplete {
