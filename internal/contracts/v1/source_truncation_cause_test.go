@@ -19,6 +19,8 @@ func sourceTruncationDepthRow(code ContextFabricCoverageDetailCode) ContextFabri
 var frozenSourceTruncationCauses = []ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailFactProviderReported,
 	ContextFabricCoverageDetailFactScopeUnexpanded,
+	ContextFabricCoverageDetailFactReadFailed,
+	ContextFabricCoverageDetailFactUnconfigured,
 }
 
 func TestSourceTruncationCausesAreTheFrozenSet(t *testing.T) {

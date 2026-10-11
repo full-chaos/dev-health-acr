@@ -742,23 +742,34 @@ func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode)
 }
 
 // coverageDetailCodeQualifiesSourceTruncation reports whether a coverage
-// detail code names a SOURCE-LEVEL shortfall: a fact source that returned part
-// of what was asked of it, with no larger population to count the gap
-// against. Only such a cause may sit on a depth row whose served and declared
-// counts are equal (truncationQualified in the outcome validator): the
-// provider cut its own answer (fact_provider_reported), or scope expansion did
-// not reach every target (fact_scope_unexpanded). Every other code states a
-// different mechanism (a failed or absent read, a prune, a narrowing, a
-// disclosure) and keeps the "not a reduction" refusal. The set is frozen by
-// TestSourceTruncationCausesAreTheFrozenSet, so a new code joins by a
-// conscious edit of both.
+// detail code names a SOURCE-LEVEL shortfall: a fact read that returned part of
+// what was asked of it (the provider truncated or failed, the read could not be
+// configured, scope expansion did not reach every target), with no larger
+// population to count the gap against. Only such a cause may sit on a depth row
+// whose served and declared counts are equal (truncationQualified in the
+// outcome validator): the counts over what was observed are exact and the
+// source said it did not return everything.
+//
+// The property, not a list: a `fact_` read-time code that may degrade an
+// answer. Three kinds of `fact_` code are outside it by name: the planning-time
+// declaration gaps (fact_no_declaring_producer, fact_table_shape_undeclared:
+// nothing was read), and fact_narrowed, a SUBJECT reduction, where equal counts
+// would contradict the code. Non-degrading codes (fact_pruned,
+// fact_read_origin_state) are disclosures, not causes. Every code outside the
+// property keeps the "not a reduction" refusal. TestSourceTruncationCausesAre
+// TheFrozenSet writes the derived set out, so a new code joins by a conscious
+// edit.
 func coverageDetailCodeQualifiesSourceTruncation(code ContextFabricCoverageDetailCode) bool {
-	switch code {
-	case ContextFabricCoverageDetailFactProviderReported, ContextFabricCoverageDetailFactScopeUnexpanded:
-		return true
-	default:
+	if !strings.HasPrefix(string(code), "fact_") || !ContextFabricCoverageDetailCodeMayDegrade(code) {
 		return false
 	}
+	switch code {
+	case ContextFabricCoverageDetailFactNoDeclaringProducer,
+		ContextFabricCoverageDetailFactTableShapeUndeclared,
+		ContextFabricCoverageDetailFactNarrowed:
+		return false
+	}
+	return true
 }
 
 // ContextFabricCoverageDetailCodeMayDegrade declares, per the settled design,
