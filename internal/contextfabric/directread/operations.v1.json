@@ -1246,7 +1246,9 @@
           "leaf": "scalar",
           "emit_subject": {
             "kind": "repository",
-            "acr_prefix": "repository:"
+            "acr_prefix": "repository:",
+            "when_variable": "input.scope",
+            "when_variable_equals": "REPO"
           }
         },
         {

@@ -61,7 +61,11 @@ func TestServedRepositoryIDsCarryTheAcrFormAtEveryMarkedOutput(t *testing.T) {
 			if out.EmitSubject.AcrPrefix != "repository:" || out.EmitSubject.Kind != "repository" {
 				t.Fatalf("%s: marker %+v", out.Path, out.EmitSubject)
 			}
+			var serveWith func(id any, sibling string, vars map[string]any) string
 			serve := func(id any, sibling string) string {
+				return serveWith(id, sibling, requestVars(out.EmitSubject, out.EmitSubject.WhenVariableEquals))
+			}
+			serveWith = func(id any, sibling string, vars map[string]any) string {
 				root := opBuild(out.Path, id)
 				if sibling != "" {
 					list, leaf, _ := strings.Cut(out.Path, "[*].")
@@ -69,7 +73,7 @@ func TestServedRepositoryIDsCarryTheAcrFormAtEveryMarkedOutput(t *testing.T) {
 					opPlace(root, strings.Split(list+"[*]."+out.EmitSubject.WhenSibling, "."), sibling)
 				}
 				raw, _ := json.Marshal(root)
-				res, err := directread.FilterResponse(op, raw)
+				res, err := directread.FilterResponseFor(op, raw, vars)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -85,6 +89,13 @@ func TestServedRepositoryIDsCarryTheAcrFormAtEveryMarkedOutput(t *testing.T) {
 			if got := serve(nil, sibling); strings.Contains(got, "repository:") {
 				t.Errorf("%s: null id prefixed: %s", out.Path, got)
 			}
+			if out.EmitSubject.WhenVariable != "" {
+				for _, other := range []string{"FILE", ""} {
+					if got := serveWith(opRepoA, sibling, requestVars(out.EmitSubject, other)); strings.Contains(got, "repository:") || !strings.Contains(got, `"`+opRepoA+`"`) {
+						t.Errorf("%s: uuid-shaped id rewritten for request value %q: %s", out.Path, other, got)
+					}
+				}
+			}
 			if out.EmitSubject.WhenSibling != "" {
 				if got := serve(opRepoA, "TEAM"); strings.Contains(got, "repository:") {
 					t.Errorf("%s: id prefixed under another scope: %s", out.Path, got)
@@ -96,4 +107,20 @@ func TestServedRepositoryIDsCarryTheAcrFormAtEveryMarkedOutput(t *testing.T) {
 	if !slices.Equal(marked, wantMarked) {
 		t.Fatalf("marked outputs = %v, want %v", marked, wantMarked)
 	}
+}
+
+func requestVars(e *directread.SubjectEmit, value string) map[string]any {
+	if e.WhenVariable == "" || value == "" {
+		return nil
+	}
+	vars := map[string]any{}
+	segs := strings.Split(e.WhenVariable, ".")
+	cur := vars
+	for _, seg := range segs[:len(segs)-1] {
+		next := map[string]any{}
+		cur[seg] = next
+		cur = next
+	}
+	cur[segs[len(segs)-1]] = value
+	return vars
 }

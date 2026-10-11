@@ -433,12 +433,23 @@ type SubjectEmit struct {
 	AcrPrefix   string `json:"acr_prefix"`
 	WhenSibling string `json:"when_sibling,omitempty"`
 	WhenEquals  string `json:"when_equals,omitempty"`
+	// WhenVariable names a request variable that must equal
+	// WhenVariableEquals (an absent variable never does): the request's own
+	// scope decides, whatever shape an id has.
+	WhenVariable       string `json:"when_variable,omitempty"`
+	WhenVariableEquals string `json:"when_variable_equals,omitempty"`
 }
 
-func (e *SubjectEmit) apply(obj map[string]any, value any) any {
+func (e *SubjectEmit) apply(obj map[string]any, vars map[string]any, value any) any {
 	s, ok := value.(string)
 	if !ok || e.AcrPrefix == "" || !isUUID(s) {
 		return value
+	}
+	if e.WhenVariable != "" {
+		got, _ := lookupOne(vars, e.WhenVariable).value.(string)
+		if got != e.WhenVariableEquals {
+			return value
+		}
 	}
 	if e.WhenSibling != "" {
 		if sib, _ := obj[e.WhenSibling].(string); sib != e.WhenEquals {
@@ -940,6 +951,13 @@ type FilterResult struct {
 // object or a list of objects is removed as well: an allowlisted scalar
 // path never smuggles nested data. The caller ERROR-logs a non-zero result.
 func FilterResponse(op *OperationPolicy, data []byte) (FilterResult, error) {
+	return FilterResponseFor(op, data, nil)
+}
+
+// FilterResponseFor is FilterResponse with the request's variable tree: an
+// output whose emit rule reads a request variable is rewritten only when that
+// variable has the named value.
+func FilterResponseFor(op *OperationPolicy, data []byte, vars map[string]any) (FilterResult, error) {
 	if op == nil || op.outputs == nil {
 		return FilterResult{}, errors.New("filter: operation policy not loaded")
 	}
@@ -949,7 +967,7 @@ func FilterResponse(op *OperationPolicy, data []byte) (FilterResult, error) {
 	if err := dec.Decode(&root); err != nil {
 		return FilterResult{}, fmt.Errorf("filter: decode: %w", err)
 	}
-	f := &responseFilter{op: op, removed: map[string]bool{}}
+	f := &responseFilter{op: op, vars: vars, removed: map[string]bool{}}
 	obj, ok := root.(map[string]any)
 	if !ok {
 		if root == nil {
@@ -972,6 +990,7 @@ func FilterResponse(op *OperationPolicy, data []byte) (FilterResult, error) {
 
 type responseFilter struct {
 	op      *OperationPolicy
+	vars    map[string]any
 	removed map[string]bool
 	count   int
 }
@@ -994,7 +1013,7 @@ func (f *responseFilter) object(path string, obj map[string]any) map[string]any 
 		child := joinPath(path, key)
 		if kept, ok := f.value(child, value); ok {
 			if emit := f.op.emits[child]; emit != nil {
-				kept = emit.apply(obj, kept)
+				kept = emit.apply(obj, f.vars, kept)
 			}
 			out[key] = kept
 		}

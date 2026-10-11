@@ -290,7 +290,7 @@ func declaredPolicy() policyDeclaration {
 			},
 			"complexityTimeseries": {
 				DocumentName: "ComplexityTimeseries",
-				EmitSubjects: map[string]dr.SubjectEmit{"complexityTimeseries.points[*].scopeId": dr.SubjectEmit{Kind: dr.SubjectKindRepository, AcrPrefix: "repository:"}},
+				EmitSubjects: map[string]dr.SubjectEmit{"complexityTimeseries.points[*].scopeId": {Kind: dr.SubjectKindRepository, AcrPrefix: "repository:", WhenVariable: "input.scope", WhenVariableEquals: "REPO"}},
 				Cost:         dr.CostSeries,
 				Variables: map[string]variableDecl{
 					"input.orgId":       principalOrg,
