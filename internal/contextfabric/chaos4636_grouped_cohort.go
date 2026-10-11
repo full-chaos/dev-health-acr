@@ -890,23 +890,29 @@ func applyGroupingRefusalDisclosure(result *InvestigationResult, outcome CohortG
 	result.Coverage.Partial = true
 }
 
-// CohortGroupOverlap is how many members of a built grouping sit under more
-// than one group (a repository owned by several teams). Zero Count means no
-// overlap and no disclosure.
-type CohortGroupOverlap struct {
-	Count      int
+// CohortGroupCoverage is what a built grouping says about the members it did
+// and did not place, counted over the SERVED (narrowed) cohort: members under
+// more than one group, members under none, and members whose group list the
+// facts cut short. All zero means nothing to disclose.
+type CohortGroupCoverage struct {
+	Overlap    int
+	Ungrouped  int
+	Cut        int
 	MemberKind SubjectKind
 	GroupKind  SubjectKind
 }
 
-// CohortGroupOverlapOf counts the cohort members listed under more than one
-// of groups. Call it on the cohort that is SERVED (after narrowing).
-func CohortGroupOverlapOf(cohort *Cohort, groups []contractsv1.ContextFabricCohortGroup) CohortGroupOverlap {
+// ownersOmittedField is the repository identity field that carries how many
+// owning teams the per-repository cap left out.
+const ownersOmittedField = "owning_teams_omitted_count"
+
+// CohortGroupCoverageOf counts over the served cohort. Call it after narrowing.
+// A member whose facts name an omitted-owner count above zero is "cut"; a member
+// listed in no group is "ungrouped"; one listed in several is "overlap".
+func CohortGroupCoverageOf(cohort *Cohort, groups []contractsv1.ContextFabricCohortGroup, facts []CanonicalFact) CohortGroupCoverage {
 	if cohort == nil || len(groups) == 0 {
-		return CohortGroupOverlap{}
+		return CohortGroupCoverage{}
 	}
-	// Only members the cohort still carries count: the overlap is stated over
-	// the served (narrowed) set, never over members the answer dropped.
 	served := make(map[string]struct{}, len(cohort.Members))
 	for _, member := range cohort.Members {
 		served[member.Subject.CanonicalID] = struct{}{}
@@ -919,24 +925,48 @@ func CohortGroupOverlapOf(cohort *Cohort, groups []contractsv1.ContextFabricCoho
 			}
 		}
 	}
-	count := 0
-	for _, n := range placed {
-		if n > 1 {
-			count++
+	cut := make(map[string]struct{})
+	for _, fact := range facts {
+		if _, ok := served[fact.Subject.CanonicalID]; !ok {
+			continue
+		}
+		if value, present := fact.Fields[ownersOmittedField]; present && value.Integer != nil && *value.Integer > 0 {
+			cut[fact.Subject.CanonicalID] = struct{}{}
 		}
 	}
-	return CohortGroupOverlap{Count: count, MemberKind: cohort.Kind, GroupKind: groups[0].Subject.Kind}
+	out := CohortGroupCoverage{MemberKind: cohort.Kind, GroupKind: groups[0].Subject.Kind, Cut: len(cut)}
+	for id := range served {
+		switch n := placed[id]; {
+		case n == 0:
+			out.Ungrouped++
+		case n > 1:
+			out.Overlap++
+		}
+	}
+	return out
 }
 
-// applyGroupOverlapDisclosure states on the wire that some members appear
-// under more than one group. It does not mark the answer partial: the
-// grouping is complete, only its totals overlap.
-func applyGroupOverlapDisclosure(result *InvestigationResult, overlap CohortGroupOverlap) {
-	if result == nil || overlap.Count < 1 {
+// applyGroupCoverageDisclosure states on the wire what the grouping left out or
+// doubled. It does not mark the answer partial: the grouping is complete for the
+// members it placed.
+func applyGroupCoverageDisclosure(result *InvestigationResult, coverage CohortGroupCoverage) {
+	if result == nil {
 		return
 	}
-	sentence := contractsv1.ContextFabricGroupingOverlapLimitation(overlap.MemberKind, overlap.GroupKind, overlap.Count)
-	composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+	var sentences []string
+	if coverage.Ungrouped > 0 {
+		sentences = append(sentences, contractsv1.ContextFabricGroupingUngroupedLimitation(coverage.MemberKind, coverage.GroupKind, coverage.Ungrouped))
+	}
+	if coverage.Cut > 0 {
+		sentences = append(sentences, contractsv1.ContextFabricGroupingCutLimitation(coverage.MemberKind, coverage.GroupKind, coverage.Cut))
+	}
+	if coverage.Overlap > 0 {
+		sentences = append(sentences, contractsv1.ContextFabricGroupingOverlapLimitation(coverage.MemberKind, coverage.GroupKind, coverage.Overlap))
+	}
+	if len(sentences) == 0 {
+		return
+	}
+	composed, displaced := appendBoundedLimitations(result.Limitations, sentences)
 	result.Limitations = composed
 	result.LimitationsDisplaced += displaced
 }

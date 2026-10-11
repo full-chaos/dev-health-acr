@@ -553,7 +553,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	if cohort := params.Graph.Cohort; cohort != nil {
 		// Over the SERVED cohort: narrowing has already run, so a member the
 		// answer dropped is never counted.
-		applyGroupOverlapDisclosure(&result, CohortGroupOverlapOf(cohort, cohort.Groups))
+		applyGroupCoverageDisclosure(&result, CohortGroupCoverageOf(cohort, cohort.Groups, params.Facts.Facts))
 	}
 	// The group read's half: groups this answer did not read, or a group
 	// list too large to carry, said on the wire beside the grouping refusal

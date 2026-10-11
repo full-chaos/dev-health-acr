@@ -47,17 +47,41 @@ func TestRepositoryCohortGroupsUnderEveryOwningTeam(t *testing.T) {
 	if ungrouped != 1 {
 		t.Fatalf("ungrouped = %d, want 1 (r3 has no owning team row)", ungrouped)
 	}
-	overlap := CohortGroupOverlapOf(cohort, groups)
-	if overlap.Count != 1 || overlap.MemberKind != SubjectRepository || overlap.GroupKind != SubjectTeam {
-		t.Fatalf("overlap = %+v, want 1 repository under more than one team (only r2 has two owners)", overlap)
+	coverage := CohortGroupCoverageOf(cohort, groups, facts)
+	if coverage.Overlap != 1 || coverage.Ungrouped != 1 || coverage.Cut != 0 || coverage.MemberKind != SubjectRepository || coverage.GroupKind != SubjectTeam {
+		t.Fatalf("coverage = %+v, want overlap 1 (r2), ungrouped 1 (r3), cut 0", coverage)
 	}
 	result := InvestigationResult{}
-	applyGroupOverlapDisclosure(&result, overlap)
-	if len(result.Limitations) != 1 || !contractsv1.IsContextFabricServiceAuthoredLimitation(result.Limitations[0]) {
-		t.Fatalf("limitations = %q, want one recognised service-authored overlap disclosure", result.Limitations)
+	applyGroupCoverageDisclosure(&result, coverage)
+	if len(result.Limitations) != 2 {
+		t.Fatalf("limitations = %q, want the ungrouped and the overlap sentence", result.Limitations)
 	}
-	if !strings.HasPrefix(result.Limitations[0], "1 repository in this answer appear") || result.Coverage.Partial {
-		t.Fatalf("overlap sentence = %q partial=%v", result.Limitations[0], result.Coverage.Partial)
+	for _, sentence := range result.Limitations {
+		if !contractsv1.IsContextFabricServiceAuthoredLimitation(sentence) {
+			t.Fatalf("%q is not a recognised service-authored limitation", sentence)
+		}
+	}
+	if result.Limitations[0] != "1 repository in this answer could not be placed under any team and appear in no group." ||
+		result.Limitations[1] != "1 repository in this answer appear in more than one team, so group totals overlap." || result.Coverage.Partial {
+		t.Fatalf("sentences = %q partial=%v", result.Limitations, result.Coverage.Partial)
+	}
+}
+
+func TestOwnersTheFactsCutShortAreDisclosedNotCalledUnowned(t *testing.T) {
+	t.Parallel()
+	cohort := &Cohort{Kind: SubjectRepository, Complete: true, Members: []CohortMember{repoMember("r1")}}
+	fact := owningTeamsFact("r1", [2]string{"a", "Alpha"})
+	cut := int64(3)
+	fact.Fields["owning_teams_omitted_count"] = FactValue{Integer: &cut}
+	groups, _, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, cohort, []CanonicalFact{fact})
+	coverage := CohortGroupCoverageOf(cohort, groups, []CanonicalFact{fact})
+	if coverage.Cut != 1 || coverage.Ungrouped != 0 {
+		t.Fatalf("coverage = %+v, want cut 1 and ungrouped 0: the repository is grouped under the owners listed", coverage)
+	}
+	result := InvestigationResult{}
+	applyGroupCoverageDisclosure(&result, coverage)
+	if len(result.Limitations) != 1 || !contractsv1.IsContextFabricGroupingCutLimitation(result.Limitations[0]) {
+		t.Fatalf("limitations = %q, want one cut sentence", result.Limitations)
 	}
 }
 
@@ -68,59 +92,78 @@ func TestRepositoryCohortWithNoOwnerRowsIsRefusedNotInvented(t *testing.T) {
 	if len(groups) != 0 || ungrouped != 1 || outcome.Refusal != CohortGroupingRefusalNoMemberPlaced {
 		t.Fatalf("groups=%d ungrouped=%d refusal=%q, want 0/1/no_member_placed", len(groups), ungrouped, outcome.Refusal)
 	}
+	if got := CohortGroupCoverageOf(cohort, groups, nil); got != (CohortGroupCoverage{}) {
+		t.Fatalf("coverage = %+v with no groups, want zero (the refusal already discloses)", got)
+	}
 }
 
-func TestSingleOwnerRepositoriesDiscloseNoOverlap(t *testing.T) {
+func TestSingleOwnerCompleteGroupingDisclosesNothing(t *testing.T) {
 	t.Parallel()
 	cohort := &Cohort{Kind: SubjectRepository, Complete: true, Members: []CohortMember{repoMember("r1")}}
-	groups, _, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, cohort, []CanonicalFact{owningTeamsFact("r1", [2]string{"a", "Alpha"})})
+	facts := []CanonicalFact{owningTeamsFact("r1", [2]string{"a", "Alpha"})}
+	groups, _, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, cohort, facts)
 	result := InvestigationResult{}
-	applyGroupOverlapDisclosure(&result, CohortGroupOverlapOf(cohort, groups))
+	applyGroupCoverageDisclosure(&result, CohortGroupCoverageOf(cohort, groups, facts))
 	if len(result.Limitations) != 0 {
-		t.Fatalf("disclosed %q with no overlap", result.Limitations)
+		t.Fatalf("disclosed %q with nothing to disclose", result.Limitations)
 	}
 }
 
-func TestOverlapLimitationParseRejectsLookalikes(t *testing.T) {
-	t.Parallel()
-	good := contractsv1.ContextFabricGroupingOverlapLimitation(contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectTeam, 3)
-	if !contractsv1.IsContextFabricGroupingOverlapLimitation(good) {
-		t.Fatalf("composer output %q not recognised", good)
-	}
-	for _, bad := range []string{
-		strings.Replace(good, "3 ", "0 ", 1),
-		strings.Replace(good, "3 ", "03 ", 1),
-		strings.Replace(good, "repositories", "widgets", 1),
-		"x " + good,
-		good + " extra",
-	} {
-		if contractsv1.IsContextFabricGroupingOverlapLimitation(bad) {
-			t.Fatalf("lookalike %q recognised", bad)
-		}
-	}
-}
-
-// A repository the answer dropped (narrowed away) that has two owners must not
-// raise the overlap: the count is over the served set only.
-func TestOverlapIsCountedOverTheServedSetOnly(t *testing.T) {
+// Members the answer dropped (narrowed away) never count: an unseen two-owner
+// or unplaced repository is not disclosed.
+func TestCoverageIsCountedOverTheServedSetOnly(t *testing.T) {
 	t.Parallel()
 	served := &Cohort{Kind: SubjectRepository, Complete: true, Members: []CohortMember{repoMember("r1")}}
 	groups := []contractsv1.ContextFabricCohortGroup{
 		{Subject: contractsv1.ContextFabricSubjectRef{Kind: SubjectTeam, CanonicalID: "team:a"}, MemberCanonicalIDs: []string{"repository:r1", "repository:dropped"}},
 		{Subject: contractsv1.ContextFabricSubjectRef{Kind: SubjectTeam, CanonicalID: "team:b"}, MemberCanonicalIDs: []string{"repository:dropped"}},
 	}
-	if got := CohortGroupOverlapOf(served, groups); got.Count != 0 {
-		t.Fatalf("overlap = %d, want 0: the two-owner repository is not in the served cohort", got.Count)
+	cutFact := owningTeamsFact("dropped", [2]string{"a", "Alpha"})
+	n := int64(2)
+	cutFact.Fields["owning_teams_omitted_count"] = FactValue{Integer: &n}
+	if got := CohortGroupCoverageOf(served, groups, []CanonicalFact{cutFact}); got.Overlap != 0 || got.Ungrouped != 0 || got.Cut != 0 {
+		t.Fatalf("coverage = %+v, want zero: the two-owner and cut repository is not in the served cohort", got)
 	}
 }
 
-func TestAssemblyCountsOverlapOverTheNarrowedCohort(t *testing.T) {
+func TestAssemblyCountsCoverageOverTheNarrowedCohort(t *testing.T) {
 	t.Parallel()
 	src, err := os.ReadFile("chaos4636_synthesis_assembly.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(src), "CohortGroupOverlapOf(cohort, cohort.Groups)") {
-		t.Fatal("assembly must count overlap over the served cohort (params.Graph.Cohort), after narrowing")
+	if !strings.Contains(string(src), "CohortGroupCoverageOf(cohort, cohort.Groups, params.Facts.Facts)") {
+		t.Fatal("assembly must count coverage over the served cohort (params.Graph.Cohort), after narrowing")
+	}
+}
+
+func TestGroupingCoverageSentencesParseAndRejectLookalikes(t *testing.T) {
+	t.Parallel()
+	repo, team := contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectTeam
+	for name, tc := range map[string]struct {
+		good string
+		is   func(string) bool
+	}{
+		"overlap":   {contractsv1.ContextFabricGroupingOverlapLimitation(repo, team, 3), contractsv1.IsContextFabricGroupingOverlapLimitation},
+		"ungrouped": {contractsv1.ContextFabricGroupingUngroupedLimitation(repo, team, 3), contractsv1.IsContextFabricGroupingUngroupedLimitation},
+		"cut":       {contractsv1.ContextFabricGroupingCutLimitation(repo, team, 3), contractsv1.IsContextFabricGroupingCutLimitation},
+	} {
+		if !tc.is(tc.good) || !contractsv1.IsContextFabricServiceAuthoredLimitation(tc.good) {
+			t.Fatalf("%s: composer output %q not recognised", name, tc.good)
+		}
+		for _, bad := range []string{
+			strings.Replace(tc.good, "3 ", "0 ", 1),
+			strings.Replace(tc.good, "3 ", "03 ", 1),
+			strings.Replace(tc.good, "repositories", "widgets", 1),
+			"x " + tc.good,
+			tc.good + " extra",
+		} {
+			if tc.is(bad) {
+				t.Fatalf("%s: lookalike %q recognised", name, bad)
+			}
+		}
+	}
+	if contractsv1.IsContextFabricGroupingOverlapLimitation(contractsv1.ContextFabricGroupingUngroupedLimitation(repo, team, 3)) {
+		t.Fatal("the three families must stay disjoint")
 	}
 }

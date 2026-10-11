@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -17,8 +18,8 @@ func TestIdentityProviderEmitsOwningTeamsFromCurrentRepoOwnership(t *testing.T) 
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
 		{match: "team_repo_ownership", rows: [][]any{
-			{"repo-1", "team-a", "Alpha"},
-			{"repo-1", "team-b", "Beta"},
+			{"repo-1", "team-a", "Alpha", int64(2)},
+			{"repo-1", "team-b", "Beta", int64(2)},
 		}},
 		{match: "FROM repos", rows: [][]any{
 			{"repo-1", "acme/one", "github"},
@@ -60,7 +61,7 @@ func TestIdentityProviderEmitsOwningTeamsFromCurrentRepoOwnership(t *testing.T) 
 			last = q
 		}
 	}
-	for _, want := range []string{"valid_to IS NULL", "FROM teams FINAL", "WHERE org_id = {org_id:String} AND is_active = 1) AS t", "lower(r.repo) = lower(o.repo_full_name)"} {
+	for _, want := range []string{"valid_to IS NULL", "FROM teams FINAL", "WHERE org_id = {org_id:String} AND is_active = 1) AS t", "LIMIT 64 BY repo_key", "count() OVER (PARTITION BY repo_key)", "lower(r.repo) = lower(o.repo_full_name)"} {
 		if !strings.Contains(last.statement, want) {
 			t.Fatalf("ownership statement lacks %q:\n%s", want, last.statement)
 		}
@@ -101,5 +102,69 @@ func TestIdentityProviderServesFactsWhenTheOwnershipReadFails(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "context_fabric_owning_teams_read_failed") {
 		t.Fatalf("no log line for the failed ownership read: %q", logs.String())
+	}
+}
+
+func TestIdentityProviderDisclosesOwnersTheCapLeftOut(t *testing.T) {
+	t.Parallel()
+	rows := make([][]any, 0, contextfabric.MaxFactValueRows)
+	for i := 0; i < contextfabric.MaxFactValueRows; i++ {
+		rows = append(rows, []any{"repo-1", fmt.Sprintf("team-%03d", i), "Team", int64(contextfabric.MaxFactValueRows + 5)})
+	}
+	client := &fakeClient{tables: []fakeTable{
+		{match: "team_repo_ownership", rows: rows},
+		{match: "FROM repos", rows: [][]any{{"repo-1", "acme/one", "github"}}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactIdentity)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind:     contextfabric.FactIdentity,
+		Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	fact := result.Facts[0]
+	if got := fact.Fields["owning_teams_omitted_count"].Integer; got == nil || *got != 5 {
+		t.Fatalf("owning_teams_omitted_count = %v, want 5 (the owners the per-repository cap left out)", got)
+	}
+	if result.State != contextfabric.SourceTruncated || result.OmittedCount != 5 || !strings.Contains(result.Reason, "owning_teams_truncated") {
+		t.Fatalf("state=%q omitted=%d reason=%q, want truncated, 5, owning_teams_truncated", result.State, result.OmittedCount, result.Reason)
+	}
+}
+
+func TestIdentityProviderReadsOwnershipInChunks(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repos", rows: nil}}}
+	subjects := make([]contextfabric.SubjectRef, 0, 250)
+	repoRows := make([][]any, 0, 250)
+	for i := 0; i < 250; i++ {
+		id := fmt.Sprintf("repo-%03d", i)
+		subjects = append(subjects, repoSubject(id))
+		repoRows = append(repoRows, []any{id, "acme/" + id, "github"})
+	}
+	client.tables = []fakeTable{{match: "FROM repos", rows: repoRows}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactIdentity)
+	if _, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactIdentity, Subjects: subjects,
+	}); err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	chunks := 0
+	for _, q := range client.queries {
+		if !strings.Contains(q.statement, "team_repo_ownership") {
+			continue
+		}
+		chunks++
+		for _, b := range q.bindings {
+			if b.Name == "ids" {
+				if ids := b.Value.([]string); len(ids) > 100 {
+					t.Fatalf("one ownership query covered %d repositories, want at most 100", len(ids))
+				}
+			}
+		}
+	}
+	if chunks != 3 {
+		t.Fatalf("ownership queries = %d, want 3 for 250 repositories", chunks)
 	}
 }

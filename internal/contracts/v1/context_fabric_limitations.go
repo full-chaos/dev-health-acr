@@ -356,37 +356,45 @@ func IsContextFabricGroupingUnplaceableLimitation(limitation string) bool {
 	return ok
 }
 
-// contextFabricGroupingOverlapLimitation* are the fixed segments of the
-// disclosure that some members of a grouped answer sit under more than one
-// group because more than one group owns them. The interpolated values are a
-// count and two members of the closed subject-kind vocabulary, so recognition
-// is a parse that cannot admit model text.
+// The three grouped-coverage disclosures state facts about a grouping that was
+// built: members under more than one group, members under none, and members
+// whose group list the facts cut short. The interpolated values are a count and
+// members of the closed subject-kind vocabulary, so recognition is a parse that
+// cannot admit model text. They name no cause (ownership or any other basis).
 const (
-	contextFabricGroupingOverlapLimitationMiddle = " in this answer appear under more than one "
-	contextFabricGroupingOverlapLimitationSuffix = " group because each has more than one owner, so group totals overlap."
+	contextFabricGroupingOverlapMiddle = " in this answer appear in more than one "
+	contextFabricGroupingOverlapSuffix = ", so group totals overlap."
+
+	contextFabricGroupingUngroupedMiddle = " in this answer could not be placed under any "
+	contextFabricGroupingUngroupedSuffix = " and appear in no group."
+
+	contextFabricGroupingCutMiddle = " in this answer have more "
+	contextFabricGroupingCutSuffix = " than the facts list, so each appears under only some of them."
 )
 
-// ContextFabricGroupingOverlapLimitation composes the overlap disclosure: count
-// members of memberKind appear under more than one group of groupKind. The sole
-// composer; IsContextFabricGroupingOverlapLimitation parses exactly this.
-func ContextFabricGroupingOverlapLimitation(memberKind, groupKind ContextFabricSubjectKind, count int) string {
-	return strconv.Itoa(count) + " " + ContextFabricSubjectKindNoun(memberKind, count) +
-		contextFabricGroupingOverlapLimitationMiddle + ContextFabricSubjectKindNoun(groupKind, 1) +
-		contextFabricGroupingOverlapLimitationSuffix
+func composeGroupingCountSentence(count int, memberKind, groupKind ContextFabricSubjectKind, middle, suffix string, pluralGroup bool) string {
+	groupCount := 1
+	if pluralGroup {
+		groupCount = 2
+	}
+	return strconv.Itoa(count) + " " + ContextFabricSubjectKindNoun(memberKind, count) + middle +
+		ContextFabricSubjectKindNoun(groupKind, groupCount) + suffix
 }
 
-// IsContextFabricGroupingOverlapLimitation reports whether a limitation is one
-// ContextFabricGroupingOverlapLimitation could have composed.
-func IsContextFabricGroupingOverlapLimitation(limitation string) bool {
-	body, ok := strings.CutSuffix(limitation, contextFabricGroupingOverlapLimitationSuffix)
+func parseGroupingCountSentence(limitation, middle, suffix string, pluralGroup bool) bool {
+	body, ok := strings.CutSuffix(limitation, suffix)
 	if !ok {
 		return false
 	}
-	head, groupNoun, ok := strings.Cut(body, contextFabricGroupingOverlapLimitationMiddle)
+	head, groupNoun, ok := strings.Cut(body, middle)
 	if !ok {
 		return false
 	}
-	if _, known := contextFabricSubjectKindFromNoun(groupNoun, 1); !known {
+	groupCount := 1
+	if pluralGroup {
+		groupCount = 2
+	}
+	if _, known := contextFabricSubjectKindFromNoun(groupNoun, groupCount); !known {
 		return false
 	}
 	countText, memberNoun, ok := strings.Cut(head, " ")
@@ -399,6 +407,41 @@ func IsContextFabricGroupingOverlapLimitation(limitation string) bool {
 	}
 	_, known := contextFabricSubjectKindFromNoun(memberNoun, count)
 	return known
+}
+
+// ContextFabricGroupingOverlapLimitation composes: count members of memberKind
+// appear in more than one group of groupKind. The sole composer.
+func ContextFabricGroupingOverlapLimitation(memberKind, groupKind ContextFabricSubjectKind, count int) string {
+	return composeGroupingCountSentence(count, memberKind, groupKind, contextFabricGroupingOverlapMiddle, contextFabricGroupingOverlapSuffix, false)
+}
+
+// IsContextFabricGroupingOverlapLimitation reports whether a limitation is one
+// ContextFabricGroupingOverlapLimitation could have composed.
+func IsContextFabricGroupingOverlapLimitation(limitation string) bool {
+	return parseGroupingCountSentence(limitation, contextFabricGroupingOverlapMiddle, contextFabricGroupingOverlapSuffix, false)
+}
+
+// ContextFabricGroupingUngroupedLimitation composes: count members could not be
+// placed under any group and appear in no group (a grouping that was built for
+// the other members). The sole composer.
+func ContextFabricGroupingUngroupedLimitation(memberKind, groupKind ContextFabricSubjectKind, count int) string {
+	return composeGroupingCountSentence(count, memberKind, groupKind, contextFabricGroupingUngroupedMiddle, contextFabricGroupingUngroupedSuffix, false)
+}
+
+// IsContextFabricGroupingUngroupedLimitation parses ContextFabricGroupingUngroupedLimitation.
+func IsContextFabricGroupingUngroupedLimitation(limitation string) bool {
+	return parseGroupingCountSentence(limitation, contextFabricGroupingUngroupedMiddle, contextFabricGroupingUngroupedSuffix, false)
+}
+
+// ContextFabricGroupingCutLimitation composes: count members have more groups
+// than the facts list, so each appears under only some of them. The sole composer.
+func ContextFabricGroupingCutLimitation(memberKind, groupKind ContextFabricSubjectKind, count int) string {
+	return composeGroupingCountSentence(count, memberKind, groupKind, contextFabricGroupingCutMiddle, contextFabricGroupingCutSuffix, true)
+}
+
+// IsContextFabricGroupingCutLimitation parses ContextFabricGroupingCutLimitation.
+func IsContextFabricGroupingCutLimitation(limitation string) bool {
+	return parseGroupingCountSentence(limitation, contextFabricGroupingCutMiddle, contextFabricGroupingCutSuffix, true)
 }
 
 // contextFabricGroupReadUnreadLimitationPrefix/-Suffix and
@@ -718,6 +761,8 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 	// defect, and it is invisible to any test that drives the composer.
 	return IsContextFabricGroupingRefusalLimitation(limitation) ||
 		IsContextFabricGroupingOverlapLimitation(limitation) ||
+		IsContextFabricGroupingUngroupedLimitation(limitation) ||
+		IsContextFabricGroupingCutLimitation(limitation) ||
 		IsContextFabricGroupingUnplaceableLimitation(limitation) ||
 		IsContextFabricRefusalBasisLimitation(limitation) ||
 		IsContextFabricGroupReadUnreadLimitation(limitation) ||

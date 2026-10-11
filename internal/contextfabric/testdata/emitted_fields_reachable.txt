@@ -139,17 +139,17 @@ FactHealth
 
 FactIdentity
   reached_funcs      88
-  dynamic_key_sites  0
+  dynamic_key_sites  1
   leaked_call_sites  2
     leak interface_method     2
     leak external_func_value  0
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            704
+    calls followed            705
     calls accounted           13
-    calls not_a_call          2
-    calls excluded_by_design  97
+    calls not_a_call          3
+    calls excluded_by_design  100
     calls leaked              2
   fields             id name owning_teams owning_teams_omitted_count provider team_id team_name title
 

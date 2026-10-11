@@ -331,7 +331,7 @@ func t4Cases() []t4Case {
 		{match: "FROM repos", rows: [][]any{{"repo-1", "example-org/widget-service", "synthetic"}}},
 	}})
 	add(t4Case{name: "identity/repository_owning_teams", kind: contextfabric.FactIdentity, subjects: repo, tables: []fakeTable{
-		{match: "team_repo_ownership", rows: [][]any{{"repo-1", "team-a", "Alpha"}}},
+		{match: "team_repo_ownership", rows: [][]any{{"repo-1", "team-a", "Alpha", int64(1)}}},
 		{match: "FROM repos", rows: [][]any{{"repo-1", "example-org/widget-service", "synthetic"}}},
 	}})
 	add(t4Case{name: "identity/repository_owning_teams_capped", kind: contextfabric.FactIdentity, subjects: repo, tables: []fakeTable{
@@ -777,11 +777,11 @@ func (p *t4StubProvider) ReadFacts(context.Context, storage.Principal, contextfa
 	return contextfabric.FactProviderResult{}, nil
 }
 
-// cappedOwnerRows is one more owner row than a fact table carries.
+// cappedOwnerRows is a full table of owners for a repository with one more.
 func cappedOwnerRows(repoID string) [][]any {
-	rows := make([][]any, 0, contextfabric.MaxFactValueRows+1)
-	for i := 0; i <= contextfabric.MaxFactValueRows; i++ {
-		rows = append(rows, []any{repoID, fmt.Sprintf("team-%03d", i), "Team"})
+	rows := make([][]any, 0, contextfabric.MaxFactValueRows)
+	for i := 0; i < contextfabric.MaxFactValueRows; i++ {
+		rows = append(rows, []any{repoID, fmt.Sprintf("team-%03d", i), "Team", int64(contextfabric.MaxFactValueRows + 1)})
 	}
 	return rows
 }
