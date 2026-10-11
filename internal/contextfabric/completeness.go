@@ -47,7 +47,10 @@ func ComputeAnswerCompleteness(result InvestigationResult) contractsv1.ContextFa
 		// Copying is also what makes the disclosure survive the
 		// recomputation this function is subjected to on every stored-result
 		// read.
-		RefusalBasis:      result.RefusalBasis,
+		RefusalBasis: result.RefusalBasis,
+		// COPIED for the same reason: the status the authority replaced is
+		// gone from result.Status, so this block cannot re-derive it.
+		StatusCorrection:  result.StatusCorrection,
 		ClaimedFactsCount: len(result.ClaimedFacts),
 		RowsCount:         rows,
 		State:             contractsv1.DeriveContextFabricAnswerCompletenessState(outcomes),

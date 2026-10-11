@@ -970,6 +970,11 @@
         "presence": "required"
       },
       {
+        "key": "status_correction_disclosed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
         "key": "outcome_rows_total",
         "type": "int",
         "presence": "required"
