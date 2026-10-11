@@ -252,26 +252,52 @@ func TestTheValidationStageDegradeKeepsTheCoverageAtTheBound(t *testing.T) {
 	}
 }
 
-// 100 degrading details fill the bound: the bound still holds, the degrading
-// rows are all kept, and the failure detail yields (the answer is then
-// recognised by its warning).
-func TestTheCoverageCapNeverExceedsTheBoundForAProtectedRow(t *testing.T) {
+// 100 degrading details fill the bound and the failure detail never yields:
+// the last degrading entry goes with its reason, the answer says how many were
+// left out, the degrading rows still pair with the reasons, and the bound holds.
+func TestTheCoverageCapNeverDropsAProtectedRowAndDisclosesTheDegradingRowsItDrops(t *testing.T) {
 	var details []CoverageDetail
+	var reasons []string
 	for i := 0; i < contractsv1.ContextFabricCoverageEntriesMaxCount; i++ {
-		details = append(details, syntheticDegradingDetail(i))
+		detail := syntheticDegradingDetail(i)
+		details = append(details, detail)
+		reasons = append(reasons, detail.Raw)
 	}
 	failure, err := newSynthesisModelFailureDetail(SynthesisFailureRejected)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := &InvestigationResult{Status: InvestigationDegraded, Warnings: []string{synthesisFailureWarning(SynthesisFailureRejected)}, Coverage: Coverage{Details: append(details, failure)}}
+	result := &InvestigationResult{Status: InvestigationDegraded, Coverage: Coverage{Details: append(details, failure), DegradedReasons: reasons}}
 
 	omitted := capCoverageEntriesToWriteBound(result)
 
 	if len(result.Coverage.Details) != contractsv1.ContextFabricCoverageEntriesMaxCount || omitted != 1 {
-		t.Fatalf("details = %d omitted = %d, want the bound with the one protected row omitted", len(result.Coverage.Details), omitted)
+		t.Fatalf("details = %d omitted = %d, want the bound with one entry left out", len(result.Coverage.Details), omitted)
 	}
-	if !IsSynthesisModelFailureAnswer(*result) {
-		t.Fatal("the answer is no longer recognised once the failure detail yielded")
+	if len(failureDetailsOf(result.Coverage)) != 1 || !IsSynthesisModelFailureAnswer(*result) {
+		t.Fatal("the failure detail yielded: a failed answer would look good")
+	}
+	var raws []string
+	for _, detail := range result.Coverage.Details {
+		if detail.Degrading {
+			raws = append(raws, detail.Raw)
+		}
+	}
+	if len(raws) != 99 || !slices.Equal(raws, result.Coverage.DegradedReasons) || slices.Contains(raws, details[99].Raw) {
+		t.Fatalf("degrading rows = %d, reasons = %d: want the last one dropped from both, the rest paired in order", len(raws), len(result.Coverage.DegradedReasons))
+	}
+	if !slices.Contains(result.Limitations, contractsv1.ContextFabricCoverageEntriesDroppedLimitation(1)) || !contractsv1.IsContextFabricServiceAuthoredLimitation(contractsv1.ContextFabricCoverageEntriesDroppedLimitation(1)) {
+		t.Fatalf("limitations = %q, want the dropped-entries disclosure with the count", result.Limitations)
+	}
+}
+
+func TestTheDroppedEntriesDisclosureIsOnlyTheComposedSentence(t *testing.T) {
+	if !contractsv1.IsContextFabricCoverageEntriesDroppedLimitation(contractsv1.ContextFabricCoverageEntriesDroppedLimitation(7)) {
+		t.Fatal("the composed sentence is not recognised")
+	}
+	for _, other := range []string{contractsv1.ContextFabricCoverageEntriesDroppedLimitation(0), "Coverage reported more entries than an answer can carry, so the last x degraded coverage entries and their reasons were left out.", "Coverage reported more entries than an answer can carry, so the last 07 degraded coverage entries and their reasons were left out.", "a model caveat"} {
+		if contractsv1.IsContextFabricCoverageEntriesDroppedLimitation(other) {
+			t.Fatalf("%q recognised as the dropped-entries disclosure", other)
+		}
 	}
 }

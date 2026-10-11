@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"fmt"
+	"log/slog"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -54,46 +55,48 @@ import (
 func capCoverageEntriesToWriteBound(result *InvestigationResult) int {
 	bound := contractsv1.ContextFabricCoverageEntriesMaxCount
 	details := result.Coverage.Details
+	if len(details) <= bound {
+		return 0
+	}
 	degrading := make([]CoverageDetail, 0, len(details))
 	nonDegrading := make([]CoverageDetail, 0, len(details))
+	protected := 0
 	for _, d := range details {
 		if d.Degrading {
 			degrading = append(degrading, d)
-		} else {
-			nonDegrading = append(nonDegrading, d)
+			continue
 		}
-	}
-	// Degrading rows never yield. A protected row comes next, and the rest fill
-	// what is left, so the total never passes the bound unless the degrading
-	// rows alone do.
-	capacity := bound - len(degrading)
-	if capacity < 0 {
-		capacity = 0
-	}
-	if len(nonDegrading) <= capacity {
-		return 0
-	}
-	protected := 0
-	for _, d := range nonDegrading {
+		nonDegrading = append(nonDegrading, d)
 		if coverageDetailNeverYields(d) {
 			protected++
 		}
 	}
-	protectedRoom := min(protected, capacity)
-	otherRoom := capacity - protectedRoom
-	omitted := len(nonDegrading) - capacity
+	// Protected rows never yield, so the failure of a model call is never left
+	// off an answer. Degrading rows come next. Only when the two together pass
+	// the bound do the LAST degrading rows go, with their degraded_reasons
+	// (the two pair 1:1 and in order), and the answer says how many.
+	dropped := 0
+	if room := max(bound-protected, 0); len(degrading) > room {
+		dropped = len(degrading) - room
+		degrading = degrading[:room]
+		if reasons := result.Coverage.DegradedReasons; len(reasons) >= dropped {
+			result.Coverage.DegradedReasons = reasons[:len(reasons)-dropped]
+		}
+		result.Limitations, _ = appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricCoverageEntriesDroppedLimitation(dropped)})
+		slog.Default().Warn("context_fabric: coverage entries over the bound, degrading entries left out",
+			"degrading_dropped", dropped, "degrading_kept", len(degrading), "protected", protected)
+	}
+	otherRoom := max(bound-len(degrading)-protected, 0)
 	kept := degrading
 	for _, d := range nonDegrading {
 		if coverageDetailNeverYields(d) {
-			if protectedRoom > 0 {
-				kept = append(kept, d)
-				protectedRoom--
-			}
+			kept = append(kept, d)
 		} else if otherRoom > 0 {
 			kept = append(kept, d)
 			otherRoom--
 		}
 	}
+	omitted := len(details) - len(kept)
 	for i := range kept {
 		kept[i].DetailID = fmt.Sprintf("cov-%02d", i+1)
 	}
