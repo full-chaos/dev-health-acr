@@ -126,9 +126,10 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 	budget.MaxEvidenceRefs = cohortEvidenceRefBudget(budget.MaxEvidenceRefs, input.Budget, result)
 
 	projection := answerprojection.Project(result, answerprojection.Budget{
-		MaxDrivers:       budget.MaxDrivers,
-		MaxCohortMembers: budget.MaxCohortMembers,
-		MaxEvidenceRefs:  budget.MaxEvidenceRefs,
+		MaxDrivers:         budget.MaxDrivers,
+		MaxCohortMembers:   budget.MaxCohortMembers,
+		MaxEvidenceRefs:    budget.MaxEvidenceRefs,
+		MaxSerializedBytes: budget.MaxSerializedBytes,
 	})
 	response := contractsv1.MCPInvestigateQuestionResponse{
 		SchemaVersion: contractsv1.MCPInvestigateQuestionResponseSchema,
