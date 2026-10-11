@@ -189,7 +189,7 @@ func producerGrammars() []producerGrammar {
 			"internal/contextfabric/chaos5990_period_delta.go|periodDeltaSubjectEvidenceRef", facts+"deficiencies.go|ReadFacts",
 			facts+"dependencies.go|readTeamRollup", facts+"deployments.go|readTeamRollup", facts+"incidents.go|readTeamRollup", facts+"pullrequests.go|readTeamRollup",
 			facts+"flow.go|readProjectFlow", facts+"flow.go|readTeamFlow", facts+"health.go|ReadFacts", facts+"health.go|readProjectHealth*2",
-			facts+"investment.go|readProjectInvestment", facts+"investment.go|readTeamThemeMix", facts+"investment_units.go|readInvestmentUnits", facts+"landscape.go|readProjectLandscape",
+			facts+"investment.go|readTeamThemeMix", facts+"investment_units.go|readInvestmentUnits", facts+"landscape.go|readProjectLandscape",
 			facts+"landscape.go|readTeamLandscape", facts+"metrics.go|readProjectMetrics", facts+"metrics.go|readTeamMetrics*2",
 			facts+"readiness.go|readProjectReadiness", facts+"readiness.go|readTeamReadiness", facts+"workload.go|readProjectWorkload*2",
 			facts+"workload.go|readTeamWorkload", source+"teams_projects.go|queryTeams", source+"teams_projects_edges.go|queryRepositoryTeams")},
@@ -203,7 +203,7 @@ func producerGrammars() []producerGrammar {
 		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "sql/2", providerFirst: true, rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, sites: sites(organizationRows)},
 		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/1", rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, sites: sites(
 			facts+"flow.go|readProjectFlow", facts+"health.go|readProjectHealth", facts+"investment.go|mergeProjectInvestmentFact",
-			facts+"investment.go|readProjectInvestment", facts+"landscape.go|readProjectLandscape", facts+"metrics.go|readProjectMetrics",
+			facts+"landscape.go|readProjectLandscape", facts+"metrics.go|readProjectMetrics",
 			facts+"readiness.go|readProjectReadiness", facts+"workitems.go|readProjectActualCompletion", facts+"workload.go|readProjectWorkload")},
 
 		// organization, episode: no canonical row.

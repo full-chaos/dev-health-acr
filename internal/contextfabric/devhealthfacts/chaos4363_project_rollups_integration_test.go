@@ -80,7 +80,7 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 		}
 	}
 
-	t.Run("investment_project_rollup_breaks_down_by_team_never_sums_across_areas", func(t *testing.T) {
+	t.Run("investment_project_never_serves_the_legacy_breakdown", func(t *testing.T) {
 		const orgID = "org-investment-rollup"
 		seedProject("proj-inv", orgID, "linear", "INV1")
 		seedTeam("team-inv-a", orgID, "Team Inv A")
@@ -97,19 +97,11 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadFacts() error = %v", err)
 		}
-		if len(result.Facts) != 1 {
-			t.Fatalf("facts = %#v, want exactly 1", result.Facts)
-		}
-		fact := result.Facts[0]
-		if got := fact.Fields["team_count"].Integer; got == nil || *got != 1 {
-			t.Fatalf("team_count = %#v, want 1", fact.Fields["team_count"])
-		}
-		rows := fact.Fields["team_breakdown"].Rows
-		if len(rows) != 1 {
-			t.Fatalf("team_breakdown = %#v, want 1 row", rows)
-		}
-		if got := rows[0].Fields["delivery_units"].Integer; got == nil || *got != 30 {
-			t.Fatalf("delivery_units = %#v, want 30", rows[0].Fields["delivery_units"])
+		// CHAOS-9195 (D5932): the legacy per-team (investment_area, project_stream) rows are not
+		// read for a project; with no work unit behind the project there is no canonical mix and no
+		// fact (never a fabricated one).
+		if len(result.Facts) != 0 {
+			t.Fatalf("facts = %#v, want none: the legacy investment_metrics_daily row must not be served for a project", result.Facts)
 		}
 	})
 

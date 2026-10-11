@@ -811,23 +811,6 @@ func investmentThemeFields(aggregateShares bool) []fieldDecl {
 func investmentFields() []fieldDecl {
 	themeBreakdown := fTable("theme_breakdown",
 		cStr("theme"), cNum("share", "ratio"), cNum("weighted_effort", ""), cStr("source"), cStr("attribution"))
-	teamBreakdown := fTable("team_breakdown",
-		cRef(declTeamRef, cStr("team_id")),
-		cNullable(cStr("team_name")),
-		cStr("day"),
-		cInt("delivery_units", "count"),
-		cInt("work_items_completed", "count"),
-		cInt("prs_merged", "count"),
-		cInt("churn_loc", "loc"),
-		// cycle_p50_hours is present only when one repository stands behind
-		// the row (an exact median). cycle_p50_hours_weighted_mean is an
-		// APPROXIMATION, not a median: the work-item-weighted mean of the
-		// per-repository medians.
-		cNullable(cNum("cycle_p50_hours", "hours")),
-		cNullable(cNum("cycle_p50_hours_weighted_mean", "hours")),
-		cNullable(cStr("investment_area")),
-		cNullable(cStr("project_stream")),
-	)
 	var prior []fieldDecl
 	for _, name := range []string{"prior_theme_feature_delivery", "prior_theme_operational", "prior_theme_maintenance", "prior_theme_quality", "prior_theme_risk"} {
 		prior = append(prior, declAggregate(fNum(name, "ratio")))
@@ -847,7 +830,6 @@ func investmentFields() []fieldDecl {
 		declOn(declProjectOnly,
 			fStr("rollup_basis"),
 			declAggregate(fInt("team_count", "count")),
-			teamBreakdown,
 			declAggregate(fInt("repo_count", "count")),
 			declAggregate(fInt("work_unit_count", "count")),
 			declAggregate(fInt("work_units_without_repo_link", "count")),

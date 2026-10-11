@@ -687,10 +687,19 @@ import (
 // discovery; a candidate saved under v135 may hold an answer that served that
 // twin or lacked the field.
 //
-// v138: a degraded answer for a failed model call serves the canonical values
+// v136 -> v137: a project's FactInvestment is only the canonical theme mix (one standalone
+// fact per project: the owning-team roll-up or the project's own attribution); the legacy
+// per-team (investment_area, project_stream, day) breakdown of investment_metrics_daily
+// (the deprecated rule classifier's keys: team_breakdown, investment_area, project_stream,
+// delivery_units, work_items_completed, prs_merged, churn_loc) is no longer served for a
+// project, and a project with no canonical mix has no investment fact (CHAOS-9195, D5932).
+// A candidate saved under v136 carries the legacy breakdown (and a mix merged onto it) and
+// must not be reused.
+//
+// v139: a degraded answer for a failed model call serves the canonical values
 // it read as claims; a candidate saved under an earlier version may hold one
 // with none.
-const QueryVersion = "devhealthfacts.clickhouse.v138"
+const QueryVersion = "devhealthfacts.clickhouse.v139"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

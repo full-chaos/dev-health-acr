@@ -16,49 +16,15 @@ import (
 )
 
 // InvestmentProvider implements contextfabric.FactProvider for FactInvestment.
-// A TEAM's investment is only the canonical theme mix over the repositories it
-// owns (work_unit_investments, CHAOS-6559); the remainder of this comment
-// describes the investment_metrics_daily read that the PROJECT roll-up still
-// uses -- Dev Health Ops' precomputed daily
-// investment-area/project-stream breakdown (delivery_units, work items,
-// PRs merged, churn, cycle time). This provider is a pure passthrough of the
-// most recent day's already-published rows; it never sums, ranks, or
-// classifies -- investment_area/project_stream are read exactly as Ops
-// assigned them (§19.6.3: Ops stays the authority for investment
-// semantics). One team can have several (investment_area, project_stream)
-// rows, so this provider -- like blockers.go's BlockersProvider -- returns
-// zero or more CanonicalFacts per requested subject, not exactly one.
-//
-// investment_metrics_daily is a plain, append-only MergeTree: live data
-// shows up to 25 rows sharing one (team_id, investment_area, project_stream,
-// day) key (intraday reruns, Codex finding F4, confirmed against real
-// ClickHouse data). ORDER BY day DESC alone leaves that same-day tie
-// unresolved -- computed_at DESC breaks it deterministically, and because
-// row_number() (not per-field argMax) is used, the winning row is always one
-// whole row, never a stitched combination.
-//
-// CHAOS-4363 widens FactInvestment to add SubjectProject: a project rolls up
-// through team_project_ownership -> investment_metrics_daily, the same real
-// join metrics.go's readProjectMetrics uses for FactMetrics (never the
-// CHAOS-4099 activity-proxy route -- see that function's doc comment for
-// why). Unlike FactMetrics' commit counts, delivery_units/work_items_completed/
-// prs_merged/churn_loc are NOT summed across owning teams here: a team's
-// investment breakdown is partitioned by (investment_area, project_stream),
-// and summing across teams that report against DIFFERENT areas would mix
-// unrelated categories into one meaningless total (worse than metrics.go's
-// ratio-averaging problem, because there is no shared unit across areas at
-// all). The project-level fact instead carries every owning team's own
-// (area, stream, day) rows verbatim in a renderable team_breakdown table,
-// disclosed via rollup_basis -- never a project-native aggregate.
-//
-// investment_classifications_daily (the ticket's proposed "classification
-// breakdown... where keyed by team") is deliberately NOT read here: its live
-// production schema (verified against the kiac trial ClickHouse,
-// system.columns, 2026-08-27) carries repo_id/artifact_id/artifact_type, no
-// team_id column at all. There is no honest team-keyed join for it, the
-// same gap CHAOS-4347's disposition inventory found for cognitive load
-// (user_metrics_daily) -- inventing one would be exactly the "stub data for
-// a kind with no canonical source" §19.6.3 forbids.
+// A team's, a project's and a repository's investment is ONLY the canonical
+// categorization (work_unit_investments, the Jev categorizer's five themes and
+// fifteen subcategories): a team's mix over the repositories it owns (CHAOS-6559), a
+// project's roll-up through its owning teams' repositories and its own attribution
+// (CHAOS-5930, CHAOS-5935), a repository's own mix. The deprecated
+// investment_metrics_daily (the legacy rule classifier's free-form investment_area /
+// project_stream keys) is read for NO subject kind any more (CHAOS-9195, D5932: the
+// categorization moved to the LLM/Jev path and the rule classifier is removed). A
+// project that has no canonical mix gets no fact, never a fabricated one.
 type InvestmentProvider struct {
 	facts  clickhouseFacts
 	scopes *membershipScopeCache
@@ -110,6 +76,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}()
 
 	var mixUnavailable string
+	var projectNoMix int
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		// CHAOS-6559: a team's investment is ONLY the canonical theme mix
 		// (work_unit_investments via owned repositories). The deprecated
@@ -132,19 +99,14 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, omitted, rejected, breakdownTruncated, scanErr := p.readProjectInvestment(ctx, orgID, projectSubjects, &facts, timeBound)
-		if scanErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query project investment", scanErr)
-		}
-		omittedUnrepresentableCount += omitted
-		rejectedCount += rejected
-		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
-		// The canonical theme-mix roll-up is a deliberately SEPARATE call
-		// from readProjectInvestment above -- see readProjectThemeMix's own
-		// doc comment for why this is a new join, not a reuse of the legacy
-		// investment_metrics_daily path. It shares projectSubjects with
-		// readProjectInvestment above, so only that call's own rejectedCount
-		// is folded in -- counting it twice here would double it.
+		// A project's investment is ONLY the canonical theme mix (work_unit_investments,
+		// the Jev categorization; CHAOS-9195, D5932). The legacy per-team
+		// (investment_area, project_stream, day) rows of investment_metrics_daily (the
+		// deprecated rule classifier's keys) are no longer read for a project, as they
+		// have not been for a team since CHAOS-6559. The shape rejection of the subjects
+		// is counted here, once.
+		_, _, projectRejected := v2Index(projectSubjects, identity.KindProject)
+		rejectedCount += projectRejected
 		// unusableRollup carries the unit population of a roll-up that had
 		// units but no positive effort, so a native mix that replaces it can
 		// still disclose that population.
@@ -163,6 +125,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			return contextfabric.FactProviderResult{}, mixReadFailure("query project native theme mix", nativeScanErr)
 		}
 		truncated = truncated || nativeRowCount > maxFactRowsPerQuery
+		// Missing is not healthy: a project with no canonical mix serves no
+		// fact, and says so by a NAMED reason instead of a silent absence.
+		projectNoMix = projectsWithoutInvestmentFact(projectSubjects, &facts)
 	}
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
@@ -232,6 +197,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
 	if mixUnavailable != "" {
 		mergeFactReadReason(&result, mixUnavailable)
+	}
+	if projectNoMix > 0 {
+		mergeFactReadReason(&result, investmentProjectNoCanonicalMixReason(projectNoMix, len(subjectsOfKind(query.Subjects, contextfabric.SubjectProject))-rejectedProjectCount(query.Subjects)))
 	}
 	if timeBound.active && len(subjectsOfKind(query.Subjects, contextfabric.SubjectTeam)) > 0 {
 		mergeFactReadReason(&result, investmentOwnershipAsSynced)
@@ -388,6 +356,47 @@ const (
 	investmentOwnershipAsSynced     = "investment_ownership_as_synced: team ownership is read from the synced ownership assertions (not historical); a past window includes every assertion not ended before the window start"
 )
 
+// investmentProjectNoCanonicalMix is the closed reason token of a project that has no
+// canonical theme mix in the requested window (CHAOS-9195): no owning-team roll-up and no
+// native attribution carries positive effort. It is not a zero mix and not a healthy project.
+const investmentProjectNoCanonicalMix = "investment_project_no_canonical_mix"
+
+func investmentProjectNoCanonicalMixReason(noMix, requested int) string {
+	return fmt.Sprintf("%s for %d of %d requested projects: no canonical theme mix (work_unit_investments) for the project in the requested window; the deprecated per-team investment_area breakdown is not served", investmentProjectNoCanonicalMix, noMix, requested)
+}
+
+// projectsWithoutInvestmentFact counts the project subjects of valid shape that have no
+// FactInvestment fact after the project reads.
+func projectsWithoutInvestmentFact(subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) int {
+	have := map[string]bool{}
+	for _, f := range *facts {
+		if f.Kind == contextfabric.FactInvestment {
+			have[contextfabric.FactSubjectKey(f.Subject)] = true
+		}
+	}
+	missing := 0
+	for _, subject := range subjects {
+		if projectSpanKey(subject) == "" {
+			continue
+		}
+		if !have[contextfabric.FactSubjectKey(subject)] {
+			missing++
+		}
+	}
+	return missing
+}
+
+// rejectedProjectCount: project subjects whose id has no project v2 shape.
+func rejectedProjectCount(subjects []contextfabric.SubjectRef) int {
+	n := 0
+	for _, subject := range subjects {
+		if subject.Kind == contextfabric.SubjectProject && projectSpanKey(subject) == "" {
+			n++
+		}
+	}
+	return n
+}
+
 // investmentMixUnavailableReason is the disclosure for teams that have no
 // canonical mix: unknown is not healthy and is not a zero mix (North Star
 // check 12), and the watermark says how fresh the data that was searched is.
@@ -403,137 +412,6 @@ func investmentMixUnavailableReason(unavailable, noOwned, requested int, waterma
 		return reason + "; work_unit_investments holds no rows for this organization"
 	}
 	return reason + "; work_unit_investments last computed at " + watermark
-}
-
-// readProjectInvestment rolls FactInvestment up for a project through
-// projects -> team_project_ownership -> investment_metrics_daily: every
-// team owning the project contributes its own latest (area, stream) rows,
-// verbatim, into one renderable team_breakdown table. The query itself now
-// lives in readers.ReadProjectInvestment; this adapter does the Go-side
-// grouping/breakdown-table construction the reader deliberately leaves to
-// its caller. The reader sums the newest row of each repository inside one
-// (team, area, stream) key. See this file's package-level doc comment for why
-// counts are never summed across teams here (unlike metrics.go's commit counts).
-func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount, omittedUnrepresentableCount, rejected int, breakdownTruncated bool, err error) {
-	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
-	if len(ids) == 0 {
-		return 0, 0, rejected, false, nil
-	}
-	scanned, err := readers.ReadProjectInvestment(ctx, p.facts.client, orgID, ids, timeBound.neutral())
-	if err != nil {
-		return 0, 0, rejected, false, err
-	}
-	rowCount = len(scanned)
-	byProject := make(map[string][]readers.InvestmentProjectRow)
-	var projectOrder []string
-	for _, r := range scanned {
-		if _, ok := bySubject[r.ProjectSubjectKey]; !ok {
-			continue
-		}
-		// churn_loc is UInt64 and is NOT wrapped with toInt64 in SQL
-		// (round-3 F2): the wrap turned a value above MaxInt64 negative,
-		// and FactValue accepts negatives, so it would have reached a
-		// public answer as a wrong number. Range-checked here instead.
-		if _, representable := representableInt64(r.ChurnLOC); !representable {
-			// Round-1 P2: counted, not silently dropped -- the project rollup
-			// must not report complete coverage while omitting a source row.
-			omittedUnrepresentableCount++
-			continue
-		}
-		if _, seen := byProject[r.ProjectSubjectKey]; !seen {
-			projectOrder = append(projectOrder, r.ProjectSubjectKey)
-		}
-		byProject[r.ProjectSubjectKey] = append(byProject[r.ProjectSubjectKey], r)
-	}
-	for _, projectKey := range projectOrder {
-		rows := byProject[projectKey]
-		subject := bySubject[projectKey]
-		seenTeamAreaStream := make(map[string]bool, len(rows))
-		seenTeams := make(map[string]bool, len(rows))
-		teamRows := make([]contextfabric.FactValueRow, 0, len(rows))
-		evidenceRefIDs := make([]string, 0, len(rows)+1)
-		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, projectKey))
-		for _, r := range rows {
-			dedupeKey := r.TeamID + "\x00" + r.InvestmentArea + "\x00" + r.ProjectStream
-			if dedupeTeamRow(seenTeamAreaStream, dedupeKey) {
-				continue
-			}
-			if !dedupeTeamRow(seenTeams, r.TeamID) {
-				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID))
-			}
-			// churnLOC's representability was already verified in the scan
-			// loop above (non-representable rows never reach byProject), so
-			// the conversion here cannot fail.
-			churnLOC, _ := representableInt64(r.ChurnLOC)
-			rowFields := map[string]contextfabric.FactValue{
-				"team_id":              contextfabric.StringFactValue(r.TeamID),
-				"team_name":            stringOrNull(r.TeamName),
-				"day":                  contextfabric.StringFactValue(r.Day),
-				"delivery_units":       contextfabric.IntegerFactValue(r.DeliveryUnits),
-				"work_items_completed": contextfabric.IntegerFactValue(r.WorkItemsCompleted),
-				"prs_merged":           contextfabric.IntegerFactValue(r.PRsMerged),
-				"churn_loc":            contextfabric.IntegerFactValue(churnLOC),
-				"investment_area":      stringOrNull(r.InvestmentArea),
-			}
-			// A key spanning several repositories has no exact median: the
-			// reader marks cycle_p50_hours known only for a single repository,
-			// and the weighted mean is an approximation served under its own
-			// name. A row with no completed work item has no median, so an
-			// unknown value is an absent cell, never 0.
-			if r.CycleP50Known && r.WorkItemsCompleted > 0 {
-				rowFields["cycle_p50_hours"] = contextfabric.NumberFactValue(r.CycleP50Hours)
-			}
-			if r.CycleP50HoursWeightedMeanKnown {
-				rowFields["cycle_p50_hours_weighted_mean"] = contextfabric.NumberFactValue(r.CycleP50HoursWeightedMean)
-			}
-			// CHAOS-4633: normalized to always-present (null when absent)
-			// rather than conditionally omitted -- project_stream is part
-			// of this row's declared Key (dedupeKey above already keys on
-			// it), and a Key column must be present on every row.
-			rowFields["project_stream"] = stringOrNull(r.ProjectStream)
-			teamRows = append(teamRows, contextfabric.FactValueRow{Fields: rowFields})
-		}
-		if len(teamRows) == 0 {
-			continue
-		}
-		// Round-1 P1: cap before RowsFactValue -- FactValue.Validate rejects
-		// a table over 64 rows outright (model.go), which would turn a
-		// large project's fact into a hard read error instead of an
-		// honestly truncated answer.
-		var omitted int
-		teamRows, omitted = capFactValueRows(teamRows)
-		breakdownTruncated = breakdownTruncated || omitted > 0
-		*facts = append(*facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactInvestment, Subject: subject,
-			Fields: map[string]contextfabric.FactValue{
-				// rollup_basis states, in the fact's own structure, that this
-				// project-level fact is a per-team BREAKDOWN, never a summed
-				// or averaged project-native total -- see the package doc
-				// comment for why investment counts are not additive across
-				// (investment_area, project_stream) the way metrics.go's
-				// commit counts are.
-				"rollup_basis": contextfabric.StringFactValue("team_project_ownership_breakdown"),
-				"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
-				// CHAOS-4633 P1: Key = [team_id, team_name, day,
-				// investment_area, project_stream] -- dedupeKey above
-				// already partitions rows on (team_id, investment_area,
-				// project_stream); day rides along as an identity column
-				// (each team's own latest day), never a Measure.
-				"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
-					Shape: contextfabric.FactTableBreakdown,
-					Key:   []string{"team_id", "team_name", "day", "investment_area", "project_stream"},
-					Measures: []string{
-						"delivery_units", "work_items_completed", "prs_merged",
-						"churn_loc", "cycle_p50_hours", "cycle_p50_hours_weighted_mean",
-					},
-					Grain: timeBound.effectiveGrain(grainDaily),
-					Rows:  teamRows,
-				}),
-			},
-			EvidenceRefIDs: evidenceRefIDs,
-		})
-	}
-	return rowCount, omittedUnrepresentableCount, rejected, breakdownTruncated, nil
 }
 
 // evidenceVoteAttributedPredicate is the ONE "does this evidence-vote row
