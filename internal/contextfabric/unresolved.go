@@ -858,6 +858,9 @@ func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, sub
 	if resolution.GraphNotProjected {
 		return "graph_not_projected"
 	}
+	if len(resolution.InactiveHints) > 0 {
+		return "team_inactive"
+	}
 	if subjectCandidatesAuthzDropped > 0 {
 		return "authz_filtered_to_empty"
 	}
@@ -1088,6 +1091,9 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 // it gets its own accurate wording rather than borrowing the unproven
 // one's (false, for this cause) claim that a search happened.
 func noMatchLimitationForEmptyPool(resolution *SubjectResolution) string {
+	if resolution != nil && len(resolution.InactiveHints) > 0 {
+		return contractsv1.ContextFabricInactiveTeamHintLimitation
+	}
 	if resolution != nil && resolution.GraphNotProjected {
 		return noMatchLimitationGraphNotProjected
 	}

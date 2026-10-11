@@ -215,6 +215,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		// would leave the default answer surface reproducing the exact
 		// silent drop this field exists to close.
 		PriorSubjectReceiptDispositions: append([]contractsv1.ContextFabricPriorSubjectReceiptEntry(nil), result.SubjectResolution.PriorSubjectReceiptDispositions...),
+		InactiveHints:                   append([]contractsv1.ContextFabricInactiveHint(nil), result.SubjectResolution.InactiveHints...),
 		RenderShapes:                    renderShapes,
 		// Completeness (CHAOS-4413): the CENSUS half is still copied
 		// verbatim and never re-derived from this projection's own

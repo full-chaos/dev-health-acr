@@ -413,7 +413,7 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("merges_onto_existing_legacy_breakdown_fact_never_shadowed", func(t *testing.T) {
+	t.Run("legacy_breakdown_row_is_never_read_for_a_project", func(t *testing.T) {
 		const orgID = "org-merge"
 		seedProject("proj-m", orgID)
 		seedTeam("team-m", orgID, "Team M")
@@ -421,9 +421,10 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 		seedRepo("repo-m", orgID)
 		seedRepoOwnership(orgID, "team-m", "repo-m")
 		seedWorkUnit("wu-m", orgID, "repo-m", 10, map[string]float64{"maintenance": 1.0})
-		// The LEGACY investment_metrics_daily row for the SAME team -- this
-		// is what readProjectInvestment turns into the FIRST FactInvestment
-		// fact for this project, appended BEFORE readProjectThemeMix runs.
+		// A LEGACY investment_metrics_daily row for the SAME team (the deprecated
+		// rule classifier's keys). CHAOS-9195 (D5932): a project's investment is ONLY the
+		// canonical theme mix; the legacy per-team breakdown is not read, so the project's fact
+		// is the standalone theme-mix fact, with no team_breakdown and no investment_area.
 		if err := direct.Exec(ctx, `INSERT INTO investment_metrics_daily (day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			date(2026, 9, 18), "team-m", "product", "growth", uint32(5), uint32(2), uint32(1), uint64(10), at, orgID); err != nil {
 			t.Fatalf("seed legacy investment row: %v", err)
@@ -431,13 +432,15 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 
 		fact := readInvestmentFact(t, providers, orgID, projectSubject("linear", "proj-m"))
 		if fact == nil {
-			t.Fatal("facts = none, want the merged fact")
+			t.Fatal("facts = none, want the theme-mix fact")
 		}
-		if _, hasBreakdown := fact.Fields["team_breakdown"]; !hasBreakdown {
-			t.Errorf("fields = %#v, want the legacy team_breakdown table still present (merged, not shadowed)", fact.Fields)
+		for _, legacy := range []string{"team_breakdown", "investment_area", "project_stream", "delivery_units"} {
+			if _, has := fact.Fields[legacy]; has {
+				t.Errorf("fields = %#v, want no legacy field %q (the deprecated rule classifier's keys are not read)", fact.Fields, legacy)
+			}
 		}
 		if got := factNumber(t, *fact, "theme_maintenance"); got != 1.0 {
-			t.Errorf("theme_maintenance = %v, want 1.0 (merged onto the same fact the legacy breakdown produced)", got)
+			t.Errorf("theme_maintenance = %v, want 1.0", got)
 		}
 	})
 
@@ -780,7 +783,7 @@ func TestProjectThemeMixReportsThroughReaderInstrumentation(t *testing.T) {
 	if !rec.sawReader("ReadProjectThemeMix") {
 		t.Errorf("readers = %v, want \"ReadProjectThemeMix\" -- the project theme-mix read must go through the reader-level instrumentation hook, not a direct, uninstrumented client call", rec.readers)
 	}
-	if !rec.sawReader("ReadProjectInvestment") {
-		t.Errorf("readers = %v, want \"ReadProjectInvestment\" too (the legacy breakdown read already goes through it)", rec.readers)
+	if rec.sawReader("ReadProjectInvestment") {
+		t.Errorf("readers = %v: the legacy ReadProjectInvestment (investment_metrics_daily, the deprecated rule classifier's keys) must not be read for a project any more (CHAOS-9195)", rec.readers)
 	}
 }

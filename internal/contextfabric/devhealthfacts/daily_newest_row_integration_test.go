@@ -32,17 +32,6 @@ func TestDailyTablesServeOnlyTheNewestRowPerKeyAgainstRealClickHouse(t *testing.
 		t.Fatalf("seed team_project_ownership: %v", err)
 	}
 
-	insertInvestment := func(computedHour int, deliveryUnits uint32) {
-		t.Helper()
-		if err := direct.Exec(ctx, `INSERT INTO investment_metrics_daily (day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			date(2026, 8, 12), "team-newest", "product", "growth", deliveryUnits, uint32(1), uint32(1), uint64(1), ts(2026, 8, 12, computedHour, 0, 0), orgID); err != nil {
-			t.Fatalf("seed investment_metrics_daily: %v", err)
-		}
-	}
-	insertInvestment(5, 99)
-	insertInvestment(7, 30)
-	insertInvestment(3, 77)
-
 	insertCoverage := func(computedHour int, estimated uint32) {
 		t.Helper()
 		if err := direct.Exec(ctx, `INSERT INTO estimate_coverage_metrics_daily (day, provider, work_scope_id, team_id, estimated_count, unestimated_count, backlog_size, ratio, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
@@ -65,16 +54,6 @@ func TestDailyTablesServeOnlyTheNewestRowPerKeyAgainstRealClickHouse(t *testing.
 		}
 		return result.Facts[0]
 	}
-
-	t.Run("investment", func(t *testing.T) {
-		rows := read(contextfabric.FactInvestment).Fields["team_breakdown"].Rows
-		if len(rows) != 1 {
-			t.Fatalf("team_breakdown rows = %d, want 1 (one row per team, area, stream)", len(rows))
-		}
-		if got := rows[0].Fields["delivery_units"].Integer; got == nil || *got != 30 {
-			t.Fatalf("delivery_units = %v, want 30 (the newest computed_at row)", intPtr(got))
-		}
-	})
 
 	t.Run("readiness", func(t *testing.T) {
 		rows := read(contextfabric.FactReadiness).Fields["team_breakdown"].Rows
