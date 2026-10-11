@@ -424,35 +424,32 @@ type OutputPath struct {
 }
 
 // SubjectEmit is the acr form of one served subject id. A value is prefixed
-// only when it is a bare uuid (the same test ToOps applies on input), and,
-// when WhenSibling is set, only when the sibling field of the same object
-// equals WhenEquals; any other value (a composite file id, a team id, null)
-// is served byte-equal.
+// only when it is a bare uuid (the same test ToOps applies on input) and,
+// when WhenVariable is set, the request variable matches; any other value (a
+// composite file id, a team id, null) is served byte-equal.
 type SubjectEmit struct {
-	Kind        string `json:"kind"`
-	AcrPrefix   string `json:"acr_prefix"`
-	WhenSibling string `json:"when_sibling,omitempty"`
-	WhenEquals  string `json:"when_equals,omitempty"`
+	Kind      string `json:"kind"`
+	AcrPrefix string `json:"acr_prefix"`
 	// WhenVariable names a request variable that must equal
-	// WhenVariableEquals (an absent variable never does): the request's own
-	// scope decides, whatever shape an id has.
-	WhenVariable       string `json:"when_variable,omitempty"`
-	WhenVariableEquals string `json:"when_variable_equals,omitempty"`
+	// WhenVariableEquals, WhenVariableDefault standing in for an absent one
+	// (empty: an absent variable never matches): the request decides, never
+	// a field the client may not select.
+	WhenVariable        string `json:"when_variable,omitempty"`
+	WhenVariableEquals  string `json:"when_variable_equals,omitempty"`
+	WhenVariableDefault string `json:"when_variable_default,omitempty"`
 }
 
-func (e *SubjectEmit) apply(obj map[string]any, vars map[string]any, value any) any {
+func (e *SubjectEmit) apply(vars map[string]any, value any) any {
 	s, ok := value.(string)
 	if !ok || e.AcrPrefix == "" || !isUUID(s) {
 		return value
 	}
 	if e.WhenVariable != "" {
-		got, _ := lookupOne(vars, e.WhenVariable).value.(string)
-		if got != e.WhenVariableEquals {
-			return value
+		got, present := lookupOne(vars, e.WhenVariable).value.(string)
+		if !present {
+			got = e.WhenVariableDefault
 		}
-	}
-	if e.WhenSibling != "" {
-		if sib, _ := obj[e.WhenSibling].(string); sib != e.WhenEquals {
+		if got != e.WhenVariableEquals {
 			return value
 		}
 	}
@@ -1013,7 +1010,7 @@ func (f *responseFilter) object(path string, obj map[string]any) map[string]any 
 		child := joinPath(path, key)
 		if kept, ok := f.value(child, value); ok {
 			if emit := f.op.emits[child]; emit != nil {
-				kept = emit.apply(obj, f.vars, kept)
+				kept = emit.apply(f.vars, kept)
 			}
 			out[key] = kept
 		}

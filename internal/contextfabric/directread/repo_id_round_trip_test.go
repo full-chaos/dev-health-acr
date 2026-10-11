@@ -61,44 +61,40 @@ func TestServedRepositoryIDsCarryTheAcrFormAtEveryMarkedOutput(t *testing.T) {
 			if out.EmitSubject.AcrPrefix != "repository:" || out.EmitSubject.Kind != "repository" {
 				t.Fatalf("%s: marker %+v", out.Path, out.EmitSubject)
 			}
-			var serveWith func(id any, sibling string, vars map[string]any) string
-			serve := func(id any, sibling string) string {
-				return serveWith(id, sibling, requestVars(out.EmitSubject, out.EmitSubject.WhenVariableEquals))
-			}
-			serveWith = func(id any, sibling string, vars map[string]any) string {
-				root := opBuild(out.Path, id)
-				if sibling != "" {
-					list, leaf, _ := strings.Cut(out.Path, "[*].")
-					_ = leaf
-					opPlace(root, strings.Split(list+"[*]."+out.EmitSubject.WhenSibling, "."), sibling)
-				}
-				raw, _ := json.Marshal(root)
+			serveWith := func(id any, vars map[string]any) string {
+				raw, _ := json.Marshal(opBuild(out.Path, id))
 				res, err := directread.FilterResponseFor(op, raw, vars)
 				if err != nil {
 					t.Fatal(err)
 				}
 				return string(res.Data)
 			}
-			sibling := out.EmitSubject.WhenEquals
-			if got := serve(opRepoA, sibling); !strings.Contains(got, `"repository:`+opRepoA+`"`) {
+			serve := func(id any) string {
+				return serveWith(id, requestVars(out.EmitSubject, out.EmitSubject.WhenVariableEquals))
+			}
+			if got := serve(opRepoA); !strings.Contains(got, `"repository:`+opRepoA+`"`) {
 				t.Errorf("%s: bare uuid served as %s", out.Path, got)
 			}
-			if got := serve(emitFileID, sibling); !strings.Contains(got, `"`+emitFileID+`"`) || strings.Contains(got, "repository:") {
+			if got := serve(emitFileID); !strings.Contains(got, `"`+emitFileID+`"`) || strings.Contains(got, "repository:") {
 				t.Errorf("%s: composite id not served byte-equal: %s", out.Path, got)
 			}
-			if got := serve(nil, sibling); strings.Contains(got, "repository:") {
+			if got := serve(nil); strings.Contains(got, "repository:") {
 				t.Errorf("%s: null id prefixed: %s", out.Path, got)
 			}
 			if out.EmitSubject.WhenVariable != "" {
-				for _, other := range []string{"FILE", ""} {
-					if got := serveWith(opRepoA, sibling, requestVars(out.EmitSubject, other)); strings.Contains(got, "repository:") || !strings.Contains(got, `"`+opRepoA+`"`) {
+				others := []string{"FILE", "TEAM"}
+				if out.EmitSubject.WhenVariableDefault != out.EmitSubject.WhenVariableEquals {
+					others = append(others, "")
+				}
+				for _, other := range others {
+					if got := serveWith(opRepoA, requestVars(out.EmitSubject, other)); strings.Contains(got, "repository:") || !strings.Contains(got, `"`+opRepoA+`"`) {
 						t.Errorf("%s: uuid-shaped id rewritten for request value %q: %s", out.Path, other, got)
 					}
 				}
-			}
-			if out.EmitSubject.WhenSibling != "" {
-				if got := serve(opRepoA, "TEAM"); strings.Contains(got, "repository:") {
-					t.Errorf("%s: id prefixed under another scope: %s", out.Path, got)
+				if out.EmitSubject.WhenVariableDefault == out.EmitSubject.WhenVariableEquals {
+					if got := serveWith(opRepoA, nil); !strings.Contains(got, "repository:") {
+						t.Errorf("%s: absent request variable did not take its default: %s", out.Path, got)
+					}
 				}
 			}
 		}

@@ -1491,8 +1491,9 @@
           "emit_subject": {
             "kind": "repository",
             "acr_prefix": "repository:",
-            "when_sibling": "scope",
-            "when_equals": "REPO"
+            "when_variable": "filter.breakout",
+            "when_variable_equals": "REPO",
+            "when_variable_default": "REPO"
           }
         },
         {

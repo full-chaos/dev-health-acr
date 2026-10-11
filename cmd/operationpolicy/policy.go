@@ -218,7 +218,7 @@ func declaredPolicy() policyDeclaration {
 		Served: map[string]operationDecl{
 			"compoundingRisk": {
 				DocumentName: "CompoundingRisk",
-				EmitSubjects: map[string]dr.SubjectEmit{"compoundingRisk.rows[*].scopeId": {Kind: dr.SubjectKindRepository, AcrPrefix: "repository:", WhenSibling: "scope", WhenEquals: "REPO"}},
+				EmitSubjects: map[string]dr.SubjectEmit{"compoundingRisk.rows[*].scopeId": {Kind: dr.SubjectKindRepository, AcrPrefix: "repository:", WhenVariable: "filter.breakout", WhenVariableEquals: "REPO", WhenVariableDefault: "REPO"}},
 				Cost:         dr.CostSeries,
 				Variables: map[string]variableDecl{
 					"orgId":            principalOrg,
