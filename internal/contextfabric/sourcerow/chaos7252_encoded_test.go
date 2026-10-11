@@ -84,7 +84,7 @@ func encodedCases() []encodedCase {
 				w.discovered[workItemDiscovery+"|jira:ABC-1"] = []contractsv1.ResolvedScope{scope(grantedID, grantedRep)}
 			},
 			calls: []string{"discover(org_1,work_item_repositories,jira:ABC-1)"},
-			// The team is decided fail closed until CHAOS-7227.
+			// No subject gate in this world: the team cannot be decided for a restricted caller.
 			restrictedServed: false,
 		},
 		{
@@ -316,17 +316,6 @@ func TestEncodedAmbiguityIsRefused(t *testing.T) {
 	two.addRow(grantedID, "work_item_dependencies.v2", ref, catalogRow("work_item_dependencies.v2", ref, entityTypes[kind], id, grantedRep))
 	if _, decision := resolver(t, two).ResolveSourceRow(context.Background(), unrestricted, string(kind), id); decision.Reason != contextfabric.SourceRowAmbiguous {
 		t.Fatalf("two rows: %+v", decision)
-	}
-}
-
-// project-team.v2 is minted but its source row is a separate change: it
-// reads nothing and the persisted record answers it.
-func TestProjectTeamV2StaysOnTheRecord(t *testing.T) {
-	w := newWorld()
-	_, id := mustMint(t, contractsv1.ContextFabricEvidenceEntityProjectTeamV2, "gitlab", "org:gitlab:1", "gl:team", "native")
-	_, decision := resolver(t, w).ResolveSourceRow(context.Background(), unrestricted, string(contractsv1.ContextFabricEvidenceEntityProjectTeamV2), id)
-	if decision.Reason != contextfabric.SourceRowKindOnRecord || len(w.calls) != 0 {
-		t.Fatalf("%+v, calls %v", decision, w.calls)
 	}
 }
 

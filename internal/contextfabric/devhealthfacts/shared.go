@@ -728,10 +728,15 @@ import (
 // complete and the only gap is a same-label claimant missing from the graph; a candidate
 // saved under an earlier version may hold the uncertified count and must not be reused.
 //
-// v149 -> v150: the team blockers rollup counts only open blockers and serves the
+// v149 -> v150: a requirement row over a truncated fact source whose cause is a
+// scope-expansion gap is admitted by the outcome validator, so an answer that was
+// refused as an invalid result is served; a candidate saved under an earlier
+// version cannot hold it.
+//
+// v150 -> v151: the team blockers rollup counts only open blockers and serves the
 // excluded-by-status count and the status basis; a candidate saved under an earlier
 // version holds the unfiltered counts.
-const QueryVersion = "devhealthfacts.clickhouse.v150"
+const QueryVersion = "devhealthfacts.clickhouse.v151"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

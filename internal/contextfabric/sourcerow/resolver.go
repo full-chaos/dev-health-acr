@@ -156,6 +156,9 @@ type target struct {
 	scope   contractsv1.ResolvedScope
 	read    contextpacket.SourceRowRead
 	grammar string
+	// teamLag: the graph holds no node for the row's team yet, and the row is
+	// served to a caller a "*" repository list admits; the expansion says so.
+	teamLag bool
 }
 
 // ResolveSourceRow implements contextfabric.SourceRowResolver.
@@ -204,6 +207,8 @@ func (r *Resolver) ResolveSourceRow(ctx context.Context, principal storage.Princ
 		targets, err = r.discoveredTargets(ctx, principal, discovery, entityID, read, contextfabric.SourceRowGrammarRowAnchored, &decision)
 	case contextfabric.SourceRowRouteOwnership:
 		return r.ownershipRow(ctx, principal, entityType, entityID, plan, decision)
+	case contextfabric.SourceRowRouteProjectTeam:
+		return r.projectTeamRow(ctx, principal, entityType, entityID, plan, decision)
 	case contextfabric.SourceRowRouteEncoded:
 		decision.Grammar = contextfabric.SourceRowGrammarEncoded
 		kind := contractsv1.ContextFabricEvidenceEntityType(entityType)
@@ -441,6 +446,9 @@ func (r *Resolver) expand(ctx context.Context, entityType, entityID string, row 
 	metadata["row_state"] = "current"
 	metadata["row_observed_at"] = evidence.ObservedAt.UTC().Format("2006-01-02T15:04:05.000Z07:00")
 	metadata["source_query"] = row.target.read.QueryID
+	if row.target.teamLag {
+		metadata["team_lookup"] = contextfabric.IdentityLookupTokenGraphLag
+	}
 	metadata["source_query_version"] = contextpacket.SourceRowQueryVersion
 	if contextpacket.CatalogSourceQuery(row.target.read.QueryID) {
 		metadata["catalog_version"] = contextpacket.SourceQueryCatalogVersionV1
@@ -563,6 +571,58 @@ func (r *Resolver) ownershipRow(ctx context.Context, principal storage.Principal
 	return expanded, decision
 }
 
+// projectTeamRow serves a project-team.v2 ownership group to a caller whose
+// repository list is "*" (CHAOS-7080: unrestricted and "*" callers). The row
+// names a project and a team and no repository, so a repository-restricted
+// caller has nothing to be granted: it stays on the persisted record
+// (kind_on_record, the record route's own reason), decided from the principal
+// alone before any read, so no refusal depends on whether the group exists.
+func (r *Resolver) projectTeamRow(ctx context.Context, principal storage.Principal, entityType, entityID string, plan contextfabric.SourceRowPlan, decision contextfabric.SourceRowDecision) (contractsv1.ExpandedEvidence, contextfabric.SourceRowDecision) {
+	decision.Grammar = contextfabric.SourceRowGrammarEncoded
+	kind := contractsv1.ContextFabricEvidenceEntityType(entityType)
+	values, ok := evidenceref.Parse(kind, entityID)
+	if !ok || !providerPattern.MatchString(values[0]) {
+		decision.Reason = contextfabric.SourceRowIDMalformed
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	if !admitsWildcard(principal) {
+		decision.Reason = contextfabric.SourceRowKindOnRecord
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	read := contextpacket.SourceRowRead{QueryID: plan.Query, Locator: contractsv1.ContextFabricEvidenceRefPrefix + entityType + ":" + entityID, Components: values}
+	references, err := r.rows.ResolveOrganizationRow(ctx, principal.OrgID, read)
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		decision.Reason, decision.Err = contextfabric.SourceRowUnavailable, err
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	decision.Rows = len(references)
+	switch len(references) {
+	case 0:
+		decision.Reason = contextfabric.SourceRowNoRow
+		return contractsv1.ExpandedEvidence{}, decision
+	case 1:
+	default:
+		decision.Reason = contextfabric.SourceRowAmbiguous
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	decision.Admitted = 1
+	row := found{target: target{read: read, grammar: contextfabric.SourceRowGrammarEncoded}, reference: references[0].Reference, key: references[0].Key}
+	if !rowNamesSubject(entityType, entityID, row) {
+		decision.Reason, decision.SubjectMismatch = contextfabric.SourceRowNoRow, true
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	expanded, err := r.expand(ctx, entityType, entityID, row)
+	if err != nil {
+		decision.Reason, decision.Err = contextfabric.SourceRowInvalid, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			decision.Reason, decision.Err = contextfabric.SourceRowUnavailable, ctxErr
+		}
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	decision.Reason = contextfabric.SourceRowServed
+	return expanded, decision
+}
+
 // rowNamesSubject recomputes the subject of the row a read returned from the
 // row's own columns, with the producer's functions, and reports whether it is
 // the subject the ref names and the grant or gate authorized (#742 r1 P1
@@ -617,6 +677,19 @@ func rowNamesSubject(entityType, entityID string, row found) bool {
 			return false
 		}
 		minted = contractsv1.EvidenceRefID(kind, row.key[0]+":"+row.key[1])
+	case contractsv1.ContextFabricEvidenceEntityProjectTeamV2:
+		// The row's own key columns are the ref's four segments, and the
+		// id the statement rendered re-mints to the requested ref.
+		values, parsed := evidenceref.Parse(kind, rowID)
+		if !parsed || len(row.key) != len(values) {
+			return false
+		}
+		for index := range values {
+			if row.key[index] != values[index] {
+				return false
+			}
+		}
+		minted, _ = evidenceref.Mint(kind, values...)
 	default:
 		// A ".v2" row (CHAOS-7252): its id is the statement's rendering of
 		// the row's own columns (evidenceref.IDSQL). It must parse as the
@@ -663,12 +736,13 @@ type encodedSpec struct {
 	anchorSegment   int
 	anchorDiscovery contextpacket.SourceRowDiscovery
 	endpoints       []endpoint
-	// wildcardOnly: the row names a subject this resolver cannot decide yet
-	// -- a team, whose ownership-derived gate CHAOS-7227 composes -- so the
-	// row is served only to a caller that a "*" repository list admits
-	// (unrestricted and "*" callers), and every repository-restricted caller
-	// is refused (fail closed; strictly stronger than the edge gate).
-	wildcardOnly bool
+	// teamSegment is the index of the team id in the ref when the row names a
+	// team (hasTeam). The team is an ownership subject: it is decided by the
+	// direct data tools' subject gate (OWNERSHIP reach, never membership,
+	// CHAOS-7227), live on every read, together with the repository the row
+	// is read in.
+	teamSegment int
+	hasTeam     bool
 }
 
 var encodedSpecs = map[contractsv1.ContextFabricEvidenceEntityType]encodedSpec{
@@ -686,10 +760,10 @@ var encodedSpecs = map[contractsv1.ContextFabricEvidenceEntityType]encodedSpec{
 	},
 	// (attribution repo_id, work item, team, source): read where the work
 	// item lives (the attribution's own repo_id is mostly the zero UUID);
-	// the team is decided fail closed until CHAOS-7227.
+	// the team is decided by the subject gate.
 	contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2: {
 		anchorDiscovery: contextpacket.SourceRowDiscoveryWorkItem, anchorSegment: 1,
-		wildcardOnly: true,
+		teamSegment: 2, hasTeam: true,
 	},
 	// (repository, deployment, incident, source): read in the repository
 	// the row names (the edge and its deployment); the incident must be
@@ -742,6 +816,12 @@ func (r *Resolver) encodedTargets(ctx context.Context, principal storage.Princip
 			return nil, err
 		}
 	}
+	teamAdmitted, teamLag := true, false
+	if spec.hasTeam {
+		if teamAdmitted, teamLag, err = r.teamAdmitted(ctx, principal, values[spec.teamSegment]); err != nil {
+			return nil, err
+		}
+	}
 	anchorWorkItem := ""
 	if !spec.anchorByID {
 		anchorWorkItem = values[spec.anchorSegment]
@@ -772,17 +852,47 @@ func (r *Resolver) encodedTargets(ctx context.Context, principal storage.Princip
 		}
 		allowed = allowed && len(admittedEnds) > 0
 	}
-	if spec.wildcardOnly && !admitsWildcard(principal) {
-		allowed = false
-	}
+	allowed = allowed && teamAdmitted
 	if !allowed {
 		return nil, nil
 	}
 	targets := make([]target, 0, len(readable))
 	for _, scope := range readable {
-		targets = append(targets, target{scope: scope, read: read, grammar: contextfabric.SourceRowGrammarEncoded})
+		targets = append(targets, target{scope: scope, read: read, grammar: contextfabric.SourceRowGrammarEncoded, teamLag: teamLag})
 	}
 	return targets, nil
+}
+
+// teamAdmitted asks the subject gate whether the caller may read the team, by
+// the team's ownership reach. The gate is asked on every read, for a refused
+// row and an absent one alike. A restricted caller is served only on an
+// admitted team. A caller a "*" repository list admits holds every
+// repository, so a team the graph has no node for yet (the graph lags the
+// tables) is not an authorization refusal: the row is served and the lag is
+// disclosed (lag). Without a gate only such a caller is served. A gate that
+// cannot answer is an error for everyone.
+func (r *Resolver) teamAdmitted(ctx context.Context, principal storage.Principal, teamID string) (admitted, lag bool, err error) {
+	if r.gate == nil {
+		return admitsWildcard(principal), false, nil
+	}
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: contextfabric.TeamCanonicalID(teamID)}
+	_, authorization := r.gate.Authorize(ctx, principal, []contextfabric.SubjectRef{subject})
+	if authorization.Decision == directread.DecisionUnavailable {
+		if authorization.Err != nil {
+			return false, false, authorization.Err
+		}
+		return false, false, fmt.Errorf("sourcerow: subject gate unavailable: %s", authorization.Reason)
+	}
+	if len(authorization.Outcomes) != 1 {
+		return false, false, nil
+	}
+	switch authorization.Outcomes[0].Outcome {
+	case directread.SubjectAdmitted:
+		return true, false, nil
+	case directread.SubjectAbsent:
+		return admitsWildcard(principal), admitsWildcard(principal), nil
+	}
+	return false, false, nil
 }
 
 // discover runs one repository discovery and refuses a saturated list.

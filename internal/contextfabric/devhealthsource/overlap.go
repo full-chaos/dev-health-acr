@@ -101,6 +101,8 @@ type windowScope struct {
 	pending *pendingWindow
 	// catchUp is the scope's catch-up pass (catch_up.go).
 	catchUp catchUpPass
+	// recon is the scope's team-ownership reconcile pass (reconcile.go).
+	recon reconcilePass
 	// ahead says the scope's last paged read stopped with rows beyond it.
 	ahead bool
 }
@@ -302,7 +304,11 @@ func (m *windowMemo) snapshot() *windowMemo {
 	defer m.mu.Unlock()
 	out := newWindowMemo()
 	for scope, sc := range m.scopes {
-		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass}
+		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass, recon: sc.recon}
+		if sc.recon.pending != nil {
+			pending := *sc.recon.pending
+			copied.recon.pending = &pending
+		}
 		if sc.pending != nil {
 			pending := *sc.pending
 			copied.pending = &pending
