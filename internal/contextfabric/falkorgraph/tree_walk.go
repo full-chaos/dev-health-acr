@@ -327,6 +327,13 @@ func (s treeWalkState) authorizedHit(hop treeHop, h walkHit) bool {
 	return s.authorized(h.to)
 }
 
+// feedAuthorized is the decision on the feed edge a fused link read returns
+// beside the link: a read that did not return it is not decided, and is denied.
+func (s treeWalkState) feedAuthorized(value interface{}) bool {
+	e := walkEdge(value)
+	return e != nil && authorizedEdgeAttributes(s.principal, s.scope, e.Properties)
+}
+
 func (s treeWalkState) authorized(n *node) bool {
 	return authorizedNodeAttributes(s.principal, s.scope, toCandidateNode(n).Attributes)
 }
@@ -684,11 +691,23 @@ func linkSegmentMatch(feed treeHop) string {
 // is not a row, so the read budget is spent on links only, and an anchor none
 // of whose near-side nodes links returns no row at all.
 func linkSegmentCypher(feed, link treeHop, temporal temporalFilter, restricted bool) string {
+	return linkSegmentCypherFor(feed, link, temporal, restricted, false)
+}
+
+// linkSegmentCypherFor is linkSegmentCypher; anchored adds what an anchored
+// member read decides with: the feed edge's own authorization lists, and the
+// far node's evidence references, which the cohort member carries.
+func linkSegmentCypherFor(feed, link treeHop, temporal temporalFilter, restricted, anchored bool) string {
 	mid := treeNodeVar{name: "m", param: "mtypes", position: feed.to}
 	end := treeNodeVar{name: "b", param: "btypes", position: link.to}
 	grants := ""
 	if restricted {
 		grants = end.grantClause() + mid.grantClause()
+	}
+	endProperties, feedColumn := walkNodeProperties, ""
+	if anchored {
+		endProperties = append(append([]string(nil), walkNodeProperties...), propEvidenceRefs)
+		feedColumn = ", " + walkProjection("ra", walkFeedProperties)
 	}
 	order := ""
 	if link.edge.linkOrder != "" {
@@ -697,8 +716,8 @@ func linkSegmentCypher(feed, link treeHop, temporal temporalFilter, restricted b
 	return linkSegmentMatch(feed) + fmt.Sprintf(hopArrow(link.step.direction, "rl")+"(b:%[2]s {%[3]s:$org, %[4]s:$endKind}) ", labelRelation, labelSubject, propOrgID, propKind) +
 		fmt.Sprintf("WHERE ra.%[1]s = $feedRel AND rl.%[1]s = $linkRel AND rl.%[2]s IN $tiers", propRelationType, propPropertyPrefix+linkTierProperty) + mid.typeClause() + end.typeClause() + grants +
 		temporal.predicate("ra") + temporal.predicate("m") + temporal.predicate("rl") + temporal.predicate("b") +
-		fmt.Sprintf(" RETURN %[4]s, %[5]s, %[6]s ORDER BY %[2]sm.%[1]s, b.%[1]s, rl.%[3]s SKIP $skip LIMIT $limit", propCanonicalID, order, propRelationshipID,
-			linkSegmentColumn("m", feed.to, walkNodeProperties), linkSegmentColumn("b", link.to, walkNodeProperties), walkProjection("rl", walkLinkProperties))
+		fmt.Sprintf(" RETURN %[4]s, %[5]s, %[6]s%[7]s ORDER BY %[2]sm.%[1]s, b.%[1]s, rl.%[3]s SKIP $skip LIMIT $limit", propCanonicalID, order, propRelationshipID,
+			linkSegmentColumn("m", feed.to, walkNodeProperties), linkSegmentColumn("b", link.to, endProperties), walkProjection("rl", walkLinkProperties), feedColumn)
 }
 
 // linkSegmentColumn is a node column of the link read: the walk properties of
@@ -827,7 +846,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 			return nil, nil, err
 		}
 	}
-	cypher := linkSegmentCypher(feed, link, temporal, restricted)
+	cypher := linkSegmentCypherFor(feed, link, temporal, restricted, state.ownershipEdges)
 	seen := map[string]bool{}
 	admitted := map[string]*node{}
 	out.endTiers = map[string]string{}
@@ -861,6 +880,8 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 			case state.anchorDenied:
 				state.deny()
 			case state.ownershipEdges && !authorizedEdgeAttributes(state.principal, state.scope, walkEdge(r["rl"]).Properties):
+				state.deny()
+			case state.ownershipEdges && !state.feedAuthorized(r["ra"]):
 				state.deny()
 			case !state.admitted(feed.to, near, tier):
 				state.deny()

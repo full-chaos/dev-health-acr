@@ -1045,6 +1045,7 @@ func (t SlogTelemetry) RecordTeamAnchorWalk(ctx context.Context, orgID string, d
 	args := []any{
 		"org_id", contextfabric.SanitizeLogAttr(orgID),
 		"outcome", contextfabric.SanitizeLogAttr(string(decision.Outcome)),
+		"anchor_kind", contextfabric.SanitizeLogAttr(string(decision.AnchorKind)),
 		"member_kind", contextfabric.SanitizeLogAttr(string(decision.MemberKind)),
 		"committed", decision.Committed,
 	}

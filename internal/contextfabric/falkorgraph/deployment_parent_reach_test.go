@@ -333,7 +333,11 @@ func seededProjectLinks(byKey map[string]seededNode, edges []seededEdge, cypher 
 			props[propPropertyPrefix+linkTierProperty] = l.tier
 			props[propPropertyPrefix+linkRankProperty] = seededTierRank[l.tier]
 		}
-		rows = append(rows, row{"m": asNode(l.near), "b": asNode(l.far), "rl": &edge{Properties: props}})
+		r := row{"m": asNode(l.near), "b": asNode(l.far), "rl": &edge{Properties: props}}
+		if strings.Contains(cypher, "AS ra") {
+			r["ra"] = &edge{Properties: map[string]interface{}{propRelationType: feedRel, propRelationshipID: "feed_" + l.near.id}}
+		}
+		rows = append(rows, r)
 	}
 	return rows
 }

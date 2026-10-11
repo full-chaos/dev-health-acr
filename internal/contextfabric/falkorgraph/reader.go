@@ -734,7 +734,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			walk, err = a.teamAnchorMembers(ctx, key, principal.OrgID, principal, scope, subject, position, collectLimit, temporal)
 			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
 			if err != nil && a.config.Telemetry != nil {
-				a.config.Telemetry.RecordTeamAnchorWalk(ctx, principal.OrgID, teamWalkTally.decision(declaredCohortKindForRouting, len(request.Resolution.Committed), err))
+				a.config.Telemetry.RecordTeamAnchorWalk(ctx, principal.OrgID, teamWalkTally.decision(teamAnchors[0].Kind, declaredCohortKindForRouting, len(request.Resolution.Committed), err))
 			}
 			teamWalkTally.add(walk)
 			for id, tier := range walk.memberTiers {
@@ -814,7 +814,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 
 	if teamWalkTally.ran && a.config.Telemetry != nil {
-		a.config.Telemetry.RecordTeamAnchorWalk(ctx, principal.OrgID, teamWalkTally.decision(declaredCohortKindForRouting, len(request.Resolution.Committed), nil))
+		a.config.Telemetry.RecordTeamAnchorWalk(ctx, principal.OrgID, teamWalkTally.decision(teamAnchors[0].Kind, declaredCohortKindForRouting, len(request.Resolution.Committed), nil))
 	}
 
 	// cohortMemberSource travels onto GraphContext so the count scope

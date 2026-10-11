@@ -17,6 +17,10 @@ var walkNodeProperties = []string{propKind, propCanonicalID, propLabel, propAuth
 
 var walkLinkProperties = []string{propPropertyPrefix + linkTierProperty, propPropertyPrefix + linkRankProperty, propRelationshipID, propAuthzRepos, propAuthzProjects, propAuthzTeams}
 
+// walkFeedProperties are what an anchored link read returns of the feed edge:
+// its relationship id and the three authorization lists.
+var walkFeedProperties = []string{propRelationshipID, propAuthzRepos, propAuthzProjects, propAuthzTeams}
+
 // walkProjection is the map of a variable's walk properties, returned under
 // the variable's own name so the ORDER BY of a read keeps its text.
 func walkProjection(variable string, properties []string) string {

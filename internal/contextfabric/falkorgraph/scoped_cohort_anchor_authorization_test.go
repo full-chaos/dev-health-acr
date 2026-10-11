@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -128,6 +129,16 @@ func TestScopedCohortUnreadableRelationshipServesNoMember(t *testing.T) {
 			},
 			denyRel: "LINKS_PULL_REQUEST", memberID: "pull_request:1", q: "which pull requests does project Alpha have?",
 		},
+		{
+			name: "feed_edge_of_the_fused_link_read", anchor: contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project:alpha", Label: "Alpha"},
+			member: contextfabric.SubjectPullRequest,
+			nodes:  []scopedAnchorNode{{"project", "project:alpha", "Alpha"}, {"work_item", "issue:1", "ALPHA-1"}, {"pull_request", "pull_request:1", "Alpha fix"}},
+			edges: []scopedAnchorEdge{
+				{rel: "BELONGS_TO_PROJECT", srcKind: "work_item", srcID: "issue:1", dstKind: "project", dstID: "project:alpha"},
+				{rel: "LINKS_PULL_REQUEST", srcKind: "work_item", srcID: "issue:1", dstKind: "pull_request", dstID: "pull_request:1", linkTier: "native"},
+			},
+			denyRel: "BELONGS_TO_PROJECT", memberID: "pull_request:1", q: "which pull requests does project Alpha have?",
+		},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -140,5 +151,25 @@ func TestScopedCohortUnreadableRelationshipServesNoMember(t *testing.T) {
 				t.Errorf("UNREADABLE RELATIONSHIP SERVED: %s reached over an unreadable %s edge: %v", tc.memberID, tc.denyRel, ids)
 			}
 		})
+	}
+}
+
+// An anchored link read returns the feed edge's authorization lists and the far
+// node's evidence references; every other link read returns neither.
+func TestAnchoredLinkReadReturnsTheFeedEdgeAndTheMembersEvidence(t *testing.T) {
+	feed, link := projectLinkHops(t)
+	anchored := linkSegmentCypherFor(feed, link, temporalFilter{}, false, true)
+	for _, want := range []string{
+		propAuthzRepos + ": ra." + propAuthzRepos,
+		"} AS ra",
+		propEvidenceRefs + ": b." + propEvidenceRefs,
+	} {
+		if !strings.Contains(anchored, want) {
+			t.Errorf("anchored link read = %q, want %q", anchored, want)
+		}
+	}
+	plain := linkSegmentCypher(feed, link, temporalFilter{}, false)
+	if strings.Contains(plain, "AS ra") || strings.Contains(plain, propEvidenceRefs) {
+		t.Errorf("plain link read = %q, want neither the feed edge nor the evidence references", plain)
 	}
 }
