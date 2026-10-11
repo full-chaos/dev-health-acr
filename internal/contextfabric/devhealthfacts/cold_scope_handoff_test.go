@@ -2,9 +2,11 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -172,5 +174,95 @@ func TestOverflowAndEmptyColdLoadsAreReportedOncePerOrganization(t *testing.T) {
 		if got != 1 {
 			t.Errorf("%s: cold-load lines = %d over two reads, want 1\n%s", name, got, buf.String())
 		}
+	}
+}
+
+// runMarkerErrClient fails only the standalone run-id read.
+type runMarkerErrClient struct{ *fakeClient }
+
+func (c runMarkerErrClient) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if isRunIDRead(statement) {
+		c.fakeClient.queries = append(c.fakeClient.queries, capturedQuery{statement: statement, bindings: bindings})
+		return nil, errors.New("run marker read failed")
+	}
+	return c.fakeClient.Query(ctx, statement, bindings)
+}
+
+// An unreadable run marker is logged, not swallowed, and the fallback scope is
+// carried: the statements of the read do not read the run marker again.
+func TestUnreadableRunMarkerIsLoggedAndNotReadAgainInsideTheClock(t *testing.T) {
+	var logs syncBuffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	client := &fakeClient{tables: coldScopeTables()}
+	readThroughProduction(t, runMarkerErrClient{client}, "org-handoff-marker")
+	if got := countRunIDReads(client); got != 1 {
+		t.Fatalf("run-marker reads in one read = %d, want 1", got)
+	}
+	if out := logs.String(); !strings.Contains(out, "devhealthfacts.membership_scope_fallback") || !strings.Contains(out, "reason=run_marker_read_failed") {
+		t.Fatalf("an unreadable run marker must emit the scope fallback WARN:\n%s", out)
+	}
+}
+
+// An organization's unit listing loads the scope before the capability clock.
+func TestOrganizationUnitListingLoadsTheScopeBeforeTheCapabilityClock(t *testing.T) {
+	client := &delayClient{inner: &fakeClient{tables: coldScopeTables()}, delays: map[string]time.Duration{
+		scopeLoadStatement: 5500 * time.Millisecond,
+	}}
+	registry, request := coldScopeRegistryProduction(t, client)
+	request.Subjects = []contextfabric.SubjectRef{{Kind: contextfabric.SubjectOrganization, CanonicalID: "org-handoff-orgunits", Label: "org"}}
+	ctx := contextfabric.WithInvestmentUnits(context.Background(), contextfabric.InvestmentUnitsRequest{Max: 2})
+	client.t0 = time.Now()
+	bundle, err := registry.ReadFacts(ctx, storage.Principal{OrgID: "org-handoff-orgunits"}, request)
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if got := countStatements(client.inner, scopeLoadStatement); got != 1 {
+		t.Fatalf("scope loads = %d, want 1: measurement did not happen", got)
+	}
+	for _, s := range bundle.Coverage.Sources {
+		if strings.Contains(s.Reason, "timed out") {
+			t.Errorf("%s reason=%q", s.Source, s.Reason)
+		}
+	}
+}
+
+// The cold-load INFO is once per organization, whatever the outcomes.
+func TestColdLoadInfoIsOncePerOrganizationAcrossOutcomes(t *testing.T) {
+	var buf syncBuffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	tables := coldScopeTables()
+	client := &fakeClient{tables: tables}
+	registry, request := coldScopeRegistryProduction(t, client)
+	read := func() {
+		if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org-info-once"}, request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setUnits := func(rows [][]any, run string) {
+		for i := range client.tables {
+			switch client.tables[i].match {
+			case scopeUnitsMatch:
+				client.tables[i].rows = rows
+			case scopeRunMatch:
+				client.tables[i].rows = [][]any{{run}}
+			}
+		}
+	}
+	setUnits([][]any{}, "run-a")
+	read()
+	setUnits([][]any{{[]string{"wu-1"}}}, "run-b")
+	read()
+	n := 0
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(line, "investment membership scope cold load") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("cold-load lines for one org over an empty then a successful run = %d, want 1\n%s", n, buf.String())
 	}
 }

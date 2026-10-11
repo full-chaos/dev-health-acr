@@ -61,9 +61,14 @@ func (p *InvestmentProvider) LoadPrerequisites(ctx context.Context, principal st
 	if err != nil {
 		return ctx, err
 	}
+	_, unitListing := contextfabric.InvestmentUnitsFrom(ctx)
 	for _, subject := range query.Subjects {
+		// An organization reads the scope only for its unit listing.
+		if subject.Kind == contextfabric.SubjectOrganization && !unitListing {
+			continue
+		}
 		switch subject.Kind {
-		case contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository:
+		case contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository, contextfabric.SubjectOrganization:
 			started := clock()
 			scope, runID, err := p.resolveMembershipScopeRun(ctx, orgID)
 			if err != nil {
@@ -76,9 +81,6 @@ func (p *InvestmentProvider) LoadPrerequisites(ctx context.Context, principal st
 				}
 				slog.WarnContext(ctx, "investment membership scope prerequisite load failed", "reason", contextfabric.SanitizeLogAttr(reason), "duration_ms", clock().Sub(started).Milliseconds())
 				return ctx, err
-			}
-			if runID == "" {
-				return ctx, nil
 			}
 			return context.WithValue(ctx, loadedMembershipScopeKey{}, loadedMembershipScope{orgID: orgID, runID: runID, scope: scope}), nil
 		}

@@ -183,8 +183,8 @@ const (
 	membershipScopeMaxUnits = 100000
 	// membershipScopeMaxOrgs bounds how many organizations are remembered.
 	membershipScopeMaxOrgs = 64
-	// membershipScopeMaxLogged bounds the set of cold loads already reported
-	// (one key per organization and outcome); an evicted key reports again.
+	// membershipScopeMaxLogged bounds the set of organizations whose cold load
+	// was already reported; an evicted organization reports again.
 	membershipScopeMaxLogged = 4 * membershipScopeMaxOrgs
 	// membershipScopeTTL bounds how long a remembered scope is served. A
 	// completed run is immutable, so a fresh entry is exact; the bound only
@@ -308,7 +308,10 @@ func (p *InvestmentProvider) resolveMembershipScopeRun(ctx context.Context, orgI
 		}
 		// The run could not be resolved: never serve a remembered set for a run
 		// that may have been replaced. The scope subqueries decide in the
-		// statement itself, exactly as before.
+		// statement itself, exactly as before. The failure is reported, never
+		// swallowed.
+		slog.WarnContext(ctx, "devhealthfacts.membership_scope_fallback", "reason", contextfabric.SanitizeLogAttr("run_marker_read_failed"), "path", contextfabric.SanitizeLogAttr("scope_subqueries"))
+		projectMixEvent(ctx, membershipScopeFallbackReader, err)
 		return subqueryMembershipScope, "", nil
 	}
 	if runs > 1 {
@@ -354,7 +357,7 @@ func (p *InvestmentProvider) resolveMembershipScopeRun(ctx context.Context, orgI
 			if rows > 0 && len(ids) > 0 {
 				outcome, units = "overflow", membershipScopeMaxUnits
 			}
-			if p.scopes.firstLoad(orgID + "\x00" + outcome) {
+			if p.scopes.firstLoad(orgID) {
 				slog.InfoContext(ctx, "investment membership scope cold load", "outcome", contextfabric.SanitizeLogAttr(outcome), "duration_ms", clock().Sub(started).Milliseconds(), "units", units)
 			}
 			return []string(nil), nil
