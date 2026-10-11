@@ -708,7 +708,11 @@ import (
 // v139 -> v143: served limitation sentences, coverage reasons and render labels name
 // kinds by display noun and carry no basis token, so a candidate saved under an
 // earlier version may hold the old wording and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v143"
+//
+// v146: an answer whose synthesis input was bounded serves one
+// synthesis_input_bounded coverage detail per fact kind read (given N of M); a
+// candidate saved under an earlier version carries only the prose limitation.
+const QueryVersion = "devhealthfacts.clickhouse.v146"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

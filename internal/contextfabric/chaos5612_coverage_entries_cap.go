@@ -22,7 +22,7 @@ import (
 // once the bound is reached, the cap behaves deterministically and is
 // emitted, never a silent drop and never a write refusal.
 //
-// DEGRADING NEVER YIELDS. Every degrading detail is paired 1:1 with a
+// DEGRADING NEVER YIELDS (and neither does the bounded-input disclosure, see coverageDetailNeverYields). Every degrading detail is paired 1:1 with a
 // DegradedReasons entry (validateCoverageDetails' own dual-write derivation
 // invariant); trimming one would desync that pairing -- mergeCoverageDetails
 // would then have to drop the WHOLE array on the next merge, per its own
@@ -63,18 +63,40 @@ func capCoverageEntriesToWriteBound(result *InvestigationResult) int {
 			nonDegrading = append(nonDegrading, d)
 		}
 	}
-	remaining := bound - len(degrading)
+	protected := 0
+	for _, d := range nonDegrading {
+		if coverageDetailNeverYields(d) {
+			protected++
+		}
+	}
+	remaining := bound - len(degrading) - protected
 	if remaining < 0 {
 		remaining = 0
 	}
-	if len(nonDegrading) <= remaining {
+	if len(nonDegrading) <= remaining+protected {
 		return 0
 	}
-	omitted := len(nonDegrading) - remaining
-	kept := append(degrading, nonDegrading[:remaining]...)
+	omitted := len(nonDegrading) - remaining - protected
+	kept := degrading
+	for _, d := range nonDegrading {
+		if coverageDetailNeverYields(d) {
+			kept = append(kept, d)
+		} else if remaining > 0 {
+			kept = append(kept, d)
+			remaining--
+		}
+	}
 	for i := range kept {
 		kept[i].DetailID = fmt.Sprintf("cov-%02d", i+1)
 	}
 	result.Coverage.Details = kept
 	return omitted
+}
+
+// coverageDetailNeverYields names the non-degrading rows the cap keeps ahead of
+// the rest: the per-kind disclosure of a bounded synthesis input, which the
+// answer's own limitation promises. Its count is the number of fact kinds
+// read, a small closed set.
+func coverageDetailNeverYields(d CoverageDetail) bool {
+	return d.Code == contractsv1.ContextFabricCoverageDetailSynthesisInputBounded
 }

@@ -59,8 +59,8 @@ func workItemModelBreach(draft InvestigationResult, input SynthesisInput, resolu
 	return rule, true
 }
 
-func workItemModelBreachFailure(rule WorkItemTupleRule, stage string, inputBounded bool) *SynthesisFailure {
-	return &SynthesisFailure{Class: SynthesisFailureRejected, Rule: string(rule), Stage: stage, InputBounded: inputBounded, cause: fmt.Errorf("%w: %w: work-item tuple draft breaks %s", ErrSynthesisRejected, ErrModelOutput, rule)}
+func workItemModelBreachFailure(rule WorkItemTupleRule, stage string, bound *synthesisInputBound) *SynthesisFailure {
+	return &SynthesisFailure{Class: SynthesisFailureRejected, Rule: string(rule), Stage: stage, Bound: bound, cause: fmt.Errorf("%w: %w: work-item tuple draft breaks %s", ErrSynthesisRejected, ErrModelOutput, rule)}
 }
 
 // workItemDegradeBasis is what the validation stage keeps of the synthesis
@@ -105,7 +105,7 @@ func (e *Engine) degradeWorkItemModelBreach(ctx context.Context, principal stora
 	if !ok {
 		return result, false
 	}
-	failure := workItemModelBreachFailure(rule, "validation", slices.Contains(result.Limitations, contractsv1.ContextFabricSynthesisInputBoundedLimitation))
+	failure := workItemModelBreachFailure(rule, "validation", synthesisInputBoundOf(result))
 	failure.DeferEvent = true
 	composed, err := composer.ComposeDegraded(ctx, principal, basis.Input, failure)
 	if err != nil {
