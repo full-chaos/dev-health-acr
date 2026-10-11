@@ -808,11 +808,15 @@ import (
 // synthesized claim may cite it (fact_id); a candidate saved under an earlier version holds
 // facts and claims without ids.
 //
-// v165 -> v166: a review fact reads its own pull request's review only (the
+// v165 -> v166: a work item's status fact adds status_since, status_duration_seconds and
+// status_since_basis; a candidate saved under v165 holds a status fact without the time in
+// the current status and must not be reused.
+//
+// v166 -> v167: a review fact reads its own pull request's review only (the
 // key carries the pull request number; a review id recurs across one
 // repository's pull requests) and cites review.v2. A candidate saved under
-// v165 may hold another pull request's review state and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v166"
+// v166 may hold another pull request's review state and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v167"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
