@@ -473,11 +473,13 @@ func (e *Engine) applyPeriodDelta(ctx context.Context, principal storage.Princip
 		switch {
 		case err != nil:
 			failure = periodDeltaFailureReasonOf(err)
-		case priorBundle.Outcomes[FactHealth].Branch == string(factReadRejected):
-			// The read returned, and the registry refused the health
-			// result: nothing was learned about the prior point, which is
-			// prior_read_failed, never unknown_prior.
-			failure = PeriodDeltaFailureReadFailed
+		case periodDeltaPriorBranchFailure(priorBundle.Outcomes[FactHealth].Branch) != PeriodDeltaFailureNone:
+			// The read returned nil error, but the health capability did
+			// not complete (failed, cancelled, rejected, unconfigured,
+			// gapped, pruned): nothing was learned about the prior point,
+			// which is prior_read_failed, never unknown_prior. Only an
+			// absent ledger entry or a completed branch is a real read.
+			failure = periodDeltaPriorBranchFailure(priorBundle.Outcomes[FactHealth].Branch)
 		default:
 			priorIssued = true
 			for _, fact := range priorBundle.Facts {
@@ -590,4 +592,17 @@ func periodDeltaTouchedSubjectKinds(subjects []SubjectRef) []SubjectKind {
 		}
 	}
 	return touched
+}
+
+// periodDeltaPriorBranchFailure maps the prior health read's ledger branch
+// to a failure reason. "" (no ledger entry) and completed are a real read.
+func periodDeltaPriorBranchFailure(branch string) PeriodDeltaFailureReason {
+	switch factReadOutcome(branch) {
+	case "", factReadCompleted:
+		return PeriodDeltaFailureNone
+	case factReadCancelled:
+		return PeriodDeltaFailureCanceled
+	default:
+		return PeriodDeltaFailureReadFailed
+	}
 }
