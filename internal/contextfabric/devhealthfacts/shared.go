@@ -799,11 +799,16 @@ import (
 // candidate saved under v162 was served corrected with no such record and the
 // model's label is not recoverable from it.
 //
-// v163 -> v164: a read obligation no producer declares for the member kind of
+// v163 -> v164: an answer about one subject (no cohort) whose claimed facts
+// overran the item ceiling is served partial with the claims cut and the cut
+// disclosed, where it was refused; a candidate saved under an earlier version
+// cannot hold it.
+//
+// v164 -> v165: a read obligation no producer declares for the member kind of
 // a cohort (health for pull requests or incidents) is judged not_applicable
 // instead of unavailable, so the answer is no longer degraded by it; a
-// candidate saved under v163 holds the degraded account and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v164"
+// candidate saved under v164 holds the degraded account and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v165"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
