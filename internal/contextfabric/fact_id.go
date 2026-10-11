@@ -21,15 +21,36 @@ func MintFactID(kind FactKind, subject SubjectRef, ordinal int) string {
 }
 
 // AssignFactIDs stamps every fact with the id of its place in its
-// (kind, subject) group, in slice order. It overwrites any id already set,
-// because an id minted for a different slice would collide with this one's.
-// Run after the slice reaches its final composition and order: the registry
-// at the end of a read, and again after a group read is merged in.
+// (kind, subject) group, in slice order. Run once, on the registry's sorted
+// bundle.
 func AssignFactIDs(facts []CanonicalFact) {
-	ordinals := make(map[string]int, len(facts))
-	for i := range facts {
-		key := string(facts[i].Kind) + "\x00" + subjectKeyForModel(facts[i].Subject)
-		facts[i].ID = MintFactID(facts[i].Kind, facts[i].Subject, ordinals[key])
+	AppendFactsWithIDs(nil, facts)
+}
+
+// AppendFactsWithIDs returns into followed by a copy of add, where each added
+// fact is stamped with the next free ordinal of its (kind, subject) group.
+// Facts already in into keep their ids: a bundle another reader already holds
+// must not change under it. When into is nil the facts of add are stamped in
+// place and returned as-is.
+func AppendFactsWithIDs(into, add []CanonicalFact) []CanonicalFact {
+	ordinals := make(map[string]int, len(into)+len(add))
+	groupKey := func(fact CanonicalFact) string {
+		return string(fact.Kind) + "\x00" + subjectKeyForModel(fact.Subject)
+	}
+	for _, fact := range into {
+		ordinals[groupKey(fact)]++
+	}
+	stamped := add
+	if into != nil {
+		stamped = append([]CanonicalFact(nil), add...)
+	}
+	for i := range stamped {
+		key := groupKey(stamped[i])
+		stamped[i].ID = MintFactID(stamped[i].Kind, stamped[i].Subject, ordinals[key])
 		ordinals[key]++
 	}
+	if into == nil {
+		return stamped
+	}
+	return append(into, stamped...)
 }

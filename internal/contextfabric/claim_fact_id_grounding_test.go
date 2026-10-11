@@ -50,8 +50,11 @@ func TestFactIDsAreDeterministicAndIndependentOfValues(t *testing.T) {
 func TestFactIDsDoNotCollideAcrossAMergedBundle(t *testing.T) {
 	member := factIDGroup()
 	group := factIDGroup()
-	merged := append(append([]CanonicalFact{}, member...), group...)
-	AssignFactIDs(merged)
+	memberIDs := []string{member[0].ID, member[1].ID}
+	merged := AppendFactsWithIDs(member, group)
+	if merged[0].ID != memberIDs[0] || merged[1].ID != memberIDs[1] {
+		t.Fatal("merging a group read must not change the ids of facts already read")
+	}
 	seen := map[string]bool{}
 	for _, fact := range merged {
 		if seen[fact.ID] {
