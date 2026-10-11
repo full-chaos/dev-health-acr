@@ -487,6 +487,10 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"CHAOS-7130 the team list uses resolved ownership and equals the edge set", "30000000-0000-4000-8000-000000000024", subCHAOS7130TeamListUsesResolvedOwnership},
 		{"CHAOS-7130 a late repos row re-projects the team", "30000000-0000-4000-8000-000000000025", subCHAOS7130LateReposRowReprojectsTheTeam},
 		{"CHAOS-7130 randomized list/edge/oracle parity", "30000000-0000-4000-8000-000000000026", subCHAOS7130RandomizedListEdgeParity},
+		{"team authorization drops a hard-deleted repository", "30000000-0000-4000-8000-000000000027", subTeamAuthorizationDropsAHardDeletedRepository},
+		{"team authorization drops a non-newest hard-deleted repository on the periodic reconcile", "30000000-0000-4000-8000-000000000028", subTeamAuthorizationDropsANonNewestHardDeletedRepository},
+		{"team reconcile walks every page and retries an unapplied page", "30000000-0000-4000-8000-000000000029", subTeamReconcileWalksEveryPageAndRetriesAnUnappliedPage},
+		{"team reconcile keeps the checkpoint after a skipped page", "30000000-0000-4000-8000-00000000002a", subTeamReconcileKeepsTheCheckpointAfterASkippedPage},
 		{"CHAOS-7139 a team at exactly the entity bound keeps every edge", "30000000-0000-4000-8000-000000000022", subCHAOS7139TeamAtEntityBoundKeepsEveryEdge},
 	}
 	// The subtests run in parallel on one shared schema; the organization id

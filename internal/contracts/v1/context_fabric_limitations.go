@@ -400,6 +400,37 @@ func IsContextFabricGroupReadUnreadLimitation(limitation string) bool {
 	return ok
 }
 
+// contextFabricCoverageEntriesDroppedLimitationPrefix/-Suffix are the fixed
+// segments of the disclosure that coverage carried more degrading entries than
+// an answer can hold, and some were left out. The one interpolated value is a
+// count the service computes.
+const (
+	contextFabricCoverageEntriesDroppedLimitationPrefix = "Coverage reported more entries than an answer can carry, so the last "
+	contextFabricCoverageEntriesDroppedLimitationSuffix = " degraded coverage entries and their reasons were left out."
+)
+
+// ContextFabricCoverageEntriesDroppedLimitation composes the disclosure that
+// dropped degraded coverage entries were left out of an answer at the entry
+// bound. THE SOLE COMPOSER: recognition is a parse over exactly these segments.
+func ContextFabricCoverageEntriesDroppedLimitation(dropped int) string {
+	return contextFabricCoverageEntriesDroppedLimitationPrefix + strconv.Itoa(dropped) + contextFabricCoverageEntriesDroppedLimitationSuffix
+}
+
+// IsContextFabricCoverageEntriesDroppedLimitation reports whether a limitation
+// is one ContextFabricCoverageEntriesDroppedLimitation could have composed.
+func IsContextFabricCoverageEntriesDroppedLimitation(limitation string) bool {
+	body, ok := strings.CutPrefix(limitation, contextFabricCoverageEntriesDroppedLimitationPrefix)
+	if !ok {
+		return false
+	}
+	count, ok := strings.CutSuffix(body, contextFabricCoverageEntriesDroppedLimitationSuffix)
+	if !ok {
+		return false
+	}
+	n, err := strconv.Atoi(count)
+	return err == nil && n > 0 && strconv.Itoa(n) == count
+}
+
 // ContextFabricGroupListOverBoundLimitation composes the disclosure that a
 // grouped question proposed more groups than the contract's group bound, so
 // its group axis was refused before any group was read and the answer is
@@ -693,7 +724,8 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricWorkItemSynthesisCoverageLimitation(limitation) ||
 		IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation) ||
 		IsContextFabricStatedRangeConflictLimitation(limitation) ||
-		IsContextFabricComparisonPeriodUnreadLimitation(limitation)
+		IsContextFabricComparisonPeriodUnreadLimitation(limitation) ||
+		IsContextFabricCoverageEntriesDroppedLimitation(limitation)
 }
 
 // ContextFabricStatedRangeConflictLimitation is served when a turn ran on the
