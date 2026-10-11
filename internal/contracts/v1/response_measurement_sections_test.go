@@ -60,3 +60,24 @@ func TestMeasurementSectionsAreTheEncodedDocumentsOwn(t *testing.T) {
 		t.Fatalf("an empty measurement has no sections, got %+v", got)
 	}
 }
+
+// Only the per-section split is lazy: the byte count and the item counts the
+// budget decides on are measured eagerly, every time, before anyone asks for
+// the sections.
+func TestMeasurementBytesAndItemsAreEagerAndOnlyTheSplitIsLazy(t *testing.T) {
+	result := ContextFabricInvestigationResult{ResultID: "result_12345678", Limitations: []string{"a limitation"}}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	measurement, err := MeasureContextFabricResponse(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if measurement.Bytes != int64(len(encoded)) {
+		t.Fatalf("Bytes = %d, want the encoded length %d without any Sections call", measurement.Bytes, len(encoded))
+	}
+	if measurement.Items != CountContextFabricResultItems(result) {
+		t.Fatalf("Items = %+v, want the eager count %+v", measurement.Items, CountContextFabricResultItems(result))
+	}
+}
