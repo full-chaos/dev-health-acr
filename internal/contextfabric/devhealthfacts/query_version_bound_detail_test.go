@@ -31,7 +31,7 @@ func TestQueryVersionMovedPastTheModelFailureDetail(t *testing.T) {
 	if !ok {
 		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
 	}
-	if n, err := strconv.Atoi(version); err != nil || n < 147 {
-		t.Fatalf("QueryVersion = %q: an answer saved before the model-failure detail (v146 and before) must not be reused", devhealthfacts.QueryVersion)
+	if n, err := strconv.Atoi(version); err != nil || n < 148 {
+		t.Fatalf("QueryVersion = %q: an answer saved before the model-failure detail (v147 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }

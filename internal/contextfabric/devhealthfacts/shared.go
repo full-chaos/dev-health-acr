@@ -713,11 +713,17 @@ import (
 // synthesis_input_bounded coverage detail per fact kind read (given N of M); a
 // candidate saved under an earlier version carries only the prose limitation.
 //
-// v147: a degraded answer for a failed model call serves one
+// v146 -> v147: a prior-period health read whose provider did not complete
+// (failed, cancelled, rejected, unconfigured, gapped, pruned) is served as
+// period_delta_transition=prior_read_failed with its reason, not as
+// unknown_prior (CHAOS-7404). A candidate saved under v146 may carry the false
+// unknown_prior and must not be reused.
+//
+// v148: a degraded answer for a failed model call serves one
 // synthesis_model_failed coverage detail (failure class and retry hint) and is
 // recognised by it; a no-facts failure serves its own limitation. A candidate
 // saved under an earlier version carries only the warning.
-const QueryVersion = "devhealthfacts.clickhouse.v147"
+const QueryVersion = "devhealthfacts.clickhouse.v148"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
