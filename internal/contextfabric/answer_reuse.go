@@ -563,9 +563,12 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	unscopedAxisKey := GrantScopedTimeAxisKey(principal, timeAxisKey)
 	timeAxisKey = RequestScopeTimeAxisKey(request, timeAxisKey)
 	timeAxisKey = GrantScopedTimeAxisKey(principal, timeAxisKey)
-	if timeAxisKey == "" {
+	if timeAxisKey == "" && unscopedAxisKey == "" {
 		// A historical context missing its own required bounds. Fail
 		// closed rather than key it as anything -- see TimeAxisKeyFor.
+		// A scoped key past the column bound alone does not end the lookup:
+		// a work-item tuple answer is keyed without the request scope and
+		// still gets its own probe below.
 		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	}
@@ -630,12 +633,30 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 		// under this exact active graph epoch.
 		GraphEpoch: binding.Epoch,
 	}
-	stored, ok, missReason, err := e.reuseGate.FindReusable(ctx, principal, key)
+	var (
+		stored     StoredInvestigationResult
+		ok         bool
+		missReason ReuseMissReason
+		err        error
+	)
+	if timeAxisKey != "" {
+		stored, ok, missReason, err = e.reuseGate.FindReusable(ctx, principal, key)
+	}
+	// tupleProbeFoundRow: the unscoped-key probe found a row that is not a
+	// work-item tuple answer, so it is not served; it also tells the scope
+	// identity attribution below what the legacy key holds without a repeat read.
+	tupleProbeFoundRow := false
+	tupleProbeRan := false
 	if (err != nil || !ok) && unscopedAxisKey != "" && unscopedAxisKey != key.TimeAxisKey {
 		tupleKey := key
 		tupleKey.TimeAxisKey = unscopedAxisKey
-		if tupleStored, tupleOK, _, tupleErr := e.reuseGate.FindReusable(ctx, principal, tupleKey); tupleErr == nil && tupleOK && ClassifyWorkItemTuple(tupleStored.Result, tupleStored.SemanticState, tupleStored.SemanticStateRead).Disposition != WorkItemTupleNotApplicable {
-			stored, ok, missReason, err = tupleStored, true, "", nil
+		tupleProbeRan = true
+		if tupleStored, tupleOK, _, tupleErr := e.reuseGate.FindReusable(ctx, principal, tupleKey); tupleErr == nil && tupleOK {
+			if ClassifyWorkItemTuple(tupleStored.Result, tupleStored.SemanticState, tupleStored.SemanticStateRead).Disposition != WorkItemTupleNotApplicable {
+				stored, ok, missReason, err = tupleStored, true, "", nil
+			} else {
+				tupleProbeFoundRow = true
+			}
 		}
 	}
 	if err != nil || !ok {
@@ -643,9 +664,17 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 		if missReason == ReuseMissStaleGraphEpoch {
 			outcome = AnswerReuseMissStaleGraphEpoch
 		} else if err == nil && requestNamesSelectors(request) {
-			legacy := key
-			legacy.TimeAxisKey = GrantScopedTimeAxisKey(principal, repositoryScopeTimeAxisKey(request, composeTimeAxisKey(TimeAxisKeyFor(effectiveTimeContext), windowKey)))
-			if legacy.TimeAxisKey != "" && legacy.TimeAxisKey != key.TimeAxisKey {
+			legacyKey := GrantScopedTimeAxisKey(principal, repositoryScopeTimeAxisKey(request, composeTimeAxisKey(TimeAxisKeyFor(effectiveTimeContext), windowKey)))
+			switch {
+			case legacyKey == "" || legacyKey == key.TimeAxisKey:
+			case tupleProbeRan && legacyKey == unscopedAxisKey:
+				// The tuple probe already read this exact key.
+				if tupleProbeFoundRow {
+					outcome = AnswerReuseMissScopeIdentity
+				}
+			default:
+				legacy := key
+				legacy.TimeAxisKey = legacyKey
 				if _, legacyOK, _, legacyErr := e.reuseGate.FindReusable(ctx, principal, legacy); legacyErr == nil && legacyOK {
 					outcome = AnswerReuseMissScopeIdentity
 				}

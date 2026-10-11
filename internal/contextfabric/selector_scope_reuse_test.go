@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func selectorAsk(t *testing.T, engine *Engine, projects, teams []string) InvestigationResult {
@@ -127,5 +128,81 @@ func TestRequestScopeTimeAxisKeyIgnoresSelectorDuplicatesAndBlanks(t *testing.T)
 	}
 	if key([]string{"a"}, nil) == key(nil, []string{"a"}) {
 		t.Fatal("project and team ids collide")
+	}
+}
+
+func TestRequestScopeTimeAxisKeyFramesSelectorsWithoutCollision(t *testing.T) {
+	t.Parallel()
+	key := func(projects, teams []string) string {
+		request := validInvestigationRequestWithConfirmedWindow()
+		request.RequestedScope.ProjectIDs = projects
+		request.RequestedScope.TeamIDs = teams
+		return RequestScopeTimeAxisKey(request, "current")
+	}
+	if key([]string{"a\x00t:b"}, nil) == key([]string{"a"}, []string{"b"}) {
+		t.Fatal("a delimiter inside an id collides with a project plus a team")
+	}
+	if key([]string{"a", "b"}, nil) == key([]string{"a\x00b"}, nil) {
+		t.Fatal("two project ids collide with one id holding the separator")
+	}
+}
+
+func TestAnswerReuseTupleProbeSurvivesAnOversizedScopedKey(t *testing.T) {
+	t.Parallel()
+	store := newScopedReuseStore()
+	telemetry := &recordingTelemetry{}
+	engine, _, _ := scopedReuseEngine(t, store, telemetry)
+	// A restricted caller's scoped key carries a grant digest too, which is what
+	// pushes a repository, project and team scoped key past the column bound.
+	principal := acceptancePrincipal()
+	principal.RepositoryScopes = []string{"acme/repo-25"}
+	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow()); err != nil {
+		t.Fatalf("Investigate error = %v", err)
+	}
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.TimeContext = TimeContext{Axis: TemporalRange, Start: &start, End: &end}
+	request.RequestedScope.RepositorySlugs = []string{"acme/repo-25"}
+	request.RequestedScope.ProjectIDs = []string{"proj-a"}
+	request.RequestedScope.TeamIDs = []string{"team-a"}
+	axisKey := composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), "")
+	if got := GrantScopedTimeAxisKey(principal, RequestScopeTimeAxisKey(request, axisKey)); got != "" {
+		t.Fatalf("scoped key fits the bound (%d): the row does not exercise the oversize path", len(got))
+	}
+	tupleKey := GrantScopedTimeAxisKey(principal, axisKey)
+	if tupleKey == "" {
+		t.Fatal("the work-item tuple key does not fit the bound")
+	}
+	for _, saved := range store.rows {
+		store.rows[tupleKey] = saved
+		break
+	}
+	store.tuple[tupleKey] = true
+	telemetry.storedResultAuthorizations = nil
+	_, _ = engine.Investigate(context.Background(), principal, request)
+	if len(telemetry.storedResultAuthorizations) == 0 {
+		t.Fatalf("an oversized scoped key hid the work-item tuple row from its own gate; lookups = %v", store.lookups)
+	}
+}
+
+func TestAnswerReuseScopeIdentityAttributionReadsEachKeyOnce(t *testing.T) {
+	t.Parallel()
+	store := newScopedReuseStore()
+	engine, _, _ := scopedReuseEngine(t, store)
+	selectorAsk(t, engine, nil, nil)
+	store.lookups = nil
+	selectorAsk(t, engine, []string{"proj-a"}, nil)
+	seen := map[string]int{}
+	for _, key := range store.lookups {
+		seen[key]++
+	}
+	for key, n := range seen {
+		if n > 1 {
+			t.Fatalf("key %q read %d times in one lookup: %v", key, n, store.lookups)
+		}
+	}
+	if len(store.lookups) < 2 {
+		t.Fatalf("lookups = %v, want the scoped key and the unscoped probe", store.lookups)
 	}
 }

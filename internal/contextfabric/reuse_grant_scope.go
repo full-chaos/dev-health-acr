@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -43,8 +44,10 @@ func GrantScopedTimeAxisKey(principal storage.Principal, axisKey string) string 
 }
 
 // RequestScopeTimeAxisKey widens the reuse key's time-axis dimension with a
-// digest of the repository slugs the caller named in the request, (trimmed by the digest) and
-// lower-cased as the census compares them (order and case never split a key). The census
+// digest of what the caller scoped the request to: the repository slugs
+// (trimmed by the digest and lower-cased as the census compares them: order and
+// case never split a key) and the project and team ids (case preserved,
+// length-framed, labelled so a project id never equals a team id). The census
 // that identifies a ticket key or a pull request number runs inside that
 // scope, so an answer built under one scope must not be served to a request
 // under another, or to one with none: the unscoped census would see every
@@ -101,7 +104,31 @@ func requestSelectorDigest(request InvestigationRequest) string {
 	if len(selectors) == 0 {
 		return ""
 	}
-	return reuseGrantDigest(selectors)
+	return reuseSelectorDigest(selectors)
+}
+
+// reuseSelectorDigest digests labelled selectors with a length prefix per
+// entry, so no byte inside an id can move a boundary between two entries or
+// between the project and team lists. Trimmed, de-duplicated, sorted.
+func reuseSelectorDigest(selectors []string) string {
+	seen := map[string]struct{}{}
+	unique := make([]string, 0, len(selectors))
+	for _, selector := range selectors {
+		if _, dup := seen[selector]; dup {
+			continue
+		}
+		seen[selector] = struct{}{}
+		unique = append(unique, selector)
+	}
+	sort.Strings(unique)
+	var framed strings.Builder
+	for _, selector := range unique {
+		framed.WriteString(strconv.Itoa(len(selector)))
+		framed.WriteByte(':')
+		framed.WriteString(selector)
+	}
+	sum := sha256.Sum256([]byte(framed.String()))
+	return hex.EncodeToString(sum[:16])
 }
 
 // requestNamesSelectors reports whether the request keys on project or team
