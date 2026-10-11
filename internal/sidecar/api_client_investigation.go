@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -78,7 +80,11 @@ func (c *Client) InvestigateWithSynthesisInput(ctx context.Context, request cont
 	var response contractsv1.ContextFabricInvestigationResponse
 	// Use the same transport-owned ID in the existing correlation header;
 	// the hosted route replaces body IDs with its request-context ID.
-	if _, err := c.callWithHeaders(ctx, http.MethodPost, investigationsPath, encoded, &response, http.Header{"X-Request-ID": []string{requestID}}); err != nil {
+	headers := http.Header{"X-Request-ID": []string{requestID}}
+	if c.cfg.InvestigationWait > 0 {
+		headers.Set(contractsv1.ContextFabricWaitBudgetHeader, strconv.Itoa(int(c.cfg.InvestigationWait/time.Second)))
+	}
+	if _, err := c.callWithHeaders(ctx, http.MethodPost, investigationsPath, encoded, &response, headers); err != nil {
 		return contractsv1.ContextFabricInvestigationResponse{}, requestID, err
 	}
 	// Lenient, even though this is the "fresh answer" call: with CHAOS-3782

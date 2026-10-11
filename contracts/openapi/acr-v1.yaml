@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 662f2cede1eca7d040b009b60a73f668f09c338a2007d6bce66f1382f0459509
+# canonical-content-sha256: 78067b3ced64b645696b98156d6848a1e277d335a9265d4613741d5c8694b27a
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -612,6 +612,8 @@ paths:
           "$ref": "#/components/parameters/RequestID"
         -
           "$ref": "#/components/parameters/ClientVersion"
+        -
+          "$ref": "#/components/parameters/WaitBudget"
       requestBody:
         content:
           application/json:
@@ -1031,6 +1033,15 @@ components:
       schema:
         maxLength: 256
         type: "string"
+    WaitBudget:
+      description: "Optional longest wait, in whole seconds, the caller will give one investigation. At least 10. The request ends by then, narrowing the service's own request timeout and never extending it: when the synthesis model call has not finished, the answer is served degraded with its result_id and coverage.details[code=synthesis_model_failed]. Stages before synthesis that run past the budget still end as 504 deadline_exceeded. A value that is not a whole number of seconds of at least 10 is ignored."
+      in: "header"
+      name: "X-ACR-Wait-Budget-Seconds"
+      required: false
+      schema:
+        example: 45
+        minimum: 10
+        type: "integer"
   responses:
     ContextFabricInvestigationBadRequest:
       content:
