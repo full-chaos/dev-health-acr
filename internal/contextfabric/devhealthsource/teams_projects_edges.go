@@ -2226,7 +2226,7 @@ func ProjectTeamSourceRowQuery() contextpacket.OrganizationRowQuery {
 		` SELECT ` + evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityProjectTeamV2, "g.provider", "g.project_id", "g.team_id", "g.source_name") + ` evidence_ref_id, 'dev_health' system, 'project_team' entity_type, ` +
 		evidenceref.IDSQL(contractsv1.ContextFabricEvidenceEntityProjectTeamV2, "g.provider", "g.project_id", "g.team_id", "g.source_name") + ` entity_id, concat(g.project_id, ' owned by team ', g.team_id) display_label, '' safe_uri, 'heuristic' provenance, 1.0 confidence, ` +
 		`concat('source=', g.source_name, ', provider=', g.provider) citation, g.observed_at observed_at, g.provider provider, g.project_id project_id, g.team_id team_id, g.source_name source ` +
-		`FROM (` + projectTeamsGroupSQL(false) + `) AS g WHERE g.edge_suppressed = 0 )`
+		`FROM (` + projectTeamsGroupSQL(false) + `) AS g WHERE 1 )`
 	return contextpacket.OrganizationRowQuery{
 		SourceQuery: contextpacket.SourceQuery{ID: contextpacket.ProjectTeamSourceRowQueryID, Source: "teams", Scope: contextpacket.EvidenceScopeRepo, Statement: statement},
 		KeyColumns:  []string{"provider", "project_id", "team_id", "source"},
