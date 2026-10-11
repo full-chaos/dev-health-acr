@@ -2870,7 +2870,8 @@
               "enum": [
                 "model_output_invalid",
                 "synthesis_rejected",
-                "model_receipt_unrecorded"
+                "model_receipt_unrecorded",
+                "model_call_not_completed"
               ]
             },
             "retry_hint": {

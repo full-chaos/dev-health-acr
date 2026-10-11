@@ -1354,7 +1354,12 @@ CHAOS-3855 the default deployment has no fallback configured, so
 `per_operation` = 122, `worst_case` = 122×2 = **~245s**. If an operator
 opts a fallback back in, `per_operation` doubles to 244 and `worst_case`
 doubles to **~490s**. Size `ACR_REQUEST_TIMEOUT` above whichever applies to the
-deployment's actual configuration, plus headroom, and treat the 8s
+deployment's actual configuration, plus headroom. The model call itself never
+runs into the last 5 s of the request (`SynthesisCompositionReserveSeconds`):
+that slice composes and stores the degraded answer when a transient call end
+(timeout, cancel, rate limit, unavailable) uses up the runtime's attempts or the
+reserve ends the call. The service refuses to start investigations when
+`ACR_REQUEST_TIMEOUT` is not above it. Treat the 8s
 per-transport-retry term as a floor, not a ceiling, if the configured
 provider is known to return long `Retry-After` values. The timeout is
 global to the API, not per-route, so raising it also loosens the bound on
