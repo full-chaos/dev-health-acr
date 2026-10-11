@@ -218,6 +218,7 @@ func declaredPolicy() policyDeclaration {
 		Served: map[string]operationDecl{
 			"compoundingRisk": {
 				DocumentName: "CompoundingRisk",
+				EmitSubjects: map[string]dr.SubjectEmit{"compoundingRisk.rows[*].scopeId": {Kind: dr.SubjectKindRepository, AcrPrefix: "repository:", WhenVariable: "filter.breakout", WhenVariableEquals: "REPO", WhenVariableDefault: "REPO"}},
 				Cost:         dr.CostSeries,
 				Variables: map[string]variableDecl{
 					"orgId":            principalOrg,
@@ -247,6 +248,7 @@ func declaredPolicy() policyDeclaration {
 			},
 			"hotspots": {
 				DocumentName: "Hotspots",
+				EmitSubjects: map[string]dr.SubjectEmit{"hotspots.rows[*].repoId": dr.SubjectEmit{Kind: dr.SubjectKindRepository, AcrPrefix: "repository:"}, "hotspots.repos[*].repoId": dr.SubjectEmit{Kind: dr.SubjectKindRepository, AcrPrefix: "repository:"}},
 				PrimaryList:  "hotspots.rows",
 				Cost:         dr.CostList,
 				Variables: map[string]variableDecl{
@@ -288,6 +290,7 @@ func declaredPolicy() policyDeclaration {
 			},
 			"complexityTimeseries": {
 				DocumentName: "ComplexityTimeseries",
+				EmitSubjects: map[string]dr.SubjectEmit{"complexityTimeseries.points[*].scopeId": {Kind: dr.SubjectKindRepository, AcrPrefix: "repository:", WhenVariable: "input.scope", WhenVariableEquals: "REPO"}},
 				Cost:         dr.CostSeries,
 				Variables: map[string]variableDecl{
 					"input.orgId":       principalOrg,
@@ -392,6 +395,7 @@ func declaredPolicy() policyDeclaration {
 			"investmentFull":      full,
 			"securityOverview": {
 				DocumentName: "SecurityOverview",
+				EmitSubjects: map[string]dr.SubjectEmit{"securityOverview.topRepos[*].repoId": {Kind: dr.SubjectKindRepository, AcrPrefix: "repository:"}},
 				Cost:         dr.CostSeries,
 				Variables:    securityFilterVariables,
 				Constraints:  []dr.Constraint{window("filters.since", "filters.until", windowDays, true)},
@@ -401,6 +405,7 @@ func declaredPolicy() policyDeclaration {
 			},
 			"workGraphEdges": {
 				DocumentName: "WorkGraphEdges",
+				EmitSubjects: map[string]dr.SubjectEmit{"workGraphEdges.edges[*].repoId": dr.SubjectEmit{Kind: dr.SubjectKindRepository, AcrPrefix: "repository:"}},
 				Cost:         dr.CostList,
 				Variables: workGraphFilters(map[string]variableDecl{
 					"filters.sourceType": enum(nodeTypes...),
