@@ -606,3 +606,58 @@ func TestApplyPeriodDelta_RequirementsAreDistinctAndDerivedFromTheComposition(t 
 		}
 	}
 }
+
+// A prior health provider that FAILED (or was cancelled/unconfigured/gapped)
+// returns a nil error from ReadFacts with a non-completed branch on the
+// ledger. None of these may be served as unknown_prior.
+func TestApplyPeriodDelta_PriorHealthBranchNotCompleted_PriorReadFailed(t *testing.T) {
+	t.Parallel()
+	for _, branch := range []factReadOutcome{factReadRejected, factReadFailed, factReadCancelled, factReadUnconfigured, factReadScopeGap, factReadPruned, factReadRejectedNonNumericMeasure} {
+		branch := branch
+		t.Run(string(branch), func(t *testing.T) {
+			t.Parallel()
+			teamSubject := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:T1"}
+			reader := &recordingFactReader{bundle: CanonicalFactBundle{Outcomes: FactOutcomeLedger{FactHealth: {Branch: string(branch)}}}}
+			engine := &Engine{facts: reader, telemetry: &recordingTelemetry{}}
+			currentFacts := []CanonicalFact{periodDeltaHealthFact(teamSubject, map[string]FactValue{"severity": StringFactValue("low")})}
+			frame := QuestionFrame{Obligations: []AnswerObligation{ObligationPeriodDelta}}
+
+			engine.applyPeriodDelta(context.Background(), periodDeltaTestPrincipal(), frame, []SubjectRef{teamSubject}, currentFacts, time.Now(), true)
+
+			fields := currentFacts[0].Fields
+			if got := factValueString(fields["period_delta_transition"]); got != string(PeriodDeltaTransitionPriorReadFailed) {
+				t.Errorf("period_delta_transition = %q, want prior_read_failed", got)
+			}
+			want := PeriodDeltaFailureReadFailed
+			if branch == factReadCancelled {
+				want = PeriodDeltaFailureCanceled
+			}
+			if got := factValueString(fields["period_delta_unavailable_reason"]); got != string(want) {
+				t.Errorf("period_delta_unavailable_reason = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// unknown keeps its one meaning: nothing attempted/learned -> no ledger
+// entry, or a completed branch with no row.
+func TestApplyPeriodDelta_PriorHealthBranchAbsentOrCompleted_UnknownPrior(t *testing.T) {
+	t.Parallel()
+	for name, ledger := range map[string]FactOutcomeLedger{
+		"absent":    nil,
+		"completed": {FactHealth: {Branch: string(factReadCompleted)}},
+	} {
+		ledger := ledger
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			teamSubject := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:T1"}
+			engine := &Engine{facts: &recordingFactReader{bundle: CanonicalFactBundle{Outcomes: ledger}}, telemetry: &recordingTelemetry{}}
+			currentFacts := []CanonicalFact{periodDeltaHealthFact(teamSubject, map[string]FactValue{"severity": StringFactValue("low")})}
+			frame := QuestionFrame{Obligations: []AnswerObligation{ObligationPeriodDelta}}
+			engine.applyPeriodDelta(context.Background(), periodDeltaTestPrincipal(), frame, []SubjectRef{teamSubject}, currentFacts, time.Now(), true)
+			if got := factValueString(currentFacts[0].Fields["period_delta_transition"]); got != string(PeriodDeltaTransitionUnknownPrior) {
+				t.Errorf("period_delta_transition = %q, want unknown_prior", got)
+			}
+		})
+	}
+}
