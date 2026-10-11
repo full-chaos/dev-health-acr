@@ -567,7 +567,7 @@ work_scope_id (project_id)"*). Three source tables carry it; three do not.
 | readiness | `estimate_coverage_metrics_daily` | **`work_scope_id`** | incidental | keyed on project identity |
 | workload | `capacity_forecasts` | **`work_scope_id`** | incidental | keyed on project identity |
 | health | `compounding_risk_daily` | none (`scope` ∈ repo/team) | **load-bearing** | keeps the hop |
-| investment | `investment_metrics_daily` | none (`repo_id`, `team_id`) | **load-bearing** | keeps the hop |
+| investment | `work_unit_investments` (via `team_repo_ownership`) | none | **load-bearing** | keeps the hop |
 | landscape | `ic_landscape_rolling_30d` | none (`repo_id`, `identity_id`, `team_id`) | **load-bearing** | keeps the hop |
 
 Removing the hop from the bottom three would be a silent capability loss,

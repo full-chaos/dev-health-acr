@@ -111,7 +111,7 @@ func runChaos7127(t *testing.T, ctx context.Context, grant []string) chaos7127Ru
 	// devhealthschema:not-a-production-replica rows are inserted into tables whose schema comes only from devhealthschema.DDL, never defined here
 	for _, statement := range devhealthschema.DDL(
 		"projects", "team_project_ownership", "team_repo_ownership", "teams",
-		"investment_metrics_daily", "capacity_forecasts", "estimate_coverage_metrics_daily",
+		"capacity_forecasts", "estimate_coverage_metrics_daily",
 		"compounding_risk_daily", "work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership", "repos", "work_item_team_attributions",
 		"recommendations_daily", "work_items", "project_membership_transitions",
 	) {
