@@ -305,6 +305,7 @@ type OperationPolicy struct {
 	variables map[string]int
 	outputs   map[string]OutputLeaf
 	nodes     map[string]bool
+	emits     map[string]*SubjectEmit
 }
 
 // VariableRule is the rule for one input path.
@@ -416,6 +417,35 @@ type OutputPath struct {
 	// BeyondDocument marks a path the registered document does not select:
 	// graphql_query serves it, run_operation and recorded ops replies do not.
 	BeyondDocument bool `json:"beyond_document,omitempty"`
+	// EmitSubject marks an output that carries an ops subject id: the answer
+	// serves it in the acr form the variables accept, so a client sends a
+	// served id back unchanged.
+	EmitSubject *SubjectEmit `json:"emit_subject,omitempty"`
+}
+
+// SubjectEmit is the acr form of one served subject id. A value is prefixed
+// only when it is a bare uuid (the same test ToOps applies on input), and,
+// when WhenSibling is set, only when the sibling field of the same object
+// equals WhenEquals; any other value (a composite file id, a team id, null)
+// is served byte-equal.
+type SubjectEmit struct {
+	Kind        string `json:"kind"`
+	AcrPrefix   string `json:"acr_prefix"`
+	WhenSibling string `json:"when_sibling,omitempty"`
+	WhenEquals  string `json:"when_equals,omitempty"`
+}
+
+func (e *SubjectEmit) apply(obj map[string]any, value any) any {
+	s, ok := value.(string)
+	if !ok || e.AcrPrefix == "" || !isUUID(s) {
+		return value
+	}
+	if e.WhenSibling != "" {
+		if sib, _ := obj[e.WhenSibling].(string); sib != e.WhenEquals {
+			return value
+		}
+	}
+	return e.AcrPrefix + s
 }
 
 // WithheldOutput is a path the document selects that never leaves acr.
@@ -717,6 +747,15 @@ func validateOperation(op *OperationPolicy) error {
 			return fmt.Errorf("person-named output %q without a written exception", out.Path)
 		}
 		op.outputs[out.Path] = out.Leaf
+		if out.EmitSubject != nil {
+			if out.EmitSubject.Kind == "" || out.EmitSubject.AcrPrefix == "" || out.Leaf != LeafScalar {
+				return fmt.Errorf("output %q: emit_subject needs a kind and a prefix on a scalar leaf", out.Path)
+			}
+			if op.emits == nil {
+				op.emits = map[string]*SubjectEmit{}
+			}
+			op.emits[out.Path] = out.EmitSubject
+		}
 		for prefix := parentPath(out.Path); prefix != ""; prefix = parentPath(prefix) {
 			op.nodes[prefix] = true
 		}
@@ -954,6 +993,9 @@ func (f *responseFilter) object(path string, obj map[string]any) map[string]any 
 	for key, value := range obj {
 		child := joinPath(path, key)
 		if kept, ok := f.value(child, value); ok {
+			if emit := f.op.emits[child]; emit != nil {
+				kept = emit.apply(obj, kept)
+			}
 			out[key] = kept
 		}
 	}

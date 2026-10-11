@@ -1243,7 +1243,11 @@
         {
           "path": "complexityTimeseries.points[*].scopeId",
           "type": "String!",
-          "leaf": "scalar"
+          "leaf": "scalar",
+          "emit_subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:"
+          }
         },
         {
           "path": "complexityTimeseries.points[*].scopeName",
@@ -1481,7 +1485,13 @@
         {
           "path": "compoundingRisk.rows[*].scopeId",
           "type": "String!",
-          "leaf": "scalar"
+          "leaf": "scalar",
+          "emit_subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:",
+            "when_sibling": "scope",
+            "when_equals": "REPO"
+          }
         },
         {
           "path": "compoundingRisk.rows[*].scopeLabel",
@@ -2626,7 +2636,11 @@
         {
           "path": "hotspots.rows[*].repoId",
           "type": "String!",
-          "leaf": "scalar"
+          "leaf": "scalar",
+          "emit_subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:"
+          }
         },
         {
           "path": "hotspots.rows[*].repoName",
@@ -2676,7 +2690,11 @@
         {
           "path": "hotspots.repos[*].repoId",
           "type": "String!",
-          "leaf": "scalar"
+          "leaf": "scalar",
+          "emit_subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:"
+          }
         },
         {
           "path": "hotspots.repos[*].repoName",
@@ -5054,7 +5072,11 @@
         {
           "path": "securityOverview.topRepos[*].repoId",
           "type": "String!",
-          "leaf": "scalar"
+          "leaf": "scalar",
+          "emit_subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:"
+          }
         },
         {
           "path": "securityOverview.topRepos[*].repoName",
@@ -6163,7 +6185,11 @@
         {
           "path": "workGraphEdges.edges[*].repoId",
           "type": "String",
-          "leaf": "scalar"
+          "leaf": "scalar",
+          "emit_subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:"
+          }
         },
         {
           "path": "workGraphEdges.edges[*].provider",
