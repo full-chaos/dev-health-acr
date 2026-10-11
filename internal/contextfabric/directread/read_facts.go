@@ -1046,7 +1046,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				row.Outcome, row.KindState, row.Reason = OutcomeUnavailable, string(outcome.State), outcome.Reason
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind):
 				row.Outcome = OutcomeNotApplicable
-				row.Reason = "this fact kind does not describe a " + string(subject.Kind)
+				row.Reason = "this fact kind does not describe " + subjectKindPlural(subject.Kind)
 			case !recorded:
 				// A planned kind with no ledger entry is a registry defect;
 				// say unknown loudly rather than claim a state.
@@ -1281,4 +1281,13 @@ func noteUnitsBudget(rows []CoverageRow, dropped int, noProgress bool) {
 			rows[i].Reason += "; " + note
 		}
 	}
+}
+
+// subjectKindPlural is the display noun a served reason uses for a subject
+// kind; a kind outside the vocabulary keeps its token.
+func subjectKindPlural(kind contractsv1.ContextFabricSubjectKind) string {
+	if noun := contractsv1.ContextFabricSubjectKindNoun(kind, 2); noun != "" {
+		return noun
+	}
+	return string(kind)
 }
