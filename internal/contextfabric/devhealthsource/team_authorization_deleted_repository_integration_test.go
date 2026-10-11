@@ -186,18 +186,23 @@ func subTeamReconcileKeepsTheCheckpointAfterASkippedPage(t *testing.T, ctx conte
 	now := time.Now().UTC().Truncate(time.Second)
 	f.source.SetClockForTest(func() time.Time { return now })
 	chaos7119Team(t, ctx, f, "team-skip", now.Add(-3*time.Hour))
+	// The project itself is consumed by the first run; only the ownership row
+	// that names it by an overlong id arrives later, and it is omitted: its
+	// page publishes nothing and the walk moves on in-process.
+	const skippedProject = "P-SKIP-A-" + "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" + "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" + "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" + "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" + "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" + "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" + "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" + "xxxxxxxxxxxxxxxx" + "0"
+	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', 'SKIP-0', 'skipped', 1, 'started', '', ?)`,
+		skippedProject, f.orgID, now.Add(-3*time.Hour))
 	first := chaos7139Run(t, ctx, f)
-	// A project whose natural key is past the identity bound is omitted: its
-	// page publishes nothing, and the walk moves on in-process.
-	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at)
-VALUES (concat('P-SKIP-', repeat('x', 240)), ?, 'github', 'SKIP-0', 'skipped', 1, 'started', '', ?)`, f.orgID, now)
+	late := time.Now().UTC().Add(240 * time.Hour)
+	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'team-skip', ?, 'SKIP-0', 'native', ?, NULL, ?)`,
+		f.orgID, skippedProject, late, late)
 	now = now.Add(devhealthsource.TeamOwnershipReconcilePeriodForTest)
 	batch, ok, err := f.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: f.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: first.cursor})
 	if err != nil || !ok {
 		t.Fatalf("reconcile batch: available=%v err=%v", ok, err)
 	}
 	if len(batch.Entities) == 0 {
-		t.Fatalf("expected the reconcile batch, got a batch without entities")
+		t.Fatalf("expected the reconcile batch, got entities=%d relationships=%d tombstones=%d", len(batch.Entities), len(batch.Relationships), len(batch.Tombstones))
 	}
 	if got, want := keysetPosition(t, batch.NextCursor), keysetPosition(t, first.cursor); got != want {
 		t.Fatalf("the reconcile batch moved the checkpoint: %s, want %s", got, want)
