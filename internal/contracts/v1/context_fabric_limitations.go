@@ -423,14 +423,14 @@ func IsContextFabricGroupListOverBoundLimitation(limitation string) bool {
 	return ok
 }
 
-// contextFabricRefusalBasisLimitationPrefix/-Middle/-Suffix are the three
+// contextFabricRefusalBasisLimitationPrefix/-Middle are the two
 // FIXED segments of CHAOS-5442's frame-refusal disclosure, and
 // contextFabricFrameInvariantRefusalLimitation is the whole sentence for the
 // refusal that has no kind to name.
 //
 // INTERPOLATED, under the same ruling the grouping-refusal disclosure above
-// records: both interpolated values are members of CLOSED vocabularies the
-// model never writes into (a subject kind and a refusal basis), so the
+// records: the one interpolated value is a member of a CLOSED vocabulary the
+// model never writes into (a subject kind, as its display noun), so the
 // sentence still carries no model text and no corpus content -- the property
 // the "fixed and non-interpolated" discipline exists to guarantee, reached by
 // the same different route.
@@ -479,12 +479,12 @@ func ContextFabricRefusalBasisLimitation(declaredKind ContextFabricSubjectKind) 
 // IsContextFabricRefusalBasisLimitation reports whether a limitation is one
 // ContextFabricRefusalBasisLimitation could have composed.
 //
-// A PARSE, AND BOTH INTERPOLATED SEGMENTS ARE CHECKED FOR MEMBERSHIP, for the
+// A PARSE, AND THE INTERPOLATED NOUN IS CHECKED FOR MEMBERSHIP, for the
 // reason the grouping recogniser states: everything that consults the
 // service-authored registry is deciding whether a string may be DISPLACED,
 // and a loose or prefix match would let a model-authored caveat that merely
 // opens with this wording become undisplaceable and take a real caveat's
-// place. The empty kind and the empty basis are not members, so a
+// place. The empty noun and a wire token are not members, so a
 // half-composed sentence is not recognised either.
 func IsContextFabricRefusalBasisLimitation(limitation string) bool {
 	body, ok := strings.CutPrefix(limitation, contextFabricRefusalBasisLimitationPrefix)

@@ -138,9 +138,8 @@ func TestResolveTerminalStatusNeverRefusesAClarifyingCallerOnTheSubstitutionOutc
 // executes the new member's own domain on both sides of every rule that
 // classifies a basis, same shape
 // TestTheOrganizationScopeBasisOverItsWholeVocabularyDomain uses for its own
-// member (role_answerability_test.go) -- except this member DOES carry its
-// own basis token in its fixed sentence, the continuation_context_unverifiable
-// convention, not the organization-scope one.
+// member (role_answerability_test.go) -- and, like every served sentence, its
+// fixed sentence carries no basis token.
 func TestTheSubjectIdentityUnconfirmedBasisOverItsWholeVocabularyDomain(t *testing.T) {
 	t.Parallel()
 	basis := subjectIdentityUnconfirmedTerminalBasis

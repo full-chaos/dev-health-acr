@@ -90,7 +90,7 @@ func ContextFabricCohortNarrowingLimitation(kind ContextFabricSubjectKind, decla
 	builder.WriteString(contextFabricCohortNarrowingOf)
 	builder.WriteString(strconv.Itoa(declared))
 	builder.WriteString(" ")
-	builder.WriteString(string(kind))
+	builder.WriteString(ContextFabricSubjectKindNoun(kind, 1))
 	builder.WriteString(contextFabricCohortNarrowingSubjects)
 	for index, step := range steps {
 		if index > 0 {
@@ -183,7 +183,7 @@ var contextFabricCohortNarrowingPattern = func() *regexp.Regexp {
 		q(contextFabricCohortNarrowingResynth) + `)`
 	step := number + q(contextFabricCohortNarrowingTo) + number + stepCause
 	return regexp.MustCompile(`^` + q(contextFabricCohortNarrowingPrefix) + number + q(contextFabricCohortNarrowingOf) + number +
-		` ([a-z_]+)` + q(contextFabricCohortNarrowingSubjects) +
+		` ([A-Za-z]+(?: [A-Za-z]+)*)` + q(contextFabricCohortNarrowingSubjects) +
 		`(` + step + `(?:` + q(contextFabricCohortNarrowingStepSep) + step + `)*)` +
 		q(contextFabricCohortNarrowingSuffix) + `$`)
 }()
@@ -214,7 +214,7 @@ func IsContextFabricCohortNarrowingLimitation(limitation string) bool {
 	if errServed != nil || errDeclared != nil {
 		return false
 	}
-	kind := ContextFabricSubjectKind(match[3])
+	kind, _ := contextFabricSubjectKindFromNoun(match[3], 1)
 	var steps []ContextFabricCohortNarrowingDisclosureStep
 	for _, text := range strings.Split(match[4], contextFabricCohortNarrowingStepSep) {
 		step, ok := parseContextFabricCohortNarrowingStep(text)

@@ -164,3 +164,27 @@ func TestKindNounLookupRejectsNonMembers(t *testing.T) {
 		t.Fatal("a singular noun resolved under the plural form")
 	}
 }
+
+func TestCohortNarrowingLimitationUsesDisplayNoun(t *testing.T) {
+	steps := []ContextFabricCohortNarrowingDisclosureStep{{Stage: ContextFabricPlanNarrowingSynthesisInput, Before: 11, After: 10}}
+	sentence, ok := ContextFabricCohortNarrowingLimitation(ContextFabricSubjectPullRequestReview, 11, 10, steps)
+	if !ok {
+		t.Fatal("chain refused")
+	}
+	if token := rawWireTokenInProse.FindString(sentence); token != "" {
+		t.Fatalf("sentence carries wire token %q: %q", token, sentence)
+	}
+	if !IsContextFabricCohortNarrowingLimitation(sentence) || !IsContextFabricServiceAuthoredLimitation(sentence) {
+		t.Fatalf("composed sentence not recognised: %q", sentence)
+	}
+	for name, edited := range map[string]string{
+		"wire token":   strings.Replace(sentence, "pull request review", "pull_request_review", 1),
+		"plural noun":  strings.Replace(sentence, "pull request review", "pull request reviews", 1),
+		"unknown noun": strings.Replace(sentence, "pull request review", "invoice", 1),
+		"empty noun":   strings.Replace(sentence, " pull request review subjects", " subjects", 1),
+	} {
+		if IsContextFabricCohortNarrowingLimitation(edited) {
+			t.Errorf("%s: recognised %q", name, edited)
+		}
+	}
+}
