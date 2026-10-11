@@ -197,6 +197,14 @@ serve-expected row that was not served has no Q (the bucket axis owns that regre
 Means are per expectation class and never blended. Q1 checks that a result is complete,
 grounded, disclosed and self-consistent; it does not check that the facts are true.
 
+A refuse-expected row may declare `"decline_if_shape_emitted": true` (bool only): the
+row owes a decline only when the model emitted the refusing shape (an intentionally
+illegal probe such as a set grouped by its own kind). A served result that shows no such
+shape (no refusal basis, no group kind equal to the cohort's member kind) is scored by
+content like a serve row, class `decline_conditional`, and carries `conditional_decline`;
+a served result that shows the shape, or a row without the flag, stays a fabrication
+(Q = 0, gate R2). The bucket axis still reports served-on-decline.
+
 ### Every attempt saves its full result file
 
 A run is only scorable on this axis if every attempt's full result is on disk, named
