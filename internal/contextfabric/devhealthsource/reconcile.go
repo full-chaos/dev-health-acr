@@ -172,5 +172,5 @@ func (p sourcePlan) logReconcile(ctx context.Context, orgID string, teams int, f
 	}
 	p.logger.InfoContext(ctx, "team ownership reconcile",
 		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
-		"teams_re_derived", teams, "pass_complete", final, "period", p.reconcilePeriod.String())
+		"teams_re_derived", teams, "pass_complete", final, "period", contextfabric.SanitizeLogAttr(p.reconcilePeriod.String()))
 }

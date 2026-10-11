@@ -192,7 +192,7 @@ func producerGrammars() []producerGrammar {
 			facts+"investment.go|readTeamThemeMix", facts+"investment_units.go|readInvestmentUnits", facts+"landscape.go|readProjectLandscape",
 			facts+"landscape.go|readTeamLandscape", facts+"metrics.go|readProjectMetrics", facts+"metrics.go|readTeamMetrics*2",
 			facts+"readiness.go|readProjectReadiness", facts+"readiness.go|readTeamReadiness", facts+"workload.go|readProjectWorkload*2",
-			facts+"workload.go|readTeamWorkload", source+"teams_projects.go|queryTeams", source+"teams_projects_edges.go|queryRepositoryTeams")},
+			facts+"workload.go|readTeamWorkload", source+"teams_projects.go|fetchTeams", source+"teams_projects_edges.go|queryRepositoryTeams")},
 		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "sql/1", rowQuery: "teams.v1", keyColumns: []string{"id"}, sites: sites(organizationRows)},
 		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "literal", fixture: true, sites: sites("internal/contextfabric/pginvestigation/paritytest/paritytest.go|RunCitedEvidenceSuite")},
 		// A project's id is "<provider>:<project id>", the provider a closed

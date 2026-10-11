@@ -209,6 +209,11 @@ func (p sourcePlan) nextBatchPage(ctx context.Context, checkpoint contextfabric.
 		// this process emitted before describes a graph that is gone.
 		p.window.reset(p.windowScope)
 		p.ignored.flush(ctx, p.logger, p.source, orgID, "abandoned")
+		if p.reconcile != nil {
+			// A from-scratch projection derives every row just now: the first
+			// reconcile pass is due one period from it, not at once.
+			p.window.setReconcileState(p.windowScope, reconcilePass{lastDone: p.clock()})
+		}
 		return p.fullSnapshot(ctx, orgID)
 	}
 	state, err := decodeCursor(checkpoint.Cursor)
