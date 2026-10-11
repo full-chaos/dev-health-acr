@@ -486,7 +486,7 @@
             "$ref": "#/components/responses/Error"
           },
           "403": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/ContextFabricInvestigationForbidden"
           },
           "409": {
             "$ref": "#/components/responses/ContextFabricInvestigationConflict"
@@ -3160,6 +3160,40 @@
                             },
                             "synthesis_input": {
                               "$ref": "../jsonschema/v1/context_fabric_investigation_response.v1.schema.json#/properties/synthesis_input"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ContextFabricInvestigationForbidden": {
+        "description": "Structured safe error. feature_not_enabled with details.reason service_model_not_entitled: a credential caller asked for an investigation that runs on the service's own model (interpretation, synthesis, or both), and the organization holds neither the acr_service_model entitlement nor its own model configuration. No model call was made and nothing was stored. The same question is served on the caller's own model with a supplied interpretation and synthesis_mode client. Web assertion callers are not refused for this reason.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "../jsonschema/v1/error.v1.schema.json"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "object",
+                          "properties": {
+                            "reason": {
+                              "enum": [
+                                "service_model_not_entitled"
+                              ]
                             }
                           }
                         }

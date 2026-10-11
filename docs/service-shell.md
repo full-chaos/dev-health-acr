@@ -59,6 +59,7 @@ The default listen address is `127.0.0.1:8080` (dictation 811: loopback-only, so
 | `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` | empty | Path to the bearer token file used to authenticate to the entitlement service |
 | `ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT` | `5s` | Per-request timeout for entitlement and health checks |
 | `ACR_DEV_HEALTH_ENTITLEMENT_MAX_RESPONSE_BYTES` | `16384` | Maximum bytes read from an entitlement response body |
+| `ACR_MCP_SERVICE_MODEL_DEFAULT` | `off` | `off`: a credential caller (MCP, CLI) runs an investigation on the deployment's own model only when the organization holds the `acr_service_model` entitlement or has its own model configuration; otherwise the turn is refused with `feature_not_enabled` / `service_model_not_entitled` and no model call. `on`: every credential caller may use the deployment model. Web assertion callers are never refused for this reason. |
 | `ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL` | empty | Optional explicit HTTP(S) proxy for entitlement requests; no credentials permitted |
 | `ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE` | empty | Optional PEM CA bundle for entitlement service TLS verification |
 | `ACR_TRUSTED_PROXY_CIDRS` | empty | Comma-separated proxy networks allowed to supply `X-Forwarded-For` |
@@ -80,8 +81,11 @@ Entitlement provider selection is automatic. A complete
 `ACR_DEV_HEALTH_ENTITLEMENT_URL` plus
 `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` selects the remote provider. Omitting
 both selects an offline allow-all provider only in `development` and `test`;
-that provider still accepts only a non-empty organization and the fixed
-`agent_context_runtime` key. Partial remote configuration and orphaned proxy,
+that provider still accepts only a non-empty organization and the
+`agent_context_runtime` and `acr_service_model` keys, and grants both. The
+remote response (`acr_entitlement.v1`) carries `agent_context_runtime` and,
+optionally, `acr_service_model`; an absent `acr_service_model` means not
+granted. Partial remote configuration and orphaned proxy,
 CA options are rejected. `staging` and `production` always require a remote
 HTTP(S) entitlement origin and preserve the fail-before-listen
 health check. Remote readiness and request authorization remain fail closed

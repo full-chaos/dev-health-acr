@@ -63,25 +63,38 @@ func New(config Config) (*Client, error) {
 	}, nil
 }
 
+const (
+	agentContextRuntimeEntitlement = "agent_context_runtime"
+	serviceModelEntitlement        = "acr_service_model"
+)
+
+// HasEntitlement answers agent_context_runtime or acr_service_model from one
+// cached response per organization. The cache lifetime follows
+// agent_context_runtime, so a changed acr_service_model grant is seen within
+// the positive or negative cache TTL.
 func (c *Client) HasEntitlement(ctx context.Context, orgID, entitlement string) (bool, error) {
-	if strings.TrimSpace(orgID) == "" || entitlement != "agent_context_runtime" {
+	if strings.TrimSpace(orgID) == "" || (entitlement != agentContextRuntimeEntitlement && entitlement != serviceModelEntitlement) {
 		return false, errors.New("unsupported entitlement request")
 	}
 	now := c.now()
-	if entitled, ok := c.cache.get(orgID, now); ok {
-		return entitled, nil
+	value, ok := c.cache.get(orgID, now)
+	if !ok {
+		result, err := c.fetch(ctx, orgID)
+		if err != nil {
+			c.cache.delete(orgID)
+			return false, err
+		}
+		ttl := c.negative
+		if result.runtime {
+			ttl = c.positive
+		}
+		c.cache.put(orgID, result, now.Add(ttl))
+		value = result
 	}
-	result, err := c.fetch(ctx, orgID)
-	if err != nil {
-		c.cache.delete(orgID)
-		return false, err
+	if entitlement == serviceModelEntitlement {
+		return value.serviceModel, nil
 	}
-	ttl := c.negative
-	if result {
-		ttl = c.positive
-	}
-	c.cache.put(orgID, result, now.Add(ttl))
-	return result, nil
+	return value.runtime, nil
 }
 
 // Check verifies the authenticated Dev Health service-health contract before
@@ -117,27 +130,27 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Client) fetch(ctx context.Context, orgID string) (bool, error) {
+func (c *Client) fetch(ctx context.Context, orgID string) (grants, error) {
 	requestContext, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, entitlementURL(c.baseURL, orgID), nil)
 	if err != nil {
-		return false, errUnavailable
+		return grants{}, errUnavailable
 	}
 	request.Header.Set("Authorization", "Bearer "+c.token)
 	response, err := c.http.Do(request)
 	if err != nil {
-		return false, errUnavailable
+		return grants{}, errUnavailable
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return false, errUnavailable
+		return grants{}, errUnavailable
 	}
 	parsed, err := decodeResponse(response.Body, c.maxBody)
 	if err != nil || parsed.SchemaVersion != entitlementSchemaVersion || parsed.OrgID != orgID {
-		return false, errUnavailable
+		return grants{}, errUnavailable
 	}
-	return parsed.AgentContextRuntime, nil
+	return grants{runtime: parsed.AgentContextRuntime, serviceModel: parsed.ServiceModel}, nil
 }
 
 func entitlementURL(baseURL *url.URL, orgID string) string {
