@@ -69,6 +69,8 @@ func TestRequestBudgetNarrowsOnlyTheInvestigationRouteAndOnlyBelowTheTimeout(t *
 		{"below minimum ignored", http.MethodPost, ContextFabricInvestigationsPath, "9", 150 * time.Second},
 		{"not a number ignored", http.MethodPost, ContextFabricInvestigationsPath, "45s", 150 * time.Second},
 		{"negative ignored", http.MethodPost, ContextFabricInvestigationsPath, "-45", 150 * time.Second},
+		{"overflowing value never wraps negative", http.MethodPost, ContextFabricInvestigationsPath, "9223372037", 150 * time.Second},
+		{"equal to timeout", http.MethodPost, ContextFabricInvestigationsPath, "150", 150 * time.Second},
 		{"above timeout never extends", http.MethodPost, ContextFabricInvestigationsPath, "600", 150 * time.Second},
 		{"absent", http.MethodPost, ContextFabricInvestigationsPath, "", 150 * time.Second},
 		{"another route", http.MethodPost, "/api/v1/context-packets", "45", 150 * time.Second},

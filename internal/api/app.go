@@ -246,18 +246,20 @@ func (a *App) requestBudget(r *http.Request) time.Duration {
 		)
 		return timeout
 	}
-	budget := time.Duration(seconds) * time.Second
-	applied := budget < timeout
+	// Compared as seconds before any conversion: a huge value must read as
+	// "above the timeout", not wrap a time.Duration negative.
+	applied := int64(seconds) < int64(timeout/time.Second)
+	budget := timeout
+	if applied {
+		budget = time.Duration(seconds) * time.Second
+	}
 	a.logger.InfoContext(r.Context(), "investigation wait budget",
 		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 		"budget_seconds", seconds,
 		"request_timeout_seconds", int(timeout/time.Second),
 		"narrowed", applied,
 	)
-	if applied {
-		return budget
-	}
-	return timeout
+	return budget
 }
 
 func (a *App) timeoutMiddleware(next http.Handler) http.Handler {
