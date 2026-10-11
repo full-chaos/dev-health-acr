@@ -84,7 +84,7 @@ func encodedCases() []encodedCase {
 				w.discovered[workItemDiscovery+"|jira:ABC-1"] = []contractsv1.ResolvedScope{scope(grantedID, grantedRep)}
 			},
 			calls: []string{"discover(org_1,work_item_repositories,jira:ABC-1)"},
-			// The team is decided fail closed until CHAOS-7227.
+			// No subject gate in this world: the team cannot be decided for a restricted caller.
 			restrictedServed: false,
 		},
 		{
