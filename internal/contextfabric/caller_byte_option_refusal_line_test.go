@@ -47,9 +47,6 @@ func TestAnAnswerThatCannotBeCutToTheCallersByteOptionIsServedUnderTheServiceCei
 	if got <= callerByteOption || got > chaos6558MaxBytes {
 		t.Fatalf("served %d bytes; the row needs an answer over the option (%d) and under the service ceiling (%d)", got, callerByteOption, chaos6558MaxBytes)
 	}
-	if result.AnswerPlan == nil || result.AnswerPlan.Budget.MaxSerializedBytes != chaos6558MaxBytes {
-		t.Fatalf("plan budget = %+v, want the service ceiling %d the answer was fitted to", result.AnswerPlan, chaos6558MaxBytes)
-	}
 }
 
 // Past the service ceiling the refusal stands and names the ceiling.
@@ -160,5 +157,45 @@ func TestAnItemTrimmedAnswerOverOnlyTheCallersByteOptionIsServedUnderTheServiceC
 	}
 	if measurement.Bytes <= callerByteOption || measurement.Bytes > singleSubjectTrimMaxBytes {
 		t.Fatalf("served %d bytes; the row needs a document over the option (%d) and under the service ceiling (%d)", measurement.Bytes, callerByteOption, singleSubjectTrimMaxBytes)
+	}
+}
+
+// The plan records the effective budget the request asked for, so the next
+// turn's unchanged request still compares equal to it. A document fitted
+// against the service ceiling is disclosed by the ceiling-fit event, not by a
+// plan that no longer matches the request.
+func TestAPlanFittedAgainstTheServiceCeilingStillRecordsTheRequestsEffectiveBudget(t *testing.T) {
+	calls := 0
+	engine := chaos6558Engine(t, &calls, &recordingTelemetry{}, chaos6558Shape{maxBytes: chaos6558MaxBytes})
+	request := chaos6558Request()
+	request.Options.MaxSerializedBytes = callerByteOption
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if got := servedBytes(t, result); got <= callerByteOption {
+		t.Fatalf("premise: served %d bytes, want an answer over the option %d", got, callerByteOption)
+	}
+	want := engine.effectiveResponseBudget(request).MaxSerializedBytes
+	if result.AnswerPlan == nil || result.AnswerPlan.Budget.MaxSerializedBytes != want {
+		t.Fatalf("plan budget = %+v, want the request's effective budget %d: the unchanged next turn would read answer_budget_changed", result.AnswerPlan, want)
+	}
+}
+
+// A refusal names the line the answer actually crossed: when the document is
+// over the service ceiling, that is the ceiling, not the caller's target.
+func TestARefusalAfterTheCeilingFitCouldNotServeNamesTheServiceCeiling(t *testing.T) {
+	calls := 0
+	const ceiling = 9000
+	engine := chaos6558Engine(t, &calls, &recordingTelemetry{}, chaos6558Shape{maxBytes: ceiling})
+	request := chaos6558Request()
+	request.Options.MaxSerializedBytes = callerByteOption
+	_, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	var refusal AnswerBudgetRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("err = %v, want a budget refusal", err)
+	}
+	if refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes || refusal.MaxSerializedBytes != ceiling {
+		t.Fatalf("refusal = overrun %q at %d, want a bytes refusal naming the service ceiling %d (measured %d)", refusal.Overrun, refusal.MaxSerializedBytes, ceiling, refusal.MeasuredBytes)
 	}
 }

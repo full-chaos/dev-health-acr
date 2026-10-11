@@ -488,7 +488,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		} else if ok {
 			return served, firstPass, nil
 		}
-		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, plan, measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
+		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
 	}
 
 	// Selection records the first attempt's measured trigger. The retry has
@@ -873,7 +873,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// retries explicitly: they inherit the same deadline problem and
 		// merely move the terminal case, arriving at the same unanswered
 		// question with more latency.
-		return InvestigationResult{}, retryPending, e.refusalFromAxis(plan, retryMeasurement, retryOverrun, true, continuationAxisForOverrun(*plan, retryRowLever))
+		return InvestigationResult{}, retryPending, e.refusalFromAxis(e.refusalPlan(plan, retryMeasurement), retryMeasurement, retryOverrun, true, continuationAxisForOverrun(*plan, retryRowLever))
 	}
 	// The SERVED answer is the retry's, so the ranking event that describes it
 	// is the retry's too. Emitting the first pass's would report a ranking
@@ -1106,6 +1106,19 @@ func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, p
 	return e.refusalFromAxis(plan, measured.Measurement, overrun, retryAttempted, axis)
 }
 
+// refusalPlan is the plan a byte refusal is built from. The plan's budget is the
+// request's own target; when the document crossed the service ceiling as well,
+// the line it crossed is the ceiling, and the refusal names that one (the plan
+// itself is not changed: the next turn compares against the target).
+func (e *Engine) refusalPlan(plan *AnswerPlan, measurement ResponseMeasurement) *AnswerPlan {
+	if e.maxSerializedBytes <= 0 || measurement.Bytes <= e.maxSerializedBytes || plan.Budget.MaxSerializedBytes >= e.maxSerializedBytes {
+		return plan
+	}
+	named := *plan
+	named.Budget.MaxSerializedBytes = e.maxSerializedBytes
+	return &named
+}
+
 // serveAtServiceCeiling is the last non-model step before a byte refusal. The
 // caller's byte option is the target the levers shed toward; the service
 // ceiling is the only refusal line. A document that overran only the target
@@ -1153,12 +1166,12 @@ func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Pr
 		}
 	}
 	if ok {
-		// The plan states the ceiling the answer was fitted to, so the event
-		// below carries the ceiling it was measured against, the document's
-		// measured bytes and items (the document as assembled, before any
-		// lever), and the step that fitted it: the decision rebuilds from this
-		// one event.
-		plan.Budget.MaxSerializedBytes = e.maxSerializedBytes
+		// The plan keeps the request's own target, which is what the next turn
+		// compares against. The event below carries the document's measured
+		// bytes and items (as assembled, before any lever) and the step that
+		// fitted it; the decision rebuilds from this one event. The ceiling it
+		// was fitted to is the service's own, and the decisive fit is told so.
+		pending.CeilingFitted = true
 		members := cohortMemberCount(params.Graph.Cohort)
 		grouped := params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0
 		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
@@ -1168,6 +1181,7 @@ func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Pr
 		event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 		event.OutcomeCompletenessState = served.Completeness.State
 		event.CeilingFit = step
+		event.MaxSerializedBytes = e.maxSerializedBytes
 		e.recordPlanNarrowing(ctx, principal, event)
 	}
 	return served, ok, nil

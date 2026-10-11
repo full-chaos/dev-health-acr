@@ -80,7 +80,9 @@ The investigation route then delivers the bounded projection sized to the option
 response-budget measured line adds `projected` (true when the projection was
 served), `served_bytes` and `caller_max_serialized_bytes`; `measured_bytes` stays
 the canonical result's size. A client synthesis turn is never projected, so its
-input can ride the body, and keeps the option as a refusal line.
+input can ride the body and is outside the option by contract (the option
+bounds the result; the input is bounded by the service ceiling), and a result over
+the option on such a turn is refused with the option named.
 
 When the engine could not reach the caller's byte target and fitted the answer against
 the service ceiling instead of refusing, the plan-narrowing line carries
