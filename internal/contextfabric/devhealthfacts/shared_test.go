@@ -591,7 +591,20 @@ func TestQueryVersionMovedPastTheGraphLagLabelCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 147 {
-		t.Fatalf("QueryVersion = %q, want v147 or later -- an answer saved when a label-named repository count was withheld over a same-label claimant missing from the graph holds that refusal and must not be reused", devhealthfacts.QueryVersion)
+	if number < 148 {
+		t.Fatalf("QueryVersion = %q, want v148 or later -- an answer saved when a label-named repository count was withheld over a same-label claimant missing from the graph holds that refusal and must not be reused", devhealthfacts.QueryVersion)
+	}
+}
+
+// TestQueryVersionMovedPastThePriorReadFailedBump pins the CURRENT query
+// version away from v146 (main before this fix), under which a prior-period health read whose
+// provider did not complete was served as unknown_prior (CHAOS-7404). Answer
+// reuse keys on this version, so a candidate saved under v146 must never be
+// served.
+func TestQueryVersionMovedPastThePriorReadFailedBump(t *testing.T) {
+	t.Parallel()
+	const versionBeforeThePriorReadFailedFix = "devhealthfacts.clickhouse.v146"
+	if devhealthfacts.QueryVersion == versionBeforeThePriorReadFailedFix {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer stored under that version may serve a false unknown_prior", devhealthfacts.QueryVersion, versionBeforeThePriorReadFailedFix)
 	}
 }
