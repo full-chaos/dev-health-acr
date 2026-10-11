@@ -255,11 +255,12 @@ func assertWithheldNeverBound(t *testing.T, name string, cell SubstitutionParent
 		if binding.ID == substitutionFollowUpSubject.CanonicalID {
 			t.Errorf("%s: the shadow binder bound the withheld subject: %+v", name, binding)
 		}
-		switch {
-		case parentBound && (binding.State != "contested" || binding.ContenderID != substitutionFollowUpSubject.CanonicalID):
-			t.Errorf("%s: binding = %+v, want the parent's binding contested by the withheld subject", name, binding)
-		case !parentBound && (binding.State != "unbound" || binding.Reason != "ambiguous_proof"):
-			t.Errorf("%s: binding = %+v, want unbound on ambiguous proof", name, binding)
+		// A planted parent binding is never the starting point here: the
+		// follow-up asks another question, so admission refuses it, and the
+		// binding stays unbound on ambiguous proof exactly as with no parent
+		// binding at all. parentBound only names which planting this is.
+		if binding.State != "unbound" || binding.Reason != "ambiguous_proof" {
+			t.Errorf("%s: binding = %+v (parent bound: %v), want unbound on ambiguous proof", name, binding, parentBound)
 		}
 	}
 }
