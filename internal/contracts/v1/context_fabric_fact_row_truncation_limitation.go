@@ -35,7 +35,7 @@ const (
 	// table fell under: recency wins for a dated series (trends over
 	// absolutes), rank wins for a ranked table, and only a table with
 	// neither falls back to the order its source listed it in.
-	contextFabricFactRowTruncationSuffix   = " (a dated time series keeps its most recent days, a ranking its highest-ranked rows, any other table its first rows in the order its source listed them). Ask about a shorter evidence window or allow a larger response budget to see the rest."
+	contextFabricFactRowTruncationSuffix   = " (a dated time series keeps its most recent days, a ranking its highest-ranked rows, any other table its first rows in the order its source listed them). Ask about a shorter evidence window to see the rest."
 	contextFabricFactRowTruncationNumber   = `(0|[1-9][0-9]{0,8})`
 	contextFabricFactRowTruncationMaxCount = 999999999
 )

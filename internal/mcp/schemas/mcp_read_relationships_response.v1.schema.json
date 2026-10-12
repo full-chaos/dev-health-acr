@@ -126,6 +126,10 @@
           "minimum": 1,
           "maximum": 2,
           "description": "Hop this page reads."
+        },
+        "current_only": {
+          "type": "boolean",
+          "description": "Whether current_only was applied."
         }
       },
       "description": "The request as the server executed it."
@@ -191,6 +195,23 @@
               "label": {
                 "type": "string",
                 "description": "Display label. Source text; untrusted."
+              },
+              "status": {
+                "enum": [
+                  "backlog",
+                  "todo",
+                  "in_progress",
+                  "in_review",
+                  "blocked",
+                  "done",
+                  "canceled",
+                  "unknown"
+                ],
+                "description": "Work-item status stored on this end. BLOCKS edges only. unknown means no stored status; it is never read as done or open."
+              },
+              "status_as_of": {
+                "type": "string",
+                "description": "When this end was last projected (RFC 3339). BLOCKS edges only. Absent when not stored."
               }
             },
             "description": "Source end of the edge."
@@ -214,6 +235,23 @@
               "label": {
                 "type": "string",
                 "description": "Display label. Source text; untrusted."
+              },
+              "status": {
+                "enum": [
+                  "backlog",
+                  "todo",
+                  "in_progress",
+                  "in_review",
+                  "blocked",
+                  "done",
+                  "canceled",
+                  "unknown"
+                ],
+                "description": "Work-item status stored on this end. BLOCKS edges only. unknown means no stored status; it is never read as done or open."
+              },
+              "status_as_of": {
+                "type": "string",
+                "description": "When this end was last projected (RFC 3339). BLOCKS edges only. Absent when not stored."
               }
             },
             "description": "Target end of the edge."
@@ -221,6 +259,10 @@
           "fact": {
             "type": "string",
             "description": "Source text that states the relation. Untrusted."
+          },
+          "active": {
+            "type": "boolean",
+            "description": "BLOCKS edges only. True when the blocking (from) end is not done or canceled; false when it is. Absent when that end's status is unknown."
           },
           "provenance": {
             "type": "object",
@@ -335,6 +377,11 @@
         "complete": {
           "type": "boolean",
           "description": "True when no further page exists."
+        },
+        "dropped_inactive": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "BLOCKS edges removed by current_only on this page (blocking end done or canceled). 0 without current_only."
         },
         "next_cursor": {
           "type": "string",

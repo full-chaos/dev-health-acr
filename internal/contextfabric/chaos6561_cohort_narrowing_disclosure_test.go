@@ -253,7 +253,7 @@ func TestCHAOS6561TwoStepNarrowingIsDisclosedFromFoundToServed(t *testing.T) {
 	want := "This answer lists 5 of the 11 project subjects found, because the list was narrowed to fit the response budget: " +
 		"11 to 10 when the plan lowered the member limit from 20 to 10 before retrieval; " +
 		"10 to 5 after the assembled answer exceeded the item budget. " +
-		"Ask a narrower question or allow a larger response budget to see the rest."
+		"Ask a narrower question to see the rest."
 	if got := chaos6561NarrowingLimitations(result); len(got) != 1 || got[0] != want {
 		t.Fatalf("cohort-narrowing limitations = %q, want exactly [%q]", got, want)
 	}
@@ -319,7 +319,7 @@ func TestCHAOS6561SingleClampStepWording(t *testing.T) {
 	}
 	want := "This answer lists 10 of the 11 project subjects found, because the list was narrowed to fit the response budget: " +
 		"11 to 10 when the plan lowered the member limit from 20 to 10 before retrieval. " +
-		"Ask a narrower question or allow a larger response budget to see the rest."
+		"Ask a narrower question to see the rest."
 	if got := chaos6561NarrowingLimitations(result); len(got) != 1 || got[0] != want {
 		t.Fatalf("cohort-narrowing limitations = %q, want exactly [%q]", got, want)
 	}

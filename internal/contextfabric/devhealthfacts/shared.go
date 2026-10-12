@@ -942,8 +942,15 @@ import (
 // the cause on the health, operational deficiency and investment kinds, where
 // a stored answer holds no_data.
 //
-// v188 -> v192: a project status answer now carries backlog, estimate coverage
-// and risk severity as drivers with minted claims. An answer saved under v188
+// v188 -> v189: a cohort answer re-synthesized over fewer members (the cohort
+// retry) no longer carries the relationship paths, driver candidates and
+// evidence refs of the members it left out, and its kind_census_truncated
+// raw text and degraded reason state the served member count (only Served did
+// before). The narrowing disclosures no longer advise a larger response
+// budget. A candidate saved under v188 may hold the stale fields.
+//
+// v189 -> v192: a project status answer now carries backlog, estimate coverage
+// and risk severity as drivers with minted claims. An answer saved under v189
 // has none.
 const QueryVersion = "devhealthfacts.clickhouse.v192"
 

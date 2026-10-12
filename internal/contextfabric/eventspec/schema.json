@@ -2253,6 +2253,11 @@
         "presence": "required"
       },
       {
+        "key": "edges_dropped_inactive",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "latency_ms",
         "type": "int",
         "presence": "required"
