@@ -586,6 +586,11 @@ type GraphTelemetry interface {
 	// projects of a committed team: the read of the team's own ownership
 	// edges and what it found. Counts and closed values only.
 	RecordTeamAnchorWalk(ctx context.Context, orgID string, decision TeamAnchorWalkDecision)
+	// RecordPullRequestStatusFilter (eventspec.PullRequestStatusFilter)
+	// reports ONE DiscoverContext call whose frame filters pull request
+	// members by a status: how many pull requests the pool held and how many
+	// hold the status. Counts and closed values only.
+	RecordPullRequestStatusFilter(ctx context.Context, orgID string, decision PullRequestStatusFilterDecision)
 	// RecordOwnershipRouting (eventspec.OwnershipRouting) reports ONE
 	// DiscoverContext call that asks for the team members of a named anchor:
 	// whether the ownership read ran and what it found. A call whose anchor
@@ -680,6 +685,8 @@ func (NoopTelemetry) RecordCohortKindFulltext(context.Context, string, CohortKin
 func (NoopTelemetry) RecordProjectDeploymentWalk(context.Context, string, ProjectDeploymentWalkDecision) {
 }
 func (NoopTelemetry) RecordTeamAnchorWalk(context.Context, string, TeamAnchorWalkDecision) {}
+func (NoopTelemetry) RecordPullRequestStatusFilter(context.Context, string, PullRequestStatusFilterDecision) {
+}
 
 func (NoopTelemetry) RecordOwnershipRouting(context.Context, string, OwnershipRoutingDecision) {
 }
@@ -1059,6 +1066,24 @@ func (t SlogTelemetry) RecordTeamAnchorWalk(ctx context.Context, orgID string, d
 		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
 	}
 	t.logger().Info(eventspec.TeamAnchorWalk.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
+}
+
+// RecordPullRequestStatusFilter logs at Info. The counts ride only on a read
+// that finished, and error only on a failed one.
+func (t SlogTelemetry) RecordPullRequestStatusFilter(ctx context.Context, orgID string, decision PullRequestStatusFilterDecision) {
+	args := []any{
+		"org_id", contextfabric.SanitizeLogAttr(orgID),
+		"outcome", contextfabric.SanitizeLogAttr(string(decision.outcome())),
+		"status", contextfabric.SanitizeLogAttr(decision.Status),
+	}
+	if decision.Err == nil {
+		args = append(args,
+			"candidates", decision.Candidates,
+			"kept", decision.Kept)
+	} else {
+		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
+	}
+	t.logger().Info(eventspec.PullRequestStatusFilter.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
 // RecordOwnershipRouting logs at Info. The read counts ride only on an
