@@ -101,7 +101,7 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	var teamOutcome teamRollupOutcome
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		var teamErr error
-		teamOutcome, teamErr = p.readTeamRollup(ctx, principal, orgID, query.RequestedRepositoryScope, teamSubjects, &facts)
+		teamOutcome, teamErr = p.readTeamRollup(ctx, principal, orgID, query.RequestedRepositoryScope, orgWideFigureAllowed(principal, query.RequestedRepositoryScope), teamSubjects, &facts)
 		if teamErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team blockers", teamErr)
 		}
@@ -318,7 +318,26 @@ func dependencyEvidenceRefID(sourceID, targetID, relationKey string) string {
 
 // blockerRollupRepo is one owned repository's recorded blocker edges whose
 // target work item lives in it.
-type blockerRollupRepo struct{ blockedItems, blockerEdges, excludedEdges int64 }
+type blockerRollupRepo struct {
+	blockedItems, blockerEdges, excludedEdges int64
+	// weakestLinkRank is the weakest tier (issueLinkTierRankSQL: native 3,
+	// explicit_text 2, heuristic 1) among the links that placed this
+	// repository's blocked items in it.
+	weakestLinkRank int64
+}
+
+// blockerLinkTierName names a link rank; a rank outside 1..3 is never emitted.
+func blockerLinkTierName(rank int64) string {
+	switch rank {
+	case 3:
+		return "native"
+	case 2:
+		return "explicit_text"
+	case 1:
+		return "heuristic"
+	}
+	return ""
+}
 
 const blockerStatusBasisOpen = "open"
 
@@ -335,7 +354,7 @@ const blockerOpenPredicate = "lower(s.status) NOT IN ('done', '" + workItemCance
 // open (not done or canceled); the edges the status excluded are counted apart. Both ends pass the shared
 // work-item authorization rule, so the counts cover the caller's authorized
 // items and are declared caller-scoped.
-func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage.Principal, orgID string, requestedScope []string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) (outcome teamRollupOutcome, err error) {
+func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage.Principal, orgID string, requestedScope []string, orgWide bool, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) (outcome teamRollupOutcome, err error) {
 	teamIDs, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	outcome.rejected = rejected
 	if len(teamIDs) == 0 {
@@ -353,22 +372,61 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 		if settingsErr != nil {
 			return outcome, settingsErr
 		}
-		statement := readers.WithSettings(`SELECT toString(t.repo_id), toInt64(uniqExactIf(d.target_work_item_id, `+statusPredicate+`)), toInt64(uniqExactIf((d.target_work_item_id, d.source_work_item_id), `+statusPredicate+`)), toInt64(uniqExactIf((d.target_work_item_id, d.source_work_item_id), NOT (`+statusPredicate+`)))
-FROM work_item_dependencies AS d FINAL
-INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
-WHERE d.org_id = {org_id:String} AND toString(t.repo_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'
-  AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
-GROUP BY t.repo_id
-ORDER BY t.repo_id`, settings)
+		// A blocked item reaches a repository only through its linked pull
+		// request rows (work_graph_issue_pr, the pull request's repository),
+		// never through the work item's own repo_id column, read with the
+		// same strict link semantics as the project scope expansion
+		// (linkedPullRequestOnSQL, workItemIsIssueSQL). The inner query keeps
+		// the strongest link tier per (repository, blocked item, blocker);
+		// the outer one names the weakest of those per repository.
+		statement := readers.WithSettings(`SELECT toString(rid), toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)), toInt64(if(countIf(is_open) > 0, minIf(item_rank, is_open), min(item_rank)))
+FROM (
+  SELECT l.repo_id AS rid, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (`+statusPredicate+`) AS is_open, max(`+linkTierRankSQL+`) AS item_rank
+  FROM work_item_dependencies AS d FINAL
+  INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
+  INNER JOIN work_graph_issue_pr AS l FINAL ON l.org_id = t.org_id AND l.work_item_id = t.work_item_id
+  INNER JOIN git_pull_requests AS pr FINAL ON `+linkedPullRequestOnSQL+`
+  INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
+  WHERE d.org_id = {org_id:String} AND toString(l.repo_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'
+    AND `+workItemIsIssueSQL("t")+` AND `+linkTierRankSQL+` > 0
+    AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
+  GROUP BY rid, tgt, src, is_open
+)
+GROUP BY rid
+ORDER BY rid`, settings)
 		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerRollup", statement, orgID, repoKeys, func(row readers.RowScanner) error {
 			var repoID string
 			var r blockerRollupRepo
-			if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges, &r.excludedEdges); err != nil {
+			if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges, &r.excludedEdges, &r.weakestLinkRank); err != nil {
 				return err
 			}
 			byRepo[repoID] = r
 			return nil
+		}, authorizationBindings...); scanErr != nil {
+			return outcome, scanErr
+		}
+	}
+	// Blocked items that are in no link row reach no repository, so they are
+	// counted under no team. The count is organization-wide (caller-authorized)
+	// and withheld from a repository-restricted caller, like the incident
+	// rollup's not-attributable figure.
+	var withoutLink int64
+	if orgWide && len(owned) > 0 {
+		authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, requestedScope))
+		settings, settingsErr := workItemReaderSettings(ctx)
+		if settingsErr != nil {
+			return outcome, settingsErr
+		}
+		statement := readers.WithSettings(`SELECT toInt64(uniqExact(d.target_work_item_id))
+FROM work_item_dependencies AS d FINAL
+INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
+INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
+WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'
+  AND `+statusPredicate+` AND `+workItemIsIssueSQL("t")+`
+  AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
+  AND d.target_work_item_id NOT IN `+issuesWithLinkedPullRequestSQL, settings)
+		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerUnlinkedItems", statement, orgID, nil, func(row readers.RowScanner) error {
+			return row.Scan(&withoutLink)
 		}, authorizationBindings...); scanErr != nil {
 			return outcome, scanErr
 		}
@@ -382,6 +440,7 @@ ORDER BY t.repo_id`, settings)
 			continue
 		}
 		var blockedItems, blockerEdges, excludedEdges, withData int64
+		weakest := int64(0)
 		breakdown := make([]contextfabric.FactValueRow, 0, len(repos))
 		for _, repo := range repos {
 			r, ok := byRepo[repo.key]
@@ -390,6 +449,9 @@ ORDER BY t.repo_id`, settings)
 			}
 			outcome.contributed++
 			withData++
+			if weakest == 0 || (r.weakestLinkRank > 0 && r.weakestLinkRank < weakest) {
+				weakest = r.weakestLinkRank
+			}
 			blockedItems += r.blockedItems
 			blockerEdges += r.blockerEdges
 			excludedEdges += r.excludedEdges
@@ -398,6 +460,9 @@ ORDER BY t.repo_id`, settings)
 					"repository_id":                contextfabric.StringFactValue(repo.key),
 					"blocked_work_items_current":   contextfabric.IntegerFactValue(r.blockedItems),
 					"blocker_dependencies_current": contextfabric.IntegerFactValue(r.blockerEdges),
+				}
+				if tier := blockerLinkTierName(r.weakestLinkRank); tier != "" {
+					cells["link_tier"] = contextfabric.StringFactValue(tier)
 				}
 				if repo.name != "" {
 					cells["repository_name"] = contextfabric.StringFactValue(repo.name)
@@ -420,7 +485,13 @@ ORDER BY t.repo_id`, settings)
 				fields["owned_repositories_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 			}
 		}
+		if orgWide {
+			fields["blocked_work_items_without_link_count"] = contextfabric.IntegerFactValue(withoutLink)
+		}
 		if withData > 0 {
+			if tier := blockerLinkTierName(weakest); tier != "" {
+				fields["repository_link_basis"] = contextfabric.StringFactValue(tier)
+			}
 			fields["blocked_work_items_current"] = contextfabric.IntegerFactValue(blockedItems)
 			fields["blocker_dependencies_current"] = contextfabric.IntegerFactValue(blockerEdges)
 			fields["blocker_dependencies_excluded_by_status_current"] = contextfabric.IntegerFactValue(excludedEdges)

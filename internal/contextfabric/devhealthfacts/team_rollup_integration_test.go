@@ -139,7 +139,7 @@ func (f *teamRollupFixture) seed(ctx context.Context, direct clickhousedriver.Co
 	link("wi-a2", "repo-a", 2)
 	link("wi-a3", "repo-a", 3)
 	link("wi-b1", "repo-b", 1)
-	link("wi-b2", "repo-b", 2)
+	link("wi-b2", "repo-b", 1)
 	dependency := func(source, target, relationship string) {
 		exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, last_synced) VALUES (?, ?, ?, ?, ?)`,
 			teamRollupOrg, source, target, relationship, at)

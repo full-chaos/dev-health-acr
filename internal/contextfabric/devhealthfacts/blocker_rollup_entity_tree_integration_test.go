@@ -22,7 +22,7 @@ func TestTeamBlockerRollup_FollowsLinkedPullRequestRepositories(t *testing.T) {
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	for _, statement := range devhealthschema.DDL(
 		"repos", "team_repo_ownership", "work_items", "work_item_dependencies", "work_graph_issue_pr",
-		"projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
+		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
@@ -50,6 +50,11 @@ func TestTeamBlockerRollup_FollowsLinkedPullRequestRepositories(t *testing.T) {
 		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			repoUUID(prRepo), id, number, float32(1), tier, "", at, blockerTreeOrg)
 	}
+	// A link counts only when its pull request exists.
+	pullRequest := func(repo string, number uint32) {
+		exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+			repoUUID(repo), blockerTreeOrg, number, "pr", "open", at, at, "feature", "")
+	}
 	blocks := func(source, target string) {
 		exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, last_synced) VALUES (?, ?, ?, ?, ?)`,
 			blockerTreeOrg, source, target, "blocks", at)
@@ -63,12 +68,25 @@ func TestTeamBlockerRollup_FollowsLinkedPullRequestRepositories(t *testing.T) {
 	item("unlinked", "repo-c", "open")  // no link row
 	item("elsewhere", "repo-c", "open") // linked to repo-c only: the team owns it by no link
 	item("closed-only", "repo-c", "open")
+	item("stale", "repo-c", "open") // its link names a pull request that does not exist
+	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, type) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'github', '', NULL, 'pr')`,
+		"pr-typed", repoUUID("repo-a"), blockerTreeOrg, "pr-typed", at)
 	link("moved", "repo-a", 1, "native")
 	link("weak", "repo-b", 2, "heuristic")
 	link("both", "repo-b", 3, "native")
 	link("both", "repo-b", 4, "heuristic")
 	link("elsewhere", "repo-c", 5, "native")
 	link("closed-only", "repo-a", 6, "explicit_text")
+	link("stale", "repo-a", 99, "native")
+	link("pr-typed", "repo-a", 1, "native")
+	for _, n := range []struct {
+		repo   string
+		number uint32
+	}{{"repo-a", 1}, {"repo-a", 6}, {"repo-b", 2}, {"repo-b", 3}, {"repo-b", 4}, {"repo-c", 5}} {
+		pullRequest(n.repo, n.number)
+	}
+	blocks("blocker-open", "stale")
+	blocks("blocker-open", "pr-typed")
 	blocks("blocker-open", "moved")
 	blocks("blocker-open", "weak")
 	blocks("blocker-open", "both")
@@ -94,7 +112,8 @@ func TestTeamBlockerRollup_FollowsLinkedPullRequestRepositories(t *testing.T) {
 	wantInt(t, fields, "blocker_dependencies_excluded_by_status_current", 1)
 	wantInt(t, rows[repoUUID("repo-a")], "blocked_work_items_current", 1)
 	wantInt(t, rows[repoUUID("repo-b")], "blocked_work_items_current", 2)
-	wantInt(t, fields, "blocked_work_items_without_link_count", 1)
+	// "unlinked" has no link row and "stale" a link to a missing pull request.
+	wantInt(t, fields, "blocked_work_items_without_link_count", 2)
 
 	tier := func(cells map[string]contextfabric.FactValue) string {
 		if v, ok := cells["link_tier"]; ok && v.String != nil {
