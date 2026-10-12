@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -242,9 +243,13 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 				lines = append(lines, line)
 				continue
 			}
-			lines = append(lines, fmt.Sprintf("- %s.%s = %s (%s)",
-				hostedInline(fact.Subject.Label), hostedInline(fact.Field),
-				hostedInline(scalarValueText(fact.Value)), hostedInline(string(fact.Kind))))
+			display, shown := scalarFieldText(fact.Field, fact.Value)
+			if !shown {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("- %s: %s (%s, %s)",
+				hostedInline(contractsv1.ContextFabricFactFieldNoun(fact.Field)), hostedInline(display),
+				hostedInline(fact.Subject.Label), hostedInline(strings.ReplaceAll(string(fact.Kind), "_", " "))))
 		}
 		if !section("## Canonical facts", lines) {
 			return b.finishWithTruncation()
@@ -516,7 +521,7 @@ func scalarValueText(value contractsv1.ContextFabricScalarValue) string {
 	case value.Integer != nil:
 		return strconv.FormatInt(*value.Integer, 10)
 	case value.Number != nil:
-		return strconv.FormatFloat(*value.Number, 'f', -1, 64)
+		return contractsv1.ContextFabricDisplayNumber(*value.Number)
 	case value.Boolean != nil:
 		return strconv.FormatBool(*value.Boolean)
 	case value.Null:
@@ -524,6 +529,21 @@ func scalarValueText(value contractsv1.ContextFabricScalarValue) string {
 	default:
 		return "unknown"
 	}
+}
+
+// scalarFieldText renders a claimed fact value of a named field for display:
+// a token reads as words, and shown is false for a field that stays out of
+// sentences.
+func scalarFieldText(field string, value contractsv1.ContextFabricScalarValue) (text string, shown bool) {
+	if value.String != nil {
+		if strings.HasSuffix(field, "_signal") {
+			if name, ok := contextfabric.CohortSignalDisplayName(*value.String); ok {
+				return name, true
+			}
+		}
+		return contractsv1.ContextFabricDisplayString(field, *value.String)
+	}
+	return scalarValueText(value), true
 }
 
 // rankingTableFieldOrder is the FIXED, deterministic key order
@@ -550,9 +570,13 @@ func rankingTableRowLine(row contractsv1.ContextFabricClaimedFactRow) string {
 		if !ok {
 			continue
 		}
-		parts = append(parts, key+"="+hostedInline(scalarValueText(value)))
+		display, shown := scalarFieldText(key, value)
+		if !shown {
+			continue
+		}
+		parts = append(parts, contractsv1.ContextFabricFactFieldNoun(key)+": "+hostedInline(display))
 	}
-	return "- " + strings.Join(parts, " ")
+	return "- " + strings.Join(parts, "; ")
 }
 
 // temporalLines renders CHAOS-3781's temporal label as header lines, or

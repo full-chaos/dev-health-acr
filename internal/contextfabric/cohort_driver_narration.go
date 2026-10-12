@@ -734,3 +734,10 @@ func recomposeCohortAnswerNarrative(status InvestigationStatus, resolution Subje
 	deterministicAnswer = truncateAtSentenceBoundary(sentence, deterministicAnswerMaxLength)
 	return directJudgment, deterministicAnswer
 }
+
+// CohortSignalDisplayName is the display noun of a cohort ranking signal; ok
+// is false for a signal outside the vocabulary.
+func CohortSignalDisplayName(signal string) (string, bool) {
+	name, ok := cohortSignalDisplayName[signal]
+	return name, ok
+}
