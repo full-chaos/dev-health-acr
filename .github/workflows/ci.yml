@@ -436,8 +436,8 @@ jobs:
           # refuses one suite name in two shards. The heavy half holds
           # disjoint tests, so its suite is renamed; classnames are untouched.
           if [ "$heavy_half" -eq 1 ]; then
-            sed -E 's|<testsuite name="([^"]*/devhealthfacts)"|<testsuite name="\1 (heavy half)"|' .tmp/coverage/junit.xml >.tmp/coverage/junit.renamed.xml
-            renamed="$(grep -c '<testsuite name="[^"]*/devhealthfacts (heavy half)"' .tmp/coverage/junit.renamed.xml || true)"
+            sed -E '/^[[:space:]]*<testsuite /s| name="([^"]*/devhealthfacts)"| name="\1 (heavy half)"|' .tmp/coverage/junit.xml >.tmp/coverage/junit.renamed.xml
+            renamed="$(grep -cE '^[[:space:]]*<testsuite .* name="[^"]*/devhealthfacts \(heavy half\)"' .tmp/coverage/junit.renamed.xml || true)"
             test "$renamed" -eq 1 || { echo "::error::heavy half junit.xml: expected 1 devhealthfacts suite, renamed $renamed"; exit 1; }
             mv .tmp/coverage/junit.renamed.xml .tmp/coverage/junit.xml
           fi
