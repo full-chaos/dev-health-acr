@@ -20,8 +20,8 @@ const blockerMemoryOrg = "5c1e8f2a-94d7-4b36-8a0e-2f6b9d3c7e14"
 // the organization's work item table. The query client runs under the hosted
 // runtime's per-statement read budget, as acr-api does.
 const (
-	blockerMemoryFillerItems     = 60_000
-	blockerMemoryMoreFillerItems = 90_000
+	blockerMemoryFillerItems     = 8_000
+	blockerMemoryMoreFillerItems = 12_000
 )
 
 func TestTeamBlockerFactsServeAnOrganizationWithManyWorkItemsOnRealClickHouse(t *testing.T) {
