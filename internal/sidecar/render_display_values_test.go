@@ -123,3 +123,29 @@ func TestRankingRowsRenderAKeyOutsideTheFixedSetAsANoun(t *testing.T) {
 		}
 	}
 }
+
+func TestEnumValuesReadAsWordsInSubjectsRowsAndStatus(t *testing.T) {
+	t.Parallel()
+	outcome, window, status := "insufficient_evidence", "current_vs_prior", "in_progress"
+	subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "wi_1", Label: "Item One"}
+	projection := displayValuesProjection([]contractsv1.ContextFabricProjectedFact{{
+		ClaimID: "claim_status_01", Kind: contractsv1.ContextFabricFactStatus, Subject: subject, Field: "status",
+		Value: contractsv1.ContextFabricScalarValue{String: &status},
+	}}, []contractsv1.ContextFabricClaimedFactRow{{Fields: map[string]contractsv1.ContextFabricScalarValue{
+		"outcome": {String: &outcome}, "window": {String: &window},
+	}}})
+	projection.CommittedSubjects = []contractsv1.ContextFabricSubjectRef{subject}
+	projection.Cohort.Kind = contractsv1.ContextFabricSubjectWorkItem
+	projection.Cohort.Members = []contractsv1.ContextFabricProjectedCohortMember{{Subject: subject, Rank: 1}}
+	markdown, _ := RenderAnswerProjectionMarkdown(projection, 1<<20)
+	for _, want := range []string{"outcome: insufficient evidence; window: current vs prior", "work item Item One", "Status: in progress"} {
+		if !strings.Contains(markdown, want) {
+			t.Errorf("markdown lacks %q:\n%s", want, markdown)
+		}
+	}
+	for _, raw := range []string{"insufficient_evidence", "current_vs_prior", "work_item", "in_progress"} {
+		if strings.Contains(markdown, raw) {
+			t.Errorf("markdown still carries %q:\n%s", raw, markdown)
+		}
+	}
+}

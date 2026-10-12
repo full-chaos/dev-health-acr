@@ -63,7 +63,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 	if len(projection.CommittedSubjects) > 0 {
 		lines := make([]string, 0, len(projection.CommittedSubjects))
 		for _, subject := range projection.CommittedSubjects {
-			lines = append(lines, fmt.Sprintf("- %s %s", hostedInline(string(subject.Kind)), hostedInline(subject.Label)))
+			lines = append(lines, fmt.Sprintf("- %s %s", hostedInline(kindWords(subject.Kind)), hostedInline(subject.Label)))
 		}
 		if !section("## Subjects", lines) {
 			return b.finishWithTruncation()
@@ -116,7 +116,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 		for _, candidate := range projection.Clarification.Candidates {
 			line := fmt.Sprintf("- %s %s (receipt %s, confidence %.2f)",
-				hostedInline(string(candidate.Subject.Kind)), hostedInline(candidate.Subject.Label),
+				hostedInline(kindWords(candidate.Subject.Kind)), hostedInline(candidate.Subject.Label),
 				hostedInline(candidate.ReceiptID), candidate.Confidence)
 			if candidate.Provider != "" {
 				line += fmt.Sprintf(" provider %s", hostedInline(candidate.Provider))
@@ -135,7 +135,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 				lines = append(lines, "")
 			}
 			lines = append(lines, fmt.Sprintf("%d. %s [%s / %s]", i+1,
-				hostedInline(driver.Title), hostedInline(string(driver.Standing)), hostedInline(driver.Category)))
+				hostedInline(driver.Title), hostedInline(strings.ReplaceAll(string(driver.Standing), "_", " ")), hostedInline(strings.ReplaceAll(driver.Category, "_", " "))))
 			lines = append(lines, driver.Summary)
 			if driver.Qualification != "" {
 				lines = append(lines, driver.Qualification)
@@ -183,7 +183,9 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 						continue
 					}
 					if fact.Kind == contractsv1.ContextFabricFactStatus {
-						values = append(values, hostedInline(scalarValueText(fact.Value)))
+						if text, shown := scalarFieldText(fact.Field, fact.Value); shown {
+							values = append(values, hostedInline(text))
+						}
 						displayedFacts[fact.ClaimID] = struct{}{}
 					}
 					// The source title is already the member label. Do not print
@@ -200,7 +202,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 				continue
 			}
 			lines = append(lines, fmt.Sprintf("%s. %s %s", strconv.Itoa(member.Rank),
-				hostedInline(string(member.Subject.Kind)), hostedInline(member.Subject.Label)))
+				hostedInline(kindWords(member.Subject.Kind)), hostedInline(member.Subject.Label)))
 			for _, reason := range member.InclusionReasons {
 				lines = append(lines, "   - "+hostedInline(reason))
 			}
@@ -530,6 +532,15 @@ func scalarValueText(value contractsv1.ContextFabricScalarValue) string {
 	default:
 		return "unknown"
 	}
+}
+
+// kindWords renders a subject kind as words: the display noun, or the token
+// with underscores as spaces for a kind outside the vocabulary.
+func kindWords(kind contractsv1.ContextFabricSubjectKind) string {
+	if noun := contractsv1.ContextFabricSubjectKindNoun(kind, 1); noun != "" {
+		return noun
+	}
+	return strings.ReplaceAll(string(kind), "_", " ")
 }
 
 // scalarFieldText renders a claimed fact value of a named field for display:
