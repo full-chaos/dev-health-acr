@@ -3415,6 +3415,11 @@ var AnchorBindingTransition = Event{
 		// admitted carried binding) replaced the model's on the reading every
 		// stage read this turn; switch_off while the count switch is off.
 		{Key: "bound_anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("bound_anchor_kind")},
+		// What the binding carried into this turn's resolution: with the carry
+		// switch on only an admitted binding injects its identity, and a
+		// refused or absent one injects nothing; switch_off while the switch is
+		// off (the ledger carries as before).
+		{Key: "bound_anchor_carry", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("bound_anchor_carry")},
 		{Key: "freshness_serving_epoch", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "freshness_ownership_digest", Type: FieldString, Presence: PresenceRequired},
 		{Key: "to_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("to_state")},
