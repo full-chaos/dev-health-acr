@@ -1411,6 +1411,21 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		cohortNodes = kept
 	}
+	// A pull request status the frame states is applied to the whole pool,
+	// before the cohort is cut, so every arm's members are filtered alike.
+	if status := contextfabric.PullRequestStatusFilterOf(request.Frame); status != "" {
+		filtered, filterErr := a.filterPullRequestsByStatus(ctx, key, principal.OrgID, status, cohortNodes, temporal)
+		if a.config.Telemetry != nil {
+			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
+				Status: status, Candidates: filtered.candidates, Kept: filtered.kept, Truncated: filtered.cut, Err: filterErr,
+			})
+		}
+		if filterErr != nil {
+			return contextfabric.GraphContext{}, graphNotProjectedError(filterErr)
+		}
+		cohortNodes = filtered.nodes
+		cohortPoolTruncated = cohortPoolTruncated || filtered.cut
+	}
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	cohortKindScopedAuthzDropped, anchorReachDenied := anchorReachDeniedCount(cohortKind, cohortNodes, principal, request, edgeFilters.ReachDenied, cohortKindScopedAuthzDropped)
 	if cohort != nil && deploymentAnchor != nil {

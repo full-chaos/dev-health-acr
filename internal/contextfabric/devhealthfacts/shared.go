@@ -919,7 +919,14 @@ import (
 // owning no repository; it is now served over every owned repository, and a set
 // above 2000 rows (per ownership window read) is a named failure. A candidate saved under v183 may hold the
 // truncated mix.
-const QueryVersion = "devhealthfacts.clickhouse.v184"
+//
+// v186 -> v187: pull request members whose question states a status of the
+// closed set (open, merged, closed, awaiting_review, changes_requested,
+// approved) are filtered by it before the cohort is cut, and the answer states
+// the filter. The status used to be refused for a value of three words or
+// more, and otherwise served as the whole unfiltered member set. A candidate
+// saved under v186 may hold that unfiltered set.
+const QueryVersion = "devhealthfacts.clickhouse.v187"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
