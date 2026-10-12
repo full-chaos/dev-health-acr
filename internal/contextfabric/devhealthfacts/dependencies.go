@@ -549,7 +549,6 @@ WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`
 				if repo.name != "" {
 					cells["repository_name"] = contextfabric.StringFactValue(repo.name)
 				}
-				cells["reach_basis"] = contextfabric.StringFactValue(repositoryReachOwned)
 				breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 			}
 		}

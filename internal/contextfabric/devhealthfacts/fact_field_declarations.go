@@ -329,7 +329,6 @@ func blockersFields() []fieldDecl {
 				cInt("blocked_work_items_current", "count"),
 				cInt("blocker_dependencies_current", "count"),
 				cNullable(cStr("link_tier")),
-				cStr("reach_basis"),
 			),
 		),
 	)

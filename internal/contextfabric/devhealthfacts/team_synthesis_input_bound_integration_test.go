@@ -165,6 +165,11 @@ func TestATeamAtTheExpansionCapIsSynthesizedWithinTheModelInputBound(t *testing.
 	}
 	read := map[contextfabric.FactKind]int{}
 	for _, fact := range bundle.Facts {
+		// The team's own rollup fact rides beside the cap's member facts: the
+		// team owns the project these items belong to.
+		if fact.Subject.Kind == contextfabric.SubjectTeam {
+			continue
+		}
 		read[fact.Kind]++
 	}
 	const expansionCap = 200

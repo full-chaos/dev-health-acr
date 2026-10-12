@@ -42,6 +42,26 @@ var declaredButNotExercised = map[contextfabric.FactKind]map[string]string{
 	// context value no case here sets); investment_units_integration_test.go
 	// exercises every one of these fields against a real ClickHouse.
 	contextfabric.FactInvestment: investmentUnitFieldsNotExercised(),
+	// Emitted only for a team that owns a project whose issues link to pull
+	// requests in repositories it does not own; no fake-driven case here seeds
+	// that reach. team_project_reach_integration_test.go exercises each field
+	// against a real ClickHouse and team_project_reach_test.go the pull request
+	// fields against canned rows.
+	contextfabric.FactBlockers: {
+		"team:project_blocked_work_items_current": "project reach, exercised by team_project_reach_integration_test.go",
+		"team:project_reached_repository_count":   "project reach, exercised by team_project_reach_integration_test.go",
+	},
+	contextfabric.FactPullRequests: {
+		"team:project_reached_repository_count": "project reach, exercised by team_project_reach_integration_test.go",
+		"team:repository_link_basis":            "project reach, exercised by team_project_reach_integration_test.go",
+		"team:repository_breakdown.link_tier":   "project reach, exercised by team_project_reach_integration_test.go",
+	},
+	contextfabric.FactDeployments: {
+		"team:project_reached_repository_count": "project reach, exercised by team_project_reach_integration_test.go",
+	},
+	contextfabric.FactIncidents: {
+		"team:project_reached_repository_count": "project reach, exercised by team_project_reach_integration_test.go",
+	},
 }
 
 func investmentUnitFieldsNotExercised() map[string]string {
