@@ -161,6 +161,11 @@ type Config struct {
 	// resolution, so retrieval, the count, discovery and the capture read
 	// one kind. Default OFF; turned on per deployment after the corpus gate.
 	AnchorBindingCountEnabled bool
+	// AnchorBindingCarryEnabled (ACR_CONTEXT_FABRIC_ANCHOR_BINDING_CARRY_ENABLED)
+	// makes the admitted anchor binding the only source of a same-question
+	// continuation's carried anchor. Default OFF; turned on per deployment
+	// after the corpus gate.
+	AnchorBindingCarryEnabled bool
 	// ServerCompletenessAuthorityEnabled (CHAOS-5640,
 	// ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED) is the
 	// gated FLIP's master switch -- default OFF, same "ships dark"
