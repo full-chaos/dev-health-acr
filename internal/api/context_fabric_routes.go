@@ -123,7 +123,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			// 500 "internal_error" this branch used to return with no
 			// measurement at all.
 			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "bytes", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
-			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
 				"measured_bytes": measuredBytes, "max_serialized_bytes": maximumBytes,
 			})
 			return
@@ -173,7 +173,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 				// body, which a projection cannot carry, so the caller's
 				// ceiling is a refusal here, exactly as it was.
 				a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "bytes", measuredBytes, callerBytes, estimatedTokens, itemCounts)
-				writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+				writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
 					"measured_bytes": measuredBytes, "max_serialized_bytes": callerBytes,
 				})
 				return
@@ -181,7 +181,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			projection, projectionEncoded, projectionBytes, budget, fits := a.projectToCallerOption(result, request.Options)
 			if !fits {
 				a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "projection_bytes", projectionBytes, callerBytes, estimatedTokens, itemCounts)
-				writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+				writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
 					"measured_bytes": projectionBytes, "max_serialized_bytes": callerBytes,
 				})
 				return
@@ -204,7 +204,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		}
 		if err := CompleteUsageWithBudget(r.Context(), usage, override); err != nil {
 			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "items", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
-			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
 				"measured_bytes": usage.Bytes, "measured_items": usage.Items, "estimated_tokens": estimatedTokens,
 				"max_items":       contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems),
 				"items_breakdown": itemCounts,
@@ -223,7 +223,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			}
 			if envelopeBytes > int64(a.config.MaxSerializedBytes) {
 				a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "synthesis_input_bytes", envelopeBytes, int64(a.config.MaxSerializedBytes), estimatedTokens, itemCounts)
-				writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+				writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
 					"measured_bytes": envelopeBytes, "max_serialized_bytes": int64(a.config.MaxSerializedBytes),
 				})
 				return
@@ -458,7 +458,7 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 				"axis":   string(budgetRefusal.NarrowerContinuationAxis),
 			}
 		}
-		a.writeContextFabricFailure(w, r, err, contextFabricClassBudgetRefusal, http.StatusRequestEntityTooLarge, "invalid_request", "The Context Fabric answer did not fit the response budget", false, details)
+		a.writeContextFabricFailure(w, r, err, contextFabricClassBudgetRefusal, http.StatusRequestEntityTooLarge, "budget_refusal", "The Context Fabric answer did not fit the response budget", false, details)
 		return
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded) {

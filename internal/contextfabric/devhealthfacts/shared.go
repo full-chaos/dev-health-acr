@@ -893,12 +893,20 @@ import (
 // not projected, window gate) discloses a withheld ledger anchor as withheld
 // and does not pass it on. A stored answer can differ.
 //
-// v180 -> v181: a pull request fact carries project_breakdown, one row per
+// v180 -> v181: a team reaches work through the projects it owns as well as the
+// repositories it owns. The pull request rollup adds the pull requests linked to
+// an owned project's issues (a reached repository counts its linked pull
+// requests only), the blockers total is the union of owned repositories and
+// owned-project items counted once, and deployments, incidents and metrics name
+// the project-reached repositories they have no rows for. A candidate saved
+// under v180 holds a team total over owned repositories alone.
+//
+// v181 -> v182: a pull request fact carries project_breakdown, one row per
 // project its linked issues reach (work_graph_issue_pr, the shared link
 // reader), each with the link tier; a pull request cohort grouped by project
 // is grouped on those rows where it was served ungrouped. A candidate saved
-// under v180 holds the ungrouped answer.
-const QueryVersion = "devhealthfacts.clickhouse.v181"
+// under v181 holds the ungrouped answer.
+const QueryVersion = "devhealthfacts.clickhouse.v182"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

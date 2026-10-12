@@ -29,7 +29,7 @@ const (
 func TestTeamOwnershipReadMeetsTheClientRowCapOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
-	for _, statement := range devhealthschema.DDL("repos", "team_repo_ownership", "deploy_metrics_daily") {
+	for _, statement := range devhealthschema.DDL("repos", "team_repo_ownership", "deploy_metrics_daily", "projects", "team_project_ownership", "work_items", "work_graph_issue_pr", "git_pull_requests") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}

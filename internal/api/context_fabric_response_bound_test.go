@@ -278,6 +278,9 @@ func assertErrorDetailsDiscloseMeasurement(t *testing.T, body []byte, wantMinByt
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		t.Fatal(err)
 	}
+	if envelope.Error.Code != "budget_refusal" {
+		t.Fatalf("error code = %q, want budget_refusal -- a valid request whose answer does not fit is a budget refusal, not an invalid request", envelope.Error.Code)
+	}
 	measuredDetail, ok := envelope.Error.Details["measured_bytes"]
 	if !ok {
 		t.Fatalf("error details = %#v, want a measured_bytes field -- a size-exceeded 413 must disclose what it measured, never a bare message", envelope.Error.Details)

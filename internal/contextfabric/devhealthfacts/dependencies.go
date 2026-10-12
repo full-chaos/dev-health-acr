@@ -320,7 +320,7 @@ func dependencyEvidenceRefID(sourceID, targetID, relationKey string) string {
 // target work item lives in it.
 type blockerRollupRepo struct {
 	blockedItems, blockerEdges, excludedEdges int64
-	// weakestLinkRank is the weakest tier (issueLinkTierRankSQL: native 3,
+	// weakestLinkRank is the weakest tier (linkTierRankSQL: native 3,
 	// explicit_text 2, heuristic 1) among the links that placed this
 	// repository's blocked items in it.
 	weakestLinkRank int64
@@ -328,7 +328,14 @@ type blockerRollupRepo struct {
 
 // blockerTeamTotals are one team's distinct blocked items and edges across its
 // owned repositories.
-type blockerTeamTotals struct{ blockedItems, blockerEdges, excludedEdges int64 }
+type blockerTeamTotals struct {
+	blockedItems, blockerEdges, excludedEdges int64
+	// projectBlockedItems and projectWeakestRank describe the blocked items
+	// reached through the team's owned projects' linked pull request rows
+	// (they are inside the totals above, counted once with owned-repository
+	// items); projectWeakestRank is 0 when no project item contributed.
+	projectBlockedItems, projectWeakestRank int64
+}
 
 // blockerPairSeparator joins a team id and a repository id in the pair list
 // bound to the totals query; the unit separator is in neither identifier.
@@ -351,6 +358,23 @@ func blockerEdgeRowsSQL(statusPredicate, authorized string) string {
   GROUP BY rid, tgt, src, is_open`
 }
 
+// blockerProjectEdgeRowsSQL is the project arm of the same reading: the
+// distinct (team, blocked item, blocker) rows of items that belong to a
+// project the team owns and reach a repository through a linked pull request
+// row (teamProjectLinkRowsSQL), with the item's strongest link tier. Same
+// issue, status and authorization rules as blockerEdgeRowsSQL.
+func blockerProjectEdgeRowsSQL(statusPredicate, authorized string) string {
+	return `SELECT pl.team_id AS team_id, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(pl.link_rank) AS item_rank
+  FROM work_item_dependencies AS d FINAL
+  INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
+  INNER JOIN ` + teamProjectLinkRowsSQL("team_ids", factTimeBound{}) + ` AS pl ON pl.work_item_id = d.target_work_item_id
+  INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
+  WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'
+    AND ` + workItemIsIssueSQL("t") + `
+    AND d.target_work_item_id IN ` + authorized + ` AND d.source_work_item_id IN ` + authorized + `
+  GROUP BY team_id, tgt, src, is_open`
+}
+
 // blockerLinkTierName names a link rank; a rank outside 1..3 is never emitted.
 func blockerLinkTierName(rank int64) string {
 	switch rank {
@@ -365,6 +389,11 @@ func blockerLinkTierName(rank int64) string {
 }
 
 const blockerStatusBasisOpen = "open"
+
+// blockerBreakdownProjectLimitation is served beside a total that includes
+// blocked items reached through an owned project: the per-repository
+// breakdown lists the owned repositories only.
+const blockerBreakdownProjectLimitation = "repository_breakdown lists the team's owned repositories only; blocked work items reached through its owned projects' linked pull requests are in the totals and in project_blocked_work_items_current, not per repository"
 
 // blockerOpenPredicate is the SQL over the blocking item's normalized
 // status: a blocker counts while it is not done or canceled. Both ends of an
@@ -389,10 +418,15 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 	if err != nil {
 		return outcome, err
 	}
+	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, teamIDs, factTimeBound{})
+	if err != nil {
+		return outcome, err
+	}
+	reachedOnly := reachedOnlyRepositories(reached, owned)
 	statusPredicate := blockerOpenPredicate
 	byRepo := map[string]blockerRollupRepo{}
 	totals := map[string]blockerTeamTotals{}
-	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 {
+	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 || len(reached) > 0 {
 		authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, requestedScope))
 		settings, settingsErr := workItemReaderSettings(ctx)
 		if settingsErr != nil {
@@ -406,38 +440,51 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 FROM (`+edgeRows+`)
 GROUP BY rid
 ORDER BY rid`, settings)
-		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerRollup", statement, orgID, repoKeys, func(row readers.RowScanner) error {
-			var repoID string
-			var r blockerRollupRepo
-			if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges, &r.excludedEdges, &r.weakestLinkRank); err != nil {
-				return err
+		if len(repoKeys) > 0 {
+			if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerRollup", statement, orgID, repoKeys, func(row readers.RowScanner) error {
+				var repoID string
+				var r blockerRollupRepo
+				if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges, &r.excludedEdges, &r.weakestLinkRank); err != nil {
+					return err
+				}
+				byRepo[repoID] = r
+				return nil
+			}, authorizationBindings...); scanErr != nil {
+				return outcome, scanErr
 			}
-			byRepo[repoID] = r
-			return nil
-		}, authorizationBindings...); scanErr != nil {
-			return outcome, scanErr
 		}
-		// Team totals: distinct blocked items and edges across the team's own
-		// owned repositories (one row per team and repository pair).
+		// Team totals: distinct blocked items and edges across two arms, the
+		// team's owned repositories (one row per team and repository pair) and
+		// the items of its owned projects that reach a repository through a
+		// linked pull request row. One item in both arms is one blocked item.
 		pairs := make([]string, 0, len(repoKeys))
 		for _, teamID := range teamIDs {
 			for _, repo := range owned[teamID] {
 				pairs = append(pairs, teamID+blockerPairSeparator+repo.key)
 			}
 		}
-		totalsStatement := readers.WithSettings(`SELECT tp.team_id, toInt64(uniqExactIf(e.tgt, e.is_open)), toInt64(uniqExactIf((e.tgt, e.src), e.is_open)), toInt64(uniqExactIf((e.tgt, e.src), NOT e.is_open))
-FROM (`+edgeRows+`) AS e
-INNER JOIN (
-  SELECT splitByChar(char(31), pair)[1] AS team_id, splitByChar(char(31), pair)[2] AS rid_str
-  FROM (SELECT arrayJoin({team_repo_pairs:Array(String)}) AS pair)
-) AS tp ON tp.rid_str = toString(e.rid)
-GROUP BY tp.team_id
-ORDER BY tp.team_id`, settings)
-		extra := append([]readers.Binding{{Name: "team_repo_pairs", Value: pairs}}, authorizationBindings...)
+		const projectArm = "arm = 'project'"
+		totalsStatement := readers.WithSettings(`SELECT team_id, toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)),
+  toInt64(uniqExactIf(tgt, is_open AND `+projectArm+`)),
+  toInt64(if(countIf(is_open AND `+projectArm+`) > 0, minIf(item_rank, is_open AND `+projectArm+`), minIf(item_rank, `+projectArm+`)))
+FROM (
+  SELECT tp.team_id AS team_id, e.tgt AS tgt, e.src AS src, toUInt8(e.is_open) AS is_open, toInt64(e.item_rank) AS item_rank, 'repository' AS arm
+  FROM (`+edgeRows+`) AS e
+  INNER JOIN (
+    SELECT splitByChar(char(31), pair)[1] AS team_id, splitByChar(char(31), pair)[2] AS rid_str
+    FROM (SELECT arrayJoin({team_repo_pairs:Array(String)}) AS pair)
+  ) AS tp ON tp.rid_str = toString(e.rid)
+  UNION ALL
+  SELECT team_id, tgt, src, toUInt8(is_open) AS is_open, toInt64(item_rank) AS item_rank, 'project' AS arm
+  FROM (`+blockerProjectEdgeRowsSQL(statusPredicate, authorized)+`)
+)
+GROUP BY team_id
+ORDER BY team_id`, settings)
+		extra := append([]readers.Binding{{Name: "team_repo_pairs", Value: pairs}, {Name: "team_ids", Value: teamIDs}}, authorizationBindings...)
 		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerTotals", totalsStatement, orgID, repoKeys, func(row readers.RowScanner) error {
 			var teamID string
 			var t blockerTeamTotals
-			if err := row.Scan(&teamID, &t.blockedItems, &t.blockerEdges, &t.excludedEdges); err != nil {
+			if err := row.Scan(&teamID, &t.blockedItems, &t.blockerEdges, &t.excludedEdges, &t.projectBlockedItems, &t.projectWeakestRank); err != nil {
 				return err
 			}
 			totals[teamID] = t
@@ -451,7 +498,7 @@ ORDER BY tp.team_id`, settings)
 	// and withheld from a repository-restricted caller, like the incident
 	// rollup's not-attributable figure.
 	var withoutLink int64
-	if orgWide && len(owned) > 0 {
+	if orgWide && (len(owned) > 0 || len(reached) > 0) {
 		authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, requestedScope))
 		settings, settingsErr := workItemReaderSettings(ctx)
 		if settingsErr != nil {
@@ -475,7 +522,7 @@ WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`
 	for _, teamID := range teamIDs {
 		subject := bySubject[teamID]
 		repos := owned[teamID]
-		if len(repos) == 0 {
+		if len(repos) == 0 && len(reachedOnly[teamID]) == 0 {
 			outcome.teamsWithoutRepos++
 			continue
 		}
@@ -525,10 +572,22 @@ WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`
 		if orgWide {
 			fields["blocked_work_items_without_link_count"] = contextfabric.IntegerFactValue(withoutLink)
 		}
+		projectData := false
 		if t, ok := totals[teamID]; ok {
 			blockedItems, blockerEdges, excludedEdges = t.blockedItems, t.blockerEdges, t.excludedEdges
+			if t.projectWeakestRank > 0 {
+				projectData = true
+				if weakest == 0 || t.projectWeakestRank < weakest {
+					weakest = t.projectWeakestRank
+				}
+				fields["project_blocked_work_items_current"] = contextfabric.IntegerFactValue(t.projectBlockedItems)
+				fields["repository_breakdown_limitation"] = contextfabric.StringFactValue(blockerBreakdownProjectLimitation)
+			}
 		}
-		if withData > 0 {
+		if n := len(reachedOnly[teamID]); n > 0 {
+			fields["project_reached_repository_count"] = contextfabric.IntegerFactValue(int64(n))
+		}
+		if withData > 0 || projectData {
 			if tier := blockerLinkTierName(weakest); tier != "" {
 				fields["repository_link_basis"] = contextfabric.StringFactValue(tier)
 			}
