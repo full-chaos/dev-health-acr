@@ -392,13 +392,16 @@ func (e *Engine) recordPathDrop(ctx context.Context, principal storage.Principal
 // the paths the answer found, once.
 func restatePathDrop(result InvestigationResult) (InvestigationResult, int) {
 	declared := len(result.Paths)
-	for index, limitation := range result.Limitations {
+	for index, limitation := range slices.Clone(result.Limitations) {
 		priorServed, priorDeclared, ok := contractsv1.ParseContextFabricPathDropLimitation(limitation)
 		if !ok {
 			continue
 		}
 		declared = priorDeclared
-		result.Limitations = slices.Delete(slices.Clone(result.Limitations), index, index+1)
+		kept := slices.Delete(slices.Clone(result.Limitations), index, index+1)
+		limitations, displaced := appendBoundedLimitations(kept, nil)
+		result.Limitations = limitations
+		result.LimitationsDisplaced += displaced
 		prior := pathDropOutcomeRow(priorServed, priorDeclared)
 		for rowIndex, row := range result.Completeness.Outcomes {
 			if reflect.DeepEqual(row, prior) {

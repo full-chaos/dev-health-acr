@@ -457,9 +457,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			}
 			if memberCut.Served || memberCut.Reduced.Status != "" {
 				members := cohortMemberCount(params.Graph.Cohort)
+				// No measurement stamp: this lever cuts the list, and the line
+				// carries the member counts before and after, as the walk-list
+				// cut's does.
 				event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
 					memberCut.Before, memberCut.After, grouped, false, overrun, memberCut.Basis)
-				event.recordMeasurement(measured)
 				event.PredictedItems = PredictedItemsForPlan(*plan, members)
 				event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 				event.RetryDeclined = declined
