@@ -42,6 +42,9 @@ func bindingCarryTurns(t *testing.T, carryOn bool, edit func(*staticResultStore)
 // follow-up.
 type carryTurnOptions struct {
 	carryOn, pendingOn bool
+	// unwindowed asks both turns without a window, so no window is carried
+	// into the follow-up.
+	unwindowed         bool
 	edit               func(*staticResultStore)
 	mutate             func(*InvestigationRequest)
 	before             func(*anchorProbeRig)
@@ -51,7 +54,7 @@ func bindingCarryTurnsWith(t *testing.T, o carryTurnOptions, followUpResponse ne
 	t.Helper()
 	rig := newAnchorProbeRig(t, false)
 	rig.interpreter.read(SubjectRepository, false)
-	one := rig.turn(t, needTurnRequest("request_carry_one", true), identityProvenResponse(probeAlpha))
+	one := rig.turn(t, needTurnRequest("request_carry_one", !o.unwindowed), identityProvenResponse(probeAlpha))
 	if got := servedLedgerAnchor(one); got.ID != probeAlpha.CanonicalID {
 		t.Fatalf("premise: turn one's ledger holds %+v; it must capture alpha", got)
 	}
@@ -63,7 +66,7 @@ func bindingCarryTurnsWith(t *testing.T, o carryTurnOptions, followUpResponse ne
 	if o.before != nil {
 		o.before(rig)
 	}
-	request := continuingNeedTurn(needTurnRequest("request_carry_two", true), one.result.ResultID)
+	request := continuingNeedTurn(needTurnRequest("request_carry_two", !o.unwindowed), one.result.ResultID)
 	if o.mutate != nil {
 		o.mutate(&request)
 	}
@@ -363,24 +366,30 @@ func TestAWithheldLedgerAnchorReachesNoResolutionCall(t *testing.T) {
 }
 
 // TestAWithheldLedgerAnchorOnAnExitBeforeResolution: the same refused
-// binding, on the two exits a same-question continuation can reach before
-// resolution: the frame-gate refusal and graph not projected. Switched off,
-// the entry reads not_evaluated and passes to the next turn (the behaviour
-// on main). Switched on, it reads vetoed_unresolved, is not passed on, and
-// no resolution call receives it.
+// binding, on each exit a same-question continuation can reach before
+// resolution: the frame-gate refusal, graph not projected, and the window
+// gate (reached when no window is carried: the parent asked without one and
+// the follow-up reads as windowed). Switched off, the entry reads
+// not_evaluated and passes to the next turn (the behaviour on main).
+// Switched on, it reads vetoed_unresolved, is not passed on, no resolution
+// call receives it, and the ledger line's anchor_disposition says so.
 func TestAWithheldLedgerAnchorOnAnExitBeforeResolution(t *testing.T) {
 	refuseFrame := func(rig *anchorProbeRig) {
 		rig.interpreter.outcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectTeam}
 	}
 	notProjected := needTurnResponse{err: fmt.Errorf("query context graph: %w", ErrGraphNotProjected)}
+	windowed := func(rig *anchorProbeRig) { rig.interpreter.read(SubjectRepository, true) }
 	for _, exit := range []struct {
-		name     string
-		before   func(*anchorProbeRig)
-		response needTurnResponse
-		calls    int
+		name       string
+		before     func(*anchorProbeRig)
+		response   needTurnResponse
+		calls      int
+		unwindowed bool
+		evaluation AnchorBindingEvaluation
 	}{
-		{"frame gate", refuseFrame, emptyProbeResponse(), 0},
-		{"graph not projected", nil, notProjected, 1},
+		{"frame gate", refuseFrame, emptyProbeResponse(), 0, false, AnchorBindingEvaluationNotResolved},
+		{"graph not projected", nil, notProjected, 1, false, AnchorBindingEvaluationNotResolved},
+		{"window gate", windowed, emptyProbeResponse(), 1, true, AnchorBindingEvaluationWindowGated},
 	} {
 		for _, tc := range []struct {
 			carryOn     bool
@@ -398,7 +407,10 @@ func TestAWithheldLedgerAnchorOnAnExitBeforeResolution(t *testing.T) {
 						exit.before(rig)
 					}
 				}
-				rig, _, two := bindingCarryTurnsWith(t, carryTurnOptions{carryOn: tc.carryOn, edit: expiredBinding, before: before}, exit.response)
+				rig, _, two := bindingCarryTurnsWith(t, carryTurnOptions{carryOn: tc.carryOn, unwindowed: exit.unwindowed, edit: expiredBinding, before: before}, exit.response)
+				if got := two.transitions[0].Evaluation; got != exit.evaluation {
+					t.Fatalf("premise: evaluation = %s, want %s on this exit", got, exit.evaluation)
+				}
 				calls := rig.graph.calls[mark:]
 				if len(calls) != exit.calls {
 					t.Fatalf("premise: resolution calls = %d, want %d on this exit", len(calls), exit.calls)
@@ -414,6 +426,12 @@ func TestAWithheldLedgerAnchorOnAnExitBeforeResolution(t *testing.T) {
 				}
 				if passed := servedLedgerAnchor(two).ID == probeAlpha.CanonicalID; passed != tc.passedOn {
 					t.Fatalf("outgoing ledger anchor = %+v, want passed on=%v", servedLedgerAnchor(two), tc.passedOn)
+				}
+				if tc.carryOn {
+					ledgers := rig.telemetry.confirmedNeedLedgers
+					if line := ledgers[len(ledgers)-1]; line.AnchorDisposition != contractsv1.ContextFabricStructureDispositionVetoedUnresolved {
+						t.Fatalf("ledger line anchor_disposition = %q, want vetoed_unresolved", line.AnchorDisposition)
+					}
 				}
 			})
 		}

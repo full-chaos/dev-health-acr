@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -144,4 +145,48 @@ func TestAGatedTurnThatProvesNothingStillReadsDiscard(t *testing.T) {
 	if ledgers := rig.telemetry.confirmedNeedLedgers; len(ledgers) != 1 || ledgers[0].CaptureSkipReason != CaptureSkipReasonWindowConfirmationGatedDiscard {
 		t.Fatalf("gated turn ledger = %+v, want window_confirmation_gated_discard", ledgers)
 	}
+}
+
+// TestPendingHeldOutranksTheCallerAndTheReceipt: with the pending carry off,
+// a pending parent reads pending_held even when the caller names a hint of
+// its kind or redeems an anchor receipt: the binding's own state decides
+// before either contest, and nothing is injected either way.
+func TestPendingHeldOutranksTheCallerAndTheReceipt(t *testing.T) {
+	toPending := mutateStoredBindings(func(s *PersistedSemanticState) {
+		editBindingMember(s, func(b *AnchorBinding) { b.State = AnchorBindingPendingWindowConfirmation })
+	})
+	t.Run("caller hint", func(t *testing.T) {
+		betaHint := func(r *InvestigationRequest) {
+			r.RequestedScope.SubjectHints = []SubjectHint{{Kind: probeBeta.Kind, ID: probeBeta.CanonicalID, Label: probeBeta.Label, Source: "ask-dev"}}
+		}
+		rig, _, two := bindingCarryTurnsWith(t, carryTurnOptions{carryOn: true, edit: toPending, mutate: betaHint}, emptyProbeResponse())
+		if line := two.transitions[0]; line.Admission != AnchorBindingAdmissionAdmitted || line.BoundAnchorCarry != BoundAnchorCarryPendingHeld {
+			t.Fatalf("admission/carry = %s/%s, want admitted/pending_held", line.Admission, line.BoundAnchorCarry)
+		}
+		if hints := carriedHintsOf(rig); len(hints) != 0 {
+			t.Fatalf("carried hints = %+v, want none", hints)
+		}
+	})
+	t.Run("redeemed anchor receipt", func(t *testing.T) {
+		rig, _, two := bindingCarryTurns(t, true, nil, nil, anchorOfferingResponse())
+		if two.result.StructureNeeds == nil || len(two.result.StructureNeeds.AnchorOptions) != 1 {
+			t.Fatalf("premise: turn two must offer one anchor, got %+v", two.result.StructureNeeds)
+		}
+		toPending(rig.store)
+		rig.engine.anchorVerifier = func(context.Context, string, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+			return true, AnchorVerificationValid
+		}
+		rig.engine.anchorMembershipVerifier = func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+			return true, AnchorVerificationValid
+		}
+		request := continuingNeedTurnAgain(needTurnRequest("request_carry_three", true), needTurnRequest("request_carry_two", true), two.result.ResultID)
+		request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: two.result.ResultID, ReceiptID: two.result.StructureNeeds.AnchorOptions[0].ReceiptID}}
+		three := rig.turn(t, request, emptyProbeResponse())
+		if line := three.transitions[0]; line.Admission != AnchorBindingAdmissionAdmitted || line.BoundAnchorCarry != BoundAnchorCarryPendingHeld {
+			t.Fatalf("admission/carry = %s/%s, want admitted/pending_held", line.Admission, line.BoundAnchorCarry)
+		}
+		if hints := carriedHintsOf(rig); len(hints) != 0 {
+			t.Fatalf("carried hints = %+v, want none", hints)
+		}
+	})
 }
