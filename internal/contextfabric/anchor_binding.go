@@ -1059,23 +1059,7 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 	if t == nil {
 		return AnchorBinding{}, unrecordedAnchorBindingEvent(site, result)
 	}
-	in := anchorBindingInput{
-		From: t.start(), Admission: t.admissionOutcome(), Evaluation: t.evaluation, Frame: t.frame, ModelAnchorKind: t.modelAnchorKind,
-		Receipt: t.receipt, CallerHints: t.callerHints, Bases: t.bases,
-		ResultID: result.ResultID, GraphEpoch: t.epoch, Freshness: t.freshness,
-		SubstitutionGuard: t.substitution,
-	}
-	switch {
-	case t.substitution.Fired():
-		// The guard withheld what the engine proved. The proof is the
-		// decisive resolution itself: restricting it to the saved document,
-		// which commits nothing, would read a contested turn as silence.
-		in.Resolution = t.resolution
-	case t.evaluation == AnchorBindingEvaluationResolved:
-		in.Resolution = servedResolutionProof(t.resolution, result.SubjectResolution)
-	case t.evaluation == AnchorBindingEvaluationWindowGated:
-		in.Resolution = t.resolution
-	}
+	in := t.bindingInput(result)
 	to, proposal := bindAnchor(in)
 	if to.active() && to.OriginResultID == result.ResultID && to.ProvenAt.IsZero() {
 		to.ProvenAt = t.now
@@ -1110,6 +1094,29 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 		event.Agreement, event.DisagreementField = AnchorBindingAgree, AnchorBindingFieldNone
 	}
 	return to, event
+}
+
+// bindingInput is every input the binder reads for this turn, the saved
+// result naming the proof's origin and, on a resolved turn, what it served.
+func (t *anchorBindingTracker) bindingInput(result InvestigationResult) anchorBindingInput {
+	in := anchorBindingInput{
+		From: t.start(), Admission: t.admissionOutcome(), Evaluation: t.evaluation, Frame: t.frame, ModelAnchorKind: t.modelAnchorKind,
+		Receipt: t.receipt, CallerHints: t.callerHints, Bases: t.bases,
+		ResultID: result.ResultID, GraphEpoch: t.epoch, Freshness: t.freshness,
+		SubstitutionGuard: t.substitution,
+	}
+	switch {
+	case t.substitution.Fired():
+		// The guard withheld what the engine proved. The proof is the
+		// decisive resolution itself: restricting it to the saved document,
+		// which commits nothing, would read a contested turn as silence.
+		in.Resolution = t.resolution
+	case t.evaluation == AnchorBindingEvaluationResolved:
+		in.Resolution = servedResolutionProof(t.resolution, result.SubjectResolution)
+	case t.evaluation == AnchorBindingEvaluationWindowGated:
+		in.Resolution = t.resolution
+	}
+	return in
 }
 
 // lineFor is the transition line's pre-entry, proposal and decision: every

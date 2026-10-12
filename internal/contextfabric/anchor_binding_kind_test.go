@@ -87,9 +87,14 @@ func TestApplyBoundAnchorKindDecisionTable(t *testing.T) {
 		b := heldBinding(AnchorBindingBound, anchorRef{Kind: kind, ID: string(kind) + ":carried"})
 		return anchorBindingParent{Status: AnchorBindingParentPresent, Binding: b}
 	}
+	pending := func(kind SubjectKind) anchorBindingParent {
+		b := heldBinding(AnchorBindingPendingWindowConfirmation, anchorRef{Kind: kind, ID: string(kind) + ":pending"})
+		return anchorBindingParent{Status: AnchorBindingParentPresent, Binding: b}
+	}
 	for _, tc := range []struct {
 		name      string
 		on        bool
+		pendingOn bool
 		receipt   *confirmedStructureMember
 		parent    anchorBindingParent
 		admission AnchorBindingAdmission
@@ -99,19 +104,22 @@ func TestApplyBoundAnchorKindDecisionTable(t *testing.T) {
 		wantKind  SubjectKind
 		wantSrc   ScopeAnchorKindSource
 	}{
-		{"off", false, receipt, admitted(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindSwitchOff, SubjectProject, ""},
-		{"nothing names a kind", true, nil, anchorBindingParent{Status: AnchorBindingParentNoReference}, "", SubjectProject, frame, BoundAnchorKindNone, SubjectProject, ""},
-		{"a refused carry names no kind", true, nil, admitted(SubjectRepository), AnchorBindingAdmissionRefusedExpired, SubjectProject, frame, BoundAnchorKindNone, SubjectProject, ""},
-		{"an unevaluated carry names no kind", true, nil, admitted(SubjectRepository), "", SubjectProject, frame, BoundAnchorKindNone, SubjectProject, ""},
-		{"admitted carry agrees", true, nil, admitted(SubjectProject), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindAgrees, SubjectProject, ""},
-		{"admitted carry applied", true, nil, admitted(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindAppliedCarried, SubjectRepository, ScopeAnchorKindAnchorBinding},
-		{"admitted carry over a silent model", true, nil, admitted(SubjectRepository), AnchorBindingAdmissionAdmitted, "", frame, BoundAnchorKindAppliedCarried, SubjectRepository, ScopeAnchorKindAnchorBinding},
-		{"the receipt outranks the carry", true, receipt, admitted(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectRepository, frame, BoundAnchorKindAppliedReceipt, SubjectProject, ScopeAnchorKindAnchorBinding},
-		{"the frame refuses the member kind", true, nil, admitted(SubjectTeam), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindRejectedByFrame, SubjectProject, ""},
-		{"no scoped frame refuses every kind", true, nil, admitted(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, nil, BoundAnchorKindRejectedByFrame, SubjectProject, ""},
+		{"off", false, false, receipt, admitted(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindSwitchOff, SubjectProject, ""},
+		{"nothing names a kind", true, false, nil, anchorBindingParent{Status: AnchorBindingParentNoReference}, "", SubjectProject, frame, BoundAnchorKindNone, SubjectProject, ""},
+		{"a refused carry names no kind", true, false, nil, admitted(SubjectRepository), AnchorBindingAdmissionRefusedExpired, SubjectProject, frame, BoundAnchorKindNone, SubjectProject, ""},
+		{"an unevaluated carry names no kind", true, false, nil, admitted(SubjectRepository), "", SubjectProject, frame, BoundAnchorKindNone, SubjectProject, ""},
+		{"admitted carry agrees", true, false, nil, admitted(SubjectProject), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindAgrees, SubjectProject, ""},
+		{"admitted carry applied", true, false, nil, admitted(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindAppliedCarried, SubjectRepository, ScopeAnchorKindAnchorBinding},
+		{"admitted carry over a silent model", true, false, nil, admitted(SubjectRepository), AnchorBindingAdmissionAdmitted, "", frame, BoundAnchorKindAppliedCarried, SubjectRepository, ScopeAnchorKindAnchorBinding},
+		{"the receipt outranks the carry", true, false, receipt, admitted(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectRepository, frame, BoundAnchorKindAppliedReceipt, SubjectProject, ScopeAnchorKindAnchorBinding},
+		{"the frame refuses the member kind", true, false, nil, admitted(SubjectTeam), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindRejectedByFrame, SubjectProject, ""},
+		{"no scoped frame refuses every kind", true, false, nil, admitted(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, nil, BoundAnchorKindRejectedByFrame, SubjectProject, ""},
+		{"a pending carry names no kind without the pending carry", true, false, nil, pending(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindNone, SubjectProject, ""},
+		{"a pending carry names its kind with the pending carry", true, true, nil, pending(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindAppliedCarried, SubjectRepository, ScopeAnchorKindAnchorBinding},
+		{"a receipt still names its kind beside a held pending binding", true, false, receipt, pending(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectRepository, frame, BoundAnchorKindAppliedReceipt, SubjectProject, ScopeAnchorKindAnchorBinding},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			engine := &Engine{anchorBindingCountEnabled: tc.on}
+			engine := &Engine{anchorBindingCountEnabled: tc.on, anchorBindingPendingCarryEnabled: tc.pendingOn}
 			tracker := &anchorBindingTracker{receipt: tc.receipt, parent: tc.parent, admission: tc.admission}
 			outcome := QuestionFamilyOutcome{Frame: tc.frame, WinningSample: FamilySample{ScopeAnchorKind: tc.model}}
 			got := engine.applyBoundAnchorKind(tracker, outcome)

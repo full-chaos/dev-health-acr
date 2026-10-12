@@ -123,6 +123,12 @@ const (
 	// saying so rather than leaving capture_decision silently
 	// empty.
 	CaptureSkipReasonWindowConfirmationGatedDiscard CaptureSkipReason = "window_confirmation_gated_discard"
+	// CaptureSkipReasonWindowConfirmationGatedPending: the same window gate,
+	// with the pending carry switched on and the anchor binding holding the
+	// offers-only pass's identity proof as pending window confirmation. The
+	// ledger still captures nothing; the binding holds the proof for the
+	// confirming turn to carry.
+	CaptureSkipReasonWindowConfirmationGatedPending CaptureSkipReason = "window_confirmation_gated_pending"
 	// CaptureSkipReasonFrameGateRefused: the frame gate refused this turn
 	// (familyOutcome.Gate.Refuses()) before subject resolution ever ran --
 	// there is no resolution outcome of any kind for the capture check to
@@ -211,6 +217,7 @@ func captureSkipReasons() []CaptureSkipReason {
 	return []CaptureSkipReason{
 		CaptureSkipReasonNotApplicable,
 		CaptureSkipReasonWindowConfirmationGatedDiscard,
+		CaptureSkipReasonWindowConfirmationGatedPending,
 		CaptureSkipReasonFrameGateRefused,
 		CaptureSkipReasonGraphNotProjected,
 		CaptureSkipReasonResolutionError,

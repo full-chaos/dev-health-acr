@@ -434,6 +434,7 @@
           "not_evaluated",
           "none",
           "not_admitted",
+          "pending_held",
           "injected",
           "caller_superseded",
           "receipt_superseded",
@@ -1486,6 +1487,7 @@
         "closed_vocabulary": [
           "not_applicable",
           "window_confirmation_gated_discard",
+          "window_confirmation_gated_pending",
           "frame_gate_refused",
           "graph_not_projected",
           "resolution_error",
