@@ -39,3 +39,32 @@ func TestComposeFailedSynthesisCurrentStateUsesDisplayValues(t *testing.T) {
 		t.Fatalf("CurrentState = %q, want %q", got, want)
 	}
 }
+
+func TestComposeCurrentStateKeepsSameFieldOfDifferentKindsApart(t *testing.T) {
+	t.Parallel()
+	open := "open"
+	subject := SubjectRef{Label: "Team A"}
+	got := composeCurrentState(SynthesisDraft{ClaimedFacts: []ClaimedFact{
+		{ClaimID: "c1", Kind: FactWork, Field: "status", Subject: subject, Value: ScalarValue{String: &open}},
+		{ClaimID: "c2", Kind: FactDeployments, Field: "status", Subject: subject, Value: ScalarValue{String: &open}},
+	}})
+	if want := "Current observed values: status: open (Team A); status: open (Team A)."; got != want {
+		t.Fatalf("CurrentState = %q, want %q", got, want)
+	}
+}
+
+func TestComposeFailedSynthesisCurrentStateRoundsRationaleAndWordsReasonTokens(t *testing.T) {
+	t.Parallel()
+	rationale := "Compounding Risk score is 0.993773746751932 (severity: high)."
+	reason := "rationale_not_in_rule_sentence_form"
+	subject := SubjectRef{Label: "Team A"}
+	got := composeFailedSynthesisCurrentState([]ClaimedFact{
+		{ClaimID: "c1", Kind: FactOperationalDeficiencies, Field: "rationale", Subject: subject, Value: ScalarValue{String: &rationale}},
+		{ClaimID: "c2", Kind: FactOperationalDeficiencies, Field: "rule_basis_unavailable_reason", Subject: subject, Value: ScalarValue{String: &reason}},
+	})
+	for _, raw := range []string{"0.9937", "rationale_not_in_rule_sentence_form"} {
+		if strings.Contains(got, raw) {
+			t.Fatalf("CurrentState %q still carries %q", got, raw)
+		}
+	}
+}

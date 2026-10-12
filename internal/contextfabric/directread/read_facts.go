@@ -1267,9 +1267,9 @@ func noteUnitsBudget(rows []CoverageRow, dropped int, noProgress bool) {
 	if dropped <= 0 {
 		return
 	}
-	note := fmt.Sprintf("units_cut_by_max_bytes %d: next_cursor resumes after the last row served", dropped)
+	note := fmt.Sprintf("work units cut by the byte limit: %d; next_cursor resumes after the last row served", dropped)
 	if noProgress {
-		note = fmt.Sprintf("units_cut_by_max_bytes %d: no unit row fits max_bytes, so no next_cursor is served; raise max_bytes", dropped)
+		note = fmt.Sprintf("work units cut by the byte limit: %d; no unit row fits max_bytes, so no next_cursor is served; raise max_bytes", dropped)
 	}
 	for i := range rows {
 		if rows[i].Kind != string(contextfabric.FactInvestment) {

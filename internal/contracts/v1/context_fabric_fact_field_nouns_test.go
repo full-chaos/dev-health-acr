@@ -26,11 +26,24 @@ func TestContextFabricDisplayNumberNeverPrintsNonFiniteOrNegativeZero(t *testing
 		"negative inf":            {math.Inf(-1), ContextFabricDisplayNumberUnavailable},
 		"negative zero":           {negZero, "0"},
 		"rounds to negative zero": {-0.001, "0.00"},
-		"large whole":             {1e20, "100000000000000000000.00"},
+		"large whole":             {1e20, "100000000000000000000"},
 	} {
 		if got := ContextFabricDisplayNumber(tc.in); got != tc.want {
 			t.Errorf("%s: ContextFabricDisplayNumber(%v) = %q, want %q", name, tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestContextFabricDisplayStringKeepsStructuredTokensOutOfProse(t *testing.T) {
+	t.Parallel()
+	if got := ContextFabricDisplayString("rationale", "Compounding Risk score is 0.993773746751932 (severity: high)."); got != "Compounding Risk score is 0.99 (severity: high)." {
+		t.Errorf("rationale = %q", got)
+	}
+	if got := ContextFabricDisplayString("rule_basis_unavailable_reason", "rationale_not_in_rule_sentence_form"); got != "rationale not in rule sentence form" {
+		t.Errorf("reason = %q", got)
+	}
+	if got := ContextFabricDisplayString("rationale", "Window 2026-10-01 to 2026-10-08 had 12 items."); got != "Window 2026-10-01 to 2026-10-08 had 12 items." {
+		t.Errorf("untouched rationale = %q", got)
 	}
 }
 

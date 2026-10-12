@@ -2,6 +2,7 @@ package v1
 
 import (
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -40,7 +41,7 @@ func ContextFabricDisplayNumber(v float64) string {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return ContextFabricDisplayNumberUnavailable
 	}
-	if v == math.Trunc(v) && math.Abs(v) < 1e15 {
+	if v == math.Trunc(v) {
 		return strconv.FormatFloat(v+0, 'f', 0, 64)
 	}
 	text := strconv.FormatFloat(v, 'f', 2, 64)
@@ -51,12 +52,27 @@ func ContextFabricDisplayNumber(v float64) string {
 }
 
 // ContextFabricDisplayString renders a string fact value for prose: a known
-// attribution basis token reads as its phrase; any other value stays as is.
+// attribution basis token reads as its phrase, a rationale shows its long
+// decimals at display precision, a reason token reads as words; any other
+// value stays as is.
 func ContextFabricDisplayString(field, value string) string {
-	if field == "attribution_basis" {
+	switch {
+	case field == "attribution_basis":
 		if phrase, ok := contextFabricAttributionBasisPhrases[value]; ok {
 			return phrase
 		}
+	case field == "rationale":
+		return contextFabricLongDecimal.ReplaceAllStringFunc(value, func(match string) string {
+			number, err := strconv.ParseFloat(match, 64)
+			if err != nil {
+				return match
+			}
+			return ContextFabricDisplayNumber(number)
+		})
+	case strings.HasSuffix(field, "_reason"):
+		return strings.ReplaceAll(value, "_", " ")
 	}
 	return value
 }
+
+var contextFabricLongDecimal = regexp.MustCompile(`\b\d+\.\d{3,}\b`)

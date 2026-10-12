@@ -3114,10 +3114,11 @@ func claimedFactSentences(claims []ClaimedFact) []string {
 	heads := make([]string, 0, len(sorted))
 	for _, claim := range sorted {
 		head := fmt.Sprintf("%s: %s", contractsv1.ContextFabricFactFieldNoun(claim.Field), scalarDisplayString(claim.Field, claim.Value))
-		i, ok := index[head]
+		key := string(claim.Kind) + "|" + head
+		i, ok := index[key]
 		if !ok {
 			i = len(heads)
-			index[head] = i
+			index[key] = i
 			heads = append(heads, head)
 			subjects = append(subjects, nil)
 		}

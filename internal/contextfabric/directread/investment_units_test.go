@@ -369,8 +369,8 @@ func TestInvestmentUnitsByteBudgetKeepsTheCursorHonest(t *testing.T) {
 	for _, row := range response.Coverage {
 		reason = row.Reason
 	}
-	if !strings.Contains(reason, "units_cut_by_max_bytes") {
-		t.Errorf("coverage reason = %q, want units_cut_by_max_bytes", reason)
+	if !strings.Contains(reason, "work units cut by the byte limit") {
+		t.Errorf("coverage reason = %q, want the byte-limit note", reason)
 	}
 }
 
