@@ -38,7 +38,7 @@ func interpretPromptMeta(system, serviceVersion string) mcpsdk.Meta {
 // only with investigate_question, so a credential that cannot investigate
 // cannot read the prompt.
 func registerInterpretPrompt(server *mcpsdk.Server, cfg *ProcessConfig, caller *CallerContext, serviceVersion string) {
-	if !hostedToolEnabled(caller, toolInvestigateQuestion) {
+	if !investigateSurface(caller) {
 		return
 	}
 	meta := interpretPromptMeta(interpretprompt.System(), serviceVersion)
@@ -55,7 +55,7 @@ func registerInterpretPrompt(server *mcpsdk.Server, cfg *ProcessConfig, caller *
 		}},
 		Meta: meta,
 	}, func(ctx context.Context, req *mcpsdk.GetPromptRequest) (*mcpsdk.GetPromptResult, error) {
-		if ok, reason := liveToolEnabled(ctx, caller, toolInvestigateQuestion); !ok {
+		if ok, reason := liveToolEnabled(ctx, caller, toolInvestigateQuestion, toolInvestigateWithInterpretation); !ok {
 			logSurfaceRefusal(ctx, cfg, "prompt", promptInterpretQuestion, reason)
 			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "unknown prompt"}
 		}
