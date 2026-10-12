@@ -3,6 +3,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,7 +140,8 @@ func seedIssueLink(t *testing.T, ctx context.Context, direct interface {
 	// A link of record is read only with the pull request it names, so the
 	// pull request row is seeded with its link.
 	for _, statement := range devhealthschema.DDL("git_pull_requests") {
-		if err := direct.Exec(ctx, statement); err != nil {
+		// The fixtures that already created the table make this a no-op.
+		if err := direct.Exec(ctx, statement); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("create git_pull_requests: %v", err)
 		}
 	}
