@@ -9,6 +9,7 @@ import (
 
 	"github.com/xeipuuv/gojsonschema"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
@@ -190,6 +191,8 @@ func TestChaos7074SchemaPropertiesMatchGoWireKeys(t *testing.T) {
 		statuses = append(statuses, string(status))
 	}
 	sort.Strings(statuses)
+	workItemStatuses := contextfabric.WorkItemStatusVocabulary()
+	sort.Strings(workItemStatuses)
 	enums := []struct {
 		name string
 		node map[string]any
@@ -199,6 +202,8 @@ func TestChaos7074SchemaPropertiesMatchGoWireKeys(t *testing.T) {
 		{"edge type", props(edge, "type"), RelationshipTypeVocabulary()},
 		{"link_tier", props(props(edge, "provenance"), "link_tier"), linkTierVocabulary},
 		{"status", props(response, "status"), statuses},
+		{"edge from status", props(props(edge, "from"), "status"), workItemStatuses},
+		{"edge to status", props(props(edge, "to"), "status"), workItemStatuses},
 		{"truncated_by", props(response, "truncated_by"), []string{RelationshipsTruncatedFrontierCap, RelationshipsTruncatedScanCap}},
 	}
 	for _, tc := range enums {

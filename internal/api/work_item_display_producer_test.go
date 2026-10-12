@@ -229,7 +229,7 @@ func displayProducerTransports(t *testing.T, f *freshTupleProducerFixture, store
 			want := *fact.Value.String
 			found := false
 			for _, line := range strings.Split(response.RenderedMarkdown.Markdown, "\n") {
-				if strings.HasPrefix(line, "- Work item:") && strings.Contains(line, fact.Subject.Label) && strings.Contains(line, want) {
+				if strings.HasPrefix(line, "> - Work item:") && strings.Contains(line, fact.Subject.Label) && strings.Contains(line, want) {
 					found = true
 				}
 			}

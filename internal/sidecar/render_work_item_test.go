@@ -59,6 +59,7 @@ func TestWorkItemCountQualificationAtomic(t *testing.T) {
 					t.Fatalf("budget=%d length=%d", budget, len(got))
 				}
 				for _, line := range strings.Split(got, "\n") {
+					line = strings.TrimPrefix(line, "> ")
 					if strings.Contains(line, "work-item count:") || strings.Contains(line, "Work-item count:") {
 						if line != want {
 							t.Fatalf("split count at budget%d: %q", budget, line)
@@ -137,11 +138,11 @@ func TestWorkItemMarkdownMemberStatusJoin(t *testing.T) {
 	for i, want := range []string{"waiting", "No status evidence in this answer", "unknown"} {
 		var row string
 		for _, line := range strings.Split(got, "\n") {
-			if strings.HasPrefix(line, "- Work item:") && strings.Contains(line, fmt.Sprintf("title-%d", i)) {
+			if strings.HasPrefix(line, "> - Work item:") && strings.Contains(line, fmt.Sprintf("title-%d", i)) {
 				row = line
 			}
 		}
-		if !strings.Contains(row, want) || strings.Contains(row, "wrong") || !strings.Contains(row, untrustedDataHeader) {
+		if !strings.Contains(row, want) || strings.Contains(row, "wrong") {
 			t.Errorf("member%d wrong row: %s", i, row)
 		}
 		if strings.Count(got, fmt.Sprintf("title-%d", i)) != 1 && i != 0 {

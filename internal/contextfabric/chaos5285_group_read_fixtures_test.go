@@ -331,7 +331,7 @@ func groupReadEngineFixtureConfigured(t *testing.T, telemetry EngineTelemetry, f
 			groupReadSynthesisCaptureMu.Unlock()
 			// And PER PASS, so a retry pin can tell the first synthesis's
 			// input from the one the served document was built from.
-			pass := groupReadSynthesisPass{Facts: append([]CanonicalFact(nil), input.Facts.Facts...)}
+			pass := groupReadSynthesisPass{Facts: append([]CanonicalFact(nil), input.Facts.Facts...), Graph: input.Graph}
 			if input.Graph.Cohort != nil {
 				for _, member := range input.Graph.Cohort.Members {
 					pass.Members = append(pass.Members, member.Subject)
@@ -447,6 +447,8 @@ type groupReadSynthesisPass struct {
 	Facts   []CanonicalFact
 	Members []SubjectRef
 	Groups  []SubjectRef
+	// Graph is the graph input the pass was synthesized from.
+	Graph GraphContext
 }
 
 // groupReadSynthesisPasses records every synthesis call's input, in order.

@@ -168,9 +168,15 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || dailyOmitted > 0
 	}
 
+	var teamOwned map[string][]teamOwnedRepo
 	teamIDs, teamBySubject, teamRejected := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectTeam), teamPrefix)
 	rejectedCount += teamRejected
 	if len(teamIDs) > 0 {
+		owned, ownedErr := teamOwnedRepositories(ctx, p.facts.client, orgID, teamIDs, timeBound)
+		if ownedErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query team owned repositories", ownedErr)
+		}
+		teamOwned = owned
 		rowCount, dailyOmitted, scanErr := p.readScope(ctx, orgID, "team", teamIDs, teamBySubject, contractsv1.ContextFabricEvidenceEntityTeam, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team health", scanErr)
@@ -192,6 +198,7 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	// read that came back empty says something more specific than "no rows".
 	retentionReason = explainTeamScopedProjectAbsence(timeBound, state, retentionReason, query.Subjects)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
+	applyTeamsOwningNothing(&result, len(teamIDs), teamsOwningNothingWithoutData(teamIDs, teamBySubject, teamOwned, facts, nil))
 	return result, nil
 }
 
