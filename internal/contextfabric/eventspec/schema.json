@@ -4097,6 +4097,69 @@
     ]
   },
   {
+    "id": "contextfabric.pull_request_status_filter",
+    "msg": "context_fabric: pull request status filter",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame filters pull request members by a status",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "applied",
+          "read_failed"
+        ]
+      },
+      {
+        "key": "status",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "open",
+          "merged",
+          "closed",
+          "awaiting_review",
+          "changes_requested",
+          "approved"
+        ]
+      },
+      {
+        "key": "candidates",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when outcome=applied"
+      },
+      {
+        "key": "kept",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when outcome=applied"
+      },
+      {
+        "key": "error",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when outcome=read_failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.remembered_window_axis",
     "msg": "context fabric remembered window axis",
     "level": "info",

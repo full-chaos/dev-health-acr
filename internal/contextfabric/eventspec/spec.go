@@ -2959,6 +2959,36 @@ var TeamAnchorWalk = Event{
 	},
 }
 
+// pullRequestStatusFilterOutcome is the closed vocabulary of
+// PullRequestStatusFilter's "outcome" field -- see
+// falkorgraph.PullRequestStatusFilterOutcomeVocabulary.
+var pullRequestStatusFilterOutcome = []string{"applied", "read_failed"}
+
+// PullRequestStatusFilter is the Info line of one DiscoverContext call whose
+// frame filters pull request members by a status of the closed set
+// (contextfabric.PullRequestStatusVocabulary): candidates is how many pull
+// requests the member pool held and kept how many hold the status now.
+// outcome=read_failed carries the error and no count.
+//
+// The line carries counts and closed values only, never a subject name or id.
+var PullRequestStatusFilter = Event{
+	ID:                 "contextfabric.pull_request_status_filter",
+	Msg:                "context_fabric: pull request status filter",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame filters pull request members by a status",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: pullRequestStatusFilterOutcome},
+		{Key: "status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"open", "merged", "closed", "awaiting_review", "changes_requested", "approved"}},
+		{Key: "candidates", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when outcome=applied"},
+		{Key: "kept", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when outcome=applied"},
+		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // OwnershipRouting is the Info line of one DiscoverContext call that asks for
 // the team members of a named anchor: whether the ownership read (the teams
 // whose ownership records name the repository) ran, and what it found.
@@ -3120,6 +3150,7 @@ var All = []Event{
 	RepositoryWorkItemWalk,
 	OwnershipRouting,
 	TeamAnchorWalk,
+	PullRequestStatusFilter,
 	AnchorBindingTransition,
 	MCPHostedContextScope,
 	MCPHTTPRequest,

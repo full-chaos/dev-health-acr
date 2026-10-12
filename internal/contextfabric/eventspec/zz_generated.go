@@ -36,6 +36,7 @@ var ByID = map[string]Event{
 	"contextfabric.operation_read":                   OperationRead,
 	"contextfabric.ownership_routing":                OwnershipRouting,
 	"contextfabric.project_deployment_walk":          ProjectDeploymentWalk,
+	"contextfabric.pull_request_status_filter":       PullRequestStatusFilter,
 	"contextfabric.remembered_window_axis":           RememberedWindowAxis,
 	"contextfabric.repository_work_item_walk":        RepositoryWorkItemWalk,
 	"contextfabric.requirement_outcome_transition":   RequirementOutcomeTransition,
@@ -2220,6 +2221,65 @@ func (f ProjectDeploymentWalkFields) SlogArgs() []any {
 		"members", f.Members,
 		"denied", f.Denied,
 		"truncated", f.Truncated,
+		"error", contextfabric.SanitizeLogAttr(f.Error),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// PullRequestStatusFilterFields is contextfabric.pull_request_status_filter's generated typed construction interface
+// (CHAOS-5516): one Go field per Field PullRequestStatusFilter.Fields declares in spec.go.
+type PullRequestStatusFilterFields struct {
+	OrgID      string
+	Outcome    string
+	Status     string
+	Candidates int
+	Kept       int
+	Error      string
+	RequestID  string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every PullRequestStatusFilterFields uniformly, set ONLY by NewPullRequestStatusFilterFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewPullRequestStatusFilterFields is the generated constructor for PullRequestStatusFilterFields -- every
+// field PullRequestStatusFilter.Fields declares is a required parameter.
+func NewPullRequestStatusFilterFields(orgID string, outcome string, status string, candidates int, kept int, error string, requestID string) PullRequestStatusFilterFields {
+	return PullRequestStatusFilterFields{
+		OrgID:       orgID,
+		Outcome:     outcome,
+		Status:      status,
+		Candidates:  candidates,
+		Kept:        kept,
+		Error:       error,
+		RequestID:   requestID,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewPullRequestStatusFilterFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f PullRequestStatusFilterFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns PullRequestStatusFilter's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f PullRequestStatusFilterFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"status", contextfabric.SanitizeLogAttr(f.Status),
+		"candidates", f.Candidates,
+		"kept", f.Kept,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}

@@ -1121,8 +1121,10 @@ func memberStatusWordText(value string) bool {
 // on a scoped set of memberKind. Empty is the valid absence. A value needs a
 // recognized qualifier. For work_item members with a status qualifier the
 // value is one of WorkItemStatusVocabulary, the closed set Dev Health writes
-// into work_items.status; acr holds no synonyms, so the interpretation
-// prompt maps the question's word onto the set.
+// into work_items.status, and for pull_request members one of
+// PullRequestStatusVocabulary, the set the pull request member read applies;
+// acr holds no synonyms, so the interpretation prompt maps the question's word
+// onto the set.
 func ValidMemberQualifierValue(memberKind SubjectKind, qualifier MemberQualifier, value string) bool {
 	if value == "" {
 		return true
@@ -1135,6 +1137,9 @@ func ValidMemberQualifierValue(memberKind SubjectKind, qualifier MemberQualifier
 	}
 	if memberKind == SubjectWorkItem && qualifier == MemberQualifierStatus {
 		return InWorkItemStatusVocabulary(value)
+	}
+	if memberKind == SubjectPullRequest && qualifier == MemberQualifierStatus {
+		return InPullRequestStatusVocabulary(value)
 	}
 	if qualifier == MemberQualifierStatus {
 		return memberStatusWordText(value)
