@@ -19,7 +19,11 @@ const (
 	// input the service's own model is given (UserPayload); bump it on every
 	// change to what that model is told. The client input (ClientPayload) is a
 	// documented projection of that input, pinned by its own input_sha256.
-	PromptVersion = "context-fabric-synthesis.v19"
+	//
+	// v19 -> v20: the prompt names the compounding-risk deficiency rule's
+	// basis fields and the latest-value fields, so the rule-time score is
+	// never stated as the team's current risk.
+	PromptVersion = "context-fabric-synthesis.v20"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )
