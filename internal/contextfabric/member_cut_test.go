@@ -1,0 +1,276 @@
+package contextfabric
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// memberCutExtraGoals adds goals to the fixture's frame; a row that needs a
+// derived read requirement sets it for its own duration.
+var memberCutExtraGoals []InvestigationGoal
+
+// memberCutGraphDetails are coverage details the fixture's graph reader mints
+// and its synthesizer carries into the draft, as the production synthesizer
+// merges the graph's coverage into the result.
+var memberCutGraphDetails []CoverageDetail
+
+// memberCutDegradedReasons pairs each degrading detail with its reason, as the
+// graph reader mints them.
+func memberCutDegradedReasons() []string {
+	reasons := []string{}
+	for _, detail := range memberCutGraphDetails {
+		if detail.Degrading {
+			reasons = append(reasons, detail.Raw)
+		}
+	}
+	return reasons
+}
+
+const (
+	memberCutPopulation = 60
+	memberCutCallerCap  = 50
+	memberCutGaps       = 21
+)
+
+// memberCutEngine is the flat owned-projects listing with a synthesizer that
+// writes `gaps` readiness findings and cites `cited` members by a claim. The
+// engine is composed with the given retry reserve: zero is the deployment the
+// retry is declined on.
+func memberCutEngine(t *testing.T, gaps int, cited []int, reserve time.Duration, telemetry *recordingTelemetry) *Engine {
+	t.Helper()
+	return memberCutEngineAtCeiling(t, gaps, cited, reserve, 0, memberCutPopulation, telemetry)
+}
+
+func memberCutEngineAtCeiling(t *testing.T, gaps int, cited []int, reserve time.Duration, maxBytes int64, population int, telemetry *recordingTelemetry) *Engine {
+	return memberCutEngineNaming(t, gaps, cited, reserve, maxBytes, population, telemetry, nil, registryDeriver{})
+}
+
+// memberCutEngineNaming is the fixture with a hook that writes the draft's
+// current_state from the cohort it was given, so a row can have the prose name
+// a member that no claim, driver or finding does.
+func memberCutEngineNaming(t *testing.T, gaps int, cited []int, reserve time.Duration, maxBytes int64, population int, telemetry *recordingTelemetry, currentState func(*Cohort) string, deriver RequirementDeriver) *Engine {
+	t.Helper()
+	frame := QuestionFrame{
+		Goals: append([]InvestigationGoal{GoalCountOrAggregate}, memberCutExtraGoals...),
+		SubjectExpression: SubjectExpression{
+			Kind:   SubjectExpressionChildrenOfScope,
+			Scoped: &ScopedSetExpression{AnchorTerms: []string{"Platform"}, MemberKind: SubjectProject},
+		},
+		Temporal: TemporalIntentCurrent,
+		Version:  QuestionFrameVersion,
+	}
+	validated := ValidateFrame(frame, nil, ShapeDiscoveredCohort)
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: familyInterpreter{
+			interpreted: InterpretedQuestion{Shape: ShapeDiscoveredCohort, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactStatus}}},
+			outcome:     QuestionFamilyOutcome{Frame: &validated.Frame, Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel},
+		},
+		Graph: ownedProjectsGraph{&capturingGraphReader{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+			context: GraphContext{Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: memberCutDegradedReasons(), Details: slices.Clone(memberCutGraphDetails)}},
+		}, population},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{}}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+			claims := []ClaimedFact{}
+			refs := []string{}
+			if gaps > 0 {
+				refs = []string{"evidence_gap_01"}
+			}
+			// The result-level list is the union of what the answer was
+			// given, members' refs included, as a synthesis writes it.
+			if input.Graph.Cohort != nil {
+				for _, member := range input.Graph.Cohort.Members {
+					refs = append(refs, member.EvidenceRefIDs...)
+				}
+			}
+			findings := []Finding{}
+			for i := 0; i < gaps; i++ {
+				finding := Finding{FindingID: fmt.Sprintf("finding_gap_%02d", i), Kind: "relationship", Summary: "A readiness gap appears open.", EvidenceRefIDs: []string{"evidence_gap_01"}}
+				if i < len(cited) && input.Graph.Cohort != nil && cited[i] < len(input.Graph.Cohort.Members) {
+					finding.Subjects = []SubjectRef{input.Graph.Cohort.Members[cited[i]].Subject}
+				}
+				if i == 0 && input.Graph.Cohort != nil && len(input.Graph.Cohort.Members) > 0 {
+					// A kept finding cites the last member's ref although it
+					// names no subject: the ref stays when that member goes.
+					last := input.Graph.Cohort.Members[len(input.Graph.Cohort.Members)-1]
+					finding.EvidenceRefIDs = append(finding.EvidenceRefIDs, last.EvidenceRefIDs...)
+				}
+				findings = append(findings, finding)
+			}
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: currentStateFor(currentState, input.Graph.Cohort),
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{},
+				ReadinessGaps: findings, Paths: []RelationshipPath{}, Conflicts: []Finding{},
+				Limitations: []string{}, EvidenceRefIDs: refs, ClaimedFacts: claims,
+				Coverage: func() Coverage {
+					merged := input.Facts.Coverage
+					merged.Details = slices.Clone(input.Graph.Coverage.Details)
+					merged.DegradedReasons = slices.Clone(input.Graph.Coverage.DegradedReasons)
+					return merged
+				}(), DeterministicAnswer: "Fine, based on available context.", Warnings: []string{},
+				Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"},
+			}, nil
+		}),
+		Requirements: deriver,
+		Telemetry:    telemetry,
+	}, func() EngineOptions {
+		options := budgetStageOptions(serverItemCeiling, reserve)
+		options.MaxSerializedBytes = maxBytes
+		return options
+	}())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return engine
+}
+
+func investigateMemberCut(t *testing.T, engine *Engine) (InvestigationResult, error) {
+	t.Helper()
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.Options.MaxCohortMembers = memberCutCallerCap
+	return engine.Investigate(context.Background(), storage.Principal{OrgID: "org_listing"}, request)
+}
+
+// The Members array stays in pool order and says nothing of attention, so a
+// ranked list is cut by AttentionRank, the highest numbers first, never from
+// the end of the array. The fixture is built so the end of the array and the
+// worst attention differ; the test asserts they do, so it cannot pass by
+// coincidence of the two orders.
+func TestARankedListIsCutByAttentionRankNotByPoolPosition(t *testing.T) {
+	attention := []int{3, 1, 6, 2, 5, 4}
+	members := make([]CohortMember, 0, len(attention))
+	for index, rank := range attention {
+		id := fmt.Sprintf("project_%03d", index)
+		members = append(members, CohortMember{
+			Subject: SubjectRef{Kind: SubjectProject, CanonicalID: id, Label: id}, Rank: index + 1,
+			InclusionReasons: []string{"owned"}, RankingComputed: true, AttentionRank: rank,
+		})
+	}
+	// project_005 (attention 4) is named by a finding and is never cut.
+	result := InvestigationResult{
+		Cohort:        &Cohort{Kind: SubjectProject, Members: members, Rationale: "owned", Complete: true, ScoreMeaning: contractsv1.ContextFabricCohortScoreMeaningAttention},
+		ReadinessGaps: []Finding{{FindingID: "finding_gap_00", Kind: "relationship", Summary: "A gap.", Subjects: []SubjectRef{members[5].Subject}, EvidenceRefIDs: []string{"evidence_gap_01"}}},
+	}
+	basis, order, ok := memberCutOrder(result, nil)
+	if !ok || basis != contractsv1.ContextFabricNarrowingBasisAttentionRank {
+		t.Fatalf("basis %q ok=%v, want attention_rank", basis, ok)
+	}
+	const cut = 2
+	poolTail := []string{"project_004", "project_003"}
+	cutIDs := []string{}
+	for _, index := range order[:cut] {
+		cutIDs = append(cutIDs, members[index].Subject.CanonicalID)
+	}
+	if cutIDs[0] == poolTail[0] || cutIDs[1] == poolTail[1] {
+		t.Fatalf("fixture does not discriminate: cut %v equals the pool tail %v", cutIDs, poolTail)
+	}
+	if cutIDs[0] != "project_002" || cutIDs[1] != "project_004" {
+		t.Fatalf("cut %v, want the two worst attention ranks, project_002 (6) then project_004 (5)", cutIDs)
+	}
+}
+
+func currentStateFor(hook func(*Cohort) string, cohort *Cohort) string {
+	if hook == nil {
+		return "Nominal."
+	}
+	return hook(cohort)
+}
+
+// A one- or two-character label is matched as a whole word: "AI" in "the AI
+// team" keeps its member listed, and "said" does not.
+func TestAShortLabelIsMatchedAsAWholeWordInTheDraftProse(t *testing.T) {
+	member := SubjectRef{Kind: SubjectProject, CanonicalID: "project_001", Label: "AI"}
+	if !namedInProse(member, draftProse(InvestigationResult{CurrentState: "The AI team is stretched."})) {
+		t.Fatal("a one-word mention of the two-character label is not matched")
+	}
+	if namedInProse(member, draftProse(InvestigationResult{CurrentState: "Reviewers said it is fine."})) {
+		t.Fatal("the label matched inside another word")
+	}
+	if !namedInProse(SubjectRef{Kind: SubjectProject, CanonicalID: "x", Label: "A"}, draftProse(InvestigationResult{CurrentState: "Team A is late."})) {
+		t.Fatal("a one-character label mentioned as a word is not matched")
+	}
+}
+
+// An items overrun with the retry unavailable is still refused (the served cut
+// is deferred) and the trace says what the answer could have left out: how many
+// members are listed, how many nothing names, and the order that would apply.
+func TestAnItemsRefusalWithTheRetryUnavailableRecordsTheMemberCutAssessment(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	_, err := investigateMemberCut(t, memberCutEngine(t, memberCutGaps, nil, 0, telemetry))
+	var refusal AnswerBudgetRefusal
+	if !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunItems {
+		t.Fatalf("err = %v, want the items refusal (the served cut is deferred)", err)
+	}
+	if len(telemetry.memberCuts) != 1 {
+		t.Fatalf("member-cut events = %d, want 1: %+v", len(telemetry.memberCuts), telemetry.memberCuts)
+	}
+	event := telemetry.memberCuts[0]
+	if event.Declined != MemberCutServedCutDeferred || event.Listed != memberCutCallerCap || event.Uncited != memberCutCallerCap ||
+		event.Basis != contractsv1.ContextFabricNarrowingBasisAttentionRank || event.ItemsBefore <= event.MaxItems {
+		t.Fatalf("member-cut event = %+v, want deferred, listed %d, uncited %d, attention_rank, over the item budget", event, memberCutCallerCap, memberCutCallerCap)
+	}
+}
+
+// A member the draft's prose names is not counted as cuttable: the assessment
+// excludes it, and the control without the prose counts every member.
+func TestAMemberNamedOnlyInTheDraftProseIsNotCountedAsCuttable(t *testing.T) {
+	named := fmt.Sprintf("project_%03d", memberCutCallerCap-1)
+	telemetry := &recordingTelemetry{}
+	engine := memberCutEngineNaming(t, memberCutGaps, nil, 0, 0, memberCutPopulation, telemetry, func(cohort *Cohort) string {
+		return "The review queue on " + strings.ToUpper(named) + " is the one to watch."
+	}, registryDeriver{})
+	if _, err := investigateMemberCut(t, engine); err == nil {
+		t.Fatal("want the items refusal")
+	}
+	if len(telemetry.memberCuts) != 1 || telemetry.memberCuts[0].Uncited != memberCutCallerCap-1 {
+		t.Fatalf("uncited = %+v, want %d: the member the prose names is not cuttable", telemetry.memberCuts, memberCutCallerCap-1)
+	}
+}
+
+// A member the answer cites (a finding names it as a subject) is not cuttable.
+func TestAMemberAFindingNamesIsNotCountedAsCuttable(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	last := memberCutCallerCap - 1
+	engine := memberCutEngine(t, memberCutGaps, []int{last, last - 1}, 0, telemetry)
+	if _, err := investigateMemberCut(t, engine); err == nil {
+		t.Fatal("want the items refusal")
+	}
+	if len(telemetry.memberCuts) != 1 || telemetry.memberCuts[0].Uncited != memberCutCallerCap-2 {
+		t.Fatalf("uncited = %+v, want %d", telemetry.memberCuts, memberCutCallerCap-2)
+	}
+}
+
+// An unranked list sorted by canonical id has a stated order (the end of the
+// list) and the assessment says so.
+func TestAnUnrankedSortedListIsOrderedFromTheEnd(t *testing.T) {
+	members := make([]CohortMember, 0, 6)
+	for index := 0; index < 6; index++ {
+		id := fmt.Sprintf("project_%03d", index)
+		members = append(members, CohortMember{
+			Subject: SubjectRef{Kind: SubjectProject, CanonicalID: id, Label: id}, Rank: index + 1,
+			InclusionReasons: []string{"owned"},
+		})
+	}
+	result := InvestigationResult{
+		Cohort:        &Cohort{Kind: SubjectProject, Members: members, Rationale: "owned", Complete: true},
+		ReadinessGaps: []Finding{{FindingID: "finding_gap_00", Kind: "relationship", Summary: "A gap.", Subjects: []SubjectRef{members[5].Subject}, EvidenceRefIDs: []string{"evidence_gap_01"}}},
+	}
+	basis, order, ok := memberCutOrder(result, nil)
+	if !ok || basis != contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
+		t.Fatalf("basis %q ok=%v, want canonical_id_lexical", basis, ok)
+	}
+	if got := fmt.Sprint(order[:2]); got != fmt.Sprint([]int{4, 3}) {
+		t.Fatalf("order %v, want [4 3] (the cited member 5 is not cuttable)", order[:2])
+	}
+}

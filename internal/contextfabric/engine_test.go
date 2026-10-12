@@ -495,6 +495,7 @@ type recordingTelemetry struct {
 	factRowTruncations         []FactRowTruncationEvent
 	claimDepthNarrowings       []ClaimDepthNarrowingEvent
 	pathDrops                  []PathDropEvent
+	memberCuts                 []MemberCutEvent
 	membershipCardinalities    []MembershipCardinalityEvent
 	cohortNarrowingDisclosures []CohortNarrowingDisclosureEvent
 	countPopulationScopes      []CountPopulationScopeEvent
@@ -913,6 +914,10 @@ func (r *recordingTelemetry) RecordFactRowTruncation(_ context.Context, _ storag
 
 func (r *recordingTelemetry) RecordClaimDepthNarrowing(_ context.Context, _ storage.Principal, event ClaimDepthNarrowingEvent) {
 	r.claimDepthNarrowings = append(r.claimDepthNarrowings, event)
+}
+
+func (r *recordingTelemetry) RecordMemberCut(_ context.Context, _ storage.Principal, event MemberCutEvent) {
+	r.memberCuts = append(r.memberCuts, event)
 }
 
 func (r *recordingTelemetry) RecordPathDrop(_ context.Context, _ storage.Principal, event PathDropEvent) {

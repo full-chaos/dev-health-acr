@@ -464,6 +464,10 @@ type PlanTelemetry interface {
 	// lever: bytes before/after, the minimum answer's bytes, paths
 	// before/after, cited paths dropped, the row cap, and served or why not.
 	RecordPathDrop(ctx context.Context, principal storage.Principal, event PathDropEvent)
+	// RecordMemberCut reports ONE application of the member-cut lever: items
+	// before/after, members listed/kept, the uncited members it could cut, the
+	// order it chose, and served or why not.
+	RecordMemberCut(ctx context.Context, principal storage.Principal, event MemberCutEvent)
 
 	// RecordMembershipCardinality reports the `membership_cardinality`
 	// server step's own result for one served answer: what was counted, how

@@ -66,6 +66,12 @@ import (
 // Investigate's scope. It is a struct rather than a parameter list so that
 // adding an input is a visible change to this stage's contract.
 type synthesisAssemblyParams struct {
+	// Draft, when set, is a synthesizer draft a previous pass of this
+	// investigation produced: the pass assembles it over its own cohort and
+	// calls no model. It is the member cut's seam -- a cut produces a new
+	// cohort and every cohort-derived field comes from one assembly over it,
+	// never from patching the document a wider cohort produced.
+	Draft *InvestigationResult
 	// ReadRequirements is the requirement list the fact read ran with: what
 	// the planner read for this question. Read-only; the status floor's
 	// asked-kind set includes it.
@@ -349,7 +355,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	})
 	var result InvestigationResult
 	var err error
-	if clientSynthesisRequested(request) {
+	if params.Draft != nil {
+		result = copyResultDeep(*params.Draft)
+	} else if clientSynthesisRequested(request) {
 		result, pending.ClientSynthesisInput, pending.ClientSynthesisMeasure, err = e.runClientSynthesis(ctx, principal, synthesisInput)
 		pending.SuppliedSynthesisServed = err == nil && request.SuppliedSynthesis != nil
 	} else {
@@ -373,6 +381,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	}
 	if params.WorkItemCensus != nil && !clientSynthesisRequested(request) {
 		pending.WorkItemDegrade = newWorkItemDegradeBasis(synthesisInput, result)
+	}
+	if params.Draft == nil && params.WorkItemCensus == nil && !clientSynthesisRequested(request) {
+		// The raw draft, before assembly writes to it, kept for the member cut.
+		draft := copyResultDeep(result)
+		pending.Draft = &draft
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()
@@ -753,6 +766,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 		result.SubjectResolution.CommitDecisionDigests = digests
 	}
+	if e.assemblyObserver != nil {
+		e.assemblyObserver(params, result, pending)
+	}
 	return result, synthesisAllocation, pending, cardinality, nil
 }
 
@@ -807,6 +823,10 @@ func correctKindCensusTruncatedServedCounts(details []CoverageDetail, cohort *Co
 // The alternative -- a bool that each emitter consults -- is what let three
 // emitters drift out of the rule one at a time.
 type assemblyTelemetry struct {
+	// Draft is the synthesizer's raw draft of this pass, before assembly,
+	// when the pass called the model. The member cut re-assembles it over a
+	// cut cohort.
+	Draft *InvestigationResult
 	// GroupingRefusal is the grouping refusal this request took, carried to
 	// finalization so the group-axis requirement is stated not_applicable
 	// with its cause instead of left to read as an unattempted read.

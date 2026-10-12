@@ -2732,6 +2732,28 @@ func (t SlogEngineTelemetry) RecordPathDrop(ctx context.Context, principal stora
 	t.logger.InfoContext(ctx, "context fabric path drop", args...)
 }
 
+// RecordMemberCut emits one member-cut application, at Info.
+func (t SlogEngineTelemetry) RecordMemberCut(ctx context.Context, principal storage.Principal, event MemberCutEvent) {
+	if t.logger == nil {
+		return
+	}
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", string(event.Family),
+		"stage", string(event.Stage),
+		"pass", event.Pass,
+		"axis", string(event.Overrun),
+		"item_budget", SanitizeLogInt(int64(event.MaxItems)),
+		"items_before", event.ItemsBefore,
+		"listed", event.Listed,
+		"uncited", event.Uncited,
+		"basis", string(event.Basis),
+		"declined", string(event.Declined),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric member cut", args...)
+}
+
 // RecordFactRetention emits one retention decision, at Info.
 //
 // The anchor fields name the committed resolution subjects the pass admitted
