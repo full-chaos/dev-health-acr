@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
@@ -49,6 +50,9 @@ func TestServiceModelRefusalAtTheToolBoundaryLeavesTheDataToolsOpen(t *testing.T
 		result, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "investigate_question", Arguments: args})
 		if err == nil && (result == nil || !result.IsError) {
 			t.Fatalf("investigate_question %v served", args)
+		}
+		if err != nil && !strings.Contains(err.Error(), "unknown tool") {
+			t.Fatalf("investigate_question %v failed for another reason: %v", args, err)
 		}
 	}
 	if n := stack.seam.used.Load(); n != 0 {

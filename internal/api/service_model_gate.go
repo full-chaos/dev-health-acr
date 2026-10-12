@@ -88,11 +88,22 @@ func (a *App) serviceModelListable(ctx context.Context, principal storage.Princi
 	if principal.AuthenticationMethod != storage.AuthenticationMethodCredential {
 		return true
 	}
-	if _, granted, err := a.deploymentModelGrant(ctx, principal); granted || err != nil {
-		return true
+	listed, reason := true, "granted"
+	if _, granted, err := a.deploymentModelGrant(ctx, principal); err != nil {
+		reason = "entitlement_unreadable"
+	} else if !granted {
+		own, ownErr := a.orgHasOwnModel(ctx, principal)
+		switch {
+		case ownErr != nil:
+			reason = "model_config_unreadable"
+		case own:
+			reason = "own_model"
+		default:
+			listed, reason = false, "no_service_model"
+		}
 	}
-	own, err := a.orgHasOwnModel(ctx, principal)
-	return own || err != nil
+	a.logger.InfoContext(ctx, "context fabric service model listing decision", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "investigate_question_listed", listed, "reason", reason)
+	return listed
 }
 
 // orgHasOwnModel reports whether the organization stored a model
