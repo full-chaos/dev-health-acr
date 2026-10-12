@@ -5300,6 +5300,11 @@
         "presence": "required"
       },
       {
+        "key": "draw_rejected_reasons",
+        "type": "string",
+        "presence": "required"
+      },
+      {
         "key": "claims",
         "type": "int",
         "presence": "required"

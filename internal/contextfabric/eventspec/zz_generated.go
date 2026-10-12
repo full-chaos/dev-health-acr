@@ -2876,6 +2876,7 @@ type SynthesisInputFields struct {
 	DrawOutcomes             string
 	DrawClaims               string
 	DrawOutputDigests        string
+	DrawRejectedReasons      string
 	Claims                   int
 	Drivers                  int
 	EvidenceRefs             int
@@ -2894,7 +2895,7 @@ type SynthesisInputFields struct {
 
 // NewSynthesisInputFields is the generated constructor for SynthesisInputFields -- every
 // field SynthesisInput.Fields declares is a required parameter.
-func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion string, promptVersion string, inputDigest string, inputBytes int, facts int, factEvidenceRefs int, factEvidenceRefsDistinct int, paths int, driverCandidates int, cohortMembers int, labelCanonicalization string, labelKeysCollapsed int, labelKeysResidual int, outcome string, drawsTotal int, drawOutcomes string, drawClaims string, drawOutputDigests string, claims int, drivers int, evidenceRefs int, zeroClaimRedraw string, requestID string) SynthesisInputFields {
+func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion string, promptVersion string, inputDigest string, inputBytes int, facts int, factEvidenceRefs int, factEvidenceRefsDistinct int, paths int, driverCandidates int, cohortMembers int, labelCanonicalization string, labelKeysCollapsed int, labelKeysResidual int, outcome string, drawsTotal int, drawOutcomes string, drawClaims string, drawOutputDigests string, drawRejectedReasons string, claims int, drivers int, evidenceRefs int, zeroClaimRedraw string, requestID string) SynthesisInputFields {
 	return SynthesisInputFields{
 		OrgIDHash:                orgIDHash,
 		ModelID:                  modelID,
@@ -2916,6 +2917,7 @@ func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion stri
 		DrawOutcomes:             drawOutcomes,
 		DrawClaims:               drawClaims,
 		DrawOutputDigests:        drawOutputDigests,
+		DrawRejectedReasons:      drawRejectedReasons,
 		Claims:                   claims,
 		Drivers:                  drivers,
 		EvidenceRefs:             evidenceRefs,
@@ -2958,6 +2960,7 @@ func (f SynthesisInputFields) SlogArgs() []any {
 		"draw_outcomes", contextfabric.SanitizeLogAttr(f.DrawOutcomes),
 		"draw_claims", contextfabric.SanitizeLogAttr(f.DrawClaims),
 		"draw_output_digests", contextfabric.SanitizeLogAttr(f.DrawOutputDigests),
+		"draw_rejected_reasons", contextfabric.SanitizeLogAttr(f.DrawRejectedReasons),
 		"claims", f.Claims,
 		"drivers", f.Drivers,
 		"evidence_refs", f.EvidenceRefs,

@@ -428,7 +428,10 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// canonical result (top-level field and mirror).
 		// 371 -> 372 -- claimed_facts[].fact_id, the optional id of the cited
 		// canonical fact; classified untrusted like claimed_facts[].field.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 372},
+		// 372 -> 375 -- claimed_facts[].derived_from[].fact_id and .field
+		// (untrusted like fact_id/field) and claimed_facts[].operation (a
+		// closed arithmetic vocabulary).
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 375},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -486,6 +489,12 @@ func trustedBecauseClosed(path string) bool {
 	// the bare leaf "reason", which other shapes in this contract use for
 	// free text: allowlisting the leaf would trust them too.
 	if strings.HasSuffix(path, ".semantic_reading.reason") {
+		return true
+	}
+	// claimed_facts[].operation is ContextFabricDerivationOperation (sum,
+	// difference, ratio), validated before a result is stored. Matched on
+	// its full suffix, not the bare leaf "operation".
+	if strings.HasSuffix(path, ".claimed_facts[].operation") {
 		return true
 	}
 	leaf := path[strings.LastIndex(path, ".")+1:]
