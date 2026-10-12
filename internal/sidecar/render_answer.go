@@ -2,6 +2,8 @@ package sidecar
 
 import (
 	"fmt"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -575,6 +577,20 @@ func rankingTableRowLine(row contractsv1.ContextFabricClaimedFactRow) string {
 			continue
 		}
 		parts = append(parts, contractsv1.ContextFabricFactFieldNoun(key)+": "+hostedInline(display))
+	}
+	var extra []string
+	for key := range row.Fields {
+		if !slices.Contains(rankingTableFieldOrder, key) {
+			extra = append(extra, key)
+		}
+	}
+	sort.Strings(extra)
+	for _, key := range extra {
+		display, shown := scalarFieldText(key, row.Fields[key])
+		if !shown {
+			continue
+		}
+		parts = append(parts, hostedInline(contractsv1.ContextFabricFactFieldNoun(key))+": "+hostedInline(display))
 	}
 	return "- " + strings.Join(parts, "; ")
 }
