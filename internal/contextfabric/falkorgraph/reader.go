@@ -1413,8 +1413,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	// A pull request status the frame states is applied to the whole pool,
 	// before the cohort is cut, so every arm's members are filtered alike.
-	if status := contextfabric.PullRequestStatusFilterOf(request.Frame); status != "" {
+	pullRequestStatus := contextfabric.PullRequestStatusFilterOf(request.Frame)
+	var pullRequestFiltered pullRequestStatusFilter
+	if status := pullRequestStatus; status != "" {
 		filtered, filterErr := a.filterPullRequestsByStatus(ctx, key, principal.OrgID, status, cohortNodes, temporal)
+		pullRequestFiltered = filtered
 		if a.config.Telemetry != nil {
 			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
 				Status: status, Candidates: filtered.candidates, Kept: filtered.kept, Truncated: filtered.cut, Err: filterErr,
@@ -1449,6 +1452,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			}
 		}
 		cohort.Rationale = teamAnchorCohortRationaleFor(teamAnchors[0].Kind, declaredCohortKindForRouting)
+	}
+	if cohort == nil && pullRequestStatus != "" && pullRequestFiltered.candidates > 0 && pullRequestFiltered.kept == 0 {
+		// Pull requests were reached and none holds the status: that is an
+		// answer (zero matches), not a question with no members.
+		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectPullRequest, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{},
+			Rationale: pullRequestStatusNoMatchRationale, Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
 	}
 	if cohort == nil && ownershipZeroOwnersResolved {
 		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectTeam, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{}, Rationale: ownershipZeroOwnersRationaleFor(ownershipExcludedOverCap), Complete: true}

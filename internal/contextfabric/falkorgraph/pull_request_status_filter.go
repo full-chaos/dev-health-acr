@@ -32,6 +32,10 @@ type pullRequestStatusFilter struct {
 	cut bool
 }
 
+// pullRequestStatusNoMatchRationale is the rationale of a pull request member
+// set in which no pull request reached holds the status asked for.
+const pullRequestStatusNoMatchRationale = "No pull request reached from the subject the question names holds the status asked for now; that is a count of matches, not a statement about health."
+
 // pullRequestStateCypher reads the stored state of a batch of pull requests.
 func pullRequestStateCypher() string {
 	return fmt.Sprintf("UNWIND $ids AS id MATCH (p:%s {%s:$org, %s:$kind, %s:id}) RETURN id, p.%s AS state ORDER BY id",

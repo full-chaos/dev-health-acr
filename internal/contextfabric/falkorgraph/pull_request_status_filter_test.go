@@ -167,3 +167,20 @@ func TestPullRequestStatusFilterReadFailureEndsTheCall(t *testing.T) {
 		t.Fatalf("status filter lines = %+v, want one read_failed line", telemetry.pullRequestStatusFilters)
 	}
 }
+
+// TestNoPullRequestHoldingTheStatusIsAnEmptyCompleteSet: pull requests were
+// reached and none holds the status, so the answer is an empty complete member
+// set, never the absence of a member set.
+func TestNoPullRequestHoldingTheStatusIsAnEmptyCompleteSet(t *testing.T) {
+	fixtures := []pullRequestStatusFixture{{id: "pull_request:merged", state: "merged"}}
+	result, _, err := discoverPullRequestMembers(t, pullRequestStatusFake(fixtures, nil), "awaiting_review")
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil {
+		t.Fatalf("no member set served; want an empty complete pull request set")
+	}
+	if result.Cohort.Kind != contextfabric.SubjectPullRequest || len(result.Cohort.Members) != 0 || !result.Cohort.Complete || result.Cohort.Truncated || result.Cohort.Rationale != pullRequestStatusNoMatchRationale {
+		t.Fatalf("cohort = %+v, want an empty complete pull request set with the no-match rationale", *result.Cohort)
+	}
+}
