@@ -66,3 +66,15 @@ func admittedIssueLinksAmongSQL(candidates string) string {
 // issuesWithLinkedPullRequestSQL is the set of issue ids that have at least
 // one admitted link row.
 var issuesWithLinkedPullRequestSQL = `(SELECT work_item_id FROM ` + admittedIssueLinksSQL + `)`
+
+// admittedLinkedPullRequestRowsSQL is the admitted link rows (known tier) whose
+// pull request exists, columns work_item_id, pr_repo_id, pr_number, link_rank,
+// without reading work_items: a caller that has already restricted the work
+// items to issues joins it on work_item_id, and so reads the work item table
+// once.
+const admittedLinkedPullRequestRowsSQL = `(
+  SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, ` + linkTierRankSQL + ` AS link_rank
+  FROM work_graph_issue_pr AS l FINAL
+  INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
+  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0
+)`
