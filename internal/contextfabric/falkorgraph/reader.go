@@ -1679,7 +1679,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if cohort != nil && cohort.Kind == declaredCohortKind {
 			served = len(cohort.Members)
 		}
-		reason := fmt.Sprintf("kind_census_truncated:%s:%d:%d", declaredCohortKind, declaredCensus, served)
+		reason := contextfabric.KindCensusTruncatedReason(declaredCohortKind, declaredCensus, served)
 		degradedReasons = append(degradedReasons, reason)
 		kindCensusKind := declaredCohortKind
 		kindCensusDetail := contextfabric.CoverageDetail{

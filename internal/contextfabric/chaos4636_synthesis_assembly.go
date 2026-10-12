@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -346,7 +347,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// graphContext.Cohort is always the member set THIS pass serves.
 	// Corrected here, once per pass, immediately before synthesis reads
 	// Coverage.Details, mirroring where the cardinality step reads it.
-	correctKindCensusTruncatedServedCounts(graphContext.Coverage.Details, graphContext.Cohort)
+	graphContext.Coverage = correctKindCensusTruncatedCoverage(graphContext.Coverage, graphContext.Cohort)
 	synthesisInput, _ := canonicalizeSynthesisSubjectLabels(SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
@@ -773,46 +774,63 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	return result, synthesisAllocation, pending, cardinality, nil
 }
 
-// correctKindCensusTruncatedServedCounts re-states a kind_census_truncated
-// detail's Served field against THIS pass's own cohort, in place.
+// KindCensusTruncatedReason is the degraded reason, and the detail's Raw, of a
+// kind_census_truncated detail: the kind the census counted, what it
+// declared, and how many members of that kind the cohort serves.
+func KindCensusTruncatedReason(kind SubjectKind, declared, served int) string {
+	return fmt.Sprintf("kind_census_truncated:%s:%d:%d", kind, declared, served)
+}
+
+// correctKindCensusTruncatedCoverage re-states every kind_census_truncated
+// detail against THIS cohort: Served, the Raw text and the label that carry
+// the same count, and the degraded reason equal to the old Raw. It returns a
+// copy and changes nothing the caller holds.
 //
-// CHAOS-5732 (D47): falkorgraph's DiscoverContext mints Served at
-// graph-discovery time, before stage 3's own response-budget narrowing can
-// shrink the cohort further -- so a detail read straight off graphContext.Coverage
-// can describe a cohort larger than the one this pass actually serves. Cheap
-// to correct here rather than upstream: this pass's own graphContext.Cohort
-// (never a population/backfilled figure) is exactly the member set the
-// document synthesis is about to build IS the document this pass serves --
-// the same fact membership_cardinality's own placement rule rests on, see
-// synthesizeAndAssemble's call one line above this function's own call site.
+// CHAOS-5732 (D47): falkorgraph's DiscoverContext mints the detail at
+// graph-discovery time, before stage 3 can narrow the cohort, so a detail
+// read straight off the graph can describe a cohort larger than the one this
+// pass serves. Served, Raw, Label and the reason state ONE count; restating
+// only Served left the other three naming the wider cohort.
 //
 // Guarded on Kind matching the cohort's own Kind, the same guard the detail's
-// original mint uses: a served count belongs to the kind the census was for,
-// never to a cohort of a different kind reached some other way. A nil cohort
-// (every member of that kind narrowed away, or none ever assembled) states
-// Served=0, matching the "no cohort of this kind was served" reading the
-// detail's own doc comment already gives that case.
-func correctKindCensusTruncatedServedCounts(details []CoverageDetail, cohort *Cohort) {
+// original mint uses. A nil cohort states Served=0.
+func correctKindCensusTruncatedCoverage(coverage Coverage, cohort *Cohort) Coverage {
 	served := 0
 	if cohort != nil {
 		served = len(cohort.Members)
 	}
-	for i := range details {
-		if details[i].Code != contractsv1.ContextFabricCoverageDetailKindCensusTruncated {
+	var details []CoverageDetail
+	var reasons []string
+	for i, detail := range coverage.Details {
+		if detail.Code != contractsv1.ContextFabricCoverageDetailKindCensusTruncated {
 			continue
 		}
-		// A live cohort updates only the detail for ITS OWN kind -- a
-		// served count belongs to the kind the census was for, never to a
-		// cohort of a different kind reached some other way. A NIL cohort
-		// carries no kind to match against at all, so every census-cut
-		// detail this pass carries is corrected to Served=0 unconditionally
-		// -- there is no cohort of ANY kind left for this pass to serve.
-		if cohort != nil && details[i].Kind != cohort.Kind {
+		if cohort != nil && detail.Kind != cohort.Kind {
 			continue
+		}
+		if details == nil {
+			details = slices.Clone(coverage.Details)
+			reasons = slices.Clone(coverage.DegradedReasons)
+		}
+		declared := 0
+		if detail.Declared != nil {
+			declared = *detail.Declared
 		}
 		servedCopy := served
+		restated := KindCensusTruncatedReason(detail.Kind, declared, served)
+		for r := range reasons {
+			if reasons[r] == detail.Raw {
+				reasons[r] = restated
+			}
+		}
 		details[i].Served = &servedCopy
+		details[i].Raw = restated
+		details[i].Label = contractsv1.ComposeCoverageDetailLabel(details[i])
 	}
+	if details != nil {
+		coverage.Details, coverage.DegradedReasons = details, reasons
+	}
+	return coverage
 }
 
 // assemblyTelemetry is every per-investigation decision event one assembly
