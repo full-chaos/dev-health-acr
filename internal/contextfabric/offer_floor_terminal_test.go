@@ -48,7 +48,7 @@ func TestPromptTextNeverStandsInForTheFloorOutcome(t *testing.T) {
 func TestTheSubjectNotFoundSentenceNamesWhatWasSearched(t *testing.T) {
 	t.Parallel()
 	got := noMatchLimitationSubjectNotFound([]string{"Phantom", "Squad"}, []string{"ci_pipeline_run", "team"})
-	for _, want := range []string{`"Phantom Squad"`, "ci_pipeline_run, team", "nothing was offered"} {
+	for _, want := range []string{`"Phantom Squad"`, "CI pipeline runs, teams", "nothing was offered"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("sentence %q lacks %q", got, want)
 		}

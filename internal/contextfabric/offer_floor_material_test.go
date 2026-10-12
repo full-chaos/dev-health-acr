@@ -58,7 +58,7 @@ func TestAFloorOutcomeWithARedeemableOfferIsNotTheSubjectNotFoundTerminal(t *tes
 func TestTheFloorTerminalNamesTheKindsOfTheEffectiveFloor(t *testing.T) {
 	t.Parallel()
 	named := investigateWithMaterial(t, StructureOfferMaterial{SubjectFloor: OfferFloorOutcome{Refused: true, SearchedKinds: []string{"project", "team"}}})
-	if !strings.Contains(strings.Join(named.Limitations, "|"), "among the kinds searched (project, team)") {
+	if !strings.Contains(strings.Join(named.Limitations, "|"), "among the kinds searched (projects, teams)") {
 		t.Fatalf("limitations = %q, want the kinds project, team", named.Limitations)
 	}
 	none := investigateWithMaterial(t, StructureOfferMaterial{SubjectFloor: OfferFloorOutcome{Refused: true}})
