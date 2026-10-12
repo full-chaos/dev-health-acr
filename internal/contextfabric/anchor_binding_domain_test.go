@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -126,7 +127,7 @@ func TestTheBinderDecidesAPersistableBindingForEveryAdmittedHint(t *testing.T) {
 var (
 	anchorBindingLineInputKeys = []string{
 		"org_id", "result_id", "parent_result_id", "site", "evaluation",
-		"parent_binding", "carry_checks",
+		"parent_binding",
 		"from_state", "from_kind", "from_id", "from_proof", "from_reason",
 		"from_origin_result_id", "from_graph_epoch", "from_contender_kind", "from_contender_id",
 		"parent_graph_epoch", "graph_epoch",
@@ -142,6 +143,10 @@ var (
 		// freshness an identity this turn proves is stamped with.
 		"from_proven_freshness_epoch", "from_proven_freshness_digest",
 		"freshness_acquisition", "freshness_serving_epoch", "freshness_ownership_digest",
+		// The parent binding's proof provenance and its admission: a refused
+		// binding is not what the binder starts from.
+		"from_policy_version", "from_proven_at", "from_witness",
+		"binding_admission", "admission_remembered_check", "admission_remembered_reason", "admission_remembered_context_error", "admission_age_seconds",
 	}
 	anchorBindingLineOutputKeys = []string{
 		"proven_anchor_ids", "effective_kind",
@@ -151,6 +156,7 @@ var (
 		"served_anchor_kind", "served_anchor_id",
 		"served_count_decision", "served_count_kind", "served_count_id",
 		"to_proven_freshness_epoch", "to_proven_freshness_digest", "ownership_movement",
+		"policy_version", "to_proven_at", "witness",
 	}
 )
 
@@ -297,7 +303,7 @@ func TestTwoTurnsWithEqualLineInputsDecideTheSameBinding(t *testing.T) {
 		}
 		sort.Strings(differingInputs)
 		sort.Strings(differingOutputs)
-		if baseTo == otherTo {
+		if reflect.DeepEqual(baseTo, otherTo) {
 			t.Logf("%-46s (%s): same decision; differing input keys %v", tc.name, tc.input, differingInputs)
 			continue
 		}
@@ -566,7 +572,7 @@ func TestAGuardDecisionThatChangesTheBindingDiffersInAnInputKey(t *testing.T) {
 	}
 	firedTo, firedEvent := tracker(SubjectSubstitutionClarified).decide(BudgetAssertSubjectlessTerminal, saved, nil)
 	quietTo, quietEvent := tracker(SubjectSubstitutionNotEvaluated).decide(BudgetAssertSubjectlessTerminal, saved, nil)
-	if firedTo == quietTo {
+	if reflect.DeepEqual(firedTo, quietTo) {
 		t.Fatalf("premise: the guard decision changed nothing (%+v)", firedTo)
 	}
 	if firedTo.State != AnchorBindingContested || firedTo.Reason != AnchorBindingReasonContestedByResolution || firedTo.ContenderID != bindBeta.ID {
