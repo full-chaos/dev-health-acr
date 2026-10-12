@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -66,12 +67,13 @@ import (
 // Investigate's scope. It is a struct rather than a parameter list so that
 // adding an input is a visible change to this stage's contract.
 type synthesisAssemblyParams struct {
-	// Draft, when set, is a synthesizer draft a previous pass of this
-	// investigation produced: the pass assembles it over its own cohort and
-	// calls no model. It is the member cut's seam -- a cut produces a new
-	// cohort and every cohort-derived field comes from one assembly over it,
-	// never from patching the document a wider cohort produced.
-	Draft *InvestigationResult
+	// Recompose, when set, is the model failure the pass before this one was
+	// served a degraded answer for: this pass composes its answer the same
+	// way, with the degraded composer over its own input, and calls no model.
+	// A narrowed pass re-synthesizes over its own cohort through the path
+	// the first pass took, so every field the synthesizer derives comes from
+	// the narrowed input and none is carried over from the wider one.
+	Recompose *SynthesisFailure
 	// ReadRequirements is the requirement list the fact read ran with: what
 	// the planner read for this question. Read-only; the status floor's
 	// asked-kind set includes it.
@@ -346,7 +348,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// graphContext.Cohort is always the member set THIS pass serves.
 	// Corrected here, once per pass, immediately before synthesis reads
 	// Coverage.Details, mirroring where the cardinality step reads it.
-	correctKindCensusTruncatedServedCounts(graphContext.Coverage.Details, graphContext.Cohort)
+	graphContext.Coverage = correctKindCensusTruncatedCoverage(graphContext.Coverage, graphContext.Cohort)
 	synthesisInput, _ := canonicalizeSynthesisSubjectLabels(SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
@@ -355,8 +357,8 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	})
 	var result InvestigationResult
 	var err error
-	if params.Draft != nil {
-		result = copyResultDeep(*params.Draft)
+	if params.Recompose != nil {
+		result, err = e.recompose(ctx, principal, synthesisInput, *params.Recompose)
 	} else if clientSynthesisRequested(request) {
 		result, pending.ClientSynthesisInput, pending.ClientSynthesisMeasure, err = e.runClientSynthesis(ctx, principal, synthesisInput)
 		pending.SuppliedSynthesisServed = err == nil && request.SuppliedSynthesis != nil
@@ -366,6 +368,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		if errors.As(err, &modelFailure) && ctx.Err() == nil {
 			if degraded, ok := e.synthesizer.(DegradedSynthesizer); ok {
 				result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, modelFailure)
+				if err == nil {
+					pending.DegradedFailure = modelFailure
+				}
 			}
 		}
 		if err == nil && params.WorkItemCensus != nil && ctx.Err() == nil {
@@ -381,11 +386,6 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	}
 	if params.WorkItemCensus != nil && !clientSynthesisRequested(request) {
 		pending.WorkItemDegrade = newWorkItemDegradeBasis(synthesisInput, result)
-	}
-	if params.Draft == nil && params.WorkItemCensus == nil && !clientSynthesisRequested(request) {
-		// The raw draft, before assembly writes to it, kept for the member cut.
-		draft := copyResultDeep(result)
-		pending.Draft = &draft
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()
@@ -772,46 +772,89 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	return result, synthesisAllocation, pending, cardinality, nil
 }
 
-// correctKindCensusTruncatedServedCounts re-states a kind_census_truncated
-// detail's Served field against THIS pass's own cohort, in place.
+// recompose composes a narrowed pass's answer with the degraded composer, as
+// the first pass's was, and calls no model. The failure's model-failure event
+// was recorded for the call that failed and is not recorded again, and its
+// input bound described that call's fact set, not this pass's.
+func (e *Engine) recompose(ctx context.Context, principal storage.Principal, input SynthesisInput, failure SynthesisFailure) (InvestigationResult, error) {
+	degraded, ok := e.synthesizer.(DegradedSynthesizer)
+	if !ok {
+		return InvestigationResult{}, errors.New("recompose: the synthesizer composes no degraded answer")
+	}
+	if err := ctx.Err(); err != nil {
+		return InvestigationResult{}, err
+	}
+	failure.DeferEvent = true
+	failure.Bound = nil
+	return degraded.ComposeDegraded(ctx, principal, input, &failure)
+}
+
+// discardObservationCoverFrom marks the cover events appended from index from
+// on as a candidate a lever built and did not serve. They stay on the trace
+// and are never published as served.
+func (p *assemblyTelemetry) discardObservationCoverFrom(from int) {
+	for i := from; i < len(p.ObservationCover); i++ {
+		p.ObservationCover[i].discarded = true
+	}
+}
+
+// KindCensusTruncatedReason is the degraded reason, and the detail's Raw, of a
+// kind_census_truncated detail: the kind the census counted, what it
+// declared, and how many members of that kind the cohort serves.
+func KindCensusTruncatedReason(kind SubjectKind, declared, served int) string {
+	return fmt.Sprintf("kind_census_truncated:%s:%d:%d", kind, declared, served)
+}
+
+// correctKindCensusTruncatedCoverage re-states every kind_census_truncated
+// detail against THIS cohort: Served, the Raw text and the label that carry
+// the same count, and the degraded reason equal to the old Raw. It returns a
+// copy and changes nothing the caller holds.
 //
-// CHAOS-5732 (D47): falkorgraph's DiscoverContext mints Served at
-// graph-discovery time, before stage 3's own response-budget narrowing can
-// shrink the cohort further -- so a detail read straight off graphContext.Coverage
-// can describe a cohort larger than the one this pass actually serves. Cheap
-// to correct here rather than upstream: this pass's own graphContext.Cohort
-// (never a population/backfilled figure) is exactly the member set the
-// document synthesis is about to build IS the document this pass serves --
-// the same fact membership_cardinality's own placement rule rests on, see
-// synthesizeAndAssemble's call one line above this function's own call site.
+// CHAOS-5732 (D47): falkorgraph's DiscoverContext mints the detail at
+// graph-discovery time, before stage 3 can narrow the cohort, so a detail
+// read straight off the graph can describe a cohort larger than the one this
+// pass serves. Served, Raw, Label and the reason state ONE count; restating
+// only Served left the other three naming the wider cohort.
 //
 // Guarded on Kind matching the cohort's own Kind, the same guard the detail's
-// original mint uses: a served count belongs to the kind the census was for,
-// never to a cohort of a different kind reached some other way. A nil cohort
-// (every member of that kind narrowed away, or none ever assembled) states
-// Served=0, matching the "no cohort of this kind was served" reading the
-// detail's own doc comment already gives that case.
-func correctKindCensusTruncatedServedCounts(details []CoverageDetail, cohort *Cohort) {
+// original mint uses. A nil cohort states Served=0.
+func correctKindCensusTruncatedCoverage(coverage Coverage, cohort *Cohort) Coverage {
 	served := 0
 	if cohort != nil {
 		served = len(cohort.Members)
 	}
-	for i := range details {
-		if details[i].Code != contractsv1.ContextFabricCoverageDetailKindCensusTruncated {
+	var details []CoverageDetail
+	var reasons []string
+	for i, detail := range coverage.Details {
+		if detail.Code != contractsv1.ContextFabricCoverageDetailKindCensusTruncated {
 			continue
 		}
-		// A live cohort updates only the detail for ITS OWN kind -- a
-		// served count belongs to the kind the census was for, never to a
-		// cohort of a different kind reached some other way. A NIL cohort
-		// carries no kind to match against at all, so every census-cut
-		// detail this pass carries is corrected to Served=0 unconditionally
-		// -- there is no cohort of ANY kind left for this pass to serve.
-		if cohort != nil && details[i].Kind != cohort.Kind {
+		if cohort != nil && detail.Kind != cohort.Kind {
 			continue
+		}
+		if details == nil {
+			details = slices.Clone(coverage.Details)
+			reasons = slices.Clone(coverage.DegradedReasons)
+		}
+		declared := 0
+		if detail.Declared != nil {
+			declared = *detail.Declared
 		}
 		servedCopy := served
+		restated := KindCensusTruncatedReason(detail.Kind, declared, served)
+		for r := range reasons {
+			if reasons[r] == detail.Raw {
+				reasons[r] = restated
+			}
+		}
 		details[i].Served = &servedCopy
+		details[i].Raw = restated
+		details[i].Label = contractsv1.ComposeCoverageDetailLabel(details[i])
 	}
+	if details != nil {
+		coverage.Details, coverage.DegradedReasons = details, reasons
+	}
+	return coverage
 }
 
 // assemblyTelemetry is every per-investigation decision event one assembly
@@ -823,10 +866,10 @@ func correctKindCensusTruncatedServedCounts(details []CoverageDetail, cohort *Co
 // The alternative -- a bool that each emitter consults -- is what let three
 // emitters drift out of the rule one at a time.
 type assemblyTelemetry struct {
-	// Draft is the synthesizer's raw draft of this pass, before assembly,
-	// when the pass called the model. The member cut re-assembles it over a
-	// cut cohort.
-	Draft *InvestigationResult
+	// DegradedFailure is the model failure this pass was served a degraded
+	// answer for, nil when the model wrote the answer. A narrowed pass is
+	// composed the same way (synthesisAssemblyParams.Recompose).
+	DegradedFailure *SynthesisFailure
 	// GroupingRefusal is the grouping refusal this request took, carried to
 	// finalization so the group-axis requirement is stated not_applicable
 	// with its cause instead of left to read as an unattempted read.
@@ -968,8 +1011,9 @@ func refusalMeasurementOf(err error) *disclosureMeasurement {
 // ONCE, from Investigate's exit, when it is known whether the answer was
 // returned.
 //
-// answered: the FINAL pass's events -- the highest Pass value, the one whose
-// result is returned -- read Served=true and every earlier pass's false.
+// answered: the FINAL pass's events -- the highest Pass value among the
+// events not discarded, the one whose result is returned -- read Served=true;
+// every earlier pass's, and every discarded candidate's, read false.
 // Not answered (a refusal, a failed validation, a save-time supersession, a
 // persistence failure after evaluation): every event reads Served=false and
 // AnswerWithheld=true, so no line claims an answer the caller never received.
@@ -977,14 +1021,14 @@ func (e *Engine) publishObservationCover(ctx context.Context, principal storage.
 	if e.telemetry == nil || len(events) == 0 {
 		return
 	}
-	finalPass := events[0].Pass
+	finalPass := -1
 	for _, event := range events {
-		if event.Pass > finalPass {
+		if !event.discarded && event.Pass > finalPass {
 			finalPass = event.Pass
 		}
 	}
 	for _, event := range events {
-		event.Served = answered && event.Pass == finalPass
+		event.Served = answered && !event.discarded && event.Pass == finalPass
 		event.AnswerWithheld = !answered
 		e.telemetry.RecordReadRequirementObservationCover(ctx, principal, event)
 	}

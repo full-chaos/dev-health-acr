@@ -134,7 +134,7 @@ func (r AnswerBudgetRefusal) Unwrap() error { return ErrAnswerExceedsBudget }
 // re-synthesizing it -- and a document that was not re-synthesized has the
 // member set, and therefore the count, it already had. The retry path below
 // computes its own, from its own pass.
-func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Principal, plan *AnswerPlan, result InvestigationResult, consumed ItemAllocation, firstPass assemblyTelemetry, params synthesisAssemblyParams, cardinality MembershipCardinality) (InvestigationResult, assemblyTelemetry, error) {
+func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Principal, plan *AnswerPlan, result InvestigationResult, consumed ItemAllocation, firstPass assemblyTelemetry, params synthesisAssemblyParams, cardinality MembershipCardinality) (outResult InvestigationResult, outPending assemblyTelemetry, outErr error) {
 	budget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
 	if budget.MaxItems <= 0 && budget.MaxSerializedBytes <= 0 {
 		// Nothing to measure against. An engine composed without either
@@ -256,12 +256,14 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// as the refusal arms do. What the lever did to it -- after-bytes, rows
 	// before/after -- is on the fact-row truncation line.
 	serveRows := func(doc InvestigationResult, docMeasured MeasuredAttempt, reason RetryDeclinedReason) (factRowTruncationAttempt, bool, error) {
+		mark := len(firstPass.ObservationCover)
 		lever, rowErr := e.planFactRowTruncation(ctx, principal, plan, params.Frame, doc, budget, docMeasured, params.Facts, &firstPass, answerPassSecond, cardinality)
 		if rowErr != nil {
 			return lever, false, rowErr
 		}
 		e.recordFactRowTruncation(ctx, principal, plan, answerPassFirst, docMeasured, lever, budget)
 		if !lever.Served {
+			firstPass.discardObservationCoverFrom(mark)
 			return lever, false, nil
 		}
 		members := cohortMemberCount(params.Graph.Cohort)
@@ -280,12 +282,14 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// serves, records the one decision event, which describes the ASSEMBLED
 	// result this stage measured.
 	servePathDrop := func(doc InvestigationResult, docMeasured MeasuredAttempt, reason RetryDeclinedReason) (InvestigationResult, bool, error) {
+		mark := len(firstPass.ObservationCover)
 		pathLever, pathErr := e.planPathDrop(ctx, principal, plan, params.Frame, doc, budget, docMeasured, params.Facts, &firstPass, answerPassSecond, cardinality)
 		if pathErr != nil {
 			return InvestigationResult{}, false, pathErr
 		}
 		e.recordPathDrop(ctx, principal, plan, answerPassFirst, docMeasured, pathLever, budget)
 		if !pathLever.Served {
+			firstPass.discardObservationCoverFrom(mark)
 			return InvestigationResult{}, false, nil
 		}
 		members := cohortMemberCount(params.Graph.Cohort)
@@ -331,9 +335,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// is the one lever it has on bytes, and a smaller true answer is served
 	// instead of a refusal.
 	if overrun == contractsv1.ContextFabricBudgetOverrunBytes && params.WorkItemCensus != nil {
+		mark := len(firstPass.ObservationCover)
 		fitted, ok, fitErr := e.fitWalkListToBytes(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, cardinality)
 		if fitErr != nil {
 			return InvestigationResult{}, firstPass, fitErr
+		}
+		if !ok {
+			firstPass.discardObservationCoverFrom(mark)
 		}
 		if ok {
 			// The decision line carries the listed counts (before and after the
@@ -356,9 +364,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// because halving was the only item lever. Halving now runs only when one
 	// claim per member still overruns.
 	if overrun == contractsv1.ContextFabricBudgetOverrunItems && params.WorkItemCensus == nil {
+		mark := len(firstPass.ObservationCover)
 		claimLever, claimErr := e.planClaimDepthNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality)
 		if claimErr != nil {
 			return InvestigationResult{}, firstPass, claimErr
+		}
+		if !claimLever.Served {
+			firstPass.discardObservationCoverFrom(mark)
 		}
 		e.recordClaimDepthNarrowing(ctx, principal, plan, answerPassFirst, measured, claimLever, budget)
 		if claimLever.Served {
@@ -391,6 +403,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// this answer is genuinely slow, or accept that nothing was left to
 	// narrow -- and a single unexplained 413 tells an operator none of them.
 	declined := RetryDeclinedNotApplicable
+	// Set when the member cut runs in place of the retry: the first pass's
+	// model failure (its answer was the degraded composition, and the cut is
+	// composed the same way) and the order the cut was taken in.
+	var recompose *SynthesisFailure
+	var cutBasis contractsv1.ContextFabricNarrowingBasis
 	// CHAOS-6558 (a): never run a retry that cannot reduce the overrunning
 	// axis. When the rows alone overran (removing them would have fit) and
 	// the narrowed input keeps every fact, the retry re-synthesizes over the
@@ -421,6 +438,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// single-subject investigation has no cohort, so `declined` is
 		// always nothing_to_narrow here and the refusal was reached
 		// without any content reduction ever being attempted.
+		mark := len(firstPass.ObservationCover)
 		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality, params.WorkItemCensus)
 		if accountingErr != nil {
 			return InvestigationResult{}, firstPass, accountingErr
@@ -429,9 +447,14 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			e.recordCandidateNarrowing(ctx, principal, plan, attempt, overrun, grouped, narrowed.Basis, before, after, declined, false, false)
 			return attempt.Result, firstPass, nil
 		}
+		firstPass.discardObservationCoverFrom(mark)
+		mark = len(firstPass.ObservationCover)
 		trim, trimErr := e.planBudgetTrim(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality, params.WorkItemCensus == nil)
 		if trimErr != nil {
 			return InvestigationResult{}, firstPass, trimErr
+		}
+		if !trim.Served {
+			firstPass.discardObservationCoverFrom(mark)
 		}
 		e.recordClaimDepthNarrowing(ctx, principal, plan, answerPassFirst, measured, trim, budget)
 		if trim.Served {
@@ -445,14 +468,6 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			event.OutcomeCompletenessState = trim.Result.Completeness.State
 			e.recordPlanNarrowing(ctx, principal, event)
 			return trim.Result, firstPass, nil
-		}
-		// MEMBER CUT, assessed: the retry is the only other lever that removes
-		// members and it was declined. The assessment names, on the trace, the
-		// members the answer could have left out; the served cut is deferred
-		// (member_cut.go), so the refusal below still stands.
-		if overrun == contractsv1.ContextFabricBudgetOverrunItems && params.WorkItemCensus == nil && trim.Reduced.Status == "" {
-			memberCut := e.planMemberCut(params, firstPass, result, budget, measured)
-			e.recordMemberCut(ctx, principal, plan, measured, memberCut, budget)
 		}
 		// The items cut left a document that fits the item ceiling and not
 		// the byte ceiling (items are reported first when both are over, so
@@ -513,12 +528,45 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		if overrun != contractsv1.ContextFabricBudgetOverrunBytes && trim.Reduced.Status != "" && trim.Measured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes {
 			ceilingDoc, ceilingInput, ceilingAllocation, ceilingOverrun, ceilingFinalize = trim.Reduced, trim.Reduced, trim.Measured.Allocation, contractsv1.ContextFabricBudgetOverrunBytes, true
 		}
+		mark = len(firstPass.ObservationCover)
 		if served, ok, serveErr := e.serveAtServiceCeiling(ctx, principal, plan, params, "assembled_result", ceilingDoc, ceilingInput, ceilingFinalize, ceilingAllocation, params.Facts, &firstPass, answerPassSecond, answerPassFirst, cardinality, budget, ceilingOverrun); serveErr != nil {
 			return InvestigationResult{}, firstPass, serveErr
 		} else if ok {
 			return served, firstPass, nil
 		}
-		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
+		firstPass.discardObservationCoverFrom(mark)
+		// MEMBER CUT: the retry is the only other lever that removes members
+		// and it did not run. The cut keeps every member the answer names and
+		// synthesizes the answer ONCE more over the cut cohort, through the
+		// path the first pass took, in the retry tail below. It does not run
+		// when an items cut already left a document over bytes only.
+		if overrun != contractsv1.ContextFabricBudgetOverrunItems || budget.MaxItems <= 0 || trim.Reduced.Status != "" {
+			return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
+		}
+		cut := e.planMemberCut(ctx, params, firstPass, result)
+		if cut.Declined != MemberCutNotApplicable {
+			e.recordMemberCut(ctx, principal, plan, measured, cut, budget)
+			return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
+		}
+		cutMeasured := measured
+		defer func() {
+			var refusal AnswerBudgetRefusal
+			switch {
+			case outErr == nil:
+			case errors.As(outErr, &refusal):
+				cut.Declined = MemberCutStillOver
+			default:
+				cut.Declined = MemberCutSynthesisFailed
+			}
+			e.recordMemberCut(ctx, principal, plan, cutMeasured, cut, budget)
+		}()
+		narrowed, before, after = cut.Input, cut.Input.Before, cut.Input.After
+		recompose, cutBasis = cut.Recompose, cut.Basis
+		e.recordFactRetention(ctx, principal, FactRetentionEvent{
+			Family: plan.Family, GroupKind: plan.GroupKind,
+			Stage:    contractsv1.ContextFabricPlanNarrowingAssembledResult,
+			Decision: narrowed.Retention,
+		})
 	}
 
 	// Selection records the first attempt's measured trigger. The retry has
@@ -532,9 +580,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		e.telemetry.RecordSynthesisRetrySelection(ctx, principal, selected)
 	}
 
+	stepBasis := planStageBasis(contractsv1.ContextFabricPlanNarrowingAssembledResult, grouped, narrowed.Basis)
+	if cutBasis != "" {
+		stepBasis = cutBasis
+	}
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
 		Stage:   contractsv1.ContextFabricPlanNarrowingAssembledResult,
-		Basis:   planStageBasis(contractsv1.ContextFabricPlanNarrowingAssembledResult, grouped, narrowed.Basis),
+		Basis:   stepBasis,
 		Before:  before,
 		After:   after,
 		Groups:  false,
@@ -552,6 +604,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// already spent the first pass's grants and only the measurement saw these.
 	retryAllocation := AllocateItems(*plan, groupCountOf(narrowed.Graph.Cohort), cohortMemberCount(narrowed.Graph.Cohort))
 	retryParams := params.forRetry(narrowed.Graph, narrowed.Facts, retryAllocation)
+	retryParams.Recompose = recompose
 	// REFRESH THE CARRIED PLAN FROM THE LIVE ONE.
 	//
 	// `params.Plan` is a VALUE copied when these params were built, which was
@@ -715,9 +768,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// when its bytes still overrun, the walk list is cut to fit as it is on the
 	// first pass, before the retry is declared a failure.
 	if retryOverrun == contractsv1.ContextFabricBudgetOverrunBytes && params.WorkItemCensus != nil {
+		mark := len(retryPending.ObservationCover)
 		fitted, ok, fitErr := e.fitWalkListToBytes(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, retryCardinality)
 		if fitErr != nil {
 			return InvestigationResult{}, retryPending, fitErr
+		}
+		if !ok {
+			retryPending.discardObservationCoverFrom(mark)
 		}
 		if ok {
 			retried = fitted
@@ -749,9 +806,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	var retryRowLever factRowTruncationAttempt
 	if retryOverrun == contractsv1.ContextFabricBudgetOverrunBytes && params.WorkItemCensus == nil {
 		var rowErr error
+		mark := len(retryPending.ObservationCover)
 		retryRowLever, rowErr = e.planFactRowTruncation(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality)
 		if rowErr != nil {
 			return InvestigationResult{}, retryPending, rowErr
+		}
+		if !retryRowLever.Served {
+			retryPending.discardObservationCoverFrom(mark)
 		}
 		e.recordFactRowTruncation(ctx, principal, plan, answerPassSecond, retryMeasured, retryRowLever, budget)
 		if retryRowLever.Served {
@@ -766,9 +827,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			retryPending.CohortRanked = &retryRanked
 			return retryRowLever.Result, retryPending, nil
 		}
+		mark = len(retryPending.ObservationCover)
 		retryPathLever, pathErr := e.planPathDrop(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality)
 		if pathErr != nil {
 			return InvestigationResult{}, retryPending, pathErr
+		}
+		if !retryPathLever.Served {
+			retryPending.discardObservationCoverFrom(mark)
 		}
 		e.recordPathDrop(ctx, principal, plan, answerPassSecond, retryMeasured, retryPathLever, budget)
 		if retryPathLever.Served {
@@ -787,9 +852,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// CHAOS-6743: the retried document gets the claim-depth lever too, before
 	// the candidate reduction and any refusal.
 	if retryOverrun == contractsv1.ContextFabricBudgetOverrunItems && params.WorkItemCensus == nil {
+		mark := len(retryPending.ObservationCover)
 		retryClaimLever, claimErr := e.planClaimDepthNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality)
 		if claimErr != nil {
 			return InvestigationResult{}, retryPending, claimErr
+		}
+		if !retryClaimLever.Served {
+			retryPending.discardObservationCoverFrom(mark)
 		}
 		e.recordClaimDepthNarrowing(ctx, principal, plan, answerPassSecond, retryMeasured, retryClaimLever, budget)
 		if retryClaimLever.Served {
@@ -807,14 +876,20 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	}
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
 		var accountingErr error
+		mark := len(retryPending.ObservationCover)
 		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality, params.WorkItemCensus)
 		if accountingErr != nil {
 			return InvestigationResult{}, retryPending, accountingErr
 		}
 		if !outcomeAttempt.Served {
+			retryPending.discardObservationCoverFrom(mark)
+			mark = len(retryPending.ObservationCover)
 			trim, trimErr := e.planBudgetTrim(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality, false)
 			if trimErr != nil {
 				return InvestigationResult{}, retryPending, trimErr
+			}
+			if !trim.Served {
+				retryPending.discardObservationCoverFrom(mark)
 			}
 			e.recordClaimDepthNarrowing(ctx, principal, plan, answerPassSecond, retryMeasured, trim, budget)
 			if trim.Served {
@@ -869,6 +944,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// was measured, and it is not a measurement.
 	// Before the refusal event: a document the service ceiling admits is not a
 	// planned refusal, and the artifacts must not say it was.
+	ceilingMark := len(retryPending.ObservationCover)
 	if served, ok, serveErr := e.serveAtServiceCeiling(ctx, principal, plan, retryParams, "re_synthesized_result", retried, retryMeasurementInput, false, consumedRetryAllocation, retryParams.Facts, &retryPending, answerPassThird, answerPassSecond, retryCardinality, budget, retryOverrun); serveErr != nil {
 		return InvestigationResult{}, retryPending, serveErr
 	} else if ok {
@@ -878,6 +954,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		}
 		return served, retryPending, nil
 	}
+	retryPending.discardObservationCoverFrom(ceilingMark)
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, retryMeasured.Overrun, narrowed.Basis)
 	event.recordMeasurement(retryMeasured)
 	// `after`, not `before`: this event measures the RE-synthesized answer,
@@ -1033,9 +1110,10 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 // narrowedInputOver is the tail of every narrowing: the kept members become the
 // cohort, the cohort is re-ranked among itself (RankCohort normalizes workload
 // WITHIN the cohort, so scores computed against a wider member set do not
-// describe it), and the facts are retained for what is left. The cohort retry
-// and the member cut both end here, so a cut cohort is ranked, cited and
-// evidenced exactly as a retried one is.
+// describe it), the facts are retained for what is left, and the paths,
+// driver candidates and evidence refs that name a removed member are dropped.
+// The cohort retry and the member cut both end here, so a cut cohort is
+// ranked, cited and evidenced exactly as a retried one is.
 func narrowedInputOver(params synthesisAssemblyParams, graph GraphContext, facts CanonicalFactBundle, cohort *Cohort, kept []CohortMember, before int, basis contractsv1.ContextFabricNarrowingBasis) narrowedInput {
 	removed := RemovedCohortMembers(cohort.Members, kept)
 	cohort.Members = kept
@@ -1061,6 +1139,7 @@ func narrowedInputOver(params synthesisAssemblyParams, graph GraphContext, facts
 	graph.Cohort = rankedCohort
 	var retention FactRetentionDecision
 	facts.Facts, retention = RetainFactsForCohortWithDecision(facts.Facts, rankedCohort, removed, params.Resolution.Committed)
+	graph = graphWithoutRemovedMembers(graph, removed, kept, facts.Facts)
 	return narrowedInput{
 		Graph: graph, Facts: facts, Citations: citations, Ranked: rankEvent,
 		Before: before, After: len(kept), Narrow: true, Basis: basis, Retention: retention,
@@ -1233,6 +1312,7 @@ func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Pr
 			served, ok, step = fitted, true, CeilingFitWalkListCut
 		}
 	case measured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes && params.WorkItemCensus == nil:
+		rowsMark := len(pending.ObservationCover)
 		rows, rowErr := e.planFactRowTruncation(ctx, principal, plan, params.Frame, doc, ceilingBudget, measured, facts, pending, planPass, cardinality)
 		if rowErr != nil {
 			return InvestigationResult{}, false, rowErr
@@ -1242,6 +1322,7 @@ func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Pr
 			served, ok, step = rows.Result, true, CeilingFitRowTruncation
 			break
 		}
+		pending.discardObservationCoverFrom(rowsMark)
 		paths, pathErr := e.planPathDrop(ctx, principal, plan, params.Frame, doc, ceilingBudget, measured, facts, pending, planPass, cardinality)
 		if pathErr != nil {
 			return InvestigationResult{}, false, pathErr
