@@ -793,6 +793,33 @@ WHERE org_id = $1
 	return snapshot, nil
 }
 
+// ReadAnchorFreshness implements contextfabric.AnchorFreshnessReader: the
+// organization's serving epoch (the lifecycle's active epoch, 0 with no
+// lifecycle row, the same rule currentSourceWatermarks reads) and the
+// ownership source's checkpoint watermark at that epoch, in one statement.
+// It reads whether or not answer reuse is enabled.
+func (s *Store) ReadAnchorFreshness(ctx context.Context, orgID string) (contextfabric.AnchorFreshnessRead, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return contextfabric.AnchorFreshnessRead{}, errors.New("pginvestigation: organization is required")
+	}
+	var read contextfabric.AnchorFreshnessRead
+	var watermark sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+WITH serving AS (
+  SELECT COALESCE((SELECT active_epoch FROM acr.context_fabric_graph_lifecycle WHERE org_id = $1), 0) AS epoch
+)
+SELECT serving.epoch, checkpoint.backend_watermark
+FROM serving
+LEFT JOIN acr.context_fabric_projection_checkpoints AS checkpoint
+  ON checkpoint.org_id = $1 AND checkpoint.epoch = serving.epoch AND checkpoint.source = $2`, orgID, contextfabric.AnchorOwnershipSource).Scan(&read.ServingEpoch, &watermark)
+	if err != nil {
+		return contextfabric.AnchorFreshnessRead{}, fmt.Errorf("read anchor freshness: %w", sanitizeError(err))
+	}
+	read.OwnershipWatermark, read.Recorded = watermark.String, watermark.Valid
+	return read, nil
+}
+
 // FindReusable implements contextfabric.AnswerReuseGate. It proves TRD
 // §19.7.3 conditions 1, 2, 5, and 7 with the SQL predicate below (an exact
 // match on org/question-hash/contract/projection, and -- CHAOS-3786 --
