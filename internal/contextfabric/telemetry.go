@@ -993,14 +993,14 @@ func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, pr
 func (t SlogEngineTelemetry) RecordProjectStatusDrivers(ctx context.Context, principal storage.Principal, event ProjectStatusDriverEvent) {
 	missing := make([]string, 0, len(event.Missing))
 	for _, kind := range event.Missing {
-		missing = append(missing, SanitizeLogAttr(string(kind)))
+		missing = append(missing, string(kind))
 	}
 	t.logger.InfoContext(ctx, "context fabric project status drivers", append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"emitted", event.Emitted,
 		"skipped_budget", event.SkippedBudget,
 		"skipped_id_clash", event.SkippedIDClash,
-		"missing_kinds", missing,
+		"missing_kinds", SanitizeLogStrings(missing),
 	}, requestIDLogAttrs(ctx)...)...)
 }
 
