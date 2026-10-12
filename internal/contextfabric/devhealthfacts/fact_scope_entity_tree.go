@@ -17,22 +17,6 @@ import (
 // through the repositories its owned projects' issues link to. An issue's own
 // repository column and a computed team attribution are never the relation.
 
-// issueLinkTierRankSQL ranks the three provenance tiers of the link of record:
-// native 3 > explicit_text 2 > heuristic 1. Any other value ranks 0 and is
-// excluded by issueLinksSQL's own filter.
-const issueLinkTierRankSQL = `multiIf(provenance = 'native', 3, provenance = 'explicit_text', 2, provenance = 'heuristic', 1, 0)`
-
-// issueLinksSQL is the organization-scoped link of record, one row per
-// (pull request repository, issue, pull request number), read FINAL so the
-// strongest tier survives the ReplacingMergeTree merge. Rows are not
-// de-duplicated per issue: a caller aggregates per repository and takes the
-// strongest tier with argMax(provenance, link_rank).
-const issueLinksSQL = `(
-  SELECT work_item_id, repo_id AS pr_repo_id, pr_number, provenance, ` + issueLinkTierRankSQL + ` AS link_rank
-  FROM work_graph_issue_pr FINAL
-  WHERE org_id = {org_id:String} AND ` + issueLinkTierRankSQL + ` > 0
-)`
-
 // currentResolvedProjectsSQL is the org-wide project identity resolution of
 // the current-axis project chain: projects.id and projects.project_key both
 // answer to a work item's project_id, and an ambiguous join key is excluded
@@ -92,8 +76,11 @@ func classifyLinkedRepository(counts *contextfabric.FactScopeExpansionCounts, ca
 }
 
 // projectUnlinkedIssueCount counts the DISTINCT issues of the requested
-// projects that have no link row at all. They reach no repository through the
-// tree, and the answer must say so rather than read as "nothing is missing".
+// projects that have no admitted link row: no link row at all, or only links
+// whose pull request does not exist or whose tier is outside the vocabulary.
+// Pull-request-typed work items are not issues and are not counted. They reach
+// no repository through the tree, and the answer must say so rather than read
+// as "nothing is missing".
 func (e *ScopeExpander) projectUnlinkedIssueCount(ctx context.Context, orgID string, projectIDs []string, bounds *asOfBounds) (int, error) {
 	var statement string
 	bindings := []contextpacket.ClickHouseBinding{
@@ -105,11 +92,14 @@ func (e *ScopeExpander) projectUnlinkedIssueCount(ctx context.Context, orgID str
 FROM work_items AS w FINAL
 INNER JOIN ` + currentResolvedProjectsSQL + ` AS p ON p.join_key = w.project_id
 WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
-  AND w.work_item_id NOT IN (SELECT work_item_id FROM ` + issueLinksSQL + `)`
+  AND ` + workItemIsIssueSQL("w") + `
+  AND w.work_item_id NOT IN (SELECT work_item_id FROM ` + admittedIssueLinksSQL + `)`
 	} else {
 		statement = `SELECT uniqExact(a.work_item_id)
 FROM (` + projectIssueArmsAsOfSQL + `) AS a
-WHERE a.work_item_id NOT IN (SELECT work_item_id FROM ` + issueLinksSQL + `)`
+LEFT JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.work_item_id = a.work_item_id
+WHERE ` + workItemIsIssueSQL("w") + `
+  AND a.work_item_id NOT IN (SELECT work_item_id FROM ` + admittedIssueLinksSQL + `)`
 		bindings = append(bindings,
 			contextpacket.ClickHouseBinding{Name: "window_start", Value: bounds.start},
 			contextpacket.ClickHouseBinding{Name: "window_end", Value: bounds.end},
@@ -126,7 +116,8 @@ FROM ` + teamOwnedProjectsSQL + ` AS t
 INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
 INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.provider = p.provider AND w.project_id = p.join_key
 WHERE p.key_resolution_count = 1 AND t.team_id IN {team_ids:Array(String)}
-  AND w.work_item_id NOT IN (SELECT work_item_id FROM ` + issueLinksSQL + `)`
+  AND ` + workItemIsIssueSQL("w") + `
+  AND w.work_item_id NOT IN (SELECT work_item_id FROM ` + admittedIssueLinksSQL + `)`
 	return e.scalarCount(ctx, statement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
 		{Name: "team_ids", Value: teamIDs},
@@ -192,7 +183,7 @@ FROM (
   FROM ` + teamOwnedProjectsSQL + ` AS t
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
   INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.provider = p.provider AND w.project_id = p.join_key
-  INNER JOIN ` + issueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
+  INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
   LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = {org_id:String}
   WHERE p.key_resolution_count = 1 AND t.team_id IN {team_ids:Array(String)}
 )

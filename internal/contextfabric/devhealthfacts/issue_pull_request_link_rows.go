@@ -1,0 +1,49 @@
+package devhealthfacts
+
+// The issue <> pull request link of record is work_graph_issue_pr, one row per
+// (pull request repository, issue, pull request number) carrying a provenance
+// tier: native 3 > explicit_text 2 > heuristic 1. Every reader of the link in
+// this package reads it through issueLinkRowsSQL (or its admitted subset), so
+// one rule decides whether a row counts:
+//
+//   - the pull request the row names exists (a stale link is skipped, as the
+//     canonical link projection skips it), and
+//   - the work item is an issue (a work item typed pr or merge_request is not).
+//
+// repo_id of a link row is the PULL REQUEST's repository, never the issue's
+// own repository column.
+
+// linkTierRankSQL ranks the three provenance tiers of the link of record,
+// ops' spelling; any other value ranks 0. l is the work_graph_issue_pr alias.
+const linkTierRankSQL = `multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0)`
+
+// linkedPullRequestOnSQL joins a link row (l) to the pull request (pr) it names.
+const linkedPullRequestOnSQL = `pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number`
+
+// workItemIsIssueSQL is the predicate that excludes pull-request-typed work
+// items; alias is the work_items alias.
+func workItemIsIssueSQL(alias string) string {
+	return `ifNull(` + alias + `.type, '') NOT IN ('pr', 'merge_request')`
+}
+
+// issueLinkRowsSQL is the organization-scoped link rows whose pull request
+// exists and whose work item is an issue, columns work_item_id, pr_repo_id
+// (the pull request's repository), pr_number, provenance, link_rank (0 for a tier outside
+// the vocabulary, which a caller that must count it can still see). Rows are
+// not de-duplicated per issue: a caller aggregates per repository and takes
+// the strongest tier with argMax(provenance, link_rank).
+var issueLinkRowsSQL = `(
+  SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, l.provenance AS provenance, ` + linkTierRankSQL + ` AS link_rank
+  FROM work_graph_issue_pr AS l FINAL
+  INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
+  LEFT JOIN work_items AS wi FINAL ON wi.org_id = l.org_id AND wi.work_item_id = l.work_item_id
+  WHERE l.org_id = {org_id:String} AND ` + workItemIsIssueSQL("wi") + `
+)`
+
+// admittedIssueLinksSQL is issueLinkRowsSQL restricted to the known tiers: the
+// links that name a repository.
+var admittedIssueLinksSQL = `(SELECT work_item_id, pr_repo_id, pr_number, provenance, link_rank FROM ` + issueLinkRowsSQL + ` WHERE link_rank > 0)`
+
+// issuesWithLinkedPullRequestSQL is the set of issue ids that have at least
+// one admitted link row.
+var issuesWithLinkedPullRequestSQL = `(SELECT work_item_id FROM ` + admittedIssueLinksSQL + `)`

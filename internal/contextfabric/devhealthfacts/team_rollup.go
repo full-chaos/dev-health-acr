@@ -114,7 +114,7 @@ LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows+1)
 // teamReachedRepo is one repository a team reaches through an owned project:
 // the repository of a pull request linked to an issue of the project
 // (work_graph_issue_pr). linkRank is the weakest provenance tier among the
-// links that reached it (issueLinkTierRankSQL: native 3, explicit_text 2,
+// links that reached it (linkTierRankSQL: native 3, explicit_text 2,
 // heuristic 1); linkedPullRequests counts the distinct linked pull requests.
 type teamReachedRepo struct {
 	key                string
@@ -140,9 +140,9 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // teamProjectLinkRowsSQL is the one team-to-linked-pull-request reach: a
 // derived table (team_id, work_item_id, pr_repo_id, pr_number, link_rank) of
 // the issues of every project a team owns (team_project_ownership, under the
-// bound's ownership rule) joined to their linked pull request rows, read with
-// the same strict admission as the project scope expansion: the work item is
-// an issue and the linked pull request exists. teamParam names the
+// bound's ownership rule) joined to their admitted link rows
+// (admittedIssueLinksSQL: the work item is an issue and the linked pull
+// request exists). teamParam names the
 // Array(String) binding holding the team ids; the bound's bindings must ride
 // with the statement. It is the same chain teamRepositories walks.
 func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
@@ -151,9 +151,8 @@ func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
   FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
   INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.provider = p.provider AND w.project_id = p.join_key
-  INNER JOIN ` + issueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
-  INNER JOIN git_pull_requests AS lpr FINAL ON lpr.org_id = {org_id:String} AND lpr.repo_id = l.pr_repo_id AND lpr.number = l.pr_number
-  WHERE p.key_resolution_count = 1 AND ` + workItemIsIssueSQL("w") + ` AND t.team_id IN {` + teamParam + `:Array(String)}
+  INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
+  WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)}
 )`
 }
 
