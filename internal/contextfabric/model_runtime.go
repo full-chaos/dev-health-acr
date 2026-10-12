@@ -3112,37 +3112,59 @@ func claimedFactSentences(claims []ClaimedFact) []string {
 	index := make(map[string]int, len(sorted))
 	subjects := make([][]string, 0, len(sorted))
 	heads := make([]string, 0, len(sorted))
+	type shownClaim struct {
+		claim ClaimedFact
+		head  string
+	}
+	shownClaims := make([]shownClaim, 0, len(sorted))
+	kindsByHead := map[string]map[FactKind]struct{}{}
 	for _, claim := range sorted {
-		head := fmt.Sprintf("%s.%s=%s", claim.Kind, claim.Field, scalarValueString(claim.Value))
-		i, ok := index[head]
+		display, shown := scalarDisplayString(claim.Field, claim.Value)
+		if !shown {
+			continue
+		}
+		head := fmt.Sprintf("%s: %s", contractsv1.ContextFabricFactFieldNoun(claim.Field), display)
+		if kindsByHead[head] == nil {
+			kindsByHead[head] = map[FactKind]struct{}{}
+		}
+		kindsByHead[head][claim.Kind] = struct{}{}
+		shownClaims = append(shownClaims, shownClaim{claim: claim, head: head})
+	}
+	for _, shown := range shownClaims {
+		claim, head := shown.claim, shown.head
+		if len(kindsByHead[head]) > 1 {
+			head = strings.ReplaceAll(string(claim.Kind), "_", " ") + " " + head
+		}
+		key := string(claim.Kind) + "|" + head
+		i, ok := index[key]
 		if !ok {
 			i = len(heads)
-			index[head] = i
+			index[key] = i
 			heads = append(heads, head)
 			subjects = append(subjects, nil)
 		}
 		subjects[i] = append(subjects[i], claim.Subject.Label)
 	}
 	for i, head := range heads {
-		sentences = append(sentences, head+" for "+strings.Join(subjects[i], ", "))
+		sentences = append(sentences, head+" ("+strings.Join(subjects[i], ", ")+")")
 	}
 	return sentences
 }
 
-func scalarValueString(v ScalarValue) string {
+func scalarDisplayString(field string, v ScalarValue) (string, bool) {
 	switch {
 	case v.String != nil:
-		return *v.String
+		return contractsv1.ContextFabricDisplayString(field, *v.String)
 	case v.Integer != nil:
-		return strconv.FormatInt(*v.Integer, 10)
+		return strconv.FormatInt(*v.Integer, 10), true
 	case v.Number != nil:
-		return strconv.FormatFloat(*v.Number, 'g', -1, 64)
+		return contractsv1.ContextFabricDisplayNumber(*v.Number), true
 	case v.Boolean != nil:
-		return strconv.FormatBool(*v.Boolean)
+		return strconv.FormatBool(*v.Boolean), true
 	case v.Null:
-		return "null"
+		return "null", true
 	default:
-		return ""
+		return "", true
 	}
 }
 

@@ -7,7 +7,7 @@
   "question": "What is the state and count of this project's work items?",
   "reused": false,
   "direct_judgment": "This investigation is complete.",
-  "current_state": "Current observed values: work.title=Implement the thing for Implement the thing.",
+  "current_state": "Current observed values: title: Implement the thing (Implement the thing).",
   "strongest_pressures": [],
   "deterministic_answer": "This investigation is complete. Counted 1 work item.",
   "committed_subjects": [

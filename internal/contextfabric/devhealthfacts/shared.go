@@ -952,7 +952,11 @@ import (
 // v189 -> v190: a project status answer now carries backlog, estimate coverage
 // and risk severity as drivers with minted claims. An answer saved under v189
 // has none.
-const QueryVersion = "devhealthfacts.clickhouse.v190"
+//
+// v190 -> v191: served prose (current_state and the direct-read coverage notes)
+// names measures by display noun and shows numbers at display precision. A
+// stored answer can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v191"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

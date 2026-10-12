@@ -378,6 +378,13 @@ func prunedReason(capability FactCapability, unsupported []SubjectKind) string {
 // them" is an existence side-channel (ruling invariant 9). That count goes to
 // telemetry, and only to telemetry.
 func unexpandedReason(capability FactCapability, gap FactScopeGap) string {
+	if gap.ScopeExpansionUnavailable() {
+		return fmt.Sprintf(
+			"%s:%s: no resolved subject holds this capability's facts directly and scope expansion is not available on this read path (origin: %s; supported: %s; policy: %s; basis: %s)",
+			FactScopeReasonUnexpanded, gap.Outcome, gap.OriginKind,
+			joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
+		)
+	}
 	return fmt.Sprintf(
 		"%s:%s: no resolved subject holds this capability's facts directly and scope expansion did not reach them (origin: %s; supported: %s; policy: %s; basis: %s)",
 		FactScopeReasonUnexpanded, gap.Outcome, gap.OriginKind,

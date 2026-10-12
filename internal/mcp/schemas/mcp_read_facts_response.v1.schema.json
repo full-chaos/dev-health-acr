@@ -205,7 +205,8 @@
             "type": "string"
           },
           "kind_state": {
-            "type": "string"
+            "type": "string",
+            "description": "The fact kind's state for this read: available, no_data, stale, truncated, unavailable, unconfigured (no scope policy is configured for this kind), unauthorized, conflicted, not_applicable, pruned, or scope_expansion_unavailable (the scope policy is configured, but scope expansion is not available on this read path)."
           },
           "reason": {
             "type": "string"
