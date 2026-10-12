@@ -3230,6 +3230,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// nothing a commit decides, so the guard below reads the same commits;
 	// it runs first so its decision is recorded on the guard's exit too.
 	resolution = anchorShadow.offerFollowUpAnchor(resolution, familyOutcome.Frame, confirmedNeedLedger.Parent, carryParentSeed(request))
+	structureMaterial = anchorShadow.reconcileFollowUpStructure(structureMaterial)
 	substitutionCommitted := append([]SubjectRef(nil), resolution.Committed...)
 	substitutionInput := subjectSubstitutionInput{
 		Parent:             confirmedNeedLedger.Parent,

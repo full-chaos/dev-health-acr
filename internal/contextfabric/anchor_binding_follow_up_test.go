@@ -272,3 +272,105 @@ func TestAFollowUpThatEndsBeforeResolutionReadsNotEvaluated(t *testing.T) {
 		t.Fatalf("admission/carry = %s/%s, want admitted_follow_up/not_evaluated", line.Admission, line.BoundAnchorCarry)
 	}
 }
+
+// anchorOptionFor is a structure anchor option for subject.
+func anchorOptionFor(subject SubjectRef) AnchorOption {
+	return AnchorOption{Label: subject.Label, Kind: subject.Kind, CanonicalID: subject.CanonicalID, MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: "engine"}
+}
+
+// TestAFollowUpOfferListsTheRememberedSubjectOnce: the turn's structure
+// offer already holds an anchor option for the remembered alpha. The follow-up
+// offer removes it, so alpha is offered once, as the first candidate; the
+// anchor need stays disclosed with whatever other options it had.
+func TestAFollowUpOfferListsTheRememberedSubjectOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options []AnchorOption
+		kept    []string
+	}{
+		{"alpha beside beta", []AnchorOption{anchorOptionFor(probeAlpha), anchorOptionFor(probeBeta)}, []string{probeBeta.CanonicalID}},
+		{"alpha alone", []AnchorOption{anchorOptionFor(probeAlpha)}, nil},
+		// A subject is its kind and id together: an option of another kind
+		// with the same id string is another subject and stays.
+		{"the same id under another kind", []AnchorOption{anchorOptionFor(probeAlpha), anchorOptionFor(SubjectRef{Kind: SubjectProject, CanonicalID: probeAlpha.CanonicalID, Label: probeAlpha.Label})}, []string{probeAlpha.CanonicalID}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := emptyProbeResponse()
+			response.material.Missing = []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor}
+			response.material.AnchorOptions = tc.options
+			_, one, two := followUpTurns(t, carryTurnOptions{followUpOn: true}, response)
+			if line := two.transitions[0]; line.BoundAnchorCarry != BoundAnchorCarryFollowUpOfferedReconciled {
+				t.Fatalf("carry = %s, want follow_up_offered_reconciled", line.BoundAnchorCarry)
+			}
+			if c := two.result.SubjectResolution.Candidates; len(c) != 1 || !reflect.DeepEqual(c[0], rememberedAlphaOffer(one.result.ResultID)) {
+				t.Fatalf("candidates = %+v, want the remembered alpha only", c)
+			}
+			needs := two.result.StructureNeeds
+			if needs == nil {
+				t.Fatal("structure needs = nil, want the anchor need still disclosed")
+			}
+			var kept []string
+			for _, option := range needs.AnchorOptions {
+				kept = append(kept, option.CanonicalID)
+			}
+			if !reflect.DeepEqual(kept, tc.kept) {
+				t.Fatalf("anchor options = %v, want %v: the remembered subject is offered once", kept, tc.kept)
+			}
+			missing := false
+			for _, member := range needs.Missing {
+				missing = missing || member == contractsv1.ContextFabricStructureNeedSubjectAnchor
+			}
+			if !missing {
+				t.Fatalf("missing = %v, want subject_anchor still disclosed", needs.Missing)
+			}
+		})
+	}
+}
+
+// TestAFollowUpNeverAppliesTheLedgerAnchor: turn one's ledger holds the
+// engine-committed alpha. On a follow-up the ledger drops the entry for the
+// changed question before applying it, so no resolution call receives it as
+// an anchor selection, no hint carries it, and no carried entry serves it as
+// applied: the only way alpha reaches the follow-up is the offer.
+func TestAFollowUpNeverAppliesTheLedgerAnchor(t *testing.T) {
+	var mark int
+	before := func(rig *anchorProbeRig) { mark = len(rig.graph.calls) }
+	rig, one, two := followUpTurns(t, carryTurnOptions{followUpOn: true, before: before}, emptyProbeResponse())
+	if got := servedLedgerAnchor(one); got.ID != probeAlpha.CanonicalID {
+		t.Fatalf("premise: turn one's ledger holds %+v, want alpha", got)
+	}
+	ledgers := rig.telemetry.confirmedNeedLedgers
+	if line := ledgers[len(ledgers)-1]; line.Outcome != ConfirmedNeedLedgerDroppedQuestionChanged {
+		t.Fatalf("follow-up ledger outcome = %s, want dropped_question_changed", line.Outcome)
+	}
+	calls := rig.graph.calls[mark:]
+	if len(calls) == 0 {
+		t.Fatal("premise: the follow-up ran no resolution")
+	}
+	for i, call := range calls {
+		if call.anchor != nil {
+			t.Fatalf("resolution call %d anchor selection = %+v, want none", i, call.anchor)
+		}
+	}
+	if hints := carriedHintsOf(rig); len(hints) != 0 {
+		t.Fatalf("carried hints = %+v, want none", hints)
+	}
+	for _, entry := range memberEntries(two.result, contractsv1.ContextFabricStructureNeedSubjectAnchor) {
+		if entry.Disposition == contractsv1.ContextFabricStructureDispositionApplied {
+			t.Fatalf("served subject_anchor entry = %+v, want never applied", entry)
+		}
+	}
+}
+
+// TestATurnWithoutTheFollowUpOfferKeepsItsAnchorOptions: with the follow-up
+// switch off, the same turn keeps its structure anchor option for alpha.
+func TestATurnWithoutTheFollowUpOfferKeepsItsAnchorOptions(t *testing.T) {
+	response := emptyProbeResponse()
+	response.material.Missing = []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor}
+	response.material.AnchorOptions = []AnchorOption{anchorOptionFor(probeAlpha), anchorOptionFor(probeBeta)}
+	_, _, two := followUpTurns(t, carryTurnOptions{}, response)
+	needs := two.result.StructureNeeds
+	if needs == nil || len(needs.AnchorOptions) != 2 {
+		t.Fatalf("structure needs = %+v, want both anchor options kept", needs)
+	}
+}

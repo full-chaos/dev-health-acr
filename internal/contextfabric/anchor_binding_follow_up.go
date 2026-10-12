@@ -83,3 +83,30 @@ func (t *anchorBindingTracker) offerFollowUpAnchor(resolution SubjectResolution,
 	t.carry = BoundAnchorCarryFollowUpOffered
 	return out
 }
+
+// reconcileFollowUpStructure removes, after a follow-up offer, any anchor
+// option the turn's structure offer holds for the offered identity, so the
+// caller sees the remembered subject once, through one redemption path. The
+// anchor need itself stays disclosed: an anchor need with no option left is
+// the documented "missing, nothing offerable" shape. Any other turn passes
+// through unchanged.
+func (t *anchorBindingTracker) reconcileFollowUpStructure(material StructureOfferMaterial) StructureOfferMaterial {
+	if t == nil || t.carry != BoundAnchorCarryFollowUpOffered {
+		return material
+	}
+	held := anchorRef{Kind: t.parent.Binding.Kind, ID: t.parent.Binding.CanonicalID}
+	kept := make([]contractsv1.ContextFabricAnchorOption, 0, len(material.AnchorOptions))
+	for _, option := range material.AnchorOptions {
+		if option.Kind == held.Kind && option.CanonicalID == held.ID {
+			continue
+		}
+		kept = append(kept, option)
+	}
+	if len(kept) == len(material.AnchorOptions) {
+		return material
+	}
+	out := material
+	out.AnchorOptions = kept
+	t.carry = BoundAnchorCarryFollowUpOfferedReconciled
+	return out
+}

@@ -69,6 +69,10 @@ const (
 	// (anchor_binding_follow_up.go), the turn's own resolution committed
 	// nothing, and the remembered identity is offered first.
 	BoundAnchorCarryFollowUpOffered BoundAnchorCarry = "follow_up_offered"
+	// BoundAnchorCarryFollowUpOfferedReconciled: as follow_up_offered, and
+	// the turn's structure offer also held an anchor option for the same
+	// identity, which was removed so the subject is offered once.
+	BoundAnchorCarryFollowUpOfferedReconciled BoundAnchorCarry = "follow_up_offered_reconciled"
 	// BoundAnchorCarryFollowUpCommitted: admitted as a follow-up, and the
 	// turn's own resolution committed a subject; nothing is offered.
 	BoundAnchorCarryFollowUpCommitted BoundAnchorCarry = "follow_up_committed"
@@ -89,7 +93,7 @@ func boundAnchorCarries() []BoundAnchorCarry {
 	return []BoundAnchorCarry{
 		BoundAnchorCarrySwitchOff, BoundAnchorCarryNotEvaluated, BoundAnchorCarryNone, BoundAnchorCarryNotAdmitted, BoundAnchorCarryPendingHeld,
 		BoundAnchorCarryInjected, BoundAnchorCarryCallerSuperseded, BoundAnchorCarryReceiptSuperseded,
-		BoundAnchorCarryCapFull, BoundAnchorCarryRememberedOffered, BoundAnchorCarryFollowUpOffered,
+		BoundAnchorCarryCapFull, BoundAnchorCarryRememberedOffered, BoundAnchorCarryFollowUpOffered, BoundAnchorCarryFollowUpOfferedReconciled,
 		BoundAnchorCarryFollowUpCommitted, BoundAnchorCarryFollowUpFrameRefused, BoundAnchorCarryFollowUpParentMismatch,
 	}
 }

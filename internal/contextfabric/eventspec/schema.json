@@ -442,6 +442,7 @@
           "cap_full",
           "remembered_offered",
           "follow_up_offered",
+          "follow_up_offered_reconciled",
           "follow_up_committed",
           "follow_up_frame_refused",
           "follow_up_parent_mismatch",

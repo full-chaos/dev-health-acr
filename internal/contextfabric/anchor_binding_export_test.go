@@ -270,6 +270,12 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 			editBindingMember(s, func(b *AnchorBinding) { b.State = AnchorBindingPendingWindowConfirmation })
 		})))},
 		anchorSiteScenario{name: "follow-up offered", run: followUpVocabularyScenario(emptyProbeResponse(), nil, nil)},
+		anchorSiteScenario{name: "follow-up offered reconciled", run: followUpVocabularyScenario(func() needTurnResponse {
+			response := emptyProbeResponse()
+			response.material.Missing = []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor}
+			response.material.AnchorOptions = []AnchorOption{{Label: probeAlpha.Label, Kind: probeAlpha.Kind, CanonicalID: probeAlpha.CanonicalID, MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: "engine"}}
+			return response
+		}(), nil, nil)},
 		anchorSiteScenario{name: "follow-up committed", run: followUpVocabularyScenario(needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}}, bases: provenCommitBases(probeAlpha)}, nil, nil)},
 		anchorSiteScenario{name: "follow-up frame refused", run: followUpVocabularyScenario(emptyProbeResponse(), func(rig *anchorProbeRig) { rig.interpreter.outcome.Frame = nil }, nil)},
 		anchorSiteScenario{name: "follow-up parent mismatch", run: followUpVocabularyScenario(emptyProbeResponse(), nil, mutateStoredBindings(func(s *PersistedSemanticState) {
