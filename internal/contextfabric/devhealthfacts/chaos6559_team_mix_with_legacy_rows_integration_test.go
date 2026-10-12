@@ -100,8 +100,8 @@ func TestTeamMixIsStandaloneAgainstRealClickHouse(t *testing.T) {
 		if len(result.Facts) != 1 || result.State != contextfabric.SourceAvailable {
 			t.Fatalf("facts = %d state = %q, want 1 fact available", len(result.Facts), result.State)
 		}
-		if !strings.Contains(result.Reason, "investment mix unavailable for 1 of 2 requested teams") {
-			t.Fatalf("reason = %q, want the unavailable disclosure for 1 of 2", result.Reason)
+		if !strings.Contains(result.RequestNote, "investment mix unavailable for 1 of 2 requested teams") {
+			t.Fatalf("reason = %q, want the unavailable disclosure for 1 of 2", result.RequestNote)
 		}
 	})
 }

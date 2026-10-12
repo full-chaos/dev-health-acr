@@ -51,7 +51,7 @@ func TestInvestmentProviderTwoTeamsOneWithoutAMixServesOneAndDisclosesTheOther(t
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	if len(result.Facts) != 1 || !strings.Contains(result.Reason, "investment mix unavailable for 1 of 2 requested teams") {
+	if len(result.Facts) != 1 || !strings.Contains(result.RequestNote, "investment mix unavailable for 1 of 2 requested teams") {
 		t.Fatalf("result = %#v", result)
 	}
 }
