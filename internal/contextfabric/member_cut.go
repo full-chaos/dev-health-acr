@@ -159,6 +159,7 @@ func (e *Engine) planMemberCut(
 		if !ok {
 			return InvestigationResult{}, false
 		}
+		cut.Completeness.Outcomes = withoutDerivedAssembledRows(cut.Completeness.Outcomes)
 		stepped := *plan
 		stepped.Narrowing = slices.Clone(plan.Narrowing)
 		e.recordPlanNarrowingStep(&stepped, PlanNarrowing{
@@ -283,4 +284,21 @@ func withoutCutMemberRefs(result InvestigationResult, dropped []CohortMember) []
 		out = append(out, ref)
 	}
 	return out
+}
+
+// withoutDerivedAssembledRows removes the assembled-result rows the finalizer
+// derives from the member set (the count, the read populations, the ranking):
+// each carries a requirement identity and is written once, keyed on that
+// identity, so a row derived over the list before the cut would otherwise
+// survive it and state the cut list's old size. Rows without a requirement
+// identity (a lever's own disclosure) are not derived and stay.
+func withoutDerivedAssembledRows(rows []RequirementOutcomeRow) []RequirementOutcomeRow {
+	kept := make([]RequirementOutcomeRow, 0, len(rows))
+	for _, row := range rows {
+		if row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult && row.Requirement != "" {
+			continue
+		}
+		kept = append(kept, row)
+	}
+	return kept
 }
