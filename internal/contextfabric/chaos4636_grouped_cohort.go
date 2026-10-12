@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"sort"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -62,9 +63,18 @@ var groupLabelColumnCandidates = []string{"team_name", "scope_name"}
 // team whose id is a project's, which is a wrong grouping rather than a
 // missing one.
 const (
-	groupScopeColumn   = "scope"
-	groupScopeTeamKind = "team"
+	groupScopeColumn      = "scope"
+	groupScopeTeamKind    = "team"
+	groupScopeProjectKind = "project"
 )
+
+// isCanonicalProjectID reports whether id is a project's canonical identity
+// (the identity registry's own form). A project group is placed only by one:
+// a raw key is never turned into a project identity here.
+func isCanonicalProjectID(id string) bool {
+	segments, ok := identity.Segments(identity.KindProject, id)
+	return ok && len(segments) == 2 && segments[1] != ""
+}
 
 // cohortGroupAssignment is one member's derived group.
 type cohortGroupAssignment struct {
@@ -210,24 +220,25 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 	byGroup := make(map[string][]string, len(cohort.Members))
 	labels := make(map[string]string, len(cohort.Members))
 	kinds := make(map[string]SubjectKind, len(cohort.Members))
+	var otherSourceKind SubjectKind
 	for _, member := range cohort.Members {
-		placed := assignments[SubjectMapKey(member.Subject)]
+		all := assignments[SubjectMapKey(member.Subject)]
+		// Only the source rows of the ASKED axis place a member. A member
+		// whose rows name another axis only (a project row beside a team
+		// question) is ungrouped, not a mismatch by itself: the mismatch is
+		// decided below, once, when NO member was placed by the asked axis
+		// and the source named another one.
+		placed := make([]cohortGroupAssignment, 0, len(all))
+		for _, assignment := range all {
+			if assignment.kind == plan.GroupKind {
+				placed = append(placed, assignment)
+			} else if otherSourceKind == "" {
+				otherSourceKind = assignment.kind
+			}
+		}
 		if len(placed) == 0 {
 			ungrouped++
 			continue
-		}
-		// The kind check is per assignment and fails the WHOLE grouping, not
-		// just this member: a grouped answer that silently kept the members
-		// whose source happened to agree would present a partial group axis
-		// as a complete one.
-		for _, assignment := range placed {
-			if assignment.kind != plan.GroupKind {
-				return nil, 0, CohortGroupingOutcome{
-					Refusal:     CohortGroupingRefusalGroupKindSourceMismatch,
-					PlannedKind: plan.GroupKind,
-					SourceKind:  assignment.kind,
-				}
-			}
 		}
 		// EVERY owning group, not the first one seen. A project genuinely
 		// owned by two teams belongs under both, and dropping one would be
@@ -271,6 +282,15 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 		// zero-valued outcome for an empty or absent cohort, and
 		// TestAnEmptyCohortIsNotARefusal pins that, so the token cannot be
 		// stamped over a population of nobody.
+		if otherSourceKind != "" {
+			// The source named a different axis for the members and none for
+			// the asked one: the kind mismatch, with the source's kind named.
+			return nil, 0, CohortGroupingOutcome{
+				Refusal:     CohortGroupingRefusalGroupKindSourceMismatch,
+				PlannedKind: plan.GroupKind,
+				SourceKind:  otherSourceKind,
+			}
+		}
 		return nil, ungrouped, CohortGroupingOutcome{
 			Refusal:     CohortGroupingRefusalNoMemberPlaced,
 			PlannedKind: plan.GroupKind,
@@ -389,11 +409,28 @@ func groupAssignmentsFromValue(value FactValue) []cohortGroupAssignment {
 	}
 	found := make([]cohortGroupAssignment, 0, len(rows))
 	for _, row := range rows {
-		// health's breakdown is per-scope and only its team rows name a
-		// team. A row that declares a scope at all must declare the team
-		// scope, or its ids belong to something else entirely.
-		if scope, declared := rowString(row, groupScopeColumn); declared && scope != groupScopeTeamKind {
-			continue
+		// health's breakdown is per-scope: a row that declares a scope names
+		// that axis and nothing else. A team scope reads the team columns; a
+		// project scope names a project by its own canonical id, taken as
+		// given and never composed from a raw key; any other scope names an
+		// axis this reader does not place.
+		if scope, declared := rowString(row, groupScopeColumn); declared {
+			switch scope {
+			case groupScopeTeamKind:
+			case groupScopeProjectKind:
+				projectID, present := rowString(row, "scope_id")
+				if !present || !isCanonicalProjectID(projectID) {
+					continue
+				}
+				projectLabel, _ := firstRowString(row, groupLabelColumnCandidates)
+				if projectLabel == "" {
+					projectLabel = projectID
+				}
+				found = append(found, cohortGroupAssignment{canonicalID: projectID, label: projectLabel, kind: SubjectProject})
+				continue
+			default:
+				continue
+			}
 		}
 		rawKey, ok := firstRowString(row, groupIDColumnCandidates)
 		if !ok || rawKey == "" {

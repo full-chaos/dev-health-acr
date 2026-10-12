@@ -124,6 +124,8 @@ var (
 	// declWorkScopeRef: a provider work scope (work_items.project_id), not a graph
 	// id; the gate cannot resolve it, so it is opaque.
 	declWorkScopeRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectProject, IDForm: contextfabric.FactSubjectIDOpaque}
+	// declProjectCanonicalRef: a project's own canonical id (project.v2:...).
+	declProjectCanonicalRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectProject, IDForm: contextfabric.FactSubjectIDCanonical}
 	// declRepositoryRef: a repos.id uuid ("repository:"+uuid is the stored
 	// canonical id).
 	declRepositoryRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectRepository, IDForm: contextfabric.FactSubjectIDRepositoryUUID}
@@ -369,6 +371,18 @@ func requiredChildrenFields() []fieldDecl {
 func pullRequestFields() []fieldDecl {
 	return declJoin(
 		declOn(declPullRequestOnly, declNullable(fStr("state"))),
+		// The projects the pull request reaches through the issue link of
+		// record, one row per project; link_tier names the strongest link tier
+		// (native, explicit_text, heuristic). scope_id is the project's
+		// canonical id.
+		declOn(declPullRequestOnly,
+			fTable("project_breakdown",
+				cStr("scope"),
+				cRef(declProjectCanonicalRef, cStr("scope_id")),
+				cNullable(cStr("scope_name")),
+				cStr("link_tier"),
+			),
+		),
 		teamRollupCommonFields(true),
 		// Counted by each pull request's own event time inside the window.
 		declOn(declTeamOnly,

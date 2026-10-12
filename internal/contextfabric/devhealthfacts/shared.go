@@ -858,7 +858,13 @@ import (
 // unavailable or not_attempted, so the answer is no longer degraded by it. A
 // candidate saved under an earlier version holds the unexplained or degraded account and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v174"
+//
+// v174 -> v175: a pull request fact carries project_breakdown, one row per
+// project its linked issues reach (work_graph_issue_pr, strict reading), each
+// with the link tier; a pull request cohort grouped by project is grouped on
+// those rows where it was served ungrouped. A candidate saved under v174 holds
+// the ungrouped answer.
+const QueryVersion = "devhealthfacts.clickhouse.v175"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

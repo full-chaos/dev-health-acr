@@ -37,7 +37,8 @@ func newPullRequestsProvider(client contextpacket.ClickHouseQueryClient) *PullRe
 func (p *PullRequestsProvider) Capability() contextfabric.FactCapability {
 	capability := newCapability(contextfabric.FactPullRequests, "devhealthfacts.pull_requests", []contextfabric.SubjectKind{contextfabric.SubjectPullRequest, contextfabric.SubjectTeam})
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
-		contextfabric.SubjectTeam: {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectTeam:        {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectPullRequest: {contextfabric.FactTableBreakdown},
 	}
 	return capability
 }
@@ -83,6 +84,15 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query pull requests", scanErr)
 	}
+	var projectsByPullRequest map[string][]pullRequestProjectRow
+	var projectLinksTruncated bool
+	if len(rows) > 0 {
+		var projectErr error
+		projectsByPullRequest, projectLinksTruncated, projectErr = p.readPullRequestProjects(ctx, orgID, ids)
+		if projectErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query pull request projects", projectErr)
+		}
+	}
 	for _, row := range rows {
 		// The int64 conversion happens here, immediately once the value is
 		// safely in Go (see readers.PullRequestStateRow.Number's doc
@@ -94,14 +104,23 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 		if !ok {
 			continue
 		}
+		fields := map[string]contextfabric.FactValue{"state": stringOrNull(row.State)}
+		evidence := []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, row.RepoID+":"+strconv.FormatInt(number, 10))}
+		// The projects this pull request reaches through the issue link of
+		// record, with the link tier on each row. Absent when no link row is
+		// admitted: a missing link is not an empty project list.
+		if table, projectEvidence, ok := pullRequestProjectBreakdown(projectsByPullRequest[key]); ok {
+			fields["project_breakdown"] = table
+			evidence = append(evidence, projectEvidence...)
+		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactPullRequests, Subject: subject,
-			Fields:         map[string]contextfabric.FactValue{"state": stringOrNull(row.State)},
-			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, row.RepoID+":"+strconv.FormatInt(number, 10))},
+			Fields:         fields,
+			EvidenceRefIDs: evidence,
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows) + teamFactCount)
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery || teamOutcome.truncated}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery || teamOutcome.truncated || projectLinksTruncated}
 	applyNoOwnedRepositories(&result, teamOutcome.teamsWithoutRepos)
 	return result, nil
 }
