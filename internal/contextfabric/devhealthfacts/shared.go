@@ -847,11 +847,16 @@ import (
 // one, or none committed at that kind) is a clarification, not a generic
 // cohort. An answer saved under v171 for such a question holds the cohort.
 //
-// v172 -> v173: the compounding-risk operational-deficiency fact carries the
+// v172 -> v173: a team's blockers fact places a blocked item in the repositories its
+// linked pull request rows name (the link tier is on the fact) instead of the work item's own
+// repository column; team totals count an item once across the team's repositories. A candidate
+// saved under v172 holds the column-based repositories and totals.
+//
+// v173 -> v174: the compounding-risk operational-deficiency fact carries the
 // rule's own basis (score, band, time) beside the team's latest
 // compounding_risk_daily row and a moved-since-the-rule flag. An answer saved
-// under v172 quotes the rule-time score as the team's current risk.
-const QueryVersion = "devhealthfacts.clickhouse.v173"
+// under v173 quotes the rule-time score as the team's current risk.
+const QueryVersion = "devhealthfacts.clickhouse.v174"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
