@@ -976,7 +976,15 @@ import (
 // members by id, which could serve no match while later members held it. A
 // status decided over a cut pool says within how many members it ran. A
 // candidate saved under v193 may hold the cut, mismatched set.
-const QueryVersion = "devhealthfacts.clickhouse.v194"
+//
+// v194 -> v195: a pull request status question anchored on the caller's
+// organization, or naming no anchor, reads the organization's pull requests
+// with the status inside the read (the status census), before the walk cap or
+// the census bound. It used to filter the first pull requests the walk or the
+// census reached, so matches past them were missed; with no anchor, a read
+// that kept none served "Retrieval found no candidate". A candidate saved under
+// v194 may hold the cut, mismatched set or that sentence.
+const QueryVersion = "devhealthfacts.clickhouse.v195"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

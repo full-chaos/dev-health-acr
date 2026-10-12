@@ -124,6 +124,17 @@ func ContextFabricMemberStatusPoolCutLimitation(kind string, read, pool int) str
 	return fmt.Sprintf("The %s filter ran within the first %d %s the read reached; %s past that bound were not checked.", nouns.field, read, nouns.plural, nouns.plural)
 }
 
+// ContextFabricMemberStatusNoMatchLimitation states that members of the kind
+// were read and none holds the status asked for now: a count of zero matches,
+// not an empty search. Empty for a kind with no status filter.
+func ContextFabricMemberStatusNoMatchLimitation(kind string) string {
+	nouns, ok := contextFabricMemberStatusCutKinds[kind]
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("No %s the read reached hold the %s asked for now; that is a count of matches, not a statement about health.", nouns.plural, nouns.field)
+}
+
 // isContextFabricMemberStatusPoolCutLimitation reports whether one limitation
 // is exactly a pool cut sentence ContextFabricMemberStatusPoolCutLimitation
 // generates.
@@ -153,6 +164,11 @@ func isContextFabricMemberStatusPoolCutLimitation(limitation string) bool {
 func IsContextFabricMemberStatusLimitation(limitation string) bool {
 	if isContextFabricMemberStatusPoolCutLimitation(limitation) {
 		return true
+	}
+	for kind := range contextFabricMemberStatusCutKinds {
+		if limitation == ContextFabricMemberStatusNoMatchLimitation(kind) {
+			return true
+		}
 	}
 	for kind, nouns := range contextFabricMemberStatusKinds {
 		if limitation == ContextFabricMemberStatusUnappliedLimitation(kind) {

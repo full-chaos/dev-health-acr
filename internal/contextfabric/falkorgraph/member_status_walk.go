@@ -183,14 +183,35 @@ func (a *Adapter) pullRequestsHoldingReviewStatus(ctx context.Context, key, orgI
 	return kept, nil
 }
 
-// statusMemberHits is the member read of a status: pages of the members whose
+// statusPage reads one page of a status member read from skip: the hits and
+// how many rows the read returned, so a short page ends the source.
+type statusPage func(skip, limit int) ([]walkHit, int, error)
+
+// statusMemberHits is the member read of a status over a step from frontier:
+// statusPagedHits over one source per batch of the frontier.
+func (a *Adapter) statusMemberHits(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, step walkStep, temporal temporalFilter, budget int) ([]walkHit, error) {
+	sources := make([]statusPage, 0, (len(frontier)+storedSubjectBatch-1)/storedSubjectBatch)
+	for start := 0; start < len(frontier); start += storedSubjectBatch {
+		end := min(start+storedSubjectBatch, len(frontier))
+		batch := make([]interface{}, 0, end-start)
+		for _, id := range frontier[start:end] {
+			batch = append(batch, id)
+		}
+		sources = append(sources, func(skip, limit int) ([]walkHit, int, error) {
+			return a.walkStepPage(ctx, key, orgID, batch, step, temporal, skip, limit)
+		})
+	}
+	return a.statusPagedHits(ctx, key, orgID, state, hop, sources, budget)
+}
+
+// statusPagedHits is the member read of a status: pages of the members whose
 // stored status the read's clause keeps, a review status decided per page by
 // the review rows, until more authorized members hold the status than the walk
 // serves or the pages end. Only authorized members count toward the cap, so
 // members the caller cannot see do not crowd out those it can. A hit that
 // holds the status and that the caller cannot see is returned for the walk to
 // deny; a hit that does not hold it is not returned.
-func (a *Adapter) statusMemberHits(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, step walkStep, temporal temporalFilter, budget int) ([]walkHit, error) {
+func (a *Adapter) statusPagedHits(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, sources []statusPage, budget int) ([]walkHit, error) {
 	pageSize := 1 << 30
 	if budget > 0 {
 		pageSize = budget + 1
@@ -201,12 +222,7 @@ func (a *Adapter) statusMemberHits(ctx context.Context, key, orgID string, state
 	kept := map[string]bool{}
 	pages := 0
 	defer func() { state.out.status.read = len(read) }()
-	for start := 0; start < len(frontier); start += storedSubjectBatch {
-		end := min(start+storedSubjectBatch, len(frontier))
-		batch := make([]interface{}, 0, end-start)
-		for _, id := range frontier[start:end] {
-			batch = append(batch, id)
-		}
+	for _, source := range sources {
 		for skip := 0; ; skip += pageSize {
 			if state.collectLimit > 0 && len(kept) > state.collectLimit {
 				state.out.status.capFilled = true
@@ -217,7 +233,7 @@ func (a *Adapter) statusMemberHits(ctx context.Context, key, orgID string, state
 				return hits, nil
 			}
 			pages++
-			page, rows, err := a.walkStepPage(ctx, key, orgID, batch, step, temporal, skip, pageSize)
+			page, rows, err := source(skip, pageSize)
 			if err != nil {
 				return nil, err
 			}

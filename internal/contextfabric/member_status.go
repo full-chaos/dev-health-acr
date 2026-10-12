@@ -192,3 +192,21 @@ func withMemberStatusOutsideSet(result InvestigationResult, outside MemberStatus
 	result.LimitationsDisplaced += displaced
 	return result
 }
+
+// memberStatusNoMatchTerminal is the sentence of a turn with no subject whose
+// status read reached members of the kind and kept none: the reader's empty
+// member set says so. Retrieval found members, so the turn is not an empty
+// search. Empty when the graph context carries no such member set.
+func memberStatusNoMatchTerminal(frame *QuestionFrame, cohort *Cohort) string {
+	if cohort == nil || len(cohort.Members) != 0 {
+		return ""
+	}
+	if PullRequestStatusFilterOf(frame) == "" {
+		if kind, status := MemberStatusFilterOf(frame); status == "" || kind != cohort.Kind {
+			return ""
+		}
+	} else if cohort.Kind != SubjectPullRequest {
+		return ""
+	}
+	return contractsv1.ContextFabricMemberStatusNoMatchLimitation(string(cohort.Kind))
+}
