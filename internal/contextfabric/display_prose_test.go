@@ -68,3 +68,17 @@ func TestComposeFailedSynthesisCurrentStateRoundsRationaleAndWordsReasonTokens(t
 		}
 	}
 }
+
+func TestComposeCurrentStateLeavesNeverInProseFieldsOut(t *testing.T) {
+	t.Parallel()
+	cursor := "opaque-cursor"
+	title := "Fix the thing"
+	subject := SubjectRef{Label: "Team A"}
+	got := composeCurrentState(SynthesisDraft{ClaimedFacts: []ClaimedFact{
+		{ClaimID: "c1", Kind: FactInvestment, Field: "next_cursor", Subject: subject, Value: ScalarValue{String: &cursor}},
+		{ClaimID: "c2", Kind: FactWork, Field: "title", Subject: subject, Value: ScalarValue{String: &title}},
+	}})
+	if want := "Current observed values: title: Fix the thing (Team A)."; got != want {
+		t.Fatalf("CurrentState = %q, want %q", got, want)
+	}
+}
