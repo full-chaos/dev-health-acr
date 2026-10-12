@@ -125,7 +125,7 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 	}
 	state, retentionReason := timeBound.retentionState(len(rows) + teamFactCount)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery || teamOutcome.truncated || projectLinksTruncated}
-	applyNoOwnedRepositories(&result, teamOutcome.teamsWithoutRepos)
+	applyNoOwnedRepositories(&result, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
 	if teamOutcome.linkRowsUnwindowed {
 		mergeFactReadReason(&result, teamProjectLinksUnwindowedReason)
 	}
@@ -201,6 +201,7 @@ type pullRequestRollupRepo struct{ opened, merged, closedUnmerged int64 }
 func (p *PullRequestsProvider) readTeamRollup(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidence *contractsv1.ContextFabricRequestedEvidenceWindow) (outcome teamRollupOutcome, err error) {
 	teamIDs, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	outcome.rejected = rejected
+	outcome.teamsRequested = len(teamIDs)
 	if len(teamIDs) == 0 {
 		return outcome, nil
 	}
@@ -249,7 +250,7 @@ ORDER BY repo_id`
 		subject := bySubject[teamID]
 		repos := owned[teamID]
 		if len(repos) == 0 && len(reachedOnly[teamID]) == 0 {
-			outcome.teamsWithoutRepos++
+			outcome.teamsWithoutRepos = append(outcome.teamsWithoutRepos, subject)
 			continue
 		}
 		var opened, merged, closedUnmerged, withData int64

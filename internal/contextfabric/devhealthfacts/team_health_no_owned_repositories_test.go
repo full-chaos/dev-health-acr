@@ -137,8 +137,17 @@ func TestMixedOwnershipDecidesTheStatePerTeam(t *testing.T) {
 			if mixed.State != contextfabric.SourceNoData || len(mixed.Facts) != 0 {
 				t.Fatalf("owner without rows beside a team that owns nothing: state = %q facts = %d, want no_data", mixed.State, len(mixed.Facts))
 			}
-			if !strings.Contains(mixed.Reason, "1 of 2 requested teams own no repository") {
-				t.Fatalf("reason = %q, want the team that owns nothing named beside the owner's state", mixed.Reason)
+			if !strings.Contains(mixed.RequestNote, "1 of 2 requested teams own no repository") {
+				t.Fatalf("request note = %q, want the team that owns nothing named beside the owner's state", mixed.RequestNote)
+			}
+			if strings.Contains(mixed.Reason, "own no repository") {
+				t.Fatalf("reason = %q, a kind reason true of one team only must not ride on every subject", mixed.Reason)
+			}
+			if got := mixed.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("NOTHING"))]; !strings.Contains(got, "team owns no repository") {
+				t.Fatalf("own reason of the team that owns nothing = %q", got)
+			}
+			if got, has := mixed.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("OWNER"))]; has && strings.Contains(got, "owns no repository") {
+				t.Fatalf("the owner carries an own reason %q", got)
 			}
 			none := readTeamsKind(t, &fakeClient{}, kind, "NOTHING", "ALSO-NOTHING")
 			if none.State != contextfabric.SourceNotApplicable || !strings.Contains(none.Reason, "owns no repository") {

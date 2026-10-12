@@ -91,7 +91,8 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 		}
 	}
 
-	teamsWithoutRepos, projectReachedWithoutRows := 0, 0
+	var teamsWithoutRepos []contextfabric.SubjectRef
+	teamsRequested, projectReachedWithoutRows := 0, 0
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		outcome, scanErr := p.readTeamRollup(ctx, orgID, teamSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if scanErr != nil {
@@ -99,7 +100,8 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 		}
 		truncated = truncated || outcome.truncated
 		rejectedCount += outcome.rejected
-		teamsWithoutRepos += outcome.teamsWithoutRepos
+		teamsWithoutRepos = append(teamsWithoutRepos, outcome.teamsWithoutRepos...)
+		teamsRequested += outcome.teamsRequested
 		projectReachedWithoutRows += outcome.projectReachedWithoutRows
 		if outcome.contributed > 0 {
 			grain = grainDaily
@@ -108,7 +110,7 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 
 	state, retentionReason := timeBound.retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
-	applyNoOwnedRepositories(&result, teamsWithoutRepos)
+	applyNoOwnedRepositories(&result, teamsRequested, teamsWithoutRepos)
 	applyProjectReachedWithoutRows(&result, projectReachedWithoutRows)
 	return result, nil
 }
@@ -197,6 +199,7 @@ type deploymentRollupRepo struct {
 func (p *DeploymentsProvider) readTeamRollup(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidence *contractsv1.ContextFabricRequestedEvidenceWindow) (outcome teamRollupOutcome, err error) {
 	teamIDs, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	outcome.rejected = rejected
+	outcome.teamsRequested = len(teamIDs)
 	if len(teamIDs) == 0 {
 		return outcome, nil
 	}
@@ -251,7 +254,7 @@ ORDER BY repo_id`
 		subject := bySubject[teamID]
 		repos := owned[teamID]
 		if len(repos) == 0 {
-			outcome.teamsWithoutRepos++
+			outcome.teamsWithoutRepos = append(outcome.teamsWithoutRepos, subject)
 			continue
 		}
 		var total, failed, withData int64

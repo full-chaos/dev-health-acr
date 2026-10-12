@@ -1067,6 +1067,12 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				row.Outcome, row.Reason = OutcomeUnavailable, "the fact registry recorded no outcome for this kind"
 			default:
 				row.KindState, row.Reason = string(outcome.State), outcome.Reason
+				if own := outcome.MemberReasons[key]; own != "" {
+					row.Reason = own
+					if outcome.Reason != "" {
+						row.Reason = own + "; " + outcome.Reason
+					}
+				}
 				if state, ok := outcome.Members[key]; ok && providerMemberStates[state] {
 					row.ProviderState = state
 				}

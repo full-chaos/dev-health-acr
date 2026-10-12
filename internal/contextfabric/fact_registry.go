@@ -342,6 +342,12 @@ type FactQuery struct {
 }
 
 type FactProviderResult struct {
+	// RequestNote is a sentence true of the request as a whole (a count of
+	// requested subjects in some state). It joins the kind's coverage reason
+	// and is never copied onto a subject's own coverage row.
+	RequestNote string
+	// SubjectReasons are reasons true of one subject, keyed by FactSubjectKey.
+	SubjectReasons map[string]string
 	Facts      []CanonicalFact
 	State      SourceState
 	ObservedAt *time.Time
@@ -1066,6 +1072,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		// said anything, which the prefixed composite can no longer answer.
 		providerReason := result.Reason
 		result.Reason = withNarrowingNote(planned, result.Reason)
+		result.Reason = CombineRequestNote(result.Reason, result.RequestNote)
 		// CHAOS-4099, codex round 3. A read that succeeded over a subject set
 		// the resolver KNOWS is incomplete is a truncated read, and says so.
 		//
@@ -2159,4 +2166,31 @@ func onlyLinkScopedWorkItems(request CanonicalFactRequest, subjects []SubjectRef
 		}
 	}
 	return len(subjects) > 0
+}
+
+// CombineRequestNote joins a request-level note to a kind reason, note first.
+func CombineRequestNote(reason, note string) string {
+	switch {
+	case strings.TrimSpace(note) == "":
+		return reason
+	case strings.TrimSpace(reason) == "":
+		return note
+	case strings.Contains(reason, note):
+		return reason
+	}
+	return note + "; " + reason
+}
+
+// StripRequestNote removes a note CombineRequestNote added, leaving the part
+// of the reason that holds for every subject of the kind.
+func StripRequestNote(reason, note string) string {
+	if strings.TrimSpace(note) == "" {
+		return reason
+	}
+	for _, variant := range []string{note + "; ", "; " + note, note} {
+		if strings.Contains(reason, variant) {
+			return strings.Replace(reason, variant, "", 1)
+		}
+	}
+	return reason
 }
