@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -99,7 +100,12 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			a.writeContextFabricError(w, r, err)
 			return
 		}
-		maximumBytes := min(int64(a.config.MaxSerializedBytes), int64(request.Options.MaxSerializedBytes))
+		// The service ceiling is the only line past which an answer is
+		// refused. The caller's own max_serialized_bytes bounds what is
+		// SERVED: an answer that measures over it is delivered as the
+		// bounded projection below, never refused and never oversize.
+		maximumBytes := int64(a.config.MaxSerializedBytes)
+		callerBytes := int64(request.Options.MaxSerializedBytes)
 		itemCounts := contextFabricResultItemCounts(result)
 		encoded, measuredBytes, sizeErr := marshalContextFabricResponse(result)
 		if sizeErr != nil {
@@ -159,10 +165,39 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		// `total <= MaxItems+Paths` is exactly `budgeted <= MaxItems` --
 		// Paths stops binding the gate without the recorded usage ever
 		// diverging from what was actually served.
+		var projected *contractsv1.ContextFabricAnswerProjection
+		servedBytes := measuredBytes
+		if measuredBytes > callerBytes {
+			if collectedSynthesisInput() != nil {
+				// A client synthesis turn needs its synthesis input in the
+				// body, which a projection cannot carry, so the caller's
+				// ceiling is a refusal here, exactly as it was.
+				a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "bytes", measuredBytes, callerBytes, estimatedTokens, itemCounts)
+				writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+					"measured_bytes": measuredBytes, "max_serialized_bytes": callerBytes,
+				})
+				return
+			}
+			projection, projectionEncoded, projectionBytes, budget, fits := a.projectToCallerOption(result, request.Options)
+			if !fits {
+				a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "projection_bytes", projectionBytes, callerBytes, estimatedTokens, itemCounts)
+				writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+					"measured_bytes": projectionBytes, "max_serialized_bytes": callerBytes,
+				})
+				return
+			}
+			projected = &projection
+			encoded = projectionEncoded
+			servedBytes = projectionBytes
+			displayArgs := answerprojection.DisplayLogArgs(result, projection, budget, false, false)
+			displayArgs = append(displayArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "surface", "investigation_create",
+				"canonical_bytes", measuredBytes, "served_bytes", servedBytes, "caller_max_serialized_bytes", callerBytes, "hosted_max_serialized_bytes", maximumBytes)
+			a.logger.InfoContext(r.Context(), "context fabric answer display", displayArgs...)
+		}
 		usage := limits.ResourceUsage{
 			Items:  int64(itemCounts.Total()),
 			Tokens: estimatedTokens,
-			Bytes:  measuredBytes,
+			Bytes:  servedBytes,
 		}
 		override := limits.ResourceBudget{
 			MaxItems: int64(contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems)) + int64(itemCounts.Paths) + int64(itemCounts.WalkCohortMembers), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
@@ -177,7 +212,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			return
 		}
 		synthesisInputBytes := 0
-		if bundle := collectedSynthesisInput(); bundle != nil {
+		if bundle := collectedSynthesisInput(); bundle != nil && projected == nil {
 			// The synthesis input has its own bound, so it is not part of the
 			// measure above.
 			var envelopeBytes int64
@@ -195,12 +230,69 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			}
 			synthesisInputBytes = int(envelopeBytes - measuredBytes)
 		}
-		a.logContextFabricResponseBudgetMeasured(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes)
+		a.logContextFabricResponseBudgetMeasured(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes, "projected", projected != nil, "served_bytes", servedBytes, "caller_max_serialized_bytes", callerBytes)
 		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_completed", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
 		deliveredStatus = string(result.Status)
 		writeEncodedJSON(w, http.StatusOK, encoded)
 	})
 	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+}
+
+// maxProjectionShrinkSteps bounds how often projectToCallerOption halves the
+// projection's count budgets while the encoded projection still overruns the
+// caller's byte option. Each step at least halves every array bound, so five
+// steps reach the single-element floor from the contract maximum.
+const maxProjectionShrinkSteps = 8
+
+// halvedCount halves a projection count bound, reading a non-positive bound
+// as the default it stands for, and never goes below one.
+func halvedCount(bound, fallback int) int {
+	if bound <= 0 {
+		bound = fallback
+	}
+	return max(1, bound/2)
+}
+
+// projectToCallerOption serves the answer an investigation produced as the
+// bounded projection the MCP tool and the result-by-id route share, sized to
+// the caller's max_serialized_bytes. The projection declares that the
+// canonical result was left out (full_result_omitted) and carries result_id,
+// which the stored-result route serves in full against the service ceiling.
+//
+// The projection bounds its narrative arrays by the byte option but keeps its
+// other arrays at their count bounds, so a very small option can still be
+// overrun; the count bounds are then halved, deterministically, until the
+// encoded projection fits. fits is false only when even the floor does not.
+func (a *App) projectToCallerOption(result contractsv1.ContextFabricInvestigationResult, options contractsv1.ContextFabricInvestigationOptions) (projection contractsv1.ContextFabricAnswerProjection, encoded []byte, bytes int64, budget answerprojection.Budget, fits bool) {
+	budget = answerprojection.Budget{
+		MaxDrivers:         options.MaxDrivers,
+		MaxCohortMembers:   options.MaxCohortMembers,
+		MaxEvidenceRefs:    options.MaxEvidenceRefs,
+		MaxSerializedBytes: options.MaxSerializedBytes,
+	}
+	for step := 0; ; step++ {
+		projection = answerprojection.Project(result, budget)
+		answerprojection.MarkFullResultOmitted(&projection)
+		if projection.Validate() != nil {
+			return projection, nil, 0, budget, false
+		}
+		var err error
+		encoded, bytes, err = marshalContextFabricResponse(projection)
+		if err != nil {
+			return projection, nil, 0, budget, false
+		}
+		if bytes <= int64(options.MaxSerializedBytes) {
+			return projection, encoded, bytes, budget, true
+		}
+		if step >= maxProjectionShrinkSteps {
+			return projection, encoded, bytes, budget, false
+		}
+		budget.MaxDrivers = halvedCount(budget.MaxDrivers, answerprojection.DefaultBudget.MaxDrivers)
+		budget.MaxCohortMembers = halvedCount(budget.MaxCohortMembers, answerprojection.DefaultBudget.MaxCohortMembers)
+		budget.MaxEvidenceRefs = halvedCount(budget.MaxEvidenceRefs, answerprojection.DefaultBudget.MaxEvidenceRefs)
+		budget.MaxFacts = halvedCount(budget.MaxFacts, answerprojection.DefaultBudget.MaxFacts)
+		budget.MaxCandidates = halvedCount(budget.MaxCandidates, answerprojection.DefaultBudget.MaxCandidates)
+	}
 }
 
 // errContextFabricPanic classifies a panic that escaped the investigator

@@ -236,6 +236,11 @@ type PlanNarrowingEvent struct {
 	// byte cut kept only because cited evidence pins them. Zero when no walk
 	// list was cut.
 	EvidencePinnedMembers int
+	// CeilingFit names how an answer that overran only the caller's byte
+	// target was fitted against the service ceiling instead of refused: the
+	// document fit as measured, or the model-free lever that served it. Empty
+	// on every other event.
+	CeilingFit CeilingFitStep
 	// OutcomeCompletenessState is what the served answer claims about
 	// itself, from the closed vocabulary the outcome set derives. It is on
 	// the event so that a served answer's completeness can be counted
@@ -647,7 +652,13 @@ func (e *Engine) recordGroupedCohortCompleteness(ctx context.Context, principal 
 // behaves precisely as it did before this slice.
 func (e *Engine) effectiveResponseBudget(request InvestigationRequest) ResponseBudget {
 	budget := ResponseBudget{MaxItems: e.maxItems, MaxSerializedBytes: e.maxSerializedBytes}
-	if requested := request.Options.MaxSerializedBytes; requested > 0 {
+	// The shed target is the answer budget when the caller named one, else the
+	// body bound: a caller that sets one knob sees the shedding it always saw.
+	requested := request.Options.AnswerBudgetBytes
+	if requested <= 0 {
+		requested = request.Options.MaxSerializedBytes
+	}
+	if requested > 0 {
 		if budget.MaxSerializedBytes <= 0 || int64(requested) < budget.MaxSerializedBytes {
 			budget.MaxSerializedBytes = int64(requested)
 		}
@@ -733,3 +744,16 @@ type MembershipCardinalityEvent struct {
 	CohortComplete  bool
 	CohortTruncated bool
 }
+
+// CeilingFitStep is the closed vocabulary of how serveAtServiceCeiling fitted
+// a document against the service ceiling.
+type CeilingFitStep string
+
+const (
+	CeilingFitNone          CeilingFitStep = ""
+	CeilingFitMeasured      CeilingFitStep = "fits_as_measured"
+	CeilingFitRowTruncation CeilingFitStep = "row_truncation"
+	CeilingFitPathDrop      CeilingFitStep = "path_drop"
+	CeilingFitWalkListCut   CeilingFitStep = "walk_list_cut"
+	CeilingFitDecisive      CeilingFitStep = "decisive_fit"
+)

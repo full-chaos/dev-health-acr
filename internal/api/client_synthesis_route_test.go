@@ -527,6 +527,16 @@ func TestClientSynthesisInputIsNotCountedInTheResultByteBudget(t *testing.T) {
 	for _, mode := range []contractsv1.ContextFabricSynthesisMode{contractsv1.ContextFabricSynthesisModeClient, ""} {
 		over := newClientRouteRig(t, large)
 		refused := over.post(t, mode, withLimit(limit))
+		if mode == "" {
+			// A server-mode answer above the caller's byte option is
+			// delivered as the projection sized to it, never refused.
+			if refused.Code != http.StatusOK || refused.Body.Len() > limit {
+				t.Fatalf("mode %q: a result above the option: status = %d, %d bytes, want 200 within %d body=%s", mode, refused.Code, refused.Body.Len(), limit, refused.Body.String())
+			}
+			continue
+		}
+		// A client synthesis turn carries its input in the body, which a
+		// projection cannot, so the option stays a refusal line there.
 		if refused.Code != http.StatusRequestEntityTooLarge || !containsJSONCode(refused.Body.Bytes(), "invalid_request") {
 			t.Fatalf("mode %q: a result above the budget: status = %d body=%s, want 413", mode, refused.Code, refused.Body.String())
 		}

@@ -4191,7 +4191,29 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}
 	decisiveBudget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
+	if pendingTelemetry.CeilingFitted && e.maxSerializedBytes > decisiveBudget.MaxSerializedBytes {
+		// Stage 3 fitted the answer against the service ceiling because the
+		// request's target could not be reached: the decisive fit is against
+		// the same line. The plan keeps the request's target.
+		decisiveBudget.MaxSerializedBytes = e.maxSerializedBytes
+	}
+	fittedBeforeFinal := result
 	result, budgetErr := e.finalizeServedFitting(ctx, principal, BudgetAssertDecisive, result, decisiveBudget)
+	if e.refusedOnlyAtCallerByteOption(budgetErr, decisiveBudget.MaxSerializedBytes) {
+		// Same line as the stage-3 fit above: the option shed what it
+		// could, and the ceiling decides.
+		decisiveBudget.MaxSerializedBytes = e.maxSerializedBytes
+		result, budgetErr = e.finalizeServedFitting(ctx, principal, BudgetAssertDecisive, fittedBeforeFinal, decisiveBudget)
+		if budgetErr == nil {
+			// Announced like the stage-3 ceiling fit: one event, from the one
+			// place that stamps it, naming the document served over the
+			// request's target and the ceiling it fits.
+			if served, measureErr := MeasureAttempt(consumedAllocation, result, decisiveBudget); measureErr == nil {
+				grouped := result.Cohort != nil && len(result.Cohort.Groups) > 0
+				e.recordCeilingFit(ctx, principal, &plan, cohortMemberCount(result.Cohort), grouped, "", served, result, contractsv1.ContextFabricBudgetOverrunBytes, CeilingFitDecisive)
+			}
+		}
+	}
 	if cover.disclosure != nil {
 		if budgetErr != nil {
 			cover.disclosureMeasured = refusalMeasurementOf(budgetErr)
@@ -4822,3 +4844,15 @@ var isRetrievalDegradedLimitation = contractsv1.IsContextFabricRetrievalDegraded
 // LimitationsDisplaced's coherence rule, and a second copy here would be a
 // second thing that can drift from the vocabulary it scans for.
 var hasRetrievalDegradedLimitation = contractsv1.HasContextFabricRetrievalDegradedLimitation
+
+// refusedOnlyAtCallerByteOption reports whether err is a byte refusal that was
+// decided against a ceiling the caller's max_serialized_bytes narrowed below
+// the service's own, so that fitting again against the service ceiling is
+// still open. A refusal at the service ceiling itself is final.
+func (e *Engine) refusedOnlyAtCallerByteOption(err error, fittedBytes int64) bool {
+	if err == nil || fittedBytes <= 0 || (e.maxSerializedBytes > 0 && fittedBytes >= e.maxSerializedBytes) {
+		return false
+	}
+	var refusal AnswerBudgetRefusal
+	return errors.As(err, &refusal) && refusal.Overrun == contractsv1.ContextFabricBudgetOverrunBytes
+}
