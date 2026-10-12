@@ -413,6 +413,53 @@ func applyNoOwnedRepositories(result *contextfabric.FactProviderResult, teamsWit
 	mergeFactReadReason(result, teamNoOwnedRepositoriesReason)
 }
 
+// teamsOwningNoRepositoriesReason is the limitation served when some, not all,
+// of the requested teams own no repository: the teams that own one keep their
+// own state.
+func teamsOwningNoRepositoriesReason(without, requested int) string {
+	return fmt.Sprintf("devhealthfacts: %d of %d requested teams own no repository in synced ownership, so no rollup applies to them; this is not a measured zero", without, requested)
+}
+
+// teamsOwningNothingWithoutData counts the requested teams that own no
+// repository and have no fact served: a team that owns something, or holds a
+// fact, is never counted.
+func teamsOwningNothingWithoutData(ids []string, bySubject map[string]contextfabric.SubjectRef, owned map[string][]teamOwnedRepo, facts []contextfabric.CanonicalFact, evaluated []contextfabric.SubjectRef) int {
+	served := make(map[string]struct{}, len(facts)+len(evaluated))
+	for _, fact := range facts {
+		served[contextfabric.FactSubjectKey(fact.Subject)] = struct{}{}
+	}
+	for _, subject := range evaluated {
+		served[contextfabric.FactSubjectKey(subject)] = struct{}{}
+	}
+	count := 0
+	for _, id := range ids {
+		if len(owned[id]) > 0 {
+			continue
+		}
+		if _, has := served[contextfabric.FactSubjectKey(bySubject[id])]; has {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// applyTeamsOwningNothing decides the state per team: only a read where every
+// requested team owns no repository, and nothing at all was served, is
+// not_applicable. When some requested team owns a repository its state stands
+// and the teams that own none are named beside it.
+func applyTeamsOwningNothing(result *contextfabric.FactProviderResult, requested, without int) {
+	if without <= 0 || requested <= 0 {
+		return
+	}
+	if without >= requested && len(result.Facts) == 0 && len(result.EvaluatedSubjects) == 0 {
+		result.State = contextfabric.SourceNotApplicable
+		result.Reason = teamNoOwnedRepositoriesReason
+		return
+	}
+	mergeFactReadReason(result, teamsOwningNoRepositoriesReason(without, requested))
+}
+
 // teamRollupOutcome is what one kind's team read reports back to its
 // ReadFacts: how many repositories contributed data, whether a table bound
 // dropped rows, the subjects skipped for shape, and the teams that own no

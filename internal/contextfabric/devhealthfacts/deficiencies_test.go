@@ -53,14 +53,18 @@ func TestOperationalDeficienciesProviderOnlyFiredRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	if !strings.Contains(client.queries[len(client.queries)-1].statement, "fired = 1") {
-		t.Fatalf("statement = %q, want fired = 1", client.queries[len(client.queries)-1].statement)
+	fired := false
+	for _, q := range client.queries {
+		fired = fired || strings.Contains(q.statement, "fired = 1")
+	}
+	if !fired {
+		t.Fatalf("queries = %#v, want one with fired = 1", client.queries)
 	}
 }
 
 func TestOperationalDeficienciesProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "WHERE rn = 1 AND fired = 1", rows: nil}}}
+	client := teamOwningClient(contextfabric.FactOperationalDeficiencies, "ghost")
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactOperationalDeficiencies)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
