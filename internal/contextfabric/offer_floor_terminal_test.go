@@ -43,18 +43,47 @@ func TestPromptTextNeverStandsInForTheFloorOutcome(t *testing.T) {
 	}
 }
 
-// TestTheSubjectNotFoundSentenceNamesWhatWasSearched: the named subject and
-// the kinds searched are in the sentence, and it says nothing was offered.
-func TestTheSubjectNotFoundSentenceNamesWhatWasSearched(t *testing.T) {
+// TestTheSubjectNotFoundSentenceNamesTheRequestedKindAndTheClosestMatches: the
+// named subject, the requested kind and the closest-match kinds are in the
+// sentence, and it says nothing was offered.
+func TestTheSubjectNotFoundSentenceNamesTheRequestedKindAndTheClosestMatches(t *testing.T) {
 	t.Parallel()
-	got := noMatchLimitationSubjectNotFound([]string{"Phantom", "Squad"}, []string{"ci_pipeline_run", "team"})
-	for _, want := range []string{`"Phantom Squad"`, "CI pipeline runs, teams", "nothing was offered"} {
+	got := noMatchLimitationSubjectNotFound([]string{"Phantom", "Squad"}, SubjectProject, []string{"ci_pipeline_run", "team"})
+	for _, want := range []string{`No project matched "Phantom Squad"; the closest matches were CI pipeline runs, teams.`, "Nothing was offered"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("sentence %q lacks %q", got, want)
 		}
 	}
-	if fallback := noMatchLimitationSubjectNotFound(nil, nil); !strings.Contains(fallback, "the subject named in the question") || !strings.Contains(fallback, "(none)") {
+	if strings.Contains(got, "searched") {
+		t.Fatalf("sentence %q claims a search scope", got)
+	}
+	if got := noMatchLimitationSubjectNotFound([]string{"Phantom"}, "", []string{"team"}); !strings.HasPrefix(got, `No subject matched "Phantom"; the closest matches were teams.`) {
+		t.Fatalf("no requested kind: %q", got)
+	}
+	if got := noMatchLimitationSubjectNotFound([]string{"Phantom"}, SubjectProject, nil); !strings.HasPrefix(got, `No project matched "Phantom". Nothing was offered`) {
+		t.Fatalf("no near misses: %q", got)
+	}
+	if got := noMatchLimitationSubjectNotFound([]string{"Phantom"}, "not_a_kind", nil); !strings.HasPrefix(got, `No subject matched "Phantom".`) {
+		t.Fatalf("unrecognized kind: %q", got)
+	}
+	if fallback := noMatchLimitationSubjectNotFound(nil, "", nil); !strings.HasPrefix(fallback, "No subject matched the name in the question.") {
 		t.Fatalf("fallback sentence = %q", fallback)
+	}
+}
+
+// TestTheRequestedKindComesFromTheWinningReadingElseTheSingleExpectedKind.
+func TestTheRequestedKindComesFromTheWinningReadingElseTheSingleExpectedKind(t *testing.T) {
+	t.Parallel()
+	var outcome QuestionFamilyOutcome
+	outcome.WinningSample.RequestedKind = SubjectProject
+	if got := noMatchRequestedKind(InvestigationRequest{ExpectedKinds: []SubjectKind{SubjectTeam}}, outcome); got != SubjectProject {
+		t.Fatalf("winning reading: %q", got)
+	}
+	if got := noMatchRequestedKind(InvestigationRequest{ExpectedKinds: []SubjectKind{SubjectTeam}}, QuestionFamilyOutcome{}); got != SubjectTeam {
+		t.Fatalf("single expected kind: %q", got)
+	}
+	if got := noMatchRequestedKind(InvestigationRequest{ExpectedKinds: []SubjectKind{SubjectTeam, SubjectProject}}, QuestionFamilyOutcome{}); got != "" {
+		t.Fatalf("two expected kinds: %q", got)
 	}
 }
 
