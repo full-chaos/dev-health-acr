@@ -857,10 +857,10 @@ func TestRuntimeAnswerSynthesizerComposesDeterministicAnswerServerSide(t *testin
 	// this field -- the same claim still lives structurally in
 	// result.ClaimedFacts (asserted below) and in result.CurrentState's own
 	// canonical statement, so this is deduplication, not a coverage loss.
-	if strings.Contains(result.DeterministicAnswer, "Canonical facts:") || strings.Contains(result.DeterministicAnswer, "readiness.release_ready=false") {
+	if strings.Contains(result.DeterministicAnswer, "Canonical facts:") || strings.Contains(result.DeterministicAnswer, "release ready: false") {
 		t.Fatalf("DeterministicAnswer = %q, want no raw k=v claimed-fact list (single-subject path, CHAOS-4699)", result.DeterministicAnswer)
 	}
-	if !strings.Contains(result.CurrentState, "readiness.release_ready=false") {
+	if !strings.Contains(result.CurrentState, "release ready: false") {
 		t.Fatalf("CurrentState = %q, want it to still carry the claimed fact restatement", result.CurrentState)
 	}
 	if len(result.ClaimedFacts) != 1 || result.ClaimedFacts[0].ClaimID != "claim_readiness_1" {
@@ -954,7 +954,7 @@ func TestRuntimeAnswerSynthesizerComposesDirectJudgmentAndCurrentStateServerSide
 	if strings.Contains(result.DirectJudgment, "contradicting") || strings.Contains(result.CurrentState, "contradicting") {
 		t.Fatalf("model prose leaked through: direct_judgment=%q current_state=%q", result.DirectJudgment, result.CurrentState)
 	}
-	if !strings.Contains(result.CurrentState, "readiness.release_ready=false") {
+	if !strings.Contains(result.CurrentState, "release ready: false") {
 		t.Fatalf("CurrentState = %q, want it composed from the validated claim", result.CurrentState)
 	}
 	if result.DirectJudgment == "" {

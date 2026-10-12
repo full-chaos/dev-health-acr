@@ -403,8 +403,10 @@ type OfferFloorOutcome struct {
 	// Refused is true when the floor withheld at least one candidate and the
 	// resolution had nothing left to offer or commit.
 	Refused bool
-	// SearchedKinds are the distinct subject kinds the retrieval pool held
-	// (offered or withheld), sorted.
+	// SearchedKinds are the distinct kinds of the near-miss candidates the
+	// floor withheld (offered or withheld rows of the retrieval pool), sorted.
+	// Retrieval is not scoped to a kind, so this is not a list of the kinds
+	// searched.
 	SearchedKinds []string
 }
 

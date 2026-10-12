@@ -25,7 +25,7 @@ const (
 
 	// InvestmentUnitsCutReason is the coverage sentence of a units page the
 	// provider cut: it promises the page fact's next_cursor.
-	InvestmentUnitsCutReason = "units_page_cut: more work units follow; pass the next_cursor of the work_unit_page fact as units.cursor"
+	InvestmentUnitsCutReason = "work units cut by the byte limit: more work units follow; pass the next_cursor of the page of work units as units.cursor"
 
 	// InvestmentUnitsWeight names the weight the unit shares carry.
 	InvestmentUnitsWeight = "share_in_scope = (distinct PR refs of the unit in this repository / distinct refs of the unit) * persisted effort_value; a unit with no PR ref counts its stored repository as one reference"

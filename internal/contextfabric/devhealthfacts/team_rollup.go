@@ -139,12 +139,27 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // derived table (team_id, work_item_id, pr_repo_id, pr_number, link_rank) of
 // the issues of every project a team owns (team_project_ownership, under the
 // bound's ownership rule) joined to their admitted link rows
-// (admittedIssueLinksSQL: the work item is an issue and the linked pull
+// (the work item is an issue, admittedLinkedPullRequestRowsSQL: the linked pull
 // request exists). teamParam names the
 // Array(String) binding holding the team ids; the bound's bindings must ride
-// with the statement. It is the same chain teamRepositories walks.
+// with the statement. It is the same chain teamRepositories walks. Work items
+// are read once, for the owned projects' issues only, so the statement's cost
+// follows the owned projects, not the size of the organization's work item
+// table.
 func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
-	return teamProjectLinkRowsAmongSQL(teamParam, bound, "")
+	owned := `(SELECT p.provider AS provider, p.join_key AS join_key FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
+    INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
+    WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)})`
+	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
+    WHERE cw.org_id = {org_id:String} AND (cw.provider, cw.project_id) IN ` + owned + ` AND ` + workItemIsIssueSQL("cw") + `)`
+	return `(
+  SELECT DISTINCT t.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
+  FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
+  INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
+  INNER JOIN ` + issues + ` AS w ON w.provider = p.provider AND w.project_id = p.join_key
+  INNER JOIN ` + admittedLinkedPullRequestRowsSQL + ` AS l ON l.work_item_id = w.work_item_id
+  WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)}
+)`
 }
 
 // teamProjectLinkRowsAmongSQL is teamProjectLinkRowsSQL over the work item

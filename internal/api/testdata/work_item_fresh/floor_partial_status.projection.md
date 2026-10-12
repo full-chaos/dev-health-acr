@@ -16,7 +16,7 @@
 
 ## Current state
 > ```
-> Current observed values: work.title=Implement the thing for Implement the thing.
+> Current observed values: title: Implement the thing (Implement the thing).
 > ```
 
 ## Server-computed answer (computed by the server from stored facts, not written by a model)

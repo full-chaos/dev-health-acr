@@ -173,7 +173,7 @@ func TestProjectStatusServerModeRecomposesCurrentStateFromTheMintedClaims(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(result.CurrentState, "No canonical facts were observed") || !strings.Contains(result.CurrentState, "backlog_size") {
+	if strings.Contains(result.CurrentState, "No canonical facts were observed") || !strings.Contains(result.CurrentState, "backlog size: 40") {
 		t.Errorf("current_state = %q, want it to restate the minted claims", result.CurrentState)
 	}
 }
