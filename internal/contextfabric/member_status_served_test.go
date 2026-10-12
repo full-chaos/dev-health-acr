@@ -9,8 +9,12 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-func investigateProjectCohort(t *testing.T, outside MemberStatusOutsideSet) InvestigationResult {
+func investigateProjectCohort(t *testing.T, outside MemberStatusOutsideSet, cut ...MemberStatusPoolCut) InvestigationResult {
 	t.Helper()
+	var poolCut MemberStatusPoolCut
+	if len(cut) > 0 {
+		poolCut = cut[0]
+	}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project:alpha", Label: "Alpha"}
 	cohort := &Cohort{
 		Kind:      SubjectProject,
@@ -29,6 +33,7 @@ func investigateProjectCohort(t *testing.T, outside MemberStatusOutsideSet) Inve
 			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 			Coverage:               Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			MemberStatusOutsideSet: outside,
+			MemberStatusPoolCut:    poolCut,
 		},
 	}
 	engine, err := NewEngine(EngineDependencies{
@@ -102,5 +107,54 @@ func TestServedProjectAnswerStatesTheMembersOutsideTheKnownSet(t *testing.T) {
 		if contractsv1.IsContextFabricMemberStatusLimitation(limitation) {
 			t.Fatalf("a read with no member outside the set served %q", limitation)
 		}
+	}
+}
+
+// TestServedAnswerStatesWithinHowManyMembersACutStatusFilterRan: a status
+// decided within a cut read states how many members it checked, once; a read
+// that was not cut states nothing of the kind.
+func TestServedAnswerStatesWithinHowManyMembersACutStatusFilterRan(t *testing.T) {
+	t.Parallel()
+	for _, cut := range []MemberStatusPoolCut{
+		{Kind: SubjectIncident, Read: 25},
+		{Kind: SubjectPullRequest, Read: 26, Pool: 60},
+		{Kind: SubjectIncident},
+	} {
+		served := investigateProjectCohort(t, MemberStatusOutsideSet{}, cut)
+		want := contractsv1.ContextFabricMemberStatusPoolCutLimitation(string(cut.Kind), cut.Read, cut.Pool)
+		count := 0
+		for _, limitation := range served.Limitations {
+			if limitation == want {
+				count++
+			}
+		}
+		if want == "" || count != 1 || !contractsv1.IsContextFabricMemberStatusLimitation(want) {
+			t.Fatalf("%+v: served limitations = %q, want exactly one %q", cut, served.Limitations, want)
+		}
+	}
+	none := investigateProjectCohort(t, MemberStatusOutsideSet{}, MemberStatusPoolCut{})
+	for _, limitation := range none.Limitations {
+		if contractsv1.IsContextFabricMemberStatusLimitation(limitation) {
+			t.Fatalf("a read that was not cut served %q", limitation)
+		}
+	}
+}
+
+// TestServedAnswerStatesACutOutsideSetCountAsALowerBound: a count whose read
+// was cut is served as "at least N", never as an exact N.
+func TestServedAnswerStatesACutOutsideSetCountAsALowerBound(t *testing.T) {
+	t.Parallel()
+	served := investigateProjectCohort(t, MemberStatusOutsideSet{Kind: SubjectProject, Count: 2000, AtLeast: true})
+	want := contractsv1.ContextFabricMemberStatusOutsideSetAtLeastLimitation("project", 2000)
+	exact := contractsv1.ContextFabricMemberStatusOutsideSetLimitation("project", 2000)
+	found := false
+	for _, limitation := range served.Limitations {
+		found = found || limitation == want
+		if limitation == exact {
+			t.Fatalf("a lower bound was served as an exact count: %q", limitation)
+		}
+	}
+	if !found {
+		t.Fatalf("served limitations = %q, want %q", served.Limitations, want)
 	}
 }
