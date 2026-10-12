@@ -350,7 +350,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	inputGraph := graphContext
 	if graphContext.Cohort == nil && clientSynthesisRequested(request) {
 		if candidates, _, _ := projectStatusDrivers(interpretation, params.Resolution.Committed, facts.Facts, nil, 0, synthesisAllocation); len(candidates) > 0 {
-			inputGraph.DriverCandidates = append(append([]DriverJudgment(nil), graphContext.DriverCandidates...), candidates...)
+			inputGraph.DriverCandidates = append(append([]DriverJudgment(nil), graphContext.DriverCandidates...), projectStatusDriverCandidates(candidates)...)
 		}
 	}
 	synthesisInput, _ := canonicalizeSynthesisSubjectLabels(SynthesisInput{
