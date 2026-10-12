@@ -100,6 +100,10 @@
       "minLength": 1,
       "maxLength": 2048,
       "description": "The page.next_cursor of the previous page of the same request. Send the same other fields."
+    },
+    "current_only": {
+      "type": "boolean",
+      "description": "Default false. True drops BLOCKS edges whose blocking end (the from end) is done or canceled; page.dropped_inactive counts them. A blocking end with unknown status is kept."
     }
   }
 }
