@@ -194,6 +194,12 @@ type EngineDependencies struct {
 	// and so never becomes reusable, exactly as if ReuseGate were also
 	// nil.
 	ReuseEpochSnapshotter RebuildEpochSnapshotter
+	// AnchorFreshness is optional. When set and the shadow anchor binding
+	// runs, Engine reads the ownership freshness once per turn before the
+	// first graph read that can prove an anchor, independently of answer
+	// reuse (anchor_freshness.go). Nil reads nothing, and the transition
+	// line says unwired.
+	AnchorFreshness AnchorFreshnessReader
 	// ReuseModelIdentityResolver is optional (CHAOS-3782, Codex round-2
 	// finding #3; CHAOS-3786). When set, tryReuse resolves the CURRENT
 	// org-effective model CHAIN through it, per call, instead of using
@@ -1273,6 +1279,7 @@ type Engine struct {
 	reuseGate                                   AnswerReuseGate
 	reuseSnapshotter                            SourceWatermarkSnapshotter
 	reuseEpochSnapshotter                       RebuildEpochSnapshotter
+	anchorFreshness                             AnchorFreshnessReader
 	reuseModelIdentityResolver                  ReuseModelIdentityResolver
 	reuseProjectionVersion                      string
 	reuseModelIdentities                        []string
@@ -1337,6 +1344,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		storedResultGate: gate,
 		reuseGate:        dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
+		anchorFreshness:            dependencies.AnchorFreshness,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
 		structureSelectionSink:     dependencies.StructureSelectionSink,
@@ -1656,6 +1664,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// The shadow anchor binding reads the parent through the memo the ledger
 	// load above filled; nil when the shadow is off.
 	anchorShadow := e.newAnchorBindingTracker(carryCtx, request, binding)
+	// The ownership freshness every proof this turn can stand on is read
+	// here, before the first graph read the binder treats as proof: the
+	// anchor membership verifier a redeemed receipt runs during structure
+	// canonicalization below, the window gate's offers-only resolution and
+	// the decisive resolution (anchor_freshness.go).
+	e.acquireAnchorFreshness(ctx, principal.OrgID, anchorShadow)
 	// CHAOS-5734: the ledger line is published at the EXIT, declared here,
 	// above every return that follows the admission, so no gate below --
 	// the two window gates and the structure veto included -- can end the

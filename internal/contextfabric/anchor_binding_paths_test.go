@@ -397,6 +397,7 @@ func TestEveryBinderInputIsOnTheTransitionLine(t *testing.T) {
 		"ResultID":          {"result_id"},
 		"GraphEpoch":        {"graph_epoch"},
 		"SubstitutionGuard": {"substitution_guard"},
+		"Freshness":         {"freshness_serving_epoch", "freshness_ownership_digest"},
 	}
 	declaredInput := map[string]bool{}
 	for _, key := range anchorBindingLineInputKeys {
@@ -412,6 +413,7 @@ func TestEveryBinderInputIsOnTheTransitionLine(t *testing.T) {
 	bindingKeys := map[string]string{
 		"State": "from_state", "Kind": "from_kind", "CanonicalID": "from_id", "Proof": "from_proof", "Reason": "from_reason",
 		"OriginResultID": "from_origin_result_id", "GraphEpoch": "from_graph_epoch", "ContenderKind": "from_contender_kind", "ContenderID": "from_contender_id",
+		"ProvenFreshness": "from_proven_freshness_digest",
 	}
 	args := AnchorBindingTransitionLogArgs(AnchorBindingTransitionEvent{}, "org_x")
 	written := map[string]bool{}
