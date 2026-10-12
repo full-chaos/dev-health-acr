@@ -316,8 +316,11 @@ func TestChaos7073DirectPathNeverExpandsScope(t *testing.T) {
 		t.Fatalf("direct read expanded scope: expander calls %d provider reads %v", expander.calls, provider.queries)
 	}
 	row := coverageOf(t, response, "metrics", projectQ)
-	if row.Outcome != OutcomeUnavailable || !strings.Contains(row.Reason+row.KindState, "") || row.KindState == "" {
-		t.Errorf("gap not disclosed: %+v", row)
+	if row.Outcome != OutcomeUnavailable || row.KindState != KindStateScopeExpansionUnavailable {
+		t.Errorf("gap not disclosed as an unavailable scope expansion: %+v", row)
+	}
+	if !strings.Contains(row.Reason, "scope expansion is not available on this read path") || strings.Contains(row.Reason, "expander_unwired") {
+		t.Errorf("reason does not name the cause in plain words: %q", row.Reason)
 	}
 	// The engine's own registry still expands (the direct copy changed
 	// nothing for it).
