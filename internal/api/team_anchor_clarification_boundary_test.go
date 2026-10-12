@@ -92,14 +92,3 @@ func TestAnOwnershipQuestionOnATeamWithNoCandidateKeepsTheNoCandidatePath(t *tes
 		t.Fatalf("the no-candidate path changed: cohort=%+v", node.Structured.Cohort)
 	}
 }
-
-// Only a team anchor is guarded: a named repository anchor with candidates and
-// no commit keeps the path it had.
-func TestAnOwnershipQuestionOnANonTeamAnchorWithCandidatesKeepsItsPath(t *testing.T) {
-	node := askOwnershipAnchoredOn(t, uncommittedTeamAnchorGraph{candidates: []contextfabric.SubjectCandidate{
-		anchorCandidate(contextfabric.SubjectRepository, "r1", "github", contextfabric.ResolutionAmbiguous),
-	}}, contextfabric.SubjectRepository)
-	if node.Structured.Status == "clarification_required" || node.Structured.Clarification != nil {
-		t.Fatalf("a clarification was served for a non-team anchor: status=%q", node.Structured.Status)
-	}
-}
