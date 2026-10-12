@@ -956,7 +956,10 @@ import (
 // v190 -> v191: served prose (current_state and the direct-read coverage notes)
 // names measures by display noun and shows numbers at display precision. A
 // stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v191"
+//
+// v191 -> v192: a cohort cut below the population retrieval reached serves that
+// population and an N of M sentence. A stored answer lacks both.
+const QueryVersion = "devhealthfacts.clickhouse.v192"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
