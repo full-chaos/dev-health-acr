@@ -1,8 +1,6 @@
 package contextfabric
 
 import (
-	"strings"
-
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -51,11 +49,6 @@ func MemberStatusStoredProperty(kind SubjectKind) string {
 		return "state"
 	}
 	return "status"
-}
-
-// NormalizeStoredMemberStatus is the stored value as the set compares it.
-func NormalizeStoredMemberStatus(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
 }
 
 // MemberStatusFilterOf is the member kind and status the project or incident

@@ -124,6 +124,7 @@ var projectStatusFixtures = []memberStatusFixture{
 	{"project:github-free-text", "H", "OPEN"},
 	{"project:gitlab-free-text", "I", "opened"},
 	{"project:no-state", "J", ""},
+	{"project:cased-set-word", "K", "Started"},
 }
 
 // Incident statuses: the canonical set ops writes for PagerDuty and Jira
@@ -137,6 +138,7 @@ var incidentStatusFixtures = []memberStatusFixture{
 	{"incident:suppressed", "F", "suppressed"},
 	{"incident:raw-unmapped", "G", "Investigating"},
 	{"incident:no-status", "H", ""},
+	{"incident:raw-cased", "I", "OPEN"},
 }
 
 func TestProjectAndIncidentMembersAreFilteredByTheStatedStatus(t *testing.T) {
@@ -147,12 +149,12 @@ func TestProjectAndIncidentMembersAreFilteredByTheStatedStatus(t *testing.T) {
 		want     []string
 		outside  int
 	}{
-		{contextfabric.SubjectProject, projectStatusFixtures, "started", []string{"project:linear-started"}, 4},
-		{contextfabric.SubjectProject, projectStatusFixtures, "completed", []string{"project:linear-completed"}, 4},
-		{contextfabric.SubjectProject, projectStatusFixtures, "paused", []string{"project:linear-paused"}, 4},
-		{contextfabric.SubjectIncident, incidentStatusFixtures, "resolved", []string{"incident:pagerduty-resolved"}, 2},
-		{contextfabric.SubjectIncident, incidentStatusFixtures, "open", []string{"incident:jsm-open"}, 2},
-		{contextfabric.SubjectIncident, incidentStatusFixtures, "suppressed", []string{"incident:suppressed"}, 2},
+		{contextfabric.SubjectProject, projectStatusFixtures, "started", []string{"project:linear-started"}, 5},
+		{contextfabric.SubjectProject, projectStatusFixtures, "completed", []string{"project:linear-completed"}, 5},
+		{contextfabric.SubjectProject, projectStatusFixtures, "paused", []string{"project:linear-paused"}, 5},
+		{contextfabric.SubjectIncident, incidentStatusFixtures, "resolved", []string{"incident:pagerduty-resolved"}, 3},
+		{contextfabric.SubjectIncident, incidentStatusFixtures, "open", []string{"incident:jsm-open"}, 3},
+		{contextfabric.SubjectIncident, incidentStatusFixtures, "suppressed", []string{"incident:suppressed"}, 3},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.kind)+"="+tc.status, func(t *testing.T) {

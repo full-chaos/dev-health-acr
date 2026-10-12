@@ -29,7 +29,8 @@ func memberStatusNoMatchRationale(kind contextfabric.SubjectKind) string {
 // the members of kind whose stored status is status now. The status is read
 // from each member's stored node, as of now whatever window the question
 // states. A stored status outside the kind's closed set matches no status of
-// the set and is counted.
+// the set and is counted; the comparison is exact, with no case folding or
+// trimming, because acr holds no synonyms.
 func (a *Adapter) filterMembersByStoredStatus(ctx context.Context, key, orgID string, kind contextfabric.SubjectKind, status string, pool []graphrank.CandidateNode) (memberStatusFilter, error) {
 	out := memberStatusFilter{}
 	ids := []string{}
@@ -55,7 +56,7 @@ func (a *Adapter) filterMembersByStoredStatus(ctx context.Context, key, orgID st
 			out.nodes = append(out.nodes, n)
 			continue
 		}
-		value := contextfabric.NormalizeStoredMemberStatus(stored[subject.CanonicalID])
+		value := stored[subject.CanonicalID]
 		switch {
 		case !contextfabric.InMemberStatusVocabulary(kind, value):
 			out.outsideSet++

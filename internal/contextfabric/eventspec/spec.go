@@ -2979,7 +2979,7 @@ var PullRequestStatusFilter = Event{
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrOnePerRequest,
 	Attribution:        []string{"org_id"},
-	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame filters pull request members by a status",
+	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame filters pull request, project or incident members by a status (member_kind says which; the message text keeps its certified pull request wording)",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: pullRequestStatusFilterOutcome},
