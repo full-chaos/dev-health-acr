@@ -61,9 +61,9 @@ func TestAModelCallThatFailsIsServedAsADegradedAnswer(t *testing.T) {
 				}
 			}
 			if completion == nil || completion.Value.Boolean == nil || !*completion.Value.Boolean {
-				t.Fatalf("claimed_facts = %+v, want actual_completion.completed=true for PLAT-0000", result.ClaimedFacts)
+				t.Fatalf("claimed_facts = %+v, want completed: true for PLAT-0000", result.ClaimedFacts)
 			}
-			if !strings.Contains(result.CurrentState, "actual_completion.completed=true for") || !strings.Contains(result.CurrentState, "PLAT-0000") {
+			if !strings.Contains(result.CurrentState, "completed: true (") || !strings.Contains(result.CurrentState, "PLAT-0000") {
 				t.Fatalf("current_state = %q, want the canonical values read", result.CurrentState)
 			}
 			if !result.Coverage.Partial {
