@@ -427,11 +427,11 @@ func stripUnverifiedEvidenceRefs(result InvestigationResult, missing map[string]
 	// strip cohort members the ORIGINAL serve never had reason to drop (the
 	// block immediately above), so a kind_census_truncated detail's Served,
 	// even if correct when this row was first stored, can go stale again
-	// here. Re-run unconditionally (correctKindCensusTruncatedServedCounts
+	// here. Re-run unconditionally (correctKindCensusTruncatedCoverage
 	// is a no-op when nothing changed) rather than only inside the
 	// DroppedMembers branch, so this call site never has to be told when a
 	// numeric field silently drifted from the object it names.
-	correctKindCensusTruncatedServedCounts(result.Coverage.Details, result.Cohort)
+	result.Coverage = correctKindCensusTruncatedCoverage(result.Coverage, result.Cohort)
 
 	if len(result.Drivers) > 0 {
 		kept := make([]DriverJudgment, 0, len(result.Drivers))
