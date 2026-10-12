@@ -446,38 +446,6 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			e.recordPlanNarrowing(ctx, principal, event)
 			return trim.Result, firstPass, nil
 		}
-		// MEMBER CUT: the retry is the only other lever that removes members,
-		// and it was declined. Claims were all the item levers above could
-		// cut; an answer whose items are members and findings is cut here, by
-		// its trailing uncited members, without a model call.
-		if overrun == contractsv1.ContextFabricBudgetOverrunItems && params.WorkItemCensus == nil && trim.Reduced.Status == "" {
-			memberCut, cutErr := e.planMemberCut(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, params.Graph.CohortPopulation)
-			if cutErr != nil {
-				return InvestigationResult{}, firstPass, cutErr
-			}
-			if memberCut.Served || memberCut.Reduced.Status != "" {
-				members := cohortMemberCount(params.Graph.Cohort)
-				// No measurement stamp: this lever cuts the list, and the line
-				// carries the member counts before and after, as the walk-list
-				// cut's does.
-				event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
-					memberCut.Before, memberCut.After, grouped, false, overrun, memberCut.Basis)
-				// A flat list has no group axis, so the constructor defaults the
-				// basis; the cut chose its own and observed it.
-				event.Basis, event.BasisObserved = memberCut.Basis, true
-				event.PredictedItems = PredictedItemsForPlan(*plan, members)
-				event.DeadlineReserved = e.synthesisDeadlineReserve > 0
-				event.RetryDeclined = declined
-				if memberCut.Served {
-					event.OutcomeCompletenessState = memberCut.Result.Completeness.State
-					e.recordPlanNarrowing(ctx, principal, event)
-					return memberCut.Result, firstPass, nil
-				}
-				event.OutcomeCompletenessState = memberCut.Reduced.Completeness.State
-				e.recordPlanNarrowing(ctx, principal, event)
-				trim.Reduced, trim.Measured = memberCut.Reduced, memberCut.Measured
-			}
-		}
 		// The items cut left a document that fits the item ceiling and not
 		// the byte ceiling (items are reported first when both are over, so
 		// the byte levers above did not run): continue the byte ladder from
