@@ -957,7 +957,7 @@ import (
 // names measures by display noun and shows numbers at display precision. A
 // stored answer can differ.
 //
-// v191 -> v194: project and incident members whose question states a status of
+// v191 -> v192: project and incident members whose question states a status of
 // the closed set of their kind (project: backlog, planned, started, paused,
 // completed, canceled; incident: active, open, acknowledged, resolved, closed,
 // suppressed) are filtered by it before the cohort is cut, and the answer
@@ -965,7 +965,7 @@ import (
 // A team has no state, so a team status qualifier is refused. The status used
 // to be admitted and served as the whole unfiltered member set. A candidate
 // saved under v191 may hold that unfiltered set.
-const QueryVersion = "devhealthfacts.clickhouse.v194"
+const QueryVersion = "devhealthfacts.clickhouse.v192"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
