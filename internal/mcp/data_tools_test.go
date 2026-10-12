@@ -487,10 +487,13 @@ func TestDataGuideResourceIsRegisteredAndReadable(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := read.Contents[0].Text
-	for _, want := range []string{"## Which operations and fields", "## Worked examples", "compoundingRisk", "`investigate_question` is for our own engine's narrative answers"} {
+	for _, want := range []string{"## Which operations and fields", "## Worked examples", "compoundingRisk"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("guide lacks %q", want)
 		}
+	}
+	if strings.Contains(text, "investigate_question") {
+		t.Error("the data guide names investigate_question for a caller that cannot list it")
 	}
 }
 

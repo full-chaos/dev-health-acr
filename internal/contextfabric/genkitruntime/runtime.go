@@ -267,6 +267,10 @@ const (
 	// project's repositories, incidents through those repositories'
 	// deployments, and operational_deficiencies through a project's owning
 	// teams. A change to what the model is told, so the version bumps.
+	// v24 -> v25: a pull_request member's status value is one of a closed
+	// set (open, merged, closed, awaiting_review, changes_requested,
+	// approved), with the review phrases mapped onto it, and two worked
+	// examples. A change to what the model is told, so the version bumps.
 	DefaultInterpretationPromptVersion = interpretprompt.PromptVersion
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3

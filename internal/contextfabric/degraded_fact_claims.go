@@ -70,9 +70,12 @@ func mintDegradedFactClaims(facts []CanonicalFact, claimLimit int) (claims []Cla
 }
 
 // degradedClaimLimit is how many claims a degraded answer may carry: the
-// claimed-fact bound, held to what the answer's own item ceiling leaves after the
-// items it already charges (subject candidates, cohort member rows) and the one
-// count claim the engine may add. No ceiling in force (a zero allocation) leaves
+// claimed-fact bound, held to what the answer's own item ceiling leaves after
+// every item the engine charges besides these claims: the subject candidates,
+// the cohort member rows, the one count claim the engine may add, and, when
+// the cohort carries a ranked driver (narration's own gate), the narration
+// grant, which cohort driver narration spends after composition on its driver
+// judgments and their claims. No ceiling in force (a zero allocation) leaves
 // the claimed-fact bound alone.
 func degradedClaimLimit(input SynthesisInput) int {
 	limit := contractsv1.ContextFabricClaimedFactsMaxCount
@@ -80,6 +83,9 @@ func degradedClaimLimit(input SynthesisInput) int {
 		return limit
 	}
 	room := input.Allocation.MaxItems - input.Allocation.MemberRowCommitment - len(input.Graph.Resolution.Candidates) - 1
+	if input.Graph.Cohort != nil && cohortHasAnyRankedDriver(input.Graph.Cohort) {
+		room -= input.Allocation.NarrationGrant
+	}
 	if room < limit {
 		limit = room
 	}

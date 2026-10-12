@@ -7,13 +7,14 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // An organization with agent_context_runtime but neither acr_service_model
 // nor its own model configuration, through the real MCP server, sidecar and
 // acr-api routes: the data tools serve as before, and an investigation that
-// would run on the service's model is the entitlement refusal that names the
-// caller's own-model path, with the model seam never reached.
+// would run on the service's model is not offered, and a call to it is refused
+// with the model seam never reached.
 func TestServiceModelRefusalAtTheToolBoundaryLeavesTheDataToolsOpen(t *testing.T) {
 	stack := newDTStackWith(t, api.EntitlementFunc(func(_ context.Context, _ string, entitlement string) (bool, error) {
 		return entitlement == "agent_context_runtime", nil
@@ -33,16 +34,25 @@ func TestServiceModelRefusalAtTheToolBoundaryLeavesTheDataToolsOpen(t *testing.T
 		t.Fatalf("data_catalog: %v %q", catalog, text)
 	}
 
+	listed, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range listed.Tools {
+		if tool.Name == "investigate_question" {
+			t.Fatal("investigate_question listed for an organization the service model does not serve")
+		}
+	}
 	for _, args := range []map[string]any{
 		{"question": "which teams need attention?"},
 		{"question": "which teams need attention?", "synthesis": "client"},
 	} {
-		refused, text := dtCallTool(t, cs, "investigate_question", args)
-		if refused != nil {
-			t.Fatalf("investigate_question %v served: %v", args, refused)
+		result, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "investigate_question", Arguments: args})
+		if err == nil && (result == nil || !result.IsError) {
+			t.Fatalf("investigate_question %v served", args)
 		}
-		if !strings.HasPrefix(text, "entitlement: reason=service_model_not_entitled: ") || !strings.Contains(text, "investigate_with_interpretation with synthesis \"client\"") || !strings.Contains(text, "own model provider") {
-			t.Fatalf("investigate_question %v error text = %q, want the service model refusal naming both options", args, text)
+		if err != nil && !strings.Contains(err.Error(), "unknown tool") {
+			t.Fatalf("investigate_question %v failed for another reason: %v", args, err)
 		}
 	}
 	if n := stack.seam.used.Load(); n != 0 {

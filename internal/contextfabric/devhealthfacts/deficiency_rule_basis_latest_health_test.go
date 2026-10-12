@@ -67,6 +67,8 @@ func TestDeficiencyFactNamesRuleBasisAndLatestHealth(t *testing.T) {
 	}
 }
 
+const partialCoverageRationale = "Compounding Risk score is 0.636 (severity: elevated), computed from 80% of its inputs (churn, complexity trend, review latency). The inputs that were present are compounding above their tuned thresholds."
+
 const ruleBasisRationale = "Compounding Risk score is 0.509 (severity: elevated). Churn, complexity trend, ownership concentration, and review latency are compounding above their tuned thresholds."
 
 // Each row states what the served deficiency fact must say about the latest
@@ -87,6 +89,8 @@ func TestDeficiencyFactRuleBasisAgainstLatestRows(t *testing.T) {
 		wantSeverity       *string
 	}{
 		{name: "band changed", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "high", uint8(1), 0.55, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.55), wantMoved: ptrBool(true), wantSeverity: ptrStr("high")},
+		{name: "partial coverage sentence", rationale: partialCoverageRationale, latest: [][]any{{"team-1", "high", uint8(1), 0.994, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.636), wantLatest: ptrNum(0.994), wantMoved: ptrBool(true), wantSeverity: ptrStr("high")},
+		{name: "partial coverage tail with an unknown input", rationale: "Compounding Risk score is 0.636 (severity: elevated), computed from 80% of its inputs (vibes). The inputs that were present are compounding above their tuned thresholds.", latest: [][]any{{"team-1", "high", uint8(1), 0.994, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantLatest: ptrNum(0.994), wantSeverity: ptrStr("high")},
 		{name: "same band, delta at threshold", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "elevated", uint8(1), 0.609, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.609), wantMoved: ptrBool(true), wantSeverity: ptrStr("elevated")},
 		{name: "same band, small delta", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "elevated", uint8(1), 0.53, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.53), wantMoved: ptrBool(false), wantSeverity: ptrStr("elevated")},
 		{name: "unparsed rationale", rationale: "The team's risk is compounding.", latest: [][]any{{"team-1", "high", uint8(1), 0.72, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantLatest: ptrNum(0.72), wantSeverity: ptrStr("high")},
@@ -150,7 +154,7 @@ func TestDeficiencyFactRuleBasisAgainstLatestRows(t *testing.T) {
 			case tc.wantSeverity != nil && (severity == nil || *severity != *tc.wantSeverity):
 				t.Fatalf("latest_severity = %#v, want %q", severity, *tc.wantSeverity)
 			}
-			if tc.rationale != ruleBasisRationale {
+			if tc.wantBasis == nil {
 				if got := fields["rule_basis_unavailable_reason"].String; got == nil || *got != "rationale_not_in_rule_sentence_form" {
 					t.Fatalf("rule_basis_unavailable_reason = %#v, want rationale_not_in_rule_sentence_form", got)
 				}

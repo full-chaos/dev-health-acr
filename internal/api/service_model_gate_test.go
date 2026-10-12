@@ -240,14 +240,14 @@ func TestClientModelPathIsServedWithoutTheFeatureOrOwnModel(t *testing.T) {
 	}
 }
 
-// Only the investigation route decides the service model: every other route
-// of the hosted API never asks for acr_service_model and is never refused for
-// it.
+// Only the investigation route decides the service model and the capabilities
+// route advertises it: every other route of the hosted API never asks for
+// acr_service_model and is never refused for it. Capabilities is never refused
+// for it either; see TestCapabilitiesNeverRefuseForTheServiceModel.
 func TestNoRouteOtherThanTheInvestigationAsksForTheServiceModel(t *testing.T) {
 	grants := &serviceModelGrants{}
 	rig := gatedClientRouteRig(t, grants, nil)
 	for _, call := range []struct{ method, path, body string }{
-		{http.MethodGet, "/api/v1/agent-context/capabilities", ""},
 		{http.MethodPost, "/api/v1/agent-context/context-packets", `{}`},
 		{http.MethodGet, "/api/v1/agent-context/evidence/ev_missing", ""},
 		{http.MethodGet, ContextFabricDataCatalogPath, ""},
@@ -275,6 +275,18 @@ func TestNoRouteOtherThanTheInvestigationAsksForTheServiceModel(t *testing.T) {
 		t.Fatal("no route reached the entitlement check; the probe proves nothing")
 	}
 	assertNoModelCallAndNoResult(t, rig)
+}
+
+func TestCapabilitiesNeverRefuseForTheServiceModel(t *testing.T) {
+	rig := gatedClientRouteRig(t, &serviceModelGrants{}, nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
+	request.Header.Set("Authorization", "Bearer "+rig.token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	recorder := httptest.NewRecorder()
+	rig.app.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "service_model_not_entitled") {
+		t.Fatalf("capabilities = %d %s", recorder.Code, recorder.Body.String())
+	}
 }
 
 func TestWebAssertionCallerIsNeverDecidedOnTheServiceModel(t *testing.T) {
