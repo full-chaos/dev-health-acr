@@ -31,7 +31,7 @@ import (
 // The row read reuses the packet catalog statement of the kind
 // (SourceQueryCatalogV1), filtered to one catalog evidence id, so an
 // expanded row has the same label, citation and provenance as the packet
-// path gives it. The four ".v2" kinds (CHAOS-7252) have no catalog
+// path gives it. The ".v2" kinds (CHAOS-7252) have no catalog
 // statement -- the catalog is also the packet path's read set, and its
 // locators live inside ev2 handles clients hold -- so their statements are
 // SourceRowOnlyQueriesV2. Each filters on the decoded components of the ref
@@ -42,8 +42,9 @@ import (
 // happens to read the same.
 
 // SourceRowQueryVersion versions the statements of this file (v2,
-// CHAOS-7252: the ".v2" statements and the work-item discovery).
-const SourceRowQueryVersion = "dev-health-source-rows.v2"
+// CHAOS-7252: the ".v2" statements and the work-item discovery; v3: the
+// review.v2 row statement).
+const SourceRowQueryVersion = "dev-health-source-rows.v3"
 
 // maxSourceRowRepositories bounds the repositories one row may map to (an
 // incident's services). A row that maps to more is refused as saturated
@@ -141,6 +142,9 @@ type SourceRowRead struct {
 // siblings.
 var workItemsSourceFamily = catalogSourceQuery("work_item_dependencies.v1").Source
 
+// gitSourceFamily is the review row's family, the catalog sibling's.
+var gitSourceFamily = catalogSourceQuery("pull_request_reviews.v1").Source
+
 // SourceRowOnlyQueriesV2 are the row statements of the ".v2" kinds
 // (CHAOS-7252). Each has the catalog's column shape and bindings plus
 // component_1..n, and returns at most one row: the table key (or, for a
@@ -169,6 +173,11 @@ var SourceRowOnlyQueriesV2 = []SourceQuery{
 	{"work_item_teams.v2", workItemsSourceFamily, EvidenceScopeRepo, standardColumns + ` SELECT ` +
 		evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, "a.repo_id", "a.work_item_id", "ifNull(a.team_id, '')", "toString(a.source)") + ` evidence_ref_id, 'dev_health' system, 'work_item_team' entity_type, ` +
 		evidenceref.IDSQL(contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, "a.repo_id", "a.work_item_id", "ifNull(a.team_id, '')", "toString(a.source)") + ` entity_id, concat(a.work_item_id, ' owned by team ', ifNull(a.team_id, '')) display_label, '' safe_uri, if(toString(a.source) = 'native_team', 'native', 'heuristic') provenance, 1.0 confidence, concat('source=', toString(a.source), ', confidence=', toString(a.confidence)) citation, a.computed_at observed_at FROM work_item_team_attributions AS a FINAL WHERE a.org_id = {org_id:String} AND toString(a.repo_id) = {component_1:String} AND a.work_item_id = {component_2:String} AND ifNull(a.team_id, '') = {component_3:String} AND toString(a.source) = {component_4:String} AND ` + devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam) + ` AND ifNull(a.team_id, '') != '' AND a.work_item_id IN (SELECT work_item_id FROM work_items FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND work_item_id = {component_2:String}) AND ifNull(a.team_id, '') IN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND id = {component_3:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) )`},
+	// The git_pull_request_reviews row by its full key (org, repository,
+	// pull request number, review id), in the repository the ref names.
+	{"pull_request_reviews.v2", gitSourceFamily, EvidenceScopeRepo, standardColumns + ` SELECT ` +
+		evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityReviewV2, "r.repo_id", "toString(r.number)", "r.review_id") + ` evidence_ref_id, 'dev_health' system, 'pull_request_review' entity_type, ` +
+		evidenceref.IDSQL(contractsv1.ContextFabricEvidenceEntityReviewV2, "r.repo_id", "toString(r.number)", "r.review_id") + ` entity_id, concat('PR #', toString(r.number), ' review') display_label, '' safe_uri, 'native' provenance, 1.0 confidence, if(lengthUTF8(ifNull(r.state, '')) BETWEEN 1 AND 2000, ifNull(r.state, ''), concat('review_id=', r.review_id)) citation, r.submitted_at observed_at FROM git_pull_request_reviews AS r FINAL INNER JOIN repos AS repo FINAL ON repo.id = r.repo_id AND repo.org_id = r.org_id WHERE r.org_id = {org_id:String} AND repo.org_id = {org_id:String} AND repo.id = {repo_id:UUID} AND toString(r.repo_id) = {component_1:String} AND toString(r.number) = {component_2:String} AND r.review_id = {component_3:String} )`},
 	// The work_graph_deployment_incident_edges row by its full key (org,
 	// deployment, incident, source), in the repository the ref names.
 	{"deployment_incident_edges.v2", "work_graph", EvidenceScopeRepo, standardColumns + ` SELECT ` +

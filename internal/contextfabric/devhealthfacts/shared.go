@@ -831,11 +831,16 @@ import (
 // row are counted as a missing next hop. A project or team answer saved under
 // v168 may rest on a repository the tree does not reach.
 //
-// v169 -> v170: with the anchor binding count switch on, a follow-up whose
+// v169 -> v170: a review fact reads its own pull request's review only (the
+// key carries the pull request number; a review id recurs across one
+// repository's pull requests) and cites review.v2. A candidate saved under
+// v169 may hold another pull request's review state and must not be reused.
+//
+// v170 -> v171: with the anchor binding count switch on, a follow-up whose
 // admitted carried binding (or redeemed anchor receipt) names another anchor
 // kind than the model states counts, discovers and captures under the
 // binding's kind, so a stored count answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v170"
+const QueryVersion = "devhealthfacts.clickhouse.v171"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1093,7 +1098,8 @@ func bindingSafeKey(key string) bool {
 // id alone is no longer collision-safe across repos in the same org -- the
 // exact defect design brief D-1..D-5 close at the graph-projection
 // producers (internal/contextfabric/devhealthsource). v2Index closes the
-// same class here: it returns repo_id and the raw id JOINED with ':' (a
+// same class here: it returns every segment -- repo_id, then (for a review)
+// the pull request number, then the raw id -- JOINED with ':' (a
 // plain, unescaped composite -- these are Go-side map keys this package's
 // own SQL also builds with concat(toString(repo_id), ':', ...), never a
 // value that leaves this process, so no codec is needed on the join
@@ -1121,7 +1127,10 @@ func v2Index(subjects []contextfabric.SubjectRef, kind string) (ids []string, by
 			rejected++
 			continue
 		}
-		key := repoID + ":" + rawID
+		// Every segment of the key, in order: a review's pull request
+		// number is part of its key, and dropping it named every pull
+		// request's review with the same id.
+		key := strings.Join(segments, ":")
 		if !bindingSafeKey(key) {
 			rejected++
 			continue

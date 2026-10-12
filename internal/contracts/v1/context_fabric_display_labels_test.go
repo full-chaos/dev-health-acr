@@ -271,8 +271,8 @@ func TestEvidenceRefIDRefusesRetiredKinds(t *testing.T) {
 			t.Errorf("successor %q does not mint", successor)
 		}
 	}
-	if retired != 5 {
-		t.Fatalf("%d retired kinds, want 5", retired)
+	if retired != 6 {
+		t.Fatalf("%d retired kinds, want 6", retired)
 	}
 }
 

@@ -138,8 +138,6 @@ func repoKindCases() []repoKindCase {
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, id: grantedID + ":jira:ABC-1", query: "work_items.v1", locator: "acr:v1:work-item:jira:ABC-1", entityType: "work_item", taskRef: "jira:ABC-1"},
 		// devhealthsource/tables.go:397, devhealthfacts/pullrequests.go:81
 		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, id: grantedID + ":532", query: "pull_requests.v1", locator: "acr:v1:pull-request:532", entityType: "pull_request"},
-		// devhealthsource/tables.go:998, devhealthfacts/pullrequests.go:135
-		{kind: contractsv1.ContextFabricEvidenceEntityReview, id: grantedID + ":rev-9", query: "pull_request_reviews.v1", locator: "acr:v1:review:rev-9", entityType: "pull_request_review"},
 		// devhealthsource/tables.go:1076, devhealthfacts/ci.go:126
 		{kind: contractsv1.ContextFabricEvidenceEntityCI, id: grantedID + ":run:77", query: "ci_pipeline_runs.v1", locator: "acr:v1:ci:run:77", entityType: "ci_pipeline_run"},
 		// devhealthsource/tables.go:458, devhealthfacts/deployments.go:117

@@ -630,7 +630,7 @@ repository or team walk over an organization that has not been rebuilt finds
 no link.
 
 **A rebuild is likewise REQUIRED for each later source-version step** up to the
-current `ClickHouseSourceVersion` v9 and `TeamsProjectsSourceVersion` v21. Each
+current `ClickHouseSourceVersion` v10 and `TeamsProjectsSourceVersion` v21. Each
 one refuses the incremental tick with `ErrProjectionSourceVersionChanged` until
 `acr-projector rebuild --org <organization-id>` runs per projected organization,
 because the affected rows carry an `updated_at` already behind the checkpoint
@@ -642,6 +642,13 @@ watermark:
   `last_synced`, or the earliest pull request or work item created for it, and
   absent otherwise (`repos.created_at` is rewritten to the sync stamp on every
   sync). Repositories projected before v9 hold a re-stamped start.
+- `ClickHouseSourceVersion` v9 → v10
+  (`internal/contextfabric/devhealthsource/clickhouse.go`): a pull request
+  review and its `BELONGS_TO_PULL_REQUEST` edge cite `review.v2`
+  (`<repository id>:<pull request number>:<review id>`) instead of the retired
+  `review` ref `<repository id>:<review id>`, which named one ref for a review
+  id on several pull requests of one repository. Reviews projected before v10
+  carry the retired ref, which expands from a stored result's record only.
 - `TeamsProjectsSourceVersion` v13 → v14: a team owning more than 200
   repositories is no longer quarantined (the entity authorization bound is
   5000), so its `team_repo_ownership` edges project.
