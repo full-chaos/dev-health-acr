@@ -657,6 +657,18 @@ func TestQueryVersionMovedPastTheProjectStatusDrivers(t *testing.T) {
 	}
 }
 
+func TestQueryVersionMovedPastTheTeamBlockersDrivers(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 194 {
+		t.Fatalf("QueryVersion = %q, want v194 or later -- an answer saved before a team blockers answer carried drivers must not be reused", devhealthfacts.QueryVersion)
+	}
+}
+
 func TestQueryVersionMovedPastTheStatusWithoutTimeInState(t *testing.T) {
 	t.Parallel()
 	for _, before := range []string{"devhealthfacts.clickhouse.v157", "devhealthfacts.clickhouse.v158", "devhealthfacts.clickhouse.v159", "devhealthfacts.clickhouse.v160", "devhealthfacts.clickhouse.v161", "devhealthfacts.clickhouse.v162", "devhealthfacts.clickhouse.v163", "devhealthfacts.clickhouse.v164", "devhealthfacts.clickhouse.v165", "devhealthfacts.clickhouse.v166", "devhealthfacts.clickhouse.v167", "devhealthfacts.clickhouse.v168", "devhealthfacts.clickhouse.v169", "devhealthfacts.clickhouse.v170", "devhealthfacts.clickhouse.v171", "devhealthfacts.clickhouse.v172", "devhealthfacts.clickhouse.v173", "devhealthfacts.clickhouse.v174", "devhealthfacts.clickhouse.v175", "devhealthfacts.clickhouse.v176", "devhealthfacts.clickhouse.v177", "devhealthfacts.clickhouse.v178", "devhealthfacts.clickhouse.v179", "devhealthfacts.clickhouse.v180", "devhealthfacts.clickhouse.v181"} {

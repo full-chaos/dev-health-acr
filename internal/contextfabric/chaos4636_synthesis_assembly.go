@@ -357,6 +357,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			inputGraph.DriverCandidates = append(append([]DriverJudgment(nil), graphContext.DriverCandidates...), projectStatusDriverCandidates(candidates)...)
 		}
 	}
+	if graphContext.Cohort != nil && clientSynthesisRequested(request) {
+		if blockers := teamBlockersDrivers(interpretation, graphContext.Cohort, facts.Facts, nil, nil, synthesisAllocation); len(blockers.Drivers) > 0 {
+			inputGraph.DriverCandidates = append(append([]DriverJudgment(nil), graphContext.DriverCandidates...), teamBlockersDriverCandidates(blockers.Drivers)...)
+		}
+	}
 	synthesisInput, _ := canonicalizeSynthesisSubjectLabels(SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: inputGraph, Facts: facts,
@@ -698,6 +703,21 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 				result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
 				result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
 				result.CurrentState = composeCurrentState(SynthesisDraft{ClaimedFacts: result.ClaimedFacts})
+			}
+		}
+	}
+	if graphContext.Cohort != nil {
+		blockers := teamBlockersDrivers(interpretation, graphContext.Cohort, facts.Facts, result.Drivers, result.ClaimedFacts, synthesisAllocation)
+		if len(blockers.Drivers) > 0 || blockers.Limitation != "" {
+			if err := validateMintedClaimsGrounded(blockers.Claims, facts.Facts); err != nil {
+				return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+			}
+			result.Drivers = append(result.Drivers, blockers.Drivers...)
+			result.ClaimedFacts = append(result.ClaimedFacts, blockers.Claims...)
+			if blockers.Limitation != "" {
+				composed, displaced := appendBoundedLimitations(result.Limitations, []string{blockers.Limitation})
+				result.Limitations = composed
+				result.LimitationsDisplaced += displaced
 			}
 		}
 	}
