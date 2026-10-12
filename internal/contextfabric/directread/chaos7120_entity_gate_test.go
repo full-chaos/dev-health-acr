@@ -65,6 +65,10 @@ func graph7120() *fakeGraph {
 }
 
 func evidence(entity contractsv1.ContextFabricEvidenceEntityType, raw string) string {
+	if _, retired := contractsv1.RetiredEvidenceEntityType(entity); retired {
+		// A stored result's ref of a retired kind: spelled, never minted.
+		return contractsv1.ContextFabricEvidenceRefPrefix + string(entity) + ":" + raw
+	}
 	return contractsv1.EvidenceRefID(entity, raw)
 }
 
@@ -209,7 +213,8 @@ func TestChaos7120EntityEvidenceIsOwnOrGated(t *testing.T) {
 		{"deployment", contextfabric.FactDeployments, deployA1, contractsv1.ContextFabricEvidenceEntityDeployment, "a:dep-1", "", "b:dep-9", map[string]contextfabric.FactValue{"status": strValue("success")}, 1},
 		{"pull request", contextfabric.FactPullRequests, pullA1, contractsv1.ContextFabricEvidenceEntityPullRequest, "a:1", "", "b:9", map[string]contextfabric.FactValue{"state": strValue("open")}, 1},
 		{"incident", contextfabric.FactIncidents, incidentA1, contractsv1.ContextFabricEvidenceEntityIncident, "inc-a", "", "inc-b", map[string]contextfabric.FactValue{"status": strValue("open")}, 1},
-		{"review", contextfabric.FactReviews, reviewA1, contractsv1.ContextFabricEvidenceEntityReview, "a:rev-1", "", "a:rev-2", map[string]contextfabric.FactValue{"state": strValue("approved")}, 1},
+		{"review", contextfabric.FactReviews, reviewA1, contractsv1.ContextFabricEvidenceEntityReviewV2, "a:1:rev-1", "", "b:9:rev-9", map[string]contextfabric.FactValue{"state": strValue("approved")}, 1},
+		{"retired review", contextfabric.FactReviews, reviewA1, contractsv1.ContextFabricEvidenceEntityReview, "a:rev-1", "", "a:rev-2", map[string]contextfabric.FactValue{"state": strValue("approved")}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			refs := []string{evidence(tc.entity, tc.own), evidence(tc.entity, tc.foreign)}
