@@ -919,7 +919,7 @@ import (
 // owning no repository; it is now served over every owned repository, and a set
 // above 2000 rows (per ownership window read) is a named failure. A candidate saved under v183 may hold the
 // truncated mix.
-const QueryVersion = "devhealthfacts.clickhouse.v184"
+const QueryVersion = "devhealthfacts.clickhouse.v190"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
