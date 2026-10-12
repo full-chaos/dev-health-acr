@@ -646,8 +646,7 @@ func rowNamesSubject(entityType, entityID string, row found) bool {
 		}
 		minted = contractsv1.EvidenceRefID(kind, rowID)
 	case contractsv1.ContextFabricEvidenceEntityWorkItem, contractsv1.ContextFabricEvidenceEntityPullRequest,
-		contractsv1.ContextFabricEvidenceEntityReview, contractsv1.ContextFabricEvidenceEntityCI,
-		contractsv1.ContextFabricEvidenceEntityDeployment:
+		contractsv1.ContextFabricEvidenceEntityCI, contractsv1.ContextFabricEvidenceEntityDeployment:
 		if rowID == "" || row.target.scope.RepoID == "" {
 			return false
 		}
@@ -765,6 +764,10 @@ var encodedSpecs = map[contractsv1.ContextFabricEvidenceEntityType]encodedSpec{
 		anchorDiscovery: contextpacket.SourceRowDiscoveryWorkItem, anchorSegment: 1,
 		teamSegment: 2, hasTeam: true,
 	},
+	// (repository, pull request number, review id): read in the repository
+	// the row names; the review is a row of that repository, so it names no
+	// other subject.
+	contractsv1.ContextFabricEvidenceEntityReviewV2: {anchorByID: true, anchorSegment: 0},
 	// (repository, deployment, incident, source): read in the repository
 	// the row names (the edge and its deployment); the incident must be
 	// readable through a current service mapping. An incident no service

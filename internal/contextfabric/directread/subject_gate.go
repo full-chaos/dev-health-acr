@@ -373,7 +373,9 @@ func finish(decision Authorization) Authorization {
 }
 
 // markInactiveTeams sets Inactive on an absent team subject the caller may
-// read whose team row is inactive. A restricted caller must also reach the
+// read whose team row is inactive. A denied team subject takes the same keyed
+// lookup in the same batch so an absent and a denied team cost the caller the
+// same work; the lookup result never changes a denied subject. A restricted caller must also reach the
 // team (and its twin) by ownership, as for an admitted team. A failure leaves
 // the subject absent: the plain denied_or_not_found answer is always safe.
 func (g *SubjectGate) markInactiveTeams(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, authority InactiveTeamAuthority, decision *Authorization, graphIndexes []int) {
@@ -381,7 +383,7 @@ func (g *SubjectGate) markInactiveTeams(ctx context.Context, principal storage.P
 	var teams []contextfabric.SubjectRef
 	for _, index := range graphIndexes {
 		gated := decision.Outcomes[index]
-		if gated.Outcome == SubjectAbsent && gated.Subject.Kind == contractsv1.ContextFabricSubjectTeam {
+		if (gated.Outcome == SubjectAbsent || gated.Outcome == SubjectDenied) && gated.Subject.Kind == contractsv1.ContextFabricSubjectTeam {
 			indexes = append(indexes, index)
 			teams = append(teams, gated.Subject)
 		}
@@ -397,7 +399,9 @@ func (g *SubjectGate) markInactiveTeams(ctx context.Context, principal storage.P
 	restricted := needsOwnershipReach(decision.PrincipalClass, contractsv1.ContextFabricSubjectTeam)
 	for position, index := range indexes {
 		entry := found[position]
-		if !entry.Inactive {
+		// A denied team is looked up only so that it costs what an absent
+		// one costs; its answer is never used.
+		if !entry.Inactive || decision.Outcomes[index].Outcome != SubjectAbsent {
 			continue
 		}
 		twin := entry.ActiveTwinID

@@ -26,7 +26,7 @@
     {
       "corpus_evidence_id": "ev-pr-auth-002",
       "query_id": "pull_request_reviews.v1",
-      "derived_locator": "acr:v1:review:review-1042-001",
+      "derived_locator": "acr:v1:review.v2:00000000-3065-4000-8000-000000000001:1042:review-1042-001",
       "entity_type": "pull_request_review",
       "entity_id": "review-1042-001",
       "packet_category": "evidence",
@@ -65,7 +65,7 @@
       "must_cite_entity": {"entity_type": "pull_request", "entity_id": "1042"}
     },
     {
-      "claim_id": "finding:review:review-1042-001",
+      "claim_id": "finding:review.v2:00000000-3065-4000-8000-000000000001:1042:review-1042-001",
       "claim_kind": "observed",
       "must_cite_entity": {"entity_type": "pull_request_review", "entity_id": "review-1042-001"}
     },

@@ -61,9 +61,16 @@ type producerGrammar struct {
 	// kind whose read is not built yet). The id must carry every ORDER BY
 	// column of that table but org_id (keyExceptions names the ones it
 	// carries in another form, and why).
-	rowQuery      string
-	keyByColumns  bool
-	keyColumns    []string
+	rowQuery     string
+	keyByColumns bool
+	keyColumns   []string
+	// columns names, in order, the column each id component of a bare-join
+	// shape ("concat/N", "sql/N") carries; a component carrying several
+	// columns joins them with '+'. A ".v2" shape's columns are its
+	// evidenceref grammar's, never written here. carriedGaps mints a ref
+	// from a synthetic row through these and requires every key column's
+	// value among the ref's segments.
+	columns       []string
 	keyExceptions map[string]string
 	// providerFirst: the first component is a project provider, a closed
 	// colon-free enum (CHAOS-7227: the project statements read only
@@ -150,6 +157,10 @@ func sites(keys ...string) map[string]int {
 	return out
 }
 
+// readRepository: a catalog locator names the row inside the repository its
+// read binds (repo_id), which is the ref's own repository.
+var readRepository = map[string]string{"repo_id": "bound by the read: the catalog statement filters repo_id = the ref's repository"}
+
 const (
 	noSourceRow = "no Context Fabric producer mints this kind: a packet catalog locator inside ev2 handles only"
 )
@@ -157,34 +168,33 @@ const (
 func producerGrammars() []producerGrammar {
 	return []producerGrammar{
 		// repository: the UUID alone.
-		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "concat/1", repoAnchored: true, sites: sites(
+		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "concat/1", repoAnchored: true, rowQuery: "repository_freshness.v1", keyColumns: []string{"id"}, columns: []string{"id"}, sites: sites(
 			facts+"ci.go|readRepositoryAggregate", facts+"deployments.go|readRepositoryAggregate", facts+"flow.go|readRepositoryFlow",
 			facts+"health.go|ReadFacts", facts+"health.go|readProjectHealth*2", facts+"identity.go|ReadFacts*2",
 			facts+"investment_repo_mix.go|readRepositoryThemeMix", facts+"investment_units.go|readInvestmentUnits", facts+"investment_units.go|unitFact", facts+"metrics.go|readRepositoryMetrics*2",
 			source+"tables.go|queryRepositories", source+"teams_projects_edges.go|queryRepositoryTeams")},
-		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "sql/1", sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "sql/1", rowQuery: "repository_freshness.v1", keyColumns: []string{"id"}, columns: []string{"id"}, sites: sites(catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "literal", fixture: true, sites: sites("internal/contextfabric/pginvestigation/paritytest/paritytest.go|RunCitedEvidenceSuite*2")},
-		// work item, pull request, review, CI run, deployment: <repo>:<one id>.
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "concat/2", repoAnchored: true, sites: sites(
+		// work item, pull request, CI run, deployment: <repo>:<one id>; the
+		// catalog's locator is the one id, read in the ref's repository.
+		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "concat/2", repoAnchored: true, rowQuery: "work_items.v1", keyColumns: []string{"repo_id", "work_item_id"}, columns: []string{"repo_id", "work_item_id"}, sites: sites(
 			facts+"identity.go|ReadFacts*2", facts+"workitems.go|ReadFacts*3", source+"tables.go|queryWorkItems",
 			source+"issue_pull_request_link.go|queryIssuePullRequestLinks", source+"teams_projects_edges.go|querySubjectProjectMemberships", "internal/contextfabric/work_item_payload.go|canonicalWorkItemEvidenceRef")},
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "sql/1", sites: sites(catalog)},
-		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "concat/2", repoAnchored: true, sites: sites(
+		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "sql/1", rowQuery: "work_items.v1", keyColumns: []string{"work_item_id"}, columns: []string{"work_item_id"}, keyExceptions: readRepository, sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "concat/2", repoAnchored: true, rowQuery: "pull_requests.v1", keyColumns: []string{"repo_id", "number"}, columns: []string{"repo_id", "number"}, sites: sites(
 			facts+"investment_units.go|unitFact", facts+"pullrequests.go|ReadFacts", source+"issue_pull_request_link.go|queryIssuePullRequestLinks", source+"tables.go|scanPullRequestRow", source+"teams_projects_edges.go|querySubjectProjectMemberships")},
-		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "sql/1", sites: sites(catalog)},
-		{kind: contractsv1.ContextFabricEvidenceEntityReview, shape: "concat/2", repoAnchored: true, sites: sites(facts+"pullrequests.go|ReadFacts", source+"tables.go|queryPullRequestReviews")},
-		{kind: contractsv1.ContextFabricEvidenceEntityReview, shape: "sql/1", sites: sites(catalog)},
-		{kind: contractsv1.ContextFabricEvidenceEntityCI, shape: "concat/2", repoAnchored: true, sites: sites(facts+"ci.go|readRunStatus", source+"tables.go|queryCIRuns")},
-		{kind: contractsv1.ContextFabricEvidenceEntityCI, shape: "sql/1", sites: sites(catalog)},
-		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, shape: "concat/2", repoAnchored: true, sites: sites(facts+"deployments.go|readDeploymentStatus", source+"tables.go|queryDeployments")},
-		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, shape: "sql/1", sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "sql/1", rowQuery: "pull_requests.v1", keyColumns: []string{"number"}, columns: []string{"number"}, keyExceptions: readRepository, sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityCI, shape: "concat/2", repoAnchored: true, rowQuery: "ci_pipeline_runs.v1", keyColumns: []string{"repo_id", "run_id"}, columns: []string{"repo_id", "run_id"}, sites: sites(facts+"ci.go|readRunStatus", source+"tables.go|queryCIRuns")},
+		{kind: contractsv1.ContextFabricEvidenceEntityCI, shape: "sql/1", rowQuery: "ci_pipeline_runs.v1", keyColumns: []string{"run_id"}, columns: []string{"run_id"}, keyExceptions: readRepository, sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, shape: "concat/2", repoAnchored: true, rowQuery: "deployments.v1", keyColumns: []string{"repo_id", "deployment_id"}, columns: []string{"repo_id", "deployment_id"}, sites: sites(facts+"deployments.go|readDeploymentStatus", source+"tables.go|queryDeployments")},
+		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, shape: "sql/1", rowQuery: "deployments.v1", keyColumns: []string{"deployment_id"}, columns: []string{"deployment_id"}, keyExceptions: readRepository, sites: sites(catalog)},
 		// incident: the id alone, keyed (org_id, id).
-		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "concat/1", rowQuery: "incidents.v1", keyColumns: []string{"id"}, sites: sites(facts+"incidents.go|ReadFacts", source+"tables.go|queryIncidents")},
-		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "sql/1", sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "concat/1", rowQuery: "incidents.v1", keyColumns: []string{"id"}, columns: []string{"id"}, sites: sites(facts+"incidents.go|ReadFacts", source+"tables.go|queryIncidents")},
+		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "sql/1", rowQuery: "incidents.v1", keyColumns: []string{"id"}, columns: []string{"id"}, sites: sites(catalog)},
 
 		// team, project: organization rows authorized by ownership through
 		// the subject gate (CHAOS-7227).
-		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "concat/1", rowQuery: "teams.v1", keyColumns: []string{"id"}, sites: sites(
+		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "concat/1", rowQuery: "teams.v1", keyColumns: []string{"id"}, columns: []string{"id"}, sites: sites(
 			"internal/contextfabric/chaos5990_period_delta.go|periodDeltaSubjectEvidenceRef", facts+"deficiencies.go|ReadFacts",
 			facts+"dependencies.go|readTeamRollup", facts+"deployments.go|readTeamRollup", facts+"incidents.go|readTeamRollup", facts+"pullrequests.go|readTeamRollup",
 			facts+"flow.go|readProjectFlow", facts+"flow.go|readTeamFlow", facts+"health.go|ReadFacts", facts+"health.go|readProjectHealth*2",
@@ -192,15 +202,15 @@ func producerGrammars() []producerGrammar {
 			facts+"landscape.go|readTeamLandscape", facts+"metrics.go|readProjectMetrics", facts+"metrics.go|readTeamMetrics*2",
 			facts+"readiness.go|readProjectReadiness", facts+"readiness.go|readTeamReadiness", facts+"workload.go|readProjectWorkload*2",
 			facts+"workload.go|readTeamWorkload", source+"teams_projects.go|fetchTeams", source+"teams_projects_edges.go|queryRepositoryTeams")},
-		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "sql/1", rowQuery: "teams.v1", keyColumns: []string{"id"}, sites: sites(organizationRows)},
+		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "sql/1", rowQuery: "teams.v1", keyColumns: []string{"id"}, columns: []string{"id"}, sites: sites(organizationRows)},
 		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "literal", fixture: true, sites: sites("internal/contextfabric/pginvestigation/paritytest/paritytest.go|RunCitedEvidenceSuite")},
 		// A project's id is "<provider>:<project id>", the provider a closed
 		// colon-free enum (CHAOS-7227). The facts pass the joined key in one
 		// variable (concat/1 below: one opaque operand carrying both).
-		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/2", providerFirst: true, rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, sites: sites(
+		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/2", providerFirst: true, rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, columns: []string{"provider", "id"}, sites: sites(
 			"internal/contextfabric/chaos5990_period_delta.go|periodDeltaSubjectEvidenceRef", source+"teams_projects.go|queryProjects")},
-		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "sql/2", providerFirst: true, rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, sites: sites(organizationRows)},
-		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/1", rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, sites: sites(
+		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "sql/2", providerFirst: true, rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, columns: []string{"provider", "id"}, sites: sites(organizationRows)},
+		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/1", rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, columns: []string{"provider+id"}, sites: sites(
 			facts+"flow.go|readProjectFlow", facts+"health.go|readProjectHealth", facts+"investment.go|mergeProjectInvestmentFact",
 			facts+"landscape.go|readProjectLandscape", facts+"metrics.go|readProjectMetrics",
 			facts+"readiness.go|readProjectReadiness", facts+"workitems.go|readProjectActualCompletion", facts+"workload.go|readProjectWorkload")},
@@ -245,6 +255,10 @@ func producerGrammars() []producerGrammar {
 			keyColumns: []string{"repo_id", "deployment_id", "incident_id", "source"}, sites: sites(source + "tables.go|queryDeploymentIncidentEdges")},
 		{kind: contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, shape: "sqlmint/4", repoAnchored: true, rowQuery: "deployment_incident_edges.v2",
 			keyColumns: []string{"repo_id", "deployment_id", "incident_id", "source"}, sites: sites(sourceRows, catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityReviewV2, shape: "mint/3", repoAnchored: true, rowQuery: "pull_request_reviews.v2",
+			keyColumns: []string{"repo_id", "number", "review_id"}, sites: sites(facts+"pullrequests.go|ReadFacts", source+"tables.go|queryPullRequestReviews")},
+		{kind: contractsv1.ContextFabricEvidenceEntityReviewV2, shape: "sqlmint/3", repoAnchored: true, rowQuery: "pull_request_reviews.v2",
+			keyColumns: []string{"repo_id", "number", "review_id"}, sites: sites(sourceRows, catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityProjectTeamV2, shape: "mint/4", keyByColumns: true,
 			keyColumns:    []string{"provider", "project_id", "team_id", "source"},
 			keyExceptions: map[string]string{"valid_from": "the ref names the projector's ownership GROUP: every assertion of (provider, project, team, source) aggregated"},
@@ -427,7 +441,7 @@ func passes(t *testing.T, g producerGrammar) (bool, string) {
 	table := rowTable(t, g)
 	switch {
 	case anchored && table == "":
-		return true, ""
+		return false, "repository-anchored with no row key declared"
 	case table == "":
 		return false, "row-anchored with no single-row key"
 	case len(orderByColumns(table)) == 0:
@@ -436,7 +450,68 @@ func passes(t *testing.T, g producerGrammar) (bool, string) {
 	if gaps := keyGaps(t, g); len(gaps) > 0 {
 		return false, fmt.Sprintf("does not carry key columns %v of %s: %s", gaps, table, devhealthschema.EngineFull[table])
 	}
+	if gaps, why := carriedGaps(g); why != "" || len(gaps) > 0 {
+		return false, strings.TrimSpace(fmt.Sprintf("declares key columns its ref does not carry %v %s", gaps, why))
+	}
 	return true, ""
+}
+
+// carriedGaps mints the entry's ref from a synthetic row -- every column a
+// distinct, colon-free value -- and lists the declared key columns whose
+// value is not among the ref's segments: a key column the entry names that
+// its grammar never writes into the ref. A ".v2" shape mints and parses
+// through evidenceref; a bare join through its declared component columns,
+// whose count must be the shape's (the shape the mint-site inventory reads
+// off the source).
+func carriedGaps(g producerGrammar) ([]string, string) {
+	value := func(column string) string { return "v-" + strings.ReplaceAll(column, "_", "-") }
+	form, count, _ := strings.Cut(g.shape, "/")
+	var segments []string
+	switch form {
+	case "mint", "sqlmint":
+		if len(g.columns) > 0 {
+			return nil, "(a .v2 entry's columns are its grammar's, not declared)"
+		}
+		grammar, ok := evidenceref.Lookup(g.kind)
+		if !ok {
+			return nil, "(no grammar)"
+		}
+		values := make([]string, len(grammar.Segments))
+		for index, segment := range grammar.Segments {
+			values[index] = value(segment.Column)
+		}
+		id, ok := evidenceref.ID(g.kind, values...)
+		if !ok {
+			return nil, "(the grammar refused its own columns)"
+		}
+		if segments, ok = evidenceref.Parse(g.kind, id); !ok {
+			return nil, "(the grammar does not parse its own id)"
+		}
+	default:
+		if n, err := strconv.Atoi(count); err != nil || n != len(g.columns) {
+			return nil, fmt.Sprintf("(columns %v for shape %s)", g.columns, g.shape)
+		}
+		parts := make([]string, 0, len(g.columns))
+		for _, component := range g.columns {
+			joined := strings.Split(component, "+")
+			for index := range joined {
+				joined[index] = value(joined[index])
+			}
+			parts = append(parts, strings.Join(joined, ":"))
+		}
+		segments = strings.Split(strings.Join(parts, ":"), ":")
+	}
+	carried := map[string]bool{}
+	for _, segment := range segments {
+		carried[segment] = true
+	}
+	var gaps []string
+	for _, column := range g.keyColumns {
+		if !carried[value(column)] {
+			gaps = append(gaps, column)
+		}
+	}
+	return gaps, ""
 }
 
 func TestSourceRowGrammarsAreInjective(t *testing.T) {
@@ -516,6 +591,59 @@ func TestSourceRowKeyCheckSeesADroppedKeyColumn(t *testing.T) {
 	t.Fatal("deployment-incident.v2 mint/4 is not listed")
 }
 
+// The key checks run on a repository-anchored grammar too, and they check
+// what the grammar CARRIES, not only what an entry declares. The retired
+// review ref "<repo>:<review_id>" is injective as a string but its two
+// components are repo_id and review_id, while git_pull_request_reviews is
+// keyed (org_id, repo_id, number, review_id): one ref named a review id on
+// two pull requests of one repository.
+func TestSourceRowKeyCheckSeesTheRetiredReviewGrammar(t *testing.T) {
+	// Declared with the table's true key: the declaration covers the ORDER
+	// BY, and the carried check sees that the grammar never writes number.
+	retired := producerGrammar{kind: contractsv1.ContextFabricEvidenceEntityReview, shape: "concat/2", repoAnchored: true,
+		rowQuery: "pull_request_reviews.v2", keyColumns: []string{"repo_id", "number", "review_id"}, columns: []string{"repo_id", "review_id"}}
+	if gaps := keyGaps(t, retired); len(gaps) != 0 {
+		t.Fatalf("the honest declaration: key gaps %v, want none", gaps)
+	}
+	if gaps, why := carriedGaps(retired); why != "" || len(gaps) != 1 || gaps[0] != "number" {
+		t.Fatalf("the retired review grammar: carried gaps %v %s, want [number]", gaps, why)
+	}
+	ok, why := passes(t, retired)
+	if ok {
+		t.Fatal("the retired review grammar passed")
+	}
+	t.Logf("retired review grammar refused: %s", why)
+	// Declared with only what it carries: the key check sees the gap.
+	carriedOnly := retired
+	carriedOnly.keyColumns = []string{"repo_id", "review_id"}
+	if gaps := keyGaps(t, carriedOnly); len(gaps) != 1 || gaps[0] != "number" {
+		t.Fatalf("the carried-only declaration: key gaps %v, want [number]", gaps)
+	}
+	// Declared with no row key: refused, never passed unchecked.
+	undeclared := retired
+	undeclared.rowQuery, undeclared.keyColumns, undeclared.columns = "", nil, nil
+	if ok, _ := passes(t, undeclared); ok {
+		t.Fatal("a repository-anchored grammar with no row key declared passed unchecked")
+	}
+	// A bare join whose declared components disagree with its shape.
+	if _, why := carriedGaps(producerGrammar{kind: contractsv1.ContextFabricEvidenceEntityReview, shape: "concat/2", keyColumns: []string{"repo_id"}, columns: []string{"repo_id"}}); why == "" {
+		t.Fatal("one declared component for a two-operand join was accepted")
+	}
+	for _, g := range producerGrammars() {
+		if g.kind != contractsv1.ContextFabricEvidenceEntityReviewV2 {
+			continue
+		}
+		if ok, why := passes(t, g); !ok {
+			t.Fatalf("review.v2 (%s) fails: %s", g.shape, why)
+		}
+		// A .v2 entry naming a key column its grammar does not write fails.
+		g.keyColumns = append(append([]string(nil), g.keyColumns...), "source")
+		if gaps, _ := carriedGaps(g); len(gaps) != 1 || gaps[0] != "source" {
+			t.Fatalf("review.v2 (%s) with an uncarried key column: gaps %v", g.shape, gaps)
+		}
+	}
+}
+
 // The collision search sees a bare join (codex r2's seed class), and the
 // escaped grammar passes it. Planted here, seen failing.
 func TestSourceRowCollisionSearchSeesABareJoin(t *testing.T) {
@@ -524,7 +652,8 @@ func TestSourceRowCollisionSearchSeesABareJoin(t *testing.T) {
 		t.Fatal("a bare ':' join of three ids passed")
 	}
 	escaped := producerGrammar{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, shape: "mint/3", rowQuery: "work_item_dependencies.v2",
-		keyColumns: []string{"source_work_item_id", "target_work_item_id", "relationship_type"}}
+		keyColumns:    []string{"source_work_item_id", "target_work_item_id", "relation_key"},
+		keyExceptions: map[string]string{"relationship_type": "relation_key"}}
 	if ok, why := passes(t, escaped); !ok {
 		t.Fatalf("the escaped grammar fails: %s", why)
 	}
