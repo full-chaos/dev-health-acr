@@ -72,12 +72,14 @@ func (a *Adapter) readStoredNodeProperty(ctx context.Context, key, orgID string,
 // node, because a link read returns members without their properties. The
 // status is as of now whatever window the question states, so the review rows
 // are read under no window, and every review row of every open pull request is
-// read: a cut read would leave a pull request's latest review unknown.
-func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, status string, pool []graphrank.CandidateNode) (pullRequestStatusFilter, error) {
+// read: a cut read would leave a pull request's latest review unknown. Only
+// pull requests the caller may read are read and counted; one it may not
+// passes through untouched for DiscoveredCohort to drop and count.
+func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, status string, pool []graphrank.CandidateNode, authorized func(graphrank.CandidateNode) bool) (pullRequestStatusFilter, error) {
 	out := pullRequestStatusFilter{}
 	ids := []string{}
 	for _, n := range pool {
-		if subject, ok := graphrank.NodeSubject(n); ok && subject.Kind == contextfabric.SubjectPullRequest {
+		if subject, ok := graphrank.NodeSubject(n); ok && subject.Kind == contextfabric.SubjectPullRequest && authorized(n) {
 			ids = append(ids, subject.CanonicalID)
 		}
 	}
@@ -98,21 +100,14 @@ func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, st
 				open = append(open, id)
 			}
 		}
-		hits, _, err := a.walkStepHits(ctx, key, orgID, open, pullRequestReviewStep, temporalFilter{}, 0)
-		if err != nil {
+		if reviews, err = a.pullRequestReviewRows(ctx, key, orgID, open); err != nil {
 			return out, err
-		}
-		for _, h := range hits {
-			submitted, _ := h.to.Properties[propValidFromNs].(int64)
-			reviews[h.from] = append(reviews[h.from], contextfabric.PullRequestReviewRow{
-				State: propStringValue(h.to.Properties[propPropertyPrefix+"state"]), SubmittedNs: submitted,
-			})
 		}
 	}
 	out.nodes = make([]graphrank.CandidateNode, 0, len(pool))
 	for _, n := range pool {
 		subject, ok := graphrank.NodeSubject(n)
-		if !ok || subject.Kind != contextfabric.SubjectPullRequest {
+		if !ok || subject.Kind != contextfabric.SubjectPullRequest || !authorized(n) {
 			out.nodes = append(out.nodes, n)
 			continue
 		}
@@ -122,6 +117,26 @@ func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, st
 		}
 	}
 	return out, nil
+}
+
+// pullRequestReviewRows reads every review row of each pull request, by pull
+// request id, under no window.
+func (a *Adapter) pullRequestReviewRows(ctx context.Context, key, orgID string, ids []string) (map[string][]contextfabric.PullRequestReviewRow, error) {
+	reviews := map[string][]contextfabric.PullRequestReviewRow{}
+	if len(ids) == 0 {
+		return reviews, nil
+	}
+	hits, _, err := a.walkStepHits(ctx, key, orgID, ids, pullRequestReviewStep, temporalFilter{}, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range hits {
+		submitted, _ := h.to.Properties[propValidFromNs].(int64)
+		reviews[h.from] = append(reviews[h.from], contextfabric.PullRequestReviewRow{
+			State: propStringValue(h.to.Properties[propPropertyPrefix+"state"]), SubmittedNs: submitted,
+		})
+	}
+	return reviews, nil
 }
 
 // PullRequestStatusFilterOutcome is the closed outcome of one pull request
@@ -154,7 +169,34 @@ type PullRequestStatusFilterDecision struct {
 	// OutsideSet counts the candidates whose stored status is outside the
 	// kind's closed set; written only for a project or incident.
 	OutsideSet int
-	Err        error
+	// Site is where the status was applied: inside the anchor's member read,
+	// or to the pool after its arms were cut.
+	Site PullRequestStatusFilterSite
+	// PoolCut: the status was decided within a cut read, so members past the
+	// cut were not checked.
+	PoolCut bool
+	// Pool is the bounded count of members of the kind the anchor's walk
+	// reaches under the state clause, when the walk's pages were cut; -1
+	// otherwise.
+	Pool int
+	Err  error
+}
+
+// PullRequestStatusFilterSite is the closed set of places a status is applied.
+type PullRequestStatusFilterSite string
+
+const (
+	// PullRequestStatusFilterSiteWalk: inside the anchor's member read, before
+	// any member cap.
+	PullRequestStatusFilterSiteWalk PullRequestStatusFilterSite = "walk"
+	// PullRequestStatusFilterSitePool: to the member pool, after its arms.
+	PullRequestStatusFilterSitePool PullRequestStatusFilterSite = "pool"
+)
+
+// PullRequestStatusFilterSiteVocabulary returns every declared site, in
+// declaration order.
+func PullRequestStatusFilterSiteVocabulary() []PullRequestStatusFilterSite {
+	return []PullRequestStatusFilterSite{PullRequestStatusFilterSiteWalk, PullRequestStatusFilterSitePool}
 }
 
 func (d PullRequestStatusFilterDecision) memberKind() contextfabric.SubjectKind {

@@ -1389,6 +1389,11 @@ type FactScopeExpansionRequest struct {
 	// unconditionally -- see ScopeExpander.projectRepositories, which is the
 	// one implementation that exists today.
 	TimeContext TimeContext
+	// PullRequestStatus is the pull request status the question frame filters
+	// its members by, or empty. An expansion whose targets are pull requests,
+	// or their reviews, reads only the pull requests that hold it, inside the
+	// read and so before Limit cuts it.
+	PullRequestStatus string
 	// Limit bounds admitted targets. The implementation must read up to
 	// Limit+1 rows and return all of them: the resolver detects truncation
 	// from the OVERFLOW row and enforces the cap itself (ruling invariant 8).
@@ -1676,6 +1681,9 @@ type factScopeResolveInput struct {
 	// resolveRequirement, and TemporalObservedTime stays gated closed for
 	// every policy (see that switch's own comment).
 	TimeContext TimeContext
+	// PullRequestStatus is the request's PullRequestStatus, carried to every
+	// expansion.
+	PullRequestStatus string
 }
 
 // newFactScopeResolveInput narrows a fact request down to what scope
@@ -1689,9 +1697,10 @@ func newFactScopeResolveInput(request CanonicalFactRequest) factScopeResolveInpu
 		})
 	}
 	return factScopeResolveInput{
-		Roots:        investigationScopeSubjects(request),
-		Requirements: requirements,
-		TimeContext:  request.Question.TimeContext,
+		Roots:             investigationScopeSubjects(request),
+		Requirements:      requirements,
+		TimeContext:       request.Question.TimeContext,
+		PullRequestStatus: request.PullRequestStatus,
 	}
 }
 
@@ -1742,7 +1751,7 @@ func (r *FactReadScopeResolver) Resolve(
 			if len(additive) == 0 {
 				continue
 			}
-			r.resolveRequirement(ctx, principal, &scope, requirement.Kind, additive, input.TimeContext)
+			r.resolveRequirement(ctx, principal, &scope, requirement.Kind, additive, input.TimeContext, input.PullRequestStatus)
 			continue
 		}
 		// A root of a kind the capability answers directly must never
@@ -1767,7 +1776,7 @@ func (r *FactReadScopeResolver) Resolve(
 			unsupportedRoots = append(unsupportedRoots, r.additiveTeamRoots(requirement.Kind, supported)...)
 			roots = unsupportedRoots
 		}
-		r.resolveRequirement(ctx, principal, &scope, requirement.Kind, roots, input.TimeContext)
+		r.resolveRequirement(ctx, principal, &scope, requirement.Kind, roots, input.TimeContext, input.PullRequestStatus)
 	}
 	sortFactScopeDerivations(scope.Derivations)
 	return scope
@@ -1809,6 +1818,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 	kind FactKind,
 	roots []SubjectRef,
 	timeContext TimeContext,
+	pullRequestStatus string,
 ) {
 	byOriginKind := map[SubjectKind][]SubjectRef{}
 	for _, root := range roots {
@@ -1937,7 +1947,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 			// remove, one field over.
 			event.DecisionReason = FactScopeDecisionExecuted
 			event.TargetLimit = rule.limitOrDefault()
-			r.expand(ctx, principal, scope, &event, origins, rule, timeContext, derivationIndex)
+			r.expand(ctx, principal, scope, &event, origins, rule, timeContext, pullRequestStatus, derivationIndex)
 		}
 
 		scope.Events = append(scope.Events, event)
@@ -2000,6 +2010,7 @@ func (r *FactReadScopeResolver) expand(
 	origins []SubjectRef,
 	rule factScopePolicyRule,
 	timeContext TimeContext,
+	pullRequestStatus string,
 	derivationIndex map[string]int,
 ) {
 	// ADMISSION GATE (CHAOS-5405 D-a), work-item targets only. The repository
@@ -2025,13 +2036,14 @@ func (r *FactReadScopeResolver) expand(
 		}
 	}
 	result, err := r.expander.ExpandFactScope(ctx, FactScopeExpansionRequest{
-		Principal:       principal,
-		RequirementKind: event.RequirementKind,
-		Origins:         origins,
-		Policy:          rule.Policy,
-		TargetKind:      rule.TargetKind,
-		TimeContext:     timeContext,
-		Limit:           rule.limitOrDefault(),
+		Principal:         principal,
+		RequirementKind:   event.RequirementKind,
+		Origins:           origins,
+		Policy:            rule.Policy,
+		TargetKind:        rule.TargetKind,
+		TimeContext:       timeContext,
+		PullRequestStatus: pullRequestStatus,
+		Limit:             rule.limitOrDefault(),
 	})
 	event.CandidateCount = result.Counts.CandidateCount
 	event.AuthorizationDroppedCount = result.Counts.AuthorizationDroppedCount
