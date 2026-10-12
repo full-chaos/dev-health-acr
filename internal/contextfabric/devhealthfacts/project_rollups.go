@@ -39,7 +39,7 @@ var projectLinkedPullRequestsSQL = `(
     SELECT DISTINCT w.work_item_id AS work_item_id, k.project_key AS project_key
     FROM work_items AS w FINAL
     INNER JOIN ` + projectJoinKeysSQL + ` AS k ON k.provider = w.provider AND k.join_key = w.project_id
-    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND length(w.work_item_id) > 0 OR 0 IN ` + linkedWorkItemIDsSQL + `
+    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + `
   ) AS pi ON pi.work_item_id = l.work_item_id
   GROUP BY project_key, pr_repo_id, pr_number
 )`
