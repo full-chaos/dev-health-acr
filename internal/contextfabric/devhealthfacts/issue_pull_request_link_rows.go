@@ -28,12 +28,12 @@ func workItemIsIssueSQL(alias string) string {
 
 // issueLinkRowsSQL is the organization-scoped link rows whose pull request
 // exists and whose work item is an issue, columns work_item_id, pr_repo_id
-// (the pull request's repository), provenance, link_rank (0 for a tier outside
+// (the pull request's repository), pr_number, provenance, link_rank (0 for a tier outside
 // the vocabulary, which a caller that must count it can still see). Rows are
 // not de-duplicated per issue: a caller aggregates per repository and takes
 // the strongest tier with argMax(provenance, link_rank).
 var issueLinkRowsSQL = `(
-  SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.provenance AS provenance, ` + linkTierRankSQL + ` AS link_rank
+  SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, l.provenance AS provenance, ` + linkTierRankSQL + ` AS link_rank
   FROM work_graph_issue_pr AS l FINAL
   INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
   LEFT JOIN work_items AS wi FINAL ON wi.org_id = l.org_id AND wi.work_item_id = l.work_item_id
@@ -42,7 +42,7 @@ var issueLinkRowsSQL = `(
 
 // admittedIssueLinksSQL is issueLinkRowsSQL restricted to the known tiers: the
 // links that name a repository.
-var admittedIssueLinksSQL = `(SELECT work_item_id, pr_repo_id, provenance, link_rank FROM ` + issueLinkRowsSQL + ` WHERE link_rank > 0)`
+var admittedIssueLinksSQL = `(SELECT work_item_id, pr_repo_id, pr_number, provenance, link_rank FROM ` + issueLinkRowsSQL + ` WHERE link_rank > 0)`
 
 // issuesWithLinkedPullRequestSQL is the set of issue ids that have at least
 // one admitted link row.
