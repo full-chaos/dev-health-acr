@@ -15,7 +15,7 @@
 
 ## Current state
 > ```
-> Current observed values: status.status=open for Implement the thing; work.title=Implement the thing for Implement the thing.
+> Current observed values: status: open (Implement the thing); title: Implement the thing (Implement the thing).
 > ```
 
 ## Server-computed answer (computed by the server from stored facts, not written by a model)

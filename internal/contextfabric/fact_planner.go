@@ -378,6 +378,24 @@ func prunedReason(capability FactCapability, unsupported []SubjectKind) string {
 // them" is an existence side-channel (ruling invariant 9). That count goes to
 // telemetry, and only to telemetry.
 func unexpandedReason(capability FactCapability, gap FactScopeGap) string {
+	if gap.WindowUnsupported() {
+		support := "does not support an observed-time window; ask without a window, or with an as-of or date-range window, to read it"
+		if gap.CurrentAxisOnly {
+			support = "supports the current window only; ask without a window to read it"
+		}
+		return fmt.Sprintf(
+			"%s:%s: no resolved subject holds this capability's facts directly and the scope policy %s (origin: %s; supported: %s; policy: %s; basis: %s)",
+			FactScopeReasonUnexpanded, gap.Outcome, support, gap.OriginKind,
+			joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
+		)
+	}
+	if gap.ScopeExpansionUnavailable() {
+		return fmt.Sprintf(
+			"%s:%s: no resolved subject holds this capability's facts directly and scope expansion is not available on this read path (origin: %s; supported: %s; policy: %s; basis: %s)",
+			FactScopeReasonUnexpanded, gap.Outcome, gap.OriginKind,
+			joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
+		)
+	}
 	return fmt.Sprintf(
 		"%s:%s: no resolved subject holds this capability's facts directly and scope expansion did not reach them (origin: %s; supported: %s; policy: %s; basis: %s)",
 		FactScopeReasonUnexpanded, gap.Outcome, gap.OriginKind,

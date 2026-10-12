@@ -125,8 +125,8 @@ func TestInvestmentUnitsRestrictedCallerSeesOnlyGrantedRepositoryRows(t *testing
 	for _, row := range response.Coverage {
 		reason = row.Reason
 	}
-	if !strings.Contains(reason, "units_not_visible 1 (aggregate over every owned repository)") || !strings.Contains(reason, "refs_unresolved 3") {
-		t.Errorf("coverage reason = %q, want units_not_visible 1 and refs_unresolved 3", reason)
+	if !strings.Contains(reason, "work units not visible: 1 (aggregate over every owned repository)") || !strings.Contains(reason, "unresolved references: 3") {
+		t.Errorf("coverage reason = %q, want 1 work unit not visible and 3 unresolved references", reason)
 	}
 	if len(seen) != 1 || seen[0].Max != 2 || seen[0].Cursor != nil {
 		t.Errorf("provider saw units requests %+v, want one with Max 2 and no cursor", seen)
@@ -369,8 +369,8 @@ func TestInvestmentUnitsByteBudgetKeepsTheCursorHonest(t *testing.T) {
 	for _, row := range response.Coverage {
 		reason = row.Reason
 	}
-	if !strings.Contains(reason, "units_cut_by_max_bytes") {
-		t.Errorf("coverage reason = %q, want units_cut_by_max_bytes", reason)
+	if !strings.Contains(reason, "work units cut by the byte limit") {
+		t.Errorf("coverage reason = %q, want the byte-limit note", reason)
 	}
 }
 

@@ -1110,6 +1110,23 @@ type FactScopeGap struct {
 	// OriginKind is the kind that could not be expanded from. Used only to
 	// compose the coverage reason, which reports KINDS and never identities.
 	OriginKind SubjectKind
+	// DecisionReason is the gate or execution basis that produced Outcome.
+	DecisionReason FactScopeDecisionReason
+	// CurrentAxisOnly is set when the policy serves the current window only.
+	CurrentAxisOnly bool
+}
+
+// WindowUnsupported reports a gap whose policy is configured and enabled but
+// does not serve the requested window.
+func (g FactScopeGap) WindowUnsupported() bool {
+	return g.Outcome == FactScopePolicyUnavailable && g.DecisionReason == FactScopeDecisionAxisUnsupported
+}
+
+// ScopeExpansionUnavailable reports a gap whose policy is enabled but whose
+// expander is not wired on this read path, as opposed to a policy that is
+// not configured.
+func (g FactScopeGap) ScopeExpansionUnavailable() bool {
+	return g.Outcome == FactScopePolicyUnavailable && g.DecisionReason == FactScopeDecisionExpanderUnwired
 }
 
 // FactScopeDerivation binds one derived read subject back to the root it was
@@ -1965,6 +1982,9 @@ func (r *FactReadScopeResolver) resolveRequirement(
 			Policy:     event.Policy,
 			Basis:      event.Basis,
 			OriginKind: originKind,
+
+			DecisionReason:  event.DecisionReason,
+			CurrentAxisOnly: rule.TargetKind == SubjectWorkItem || rule.CurrentAxisOnly,
 		}
 		existing, exists := scope.Gaps[kind]
 		if !exists || (!factScopeGapDegrades(existing.Outcome) && factScopeGapDegrades(candidate.Outcome)) {

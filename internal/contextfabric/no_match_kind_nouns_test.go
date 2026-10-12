@@ -7,8 +7,8 @@ import (
 
 func TestTheSubjectNotFoundSentenceNamesKindsByDisplayNoun(t *testing.T) {
 	t.Parallel()
-	got := noMatchLimitationSubjectNotFound([]string{"Phantom"}, []string{"ci_pipeline_run", "pull_request", "work_item"})
-	if !strings.Contains(got, "among the kinds searched (CI pipeline runs, pull requests, work items)") {
+	got := noMatchLimitationSubjectNotFound([]string{"Phantom"}, SubjectProject, []string{"ci_pipeline_run", "pull_request", "work_item"})
+	if !strings.Contains(got, "the closest matches were CI pipeline runs, pull requests, work items.") {
 		t.Fatalf("sentence = %q", got)
 	}
 	if strings.Contains(got, "_") {
@@ -16,12 +16,9 @@ func TestTheSubjectNotFoundSentenceNamesKindsByDisplayNoun(t *testing.T) {
 	}
 }
 
-func TestTheSubjectNotFoundKindsKeepNoneAndUnknownTokens(t *testing.T) {
+func TestTheNearMissKindsKeepUnknownTokens(t *testing.T) {
 	t.Parallel()
-	if got := kindsSearchedText(nil); got != "none" {
-		t.Fatalf("got %q", got)
-	}
-	if got := kindsSearchedText([]string{"team", "mystery_kind"}); got != "teams, mystery_kind" {
+	if got := nearMissKindsText([]string{"team", "mystery_kind"}); got != "teams, mystery_kind" {
 		t.Fatalf("got %q", got)
 	}
 }

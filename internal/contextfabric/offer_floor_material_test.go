@@ -27,7 +27,7 @@ func investigateWithMaterial(t *testing.T, material StructureOfferMaterial) Inve
 
 func hasSubjectNotFound(result InvestigationResult) bool {
 	for _, limitation := range result.Limitations {
-		if strings.Contains(limitation, "among the kinds searched") {
+		if strings.Contains(limitation, "the closest matches were") {
 			return true
 		}
 	}
@@ -58,11 +58,11 @@ func TestAFloorOutcomeWithARedeemableOfferIsNotTheSubjectNotFoundTerminal(t *tes
 func TestTheFloorTerminalNamesTheKindsOfTheEffectiveFloor(t *testing.T) {
 	t.Parallel()
 	named := investigateWithMaterial(t, StructureOfferMaterial{SubjectFloor: OfferFloorOutcome{Refused: true, SearchedKinds: []string{"project", "team"}}})
-	if !strings.Contains(strings.Join(named.Limitations, "|"), "among the kinds searched (projects, teams)") {
+	if !strings.Contains(strings.Join(named.Limitations, "|"), "the closest matches were projects, teams.") {
 		t.Fatalf("limitations = %q, want the kinds project, team", named.Limitations)
 	}
 	none := investigateWithMaterial(t, StructureOfferMaterial{SubjectFloor: OfferFloorOutcome{Refused: true}})
-	if !strings.Contains(strings.Join(none.Limitations, "|"), "among the kinds searched (none)") {
-		t.Fatalf("limitations = %q, want (none)", none.Limitations)
+	if !strings.Contains(strings.Join(none.Limitations, "|"), "No subject matched") || strings.Contains(strings.Join(none.Limitations, "|"), "closest matches") {
+		t.Fatalf("limitations = %q, want no closest-match clause", none.Limitations)
 	}
 }

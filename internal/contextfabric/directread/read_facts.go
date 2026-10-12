@@ -312,6 +312,14 @@ type NaturalKey struct {
 }
 
 // CoverageRow is one (kind, subject) outcome.
+// KindStateScopeExpansionUnavailable: the kind's scope policy is configured
+// but scope expansion is not available on this read path.
+const KindStateScopeExpansionUnavailable = "scope_expansion_unavailable"
+
+// KindStateWindowUnsupported: the kind's scope policy is configured but does
+// not serve the requested window.
+const KindStateWindowUnsupported = "window_unsupported"
+
 type CoverageRow struct {
 	Kind          string         `json:"kind"`
 	Subject       RequestSubject `json:"subject"`
@@ -1044,6 +1052,12 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				// which the direct path does not run: disclosed, not
 				// "not applicable".
 				row.Outcome, row.KindState, row.Reason = OutcomeUnavailable, string(outcome.State), outcome.Reason
+				if outcome.ScopeExpansionUnavailable {
+					row.KindState = KindStateScopeExpansionUnavailable
+				}
+				if outcome.WindowUnsupported {
+					row.KindState = KindStateWindowUnsupported
+				}
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind):
 				row.Outcome = OutcomeNotApplicable
 				row.Reason = "this fact kind does not describe " + subjectKindPlural(subject.Kind)
@@ -1241,13 +1255,13 @@ func noteUnitsCoverage(rows []CoverageRow, facts []ServedFact, notVisible int) {
 		}
 		var notes []string
 		if notVisible > 0 {
-			notes = append(notes, fmt.Sprintf("units_not_visible %d (aggregate over every owned repository)", notVisible))
+			notes = append(notes, fmt.Sprintf("work units not visible: %d (aggregate over every owned repository)", notVisible))
 		}
 		if unresolved > 0 {
-			notes = append(notes, fmt.Sprintf("refs_unresolved %d (aggregate over every owned repository)", unresolved))
+			notes = append(notes, fmt.Sprintf("unresolved references: %d (aggregate over every owned repository)", unresolved))
 		}
 		if unattributedRows > 0 {
-			notes = append(notes, fmt.Sprintf("units_unattributed %d rows, effort %s reaches no resolved repository (rows without repository_id; included in scope_share_total and in the organization's unattributed_effort_share)", unattributedRows, strconv.FormatFloat(unattributedShare, 'g', 6, 64)))
+			notes = append(notes, fmt.Sprintf("unattributed work units: %d rows, effort share %s reaches no resolved repository (rows without a repository; included in the scope share total and in the organization's unattributed effort share)", unattributedRows, contractsv1.ContextFabricDisplayNumber(unattributedShare)))
 		}
 		if len(notes) == 0 {
 			continue
@@ -1267,9 +1281,9 @@ func noteUnitsBudget(rows []CoverageRow, dropped int, noProgress bool) {
 	if dropped <= 0 {
 		return
 	}
-	note := fmt.Sprintf("units_cut_by_max_bytes %d: next_cursor resumes after the last row served", dropped)
+	note := fmt.Sprintf("work units cut by the byte limit: %d; the next page resumes after the last row served", dropped)
 	if noProgress {
-		note = fmt.Sprintf("units_cut_by_max_bytes %d: no unit row fits max_bytes, so no next_cursor is served; raise max_bytes", dropped)
+		note = fmt.Sprintf("work units cut by the byte limit: %d; no unit row fits the byte limit, so no next page is served; raise max_bytes", dropped)
 	}
 	for i := range rows {
 		if rows[i].Kind != string(contextfabric.FactInvestment) {

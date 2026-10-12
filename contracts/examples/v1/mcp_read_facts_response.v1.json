@@ -73,6 +73,16 @@
         "canonical_id": "team-payments"
       },
       "outcome": "fact_served"
+    },
+    {
+      "kind": "deployments",
+      "subject": {
+        "kind": "project",
+        "canonical_id": "project-checkout"
+      },
+      "outcome": "unavailable",
+      "kind_state": "window_unsupported",
+      "reason": "unexpanded:policy_unavailable: no resolved subject holds this capability's facts directly and the scope policy supports the current window only; ask without a window to read it (origin: project; supported: repository; policy: project_issue_pull_request_deployments_v1; basis: activity_proxy)"
     }
   ],
   "versions": {

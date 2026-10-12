@@ -81,7 +81,7 @@ func TestWorkItemCountQualificationAtomic(t *testing.T) {
 	p = workItemCountProjection(7)
 	p.KeyFacts[0].Field = "team_count"
 	got, _ = RenderAnswerProjectionMarkdown(p, 24000)
-	if !strings.Contains(got, " = ") {
+	if !strings.Contains(got, "team count: 7") {
 		t.Error("changed other cardinality rendering")
 	}
 }
@@ -173,7 +173,7 @@ func TestWorkItemMarkdownOnlyDeduplicatesIdenticalWorkTitle(t *testing.T) {
 			}
 			p := v1.ContextFabricAnswerProjection{Cohort: &v1.ContextFabricProjectedCohort{Kind: v1.ContextFabricSubjectWorkItem, Total: 1, Members: []v1.ContextFabricProjectedCohortMember{{Subject: subject, Rank: 1}}}, KeyFacts: []v1.ContextFabricProjectedFact{fact}}
 			got, cut := RenderAnswerProjectionMarkdown(p, 24000)
-			if cut || strings.Contains(got, " = ") != (mode != "identical") {
+			if cut || strings.Contains(got, "(source title, ") != (mode != "identical") {
 				t.Errorf("deduplication suppressed independent content: %s", got)
 			}
 		})
