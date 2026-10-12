@@ -27,7 +27,10 @@ const (
 	// v20 -> v21: the prompt asks for plain measure names and two-decimal
 	// display numbers in sentences a reader sees, with claimed_facts values
 	// kept verbatim.
-	PromptVersion = "context-fabric-synthesis.v21"
+	//
+	// v21 -> v22: the input cohort carries the population a cut list was
+	// drawn from, so an answer reused under v21 is never served without it.
+	PromptVersion = "context-fabric-synthesis.v22"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )
