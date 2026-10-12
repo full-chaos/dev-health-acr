@@ -14,6 +14,8 @@ import (
 
 type memberStatusFixture struct {
 	id, label, stored string
+	// repo is the repository the node's authorization names; empty carries none.
+	repo string
 }
 
 func memberStatusFrame(kind contextfabric.SubjectKind, value string) *contextfabric.QuestionFrame {
@@ -42,7 +44,11 @@ func memberStatusFake(kind contextfabric.SubjectKind, fixtures []memberStatusFix
 			}
 			var rows []row
 			for _, f := range fixtures {
-				rows = append(rows, row{"node": &node{Properties: map[string]interface{}{propKind: string(kind), propCanonicalID: f.id, propLabel: f.label}}, "score": 1.0})
+				properties := map[string]interface{}{propKind: string(kind), propCanonicalID: f.id, propLabel: f.label}
+				if f.repo != "" {
+					properties["authorization_repositories"] = []string{f.repo}
+				}
+				rows = append(rows, row{"node": &node{Properties: properties}, "score": 1.0})
 			}
 			return rows, nil
 		case strings.Contains(cypher, "UNION"):
@@ -98,12 +104,17 @@ func memberStatusFake(kind contextfabric.SubjectKind, fixtures []memberStatusFix
 
 func discoverMemberStatus(t *testing.T, fake *fakeConn, kind contextfabric.SubjectKind, status string) (contextfabric.GraphContext, *recordingTelemetry, error) {
 	t.Helper()
+	return discoverMemberStatusAs(t, fake, kind, status, storage.Principal{OrgID: "org-1"})
+}
+
+func discoverMemberStatusAs(t *testing.T, fake *fakeConn, kind contextfabric.SubjectKind, status string, principal storage.Principal) (contextfabric.GraphContext, *recordingTelemetry, error) {
+	t.Helper()
 	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:alpha", Label: "Alpha"}
 	request := ownershipRoutingRequest(memberStatusFrame(kind, status), anchor)
 	request.ScopeAnchorKind = contextfabric.SubjectTeam
 	request.Request.Question = "which " + string(kind) + "s of team Alpha are in that state?"
 	telemetry := &recordingTelemetry{}
-	result, err := newFakeAdapterWithTelemetry(t, fake, telemetry).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	result, err := newFakeAdapterWithTelemetry(t, fake, telemetry).DiscoverContext(context.Background(), principal, request)
 	return result, telemetry, err
 }
 
@@ -121,31 +132,31 @@ func servedMemberIDs(result contextfabric.GraphContext) []string {
 // Project states as each provider writes them: Linear's closed category set
 // maps; the other providers' free strings and an absent state do not.
 var projectStatusFixtures = []memberStatusFixture{
-	{"project:linear-backlog", "A", "backlog"},
-	{"project:linear-planned", "B", "planned"},
-	{"project:linear-started", "C", "started"},
-	{"project:linear-paused", "D", "paused"},
-	{"project:linear-completed", "E", "completed"},
-	{"project:linear-canceled", "F", "canceled"},
-	{"project:jira-free-text", "G", "In Progress"},
-	{"project:github-free-text", "H", "OPEN"},
-	{"project:gitlab-free-text", "I", "opened"},
-	{"project:no-state", "J", ""},
-	{"project:cased-set-word", "K", "Started"},
+	{"project:linear-backlog", "A", "backlog", ""},
+	{"project:linear-planned", "B", "planned", ""},
+	{"project:linear-started", "C", "started", ""},
+	{"project:linear-paused", "D", "paused", ""},
+	{"project:linear-completed", "E", "completed", ""},
+	{"project:linear-canceled", "F", "canceled", ""},
+	{"project:jira-free-text", "G", "In Progress", ""},
+	{"project:github-free-text", "H", "OPEN", ""},
+	{"project:gitlab-free-text", "I", "opened", ""},
+	{"project:no-state", "J", "", ""},
+	{"project:cased-set-word", "K", "Started", ""},
 }
 
 // Incident statuses: the canonical set ops writes for PagerDuty and Jira
 // Service Management incidents, and a raw status no normalization mapped.
 var incidentStatusFixtures = []memberStatusFixture{
-	{"incident:pagerduty-active", "A", "active"},
-	{"incident:pagerduty-acknowledged", "B", "acknowledged"},
-	{"incident:pagerduty-resolved", "C", "resolved"},
-	{"incident:jsm-open", "D", "open"},
-	{"incident:jsm-closed", "E", "closed"},
-	{"incident:suppressed", "F", "suppressed"},
-	{"incident:raw-unmapped", "G", "Investigating"},
-	{"incident:no-status", "H", ""},
-	{"incident:raw-cased", "I", "OPEN"},
+	{"incident:pagerduty-active", "A", "active", ""},
+	{"incident:pagerduty-acknowledged", "B", "acknowledged", ""},
+	{"incident:pagerduty-resolved", "C", "resolved", ""},
+	{"incident:jsm-open", "D", "open", ""},
+	{"incident:jsm-closed", "E", "closed", ""},
+	{"incident:suppressed", "F", "suppressed", ""},
+	{"incident:raw-unmapped", "G", "Investigating", ""},
+	{"incident:no-status", "H", "", ""},
+	{"incident:raw-cased", "I", "OPEN", ""},
 }
 
 func TestProjectAndIncidentMembersAreFilteredByTheStatedStatus(t *testing.T) {
@@ -212,7 +223,7 @@ func TestMemberStatusFilterReadFailureEndsTheCall(t *testing.T) {
 }
 
 func TestNoMemberHoldingTheStatusIsAnEmptyCompleteSet(t *testing.T) {
-	fixtures := []memberStatusFixture{{"project:a", "A", "started"}, {"project:b", "B", "In Progress"}}
+	fixtures := []memberStatusFixture{{"project:a", "A", "started", ""}, {"project:b", "B", "In Progress", ""}}
 	result, _, err := discoverMemberStatus(t, memberStatusFake(contextfabric.SubjectProject, fixtures, nil), contextfabric.SubjectProject, "paused")
 	if err != nil {
 		t.Fatal(err)
@@ -242,5 +253,33 @@ func TestUnqualifiedProjectQuestionRecordsNoStatusFilter(t *testing.T) {
 	}
 	if len(telemetry.pullRequestStatusFilters) != 0 || result.MemberStatusOutsideSet.Count != 0 {
 		t.Fatalf("an unqualified question recorded a filter: %+v %+v", telemetry.pullRequestStatusFilters, result.MemberStatusOutsideSet)
+	}
+}
+
+// TestMemberStatusCountsOnlyTheMembersTheCallerMayRead: a caller restricted to
+// one repository is told how many readable incidents hold a stored status
+// outside the set, never a count that includes incidents of a repository it
+// cannot read, and the filter reads and counts only the readable ones.
+func TestMemberStatusCountsOnlyTheMembersTheCallerMayRead(t *testing.T) {
+	fixtures := []memberStatusFixture{
+		{id: "incident:readable-open", label: "A", stored: "open", repo: "acme/granted"},
+		{id: "incident:readable-unmapped", label: "B", stored: "Investigating", repo: "acme/granted"},
+		{id: "incident:secret-open", label: "C", stored: "open", repo: "acme/secret"},
+		{id: "incident:secret-unmapped", label: "D", stored: "Paged", repo: "acme/secret"},
+		{id: "incident:secret-unmapped-two", label: "E", stored: "Paged", repo: "acme/secret"},
+	}
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/granted"}}
+	result, telemetry, err := discoverMemberStatusAs(t, memberStatusFake(contextfabric.SubjectIncident, fixtures, nil), contextfabric.SubjectIncident, "open", principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := servedMemberIDs(result), []string{"incident:readable-open"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("served incidents = %v, want %v", got, want)
+	}
+	if want := (contextfabric.MemberStatusOutsideSet{Kind: contextfabric.SubjectIncident, Count: 1}); result.MemberStatusOutsideSet != want {
+		t.Fatalf("outside the known set = %+v, want %+v: the count must not include incidents the caller cannot read", result.MemberStatusOutsideSet, want)
+	}
+	if len(telemetry.pullRequestStatusFilters) != 1 || telemetry.pullRequestStatusFilters[0].Candidates != 2 {
+		t.Fatalf("status filter lines = %+v, want one line over the 2 readable candidates", telemetry.pullRequestStatusFilters)
 	}
 }

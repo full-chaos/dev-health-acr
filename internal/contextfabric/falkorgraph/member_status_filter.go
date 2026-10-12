@@ -30,12 +30,15 @@ func memberStatusNoMatchRationale(kind contextfabric.SubjectKind) string {
 // from each member's stored node, as of now whatever window the question
 // states. A stored status outside the kind's closed set matches no status of
 // the set and is counted; the comparison is exact, with no case folding or
-// trimming, because acr holds no synonyms.
-func (a *Adapter) filterMembersByStoredStatus(ctx context.Context, key, orgID string, kind contextfabric.SubjectKind, status string, pool []graphrank.CandidateNode) (memberStatusFilter, error) {
+// trimming, because acr holds no synonyms. Only members the caller may read are
+// read and counted: a node the caller's scope or the request's requested scope
+// excludes passes through untouched, so DiscoveredCohort still drops and counts
+// it as an authorization drop, and no count or telemetry line reflects it.
+func (a *Adapter) filterMembersByStoredStatus(ctx context.Context, key, orgID string, kind contextfabric.SubjectKind, status string, pool []graphrank.CandidateNode, authorized func(graphrank.CandidateNode) bool) (memberStatusFilter, error) {
 	out := memberStatusFilter{}
 	ids := []string{}
 	for _, n := range pool {
-		if subject, ok := graphrank.NodeSubject(n); ok && subject.Kind == kind {
+		if subject, ok := graphrank.NodeSubject(n); ok && subject.Kind == kind && authorized(n) {
 			ids = append(ids, subject.CanonicalID)
 		}
 	}
@@ -52,7 +55,7 @@ func (a *Adapter) filterMembersByStoredStatus(ctx context.Context, key, orgID st
 	out.nodes = make([]graphrank.CandidateNode, 0, len(pool))
 	for _, n := range pool {
 		subject, ok := graphrank.NodeSubject(n)
-		if !ok || subject.Kind != kind {
+		if !ok || subject.Kind != kind || !authorized(n) {
 			out.nodes = append(out.nodes, n)
 			continue
 		}

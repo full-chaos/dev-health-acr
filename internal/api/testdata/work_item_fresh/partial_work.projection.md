@@ -16,7 +16,7 @@
 
 ## Current state
 > ```
-> Current observed values: status.status=open for work-1.
+> Current observed values: status: open (work-1).
 > ```
 
 ## Server-computed answer (computed by the server from stored facts, not written by a model)

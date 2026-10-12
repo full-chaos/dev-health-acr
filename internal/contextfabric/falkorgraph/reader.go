@@ -1456,7 +1456,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		cohortNodes = filtered.nodes
 	case memberStatus != "":
-		filtered, filterErr := a.filterMembersByStoredStatus(ctx, key, principal.OrgID, memberStatusKind, memberStatus, cohortNodes)
+		filtered, filterErr := a.filterMembersByStoredStatus(ctx, key, principal.OrgID, memberStatusKind, memberStatus, cohortNodes, func(n graphrank.CandidateNode) bool {
+			return graphrank.AuthorizedAttributes(principal, request.Request.RequestedScope, n.Attributes)
+		})
 		memberFiltered = filtered
 		poolCut := filterErr == nil && cohortPoolTruncated
 		if a.config.Telemetry != nil {

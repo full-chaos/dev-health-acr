@@ -26,7 +26,7 @@ func TestTheFloorEmptiedTerminalReachesTheResultAsTheSubjectNotFoundSentence(t *
 	if result.Status != InvestigationNoMatch {
 		t.Fatalf("status = %q, want no_match", result.Status)
 	}
-	want := noMatchLimitationSubjectNotFound([]string{"Phantom", "Squad"}, []string{"team"})
+	want := noMatchLimitationSubjectNotFound([]string{"Phantom", "Squad"}, "", []string{"team"})
 	found := false
 	for _, limitation := range result.Limitations {
 		if limitation == noMatchLimitationOfferFloorEmptied {
@@ -39,7 +39,7 @@ func TestTheFloorEmptiedTerminalReachesTheResultAsTheSubjectNotFoundSentence(t *
 	if !found {
 		t.Fatalf("limitations = %q, want the subject-not-found sentence %q", result.Limitations, want)
 	}
-	if !strings.Contains(want, `"Phantom Squad"`) || !strings.Contains(want, "among the kinds searched (teams)") {
+	if !strings.Contains(want, `"Phantom Squad"`) || !strings.Contains(want, "the closest matches were teams") {
 		t.Fatalf("sentence = %q", want)
 	}
 }
@@ -51,16 +51,71 @@ func TestTheOfferFloorTextsArePinned(t *testing.T) {
 	if !strings.HasPrefix(noMatchLimitationOfferFloorEmptied, "No subject matching the name in the question was found, so nothing was offered") {
 		t.Fatalf("marker text = %q", noMatchLimitationOfferFloorEmptied)
 	}
-	got := noMatchLimitationSubjectNotFound([]string{"Phantom"}, []string{"team"})
-	want := `No subject matching "Phantom" was found among the kinds searched (teams), so nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one.`
+	got := noMatchLimitationSubjectNotFound([]string{"Phantom"}, "", []string{"team"})
+	want := `No subject matched "Phantom"; the closest matches were teams. Nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one.`
 	if got != want {
 		t.Fatalf("sentence = %q", got)
 	}
-	blank := noMatchLimitationSubjectNotFound([]string{"", ""}, []string{"team"})
-	if !strings.HasPrefix(blank, "No subject matching the subject named in the question was found") {
+	blank := noMatchLimitationSubjectNotFound([]string{"", ""}, "", []string{"team"})
+	if !strings.HasPrefix(blank, "No subject matched the name in the question") {
 		t.Fatalf("blank terms sentence = %q", blank)
 	}
-	if kindsSearchedText(nil) != "none" || kindsSearchedText([]string{"a", "b"}) != "a, b" {
-		t.Fatal("kindsSearchedText")
+}
+
+// TestAProjectNamedQuestionWithOnlyATeamNearMissServesTheRequestedKindSentence
+// drives Investigate: the request asks about a project, only a weak team came
+// close, and the served limitation names the project and the team as the
+// closest match, without claiming a search scope.
+func TestAProjectNamedQuestionWithOnlyATeamNearMissServesTheRequestedKindSentence(t *testing.T) {
+	t.Parallel()
+	graph := &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		material:   StructureOfferMaterial{SubjectFloor: OfferFloorOutcome{Refused: true, SearchedKinds: []string{"team"}}},
+		context:    emptyGraphContext(),
+	}
+	interpretation := bootstrapInterpretation()
+	interpretation.SubjectTerms = []string{"Phantom"}
+	engine := buildWindowGateEngine(t, &countingInterpreter{interpretation: interpretation}, graph, newMapResultStore())
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.ExpectedKinds = []SubjectKind{SubjectProject}
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	served := strings.Join(result.Limitations, "|")
+	if result.Status != InvestigationNoMatch || !strings.Contains(served, `No project matched "Phantom"; the closest matches were teams. Nothing was offered`) {
+		t.Fatalf("status=%q limitations=%q", result.Status, result.Limitations)
+	}
+	if strings.Contains(served, "searched") {
+		t.Fatalf("limitations = %q claim a search scope", result.Limitations)
+	}
+}
+
+// TestAProjectNamedQuestionServesTheRequestedKindFromTheWinningReading is the
+// same row with no caller expected kind: the requested project kind arrives
+// only on the winning reading of the question.
+func TestAProjectNamedQuestionServesTheRequestedKindFromTheWinningReading(t *testing.T) {
+	t.Parallel()
+	graph := &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		material:   StructureOfferMaterial{SubjectFloor: OfferFloorOutcome{Refused: true, SearchedKinds: []string{"team"}}},
+		context:    emptyGraphContext(),
+	}
+	interpretation := bootstrapInterpretation()
+	interpretation.SubjectTerms = []string{"Phantom"}
+	var family QuestionFamilyOutcome
+	family.WinningSample.RequestedKind = SubjectProject
+	engine := buildWindowGateEngine(t, &countingInterpreter{interpretation: interpretation, family: family}, graph, newMapResultStore())
+	request := validInvestigationRequestWithConfirmedWindow()
+	if len(request.ExpectedKinds) != 0 {
+		t.Fatalf("request carries expected kinds %v", request.ExpectedKinds)
+	}
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	served := strings.Join(result.Limitations, "|")
+	if result.Status != InvestigationNoMatch || !strings.Contains(served, `No project matched "Phantom"; the closest matches were teams. Nothing was offered`) {
+		t.Fatalf("status=%q limitations=%q", result.Status, result.Limitations)
 	}
 }

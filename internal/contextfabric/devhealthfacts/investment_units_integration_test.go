@@ -172,7 +172,7 @@ func TestInvestmentUnitsMatchTheMixAndPageAgainstRealClickHouse(t *testing.T) {
 		if more != result.Truncated {
 			t.Fatalf("page %d: next_cursor present = %v but Truncated = %v", pages, more, result.Truncated)
 		}
-		if more && !strings.Contains(result.Reason, "units_page_cut") {
+		if more && !strings.Contains(result.Reason, "work units cut by the byte limit") {
 			t.Fatalf("page %d is cut but the reason does not say so: %q", pages, result.Reason)
 		}
 		if rows > 2 {

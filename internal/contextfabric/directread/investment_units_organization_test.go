@@ -85,8 +85,8 @@ func TestInvestmentUnitsOrganizationServesUnattributedRowsAndResumesAfterThem(t 
 	for _, row := range first.Coverage {
 		reason += row.Reason
 	}
-	if !strings.Contains(reason, "units_unattributed 4 rows") {
-		t.Errorf("coverage reason = %q, want units_unattributed 4 rows", reason)
+	if !strings.Contains(reason, "unattributed work units: 4 rows") {
+		t.Errorf("coverage reason = %q, want unattributed work units: 4 rows", reason)
 	}
 	token := pageCursor(t, first)
 	if _, err := reader.Read(requestContext(), unrestricted, FactsRequest{Kinds: []string{"investment"}, Subjects: []RequestSubject{organization}, Units: &RequestUnits{Cursor: token, MaxUnits: 2}}); err != nil {

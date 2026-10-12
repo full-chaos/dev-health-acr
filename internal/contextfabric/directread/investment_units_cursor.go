@@ -318,7 +318,7 @@ func (r *FactsReader) noteUnitsPageNotServed(response *FactsResponse, maxBytes i
 		}
 		minimum = len(encoded)
 	}
-	note := fmt.Sprintf("units not served under max_bytes %d; minimum %d (the work_unit_page fact does not fit beside the mix fact); no next_cursor; raise max_bytes", maxBytes, minimum)
+	note := fmt.Sprintf("work units not served under a byte limit of %d; minimum %d (the page of work units does not fit beside the mix); no next page; raise max_bytes", maxBytes, minimum)
 	bare.Fields["units_limitation"] = note
 	response.Facts = append(response.Facts, bare)
 	for i := range response.Coverage {
@@ -352,7 +352,7 @@ func flagUnitsOverBudget(response *FactsResponse, maxBytes int) {
 func dropUnitsCursorPromise(rows []CoverageRow) {
 	for i := range rows {
 		if rows[i].Kind == string(contextfabric.FactInvestment) {
-			rows[i].Reason = strings.ReplaceAll(rows[i].Reason, contextfabric.InvestmentUnitsCutReason, "units_page_cut: more work units follow")
+			rows[i].Reason = strings.ReplaceAll(rows[i].Reason, contextfabric.InvestmentUnitsCutReason, "work units cut by the byte limit: more work units follow")
 		}
 	}
 }

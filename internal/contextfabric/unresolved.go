@@ -272,7 +272,7 @@ const (
 	noMatchLimitationOfferPoolEmptied = "Retrieval matched one or more subjects only by semantic similarity, which is not enough to identify a subject, so none could be offered and no canonical facts were read. Name the subject you mean, or rephrase the question so it names one."
 	// noMatchLimitationOfferFloorEmptied marks the floor-emptied terminal in
 	// resolveTerminalStatus's own return; terminalResult replaces it with
-	// noMatchLimitationSubjectNotFound, which names the subject and the kinds.
+	// noMatchLimitationSubjectNotFound, which names the subject and the closest kinds.
 	noMatchLimitationOfferFloorEmptied = "No subject matching the name in the question was found, so nothing was offered and no canonical facts were read."
 	// The ambiguous-and-clarification-unavailable pair (CHAOS-3810 codex
 	// round-1 P2): a no_match result reached WITH candidates attached must
@@ -318,12 +318,9 @@ const (
 		"mean, or rephrase the question so it names one."
 )
 
-// kindsSearchedText renders the searched kinds as plural display nouns, "none"
-// when the pool held none; a token outside the vocabulary is kept as is.
-func kindsSearchedText(kinds []string) string {
-	if len(kinds) == 0 {
-		return "none"
-	}
+// nearMissKindsText renders the near-miss kinds as plural display nouns; a
+// token outside the vocabulary is kept as is.
+func nearMissKindsText(kinds []string) string {
 	nouns := make([]string, 0, len(kinds))
 	for _, kind := range kinds {
 		noun := contractsv1.ContextFabricSubjectKindNoun(contractsv1.ContextFabricSubjectKind(kind), 2)
@@ -336,14 +333,36 @@ func kindsSearchedText(kinds []string) string {
 }
 
 // noMatchLimitationSubjectNotFound is the terminal prose for a named subject
-// no candidate identified: it names what was searched for and which kinds
-// were searched, and it states that nothing was offered.
-func noMatchLimitationSubjectNotFound(subjectTerms []string, searchedKinds []string) string {
-	named := "the subject named in the question"
+// no candidate identified. Retrieval is not scoped to a kind, so it never
+// claims a list of kinds was searched: it names the requested kind when one
+// was asked for and labels the kinds of the withheld candidates as the
+// closest matches.
+func noMatchLimitationSubjectNotFound(subjectTerms []string, requestedKind SubjectKind, nearMissKinds []string) string {
+	named := "the name in the question"
 	if terms := strings.TrimSpace(strings.Join(subjectTerms, " ")); terms != "" {
 		named = "\"" + terms + "\""
 	}
-	return "No subject matching " + named + " was found among the kinds searched (" + kindsSearchedText(searchedKinds) + "), so nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one."
+	head := "No subject matched " + named
+	if noun := contractsv1.ContextFabricSubjectKindNoun(contractsv1.ContextFabricSubjectKind(requestedKind), 1); noun != "" {
+		head = "No " + noun + " matched " + named
+	}
+	if len(nearMissKinds) > 0 {
+		head += "; the closest matches were " + nearMissKindsText(nearMissKinds)
+	}
+	return head + ". Nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one."
+}
+
+// noMatchRequestedKind is the kind the question asked about, when one is
+// determinable: the winning reading's requested kind, else the caller's
+// single explicit expected kind.
+func noMatchRequestedKind(request InvestigationRequest, familyOutcome QuestionFamilyOutcome) SubjectKind {
+	if kind := familyOutcome.WinningSample.RequestedKind; kind != "" {
+		return kind
+	}
+	if len(request.ExpectedKinds) == 1 {
+		return request.ExpectedKinds[0]
+	}
+	return ""
 }
 
 // terminalResult composes the model-free result for an investigation that
@@ -465,7 +484,7 @@ func (e *Engine) terminalResult(
 	status, limitation := resolveTerminalStatus(request, &resolution, familyOutcome.Frame,
 		clarificationOffersRedeemable(resolution, structureMaterial, windowClarification, declaredKind), declaredKind, substitutionOutcome, effectiveSubjectFloor(structureMaterial))
 	if limitation == noMatchLimitationOfferFloorEmptied {
-		limitation = noMatchLimitationSubjectNotFound(interpretation.SubjectTerms, effectiveSubjectFloor(structureMaterial).SearchedKinds)
+		limitation = noMatchLimitationSubjectNotFound(interpretation.SubjectTerms, noMatchRequestedKind(request, familyOutcome), effectiveSubjectFloor(structureMaterial).SearchedKinds)
 	}
 	if status == InvestigationNoMatch && limitation == noMatchLimitationUnproven {
 		switch subjectTermsInputFrom(ctx) {
