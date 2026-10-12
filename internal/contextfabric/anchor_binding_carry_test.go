@@ -44,10 +44,10 @@ type carryTurnOptions struct {
 	carryOn, pendingOn bool
 	// unwindowed asks both turns without a window, so no window is carried
 	// into the follow-up.
-	unwindowed         bool
-	edit               func(*staticResultStore)
-	mutate             func(*InvestigationRequest)
-	before             func(*anchorProbeRig)
+	unwindowed bool
+	edit       func(*staticResultStore)
+	mutate     func(*InvestigationRequest)
+	before     func(*anchorProbeRig)
 }
 
 func bindingCarryTurnsWith(t *testing.T, o carryTurnOptions, followUpResponse needTurnResponse) (*anchorProbeRig, anchorProbeTurn, anchorProbeTurn) {
