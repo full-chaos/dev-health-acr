@@ -137,14 +137,13 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 }
 
 // projectStatusDriverCandidates are the drivers shown to a client that writes
-// its own answer. They hold no claim id and use the narrative category, so a
-// path that serves a candidate verbatim serves a driver that validates by
-// itself; the minted driver, with its claim, only exists after synthesis.
+// its own answer: the same observation with its true category and the fact's
+// evidence refs, and no claim id. They exist only on the synthesis input copy
+// of the graph, never on a served or stored result.
 func projectStatusDriverCandidates(drivers []DriverJudgment) []DriverJudgment {
 	candidates := make([]DriverJudgment, 0, len(drivers))
 	for _, driver := range drivers {
 		driver.DriverID += "-candidate"
-		driver.Category = string(contractsv1.ContextFabricDriverCategoryNarrative)
 		driver.ClaimedFactIDs = nil
 		candidates = append(candidates, driver)
 	}

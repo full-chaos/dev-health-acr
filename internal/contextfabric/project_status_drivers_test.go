@@ -120,39 +120,48 @@ func TestTeamStatusQuestionServesNoProjectStatusDrivers(t *testing.T) {
 	}
 }
 
-func TestProjectStatusCandidatesHoldNoUnresolvedClaimAndValidateAlone(t *testing.T) {
+func TestProjectStatusCandidatesKeepTheTrueCategoryAndEvidenceWithoutClaims(t *testing.T) {
 	project := acceptanceProject()
 	drivers, _, _ := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{project}, projectStatusFacts(project), nil, 0, ItemAllocation{})
 	candidates := projectStatusDriverCandidates(drivers)
 	if len(candidates) != 3 {
 		t.Fatalf("candidates = %d, want 3", len(candidates))
 	}
-	for _, candidate := range candidates {
+	for index, candidate := range candidates {
 		if len(candidate.ClaimedFactIDs) != 0 {
 			t.Errorf("candidate %q holds claim ids %v", candidate.DriverID, candidate.ClaimedFactIDs)
 		}
-		if err := candidate.Validate(); err != nil {
-			t.Errorf("candidate %q served verbatim would not validate: %v", candidate.DriverID, err)
+		if candidate.Category != drivers[index].Category || candidate.Category == "narrative" {
+			t.Errorf("candidate %q category = %q, want the observation's %q", candidate.DriverID, candidate.Category, drivers[index].Category)
+		}
+		if candidate.Derivation != DerivationCanonicalStructured || candidate.EpistemicStatus != EpistemicObserved {
+			t.Errorf("candidate %q derivation/epistemic = %q/%q", candidate.DriverID, candidate.Derivation, candidate.EpistemicStatus)
+		}
+		if len(candidate.EvidenceRefIDs) == 0 {
+			t.Errorf("candidate %q carries no evidence ref", candidate.DriverID)
 		}
 	}
 }
 
-func TestProjectStatusCandidatesServedByDegradeResolveEveryClaim(t *testing.T) {
-	project := acceptanceProject()
-	drivers, _, _ := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{project}, projectStatusFacts(project), nil, 0, ItemAllocation{})
-	stored := storedResultWithCandidateEvidence()
-	stored.Drivers = projectStatusDriverCandidates(drivers)
-	for _, driver := range stored.Drivers {
-		stored.EvidenceRefIDs = append(stored.EvidenceRefIDs, driver.EvidenceRefIDs...)
+func TestProjectStatusCandidatesNeverReachTheServedResult(t *testing.T) {
+	rig := projectStatusRig(t, projectStatusRequirements, projectStatusFacts)
+	result, _, err := rig.investigate(clientRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, driver := range result.Drivers {
+		if strings.HasSuffix(driver.DriverID, "-candidate") {
+			t.Errorf("served driver %q is a synthesis-input candidate", driver.DriverID)
+		}
 	}
 	claims := map[string]bool{}
-	for _, claim := range stored.ClaimedFacts {
+	for _, claim := range result.ClaimedFacts {
 		claims[claim.ClaimID] = true
 	}
-	for _, driver := range stored.Drivers {
+	for _, driver := range result.Drivers {
 		for _, id := range driver.ClaimedFactIDs {
 			if !claims[id] {
-				t.Errorf("served candidate %q holds unresolved claim id %q", driver.DriverID, id)
+				t.Errorf("served driver %q holds unresolved claim id %q", driver.DriverID, id)
 			}
 		}
 	}
