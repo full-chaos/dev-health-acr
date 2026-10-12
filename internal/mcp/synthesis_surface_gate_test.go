@@ -125,22 +125,35 @@ func TestSynthesisSurfacesLiveCheckWithOneRegisteredToolEachWay(t *testing.T) {
 	}
 }
 
-func TestInterpretationSurfacesStayGatedOnInvestigateQuestion(t *testing.T) {
-	only := []string{toolInvestigateWithInterpretation}
-	_, client, closeFn := newGateRig(t, only, only)
-	defer closeFn()
-	if slices.Contains(promptNames(t, client), promptInterpretQuestion) {
-		t.Errorf("%s listed", promptInterpretQuestion)
-	}
-	if _, err := client.GetPrompt(context.Background(), &mcpsdk.GetPromptParams{Name: promptInterpretQuestion, Arguments: map[string]string{interpretQuestionArg: "q"}}); err == nil {
-		t.Errorf("%s gettable", promptInterpretQuestion)
-	}
-	for _, u := range []string{uriInterpretationOutput, uriFactKinds} {
-		if slices.Contains(resourceURIs(t, client), u) {
-			t.Errorf("%s listed", u)
-		}
-		if _, err := readResource(t, client, u); err == nil {
-			t.Errorf("%s readable", u)
-		}
+func TestInterpretationSurfacesFollowEitherInvestigationTool(t *testing.T) {
+	for _, tool := range []string{toolInvestigateQuestion, toolInvestigateWithInterpretation} {
+		t.Run(tool, func(t *testing.T) {
+			r, client, closeFn := newGateRig(t, []string{tool}, []string{tool})
+			defer closeFn()
+			uris := resourceURIs(t, client)
+			if !slices.Contains(promptNames(t, client), promptInterpretQuestion) {
+				t.Errorf("%s not listed", promptInterpretQuestion)
+			}
+			if _, err := client.GetPrompt(context.Background(), &mcpsdk.GetPromptParams{Name: promptInterpretQuestion, Arguments: map[string]string{interpretQuestionArg: "q"}}); err != nil {
+				t.Errorf("%s not gettable: %v", promptInterpretQuestion, err)
+			}
+			for _, u := range []string{uriInterpretationOutput, uriFactKinds} {
+				if !slices.Contains(uris, u) {
+					t.Errorf("%s not listed", u)
+				}
+				if _, err := readResource(t, client, u); err != nil {
+					t.Errorf("%s not readable: %v", u, err)
+				}
+			}
+			r.setLive(nil)
+			if _, err := client.GetPrompt(context.Background(), &mcpsdk.GetPromptParams{Name: promptInterpretQuestion, Arguments: map[string]string{interpretQuestionArg: "q"}}); err == nil {
+				t.Errorf("%s gettable after revocation", promptInterpretQuestion)
+			}
+			for _, u := range []string{uriInterpretationOutput, uriFactKinds} {
+				if _, err := readResource(t, client, u); err == nil {
+					t.Errorf("%s readable after revocation", u)
+				}
+			}
+		})
 	}
 }

@@ -925,6 +925,12 @@ import (
 // (...)"), which was served as rationale_not_in_rule_sentence_form. A stored
 // answer can differ.
 const QueryVersion = "devhealthfacts.clickhouse.v193"
+//
+// v185 -> v186: a degraded cohort answer (the model call failed) leaves cohort
+// driver narration its item grant. The degraded composition claimed that grant
+// too, so composition and narration together overran the item budget: the
+// answer was cut by the claim-depth lever, or refused when the byte budget was
+// also exceeded. A candidate saved under v185 may hold the cut answer.
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

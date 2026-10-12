@@ -10,8 +10,11 @@ import (
 
 // registerGuideResources adds the static guide resources. They are read-only,
 // embedded, generated from the ACR registries, and identical for every
-// caller: no handler reads caller, credential, or organization state.
-func registerGuideResources(server *mcpsdk.Server) {
+// caller with the same tool catalogue: the text only varies with whether
+// investigate_question is listed, and no handler reads credential or
+// organization state.
+func registerGuideResources(server *mcpsdk.Server, caller *CallerContext) {
+	serviceModel := hostedToolEnabled(caller, toolInvestigateQuestion)
 	for _, res := range guide.Resources() {
 		uri := res.URI
 		server.AddResource(&mcpsdk.Resource{
@@ -22,7 +25,7 @@ func registerGuideResources(server *mcpsdk.Server) {
 			MIMEType:    guide.MIMEType,
 			Annotations: &mcpsdk.Annotations{Audience: []mcpsdk.Role{"assistant"}},
 		}, func(_ context.Context, _ *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
-			text, err := guide.Text(uri)
+			text, err := guide.TextFor(uri, serviceModel)
 			if err != nil {
 				return nil, mcpsdk.ResourceNotFoundError(uri)
 			}
