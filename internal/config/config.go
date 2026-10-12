@@ -166,6 +166,12 @@ type Config struct {
 	// continuation's carried anchor. Default OFF; turned on per deployment
 	// after the corpus gate.
 	AnchorBindingCarryEnabled bool
+	// AnchorBindingPendingCarryEnabled
+	// (ACR_CONTEXT_FABRIC_ANCHOR_BINDING_PENDING_CARRY_ENABLED) lets a binding
+	// still pending window confirmation carry its anchor into the confirming
+	// turn. Needs AnchorBindingCarryEnabled. Default OFF; turned on per
+	// deployment after the corpus gate.
+	AnchorBindingPendingCarryEnabled bool
 	// ServerCompletenessAuthorityEnabled (CHAOS-5640,
 	// ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED) is the
 	// gated FLIP's master switch -- default OFF, same "ships dark"
