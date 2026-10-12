@@ -2233,9 +2233,12 @@ type PullRequestStatusFilterFields struct {
 	Outcome    string
 	MemberKind string
 	Status     string
+	Site       string
 	Candidates int
 	Kept       int
+	PoolCut    bool
 	OutsideSet int
+	Pool       int
 	Error      string
 	RequestID  string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
@@ -2251,15 +2254,18 @@ type PullRequestStatusFilterFields struct {
 
 // NewPullRequestStatusFilterFields is the generated constructor for PullRequestStatusFilterFields -- every
 // field PullRequestStatusFilter.Fields declares is a required parameter.
-func NewPullRequestStatusFilterFields(orgID string, outcome string, memberKind string, status string, candidates int, kept int, outsideSet int, error string, requestID string) PullRequestStatusFilterFields {
+func NewPullRequestStatusFilterFields(orgID string, outcome string, memberKind string, status string, site string, candidates int, kept int, poolCut bool, outsideSet int, pool int, error string, requestID string) PullRequestStatusFilterFields {
 	return PullRequestStatusFilterFields{
 		OrgID:       orgID,
 		Outcome:     outcome,
 		MemberKind:  memberKind,
 		Status:      status,
+		Site:        site,
 		Candidates:  candidates,
 		Kept:        kept,
+		PoolCut:     poolCut,
 		OutsideSet:  outsideSet,
+		Pool:        pool,
 		Error:       error,
 		RequestID:   requestID,
 		constructed: true,
@@ -2283,9 +2289,12 @@ func (f PullRequestStatusFilterFields) SlogArgs() []any {
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
 		"member_kind", contextfabric.SanitizeLogAttr(f.MemberKind),
 		"status", contextfabric.SanitizeLogAttr(f.Status),
+		"site", contextfabric.SanitizeLogAttr(f.Site),
 		"candidates", f.Candidates,
 		"kept", f.Kept,
+		"pool_cut", f.PoolCut,
 		"outside_set", f.OutsideSet,
+		"pool", f.Pool,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
