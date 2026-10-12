@@ -442,6 +442,10 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.Coverage.Partial = true
 	}
 	result = withMemberStatusOutsideSet(result, graphContext.MemberStatusOutsideSet)
+	result = withMemberStatusNoneReached(result, graphContext.MemberStatusOutsideSet, graphContext.Cohort, params.ScopeAnchorKind)
+	if graphContext.Cohort == nil {
+		result = withMemberStatusNotComputed(result, params.Frame, graphContext.Coverage)
+	}
 	if cardinality.Scope.Decision == CountPopulationScopeSingleSubject {
 		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricSingleSubjectCountLimitation})
 		result.Limitations = composed

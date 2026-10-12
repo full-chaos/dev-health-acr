@@ -1768,7 +1768,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation, CohortPopulationLowerBound: cohortPoolTruncated,
 		CohortMemberSource:     cohortMemberSource,
-		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: memberFiltered.outsideSet},
+		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: memberFiltered.outsideSet, Filtered: memberStatus != "", Reached: memberFiltered.candidates},
 		Paths:                  admission.Paths, DriverCandidates: admission.Drivers,
 		EvidenceRefIDs: admission.EvidenceRefIDs, FactRequirements: factRequirements,
 		Coverage: contextfabric.Coverage{

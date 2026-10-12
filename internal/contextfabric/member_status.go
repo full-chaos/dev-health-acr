@@ -1,6 +1,9 @@
 package contextfabric
 
 import (
+	"log/slog"
+	"strings"
+
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -59,6 +62,10 @@ func MemberStatusFilterOf(frame *QuestionFrame) (SubjectKind, string) {
 type MemberStatusOutsideSet struct {
 	Kind  SubjectKind
 	Count int
+	// Filtered is true when the graph read applied the status filter, and
+	// Reached is how many members of Kind the anchor reached before it.
+	Filtered bool
+	Reached  int
 }
 
 // MemberStatusUnappliedOf reports whether frame states a status on members of
@@ -146,6 +153,89 @@ func withMemberStatusDisclosure(result InvestigationResult, frame *QuestionFrame
 // filter could not match because their stored status is outside the kind's set.
 func withMemberStatusOutsideSet(result InvestigationResult, outside MemberStatusOutsideSet) InvestigationResult {
 	sentence := contractsv1.ContextFabricMemberStatusOutsideSetLimitation(string(outside.Kind), outside.Count)
+	if sentence == "" {
+		return result
+	}
+	for _, limitation := range result.Limitations {
+		if limitation == sentence {
+			return result
+		}
+	}
+	composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+	result.Limitations = composed
+	result.LimitationsDisplaced += displaced
+	return result
+}
+
+// coverageReasonLabel is the fixed label of the first degrading coverage
+// detail of a result, or of the cause a ledger row names, or empty.
+func coverageReasonLabel(result InvestigationResult, graph Coverage) string {
+	for _, detail := range append(append([]CoverageDetail{}, graph.Details...), result.Coverage.Details...) {
+		if detail.Degrading {
+			if label := contractsv1.ComposeCoverageDetailLabel(detail); label != "" {
+				return label
+			}
+		}
+	}
+	for _, row := range result.Completeness.Outcomes {
+		if row.CauseCoverage != "" {
+			if label := contractsv1.ComposeCoverageDetailLabel(CoverageDetail{Code: row.CauseCoverage, Degrading: true}); label != "" {
+				return label
+			}
+		}
+	}
+	return ""
+}
+
+// withMemberStatusNoneReached states that the status filter ran and the anchor
+// reached no member of the kind, so the empty set is not read as members
+// holding another status.
+func withMemberStatusNoneReached(result InvestigationResult, outside MemberStatusOutsideSet, cohort *Cohort, anchorKind SubjectKind) InvestigationResult {
+	if !outside.Filtered || outside.Reached > 0 || cohort != nil {
+		return result
+	}
+	return withServiceLimitation(result, contractsv1.ContextFabricMemberStatusNoneReachedLimitation(string(outside.Kind), string(anchorKind)))
+}
+
+// withMemberStatusNotComputed states that a status question over projects or
+// incidents was answered without any read applying the status.
+func withMemberStatusNotComputed(result InvestigationResult, frame *QuestionFrame, graph Coverage) InvestigationResult {
+	if result.Status == InvestigationComplete || result.Status == InvestigationClarificationRequired {
+		return result
+	}
+	kind, _ := MemberStatusFilterOf(frame)
+	if kind == "" || (result.Cohort != nil && result.Cohort.Kind == kind) {
+		return result
+	}
+	for _, limitation := range result.Limitations {
+		if contractsv1.IsContextFabricMemberStatusLimitation(limitation) && !strings.Contains(limitation, "outside the known set") {
+			return result
+		}
+	}
+	reason := coverageReasonLabel(result, graph)
+	if reason == "" {
+		reason = "the service recorded no read of its members"
+	}
+	return withServiceLimitation(result, contractsv1.ContextFabricMemberStatusNotComputedLimitation(string(kind), reason))
+}
+
+// withDegradedLimitationFallback is the safety net: a partial or degraded
+// answer is never served with an empty limitations list. Reaching it means a
+// degraded exit has no limitation of its own, so it logs.
+func withDegradedLimitationFallback(result InvestigationResult) InvestigationResult {
+	if (result.Status != InvestigationPartial && result.Status != InvestigationDegraded) || len(result.Limitations) > 0 {
+		return result
+	}
+	reason := coverageReasonLabel(result, Coverage{})
+	if reason == "" {
+		reason = "no coverage cause was recorded"
+	}
+	slog.Default().Warn("context_fabric: a degraded answer reached assembly without a limitation of its own",
+		"status", SanitizeLogAttr(string(result.Status)), "reason", SanitizeLogAttr(reason))
+	return withServiceLimitation(result, contractsv1.ContextFabricDegradedWithoutLimitation(string(result.Status), reason))
+}
+
+func withServiceLimitation(result InvestigationResult, sentence string) InvestigationResult {
 	if sentence == "" {
 		return result
 	}
