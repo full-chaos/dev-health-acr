@@ -26,15 +26,26 @@ type statementMemory struct {
 	peak       uint64
 }
 
-func statementMemorySince(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, table string, markMicros int64) statementMemory {
+// statementFilter picks the guarded statements in query_log: every SELECT that
+// reads Table and, when QueryContains is set, whose text contains it (a
+// fragment only the guarded statements carry).
+type statementFilter struct {
+	Table         string
+	QueryContains string
+}
+
+func statementMemorySince(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, filter statementFilter, markMicros int64) statementMemory {
 	t.Helper()
+	if filter.Table == "" {
+		t.Fatal("statementFilter.Table is required")
+	}
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 	}
 	var m statementMemory
 	if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage) FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.', ?))`, markMicros, table).Scan(&m.statements, &m.peak); err != nil {
+  AND has(tables, concat(currentDatabase(), '.', ?)) AND position(query, ?) > 0`, markMicros, filter.Table, filter.QueryContains).Scan(&m.statements, &m.peak); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
 	return m
