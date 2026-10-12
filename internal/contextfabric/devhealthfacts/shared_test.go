@@ -647,7 +647,7 @@ func TestQueryVersionMovedPastTheSelectorScopeKey(t *testing.T) {
 
 func TestQueryVersionMovedPastTheStatusWithoutTimeInState(t *testing.T) {
 	t.Parallel()
-	for _, before := range []string{"devhealthfacts.clickhouse.v157", "devhealthfacts.clickhouse.v158", "devhealthfacts.clickhouse.v159", "devhealthfacts.clickhouse.v160", "devhealthfacts.clickhouse.v161", "devhealthfacts.clickhouse.v162", "devhealthfacts.clickhouse.v163", "devhealthfacts.clickhouse.v164", "devhealthfacts.clickhouse.v165", "devhealthfacts.clickhouse.v166", "devhealthfacts.clickhouse.v167"} {
+	for _, before := range []string{"devhealthfacts.clickhouse.v157", "devhealthfacts.clickhouse.v158", "devhealthfacts.clickhouse.v159", "devhealthfacts.clickhouse.v160", "devhealthfacts.clickhouse.v161", "devhealthfacts.clickhouse.v162", "devhealthfacts.clickhouse.v163", "devhealthfacts.clickhouse.v164", "devhealthfacts.clickhouse.v165", "devhealthfacts.clickhouse.v166", "devhealthfacts.clickhouse.v167", "devhealthfacts.clickhouse.v168", "devhealthfacts.clickhouse.v169", "devhealthfacts.clickhouse.v170", "devhealthfacts.clickhouse.v171", "devhealthfacts.clickhouse.v172", "devhealthfacts.clickhouse.v173"} {
 		if devhealthfacts.QueryVersion != before {
 			continue
 		}
