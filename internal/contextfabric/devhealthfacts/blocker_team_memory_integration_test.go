@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
@@ -67,6 +69,13 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: blockerMemoryOrg, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{teamSubject(teamID)},
 	})
+	statements, peak := blockerStatementPeakMemory(t, ctx, direct)
+	if statements < 2 {
+		t.Fatalf("measurement did not happen: %d team blocker statements in system.query_log, want the roll-up and the totals at least", statements)
+	}
+	if peak >= blockerMemoryPeakCeiling {
+		t.Fatalf("team blocker statements peaked at %d bytes over %d unrelated work items, want under %d (a quarter of the 64 MiB statement cap)", peak, blockerMemoryFillerItems, blockerMemoryPeakCeiling)
+	}
 	if err != nil {
 		cause := readFailureCause(err)
 		if strings.Contains(cause, "code: 241") {
@@ -78,4 +87,79 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 	wantInt(t, fields, "blocked_work_items_current", 2)
 	wantInt(t, fields, "blocker_dependencies_current", 2)
 	wantInt(t, fields, "project_blocked_work_items_current", 1)
+}
+
+const blockerMemoryPeakCeiling = uint64(64<<20) / 4
+
+// blockerStatementPeakMemory is the number of finished or failed SELECT
+// statements over work_item_dependencies and their peak memory_usage.
+func blockerStatementPeakMemory(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) (statements, peak uint64) {
+	t.Helper()
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
+	}
+	if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage) FROM system.query_log
+WHERE type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))`).Scan(&statements, &peak); err != nil {
+		t.Fatalf("read query_log: %v", err)
+	}
+	return statements, peak
+}
+
+const blockerSiblingOrg = "8d2f6a19-3c4e-4b71-9e05-7a1c5b3d9f28"
+
+// A blocker edge counts only when both of its work items are authorized, and
+// an id is authorized only when every stored row carrying it is: an endpoint
+// with a second row in a repository outside the caller's scope is refused, and
+// so is its edge, however the read narrows the rows it looks at.
+func TestTeamBlockerFactsRefuseAnEndpointWithAnUnauthorizedSiblingRowOnRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	for _, statement := range devhealthschema.DDL(
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_graph_issue_pr",
+		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
+	) {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	at := ts(2026, 9, 29, 0, 0, 0)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	const teamID = "team-owner"
+	for _, repo := range []string{"repo-owned", "repo-secret"} {
+		exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID(repo), blockerSiblingOrg, "acme/"+repo, "github", at)
+	}
+	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		blockerSiblingOrg, "github", teamID, repoUUID("repo-owned"), "acme/repo-owned", "exact", "native", uint8(1), uint16(100), int32(0), ts(2026, 1, 1, 0, 0, 0), nil, at)
+	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+		repoUUID("repo-owned"), blockerSiblingOrg, uint32(1), "pr", "open", at, at, "feature", "")
+	for _, row := range []struct{ id, repo string }{
+		{"blocker-open", "repo-owned"}, {"blocked-kept", "repo-owned"},
+		{"blocker-shared", "repo-owned"}, {"blocker-shared", "repo-secret"}, {"blocked-refused", "repo-owned"},
+	} {
+		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'github', '', NULL)`,
+			row.id, repoUUID(row.repo), blockerSiblingOrg, "title "+row.id, at)
+	}
+	for _, edge := range []struct{ source, target string }{{"blocker-open", "blocked-kept"}, {"blocker-shared", "blocked-refused"}} {
+		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoUUID("repo-owned"), edge.target, uint32(1), float32(1), "native", "", at, blockerSiblingOrg)
+		exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, last_synced) VALUES (?, ?, ?, ?, ?)`,
+			blockerSiblingOrg, edge.source, edge.target, "blocks", at)
+	}
+
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactBlockers)
+	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: blockerSiblingOrg, RepositoryScopes: []string{"acme/repo-owned"}}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{teamSubject(teamID)},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v: %s", err, readFailureCause(err))
+	}
+	fields := factFor(t, result, teamSubject(teamID)).Fields
+	wantInt(t, fields, "blocked_work_items_current", 1)
+	wantInt(t, fields, "blocker_dependencies_current", 1)
 }
