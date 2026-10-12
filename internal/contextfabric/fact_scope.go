@@ -48,6 +48,7 @@ package contextfabric
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -161,6 +162,21 @@ const (
 	FactScopePolicyTeamPrimaryAttributionWorkItemRequiredChildren FactScopePolicy = "team_primary_attribution_work_item_required_children_v1"
 	FactScopePolicyTeamPrimaryAttributionWorkItemIdentity         FactScopePolicy = "team_primary_attribution_work_item_identity_v1"
 	FactScopePolicyTeamPrimaryAttributionWorkItemMembership       FactScopePolicy = "team_primary_attribution_work_item_membership_v1"
+
+	// The five entity-tree policies. Each is one typed path from one origin
+	// kind to one target kind for one requirement, and each is current-axis
+	// only (FactScopePolicyRule.CurrentAxisOnly).
+	//
+	// They follow the entity tree (Repository <> Pull request <> Issue <>
+	// Project), never an issue's own repository column and never a computed
+	// team attribution: a team reaches repositories through ownership rows, a
+	// project reaches repositories through its issues' linked pull request
+	// rows, and a project reaches teams through ownership rows.
+	FactScopePolicyTeamRepositoryOwnershipContinuousIntegration FactScopePolicy = "team_repository_ownership_continuous_integration_v1"
+	FactScopePolicyProjectIssuePullRequestContinuousIntegration FactScopePolicy = "project_issue_pull_request_continuous_integration_v1"
+	FactScopePolicyProjectIssuePullRequestDeployments           FactScopePolicy = "project_issue_pull_request_deployments_v1"
+	FactScopePolicyProjectIssuePullRequestIncidents             FactScopePolicy = "project_issue_pull_request_incidents_v1"
+	FactScopePolicyProjectTeamOwnershipOperationalDeficiencies  FactScopePolicy = "project_team_ownership_operational_deficiencies_v1"
 )
 
 // FactScopeBasis names the EPISTEMIC standing of an expansion path -- what
@@ -671,6 +687,11 @@ type factScopePolicyRule struct {
 	// rule that is enabled but has no expander wired still fails CLOSED to
 	// FactScopePolicyUnavailable -- see FactReadScopeResolver.Resolve.
 	Enabled bool
+	// CurrentAxisOnly refuses every non-current temporal axis at the gate, as
+	// the work-item policies do: the chain reads ownership and link rows as
+	// they stand now, and answering a historical request with today's rows
+	// would be a false historical answer.
+	CurrentAxisOnly bool
 	// Limit overrides maxFactScopeTargets for this policy. Zero means the
 	// default. A per-policy bound exists because the chains have very
 	// different fan-out: one project reaches few repositories but those
@@ -730,6 +751,21 @@ const (
 	factScopeChainPullRequest = factScopeChainRepository + "; pull_request -BELONGS_TO_REPOSITORY-> repository (devhealthsource/tables.go: queryPullRequests)"
 	// factScopeChainReview reaches the reviews on those pull requests.
 	factScopeChainReview = factScopeChainPullRequest + "; pull_request_review -BELONGS_TO_PULL_REQUEST-> pull_request (devhealthsource/tables.go: queryPullRequestReviews)"
+
+	// factScopeChainTeamRepositoryOwnership is the entity tree's ownership
+	// half: a team owns repositories through team_repo_ownership rows, resolved
+	// the way ops does (ownershipresolve), currently valid.
+	factScopeChainTeamRepositoryOwnership = "team -OWNS_REPOSITORY-> repository (devhealthsource/teams_projects_edges.go: queryRepositoryTeams)"
+	// factScopeChainProjectIssuePullRequest is the entity tree's link half: a
+	// project reaches repositories ONLY through its issues' linked pull request
+	// rows (work_graph_issue_pr), and the repository is the PULL REQUEST's
+	// (l.repo_id), never the issue's own repository column.
+	factScopeChainProjectIssuePullRequest = "work_item -BELONGS_TO_PROJECT-> project / work_item -LINKS_PULL_REQUEST-> pull_request -BELONGS_TO_REPOSITORY-> repository (devhealthsource/issue_pull_request_link.go: queryIssuePullRequestLinks)"
+	// factScopeChainProjectIssuePullRequestIncident continues one hop through
+	// the deployment-incident edge of each reached repository.
+	factScopeChainProjectIssuePullRequestIncident = factScopeChainProjectIssuePullRequest + "; deployment -CAUSED_INCIDENT-> incident (devhealthsource/tables.go: queryDeploymentIncidentEdges)"
+	// factScopeChainProjectTeamOwnership reaches the teams that own a project.
+	factScopeChainProjectTeamOwnership = "team -OWNS_PROJECT-> project (devhealthsource/teams_projects_edges.go: queryProjectTeams)"
 )
 
 // factScopeEligibilityRow is one declared row of the table below. Declared as
@@ -769,14 +805,11 @@ type factScopeEligibilityRow struct {
 //
 // WHAT IS DELIBERATELY ABSENT:
 //
-//   - team-target families from a PROJECT origin (workload, investment,
-//     readiness, operational_deficiencies). The chain would run
-//     project <- work_item -OWNED_BY_TEAM-> team, which laundle-launders the
-//     same computed attribution CHAOS-4101 is holding back -- reaching it
-//     from the other direction does not make it stronger.
-//   - incidents, deployments, continuous_integration. Chains plausibly
-//     exist; none was traced end to end for this ticket, and an uncited row
-//     is exactly what criterion 1 forbids.
+//   - team-target families from a PROJECT origin that HealthProvider-style
+//     direct support already answers (workload, investment, readiness):
+//     they never prune. operational_deficiencies has a row, through the
+//     ownership rows of the project, never through the computed work-item
+//     team attribution.
 //   - source_health (organization-scoped). No chain.
 //   - health from a TEAM origin: HealthProvider already supports team
 //     directly, so it never prunes and never reaches this table.
@@ -851,13 +884,51 @@ var factScopeEligibility = []factScopeEligibilityRow{
 		},
 	},
 
-	// --- Disclosure-only rows: reachable, cited, and never traversed ---
+	// --- The entity-tree rows (project/team origin) ---
 	//
-	// policy `none` (ruling point 4). These disclose the gap and emit
-	// policy_unavailable telemetry; activating any of them is a follow-on
-	// ticket with its own preconditions.
+	// ci, deployments, incidents and operational_deficiencies had no row, so a
+	// project or team question for them was PRUNED: a proof that nothing was
+	// missing, on a chain that exists. Each row below cites its chain. They
+	// are current-axis only and aim at the kind the provider reads.
+	{
+		Requirement: FactContinuousIntegration, Origins: []SubjectKind{SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyTeamRepositoryOwnershipContinuousIntegration, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisDirect, Enabled: true, CurrentAxisOnly: true, Chain: factScopeChainTeamRepositoryOwnership,
+		},
+	},
+	{
+		Requirement: FactContinuousIntegration, Origins: []SubjectKind{SubjectProject},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyProjectIssuePullRequestContinuousIntegration, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Enabled: true, CurrentAxisOnly: true, Chain: factScopeChainProjectIssuePullRequest,
+		},
+	},
+	{
+		Requirement: FactDeployments, Origins: []SubjectKind{SubjectProject},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyProjectIssuePullRequestDeployments, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Enabled: true, CurrentAxisOnly: true, Chain: factScopeChainProjectIssuePullRequest,
+		},
+	},
+	{
+		Requirement: FactIncidents, Origins: []SubjectKind{SubjectProject},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyProjectIssuePullRequestIncidents, TargetKind: SubjectIncident,
+			Basis: FactScopeBasisActivityProxy, Enabled: true, CurrentAxisOnly: true, Chain: factScopeChainProjectIssuePullRequestIncident,
+		},
+	},
+	{
+		Requirement: FactOperationalDeficiencies, Origins: []SubjectKind{SubjectProject},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyProjectTeamOwnershipOperationalDeficiencies, TargetKind: SubjectTeam,
+			Basis: FactScopeBasisDirect, Enabled: true, CurrentAxisOnly: true, Chain: factScopeChainProjectTeamOwnership,
+		},
+	},
 	// health is repository-scoped, reached by the SAME chain as metrics.
-	// Project origin only -- see WHAT IS DELIBERATELY ABSENT above.
+	// Project origin only. Disclosure-only: HealthProvider supports the
+	// project kind directly in production, so this pair is answered and the
+	// row is reached only by a capability set that does not support it.
 	{
 		Requirement: FactHealth, Origins: []SubjectKind{SubjectProject},
 		Rule: factScopePolicyRule{
@@ -1772,7 +1843,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 			// Stage 1, and any future policy shipped dark.
 			event.Outcome = FactScopePolicyUnavailable
 			event.DecisionReason = FactScopeDecisionPolicyDisabled
-		case rule.TargetKind == SubjectWorkItem && timeContext.Axis != "" && timeContext.Axis != contractsv1.ContextFabricTemporalCurrent:
+		case (rule.TargetKind == SubjectWorkItem || rule.CurrentAxisOnly) && timeContext.Axis != "" && timeContext.Axis != contractsv1.ContextFabricTemporalCurrent:
 			// CHAOS-5405: the fourteen work-item `_v1` policies support the
 			// CURRENT axis only, so ANY non-current axis is refused here --
 			// not just observed_time, and not only when its bounds are
@@ -2576,7 +2647,7 @@ func factScopeDecisionReasonForFailure(class FactScopeFailureClass) FactScopeDec
 // null; a measured empty one serializes as 0. Writing the count
 // unconditionally would collapse the two into the same wire value and undo the
 // entire reason the field is a pointer.
-func applyFactScopeCensus(result *InvestigationResult, scope *FactReadScope) {
+func applyFactScopeCensus(result *InvestigationResult, scope *FactReadScope, maxSerializedBytes int64) {
 	if result == nil || scope == nil || len(scope.Events) == 0 {
 		// Optional-first: a path that resolved no scope leaves the field nil
 		// rather than serving an empty array, so "no scope was resolved" and
@@ -2607,5 +2678,115 @@ func applyFactScopeCensus(result *InvestigationResult, scope *FactReadScope) {
 		}
 		records = append(records, record)
 	}
-	result.FactScopeCensus = records
+	kept, omitted := shedFactScopeCensus(records, result.Interpretation.FactRequirements, maxSerializedBytes)
+	result.FactScopeCensus = kept
+	result.FactScopeCensusOmitted = omitted
+}
+
+// shedFactScopeCensus cuts the census to what the requested byte budget can
+// carry beside the smallest valid answer, and returns how many rows it cut.
+//
+// IT SHEDS ONLY WHEN IT MUST: a budget whose row ceiling holds every record
+// returns them all and a zero count, which is every request at the default
+// budget. When it must cut, it cuts by relevance and never by position alone:
+//
+//  1. a row whose requirement is NOT one of the question's own requirements
+//     goes first (it explains something the question did not ask for);
+//  2. among the rest, a row that is not needed to explain the served answer --
+//     a decision that expanded without truncation -- goes before one that
+//     records a gap, a refusal or a cut-short traversal;
+//  3. ties keep the producer's own order, so the result is deterministic.
+//
+// The kept rows retain their original relative order. The count of omitted
+// rows is served beside them: a census that is silently shorter would read
+// as "the resolver made these decisions and no others".
+func shedFactScopeCensus(records []contractsv1.ContextFabricFactScopeCensusRecord, requirements []FactRequirement, maxSerializedBytes int64) ([]contractsv1.ContextFabricFactScopeCensusRecord, int) {
+	ceiling := contractsv1.ContextFabricFactScopeCensusRowCeiling(maxSerializedBytes)
+	if len(records) <= ceiling {
+		return records, 0
+	}
+	keep := factScopeCensusKeepOrder(records, requirements)[:ceiling]
+	return keepFactScopeCensusRows(records, keep), len(records) - len(keep)
+}
+
+// factScopeCensusKeepOrder lists the indices of records from the row to keep
+// LAST-resort-shed (the one that best explains the served answer) to the row
+// to shed first. Deterministic: the sort is stable over the producer's order.
+func factScopeCensusKeepOrder(records []contractsv1.ContextFabricFactScopeCensusRecord, requirements []FactRequirement) []int {
+	asked := make(map[string]bool, len(requirements))
+	for _, requirement := range requirements {
+		asked[string(requirement.Kind)] = true
+	}
+	tiers := make([]int, len(records))
+	order := make([]int, len(records))
+	for i, record := range records {
+		order[i] = i
+		if !asked[record.RequirementKind] {
+			tiers[i] += 2
+		}
+		if !record.Truncated && record.Outcome == string(FactScopeExpanded) {
+			tiers[i]++
+		}
+	}
+	sort.SliceStable(order, func(a, b int) bool { return tiers[order[a]] < tiers[order[b]] })
+	return order
+}
+
+// keepFactScopeCensusRows returns the records at the given indices, in their
+// original relative order.
+func keepFactScopeCensusRows(records []contractsv1.ContextFabricFactScopeCensusRecord, keep []int) []contractsv1.ContextFabricFactScopeCensusRecord {
+	sorted := append([]int(nil), keep...)
+	sort.Ints(sorted)
+	kept := make([]contractsv1.ContextFabricFactScopeCensusRecord, 0, len(sorted))
+	for _, index := range sorted {
+		kept = append(kept, records[index])
+	}
+	return kept
+}
+
+// shedFactScopeCensusToBytes cuts census rows, least relevant first, until
+// the bytes they carried cover `over`: the bytes by which the composed answer
+// exceeds its budget. It is the stage-3 lever for an answer that is larger
+// than the minimum answer the composition-time ceiling reserves for.
+//
+// The census is diagnostics about the answer, not evidence in it, so it is
+// the first thing to give way, and it gives way DISCLOSED: the count of
+// cells it no longer lists is added to FactScopeCensusOmitted. When the whole
+// census is not enough to cover the overrun, it is cut whole anyway: the
+// answer levers that follow then need to cut less of the answer's own
+// content, and a census nobody can read beside a refusal costs nothing. It
+// reports false, and returns the result unchanged, only when there is no
+// census to cut.
+func shedFactScopeCensusToBytes(result InvestigationResult, over int64) (InvestigationResult, bool) {
+	records := result.FactScopeCensus
+	if over <= 0 || len(records) == 0 {
+		return result, false
+	}
+	// The omitted count's key and widest value are paid once, on the first
+	// shed; a result that already carries a count pays nothing more.
+	var saved int64
+	if result.FactScopeCensusOmitted == 0 {
+		saved -= int64(len(`,"fact_scope_census_omitted":`)) + 2
+	}
+	order := factScopeCensusKeepOrder(records, result.Interpretation.FactRequirements)
+	cut := 0
+	for cut < len(order) && saved < over {
+		encoded, err := json.Marshal(records[order[len(order)-1-cut]])
+		if err != nil {
+			return result, false
+		}
+		saved += int64(len(encoded)) + 1
+		cut++
+		if cut == len(order) {
+			// Every row gone: the array and its key leave the document too.
+			saved += int64(len(`,"fact_scope_census":[]`))
+		}
+	}
+	shed := result
+	shed.FactScopeCensus = keepFactScopeCensusRows(records, order[:len(order)-cut])
+	if len(shed.FactScopeCensus) == 0 {
+		shed.FactScopeCensus = nil
+	}
+	shed.FactScopeCensusOmitted = result.FactScopeCensusOmitted + cut
+	return shed, true
 }

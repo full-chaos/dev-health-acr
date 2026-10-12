@@ -131,12 +131,12 @@ func TestChaos5405_APolicyNameIsNeverSharedAcrossPairs(t *testing.T) {
 	}
 }
 
-// TestChaos5405_TheRuledActivationSetIsExactlyTwenty is the widened successor
+// TestChaos5405_TheRuledActivationSetIsExactlyTwentyFive is the widened successor
 // of TestChaos4099_OnlyTheSixRuledPoliciesAreEverActivatable: the ruled set
 // grows from six to twenty, and NOTHING beyond it may ever ship enabled.
 // Cardinality is checked in both directions -- a one-way subset check
 // certifies nothing about a present-and-unexpected member.
-func TestChaos5405_TheRuledActivationSetIsExactlyTwenty(t *testing.T) {
+func TestChaos5405_TheRuledActivationSetIsExactlyTwentyFive(t *testing.T) {
 	t.Parallel()
 	ruled := map[FactScopePolicy]SubjectKind{
 		FactScopePolicyProjectWorkItemRepository:               SubjectProject,
@@ -151,6 +151,15 @@ func TestChaos5405_TheRuledActivationSetIsExactlyTwenty(t *testing.T) {
 	}
 	if len(ruled) != 20 {
 		t.Fatalf("ruled activation set = %d policies, want 20 (6 CHAOS-4099/4101 + 14 CHAOS-5405)", len(ruled))
+	}
+	// The five entity-tree policies, ruled with the entity-tree widening.
+	ruled[FactScopePolicyTeamRepositoryOwnershipContinuousIntegration] = SubjectTeam
+	ruled[FactScopePolicyProjectIssuePullRequestContinuousIntegration] = SubjectProject
+	ruled[FactScopePolicyProjectIssuePullRequestDeployments] = SubjectProject
+	ruled[FactScopePolicyProjectIssuePullRequestIncidents] = SubjectProject
+	ruled[FactScopePolicyProjectTeamOwnershipOperationalDeficiencies] = SubjectProject
+	if len(ruled) != 25 {
+		t.Fatalf("ruled activation set = %d policies, want 25", len(ruled))
 	}
 	seen := map[FactScopePolicy]bool{}
 	for _, row := range factScopeEligibility {

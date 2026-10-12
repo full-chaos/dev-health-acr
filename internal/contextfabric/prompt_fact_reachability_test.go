@@ -53,34 +53,38 @@ func TestInterpretationPromptReachabilityMatchesRegistryAndScopeRules(t *testing
 		t.Error("prompt lost the work-item and activity reachability sentence this test derives")
 	}
 
-	// Sentence 2: "A team also has its own rollups of blockers, pull_requests,
-	// incidents and deployments." Incidents and deployments are team-only.
+	// Sentence 2: "A team or project question also reaches
+	// continuous_integration and deployments through its repositories, and
+	// incidents through the deployments of those repositories; a project
+	// question also reaches operational_deficiencies through the teams that
+	// own the project."
+	for _, kind := range []string{"continuous_integration", "deployments", "incidents", "operational_deficiencies"} {
+		for name, set := range map[string]map[string]bool{"team": team, "project": project} {
+			if !set[kind] {
+				t.Errorf("the prompt says a %s question reaches %s, but the registry and scope rules do not reach it", name, kind)
+			}
+		}
+	}
+	if !strings.Contains(prompt, "A team or project question also reaches continuous_integration and deployments through its repositories, and incidents through the deployments of those repositories; a project question also reaches operational_deficiencies through the teams that own the project.") {
+		t.Error("prompt lost the repository-reach sentence this test derives")
+	}
+
+	// Sentence 3: "A team also has its own rollups of blockers,
+	// pull_requests, incidents and deployments."
 	for _, kind := range []string{"blockers", "pull_requests", "incidents", "deployments"} {
 		if !team[kind] {
 			t.Errorf("the prompt says a team has its own %s rollup, but a team does not reach it", kind)
-		}
-	}
-	for _, kind := range []string{"incidents", "deployments"} {
-		if project[kind] {
-			t.Errorf("%s is now reachable from a project; the prompt's team-only wording must change", kind)
 		}
 	}
 	if !strings.Contains(prompt, "A team also has its own rollups of blockers, pull_requests, incidents and deployments.") {
 		t.Error("prompt lost the team rollup sentence this test derives")
 	}
 
-	// Sentence 3: "continuous_integration and source_health are not reached
-	// from a team or a project; operational_deficiencies is not reached from
-	// a project."
-	for _, kind := range []string{"continuous_integration", "source_health"} {
-		if team[kind] || project[kind] {
-			t.Errorf("%s is reachable from a team or project; the prompt says it is not", kind)
-		}
+	// Sentence 4: "source_health is not reached from a team or a project."
+	if team["source_health"] || project["source_health"] {
+		t.Error("source_health is reachable from a team or project; the prompt says it is not")
 	}
-	if !team["operational_deficiencies"] || project["operational_deficiencies"] {
-		t.Errorf("operational_deficiencies reachability changed (team=%v project=%v); the prompt says team yes, project no", team["operational_deficiencies"], project["operational_deficiencies"])
-	}
-	if !strings.Contains(prompt, "continuous_integration and source_health are not reached from a team or a project; operational_deficiencies is not reached from a project.") {
+	if !strings.Contains(prompt, "source_health is not reached from a team or a project.") {
 		t.Error("prompt lost the not-reached sentence this test derives")
 	}
 }
