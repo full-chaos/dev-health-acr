@@ -54,7 +54,7 @@ func (g retryCensusGraph) DiscoverContext(ctx context.Context, principal storage
 	}
 	graph.EvidenceRefIDs = refs
 	declared, served := retryCensusDeclared, len(graph.Cohort.Members)
-	reason := fmt.Sprintf("kind_census_truncated:%s:%d:%d", SubjectProject, declared, served)
+	reason := KindCensusTruncatedReason(SubjectProject, declared, served)
 	detail := CoverageDetail{
 		DetailID: "cov-graph-01", Source: "context-fabric:graph", Code: contractsv1.ContextFabricCoverageDetailKindCensusTruncated,
 		Degrading: true, Kind: SubjectProject, Declared: &declared, Served: &served, Raw: reason,
@@ -163,7 +163,7 @@ func TestTheCohortRetryServesNoFieldNamingTheMembersItLeftOut(t *testing.T) {
 			}
 		}
 	}
-	want := fmt.Sprintf("kind_census_truncated:%s:%d:%d", SubjectProject, retryCensusDeclared, len(served))
+	want := KindCensusTruncatedReason(SubjectProject, retryCensusDeclared, len(served))
 	census := 0
 	for _, detail := range result.Coverage.Details {
 		if detail.Code != contractsv1.ContextFabricCoverageDetailKindCensusTruncated {

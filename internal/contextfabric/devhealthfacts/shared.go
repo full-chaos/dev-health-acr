@@ -925,7 +925,14 @@ import (
 // too, so composition and narration together overran the item budget: the
 // answer was cut by the claim-depth lever, or refused when the byte budget was
 // also exceeded. A candidate saved under v185 may hold the cut answer.
-const QueryVersion = "devhealthfacts.clickhouse.v186"
+//
+// v187 -> v188: a cohort answer re-synthesized over fewer members (the cohort
+// retry) no longer carries the relationship paths, driver candidates and
+// evidence refs of the members it left out, and its kind_census_truncated
+// raw text and degraded reason state the served member count (only Served did
+// before). The narrowing disclosures no longer advise a larger response
+// budget. A candidate saved under v187 may hold the stale fields.
+const QueryVersion = "devhealthfacts.clickhouse.v188"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
