@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -42,6 +43,39 @@ func (r *countingPhrasingRuntime) PhraseStructureOffers(_ context.Context, _ sto
 	return draft, clientRouteReceipt(contextfabric.ModelOperationPhraseOffers), nil
 }
 
+func (r *countingPhrasingRuntime) InterpretQuestion(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+	return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, contextfabric.ErrModelUnavailable
+}
+
+func (r *countingPhrasingRuntime) SynthesizeAnswer(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
+	return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, contextfabric.ErrModelUnavailable
+}
+
+// byoPhrasingConfigs is the resolver's view of the organization's own model
+// configuration; its runtime is the counting BYO phrasing model.
+type byoPhrasingConfigs struct{ found bool }
+
+func (c byoPhrasingConfigs) ResolveOrgModelConfig(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
+	if !c.found {
+		return contextfabric.ResolvedOrgModelConfig{}, false, nil
+	}
+	return contextfabric.ResolvedOrgModelConfig{Provider: "openai_compatible", Model: "org-model", Generation: 1}, true, nil
+}
+
+// phrasingResolver composes the production per-organization resolver over the
+// counting deployment phrasing model and the counting BYO phrasing model.
+func phrasingResolver(deployment, byo *countingPhrasingRuntime, hasBYO, absentDeployment bool, logger *slog.Logger) *modelruntimeresolver.Resolver {
+	var deploymentRuntime contextfabric.ModelRuntime
+	if !absentDeployment {
+		deploymentRuntime = deployment
+	}
+	resolver := modelruntimeresolver.New(deploymentRuntime, byoPhrasingConfigs{found: hasBYO}, func(context.Context, contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
+		return byo, nil
+	})
+	resolver.Logger = logger
+	return resolver
+}
+
 func (r *countingPhrasingRuntime) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -53,17 +87,22 @@ type phrasingRouteRig struct {
 	token    string
 	model    *clientRouteModel
 	phrasing *countingPhrasingRuntime
+	byo      *countingPhrasingRuntime
 	logs     *bytes.Buffer
 }
 
 // newPhrasingRouteRig composes the real API over the real engine with the
 // caller's own interpretation accepted, a graph that commits nothing and offers
 // one kind option, and the offer phraser wired to a counting deployment model.
-func newPhrasingRouteRig(t *testing.T, grants *serviceModelGrants) *phrasingRouteRig {
+func newPhrasingRouteRig(t *testing.T, grants *serviceModelGrants, hasBYO bool) *phrasingRouteRig {
+	return newPhrasingRouteRigWith(t, grants, hasBYO, false)
+}
+
+func newPhrasingRouteRigWith(t *testing.T, grants *serviceModelGrants, hasBYO, absentDeployment bool) *phrasingRouteRig {
 	t.Helper()
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	rig := &phrasingRouteRig{model: &clientRouteModel{}, phrasing: &countingPhrasingRuntime{}, logs: logs}
+	rig := &phrasingRouteRig{model: &clientRouteModel{}, phrasing: &countingPhrasingRuntime{}, byo: &countingPhrasingRuntime{}, logs: logs}
 	supplied, err := genkitruntime.NewSuppliedInterpreter(genkitruntime.SuppliedInterpreterConfig{Logger: logger})
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +129,7 @@ func newPhrasingRouteRig(t *testing.T, grants *serviceModelGrants) *phrasingRout
 		},
 		Results:      store,
 		Telemetry:    telemetry,
-		OfferPhraser: contextfabric.RuntimeOfferPhraser{Runtime: rig.phrasing, Sink: acceptingSink{}, Logger: logger},
+		OfferPhraser: contextfabric.RuntimeOfferPhraser{Runtime: phrasingResolver(rig.phrasing, rig.byo, hasBYO, absentDeployment, logger), Sink: acceptingSink{}, Logger: logger},
 	}, contextfabric.EngineOptions{
 		ServiceVersion: "phrasing-route",
 		Now:            func() time.Time { return time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC) },
@@ -104,6 +143,7 @@ func newPhrasingRouteRig(t *testing.T, grants *serviceModelGrants) *phrasingRout
 	}
 	rig.app, rig.token = newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 500, MaxTokens: 500_000, MaxBytes: 8 << 20}, logs)
 	rig.app.runtime.Entitlements = grants
+	rig.app.runtime.OrgModelConfigs = ownModelConfigs{found: hasBYO}
 	return rig
 }
 
@@ -156,10 +196,10 @@ func kindOptionsOf(t *testing.T, envelope contractsv1.ContextFabricInvestigation
 // structural label and no phrasing, the deployment phrasing model is never
 // called, and the decision and the phrasing outcome are both in the trace.
 func TestClarificationOnTheClientPathWithoutTheFeatureIsNeverPhrasedOnTheDeploymentModel(t *testing.T) {
-	rig := newPhrasingRouteRig(t, &serviceModelGrants{})
+	rig := newPhrasingRouteRig(t, &serviceModelGrants{}, false)
 	options := kindOptionsOf(t, rig.post(t))
-	if got := rig.phrasing.count(); got != 0 {
-		t.Fatalf("deployment phrasing calls = %d, want 0", got)
+	if got := rig.phrasing.count(); got != 0 || rig.byo.count() != 0 {
+		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 0", got, rig.byo.count())
 	}
 	if options[0].Label != "a pull request" || options[0].Phrasing != "" {
 		t.Fatalf("kind option = %+v, want the structural label and no phrasing", options[0])
@@ -178,7 +218,7 @@ func TestClarificationOnTheClientPathWithoutTheFeatureIsNeverPhrasedOnTheDeploym
 // The mirror: the same turn for an organization with the feature is phrased
 // once on the deployment model.
 func TestClarificationOnTheClientPathWithTheFeatureIsPhrasedOnTheDeploymentModel(t *testing.T) {
-	rig := newPhrasingRouteRig(t, &serviceModelGrants{feature: true})
+	rig := newPhrasingRouteRig(t, &serviceModelGrants{feature: true}, false)
 	options := kindOptionsOf(t, rig.post(t))
 	if got := rig.phrasing.count(); got != 1 {
 		t.Fatalf("deployment phrasing calls = %d, want 1", got)
@@ -198,11 +238,11 @@ func TestClarificationOnTheClientPathWithTheFeatureIsPhrasedOnTheDeploymentModel
 // meets the window gate with subject offers. The interpretation is the
 // organization's own model (a fixed reading here, no model call), so the
 // caller is served on its own model configuration.
-func newWindowGatePhrasingRig(t *testing.T, grants *serviceModelGrants) *phrasingRouteRig {
+func newWindowGatePhrasingRig(t *testing.T, grants *serviceModelGrants, hasBYO bool) *phrasingRouteRig {
 	t.Helper()
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	rig := &phrasingRouteRig{model: &clientRouteModel{}, phrasing: &countingPhrasingRuntime{}, logs: logs}
+	rig := &phrasingRouteRig{model: &clientRouteModel{}, phrasing: &countingPhrasingRuntime{}, byo: &countingPhrasingRuntime{}, logs: logs}
 	project := contextfabric.SubjectProject
 	ciRun := contractsv1.ContextFabricSubjectCIRun
 	reading := surfaceReading(t, contextfabric.QuestionFrame{
@@ -227,7 +267,7 @@ func newWindowGatePhrasingRig(t *testing.T, grants *serviceModelGrants) *phrasin
 		Facts: surfaceFacts{t: t}, Synthesizer: surfaceSynthesizer{t: t},
 		Results:      store,
 		Telemetry:    contextfabric.NewSlogEngineTelemetry(logger),
-		OfferPhraser: contextfabric.RuntimeOfferPhraser{Runtime: rig.phrasing, Sink: acceptingSink{}, Logger: logger},
+		OfferPhraser: contextfabric.RuntimeOfferPhraser{Runtime: phrasingResolver(rig.phrasing, rig.byo, hasBYO, false, logger), Sink: acceptingSink{}, Logger: logger},
 	}, contextfabric.EngineOptions{
 		ServiceVersion: "window-gate-phrasing-route",
 		Now:            func() time.Time { return time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC) },
@@ -241,7 +281,7 @@ func newWindowGatePhrasingRig(t *testing.T, grants *serviceModelGrants) *phrasin
 	}
 	rig.app, rig.token = newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 500, MaxTokens: 500_000, MaxBytes: 8 << 20}, logs)
 	rig.app.runtime.Entitlements = grants
-	rig.app.runtime.OrgModelConfigs = ownModelConfigs{found: true}
+	rig.app.runtime.OrgModelConfigs = ownModelConfigs{found: hasBYO}
 	return rig
 }
 
@@ -270,33 +310,78 @@ func windowGateCandidateOptions(t *testing.T, envelope contractsv1.ContextFabric
 	return needs.CandidateOptions
 }
 
-// A window-gate clarification for an organization served on its own model
-// without the feature: the gate's subject offer is not phrased on the
-// deployment model.
-func TestWindowGateClarificationOnTheOwnModelWithoutTheFeatureIsNeverPhrasedOnTheDeploymentModel(t *testing.T) {
-	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{})
+// An organization served on its own model without the feature is phrased on
+// its own model, never the deployment's.
+func TestWindowGateClarificationOnTheOwnModelWithoutTheFeatureIsPhrasedOnTheOwnModel(t *testing.T) {
+	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{}, true)
 	options := windowGateCandidateOptions(t, rig.postWithoutWindow(t))
-	if got := rig.phrasing.count(); got != 0 {
-		t.Fatalf("deployment phrasing calls = %d, want 0", got)
+	if rig.phrasing.count() != 0 || rig.byo.count() != 1 {
+		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 1", rig.phrasing.count(), rig.byo.count())
 	}
-	if options[0].Label != "CI run 29213415002" || options[0].Phrasing != "" {
-		t.Fatalf("candidate option = %+v, want the structural label and no phrasing", options[0])
+	if options[0].Label != "CI run 29213415002" || options[0].Phrasing != phrasedKindLabel {
+		t.Fatalf("candidate option = %+v, want the structural label and the phrasing", options[0])
 	}
 	if got := serviceModelDecisionBasis(t, rig.logs); len(got) != 1 || got[0] != "own_model" {
 		t.Fatalf("decision log bases = %v, want [own_model]", got)
 	}
-	if got := phrasingOutcomes(rig.logs); len(got) != 1 || got[0] != string(contextfabric.OfferPhrasingWithheld) {
-		t.Fatalf("phrasing outcomes = %v, want [%s]", got, contextfabric.OfferPhrasingWithheld)
+	if got := phrasingOutcomes(rig.logs); len(got) != 1 || got[0] != string(contextfabric.OfferPhrasingGenerated) {
+		t.Fatalf("phrasing outcomes = %v, want [%s]", got, contextfabric.OfferPhrasingGenerated)
 	}
 }
 
 func TestWindowGateClarificationWithTheFeatureIsPhrasedOnTheDeploymentModel(t *testing.T) {
-	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true})
+	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true}, false)
 	options := windowGateCandidateOptions(t, rig.postWithoutWindow(t))
-	if got := rig.phrasing.count(); got != 1 {
-		t.Fatalf("deployment phrasing calls = %d, want 1", got)
+	if rig.phrasing.count() != 1 || rig.byo.count() != 0 {
+		t.Fatalf("phrasing calls = deployment %d byo %d, want 1 and 0", rig.phrasing.count(), rig.byo.count())
 	}
 	if options[0].Phrasing != phrasedKindLabel {
 		t.Fatalf("candidate option phrasing = %q, want %q", options[0].Phrasing, phrasedKindLabel)
+	}
+}
+
+// An organization with the feature and its own model is phrased on its own
+// model: the deployment model is not used while the organization has one.
+func TestWindowGateClarificationWithTheFeatureAndAnOwnModelIsPhrasedOnTheOwnModel(t *testing.T) {
+	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true}, true)
+	options := windowGateCandidateOptions(t, rig.postWithoutWindow(t))
+	if rig.phrasing.count() != 0 || rig.byo.count() != 1 {
+		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 1", rig.phrasing.count(), rig.byo.count())
+	}
+	if options[0].Phrasing != phrasedKindLabel {
+		t.Fatalf("candidate option phrasing = %q, want %q", options[0].Phrasing, phrasedKindLabel)
+	}
+}
+
+// A caller-model turn for an organization with its own model, without the
+// feature, is phrased on the organization's own model.
+func TestClarificationOnTheClientPathWithAnOwnModelIsPhrasedOnTheOwnModel(t *testing.T) {
+	rig := newPhrasingRouteRig(t, &serviceModelGrants{}, true)
+	options := kindOptionsOf(t, rig.post(t))
+	if rig.phrasing.count() != 0 || rig.byo.count() != 1 {
+		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 1", rig.phrasing.count(), rig.byo.count())
+	}
+	if options[0].Phrasing != phrasedKindLabel {
+		t.Fatalf("kind option phrasing = %q, want %q", options[0].Phrasing, phrasedKindLabel)
+	}
+}
+
+// A deployment with no model runtime and an organization with no model of its
+// own: the offer is served with its structural labels, the outcome is the
+// withheld class (not a failed call), and nothing is refused.
+func TestClarificationWithNoModelConfiguredIsServedWithStructuralLabelsAsWithheld(t *testing.T) {
+	rig := newPhrasingRouteRigWith(t, &serviceModelGrants{feature: true}, false, true)
+	options := kindOptionsOf(t, rig.post(t))
+	if rig.phrasing.count() != 0 || rig.byo.count() != 0 {
+		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 0", rig.phrasing.count(), rig.byo.count())
+	}
+	if options[0].Label != "a pull request" || options[0].Phrasing != "" {
+		t.Fatalf("kind option = %+v, want the structural label and no phrasing", options[0])
+	}
+	if got := phrasingOutcomes(rig.logs); len(got) != 1 || got[0] != string(contextfabric.OfferPhrasingWithheld) {
+		t.Fatalf("phrasing outcomes = %v, want [%s]", got, contextfabric.OfferPhrasingWithheld)
+	}
+	if !strings.Contains(rig.logs.String(), "no_model_configured") {
+		t.Fatal("logs carry no no_model_configured basis line")
 	}
 }

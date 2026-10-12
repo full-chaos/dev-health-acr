@@ -1,19 +1,43 @@
 package contextfabric
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 type platformModelWithheldKey struct{}
 
+type platformModelWithheldValue struct {
+	basis string
+}
+
+// ErrPlatformModelWithheld marks a model call that fell through to the
+// deployment model for a turn that may not run on it. Callers treat it as
+// "no model call was made", not as a provider failure.
+var ErrPlatformModelWithheld = errors.New("context fabric platform model withheld")
+
 // WithPlatformModelWithheld marks a turn that may not run on the deployment's
-// own model. The caller decides it before the engine runs; the engine reads it
-// for the calls that always run on the deployment model, such as offer
-// phrasing.
+// own model. The caller decides it before the engine runs; the model runtime
+// resolver reads it at the one place a request falls through to the
+// deployment model.
 func WithPlatformModelWithheld(ctx context.Context) context.Context {
-	return context.WithValue(ctx, platformModelWithheldKey{}, true)
+	return WithPlatformModelWithheldBasis(ctx, "")
+}
+
+// WithPlatformModelWithheldBasis is WithPlatformModelWithheld carrying the
+// gate's decision basis, so the call that is withheld can log why.
+func WithPlatformModelWithheldBasis(ctx context.Context, basis string) context.Context {
+	return context.WithValue(ctx, platformModelWithheldKey{}, platformModelWithheldValue{basis: basis})
 }
 
 // PlatformModelWithheld reports whether WithPlatformModelWithheld marked ctx.
 func PlatformModelWithheld(ctx context.Context) bool {
-	withheld, _ := ctx.Value(platformModelWithheldKey{}).(bool)
-	return withheld
+	_, ok := ctx.Value(platformModelWithheldKey{}).(platformModelWithheldValue)
+	return ok
+}
+
+// PlatformModelWithheldBasis returns the basis the turn was withheld on, or "".
+func PlatformModelWithheldBasis(ctx context.Context) string {
+	value, _ := ctx.Value(platformModelWithheldKey{}).(platformModelWithheldValue)
+	return value.basis
 }
