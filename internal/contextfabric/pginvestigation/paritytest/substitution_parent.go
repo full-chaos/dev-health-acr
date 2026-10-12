@@ -141,7 +141,125 @@ func RunSubstitutionParentReadSuite(t *testing.T, newStore func(t *testing.T) (c
 			}
 		}
 	}
+	admitted := runAdmittedBindingCell(t, newStore)
+	cells = append(cells, admitted)
 	return cells
+}
+
+// admittedBindingQuestion is the question both the parent and the follow-up
+// of the admitted cell ask.
+const admittedBindingQuestion = "How is the parent project doing?"
+
+// runAdmittedBindingCell plants a parent whose snapshot carries a binding
+// proven under the current policy, one minute before the follow-up, with a
+// recorded ownership freshness, and whose question the follow-up repeats.
+// Read back through the store, every admission check passes: the binding is
+// admitted, and the follow-up's withheld subject contests it.
+func runAdmittedBindingCell(t *testing.T, newStore func(t *testing.T) (contextfabric.InvestigationResultStore, SemanticSeed)) SubstitutionParentCell {
+	t.Helper()
+	const name = "payload_readable/snapshot_bound_admitted/one_identity"
+	store, seed := newStore(t)
+	parentID := substitutionParentID(name)
+	parent := result(parentID, admittedBindingQuestion)
+	payload, err := json.Marshal(parent)
+	if err != nil {
+		t.Fatalf("%s: marshal parent: %v", name, err)
+	}
+	held := "project-" + parentID
+	state := SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)
+	binding, err := json.Marshal(map[string]any{
+		"state": "bound", "kind": string(contextfabric.SubjectProject), "canonical_id": held,
+		"proof": "identity_proven", "reason": "identity_proven", "origin_result_id": parentID, "graph_epoch": 0,
+		"proven_freshness": map[string]any{"recorded": true, "serving_epoch": 0, "ownership_watermark": "ownership-w1"},
+		"policy_version":   contextfabric.AnchorBindingPolicyVersion,
+		"proven_at":        time.Unix(840, 0).UTC().Format(time.RFC3339Nano),
+		"witness":          []string{string(contextfabric.SubjectProject) + ":" + held},
+	})
+	if err != nil {
+		t.Fatalf("%s: encode binding: %v", name, err)
+	}
+	state.Extensions = contextfabric.SemanticStateExtensions{"anchor_binding": binding}
+	snapshot, err := contextfabric.EncodeSemanticState(state)
+	if err != nil {
+		t.Fatalf("%s: encode snapshot: %v", name, err)
+	}
+	seed(t, substitutionPrincipal.OrgID, parentID, payload, snapshot)
+	stored, getErr := store.Get(context.Background(), substitutionPrincipal, parentID)
+	if getErr != nil || stored.SemanticStateRead != contextfabric.SemanticStateReadAvailable {
+		t.Fatalf("%s: fixture defect: the parent read back %v / %s", name, getErr, stored.SemanticStateRead)
+	}
+	var sink bytes.Buffer
+	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
+		Interpreter: substitutionInterpreter{}, Graph: substitutionGraph{}, Facts: substitutionFacts{}, Synthesizer: substitutionSynth{},
+		Results:   store,
+		Telemetry: contextfabric.NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&sink, &slog.HandlerOptions{Level: slog.LevelInfo}))),
+		CandidateVerifier: func(context.Context, storage.Principal, contextfabric.RequestedScope, contextfabric.ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string) (bool, contextfabric.CandidateVerificationReason) {
+			return true, contextfabric.CandidateVerificationValid
+		},
+		AnchorFreshness: admittedOwnership{},
+	}, contextfabric.EngineOptions{
+		ServiceVersion: "substitution-parent-parity",
+		Now:            func() time.Time { return time.Unix(900, 0).UTC() },
+		NewResultID:    func() string { return "result-substitution-child-" + sanitizeCellName(name) },
+	})
+	if err != nil {
+		t.Fatalf("%s: NewEngine: %v", name, err)
+	}
+	request := contextfabric.InvestigationRequest{
+		SchemaVersion: contextfabric.InvestigationRequestSchemaV1,
+		RequestID:     "request-substitution-" + sanitizeCellName(name),
+		Question:      admittedBindingQuestion,
+		TimeContext:   contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent, EvidenceWindow: &contextfabric.RequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing90D}},
+		Options: contextfabric.InvestigationOptions{
+			MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
+			MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 1 << 20, AllowClarification: true,
+		},
+		Consumer:       contextfabric.ConsumerInfo{Name: "context-fabric-workbench", Version: "0.1.0", Surface: "workbench"},
+		ParentResultID: parentID,
+	}
+	served, err := engine.Investigate(context.Background(), substitutionPrincipal, request)
+	if err != nil {
+		t.Fatalf("%s: Investigate: %v", name, err)
+	}
+	cell := SubstitutionParentCell{Name: name, Status: string(served.Status), Committed: len(served.SubjectResolution.Committed)}
+	admissions := []string{}
+	scanner := bufio.NewScanner(&sink)
+	scanner.Buffer(make([]byte, 0, 1<<16), 1<<22)
+	for scanner.Scan() {
+		var line map[string]any
+		if json.Unmarshal(scanner.Bytes(), &line) != nil || line["msg"] != contextfabric.AnchorBindingTransitionLogMessage {
+			continue
+		}
+		var b SubstitutionParentBinding
+		b.State, _ = line["to_state"].(string)
+		b.ID, _ = line["to_id"].(string)
+		b.Reason, _ = line["reason"].(string)
+		b.ContenderID, _ = line["contender_id"].(string)
+		cell.Bindings = append(cell.Bindings, b)
+		admission, _ := line["binding_admission"].(string)
+		admissions = append(admissions, admission)
+	}
+	if len(cell.Bindings) == 0 {
+		t.Fatalf("%s: no anchor-binding transition line was emitted", name)
+	}
+	for i, b := range cell.Bindings {
+		if admissions[i] != "admitted" {
+			t.Errorf("%s: binding_admission = %q, want the stored binding admitted", name, admissions[i])
+		}
+		if b.State != "contested" || b.ID != held || b.ContenderID != substitutionFollowUpSubject.CanonicalID {
+			t.Errorf("%s: binding = %+v, want the admitted binding held and contested by the withheld subject", name, b)
+		}
+	}
+	t.Logf("%-58s admission=%v bindings=%+v", name, admissions, cell.Bindings)
+	return cell
+}
+
+// admittedOwnership reads the ownership the admitted cell's binding was
+// proven under.
+type admittedOwnership struct{}
+
+func (admittedOwnership) ReadAnchorFreshness(context.Context, string) (contextfabric.AnchorFreshnessRead, error) {
+	return contextfabric.AnchorFreshnessRead{ServingEpoch: 0, OwnershipWatermark: "ownership-w1", Recorded: true}, nil
 }
 
 func runSubstitutionParentCell(t *testing.T, newStore func(t *testing.T) (contextfabric.InvestigationResultStore, SemanticSeed), name string, oneIdentity, payloadReadable bool, snapshot []byte) SubstitutionParentCell {
@@ -255,11 +373,12 @@ func assertWithheldNeverBound(t *testing.T, name string, cell SubstitutionParent
 		if binding.ID == substitutionFollowUpSubject.CanonicalID {
 			t.Errorf("%s: the shadow binder bound the withheld subject: %+v", name, binding)
 		}
-		switch {
-		case parentBound && (binding.State != "contested" || binding.ContenderID != substitutionFollowUpSubject.CanonicalID):
-			t.Errorf("%s: binding = %+v, want the parent's binding contested by the withheld subject", name, binding)
-		case !parentBound && (binding.State != "unbound" || binding.Reason != "ambiguous_proof"):
-			t.Errorf("%s: binding = %+v, want unbound on ambiguous proof", name, binding)
+		// A planted parent binding is never the starting point here: the
+		// follow-up asks another question, so admission refuses it, and the
+		// binding stays unbound on ambiguous proof exactly as with no parent
+		// binding at all. parentBound only names which planting this is.
+		if binding.State != "unbound" || binding.Reason != "ambiguous_proof" {
+			t.Errorf("%s: binding = %+v (parent bound: %v), want unbound on ambiguous proof", name, binding, parentBound)
 		}
 	}
 }
