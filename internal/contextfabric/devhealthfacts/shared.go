@@ -942,10 +942,17 @@ import (
 // the cause on the health, operational deficiency and investment kinds, where
 // a stored answer holds no_data.
 //
-// v188 -> v189: served prose (current_state and the direct-read coverage notes)
+// v188 -> v189: a cohort answer re-synthesized over fewer members (the cohort
+// retry) no longer carries the relationship paths, driver candidates and
+// evidence refs of the members it left out, and its kind_census_truncated
+// raw text and degraded reason state the served member count (only Served did
+// before). The narrowing disclosures no longer advise a larger response
+// budget. A candidate saved under v188 may hold the stale fields.
+//
+// v189 -> v190: served prose (current_state and the direct-read coverage notes)
 // names measures by display noun and shows numbers at display precision. A
 // stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v189"
+const QueryVersion = "devhealthfacts.clickhouse.v190"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

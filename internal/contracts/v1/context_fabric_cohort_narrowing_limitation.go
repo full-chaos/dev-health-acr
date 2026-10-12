@@ -19,8 +19,8 @@ import (
 //
 // INTERPOLATED WITH COUNTS, and that is a deliberate, narrower exception to the
 // "no count" rule the grouping disclosures above follow. The reader needs the
-// FROM and the TO to act on this sentence (ask a narrower question, or allow a
-// larger budget), and the counts are the whole disclosure. The hazard the
+// FROM and the TO to act on this sentence (ask a narrower question), and the
+// counts are the whole disclosure. The hazard the
 // grouping disclosures avoid -- a recogniser that accepts arbitrary digit runs
 // widens what a model caveat can impersonate -- is bounded here by a STRICT
 // parse: every step is one of a closed set of fixed phrases, every number is a
@@ -55,7 +55,7 @@ const (
 	contextFabricCohortNarrowingOf         = " of the "
 	contextFabricCohortNarrowingSubjects   = " subjects found, because the list was narrowed to fit the response budget: "
 	contextFabricCohortNarrowingStepSep    = "; "
-	contextFabricCohortNarrowingSuffix     = ". Ask a narrower question or allow a larger response budget to see the rest."
+	contextFabricCohortNarrowingSuffix     = ". Ask a narrower question to see the rest."
 	contextFabricCohortNarrowingTo         = " to "
 	contextFabricCohortNarrowingClampFrom  = " when the plan lowered the member limit from "
 	contextFabricCohortNarrowingClampSet   = " when the plan set a member limit of "
