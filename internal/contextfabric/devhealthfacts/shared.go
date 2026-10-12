@@ -841,7 +841,17 @@ import (
 // pull request rows) where it was pruned with no reach; a candidate saved under an earlier version
 // carries the pruned answer for such a question. The census also sheds rows under a small byte
 // budget and serves the count it cut.
-const QueryVersion = "devhealthfacts.clickhouse.v172"
+//
+// v171 -> v172: a scoped question whose anchor cannot be bound to one subject
+// (several committed subjects of the anchor kind and no anchor term matched
+// one, or none committed at that kind) is a clarification, not a generic
+// cohort. An answer saved under v171 for such a question holds the cohort.
+//
+// v172 -> v173: a team's blockers fact places a blocked item in the repositories its
+// linked pull request rows name (the link tier is on the fact) instead of the work item's own
+// repository column; team totals count an item once across the team's repositories. A candidate
+// saved under v172 holds the column-based repositories and totals.
+const QueryVersion = "devhealthfacts.clickhouse.v173"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
