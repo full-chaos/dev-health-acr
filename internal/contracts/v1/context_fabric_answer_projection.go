@@ -127,6 +127,10 @@ type ContextFabricAnswerProjection struct {
 	// D-d, verbatim: "Preserve these records through answerprojection;
 	// consumers must not reconstruct them from prose."
 	FactScopeCensus []ContextFabricFactScopeCensusRecord `json:"fact_scope_census,omitempty"`
+	// FactScopeCensusOmitted is the canonical result's own count of census
+	// decisions the byte budget could not carry, copied verbatim: the census
+	// above is a bounded sample whenever this is positive.
+	FactScopeCensusOmitted int `json:"fact_scope_census_omitted,omitempty"`
 	// EvidenceRefLabels (CHAOS-4690) maps exactly the refs this projection
 	// retains in EvidenceRefIDs to their display labels — filtered from the
 	// canonical result's own map, 1:1 with already-budgeted refs.

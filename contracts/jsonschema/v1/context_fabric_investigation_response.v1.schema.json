@@ -200,8 +200,14 @@
       "items": {
         "$ref": "context_fabric_common.v1.schema.json#/$defs/FactScopeCensusRecord"
       },
-      "maxItems": 21,
+      "maxItems": 26,
       "description": "CHAOS-5405 D-d: one record per attempted requirement/origin scope decision. Optional-first: absent on every result written before this field existed, and on any path that resolved no scope at all -- absent and empty are different documents."
+    },
+    "fact_scope_census_omitted": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 26,
+      "description": "Count of scope decisions the census does not list because the request's serialized byte budget could not carry every row beside the smallest valid answer. Absent when every decision is listed. Additive: absent on every result written before this field existed."
     },
     "evidence_ref_labels": {
       "type": "object",
