@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -83,8 +85,10 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactPullRequests)
 	window := contractsv1TimeContext(ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 30, 23, 59, 59))
+	var lastMark int64
 	read := func() (statementMemory, contextfabric.FactProviderResult, error) {
 		mark := serverNowMicros(t, ctx, direct)
+		lastMark = mark
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: projectReachMemoryOrg, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
 			Time: window, Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{teamSubject(teamID)},
 		})
@@ -94,10 +98,13 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 		t.Fatalf("warm-up ReadFacts: %v: %s", err, readFailureCause(err))
 	}
 	small, smallResult, smallErr := read()
+	smallBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
 SELECT concat('filler-more-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?)`,
 		repoUUID("repo-filler"), projectReachMemoryOrg, at, uint64(blockerMemoryMoreFillerItems))
 	large, largeResult, largeErr := read()
+	largeBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
+	t.Logf("read_bytes of the project-reached statements: %d at the smaller size, %d at the larger", smallBytes, largeBytes)
 	// The reach read and the linked pull request read run on every read.
 	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team project-reached repository statements", small, large, 2)
 	for _, read := range []struct {
@@ -122,4 +129,20 @@ SELECT concat('filler-more-', repeat('x', 96), '-', toString(number)), ?, ?, 'fi
 			t.Fatalf("link_tier = %v, want the weakest tier heuristic", tier)
 		}
 	}
+}
+
+// projectReachedReadBytes is the peak read_bytes of the SELECTs over
+// team_project_ownership and work_graph_issue_pr logged after the mark.
+func projectReachedReadBytes(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, markMicros int64) uint64 {
+	t.Helper()
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs: %v", err)
+	}
+	var peak uint64
+	if err := direct.QueryRow(ctx, `SELECT max(read_bytes) FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.team_project_ownership')) AND position(query, 'work_graph_issue_pr') > 0`, markMicros).Scan(&peak); err != nil {
+		t.Fatalf("read query_log: %v", err)
+	}
+	return peak
 }
