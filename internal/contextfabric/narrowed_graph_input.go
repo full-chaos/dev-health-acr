@@ -3,10 +3,11 @@ package contextfabric
 import "slices"
 
 // narrowedInputRefHolders names every evidence-ref holder of a synthesis
-// input besides the graph's own ref list, by its path from the input. It is
-// the one list keptInputRefs walks, and
-// TestEveryEvidenceRefHolderOfTheSynthesisInputIsWalked fails when the input
-// types grow a holder this list does not name.
+// input besides the graph's own ref list, by its path in SynthesisInput. It
+// is the one list keptInputRefs walks. Together with
+// narrowedInputRefExclusions it accounts for every field of SynthesisInput
+// that can carry a ref: TestEveryEvidenceRefHolderOfTheSynthesisInputIsWalked
+// reflects over the whole input and fails on a field in neither.
 var narrowedInputRefHolders = []string{
 	"Graph.Resolution.Candidates[].EvidenceRefIDs",
 	"Graph.Cohort.Members[].EvidenceRefIDs",
@@ -14,6 +15,30 @@ var narrowedInputRefHolders = []string{
 	"Graph.Paths[].Edges[].EvidenceRefIDs",
 	"Graph.DriverCandidates[].EvidenceRefIDs",
 	"Facts.Facts[].EvidenceRefIDs",
+}
+
+// synthesisInputRefRoots accounts for every top-level SynthesisInput field:
+// the two whose holders keptInputRefs walks, and the rest with why none of
+// their fields holds an evidence ref a narrowed pass must keep. A field added
+// to SynthesisInput fails the census test until it is named here.
+var synthesisInputRefRoots = map[string]string{
+	"Graph":                   "walked: candidates, cohort members, paths, edges, driver candidates",
+	"Facts":                   "walked: facts",
+	"Request":                 "the caller's request: question, options and time context; its raw supplied interpretation and synthesis are excluded below",
+	"Interpretation":          "the interpreted question: requirements and time context, no refs",
+	"Allocation":              "item counts only",
+	"LabelCanonicalization":   "label rewrites, no refs",
+	"EvidenceWindow":          "the effective window's bounds, no refs",
+	"ReadTimeClamp":           "the read-time clamp, no refs",
+	"EvidenceWindowFromClock": "a flag",
+}
+
+// narrowedInputRefExclusions are the SynthesisInput fields that can carry a
+// ref and are not walked, each with the reason.
+var narrowedInputRefExclusions = map[string]string{
+	"Graph.EvidenceRefIDs":                  "the list the narrowing filters",
+	"Request.SuppliedSynthesis.Output":      "a supplied synthesis declines the cohort retry (RetryDeclinedSuppliedSynthesis), so no narrowed pass reads it",
+	"Request.SuppliedInterpretation.Output": "the caller's interpretation, decoded into Interpretation before retrieval; the interpretation shape names no evidence ref",
 }
 
 // keptInputRefs is every evidence ref a holder of the narrowed input still

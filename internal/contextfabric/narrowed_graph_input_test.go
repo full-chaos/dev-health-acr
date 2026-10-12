@@ -1,7 +1,10 @@
 package contextfabric
 
 import (
+	"encoding/json"
+	"maps"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -71,23 +74,52 @@ func TestTheNarrowedGraphInputDropsWhatNamesARemovedMember(t *testing.T) {
 	}
 }
 
-// keptInputRefs walks exactly the holders narrowedInputRefHolders names, and
-// that list names every ref-bearing field the synthesis input types reach: a
-// holder added to GraphContext, its cohort, paths, drivers or candidates, or
-// to the fact bundle, fails here until it is walked.
+// The holder census covers the WHOLE synthesis input: every top-level
+// SynthesisInput field is a walked root or a named exclusion, and every field
+// at any depth that can carry an evidence ref (a string list, string map or
+// string named for a ref or evidence, raw JSON, an interface) is a holder
+// keptInputRefs walks or a named exclusion with its reason. A field added to
+// the input fails here until it is accounted for, and each walked holder is
+// shown to be walked.
 func TestEveryEvidenceRefHolderOfTheSynthesisInputIsWalked(t *testing.T) {
+	inputType := reflect.TypeOf(SynthesisInput{})
+	roots := []string{}
+	for i := 0; i < inputType.NumField(); i++ {
+		roots = append(roots, inputType.Field(i).Name)
+	}
+	slices.Sort(roots)
+	if named := slices.Sorted(maps.Keys(synthesisInputRefRoots)); !slices.Equal(roots, named) {
+		t.Fatalf("SynthesisInput fields = %v, accounted for = %v", roots, named)
+	}
+
+	refName := regexp.MustCompile(`(?i)ref|evidence`)
+	rawJSON := reflect.TypeOf(json.RawMessage(nil))
+	stringish := func(tp reflect.Type) bool {
+		switch tp.Kind() {
+		case reflect.String:
+			return true
+		case reflect.Slice, reflect.Array, reflect.Map:
+			return tp.Elem().Kind() == reflect.String || ((tp.Elem().Kind() == reflect.Slice || tp.Elem().Kind() == reflect.Array) && tp.Elem().Elem().Kind() == reflect.String)
+		}
+		return false
+	}
 	found := []string{}
 	var walk func(reflect.Type, string, map[reflect.Type]bool)
 	walk = func(tp reflect.Type, path string, seen map[reflect.Type]bool) {
-		for tp.Kind() == reflect.Pointer {
-			tp = tp.Elem()
-		}
-		for tp.Kind() == reflect.Slice || tp.Kind() == reflect.Array || tp.Kind() == reflect.Map {
-			tp = tp.Elem()
-			path += "[]"
-			for tp.Kind() == reflect.Pointer {
+		for {
+			switch tp.Kind() {
+			case reflect.Pointer:
 				tp = tp.Elem()
+				continue
+			case reflect.Slice, reflect.Array, reflect.Map:
+				if tp == rawJSON || stringish(tp) {
+					return
+				}
+				tp = tp.Elem()
+				path += "[]"
+				continue
 			}
+			break
 		}
 		if tp.Kind() != reflect.Struct || seen[tp] {
 			return
@@ -96,20 +128,27 @@ func TestEveryEvidenceRefHolderOfTheSynthesisInputIsWalked(t *testing.T) {
 		defer delete(seen, tp)
 		for i := 0; i < tp.NumField(); i++ {
 			field := tp.Field(i)
-			if field.Type == reflect.TypeOf([]string(nil)) && strings.Contains(field.Name, "Ref") {
-				found = append(found, path+"."+field.Name)
-				continue
+			fieldPath := strings.TrimPrefix(path+"."+field.Name, ".")
+			fieldType := field.Type
+			for fieldType.Kind() == reflect.Pointer {
+				fieldType = fieldType.Elem()
 			}
-			walk(field.Type, path+"."+field.Name, seen)
+			switch {
+			case fieldType == rawJSON || fieldType.Kind() == reflect.Interface:
+				found = append(found, fieldPath)
+			case stringish(fieldType) && refName.MatchString(field.Name):
+				found = append(found, fieldPath)
+			default:
+				walk(field.Type, fieldPath, seen)
+			}
 		}
 	}
-	walk(reflect.TypeOf(GraphContext{}), "Graph", map[reflect.Type]bool{})
-	walk(reflect.TypeOf(CanonicalFactBundle{}), "Facts", map[reflect.Type]bool{})
-	found = slices.DeleteFunc(found, func(path string) bool { return path == "Graph.EvidenceRefIDs" })
+	walk(inputType, "", map[reflect.Type]bool{})
 	slices.Sort(found)
-	walked := slices.Sorted(slices.Values(narrowedInputRefHolders))
-	if !slices.Equal(found, walked) {
-		t.Fatalf("ref holders in the input types = %v, walked = %v", found, walked)
+	accounted := append(slices.Clone(narrowedInputRefHolders), slices.Collect(maps.Keys(narrowedInputRefExclusions))...)
+	slices.Sort(accounted)
+	if !slices.Equal(found, accounted) {
+		t.Fatalf("ref-carrying fields of SynthesisInput = %v\nwalked or excluded = %v", found, accounted)
 	}
 
 	holder := []string{"ref_holder"}
