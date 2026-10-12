@@ -877,6 +877,24 @@ GROUP BY i.id`
 // and those are correctly not this producer's concern. Only the repos join
 // (resolving the source work item's optional repo attributes) relaxes to
 // LEFT, for the same zero-UUID reason queryWorkItems does.
+// dependencyRelationshipTypeExpr is the relationship type as the cursor key and
+// the scanned row both see it: a NULL type reads as related_to.
+const dependencyRelationshipTypeExpr = "ifNull(d.relationship_type, 'related_to')"
+
+// dependencyRowKeySQL is queryWorkItemDependencies' keyset tiebreaker, shared
+// by the predicate and the ORDER BY. It is injective over the row identity
+// (repository, source, target, type): ids carry ':' and '%', so a bare concat
+// let two distinct rows share one key and the strict `>` dropped the second at
+// a page boundary.
+var dependencyRowKeySQL = rowKeySQL("toString(w.repo_id)", "d.source_work_item_id", "d.target_work_item_id", dependencyRelationshipTypeExpr)
+
+// dependencyRowKey is dependencyRowKeySQL's Go half: the string a scanned row
+// carries as its sortKey and a saved cursor resumes from. The two must agree
+// byte for byte.
+func dependencyRowKey(repoID, sourceID, targetID, relationshipType string) string {
+	return identity.JoinSegments(repoID, sourceID, targetID, relationshipType)
+}
+
 // queryWorkItemDependencies mints work_item.v2 endpoint references (design
 // brief D-4/§1.3) AND, since S2b, closes §1.5 (P5) for the one endpoint
 // that can genuinely fail to resolve: a row whose target_work_item_id does
@@ -921,9 +939,8 @@ GROUP BY i.id`
 // there is no ref-stub case to close there.
 func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	seenNodeTombstones := make(map[string]struct{})
-	const relationshipTypeExpr = "ifNull(d.relationship_type, 'related_to')"
-	const rowKey = "concat(toString(w.repo_id), ':', d.source_work_item_id, ':', d.target_work_item_id, ':', " + relationshipTypeExpr + ")"
-	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + relationshipTypeExpr + `, toString(w.repo_id), ifNull(r.repo, ''), d.last_synced,
+	rowKey := dependencyRowKeySQL
+	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + dependencyRelationshipTypeExpr + `, toString(w.repo_id), ifNull(r.repo, ''), d.last_synced,
        w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
        ` + nullableTimestamp("t.created_at") + `, ` + nullableTimestamp("coalesce(t.completed_at, t.closed_at)") + `, toString(t.repo_id)
 FROM work_item_dependencies AS d FINAL
@@ -941,7 +958,7 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
-		rowSortKey := repoID + ":" + sourceID + ":" + targetID + ":" + relationshipType
+		rowSortKey := dependencyRowKey(repoID, sourceID, targetID, relationshipType)
 		if ignored, ok := ignoredDependencyType(relationshipType); ok {
 			return []candidate{{observedAt: observedAt, sortKey: rowSortKey, ignoredType: ignored}}, nil
 		}
