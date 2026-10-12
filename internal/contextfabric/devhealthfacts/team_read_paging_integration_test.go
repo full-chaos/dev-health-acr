@@ -107,15 +107,29 @@ func TestScopeExpanderTeamSlugsPageUnderTheClientRowCapOnRealClickHouse(t *testi
 	if err != nil || omitted {
 		t.Fatalf("derive project id: err=%v omitted=%v", err, omitted)
 	}
-	result, err := devhealthfacts.NewScopeExpander(query).ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
-		Principal: storage.Principal{OrgID: pagedSlugOrg, RepositoryScopes: []string{"*"}}, RequirementKind: contextfabric.FactOperationalDeficiencies,
-		Origins: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectProject, CanonicalID: id, Label: "Slugs"}},
-		Policy:  contextfabric.FactScopePolicyProjectTeamOwnershipOperationalDeficiencies, TargetKind: contextfabric.SubjectTeam, Limit: 10,
-	})
-	if err != nil {
-		t.Fatalf("a team owning %d repositories must expand: %v", pagedRepoCount, err)
+	// The team is admitted to a repository-restricted caller only when the
+	// caller may read a repository the team owns. "acme/slug-999" sorts last
+	// of the 1100 slugs, so it is on the third page: the team is admitted only
+	// if every page's slugs reach the authorization rule.
+	expand := func(scopes []string) contextfabric.FactScopeExpansionResult {
+		t.Helper()
+		result, err := devhealthfacts.NewScopeExpander(query).ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
+			Principal: storage.Principal{OrgID: pagedSlugOrg, RepositoryScopes: scopes}, RequirementKind: contextfabric.FactOperationalDeficiencies,
+			Origins: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectProject, CanonicalID: id, Label: "Slugs"}},
+			Policy:  contextfabric.FactScopePolicyProjectTeamOwnershipOperationalDeficiencies, TargetKind: contextfabric.SubjectTeam, Limit: 10,
+		})
+		if err != nil {
+			t.Fatalf("a team owning %d repositories must expand: %v", pagedRepoCount, err)
+		}
+		return result
 	}
-	if len(result.Targets) != 1 {
-		t.Fatalf("targets = %d (%v), want the one owning team", len(result.Targets), result.Targets)
+	if got := expand([]string{"acme/slug-999"}).Targets; len(got) != 1 {
+		t.Fatalf("a caller who reads only the last page's repository: targets = %d (%v), want the owning team", len(got), got)
+	}
+	if got := expand([]string{"acme/not-owned"}).Targets; len(got) != 0 {
+		t.Fatalf("a caller who reads none of the team's repositories: targets = %d (%v), want none", len(got), got)
+	}
+	if got := expand([]string{"*"}).Targets; len(got) != 1 {
+		t.Fatalf("an unrestricted caller: targets = %d (%v), want the owning team", len(got), got)
 	}
 }
