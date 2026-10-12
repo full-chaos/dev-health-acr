@@ -842,11 +842,16 @@ import (
 // carries the pruned answer for such a question. The census also sheds rows under a small byte
 // budget and serves the count it cut.
 //
-// v171 -> v172: with the anchor binding count switch on, a follow-up whose
+// v171 -> v172: a scoped question whose anchor cannot be bound to one subject
+// (several committed subjects of the anchor kind and no anchor term matched
+// one, or none committed at that kind) is a clarification, not a generic
+// cohort. An answer saved under v171 for such a question holds the cohort.
+//
+// v172 -> v173: with the anchor binding count switch on, a follow-up whose
 // admitted carried binding (or redeemed anchor receipt) names another anchor
 // kind than the model states counts, discovers and captures under the
 // binding's kind, so a stored count answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v172"
+const QueryVersion = "devhealthfacts.clickhouse.v173"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
