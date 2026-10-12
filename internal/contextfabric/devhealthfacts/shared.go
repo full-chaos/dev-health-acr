@@ -875,7 +875,14 @@ import (
 // resolution when the binding does not carry it), and a carried anchor the
 // resolver offered but did not commit is listed first in the clarification,
 // so a stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v178"
+//
+// v178 -> v179: with the anchor binding pending carry switch on (beside the
+// carry switch), a binding pending window confirmation carries its anchor
+// into the confirming turn; with it off such a binding carries nothing. With
+// the carry switch on, an exit that ends before resolution (frame gate, graph
+// not projected) discloses a withheld ledger anchor as withheld and does not
+// pass it on. A stored answer can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v179"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
