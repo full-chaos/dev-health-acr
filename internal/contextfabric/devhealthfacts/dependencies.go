@@ -370,7 +370,7 @@ func blockerProjectEdgeRowsSQL(statusPredicate, authorized string) string {
 	return `SELECT pl.team_id AS team_id, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(pl.link_rank) AS item_rank
   FROM work_item_dependencies AS d FINAL
   INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-  INNER JOIN ` + teamProjectLinkRowsSQL("team_ids") + ` AS pl ON pl.work_item_id = d.target_work_item_id
+  INNER JOIN ` + teamProjectLinkRowsSQL("team_ids", factTimeBound{}) + ` AS pl ON pl.work_item_id = d.target_work_item_id
   INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
   WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'
     AND ` + workItemIsIssueSQL("t") + `
@@ -392,6 +392,11 @@ func blockerLinkTierName(rank int64) string {
 }
 
 const blockerStatusBasisOpen = "open"
+
+// blockerBreakdownProjectLimitation is served beside a total that includes
+// blocked items reached through an owned project: the per-repository
+// breakdown lists the owned repositories only.
+const blockerBreakdownProjectLimitation = "repository_breakdown lists the team's owned repositories only; blocked work items reached through its owned projects' linked pull requests are in the totals and in project_blocked_work_items_current, not per repository"
 
 // blockerOpenPredicate is the SQL over the blocking item's normalized
 // status: a blocker counts while it is not done or canceled. Both ends of an
@@ -416,7 +421,7 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 	if err != nil {
 		return outcome, err
 	}
-	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, teamIDs)
+	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, teamIDs, factTimeBound{})
 	if err != nil {
 		return outcome, err
 	}
@@ -579,6 +584,7 @@ WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`
 					weakest = t.projectWeakestRank
 				}
 				fields["project_blocked_work_items_current"] = contextfabric.IntegerFactValue(t.projectBlockedItems)
+				fields["repository_breakdown_limitation"] = contextfabric.StringFactValue(blockerBreakdownProjectLimitation)
 			}
 		}
 		if n := len(reachedOnly[teamID]); n > 0 {

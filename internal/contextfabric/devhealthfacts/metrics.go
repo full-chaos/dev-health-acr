@@ -568,7 +568,7 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 	if err != nil {
 		return 0, rejected, 0, 0, err
 	}
-	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, ids)
+	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, ids, timeBound)
 	if err != nil {
 		return 0, rejected, 0, 0, err
 	}

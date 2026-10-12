@@ -183,7 +183,7 @@ func (p *PullRequestsProvider) readTeamRollup(ctx context.Context, orgID string,
 	if err != nil {
 		return outcome, err
 	}
-	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, teamIDs)
+	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, teamIDs, timeBound)
 	if err != nil {
 		return outcome, err
 	}
@@ -192,7 +192,7 @@ func (p *PullRequestsProvider) readTeamRollup(ctx context.Context, orgID string,
 	byRepo := map[string]pullRequestRollupRepo{}
 	// A repository reached only through an owned project counts the project's
 	// linked pull requests alone, never the repository's whole activity.
-	reachedCounts, err := teamLinkedPullRequestCounts(ctx, p.facts.client, orgID, teamIDs, reachedOnly, window)
+	reachedCounts, err := teamLinkedPullRequestCounts(ctx, p.facts.client, orgID, teamIDs, reachedOnly, window, timeBound)
 	if err != nil {
 		return outcome, err
 	}
@@ -336,7 +336,7 @@ ORDER BY repo_id`
 // by the same opened / merged / closed-unmerged rule the owned arm applies.
 // The key is team id + blockerPairSeparator + repository id. A repository
 // whose linked pull requests have no git_pull_requests row is absent.
-func teamLinkedPullRequestCounts(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, reachedOnly map[string][]teamReachedRepo, window rollupWindow) (map[string]pullRequestRollupRepo, error) {
+func teamLinkedPullRequestCounts(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, reachedOnly map[string][]teamReachedRepo, window rollupWindow, bound factTimeBound) (map[string]pullRequestRollupRepo, error) {
 	counts := map[string]pullRequestRollupRepo{}
 	if reachedRepositoryCount(reachedOnly) == 0 {
 		return counts, nil
@@ -345,7 +345,7 @@ func teamLinkedPullRequestCounts(ctx context.Context, client contextpacket.Click
 	toInt64(countIf(` + window.timestampExpr("pr.created_at") + `)),
 	toInt64(countIf(pr.merged_at IS NOT NULL AND ` + window.timestampExpr("pr.merged_at") + `)),
 	toInt64(countIf(pr.merged_at IS NULL AND pr.closed_at IS NOT NULL AND ` + window.timestampExpr("pr.closed_at") + `))
-FROM (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM ` + teamProjectLinkRowsSQL("ids") + `) AS lr
+FROM (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM ` + teamProjectLinkRowsSQL("ids", bound) + `) AS lr
 INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = {org_id:String} AND pr.repo_id = lr.pr_repo_id AND pr.number = lr.pr_number
 GROUP BY lr.team_id, lr.pr_repo_id
 ORDER BY lr.team_id, lr.pr_repo_id
@@ -360,7 +360,7 @@ LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows+1)
 		}
 		counts[teamID+blockerPairSeparator+repoID] = r
 		return nil
-	}, window.bindings()...); err != nil {
+	}, append(window.bindings(), boundReaderBindings(bound)...)...); err != nil {
 		return nil, err
 	}
 	if rows > maxTeamOwnedRepositoryRows {

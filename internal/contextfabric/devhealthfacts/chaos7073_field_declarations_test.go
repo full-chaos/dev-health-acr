@@ -50,6 +50,7 @@ var declaredButNotExercised = map[contextfabric.FactKind]map[string]string{
 	contextfabric.FactBlockers: {
 		"team:project_blocked_work_items_current": "project reach, exercised by team_project_reach_integration_test.go",
 		"team:project_reached_repository_count":   "project reach, exercised by team_project_reach_integration_test.go",
+		"team:repository_breakdown_limitation":    "project reach, exercised by team_project_reach_integration_test.go",
 	},
 	contextfabric.FactPullRequests: {
 		"team:project_reached_repository_count": "project reach, exercised by team_project_reach_integration_test.go",

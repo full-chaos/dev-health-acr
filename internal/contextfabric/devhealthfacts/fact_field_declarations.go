@@ -323,6 +323,9 @@ func blockersFields() []fieldDecl {
 			// distinct blocked items in the total came through that arm (an
 			// item also in an owned repository is counted once).
 			declCallerScoped(fInt("project_blocked_work_items_current", "count")),
+			// Served beside project_blocked_work_items_current: the breakdown
+			// below lists owned repositories only.
+			fStr("repository_breakdown_limitation"),
 			fTable("repository_breakdown",
 				cRef(declRepositoryRef, cStr("repository_id")),
 				cNullable(cStr("repository_name")),

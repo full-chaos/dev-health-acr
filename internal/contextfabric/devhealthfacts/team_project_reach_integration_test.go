@@ -43,11 +43,16 @@ func TestTeamRollups_ReachWorkThroughOwnedProjectLinks(t *testing.T) {
 		exec(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
 			project, projectReachOrg, "linear", nil, project, uint8(1), "active", "", at)
 	}
-	for _, team := range []string{"team-both", "team-project-only"} {
+	for _, team := range []string{"team-both", "team-project-only", "team-ended"} {
 		exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
 			team, team, at, projectReachOrg, "linear", uint8(1))
+		// team-ended's ownership of proj-1 ended inside the past window below.
+		var validTo any
+		if team == "team-ended" {
+			validTo = ts(2026, 6, 20, 0, 0, 0)
+		}
 		exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			projectReachOrg, "linear", team, "proj-1", nil, "native", at, nil, at)
+			projectReachOrg, "linear", team, "proj-1", nil, "native", ts(2026, 1, 1, 0, 0, 0), validTo, at)
 	}
 	// team-both also owns repo-a directly; team-project-only owns no repository.
 	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -78,6 +83,9 @@ func TestTeamRollups_ReachWorkThroughOwnedProjectLinks(t *testing.T) {
 	link("i-reach", "repo-r", 2, "native")
 	link("i-weak", "repo-r", 3, "heuristic")
 	link("i-other", "repo-r", 4, "native")
+	link("i-stale", "repo-r", 99, "native")
+	link("i-hist", "repo-r", 30, "native")
+	link("pr-typed", "repo-r", 2, "native")
 	// repo-a: #1 linked, #10 not linked (owned: both count). repo-r: #2, #3
 	// linked to owned-project issues, #4 linked to another project's issue,
 	// #20 unlinked (reached: only #2 and #3 count).
@@ -87,7 +95,9 @@ func TestTeamRollups_ReachWorkThroughOwnedProjectLinks(t *testing.T) {
 	}{{"repo-a", 1}, {"repo-a", 10}, {"repo-r", 2}, {"repo-r", 3}, {"repo-r", 4}, {"repo-r", 20}} {
 		pullRequest(n.repo, n.number)
 	}
-	for _, target := range []string{"i-own", "i-reach", "i-weak", "i-other"} {
+	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+		repoUUID("repo-r"), projectReachOrg, uint32(30), "pr", "open", at, ts(2026, 6, 10, 0, 0, 0), "feature", "")
+	for _, target := range []string{"i-own", "i-reach", "i-weak", "i-other", "i-stale", "pr-typed"} {
 		blocks("blocker", target)
 	}
 
@@ -153,6 +163,24 @@ func TestTeamRollups_ReachWorkThroughOwnedProjectLinks(t *testing.T) {
 		only := factFor(t, read(contextfabric.FactBlockers, "team-project-only"), teamSubject("team-project-only")).Fields
 		wantInt(t, only, "owned_repository_count", 0)
 		wantInt(t, only, "blocked_work_items_current", 3)
+		// The stale link (no such pull request) and the pull-request-typed item
+		// are outside the admitted links: not counted, and the breakdown
+		// limitation is stated beside the project items.
+		if got := str(both, "repository_breakdown_limitation"); got == "" {
+			t.Fatalf("repository_breakdown_limitation missing beside project_blocked_work_items_current")
+		}
+	})
+
+	t.Run("pull requests: a past window keeps project ownership that ended inside it", func(t *testing.T) {
+		result, err := findProvider(t, providers, contextfabric.FactPullRequests).ReadFacts(ctx, principal, contextfabric.FactQuery{
+			Time: pastRangeWindow(), Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{teamSubject("team-ended")},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts: %v", err)
+		}
+		fields := factFor(t, result, teamSubject("team-ended")).Fields
+		wantInt(t, fields, "pull_requests_opened_window", 1)
+		wantInt(t, fields, "project_reached_repository_count", 2)
 	})
 
 	t.Run("deployments: project-reached repositories contribute no repo-level rows, named", func(t *testing.T) {

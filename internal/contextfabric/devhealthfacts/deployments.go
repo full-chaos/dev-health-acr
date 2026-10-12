@@ -204,7 +204,7 @@ func (p *DeploymentsProvider) readTeamRollup(ctx context.Context, orgID string, 
 	if err != nil {
 		return outcome, err
 	}
-	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, teamIDs)
+	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, teamIDs, timeBound)
 	if err != nil {
 		return outcome, err
 	}

@@ -128,29 +128,51 @@ const (
 	repositoryReachOwnedProject = "owned_project_link"
 )
 
+// teamOwnedProjectsAsOfSQL is every (provider, project id, team) a team owns
+// through team_project_ownership under the read's ownership rule: currently
+// owned for an unbounded read, owned at or after the bound's start (the same
+// "has not ended before the window" rule the owned-repository reads use) for a
+// historical one. Identity-resolved by the library's two-armed project match.
+func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
+	return "(SELECT provider, id, team_id FROM " + readers.ProjectOwnershipCatalogJoinSQL(readers.OwnershipValidityPredicate(bound.neutral())) + ")"
+}
+
 // teamProjectLinkRowsSQL is the one team-to-linked-pull-request reach: a
 // derived table (team_id, work_item_id, pr_repo_id, pr_number, link_rank) of
-// the issues of every project a team owns (team_project_ownership) joined to
-// their linked pull request rows. teamParam names the Array(String) binding
-// holding the team ids. It is the same chain teamRepositories walks.
-func teamProjectLinkRowsSQL(teamParam string) string {
+// the issues of every project a team owns (team_project_ownership, under the
+// bound's ownership rule) joined to their linked pull request rows, read with
+// the same strict admission as the project scope expansion: the work item is
+// an issue and the linked pull request exists. teamParam names the
+// Array(String) binding holding the team ids; the bound's bindings must ride
+// with the statement. It is the same chain teamRepositories walks.
+func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 	return `(
   SELECT DISTINCT t.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
-  FROM ` + teamOwnedProjectsSQL + ` AS t
+  FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
   INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.provider = p.provider AND w.project_id = p.join_key
   INNER JOIN ` + issueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
-  WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)}
+  INNER JOIN git_pull_requests AS lpr FINAL ON lpr.org_id = {org_id:String} AND lpr.repo_id = l.pr_repo_id AND lpr.number = l.pr_number
+  WHERE p.key_resolution_count = 1 AND ` + workItemIsIssueSQL("w") + ` AND t.team_id IN {` + teamParam + `:Array(String)}
 )`
+}
+
+// boundReaderBindings are a bound's time parameters as reader bindings.
+func boundReaderBindings(bound factTimeBound) []readers.Binding {
+	var out []readers.Binding
+	for _, binding := range bound.bindings() {
+		out = append(out, readers.Binding{Name: binding.Name, Value: binding.Value})
+	}
+	return out
 }
 
 // teamProjectReachedRepositories reads team -> repositories reached through
 // the team's owned projects' linked pull requests, ordered by repository id.
 // A repository the team also owns appears here too; callers drop it with
 // reachedOnlyRepositories so it is counted once, as owned.
-func teamProjectReachedRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string) (map[string][]teamReachedRepo, error) {
+func teamProjectReachedRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, bound factTimeBound) (map[string][]teamReachedRepo, error) {
 	statement := `SELECT lr.team_id, toString(lr.pr_repo_id), ifNull(any(r.repo), ''), toInt64(min(lr.link_rank)), toInt64(uniqExact(lr.pr_number))
-FROM ` + teamProjectLinkRowsSQL("ids") + ` AS lr
+FROM ` + teamProjectLinkRowsSQL("ids", bound) + ` AS lr
 LEFT JOIN repos AS r FINAL ON r.id = lr.pr_repo_id AND r.org_id = {org_id:String}
 GROUP BY lr.team_id, lr.pr_repo_id
 ORDER BY lr.team_id, lr.pr_repo_id
@@ -166,7 +188,7 @@ LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows+1)
 		}
 		reached[teamID] = append(reached[teamID], repo)
 		return nil
-	}); err != nil {
+	}, boundReaderBindings(bound)...); err != nil {
 		return nil, err
 	}
 	if rows > maxTeamOwnedRepositoryRows {
