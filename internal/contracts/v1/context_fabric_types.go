@@ -1728,7 +1728,11 @@ type ContextFabricDriverJudgment struct {
 	EpistemicStatus ContextFabricEpistemicStatus  `json:"epistemic_status"`
 	Confidence      float64                       `json:"confidence"`
 	Qualification   string                        `json:"qualification,omitempty"`
-	Current         bool                          `json:"current"`
+	// SourceState is the state of the fact read this driver rests on, set
+	// only when it is not complete (truncated). Absent means available.
+	// Additive v1 optional field.
+	SourceState ContextFabricSourceState `json:"source_state,omitempty"`
+	Current     bool                     `json:"current"`
 }
 
 type ContextFabricFinding struct {

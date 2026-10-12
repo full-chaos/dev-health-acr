@@ -133,8 +133,10 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 		}
 		taken[driverID] = struct{}{}
 		summary := title + "."
+		var sourceState SourceState
 		if fact.SourceState == SourceTruncated {
 			summary = title + " (partial: the source read was truncated)."
+			sourceState = SourceTruncated
 			event.Partial = append(event.Partial, observation.kind)
 		}
 		claims = append(claims, ClaimedFact{ClaimID: claimID, Kind: observation.kind, Subject: project, Field: observation.field, Value: convertFactValueScalar(claimValue)})
@@ -142,7 +144,7 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 			DriverID: driverID, Standing: DriverPrincipal, Category: observation.category,
 			Title: title, Summary: summary,
 			AffectedSubjects: []SubjectRef{project}, EvidenceRefIDs: fact.EvidenceRefIDs, ClaimedFactIDs: []string{claimID},
-			Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.95, Current: true,
+			Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.95, SourceState: sourceState, Current: true,
 		})
 	}
 	event.Emitted = len(drivers)

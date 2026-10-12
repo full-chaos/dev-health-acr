@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -30,6 +31,13 @@ func TestProjectStatusTruncatedReadinessIsServedAsAPartialDriver(t *testing.T) {
 		if want := driver.Category == "readiness"; partial != want {
 			t.Errorf("driver %q summary %q: partial label = %v, want %v", driver.DriverID, driver.Summary, partial, want)
 		}
+		wantState := SourceState("")
+		if driver.Category == "readiness" {
+			wantState = SourceTruncated
+		}
+		if driver.SourceState != wantState {
+			t.Errorf("driver %q source_state = %q, want %q", driver.DriverID, driver.SourceState, wantState)
+		}
 	}
 }
 
@@ -43,6 +51,15 @@ func TestProjectStatusTruncatedReadinessCandidateCarriesThePartialLabel(t *testi
 	}
 	if got := strings.Count(string(rig.encoded[0]), "partial: the source read was truncated"); got != 1 {
 		t.Errorf("synthesis_input carries %d partial labels, want 1", got)
+	}
+	var decoded any
+	if err := json.Unmarshal(rig.encoded[0], &decoded); err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]string{}
+	collectCandidateStates(decoded, states)
+	if len(states) != 3 || states["project-status-2-readiness-candidate"] != "truncated" || states["project-status-1-workload-candidate"] != "" || states["project-status-3-health-candidate"] != "" {
+		t.Errorf("candidate source_state by driver = %v, want truncated on readiness only", states)
 	}
 }
 
@@ -63,5 +80,22 @@ func TestProjectStatusAbsentReadinessIsMissingAndTruncatedIsPartial(t *testing.T
 	_, _, event = projectStatusDrivers(interpretation, []SubjectRef{project}, noHealth, nil, nil, ItemAllocation{})
 	if len(event.Missing) != 1 || event.Missing[0] != FactHealth {
 		t.Errorf("absent health: missing=%v, want [health]", event.Missing)
+	}
+}
+
+func collectCandidateStates(node any, states map[string]string) {
+	switch value := node.(type) {
+	case map[string]any:
+		if id, ok := value["driver_id"].(string); ok && strings.HasSuffix(id, "-candidate") {
+			state, _ := value["source_state"].(string)
+			states[id] = state
+		}
+		for _, child := range value {
+			collectCandidateStates(child, states)
+		}
+	case []any:
+		for _, child := range value {
+			collectCandidateStates(child, states)
+		}
 	}
 }
