@@ -937,7 +937,11 @@ import (
 // the filter. The status used to be refused for a value of three words or
 // more, and otherwise served as the whole unfiltered member set. A candidate
 // saved under v186 may hold that unfiltered set.
-const QueryVersion = "devhealthfacts.clickhouse.v187"
+//
+// v187 -> v188: a team that owns no repository is served not_applicable with
+// the cause on the health, operational deficiency and investment kinds, where
+// a stored answer holds no_data.
+const QueryVersion = "devhealthfacts.clickhouse.v188"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

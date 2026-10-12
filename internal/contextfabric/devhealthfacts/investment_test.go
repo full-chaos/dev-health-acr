@@ -58,7 +58,7 @@ func TestInvestmentProviderTwoTeamsOneWithoutAMixServesOneAndDisclosesTheOther(t
 
 func TestInvestmentProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: nil}}}
+	client := teamOwningClient(contextfabric.FactInvestment, "ghost")
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
