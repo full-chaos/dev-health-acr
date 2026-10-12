@@ -33,13 +33,14 @@ type readRelationshipsSubjectInput struct {
 }
 
 type readRelationshipsInput struct {
-	Subject   readRelationshipsSubjectInput `json:"subject"`
-	Types     []string                      `json:"types"`
-	Direction string                        `json:"direction"`
-	Depth     int                           `json:"depth"`
-	AsOf      string                        `json:"as_of"`
-	Limit     int                           `json:"limit"`
-	Cursor    string                        `json:"cursor"`
+	Subject     readRelationshipsSubjectInput `json:"subject"`
+	Types       []string                      `json:"types"`
+	Direction   string                        `json:"direction"`
+	Depth       int                           `json:"depth"`
+	AsOf        string                        `json:"as_of"`
+	Limit       int                           `json:"limit"`
+	Cursor      string                        `json:"cursor"`
+	CurrentOnly bool                          `json:"current_only"`
 }
 
 func (in readRelationshipsInput) validate() error {
