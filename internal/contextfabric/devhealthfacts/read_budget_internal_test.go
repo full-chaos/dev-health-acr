@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -128,5 +129,37 @@ func TestRepoMixRowLimitHoldsEveryRepositoryWindowAndSpanRowPlusOneProbe(t *test
 	statement := repoMixStatementScoped([]factTimeBound{{}}, membershipScope{mode: membershipScopeIDs, ids: []string{"a"}}, 1001)
 	if !strings.HasSuffix(statement, "\nLIMIT 1001") {
 		t.Fatalf("statement does not end with the sized LIMIT: %q", statement[len(statement)-40:])
+	}
+}
+
+func TestReadStatsInstrumentationNamesTheClickHouseCodeOfAFailedStatement(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"memory", fmt.Errorf("devhealthfacts: query team blockers: %w", &clickhousedriver.Exception{Code: 241, Message: "Memory limit (for query) exceeded: secret-fragment"}), "clickhouse_code=241"},
+		{"budget", &clickhousedriver.Exception{Code: 307}, "clickhouse_code=307"},
+		{"other", errors.New("connection reset"), ""},
+		{"ok", nil, ""},
+	} {
+		var buffer bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		_, finish := NewReadStatsInstrumentation(readers.NoopInstrumentation{}, logger, nil).StartQuery(context.Background(), "ReadTeamBlockerTotals", true)
+		finish(tc.err)
+		line := buffer.String()
+		if tc.want == "" {
+			if strings.Contains(line, "clickhouse_code") {
+				t.Fatalf("%s: line %q names a ClickHouse code for a non-ClickHouse outcome", tc.name, line)
+			}
+			continue
+		}
+		if !strings.Contains(line, tc.want) || !strings.Contains(line, "outcome=") {
+			t.Fatalf("%s: line %q lacks %q", tc.name, line, tc.want)
+		}
+		if strings.Contains(line, "secret-fragment") {
+			t.Fatalf("%s: the line carries the exception text: %q", tc.name, line)
+		}
 	}
 }
