@@ -50,8 +50,8 @@ func TestCHAOS6558_BudgetRefusalDetailsReachTheCaller(t *testing.T) {
 	if !errors.As(decoded, &got) {
 		t.Fatalf("decodeAPIError = %T, want *APIError", decoded)
 	}
-	if !errors.Is(got, ErrInvalidRequest) {
-		t.Fatalf("sentinel = %v, want ErrInvalidRequest (category unchanged)", got)
+	if !errors.Is(got, ErrBudgetRefusal) {
+		t.Fatalf("sentinel = %v, want ErrBudgetRefusal", got)
 	}
 	if got.Budget == nil {
 		t.Fatalf("Budget = nil, want the parsed budget refusal")
