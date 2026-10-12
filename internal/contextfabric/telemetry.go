@@ -988,6 +988,22 @@ func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, pr
 	}, requestIDLogAttrs(ctx)...)...)
 }
 
+// RecordProjectStatusDrivers reports one project status driver decision:
+// counts and closed fact-kind names only, never a value or a subject.
+func (t SlogEngineTelemetry) RecordProjectStatusDrivers(ctx context.Context, principal storage.Principal, event ProjectStatusDriverEvent) {
+	missing := make([]string, 0, len(event.Missing))
+	for _, kind := range event.Missing {
+		missing = append(missing, string(kind))
+	}
+	t.logger.InfoContext(ctx, "context fabric project status drivers", append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"emitted", event.Emitted,
+		"skipped_budget", event.SkippedBudget,
+		"skipped_id_clash", event.SkippedIDClash,
+		"missing_kinds", SanitizeLogStrings(missing),
+	}, requestIDLogAttrs(ctx)...)...)
+}
+
 // RecordEvidenceLabelFallback implements EngineTelemetry (CHAOS-4690 item
 // 4). Content-safe: org id and one closed count -- never the unlabeled
 // evidence ref or its entity-type segment (r2 F5; see the interface's own

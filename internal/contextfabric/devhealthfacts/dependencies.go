@@ -341,6 +341,18 @@ type blockerTeamTotals struct {
 // bound to the totals query; the unit separator is in neither identifier.
 const blockerPairSeparator = "\x1f"
 
+// blockerEndpointIDsSQL is the ids at either end of the organization's blocker
+// edges. The team blocker statements read work items, their link rows and
+// their authorization for these ids only, so a statement's cost follows the
+// blocker edges, not the size of the organization's work item table.
+const blockerEndpointIDsSQL = `(SELECT arrayJoin([be.source_work_item_id, be.target_work_item_id]) FROM work_item_dependencies AS be FINAL WHERE be.org_id = {org_id:String} AND lower(ifNull(be.relationship_type, '')) = '` + blockerRelationshipType + `')`
+
+// blockerWorkItemsSQL is the work_items rows of the blocker edge endpoints
+// under alias, with the columns the team blocker statements read.
+func blockerWorkItemsSQL(alias string) string {
+	return `(SELECT org_id, work_item_id, status, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + blockerEndpointIDsSQL + `) AS ` + alias
+}
+
 // blockerEdgeRowsSQL is the one reading of a blocker edge's repository: the
 // distinct (repository, blocked item, blocker) rows with the item's strongest
 // link tier in that repository. A blocked item reaches a repository only
@@ -351,8 +363,8 @@ const blockerPairSeparator = "\x1f"
 func blockerEdgeRowsSQL(statusPredicate, authorized string) string {
 	return `SELECT l.pr_repo_id AS rid, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(l.link_rank) AS item_rank
   FROM work_item_dependencies AS d FINAL
-  INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = d.target_work_item_id
-  INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
+  INNER JOIN ` + admittedIssueLinksAmongSQL(blockerEndpointIDsSQL) + ` AS l ON l.work_item_id = d.target_work_item_id
+  INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
   WHERE d.org_id = {org_id:String} AND toString(l.pr_repo_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'
     AND d.target_work_item_id IN ` + authorized + ` AND d.source_work_item_id IN ` + authorized + `
   GROUP BY rid, tgt, src, is_open`
@@ -366,9 +378,9 @@ func blockerEdgeRowsSQL(statusPredicate, authorized string) string {
 func blockerProjectEdgeRowsSQL(statusPredicate, authorized string) string {
 	return `SELECT pl.team_id AS team_id, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(pl.link_rank) AS item_rank
   FROM work_item_dependencies AS d FINAL
-  INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-  INNER JOIN ` + teamProjectLinkRowsSQL("team_ids", factTimeBound{}) + ` AS pl ON pl.work_item_id = d.target_work_item_id
-  INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
+  INNER JOIN ` + blockerWorkItemsSQL("t") + ` ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
+  INNER JOIN ` + teamProjectLinkRowsAmongSQL("team_ids", factTimeBound{}, blockerEndpointIDsSQL) + ` AS pl ON pl.work_item_id = d.target_work_item_id
+  INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
   WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'
     AND ` + workItemIsIssueSQL("t") + `
     AND d.target_work_item_id IN ` + authorized + ` AND d.source_work_item_id IN ` + authorized + `
@@ -427,7 +439,7 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 	byRepo := map[string]blockerRollupRepo{}
 	totals := map[string]blockerTeamTotals{}
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 || len(reached) > 0 {
-		authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, requestedScope))
+		authorized, authorizationBindings := workItemAuthorizedIDsAmongSQL(workItemRepositoryAuthorization(principal, requestedScope), blockerEndpointIDsSQL)
 		settings, settingsErr := workItemReaderSettings(ctx)
 		if settingsErr != nil {
 			return outcome, settingsErr
@@ -507,19 +519,19 @@ ORDER BY team_id`, settings)
 	// rollup's not-attributable figure.
 	var withoutLink int64
 	if orgWide && (len(owned) > 0 || len(reached) > 0) {
-		authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, requestedScope))
+		authorized, authorizationBindings := workItemAuthorizedIDsAmongSQL(workItemRepositoryAuthorization(principal, requestedScope), blockerEndpointIDsSQL)
 		settings, settingsErr := workItemReaderSettings(ctx)
 		if settingsErr != nil {
 			return outcome, settingsErr
 		}
 		statement := readers.WithSettings(`SELECT toInt64(uniqExact(d.target_work_item_id))
 FROM work_item_dependencies AS d FINAL
-INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
+INNER JOIN `+blockerWorkItemsSQL("t")+` ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
+INNER JOIN `+blockerWorkItemsSQL("s")+` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
 WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'
   AND `+statusPredicate+` AND `+workItemIsIssueSQL("t")+`
   AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
-  AND d.target_work_item_id NOT IN `+issuesWithLinkedPullRequestSQL, settings)
+  AND d.target_work_item_id NOT IN (SELECT work_item_id FROM `+admittedIssueLinksAmongSQL(blockerEndpointIDsSQL)+`)`, settings)
 		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerUnlinkedItems", statement, orgID, nil, func(row readers.RowScanner) error {
 			return row.Scan(&withoutLink)
 		}, authorizationBindings...); scanErr != nil {
