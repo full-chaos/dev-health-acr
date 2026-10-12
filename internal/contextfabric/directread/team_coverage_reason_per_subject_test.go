@@ -36,7 +36,7 @@ func TestMixedTeamCoverageReasonIsPerSubject(t *testing.T) {
 	if !strings.Contains(emptyRow.Reason, "owns no repository") {
 		t.Errorf("empty team row reason = %q, want its own", emptyRow.Reason)
 	}
-	if emptyRow.Outcome != "never_evaluated" || ownerRow.Outcome != "fired" {
+	if emptyRow.Outcome != OutcomeReadNoFact || ownerRow.Outcome != OutcomeFactServed {
 		t.Errorf("outcomes = %q, %q", ownerRow.Outcome, emptyRow.Outcome)
 	}
 }
