@@ -157,6 +157,9 @@ var (
 		"served_count_decision", "served_count_kind", "served_count_id",
 		"to_proven_freshness_epoch", "to_proven_freshness_digest", "ownership_movement",
 		"policy_version", "to_proven_at", "witness",
+		// What the binding carried into resolution: a served-side decision the
+		// binder does not read.
+		"bound_anchor_carry",
 	}
 )
 

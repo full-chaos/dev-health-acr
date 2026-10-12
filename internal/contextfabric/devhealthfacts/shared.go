@@ -846,7 +846,13 @@ import (
 // (several committed subjects of the anchor kind and no anchor term matched
 // one, or none committed at that kind) is a clarification, not a generic
 // cohort. An answer saved under v171 for such a question holds the cohort.
-const QueryVersion = "devhealthfacts.clickhouse.v172"
+//
+// v172 -> v173: with the anchor binding carry switch on, a same-question
+// follow-up carries its anchor only from the admitted binding (never from the
+// confirmed-need ledger's engine-committed entry), and a carry its
+// resolution does not commit is offered first in the clarification, so a
+// stored answer can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v173"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

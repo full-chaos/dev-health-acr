@@ -1065,6 +1065,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		MaxSerializedBytes: int64(request.config.MaxSerializedBytes),
 		// See Config.ServerCompletenessAuthorityEnabled's own doc comment.
 		ServerCompletenessAuthorityEnabled: request.config.ServerCompletenessAuthorityEnabled,
+		// See Config.AnchorBindingCarryEnabled.
+		AnchorBindingCarryEnabled: request.config.AnchorBindingCarryEnabled,
 		// See Config.ServerCompletenessAuthoritySymmetricEnabled's own doc
 		// comment.
 		ServerCompletenessAuthoritySymmetricEnabled: request.config.ServerCompletenessAuthoritySymmetricEnabled,

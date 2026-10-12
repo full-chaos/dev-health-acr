@@ -3411,6 +3411,11 @@ var AnchorBindingTransition = Event{
 		// that point and on a reuse serve. What it acquired follows, in the same
 		// form as the parent's.
 		{Key: "freshness_acquisition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("freshness_acquisition")},
+		// What the binding carried into this turn's resolution: with the carry
+		// switch on only an admitted binding injects its identity, and a
+		// refused or absent one injects nothing; switch_off while the switch is
+		// off (the ledger carries as before).
+		{Key: "bound_anchor_carry", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("bound_anchor_carry")},
 		{Key: "freshness_serving_epoch", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "freshness_ownership_digest", Type: FieldString, Presence: PresenceRequired},
 		{Key: "to_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("to_state")},

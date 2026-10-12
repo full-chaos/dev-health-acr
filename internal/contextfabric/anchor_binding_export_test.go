@@ -68,6 +68,9 @@ func RunAnchorBindingScenarioForTest(t *testing.T, scenario string) (log []byte,
 		if step.verified {
 			rig.verify()
 		}
+		if step.carryOn {
+			rig.engine.anchorBindingCarryEnabled = true
+		}
 		rig.graph.response = step.response
 		request := step.request(turns)
 		buf.Reset()
@@ -223,6 +226,24 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 			}
 			return rig.turn(t, continuingNeedTurn(needTurnRequest("request_vocab_adm_refused_two", true), one.result.ResultID), emptyProbeResponse()).result
 		}},
+	)
+	// Every carry decision with the carry switch on, through the real engine.
+	recommitted := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}}, bases: provenCommitBases(probeAlpha)}
+	betaOffered := needTurnResponse{resolution: SubjectResolution{Committed: []SubjectRef{}, Candidates: []SubjectCandidate{{
+		ReceiptID: "receipt_vocab_carry_beta", Subject: probeBeta, State: ResolutionAmbiguous,
+		MatchedTerms: []string{"a"}, MatchReasons: []string{"matched"}, Confidence: 0.4, EvidenceRefIDs: []string{},
+	}}}, bases: CommitBasisSet{}}
+	carryStep := func(id string, response needTurnResponse, mutate func(*InvestigationRequest), seed func(*staticResultStore)) anchorProbeStep {
+		return anchorProbeStep{request: followUp(id, "", mutate), seed: seed, verified: true, carryOn: true, response: response}
+	}
+	scenarios = append(scenarios,
+		anchorSiteScenario{name: "carry none", run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_vocab_carry_none", true), carryOn: true, response: identityProvenResponse(probeAlpha)})},
+		anchorSiteScenario{name: "carry injected", run: anchorProbeScenario(first, carryStep("request_vocab_carry_injected", recommitted, nil, nil))},
+		anchorSiteScenario{name: "carry not admitted", run: anchorProbeScenario(first, carryStep("request_vocab_carry_refused", emptyProbeResponse(), nil, mutateStoredBindings(func(s *PersistedSemanticState) {
+			editBindingMember(s, func(b *AnchorBinding) { b.PolicyVersion = "" })
+		})))},
+		anchorSiteScenario{name: "carry caller superseded", run: anchorProbeScenario(first, carryStep("request_vocab_carry_caller", emptyProbeResponse(), betaHint, nil))},
+		anchorSiteScenario{name: "carry remembered offered", run: anchorProbeScenario(first, carryStep("request_vocab_carry_offered", betaOffered, nil, nil))},
 	)
 	// The subject-substitution guard's firing and redeemed outcomes, through
 	// the real engine, so the line's substitution_guard key reaches each one.

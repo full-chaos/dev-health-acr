@@ -28,6 +28,11 @@ type EngineOptions struct {
 	// (anchor_binding.go): no binding is computed, persisted or reported.
 	// Zero value = the shadow runs. Served output is identical either way.
 	DisableAnchorBindingShadow bool
+	// AnchorBindingCarryEnabled makes the admitted anchor binding the only
+	// source of a same-question continuation's carried anchor
+	// (anchor_binding_carry.go). Zero value = off: the confirmed-need
+	// ledger's carry runs as before. Needs the shadow binding.
+	AnchorBindingCarryEnabled bool
 	// AnchorBindingMaxAge is the age past which a carried anchor proof is not
 	// admitted (anchor_admission.go). Zero selects
 	// DefaultAnchorBindingMaxAge; anything else must lie in
@@ -1286,6 +1291,7 @@ type Engine struct {
 	reuseEpochSnapshotter                       RebuildEpochSnapshotter
 	anchorFreshness                             AnchorFreshnessReader
 	anchorBindingMaxAgeSetting                  time.Duration
+	anchorBindingCarryEnabled                   bool
 	reuseModelIdentityResolver                  ReuseModelIdentityResolver
 	reuseProjectionVersion                      string
 	reuseModelIdentities                        []string
@@ -1355,6 +1361,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		anchorFreshness:            dependencies.AnchorFreshness,
 		anchorBindingMaxAgeSetting: options.AnchorBindingMaxAge,
+		anchorBindingCarryEnabled:  options.AnchorBindingCarryEnabled,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
 		structureSelectionSink:     dependencies.StructureSelectionSink,
@@ -2992,16 +2999,26 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// reaches resolution, rather than left to compete with it.
 	var anchorSupersededEntry confirmedStructureMember
 	var anchorSupersededByCaller bool
-	if hint, ok := engineCommittedAnchorHint(appliedNeeds); ok {
-		if callerSuppliedHintOfKind(graphRequest.RequestedScope.SubjectHints, hint.Kind) {
-			anchorSupersededEntry = appliedNeeds[contractsv1.ContextFabricStructureNeedSubjectAnchor]
-			anchorSupersededByCaller = true
-			delete(appliedNeeds, contractsv1.ContextFabricStructureNeedSubjectAnchor)
-		} else if len(graphRequest.RequestedScope.SubjectHints) < 50 {
-			// 50: the same ContextFabricRequestedScope.SubjectHints v1 bound
-			// resolvePriorSubjectHints' own cap above enforces.
-			graphRequest.RequestedScope.SubjectHints = append(append([]SubjectHint(nil), graphRequest.RequestedScope.SubjectHints...), hint)
-		}
+	ledgerHint, ledgerCarries := engineCommittedAnchorHint(appliedNeeds)
+	if ledgerCarries && callerSuppliedHintOfKind(graphRequest.RequestedScope.SubjectHints, ledgerHint.Kind) {
+		anchorSupersededEntry = appliedNeeds[contractsv1.ContextFabricStructureNeedSubjectAnchor]
+		anchorSupersededByCaller = true
+		delete(appliedNeeds, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+		ledgerCarries = false
+	}
+	// WHO CARRIES THE ANCHOR. With the binding carry switched on, only the
+	// admitted binding does (anchor_binding_carry.go): the ledger's
+	// engine_committed entry is never injected, and a refused or absent
+	// binding injects nothing. Switched off, the ledger's carry runs as
+	// before.
+	carriedHint, carries := e.bindingCarryHint(anchorShadow, graphRequest.RequestedScope.SubjectHints)
+	if !e.anchorBindingCarryEnabled || anchorShadow == nil {
+		carriedHint, carries = ledgerHint, ledgerCarries
+	}
+	if carries && len(graphRequest.RequestedScope.SubjectHints) < 50 {
+		// 50: the same ContextFabricRequestedScope.SubjectHints v1 bound
+		// resolvePriorSubjectHints' own cap above enforces.
+		graphRequest.RequestedScope.SubjectHints = append(append([]SubjectHint(nil), graphRequest.RequestedScope.SubjectHints...), carriedHint)
 	}
 	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed, appliedNeeds), familyOutcome.Frame, scopeAnchorKind)
 	if err != nil {
@@ -3056,6 +3073,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		captureSkipReasonForTelemetry = CaptureSkipReasonResolutionError
 		return InvestigationResult{}, stageError(StageSubjectResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
+	// A carried anchor resolution did not commit, on a turn that still asks
+	// which subject was meant: the remembered identity is offered first.
+	resolution = anchorShadow.offerRememberedAnchor(resolution)
 	anchorShadow.observeResolution(AnchorBindingEvaluationResolved, resolution, commitBases)
 	// CHAOS-5788: whether THIS turn's own resolution just bound a committed
 	// subject to the frame's own anchor -- computed here, once, from the
