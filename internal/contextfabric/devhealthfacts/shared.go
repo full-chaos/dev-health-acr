@@ -917,7 +917,7 @@ import (
 // completion. The read stopped at 200 ownership rows shared by every requested
 // team, so a team past the cut was served over a partial repository set, or as
 // owning no repository; it is now served over every owned repository, and a set
-// above 2000 rows is a named failure. A candidate saved under v183 may hold the
+// above 2000 rows (per ownership window read) is a named failure. A candidate saved under v183 may hold the
 // truncated mix.
 const QueryVersion = "devhealthfacts.clickhouse.v184"
 

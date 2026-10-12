@@ -105,3 +105,21 @@ func TestInvestmentOwnedRepositoriesAboveTheBoundIsANamedFailure(t *testing.T) {
 		t.Fatalf("want the named bound failure, got %v", err)
 	}
 }
+
+func TestInvestmentOwnedRepositoriesResumeAcrossTeamsAtAPageBoundary(t *testing.T) {
+	var pairs [][2]string
+	for i := 0; i < teamReadPageRows; i++ {
+		pairs = append(pairs, [2]string{"team-a", fmt.Sprintf("repo-%04d", i)})
+	}
+	// team-b shares the repository key the first page ends on, and one more.
+	last := pairs[len(pairs)-1][1]
+	pairs = append(pairs, [2]string{"team-b", "repo-0000"}, [2]string{"team-b", last}, [2]string{"team-b", "repo-9999"})
+	client := &ownershipPairSim{pairs: pairs}
+	owned, err := newInvestmentProvider(client).readTeamOwnedRepositories(context.Background(), "org-1", []string{"team-a", "team-b"}, factTimeBound{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owned["team-a"]) != teamReadPageRows || len(owned["team-b"]) != 3 {
+		t.Fatalf("owned = team-a %d, team-b %d, want %d and 3", len(owned["team-a"]), len(owned["team-b"]), teamReadPageRows)
+	}
+}
