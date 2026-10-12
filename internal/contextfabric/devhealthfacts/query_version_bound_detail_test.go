@@ -80,14 +80,14 @@ func TestQueryVersionMovedPastTheBoundAnchorKind(t *testing.T) {
 
 // With the anchor binding carry switch on, a same-question follow-up carries
 // its anchor only from the admitted binding, so an answer stored before it
-// (v176 and before) must not be reused.
+// (v177 and before) must not be reused.
 func TestQueryVersionMovedPastTheBindingCarry(t *testing.T) {
 	const prefix = "devhealthfacts.clickhouse.v"
 	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
 	if !ok {
 		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
 	}
-	if n, err := strconv.Atoi(version); err != nil || n < 177 {
-		t.Fatalf("QueryVersion = %q: an answer saved before the binding carry (v176 and before) must not be reused", devhealthfacts.QueryVersion)
+	if n, err := strconv.Atoi(version); err != nil || n < 178 {
+		t.Fatalf("QueryVersion = %q: an answer saved before the binding carry (v177 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }
