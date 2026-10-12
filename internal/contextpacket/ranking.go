@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"sort"
 	"strings"
+	"unicode"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -54,14 +55,14 @@ func requestedEvidenceCategories(refs []contractsv1.EvidenceRef, requested []con
 }
 
 func evidenceBefore(left, right contractsv1.EvidenceRef, goal string) bool {
+	if l, r := goalScore(left, goal), goalScore(right, goal); l != r {
+		return l > r
+	}
 	if provenanceRank(left.Provenance) != provenanceRank(right.Provenance) {
 		return provenanceRank(left.Provenance) < provenanceRank(right.Provenance)
 	}
 	if !left.ObservedAt.Equal(right.ObservedAt) {
 		return left.ObservedAt.After(right.ObservedAt)
-	}
-	if goalScore(left, goal) != goalScore(right, goal) {
-		return goalScore(left, goal) > goalScore(right, goal)
 	}
 	l, r := evidenceRule(left), evidenceRule(right)
 	if l.categoryRank != r.categoryRank {
@@ -87,10 +88,25 @@ func provenanceRank(value string) int {
 		return 4
 	}
 }
+
+var goalStopwords = map[string]bool{"the": true, "and": true, "for": true, "about": true, "what": true, "should": true, "know": true, "first": true, "change": true, "changes": true, "are": true, "with": true, "this": true, "that": true, "from": true, "into": true, "before": true, "how": true, "who": true, "when": true, "where": true, "which": true, "will": true, "can": true, "does": true, "need": true, "want": true}
+
+func goalWords(goal string) []string {
+	words := strings.FieldsFunc(strings.ToLower(goal), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	kept := make([]string, 0, len(words))
+	for _, word := range words {
+		if len(word) > 2 && !goalStopwords[word] {
+			kept = append(kept, word)
+		}
+	}
+	return kept
+}
+
 func goalScore(ref contractsv1.EvidenceRef, goal string) int {
+	haystack := strings.ToLower(ref.Citation + " " + ref.Source.DisplayLabel)
 	score := 0
-	for _, word := range strings.Fields(strings.ToLower(goal)) {
-		if len(word) > 2 && strings.Contains(strings.ToLower(ref.Citation+" "+ref.Source.DisplayLabel), word) {
+	for _, word := range goalWords(goal) {
+		if strings.Contains(haystack, word) {
 			score++
 		}
 	}
