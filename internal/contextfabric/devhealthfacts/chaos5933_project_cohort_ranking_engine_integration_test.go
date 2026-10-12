@@ -8,8 +8,9 @@ package devhealthfacts_test
 // Floor arithmetic is derived here from the design weights, never read back
 // from production constants: deficiency 20, readiness 15, health 25,
 // workload 10, investment_mix 30, floor 50. A project member is never read
-// for operational_deficiencies (team-only capability) and carries no
-// readiness rows, so its available weight is the sum of the roll-up
+// for operational_deficiencies (a team-only capability, reached from a
+// project only through its owning teams and never credited to the project)
+// and carries no readiness rows, so its available weight is the sum of the roll-up
 // families it actually has.
 
 import (
@@ -416,7 +417,14 @@ func TestCHAOS5933ProjectCohortIsRankedThroughTheEngineAgainstRealClickHouse(t *
 			fmt.Sprintf("%s:%d", contextfabric.RankingSignalHealthRisk, health),
 			fmt.Sprintf("%s:%d", contextfabric.RankingSignalWorkloadPressure, workload),
 			fmt.Sprintf("%s:%d", contextfabric.RankingSignalInvestmentMix, investment),
-			fmt.Sprintf("deficiency_zero_withheld=%d", len(projectCohortCells)),
+			// A project's operational_deficiencies is no longer PRUNED (which
+			// reads as "nothing missing" and made a zero creditable, so the
+			// guard withheld one per member): it is reached through the
+			// project's owning teams, and a gap there is a disclosed state a
+			// zero is never credited from. Nothing is creditable, so nothing
+			// is withheld, and the member is still never credited a severity
+			// (asserted below).
+			"deficiency_zero_withheld=0",
 			"read_attribution_carried=true",
 		} {
 			if !strings.Contains(line, want) {

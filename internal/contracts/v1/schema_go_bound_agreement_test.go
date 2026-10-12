@@ -188,6 +188,11 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// Round-18's ruled mutation (minimum 0 -> 1) passed against that
 		// catch-all before this entry existed.
 		"result#properties.limitations_displaced.minimum": 0,
+		// The census omitted count: validateFactScopeCensusOmitted enforces
+		// non-negative and census rows + omitted <= the census maximum, so
+		// the count's own ceiling is that maximum.
+		"result#properties.fact_scope_census_omitted.minimum": 0,
+		"result#properties.fact_scope_census_omitted.maximum": ContextFabricFactScopeCensusMaxCount,
 		// CHAOS-4636: the answer plan's own bounds, every one mapped
 		// explicitly rather than left to a pattern classifier. The floors
 		// especially: Go rejects each of these with its own clause (see

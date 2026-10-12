@@ -835,7 +835,13 @@ import (
 // key carries the pull request number; a review id recurs across one
 // repository's pull requests) and cites review.v2. A candidate saved under
 // v169 may hold another pull request's review state and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v170"
+//
+// v170 -> v171: a team or project question for continuous integration, deployments, incidents or
+// operational deficiencies reaches those facts through the entity tree (ownership rows, and linked
+// pull request rows) where it was pruned with no reach; a candidate saved under an earlier version
+// carries the pruned answer for such a question. The census also sheds rows under a small byte
+// budget and serves the count it cut.
+const QueryVersion = "devhealthfacts.clickhouse.v171"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

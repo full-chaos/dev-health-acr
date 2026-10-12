@@ -85,7 +85,8 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v19 -> v20: rule precedence with the count rule before the share rule, the member-kind, event-member and assignee rules, more state conditions, and worked examples for the members of a named parent.
 			// v21 -> v22: the status line of the fact-kind glossary lists all eight status values.
 			// v22 -> v23: the investment line of the fact-kind glossary names organization among its subject kinds.
-			digest: "fe42e19ac4a4e89965bccf19e63502483d8daca0bcfad5e5e5658903ad31dd0e",
+			// v23 -> v24: the reachability sentences: continuous_integration and deployments are reached through a team's or project's repositories, incidents through those repositories' deployments, and operational_deficiencies through a project's owning teams.
+			digest: "155e4c8e6fee2910a287fc1ca40afe87892488f1a8debd2e1c7088a79859cb98",
 		},
 		{
 			name:    "synthesis system prompt",
