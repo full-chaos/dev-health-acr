@@ -5473,6 +5473,11 @@
         "presence": "required"
       },
       {
+        "key": "ceiling_fit",
+        "type": "string",
+        "presence": "required"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",
