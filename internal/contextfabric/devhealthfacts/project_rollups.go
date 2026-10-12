@@ -34,12 +34,12 @@ const projectJoinKeysSQL = `(SELECT provider, join_key, concat(provider, ':', id
 // with the strongest known link tier among the project's issues that link it.
 var projectLinkedPullRequestsSQL = `(
   SELECT pi.project_key AS project_key, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, max(l.link_rank) AS link_rank
-  FROM ` + admittedIssueLinksSQL + ` AS l
+  FROM ` + admittedIssueLinksAmongSQL(linkedWorkItemIDsSQL) + ` AS l
   INNER JOIN (
     SELECT DISTINCT w.work_item_id AS work_item_id, k.project_key AS project_key
     FROM work_items AS w FINAL
     INNER JOIN ` + projectJoinKeysSQL + ` AS k ON k.provider = w.provider AND k.join_key = w.project_id
-    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + `
+    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND w.work_item_id IN ` + linkedWorkItemIDsSQL + `
   ) AS pi ON pi.work_item_id = l.work_item_id
   GROUP BY project_key, pr_repo_id, pr_number
 )`
@@ -181,7 +181,7 @@ func projectBlockerEdgeRowsSQL(authorized string) string {
     SELECT DISTINCT w.work_item_id AS work_item_id, k.project_key AS project_key
     FROM work_items AS w FINAL
     INNER JOIN ` + projectJoinKeysSQL + ` AS k ON k.provider = w.provider AND k.join_key = w.project_id
-    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + `
+    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND w.work_item_id IN ` + blockerEndpointIDsSQL + `
   ) AS t ON t.work_item_id = d.target_work_item_id
   INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
   WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'
