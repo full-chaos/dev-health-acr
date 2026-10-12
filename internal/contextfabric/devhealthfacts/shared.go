@@ -869,13 +869,23 @@ import (
 // compounding_risk_daily row and a moved-since-the-rule flag. An answer saved
 // under v175 quotes the rule-time score as the team's current risk.
 //
-// v177 -> v178: every reader of the issue <> pull request link of record
+// v177 -> v178: with the anchor binding carry switch on, a same-question
+// follow-up carries its anchor only from the admitted binding (never from the
+// confirmed-need ledger's engine-committed entry, which is withheld from
+// resolution when the binding does not carry it), and a carried anchor the
+// resolver offered but did not commit is listed first in the clarification,
+// so a stored answer can differ.
+//
+// v178 -> v179: every reader of the issue <> pull request link of record
 // admits a link row the same way: the pull request it names exists and the
 // work item is an issue. A team or project scope no longer reaches a
 // repository through a link to a missing pull request or through a
 // pull-request-typed work item, and such an issue is counted as a missing next
-// hop. An answer saved under v177 may rest on a repository so reached.
-const QueryVersion = "devhealthfacts.clickhouse.v178"
+// hop (an issue whose only link row names a missing pull request is missing
+// although a row exists; a pull-request-typed work item is not an issue and is
+// no longer counted). An answer saved under v178 may rest on a repository so
+// reached.
+const QueryVersion = "devhealthfacts.clickhouse.v179"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

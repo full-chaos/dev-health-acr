@@ -76,8 +76,11 @@ func classifyLinkedRepository(counts *contextfabric.FactScopeExpansionCounts, ca
 }
 
 // projectUnlinkedIssueCount counts the DISTINCT issues of the requested
-// projects that have no link row at all. They reach no repository through the
-// tree, and the answer must say so rather than read as "nothing is missing".
+// projects that have no admitted link row: no link row at all, or only links
+// whose pull request does not exist or whose tier is outside the vocabulary.
+// Pull-request-typed work items are not issues and are not counted. They reach
+// no repository through the tree, and the answer must say so rather than read
+// as "nothing is missing".
 func (e *ScopeExpander) projectUnlinkedIssueCount(ctx context.Context, orgID string, projectIDs []string, bounds *asOfBounds) (int, error) {
 	var statement string
 	bindings := []contextpacket.ClickHouseBinding{

@@ -426,6 +426,23 @@
         ]
       },
       {
+        "key": "bound_anchor_carry",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "switch_off",
+          "not_evaluated",
+          "none",
+          "not_admitted",
+          "injected",
+          "caller_superseded",
+          "receipt_superseded",
+          "cap_full",
+          "remembered_offered",
+          "undeclared"
+        ]
+      },
+      {
         "key": "freshness_serving_epoch",
         "type": "int",
         "presence": "required"

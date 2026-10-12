@@ -26,10 +26,12 @@ func TestIssueLinkReaders_EveryLinkReadAdmitsOnlyExistingPullRequestsOfIssues(t 
 			t.Errorf("statement reads work_graph_issue_pr without excluding pull-request-typed work items:\n%s", query.statement)
 		}
 	}
-	// 3 project current + 3 team + as-of project hops (hop + unlinked count +
-	// drop count) x 3 policies: a sweep that stops reaching the link read must
-	// fail here, not pass vacuously.
-	if reading < 8 {
-		t.Fatalf("only %d statements read work_graph_issue_pr, want at least 8: the sweep no longer reaches every link reader", reading)
+	// The exact count of expander statements that read the link: a reader that
+	// disappears or a new one that arrives must change this number on purpose.
+	// The blocker rollup's own read (blockerEdgeRowsSQL) is pinned by
+	// blocker_rollup_entity_tree_integration_test.go.
+	const wantLinkReads = 21
+	if reading != wantLinkReads {
+		t.Fatalf("%d statements read work_graph_issue_pr, want %d: the sweep no longer reaches every link reader, or a reader was added", reading, wantLinkReads)
 	}
 }
