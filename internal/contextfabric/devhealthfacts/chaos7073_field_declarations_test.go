@@ -111,7 +111,16 @@ func t4Cases() []t4Case {
 		nullDeficiency[i] = ""
 	}
 	add(t4Case{name: "operational_deficiencies/team", kind: contextfabric.FactOperationalDeficiencies, subjects: team, tables: []fakeTable{
-		{match: "WHERE rn = 1", rows: [][]any{deficiencyRow("CHAOS"), nullDeficiency}},
+		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{deficiencyRow("CHAOS"), nullDeficiency}},
+	}})
+	basisDeficiency := deficiencyRow("CHAOS")
+	basisDeficiency[5] = ruleBasisRationale
+	add(t4Case{name: "operational_deficiencies/team_rule_basis_latest", kind: contextfabric.FactOperationalDeficiencies, subjects: team, tables: []fakeTable{
+		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{basisDeficiency}},
+		{match: "toString(day)\nFROM (", rows: [][]any{{"CHAOS", "high", uint8(1), 0.72, "2026-07-04 00:30:00", "2026-07-03"}}},
+	}})
+	add(t4Case{name: "operational_deficiencies/team_rule_basis_no_latest", kind: contextfabric.FactOperationalDeficiencies, subjects: team, tables: []fakeTable{
+		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{basisDeficiency}},
 	}})
 
 	// ---- landscape
