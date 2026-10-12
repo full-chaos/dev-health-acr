@@ -4141,12 +4141,6 @@
         "applicability": "written when outcome=applied"
       },
       {
-        "key": "truncated",
-        "type": "bool",
-        "presence": "conditional",
-        "applicability": "written when outcome=applied"
-      },
-      {
         "key": "error",
         "type": "string",
         "presence": "conditional",

@@ -2231,7 +2231,6 @@ type PullRequestStatusFilterFields struct {
 	Status     string
 	Candidates int
 	Kept       int
-	Truncated  bool
 	Error      string
 	RequestID  string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
@@ -2247,14 +2246,13 @@ type PullRequestStatusFilterFields struct {
 
 // NewPullRequestStatusFilterFields is the generated constructor for PullRequestStatusFilterFields -- every
 // field PullRequestStatusFilter.Fields declares is a required parameter.
-func NewPullRequestStatusFilterFields(orgID string, outcome string, status string, candidates int, kept int, truncated bool, error string, requestID string) PullRequestStatusFilterFields {
+func NewPullRequestStatusFilterFields(orgID string, outcome string, status string, candidates int, kept int, error string, requestID string) PullRequestStatusFilterFields {
 	return PullRequestStatusFilterFields{
 		OrgID:       orgID,
 		Outcome:     outcome,
 		Status:      status,
 		Candidates:  candidates,
 		Kept:        kept,
-		Truncated:   truncated,
 		Error:       error,
 		RequestID:   requestID,
 		constructed: true,
@@ -2279,7 +2277,6 @@ func (f PullRequestStatusFilterFields) SlogArgs() []any {
 		"status", contextfabric.SanitizeLogAttr(f.Status),
 		"candidates", f.Candidates,
 		"kept", f.Kept,
-		"truncated", f.Truncated,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}

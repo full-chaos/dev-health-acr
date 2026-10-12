@@ -1416,18 +1416,17 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	pullRequestStatus := contextfabric.PullRequestStatusFilterOf(request.Frame)
 	var pullRequestFiltered pullRequestStatusFilter
 	if status := pullRequestStatus; status != "" {
-		filtered, filterErr := a.filterPullRequestsByStatus(ctx, key, principal.OrgID, status, cohortNodes, temporal)
+		filtered, filterErr := a.filterPullRequestsByStatus(ctx, key, principal.OrgID, status, cohortNodes)
 		pullRequestFiltered = filtered
 		if a.config.Telemetry != nil {
 			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
-				Status: status, Candidates: filtered.candidates, Kept: filtered.kept, Truncated: filtered.cut, Err: filterErr,
+				Status: status, Candidates: filtered.candidates, Kept: filtered.kept, Err: filterErr,
 			})
 		}
 		if filterErr != nil {
 			return contextfabric.GraphContext{}, graphNotProjectedError(filterErr)
 		}
 		cohortNodes = filtered.nodes
-		cohortPoolTruncated = cohortPoolTruncated || filtered.cut
 	}
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	cohortKindScopedAuthzDropped, anchorReachDenied := anchorReachDeniedCount(cohortKind, cohortNodes, principal, request, edgeFilters.ReachDenied, cohortKindScopedAuthzDropped)

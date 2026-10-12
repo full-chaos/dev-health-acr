@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -82,8 +83,14 @@ func pullRequestStatusFrame(status string) *contextfabric.QuestionFrame {
 
 func discoverPullRequestMembers(t *testing.T, fake *fakeConn, status string) (contextfabric.GraphContext, *recordingTelemetry, error) {
 	t.Helper()
+	return discoverPullRequestMembersAt(t, fake, status, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})
+}
+
+func discoverPullRequestMembersAt(t *testing.T, fake *fakeConn, status string, timeContext contextfabric.TimeContext) (contextfabric.GraphContext, *recordingTelemetry, error) {
+	t.Helper()
 	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:alpha", Label: "Alpha"}
 	request := ownershipRoutingRequest(pullRequestStatusFrame(status), anchor)
+	request.Interpretation.TimeContext = timeContext
 	request.ScopeAnchorKind = contextfabric.SubjectTeam
 	request.Request.Question = "which pull requests of team Alpha are in that state?"
 	telemetry := &recordingTelemetry{}
@@ -182,5 +189,30 @@ func TestNoPullRequestHoldingTheStatusIsAnEmptyCompleteSet(t *testing.T) {
 	}
 	if result.Cohort.Kind != contextfabric.SubjectPullRequest || len(result.Cohort.Members) != 0 || !result.Cohort.Complete || result.Cohort.Truncated || result.Cohort.Rationale != pullRequestStatusNoMatchRationale {
 		t.Fatalf("cohort = %+v, want an empty complete pull request set with the no-match rationale", *result.Cohort)
+	}
+}
+
+// TestPullRequestReviewStatusIsReadAsOfNowUnderAStatedWindow: the status is as
+// of now whatever window the question states, so a review submitted after the
+// window still decides it.
+func TestPullRequestReviewStatusIsReadAsOfNowUnderAStatedWindow(t *testing.T) {
+	now := time.Now().UTC()
+	fixtures := []pullRequestStatusFixture{
+		{id: "pull_request:approved", state: "open", reviews: []contextfabric.PullRequestReviewRow{{State: "APPROVED", SubmittedNs: now.UnixNano()}}},
+		{id: "pull_request:no-review", state: "open"},
+	}
+	start, end := now.AddDate(-2, 0, 0), now.AddDate(-1, 0, 0)
+	window := contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}
+	for status, want := range map[string][]string{
+		"approved":        {"pull_request:approved"},
+		"awaiting_review": {"pull_request:no-review"},
+	} {
+		result, _, err := discoverPullRequestMembersAt(t, pullRequestStatusFake(fixtures, nil), status, window)
+		if err != nil {
+			t.Fatalf("DiscoverContext() error = %v", err)
+		}
+		if got := servedPullRequestIDs(result); !reflect.DeepEqual(got, want) {
+			t.Fatalf("status %s under a past window: served %v, want %v", status, got, want)
+		}
 	}
 }

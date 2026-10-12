@@ -588,9 +588,8 @@ type GraphTelemetry interface {
 	RecordTeamAnchorWalk(ctx context.Context, orgID string, decision TeamAnchorWalkDecision)
 	// RecordPullRequestStatusFilter (eventspec.PullRequestStatusFilter)
 	// reports ONE DiscoverContext call whose frame filters pull request
-	// members by a status: how many pull requests the pool held, how many
-	// hold the status, and whether the review read was cut. Counts and closed
-	// values only.
+	// members by a status: how many pull requests the pool held and how many
+	// hold the status. Counts and closed values only.
 	RecordPullRequestStatusFilter(ctx context.Context, orgID string, decision PullRequestStatusFilterDecision)
 	// RecordOwnershipRouting (eventspec.OwnershipRouting) reports ONE
 	// DiscoverContext call that asks for the team members of a named anchor:
@@ -1080,8 +1079,7 @@ func (t SlogTelemetry) RecordPullRequestStatusFilter(ctx context.Context, orgID 
 	if decision.Err == nil {
 		args = append(args,
 			"candidates", decision.Candidates,
-			"kept", decision.Kept,
-			"truncated", decision.Truncated)
+			"kept", decision.Kept)
 	} else {
 		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
 	}

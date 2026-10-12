@@ -18,18 +18,12 @@ var pullRequestReviewStep = walkStep{
 	direction: walkIn,
 }
 
-// pullRequestReviewReadLimit bounds the review rows one filter reads; a read
-// cut at it leaves the filtered pool truncated.
-const pullRequestReviewReadLimit = exactNameCandidateQueryLimit
-
 // pullRequestStatusFilter is the outcome of filtering one member pool by a
 // pull request status.
 type pullRequestStatusFilter struct {
 	nodes []graphrank.CandidateNode
 	// candidates and kept count the pool's pull requests before and after.
 	candidates, kept int
-	// cut: the review read was cut, so a member may be missing.
-	cut bool
 }
 
 // pullRequestStatusNoMatchRationale is the rationale of a pull request member
@@ -45,8 +39,11 @@ func pullRequestStateCypher() string {
 // filterPullRequestsByStatus keeps the pool's nodes that are not pull requests
 // and the pull requests that hold status now (contextfabric.PullRequestStatusMatches).
 // The state is read from each pull request's stored node, never from the pool
-// node, because a link read returns members without their properties.
-func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, status string, pool []graphrank.CandidateNode, temporal temporalFilter) (pullRequestStatusFilter, error) {
+// node, because a link read returns members without their properties. The
+// status is as of now whatever window the question states, so the review rows
+// are read under no window, and every review row of every open pull request is
+// read: a cut read would leave a pull request's latest review unknown.
+func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, status string, pool []graphrank.CandidateNode) (pullRequestStatusFilter, error) {
 	out := pullRequestStatusFilter{}
 	ids := []string{}
 	for _, n := range pool {
@@ -86,11 +83,10 @@ func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, st
 				open = append(open, id)
 			}
 		}
-		hits, cut, err := a.walkStepHits(ctx, key, orgID, open, pullRequestReviewStep, temporal, pullRequestReviewReadLimit)
+		hits, _, err := a.walkStepHits(ctx, key, orgID, open, pullRequestReviewStep, temporalFilter{}, 0)
 		if err != nil {
 			return out, err
 		}
-		out.cut = cut
 		for _, h := range hits {
 			submitted, _ := h.to.Properties[propValidFromNs].(int64)
 			reviews[h.from] = append(reviews[h.from], contextfabric.PullRequestReviewRow{
@@ -137,9 +133,7 @@ type PullRequestStatusFilterDecision struct {
 	Status string
 	// Candidates and Kept count the pool's pull requests before and after.
 	Candidates, Kept int
-	// Truncated: the review read was cut.
-	Truncated bool
-	Err       error
+	Err              error
 }
 
 func (d PullRequestStatusFilterDecision) outcome() PullRequestStatusFilterOutcome {

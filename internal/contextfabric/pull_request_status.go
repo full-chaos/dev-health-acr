@@ -169,16 +169,18 @@ func PullRequestStatusFilterDisclosure(value string) string {
 
 // withPullRequestStatusDisclosure states, on a document that serves pull
 // request members, the status they were filtered by, or that the state the
-// question named was not applied. It adds a sentence once; a re-finalized
-// document keeps the one it has.
+// question named was not applied. A status on an operand of an explicit set is
+// never applied, whatever the document serves, so it is stated on every such
+// document. It adds a sentence once; a re-finalized document keeps the one it
+// has.
 func withPullRequestStatusDisclosure(result InvestigationResult, frame *QuestionFrame) InvestigationResult {
-	if result.Cohort == nil || result.Cohort.Kind != SubjectPullRequest {
-		return result
-	}
+	servesPullRequests := result.Cohort != nil && result.Cohort.Kind == SubjectPullRequest
+	operandStatus := frame != nil && frame.SubjectExpression.Kind == SubjectExpressionExplicitSet && PullRequestStatusUnappliedOf(frame)
 	sentence := ""
-	if status := PullRequestStatusFilterOf(frame); status != "" {
+	switch status := PullRequestStatusFilterOf(frame); {
+	case status != "" && servesPullRequests:
 		sentence = PullRequestStatusFilterDisclosure(status)
-	} else if PullRequestStatusUnappliedOf(frame) {
+	case operandStatus || (servesPullRequests && PullRequestStatusUnappliedOf(frame)):
 		sentence = contractsv1.ContextFabricPullRequestStatusUnappliedLimitation
 	}
 	if sentence == "" {

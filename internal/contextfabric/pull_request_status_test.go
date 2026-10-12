@@ -131,6 +131,16 @@ func TestServedPullRequestMembersStateTheirStatusFilter(t *testing.T) {
 	if !contractsv1.IsContextFabricServiceAuthoredLimitation(contractsv1.ContextFabricPullRequestStatusUnappliedLimitation) {
 		t.Fatalf("the unapplied disclosure is not recognised as service-authored")
 	}
+	operands := QuestionFrame{SubjectExpression: SubjectExpression{Kind: SubjectExpressionExplicitSet, Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+		{Kind: SubjectOperandScoped, Scoped: &ScopedSetExpression{AnchorTerms: []string{"Vesper"}, MemberKind: SubjectPullRequest, MemberQualifier: MemberQualifierStatus, MemberQualifierValue: PullRequestStatusAwaitingReview}},
+		{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"Marram"}}},
+	}}}}
+	for _, document := range []InvestigationResult{{}, {Cohort: &Cohort{Kind: SubjectTeam}}} {
+		got := withPullRequestStatusDisclosure(document, &operands).Limitations
+		if len(got) != 1 || got[0] != contractsv1.ContextFabricPullRequestStatusUnappliedLimitation {
+			t.Fatalf("an explicit-set operand status on a document with cohort %+v: limitations = %q, want the unapplied sentence", document.Cohort, got)
+		}
+	}
 	frame := pullRequestStatusQuestionFrame(PullRequestStatusOpen)
 	projects := InvestigationResult{Cohort: &Cohort{Kind: SubjectProject}}
 	if got := withPullRequestStatusDisclosure(projects, &frame).Limitations; len(got) != 0 {

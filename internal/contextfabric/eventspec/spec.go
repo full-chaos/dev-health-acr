@@ -2966,9 +2966,8 @@ var pullRequestStatusFilterOutcome = []string{"applied", "read_failed"}
 // PullRequestStatusFilter is the Info line of one DiscoverContext call whose
 // frame filters pull request members by a status of the closed set
 // (contextfabric.PullRequestStatusVocabulary): candidates is how many pull
-// requests the member pool held, kept how many hold the status now, and
-// truncated whether the review read was cut. outcome=read_failed carries the
-// error and no count.
+// requests the member pool held and kept how many hold the status now.
+// outcome=read_failed carries the error and no count.
 //
 // The line carries counts and closed values only, never a subject name or id.
 var PullRequestStatusFilter = Event{
@@ -2984,7 +2983,6 @@ var PullRequestStatusFilter = Event{
 		{Key: "status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"open", "merged", "closed", "awaiting_review", "changes_requested", "approved"}},
 		{Key: "candidates", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when outcome=applied"},
 		{Key: "kept", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when outcome=applied"},
-		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when outcome=applied"},
 		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
