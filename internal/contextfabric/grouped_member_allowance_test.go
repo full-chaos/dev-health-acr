@@ -47,15 +47,20 @@ func TestGroupedAllowanceFollowsBudgetTwoGroupsThreeMembers(t *testing.T) {
 		}
 		cohort := groupedCohort(2, 3)
 		served := len(cohort.Members)
-		if kept, _, narrowed, _ := NarrowGroupedCohort(&cohort, planned.MaxMembers); narrowed {
+		groups := cohort.Groups
+		if kept, narrowedGroups, narrowed, _ := NarrowGroupedCohort(&cohort, planned.MaxMembers); narrowed {
 			served = len(kept)
+			groups = narrowedGroups
 		}
 		if served != c.served {
 			t.Errorf("max_items=%d: served %d members, want %d", c.maxItems, served, c.served)
 		}
-		for _, group := range cohort.Groups {
+		if len(groups) != 2 {
+			t.Errorf("max_items=%d: %d groups after narrowing, want 2", c.maxItems, len(groups))
+		}
+		for _, group := range groups {
 			if len(group.MemberCanonicalIDs) == 0 {
-				t.Errorf("max_items=%d: a group lost every member", c.maxItems)
+				t.Errorf("max_items=%d: group %s lost every member", c.maxItems, group.Subject.CanonicalID)
 			}
 		}
 	}
