@@ -996,6 +996,11 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 				outcome.ScopeExpansionUnavailable = true
 				bundle.Outcomes[planned.Kind] = outcome
 			}
+			if planned.ScopeGap.WindowUnsupported() {
+				outcome := bundle.Outcomes[planned.Kind]
+				outcome.WindowUnsupported = true
+				bundle.Outcomes[planned.Kind] = outcome
+			}
 			r.recordFactRead(ctx, principal, planned.Kind, factReadScopeGap, gapState, planned.Subjects, 0, false)
 			continue
 		}

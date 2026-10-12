@@ -1112,6 +1112,14 @@ type FactScopeGap struct {
 	OriginKind SubjectKind
 	// DecisionReason is the gate or execution basis that produced Outcome.
 	DecisionReason FactScopeDecisionReason
+	// CurrentAxisOnly is set when the policy serves the current window only.
+	CurrentAxisOnly bool
+}
+
+// WindowUnsupported reports a gap whose policy is configured and enabled but
+// does not serve the requested window.
+func (g FactScopeGap) WindowUnsupported() bool {
+	return g.Outcome == FactScopePolicyUnavailable && g.DecisionReason == FactScopeDecisionAxisUnsupported
 }
 
 // ScopeExpansionUnavailable reports a gap whose policy is enabled but whose
@@ -1970,7 +1978,8 @@ func (r *FactReadScopeResolver) resolveRequirement(
 			Basis:      event.Basis,
 			OriginKind: originKind,
 
-			DecisionReason: event.DecisionReason,
+			DecisionReason:  event.DecisionReason,
+			CurrentAxisOnly: rule.TargetKind == SubjectWorkItem || rule.CurrentAxisOnly,
 		}
 		existing, exists := scope.Gaps[kind]
 		if !exists || (!factScopeGapDegrades(existing.Outcome) && factScopeGapDegrades(candidate.Outcome)) {
