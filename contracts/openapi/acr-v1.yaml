@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 427fa614d956f26b4d7995a3d22c2d8714b8177ee849b6b90eeafe853a124737
+# canonical-content-sha256: 903e4636048fab4aad554495a515be874607ceaada6f0a02098113d72fd617e6
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1206,6 +1206,10 @@ components:
                     type: "array"
                   kind:
                     type: "string"
+                  max_window_days:
+                    description: "The widest range or trailing window, in days, one read_facts call takes for this kind. A read over several kinds is held to the smallest."
+                    minimum: 1
+                    type: "integer"
                   subject_kinds:
                     items:
                       type: "string"

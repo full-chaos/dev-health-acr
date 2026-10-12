@@ -4104,7 +4104,7 @@
     "attribution": [
       "org_id"
     ],
-    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame filters pull request members by a status",
+    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame filters pull request, project or incident members by a status (member_kind says which; the message text keeps its certified pull request wording)",
     "fields": [
       {
         "key": "org_id",

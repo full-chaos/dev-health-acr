@@ -592,6 +592,7 @@ type recordingTelemetry struct {
 	// cohortDriverNarrations (CHAOS-4398 PR3b) mirrors the SAME
 	// list-not-count discipline.
 	cohortDriverNarrations []CohortDriverNarrationEvent
+	projectStatusDrivers   []ProjectStatusDriverEvent
 	// evidenceLabelFallbacks (CHAOS-4690) mirrors modelRowsStripped's own
 	// list-not-count discipline: a test asserts the exact count recorded
 	// for a given call, never merely that something fired.
@@ -1094,6 +1095,10 @@ func (r *recordingTelemetry) RecordWindowContinuationDecision(_ context.Context,
 
 func (r *recordingTelemetry) RecordCohortRanked(_ context.Context, _ storage.Principal, event CohortRankedEvent) {
 	r.cohortRanked = append(r.cohortRanked, event)
+}
+
+func (r *recordingTelemetry) RecordProjectStatusDrivers(_ context.Context, _ storage.Principal, event ProjectStatusDriverEvent) {
+	r.projectStatusDrivers = append(r.projectStatusDrivers, event)
 }
 
 func (r *recordingTelemetry) RecordCohortDriverNarration(_ context.Context, _ storage.Principal, event CohortDriverNarrationEvent) {
