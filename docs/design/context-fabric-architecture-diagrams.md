@@ -558,9 +558,16 @@ matched an anchor term by an identity mechanism. A truncated lexical search
 refuses only beside an identity lookup that was not complete; `incomplete`,
 `not_run_time_axis` and `not_wired` admit nothing.
 
-**Code that does not yet follow the tree.** The team blocker rollup
-(`devhealthfacts/dependencies.go`) still reaches a repository through a work
-item's own `repo_id`. The CHAOS-4099 fact-scope expander
+**Code that follows the tree.** The team blocker rollup
+(`devhealthfacts/dependencies.go`, `readTeamRollup`) places a blocked item in
+the repositories its linked pull request rows name, never its own `repo_id`;
+it reads the link with the same strict semantics as the project scope
+expansion (the pull request must exist, pull-request-typed work items are not
+issues) and names the weakest counted tier (`link_tier` per repository,
+`repository_link_basis` per fact). Blocked items in no admitted link row are
+disclosed in `blocked_work_items_without_link_count`. The repository set is
+still the team's `team_repo_ownership` rows, like the other team rollups. The
+CHAOS-4099 fact-scope expander
 (`devhealthfacts/chaos4099_scope_expander.go`, `projectRepositories`,
 `projectRepositoriesAsOf`; `teamRepositories` in
 `devhealthfacts/fact_scope_entity_tree.go`) follows the tree:
