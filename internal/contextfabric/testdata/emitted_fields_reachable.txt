@@ -58,19 +58,19 @@ FactActualCompletion
   fields             archived_items cancelled_count completed completed_at completed_count completion_ratio counted_work_items member_kind rollup_basis unknown_status_count work_item_count
 
 FactBlockers
-  reached_funcs      105
+  reached_funcs      106
   dynamic_key_sites  0
-  leaked_call_sites  6
-    leak interface_method     6
+  leaked_call_sites  7
+    leak interface_method     7
     leak external_func_value  0
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            750
+    calls followed            751
     calls accounted           13
     calls not_a_call          9
-    calls excluded_by_design  155
-    calls leaked              6
+    calls excluded_by_design  161
+    calls leaked              7
   fields             blocked_by_work_item_id blocked_by_work_item_ref blocked_work_items_current blocked_work_items_without_link_count blocker_dependencies_current blocker_dependencies_excluded_by_status_current blocker_status_basis link_tier owned_repositories owned_repositories_omitted_count owned_repository_count repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_link_basis repository_name repository_tables_basis rollup_basis
 
 FactContinuousIntegration
