@@ -61,9 +61,13 @@ func TestDirectReadServesTeamBlockersThroughTheRealScopeExpander(t *testing.T) {
 	granted, other := repoUUID("direct-read-granted"), repoUUID("direct-read-other")
 	exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, granted, orgID, "acme/granted", "github", at)
 	exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, other, orgID, "acme/other", "github", at)
+	// The provider authorizes both ends of a blocker edge, so each blocking
+	// item is a work item in the same repository as the item it blocks.
 	for _, item := range []struct{ id, repo string }{{"WI-GRANTED", granted}, {"WI-OTHER", other}} {
-		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			item.id, item.repo, orgID, "linear", "issue "+item.id, "open", "", "", "", at)
+		for _, id := range []string{item.id, item.id + "-BLOCKER"} {
+			exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, item.repo, orgID, "linear", "issue "+id, "open", "", "", "", at)
+		}
 		exec(`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			orgID, item.repo, item.id, teamID, "native_team", uint8(1), "high", at)
 		exec(`INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?)`,
