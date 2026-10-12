@@ -16,7 +16,7 @@ func mcpSynthesisInput() *contractsv1.ContextFabricSynthesisInput {
 	sum := sha256.Sum256(input)
 	return &contractsv1.ContextFabricSynthesisInput{
 		Contract: contractsv1.ContextFabricSynthesisContract{
-			ModelOutputVersion: "context-fabric-model-output.v8",
+			ModelOutputVersion: "context-fabric-model-output.v9",
 			PromptVersion:      "context-fabric-synthesis.v3",
 			SystemSHA256:       strings.Repeat("b", 64),
 		},
