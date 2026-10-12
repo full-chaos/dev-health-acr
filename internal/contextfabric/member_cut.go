@@ -2,8 +2,6 @@ package contextfabric
 
 import (
 	"context"
-	"errors"
-	"slices"
 	"sort"
 	"strings"
 
@@ -11,21 +9,16 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// The member cut is the model-free item lever for a flat cohort whose answer
-// overran the item budget on members the answer does not name. Every other
-// lever that removes members re-synthesizes (the cohort retry) and so needs a
-// model call and the deadline for it.
+// The member cut: the model-free item lever for a flat cohort whose answer
+// overran the item budget on members the answer does not name, when the cohort
+// retry (the only other lever that removes members, and a model call) is
+// unavailable.
 //
-// It does NOT patch the document. A cut produces a new cohort, and everything
-// derived from the cohort -- the cardinality claim and sentence, the count,
-// read and ranking rows, the narrated drivers, the render shapes, the
-// coverage and the evidence closure -- comes from ONE assembly over it: the
-// pass-1 raw draft is assembled again over the cut graph through
-// synthesizeAndAssemble with no model call, then finalized like any pass.
-//
-// What is not regenerated is the model's prose (the draft's own judgment,
-// pressures and driver summaries): the cut removes only members the draft never
-// names as a subject, and the disclosure says the answer was cut.
+// It must not patch the document. A cut produces a new cohort and everything
+// derived from the cohort comes from ONE assembly over it; the seam for that is
+// in place (the pass-1 draft kept on the pass's pending telemetry, assembled
+// again by synthesizeAndAssemble with no model call). Serving the cut is
+// deferred; what runs here is the assessment, recorded as one decision event.
 
 // MemberCutDeclined is the CLOSED vocabulary of why the member cut did not
 // serve an answer.
@@ -42,42 +35,24 @@ const (
 	// MemberCutNoDraft: the pass kept no draft to assemble again (a
 	// client-written synthesis, or a pass that did not synthesize).
 	MemberCutNoDraft MemberCutDeclined = "no_draft"
-	// MemberCutDraftCarriesCohort: the draft brings a cohort of its own, which
-	// assembly would prefer to the cut one.
-	MemberCutDraftCarriesCohort MemberCutDeclined = "draft_carries_cohort"
 	// MemberCutNoStatedOrder: the list carries no order the plan can state
 	// (neither attention rank nor canonical id order).
 	MemberCutNoStatedOrder MemberCutDeclined = "no_stated_order"
 	// MemberCutNothingCuttable: every member is named by the answer.
 	MemberCutNothingCuttable MemberCutDeclined = "nothing_cuttable"
-	// MemberCutWouldRemoveAll: fitting would remove every listed member.
-	MemberCutWouldRemoveAll MemberCutDeclined = "would_remove_all"
-	// MemberCutInsufficient: with every cuttable member gone the answer still
-	// overruns on items.
-	MemberCutInsufficient MemberCutDeclined = "insufficient"
-	// MemberCutBytesRemain: the cut fits the items and the document still
-	// overruns on bytes at the ceiling.
-	MemberCutBytesRemain MemberCutDeclined = "bytes_remain"
-	// MemberCutUnmeasurable: a candidate could not be assembled or marshaled.
-	MemberCutUnmeasurable MemberCutDeclined = "unmeasurable"
-	// MemberCutInvalidResult: the fitting document failed contract validation.
-	MemberCutInvalidResult MemberCutDeclined = "invalid_result"
+	// MemberCutServedCutDeferred: members could be left out (Uncited of Listed
+	// are named by nothing in the answer) and the served cut is deferred until
+	// every field a synthesizer derives from the graph input is restated over
+	// a cut cohort.
+	MemberCutServedCutDeferred MemberCutDeclined = "served_cut_deferred"
 )
 
 type memberCutAttempt struct {
-	Result   InvestigationResult
-	Pending  assemblyTelemetry
-	Served   bool
 	Declined MemberCutDeclined
 	Measured MeasuredAttempt
 	Listed   int
-	Kept     int
 	Uncited  int
 	Basis    contractsv1.ContextFabricNarrowingBasis
-	StepKept bool
-	// Passes counts the assemblies the search ran (candidates and the served
-	// one): the CPU cost of the lever, a measurement.
-	Passes int
 }
 
 // MemberCutEvent is the operator record of ONE member-cut decision. Counts
@@ -91,16 +66,9 @@ type MemberCutEvent struct {
 	ItemsBefore int
 	ItemsAfter  int
 	Listed      int
-	Kept        int
 	Uncited     int
 	Basis       contractsv1.ContextFabricNarrowingBasis
-	// ChainRecorded says the plan step was recorded, which is only true when
-	// the list the cut started from was the whole population.
-	ChainRecorded bool
-	// Passes is how many times the draft was assembled to find the cut.
-	Passes   int
-	Served   bool
-	Declined MemberCutDeclined
+	Declined    MemberCutDeclined
 }
 
 // memberCutBasis names the order the list is cut in, or false when the list
@@ -225,319 +193,70 @@ func isWordByte(b byte) bool {
 	return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || b >= 0x80
 }
 
-// memberCutOutcomeRow: NARROWED in SCOPE (fewer members listed; each that
-// remains is unchanged) because of the ITEM budget, observed. It carries no
-// requirement identity: it is the lever's own disclosure, not a derived row.
-func memberCutOutcomeRow(served, declared int) RequirementOutcomeRow {
-	return contractsv1.ContextFabricWithReductionRefinement(RequirementOutcomeRow{
-		Stage:         contractsv1.ContextFabricOutcomeStageAssembledResult,
-		Outcome:       contractsv1.ContextFabricRequirementNarrowed,
-		Impact:        contractsv1.ContextFabricAnswerImpactScope,
-		CauseOverrun:  contractsv1.ContextFabricBudgetOverrunItems,
-		CauseObserved: true,
-		Served:        served,
-		Declared:      declared,
-	})
-}
-
-// draftForCutCohort is the draft as the cut cohort's assembly receives it:
-// the result-level evidence refs only a cut member carried are removed, as the
-// model would not have listed them for a cohort without that member. Every
-// other site of the draft is untouched; none of them names a cut member.
-func draftForCutCohort(draft InvestigationResult, cut []CohortMember) InvestigationResult {
-	if len(draft.EvidenceRefIDs) == 0 || len(cut) == 0 {
-		return draft
-	}
-	only := map[string]bool{}
-	for _, member := range cut {
-		for _, ref := range member.EvidenceRefIDs {
-			only[ref] = true
-		}
-	}
-	probe := draft
-	probe.EvidenceRefIDs = nil
-	probe.Cohort = nil
-	elsewhere := contractsv1.ContextFabricEvidenceRefClosure(probe)
-	kept := make([]string, 0, len(draft.EvidenceRefIDs))
-	for _, ref := range draft.EvidenceRefIDs {
-		if _, stays := elsewhere[ref]; only[ref] && !stays {
-			continue
-		}
-		kept = append(kept, ref)
-	}
-	draft.EvidenceRefIDs = kept
-	return draft
-}
-
-// planMemberCut assembles the pass-1 draft over the cohort with the fewest
-// uncited members removed that fit the item budget. firstPass is the pending
-// of the pass whose document `result` is; params are that pass's params.
+// planMemberCut assesses the member cut and does not serve it.
+//
+// A served cut produces a new cohort, and every field of the document that
+// depends on the member list must come from one assembly over it. The seam for
+// that exists (synthesizeAndAssemble takes the pass-1 draft, narrowedInputOver
+// narrows the graph, copyResultDeep keeps the draft intact), and review found
+// the fields the SYNTHESIZER derived from the graph input and left in the draft
+// one at a time (a census served count, then its raw text and degraded reason):
+// that class is not closed, so the served cut is deferred. What this does is the
+// part that is already exact and useful: it says, on the trace, that an items
+// overrun with the retry unavailable had members it could have left out, how
+// many, and in which order.
 func (e *Engine) planMemberCut(
-	ctx context.Context,
-	principal storage.Principal,
-	plan *AnswerPlan,
 	params synthesisAssemblyParams,
 	firstPass assemblyTelemetry,
 	result InvestigationResult,
 	budget ResponseBudget,
 	measured MeasuredAttempt,
-) (memberCutAttempt, error) {
+) memberCutAttempt {
 	attempt := memberCutAttempt{Measured: measured}
 	if measured.Overrun != contractsv1.ContextFabricBudgetOverrunItems || budget.MaxItems <= 0 {
 		attempt.Declined = MemberCutNotItemsAxis
-		return attempt, nil
+		return attempt
 	}
 	graphCohort := params.Graph.Cohort
 	if params.WorkItemCensus != nil || graphCohort == nil || len(graphCohort.Groups) > 0 || len(graphCohort.Members) < 2 ||
 		result.Cohort == nil || len(result.Cohort.Members) != len(graphCohort.Members) {
 		attempt.Declined = MemberCutNoCohort
-		return attempt, nil
+		return attempt
 	}
 	if firstPass.Draft == nil || clientSynthesisRequested(params.Request) {
 		attempt.Declined = MemberCutNoDraft
-		return attempt, nil
-	}
-	if firstPass.Draft.Cohort != nil {
-		attempt.Declined = MemberCutDraftCarriesCohort
-		return attempt, nil
+		return attempt
 	}
 	basis, order, ok := memberCutOrder(result, firstPass.Draft)
 	if !ok {
 		attempt.Declined = MemberCutNoStatedOrder
-		return attempt, nil
+		return attempt
 	}
-	listed := len(graphCohort.Members)
-	attempt.Listed, attempt.Basis, attempt.Uncited = listed, basis, len(order)
-	if len(order) == 0 {
-		attempt.Declined = MemberCutNothingCuttable
-		return attempt, nil
-	}
-	over := measured.Measurement.Items.Budgeted() - budget.MaxItems
-	maxCut := min(len(order), listed-1)
-	if over <= 0 {
-		attempt.Declined = MemberCutNotItemsAxis
-		return attempt, nil
-	}
-	if over > maxCut {
-		if over >= listed && len(order) >= listed {
-			attempt.Declined = MemberCutWouldRemoveAll
-		} else {
-			attempt.Declined = MemberCutInsufficient
-		}
-		return attempt, nil
-	}
-	// The plan's member chain runs from the population retrieval found to the
-	// members served and every step in it states its own cause. When the list
-	// this cut starts from was already shorter than that population (a
-	// caller's member limit cut it before planning, a loss no step records),
-	// a step recorded here would be read as the cause of the whole drop.
-	// A plan already holding its maximum of narrowing steps records none, and
-	// the event must not say it did.
-	attempt.StepKept = params.Graph.CohortPopulation <= listed && len(plan.Narrowing) < contractsv1.ContextFabricPlanNarrowingMaxCount
-
-	// assemble builds the document for a cut of n members: the cut graph, the
-	// draft for it, one assembly pass, the lever's own disclosure, finalization.
-	assemble := func(n int, pending *assemblyTelemetry) (InvestigationResult, ItemAllocation, assemblyTelemetry, MembershipCardinality, synthesisAssemblyParams, narrowedInput, AnswerPlan, error) {
-		drop := map[int]bool{}
-		cutMembers := make([]CohortMember, 0, n)
-		for _, index := range order[:n] {
-			drop[index] = true
-			cutMembers = append(cutMembers, graphCohort.Members[index])
-		}
-		kept := make([]CohortMember, 0, listed-n)
-		for index, member := range graphCohort.Members {
-			if !drop[index] {
-				kept = append(kept, member)
-			}
-		}
-		narrowed := narrowedInputOver(params, params.Graph, params.Facts, copyCohortForRetry(graphCohort), kept, listed, basis)
-		stepped := *plan
-		stepped.Narrowing = slices.Clone(plan.Narrowing)
-		if attempt.StepKept {
-			e.recordPlanNarrowingStep(&stepped, PlanNarrowing{
-				Stage:   contractsv1.ContextFabricPlanNarrowingAssembledResult,
-				Basis:   basis,
-				Before:  listed,
-				After:   len(kept),
-				Overrun: contractsv1.ContextFabricBudgetOverrunItems,
-			})
-		}
-		allocation := AllocateItems(stepped, groupCountOf(narrowed.Graph.Cohort), cohortMemberCount(narrowed.Graph.Cohort))
-		cutParams := params.forRetry(narrowed.Graph, narrowed.Facts, allocation)
-		cutParams.Plan = stepped
-		cutParams.CohortSignalCitations = narrowed.Citations
-		draft := draftForCutCohort(*firstPass.Draft, cutMembers)
-		// What the synthesizer derived from the graph input it was given is not
-		// regenerated by assembly either: the census served count it merged
-		// from the graph's coverage names the uncut list, and is restated here
-		// over the cut cohort by the same function the pass runs before
-		// synthesis.
-		draft.Coverage.Details = slices.Clone(draft.Coverage.Details)
-		correctKindCensusTruncatedServedCounts(draft.Coverage.Details, narrowed.Graph.Cohort)
-		cutParams.Draft = &draft
-		attempt.Passes++
-		assembled, consumed, assembledPending, cardinality, err := e.synthesizeAndAssemble(ctx, principal, cutParams)
-		if err != nil {
-			return InvestigationResult{}, ItemAllocation{}, assemblyTelemetry{}, MembershipCardinality{}, cutParams, narrowed, stepped, err
-		}
-		// The lever's own disclosure: one sentence naming the rule, one scope
-		// row, and partial. None of it is derived from the cohort.
-		if sentence, ok := contractsv1.ContextFabricMemberCutLimitation(n, listed, basis == contractsv1.ContextFabricNarrowingBasisAttentionRank); ok {
-			composed, displaced := appendBoundedLimitations(assembled.Limitations, []string{sentence})
-			assembled.Limitations = composed
-			assembled.LimitationsDisplaced += displaced
-		}
-		assembled.Coverage.Partial = true
-		if assembled.Status == InvestigationComplete {
-			assembled.Status = InvestigationPartial
-		}
-		target := &assembledPending
-		if pending == nil {
-			target = nil
-		}
-		assembled = e.finalizeResult(ctx, principal, assembled, stepped, params.Frame, narrowed.Facts, target, answerPassThird, cardinality)
-		// The scope row is appended AFTER finalization: the finalizer seeds the
-		// planning rows only into an empty set, so a row placed before it would
-		// suppress every derived row. It carries no requirement identity, so
-		// nothing re-derives or drops it, and the completeness block is
-		// derived again over the set that includes it.
-		assembled.Completeness.Outcomes = appendOutcomeRows(assembled.Completeness.Outcomes, memberCutOutcomeRow(listed-n, listed))
-		assembled.Completeness = ComputeAnswerCompleteness(assembled)
-		return assembled, consumed, assembledPending, cardinality, cutParams, narrowed, stepped, nil
-	}
-	fitsItems := func(n int) (bool, error) {
-		doc, consumed, _, _, _, _, _, err := assemble(n, nil)
-		if err != nil {
-			return false, err
-		}
-		got, err := e.measureAssembledAttempt(ctx, principal, "member_cut", consumed, doc, budget)
-		if err != nil {
-			return false, err
-		}
-		return got.Overrun != contractsv1.ContextFabricBudgetOverrunItems, nil
-	}
-	if ok, err := fitsItems(maxCut); err != nil {
-		if errors.Is(err, ErrItemAccounting) {
-			return attempt, err
-		}
-		attempt.Declined = MemberCutUnmeasurable
-		return attempt, nil
-	} else if !ok {
-		attempt.Declined = MemberCutInsufficient
-		return attempt, nil
-	}
-	low, high, best := over, maxCut, maxCut
-	for low <= high {
-		mid := low + (high-low)/2
-		ok, err := fitsItems(mid)
-		if err != nil {
-			attempt.Declined = MemberCutUnmeasurable
-			return attempt, nil
-		}
-		if ok {
-			best, high = mid, mid-1
-		} else {
-			low = mid + 1
-		}
-	}
-
-	doc, consumed, pending, cardinality, cutParams, narrowed, stepped, err := assemble(best, &assemblyTelemetry{})
-	if err != nil {
-		attempt.Declined = MemberCutUnmeasurable
-		return attempt, nil
-	}
-	got, err := e.measureAssembledAttempt(ctx, principal, "member_cut", consumed, doc, budget)
-	if err != nil {
-		if errors.Is(err, ErrItemAccounting) {
-			return attempt, err
-		}
-		attempt.Declined = MemberCutUnmeasurable
-		return attempt, nil
-	}
-	attempt.Measured, attempt.Kept = got, listed-best
-	// This pass is pass two of the investigation: its pending carries the
-	// first pass's observation-cover events, published as not served.
-	pending.RetryAttempted = firstPass.RetryAttempted
-	merged := make([]ReadRequirementObservationCoverEvent, 0, len(firstPass.ObservationCover)+len(pending.ObservationCover))
-	merged = append(merged, firstPass.ObservationCover...)
-	merged = append(merged, pending.ObservationCover...)
-	pending.ObservationCover = merged
-	if params.WorkItemCensus == nil {
-		ranked := narrowed.Ranked
-		pending.CohortRanked = &ranked
-	}
-
+	attempt.Listed, attempt.Basis, attempt.Uncited = len(graphCohort.Members), basis, len(order)
 	switch {
-	case got.Overrun == contractsv1.ContextFabricBudgetFits && got.CertifiedFit():
-		// The document was finalized once, in assemble, with this pass's
-		// pending telemetry: finalizing it again would append its observation
-		// cover events a second time.
-		if !servableLeverResult(doc) {
-			attempt.Declined = MemberCutInvalidResult
-			return attempt, nil
-		}
-		attempt.Result, attempt.Pending, attempt.Served = doc, pending, true
-	case got.Overrun == contractsv1.ContextFabricBudgetOverrunBytes:
-		// Items fit; bytes overrun the caller's target. The service ceiling
-		// decides, over the cut pass's own params, facts and cardinality.
-		served, ok, serveErr := e.serveAtServiceCeiling(ctx, principal, &stepped, cutParams, "member_cut", doc, doc, false, consumed, narrowed.Facts, &pending, answerPassThird, answerPassSecond, cardinality, budget, contractsv1.ContextFabricBudgetOverrunBytes)
-		if serveErr != nil {
-			return attempt, serveErr
-		}
-		if !ok {
-			attempt.Declined = MemberCutBytesRemain
-			return attempt, nil
-		}
-		if !servableLeverResult(served) {
-			attempt.Declined = MemberCutInvalidResult
-			return attempt, nil
-		}
-		attempt.Result, attempt.Pending, attempt.Served = served, pending, true
+	case len(order) == 0:
+		attempt.Declined = MemberCutNothingCuttable
 	default:
-		attempt.Declined = MemberCutInsufficient
-		return attempt, nil
+		attempt.Declined = MemberCutServedCutDeferred
 	}
-	// The decision that shaped the served answer's facts: which evidence the
-	// cut cohort kept.
-	e.recordFactRetention(ctx, principal, FactRetentionEvent{
-		Family: plan.Family, GroupKind: plan.GroupKind,
-		Stage:    contractsv1.ContextFabricPlanNarrowingAssembledResult,
-		Decision: narrowed.Retention,
-	})
-	// The step reaches the plan only for a document that is used.
-	if attempt.StepKept {
-		e.recordPlanNarrowingStep(plan, PlanNarrowing{
-			Stage:   contractsv1.ContextFabricPlanNarrowingAssembledResult,
-			Basis:   basis,
-			Before:  listed,
-			After:   attempt.Kept,
-			Overrun: contractsv1.ContextFabricBudgetOverrunItems,
-		})
-	}
-	return attempt, nil
+	return attempt
 }
 
-// recordMemberCut emits the one decision line of a member-cut application,
-// served or declined.
+// recordMemberCut emits the one decision line of a member-cut assessment.
 func (e *Engine) recordMemberCut(ctx context.Context, principal storage.Principal, plan *AnswerPlan, before MeasuredAttempt, attempt memberCutAttempt, budget ResponseBudget) {
 	if e.telemetry == nil || attempt.Declined == MemberCutNotItemsAxis {
 		return
 	}
 	e.telemetry.RecordMemberCut(ctx, principal, MemberCutEvent{
-		Family:        plan.Family,
-		Stage:         contractsv1.ContextFabricPlanNarrowingAssembledResult,
-		Pass:          answerPassFirst,
-		Overrun:       before.Overrun,
-		MaxItems:      budget.MaxItems,
-		ItemsBefore:   before.Measurement.Items.Budgeted(),
-		ItemsAfter:    attempt.Measured.Measurement.Items.Budgeted(),
-		Listed:        attempt.Listed,
-		Kept:          attempt.Kept,
-		Uncited:       attempt.Uncited,
-		Basis:         attempt.Basis,
-		ChainRecorded: attempt.StepKept && attempt.Served,
-		Passes:        attempt.Passes,
-		Served:        attempt.Served,
-		Declined:      attempt.Declined,
+		Family:      plan.Family,
+		Stage:       contractsv1.ContextFabricPlanNarrowingAssembledResult,
+		Pass:        answerPassFirst,
+		Overrun:     before.Overrun,
+		MaxItems:    budget.MaxItems,
+		ItemsBefore: before.Measurement.Items.Budgeted(),
+		Listed:      attempt.Listed,
+		Uncited:     attempt.Uncited,
+		Basis:       attempt.Basis,
+		Declined:    attempt.Declined,
 	})
 }

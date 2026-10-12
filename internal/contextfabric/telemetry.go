@@ -2745,15 +2745,9 @@ func (t SlogEngineTelemetry) RecordMemberCut(ctx context.Context, principal stor
 		"axis", string(event.Overrun),
 		"item_budget", SanitizeLogInt(int64(event.MaxItems)),
 		"items_before", event.ItemsBefore,
-		"items_after", event.ItemsAfter,
 		"listed", event.Listed,
-		"kept", event.Kept,
-		"members_cut", event.Listed - event.Kept,
 		"uncited", event.Uncited,
 		"basis", string(event.Basis),
-		"chain_recorded", event.ChainRecorded,
-		"assembly_passes", event.Passes,
-		"served", event.Served,
 		"declined", string(event.Declined),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)

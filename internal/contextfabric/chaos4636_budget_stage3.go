@@ -446,20 +446,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			e.recordPlanNarrowing(ctx, principal, event)
 			return trim.Result, firstPass, nil
 		}
-		// MEMBER CUT: the retry is the only other lever that removes members,
-		// and it was declined. The pass-1 draft is assembled again over the
-		// cohort with its uncited trailing members removed -- one assembly, no
-		// model call -- so the count, the claim, the sentence and every row
-		// come from the cut cohort rather than from a patched document.
+		// MEMBER CUT, assessed: the retry is the only other lever that removes
+		// members and it was declined. The assessment names, on the trace, the
+		// members the answer could have left out; the served cut is deferred
+		// (member_cut.go), so the refusal below still stands.
 		if overrun == contractsv1.ContextFabricBudgetOverrunItems && params.WorkItemCensus == nil && trim.Reduced.Status == "" {
-			memberCut, cutErr := e.planMemberCut(ctx, principal, plan, params, firstPass, result, budget, measured)
-			if cutErr != nil {
-				return InvestigationResult{}, firstPass, cutErr
-			}
+			memberCut := e.planMemberCut(params, firstPass, result, budget, measured)
 			e.recordMemberCut(ctx, principal, plan, measured, memberCut, budget)
-			if memberCut.Served {
-				return memberCut.Result, memberCut.Pending, nil
-			}
 		}
 		// The items cut left a document that fits the item ceiling and not
 		// the byte ceiling (items are reported first when both are over, so
