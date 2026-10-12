@@ -71,7 +71,7 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 	})
 	statements, peak := blockerStatementPeakMemory(t, ctx, direct)
 	if statements < 2 {
-		t.Fatalf("measurement did not happen: %d team blocker statements in system.query_log, want the roll-up and the totals at least", statements)
+		t.Fatalf("measurement did not happen: %d team blocker statements in system.query_log, want the roll-up and the totals at least; read error: %v: %s; recent server statements:\n%s", statements, err, readFailureCause(err), recentServerStatements(ctx, direct))
 	}
 	if peak >= blockerMemoryPeakCeiling {
 		t.Fatalf("team blocker statements peaked at %d bytes over %d unrelated work items, want under %d (a quarter of the 64 MiB statement cap)", peak, blockerMemoryFillerItems, blockerMemoryPeakCeiling)
@@ -99,11 +99,29 @@ func blockerStatementPeakMemory(t *testing.T, ctx context.Context, direct clickh
 		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 	}
 	if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage) FROM system.query_log
-WHERE type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+WHERE type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))`).Scan(&statements, &peak); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
 	return statements, peak
+}
+
+func recentServerStatements(ctx context.Context, direct clickhousedriver.Conn) string {
+	rows, err := direct.Query(ctx, `SELECT concat(toString(type), ' code=', toString(exception_code), ' memory=', toString(memory_usage), ' tables=', arrayStringConcat(tables, ','), ' || ', substring(exception, 1, 200), ' || ', substring(query, 1, 160))
+FROM system.query_log WHERE type != 'QueryStart' ORDER BY event_time_microseconds DESC LIMIT 8`)
+	if err != nil {
+		return "query_log unreadable: " + err.Error()
+	}
+	defer rows.Close()
+	var out strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			return out.String() + "scan: " + err.Error()
+		}
+		out.WriteString(line + "\n")
+	}
+	return out.String()
 }
 
 const blockerSiblingOrg = "8d2f6a19-3c4e-4b71-9e05-7a1c5b3d9f28"
