@@ -79,6 +79,9 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 		})
 		return statementMemorySince(t, ctx, direct, statementFilter{Table: "work_item_dependencies"}, mark), result, err
 	}
+	if _, _, err := read(); err != nil {
+		t.Fatalf("warm-up ReadFacts: %v: %s", err, readFailureCause(err))
+	}
 	small, smallResult, smallErr := read()
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
 SELECT concat('filler-more-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?)`,

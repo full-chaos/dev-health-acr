@@ -9,22 +9,16 @@ import (
 )
 
 // A statement whose cost must follow its own evidence, not the size of the
-// organization, is guarded twice. The slope guard is the property: the peak
-// memory of the statements, measured at two organization sizes, may not grow
-// by more than statementMemorySlope. The ceiling keeps each statement clear of
-// the work-item reader's 64 MiB per-statement memory cap.
+// organization, is guarded twice. The slope guard is the property: each
+// statement's peak memory, measured at two organization sizes, may not grow by
+// more than statementMemorySlope. Statements are matched by query_log's
+// normalized_query_hash, so a large statement cannot hide the growth of a
+// smaller one. The ceiling keeps each statement clear of the work-item
+// reader's 64 MiB per-statement memory cap.
 const (
 	statementMemorySlope   = 1.15
 	statementMemoryCeiling = uint64(56 << 20)
 )
-
-// statementMemory is what query_log holds for the finished or failed SELECTs
-// over one table logged after a mark: how many there were and their peak
-// memory_usage.
-type statementMemory struct {
-	statements uint64
-	peak       uint64
-}
 
 // statementFilter picks the guarded statements in query_log: every SELECT that
 // reads Table and, when QueryContains is set, whose text contains it (a
@@ -34,6 +28,10 @@ type statementFilter struct {
 	QueryContains string
 }
 
+// statementMemory is the peak memory_usage of each guarded statement (by
+// normalized_query_hash), finished or failed, logged after a mark.
+type statementMemory map[uint64]uint64
+
 func statementMemorySince(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, filter statementFilter, markMicros int64) statementMemory {
 	t.Helper()
 	if filter.Table == "" {
@@ -42,29 +40,50 @@ func statementMemorySince(t *testing.T, ctx context.Context, direct clickhousedr
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 	}
-	var m statementMemory
-	if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage) FROM system.query_log
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage) FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.', ?)) AND position(query, ?) > 0`, markMicros, filter.Table, filter.QueryContains).Scan(&m.statements, &m.peak); err != nil {
+  AND has(tables, concat(currentDatabase(), '.', ?)) AND position(query, ?) > 0
+GROUP BY normalized_query_hash`, markMicros, filter.Table, filter.QueryContains)
+	if err != nil {
 		t.Fatalf("read query_log: %v", err)
+	}
+	defer rows.Close()
+	m := statementMemory{}
+	for rows.Next() {
+		var hash, peak uint64
+		if err := rows.Scan(&hash, &peak); err != nil {
+			t.Fatalf("scan query_log: %v", err)
+		}
+		m[hash] = peak
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read query_log rows (measurement did not happen): %v", err)
 	}
 	return m
 }
 
 // assertStatementMemoryFollowsEvidence applies both guards to the statements
-// measured at a smaller and a larger organization. Each side must have logged
-// at least minStatements, or the measurement did not happen.
-func assertStatementMemoryFollowsEvidence(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, small, large statementMemory, minStatements uint64) {
+// measured at a smaller and a larger organization. Both sides must hold the
+// same statements, at least minStatements of them, or the measurement did not
+// happen. Run one unmeasured read before the smaller measurement: a cold
+// first read peaks higher and would mask growth.
+func assertStatementMemoryFollowsEvidence(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, small, large statementMemory, minStatements int) {
 	t.Helper()
-	if small.statements < minStatements || large.statements < minStatements {
-		t.Fatalf("%s: measurement did not happen: %d and %d statements logged, want at least %d each; recent server statements:\n%s", label, small.statements, large.statements, minStatements, recentServerStatements(ctx, direct))
+	if len(small) < minStatements || len(large) != len(small) {
+		t.Fatalf("%s: measurement did not happen: %d and %d distinct statements logged, want the same %d or more on both sides; recent server statements:\n%s", label, len(small), len(large), minStatements, recentServerStatements(ctx, direct))
 	}
-	if float64(large.peak) > statementMemorySlope*float64(small.peak) {
-		t.Errorf("%s: peak memory grew with the organization: %d bytes at the larger size, %d at the smaller, over the %.2fx slope", label, large.peak, small.peak, statementMemorySlope)
-	}
-	for _, m := range []statementMemory{small, large} {
-		if m.peak >= statementMemoryCeiling {
-			t.Errorf("%s: a statement peaked at %d bytes, want under %d (7/8 of the 64 MiB statement cap)", label, m.peak, statementMemoryCeiling)
+	for hash, smallPeak := range small {
+		largePeak, ok := large[hash]
+		if !ok {
+			t.Fatalf("%s: statement %d ran at the smaller size only; recent server statements:\n%s", label, hash, recentServerStatements(ctx, direct))
+		}
+		if float64(largePeak) > statementMemorySlope*float64(smallPeak) {
+			t.Errorf("%s: statement %d grew with the organization: peak %d bytes at the larger size, %d at the smaller, over the %.2fx slope", label, hash, largePeak, smallPeak, statementMemorySlope)
+		}
+		for _, peak := range []uint64{smallPeak, largePeak} {
+			if peak >= statementMemoryCeiling {
+				t.Errorf("%s: statement %d peaked at %d bytes, want under %d (7/8 of the 64 MiB statement cap)", label, hash, peak, statementMemoryCeiling)
+			}
 		}
 	}
 }
