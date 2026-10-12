@@ -206,6 +206,11 @@ test-race-split: test-race-shared test-race-isolated
 test-shuffle-random:
 	go test $(GOTEST_EXEC) -count=1 -race -shuffle=on -timeout $(GOTEST_TIMEOUT) $(GOTEST_PKGS)
 
+# The tool fetch is the only step retried (scripts/ci/retry.sh): a module proxy
+# reset is transient. The test run itself is never retried or rerun: a
+# deterministic failure would re-run the whole package suite per attempt, and
+# gotestsum --rerun-fails would overwrite -coverprofile with the rerun's.
+# scripts/ci/test-coverage-no-suite-retry.sh pins this.
 # test-coverage produces machine-readable CI artifacts: JUnit XML for test
 # results, Cobertura XML for coverage, and a gotestsum JSON stream for
 # failure analysis. gotestsum wraps a single `go test` invocation (forwarding
@@ -225,8 +230,9 @@ test-shuffle-random:
 # CI's `if: always()` upload was meant to catch it.
 test-coverage:
 	mkdir -p $(COVERAGE_DIR)
+	scripts/ci/retry.sh go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --version
 	status=0; \
-	scripts/ci/retry.sh go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --junitfile $(COVERAGE_JUNIT) --jsonfile $(COVERAGE_JSON) -- \
+	go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --junitfile $(COVERAGE_JUNIT) --jsonfile $(COVERAGE_JSON) -- \
 		$(GOTEST_EXEC) -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) -coverprofile=$(COVERAGE_PROFILE) $(GOTEST_PKGS) || status=$$?; \
 	if [ -f $(COVERAGE_PROFILE) ]; then \
 		scripts/ci/retry.sh go run github.com/boumenot/gocover-cobertura@$(GOCOVER_COBERTURA_VERSION) < $(COVERAGE_PROFILE) > $(COVERAGE_COBERTURA) || status=$$?; \

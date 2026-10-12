@@ -906,7 +906,13 @@ import (
 // reader), each with the link tier; a pull request cohort grouped by project
 // is grouped on those rows where it was served ungrouped. A candidate saved
 // under v181 holds the ungrouped answer.
-const QueryVersion = "devhealthfacts.clickhouse.v182"
+//
+// v182 -> v183: with the anchor binding follow-up switch on (beside the carry
+// switch), a continuation whose question changed is admitted onto a bound
+// binding as a follow-up; when its own resolution commits nothing, it asks
+// which subject was meant with the earlier answer's subject offered first,
+// where it used to end without a match. A stored answer can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v183"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -41,7 +41,8 @@ func bindingCarryTurns(t *testing.T, carryOn bool, edit func(*staticResultStore)
 // a store edit, a request mutation, and a rig hook run just before the
 // follow-up.
 type carryTurnOptions struct {
-	carryOn, pendingOn bool
+	carryOn, pendingOn  bool
+	followUpOn, countOn bool
 	// unwindowed asks both turns without a window, so no window is carried
 	// into the follow-up.
 	unwindowed bool
@@ -60,6 +61,7 @@ func bindingCarryTurnsWith(t *testing.T, o carryTurnOptions, followUpResponse ne
 	}
 	rig.verify()
 	rig.engine.anchorBindingCarryEnabled, rig.engine.anchorBindingPendingCarryEnabled = o.carryOn, o.pendingOn
+	rig.engine.anchorBindingFollowUpEnabled, rig.engine.anchorBindingCountEnabled = o.followUpOn, o.countOn
 	if o.edit != nil {
 		o.edit(rig.store)
 	}

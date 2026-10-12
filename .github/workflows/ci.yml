@@ -163,6 +163,8 @@ jobs:
       # a real registry.
       - name: Verify the mirror-image inspect retry stops on success and gives up after its budget
         run: scripts/ci/test-verify-mirrored-images-retry.sh
+      - name: Verify test-coverage never retries or reruns the test run
+        run: scripts/ci/test-coverage-no-suite-retry.sh
       # A Go file whose NAME ends in a GOOS/GOARCH token is compiled only on
       # that platform, whether or not the author meant it, and nothing reports
       # it: the file simply moves into IgnoredGoFiles and `go build`/`go test`
