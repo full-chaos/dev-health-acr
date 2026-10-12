@@ -82,10 +82,10 @@ func lastSynthesisSubjects(t *testing.T) []string {
 	return ids
 }
 
-// runAnchorRetentionTurn drives stage 2 (MaxItems below the grouped headroom)
+// runAnchorRetentionTurn drives stage 2 (a member cap of one narrows the grouped cohort)
 // with one committed repository anchor, and returns the subjects the FINAL
 // synthesis pass received.
-func runAnchorRetentionTurn(t *testing.T, maxItems int) []string {
+func runAnchorRetentionTurn(t *testing.T, maxItems, maxMembers int) []string {
 	t.Helper()
 	anchor := SubjectRef{Kind: SubjectRepository, CanonicalID: "repo_anchor", Label: "anchor"}
 	groupReadSynthesisPasses = nil
@@ -96,6 +96,7 @@ func runAnchorRetentionTurn(t *testing.T, maxItems int) []string {
 			config.graph.resolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{anchor}}
 			config.graph.bases = provenCommitBases(anchor)
 		})
+	request.Options.MaxCohortMembers = maxMembers
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
@@ -108,7 +109,7 @@ func runAnchorRetentionTurn(t *testing.T, maxItems int) []string {
 //
 // NOT t.Parallel(): it reads the package-level synthesis capture.
 func TestACommittedAnchorSurvivesGroupedNarrowing(t *testing.T) {
-	subjects := runAnchorRetentionTurn(t, 6)
+	subjects := runAnchorRetentionTurn(t, 6, 1)
 	t.Logf("final synthesis fact subjects: %v", subjects)
 	// The narrowing must be REAL, or the anchor survives for the wrong reason.
 	if containsString(subjects, "project/project_b") && containsString(subjects, "project/project_d") &&
@@ -127,7 +128,7 @@ func TestACommittedAnchorSurvivesGroupedNarrowing(t *testing.T) {
 //
 // NOT t.Parallel(): it reads the package-level synthesis capture.
 func TestACommittedAnchorSurvivesWithoutNarrowing(t *testing.T) {
-	subjects := runAnchorRetentionTurn(t, 40)
+	subjects := runAnchorRetentionTurn(t, 40, 20)
 	t.Logf("final synthesis fact subjects: %v", subjects)
 	for _, want := range []string{"project/project_a", "project/project_b", "project/project_c", "project/project_d", "repository/repo_anchor"} {
 		if !containsString(subjects, want) {
@@ -344,6 +345,7 @@ func TestTheRetentionLineNamesTheCommittedAnchors(t *testing.T) {
 			config.graph.resolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{repo, doc, named}}
 			config.graph.bases = provenCommitBases(repo, doc, named)
 		})
+	request.Options.MaxCohortMembers = 1
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}

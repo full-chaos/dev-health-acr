@@ -72,7 +72,7 @@ var cohortRankingFormulaKinds = []FactKind{
 	FactHealth, FactWorkload, FactReadiness, FactOperationalDeficiencies, FactInvestment,
 }
 
-// planSynthesisHeadroom is the item allowance stage 2 holds back for what
+// planSynthesisHeadroomCap is the most items stage 2 holds back for what
 // SYNTHESIS WILL ADD -- drivers, remaining work, readiness gaps, conflicts
 // and claimed facts. Those are the terms the item budget charges, and none of
 // them exists before synthesis has run, which is the whole reason stage 2
@@ -85,7 +85,7 @@ var cohortRankingFormulaKinds = []FactKind{
 // measurement rather than letting anyone pick it in advance. If the measured
 // value differs, THIS TABLE is what moves, and the narrowing telemetry is
 // what says by how much.
-func planSynthesisHeadroom(profile PlanBudgetProfile) int {
+func planSynthesisHeadroomCap(profile PlanBudgetProfile) int {
 	switch profile {
 	case PlanBudgetSingleSubject:
 		return 12
@@ -102,6 +102,28 @@ func planSynthesisHeadroom(profile PlanBudgetProfile) int {
 	// PlanBudgetUnbounded and any future profile reserve nothing. Reserving
 	// a guess would narrow an answer that had no need to narrow.
 	return 0
+}
+
+// planSynthesisMemberFloor is the member allowance the headroom rule never
+// takes below, while the budget affords it: the reserve stops growing with
+// the profile cap once the item budget is down to this many members plus the
+// cap, so a small budget keeps serving members instead of reserving them away.
+const planSynthesisMemberFloor = 10
+
+// planSynthesisHeadroom is the item allowance stage 2 holds back for what
+// synthesis adds, as a function of the budget it is held back from:
+// clamp(MaxItems - planSynthesisMemberFloor, 1, cap). At or above
+// MaxItems = cap + planSynthesisMemberFloor it is the profile's cap exactly,
+// so the default ceiling and every larger one plan as they always did; below
+// it the reserve shrinks with the budget, so the member allowance
+// (MaxItems - headroom) stays at the floor instead of collapsing to one.
+// A budget not stated (MaxItems <= 0) reserves the cap, as before.
+func planSynthesisHeadroom(profile PlanBudgetProfile, maxItems int) int {
+	ceiling := planSynthesisHeadroomCap(profile)
+	if ceiling == 0 || maxItems <= 0 {
+		return ceiling
+	}
+	return min(ceiling, max(1, maxItems-planSynthesisMemberFloor))
 }
 
 // PredictedAnswerItems is what the PLAN ITSELF budgeted a cohort of this size
@@ -358,7 +380,7 @@ const flatCohortListingMemberCap = 100
 
 // planBudget derives the plan's ceiling and its stage-1 member clamp.
 func planBudget(profile PlanBudgetProfile, budget ResponseBudget, maxCohortMembers int, listing bool) AnswerPlanBudget {
-	headroom := planSynthesisHeadroom(profile)
+	headroom := planSynthesisHeadroom(profile, budget.MaxItems)
 	planned := AnswerPlanBudget{
 		MaxItems:           budget.MaxItems,
 		MaxSerializedBytes: budget.MaxSerializedBytes,

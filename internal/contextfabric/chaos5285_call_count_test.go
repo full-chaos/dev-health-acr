@@ -57,6 +57,7 @@ func TestTheAdmittedGroupedSingleSynthesisPathMakesExactlyTwoFactServiceCalls(t 
 	// A budget too small for the first answer forces the one bounded retry.
 	options := EngineOptions{MaxItems: 6, SynthesisDeadlineReserve: time.Second}
 	engine, request := groupReadEngineFixtureFull(t, &recordingTelemetry{}, recorder, members, nil, SubjectProject, &options, &synthesisCalls)
+	request.Options.MaxCohortMembers = 1
 
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)

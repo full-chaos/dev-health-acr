@@ -94,8 +94,8 @@ func TestTheRetentionDecisionReachesTheConfiguredLogger(t *testing.T) {
 		bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
 		return bundle
 	}}
-	// Below the reserve, so the allowance clamps and stage 2 narrows -- which
-	// is what makes a retention pass run at all.
+	// A member cap of one, so stage 2 narrows -- which is what makes a
+	// retention pass run at all.
 	options := EngineOptions{MaxItems: 6}
 	members := []CohortMember{}
 	for index, id := range []string{"project_a", "project_b", "project_c", "project_d"} {
@@ -106,6 +106,7 @@ func TestTheRetentionDecisionReachesTheConfiguredLogger(t *testing.T) {
 		})
 	}
 	engine, request := groupReadEngineFixtureFull(t, logs.telemetry, recorder, members, nil, SubjectProject, &options, nil)
+	request.Options.MaxCohortMembers = 1
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
