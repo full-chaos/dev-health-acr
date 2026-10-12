@@ -134,3 +134,18 @@ func ContextFabricDisplayString(field, value string) (text string, ok bool) {
 }
 
 var contextFabricLongDecimal = regexp.MustCompile(`\b\d+\.\d+\b`)
+
+var contextFabricCohortSignalNouns = map[string]string{
+	"investment_mix":                    "investment mix",
+	"health.compounding_risk":           "health risk",
+	"operational_deficiencies.severity": "operational deficiencies",
+	"readiness.coverage_gap":            "readiness gap",
+	"workload.forecast_pressure":        "workload pressure",
+}
+
+// ContextFabricCohortSignalNoun is the display noun of a cohort ranking
+// signal; ok is false for a signal outside the vocabulary.
+func ContextFabricCohortSignalNoun(signal string) (string, bool) {
+	noun, ok := contextFabricCohortSignalNouns[signal]
+	return noun, ok
+}

@@ -42,13 +42,11 @@ var cohortSignalDriverCategory = map[string]contractsv1.ContextFabricDriverCateg
 
 // cohortSignalDisplayName is narration-prose ONLY (Title/Summary wording),
 // never a wire value or a closed-vocabulary field -- a cosmetic label, not
-// a citation.
-var cohortSignalDisplayName = map[string]string{
-	RankingSignalInvestmentMix:      "investment mix",
-	RankingSignalHealthRisk:         "health risk",
-	RankingSignalDeficiencySeverity: "operational deficiencies",
-	RankingSignalReadinessGap:       "readiness gap",
-	RankingSignalWorkloadPressure:   "workload pressure",
+// a citation. The table is contractsv1.ContextFabricCohortSignalNoun, shared
+// with the markdown view.
+func cohortSignalDisplayName(signal string) string {
+	noun, _ := contractsv1.ContextFabricCohortSignalNoun(signal)
+	return noun
 }
 
 // narrateCohortDriverJudgments builds the §5a narrated ContextFabricDriverJudgment
@@ -563,7 +561,7 @@ func trimToRunes(value string, limit int) string {
 // elision marker.
 func cohortDriverJudgmentTitle(member CohortMember, driver CohortMemberDriver) string {
 	return truncateAtSentenceBoundary(
-		fmt.Sprintf("%s: %s", member.Subject.Label, cohortSignalDisplayName[driver.Signal]),
+		fmt.Sprintf("%s: %s", member.Subject.Label, cohortSignalDisplayName(driver.Signal)),
 		contractsv1.ContextFabricDriverTitleMaxLength,
 	)
 }
@@ -585,7 +583,7 @@ func cohortDriverJudgmentSummary(member CohortMember, driver CohortMemberDriver)
 	}
 	return fmt.Sprintf(
 		"%s (weight %.0f, value %.2f) contributed %.1f of %s's %s attention points.",
-		cohortSignalDisplayName[driver.Signal], driver.Weight, driver.Value, driver.WeightContributed, member.Subject.Label, scoreText,
+		cohortSignalDisplayName(driver.Signal), driver.Weight, driver.Value, driver.WeightContributed, member.Subject.Label, scoreText,
 	)
 }
 
@@ -733,11 +731,4 @@ func recomposeCohortAnswerNarrative(status InvestigationStatus, resolution Subje
 	directJudgment = truncateAtSentenceBoundary(sentence, directJudgmentMaxLength)
 	deterministicAnswer = truncateAtSentenceBoundary(sentence, deterministicAnswerMaxLength)
 	return directJudgment, deterministicAnswer
-}
-
-// CohortSignalDisplayName is the display noun of a cohort ranking signal; ok
-// is false for a signal outside the vocabulary.
-func CohortSignalDisplayName(signal string) (string, bool) {
-	name, ok := cohortSignalDisplayName[signal]
-	return name, ok
 }

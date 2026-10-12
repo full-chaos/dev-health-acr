@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -539,7 +538,7 @@ func scalarValueText(value contractsv1.ContextFabricScalarValue) string {
 func scalarFieldText(field string, value contractsv1.ContextFabricScalarValue) (text string, shown bool) {
 	if value.String != nil {
 		if strings.HasSuffix(field, "_signal") {
-			if name, ok := contextfabric.CohortSignalDisplayName(*value.String); ok {
+			if name, ok := contractsv1.ContextFabricCohortSignalNoun(*value.String); ok {
 				return name, true
 			}
 		}
