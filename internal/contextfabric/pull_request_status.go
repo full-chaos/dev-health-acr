@@ -82,7 +82,6 @@ type PullRequestReviewRow struct {
 // The rule is per pull request, not per reviewer: the review rows the graph
 // holds carry no reviewer.
 func PullRequestStatusMatches(value, state string, reviews []PullRequestReviewRow) bool {
-	state = strings.ToLower(strings.TrimSpace(state))
 	switch value {
 	case PullRequestStatusOpen, PullRequestStatusMerged, PullRequestStatusClosed:
 		return state == value

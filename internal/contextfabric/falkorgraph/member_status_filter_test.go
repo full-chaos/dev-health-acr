@@ -230,8 +230,15 @@ func TestUnqualifiedProjectQuestionRecordsNoStatusFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := servedMemberIDs(result); len(got) != len(projectStatusFixtures) {
-		t.Fatalf("served %d projects, want all %d", len(got), len(projectStatusFixtures))
+	const memberCap = 10
+	if len(projectStatusFixtures) <= memberCap {
+		t.Fatalf("the fixture holds %d projects, within the member cap %d: it no longer shows the cut", len(projectStatusFixtures), memberCap)
+	}
+	if got := servedMemberIDs(result); len(got) != memberCap {
+		t.Fatalf("served %d projects, want the member cap %d of the %d reached", len(got), memberCap, len(projectStatusFixtures))
+	}
+	if result.Cohort == nil || !result.Cohort.Truncated {
+		t.Fatalf("cohort = %+v, want a truncated set: the cap cut it", result.Cohort)
 	}
 	if len(telemetry.pullRequestStatusFilters) != 0 || result.MemberStatusOutsideSet.Count != 0 {
 		t.Fatalf("an unqualified question recorded a filter: %+v %+v", telemetry.pullRequestStatusFilters, result.MemberStatusOutsideSet)
