@@ -493,6 +493,9 @@ const (
 	// answerPassThird is the candidate-narrowing re-finalize that runs after
 	// a retry (answerPassSecond) still did not fit.
 	answerPassThird = 2
+	// answerPassDecisive is the decisive fit of the served document, which
+	// runs after every attempt above and names a lever applied there.
+	answerPassDecisive = 3
 )
 
 func (e *Engine) finalizeResult(
