@@ -24,9 +24,9 @@ import (
 // the acr fact registry's facts for them, with one coverage row per (kind,
 // subject). No model runs on this path (A1.7): the interpretation is the
 // client's. The seam is ReadFacts, called through FactReader, so the direct
-// read reads exactly what the engine reads, minus the scope expander (the
-// direct registry is built without one: derived subjects are not proved
-// authorized on this path, so none are derived).
+// read reads exactly what the engine reads, scope expansion included: a fact
+// on a derived subject is served only when the subject was derived from a
+// gate-admitted root (guardDerivedFacts), and names that root.
 
 // ContractVersion is the direct data contract family (design J.1).
 const ContractVersion = "acr-data.v1"
@@ -249,9 +249,13 @@ type ServedFact struct {
 	PopulationScopedFields []string `json:"population_scoped_fields,omitempty"`
 	// AttributionBasis names how an investment fact attributes effort
 	// (decision K10).
-	AttributionBasis string         `json:"attribution_basis,omitempty"`
-	Withheld         []WithheldItem `json:"withheld,omitempty"`
-	Provenance       Provenance     `json:"provenance"`
+	AttributionBasis string `json:"attribution_basis,omitempty"`
+	// ReachedFrom names the requested subjects a fact on a derived subject
+	// was reached from by scope expansion; empty on a requested subject's
+	// own fact.
+	ReachedFrom []ReachedFrom  `json:"reached_from,omitempty"`
+	Withheld    []WithheldItem `json:"withheld,omitempty"`
+	Provenance  Provenance     `json:"provenance"`
 }
 
 // ServedSubject is a fact's subject.
@@ -313,7 +317,7 @@ type NaturalKey struct {
 
 // CoverageRow is one (kind, subject) outcome.
 // KindStateScopeExpansionUnavailable: the kind's scope policy is configured
-// but scope expansion is not available on this read path.
+// but no scope expander is wired on this server.
 const KindStateScopeExpansionUnavailable = "scope_expansion_unavailable"
 
 // KindStateWindowUnsupported: the kind's scope policy is configured but does
@@ -396,13 +400,21 @@ type FactsReadRecord struct {
 	// stale, invalid or foreign_org (the read_relationships cursor
 	// vocabulary); empty when the read carried no units argument.
 	UnitsCursor string
-	Bytes       int
-	Latency     time.Duration
+	// Scope expansion: targets derived from admitted roots, facts served on
+	// them, facts withheld because their subject was neither an admitted
+	// root nor derived from one, and targets the expander dropped as not
+	// authorized for the caller.
+	DerivedTargets       int
+	DerivedFactsServed   int
+	DerivedFactsWithheld int
+	DerivedUnauthorized  int
+	Bytes                int
+	Latency              time.Duration
 }
 
 // NewFactsReader builds the tool core. gate is the root subject gate,
-// reader the gate-bound fact reader over the DIRECT registry (built with no
-// scope expander); its declarations come from that same registry.
+// reader the gate-bound fact reader over the direct fact source; its
+// declarations come from that same registry.
 func NewFactsReader(gate *SubjectGate, reader *FactReader, recorder FactsRecorder) *FactsReader {
 	return &FactsReader{
 		gate: gate, embedded: NewEmbeddedSubjectGate(gate), reader: reader,
@@ -531,6 +543,12 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 		}
 		return response, fmt.Errorf("%w: %w", ErrFactsUnavailable, err)
 	}
+	derived := newDerivedIndex(bundle.Scope, admitted.Subjects())
+	bundle.Facts, record.DerivedFactsWithheld = guardDerivedFacts(bundle.Facts, admitted.Subjects(), derived)
+	record.DerivedUnauthorized = derived.unauthorized
+	for _, byTarget := range derived.targets {
+		record.DerivedTargets += len(byTarget)
+	}
 	gated, report, err := r.embedded.Filter(ctx, principal, admitted, bundle.Facts, capabilities)
 	if err != nil {
 		response.Status = StatusUnavailable
@@ -551,13 +569,14 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 			continue
 		}
 		served, withheld := serveFact(item, capabilities[item.Fact.Kind], plan)
+		served.ReachedFrom = derived.reachedFrom(item.Fact.Kind, item.Fact.Subject)
 		if len(withheld) > 0 {
 			key := string(item.Fact.Kind) + "\x00" + subjectKey(item.Fact.Subject)
 			withheldBySubject[key] = append(withheldBySubject[key], withheld...)
 		}
 		response.Facts = append(response.Facts, served)
 	}
-	response.Coverage = coverageRows(plan, admitted.Subjects(), bundle, capabilities, response.Facts, withheldBySubject)
+	response.Coverage = coverageRows(plan, admitted.Subjects(), bundle, capabilities, response.Facts, withheldBySubject, derived)
 	if plan.units != nil {
 		noteUnitsCoverage(response.Coverage, response.Facts, unitsNotVisible)
 	}
@@ -590,6 +609,11 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 	// Counted AFTER the budget: a fact the budget withheld served no rows
 	// (codex r1 P1).
 	record.FactsReturned = len(response.Facts)
+	for _, fact := range response.Facts {
+		if len(fact.ReachedFrom) > 0 {
+			record.DerivedFactsServed++
+		}
+	}
 	for _, fact := range response.Facts {
 		for _, table := range fact.Tables {
 			record.RowsReturned += len(table.Rows)
@@ -1033,7 +1057,7 @@ func naturalKeys(ids []string) []NaturalKey {
 }
 
 // coverageRows builds one row per (kind, admitted subject) from the ledger.
-func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle contextfabric.CanonicalFactBundle, capabilities map[contextfabric.FactKind]contextfabric.FactCapability, facts []ServedFact, withheld map[string][]string) []CoverageRow {
+func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle contextfabric.CanonicalFactBundle, capabilities map[contextfabric.FactKind]contextfabric.FactCapability, facts []ServedFact, withheld map[string][]string, derived derivedIndex) []CoverageRow {
 	served := map[string]bool{}
 	for _, fact := range facts {
 		served[fact.Kind+"\x00"+fact.Subject.Kind+"\x00"+fact.Subject.CanonicalID] = true
@@ -1049,8 +1073,8 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 			switch {
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind) && recorded && outcome.Branch == "scope_gap":
 				// The kind could be reached only through scope expansion,
-				// which the direct path does not run: disclosed, not
-				// "not applicable".
+				// and the expansion delivered nothing readable: disclosed,
+				// not "not applicable".
 				row.Outcome, row.KindState, row.Reason = OutcomeUnavailable, string(outcome.State), outcome.Reason
 				if outcome.ScopeExpansionUnavailable {
 					row.KindState = KindStateScopeExpansionUnavailable
@@ -1059,8 +1083,15 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 					row.KindState = KindStateWindowUnsupported
 				}
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind):
-				row.Outcome = OutcomeNotApplicable
-				row.Reason = "this fact kind does not describe " + subjectKindPlural(subject.Kind)
+				targets, servedTargets, expansion, expanded := derived.derivedCoverage(kind, subject, served)
+				if !expanded {
+					row.Outcome = OutcomeNotApplicable
+					row.Reason = "this fact kind does not describe " + subjectKindPlural(subject.Kind)
+					break
+				}
+				row.KindState = string(outcome.State)
+				row.Reason = derivedReason(targets, servedTargets, expansion)
+				row.Outcome = derivedOutcome(outcome, targets, servedTargets, expansion)
 			case !recorded:
 				// A planned kind with no ledger entry is a registry defect;
 				// say unknown loudly rather than claim a state.
@@ -1071,11 +1102,50 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 					row.ProviderState = state
 				}
 				row.Outcome = subjectOutcome(outcome, key, served[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID], row.ProviderState, subject, capability)
+				if targets, servedTargets, expansion, expanded := derived.derivedCoverage(kind, subject, served); expanded && (targets > 0 || expansionCut(expansion.outcome)) {
+					row.Reason = joinReason(row.Reason, derivedReason(targets, servedTargets, expansion))
+					if servedTargets > 0 && !servedOutcome(row.Outcome) {
+						row.Outcome = derivedOutcome(outcome, targets, servedTargets, expansion)
+					}
+				}
 			}
 			rows = append(rows, row)
 		}
 	}
 	return rows
+}
+
+// derivedOutcome is a root's outcome when its facts were read on the targets
+// scope expansion derived from it.
+func derivedOutcome(outcome contextfabric.FactKindOutcome, targets, served int, expansion derivedExpansion) string {
+	switch outcome.Branch {
+	case "unconfigured", "scope_gap", "failed", "rejected":
+		return OutcomeUnavailable
+	}
+	switch {
+	case served > 0 && outcome.State == contextfabric.SourceStale:
+		return OutcomeStale
+	case served > 0 && (outcome.State == contextfabric.SourceTruncated || expansionCut(expansion.outcome)):
+		return OutcomeTruncated
+	case served > 0:
+		return OutcomeFactServed
+	case targets == 0 && expansionCut(expansion.outcome):
+		return OutcomeUnavailable
+	}
+	switch outcome.State {
+	case contextfabric.SourceAvailable, contextfabric.SourceNoData, contextfabric.SourceStale, contextfabric.SourceTruncated:
+		return OutcomeReadNoFact
+	default:
+		return OutcomeUnavailable
+	}
+}
+
+func servedOutcome(outcome string) bool {
+	switch outcome {
+	case OutcomeFactServed, OutcomeStale, OutcomeTruncated, OutcomeMeasuredZero:
+		return true
+	}
+	return false
 }
 
 func subjectOutcome(outcome contextfabric.FactKindOutcome, key string, served bool, providerState string, subject contextfabric.SubjectRef, capability contextfabric.FactCapability) string {
@@ -1173,9 +1243,36 @@ func applyBudget(response *FactsResponse, maxBytes int) *Truncation {
 				row.Outcome = OutcomeWithheldBudget
 			}
 		}
+		for _, root := range dropped.ReachedFrom {
+			if reachedFactServed(response.Facts, dropped.Kind, root) {
+				continue
+			}
+			for index := range response.Coverage {
+				row := &response.Coverage[index]
+				if row.Kind == dropped.Kind && row.Subject.Kind == root.Kind && row.Subject.CanonicalID == root.CanonicalID && servedOutcome(row.Outcome) {
+					row.Outcome = OutcomeWithheldBudget
+				}
+			}
+		}
 	}
 	truncation.CoverageOverBudget = size() > maxBytes
 	return truncation
+}
+
+// reachedFactServed reports whether a served fact of kind still names root in
+// its reached_from.
+func reachedFactServed(facts []ServedFact, kind string, root ReachedFrom) bool {
+	for _, fact := range facts {
+		if fact.Kind != kind {
+			continue
+		}
+		for _, reach := range fact.ReachedFrom {
+			if reach.Kind == root.Kind && reach.CanonicalID == root.CanonicalID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func untrustedFields(facts []ServedFact) []string {
