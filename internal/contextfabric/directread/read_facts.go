@@ -1107,7 +1107,7 @@ func subjectOutcome(outcome contextfabric.FactKindOutcome, key string, served bo
 	}
 	switch {
 	case providerState != "":
-		return providerState
+		return providerStateOutcome(providerState)
 	case served && outcome.State == contextfabric.SourceStale:
 		return OutcomeStale
 	case served && outcome.State == contextfabric.SourceTruncated:
@@ -1125,6 +1125,23 @@ func subjectOutcome(outcome contextfabric.FactKindOutcome, key string, served bo
 		return OutcomeNotApplicable
 	default:
 		return OutcomeUnavailable
+	}
+}
+
+// providerStateOutcome maps a provider's per-subject state onto the closed
+// coverage vocabulary; the exact state stays in CoverageRow.ProviderState.
+func providerStateOutcome(state string) string {
+	switch state {
+	case "fired":
+		return OutcomeFactServed
+	case "measured_zero":
+		return OutcomeMeasuredZero
+	case "stale":
+		return OutcomeStale
+	case "withheld_capped_read":
+		return OutcomeTruncated
+	default:
+		return OutcomeReadNoFact
 	}
 }
 
