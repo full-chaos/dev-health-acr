@@ -29,13 +29,25 @@ func ContextFabricFactFieldNoun(field string) string {
 	return strings.ReplaceAll(field, "_", " ")
 }
 
+// ContextFabricDisplayNumberUnavailable is what prose says for a number that
+// is not a finite value; the raw value stays in the structured fields.
+const ContextFabricDisplayNumberUnavailable = "not available"
+
 // ContextFabricDisplayNumber renders a number for prose: a whole value as an
-// integer, any other value to two decimals.
+// integer, any other value to two decimals. NaN and infinities never print as
+// numbers, and a value that rounds to zero prints without a sign.
 func ContextFabricDisplayNumber(v float64) string {
-	if v == math.Trunc(v) && math.Abs(v) < 1e15 {
-		return strconv.FormatFloat(v, 'f', 0, 64)
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return ContextFabricDisplayNumberUnavailable
 	}
-	return strconv.FormatFloat(v, 'f', 2, 64)
+	if v == math.Trunc(v) && math.Abs(v) < 1e15 {
+		return strconv.FormatFloat(v+0, 'f', 0, 64)
+	}
+	text := strconv.FormatFloat(v, 'f', 2, 64)
+	if text == "-0.00" {
+		return "0.00"
+	}
+	return text
 }
 
 // ContextFabricDisplayString renders a string fact value for prose: a known
