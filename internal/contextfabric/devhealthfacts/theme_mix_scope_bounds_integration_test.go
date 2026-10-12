@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // The remembered membership scope is bounded at 100,000 work units: a run at
@@ -121,7 +122,12 @@ func TestThemeMixScopeAtAndAboveTheBoundServeTheSameMixAgainstRealClickHouse(t *
 // fails a truncated read never fires.
 func TestTeamThemeMixOver500RepositoriesFillsTheRowCeilingOfOneStatementAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newScopedCHAOS7257Client(t, nil)
+	// The hosted client runs max_result_rows far above the library default of
+	// 1000; the statement's 1501-row ceiling is read under that production cap.
+	query, direct := newScopedCHAOS7257Client(t, func(o *runtimeclickhouse.Options) {
+		rows := uint(100000)
+		o.MaxResultRows = &rows
+	})
 	createCHAOS7257Tables(t, ctx, direct)
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	const orgID = "org-ceiling"
