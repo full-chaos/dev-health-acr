@@ -846,7 +846,7 @@ import (
 // (several committed subjects of the anchor kind and no anchor term matched
 // one, or none committed at that kind) is a clarification, not a generic
 // cohort. An answer saved under v171 for such a question holds the cohort.
-const QueryVersion = "devhealthfacts.clickhouse.v172"
+const QueryVersion = "devhealthfacts.clickhouse.v173"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
