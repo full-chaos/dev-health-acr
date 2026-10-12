@@ -3411,6 +3411,10 @@ var AnchorBindingTransition = Event{
 		// that point and on a reuse serve. What it acquired follows, in the same
 		// form as the parent's.
 		{Key: "freshness_acquisition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("freshness_acquisition")},
+		// Whether the binding's anchor kind (a redeemed anchor receipt, else an
+		// admitted carried binding) replaced the model's on the reading every
+		// stage read this turn; switch_off while the count switch is off.
+		{Key: "bound_anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("bound_anchor_kind")},
 		// What the binding carried into this turn's resolution: with the carry
 		// switch on only an admitted binding injects its identity, and a
 		// refused or absent one injects nothing; switch_off while the switch is

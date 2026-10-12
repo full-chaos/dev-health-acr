@@ -27,6 +27,9 @@ type needTurnResponse struct {
 	resolution SubjectResolution
 	material   StructureOfferMaterial
 	bases      CommitBasisSet
+	// context, when set, is what DiscoverContext returns for this turn; the
+	// zero value returns an empty graph context.
+	context *GraphContext
 	// err, when set, is what ResolveSubjects itself reports for this turn --
 	// e.g. a wrapped ErrGraphNotProjected -- instead of the scripted
 	// resolution succeeding. The zero value (nil) is every existing
@@ -57,6 +60,9 @@ func (g *needTurnGraph) ResolveSubjects(_ context.Context, _ storage.Principal, 
 }
 
 func (g *needTurnGraph) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
+	if g.response.context != nil {
+		return *g.response.context, nil
+	}
 	return emptyGraphContext(), nil
 }
 

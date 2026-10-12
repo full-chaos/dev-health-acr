@@ -198,19 +198,19 @@ func TestBuildContextFabricInvestigator_wiresTheAnchorFreshnessReaderWithAnswerR
 	}
 }
 
-// TestBuildContextFabricInvestigator_wiresTheAnchorBindingCarrySwitch: the
+// TestBuildContextFabricInvestigator_wiresTheAnchorBindingCountSwitch: the
 // deployment switch reaches the engine, off by default.
-func TestBuildContextFabricInvestigator_wiresTheAnchorBindingCarrySwitch(t *testing.T) {
+func TestBuildContextFabricInvestigator_wiresTheAnchorBindingCountSwitch(t *testing.T) {
 	configureGraph(t)
 	for _, on := range []bool{false, true} {
 		request, postgres, clickhouse := investigatorBuildRequest(t)
-		request.config.AnchorBindingCarryEnabled = on
+		request.config.AnchorBindingCountEnabled = on
 		investigator, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 		if err != nil {
 			t.Fatalf("buildContextFabricInvestigator() = %v", err)
 		}
 		engine := investigator.(*contextfabric.Engine)
-		if got := reflect.ValueOf(engine).Elem().FieldByName("anchorBindingCarryEnabled").Bool(); got != on {
+		if got := reflect.ValueOf(engine).Elem().FieldByName("anchorBindingCountEnabled").Bool(); got != on {
 			t.Errorf("config %v reached the engine as %v", on, got)
 		}
 	}
@@ -513,5 +513,23 @@ func TestBuildContextFabricInvestigator_failsOnAMisconfiguredModelProvider(t *te
 	}
 	if investigator != nil {
 		t.Fatal("investigator was composed alongside an error")
+	}
+}
+
+// TestBuildContextFabricInvestigator_wiresTheAnchorBindingCarrySwitch: the
+// deployment switch reaches the engine, off by default.
+func TestBuildContextFabricInvestigator_wiresTheAnchorBindingCarrySwitch(t *testing.T) {
+	configureGraph(t)
+	for _, on := range []bool{false, true} {
+		request, postgres, clickhouse := investigatorBuildRequest(t)
+		request.config.AnchorBindingCarryEnabled = on
+		investigator, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+		if err != nil {
+			t.Fatalf("buildContextFabricInvestigator() = %v", err)
+		}
+		engine := investigator.(*contextfabric.Engine)
+		if got := reflect.ValueOf(engine).Elem().FieldByName("anchorBindingCarryEnabled").Bool(); got != on {
+			t.Errorf("config %v reached the engine as %v", on, got)
+		}
 	}
 }

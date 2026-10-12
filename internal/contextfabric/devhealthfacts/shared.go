@@ -859,12 +859,18 @@ import (
 // candidate saved under an earlier version holds the unexplained or degraded account and must not be
 // reused.
 //
-// v174 -> v175: with the anchor binding carry switch on, a same-question
+// v174 -> v175: with the anchor binding count switch on, a follow-up whose
+// admitted carried binding (or redeemed anchor receipt) names another anchor
+// kind than the model states counts, discovers and captures under the
+// binding's kind, so a stored count answer can differ.
+//
+// v175 -> v176: with the anchor binding carry switch on, a same-question
 // follow-up carries its anchor only from the admitted binding (never from the
-// confirmed-need ledger's engine-committed entry), and a carry its
-// resolution does not commit is offered first in the clarification, so a
-// stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v175"
+// confirmed-need ledger's engine-committed entry, which is withheld from
+// resolution when the binding does not carry it), and a carried anchor the
+// resolver offered but did not commit is listed first in the clarification,
+// so a stored answer can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v176"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

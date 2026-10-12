@@ -64,16 +64,30 @@ func TestQueryVersionMovedPastTheFlowNotTrackedMeasure(t *testing.T) {
 	}
 }
 
-// With the anchor binding carry switch on, a same-question follow-up carries
-// its anchor only from the admitted binding, so an answer stored before it
+// With the anchor binding count switch on, a follow-up counts, discovers and
+// captures under the binding's anchor kind, so an answer stored before it
 // (v174 and before) must not be reused.
-func TestQueryVersionMovedPastTheBindingCarry(t *testing.T) {
+func TestQueryVersionMovedPastTheBoundAnchorKind(t *testing.T) {
 	const prefix = "devhealthfacts.clickhouse.v"
 	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
 	if !ok {
 		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
 	}
 	if n, err := strconv.Atoi(version); err != nil || n < 175 {
-		t.Fatalf("QueryVersion = %q: an answer saved before the binding carry (v174 and before) must not be reused", devhealthfacts.QueryVersion)
+		t.Fatalf("QueryVersion = %q: an answer saved before the bound anchor kind (v174 and before) must not be reused", devhealthfacts.QueryVersion)
+	}
+}
+
+// With the anchor binding carry switch on, a same-question follow-up carries
+// its anchor only from the admitted binding, so an answer stored before it
+// (v175 and before) must not be reused.
+func TestQueryVersionMovedPastTheBindingCarry(t *testing.T) {
+	const prefix = "devhealthfacts.clickhouse.v"
+	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
+	if !ok {
+		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
+	}
+	if n, err := strconv.Atoi(version); err != nil || n < 176 {
+		t.Fatalf("QueryVersion = %q: an answer saved before the binding carry (v175 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }

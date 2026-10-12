@@ -68,6 +68,9 @@ func RunAnchorBindingScenarioForTest(t *testing.T, scenario string) (log []byte,
 		if step.verified {
 			rig.verify()
 		}
+		if step.countOn {
+			rig.engine.anchorBindingCountEnabled = true
+		}
 		if step.carryOn {
 			rig.engine.anchorBindingCarryEnabled = true
 		}
@@ -227,6 +230,22 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 			return rig.turn(t, continuingNeedTurn(needTurnRequest("request_vocab_adm_refused_two", true), one.result.ResultID), emptyProbeResponse()).result
 		}},
 	)
+	// Every bound-anchor-kind decision with the count switch on, through the
+	// real engine.
+	committedAlpha := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}}, bases: provenCommitBases(probeAlpha)}
+	firstOn := first
+	firstOn.countOn = true
+	scenarios = append(scenarios,
+		anchorSiteScenario{name: "bound kind none", run: anchorProbeScenario(firstOn)},
+		anchorSiteScenario{name: "bound kind agrees", run: anchorProbeScenario(firstOn, anchorProbeStep{request: followUp("request_vocab_kind_agrees", "", nil), anchorKind: SubjectRepository, verified: true, response: committedAlpha})},
+		anchorSiteScenario{name: "bound kind applied carried", run: anchorProbeScenario(firstOn, anchorProbeStep{request: followUp("request_vocab_kind_carried", "", nil), anchorKind: SubjectProject, verified: true, response: committedAlpha})},
+		// A held binding of the frame's own member kind: the frame refuses it
+		// as the anchor, so the model's kind stands.
+		anchorSiteScenario{name: "bound kind rejected by frame", run: anchorProbeScenario(firstOn,
+			edited("request_vocab_kind_member", func(b *AnchorBinding) {
+				b.Kind, b.CanonicalID, b.Witness = probeTeam.Kind, probeTeam.CanonicalID, []string{string(probeTeam.Kind) + ":" + probeTeam.CanonicalID}
+			}))},
+	)
 	// Every carry decision with the carry switch on, through the real engine.
 	recommitted := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}}, bases: provenCommitBases(probeAlpha)}
 	alphaOffered := offeringResponse(probeOffer("receipt_vocab_carry_beta", probeBeta), probeOffer("receipt_vocab_carry_alpha", probeAlpha))
@@ -378,6 +397,13 @@ func RunAnchorBindingVocabularyForTest(t *testing.T) []AnchorBindingVocabularyLo
 		}
 		_ = engine.saveResult(context.Background(), acceptancePrincipal(), BudgetAssertDecisive, InvestigationResult{ResultID: fmt.Sprintf("result_vocab_cancelled_%d", i)}, nil, nil, "", 0, "", semanticStateCapture{Write: SemanticStateOf(state)}.withAnchorShadow(cancelled))
 	}
+	// A redeemed anchor receipt's kind applied to the reading: the probe rig
+	// redeems no anchor receipt over a scoped frame, so the tracker is built
+	// as applyBoundAnchorKind leaves it (its decision table is
+	// TestApplyBoundAnchorKindDecisionTable) and saved through saveResult.
+	appliedReceipt := &anchorBindingTracker{parent: anchorBindingParent{Status: AnchorBindingParentNoReference}, evaluation: AnchorBindingEvaluationNotResolved, epoch: 7, boundKind: BoundAnchorKindAppliedReceipt,
+		receipt: &confirmedStructureMember{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: bindAlpha.Kind, AppliedValue: bindAlpha.ID}}
+	_ = engine.saveResult(context.Background(), acceptancePrincipal(), BudgetAssertDecisive, InvestigationResult{ResultID: "result_vocab_applied_receipt"}, nil, nil, "", 0, "", semanticStateCapture{Write: SemanticStateOf(state)}.withAnchorShadow(appliedReceipt))
 	return append(out, AnchorBindingVocabularyLog{Name: "direct saves", Log: direct.Bytes()})
 }
 

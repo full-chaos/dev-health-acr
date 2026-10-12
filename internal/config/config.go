@@ -156,6 +156,11 @@ type Config struct {
 	// request can mint a v2 (membership-verify) ambiguous-claimant anchor
 	// offer -- byte-identical to pre-CHAOS-4042 behavior.
 	AnchorMembershipOffersEnabled bool
+	// AnchorBindingCountEnabled (ACR_CONTEXT_FABRIC_ANCHOR_BINDING_COUNT_ENABLED)
+	// applies the anchor binding's kind to a turn's reading before any
+	// resolution, so retrieval, the count, discovery and the capture read
+	// one kind. Default OFF; turned on per deployment after the corpus gate.
+	AnchorBindingCountEnabled bool
 	// AnchorBindingCarryEnabled (ACR_CONTEXT_FABRIC_ANCHOR_BINDING_CARRY_ENABLED)
 	// makes the admitted anchor binding the only source of a same-question
 	// continuation's carried anchor. Default OFF; turned on per deployment

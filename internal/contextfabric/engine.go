@@ -38,6 +38,13 @@ type EngineOptions struct {
 	// DefaultAnchorBindingMaxAge; anything else must lie in
 	// [MinAnchorBindingMaxAge, MaxAnchorBindingMaxAge].
 	AnchorBindingMaxAge time.Duration
+	// AnchorBindingCountEnabled applies the anchor binding's kind (a
+	// redeemed anchor receipt, else an admitted carried binding) to the
+	// accepted reading before any resolution, so retrieval, the count's
+	// population decision, discovery and the capture read one kind
+	// (anchor_binding_kind.go). Zero value = off: the model's kind stands,
+	// byte-identical to before. Needs the shadow binding.
+	AnchorBindingCountEnabled bool
 	// MaxItems (CHAOS-4636) is the SERVICE-configured item ceiling the
 	// investigation route's own 413 gate enforces (ACR_MAX_ITEMS, default
 	// 30). The listed members of a work-item walk are outside it
@@ -1291,6 +1298,7 @@ type Engine struct {
 	reuseEpochSnapshotter                       RebuildEpochSnapshotter
 	anchorFreshness                             AnchorFreshnessReader
 	anchorBindingMaxAgeSetting                  time.Duration
+	anchorBindingCountEnabled                   bool
 	anchorBindingCarryEnabled                   bool
 	reuseModelIdentityResolver                  ReuseModelIdentityResolver
 	reuseProjectionVersion                      string
@@ -1366,6 +1374,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		anchorFreshness:            dependencies.AnchorFreshness,
 		anchorBindingMaxAgeSetting: options.AnchorBindingMaxAge,
+		anchorBindingCountEnabled:  options.AnchorBindingCountEnabled,
 		anchorBindingCarryEnabled:  options.AnchorBindingCarryEnabled,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
@@ -2843,6 +2852,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// The parent binding is admitted (or refused) once, here, after the
 	// ownership read it compares against and before any proof is weighed.
 	e.admitAnchorBindingParent(ctx, principal, request, binding, anchorShadow)
+	// One anchor kind for every stage below: the binding's, when the switch
+	// is on and it names one the frame admits (anchor_binding_kind.go).
+	familyOutcome = e.applyBoundAnchorKind(anchorShadow, familyOutcome)
 	// WHO CARRIES THE ANCHOR, decided once, here, before EITHER resolution
 	// call reads the ledger (anchor_binding_carry.go). With the binding carry
 	// switched on, only the admitted binding carries: a ledger subject_anchor
