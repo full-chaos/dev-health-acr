@@ -1215,6 +1215,13 @@ type SemanticStateInput struct {
 // BuildSemanticState assembles a snapshot from the accepted values. It does
 // not validate; captureSemanticState does.
 func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
+	anchorKind, anchorKindSource := in.Outcome.WinningSample.ScopeAnchorKind, in.Outcome.WinningSample.ScopeAnchorKindSource
+	if anchorKindSource == ScopeAnchorKindAnchorBinding {
+		// A kind applied from the anchor binding is this turn's decision, not
+		// the reading: the reading persists the kind it stated
+		// (anchor_binding_kind.go).
+		anchorKind, anchorKindSource = in.Outcome.WinningSample.ModelScopeAnchorKind, in.Outcome.WinningSample.ModelScopeAnchorKindSource
+	}
 	state := &PersistedSemanticState{
 		FormatVersion:                SemanticStateFormatVersion,
 		Family:                       in.Outcome.Family,
@@ -1222,7 +1229,7 @@ func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
 		FamilyTableVersion:           in.FamilyVersion,
 		GroupKind:                    in.GroupKind,
 		NarrowingBasis:               in.NarrowingBasis,
-		ScopeAnchor:                  SemanticScopeAnchor{Kind: in.Outcome.WinningSample.ScopeAnchorKind, Term: in.Outcome.WinningSample.ScopeAnchorTerm, KindSource: in.Outcome.WinningSample.ScopeAnchorKindSource},
+		ScopeAnchor:                  SemanticScopeAnchor{Kind: anchorKind, Term: in.Outcome.WinningSample.ScopeAnchorTerm, KindSource: anchorKindSource},
 		FrameVersion:                 QuestionFrameVersion,
 		Roles:                        []SemanticRoleSlot{},
 		Requirements:                 []SemanticRequirement{},

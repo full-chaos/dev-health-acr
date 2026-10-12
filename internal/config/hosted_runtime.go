@@ -142,6 +142,10 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.AnchorMembershipOffersEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_ANCHOR_MEMBERSHIP_ENABLED", false); err != nil {
 		return err
 	}
+	// Default OFF -- see Config.AnchorBindingCountEnabled.
+	if cfg.AnchorBindingCountEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_ANCHOR_BINDING_COUNT_ENABLED", false); err != nil {
+		return err
+	}
 	// Default OFF -- see Config.ServerCompletenessAuthorityEnabled's own
 	// doc comment.
 	if cfg.ServerCompletenessAuthorityEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED", false); err != nil {
@@ -218,6 +222,7 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_investigations_enabled", c.EnableContextFabricInvestigations,
 		"context_fabric_structure_priors_enabled", c.StructurePriorsEnabled,
 		"context_fabric_anchor_membership_enabled", c.AnchorMembershipOffersEnabled,
+		"context_fabric_anchor_binding_count_enabled", c.AnchorBindingCountEnabled,
 		"context_fabric_server_completeness_authority_enabled", c.ServerCompletenessAuthorityEnabled,
 		"context_fabric_server_completeness_authority_symmetric_enabled", c.ServerCompletenessAuthoritySymmetricEnabled,
 		"minimum_sidecar_version", c.MinimumSidecarVersion,

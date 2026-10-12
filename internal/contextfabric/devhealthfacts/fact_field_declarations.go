@@ -499,6 +499,20 @@ func deficiencyFields() []fieldDecl {
 		declNullable(fStr("success_criterion")),
 		declFresh(fStr("window_start")),
 		declFresh(fStr("window_end")),
+		// compounding-risk rule only: the rule's own basis, read from its
+		// rationale, beside the latest computation.
+		declFresh(fStr("rule_computed_at")),
+		fNum("rule_basis_compounding_risk", ""),
+		fStr("rule_basis_severity"),
+		fNum("latest_compounding_risk", ""),
+		fStr("latest_severity"),
+		declFresh(fStr("latest_computed_at")),
+		declFresh(fStr("latest_as_of_day")),
+		fStr("latest_unavailable_reason"),
+		fStr("latest_severity_unavailable_reason"),
+		fStr("latest_score_unavailable_reason"),
+		fStr("rule_basis_unavailable_reason"),
+		fBool("score_moved_since_rule"),
 	}
 }
 

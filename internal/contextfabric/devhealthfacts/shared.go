@@ -859,12 +859,22 @@ import (
 // candidate saved under an earlier version holds the unexplained or degraded account and must not be
 // reused.
 //
-// v174 -> v175: a pull request fact carries project_breakdown, one row per
+// v174 -> v175: with the anchor binding count switch on, a follow-up whose
+// admitted carried binding (or redeemed anchor receipt) names another anchor
+// kind than the model states counts, discovers and captures under the
+// binding's kind, so a stored count answer can differ.
+//
+// v175 -> v176: the compounding-risk operational-deficiency fact carries the
+// rule's own basis (score, band, time) beside the team's latest
+// compounding_risk_daily row and a moved-since-the-rule flag. An answer saved
+// under v175 quotes the rule-time score as the team's current risk.
+//
+// v177 -> v178: a pull request fact carries project_breakdown, one row per
 // project its linked issues reach (work_graph_issue_pr, strict reading), each
 // with the link tier; a pull request cohort grouped by project is grouped on
-// those rows where it was served ungrouped. A candidate saved under v174 holds
+// those rows where it was served ungrouped. A candidate saved under v177 holds
 // the ungrouped answer.
-const QueryVersion = "devhealthfacts.clickhouse.v175"
+const QueryVersion = "devhealthfacts.clickhouse.v178"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
