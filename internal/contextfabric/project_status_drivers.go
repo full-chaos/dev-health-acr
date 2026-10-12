@@ -57,6 +57,7 @@ type ProjectStatusDriverEvent struct {
 	SkippedBudget  int
 	SkippedIDClash int
 	Missing        []FactKind
+	Partial        []FactKind
 }
 
 func projectStatusIntent(interpretation InterpretedQuestion) bool {
@@ -103,7 +104,7 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 		for index := range facts {
 			candidate := &facts[index]
 			if candidate.Kind == observation.kind && candidate.Subject.Kind == project.Kind && candidate.Subject.CanonicalID == project.CanonicalID &&
-				candidate.SourceState == SourceAvailable {
+				(candidate.SourceState == SourceAvailable || candidate.SourceState == SourceTruncated) {
 				fact = candidate
 				break
 			}
@@ -131,10 +132,15 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 			continue
 		}
 		taken[driverID] = struct{}{}
+		summary := title + "."
+		if fact.SourceState == SourceTruncated {
+			summary = title + " (partial: the source read was truncated)."
+			event.Partial = append(event.Partial, observation.kind)
+		}
 		claims = append(claims, ClaimedFact{ClaimID: claimID, Kind: observation.kind, Subject: project, Field: observation.field, Value: convertFactValueScalar(claimValue)})
 		drivers = append(drivers, DriverJudgment{
 			DriverID: driverID, Standing: DriverPrincipal, Category: observation.category,
-			Title: title, Summary: title + ".",
+			Title: title, Summary: summary,
 			AffectedSubjects: []SubjectRef{project}, EvidenceRefIDs: fact.EvidenceRefIDs, ClaimedFactIDs: []string{claimID},
 			Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.95, Current: true,
 		})
