@@ -81,7 +81,7 @@
       "derivation": "canonical_structured",
       "epistemic_status": "observed",
       "evidence_ref_ids": [
-        "acr:v1:review:review_1"
+        "acr:v1:review.v2:00000000-0000-0000-0000-000000000000:42:review_1"
       ],
       "from": {
         "canonical_id": "pull_request_review:review_1",

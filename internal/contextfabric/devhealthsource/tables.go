@@ -1330,7 +1330,9 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.last_synced", rowK
 		properties["number"] = intScalar(number)
 		setStringProperty(properties, "pr_title", pullRequestTitle, 0)
 		setStringProperty(properties, "repo", repoSlug, 0)
-		evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityReview, repoID+":"+reviewID)
+		// The review's full key: a review id repeats across one
+		// repository's pull requests (an approval is named by its approver).
+		evidenceRefID, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityReviewV2, repoID, numberStr, reviewID)
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
 			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,

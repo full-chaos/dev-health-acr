@@ -112,6 +112,7 @@ var contextFabricEvidenceEntityLabels = map[ContextFabricEvidenceEntityType]stri
 	ContextFabricEvidenceEntityWorkItemHierarchyV2:  "Work item hierarchy",
 	ContextFabricEvidenceEntityProjectTeamV2:        "Project/team link",
 	ContextFabricEvidenceEntityWorkItemTeamV2:       "Work item/team link",
+	ContextFabricEvidenceEntityReviewV2:             "Review",
 }
 
 // humanizeVocabularyToken is the deterministic transform for a token from

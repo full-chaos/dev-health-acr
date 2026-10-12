@@ -389,7 +389,7 @@ func t4Cases() []t4Case {
 		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(1042), "open"}, {"repo-1", uint32(1042), ""}}},
 	}})
 	add(t4Case{name: "reviews/pull_request_review", kind: contextfabric.FactReviews, subjects: []contextfabric.SubjectRef{reviewSubject("repo-1", "review-1")}, tables: []fakeTable{
-		{match: "FROM git_pull_request_reviews", rows: [][]any{{"review-1", "approved", "repo-1"}, {"review-1", "", "repo-1"}}},
+		{match: "FROM git_pull_request_reviews", rows: [][]any{{"review-1", "approved", "repo-1", uint32(1)}, {"review-1", "", "repo-1", uint32(1)}}},
 	}})
 	add(t4Case{name: "continuous_integration/ci_pipeline_run", kind: contextfabric.FactContinuousIntegration, subjects: []contextfabric.SubjectRef{ciRunSubject("repo-1", "run-1")}, tables: []fakeTable{
 		{match: "FROM ci_pipeline_runs", rows: [][]any{{"run-1", "success", "repo-1"}, {"run-1", "", "repo-1"}}},
