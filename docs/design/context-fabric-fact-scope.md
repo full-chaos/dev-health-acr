@@ -728,3 +728,58 @@ both — see that file's own comments for the full reasoning. Every other
 capability's CHAOS-4099 premise (§1's defect, §6's closed eligibility
 table) is unchanged: a capability that still has no team/project-native
 source keeps routing through this resolver exactly as before.
+
+## 12. The entity-tree rows
+
+Five pairs had no eligibility row and so were **pruned** (a proof of
+absence) although the entity tree (Repository <> Pull request <> Issue <>
+Project, plus ownership) reaches them. Each now has a row with a `Chain`
+citation, is enabled, and is current-axis only (`CurrentAxisOnly`): the rows
+read ownership and link rows as they stand now, so a historical request is
+refused at the gate, never answered with today's rows.
+
+| Requirement | Origin | Policy | Target | Chain | Basis |
+| --- | --- | --- | --- | --- | --- |
+| continuous_integration | team | `team_repository_ownership_continuous_integration_v1` | repository | team -> `team_repo_ownership` -> repository | direct |
+| continuous_integration | project | `project_issue_pull_request_continuous_integration_v1` | repository | project -> its issues -> `work_graph_issue_pr` -> the pull request's repository | activity_proxy |
+| deployments | project | `project_issue_pull_request_deployments_v1` | repository | same as above | activity_proxy |
+| incidents | project | `project_issue_pull_request_incidents_v1` | incident | the repositories above -> deployment-incident edges | activity_proxy |
+| operational_deficiencies | project | `project_team_ownership_operational_deficiencies_v1` | team | project -> `team_project_ownership` -> team | direct |
+
+What these rows never use: an issue's own repository column, an issue-key
+prefix, or a computed team attribution. A repository is the **pull request's**
+(`work_graph_issue_pr.repo_id`); a project issue with no link row is a counted
+missing next hop, never an empty project.
+
+- **Link tier.** The strongest link tier per repository (native >
+  explicit_text > heuristic, read FINAL) travels per target in
+  `TargetAttributionSource` and is counted in the event's source counts, so an
+  answer names the tier and never presents a lower tier as native. A link whose
+  provenance is outside those three is counted (`UnknownAttributionSourceCount`)
+  and never admitted.
+- **Authorization at every hop.** Repositories are authorized before the next
+  read. An incident that any unauthorized or unresolvable repository also
+  names is dropped whole and counted. A team reached from a project follows the
+  graph's own visibility rule: a restricted caller sees it only when it may
+  read a repository the team owns.
+- **The health/project row is unchanged.** `HealthProvider` supports the
+  project kind directly, so that pair is answered in production; the
+  disclosure-only row stays as the model of a capability set that does not.
+
+### The census sheds under a small byte budget
+
+The census is one row per requirement/origin cell, so its worst case is a
+function of this table. With 25 cells it no longer fits beside the smallest
+valid answer at the smallest budget a caller may request. The census therefore
+sheds at composition time (`shedFactScopeCensus`) to
+`ContextFabricFactScopeCensusRowCeiling(budget)` rows and serves
+`fact_scope_census_omitted`, the count it cut. Rows for requirements the
+question did not make go first; then rows that merely expanded; rows recording
+a gap, a refusal or a cut-short traversal are kept. At the default budget
+nothing is shed and the count is absent.
+
+These five policies are traversed by `devhealthfacts/fact_scope_entity_tree_policies.go`. The project and team
+repository chains of the earlier policies follow the same tree through `fact_scope_entity_tree.go`; the two
+read a link of record slightly differently (these policies read a link only with its pull request, skip
+pull-request-typed work items, and count every unlinked issue), so a change to what the link of record means
+must be made in both.

@@ -823,6 +823,27 @@ func assembledResultArmCases() []assembledResultArmCase {
 			},
 		},
 		{
+			// The caller's byte target could not be reached and no retry was
+			// possible; the document fits the service ceiling as assembled, so
+			// serveAtServiceCeiling served it. The event measures that one
+			// document, before any lever, and names the step.
+			name:          "service-ceiling fit served the assembled result",
+			discriminator: "ceiling_fit=fits_as_measured",
+			spec:          attributionFixtureSpec{members: 3, globalFindings: 6, groupDrivers: 3, multiGroupDrivers: 2, memberDrivers: 1, rowClaims: 2, paths: 10},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				options := budgetStageOptions(30, 0)
+				options.MaxSerializedBytes = attributionUnboundedBytes(t, spec) + 8000
+				engine, _ := attributionEngine(t, spec, sink, options, cohortSizes)
+				request := validInvestigationRequestWithConfirmedWindow()
+				request.Options.MaxSerializedBytes = contractsv1.ContextFabricSerializedBytesMin
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+				if err != nil {
+					t.Fatalf("Investigate() error = %v, want the answer served against the service ceiling", err)
+				}
+				return result, true
+			},
+		},
+		{
 			// The budget-trim lever served the FIRST document: one claim per
 			// member still overran the item ceiling and no retry was possible.
 			// The event measures that document, before the cut.

@@ -181,6 +181,9 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	if err := validateFactScopeCensus(p.FactScopeCensus); err != nil {
 		return fmt.Errorf("answer projection %w", err)
 	}
+	if err := validateFactScopeCensusOmitted(p.FactScopeCensus, p.FactScopeCensusOmitted); err != nil {
+		return fmt.Errorf("answer projection %w", err)
+	}
 	return nil
 }
 

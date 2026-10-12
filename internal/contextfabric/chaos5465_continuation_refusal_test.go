@@ -1026,6 +1026,9 @@ func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 		"options.max_serialized_bytes": {"disqualifier", "the effective byte budget turn one recorded on the carrier's plan differs", func(r *InvestigationRequest) {
 			r.Options.MaxSerializedBytes = r.Options.MaxSerializedBytes / 2
 		}},
+		"options.answer_budget_bytes": {"disqualifier", "the effective byte budget turn one recorded on the carrier's plan differs", func(r *InvestigationRequest) {
+			r.Options.AnswerBudgetBytes = r.Options.MaxSerializedBytes / 2
+		}},
 		"options.max_subject_candidates": {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxSubjectCandidates = 3 }},
 		"options.max_cohort_members":     {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxCohortMembers = 7 }},
 		"options.max_relationship_paths": {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxRelationshipPaths = 7 }},

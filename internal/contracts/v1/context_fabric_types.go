@@ -575,6 +575,10 @@ const (
 	ContextFabricEvidenceEntityPullRequest          ContextFabricEvidenceEntityType = "pull-request"
 	ContextFabricEvidenceEntityRepository           ContextFabricEvidenceEntityType = "repository"
 	ContextFabricEvidenceEntityReview               ContextFabricEvidenceEntityType = "review"
+	// review.v2 replaces review, whose id "<repo>:<review_id>" left out the
+	// pull request number of the review's key, so one ref could name the
+	// same review id on two pull requests of one repository.
+	ContextFabricEvidenceEntityReviewV2             ContextFabricEvidenceEntityType = "review.v2"
 	ContextFabricEvidenceEntityReviewOutcome        ContextFabricEvidenceEntityType = "review-outcome"
 	ContextFabricEvidenceEntityTeam                 ContextFabricEvidenceEntityType = "team"
 	ContextFabricEvidenceEntityWorkItem             ContextFabricEvidenceEntityType = "work-item"
@@ -613,6 +617,7 @@ var contextFabricEvidenceEntityTypes = [...]ContextFabricEvidenceEntityType{
 	ContextFabricEvidenceEntityPullRequest,
 	ContextFabricEvidenceEntityRepository,
 	ContextFabricEvidenceEntityReview,
+	ContextFabricEvidenceEntityReviewV2,
 	ContextFabricEvidenceEntityReviewOutcome,
 	ContextFabricEvidenceEntityTeam,
 	ContextFabricEvidenceEntityWorkItem,
@@ -626,13 +631,15 @@ var contextFabricEvidenceEntityTypes = [...]ContextFabricEvidenceEntityType{
 
 // contextFabricRetiredEvidenceEntityTypes are vocabulary members no producer
 // may mint any more (CHAOS-7252). Their ids joined two or more colon-capable
-// components with a bare ':', so one ref string could name two rows. Refs of
+// components with a bare ':' or (review) left out a column of the row's key,
+// so one ref string could name two rows. Refs of
 // these kinds already sit in stored results and client transcripts, so the
 // kinds stay in the vocabulary (labels, trace values, the persisted-record
 // route) -- but EvidenceRefID refuses them, and each has a ".v2" successor.
 var contextFabricRetiredEvidenceEntityTypes = map[ContextFabricEvidenceEntityType]ContextFabricEvidenceEntityType{
 	ContextFabricEvidenceEntityDeploymentIncident: ContextFabricEvidenceEntityDeploymentIncidentV2,
 	ContextFabricEvidenceEntityProjectTeam:        ContextFabricEvidenceEntityProjectTeamV2,
+	ContextFabricEvidenceEntityReview:             ContextFabricEvidenceEntityReviewV2,
 	ContextFabricEvidenceEntityWorkItemDependency: ContextFabricEvidenceEntityWorkItemDependencyV2,
 	ContextFabricEvidenceEntityWorkItemHierarchy:  ContextFabricEvidenceEntityWorkItemHierarchyV2,
 	ContextFabricEvidenceEntityWorkItemTeam:       ContextFabricEvidenceEntityWorkItemTeamV2,
@@ -1191,14 +1198,22 @@ const (
 const ContextFabricMaxCohortMembersLimit = 250
 
 type ContextFabricInvestigationOptions struct {
-	MaxSubjectCandidates int  `json:"max_subject_candidates"`
-	MaxCohortMembers     int  `json:"max_cohort_members"`
-	MaxRelationshipPaths int  `json:"max_relationship_paths"`
-	MaxDrivers           int  `json:"max_drivers"`
-	MaxEvidenceRefs      int  `json:"max_evidence_refs"`
-	MaxSerializedBytes   int  `json:"max_serialized_bytes"`
-	AllowClarification   bool `json:"allow_clarification"`
-	IncludeDebug         bool `json:"include_debug"`
+	MaxSubjectCandidates int `json:"max_subject_candidates"`
+	MaxCohortMembers     int `json:"max_cohort_members"`
+	MaxRelationshipPaths int `json:"max_relationship_paths"`
+	MaxDrivers           int `json:"max_drivers"`
+	MaxEvidenceRefs      int `json:"max_evidence_refs"`
+	// MaxSerializedBytes is the hard bound on the body served: a result that
+	// measures over it is delivered as the bounded projection sized to it,
+	// and a request above the service ceiling is refused.
+	MaxSerializedBytes int `json:"max_serialized_bytes"`
+	// AnswerBudgetBytes is the target the engine sheds the canonical result
+	// toward (rows, members). Optional; absent means MaxSerializedBytes, so a
+	// caller that sets one knob sees the shedding it always saw. It never
+	// exceeds MaxSerializedBytes.
+	AnswerBudgetBytes  int  `json:"answer_budget_bytes,omitempty"`
+	AllowClarification bool `json:"allow_clarification"`
+	IncludeDebug       bool `json:"include_debug"`
 	// WindowConfirmationMode (CHAOS-3900 W2, design brief §4) selects
 	// whether an INFERRED (non-confirmed) evidence window additionally
 	// nudges the caller via a disclosed Warnings sentence, beside the
@@ -2073,9 +2088,22 @@ type ContextFabricInvestigationResult struct {
 	//
 	// Optional-first: nil on every result written before this field existed,
 	// and on any path that resolved no scope at all.
-	FactScopeCensus   []ContextFabricFactScopeCensusRecord `json:"fact_scope_census,omitempty"`
-	EvidenceRefLabels map[string]string                    `json:"evidence_ref_labels,omitempty"`
-	Versions          ContextFabricVersionSet              `json:"versions"`
+	FactScopeCensus []ContextFabricFactScopeCensusRecord `json:"fact_scope_census,omitempty"`
+	// FactScopeCensusOmitted counts the scope decisions the census does NOT
+	// list because the request's serialized byte budget could not carry every
+	// row beside the smallest valid answer (ContextFabricFactScopeCensusRowCeiling).
+	// A reader who sees N records and a positive count here knows the census is
+	// a bounded sample of the decisions made, never the whole set; the rows
+	// kept are the ones that explain the served answer first. Zero, and absent
+	// from the wire, whenever every decision fits -- which is every request at
+	// the default budget.
+	//
+	// Optional-first, additive: absent on every result written before this
+	// field existed. The only cause is the byte budget, so there is no reason
+	// code to carry.
+	FactScopeCensusOmitted int                     `json:"fact_scope_census_omitted,omitempty"`
+	EvidenceRefLabels      map[string]string       `json:"evidence_ref_labels,omitempty"`
+	Versions               ContextFabricVersionSet `json:"versions"`
 	// DeterministicAnswer is the service's own answer sentence. Required on
 	// every SUPPORTED result (ContextFabricResultSupported: a claimed fact
 	// AND a citable evidence ref) and on every complete/partial one; may be

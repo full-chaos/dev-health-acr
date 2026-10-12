@@ -21,6 +21,10 @@ func derived7120(kind string, values ...string) string {
 }
 
 func evidence7120(entity contractsv1.ContextFabricEvidenceEntityType, raw string) string {
+	if _, retired := contractsv1.RetiredEvidenceEntityType(entity); retired {
+		// A stored result's ref of a retired kind: spelled, never minted.
+		return contractsv1.ContextFabricEvidenceRefPrefix + string(entity) + ":" + raw
+	}
 	return contractsv1.EvidenceRefID(entity, raw)
 }
 
@@ -58,8 +62,12 @@ func TestChaos7120ResolveEvidenceMapsEntityFormsExactly(t *testing.T) {
 		{"pull request with a non-numeric number", pullA1_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityPullRequest, "a:x"), false, false, "", ""},
 		{"own incident", incidentA1_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityIncident, "inc-a"), true, true, "", ""},
 		{"other incident", incidentA1_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityIncident, "inc-b"), true, false, contractsv1.ContextFabricSubjectIncident, incidentB9_7120.CanonicalID},
-		{"own review", reviewA1_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityReview, "a:rev-1"), true, true, "", ""},
-		{"other review", reviewA1_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityReview, "a:rev-2"), false, false, "", ""},
+		{"own review", reviewA1_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityReviewV2, "a:1:rev-1"), true, true, "", ""},
+		{"same review id on another pull request", reviewA1_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityReviewV2, "a:2:rev-1"), true, false, contractsv1.ContextFabricSubjectPullRequestReview, derived7120(identity.KindPullRequestReview, "a", "2", "rev-1")},
+		{"review with a non-numeric number", reviewA1_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityReviewV2, "a:x:rev-1"), false, false, "", ""},
+		{"review without its number", reviewA1_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityReviewV2, "a:rev-1"), false, false, "", ""},
+		{"own retired review", reviewA1_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityReview, "a:rev-1"), true, true, "", ""},
+		{"other retired review", reviewA1_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityReview, "a:rev-2"), false, false, "", ""},
 		{"work item evidence on a repository fact", repoA_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityWorkItem, "a:WA-1"), true, false, contractsv1.ContextFabricSubjectWorkItem, workA1_7120.CanonicalID},
 	} {
 		ref, ok, own := resolveEvidence(tc.subject, tc.id)

@@ -188,6 +188,11 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// Round-18's ruled mutation (minimum 0 -> 1) passed against that
 		// catch-all before this entry existed.
 		"result#properties.limitations_displaced.minimum": 0,
+		// The census omitted count: validateFactScopeCensusOmitted enforces
+		// non-negative and census rows + omitted <= the census maximum, so
+		// the count's own ceiling is that maximum.
+		"result#properties.fact_scope_census_omitted.minimum": 0,
+		"result#properties.fact_scope_census_omitted.maximum": ContextFabricFactScopeCensusMaxCount,
 		// CHAOS-4636: the answer plan's own bounds, every one mapped
 		// explicitly rather than left to a pattern classifier. The floors
 		// especially: Go rejects each of these with its own clause (see
@@ -454,6 +459,8 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.InvestigationOptions.properties.max_evidence_refs.maximum":      500,
 		"common#$defs.InvestigationOptions.properties.max_serialized_bytes.minimum":   ContextFabricSerializedBytesMin,
 		"common#$defs.InvestigationOptions.properties.max_serialized_bytes.maximum":   ContextFabricSerializedBytesMax,
+		"common#$defs.InvestigationOptions.properties.answer_budget_bytes.minimum":    ContextFabricSerializedBytesMin,
+		"common#$defs.InvestigationOptions.properties.answer_budget_bytes.maximum":    ContextFabricSerializedBytesMax,
 		// CHAOS-4867 (main's ruling, option A): the request-side substring
 		// case that used to excuse InvestigationOptions above excused these
 		// four sibling shapes with the exact same false claim. An audit
