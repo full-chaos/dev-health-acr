@@ -42,7 +42,11 @@ func TestShadowBindingBindsARedeemedAnchorReceipt(t *testing.T) {
 	}
 	line := lines[1]
 	want := AnchorBinding{State: AnchorBindingBound, Kind: SubjectRepository, CanonicalID: "repository:need-r2", Proof: AnchorBindingProofCallerReceipt,
-		Reason: AnchorBindingReasonCallerReceipt, OriginResultID: two.result.ResultID}
+		Reason: AnchorBindingReasonCallerReceipt, OriginResultID: two.result.ResultID,
+		PolicyVersion: AnchorBindingPolicyVersion, ProvenAt: h.engine.now().UTC().Round(0)}
+	if len(line.ProvenAnchorIDs) > 0 {
+		want.Witness = line.ProvenAnchorIDs
+	}
 	if !reflect.DeepEqual(line.To, want) || two.saved == nil || bindingMember(two.saved) == nil || !reflect.DeepEqual(*bindingMember(two.saved), want) {
 		t.Fatalf("binding = %+v (persisted %+v), want %+v", line.To, two.saved, want)
 	}
@@ -214,7 +218,9 @@ func TestAReuseServeDecidesFromThisRequestAndTheReplayedProof(t *testing.T) {
 		t.Fatalf("fixture defect: the framed row carries no frame")
 	}
 	proven := func(proof AnchorBindingProof, reason AnchorBindingReason) AnchorBinding {
-		return AnchorBinding{State: AnchorBindingBound, Kind: held.Kind, CanonicalID: held.ID, Proof: proof, Reason: reason, OriginResultID: candidate.ResultID}
+		// A reuse serve saves nothing, so nothing stamps a proof time.
+		return AnchorBinding{State: AnchorBindingBound, Kind: held.Kind, CanonicalID: held.ID, Proof: proof, Reason: reason, OriginResultID: candidate.ResultID,
+			PolicyVersion: AnchorBindingPolicyVersion, Witness: []string{string(held.Kind) + ":" + held.ID}}
 	}
 	for _, tc := range []struct {
 		name       string
@@ -386,7 +392,8 @@ func TestAnchorBindingLineWritesAbsentListsAsEmptyLists(t *testing.T) {
 // TestTwoTurnsWithEqualLineInputsDecideTheSameBinding.
 func TestEveryBinderInputIsOnTheTransitionLine(t *testing.T) {
 	inputKeys := map[string][]string{
-		"From":              {"from_state", "from_kind", "from_id", "from_proof", "from_reason", "from_origin_result_id", "from_graph_epoch", "from_contender_kind", "from_contender_id", "parent_binding", "parent_graph_epoch", "carry_checks"},
+		"From":              {"from_state", "from_kind", "from_id", "from_proof", "from_reason", "from_origin_result_id", "from_graph_epoch", "from_contender_kind", "from_contender_id", "from_proven_freshness_epoch", "from_proven_freshness_digest", "from_policy_version", "from_proven_at", "from_witness", "parent_binding", "parent_graph_epoch"},
+		"Admission":         {"binding_admission", "admission_remembered_check", "admission_remembered_reason", "admission_remembered_context_error", "admission_age_seconds"},
 		"Evaluation":        {"evaluation"},
 		"Frame":             {"frame_expression_kind", "frame_member_kind", "anchor_term_count", "anchor_term_matched_ids", "named_expected_kind"},
 		"ModelAnchorKind":   {"model_anchor_kind"},
@@ -413,7 +420,7 @@ func TestEveryBinderInputIsOnTheTransitionLine(t *testing.T) {
 	bindingKeys := map[string]string{
 		"State": "from_state", "Kind": "from_kind", "CanonicalID": "from_id", "Proof": "from_proof", "Reason": "from_reason",
 		"OriginResultID": "from_origin_result_id", "GraphEpoch": "from_graph_epoch", "ContenderKind": "from_contender_kind", "ContenderID": "from_contender_id",
-		"ProvenFreshness": "from_proven_freshness_digest",
+		"ProvenFreshness": "from_proven_freshness_digest", "PolicyVersion": "from_policy_version", "ProvenAt": "from_proven_at", "Witness": "from_witness",
 	}
 	args := AnchorBindingTransitionLogArgs(AnchorBindingTransitionEvent{}, "org_x")
 	written := map[string]bool{}

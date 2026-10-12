@@ -246,6 +246,14 @@ func TestBindAnchorTransitionTable(t *testing.T) {
 				in.CallerHints = append(in.CallerHints, SubjectHint{Kind: hint.Kind, ID: hint.ID})
 			}
 			got, proposal := bindAnchor(in)
+			// An identity this turn proves is stamped with the policy and the
+			// witness of every identity the turn proved, in proof order.
+			if tc.want.OriginResultID == in.ResultID && tc.want.State != AnchorBindingUnbound {
+				tc.want.PolicyVersion = AnchorBindingPolicyVersion
+				if witness := refIDs(proposal.Stream); len(witness) > 0 {
+					tc.want.Witness = witness
+				}
+			}
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("binding\n got %+v\nwant %+v", got, tc.want)
 			}
@@ -595,9 +603,11 @@ func TestAnchorBindingLineVocabularyIsClosedOverItsProducers(t *testing.T) {
 		"disagreement_field":    {"none", "pending_proof", "carried_anchor", "count_anchor"},
 		"persisted":             {"persisted", "payload_rejected", "replay_conflict", "superseded", "save_failed", "state_absent", "binding_unencodable", "not_saved"},
 		"served_count_decision": {"not_evaluated", "anchor_committed", "anchor_ambiguous", "anchor_unresolved", "single_subject"},
-		"carry_checks":          {"not_applicable", "not_evaluated"},
-		"freshness_acquisition": {"not_attempted", "acquired", "unwired", "read_failed", "source_absent", "unstorable"},
-		"ownership_movement":    {"not_applicable", "proven_unrecorded", "not_acquired", "unmoved", "moved"},
+		"binding_admission": {"not_applicable", "not_evaluated", "admitted", "refused_policy_version", "refused_question_changed", "refused_question_indeterminate",
+			"refused_origin_unverifiable", "refused_expired", "refused_ownership_moved", "refused_ownership_unverified", "refused_subject_unreadable"},
+		"admission_remembered_check": {"not_checked", "readable", "verifier_unwired", "cancelled_before_check", "cancelled_during_check", "refused"},
+		"freshness_acquisition":      {"not_attempted", "acquired", "unwired", "read_failed", "source_absent", "unstorable"},
+		"ownership_movement":         {"not_applicable", "proven_unrecorded", "not_acquired", "unmoved", "moved"},
 	} {
 		if got := AnchorBindingTransitionLineVocabulary(key); !reflect.DeepEqual(got, members) {
 			t.Errorf("vocabulary %q = %v, want %v", key, got, members)
@@ -615,7 +625,7 @@ func TestAnchorBindingLineVocabularyIsClosedOverItsProducers(t *testing.T) {
 	for i := 0; i+1 < len(args); i += 2 {
 		fields[args[i].(string)] = args[i+1]
 	}
-	if fields["reason"] != "unrecorded" || fields["site"] != "decisive" || fields["persisted"] != "undeclared" || fields["carry_checks"] != "not_applicable" {
+	if fields["reason"] != "unrecorded" || fields["site"] != "decisive" || fields["persisted"] != "undeclared" || fields["binding_admission"] != "not_applicable" || fields["admission_age_seconds"] != int64(-1) {
 		t.Fatalf("unrecorded line fields = %v", fields)
 	}
 }

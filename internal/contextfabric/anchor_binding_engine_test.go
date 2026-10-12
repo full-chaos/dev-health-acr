@@ -116,6 +116,13 @@ func newAnchorProbeRig(t *testing.T, shadowOff bool) *anchorProbeRig {
 	return rig
 }
 
+// verify wires a live re-read that proves every subject readable.
+func (r *anchorProbeRig) verify() {
+	r.engine.candidateVerifier = func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string) (bool, CandidateVerificationReason) {
+		return true, CandidateVerificationValid
+	}
+}
+
 // anchorProbeTurn is one turn's served document, its saved snapshot and the
 // transition lines it emitted.
 type anchorProbeTurn struct {
@@ -191,7 +198,10 @@ type anchorProbeStep struct {
 	seed func(*staticResultStore)
 	// ownership, when set, edits the rig's ownership reader before the turn.
 	ownership func(*probeOwnership)
-	response  needTurnResponse
+	// verified wires a live re-read that proves every subject readable from
+	// this turn on, so a carried binding can pass admission.
+	verified bool
+	response needTurnResponse
 }
 
 // runAnchorProbe runs the same script on a shadow-on and a shadow-off rig and
@@ -207,6 +217,14 @@ func runAnchorProbe(t *testing.T, steps []anchorProbeStep) []anchorProbeTurn {
 		if step.ownership != nil {
 			step.ownership(on.ownership)
 			step.ownership(off.ownership)
+		}
+		if step.verified {
+			on.verify()
+			off.verify()
+		}
+		if step.seed != nil {
+			step.seed(on.store)
+			step.seed(off.store)
 		}
 		onTurn := on.turn(t, step.request(onTurns), step.response)
 		offTurn := off.turn(t, step.request(offTurns), step.response)
@@ -264,15 +282,17 @@ func followUp(id, question string, mutate func(*InvestigationRequest)) func([]an
 	}
 }
 
-// TestShadowBindingKeepsTheProvenRepositoryAcrossANaturalFollowUp is the shadow counterpart of the design-review probe
-// TestAnchorDesignReviewNaturalFollowup. Turn one
-// proves alpha; the follow-up asks a different question naming the parent.
-// Served: the ledger drops alpha (question changed). Shadow: alpha stays
-// bound, and the line says the served ledger disagrees.
-func TestShadowBindingKeepsTheProvenRepositoryAcrossANaturalFollowUp(t *testing.T) {
+// TestShadowBindingRefusesACarryAcrossAChangedQuestion is the shadow
+// counterpart of the design-review probe TestAnchorDesignReviewNaturalFollowup.
+// Turn one proves alpha; the follow-up asks a different question naming the
+// parent. The proving turn asked another question, so admission refuses the
+// carry and the binder starts unbound; the line still shows what the parent
+// held. A changed question keeps an anchor only through a validated
+// transition, which this binding does not yet have.
+func TestShadowBindingRefusesACarryAcrossAChangedQuestion(t *testing.T) {
 	turns := runAnchorProbe(t, []anchorProbeStep{
 		{request: firstTurnRequest("request_probe_nat_one", true), response: identityProvenResponse(probeAlpha)},
-		{request: followUp("request_probe_nat_two", "And how many teams contribute to it?", nil), response: emptyProbeResponse()},
+		{request: followUp("request_probe_nat_two", "And how many teams contribute to it?", nil), verified: true, response: emptyProbeResponse()},
 	})
 	one, two := turns[0], turns[1]
 	if got := *bindingMember(one.saved); got.State != AnchorBindingBound || got.CanonicalID != probeAlpha.CanonicalID || got.Reason != AnchorBindingReasonIdentityProven {
@@ -281,31 +301,46 @@ func TestShadowBindingKeepsTheProvenRepositoryAcrossANaturalFollowUp(t *testing.
 	if got := servedLedgerAnchor(two); !got.none() {
 		t.Fatalf("premise: the served follow-up ledger holds %+v; the reproduced seam drops the anchor", got)
 	}
+	if binding := *bindingMember(two.saved); binding.State != AnchorBindingUnbound || binding.Reason != AnchorBindingReasonNoProof {
+		t.Fatalf("follow-up binding = %+v, want unbound: the refused carry is not the starting point", binding)
+	}
+	line := two.transitions[0]
+	if line.Admission != AnchorBindingAdmissionRefusedQuestionChanged || line.ParentBinding != AnchorBindingParentPresent || line.From.CanonicalID != probeAlpha.CanonicalID ||
+		line.AdmissionRemembered.Check != SubjectSubstitutionRememberedNotChecked {
+		t.Fatalf("follow-up line = %+v, want the held alpha refused for a changed question before any re-read", line)
+	}
+}
+
+// TestShadowBindingKeepsTheProvenRepositoryAcrossTheSameQuestion: the same
+// question asked again under the parent, with ownership unmoved and the held
+// identity readable, admits the carry; a resolution that proves nothing new
+// keeps it, carried silent.
+func TestShadowBindingKeepsTheProvenRepositoryAcrossTheSameQuestion(t *testing.T) {
+	turns := runAnchorProbe(t, []anchorProbeStep{
+		{request: firstTurnRequest("request_probe_same_one", true), response: identityProvenResponse(probeAlpha)},
+		{request: followUp("request_probe_same_two", "", nil), verified: true, response: emptyProbeResponse()},
+	})
+	one, two := turns[0], turns[1]
 	binding := *bindingMember(two.saved)
 	if binding.State != AnchorBindingBound || binding.CanonicalID != probeAlpha.CanonicalID || binding.Reason != AnchorBindingReasonCarriedSilent || binding.OriginResultID != one.result.ResultID {
 		t.Fatalf("follow-up binding = %+v, want alpha bound, carried_silent, origin %s", binding, one.result.ResultID)
 	}
-	line := two.transitions[0]
-	if line.ParentBinding != AnchorBindingParentPresent || line.Agreement != AnchorBindingDisagree || line.DisagreementField != AnchorBindingFieldCarriedAnchor {
-		t.Fatalf("follow-up line = %+v, want parent present and a carried_anchor disagreement", line)
+	if line := two.transitions[0]; line.Admission != AnchorBindingAdmissionAdmitted || line.AdmissionRemembered.Check != SubjectSubstitutionRememberedReadable || line.AdmissionAgeSeconds != 0 {
+		t.Fatalf("follow-up line = %+v, want admitted after a readable re-read, age 0", line)
 	}
 }
 
 // TestShadowBindingNeverBindsAnAliasThatWinsOnAFollowUp is the shadow counterpart of the design-review probe
-// TestAnchorDesignReviewWrongSubject. The follow-up's
-// resolution proves beta through the anchor term. Served: beta is captured
-// and counted. Shadow: alpha is retained, beta is recorded as the contender,
-// and nothing is effective.
+// TestAnchorDesignReviewWrongSubject. The follow-up asks the same question and
+// its resolution proves beta through the anchor term. Served: the guard
+// withholds beta. Shadow: the admitted alpha is retained, beta is recorded
+// as the contender, and nothing is effective.
 func TestShadowBindingNeverBindsAnAliasThatWinsOnAFollowUp(t *testing.T) {
 	turns := runAnchorProbe(t, []anchorProbeStep{
 		{request: firstTurnRequest("request_probe_alias_one", true), response: identityProvenResponse(probeAlpha)},
-		{request: followUp("request_probe_alias_two", "And how many teams contribute to it?", nil), response: identityProvenResponse(probeBeta)},
+		{request: followUp("request_probe_alias_two", "", nil), verified: true, response: identityProvenResponse(probeBeta)},
 	})
 	two := turns[1]
-	// The follow-up names the parent and its own text resolves to beta. The
-	// subject-substitution guard withholds beta -- the turn clarifies and
-	// serves no subject -- so the served ledger captures nothing, and the
-	// binder still sees the proof the engine made.
 	if two.result.Status != InvestigationClarificationRequired || len(two.result.SubjectResolution.Committed) != 0 {
 		t.Fatalf("premise: the follow-up served %q with %d committed; the guard withholds beta", two.result.Status, len(two.result.SubjectResolution.Committed))
 	}
@@ -313,21 +348,15 @@ func TestShadowBindingNeverBindsAnAliasThatWinsOnAFollowUp(t *testing.T) {
 		t.Fatalf("premise: the served follow-up ledger holds %+v; a withheld subject is never captured", got)
 	}
 	binding := *bindingMember(two.saved)
-	want := AnchorBinding{
-		State: AnchorBindingContested, Kind: probeAlpha.Kind, CanonicalID: probeAlpha.CanonicalID,
-		Proof: AnchorBindingProofIdentityProven, Reason: AnchorBindingReasonContestedByResolution,
-		OriginResultID: turns[0].result.ResultID, ContenderKind: probeBeta.Kind, ContenderID: probeBeta.CanonicalID,
-		ProvenFreshness: AnchorFreshness{Recorded: true, OwnershipWatermark: probeOwnershipW1.OwnershipWatermark},
-	}
+	one := *bindingMember(turns[0].saved)
+	want := one
+	want.State, want.Reason, want.ContenderKind, want.ContenderID = AnchorBindingContested, AnchorBindingReasonContestedByResolution, probeBeta.Kind, probeBeta.CanonicalID
 	if !reflect.DeepEqual(binding, want) {
 		t.Fatalf("follow-up binding = %+v, want %+v", binding, want)
 	}
-	// Nothing is served on the guarded turn, so the binder's held anchor and
-	// the served document agree that neither carries beta forward; the line
-	// still proves beta, and names the guard that withheld it.
-	if line := two.transitions[0]; line.Agreement != AnchorBindingAgree || line.DisagreementField != AnchorBindingFieldNone ||
+	if line := two.transitions[0]; line.Admission != AnchorBindingAdmissionAdmitted || line.Agreement != AnchorBindingAgree || line.DisagreementField != AnchorBindingFieldNone ||
 		!reflect.DeepEqual(line.ProvenAnchorIDs, []string{"repository:" + probeBeta.CanonicalID}) || !line.SubstitutionGuard.Fired() {
-		t.Fatalf("follow-up line = %+v, want an agreement over a withheld beta that the line still proves", line)
+		t.Fatalf("follow-up line = %+v, want an admitted carry contested by a withheld beta that the line still proves", line)
 	}
 }
 
@@ -341,7 +370,7 @@ func TestShadowBindingKeepsWindowGatedProofAsPending(t *testing.T) {
 		{request: firstTurnRequest("request_probe_gate_one", false), windowed: true, response: identityProvenResponse(probeAlpha)},
 		{request: followUp("request_probe_gate_two", "", func(r *InvestigationRequest) {
 			r.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
-		}), response: emptyProbeResponse()},
+		}), verified: true, response: emptyProbeResponse()},
 	})
 	one, two := turns[0], turns[1]
 	if one.result.Status != InvestigationClarificationRequired {
@@ -375,7 +404,7 @@ func TestShadowBindingKeepsWindowGatedProofAsPending(t *testing.T) {
 func TestShadowBindingHoldsOneAnchorWhenTheModelKindConflicts(t *testing.T) {
 	turns := runAnchorProbe(t, []anchorProbeStep{
 		{request: firstTurnRequest("request_probe_kind_one", true), anchorKind: SubjectRepository, response: identityProvenResponse(probeAlpha)},
-		{request: followUp("request_probe_kind_two", "", nil), anchorKind: SubjectProject, response: needTurnResponse{
+		{request: followUp("request_probe_kind_two", "", nil), anchorKind: SubjectProject, verified: true, response: needTurnResponse{
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}},
 			bases:      provenCommitBases(probeAlpha),
 		}},
@@ -454,7 +483,7 @@ func anchorSiteArm(t *testing.T, scenario anchorSiteScenario, shadowOff bool, lo
 
 // unboundZero are the fields an unbound binding leaves empty on an engine
 // whose graph epoch is zero.
-var unboundZero = map[string]bool{"Kind": true, "CanonicalID": true, "OriginResultID": true, "GraphEpoch": true, "ContenderKind": true, "ContenderID": true, "ProvenFreshness": true}
+var unboundZero = map[string]bool{"Kind": true, "CanonicalID": true, "OriginResultID": true, "GraphEpoch": true, "ContenderKind": true, "ContenderID": true, "ProvenFreshness": true, "PolicyVersion": true, "ProvenAt": true, "Witness": true}
 
 // heldZero are the fields a held, uncontested binding leaves empty on an
 // engine whose graph epoch is zero.
@@ -478,6 +507,9 @@ func anchorProbeScenario(steps ...anchorProbeStep) func(*testing.T, EngineTeleme
 			}
 			if step.ownership != nil {
 				step.ownership(rig.ownership)
+			}
+			if step.verified {
+				rig.verify()
 			}
 			turns = append(turns, rig.turn(t, step.request(turns), step.response))
 		}
@@ -560,7 +592,7 @@ func anchorSiteScenarios() []anchorSiteScenario {
 				return two.result
 			},
 			check: lastLineHas("parent", func(l AnchorBindingTransitionEvent) bool {
-				return l.ParentBinding == AnchorBindingParentPresent && l.CarryChecks == AnchorBindingCarryChecksNotEvaluated && l.From.State == AnchorBindingUnbound
+				return l.ParentBinding == AnchorBindingParentPresent && l.Admission == AnchorBindingAdmissionNotApplicable && l.From.State == AnchorBindingUnbound
 			})},
 		{name: "structure_veto", site: BudgetAssertStructureVeto, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,
 			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
@@ -689,7 +721,7 @@ func anchorSiteScenarios() []anchorSiteScenario {
 		{name: "guarded_contested", site: BudgetAssertSubjectlessTerminal, reach: AnchorBindingEvaluationResolved, zero: map[string]bool{"GraphEpoch": true},
 			run: anchorProbeScenario(
 				anchorProbeStep{request: firstTurnRequest("request_site_contest_one", true), response: identityProvenResponse(probeAlpha)},
-				anchorProbeStep{request: followUp("request_site_contest_two", "And how many teams contribute to it?", nil), response: identityProvenResponse(probeBeta)},
+				anchorProbeStep{request: followUp("request_site_contest_two", "", nil), verified: true, response: identityProvenResponse(probeBeta)},
 			)},
 	}
 }
@@ -767,8 +799,9 @@ func TestAnchorBindingShadowParityAtEverySaveSite(t *testing.T) {
 				if line.To.Reason == AnchorBindingReasonUnrecorded {
 					t.Fatalf("a Save reached persistence with no binding decision: %+v", line)
 				}
-				if (line.CarryChecks == AnchorBindingCarryChecksNotEvaluated) != (line.ParentBinding == AnchorBindingParentPresent) {
-					t.Fatalf("carry_checks %s disagrees with parent_binding %s", line.CarryChecks, line.ParentBinding)
+				heldParent := line.ParentBinding == AnchorBindingParentPresent && line.From.active()
+				if heldParent == (line.Admission == AnchorBindingAdmissionNotApplicable) {
+					t.Fatalf("binding_admission %s disagrees with a held parent binding %v (parent_binding %s)", line.Admission, heldParent, line.ParentBinding)
 				}
 			}
 			binding := last.To
