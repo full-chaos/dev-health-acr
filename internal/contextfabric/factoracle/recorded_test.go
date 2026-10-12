@@ -36,18 +36,20 @@ var contractsAtCapture = map[string]string{
 	"cognitiveLoad":                  "sha256:52ce7277e9e7033d638b213773e41b478f6cd9af0c540655998dad13dabc4dfb",
 	"complexityTimeseries":           "sha256:5795ecd7c05b216647191e6eca4b6b397c4612a21e2225137590930bf1c65569",
 	"compoundingRisk":                "sha256:ded079a60583d070f41a5d5682bd77c32b22923d21843c2c9f2bdfe1ce0360e2",
-	"home":                           "sha256:0c33644264dc63095441379db29060939e8d351fbcbfe2c3a1e8e7ade2a0c86a",
-	"hotspots":                       "sha256:30999b82cd7e907ea1711e271b90aae84e66e60f9e93bbee835acf377cdbab23",
-	"investmentBreakdown":            "sha256:8742ea2b7d3c3014c7a429a115108e167caf8a250230f5e59c16e3332f7b1749",
-	"investmentFull":                 "sha256:179a09e19ce83802c67b1b40fe4c2c1b3c003617d4b49acca225146db3737111",
-	"recommendations":                "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
-	"securityOverview":               "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",
-	"sourceHealth":                   "sha256:1e37288fae98f7a84a5f7a2a8d6bea26514c6e4bf284f8d9e528a7e0819ba876",
-	"throughputForecast":             "sha256:ad5d774fa899197d84842001d2f9fcee48155c5356a27238e1d726e1aff4db51",
-	"workGraphArtifacts":             "sha256:551ed4f4200e13f02a988d6deab6a9ffc41e41a2d2c72c9d66f224b0d5fe86fc",
-	"workGraphEdges":                 "sha256:22f4a10da08615255631c5f866313fdeda9c65bd17a6b621f332984e61ce602e",
-	"workGraphFlow":                  "sha256:d442757b8633c7f9542f48a92a34ef1dbcfacdd994e68c76ad7a31cce1428cf1",
-	"workItemTeamAttributions":       "sha256:e3e1700f64773540a6192f8239068aac3b780a4d5cf37c5252f766bf819dda58",
+	// home is advanced past the capture: ops 5376c7c1 added home.filterEmptyReason and the capture holds no home case
+	// (TestTheCaptureHoldsNoHomeCaseWhileItsContractIsAdvanced); retake the capture on the next venue move.
+	"home":                     "sha256:24d5876a9283d3f652dd434440d08e8848fceecb5a2f51405a1c50578d70608b",
+	"hotspots":                 "sha256:30999b82cd7e907ea1711e271b90aae84e66e60f9e93bbee835acf377cdbab23",
+	"investmentBreakdown":      "sha256:8742ea2b7d3c3014c7a429a115108e167caf8a250230f5e59c16e3332f7b1749",
+	"investmentFull":           "sha256:179a09e19ce83802c67b1b40fe4c2c1b3c003617d4b49acca225146db3737111",
+	"recommendations":          "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
+	"securityOverview":         "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",
+	"sourceHealth":             "sha256:1e37288fae98f7a84a5f7a2a8d6bea26514c6e4bf284f8d9e528a7e0819ba876",
+	"throughputForecast":       "sha256:ad5d774fa899197d84842001d2f9fcee48155c5356a27238e1d726e1aff4db51",
+	"workGraphArtifacts":       "sha256:551ed4f4200e13f02a988d6deab6a9ffc41e41a2d2c72c9d66f224b0d5fe86fc",
+	"workGraphEdges":           "sha256:22f4a10da08615255631c5f866313fdeda9c65bd17a6b621f332984e61ce602e",
+	"workGraphFlow":            "sha256:d442757b8633c7f9542f48a92a34ef1dbcfacdd994e68c76ad7a31cce1428cf1",
+	"workItemTeamAttributions": "sha256:e3e1700f64773540a6192f8239068aac3b780a4d5cf37c5252f766bf819dda58",
 }
 
 func requireCaptureContractsUnchanged(t *testing.T, policy *directread.GraphQLPolicy, recorded, pinned string) {
