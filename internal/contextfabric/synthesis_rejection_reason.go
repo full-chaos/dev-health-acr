@@ -70,6 +70,11 @@ const (
 	RejectionReasonClaimNoCanonicalFact      SynthesisRejectionReason = "claim_no_canonical_fact"
 	RejectionReasonClaimFieldUnobserved      SynthesisRejectionReason = "claim_field_unobserved"
 	RejectionReasonClaimValueContradicts     SynthesisRejectionReason = "claim_value_contradicts_canonical"
+	// A derived claim (derived_from + operation) that names an input that is
+	// not a supplied numeric fact of its subject, or whose value the stated
+	// operation does not reproduce from its inputs.
+	RejectionReasonClaimDerivationInputUnknown  SynthesisRejectionReason = "claim_derivation_input_unknown"
+	RejectionReasonClaimDerivationValueMismatch SynthesisRejectionReason = "claim_derivation_value_mismatch"
 
 	// Drivers.
 	RejectionReasonDriverInvalid              SynthesisRejectionReason = "driver_invalid"
@@ -141,6 +146,8 @@ var canonicalSynthesisRejectionReasons = map[SynthesisRejectionReason]SynthesisR
 	RejectionReasonClaimNoCanonicalFact:             RejectionReasonClaimNoCanonicalFact,
 	RejectionReasonClaimFieldUnobserved:             RejectionReasonClaimFieldUnobserved,
 	RejectionReasonClaimValueContradicts:            RejectionReasonClaimValueContradicts,
+	RejectionReasonClaimDerivationInputUnknown:      RejectionReasonClaimDerivationInputUnknown,
+	RejectionReasonClaimDerivationValueMismatch:     RejectionReasonClaimDerivationValueMismatch,
 	RejectionReasonDriverInvalid:                    RejectionReasonDriverInvalid,
 	RejectionReasonDriverSubjectOutOfScope:          RejectionReasonDriverSubjectOutOfScope,
 	RejectionReasonDriverSubjectLabelMismatch:       RejectionReasonDriverSubjectLabelMismatch,

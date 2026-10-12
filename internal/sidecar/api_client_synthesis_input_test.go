@@ -18,7 +18,7 @@ func synthesisInputForClientTest() *contractsv1.ContextFabricSynthesisInput {
 	sum := sha256.Sum256(input)
 	return &contractsv1.ContextFabricSynthesisInput{
 		Contract: contractsv1.ContextFabricSynthesisContract{
-			ModelOutputVersion: "context-fabric-model-output.v8", PromptVersion: "context-fabric-synthesis.v3", SystemSHA256: strings.Repeat("b", 64),
+			ModelOutputVersion: "context-fabric-model-output.v9", PromptVersion: "context-fabric-synthesis.v3", SystemSHA256: strings.Repeat("b", 64),
 		},
 		Input: input, InputSHA256: hex.EncodeToString(sum[:]), Rules: []string{"Use only the facts in this input."},
 	}

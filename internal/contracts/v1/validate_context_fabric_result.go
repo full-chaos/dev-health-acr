@@ -1006,6 +1006,9 @@ func (c ContextFabricClaimedFact) Validate() error {
 	if utf8.RuneCountInString(c.FactID) > ContextFabricModelMintedIDMaxLength {
 		return fmt.Errorf("claimed fact fact_id violates v1 bounds")
 	}
+	if err := c.validateDerivation(); err != nil {
+		return err
+	}
 	if err := c.Subject.Validate(); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
@@ -2187,6 +2190,45 @@ func (r ContextFabricInvestigationResult) validateStatusCorrection() error {
 			}
 		}
 		return fmt.Errorf("status_correction deciding_requirement and deciding_outcome name no completeness outcome row")
+	}
+	return nil
+}
+
+// validateDerivation checks the derived_from/operation pair's shape. It
+// cannot check the arithmetic: that needs the supplied fact bundle, which
+// SynthesisDraft.ValidateAgainst holds.
+func (c ContextFabricClaimedFact) validateDerivation() error {
+	if len(c.DerivedFrom) == 0 && c.Operation == "" {
+		return nil
+	}
+	if len(c.DerivedFrom) == 0 || c.Operation == "" {
+		return fmt.Errorf("claimed fact derived_from and operation must be set together")
+	}
+	if c.FactID != "" {
+		return fmt.Errorf("claimed fact derived_from excludes fact_id")
+	}
+	if len(c.DerivedFrom) > ContextFabricDerivationInputsMaxItems {
+		return fmt.Errorf("claimed fact derived_from violates v1 bounds")
+	}
+	switch c.Operation {
+	case ContextFabricDerivationSum:
+		if len(c.DerivedFrom) < 2 {
+			return fmt.Errorf("claimed fact derivation sum needs at least two inputs")
+		}
+	case ContextFabricDerivationDifference, ContextFabricDerivationRatio:
+		if len(c.DerivedFrom) != 2 {
+			return fmt.Errorf("claimed fact derivation %s needs exactly two inputs", c.Operation)
+		}
+	default:
+		return fmt.Errorf("claimed fact derivation operation is not in the closed set")
+	}
+	for _, input := range c.DerivedFrom {
+		if !stringLengthBetween(input.FactID, 1, ContextFabricModelMintedIDMaxLength) || !stringLengthBetween(input.Field, 1, ContextFabricClaimedFieldMaxLength) || strings.TrimSpace(input.Field) != input.Field {
+			return fmt.Errorf("claimed fact derivation input violates v1 bounds")
+		}
+	}
+	if c.Value.Integer == nil && c.Value.Number == nil {
+		return fmt.Errorf("claimed fact derivation value must be numeric")
 	}
 	return nil
 }
