@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,23 @@ import (
 // memberCutExtraGoals adds goals to the fixture's frame; a row that needs a
 // derived read requirement sets it for its own duration.
 var memberCutExtraGoals []InvestigationGoal
+
+// memberCutGraphDetails are coverage details the fixture's graph reader mints
+// and its synthesizer carries into the draft, as the production synthesizer
+// merges the graph's coverage into the result.
+var memberCutGraphDetails []CoverageDetail
+
+// memberCutDegradedReasons pairs each degrading detail with its reason, as the
+// graph reader mints them.
+func memberCutDegradedReasons() []string {
+	reasons := []string{}
+	for _, detail := range memberCutGraphDetails {
+		if detail.Degrading {
+			reasons = append(reasons, detail.Raw)
+		}
+	}
+	return reasons
+}
 
 const (
 	memberCutPopulation = 60
@@ -58,7 +76,7 @@ func memberCutEngineNaming(t *testing.T, gaps int, cited []int, reserve time.Dur
 		Graph: ownedProjectsGraph{&capturingGraphReader{
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
 			context: GraphContext{Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
-				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}},
+				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: memberCutDegradedReasons(), Details: slices.Clone(memberCutGraphDetails)}},
 		}, population},
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{}}, nil
@@ -95,7 +113,12 @@ func memberCutEngineNaming(t *testing.T, gaps int, cited []int, reserve time.Dur
 				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{},
 				ReadinessGaps: findings, Paths: []RelationshipPath{}, Conflicts: []Finding{},
 				Limitations: []string{}, EvidenceRefIDs: refs, ClaimedFacts: claims,
-				Coverage: input.Facts.Coverage, DeterministicAnswer: "Fine, based on available context.", Warnings: []string{},
+				Coverage: func() Coverage {
+					merged := input.Facts.Coverage
+					merged.Details = slices.Clone(input.Graph.Coverage.Details)
+					merged.DegradedReasons = slices.Clone(input.Graph.Coverage.DegradedReasons)
+					return merged
+				}(), DeterministicAnswer: "Fine, based on available context.", Warnings: []string{},
 				Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"},
 			}, nil
 		}),
@@ -200,6 +223,17 @@ func TestAFlatCohortOverTheItemBudgetIsServedWithItsTrailingMembersCut(t *testin
 				t.Fatalf("%s belongs to a cut member nothing kept cites and is still on the result (closure %v, label %v)", ref, present, labelled)
 			}
 		}
+	}
+	// The trace carries the declined retry candidate's retention decision and
+	// then the cut cohort's own: one each.
+	retentions := 0
+	for _, event := range telemetry.factRetentions {
+		if event.Stage == contractsv1.ContextFabricPlanNarrowingAssembledResult {
+			retentions++
+		}
+	}
+	if retentions != 2 {
+		t.Fatalf("assembled-result fact-retention events = %d, want 2 (the declined retry candidate's, then the cut cohort's)", retentions)
 	}
 	cuts := 0
 	for _, event := range telemetry.memberCuts {
@@ -467,5 +501,32 @@ func TestAShortLabelIsMatchedAsAWholeWordInTheDraftProse(t *testing.T) {
 	}
 	if !namedInProse(SubjectRef{Kind: SubjectProject, CanonicalID: "x", Label: "A"}, draftProse(InvestigationResult{CurrentState: "Team A is late."})) {
 		t.Fatal("a one-character label mentioned as a word is not matched")
+	}
+}
+
+// A coverage detail the graph minted for the uncut list (the census served
+// count) is carried by the draft; the cut cohort's assembly must state the
+// cohort the document lists, as the retry's re-synthesis does.
+func TestACutCohortsCensusServedCountNamesTheListedMembers(t *testing.T) {
+	memberCutGraphDetails = []CoverageDetail{kindCensusStaleServedDetail(memberCutPopulation, memberCutCallerCap)}
+	defer func() { memberCutGraphDetails = nil }()
+	telemetry := &recordingTelemetry{}
+	result, err := investigateMemberCut(t, memberCutEngine(t, memberCutGaps, nil, 0, telemetry))
+	if err != nil {
+		t.Fatalf("Investigate() error = %v events=%+v", err, telemetry.memberCuts)
+	}
+	if len(result.Cohort.Members) >= memberCutCallerCap {
+		t.Fatalf("served %d members: the case did not cut", len(result.Cohort.Members))
+	}
+	detail, ok := kindCensusTruncatedDetailIn(result.Coverage.Details)
+	if !ok {
+		t.Fatal("no kind_census_truncated detail on the served document")
+	}
+	if detail.Served == nil || *detail.Served != len(result.Cohort.Members) {
+		got := -1
+		if detail.Served != nil {
+			got = *detail.Served
+		}
+		t.Fatalf("census detail says %d served, the document lists %d members", got, len(result.Cohort.Members))
 	}
 }
