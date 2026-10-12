@@ -21,7 +21,7 @@ const credentialOperationInProgressMessage = "another acr-mcp credential operati
 // sidecar.DescribeConfigError(), both of which are engineered upstream to
 // be safe by construction.
 type classifiedError struct {
-	category string // auth | entitlement | repo_forbidden | validation | rate_limit | no_data | version | unavailable | timeout | cancelled | internal
+	category string // auth | entitlement | repo_forbidden | validation | budget | rate_limit | no_data | version | unavailable | timeout | cancelled | internal
 	message  string
 }
 
@@ -122,6 +122,9 @@ func classifyAPIError(err error, apiErr *sidecar.APIError) *classifiedError {
 		category = "rate_limit"
 	case errors.Is(err, sidecar.ErrNotFound):
 		category = "no_data"
+	case errors.Is(err, sidecar.ErrBudgetRefusal):
+		category = "budget"
+		message = budgetRefusalMessage(apiErr)
 	case errors.Is(err, sidecar.ErrInvalidRequest):
 		category = "validation"
 		switch {
@@ -161,6 +164,22 @@ func classifyAPIError(err error, apiErr *sidecar.APIError) *classifiedError {
 		category = "unavailable"
 	}
 	return &classifiedError{category: category, message: message}
+}
+
+// budgetRefusalAdvice tells a model caller what a budget refusal asks of it:
+// the request was valid, the answer was too large, and a larger budget is
+// not the remedy.
+const budgetRefusalAdvice = "the request was valid but the answer did not fit the response budget; narrow the question (fewer members, a smaller result_count, a shorter window or one group) and ask again; do not retry with a larger budget"
+
+// budgetRefusalMessage is the tool text of a budget refusal: the sanitized
+// refusal line with its measured fields, then the advice, naming the axis
+// the hosted service suggested when it sent one.
+func budgetRefusalMessage(apiErr *sidecar.APIError) string {
+	message := apiErr.Error() + "; " + budgetRefusalAdvice
+	if b := apiErr.Budget; b != nil && b.NarrowerContinuationAxis != "" {
+		message += "; suggested axis: " + b.NarrowerContinuationAxis
+	}
+	return message
 }
 
 // classifyLocalSidecarSentinel maps a sidecar sentinel that can reach this

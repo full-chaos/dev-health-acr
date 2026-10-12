@@ -35,7 +35,10 @@ var (
 	ErrInternalAPIError    = errors.New("acr: hosted API reported an internal error")
 	ErrNotFound            = errors.New("acr: resource was not found")
 	ErrInvalidRequest      = errors.New("acr: request was rejected as invalid")
-	ErrUnknownAPIError     = errors.New("acr: hosted API reported an unrecognized error code")
+	// ErrBudgetRefusal is the sentinel for budget_refusal: the request was
+	// valid and the answer did not fit the response budget.
+	ErrBudgetRefusal   = errors.New("acr: the answer did not fit the response budget")
+	ErrUnknownAPIError = errors.New("acr: hosted API reported an unrecognized error code")
 	// ErrUpstreamInvalidOutput, ErrInterpretationRejected, and
 	// ErrSynthesisRejected are the Context Fabric investigations endpoint's
 	// three model-failure codes (CHAOS-3784: internal/api/context_fabric_routes.go's
@@ -90,6 +93,7 @@ var codeSentinels = map[string]error{
 	"internal_error":          ErrInternalAPIError,
 	"not_found":               ErrNotFound,
 	"invalid_request":         ErrInvalidRequest,
+	"budget_refusal":          ErrBudgetRefusal,
 	"upstream_invalid_output": ErrUpstreamInvalidOutput,
 	"interpretation_rejected": ErrInterpretationRejected,
 	"synthesis_rejected":      ErrSynthesisRejected,
@@ -117,6 +121,7 @@ var codeSafeMessages = map[string]string{
 	"internal_error":          "the hosted API reported an internal error",
 	"not_found":               "the requested resource was not found",
 	"invalid_request":         "the request was rejected as invalid",
+	"budget_refusal":          "the answer did not fit the response budget",
 	"upstream_invalid_output": "the hosted API's model provider returned an invalid response",
 	"interpretation_rejected": "the hosted API rejected the interpreted question against a v1 bound",
 	"synthesis_rejected":      "the hosted API rejected the synthesized answer against a v1 bound",
@@ -150,7 +155,7 @@ type APIError struct {
 	RetryAfter           time.Duration
 	RequestID            string
 	MinimumClientVersion string
-	// Budget (CHAOS-6558) is set only for a 413 invalid_request whose
+	// Budget (CHAOS-6558) is set only for a 413 budget_refusal whose
 	// details carry at least one valid budget field: the hosted answer did
 	// not fit the response budget. Every field is a closed token or a
 	// non-negative integer parsed from error.details -- never hosted text.
@@ -353,7 +358,7 @@ func newAPIError(status int, detail contractsv1.ErrorDetail, requestID, retryAft
 	if detail.Code == "version_mismatch" {
 		apiErr.MinimumClientVersion = minimumClientVersion(detail.Details)
 	}
-	if detail.Code == "invalid_request" && status == 413 {
+	if detail.Code == "budget_refusal" && status == 413 {
 		if budget, ok := budgetRefusal(detail.Details); ok {
 			apiErr.Budget = &budget
 			apiErr.Message = budgetRefusalSafeMessage
