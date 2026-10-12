@@ -320,12 +320,12 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 	}
 }
 
-// Fixture: the GET /registry body of ops b1d7e1f1, written from the output of
+// Fixture: the GET /registry body of ops 5376c7c1, written from the output of
 // ops go run ./cmd/registrydump (the current text of every operation, the
 // legacy texts left out, as the route serves them), not captured from a host.
 // The catalogue pinned from that commit must match it with zero drift.
 func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_b1d7e1f1.json")
+	body, err := os.ReadFile("testdata/query_registry_5376c7c1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	w, cat, buf := newWatch(t, f, nil)
 	w.Start()
 	w.Wait()
-	const want = "sha256:a5bb8eca55047d939f39fc3317e0bb016a485fb79d5f42b0c440786cfa8ac45b"
+	const want = "sha256:c00c3c65aa6bdbe476b515549be17868f5a39f5e41aa2f106b08cc9f9cb4b462"
 	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
 		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
 	}
