@@ -107,6 +107,7 @@ func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Pri
 		Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery || teamOutcome.truncated,
 	}
 	applyNoOwnedRepositories(&result, teamOutcome.teamsWithoutRepos)
+	applyProjectReachedWithoutRows(&result, teamOutcome.projectReachedWithoutRows)
 	// Retention wins over the severity note: with no rows at all there is
 	// no fact whose severity could have been omitted, and reporting the
 	// omission would point a reader at the wrong limitation.
@@ -135,6 +136,12 @@ func (p *IncidentsProvider) readTeamRollup(ctx context.Context, orgID string, or
 	if err != nil {
 		return outcome, err
 	}
+	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, teamIDs, timeBound)
+	if err != nil {
+		return outcome, err
+	}
+	reachedOnly := reachedOnlyRepositories(reached, owned)
+	outcome.projectReachedWithoutRows = reachedRepositoryCount(reachedOnly)
 	window := resolveRollupWindow(timeBound, evidence, clock())
 	byRepo := map[string]incidentRollupRepo{}
 	incidentTime := "ifNull(i.started_at, i.observed_at)"
@@ -230,6 +237,9 @@ WHERE org_id = {org_id:String} AND is_deleted = 0 AND ` + window.timestampExpr("
 		}
 		if value, ok := window.endValue(); ok {
 			fields["window_end"] = value
+		}
+		if n := len(reachedOnly[teamID]); n > 0 {
+			fields["project_reached_repository_count"] = contextfabric.IntegerFactValue(int64(n))
 		}
 		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok && tables {
 			fields["owned_repositories"] = table

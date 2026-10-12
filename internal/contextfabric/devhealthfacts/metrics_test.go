@@ -180,6 +180,9 @@ func TestMetricsProviderAllThreeSubjectKindsInOneQuery(t *testing.T) {
 		// team_metrics_daily" as its inner join, so the more specific
 		// match must be checked first -- fakeClient.Query returns the
 		// first table whose match is a substring of the statement.
+		// The team's project-reach read also names team_project_ownership;
+		// it has no rows here.
+		{match: "uniqExact(lr.pr_number)", rows: nil},
 		{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}},
 		{match: "FROM team_project_ownership", rows: [][]any{
 			projectRollupRow("linear", "proj-1", "team-1", "Team One", 10, 4, 2, 0.4, 0.2),

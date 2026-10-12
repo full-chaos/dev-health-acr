@@ -69,6 +69,11 @@ func TestTeamPullRequestAndReviewFactsAreServedThroughTheRealProducers(t *testin
 	}
 	served := map[string]string{}
 	for _, fact := range bundle.Facts {
+		// The team's own rollup fact rides beside the member facts: the team
+		// owns the project these pull requests belong to through its issues.
+		if fact.Subject.Kind == contextfabric.SubjectTeam {
+			continue
+		}
 		state := fact.Fields["state"].String
 		if state == nil {
 			t.Fatalf("fact %+v carries no state", fact)

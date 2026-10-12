@@ -893,12 +893,20 @@ import (
 // not projected, window gate) discloses a withheld ledger anchor as withheld
 // and does not pass it on. A stored answer can differ.
 //
-// v180 -> v181: with the anchor binding follow-up switch on (beside the carry
+// v180 -> v181: a team reaches work through the projects it owns as well as the
+// repositories it owns. The pull request rollup adds the pull requests linked to
+// an owned project's issues (a reached repository counts its linked pull
+// requests only), the blockers total is the union of owned repositories and
+// owned-project items counted once, and deployments, incidents and metrics name
+// the project-reached repositories they have no rows for. A candidate saved
+// under v180 holds a team total over owned repositories alone.
+//
+// v181 -> v182: with the anchor binding follow-up switch on (beside the carry
 // switch), a continuation whose question changed is admitted onto a bound
 // binding as a follow-up; when its own resolution commits nothing, it asks
 // which subject was meant with the earlier answer's subject offered first,
 // where it used to end without a match. A stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v181"
+const QueryVersion = "devhealthfacts.clickhouse.v182"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
