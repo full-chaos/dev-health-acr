@@ -1058,6 +1058,14 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				if outcome.WindowUnsupported {
 					row.KindState = KindStateWindowUnsupported
 				}
+			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind) && recorded && outcome.UnreachedRoot != nil && outcome.UnreachedRoot.Kind == subject.Kind:
+				row.Outcome, row.KindState, row.Reason = OutcomeUnavailable, string(outcome.UnreachedRoot.State), outcome.UnreachedRoot.Reason
+				if outcome.UnreachedRoot.ScopeExpansionUnavailable {
+					row.KindState = KindStateScopeExpansionUnavailable
+				}
+				if outcome.UnreachedRoot.WindowUnsupported {
+					row.KindState = KindStateWindowUnsupported
+				}
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind):
 				row.Outcome = OutcomeNotApplicable
 				row.Reason = "this fact kind does not describe " + subjectKindPlural(subject.Kind)

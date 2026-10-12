@@ -47,6 +47,38 @@ type FactKindOutcome struct {
 	// WindowUnsupported is set on a scope_gap branch whose policy is
 	// configured and enabled but does not serve the requested window.
 	WindowUnsupported bool
+	// UnreachedRoot is set when a kind read some subjects but a scope gap left
+	// the roots of another kind unreached. It carries that gap's own cause.
+	UnreachedRoot *FactUnreachedRoot
+}
+
+// FactUnreachedRoot is the cause a scope gap gives for the root subjects of
+// one kind that a partially served kind did not reach.
+type FactUnreachedRoot struct {
+	Kind                      SubjectKind
+	State                     SourceState
+	ScopeExpansionUnavailable bool
+	WindowUnsupported         bool
+	Reason                    string
+}
+
+func (bundle *CanonicalFactBundle) noteUnreachedRoot(kind FactKind, planned factPlanEntry, capability FactCapability) {
+	if planned.ScopeGap == nil {
+		return
+	}
+	outcome, ok := bundle.Outcomes[kind]
+	if !ok {
+		return
+	}
+	gap := *planned.ScopeGap
+	outcome.UnreachedRoot = &FactUnreachedRoot{
+		Kind:                      gap.OriginKind,
+		State:                     factScopeGapSourceState(gap.Outcome),
+		ScopeExpansionUnavailable: gap.ScopeExpansionUnavailable(),
+		WindowUnsupported:         gap.WindowUnsupported(),
+		Reason:                    unexpandedReason(capability, gap),
+	}
+	bundle.Outcomes[kind] = outcome
 }
 
 // FactOutcomeLedger maps a planned fact kind to its outcome.

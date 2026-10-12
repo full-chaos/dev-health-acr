@@ -1057,6 +1057,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason),
 				factDetailSpecForRead(planned, registered.capability, true, reason))
 			bundle.recordOutcome(planned.Kind, factReadFailed, planned.Subjects, query.Subjects, nil)
+			bundle.noteUnreachedRoot(planned.Kind, planned, registered.capability)
 			r.recordFactRead(ctx, principal, planned.Kind, factReadFailed, state, query.Subjects, 0, false)
 			continue
 		}
@@ -1110,6 +1111,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason),
 				factDetailSpecForRead(planned, registered.capability, true, reason))
 			bundle.recordOutcome(planned.Kind, factReadRejected, planned.Subjects, query.Subjects, nil)
+			bundle.noteUnreachedRoot(planned.Kind, planned, registered.capability)
 			r.recordFactRead(ctx, principal, planned.Kind, outcome, state, query.Subjects, factsReturned, false)
 			r.recordFactResultRejection(ctx, principal, planned.Kind, rejection.cause, query.Subjects, factsReturned)
 			continue
@@ -1133,6 +1135,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		bundle.ReadSubjects.add(planned.Kind, query.Subjects)
 		r.recordEvaluationCoverage(ctx, principal, planned.Kind, result.Evaluation, len(result.EvaluatedSubjects))
 		bundle.recordOutcome(planned.Kind, factReadCompleted, planned.Subjects, query.Subjects, &result)
+		bundle.noteUnreachedRoot(planned.Kind, planned, registered.capability)
 		r.recordFactRead(ctx, principal, planned.Kind, factReadCompleted, mergedState, query.Subjects, factsReturned, mergedState == SourceTruncated)
 	}
 	sortCanonicalFacts(bundle.Facts)
