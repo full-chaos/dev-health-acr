@@ -265,3 +265,35 @@ func TestMemberStatusCountsOnlyTheMembersTheCallerMayRead(t *testing.T) {
 		t.Fatalf("status filter lines = %+v, want one line over the 2 readable candidates", telemetry.pullRequestStatusFilters)
 	}
 }
+
+// TestMemberStatusForACallerWhoCanReadNoneOfTheReachedMembers: every reached
+// incident is in a repository the caller cannot read. The status filter reads
+// and counts none of them, so no member is served, the outside-set count is 0,
+// the filter line reports 0 candidates, and the call does not build the
+// "no member holds the status" cohort, which would tell the caller that
+// members it cannot read exist.
+func TestMemberStatusForACallerWhoCanReadNoneOfTheReachedMembers(t *testing.T) {
+	fixtures := []memberStatusFixture{
+		{id: "incident:secret-open", label: "A", stored: "open", repo: "acme/secret"},
+		{id: "incident:secret-unmapped", label: "B", stored: "Paged", repo: "acme/secret"},
+		{id: "incident:secret-resolved", label: "C", stored: "resolved", repo: "acme/secret"},
+	}
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/granted"}}
+	result, telemetry, err := discoverMemberStatusAs(t, memberStatusFake(contextfabric.SubjectIncident, fixtures, nil), contextfabric.SubjectIncident, "open", principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := servedMemberIDs(result); len(got) != 0 {
+		t.Fatalf("served incidents = %v, want none", got)
+	}
+	if result.Cohort != nil {
+		t.Fatalf("cohort = %+v, want none: an empty complete cohort would reveal that unreadable members were reached", result.Cohort)
+	}
+	if result.MemberStatusOutsideSet.Count != 0 {
+		t.Fatalf("outside the known set = %+v, want a count of 0", result.MemberStatusOutsideSet)
+	}
+	want := []PullRequestStatusFilterDecision{{MemberKind: contextfabric.SubjectIncident, Status: "open"}}
+	if !reflect.DeepEqual(telemetry.pullRequestStatusFilters, want) {
+		t.Fatalf("status filter lines = %+v, want %+v (0 candidates)", telemetry.pullRequestStatusFilters, want)
+	}
+}
