@@ -2,8 +2,11 @@ package devhealthfacts
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
+
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -165,8 +168,9 @@ const ReadStatsMessage = "devhealthfacts.read_stats"
 // into a ReadStats it finds on the context this decorator wires in.
 //
 // Only closed values are logged: the reader name (a constant chosen at each
-// call site), numbers and a closed outcome. Never the exception text, a row,
-// an org id or a subject id.
+// call site), numbers, a closed outcome and, on a failed statement, the
+// numeric ClickHouse exception code. Never the exception text, a row, an org
+// id or a subject id.
 type readStatsInstrumentation struct {
 	next   readers.Instrumentation
 	logger *slog.Logger
@@ -207,13 +211,18 @@ func (r readStatsInstrumentation) StartQuery(ctx context.Context, reader string,
 		} else if err != nil {
 			outcome = "error"
 		}
-		r.logger.LogAttrs(ctx, slog.LevelInfo, ReadStatsMessage,
+		attrs := []slog.Attr{
 			slog.String("reader", contextfabric.SanitizeLogAttr(reader)),
 			slog.Uint64("read_rows", rows),
 			slog.Uint64("read_bytes", bytes),
 			slog.Int64("elapsed_ms", elapsed.Milliseconds()),
 			slog.String("outcome", contextfabric.SanitizeLogAttr(outcome)),
-		)
+		}
+		var exception *clickhousedriver.Exception
+		if errors.As(err, &exception) {
+			attrs = append(attrs, slog.Int("clickhouse_code", int(exception.Code)))
+		}
+		r.logger.LogAttrs(ctx, slog.LevelInfo, ReadStatsMessage, attrs...)
 		finish(err)
 	}
 }
