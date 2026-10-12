@@ -3,7 +3,12 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"maps"
+	"math"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -87,9 +92,9 @@ func (p *OperationalDeficienciesProvider) ReadFacts(ctx context.Context, princip
 	// missing from the first version of this tuple -- two rows tied on
 	// (window_end, computed_at) but differing only in rule_version or
 	// window_start would still have been unordered.
-	statement := withRowLimit(`SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, toString(window_start), toString(window_end)
+	statement := withRowLimit(`SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, toString(window_start), toString(window_end), toString(computed_at)
 FROM (
-	SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, window_start, window_end, fired,
+	SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, window_start, window_end, computed_at, fired,
 		row_number() OVER (PARTITION BY team_id, rule_id ORDER BY window_end DESC, computed_at DESC, cityHash64(tuple(fired, severity, title, rationale, success_criterion, rule_version, window_start)) DESC) AS rn
 	FROM recommendations_daily FINAL
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)} AND ` + deficiencyWindowSQL("window_end", timeBound) + `
@@ -98,10 +103,12 @@ WHERE rn = 1 AND fired = 1
 ORDER BY team_id, rule_id`)
 	rowCount := 0
 	firedTeams := map[string]struct{}{}
+	var basisFacts []basisFact
+	basisTeams := map[string]struct{}{}
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
-		var teamID, ruleID, ruleVersion, severity, title, rationale, successCriterion, windowStart, windowEnd string
-		if err := row.Scan(&teamID, &ruleID, &ruleVersion, &severity, &title, &rationale, &successCriterion, &windowStart, &windowEnd); err != nil {
+		var teamID, ruleID, ruleVersion, severity, title, rationale, successCriterion, windowStart, windowEnd, computedAt string
+		if err := row.Scan(&teamID, &ruleID, &ruleVersion, &severity, &title, &rationale, &successCriterion, &windowStart, &windowEnd, &computedAt); err != nil {
 			return err
 		}
 		subject, ok := bySubject[teamID]
@@ -109,24 +116,53 @@ ORDER BY team_id, rule_id`)
 			return nil
 		}
 		firedTeams[teamID] = struct{}{}
+		fields := map[string]contextfabric.FactValue{
+			"rule_id":           stringOrNull(ruleID),
+			"rule_version":      stringOrNull(ruleVersion),
+			"severity":          stringOrNull(severity),
+			"title":             stringOrNull(title),
+			"rationale":         stringOrNull(rationale),
+			"success_criterion": stringOrNull(successCriterion),
+			"window_start":      contextfabric.StringFactValue(windowStart),
+			"window_end":        contextfabric.StringFactValue(windowEnd),
+		}
+		if ruleID == compoundingRiskRuleID {
+			fields["rule_computed_at"] = contextfabric.StringFactValue(computedAt)
+			basis, parsed := parseCompoundingRiskRationale(rationale)
+			if parsed {
+				fields["rule_basis_compounding_risk"] = contextfabric.NumberFactValue(basis.score)
+				fields["rule_basis_severity"] = contextfabric.StringFactValue(basis.severity)
+			} else {
+				fields["rule_basis_unavailable_reason"] = contextfabric.StringFactValue(ruleBasisUnavailableNotRuleSentence)
+				slog.Warn("devhealthfacts.rule_basis_unparsed", "rule_id", contextfabric.SanitizeLogAttr(ruleID))
+			}
+			basisFacts = append(basisFacts, basisFact{index: len(facts), teamID: teamID, basis: basis, parsed: parsed})
+			basisTeams[teamID] = struct{}{}
+		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactOperationalDeficiencies, Subject: subject,
-			Fields: map[string]contextfabric.FactValue{
-				"rule_id":           stringOrNull(ruleID),
-				"rule_version":      stringOrNull(ruleVersion),
-				"severity":          stringOrNull(severity),
-				"title":             stringOrNull(title),
-				"rationale":         stringOrNull(rationale),
-				"success_criterion": stringOrNull(successCriterion),
-				"window_start":      contextfabric.StringFactValue(windowStart),
-				"window_end":        contextfabric.StringFactValue(windowEnd),
-			},
+			Fields:         fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query team operational deficiencies", scanErr)
+	}
+	if len(basisTeams) > 0 {
+		teamIDs := make([]string, 0, len(basisTeams))
+		for id := range basisTeams {
+			teamIDs = append(teamIDs, id)
+		}
+		sort.Strings(teamIDs)
+		latest, latestErr := p.readLatestCompoundingRisk(ctx, orgID, teamIDs, timeBound)
+		if latestErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query team latest compounding risk", latestErr)
+		}
+		for _, bf := range basisFacts {
+			current, found := latest[bf.teamID]
+			maps.Copy(facts[bf.index].Fields, p.latestFields(current, found, bf))
+		}
 	}
 	evaluated, evaluation := coverage.classify(firedTeams, rowCount >= maxFactRowsPerQuery)
 	state, retentionReason := timeBound.retentionState(rowCount)
@@ -302,4 +338,132 @@ func (c evaluationCoverage) classify(fired map[string]struct{}, capped bool) ([]
 		evaluation.members = append(evaluation.members, contextfabric.FactEvaluationMember{Subject: c.requested[teamID], State: state})
 	}
 	return measured, evaluation
+}
+
+const compoundingRiskRuleID = "compounding-risk"
+
+// compoundingRiskMovedDelta is the score change, in compounding_risk units,
+// that counts as "moved since the rule ran" when the severity band itself did
+// not change.
+const compoundingRiskMovedDelta = 0.1
+
+const (
+	latestUnavailableNoRow              = "no_compounding_risk_row"
+	latestScoreUnavailableNull          = "compounding_risk_null_on_latest_row"
+	ruleBasisUnavailableNotRuleSentence = "rationale_not_in_rule_sentence_form"
+)
+
+var compoundingRiskRationalePattern = regexp.MustCompile(`^Compounding Risk score is (\d+\.\d+) \(severity: (elevated|high)\)\.`)
+
+// ruleBasis is the score and band the Ops rule states it ran on, read from
+// the rule's own rationale text (Ops stores no structured column for it).
+type ruleBasis struct {
+	score    float64
+	severity string
+}
+
+type basisFact struct {
+	index  int
+	teamID string
+	basis  ruleBasis
+	parsed bool
+}
+
+// parseCompoundingRiskRationale reads the rule-time score and band. Any text
+// that is not the rule's own sentence is unparsed: the caller serves no
+// basis rather than a zero.
+func parseCompoundingRiskRationale(rationale string) (ruleBasis, bool) {
+	match := compoundingRiskRationalePattern.FindStringSubmatch(rationale)
+	if match == nil {
+		return ruleBasis{}, false
+	}
+	score, err := strconv.ParseFloat(match[1], 64)
+	if err != nil {
+		return ruleBasis{}, false
+	}
+	return ruleBasis{score: score, severity: match[2]}, true
+}
+
+type latestCompoundingRisk struct {
+	severity   string
+	hasRisk    bool
+	risk       float64
+	computedAt string
+	day        string
+	known      bool
+	fresh      bool
+}
+
+// readLatestCompoundingRisk reads each team's latest compounding_risk_daily
+// row with the SAME pick health.go's readScope makes, so the deficiency fact
+// and the health fact can never name two different latest rows.
+func (p *OperationalDeficienciesProvider) readLatestCompoundingRisk(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (map[string]latestCompoundingRisk, error) {
+	statement := withRowLimit(`SELECT scope_id, toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0)), toString(computed_at), toString(day),
+	toUInt8(` + freshnessIsKnownSQL("severity") + `),
+	toUInt8(` + freshnessIsKnownSQL("severity") + ` AND ` + freshnessIsFreshSQL("day", timeBound) + `)
+FROM (
+	SELECT scope_id, severity, compounding_risk, computed_at, day,
+		row_number() OVER (PARTITION BY scope_id ORDER BY (severity != 'unknown') DESC, day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1), ifNull(churn_norm, -1), ifNull(complexity_norm, -1), ifNull(ownership_norm, -1), ifNull(review_norm, -1), w_churn, w_complexity, w_ownership, w_review)) DESC) AS rn
+	FROM compounding_risk_daily
+	WHERE org_id = {org_id:String} AND scope = 'team' AND scope_id IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
+)
+WHERE rn = 1
+ORDER BY scope_id`)
+	out := make(map[string]latestCompoundingRisk, len(ids))
+	err := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var scopeID string
+		var hasRisk, isKnown, isFresh uint8
+		var latest latestCompoundingRisk
+		if err := row.Scan(&scopeID, &latest.severity, &hasRisk, &latest.risk, &latest.computedAt, &latest.day, &isKnown, &isFresh); err != nil {
+			return err
+		}
+		latest.hasRisk = hasRisk != 0
+		latest.known = isKnown != 0
+		latest.fresh = isFresh != 0
+		out[scopeID] = latest
+		return nil
+	}, timeBound.bindings()...)
+	return out, err
+}
+
+// latestFields names the latest computation beside the rule basis, with the
+// same severity freshness policy the health fact applies. Nothing is
+// zero-filled; every absent value carries its reason, and a move is stated
+// only when it can be decided.
+func (p *OperationalDeficienciesProvider) latestFields(latest latestCompoundingRisk, found bool, bf basisFact) map[string]contextfabric.FactValue {
+	fields := map[string]contextfabric.FactValue{}
+	if !found {
+		fields["latest_unavailable_reason"] = contextfabric.StringFactValue(latestUnavailableNoRow)
+		return fields
+	}
+	fields["latest_computed_at"] = contextfabric.StringFactValue(latest.computedAt)
+	fields["latest_as_of_day"] = contextfabric.StringFactValue(latest.day)
+	if latest.hasRisk {
+		fields["latest_compounding_risk"] = contextfabric.NumberFactValue(latest.risk)
+	} else {
+		fields["latest_score_unavailable_reason"] = contextfabric.StringFactValue(latestScoreUnavailableNull)
+	}
+	bandServed := latest.known && latest.fresh
+	switch {
+	case bandServed:
+		fields["latest_severity"] = contextfabric.StringFactValue(latest.severity)
+	case latest.known:
+		fields["latest_severity_unavailable_reason"] = contextfabric.StringFactValue(healthSeverityUnavailableReasonStaleBeyondWindow)
+	default:
+		fields["latest_severity_unavailable_reason"] = contextfabric.StringFactValue(healthSeverityUnavailableReasonNoKnownBand)
+	}
+	if !bf.parsed {
+		return fields
+	}
+	switch {
+	case latest.hasRisk:
+		moved := math.Abs(latest.risk-bf.basis.score) >= compoundingRiskMovedDelta-1e-9
+		if bandServed && latest.severity != bf.basis.severity {
+			moved = true
+		}
+		fields["score_moved_since_rule"] = contextfabric.BooleanFactValue(moved)
+	case bandServed && latest.severity != bf.basis.severity:
+		fields["score_moved_since_rule"] = contextfabric.BooleanFactValue(true)
+	}
+	return fields
 }

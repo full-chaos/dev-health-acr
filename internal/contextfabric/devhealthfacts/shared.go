@@ -863,7 +863,12 @@ import (
 // admitted carried binding (or redeemed anchor receipt) names another anchor
 // kind than the model states counts, discovers and captures under the
 // binding's kind, so a stored count answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v176"
+//
+// v175 -> v176: the compounding-risk operational-deficiency fact carries the
+// rule's own basis (score, band, time) beside the team's latest
+// compounding_risk_daily row and a moved-since-the-rule flag. An answer saved
+// under v175 quotes the rule-time score as the team's current risk.
+const QueryVersion = "devhealthfacts.clickhouse.v177"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
