@@ -104,6 +104,9 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 	state, retentionReason := timeBound.retentionState(len(rows) + teamFactCount)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery || teamOutcome.truncated}
 	applyNoOwnedRepositories(&result, teamOutcome.teamsWithoutRepos)
+	if teamOutcome.linkRowsUnwindowed {
+		mergeFactReadReason(&result, teamProjectLinksUnwindowedReason)
+	}
 	return result, nil
 }
 
@@ -260,6 +263,9 @@ ORDER BY repo_id`
 			}
 			outcome.contributed++
 			reachedWithData++
+			if timeBound.active {
+				outcome.linkRowsUnwindowed = true
+			}
 			opened += r.opened
 			merged += r.merged
 			closedUnmerged += r.closedUnmerged

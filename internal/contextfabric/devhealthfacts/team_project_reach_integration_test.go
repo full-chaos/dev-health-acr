@@ -181,6 +181,9 @@ func TestTeamRollups_ReachWorkThroughOwnedProjectLinks(t *testing.T) {
 		fields := factFor(t, result, teamSubject("team-ended")).Fields
 		wantInt(t, fields, "pull_requests_opened_window", 1)
 		wantInt(t, fields, "project_reached_repository_count", 2)
+		if !strings.Contains(result.Reason, "link rows carry no validity window") {
+			t.Fatalf("reason = %q, want the unwindowed-links limitation", result.Reason)
+		}
 	})
 
 	t.Run("deployments: project-reached repositories contribute no repo-level rows, named", func(t *testing.T) {

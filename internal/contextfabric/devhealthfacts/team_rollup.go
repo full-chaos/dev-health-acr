@@ -426,4 +426,12 @@ type teamRollupOutcome struct {
 	// projectReachedWithoutRows counts the repositories reached only through
 	// owned projects that a repo-level kind has no rows for.
 	projectReachedWithoutRows int
+	// linkRowsUnwindowed is set when a historical read counted work through
+	// the issue <> pull request link rows, which carry no validity window:
+	// they are read as they stand now.
+	linkRowsUnwindowed bool
 }
+
+// teamProjectLinksUnwindowedReason is the limitation served beside a
+// historical read that reached work through project links.
+const teamProjectLinksUnwindowedReason = "devhealthfacts: project reach on a historical read uses the issue-to-pull-request links as they stand now; link rows carry no validity window"
