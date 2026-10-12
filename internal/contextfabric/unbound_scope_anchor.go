@@ -1,5 +1,10 @@
 package contextfabric
 
+// unboundScopeAnchorTerminalReason is the subjectless-terminal reason of a turn
+// ended before discovery because the scope anchor could not be bound to one
+// subject.
+const unboundScopeAnchorTerminalReason = "unbound_scope_anchor"
+
 // treeScopeAnchorKinds are the anchor kinds whose members are read over the
 // entity tree. An anchor of any other kind stays on the generic walk.
 var treeScopeAnchorKinds = map[SubjectKind]bool{
@@ -61,4 +66,16 @@ func unboundScopeAnchorResolution(frame *QuestionFrame, declaredAnchorKind Subje
 	resolution.CommitDecisionDigests = nil
 	resolution.ClarificationPrompt = ClarificationPrompt(candidates)
 	return resolution
+}
+
+// unboundAnchorAwareTerminalReason is subjectlessTerminalReason with the one
+// class the turn decided before discovery named: a pool that is non-empty only
+// because the scope anchor could not be bound reads unbound_scope_anchor, not
+// the generic ambiguous.
+func unboundAnchorAwareTerminalReason(frame *QuestionFrame, declaredAnchorKind SubjectKind, gate FrameGate, resolution SubjectResolution, subjectCandidatesAuthzDropped int, declaredKind declaredKindDecision) string {
+	reason := subjectlessTerminalReason(gate, resolution, subjectCandidatesAuthzDropped, declaredKind)
+	if reason == "ambiguous" && unboundScopeAnchorNamed(frame, declaredAnchorKind, resolution, CommitBasisSet{}) {
+		return unboundScopeAnchorTerminalReason
+	}
+	return reason
 }

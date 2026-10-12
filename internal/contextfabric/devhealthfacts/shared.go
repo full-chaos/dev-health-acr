@@ -830,6 +830,10 @@ import (
 // link to, not the repositories of its attributed issues. Issues with no link
 // row are counted as a missing next hop. A project or team answer saved under
 // v168 may rest on a repository the tree does not reach.
+// v169 -> v170: a scoped question whose anchor cannot be bound to one subject
+// (several committed subjects of the anchor kind and no anchor term matched
+// one, or none committed at that kind) is a clarification, not a generic
+// cohort. An answer saved under v169 for such a question holds the cohort.
 const QueryVersion = "devhealthfacts.clickhouse.v170"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
