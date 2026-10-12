@@ -938,10 +938,14 @@ import (
 // more, and otherwise served as the whole unfiltered member set. A candidate
 // saved under v186 may hold that unfiltered set.
 //
-// v187 -> v193: served prose (current_state and the direct-read coverage notes)
+// v187 -> v188: a team that owns no repository is served not_applicable with
+// the cause on the health, operational deficiency and investment kinds, where
+// a stored answer holds no_data.
+//
+// v188 -> v189: served prose (current_state and the direct-read coverage notes)
 // names measures by display noun and shows numbers at display precision. A
 // stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v193"
+const QueryVersion = "devhealthfacts.clickhouse.v189"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
