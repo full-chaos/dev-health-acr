@@ -68,10 +68,11 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{teamSubject(teamID)},
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "code: 241") {
-			t.Fatalf("team blocker read exceeded its statement memory budget over %d unrelated work items: %v", blockerMemoryFillerItems, err)
+		cause := readFailureCause(err)
+		if strings.Contains(cause, "code: 241") {
+			t.Fatalf("team blocker read exceeded its statement memory budget over %d unrelated work items: %s", blockerMemoryFillerItems, cause)
 		}
-		t.Fatalf("ReadFacts: %v", err)
+		t.Fatalf("ReadFacts: %v: %s", err, cause)
 	}
 	fields := factFor(t, result, teamSubject(teamID)).Fields
 	wantInt(t, fields, "blocked_work_items_current", 2)
