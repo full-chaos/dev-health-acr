@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"reflect"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -151,5 +152,40 @@ func TestThePersistedReadingKeepsTheModelsKind(t *testing.T) {
 		if _, err := EncodeSemanticState(state); err != nil {
 			t.Errorf("%s: the persisted reading does not encode: %v", name, err)
 		}
+	}
+}
+
+// TestTheReadbackKeepsACountServedOnTheBoundKind: a count served on the
+// bound kind, read back by id, is the count the client was served. The
+// persisted reading keeps the model's kind, so the readback's own
+// re-derivation does not count; the repair then leaves the served claim as
+// it stands rather than force a decision it has no evidence for.
+func TestTheReadbackKeepsACountServedOnTheBoundKind(t *testing.T) {
+	first := identityProvenResponse(probeAlpha)
+	first.context = countedTeams()
+	rig := newAnchorProbeRig(t, false)
+	rig.engine.anchorBindingCountEnabled = true
+	rig.interpreter.read(SubjectRepository, false)
+	one := rig.turn(t, needTurnRequest("request_readback_one", true), first)
+	rig.verify()
+	rig.interpreter.read(SubjectProject, false)
+	two := rig.turn(t, continuingNeedTurn(needTurnRequest("request_readback_two", true), one.result.ResultID), needTurnResponse{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}}, bases: provenCommitBases(probeAlpha), context: countedTeams(),
+	})
+	if two.transitions[0].ServedCount != string(CountPopulationScopeAnchorCommitted) {
+		t.Fatalf("premise: served count %s, want anchor_committed on the bound kind", two.transitions[0].ServedCount)
+	}
+	stored := rig.store.results[two.result.ResultID]
+	readback := stored
+	readback.ClaimedFacts = append([]ClaimedFact(nil), stored.ClaimedFacts...)
+	if RepairStoredCardinalityClaimSubject(acceptancePrincipal(), &readback, two.saved, SemanticStateReadAvailable) {
+		t.Fatalf("the readback repaired the served claim: %+v", readback.ClaimedFacts)
+	}
+	if !reflect.DeepEqual(readback.ClaimedFacts, stored.ClaimedFacts) || len(readback.ClaimedFacts) == 0 {
+		t.Fatalf("readback claims = %+v, want the served three teams on alpha unchanged", readback.ClaimedFacts)
+	}
+	claim := readback.ClaimedFacts[0]
+	if claim.Subject.CanonicalID != probeAlpha.CanonicalID || claim.Value.Integer == nil || *claim.Value.Integer != 3 {
+		t.Fatalf("readback claim = %+v, want three teams on %s", claim, probeAlpha.CanonicalID)
 	}
 }
