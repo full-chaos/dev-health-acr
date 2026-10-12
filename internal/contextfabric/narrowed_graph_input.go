@@ -1,0 +1,154 @@
+package contextfabric
+
+import "slices"
+
+// narrowedInputRefHolders names every evidence-ref holder of a synthesis
+// input besides the graph's own ref list, by its path in SynthesisInput. It
+// is the one list keptInputRefs walks. Together with
+// narrowedInputRefExclusions it accounts for every field of SynthesisInput
+// that can carry a ref: TestEveryEvidenceRefHolderOfTheSynthesisInputIsWalked
+// reflects over the whole input and fails on a field in neither.
+var narrowedInputRefHolders = []string{
+	"Graph.Resolution.Candidates[].EvidenceRefIDs",
+	"Graph.Cohort.Members[].EvidenceRefIDs",
+	"Graph.Paths[].EvidenceRefIDs",
+	"Graph.Paths[].Edges[].EvidenceRefIDs",
+	"Graph.DriverCandidates[].EvidenceRefIDs",
+	"Facts.Facts[].EvidenceRefIDs",
+}
+
+// synthesisInputRefRoots accounts for every top-level SynthesisInput field:
+// the two whose holders keptInputRefs walks, and the rest with why none of
+// their fields holds an evidence ref a narrowed pass must keep. A field added
+// to SynthesisInput fails the census test until it is named here.
+var synthesisInputRefRoots = map[string]string{
+	"Graph":                   "walked: candidates, cohort members, paths, edges, driver candidates",
+	"Facts":                   "walked: facts",
+	"Request":                 "the caller's request: question, options and time context; its raw supplied interpretation and synthesis are excluded below",
+	"Interpretation":          "the interpreted question: requirements and time context, no refs",
+	"Allocation":              "item counts only",
+	"LabelCanonicalization":   "label rewrites, no refs",
+	"EvidenceWindow":          "the effective window's bounds, no refs",
+	"ReadTimeClamp":           "the read-time clamp, no refs",
+	"EvidenceWindowFromClock": "a flag",
+}
+
+// narrowedInputRefExclusions are the SynthesisInput fields that can carry a
+// ref and are not walked, each with the reason.
+var narrowedInputRefExclusions = map[string]string{
+	"Graph.EvidenceRefIDs":                  "the list the narrowing filters",
+	"Request.SuppliedSynthesis.Output":      "a supplied synthesis declines the cohort retry (RetryDeclinedSuppliedSynthesis), so no narrowed pass reads it",
+	"Request.SuppliedInterpretation.Output": "the caller's interpretation, decoded into Interpretation before retrieval; the interpretation shape names no evidence ref",
+}
+
+// keptInputRefs is every evidence ref a holder of the narrowed input still
+// carries, walked over exactly the holders narrowedInputRefHolders names.
+func keptInputRefs(graph GraphContext, facts []CanonicalFact) map[string]bool {
+	kept := map[string]bool{}
+	mark := func(refs []string) {
+		for _, ref := range refs {
+			kept[ref] = true
+		}
+	}
+	for _, candidate := range graph.Resolution.Candidates {
+		mark(candidate.EvidenceRefIDs)
+	}
+	if graph.Cohort != nil {
+		for _, member := range graph.Cohort.Members {
+			mark(member.EvidenceRefIDs)
+		}
+	}
+	for _, path := range graph.Paths {
+		mark(path.EvidenceRefIDs)
+		for _, edge := range path.Edges {
+			mark(edge.EvidenceRefIDs)
+		}
+	}
+	for _, driver := range graph.DriverCandidates {
+		mark(driver.EvidenceRefIDs)
+	}
+	for _, fact := range facts {
+		mark(fact.EvidenceRefIDs)
+	}
+	return kept
+}
+
+// graphWithoutRemovedMembers is the graph input of a narrowed pass, whose
+// cohort is already the narrowed one: every relationship path that names a
+// removed member is dropped, and every driver candidate that affects a removed
+// member or cites a dropped path. Synthesis derives the answer's paths,
+// drivers and evidence from this input, so what it does not carry the answer
+// cannot name. A graph evidence ref is removed only when a dropped member,
+// path or driver carried it and no holder left in the narrowed input
+// (keptInputRefs) carries it.
+func graphWithoutRemovedMembers(graph GraphContext, removed []CohortMember, facts []CanonicalFact) GraphContext {
+	if len(removed) == 0 {
+		return graph
+	}
+	gone := make(map[string]bool, len(removed))
+	dropped := map[string]bool{}
+	mark := func(refs []string) {
+		for _, ref := range refs {
+			dropped[ref] = true
+		}
+	}
+	for _, member := range removed {
+		gone[SubjectMapKey(member.Subject)] = true
+		mark(member.EvidenceRefIDs)
+	}
+
+	paths := make([]RelationshipPath, 0, len(graph.Paths))
+	droppedPaths := map[string]bool{}
+	for _, path := range graph.Paths {
+		if !pathNamesRemoved(path, gone) {
+			paths = append(paths, path)
+			continue
+		}
+		droppedPaths[path.PathID] = true
+		mark(path.EvidenceRefIDs)
+		for _, edge := range path.Edges {
+			mark(edge.EvidenceRefIDs)
+		}
+	}
+
+	// A driver candidate is a judgment about the paths it cites: graphrank's
+	// edge admission builds one per admitted edge, affecting the edge's From
+	// and naming its To in the title and summary. One that affects a removed
+	// member, or cites a dropped path, describes a member the pass no longer
+	// serves.
+	drivers := make([]DriverJudgment, 0, len(graph.DriverCandidates))
+	for _, driver := range graph.DriverCandidates {
+		if slices.ContainsFunc(driver.AffectedSubjects, func(subject SubjectRef) bool { return gone[SubjectMapKey(subject)] }) ||
+			slices.ContainsFunc(driver.PathIDs, func(id string) bool { return droppedPaths[id] }) {
+			mark(driver.EvidenceRefIDs)
+			continue
+		}
+		drivers = append(drivers, driver)
+	}
+
+	graph.Paths, graph.DriverCandidates = paths, drivers
+	kept := keptInputRefs(graph, facts)
+	refs := make([]string, 0, len(graph.EvidenceRefIDs))
+	for _, ref := range graph.EvidenceRefIDs {
+		if dropped[ref] && !kept[ref] {
+			continue
+		}
+		refs = append(refs, ref)
+	}
+	graph.EvidenceRefIDs = refs
+	return graph
+}
+
+func pathNamesRemoved(path RelationshipPath, gone map[string]bool) bool {
+	for _, node := range path.Nodes {
+		if gone[SubjectMapKey(node)] {
+			return true
+		}
+	}
+	for _, edge := range path.Edges {
+		if gone[SubjectMapKey(edge.From)] || gone[SubjectMapKey(edge.To)] {
+			return true
+		}
+	}
+	return false
+}

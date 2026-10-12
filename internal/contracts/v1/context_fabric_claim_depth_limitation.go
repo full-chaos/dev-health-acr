@@ -26,7 +26,7 @@ const (
 	contextFabricClaimDepthSubjects = " subjects, because the assembled answer exceeded the item budget: each subject keeps at most "
 	contextFabricClaimDepthFact     = " fact"
 	contextFabricClaimDepthFacts    = " facts"
-	contextFabricClaimDepthSuffix   = " (every fact the answer cites is kept, and a subject's other facts are kept in the order they were claimed). Ask a narrower question or allow a larger response budget to see the rest."
+	contextFabricClaimDepthSuffix   = " (every fact the answer cites is kept, and a subject's other facts are kept in the order they were claimed). Ask a narrower question to see the rest."
 	contextFabricClaimDepthNumber   = `(0|[1-9][0-9]{0,8})`
 	contextFabricClaimDepthMaxCount = 999999999
 )
