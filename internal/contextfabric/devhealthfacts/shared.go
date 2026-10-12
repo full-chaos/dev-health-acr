@@ -882,7 +882,6 @@ import (
 // those rows where it was served ungrouped. A candidate saved under v178 holds
 // the ungrouped answer.
 const QueryVersion = "devhealthfacts.clickhouse.v179"
-const QueryVersion = "devhealthfacts.clickhouse.v178"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
