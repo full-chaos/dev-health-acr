@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -733,6 +734,10 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			return rejectSynthesisClaim(RejectionReasonClaimNoCanonicalFact, 0, "claimed fact %s/%s has no canonical observation to ground it", claim.Kind, claim.Field)
 		case claimFactIDUnknown:
 			return rejectSynthesisClaim(RejectionReasonClaimNoCanonicalFact, canonicalFactGroupSize(input.Facts.Facts, claim), "claimed fact %s/%s cites fact_id %q, which names no supplied canonical fact of that kind and subject", claim.Kind, claim.Field, claim.FactID)
+		case claimDerivationInputUnknown:
+			return rejectSynthesisClaim(RejectionReasonClaimDerivationInputUnknown, 0, "derived claim %q names an input that is not a supplied numeric fact of its subject", claim.ClaimID)
+		case claimDerivationValueMismatch:
+			return rejectSynthesisClaim(RejectionReasonClaimDerivationValueMismatch, 0, "derived claim %q value is not reproducible from its named inputs", claim.ClaimID)
 		case claimFieldUnobserved:
 			return rejectSynthesisClaim(RejectionReasonClaimFieldUnobserved, canonicalFactGroupSize(input.Facts.Facts, claim), "claimed fact field %q was not canonically observed", claim.Field)
 		default:
@@ -1081,6 +1086,13 @@ const (
 	// claimFactIDUnknown: the claim cites a fact_id that names no supplied
 	// canonical fact of the claim's Kind and Subject.
 	claimFactIDUnknown
+	// claimDerivationInputUnknown: a derived claim names an input that is
+	// not a supplied numeric fact of the claim's Subject.
+	claimDerivationInputUnknown
+	// claimDerivationValueMismatch: every input resolved, but the claimed
+	// value is not what the stated operation yields from them (or the
+	// operation is undefined, e.g. a ratio over zero).
+	claimDerivationValueMismatch
 	// claimGrounded: a canonical fact of this Kind/Subject observed this
 	// Field with exactly this Value.
 	claimGrounded
@@ -1132,6 +1144,10 @@ func groundClaim(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, claim
 // Only a match at position > 0 was impossible before.
 func groundClaimAt(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, claimGroundingOutcome, int) {
 	key := subjectKeyForModel(claim.Subject)
+	if len(claim.DerivedFrom) > 0 {
+		outcome := groundDerivedClaim(facts, claim, key)
+		return CanonicalFact{}, outcome, -1
+	}
 	if claim.FactID != "" {
 		return groundClaimByFactID(facts, claim, key)
 	}
@@ -1201,6 +1217,9 @@ func groundClaimByFactID(facts []CanonicalFact, claim ClaimedFact, key string) (
 // happen must FAIL, loudly" rule warns about -- so the ungrounded path
 // keeps its old, explicit behavior instead of quietly attaching nothing.
 func claimSourceFact(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, bool) {
+	if len(claim.DerivedFrom) > 0 {
+		return CanonicalFact{}, false
+	}
 	if fact, outcome := groundClaim(facts, claim); outcome == claimGrounded {
 		return fact, true
 	}
@@ -1259,7 +1278,7 @@ func ClaimsGroundedBeyondFirstGroupMember(facts []CanonicalFact, claims []Claime
 	for _, claim := range claims {
 		// A claim that names its fact by id was not decided by the group
 		// closure at all, whatever position that fact holds.
-		if claim.FactID != "" {
+		if claim.FactID != "" || len(claim.DerivedFrom) > 0 {
 			continue
 		}
 		if _, outcome, position := groundClaimAt(facts, claim); outcome == claimGrounded && position > 0 {
@@ -3657,4 +3676,110 @@ func callDeadlineOf(callCtx context.Context, reserveFired bool) time.Time {
 	}
 	deadline, _ := callCtx.Deadline()
 	return deadline
+}
+
+// derivationTolerance is the fixed absolute tolerance a float derivation is
+// compared with. Integer sums and differences over integer inputs are exact.
+const derivationTolerance = 1e-9
+
+// groundDerivedClaim grounds a derived claim: every input must name a
+// supplied fact of the claim's Subject whose named field is a number, and the
+// claimed value must equal the stated operation over them, in order.
+func groundDerivedClaim(facts []CanonicalFact, claim ClaimedFact, key string) claimGroundingOutcome {
+	floats := make([]float64, 0, len(claim.DerivedFrom))
+	ints := make([]int64, 0, len(claim.DerivedFrom))
+	allInt := true
+	for _, input := range claim.DerivedFrom {
+		found := false
+		for _, fact := range facts {
+			if fact.ID == "" || fact.ID != input.FactID || subjectKeyForModel(fact.Subject) != key {
+				continue
+			}
+			value, present := fact.Fields[input.Field]
+			switch {
+			case !present:
+			case value.Integer != nil:
+				ints = append(ints, *value.Integer)
+				floats = append(floats, float64(*value.Integer))
+				found = true
+			case value.Number != nil && !math.IsNaN(*value.Number) && !math.IsInf(*value.Number, 0):
+				allInt = false
+				floats = append(floats, *value.Number)
+				found = true
+			}
+			break
+		}
+		if !found {
+			return claimDerivationInputUnknown
+		}
+	}
+	if len(floats) != len(claim.DerivedFrom) {
+		return claimDerivationInputUnknown
+	}
+	if allInt && claim.Operation != contractsv1.ContextFabricDerivationRatio {
+		// Integer inputs under sum or difference have an exact integer
+		// result whatever numeric type the claim states it in; a result
+		// that does not fit int64 is never reproducible.
+		var want int64
+		switch claim.Operation {
+		case contractsv1.ContextFabricDerivationSum:
+			for _, v := range ints {
+				next := want + v
+				if (v > 0 && next < want) || (v < 0 && next > want) {
+					return claimDerivationValueMismatch
+				}
+				want = next
+			}
+		case contractsv1.ContextFabricDerivationDifference:
+			want = ints[0] - ints[1]
+			if (ints[1] > 0 && want > ints[0]) || (ints[1] < 0 && want < ints[0]) {
+				return claimDerivationValueMismatch
+			}
+		default:
+			return claimDerivationValueMismatch
+		}
+		switch {
+		case claim.Value.Integer != nil:
+			if *claim.Value.Integer == want {
+				return claimGrounded
+			}
+		case claim.Value.Number != nil:
+			// A number states an exact integer result only when it is that
+			// integer: the float of want must round-trip back to want.
+			claimed := *claim.Value.Number
+			if claimed == float64(want) && int64(claimed) == want {
+				return claimGrounded
+			}
+		}
+		return claimDerivationValueMismatch
+	}
+	var claimed float64
+	switch {
+	case claim.Value.Integer != nil:
+		claimed = float64(*claim.Value.Integer)
+	case claim.Value.Number != nil:
+		claimed = *claim.Value.Number
+	default:
+		return claimDerivationValueMismatch
+	}
+	var want float64
+	switch claim.Operation {
+	case contractsv1.ContextFabricDerivationSum:
+		for _, v := range floats {
+			want += v
+		}
+	case contractsv1.ContextFabricDerivationDifference:
+		want = floats[0] - floats[1]
+	case contractsv1.ContextFabricDerivationRatio:
+		if floats[1] == 0 {
+			return claimDerivationValueMismatch
+		}
+		want = floats[0] / floats[1]
+	default:
+		return claimDerivationValueMismatch
+	}
+	if math.IsNaN(want) || math.IsInf(want, 0) || math.Abs(claimed-want) > derivationTolerance {
+		return claimDerivationValueMismatch
+	}
+	return claimGrounded
 }

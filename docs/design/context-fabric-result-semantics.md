@@ -95,6 +95,19 @@ The fix, concretely:
    `CanonicalFact.id` + `ClaimedFact.fact_id` -- a contract widening plus
    a prompt change -- tracked separately.
 
+   **Derived claims.** A claim may state a value computed from served
+   facts: `derived_from` (two or more `{fact_id, field}` inputs, at most
+   eight) with `operation` `sum`, `difference` or `ratio` (the last two take
+   exactly two inputs; first minus second, first over second). It is
+   grounded only when every input is a numeric field of a served fact of the
+   claim's own subject and `value` equals the operation over them (integer
+   sums and differences exactly, any ratio or float within an absolute
+   1e-9; a ratio over zero is ungrounded). It excludes `fact_id` and
+   attaches no rows (no single source fact). A derived claim whose inputs do
+   not resolve is rejected as `claim_derivation_input_unknown`, one whose
+   value is not reproduced as `claim_derivation_value_mismatch`. Each
+   rejected re-draw names its rule in `draw_rejected_reasons`.
+
    **The closure the model is shown must equal the closure it is judged
    against (CHAOS-4522).** `synthesisSubjects` and the `allowedEvidence`
    allow-set are rebuilt inside `ValidateAgainst` from `SynthesisInput`,
