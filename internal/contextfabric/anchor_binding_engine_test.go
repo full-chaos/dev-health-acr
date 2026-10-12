@@ -201,6 +201,8 @@ type anchorProbeStep struct {
 	// verified wires a live re-read that proves every subject readable from
 	// this turn on, so a carried binding can pass admission.
 	verified bool
+	// countOn turns AnchorBindingCountEnabled on from this turn on.
+	countOn  bool
 	response needTurnResponse
 }
 
@@ -221,6 +223,9 @@ func runAnchorProbe(t *testing.T, steps []anchorProbeStep) []anchorProbeTurn {
 		if step.verified {
 			on.verify()
 			off.verify()
+		}
+		if step.countOn {
+			on.engine.anchorBindingCountEnabled, off.engine.anchorBindingCountEnabled = true, true
 		}
 		if step.seed != nil {
 			step.seed(on.store)
@@ -510,6 +515,9 @@ func anchorProbeScenario(steps ...anchorProbeStep) func(*testing.T, EngineTeleme
 			}
 			if step.verified {
 				rig.verify()
+			}
+			if step.countOn {
+				rig.engine.anchorBindingCountEnabled = true
 			}
 			turns = append(turns, rig.turn(t, step.request(turns), step.response))
 		}
