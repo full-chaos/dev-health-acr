@@ -478,6 +478,10 @@ type anchorBindingProposal struct {
 	// the effective kind excludes. They can never be bound, and they are
 	// never silence: a proof of another kind contradicts the held anchor.
 	Contradicting []anchorRef
+	// Stream is every identity the turn proved, of any kind, in the order
+	// the turn proved them: Proven and Contradicting interleaved as they
+	// came. The witness records it.
+	Stream []anchorRef
 }
 
 // bindAnchor is the one binder. PURE.
@@ -529,7 +533,8 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 	}
 	if in.Evaluation != AnchorBindingEvaluationNotResolved {
 		proposal.Proven = provenAnchors(in.Frame, proposal.EffectiveKind, in.Resolution, in.Bases)
-		for _, ref := range provenAnchors(in.Frame, "", in.Resolution, in.Bases) {
+		proposal.Stream = provenAnchors(in.Frame, "", in.Resolution, in.Bases)
+		for _, ref := range proposal.Stream {
 			if !memberOf(proposal.Proven, ref) {
 				proposal.Contradicting = append(proposal.Contradicting, ref)
 			}
@@ -1350,6 +1355,7 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"binding_admission", SanitizeLogAttr(closed("binding_admission", string(event.Admission))),
 		"admission_remembered_check", SanitizeLogAttr(closed("admission_remembered_check", string(event.AdmissionRemembered.Check))),
 		"admission_remembered_reason", SanitizeLogAttr(string(event.AdmissionRemembered.Reason)),
+		"admission_remembered_context_error", SanitizeLogAttr(event.AdmissionRemembered.ContextError),
 		"admission_age_seconds", event.AdmissionAgeSeconds,
 		"from_state", SanitizeLogAttr(closed("from_state", string(event.From.State))),
 		"from_kind", SanitizeLogAttr(string(event.From.Kind)),

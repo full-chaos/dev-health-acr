@@ -223,7 +223,7 @@ func TestAProvenBindingCarriesItsPolicyProofTimeAndWitness(t *testing.T) {
 	if ValidateAnchorBinding(oversized) == nil {
 		t.Fatal("a witness over its bound validated")
 	}
-	if got := anchorBindingWitness(anchorBindingProposal{Proven: make([]anchorRef, AnchorBindingWitnessMax+3)}); len(got) != AnchorBindingWitnessMax {
+	if got := anchorBindingWitness(anchorBindingProposal{Stream: make([]anchorRef, AnchorBindingWitnessMax+3)}); len(got) != AnchorBindingWitnessMax {
 		t.Fatalf("witness of %d proven identities = %d, want the bound %d", AnchorBindingWitnessMax+3, len(got), AnchorBindingWitnessMax)
 	}
 }
@@ -274,5 +274,26 @@ func TestAParentEchoOfTheCommittedSubjectNeverChangesTheRequestIdentity(t *testi
 				t.Errorf("%s: hop %d identity %+v differs from the root's %+v", name, i+1, got, first)
 			}
 		}
+	}
+}
+
+// TestTheWitnessKeepsTheProofStreamsOrderAcrossKinds: the witness records
+// every identity the proving turn proved in the order the turn proved them,
+// whatever their kinds. A team proved before the repository the binding
+// holds stays first.
+func TestTheWitnessKeepsTheProofStreamsOrderAcrossKinds(t *testing.T) {
+	team := anchorRef{Kind: SubjectTeam, ID: "team:witness-first"}
+	repository := anchorRef{Kind: SubjectRepository, ID: "repository:witness-second"}
+	resolution, bases := proofOf(CommitBasisAuthoritativeIdentity, team, repository)
+	to, proposal := bindAnchor(anchorBindingInput{
+		From: unboundFrom, Evaluation: AnchorBindingEvaluationResolved, Frame: countingFrame(SubjectProject),
+		ModelAnchorKind: SubjectRepository, Resolution: resolution, Bases: bases, ResultID: "result_witness", GraphEpoch: 7,
+	})
+	if to.State != AnchorBindingBound || to.CanonicalID != repository.ID || len(proposal.Contradicting) != 1 {
+		t.Fatalf("premise: binding %+v contradicting %+v, want the repository bound with the team contradicting", to, proposal.Contradicting)
+	}
+	want := []string{"team:team:witness-first", "repository:repository:witness-second"}
+	if !reflect.DeepEqual(to.Witness, want) {
+		t.Fatalf("witness = %v, want the proof stream's order %v", to.Witness, want)
 	}
 }

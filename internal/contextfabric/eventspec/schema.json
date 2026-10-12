@@ -217,6 +217,11 @@
         "presence": "required"
       },
       {
+        "key": "admission_remembered_context_error",
+        "type": "string",
+        "presence": "required"
+      },
+      {
         "key": "admission_age_seconds",
         "type": "int",
         "presence": "required"

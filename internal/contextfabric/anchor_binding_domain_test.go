@@ -146,7 +146,7 @@ var (
 		// The parent binding's proof provenance and its admission: a refused
 		// binding is not what the binder starts from.
 		"from_policy_version", "from_proven_at", "from_witness",
-		"binding_admission", "admission_remembered_check", "admission_remembered_reason", "admission_age_seconds",
+		"binding_admission", "admission_remembered_check", "admission_remembered_reason", "admission_remembered_context_error", "admission_age_seconds",
 	}
 	anchorBindingLineOutputKeys = []string{
 		"proven_anchor_ids", "effective_kind",

@@ -167,3 +167,28 @@ func TestEveryClosedAnchorBindingTokenIsEmittedByTheRealProducer(t *testing.T) {
 		t.Fatal("no closed key was observed")
 	}
 }
+
+// TestACancelledReReadNamesItsContextErrorOnTheLine: the admission re-read's
+// context error, kept on the decision, reaches the production line.
+func TestACancelledReReadNamesItsContextErrorOnTheLine(t *testing.T) {
+	cancelled := 0
+	for _, driver := range contextfabric.RunAnchorBindingVocabularyForTest(t) {
+		log, err := certify.Parse(driver.Log)
+		if err != nil {
+			t.Fatalf("%s: certify.Parse: %v", driver.Name, err)
+		}
+		for _, line := range log.LinesWithMsg(eventspec.AnchorBindingTransition.Msg) {
+			check := fmt.Sprint(line["admission_remembered_check"])
+			if check != "cancelled_before_check" && check != "cancelled_during_check" {
+				continue
+			}
+			cancelled++
+			if got := fmt.Sprint(line["admission_remembered_context_error"]); got != "context canceled" {
+				t.Errorf("%s: admission_remembered_context_error = %q, want the context error", driver.Name, got)
+			}
+		}
+	}
+	if cancelled != 2 {
+		t.Fatalf("cancelled re-read lines = %d, want one per cancelled class", cancelled)
+	}
+}
