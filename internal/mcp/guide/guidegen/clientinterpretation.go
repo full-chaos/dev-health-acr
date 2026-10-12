@@ -336,7 +336,7 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 		StatusDraftRejected, q(CodeSynthesisRejected), q("details."+c.RejectionReasonKey))
 	fmt.Fprintf(&b, "- **No interpretation.** A hosted request with a draft and no interpretation is refused with status 400, code %s, and %s %s. The tool always sends your interpretation.\n",
 		q(CodeContractRefused), q("details."+c.ReasonKey), q(c.ReasonInterpretationRequired))
-	fmt.Fprintf(&b, "- **The answer does not fit the byte budget.** Status %d, as for any answer that is too large. We do not narrow the input and write a new one, because your draft was written for this input. Raise the byte limit of %s, or write fewer items in your draft.\n",
+	fmt.Fprintf(&b, "- **The answer does not fit the byte budget.** Status %d, as for any answer that is too large. We do not narrow the input and write a new one, because your draft was written for this input. Write fewer items in your draft or ask a narrower question; do not send the same request again with a larger %s. The tool reports it with the category `budget`.\n",
 		StatusAnswerTooLarge, q(c.BudgetArg))
 	b.WriteString("- We check the claims, the subjects, and the evidence of your draft against the facts we read. We make no model call, and nothing is stored when a check fails.\n")
 	b.WriteString("- We do not check the free text of a draft against the input, as for the text of our own model. Do not state absolute window bounds that the input does not hold.\n")

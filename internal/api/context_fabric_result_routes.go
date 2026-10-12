@@ -350,7 +350,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			// route enforces the SAME bound the investigation route wrote
 			// under, so a result that returns once can also be re-read.
 			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "bytes", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
-			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation result exceeded service limits", false, map[string]any{
+			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation result exceeded service limits", false, map[string]any{
 				"measured_bytes": measuredBytes, "max_serialized_bytes": maximumBytes,
 			})
 			return
@@ -375,7 +375,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 		}
 		if err := CompleteUsageWithBudget(r.Context(), usage, override); err != nil {
 			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "items", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
-			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation result exceeded service limits", false, map[string]any{
+			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation result exceeded service limits", false, map[string]any{
 				"measured_bytes": usage.Bytes, "measured_items": usage.Items, "estimated_tokens": estimatedTokens,
 				"max_items":       contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems),
 				"items_breakdown": itemCounts,

@@ -183,11 +183,15 @@ func TestChaos4735BudgetRefusal413CarriesNoServerAuthoredProse(t *testing.T) {
 			}
 			var body struct {
 				Error struct {
+					Code    string         `json:"code"`
 					Details map[string]any `json:"details"`
 				} `json:"error"`
 			}
 			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 				t.Fatalf("decode: %v", err)
+			}
+			if body.Error.Code != "budget_refusal" {
+				t.Errorf("error code = %q, want budget_refusal", body.Error.Code)
 			}
 			details := body.Error.Details
 
