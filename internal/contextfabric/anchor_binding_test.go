@@ -603,13 +603,13 @@ func TestAnchorBindingLineVocabularyIsClosedOverItsProducers(t *testing.T) {
 		"disagreement_field":    {"none", "pending_proof", "carried_anchor", "count_anchor"},
 		"persisted":             {"persisted", "payload_rejected", "replay_conflict", "superseded", "save_failed", "state_absent", "binding_unencodable", "not_saved"},
 		"served_count_decision": {"not_evaluated", "anchor_committed", "anchor_ambiguous", "anchor_unresolved", "single_subject"},
-		"binding_admission": {"not_applicable", "not_evaluated", "admitted", "refused_policy_version", "refused_question_changed", "refused_question_indeterminate",
+		"binding_admission": {"not_applicable", "not_evaluated", "admitted", "admitted_follow_up", "refused_policy_version", "refused_question_changed", "refused_question_indeterminate",
 			"refused_origin_unverifiable", "refused_expired", "refused_ownership_moved", "refused_ownership_unverified", "refused_subject_unreadable"},
 		"admission_remembered_check": {"not_checked", "readable", "verifier_unwired", "cancelled_before_check", "cancelled_during_check", "refused"},
 		"freshness_acquisition":      {"not_attempted", "acquired", "unwired", "read_failed", "source_absent", "unstorable"},
 		"ownership_movement":         {"not_applicable", "proven_unrecorded", "not_acquired", "unmoved", "moved"},
 		"bound_anchor_kind":          {"switch_off", "not_evaluated", "none", "agrees", "rejected_by_frame", "applied_receipt", "applied_carried"},
-		"bound_anchor_carry":         {"switch_off", "not_evaluated", "none", "not_admitted", "pending_held", "injected", "caller_superseded", "receipt_superseded", "cap_full", "remembered_offered"},
+		"bound_anchor_carry":         {"switch_off", "not_evaluated", "none", "not_admitted", "pending_held", "injected", "caller_superseded", "receipt_superseded", "cap_full", "remembered_offered", "follow_up_offered", "follow_up_offered_reconciled", "follow_up_committed", "follow_up_frame_refused", "follow_up_parent_mismatch"},
 	} {
 		if got := AnchorBindingTransitionLineVocabulary(key); !reflect.DeepEqual(got, members) {
 			t.Errorf("vocabulary %q = %v, want %v", key, got, members)

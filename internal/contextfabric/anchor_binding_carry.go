@@ -65,6 +65,24 @@ const (
 	// BoundAnchorCarryCapFull: the carry was due, but the request already
 	// holds the maximum number of subject hints; nothing is injected.
 	BoundAnchorCarryCapFull BoundAnchorCarry = "cap_full"
+	// BoundAnchorCarryFollowUpOffered: the parent was admitted as a follow-up
+	// (anchor_binding_follow_up.go), the turn's own resolution committed
+	// nothing, and the remembered identity is offered first.
+	BoundAnchorCarryFollowUpOffered BoundAnchorCarry = "follow_up_offered"
+	// BoundAnchorCarryFollowUpOfferedReconciled: as follow_up_offered, and
+	// the turn's structure offer also held an anchor option for the same
+	// identity, which was removed so the subject is offered once.
+	BoundAnchorCarryFollowUpOfferedReconciled BoundAnchorCarry = "follow_up_offered_reconciled"
+	// BoundAnchorCarryFollowUpCommitted: admitted as a follow-up, and the
+	// turn's own resolution committed a subject; nothing is offered.
+	BoundAnchorCarryFollowUpCommitted BoundAnchorCarry = "follow_up_committed"
+	// BoundAnchorCarryFollowUpFrameRefused: admitted as a follow-up, but the
+	// follow-up's frame does not take the binding's kind as its scope anchor.
+	BoundAnchorCarryFollowUpFrameRefused BoundAnchorCarry = "follow_up_frame_refused"
+	// BoundAnchorCarryFollowUpParentMismatch: admitted as a follow-up, but the
+	// parent did not serve the binding's identity, so there is no label the
+	// caller already saw to offer it under.
+	BoundAnchorCarryFollowUpParentMismatch BoundAnchorCarry = "follow_up_parent_mismatch"
 	// BoundAnchorCarryRememberedOffered: the carried anchor was injected,
 	// resolution committed nothing, and the turn's clarification offers the
 	// remembered identity first.
@@ -75,7 +93,8 @@ func boundAnchorCarries() []BoundAnchorCarry {
 	return []BoundAnchorCarry{
 		BoundAnchorCarrySwitchOff, BoundAnchorCarryNotEvaluated, BoundAnchorCarryNone, BoundAnchorCarryNotAdmitted, BoundAnchorCarryPendingHeld,
 		BoundAnchorCarryInjected, BoundAnchorCarryCallerSuperseded, BoundAnchorCarryReceiptSuperseded,
-		BoundAnchorCarryCapFull, BoundAnchorCarryRememberedOffered,
+		BoundAnchorCarryCapFull, BoundAnchorCarryRememberedOffered, BoundAnchorCarryFollowUpOffered, BoundAnchorCarryFollowUpOfferedReconciled,
+		BoundAnchorCarryFollowUpCommitted, BoundAnchorCarryFollowUpFrameRefused, BoundAnchorCarryFollowUpParentMismatch,
 	}
 }
 
@@ -115,6 +134,10 @@ func (e *Engine) bindingCarryHint(t *anchorBindingTracker, hints []contractsv1.C
 	switch {
 	case !(t.parent.Status == AnchorBindingParentPresent && t.parent.Binding.active()):
 		t.carry = BoundAnchorCarryNone
+		return contractsv1.ContextFabricSubjectHint{}, false
+	case t.admissionOutcome() == AnchorBindingAdmissionAdmittedFollowUp:
+		// Never a hint: the offer is decided after resolution
+		// (anchor_binding_follow_up.go).
 		return contractsv1.ContextFabricSubjectHint{}, false
 	case !held.identifies():
 		t.carry = BoundAnchorCarryNotAdmitted
