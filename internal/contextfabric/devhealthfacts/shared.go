@@ -968,7 +968,19 @@ import (
 // A team has no state, so a team status qualifier is refused. The status used
 // to be admitted and served as the whole unfiltered member set. A candidate
 // saved under v192 may hold that unfiltered set.
-const QueryVersion = "devhealthfacts.clickhouse.v194"
+//
+// v193 -> v194: a status the question states on pull request, project or
+// incident members is applied inside the anchor's member read and the scope
+// expansion to pull requests, before the member cap or the read limit, so the
+// cap describes the members that hold the status. It used to filter the first
+// members by id, which could serve no match while later members held it. A
+// status decided over a cut pool says within how many members it ran. A
+// candidate saved under v193 may hold the cut, mismatched set.
+//
+// v194 -> v195: a partial or degraded answer is never served with an empty
+// limitations list; a status question over projects or incidents that reached
+// no member, or whose status no read applied, says which.
+const QueryVersion = "devhealthfacts.clickhouse.v195"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

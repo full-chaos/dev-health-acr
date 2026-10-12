@@ -16,19 +16,38 @@ import (
 type pullRequestStatusFixture struct {
 	id, state string
 	reviews   []contextfabric.PullRequestReviewRow
+	// repo is the repository the pull request belongs to, owned by the team;
+	// empty is repository:alpha.
+	repo string
+	// hidden: the pull request carries a repository grant no requested scope
+	// names (the others carry full-chaos/alpha, the repository the team owns).
+	hidden bool
 }
 
 // pullRequestStatusFake serves a team that owns one repository whose pull
 // requests are fixtures: each pull request node carries its state, and each
-// review row is a review node that belongs to its pull request.
+// review row is a review node that belongs to its pull request. stateReadErr
+// fails every read that carries a status clause, and the stored state read.
 func pullRequestStatusFake(fixtures []pullRequestStatusFixture, stateReadErr error) *fakeConn {
 	nodes := []scopedAnchorNode{{"team", "team:alpha", "Alpha"}, {"repository", "repository:alpha", "full-chaos/alpha"}}
 	edges := []scopedAnchorEdge{{rel: "OWNED_BY_TEAM", srcKind: "repository", srcID: "repository:alpha", dstKind: "team", dstID: "team:alpha"}}
 	states := map[string]string{}
+	hidden := map[string]bool{}
 	reviews := map[string]contextfabric.PullRequestReviewRow{}
+	repos := map[string]bool{"repository:alpha": true}
 	for _, f := range fixtures {
+		repo := f.repo
+		if repo == "" {
+			repo = "repository:alpha"
+		}
+		if !repos[repo] {
+			repos[repo] = true
+			nodes = append(nodes, scopedAnchorNode{"repository", repo, repo})
+			edges = append(edges, scopedAnchorEdge{rel: "OWNED_BY_TEAM", srcKind: "repository", srcID: repo, dstKind: "team", dstID: "team:alpha"})
+		}
+		hidden[f.id] = f.hidden
 		nodes = append(nodes, scopedAnchorNode{"pull_request", f.id, f.id})
-		edges = append(edges, scopedAnchorEdge{rel: "BELONGS_TO_REPOSITORY", srcKind: "pull_request", srcID: f.id, dstKind: "repository", dstID: "repository:alpha"})
+		edges = append(edges, scopedAnchorEdge{rel: "BELONGS_TO_REPOSITORY", srcKind: "pull_request", srcID: f.id, dstKind: "repository", dstID: repo})
 		states[f.id] = f.state
 		for i, review := range f.reviews {
 			reviewID := f.id + ":review:" + string(rune('a'+i))
@@ -47,11 +66,30 @@ func pullRequestStatusFake(fixtures []pullRequestStatusFixture, stateReadErr err
 				propPropertyPrefix + "state": review.State, propValidFromNs: review.SubmittedNs,
 			}}}}, nil
 		}
-		return inner(ctx, graphKey, cypher, params, readOnly)
+		rows, err := inner(ctx, graphKey, cypher, params, readOnly)
+		if !strings.Contains(cypher, "UNION") {
+			for _, r := range rows {
+				n, isNode := r["n"].(*node)
+				if !isNode || n == nil {
+					continue
+				}
+				n.Properties[propAuthzRepos] = []string{"full-chaos/alpha"}
+				if hidden[id] {
+					n.Properties[propAuthzRepos] = []string{"acme/hidden"}
+				}
+				if state, ok := states[id]; ok {
+					n.Properties[propPropertyPrefix+"state"] = state
+				}
+			}
+		}
+		return rows, err
 	}
 	fake = withWalkStepReads(fake)
 	stepped := fake.queryFunc
 	fake.queryFunc = func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if stateReadErr != nil && strings.Contains(cypher, "$bstatus") {
+			return nil, stateReadErr
+		}
 		if cypher != pullRequestStateCypher() {
 			return stepped(ctx, graphKey, cypher, params, readOnly)
 		}
@@ -153,7 +191,11 @@ func TestTeamPullRequestMembersAreFilteredByTheStatedStatus(t *testing.T) {
 				}
 				return
 			}
-			want := []PullRequestStatusFilterDecision{{Status: tc.status, Candidates: len(fixtures), Kept: len(tc.want)}}
+			candidates := len(tc.want)
+			if contextfabric.PullRequestStatusReviewDerived(tc.status) {
+				candidates = 5
+			}
+			want := []PullRequestStatusFilterDecision{{MemberKind: contextfabric.SubjectPullRequest, Status: tc.status, Site: PullRequestStatusFilterSiteWalk, Candidates: candidates, Kept: len(tc.want), Pool: -1}}
 			if !reflect.DeepEqual(telemetry.pullRequestStatusFilters, want) {
 				t.Fatalf("status filter lines = %+v, want %+v", telemetry.pullRequestStatusFilters, want)
 			}
@@ -161,17 +203,23 @@ func TestTeamPullRequestMembersAreFilteredByTheStatedStatus(t *testing.T) {
 	}
 }
 
-// TestPullRequestStatusFilterReadFailureEndsTheCall: a failed state read is a
-// failed discovery and a read_failed line, never an unfiltered member set.
+// TestPullRequestStatusFilterReadFailureEndsTheCall: a failed status-narrowed
+// member read is a failed discovery and a read_failed walk line, never an
+// unfiltered member set.
 func TestPullRequestStatusFilterReadFailureEndsTheCall(t *testing.T) {
 	fixtures := []pullRequestStatusFixture{{id: "pull_request:no-review", state: "open"}}
 	readErr := errors.New("graph unavailable")
-	result, telemetry, err := discoverPullRequestMembers(t, pullRequestStatusFake(fixtures, readErr), "awaiting_review")
-	if err == nil {
-		t.Fatalf("DiscoverContext() served %v with a failed state read", servedPullRequestIDs(result))
-	}
-	if len(telemetry.pullRequestStatusFilters) != 1 || telemetry.pullRequestStatusFilters[0].outcome() != PullRequestStatusFilterReadFailed {
-		t.Fatalf("status filter lines = %+v, want one read_failed line", telemetry.pullRequestStatusFilters)
+	for _, status := range []string{"open", "awaiting_review"} {
+		result, telemetry, err := discoverPullRequestMembers(t, pullRequestStatusFake(fixtures, readErr), status)
+		if err == nil {
+			t.Fatalf("%s: DiscoverContext() served %v with a failed status read", status, servedPullRequestIDs(result))
+		}
+		if len(telemetry.teamAnchorWalks) != 1 || telemetry.teamAnchorWalks[0].Outcome != TeamAnchorWalkReadFailed {
+			t.Fatalf("%s: team anchor walk lines = %+v, want one read_failed line", status, telemetry.teamAnchorWalks)
+		}
+		if len(telemetry.pullRequestStatusFilters) != 0 {
+			t.Fatalf("%s: status filter lines = %+v, want none for a call that failed", status, telemetry.pullRequestStatusFilters)
+		}
 	}
 }
 

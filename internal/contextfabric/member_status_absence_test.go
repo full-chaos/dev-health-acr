@@ -85,7 +85,7 @@ func TestIncidentStatusNoneReachedStatesTheReachBasisOfTheAnchorKind(t *testing.
 	t.Parallel()
 	for anchor, basis := range map[SubjectKind]string{SubjectTeam: "the repositories and services it owns", SubjectProject: "the repositories of its linked pull requests"} {
 		served := investigateIncidentStatus(t, incidentStatusRow{anchor: anchor, status: InvestigationDegraded,
-			graph: GraphContext{MemberStatusOutsideSet: MemberStatusOutsideSet{Kind: SubjectIncident, Filtered: true, Reached: 0}}})
+			graph: GraphContext{MemberStatusOutsideSet: MemberStatusOutsideSet{Kind: SubjectIncident, Filtered: true}}})
 		want := "No incidents were reached from the " + string(anchor) + " through " + basis + ", so the status was matched against none."
 		wantLimitation(t, served, want)
 		if !contractsv1.IsContextFabricMemberStatusLimitation(want) {
@@ -98,7 +98,7 @@ func TestIncidentStatusReachedButNoneHoldTheStatusServesTheClosedSetSentence(t *
 	t.Parallel()
 	cohort := &Cohort{Kind: SubjectIncident, Members: []CohortMember{}, Exclusions: []CohortExclusion{}, Rationale: "none holds the status"}
 	served := investigateIncidentStatus(t, incidentStatusRow{anchor: SubjectTeam, status: InvestigationPartial,
-		graph: GraphContext{Cohort: cohort, MemberStatusOutsideSet: MemberStatusOutsideSet{Kind: SubjectIncident, Filtered: true, Reached: 4}}})
+		graph: GraphContext{Cohort: cohort, MemberStatusOutsideSet: MemberStatusOutsideSet{Kind: SubjectIncident, Filtered: true, Reached: true}}})
 	wantLimitation(t, served, contractsv1.ContextFabricMemberStatusFilterLimitation("incident", "open"))
 	for _, limitation := range served.Limitations {
 		if strings.HasPrefix(limitation, "No incidents were reached") {

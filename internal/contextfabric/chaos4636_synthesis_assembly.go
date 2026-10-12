@@ -442,7 +442,8 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.Coverage.Partial = true
 	}
 	result = withMemberStatusOutsideSet(result, graphContext.MemberStatusOutsideSet)
-	result = withMemberStatusNoneReached(result, graphContext.MemberStatusOutsideSet, graphContext.Cohort, params.ScopeAnchorKind)
+	result = withMemberStatusPoolCut(result, graphContext.MemberStatusPoolCut)
+	result = withMemberStatusNoneReached(result, graphContext.MemberStatusOutsideSet, graphContext.MemberStatusPoolCut, graphContext.Cohort, params.ScopeAnchorKind)
 	if graphContext.Cohort == nil {
 		result = withMemberStatusNotComputed(result, params.Frame, graphContext.Coverage)
 	}

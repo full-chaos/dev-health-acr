@@ -123,7 +123,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 				TemporalDroppedCount: repoCounts.TemporalDroppedCount, UnboundedValidityCount: repoCounts.UnboundedValidityCount, MalformedTouchCount: repoCounts.MalformedTouchCount, DuplicateAddCount: repoCounts.DuplicateAddCount,
 			}}, nil
 		}
-		targets, targetBasis, targetSource, targetRoot, prCounts, err := e.pullRequestsForRepositories(ctx, orgID, authorizedRepos, limit)
+		targets, targetBasis, targetSource, targetRoot, prCounts, err := e.pullRequestsForRepositories(ctx, orgID, authorizedRepos, limit, request.PullRequestStatus)
 		if err != nil {
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
@@ -165,7 +165,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 				TemporalDroppedCount: repoCounts.TemporalDroppedCount, UnboundedValidityCount: repoCounts.UnboundedValidityCount, MalformedTouchCount: repoCounts.MalformedTouchCount, DuplicateAddCount: repoCounts.DuplicateAddCount,
 			}}, nil
 		}
-		targets, targetBasis, targetSource, targetRoot, reviewCounts, err := e.pullRequestReviewsForRepositories(ctx, orgID, authorizedRepos, limit)
+		targets, targetBasis, targetSource, targetRoot, reviewCounts, err := e.pullRequestReviewsForRepositories(ctx, orgID, authorizedRepos, limit, request.PullRequestStatus)
 		if err != nil {
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
@@ -209,7 +209,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 				MissingNextHopCount: repoCounts.MissingNextHopCount, Truncated: repoCounts.Truncated,
 			}}, nil
 		}
-		targets, targetBasis, targetSource, targetRoot, prCounts, err := e.pullRequestsForRepositories(ctx, orgID, authorizedRepos, limit)
+		targets, targetBasis, targetSource, targetRoot, prCounts, err := e.pullRequestsForRepositories(ctx, orgID, authorizedRepos, limit, request.PullRequestStatus)
 		if err != nil {
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
@@ -230,7 +230,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 				MissingNextHopCount: repoCounts.MissingNextHopCount, Truncated: repoCounts.Truncated,
 			}}, nil
 		}
-		targets, targetBasis, targetSource, targetRoot, reviewCounts, err := e.pullRequestReviewsForRepositories(ctx, orgID, authorizedRepos, limit)
+		targets, targetBasis, targetSource, targetRoot, reviewCounts, err := e.pullRequestReviewsForRepositories(ctx, orgID, authorizedRepos, limit, request.PullRequestStatus)
 		if err != nil {
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
@@ -1089,22 +1089,26 @@ func repoCandidateIndex(repos []repositoryCandidate) map[string]repositoryCandid
 // (CHAOS-4101): each PR inherits the basis of the repository it belongs to,
 // via repos' own basis field -- empty/no-op for the project policy, since
 // projectRepositories never sets it.
-func (e *ScopeExpander) pullRequestsForRepositories(ctx context.Context, orgID string, repos []repositoryCandidate, limit int) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, map[string]contextfabric.SubjectRef, contextfabric.FactScopeExpansionCounts, error) {
+//
+// A status reads only the pull requests that hold it (pullRequestStatusSQL),
+// inside the statement and so before its LIMIT.
+func (e *ScopeExpander) pullRequestsForRepositories(ctx context.Context, orgID string, repos []repositoryCandidate, limit int, status string) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, map[string]contextfabric.SubjectRef, contextfabric.FactScopeExpansionCounts, error) {
 	if len(repos) == 0 {
 		return nil, nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, nil
 	}
 	repoIDs := repositoryIDs(repos)
 	byRepoID := repoCandidateIndex(repos)
 	limitPlusOne := limit + 1
+	statusClause, statusBindings := pullRequestStatusSQL(status)
 	statement := `SELECT toString(p.repo_id), p.number
 FROM git_pull_requests AS p FINAL
-WHERE p.org_id = {org_id:String} AND toString(p.repo_id) IN {repo_ids:Array(String)}
+WHERE p.org_id = {org_id:String} AND toString(p.repo_id) IN {repo_ids:Array(String)}` + statusClause + `
 ORDER BY toString(p.repo_id), p.number
 LIMIT ` + strconv.Itoa(limitPlusOne)
-	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
+	rows, err := e.client.Query(ctx, statement, append([]contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
 		{Name: "repo_ids", Value: repoIDs},
-	})
+	}, statusBindings...))
 	if err != nil {
 		return nil, nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
@@ -1187,23 +1191,24 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 // Returns a per-target basis override map alongside targets/counts
 // (CHAOS-4101), the same way pullRequestsForRepositories does: each review
 // inherits the basis of the repository its pull request belongs to.
-func (e *ScopeExpander) pullRequestReviewsForRepositories(ctx context.Context, orgID string, repos []repositoryCandidate, limit int) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, map[string]contextfabric.SubjectRef, contextfabric.FactScopeExpansionCounts, error) {
+func (e *ScopeExpander) pullRequestReviewsForRepositories(ctx context.Context, orgID string, repos []repositoryCandidate, limit int, status string) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, map[string]contextfabric.SubjectRef, contextfabric.FactScopeExpansionCounts, error) {
 	if len(repos) == 0 {
 		return nil, nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, nil
 	}
 	repoIDs := repositoryIDs(repos)
 	byRepoID := repoCandidateIndex(repos)
 	limitPlusOne := limit + 1
+	statusClause, statusBindings := pullRequestStatusSQL(status)
 	statement := `SELECT r.review_id, toString(r.repo_id), r.number
 FROM git_pull_request_reviews AS r FINAL
 INNER JOIN git_pull_requests AS p FINAL ON r.repo_id = p.repo_id AND r.number = p.number AND r.org_id = p.org_id
-WHERE r.org_id = {org_id:String} AND toString(r.repo_id) IN {repo_ids:Array(String)}
+WHERE r.org_id = {org_id:String} AND toString(r.repo_id) IN {repo_ids:Array(String)}` + statusClause + `
 ORDER BY toString(r.repo_id), r.number, r.review_id
 LIMIT ` + strconv.Itoa(limitPlusOne)
-	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
+	rows, err := e.client.Query(ctx, statement, append([]contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
 		{Name: "repo_ids", Value: repoIDs},
-	})
+	}, statusBindings...))
 	if err != nil {
 		return nil, nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
