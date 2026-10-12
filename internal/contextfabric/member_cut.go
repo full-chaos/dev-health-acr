@@ -93,6 +93,11 @@ func cutTrailingMembers(result InvestigationResult, uncited []int, n int) (Inves
 	}
 	cohort.Complete, cohort.Truncated = false, true
 	result.Cohort = &cohort
+	// A cut answer is partial, as every other model-free lever serves it.
+	result.Coverage.Partial = true
+	if result.Status == InvestigationComplete {
+		result.Status = InvestigationPartial
+	}
 	return result, true
 }
 

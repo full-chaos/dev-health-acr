@@ -115,6 +115,9 @@ func TestAFlatCohortOverTheItemBudgetIsServedWithItsTrailingMembersCut(t *testin
 	if result.Cohort.Complete || !result.Cohort.Truncated {
 		t.Fatalf("complete=%v truncated=%v, want false/true", result.Cohort.Complete, result.Cohort.Truncated)
 	}
+	if result.Status != InvestigationPartial || !result.Coverage.Partial {
+		t.Fatalf("status %q partial=%v: a cut answer is partial", result.Status, result.Coverage.Partial)
+	}
 	disclosed := false
 	for _, limitation := range result.Limitations {
 		if contractsv1.IsContextFabricCohortNarrowingLimitation(limitation) && strings.Contains(limitation, "exceeded the item budget") {
