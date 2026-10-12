@@ -537,7 +537,7 @@ func TestClientSynthesisInputIsNotCountedInTheResultByteBudget(t *testing.T) {
 		}
 		// A client synthesis turn carries its input in the body, which a
 		// projection cannot, so the option stays a refusal line there.
-		if refused.Code != http.StatusRequestEntityTooLarge || !containsJSONCode(refused.Body.Bytes(), "invalid_request") {
+		if refused.Code != http.StatusRequestEntityTooLarge || !containsJSONCode(refused.Body.Bytes(), "budget_refusal") {
 			t.Fatalf("mode %q: a result above the budget: status = %d body=%s, want 413", mode, refused.Code, refused.Body.String())
 		}
 	}
@@ -625,7 +625,7 @@ func TestClientSynthesisResponseOverTheServiceCeilingIsRefused(t *testing.T) {
 	rig := newClientRouteRig(t, fixture)
 	rig.app.config.MaxSerializedBytes = ceiling
 	recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeClient, withLimit)
-	if recorder.Code != http.StatusRequestEntityTooLarge || !containsJSONCode(recorder.Body.Bytes(), "invalid_request") {
+	if recorder.Code != http.StatusRequestEntityTooLarge || !containsJSONCode(recorder.Body.Bytes(), "budget_refusal") {
 		t.Fatalf("status = %d body=%s, want 413 invalid_request", recorder.Code, recorder.Body.String())
 	}
 	if _, present := topLevelKeys(t, recorder.Body.Bytes())["synthesis_input"]; present || bytes.Contains(recorder.Body.Bytes(), []byte("synthesis_input")) {

@@ -30,6 +30,7 @@
         "code": {
           "enum": [
             "invalid_request",
+            "budget_refusal",
             "device_authorization_conflict",
             "invalid_token",
             "insufficient_scope",
@@ -61,7 +62,7 @@
         },
         "details": {
           "type": "object",
-          "description": "Closed safe keys only. For a 400 invalid_request about the request body, details.reason is malformed_json, schema_violation, unknown_field, trailing_json or body_too_large, and details.field, when present, is the JSON path of the failing field.",
+          "description": "Closed safe keys only. For a 400 invalid_request about the request body, details.reason is malformed_json, schema_violation, unknown_field, trailing_json or body_too_large, and details.field, when present, is the JSON path of the failing field. A budget_refusal is a 413 for a valid request whose answer did not fit the response budget; details carry overrun, the measured and maximum counts and narrower_continuation.",
           "properties": {
             "reason": {
               "type": "string",

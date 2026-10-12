@@ -30,7 +30,7 @@ func TestCHAOS6558_InvestigateQuestionBudgetRefusalCarriesNarrowingAdvice(t *tes
 			writeJSONFixture(t, w, http.StatusRequestEntityTooLarge, contractsv1.ErrorEnvelope{
 				SchemaVersion: contractsv1.ErrorSchema, RequestID: "req_745310015e271972029c854d74886738",
 				Error: contractsv1.ErrorDetail{
-					Code: "invalid_request", Message: "The Context Fabric answer did not fit the response budget",
+					Code: "budget_refusal", Message: "The Context Fabric answer did not fit the response budget",
 					HTTPStatus: http.StatusRequestEntityTooLarge,
 					Details: map[string]any{
 						"overrun": "bytes", "measured_items": 17, "measured_bytes": 122402,
@@ -84,6 +84,19 @@ func TestCHAOS6558_InvestigateQuestionBudgetRefusalCarriesNarrowingAdvice(t *tes
 	if strings.Contains(text, "rejected as invalid") {
 		t.Errorf("tool text %q still calls an oversized answer an invalid request", text)
 	}
+	for _, fragment := range []string{"code=budget_refusal", "do not retry with a larger budget", "suggested axis: result_count"} {
+		if !strings.Contains(text, fragment) {
+			t.Errorf("tool text %q lacks %q", text, fragment)
+		}
+	}
+	for _, absent := range []string{"invalid_request", "validation:"} {
+		if strings.Contains(text, absent) {
+			t.Errorf("tool text %q carries %q for a valid request", text, absent)
+		}
+	}
+	if !strings.HasPrefix(text, "budget:") {
+		t.Errorf("tool text %q is not in the budget category", text)
+	}
 }
 
 // The sidecar's closed axis set must equal the engine's registry (minus
@@ -122,7 +135,7 @@ func TestCHAOS6558_InvestigationResultPartialBudgetDetailsRenderOnlyWhatWasSent(
 			writeJSONFixture(t, w, http.StatusRequestEntityTooLarge, contractsv1.ErrorEnvelope{
 				SchemaVersion: contractsv1.ErrorSchema, RequestID: "req_result_route_413",
 				Error: contractsv1.ErrorDetail{
-					Code: "invalid_request", Message: "Context Fabric investigation result exceeded service limits",
+					Code: "budget_refusal", Message: "Context Fabric investigation result exceeded service limits",
 					HTTPStatus: http.StatusRequestEntityTooLarge,
 					Details:    map[string]any{"measured_bytes": 122402, "max_serialized_bytes": 65536},
 				},
