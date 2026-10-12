@@ -188,7 +188,12 @@ func (r *Resolver) PhraseStructureOffers(ctx context.Context, principal storage.
 		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, err
 	}
 	phraser, ok := runtime.(contextfabric.OfferPhrasingModelRuntime)
-	if !ok || runtime == nil {
+	if runtime == nil || !ok {
+		logger := r.Logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.WarnContext(ctx, "context fabric offer phrasing withheld: no model runtime", "org_id", contextfabric.SanitizeLogAttr(principal.OrgID), "basis", "no_model_configured", "request_id", contextfabric.SanitizeLogAttr(input.RequestID))
 		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, contextfabric.ErrModelUnavailable
 	}
 	return phraser.PhraseStructureOffers(ctx, principal, input)

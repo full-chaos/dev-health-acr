@@ -99,8 +99,9 @@ const (
 	// (transport, provider, or context deadline). Structural labels ship
 	// unchanged.
 	OfferPhrasingCallFailed OfferPhrasingOutcome = "call_failed"
-	// OfferPhrasingWithheld: the turn may not run on the deployment model
-	// and the organization has no model of its own, so no call was made.
+	// OfferPhrasingWithheld: no model may or can serve this turn -- the
+	// deployment model is withheld and the organization has no model of its
+	// own, or no usable runtime is configured -- so no call was made.
 	// Structural labels ship unchanged.
 	OfferPhrasingWithheld OfferPhrasingOutcome = "withheld_platform_model"
 )
@@ -264,7 +265,7 @@ func (r RuntimeOfferPhraser) Phrase(ctx context.Context, principal storage.Princ
 // pass -- "fail-open to structure, never to the model" means a partially-
 // trusted model response is treated the same as an untrusted one.
 func classifyOfferPhrasingDraft(input StructureOfferPhrasingInput, draft StructureOfferPhrasingDraft, callErr error) (OfferPhrasingOutcome, map[string]string) {
-	if errors.Is(callErr, ErrPlatformModelWithheld) {
+	if errors.Is(callErr, ErrPlatformModelWithheld) || errors.Is(callErr, ErrModelUnavailable) {
 		return OfferPhrasingWithheld, nil
 	}
 	if callErr != nil {
