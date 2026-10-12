@@ -93,7 +93,8 @@
         "obligation": "health",
         "outcome": "not_applicable",
         "impact": "none",
-        "cause_observed": false,
+        "cause_coverage": "fact_no_declaring_producer",
+        "cause_observed": true,
         "served": 0,
         "declared": 0
       },

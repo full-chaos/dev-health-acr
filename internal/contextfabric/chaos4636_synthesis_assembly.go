@@ -550,6 +550,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// before the commit-affirmation gate, Validate and Save, so the sentence,
 	// its Coverage.Partial flag and the answer are one object throughout.
 	applyGroupingRefusalDisclosure(&result, params.GroupingRefusal)
+	pending.GroupingRefusal = params.GroupingRefusal
 	if cohort := params.Graph.Cohort; cohort != nil {
 		// Over the SERVED cohort: narrowing has already run, so a member the
 		// answer dropped is never counted.
@@ -806,6 +807,10 @@ func correctKindCensusTruncatedServedCounts(details []CoverageDetail, cohort *Co
 // The alternative -- a bool that each emitter consults -- is what let three
 // emitters drift out of the rule one at a time.
 type assemblyTelemetry struct {
+	// GroupingRefusal is the grouping refusal this request took, carried to
+	// finalization so the group-axis requirement is stated not_applicable
+	// with its cause instead of left to read as an unattempted read.
+	GroupingRefusal CohortGroupingOutcome
 	// RetryAttempted carries actual second-pass execution to the final
 	// decisive budget assertion; input narrowing alone does not prove it.
 	RetryAttempted bool
