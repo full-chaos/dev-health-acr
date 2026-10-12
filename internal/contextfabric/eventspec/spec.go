@@ -2964,10 +2964,18 @@ var TeamAnchorWalk = Event{
 // falkorgraph.PullRequestStatusFilterOutcomeVocabulary.
 var pullRequestStatusFilterOutcome = []string{"applied", "read_failed"}
 
+// pullRequestStatusFilterSite is the closed vocabulary of
+// PullRequestStatusFilter's "site" field -- see
+// falkorgraph.PullRequestStatusFilterSiteVocabulary.
+var pullRequestStatusFilterSite = []string{"walk", "pool"}
+
 // PullRequestStatusFilter is the Info line of one DiscoverContext call whose
-// frame filters pull request members by a status of the closed set
-// (contextfabric.PullRequestStatusVocabulary): candidates is how many pull
-// requests the member pool held and kept how many hold the status now.
+// frame filters pull request, project or incident members by a status of the
+// closed set of member_kind (contextfabric.MemberStatusVocabulary): candidates
+// is how many members of the kind the member pool held (site=pool) or the
+// status-narrowed member read returned (site=walk), and kept how many hold the
+// status now; outside_set counts the project or incident candidates whose
+// stored status is outside the set.
 // outcome=read_failed carries the error and no count.
 //
 // The line carries counts and closed values only, never a subject name or id.
@@ -2977,13 +2985,18 @@ var PullRequestStatusFilter = Event{
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrOnePerRequest,
 	Attribution:        []string{"org_id"},
-	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame filters pull request members by a status",
+	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame filters pull request, project or incident members by a status (member_kind says which; the message text keeps its certified pull request wording)",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: pullRequestStatusFilterOutcome},
-		{Key: "status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"open", "merged", "closed", "awaiting_review", "changes_requested", "approved"}},
+		{Key: "member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"pull_request", "project", "incident"}},
+		{Key: "status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"open", "merged", "closed", "awaiting_review", "changes_requested", "approved", "backlog", "planned", "started", "paused", "completed", "canceled", "active", "acknowledged", "resolved", "suppressed"}},
+		{Key: "site", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=applied: walk when the anchor's member read carried the status (before any member cap), pool when the status was applied to the pool after its arms", ClosedVocabulary: pullRequestStatusFilterSite},
 		{Key: "candidates", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when outcome=applied"},
 		{Key: "kept", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when outcome=applied"},
+		{Key: "pool_cut", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when outcome=applied: the status was decided within a cut read, so members past the cut were not checked"},
+		{Key: "outside_set", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when outcome=applied and member_kind is project or incident: the candidates whose stored status is outside the kind's closed set"},
+		{Key: "pool", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when site=walk, pool_cut, and the bounded count finished: the count of members of the kind the caller may read that the anchor's walk reaches under the state clause; absent when that count was itself cut (unknown)"},
 		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},

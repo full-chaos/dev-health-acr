@@ -30,10 +30,40 @@ type pullRequestStatusFilter struct {
 // set in which no pull request reached holds the status asked for.
 const pullRequestStatusNoMatchRationale = "No pull request reached from the subject the question names holds the status asked for now; that is a count of matches, not a statement about health."
 
+// storedNodePropertyCypher reads one stored property of a batch of nodes of one
+// kind, as the column "value".
+func storedNodePropertyCypher(property string) string {
+	return fmt.Sprintf("UNWIND $ids AS id MATCH (p:%s {%s:$org, %s:$kind, %s:id}) RETURN id, p.%s AS value ORDER BY id",
+		labelSubject, propOrgID, propKind, propCanonicalID, propPropertyPrefix+property)
+}
+
 // pullRequestStateCypher reads the stored state of a batch of pull requests.
-func pullRequestStateCypher() string {
-	return fmt.Sprintf("UNWIND $ids AS id MATCH (p:%s {%s:$org, %s:$kind, %s:id}) RETURN id, p.%s AS state ORDER BY id",
-		labelSubject, propOrgID, propKind, propCanonicalID, propPropertyPrefix+"state")
+func pullRequestStateCypher() string { return storedNodePropertyCypher("state") }
+
+// readStoredNodeProperty reads the stored property of every id from the stored
+// node, never from the pool node, because a link read returns members without
+// their properties. An id with no stored node has no entry.
+func (a *Adapter) readStoredNodeProperty(ctx context.Context, key, orgID string, kind contextfabric.SubjectKind, cypher string, ids []string, what string) (map[string]string, error) {
+	values := make(map[string]string, len(ids))
+	for start := 0; start < len(ids); start += storedSubjectBatch {
+		end := min(start+storedSubjectBatch, len(ids))
+		batch := make([]interface{}, 0, end-start)
+		for _, id := range ids[start:end] {
+			batch = append(batch, id)
+		}
+		rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{
+			"org": orgID, "ids": batch, "kind": string(kind),
+		}, true)
+		if err != nil {
+			return nil, safeDependencyError("read "+string(kind)+" "+what, err)
+		}
+		for _, r := range rows {
+			if id, _ := r["id"].(string); id != "" {
+				values[id] = propStringValue(r["value"])
+			}
+		}
+	}
+	return values, nil
 }
 
 // filterPullRequestsByStatus keeps the pool's nodes that are not pull requests
@@ -42,12 +72,14 @@ func pullRequestStateCypher() string {
 // node, because a link read returns members without their properties. The
 // status is as of now whatever window the question states, so the review rows
 // are read under no window, and every review row of every open pull request is
-// read: a cut read would leave a pull request's latest review unknown.
-func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, status string, pool []graphrank.CandidateNode) (pullRequestStatusFilter, error) {
+// read: a cut read would leave a pull request's latest review unknown. Only
+// pull requests the caller may read are read and counted; one it may not
+// passes through untouched for DiscoveredCohort to drop and count.
+func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, status string, pool []graphrank.CandidateNode, authorized func(graphrank.CandidateNode) bool) (pullRequestStatusFilter, error) {
 	out := pullRequestStatusFilter{}
 	ids := []string{}
 	for _, n := range pool {
-		if subject, ok := graphrank.NodeSubject(n); ok && subject.Kind == contextfabric.SubjectPullRequest {
+		if subject, ok := graphrank.NodeSubject(n); ok && subject.Kind == contextfabric.SubjectPullRequest && authorized(n) {
 			ids = append(ids, subject.CanonicalID)
 		}
 	}
@@ -56,24 +88,9 @@ func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, st
 		out.nodes = pool
 		return out, nil
 	}
-	states := make(map[string]string, len(ids))
-	for start := 0; start < len(ids); start += storedSubjectBatch {
-		end := min(start+storedSubjectBatch, len(ids))
-		batch := make([]interface{}, 0, end-start)
-		for _, id := range ids[start:end] {
-			batch = append(batch, id)
-		}
-		rows, err := a.api.query(ctx, key, pullRequestStateCypher(), map[string]interface{}{
-			"org": orgID, "ids": batch, "kind": string(contextfabric.SubjectPullRequest),
-		}, true)
-		if err != nil {
-			return out, safeDependencyError("read pull request states", err)
-		}
-		for _, r := range rows {
-			if id, _ := r["id"].(string); id != "" {
-				states[id] = propStringValue(r["state"])
-			}
-		}
+	states, err := a.readStoredNodeProperty(ctx, key, orgID, contextfabric.SubjectPullRequest, pullRequestStateCypher(), ids, "state")
+	if err != nil {
+		return out, err
 	}
 	reviews := map[string][]contextfabric.PullRequestReviewRow{}
 	if contextfabric.PullRequestStatusReviewDerived(status) {
@@ -83,21 +100,14 @@ func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, st
 				open = append(open, id)
 			}
 		}
-		hits, _, err := a.walkStepHits(ctx, key, orgID, open, pullRequestReviewStep, temporalFilter{}, 0)
-		if err != nil {
+		if reviews, err = a.pullRequestReviewRows(ctx, key, orgID, open); err != nil {
 			return out, err
-		}
-		for _, h := range hits {
-			submitted, _ := h.to.Properties[propValidFromNs].(int64)
-			reviews[h.from] = append(reviews[h.from], contextfabric.PullRequestReviewRow{
-				State: propStringValue(h.to.Properties[propPropertyPrefix+"state"]), SubmittedNs: submitted,
-			})
 		}
 	}
 	out.nodes = make([]graphrank.CandidateNode, 0, len(pool))
 	for _, n := range pool {
 		subject, ok := graphrank.NodeSubject(n)
-		if !ok || subject.Kind != contextfabric.SubjectPullRequest {
+		if !ok || subject.Kind != contextfabric.SubjectPullRequest || !authorized(n) {
 			out.nodes = append(out.nodes, n)
 			continue
 		}
@@ -107,6 +117,26 @@ func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, st
 		}
 	}
 	return out, nil
+}
+
+// pullRequestReviewRows reads every review row of each pull request, by pull
+// request id, under no window.
+func (a *Adapter) pullRequestReviewRows(ctx context.Context, key, orgID string, ids []string) (map[string][]contextfabric.PullRequestReviewRow, error) {
+	reviews := map[string][]contextfabric.PullRequestReviewRow{}
+	if len(ids) == 0 {
+		return reviews, nil
+	}
+	hits, _, err := a.walkStepHits(ctx, key, orgID, ids, pullRequestReviewStep, temporalFilter{}, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range hits {
+		submitted, _ := h.to.Properties[propValidFromNs].(int64)
+		reviews[h.from] = append(reviews[h.from], contextfabric.PullRequestReviewRow{
+			State: propStringValue(h.to.Properties[propPropertyPrefix+"state"]), SubmittedNs: submitted,
+		})
+	}
+	return reviews, nil
 }
 
 // PullRequestStatusFilterOutcome is the closed outcome of one pull request
@@ -129,11 +159,51 @@ func PullRequestStatusFilterOutcomeVocabulary() []PullRequestStatusFilterOutcome
 // PullRequestStatusFilterDecision is one decision line of the pull request
 // status filter: counts and closed values only, never a name or an id.
 type PullRequestStatusFilterDecision struct {
-	// Status is the value of contextfabric.PullRequestStatusVocabulary applied.
+	// MemberKind is the kind filtered: pull_request when empty, else project
+	// or incident.
+	MemberKind contextfabric.SubjectKind
+	// Status is the value of contextfabric.MemberStatusVocabulary(MemberKind) applied.
 	Status string
-	// Candidates and Kept count the pool's pull requests before and after.
+	// Candidates and Kept count the pool's members of the kind before and after.
 	Candidates, Kept int
-	Err              error
+	// OutsideSet counts the candidates whose stored status is outside the
+	// kind's closed set; written only for a project or incident.
+	OutsideSet int
+	// Site is where the status was applied: inside the anchor's member read,
+	// or to the pool after its arms were cut.
+	Site PullRequestStatusFilterSite
+	// PoolCut: the status was decided within a cut read, so members past the
+	// cut were not checked.
+	PoolCut bool
+	// Pool is the bounded count of members of the kind the anchor's walk
+	// reaches under the state clause, when the walk's pages were cut; -1
+	// otherwise.
+	Pool int
+	Err  error
+}
+
+// PullRequestStatusFilterSite is the closed set of places a status is applied.
+type PullRequestStatusFilterSite string
+
+const (
+	// PullRequestStatusFilterSiteWalk: inside the anchor's member read, before
+	// any member cap.
+	PullRequestStatusFilterSiteWalk PullRequestStatusFilterSite = "walk"
+	// PullRequestStatusFilterSitePool: to the member pool, after its arms.
+	PullRequestStatusFilterSitePool PullRequestStatusFilterSite = "pool"
+)
+
+// PullRequestStatusFilterSiteVocabulary returns every declared site, in
+// declaration order.
+func PullRequestStatusFilterSiteVocabulary() []PullRequestStatusFilterSite {
+	return []PullRequestStatusFilterSite{PullRequestStatusFilterSiteWalk, PullRequestStatusFilterSitePool}
+}
+
+func (d PullRequestStatusFilterDecision) memberKind() contextfabric.SubjectKind {
+	if d.MemberKind == "" {
+		return contextfabric.SubjectPullRequest
+	}
+	return d.MemberKind
 }
 
 func (d PullRequestStatusFilterDecision) outcome() PullRequestStatusFilterOutcome {

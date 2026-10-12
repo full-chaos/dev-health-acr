@@ -959,7 +959,24 @@ import (
 //
 // v191 -> v192: a cohort cut below the population retrieval reached serves that
 // population and an N of M sentence. A stored answer lacks both.
-const QueryVersion = "devhealthfacts.clickhouse.v192"
+//
+// v192 -> v193: project and incident members whose question states a status of
+// the closed set of their kind (project: backlog, planned, started, paused,
+// completed, canceled; incident: active, open, acknowledged, resolved, closed,
+// suppressed) are filtered by it before the cohort is cut, and the answer
+// states the filter and how many members held a stored status outside the set.
+// A team has no state, so a team status qualifier is refused. The status used
+// to be admitted and served as the whole unfiltered member set. A candidate
+// saved under v192 may hold that unfiltered set.
+//
+// v193 -> v194: a status the question states on pull request, project or
+// incident members is applied inside the anchor's member read and the scope
+// expansion to pull requests, before the member cap or the read limit, so the
+// cap describes the members that hold the status. It used to filter the first
+// members by id, which could serve no match while later members held it. A
+// status decided over a cut pool says within how many members it ran. A
+// candidate saved under v193 may hold the cut, mismatched set.
+const QueryVersion = "devhealthfacts.clickhouse.v194"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

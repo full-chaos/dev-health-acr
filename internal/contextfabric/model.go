@@ -380,11 +380,20 @@ type GraphContext struct {
 	// SynthesisInput, and this value exists for a server step that runs
 	// after synthesis, never for the model.
 	CohortMemberSource CohortMemberSource `json:"-"`
-	Paths              []RelationshipPath `json:"paths"`
-	DriverCandidates   []DriverJudgment   `json:"driver_candidates"`
-	EvidenceRefIDs     []string           `json:"evidence_ref_ids"`
-	FactRequirements   []FactRequirement  `json:"fact_requirements"`
-	Coverage           Coverage           `json:"coverage"`
+	// MemberStatusOutsideSet is how many project or incident members the
+	// status filter could not match because their stored status is outside the
+	// kind's closed set. Engine bookkeeping, `json:"-"` like CohortPopulation:
+	// the model is not told a count the answer states in a limitation.
+	MemberStatusOutsideSet MemberStatusOutsideSet `json:"-"`
+	// MemberStatusPoolCut is a status filter decided within a cut read: the
+	// answer states how many members were checked. Engine bookkeeping,
+	// `json:"-"` for the same reason as MemberStatusOutsideSet.
+	MemberStatusPoolCut MemberStatusPoolCut `json:"-"`
+	Paths               []RelationshipPath  `json:"paths"`
+	DriverCandidates    []DriverJudgment    `json:"driver_candidates"`
+	EvidenceRefIDs      []string            `json:"evidence_ref_ids"`
+	FactRequirements    []FactRequirement   `json:"fact_requirements"`
+	Coverage            Coverage            `json:"coverage"`
 }
 
 type CanonicalFactRequest struct {
@@ -413,6 +422,11 @@ type CanonicalFactRequest struct {
 	// requested selector, while a non-empty list that normalizes to no valid
 	// selector becomes an explicit zero (deny) selector.
 	RequestedRepositoryScope []string `json:"-"`
+	// PullRequestStatus is the pull request status the question frame filters
+	// its members by (PullRequestStatusFilterOf), or empty. A scope expansion
+	// to pull requests reads only the pull requests that hold it, inside the
+	// read and so before its limit. Engine dispatch state, never a model field.
+	PullRequestStatus string `json:"-"`
 	// LinkScopedSubjects are the work items this request's link predicate
 	// admitted under the requested repository scope (the repository walk's
 	// members, the satisfier the scoped census admitted): each is in the scope

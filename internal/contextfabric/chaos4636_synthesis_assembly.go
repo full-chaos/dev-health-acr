@@ -441,6 +441,8 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
 	}
+	result = withMemberStatusOutsideSet(result, graphContext.MemberStatusOutsideSet)
+	result = withMemberStatusPoolCut(result, graphContext.MemberStatusPoolCut)
 	if cardinality.Scope.Decision == CountPopulationScopeSingleSubject {
 		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricSingleSubjectCountLimitation})
 		result.Limitations = composed

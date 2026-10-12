@@ -694,7 +694,7 @@ func (e *Engine) finalizeResult(
 	// marshal. The decision is HELD on the pending telemetry (replaced per
 	// pass, so it describes the last document this pending finalized) and
 	// published once by (*Engine).emit.
-	result = withPullRequestStatusDisclosure(result, frame)
+	result = withMemberStatusDisclosure(result, frame)
 	disclosure, decided := applyCohortNarrowingDisclosure(&result, stamped.Family, cardinality, stamped.Narrowing)
 	if pending != nil {
 		pending.CohortNarrowingDisclosure = nil

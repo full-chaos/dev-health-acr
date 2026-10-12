@@ -1123,9 +1123,14 @@ func memberStatusWordText(value string) bool {
 // value is one of WorkItemStatusVocabulary, the closed set Dev Health writes
 // into work_items.status, and for pull_request members one of
 // PullRequestStatusVocabulary, the set the pull request member read applies;
-// acr holds no synonyms, so the interpretation prompt maps the question's word
+// for project and incident members one of MemberStatusVocabulary; a team has
+// no state fact, so a status qualifier on team members is never valid; acr
+// holds no synonyms, so the interpretation prompt maps the question's word
 // onto the set.
 func ValidMemberQualifierValue(memberKind SubjectKind, qualifier MemberQualifier, value string) bool {
+	if memberKind == SubjectTeam && qualifier == MemberQualifierStatus {
+		return false
+	}
 	if value == "" {
 		return true
 	}
@@ -1140,6 +1145,9 @@ func ValidMemberQualifierValue(memberKind SubjectKind, qualifier MemberQualifier
 	}
 	if memberKind == SubjectPullRequest && qualifier == MemberQualifierStatus {
 		return InPullRequestStatusVocabulary(value)
+	}
+	if qualifier == MemberQualifierStatus && len(MemberStatusVocabulary(memberKind)) > 0 {
+		return InMemberStatusVocabulary(memberKind, value)
 	}
 	if qualifier == MemberQualifierStatus {
 		return memberStatusWordText(value)
