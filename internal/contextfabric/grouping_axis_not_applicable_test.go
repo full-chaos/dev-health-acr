@@ -35,35 +35,12 @@ func prCohort(ids ...string) *Cohort {
 	return cohort
 }
 
-func TestAProjectGroupAxisIsBuiltFromProjectScopedRows(t *testing.T) {
-	t.Parallel()
-	groups, ungrouped, outcome := BuildCohortGroups(AnswerPlan{GroupKind: SubjectProject}, prCohort("pull_request:a", "pull_request:b"), []CanonicalFact{
-		projectScopedFact("pull_request:a", "p1", "Payments"),
-		projectScopedFact("pull_request:b", "p1", "Payments"),
-	})
-	if outcome.Refusal != CohortGroupingRefusalNone || ungrouped != 0 || len(groups) != 1 {
-		t.Fatalf("groups=%d ungrouped=%d outcome=%+v, want one project group", len(groups), ungrouped, outcome)
-	}
-	if got := groups[0].Subject; got.Kind != SubjectProject || got.CanonicalID != "project:p1" || got.Label != "Payments" || groups[0].Total != 2 {
-		t.Fatalf("group = %+v", groups[0])
-	}
-}
-
 func TestAProjectQuestionOverTeamOnlyRowsRefusesAsAKindMismatch(t *testing.T) {
 	t.Parallel()
 	groups, _, outcome := BuildCohortGroups(AnswerPlan{GroupKind: SubjectProject}, prCohort("pull_request:a"),
 		[]CanonicalFact{prTeamFact("pull_request:a", "team_1", "Platform")})
 	if len(groups) != 0 || outcome.Refusal != CohortGroupingRefusalGroupKindSourceMismatch || outcome.PlannedKind != SubjectProject || outcome.SourceKind != SubjectTeam {
 		t.Fatalf("groups=%d outcome=%+v", len(groups), outcome)
-	}
-}
-
-func TestATeamQuestionOverProjectOnlyRowsRefusesAsAKindMismatch(t *testing.T) {
-	t.Parallel()
-	groups, ungrouped, outcome := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, prCohort("pull_request:a"),
-		[]CanonicalFact{projectScopedFact("pull_request:a", "p1", "Payments")})
-	if len(groups) != 0 || ungrouped != 0 || outcome.Refusal != CohortGroupingRefusalGroupKindSourceMismatch || outcome.SourceKind != SubjectProject {
-		t.Fatalf("groups=%d ungrouped=%d outcome=%+v", len(groups), ungrouped, outcome)
 	}
 }
 

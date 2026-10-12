@@ -845,9 +845,8 @@ import (
 // v171 -> v172: a not_applicable outcome row names why (fact_no_declaring_producer,
 // observed), and a grouped question whose group axis the source cannot place
 // states its group-axis requirement not_applicable with that cause instead of
-// unavailable or not_attempted, so the answer is no longer degraded by it; a
-// project-scoped group row builds a project group axis. A candidate saved under
-// an earlier version holds the unexplained or degraded account and must not be
+// unavailable or not_attempted, so the answer is no longer degraded by it. A
+// candidate saved under an earlier version holds the unexplained or degraded account and must not be
 // reused.
 const QueryVersion = "devhealthfacts.clickhouse.v172"
 
