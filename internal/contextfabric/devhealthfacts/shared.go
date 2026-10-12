@@ -852,11 +852,18 @@ import (
 // repository column; team totals count an item once across the team's repositories. A candidate
 // saved under v172 holds the column-based repositories and totals.
 //
-// v173 -> v174: the compounding-risk operational-deficiency fact carries the
+// v173 -> v174: a not_applicable outcome row names why (fact_no_declaring_producer,
+// observed), and a grouped question whose group axis the source cannot place
+// states its group-axis requirement not_applicable with that cause instead of
+// unavailable or not_attempted, so the answer is no longer degraded by it. A
+// candidate saved under an earlier version holds the unexplained or degraded account and must not be
+// reused.
+//
+// v174 -> v175: the compounding-risk operational-deficiency fact carries the
 // rule's own basis (score, band, time) beside the team's latest
 // compounding_risk_daily row and a moved-since-the-rule flag. An answer saved
-// under v173 quotes the rule-time score as the team's current risk.
-const QueryVersion = "devhealthfacts.clickhouse.v174"
+// under v174 quotes the rule-time score as the team's current risk.
+const QueryVersion = "devhealthfacts.clickhouse.v175"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

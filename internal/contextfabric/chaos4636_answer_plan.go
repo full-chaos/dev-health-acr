@@ -627,6 +627,10 @@ func (e *Engine) finalizeResult(
 	// e.observationKeys (no dependency wired) yields a nil assignment, which
 	// every comparison already treats as "nothing declared" -- see
 	// ObservationKeys' own doc comment on EngineDependencies.
+	if pending != nil {
+		result.Completeness.Outcomes = appendGroupAxisNotApplicableRows(
+			result.Completeness.Outcomes, stamped.Requirements, pending.GroupingRefusal)
+	}
 	var observationKeys observationKeyAssignment
 	if e.observationKeys != nil {
 		observationKeys = e.observationKeys.ObservationKeyAssignment()
