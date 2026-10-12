@@ -452,3 +452,64 @@ func TestAnOverBoundLinkPoolIsNotReportedAsExact(t *testing.T) {
 		t.Fatalf("pool = %d, want unknown (-1): the count read stopped past the census bound", walk.status.pool)
 	}
 }
+
+// TestPoolSiteStatusCountsOnlyReadablePullRequests: an organization anchor is
+// off the entity tree, so its pull requests reach the pool through the
+// lexical arm and the status filters the pool. One open pull request is inside
+// the caller's grants and one outside; the status line counts and keeps only
+// the readable one.
+func TestPoolSiteStatusCountsOnlyReadablePullRequests(t *testing.T) {
+	type pr struct{ id, repo string }
+	pulls := []pr{{"pull_request:alpha:001", "full-chaos/alpha"}, {"pull_request:alpha:002", "acme/hidden"}}
+	pullNode := func(p pr) *node {
+		return &node{Properties: map[string]interface{}{propKind: "pull_request", propCanonicalID: p.id, propLabel: p.id,
+			propAuthzRepos: []string{p.repo}, propPropertyPrefix + "state": "open"}}
+	}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			var rows []row
+			for _, p := range pulls {
+				rows = append(rows, row{"node": pullNode(p), "score": 1.0})
+			}
+			return rows, nil
+		case cypher == pullRequestStateCypher():
+			var rows []row
+			ids, _ := params["ids"].([]interface{})
+			for _, raw := range ids {
+				rows = append(rows, row{"id": raw, "value": "open"})
+			}
+			return rows, nil
+		case strings.Contains(cypher, "UNION"), strings.HasPrefix(cypher, "UNWIND $ids"):
+			return nil, nil
+		}
+		id, _ := params["id"].(string)
+		for _, p := range pulls {
+			if p.id == id {
+				return []row{{"n": pullNode(p)}}, nil
+			}
+		}
+		if id == "organization:acme" {
+			return []row{fakeSubjectNodeRow("organization", id, "Acme")}, nil
+		}
+		return nil, nil
+	}}
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: "organization:acme", Label: "Acme"}
+	frame := pullRequestStatusFrame("open")
+	frame.SubjectExpression.Scoped.AnchorTerms = []string{"Acme"}
+	request := ownershipRoutingRequest(frame, anchor)
+	request.ScopeAnchorKind = contextfabric.SubjectOrganization
+	request.Request.Question = "which pull requests of Acme are open?"
+	telemetry := &recordingTelemetry{}
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/alpha"}}
+	if _, err := newFakeAdapterWithTelemetry(t, fake, telemetry).DiscoverContext(context.Background(), principal, request); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(telemetry.pullRequestStatusFilters) != 1 {
+		t.Fatalf("status filter lines = %+v, want one", telemetry.pullRequestStatusFilters)
+	}
+	line := telemetry.pullRequestStatusFilters[0]
+	if line.Site != PullRequestStatusFilterSitePool || line.Candidates != 1 || line.Kept != 1 {
+		t.Fatalf("status filter line = %+v, want the pool site counting the one readable pull request", line)
+	}
+}
