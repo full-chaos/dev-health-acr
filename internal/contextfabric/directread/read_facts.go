@@ -1129,7 +1129,7 @@ func derivedOutcome(outcome contextfabric.FactKindOutcome, targets, served int, 
 		return OutcomeTruncated
 	case served > 0:
 		return OutcomeFactServed
-	case targets == 0 && expansionCut(expansion.outcome):
+	case expansionCut(expansion.outcome):
 		return OutcomeUnavailable
 	}
 	switch outcome.State {

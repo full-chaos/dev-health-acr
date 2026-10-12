@@ -324,3 +324,28 @@ func TestDirectReadLineCountsDerivedFacts(t *testing.T) {
 		}
 	}
 }
+
+// A cut expansion that served no fact for a root never reads as "no fact":
+// the cut may have left that root's facts out.
+func TestDirectReadCutExpansionWithoutFactIsNotReadNoFact(t *testing.T) {
+	expander := &scriptedExpander{expand: func(request contextfabric.FactScopeExpansionRequest) contextfabric.FactScopeExpansionResult {
+		targets := make([]contextfabric.SubjectRef, 0, request.Limit+1)
+		for i := 0; i <= request.Limit; i++ {
+			targets = append(targets, contextfabric.SubjectRef{Kind: request.TargetKind, CanonicalID: fmt.Sprintf("repository:r%04d", i), Label: fmt.Sprintf("R%d", i)})
+		}
+		return contextfabric.FactScopeExpansionResult{Targets: targets, Counts: contextfabric.FactScopeExpansionCounts{CandidateCount: len(targets)}}
+	}}
+	empty := perSubjectProvider(contextfabric.FactDeployments, contractsv1.ContextFabricSubjectRepository)
+	empty.read = func(contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable}, nil
+	}
+	reader := directExpandingReader(t, graphOfOrgA(), expander, nil, empty)
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"deployments"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := coverageOf(t, response, "deployments", projectQ)
+	if row.Outcome != OutcomeUnavailable || !strings.Contains(row.Reason, string(contextfabric.FactScopeExpandedPartial)) || response.Status != StatusPartial {
+		t.Fatalf("row %+v status %q", row, response.Status)
+	}
+}
