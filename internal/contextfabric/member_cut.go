@@ -55,15 +55,49 @@ func memberCutBasis(cohort *Cohort) (contractsv1.ContextFabricNarrowingBasis, bo
 	return "", false
 }
 
-// cutTrailingMembers drops the last n uncited members. It returns false when
-// fewer than n are uncited.
-func cutTrailingMembers(result InvestigationResult, uncited []int, n int) (InvestigationResult, bool) {
-	if n <= 0 || n > len(uncited) {
+// memberCutOrder returns the order members are cut in, worst first, over the
+// members nothing in the answer names: for a ranked list the highest
+// AttentionRank first (a member ranking did not run for counts as worst), as
+// the Members array stays in pool order and says nothing of attention; for an
+// unranked list sorted by canonical id, from the end of the list. The basis
+// states exactly that order.
+func memberCutOrder(result InvestigationResult) (contractsv1.ContextFabricNarrowingBasis, []int, bool) {
+	basis, ok := memberCutBasis(result.Cohort)
+	if !ok {
+		return "", nil, false
+	}
+	cited := walkListSubjectCited(result)
+	order := make([]int, 0, len(result.Cohort.Members))
+	for index, member := range result.Cohort.Members {
+		if !cited[member.Subject.CanonicalID] {
+			order = append(order, index)
+		}
+	}
+	members := result.Cohort.Members
+	sort.SliceStable(order, func(a, b int) bool {
+		left, right := members[order[a]], members[order[b]]
+		if basis == contractsv1.ContextFabricNarrowingBasisAttentionRank {
+			if left.RankingComputed != right.RankingComputed {
+				return !left.RankingComputed
+			}
+			if left.AttentionRank != right.AttentionRank {
+				return left.AttentionRank > right.AttentionRank
+			}
+		}
+		return order[a] > order[b]
+	})
+	return basis, order, true
+}
+
+// cutMembers drops the first n members of order. It returns false when order
+// holds fewer than n.
+func cutMembers(result InvestigationResult, order []int, n int) (InvestigationResult, bool) {
+	if n <= 0 || n > len(order) {
 		return result, false
 	}
 	drop := map[int]bool{}
 	dropped := []CohortMember{}
-	for _, index := range uncited[len(uncited)-n:] {
+	for _, index := range order[:n] {
 		drop[index] = true
 		dropped = append(dropped, result.Cohort.Members[index])
 	}
@@ -74,13 +108,10 @@ func cutTrailingMembers(result InvestigationResult, uncited []int, n int) (Inves
 			cohort.Members = append(cohort.Members, member)
 		}
 	}
-	// Both orders stay dense, as the cohort validator requires of a served
-	// list: Rank is the list position; AttentionRank is renumbered over the
-	// ranked members that remain, in the order they already held, so no
-	// member's place relative to another changes and no score is rewritten.
-	for index := range cohort.Members {
-		cohort.Members[index].Rank = index + 1
-	}
+	// Rank stays the pool-order value each member held (the validator needs it
+	// only to increase). AttentionRank is renumbered dense over the ranked
+	// members that remain, in the order they already held, so no member's place
+	// relative to another changes and no score is rewritten.
 	ranked := make([]int, 0, len(cohort.Members))
 	for index, member := range cohort.Members {
 		if member.RankingComputed {
@@ -135,19 +166,12 @@ func (e *Engine) planMemberCut(
 		attempt.Declined = ClaimDepthNoCohort
 		return attempt, nil
 	}
-	basis, ok := memberCutBasis(result.Cohort)
+	basis, uncited, ok := memberCutOrder(result)
 	if !ok {
 		attempt.Declined = ClaimDepthNoCohort
 		return attempt, nil
 	}
 	attempt.Before, attempt.Basis = len(result.Cohort.Members), basis
-	cited := walkListSubjectCited(result)
-	uncited := make([]int, 0, len(result.Cohort.Members))
-	for index, member := range result.Cohort.Members {
-		if !cited[member.Subject.CanonicalID] {
-			uncited = append(uncited, index)
-		}
-	}
 	over := measured.Measurement.Items.Budgeted() - budget.MaxItems
 	if over <= 0 || len(uncited) == 0 {
 		attempt.Declined = ClaimDepthNothingCuttable
@@ -155,7 +179,7 @@ func (e *Engine) planMemberCut(
 	}
 
 	build := func(n int, telemetry *assemblyTelemetry) (InvestigationResult, bool) {
-		cut, ok := cutTrailingMembers(result, uncited, n)
+		cut, ok := cutMembers(result, uncited, n)
 		if !ok {
 			return InvestigationResult{}, false
 		}
@@ -205,7 +229,10 @@ func (e *Engine) planMemberCut(
 			low = mid + 1
 		}
 	}
-	cut, ok := build(best, pending)
+	// Measured WITHOUT the pending telemetry: a candidate the byte ladder may
+	// still replace must not leave cover events behind that publication would
+	// mark as served. The document that is used is finalized with it once.
+	cut, ok := build(best, nil)
 	if !ok {
 		attempt.Declined = ClaimDepthInsufficient
 		return attempt, nil
@@ -226,7 +253,12 @@ func (e *Engine) planMemberCut(
 			attempt.Declined = ClaimDepthInvalidResult
 			return attempt, nil
 		}
-		attempt.Result, attempt.Served = cut, true
+		final, built := build(best, pending)
+		if !built || !servableLeverResult(final) {
+			attempt.Declined = ClaimDepthInvalidResult
+			return attempt, nil
+		}
+		attempt.Result, attempt.Served = final, true
 	case servedMeasured.Overrun == contractsv1.ContextFabricBudgetOverrunBytes:
 		attempt.Reduced = cut
 	default:

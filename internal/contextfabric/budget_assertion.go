@@ -521,30 +521,38 @@ func (e *Engine) dropPathsToFitDecisive(ctx context.Context, principal storage.P
 	if !droppable {
 		return InvestigationResult{}, PathDropEvent{}, false, nil
 	}
-	fits := func(n int) (InvestigationResult, int, bool, error) {
+	// fits reports whether the document with n paths dropped fits as sent, and
+	// the bytes it measured: the floor's bytes are the minimum answer a refusal
+	// or an event names.
+	fits := func(n int) (InvestigationResult, int, bool, int64, error) {
 		candidate, cited, ok := build(n)
 		if !ok {
-			return InvestigationResult{}, 0, false, nil
+			return InvestigationResult{}, 0, false, 0, nil
 		}
 		finalized, err := e.finalizeServedAs(ctx, principal, stage, candidate, nil, budget, servedModeMeasureOnly)
 		var refusal AnswerBudgetRefusal
 		if err == nil {
 			// Fits as sent; it must also be a valid document as sent, which is
 			// the document the serving path validates.
-			return candidate, cited, servableLeverResult(finalized), nil
+			var bytes int64
+			if measured, measureErr := contractsv1.MeasureContextFabricResponse(finalized); measureErr == nil {
+				bytes = measured.Bytes
+			}
+			return candidate, cited, servableLeverResult(finalized), bytes, nil
 		}
 		if errors.As(err, &refusal) && refusal.Overrun == contractsv1.ContextFabricBudgetOverrunBytes {
-			return candidate, cited, false, nil
+			return candidate, cited, false, refusal.MeasuredBytes, nil
 		}
-		return InvestigationResult{}, 0, false, err
+		return InvestigationResult{}, 0, false, 0, err
 	}
-	if _, _, ok, err := fits(len(order)); err != nil || !ok {
-		return InvestigationResult{}, PathDropEvent{}, false, err
+	_, _, floorFits, floorBytes, floorErr := fits(len(order))
+	if floorErr != nil || !floorFits {
+		return InvestigationResult{}, PathDropEvent{}, false, floorErr
 	}
 	low, high, best := 1, len(order), len(order)
 	for low <= high {
 		mid := low + (high-low)/2
-		_, _, ok, err := fits(mid)
+		_, _, ok, _, err := fits(mid)
 		if err != nil {
 			return InvestigationResult{}, PathDropEvent{}, false, err
 		}
@@ -554,7 +562,7 @@ func (e *Engine) dropPathsToFitDecisive(ctx context.Context, principal storage.P
 			low = mid + 1
 		}
 	}
-	candidate, cited, ok, err := fits(best)
+	candidate, cited, ok, _, err := fits(best)
 	if err != nil || !ok {
 		return InvestigationResult{}, PathDropEvent{}, false, err
 	}
@@ -564,7 +572,7 @@ func (e *Engine) dropPathsToFitDecisive(ctx context.Context, principal storage.P
 	}
 	return candidate, PathDropEvent{
 		PathsBefore: len(current.Paths), PathsAfter: len(candidate.Paths),
-		CitedDropped: cited, DroppedPathIDs: ids,
+		CitedDropped: cited, DroppedPathIDs: ids, MinimumBytes: floorBytes,
 	}, true, nil
 }
 
@@ -583,7 +591,6 @@ func (e *Engine) recordServedPathDrop(ctx context.Context, principal storage.Pri
 	drop.Served = true
 	if measured, err := contractsv1.MeasureContextFabricResponse(served); err == nil {
 		drop.BytesAfter = measured.Bytes
-		drop.MinimumBytes = measured.Bytes
 	}
 	e.telemetry.RecordPathDrop(ctx, principal, drop)
 }

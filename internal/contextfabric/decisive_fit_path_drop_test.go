@@ -96,6 +96,9 @@ func TestADecisiveFitOverTheCeilingDropsPathsBeforeRefusing(t *testing.T) {
 	for _, event := range telemetry.pathDrops {
 		if event.Pass == answerPassDecisive {
 			drops++
+			if event.MinimumBytes <= 0 || event.MinimumBytes >= event.BytesAfter {
+				t.Fatalf("decisive path-drop event reports minimum %d against served %d: the minimum is the size with every droppable path gone, below the fewest-drop document", event.MinimumBytes, event.BytesAfter)
+			}
 			if !event.Served || event.PathsBefore-event.PathsAfter != chaos6558PathCount-len(result.Paths) || len(event.DroppedPathIDs) != event.PathsBefore-event.PathsAfter || event.BytesBefore <= decisivePathDropCeiling || event.BytesAfter > decisivePathDropCeiling {
 				t.Fatalf("decisive path-drop event = %+v, served %d paths", event, len(result.Paths))
 			}

@@ -268,3 +268,60 @@ func TestAnItemOverrunUnderACallerByteOptionIsServedAtTheServiceCeiling(t *testi
 		t.Fatalf("served %d members: the cut did not run", len(result.Cohort.Members))
 	}
 }
+
+// The Members array stays in pool order and says nothing of attention, so a
+// ranked list is cut by AttentionRank, the highest numbers first, never from
+// the end of the array. The fixture is built so the end of the array and the
+// worst attention differ; the test asserts they do, so it cannot pass by
+// coincidence of the two orders.
+func TestARankedListIsCutByAttentionRankNotByPoolPosition(t *testing.T) {
+	attention := []int{3, 1, 6, 2, 5, 4}
+	members := make([]CohortMember, 0, len(attention))
+	for index, rank := range attention {
+		id := fmt.Sprintf("project_%03d", index)
+		members = append(members, CohortMember{
+			Subject: SubjectRef{Kind: SubjectProject, CanonicalID: id, Label: id}, Rank: index + 1,
+			InclusionReasons: []string{"owned"}, RankingComputed: true, AttentionRank: rank,
+		})
+	}
+	// project_005 (attention 4) is named by a finding and is never cut.
+	result := InvestigationResult{
+		Cohort:        &Cohort{Kind: SubjectProject, Members: members, Rationale: "owned", Complete: true, ScoreMeaning: contractsv1.ContextFabricCohortScoreMeaningAttention},
+		ReadinessGaps: []Finding{{FindingID: "finding_gap_00", Kind: "relationship", Summary: "A gap.", Subjects: []SubjectRef{members[5].Subject}, EvidenceRefIDs: []string{"evidence_gap_01"}}},
+	}
+	basis, order, ok := memberCutOrder(result)
+	if !ok || basis != contractsv1.ContextFabricNarrowingBasisAttentionRank {
+		t.Fatalf("basis %q ok=%v, want attention_rank", basis, ok)
+	}
+	const cut = 2
+	poolTail := []string{"project_004", "project_003"}
+	cutIDs := []string{}
+	for _, index := range order[:cut] {
+		cutIDs = append(cutIDs, members[index].Subject.CanonicalID)
+	}
+	if cutIDs[0] == poolTail[0] || cutIDs[1] == poolTail[1] {
+		t.Fatalf("fixture does not discriminate: cut %v equals the pool tail %v", cutIDs, poolTail)
+	}
+	if cutIDs[0] != "project_002" || cutIDs[1] != "project_004" {
+		t.Fatalf("cut %v, want the two worst attention ranks, project_002 (6) then project_004 (5)", cutIDs)
+	}
+	cutResult, ok := cutMembers(result, order, cut)
+	if !ok {
+		t.Fatal("cutMembers declined")
+	}
+	kept := cutResult.Cohort.Members
+	wantAttention := map[string]int{"project_000": 3, "project_001": 1, "project_003": 2, "project_005": 4}
+	wantRank := map[string]int{"project_000": 1, "project_001": 2, "project_003": 4, "project_005": 6}
+	// attention 3,1,2,4 -> dense in held order 3,1,2,4 (already dense).
+	for _, member := range kept {
+		if member.AttentionRank != wantAttention[member.Subject.CanonicalID] {
+			t.Fatalf("%s attention rank %d, want %d", member.Subject.CanonicalID, member.AttentionRank, wantAttention[member.Subject.CanonicalID])
+		}
+		if member.Rank != wantRank[member.Subject.CanonicalID] {
+			t.Fatalf("%s rank %d, want its pool position %d: Rank is the pool order and is not renumbered", member.Subject.CanonicalID, member.Rank, wantRank[member.Subject.CanonicalID])
+		}
+	}
+	if len(kept) != 4 || cutResult.Cohort.Complete || !cutResult.Cohort.Truncated {
+		t.Fatalf("kept %d, complete=%v truncated=%v", len(kept), cutResult.Cohort.Complete, cutResult.Cohort.Truncated)
+	}
+}
