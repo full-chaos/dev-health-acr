@@ -318,12 +318,21 @@ const (
 		"mean, or rephrase the question so it names one."
 )
 
-// kindsSearchedText renders the searched kinds, "none" when the pool held none.
+// kindsSearchedText renders the searched kinds as plural display nouns, "none"
+// when the pool held none; a token outside the vocabulary is kept as is.
 func kindsSearchedText(kinds []string) string {
 	if len(kinds) == 0 {
 		return "none"
 	}
-	return strings.Join(kinds, ", ")
+	nouns := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		noun := contractsv1.ContextFabricSubjectKindNoun(contractsv1.ContextFabricSubjectKind(kind), 2)
+		if noun == "" {
+			noun = kind
+		}
+		nouns = append(nouns, noun)
+	}
+	return strings.Join(nouns, ", ")
 }
 
 // noMatchLimitationSubjectNotFound is the terminal prose for a named subject

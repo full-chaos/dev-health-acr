@@ -39,7 +39,7 @@ func TestTheFloorEmptiedTerminalReachesTheResultAsTheSubjectNotFoundSentence(t *
 	if !found {
 		t.Fatalf("limitations = %q, want the subject-not-found sentence %q", result.Limitations, want)
 	}
-	if !strings.Contains(want, `"Phantom Squad"`) || !strings.Contains(want, "among the kinds searched (team)") {
+	if !strings.Contains(want, `"Phantom Squad"`) || !strings.Contains(want, "among the kinds searched (teams)") {
 		t.Fatalf("sentence = %q", want)
 	}
 }
@@ -52,7 +52,7 @@ func TestTheOfferFloorTextsArePinned(t *testing.T) {
 		t.Fatalf("marker text = %q", noMatchLimitationOfferFloorEmptied)
 	}
 	got := noMatchLimitationSubjectNotFound([]string{"Phantom"}, []string{"team"})
-	want := `No subject matching "Phantom" was found among the kinds searched (team), so nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one.`
+	want := `No subject matching "Phantom" was found among the kinds searched (teams), so nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one.`
 	if got != want {
 		t.Fatalf("sentence = %q", got)
 	}
