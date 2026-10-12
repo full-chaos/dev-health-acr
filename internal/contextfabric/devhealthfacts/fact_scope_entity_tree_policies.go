@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // This file is the traversal of the five entity-tree policies. Every hop
@@ -432,37 +433,51 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 // teamOwnedRepositorySlugs is team -> the slugs (repos.repo) of the
 // repositories it currently owns.
 func (e *ScopeExpander) teamOwnedRepositorySlugs(ctx context.Context, orgID string, teamIDs []string) (map[string][]string, error) {
-	statement := `SELECT own.team_id, ifNull(r.repo, '')
-FROM ` + ownedRepositoriesSource(` AND team_id IN {team_ids:Array(String)}`+ownershipValidityPredicate(factTimeBound{})) + ` AS own
+	source := ownedRepositoriesSource(` AND team_id IN {team_ids:Array(String)}` + ownershipValidityPredicate(factTimeBound{}))
+	slugs := map[string][]string{}
+	err := pagedTeamRepoRead(
+		teamRepoCursor{teamExpr: "own.team_id", repoExpr: "r.repo", repoType: "String"},
+		func(having string, limit int) string {
+			return `SELECT own.team_id, ifNull(r.repo, '')
+FROM ` + source + ` AS own
 LEFT JOIN (SELECT toString(id) AS repo_key, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS r ON r.repo_key = own.repo_key
 GROUP BY own.team_id, r.repo
+` + having + `
 ORDER BY own.team_id, r.repo
-LIMIT ` + strconv.Itoa(maxTeamOwnedRepositoryRows+1)
-	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
-		{Name: "org_id", Value: orgID},
-		{Name: "team_ids", Value: teamIDs},
-	})
+LIMIT ` + strconv.Itoa(limit)
+		},
+		func(statement string, extra []readers.Binding, scan func(contextpacket.ClickHouseRowScanner) error) error {
+			bindings := []contextpacket.ClickHouseBinding{
+				{Name: "org_id", Value: orgID},
+				{Name: "team_ids", Value: teamIDs},
+			}
+			for _, binding := range extra {
+				bindings = append(bindings, contextpacket.ClickHouseBinding{Name: binding.Name, Value: binding.Value})
+			}
+			rows, err := e.client.Query(ctx, statement, bindings)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				if err := scan(rows); err != nil {
+					return err
+				}
+			}
+			return rows.Err()
+		},
+		func(row contextpacket.ClickHouseRowScanner) (string, string, error) {
+			var teamID, slug string
+			if err := row.Scan(&teamID, &slug); err != nil {
+				return "", "", err
+			}
+			if slug != "" {
+				slugs[teamID] = append(slugs[teamID], slug)
+			}
+			return teamID, slug, nil
+		})
 	if err != nil {
 		return nil, err
-	}
-	defer rows.Close()
-	slugs := map[string][]string{}
-	count := 0
-	for rows.Next() {
-		var teamID, slug string
-		if err := rows.Scan(&teamID, &slug); err != nil {
-			return nil, err
-		}
-		count++
-		if slug != "" {
-			slugs[teamID] = append(slugs[teamID], slug)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if count > maxTeamOwnedRepositoryRows {
-		return nil, fmt.Errorf("%s", teamOwnedRepositoriesOverflowReason)
 	}
 	return slugs, nil
 }

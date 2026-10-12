@@ -230,17 +230,19 @@ FROM (
 )
 WHERE latest = 1
 ORDER BY repo_id`
-		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamDeploymentRollup", statement, orgID, repoKeys, func(row contextpacket.ClickHouseRowScanner) error {
-			var repoID string
-			var r deploymentRollupRepo
-			var hasDeploy, hasLead uint8
-			if err := row.Scan(&repoID, &r.deployments, &r.failed, &r.days, &r.latestDay, &hasDeploy, &r.deployTime, &hasLead, &r.leadTime); err != nil {
-				return err
-			}
-			r.hasDeployTime, r.hasLead = hasDeploy != 0, hasLead != 0
-			byRepo[repoID] = r
-			return nil
-		}, window.bindings()...); scanErr != nil {
+		if scanErr := forEachRepoKeyChunk(repoKeys, func(chunk []string) error {
+			return readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamDeploymentRollup", statement, orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
+				var repoID string
+				var r deploymentRollupRepo
+				var hasDeploy, hasLead uint8
+				if err := row.Scan(&repoID, &r.deployments, &r.failed, &r.days, &r.latestDay, &hasDeploy, &r.deployTime, &hasLead, &r.leadTime); err != nil {
+					return err
+				}
+				r.hasDeployTime, r.hasLead = hasDeploy != 0, hasLead != 0
+				byRepo[repoID] = r
+				return nil
+			}, window.bindings()...)
+		}); scanErr != nil {
 			return outcome, scanErr
 		}
 	}

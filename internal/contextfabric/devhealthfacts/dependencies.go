@@ -441,15 +441,17 @@ FROM (`+edgeRows+`)
 GROUP BY rid
 ORDER BY rid`, settings)
 		if len(repoKeys) > 0 {
-			if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerRollup", statement, orgID, repoKeys, func(row readers.RowScanner) error {
-				var repoID string
-				var r blockerRollupRepo
-				if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges, &r.excludedEdges, &r.weakestLinkRank); err != nil {
-					return err
-				}
-				byRepo[repoID] = r
-				return nil
-			}, authorizationBindings...); scanErr != nil {
+			if scanErr := forEachRepoKeyChunk(repoKeys, func(chunk []string) error {
+				return readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerRollup", statement, orgID, chunk, func(row readers.RowScanner) error {
+					var repoID string
+					var r blockerRollupRepo
+					if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges, &r.excludedEdges, &r.weakestLinkRank); err != nil {
+						return err
+					}
+					byRepo[repoID] = r
+					return nil
+				}, authorizationBindings...)
+			}); scanErr != nil {
 				return outcome, scanErr
 			}
 		}
