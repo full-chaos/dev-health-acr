@@ -1,7 +1,9 @@
 package contextfabric
 
 import (
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -17,8 +19,10 @@ func narrowedGraphPath(id string, nodes []SubjectRef, edgeTo SubjectRef, ref str
 // A narrowed pass's graph input carries nothing that names a removed member:
 // a path with the member as a node or an edge end, and a driver candidate that
 // affects it, are dropped; a kept driver loses its citation of a dropped
-// path; an evidence ref only dropped things carried is removed, and a ref a
-// kept member, kept path, kept driver or retained fact still carries stays.
+// path. An evidence ref a dropped member, path or driver carried is removed
+// unless a holder left in the narrowed input carries it: a kept member, kept
+// path, kept driver, retained fact or resolution candidate. A ref nothing
+// dropped carried stays.
 func TestTheNarrowedGraphInputDropsWhatNamesARemovedMember(t *testing.T) {
 	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "team_a", Label: "A"}
 	keptSubject := SubjectRef{Kind: SubjectProject, CanonicalID: "project_kept", Label: "kept"}
@@ -26,21 +30,24 @@ func TestTheNarrowedGraphInputDropsWhatNamesARemovedMember(t *testing.T) {
 	kept := []CohortMember{{Subject: keptSubject, EvidenceRefIDs: []string{"ref_kept_member", "ref_shared"}}}
 	removed := []CohortMember{{Subject: goneSubject, EvidenceRefIDs: []string{"ref_gone_member", "ref_shared", "ref_fact"}}}
 	graph := GraphContext{
+		Resolution: SubjectResolution{Candidates: []SubjectCandidate{{Subject: team, EvidenceRefIDs: []string{"ref_candidate"}}}},
+		Cohort:     &Cohort{Kind: SubjectProject, Members: kept},
 		Paths: []RelationshipPath{
 			narrowedGraphPath("path_kept_one", []SubjectRef{team, keptSubject}, keptSubject, "ref_path_kept"),
 			narrowedGraphPath("path_gone_node", []SubjectRef{team, goneSubject}, goneSubject, "ref_path_gone"),
 			narrowedGraphPath("path_gone_edge", []SubjectRef{team, keptSubject}, goneSubject, "ref_path_edge"),
+			narrowedGraphPath("path_gone_candidate", []SubjectRef{team, goneSubject}, goneSubject, "ref_candidate"),
 		},
 		DriverCandidates: []DriverJudgment{
 			{DriverID: "driver_gone", AffectedSubjects: []SubjectRef{goneSubject}, EvidenceRefIDs: []string{"ref_driver_gone"}},
 			{DriverID: "driver_kept", AffectedSubjects: []SubjectRef{keptSubject}, PathIDs: []string{"path_kept_one", "path_gone_node"}, EvidenceRefIDs: []string{"ref_driver_kept"}},
 		},
-		EvidenceRefIDs: []string{"ref_kept_member", "ref_shared", "ref_gone_member", "ref_fact", "ref_path_kept", "ref_path_gone", "ref_path_edge", "ref_driver_gone", "ref_driver_kept", "ref_unrelated"},
+		EvidenceRefIDs: []string{"ref_kept_member", "ref_shared", "ref_gone_member", "ref_fact", "ref_path_kept", "ref_path_gone", "ref_path_edge", "ref_candidate", "ref_driver_gone", "ref_driver_kept", "ref_unrelated"},
 	}
 	facts := []CanonicalFact{{Subject: team, EvidenceRefIDs: []string{"ref_fact"}}}
 	original := slices.Clone(graph.DriverCandidates[1].PathIDs)
 
-	got := graphWithoutRemovedMembers(graph, removed, kept, facts)
+	got := graphWithoutRemovedMembers(graph, removed, facts)
 
 	paths := []string{}
 	for _, path := range got.Paths {
@@ -52,15 +59,75 @@ func TestTheNarrowedGraphInputDropsWhatNamesARemovedMember(t *testing.T) {
 	if len(got.DriverCandidates) != 1 || got.DriverCandidates[0].DriverID != "driver_kept" || !slices.Equal(got.DriverCandidates[0].PathIDs, []string{"path_kept_one"}) {
 		t.Errorf("drivers = %+v, want driver_kept citing path_kept_one only", got.DriverCandidates)
 	}
-	wantRefs := []string{"ref_kept_member", "ref_shared", "ref_fact", "ref_path_kept", "ref_driver_kept", "ref_unrelated"}
+	wantRefs := []string{"ref_kept_member", "ref_shared", "ref_fact", "ref_path_kept", "ref_candidate", "ref_driver_kept", "ref_unrelated"}
 	if !slices.Equal(got.EvidenceRefIDs, wantRefs) {
 		t.Errorf("refs = %v, want %v", got.EvidenceRefIDs, wantRefs)
 	}
-	if !slices.Equal(graph.DriverCandidates[1].PathIDs, original) || len(graph.Paths) != 3 || len(graph.EvidenceRefIDs) != 10 {
+	if !slices.Equal(graph.DriverCandidates[1].PathIDs, original) || len(graph.Paths) != 4 || len(graph.EvidenceRefIDs) != 11 {
 		t.Errorf("the caller's graph was changed: %+v", graph)
 	}
-	if same := graphWithoutRemovedMembers(graph, nil, kept, facts); len(same.Paths) != 3 || len(same.DriverCandidates) != 2 || len(same.EvidenceRefIDs) != 10 {
+	if same := graphWithoutRemovedMembers(graph, nil, facts); len(same.Paths) != 4 || len(same.DriverCandidates) != 2 || len(same.EvidenceRefIDs) != 11 {
 		t.Errorf("nothing removed changed the graph: %+v", same)
+	}
+}
+
+// keptInputRefs walks exactly the holders narrowedInputRefHolders names, and
+// that list names every ref-bearing field the synthesis input types reach: a
+// holder added to GraphContext, its cohort, paths, drivers or candidates, or
+// to the fact bundle, fails here until it is walked.
+func TestEveryEvidenceRefHolderOfTheSynthesisInputIsWalked(t *testing.T) {
+	found := []string{}
+	var walk func(reflect.Type, string, map[reflect.Type]bool)
+	walk = func(tp reflect.Type, path string, seen map[reflect.Type]bool) {
+		for tp.Kind() == reflect.Pointer {
+			tp = tp.Elem()
+		}
+		for tp.Kind() == reflect.Slice || tp.Kind() == reflect.Array || tp.Kind() == reflect.Map {
+			tp = tp.Elem()
+			path += "[]"
+			for tp.Kind() == reflect.Pointer {
+				tp = tp.Elem()
+			}
+		}
+		if tp.Kind() != reflect.Struct || seen[tp] {
+			return
+		}
+		seen[tp] = true
+		defer delete(seen, tp)
+		for i := 0; i < tp.NumField(); i++ {
+			field := tp.Field(i)
+			if field.Type == reflect.TypeOf([]string(nil)) && strings.Contains(field.Name, "Ref") {
+				found = append(found, path+"."+field.Name)
+				continue
+			}
+			walk(field.Type, path+"."+field.Name, seen)
+		}
+	}
+	walk(reflect.TypeOf(GraphContext{}), "Graph", map[reflect.Type]bool{})
+	walk(reflect.TypeOf(CanonicalFactBundle{}), "Facts", map[reflect.Type]bool{})
+	found = slices.DeleteFunc(found, func(path string) bool { return path == "Graph.EvidenceRefIDs" })
+	slices.Sort(found)
+	walked := slices.Sorted(slices.Values(narrowedInputRefHolders))
+	if !slices.Equal(found, walked) {
+		t.Fatalf("ref holders in the input types = %v, walked = %v", found, walked)
+	}
+
+	holder := []string{"ref_holder"}
+	for _, row := range []struct {
+		name  string
+		graph GraphContext
+		facts []CanonicalFact
+	}{
+		{"candidate", GraphContext{Resolution: SubjectResolution{Candidates: []SubjectCandidate{{EvidenceRefIDs: holder}}}}, nil},
+		{"member", GraphContext{Cohort: &Cohort{Members: []CohortMember{{EvidenceRefIDs: holder}}}}, nil},
+		{"path", GraphContext{Paths: []RelationshipPath{{EvidenceRefIDs: holder}}}, nil},
+		{"edge", GraphContext{Paths: []RelationshipPath{{Edges: []RelationshipEdge{{EvidenceRefIDs: holder}}}}}, nil},
+		{"driver", GraphContext{DriverCandidates: []DriverJudgment{{EvidenceRefIDs: holder}}}, nil},
+		{"fact", GraphContext{}, []CanonicalFact{{EvidenceRefIDs: holder}}},
+	} {
+		if !keptInputRefs(row.graph, row.facts)["ref_holder"] {
+			t.Errorf("%s: keptInputRefs does not walk this holder", row.name)
+		}
 	}
 }
 

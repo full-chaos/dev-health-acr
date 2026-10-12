@@ -189,3 +189,121 @@ func TestTheCohortRetryServesNoFieldNamingTheMembersItLeftOut(t *testing.T) {
 		t.Fatalf("served %d of %d members; the answer still describes the members the retry left out:\n%s", len(served), retryListedMembers, strings.Join(failures, "\n"))
 	}
 }
+
+// The grouped cohort retry narrows through the same tail: the graph input it
+// re-synthesizes from names only the members it keeps -- every group lists
+// kept members only and keeps at least one, no relationship path names a
+// member it left out, and the census states the kept member count.
+func TestAGroupedCohortRetryInputNamesOnlyTheMembersItKeeps(t *testing.T) {
+	previousClaims := groupReadClaimsPerMember
+	groupReadClaimsPerMember = 5
+	groupReadSynthesisPasses = nil
+	t.Cleanup(func() {
+		groupReadClaimsPerMember = previousClaims
+		groupReadSynthesisPasses = nil
+	})
+	ids := groupReadRetryMemberIDs()
+	teamOf := func(index int) string {
+		if index >= 3 {
+			return "team_platform"
+		}
+		return "team_security"
+	}
+	recorder := &groupReadRecorder{facts: func(request CanonicalFactRequest) CanonicalFactBundle {
+		bundle := emptyFactBundle()
+		for _, subject := range request.Subjects {
+			if subject.Kind == SubjectTeam {
+				return bundle
+			}
+		}
+		for index, id := range ids {
+			bundle.Facts = append(bundle.Facts, teamScopedFact(id, teamOf(index), teamOf(index)))
+		}
+		bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
+		return bundle
+	}}
+	members := make([]CohortMember, 0, len(ids))
+	for index, id := range ids {
+		members = append(members, CohortMember{
+			Subject: SubjectRef{Kind: SubjectProject, CanonicalID: id, Label: id}, Rank: index + 1, InclusionReasons: []string{"matched"},
+		})
+	}
+	synthesisCalls := 0
+	options := EngineOptions{MaxItems: 26, SynthesisDeadlineReserve: time.Hour}
+	engine, request := groupReadEngineFixtureConfigured(t, &recordingTelemetry{}, recorder, members, nil, SubjectProject, &options, &synthesisCalls, func(config *groupReadFixtureConfig) {
+		graph := &config.graph.context
+		for index, member := range members {
+			team := SubjectRef{Kind: SubjectTeam, CanonicalID: teamOf(index), Label: teamOf(index)}
+			ref := fmt.Sprintf("ref_group_path_%02d", index)
+			graph.Paths = append(graph.Paths, RelationshipPath{
+				PathID: fmt.Sprintf("path_group_member_%02d", index), Nodes: []SubjectRef{team, member.Subject},
+				Edges: []RelationshipEdge{{
+					Type: contractsv1.ContextFabricRelationshipRelatedTo, From: team, To: member.Subject,
+					Derivation: DerivationGraphAssociated, EpistemicStatus: EpistemicInferred, EvidenceRefIDs: []string{ref},
+				}},
+				WhyRelevant: "The team owns the project.", EvidenceRefIDs: []string{ref},
+			})
+			graph.EvidenceRefIDs = append(graph.EvidenceRefIDs, ref)
+		}
+		declared, served := retryCensusDeclared, len(members)
+		reason := KindCensusTruncatedReason(SubjectProject, declared, served)
+		detail := CoverageDetail{
+			DetailID: "cov-graph-01", Source: "context-fabric:graph", Code: contractsv1.ContextFabricCoverageDetailKindCensusTruncated,
+			Degrading: true, Kind: SubjectProject, Declared: &declared, Served: &served, Raw: reason,
+		}
+		detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+		graph.Coverage.Details = append(graph.Coverage.Details, detail)
+		graph.Coverage.DegradedReasons = append(graph.Coverage.DegradedReasons, reason)
+	})
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want the grouped retry served", err)
+	}
+	if synthesisCalls != 2 || len(groupReadSynthesisPasses) != 2 {
+		t.Fatalf("synthesis calls = %d (passes %d), want the first pass and the one retry", synthesisCalls, len(groupReadSynthesisPasses))
+	}
+	retry := groupReadSynthesisPasses[1].Graph
+	if retry.Cohort == nil || len(retry.Cohort.Groups) < 2 || len(retry.Cohort.Members) >= len(members) {
+		t.Fatalf("retry cohort = %+v, want a grouped cohort narrowed below %d members", retry.Cohort, len(members))
+	}
+	kept := map[string]bool{}
+	for _, member := range retry.Cohort.Members {
+		kept[member.Subject.CanonicalID] = true
+	}
+	var failures []string
+	for _, group := range retry.Cohort.Groups {
+		if len(group.MemberCanonicalIDs) == 0 {
+			failures = append(failures, fmt.Sprintf("group %s lists no member", group.Subject.CanonicalID))
+		}
+		for _, id := range group.MemberCanonicalIDs {
+			if !kept[id] {
+				failures = append(failures, fmt.Sprintf("group %s lists %s, a member the retry left out", group.Subject.CanonicalID, id))
+			}
+		}
+	}
+	for _, path := range retry.Paths {
+		for _, node := range path.Nodes {
+			if node.Kind == SubjectProject && !kept[node.CanonicalID] {
+				failures = append(failures, fmt.Sprintf("path %s names %s, a member the retry left out", path.PathID, node.CanonicalID))
+			}
+		}
+	}
+	if len(retry.Paths) != len(kept) {
+		failures = append(failures, fmt.Sprintf("paths = %d, want one per kept member (%d)", len(retry.Paths), len(kept)))
+	}
+	want := KindCensusTruncatedReason(SubjectProject, retryCensusDeclared, len(kept))
+	for _, detail := range retry.Coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailKindCensusTruncated && (detail.Raw != want || detail.Served == nil || *detail.Served != len(kept)) {
+			failures = append(failures, fmt.Sprintf("census = served %v raw %q, want %d and %q", detail.Served, detail.Raw, len(kept), want))
+		}
+	}
+	if !slices.Contains(retry.Coverage.DegradedReasons, want) {
+		failures = append(failures, fmt.Sprintf("degraded reasons %v, want %q", retry.Coverage.DegradedReasons, want))
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != len(kept) {
+		failures = append(failures, fmt.Sprintf("served cohort %+v, want the %d kept members", result.Cohort, len(kept)))
+	}
+	if len(failures) > 0 {
+		t.Fatalf("the grouped retry's input still describes members it left out:\n%s", strings.Join(failures, "\n"))
+	}
+}

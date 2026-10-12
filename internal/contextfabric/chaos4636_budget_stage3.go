@@ -1061,7 +1061,7 @@ func narrowedInputOver(params synthesisAssemblyParams, graph GraphContext, facts
 	graph.Cohort = rankedCohort
 	var retention FactRetentionDecision
 	facts.Facts, retention = RetainFactsForCohortWithDecision(facts.Facts, rankedCohort, removed, params.Resolution.Committed)
-	graph = graphWithoutRemovedMembers(graph, removed, kept, facts.Facts)
+	graph = graphWithoutRemovedMembers(graph, removed, facts.Facts)
 	return narrowedInput{
 		Graph: graph, Facts: facts, Citations: citations, Ranked: rankEvent,
 		Before: before, After: len(kept), Narrow: true, Basis: basis, Retention: retention,
