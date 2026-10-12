@@ -58,7 +58,7 @@ FactActualCompletion
   fields             archived_items cancelled_count completed completed_at completed_count completion_ratio counted_work_items member_kind rollup_basis unknown_status_count work_item_count
 
 FactBlockers
-  reached_funcs      123
+  reached_funcs      128
   dynamic_key_sites  0
   leaked_call_sites  16
     leak interface_method     9
@@ -66,7 +66,7 @@ FactBlockers
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         1
-    calls followed            841
+    calls followed            853
     calls accounted           13
     calls not_a_call          10
     calls excluded_by_design  198
@@ -90,7 +90,7 @@ FactContinuousIntegration
   fields             avg_duration_minutes avg_queue_minutes day p90_duration_minutes pipelines_count status success_rate
 
 FactDeployments
-  reached_funcs      111
+  reached_funcs      115
   dynamic_key_sites  0
   leaked_call_sites  10
     leak interface_method     3
@@ -98,7 +98,7 @@ FactDeployments
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         1
-    calls followed            818
+    calls followed            822
     calls accounted           13
     calls not_a_call          6
     calls excluded_by_design  170
@@ -154,7 +154,7 @@ FactIdentity
   fields             id name owning_teams owning_teams_omitted_count provider team_id team_name title
 
 FactIncidents
-  reached_funcs      111
+  reached_funcs      115
   dynamic_key_sites  0
   leaked_call_sites  12
     leak interface_method     5
@@ -162,7 +162,7 @@ FactIncidents
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         1
-    calls followed            818
+    calls followed            822
     calls accounted           13
     calls not_a_call          6
     calls excluded_by_design  161
@@ -218,7 +218,7 @@ FactMembership
   fields             organization_id repository_id repository_name
 
 FactMetrics
-  reached_funcs      114
+  reached_funcs      118
   dynamic_key_sites  1
   leaked_call_sites  13
     leak interface_method     5
@@ -226,7 +226,7 @@ FactMetrics
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         1
-    calls followed            835
+    calls followed            839
     calls accounted           13
     calls not_a_call          4
     calls excluded_by_design  194
@@ -250,7 +250,7 @@ FactOperationalDeficiencies
   fields             latest_as_of_day latest_compounding_risk latest_computed_at latest_score_unavailable_reason latest_severity latest_severity_unavailable_reason latest_unavailable_reason rationale rule_basis_compounding_risk rule_basis_severity rule_basis_unavailable_reason rule_computed_at rule_id rule_version score_moved_since_rule severity success_criterion title window_end window_start
 
 FactPullRequests
-  reached_funcs      116
+  reached_funcs      120
   dynamic_key_sites  0
   leaked_call_sites  14
     leak interface_method     6
@@ -258,7 +258,7 @@ FactPullRequests
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         1
-    calls followed            845
+    calls followed            849
     calls accounted           13
     calls not_a_call          9
     calls excluded_by_design  214
@@ -282,7 +282,7 @@ FactReadiness
   fields             backlog_size basis daily_readiness daily_readiness_omitted_count day estimate_coverage_ratio estimated_count provider rollup_basis team_breakdown team_count team_id team_name unestimated_count work_scope_id
 
 FactRequiredChildren
-  reached_funcs      87
+  reached_funcs      88
   dynamic_key_sites  0
   leaked_call_sites  3
     leak interface_method     3
@@ -290,7 +290,7 @@ FactRequiredChildren
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            779
+    calls followed            780
     calls accounted           13
     calls not_a_call          4
     calls excluded_by_design  87

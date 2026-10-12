@@ -7,10 +7,12 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 const blockerMemoryOrg = "5c1e8f2a-94d7-4b36-8a0e-2f6b9d3c7e14"
@@ -18,12 +20,16 @@ const blockerMemoryOrg = "5c1e8f2a-94d7-4b36-8a0e-2f6b9d3c7e14"
 // An organization's work items that are in no blocker edge must not count
 // against the team blocker reads' statement memory budget: the reads serve a
 // handful of edges, so their cost has to follow the edges, not the size of
-// the organization's work item table.
+// the organization's work item table. The query client runs under the hosted
+// runtime's per-statement read budget, as acr-api does.
 const blockerMemoryFillerItems = 250_000
 
 func TestTeamBlockerFactsServeAnOrganizationWithManyWorkItemsOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
+		options.MaxBytesToRead = &maxBytesToRead
+	})
 	for _, statement := range devhealthschema.DDL(
 		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
@@ -62,8 +68,8 @@ func TestTeamBlockerFactsServeAnOrganizationWithManyWorkItemsOnRealClickHouse(t 
 			blockerMemoryOrg, "blocker-open", blocked, "blocks", at)
 	}
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
-SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', ?, NULL FROM numbers(?)`,
-		repoUUID("repo-owned"), blockerMemoryOrg, at, project, uint64(blockerMemoryFillerItems))
+SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?)`,
+		repoUUID("repo-owned"), blockerMemoryOrg, at, uint64(blockerMemoryFillerItems))
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactBlockers)
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: blockerMemoryOrg, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
@@ -71,7 +77,7 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 	})
 	statements, peak := blockerStatementPeakMemory(t, ctx, direct)
 	if statements < 2 {
-		t.Fatalf("measurement did not happen: %d team blocker statements in system.query_log, want the roll-up and the totals at least", statements)
+		t.Fatalf("measurement did not happen: %d team blocker statements in system.query_log, want the roll-up and the totals at least; read error: %v: %s; recent server statements:\n%s", statements, err, readFailureCause(err), recentServerStatements(ctx, direct))
 	}
 	if peak >= blockerMemoryPeakCeiling {
 		t.Fatalf("team blocker statements peaked at %d bytes over %d unrelated work items, want under %d (a quarter of the 64 MiB statement cap)", peak, blockerMemoryFillerItems, blockerMemoryPeakCeiling)
@@ -99,11 +105,29 @@ func blockerStatementPeakMemory(t *testing.T, ctx context.Context, direct clickh
 		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 	}
 	if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage) FROM system.query_log
-WHERE type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+WHERE type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))`).Scan(&statements, &peak); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
 	return statements, peak
+}
+
+func recentServerStatements(ctx context.Context, direct clickhousedriver.Conn) string {
+	rows, err := direct.Query(ctx, `SELECT concat(toString(type), ' code=', toString(exception_code), ' memory=', toString(memory_usage), ' tables=', arrayStringConcat(tables, ','), ' || ', substring(exception, 1, 200), ' || ', substring(query, 1, 160))
+FROM system.query_log WHERE type != 'QueryStart' ORDER BY event_time_microseconds DESC LIMIT 8`)
+	if err != nil {
+		return "query_log unreadable: " + err.Error()
+	}
+	defer rows.Close()
+	var out strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			return out.String() + "scan: " + err.Error()
+		}
+		out.WriteString(line + "\n")
+	}
+	return out.String()
 }
 
 const blockerSiblingOrg = "8d2f6a19-3c4e-4b71-9e05-7a1c5b3d9f28"
