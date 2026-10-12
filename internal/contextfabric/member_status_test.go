@@ -147,3 +147,43 @@ func TestMembersOutsideTheKnownSetAreCounted(t *testing.T) {
 		t.Fatalf("a team count stated %q", got)
 	}
 }
+
+// TestMemberStatusRecognizerMatchesOnlyTheGeneratedSentences: a lookalike a
+// model could author (a status outside the closed set, a kind or article that
+// does not match, a zero or padded count, a changed vocabulary) is not
+// recognised as service-authored.
+func TestMemberStatusRecognizerMatchesOnlyTheGeneratedSentences(t *testing.T) {
+	for _, kind := range []SubjectKind{SubjectProject, SubjectIncident} {
+		for _, status := range MemberStatusVocabulary(kind) {
+			if !contractsv1.IsContextFabricMemberStatusLimitation(contractsv1.ContextFabricMemberStatusFilterLimitation(string(kind), status)) {
+				t.Errorf("%s %q: the generated filter sentence is not recognised", kind, status)
+			}
+		}
+		for _, count := range []int{1, 7, 25} {
+			if !contractsv1.IsContextFabricMemberStatusLimitation(contractsv1.ContextFabricMemberStatusOutsideSetLimitation(string(kind), count)) {
+				t.Errorf("%s %d: the generated count sentence is not recognised", kind, count)
+			}
+		}
+		if !contractsv1.IsContextFabricMemberStatusLimitation(contractsv1.ContextFabricMemberStatusUnappliedLimitation(string(kind))) {
+			t.Errorf("%s: the generated unapplied sentence is not recognised", kind)
+		}
+	}
+	for _, lookalike := range []string{
+		"Members are the projects whose current state is bogus; it is read as of now, over no period, and is not completion, readiness or health.",
+		"Members are the projects whose current state is open; it is read as of now, over no period, and is not completion, readiness or health.",
+		"Members are the incidents whose current status is started; it is read as of now, over no period, and is not completion, readiness or health.",
+		"Members are the projects whose current status is started; it is read as of now, over no period, and is not completion, readiness or health.",
+		"0 projects have a state outside the known set and were not matched.",
+		"07 projects have a state outside the known set and were not matched.",
+		"3 projects have a status outside the known set and were not matched.",
+		"3 incidents have a state outside the known set and were not matched.",
+		"3 teams have a state outside the known set and were not matched.",
+		"Members are not filtered by state: the state the question names is not one the project read applies (any word at all).",
+		"Members are not filtered by state: the state the question names is not one the incident read applies (backlog, planned, started, paused, completed or canceled).",
+		" 3 projects have a state outside the known set and were not matched.",
+	} {
+		if contractsv1.IsContextFabricMemberStatusLimitation(lookalike) {
+			t.Errorf("lookalike %q was recognised as service-authored", lookalike)
+		}
+	}
+}

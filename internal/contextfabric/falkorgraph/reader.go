@@ -1433,7 +1433,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	memberStatusKind, memberStatus := contextfabric.MemberStatusFilterOf(request.Frame)
 	var memberFiltered memberStatusFilter
 	if memberStatus != "" {
-		filtered, filterErr := a.filterMembersByStoredStatus(ctx, key, principal.OrgID, memberStatusKind, memberStatus, cohortNodes)
+		filtered, filterErr := a.filterMembersByStoredStatus(ctx, key, principal.OrgID, memberStatusKind, memberStatus, cohortNodes, func(n graphrank.CandidateNode) bool {
+			return graphrank.AuthorizedAttributes(principal, request.Request.RequestedScope, n.Attributes)
+		})
 		memberFiltered = filtered
 		if a.config.Telemetry != nil {
 			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{

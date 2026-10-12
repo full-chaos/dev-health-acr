@@ -4,18 +4,6 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// The project state set is the closed category set Linear writes for a
-// project (status.type), the only provider whose project state is a closed
-// vocabulary today; the other providers write a free string. The incident
-// status set is the canonical set ops writes into operational_incidents
-// (normalized_status). A stored value outside a set never matches a status of
-// the set and is counted, not dropped silently. acr holds no synonyms: the
-// interpretation prompt maps the question's words onto the set.
-var memberStatusVocabularies = map[SubjectKind][]string{
-	SubjectProject:  {"backlog", "planned", "started", "paused", "completed", "canceled"},
-	SubjectIncident: {"active", "open", "acknowledged", "resolved", "closed", "suppressed"},
-}
-
 // MemberStatusKinds are the member kinds whose status qualifier a read applies
 // as a pool filter, in the order their disclosures are composed.
 func MemberStatusKinds() []SubjectKind {
@@ -28,7 +16,7 @@ func MemberStatusVocabulary(kind SubjectKind) []string {
 	if kind == SubjectPullRequest {
 		return PullRequestStatusVocabulary()
 	}
-	return append([]string(nil), memberStatusVocabularies[kind]...)
+	return contractsv1.ContextFabricMemberStatusVocabulary(string(kind))
 }
 
 // InMemberStatusVocabulary reports whether value is in the closed status set
