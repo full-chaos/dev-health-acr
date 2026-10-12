@@ -1271,7 +1271,7 @@ func applyBudget(response *FactsResponse, maxBytes int) *Truncation {
 	truncation := &Truncation{TruncatedBy: TruncatedByMaxBytes}
 	response.Truncation = truncation
 	response.Status = StatusPartial
-	for len(response.Facts) > 0 && size() > maxBytes {
+	drop := func() {
 		dropped := response.Facts[len(response.Facts)-1]
 		response.Facts = response.Facts[:len(response.Facts)-1]
 		truncation.FactsOmitted++
@@ -1292,6 +1292,22 @@ func applyBudget(response *FactsResponse, maxBytes int) *Truncation {
 				}
 			}
 		}
+	}
+	// Dropping a fact removes at least its own encoding and a comma (a
+	// coverage row it marks only grows), so an estimate from per-fact sizes
+	// never drops more than needed; the exact loop below finishes the cut
+	// with one marshal per remaining fact instead of one per dropped fact.
+	estimate := size()
+	for len(response.Facts) > 0 && estimate > maxBytes {
+		encoded, err := json.Marshal(response.Facts[len(response.Facts)-1])
+		if err != nil {
+			break
+		}
+		estimate -= len(encoded) + 1
+		drop()
+	}
+	for len(response.Facts) > 0 && size() > maxBytes {
+		drop()
 	}
 	truncation.CoverageOverBudget = size() > maxBytes
 	return truncation
