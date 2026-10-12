@@ -93,7 +93,7 @@ func TestQueryVersionMovedPastTheBindingCarry(t *testing.T) {
 }
 
 // With the anchor binding pending carry switch on, a pending binding carries
-// its anchor into the confirming turn, so an answer stored before it (v178
+// its anchor into the confirming turn, so an answer stored before it (v179
 // and before) must not be reused.
 func TestQueryVersionMovedPastThePendingCarry(t *testing.T) {
 	const prefix = "devhealthfacts.clickhouse.v"
@@ -101,7 +101,7 @@ func TestQueryVersionMovedPastThePendingCarry(t *testing.T) {
 	if !ok {
 		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
 	}
-	if n, err := strconv.Atoi(version); err != nil || n < 179 {
-		t.Fatalf("QueryVersion = %q: an answer saved before the pending carry (v178 and before) must not be reused", devhealthfacts.QueryVersion)
+	if n, err := strconv.Atoi(version); err != nil || n < 180 {
+		t.Fatalf("QueryVersion = %q: an answer saved before the pending carry (v179 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }

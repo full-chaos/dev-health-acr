@@ -876,13 +876,23 @@ import (
 // resolver offered but did not commit is listed first in the clarification,
 // so a stored answer can differ.
 //
-// v178 -> v179: with the anchor binding pending carry switch on (beside the
+// v178 -> v179: every reader of the issue <> pull request link of record
+// admits a link row the same way: the pull request it names exists and the
+// work item is an issue. A team or project scope no longer reaches a
+// repository through a link to a missing pull request or through a
+// pull-request-typed work item, and such an issue is counted as a missing next
+// hop (an issue whose only link row names a missing pull request is missing
+// although a row exists; a pull-request-typed work item is not an issue and is
+// no longer counted). An answer saved under v178 may rest on a repository so
+// reached.
+//
+// v179 -> v180: with the anchor binding pending carry switch on (beside the
 // carry switch), a binding pending window confirmation carries its anchor
 // into the confirming turn; with it off such a binding carries nothing. With
 // the carry switch on, an exit that ends before resolution (frame gate, graph
-// not projected) discloses a withheld ledger anchor as withheld and does not
-// pass it on. A stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v179"
+// not projected, window gate) discloses a withheld ledger anchor as withheld
+// and does not pass it on. A stored answer can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v180"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -3,11 +3,13 @@ package devhealthfacts_test
 import (
 	"context"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -135,9 +137,21 @@ func seedIssueLink(t *testing.T, ctx context.Context, direct interface {
 	Exec(ctx context.Context, query string, args ...any) error
 }, orgID, workItemID, pullRequestRepoID string, number uint32, tier string, at time.Time) {
 	t.Helper()
+	// A link of record is read only with the pull request it names, so the
+	// pull request row is seeded with its link.
+	for _, statement := range devhealthschema.DDL("git_pull_requests") {
+		// The fixtures that already created the table make this a no-op.
+		if err := direct.Exec(ctx, statement); err != nil && !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("create git_pull_requests: %v", err)
+		}
+	}
 	if err := direct.Exec(ctx, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		pullRequestRepoID, workItemID, number, float32(1), tier, "", at, orgID); err != nil {
 		t.Fatalf("seed link %s -> %s#%d (%s): %v", workItemID, pullRequestRepoID, number, tier, err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+		pullRequestRepoID, orgID, number, "linked pull request", "open", at, at, "feat/link", ""); err != nil {
+		t.Fatalf("seed pull request %s#%d: %v", pullRequestRepoID, number, err)
 	}
 }
 
