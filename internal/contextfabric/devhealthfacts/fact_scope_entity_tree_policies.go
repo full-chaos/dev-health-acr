@@ -37,6 +37,24 @@ import (
 // vocabulary devhealthsource/issue_pull_request_link.go projects.
 const linkTierRankSQL = `multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0)`
 
+// The strict reading of the link of record, shared by every reader that
+// follows an issue to a repository: a link row counts only when the pull
+// request it names exists (a stale link is skipped), and a work item typed as
+// a pull request or merge request is never an issue.
+const linkedPullRequestOnSQL = `pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number`
+
+// workItemIsIssueSQL is the predicate that excludes pull-request-typed work
+// items; alias is the work_items alias.
+func workItemIsIssueSQL(alias string) string {
+	return `ifNull(` + alias + `.type, '') NOT IN ('pr', 'merge_request')`
+}
+
+// issuesWithLinkedPullRequestSQL is the set of work item ids that have at
+// least one admitted link row (an existing pull request, a known tier).
+const issuesWithLinkedPullRequestSQL = `(SELECT l.work_item_id FROM work_graph_issue_pr AS l FINAL
+  INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
+  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0)`
+
 // refuseNonCurrentEntityTreeAxis is the boundary check of the current-axis
 // only policies; the resolver already refuses a non-current axis at its gate.
 func refuseNonCurrentEntityTreeAxis(request contextfabric.FactScopeExpansionRequest) error {
@@ -206,10 +224,10 @@ func (e *ScopeExpander) projectLinkedRepositories(ctx context.Context, orgID str
 FROM work_items AS w FINAL
 INNER JOIN ` + projectKeyResolutionSubquery + ` AS p ON p.join_key = w.project_id
 LEFT JOIN work_graph_issue_pr AS l FINAL ON l.org_id = w.org_id AND l.work_item_id = w.work_item_id
-LEFT JOIN git_pull_requests AS pr FINAL ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number
+LEFT JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
 LEFT JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id
 WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
-  AND ifNull(w.type, '') NOT IN ('pr', 'merge_request')
+  AND ` + workItemIsIssueSQL("w") + `
 GROUP BY link_state, repo_id_str, repo_slug
 ORDER BY link_state DESC, repo_id_str
 LIMIT ` + strconv.Itoa(limitPlusOne)
