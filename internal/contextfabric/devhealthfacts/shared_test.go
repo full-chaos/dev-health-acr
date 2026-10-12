@@ -652,8 +652,8 @@ func TestQueryVersionMovedPastTheProjectStatusDrivers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 188 {
-		t.Fatalf("QueryVersion = %q, want v188 or later -- an answer saved before a project status answer carried drivers must not be reused", devhealthfacts.QueryVersion)
+	if number < 190 {
+		t.Fatalf("QueryVersion = %q, want v190 or later -- an answer saved before a project status answer carried drivers must not be reused", devhealthfacts.QueryVersion)
 	}
 }
 
