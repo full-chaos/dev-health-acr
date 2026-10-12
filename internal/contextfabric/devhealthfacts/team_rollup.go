@@ -144,7 +144,19 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // Array(String) binding holding the team ids; the bound's bindings must ride
 // with the statement. It is the same chain teamRepositories walks.
 func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
-	return teamProjectLinkRowsAmongSQL(teamParam, bound, "")
+	return teamProjectLinkRowsAmongSQL(teamParam, bound, teamOwnedProjectWorkItemIDsSQL(teamParam, bound))
+}
+
+// teamOwnedProjectWorkItemIDsSQL is the work item ids of the projects the
+// teams in teamParam own (the project rows of teamProjectLinkRowsAmongSQL's
+// join), so the work item and link reads follow the owned projects, not the
+// size of the organization's work item table.
+func teamOwnedProjectWorkItemIDsSQL(teamParam string, bound factTimeBound) string {
+	return `(SELECT cw.work_item_id FROM work_items AS cw FINAL
+  WHERE cw.org_id = {org_id:String} AND (cw.provider, cw.project_id) IN (
+    SELECT p.provider, p.join_key FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
+    INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
+    WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)}))`
 }
 
 // teamProjectLinkRowsAmongSQL is teamProjectLinkRowsSQL over the work item
