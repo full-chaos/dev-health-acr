@@ -312,6 +312,10 @@ type NaturalKey struct {
 }
 
 // CoverageRow is one (kind, subject) outcome.
+// KindStateScopeExpansionUnavailable: the kind's scope policy is configured
+// but scope expansion is not available on this read path.
+const KindStateScopeExpansionUnavailable = "scope_expansion_unavailable"
+
 type CoverageRow struct {
 	Kind          string         `json:"kind"`
 	Subject       RequestSubject `json:"subject"`
@@ -1044,6 +1048,9 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				// which the direct path does not run: disclosed, not
 				// "not applicable".
 				row.Outcome, row.KindState, row.Reason = OutcomeUnavailable, string(outcome.State), outcome.Reason
+				if outcome.ScopeExpansionUnavailable {
+					row.KindState = KindStateScopeExpansionUnavailable
+				}
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind):
 				row.Outcome = OutcomeNotApplicable
 				row.Reason = "this fact kind does not describe " + subjectKindPlural(subject.Kind)
