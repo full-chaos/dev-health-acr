@@ -302,6 +302,9 @@ func TestAStatusCensusCutAtItsPageCapSaysWhereItWasDecided(t *testing.T) {
 			if result.Cohort == nil || result.Cohort.Complete || !result.Cohort.Truncated {
 				t.Fatalf("cohort = %+v, want an empty, cut, incomplete pull request set", result.Cohort)
 			}
+			if result.Status != contextfabric.InvestigationPartial {
+				t.Fatalf("status = %q, want partial: the read was cut", result.Status)
+			}
 			sentence := contractsv1.ContextFabricMemberStatusPoolCutLimitation(string(contextfabric.SubjectPullRequest), read, tc.pool)
 			if !slices.Contains(result.Limitations, sentence) {
 				t.Fatalf("limitations %q, want %q", result.Limitations, sentence)
@@ -399,15 +402,20 @@ func TestNoPullRequestHoldingTheStatusIsACountOfZero(t *testing.T) {
 	for _, anchored := range []bool{true, false} {
 		t.Run(fmt.Sprintf("anchored=%v", anchored), func(t *testing.T) {
 			result, _ := investigateOrganizationPullRequests(t, organizationPullRequests(40, 40), "open", storage.Principal{OrgID: "org-1"}, anchored)
-			if result.Cohort == nil || len(result.Cohort.Members) != 0 || !result.Cohort.Complete {
+			if result.Status != contextfabric.InvestigationComplete {
+				t.Fatalf("status = %q (limitations %q), want complete: a measured zero is an answer", result.Status, result.Limitations)
+			}
+			if result.Cohort == nil || len(result.Cohort.Members) != 0 || !result.Cohort.Complete || result.Cohort.Truncated {
 				t.Fatalf("cohort = %+v, want an empty, complete pull request set", result.Cohort)
 			}
-			assertNoEmptySearchClaim(t, result)
+			want := pullRequestStatusNoMatchRationale
 			if !anchored {
-				if sentence := contractsv1.ContextFabricMemberStatusNoMatchLimitation(string(contextfabric.SubjectPullRequest)); !slices.Contains(result.Limitations, sentence) {
-					t.Fatalf("limitations %q, want %q", result.Limitations, sentence)
-				}
+				want = "No pull request the read reached holds the status asked for now; that is a count of matches, not a statement about health."
 			}
+			if result.Cohort.Rationale != want {
+				t.Fatalf("rationale = %q, want %q", result.Cohort.Rationale, want)
+			}
+			assertNoEmptySearchClaim(t, result)
 		})
 	}
 }
@@ -482,5 +490,15 @@ func TestTheStatusCensusCarriesTheStatusAndTheGrantsInsideItsRead(t *testing.T) 
 	}
 	if got := clause.values; !reflect.DeepEqual(got, []interface{}{contextfabric.PullRequestStatusOpen}) {
 		t.Fatalf("awaiting_review clause values = %v, want the open state: the review rows decide the rest", got)
+	}
+}
+
+// TestAStatusQuestionThatReadNothingStaysNoMatch: the organization holds no
+// pull request, so the census read none; with no anchor that is still an empty
+// search.
+func TestAStatusQuestionThatReadNothingStaysNoMatch(t *testing.T) {
+	result, _ := investigateOrganizationPullRequests(t, nil, "open", storage.Principal{OrgID: "org-1"}, false)
+	if result.Status != contextfabric.InvestigationNoMatch || result.Cohort != nil {
+		t.Fatalf("status = %q cohort = %+v, want no_match and no member set", result.Status, result.Cohort)
 	}
 }

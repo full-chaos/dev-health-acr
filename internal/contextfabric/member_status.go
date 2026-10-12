@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // MemberStatusKinds are the member kinds whose status qualifier a read applies
@@ -193,20 +194,23 @@ func withMemberStatusOutsideSet(result InvestigationResult, outside MemberStatus
 	return result
 }
 
-// memberStatusNoMatchTerminal is the sentence of a turn with no subject whose
-// status read reached members of the kind and kept none: the reader's empty
-// member set says so. Retrieval found members, so the turn is not an empty
-// search. Empty when the graph context carries no such member set.
-func memberStatusNoMatchTerminal(frame *QuestionFrame, cohort *Cohort) string {
+// statusMeasuredZero reports whether a turn with no subject still read members:
+// the graph context carries the empty member set of a status read that reached
+// members of the kind and kept none. That is a count of zero, not an empty
+// search.
+func statusMeasuredZero(frame *QuestionFrame, cohort *Cohort) bool {
 	if cohort == nil || len(cohort.Members) != 0 {
-		return ""
+		return false
 	}
-	if PullRequestStatusFilterOf(frame) == "" {
-		if kind, status := MemberStatusFilterOf(frame); status == "" || kind != cohort.Kind {
-			return ""
-		}
-	} else if cohort.Kind != SubjectPullRequest {
-		return ""
+	if PullRequestStatusFilterOf(frame) != "" {
+		return cohort.Kind == SubjectPullRequest
 	}
-	return contractsv1.ContextFabricMemberStatusNoMatchLimitation(string(cohort.Kind))
+	kind, status := MemberStatusFilterOf(frame)
+	return status != "" && kind == cohort.Kind
+}
+
+// callerOrganizationSubject is the caller's organization as a subject, in the
+// graph's key form.
+func callerOrganizationSubject(principal storage.Principal) SubjectRef {
+	return SubjectRef{Kind: SubjectOrganization, CanonicalID: "organization:" + principal.OrgID, Label: principal.OrgID}
 }

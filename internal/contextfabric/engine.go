@@ -3461,6 +3461,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if workItemTuple {
 		subjects = workItemTupleSubjects(graphContext.Cohort)
 	}
+	if len(subjects) == 0 && !workItemTuple && statusMeasuredZero(familyOutcome.Frame, graphContext.Cohort) {
+		// The status read reached members and kept none: a measured zero over
+		// the caller's organization, answered like an anchored one.
+		subjects = []SubjectRef{callerOrganizationSubject(principal)}
+	}
 	if len(subjects) == 0 && !workItemTuple {
 		terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
 		return terminal, terminalErr

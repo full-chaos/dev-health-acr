@@ -571,20 +571,7 @@ func (e *Engine) terminalResult(
 	if coverage.DegradedReasons == nil {
 		coverage.DegradedReasons = []string{}
 	}
-	statusNoMatch := false
-	if status == InvestigationNoMatch && limitation == noMatchLimitationUnproven {
-		if sentence := memberStatusNoMatchTerminal(familyOutcome.Frame, graphContext.Cohort); sentence != "" {
-			limitation, statusNoMatch = sentence, true
-		}
-	}
 	limitations := []string{limitation}
-	if statusNoMatch {
-		if cut := graphContext.MemberStatusPoolCut; cut.Kind != "" {
-			if sentence := contractsv1.ContextFabricMemberStatusPoolCutLimitation(string(cut.Kind), cut.Read, cut.Pool); sentence != "" {
-				limitations = append(limitations, sentence)
-			}
-		}
-	}
 	// Same fold Investigate applies to a synthesized result, through the
 	// same bounded wrapper: a retrieval mechanism that was unavailable
 	// narrowed THIS resolution, and that is even more load-bearing here --

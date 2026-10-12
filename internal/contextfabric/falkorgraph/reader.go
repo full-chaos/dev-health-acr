@@ -1549,11 +1549,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// Pull requests were reached and none holds the status: that is an
 		// answer (zero matches), not a question with no members.
 		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectPullRequest, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{},
-			Rationale: pullRequestStatusNoMatchRationale, Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
+			Rationale: statusNoMatchRationaleFor(pullRequestStatusNoMatchRationale, contextfabric.SubjectPullRequest, request.Resolution.Committed), Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
 	}
 	if cohort == nil && memberStatus != "" && statusNoMatch {
 		cohort = &contextfabric.Cohort{Kind: memberStatusKind, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{},
-			Rationale: memberStatusNoMatchRationale(memberStatusKind), Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
+			Rationale: statusNoMatchRationaleFor(memberStatusNoMatchRationale(memberStatusKind), memberStatusKind, request.Resolution.Committed), Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
 	}
 	if cohort == nil && ownershipZeroOwnersResolved {
 		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectTeam, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{}, Rationale: ownershipZeroOwnersRationaleFor(ownershipExcludedOverCap), Complete: true}

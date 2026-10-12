@@ -982,8 +982,10 @@ import (
 // with the status inside the read (the status census), before the walk cap or
 // the census bound. It used to filter the first pull requests the walk or the
 // census reached, so matches past them were missed; with no anchor, a read
-// that kept none served "Retrieval found no candidate". A candidate saved under
-// v194 may hold the cut, mismatched set or that sentence.
+// that kept none served no_match. A read that keeps none is now a measured zero
+// (complete), and an answer whose status was decided within a cut read is
+// partial. A candidate saved under v194 may hold the cut, mismatched set, that
+// no_match, or a complete status over a cut read.
 const QueryVersion = "devhealthfacts.clickhouse.v195"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for

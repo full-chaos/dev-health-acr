@@ -205,6 +205,21 @@ func applyDeniedCohortStatusFloor(result *InvestigationResult) {
 	}
 }
 
+// applyStatusPoolCutStatusFloor floors a complete answer that states its member
+// status was decided within a cut read: members past the read were not checked,
+// so the answer is partial.
+func applyStatusPoolCutStatusFloor(result *InvestigationResult) {
+	if result == nil || result.Status != InvestigationComplete || result.RefusalBasis != "" {
+		return
+	}
+	for _, limitation := range result.Limitations {
+		if contractsv1.IsContextFabricMemberStatusPoolCutLimitation(limitation) {
+			floorNoMatchTo(result, InvestigationPartial)
+			return
+		}
+	}
+}
+
 // populationTruncatedNoMemberRowHolds reports whether an assembled-result
 // outcome row says the population was truncated and no member of it was served.
 func populationTruncatedNoMemberRowHolds(result InvestigationResult) bool {
@@ -231,6 +246,7 @@ func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
 	applyPopulationOutcomeStatusFloor(&result)
 	applyEmptyMemberSearchStatusFloor(&result)
 	applyDeniedCohortStatusFloor(&result)
+	applyStatusPoolCutStatusFloor(&result)
 	if result.Status != before {
 		result.Completeness = ComputeAnswerCompleteness(result)
 	}
