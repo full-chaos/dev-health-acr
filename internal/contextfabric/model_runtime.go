@@ -3112,12 +3112,29 @@ func claimedFactSentences(claims []ClaimedFact) []string {
 	index := make(map[string]int, len(sorted))
 	subjects := make([][]string, 0, len(sorted))
 	heads := make([]string, 0, len(sorted))
+	type shownClaim struct {
+		claim ClaimedFact
+		head  string
+	}
+	shownClaims := make([]shownClaim, 0, len(sorted))
+	kindsByHead := map[string]map[FactKind]struct{}{}
 	for _, claim := range sorted {
 		display, shown := scalarDisplayString(claim.Field, claim.Value)
 		if !shown {
 			continue
 		}
 		head := fmt.Sprintf("%s: %s", contractsv1.ContextFabricFactFieldNoun(claim.Field), display)
+		if kindsByHead[head] == nil {
+			kindsByHead[head] = map[FactKind]struct{}{}
+		}
+		kindsByHead[head][claim.Kind] = struct{}{}
+		shownClaims = append(shownClaims, shownClaim{claim: claim, head: head})
+	}
+	for _, shown := range shownClaims {
+		claim, head := shown.claim, shown.head
+		if len(kindsByHead[head]) > 1 {
+			head = strings.ReplaceAll(string(claim.Kind), "_", " ") + " " + head
+		}
 		key := string(claim.Kind) + "|" + head
 		i, ok := index[key]
 		if !ok {

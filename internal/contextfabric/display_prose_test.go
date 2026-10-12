@@ -48,7 +48,7 @@ func TestComposeCurrentStateKeepsSameFieldOfDifferentKindsApart(t *testing.T) {
 		{ClaimID: "c1", Kind: FactWork, Field: "status", Subject: subject, Value: ScalarValue{String: &open}},
 		{ClaimID: "c2", Kind: FactDeployments, Field: "status", Subject: subject, Value: ScalarValue{String: &open}},
 	}})
-	if want := "Current observed values: status: open (Team A); status: open (Team A)."; got != want {
+	if want := "Current observed values: work status: open (Team A); deployments status: open (Team A)."; got != want {
 		t.Fatalf("CurrentState = %q, want %q", got, want)
 	}
 }

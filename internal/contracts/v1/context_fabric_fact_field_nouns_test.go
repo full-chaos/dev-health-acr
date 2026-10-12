@@ -45,6 +45,8 @@ func TestContextFabricDisplayStringKeepsStructuredTokensOutOfProse(t *testing.T)
 		"untouched rationale": {"rationale", "Window 2026-10-01 to 2026-10-08 had 12 items.", "Window 2026-10-01 to 2026-10-08 had 12 items.", true},
 		"basis phrase":        {"attribution_basis", "pr_ref_share_partition", "share of pull request references", true},
 		"text as is":          {"title", "Carry_the signal", "Carry_the signal", true},
+		"short decimal":       {"rationale", "Compounding Risk score is 0.5 (severity: high), 1.00 of inputs.", "Compounding Risk score is 0.50 (severity: high), 1 of inputs.", true},
+		"stage token":         {"last_failure_stage", "provider_rate_limited", "provider rate limited", true},
 		"cursor never":        {"next_cursor", "abc", "", false},
 		"unclassified as is":  {"zz_unclassified", "a_b", "a_b", true},
 	} {

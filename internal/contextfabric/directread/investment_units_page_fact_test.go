@@ -111,7 +111,7 @@ func TestInvestmentUnitsPageFactNotFittingBesideTheMixIsALimitation(t *testing.T
 	if _, has := page.Fields["next_cursor"]; has {
 		t.Fatal("limitation row carries a cursor")
 	}
-	if text, _ := page.Fields["units_limitation"].(string); !strings.Contains(text, "units not served under max_bytes 4096; minimum ") {
+	if text, _ := page.Fields["units_limitation"].(string); !strings.Contains(text, "work units not served under a byte limit of 4096; minimum ") {
 		t.Fatalf("units_limitation = %q", text)
 	}
 	if n := countUnitRows(response.Facts); n != 0 {
@@ -121,7 +121,7 @@ func TestInvestmentUnitsPageFactNotFittingBesideTheMixIsALimitation(t *testing.T
 	if strings.Contains(reason, "pass the next_cursor") {
 		t.Fatalf("coverage still promises a cursor: %q", reason)
 	}
-	if !strings.Contains(reason, "units not served under max_bytes 4096; minimum ") || !strings.Contains(reason, "raise max_bytes") {
+	if !strings.Contains(reason, "work units not served under a byte limit of 4096; minimum ") || !strings.Contains(reason, "raise max_bytes") {
 		t.Fatalf("coverage reason = %q, want the limitation text", reason)
 	}
 	var minimum int
