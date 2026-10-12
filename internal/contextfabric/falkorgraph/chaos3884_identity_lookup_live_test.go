@@ -128,6 +128,8 @@ func (f *fakeIdentityTelemetry) RecordProjectDeploymentWalk(context.Context, str
 }
 func (f *fakeIdentityTelemetry) RecordTeamAnchorWalk(context.Context, string, falkorgraph.TeamAnchorWalkDecision) {
 }
+func (f *fakeIdentityTelemetry) RecordPullRequestStatusFilter(context.Context, string, falkorgraph.PullRequestStatusFilterDecision) {
+}
 func (f *fakeIdentityTelemetry) RecordOwnershipRouting(context.Context, string, falkorgraph.OwnershipRoutingDecision) {
 }
 

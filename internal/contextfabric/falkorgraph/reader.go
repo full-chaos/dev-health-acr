@@ -1411,6 +1411,23 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		cohortNodes = kept
 	}
+	// A pull request status the frame states is applied to the whole pool,
+	// before the cohort is cut, so every arm's members are filtered alike.
+	pullRequestStatus := contextfabric.PullRequestStatusFilterOf(request.Frame)
+	var pullRequestFiltered pullRequestStatusFilter
+	if status := pullRequestStatus; status != "" {
+		filtered, filterErr := a.filterPullRequestsByStatus(ctx, key, principal.OrgID, status, cohortNodes)
+		pullRequestFiltered = filtered
+		if a.config.Telemetry != nil {
+			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
+				Status: status, Candidates: filtered.candidates, Kept: filtered.kept, Err: filterErr,
+			})
+		}
+		if filterErr != nil {
+			return contextfabric.GraphContext{}, graphNotProjectedError(filterErr)
+		}
+		cohortNodes = filtered.nodes
+	}
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	cohortKindScopedAuthzDropped, anchorReachDenied := anchorReachDeniedCount(cohortKind, cohortNodes, principal, request, edgeFilters.ReachDenied, cohortKindScopedAuthzDropped)
 	if cohort != nil && deploymentAnchor != nil {
@@ -1434,6 +1451,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			}
 		}
 		cohort.Rationale = teamAnchorCohortRationaleFor(teamAnchors[0].Kind, declaredCohortKindForRouting)
+	}
+	if cohort == nil && pullRequestStatus != "" && pullRequestFiltered.candidates > 0 && pullRequestFiltered.kept == 0 {
+		// Pull requests were reached and none holds the status: that is an
+		// answer (zero matches), not a question with no members.
+		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectPullRequest, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{},
+			Rationale: pullRequestStatusNoMatchRationale, Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
 	}
 	if cohort == nil && ownershipZeroOwnersResolved {
 		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectTeam, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{}, Rationale: ownershipZeroOwnersRationaleFor(ownershipExcludedOverCap), Complete: true}

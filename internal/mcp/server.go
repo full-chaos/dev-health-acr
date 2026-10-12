@@ -205,7 +205,7 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 			},
 		)
 	}
-	registerGuideResources(server)
+	registerGuideResources(server, caller)
 	registerInvestigatePrompts(server, caller)
 	registerInterpretPrompt(server, cfg, caller, serverVersion)
 	registerInterpretResources(server, cfg, caller, serverVersion)
@@ -234,6 +234,14 @@ func hostedToolEnabled(caller *CallerContext, name string) bool {
 	return slices.Contains(caller.Capabilities().EnabledTools, name)
 }
 
+// investigateSurface reports whether the caller has any investigation tool.
+// The interpretation prompts, resources and guide sections serve both
+// investigate_question and investigate_with_interpretation, so they follow this,
+// while the investigate_question tool itself follows its own advertisement.
+func investigateSurface(caller *CallerContext) bool {
+	return hostedToolEnabled(caller, toolInvestigateQuestion) || hostedToolEnabled(caller, toolInvestigateWithInterpretation)
+}
+
 // modelCallerLead steers a model caller to the data tools and the client path
 // before it reads the rest of the guide. It names only registered tools.
 func modelCallerLead(caller *CallerContext, investigate bool) string {
@@ -249,9 +257,13 @@ func modelCallerLead(caller *CallerContext, investigate bool) string {
 		b.WriteString("\nIf you are a model: answer from stored facts first with " + strings.Join(data, ", ") + ".\n")
 	}
 	if investigate && hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
-		b.WriteString("If you can run prompts/get, use investigate_with_interpretation with synthesis \"client\" instead of investigate_question.\n")
+		if hostedToolEnabled(caller, toolInvestigateQuestion) {
+			b.WriteString("If you can run prompts/get, use investigate_with_interpretation with synthesis \"client\" instead of investigate_question.\n")
+		} else {
+			b.WriteString("If you can run prompts/get, use investigate_with_interpretation with synthesis \"client\".\n")
+		}
 	}
-	if investigate {
+	if investigate && hostedToolEnabled(caller, toolInvestigateQuestion) {
 		b.WriteString("investigate_question is for callers with no model of their own.\n")
 	}
 	if b.Len() == 0 {
@@ -265,7 +277,7 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 	// The lead sentence names only what this server registered: a deployment
 	// whose hosted API advertises no investigation tools must not be told it
 	// has them.
-	investigate := hostedToolEnabled(caller, toolInvestigateQuestion)
+	investigate := investigateSurface(caller)
 	kinds := "context tools"
 	if investigate {
 		kinds = "context and investigation tools"
@@ -286,7 +298,11 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 	b.WriteString("\nChoosing a tool:\n")
 	b.WriteString("- context_for_task: you are about to work on a task in one repository. Pass a goal; get a ranked context packet.\n")
 	if hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
-		b.WriteString("- investigate_with_interpretation: the same question as investigate_question, when you ran the interpretation on your own model. Fetch the prompt interpret_question with prompts/get, run it, and pass the reply as interpretation and the prompt's _meta values as contract. It takes synthesis \"client\" as well, and only this tool takes the write-back: after you wrote the answer, send the same call again with synthesis_output (your draft) and synthesis_contract (synthesis_input.contract and synthesis_input.input_sha256 of the first answer); the service checks the draft against the facts and makes no model call.\n")
+		if hostedToolEnabled(caller, toolInvestigateQuestion) {
+			b.WriteString("- investigate_with_interpretation: the same question as investigate_question, when you ran the interpretation on your own model. Fetch the prompt interpret_question with prompts/get, run it, and pass the reply as interpretation and the prompt's _meta values as contract. It takes synthesis \"client\" as well, and only this tool takes the write-back: after you wrote the answer, send the same call again with synthesis_output (your draft) and synthesis_contract (synthesis_input.contract and synthesis_input.input_sha256 of the first answer); the service checks the draft against the facts and makes no model call.\n")
+		} else {
+			b.WriteString("- investigate_with_interpretation: a question about teams, projects, repositories, pull requests, incidents or delivery health, for one subject or for many, answered from an interpretation you ran on your own model. Fetch the prompt interpret_question with prompts/get, run it, and pass the reply as interpretation and the prompt's _meta values as contract. Pass synthesis \"client\": the service skips its own answer writing and returns synthesis_input; fetch the prompt synthesize_answer with prompts/get and run it with synthesis_input.input as the user message. The stored result then carries facts and evidence only. After you wrote the answer, send the same call again with synthesis_output (your draft) and synthesis_contract (synthesis_input.contract and synthesis_input.input_sha256 of the first answer); the service checks the draft against the facts and makes no model call.\n")
+		}
 	}
 	if hostedToolEnabled(caller, toolInvestigationResult) {
 		b.WriteString("- investigation_result: you need the full result behind a previous answer. Pass its result_id.\n")
@@ -297,7 +313,7 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 	if hostedToolEnabled(caller, toolReadRelationships) {
 		b.WriteString("- read_relationships: you have one canonical subject id (copied from another answer, never built) and want its edges, without a model run. Pass subject and optionally types, direction, depth.\n")
 	}
-	if investigate {
+	if hostedToolEnabled(caller, toolInvestigateQuestion) {
 		b.WriteString("- investigate_question (callers with no model of their own): you have a question about teams, projects, repositories, pull requests, incidents or delivery health, for one subject or for many. Pass the question in plain words. To write the answer on your own model, pass synthesis \"client\": the service skips its own answer writing and returns synthesis_input; fetch the prompt synthesize_answer with prompts/get and run it with synthesis_input.input as the user message. The stored result then carries facts and evidence only. This tool runs on the service's model, or on the organization's own model configuration when it has one; an organization with neither the plan feature for the service's model nor its own configuration gets reason service_model_not_entitled; then use investigate_with_interpretation with synthesis \"client\".\n")
 	}
 	b.WriteString("- source_evidence: you want to check or quote one source. Pass an evidence_ref_id returned by another tool, unchanged, with the result_id of the answer that returned it.\n")

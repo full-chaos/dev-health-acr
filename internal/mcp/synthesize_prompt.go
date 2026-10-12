@@ -30,7 +30,7 @@ func synthesizePromptMeta(system, serviceVersion string) mcpsdk.Meta {
 // register only with investigate_question or investigate_with_interpretation,
 // so a credential that can run neither cannot read them.
 func registerSynthesizePrompt(server *mcpsdk.Server, cfg *ProcessConfig, caller *CallerContext, serviceVersion string) {
-	if !hostedToolEnabled(caller, toolInvestigateQuestion) && !hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
+	if !investigateSurface(caller) {
 		return
 	}
 	meta := synthesizePromptMeta(synthesisprompt.System(), serviceVersion)

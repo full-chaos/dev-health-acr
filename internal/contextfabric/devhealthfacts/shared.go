@@ -925,6 +925,19 @@ import (
 // (...)"), which was served as rationale_not_in_rule_sentence_form. A stored
 // answer can differ.
 //
+// v185 -> v186: a degraded cohort answer (the model call failed) leaves cohort
+// driver narration its item grant. The degraded composition claimed that grant
+// too, so composition and narration together overran the item budget: the
+// answer was cut by the claim-depth lever, or refused when the byte budget was
+// also exceeded. A candidate saved under v185 may hold the cut answer.
+//
+// v186 -> v187: pull request members whose question states a status of the
+// closed set (open, merged, closed, awaiting_review, changes_requested,
+// approved) are filtered by it before the cohort is cut, and the answer states
+// the filter. The status used to be refused for a value of three words or
+// more, and otherwise served as the whole unfiltered member set. A candidate
+// saved under v186 may hold that unfiltered set.
+//
 // -> v190: pull requests and blockers also serve a project subject (a rollup
 // over the project's issues and their linked pull requests), and an
 // investigation of a project keeps that rollup beside the expanded per-item
