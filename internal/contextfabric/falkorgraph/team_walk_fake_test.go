@@ -62,13 +62,6 @@ func withWalkStepReads(inner *fakeConn) *fakeConn {
 		sort.SliceStable(out, func(i, j int) bool {
 			return propStringValue(walkNode(out[i]["b"]).Properties[propCanonicalID]) < propStringValue(walkNode(out[j]["b"]).Properties[propCanonicalID])
 		})
-		if strings.Contains(cypher, "RETURN count(DISTINCT b)") {
-			reached := map[string]bool{}
-			for _, r := range out {
-				reached[propStringValue(walkNode(r["b"]).Properties[propCanonicalID])] = true
-			}
-			return []row{{"reached": int64(len(reached))}}, nil
-		}
 		if skip, ok := params["skip"].(int); ok && strings.Contains(cypher, "SKIP $skip") {
 			out = out[min(skip, len(out)):]
 		}

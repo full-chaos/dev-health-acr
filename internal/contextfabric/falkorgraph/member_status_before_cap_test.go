@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // pullRequestPool is n pull requests of the team's repository, ids in id
@@ -97,7 +98,7 @@ func TestReviewStatusPagesStopAtTheirCapAndSaySo(t *testing.T) {
 	if result.Cohort == nil || len(result.Cohort.Members) != 0 || !result.Cohort.Truncated || result.Cohort.Complete {
 		t.Fatalf("cohort = %+v, want an empty, cut, incomplete pull request set", result.Cohort)
 	}
-	if want := (contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: pages}); result.MemberStatusPoolCut != want {
+	if want := (contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: pages, Pool: pages + 1}); result.MemberStatusPoolCut != want {
 		t.Fatalf("pool cut = %+v, want %+v", result.MemberStatusPoolCut, want)
 	}
 	want := []PullRequestStatusFilterDecision{{MemberKind: contextfabric.SubjectPullRequest, Status: "awaiting_review", Site: PullRequestStatusFilterSiteWalk,
@@ -166,7 +167,7 @@ func TestIncidentStatusOverACutPoolSaysWhereItWasDecided(t *testing.T) {
 		telemetry.pullRequestStatusFilters[0].Candidates != cut.Read {
 		t.Fatalf("status filter lines = %+v, want one cut pool line over %d incidents", telemetry.pullRequestStatusFilters, cut.Read)
 	}
-	sentence := contractsv1.ContextFabricMemberStatusPoolCutLimitation(string(cut.Kind), cut.Read)
+	sentence := contractsv1.ContextFabricMemberStatusPoolCutLimitation(string(cut.Kind), cut.Read, cut.Pool)
 	if !strings.Contains(sentence, fmt.Sprintf("first %d incidents", cut.Read)) || !contractsv1.IsContextFabricServiceAuthoredLimitation(sentence) {
 		t.Fatalf("pool cut sentence %q is not a service-authored limitation naming the incidents checked", sentence)
 	}
@@ -243,5 +244,85 @@ func TestStatusFilterLineCarriesWhereTheStatusWasApplied(t *testing.T) {
 				t.Fatalf("pool line carries a pool count: %v", line)
 			}
 		}
+	}
+}
+
+// TestReviewStatusThatFillsTheCapSaysHowManyWereChecked: 60 open pull
+// requests await a review; the pages stop once more than the cap hold the
+// status, with open pull requests unread. The set is cut and the answer
+// states the status was checked within the first N of the M open pull
+// requests the caller may see.
+func TestReviewStatusThatFillsTheCapSaysHowManyWereChecked(t *testing.T) {
+	fixtures := pullRequestPool(60, func(int) (string, []contextfabric.PullRequestReviewRow) { return "open", nil })
+	result, telemetry, err := discoverPullRequestMembers(t, pullRequestStatusFake(fixtures, nil), "awaiting_review")
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil || !result.Cohort.Truncated || result.Cohort.Complete || len(result.Cohort.Members) == 0 {
+		t.Fatalf("cohort = %+v, want a cut, non-empty pull request set", result.Cohort)
+	}
+	if want := (contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 26, Pool: 60}); result.MemberStatusPoolCut != want {
+		t.Fatalf("pool cut = %+v, want %+v", result.MemberStatusPoolCut, want)
+	}
+	if len(telemetry.pullRequestStatusFilters) != 1 || !telemetry.pullRequestStatusFilters[0].PoolCut || telemetry.pullRequestStatusFilters[0].Pool != 60 {
+		t.Fatalf("status filter lines = %+v, want one cut walk line with pool 60", telemetry.pullRequestStatusFilters)
+	}
+}
+
+// TestStatusReadIsNotStarvedByAnIntermediateCut: the team owns 30
+// repositories, one pull request each; the first 26 repositories by id hold a
+// merged one and the last four an open one. The repository frontier is wider
+// than the member cap, so the status read reaches every repository and serves
+// the four open pull requests, complete.
+func TestStatusReadIsNotStarvedByAnIntermediateCut(t *testing.T) {
+	var fixtures []pullRequestStatusFixture
+	var want []string
+	for i := 1; i <= 30; i++ {
+		f := pullRequestStatusFixture{id: fmt.Sprintf("pull_request:repo-%03d:1", i), state: "merged", repo: fmt.Sprintf("repository:repo-%03d", i)}
+		if i > 26 {
+			f.state = "open"
+			want = append(want, f.id)
+		}
+		fixtures = append(fixtures, f)
+	}
+	for _, status := range []string{"open", "awaiting_review"} {
+		result, _, err := discoverPullRequestMembers(t, pullRequestStatusFake(fixtures, nil), status)
+		if err != nil {
+			t.Fatalf("%s: DiscoverContext() error = %v", status, err)
+		}
+		if got := servedPullRequestIDs(result); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: served %v, want %v", status, got, want)
+		}
+		if !result.Cohort.Complete || result.Cohort.Truncated {
+			t.Fatalf("%s: cohort complete=%v truncated=%v, want complete", status, result.Cohort.Complete, result.Cohort.Truncated)
+		}
+	}
+}
+
+// TestADeniedPullRequestHoldsTheStatus: two pull requests are outside the
+// caller's repository grants, one awaiting a review and one approved. For awaiting_review
+// only the first is denied: the approved one does not hold the status, so it
+// is filtered, not denied.
+func TestADeniedPullRequestHoldsTheStatus(t *testing.T) {
+	fixtures := []pullRequestStatusFixture{
+		{id: "pull_request:alpha:001", state: "open"},
+		{id: "pull_request:alpha:002", state: "open", hidden: true},
+		{id: "pull_request:alpha:003", state: "open", hidden: true, reviews: []contextfabric.PullRequestReviewRow{{State: "APPROVED", SubmittedNs: 10}}},
+	}
+	adapter := newFakeAdapter(t, pullRequestStatusFake(fixtures, nil))
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:alpha", Label: "Alpha"}
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/alpha"}}
+	status := memberStatusPredicate{kind: contextfabric.SubjectPullRequest, status: "awaiting_review"}
+	// The fake's edges carry no authorization lists, so the walk decides by
+	// the node alone, the rule of every tree walk but an anchored member read.
+	walk, err := adapter.treeMembersOf(context.Background(), "graph", "org-1", principal, contextfabric.RequestedScope{}, team, treePullRequest, 25, temporalFilter{}, false, false, status)
+	if err != nil {
+		t.Fatalf("teamAnchorMembers() error = %v", err)
+	}
+	if len(walk.nodes) != 1 || mustSubject(walk.nodes[0]).CanonicalID != "pull_request:alpha:001" {
+		t.Fatalf("members = %+v, want pull request 001 only", walk.nodes)
+	}
+	if walk.denied != 1 {
+		t.Fatalf("denied = %d, want 1: only the hidden pull request that holds the status", walk.denied)
 	}
 }

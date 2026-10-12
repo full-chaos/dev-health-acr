@@ -307,6 +307,10 @@ type treeWalkState struct {
 	principal    storage.Principal
 	scope        contextfabric.RequestedScope
 	collectLimit int
+	// frontierLimit bounds an intermediate frontier: collectLimit, or for a
+	// walk whose members are filtered by a status the census bound, so the
+	// status read is not starved by a cut before it.
+	frontierLimit int
 	// ownershipEdges: every hit, and every link, must also pass its edge's own
 	// authorization. Set for an anchor's member read (a cohort), the rule of
 	// the generic walk it replaces; the other tree walks decide by the node.
@@ -387,22 +391,23 @@ func (s treeWalkState) denyOwned(hop treeHop, n *node) {
 	s.out.filters.mergeReachDenied(map[string]struct{}{subjectUUID(propStringValue(n.Properties[propKind]), canonicalIDOf(n)): {}})
 }
 
-// cut bounds a frontier by the collect budget; a cut one is truncation.
+// cut bounds an intermediate frontier by the frontier budget; a cut one is
+// truncation.
 func (s treeWalkState) cut(ids []string) []string {
 	sort.Strings(ids)
-	if s.collectLimit > 0 && len(ids) > s.collectLimit {
-		s.out.truncated = true
-		return ids[:s.collectLimit]
-	}
-	return ids
+	return s.cutRankedTo(ids, s.frontierLimit)
 }
 
-// cutRanked bounds a frontier the link read already ordered (strongest link
+// cutRanked bounds a member set the link read already ordered (strongest link
 // tier first): the first ids are kept, not the alphabetically first.
 func (s treeWalkState) cutRanked(ids []string) []string {
-	if s.collectLimit > 0 && len(ids) > s.collectLimit {
+	return s.cutRankedTo(ids, s.collectLimit)
+}
+
+func (s treeWalkState) cutRankedTo(ids []string, limit int) []string {
+	if limit > 0 && len(ids) > limit {
 		s.out.truncated = true
-		return ids[:s.collectLimit]
+		return ids[:limit]
 	}
 	return ids
 }
@@ -456,7 +461,10 @@ func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principa
 	if !ok {
 		return out, nil
 	}
-	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit, ownershipEdges: ownershipEdges, anchorDenied: anchorDenied, status: status}
+	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit, frontierLimit: collectLimit, ownershipEdges: ownershipEdges, anchorDenied: anchorDenied, status: status}
+	if status.set() {
+		state.frontierLimit = max(collectLimit, exactNameCandidateQueryLimit)
+	}
 	frontier := []string{anchor.CanonicalID}
 	subjects := map[string]contextfabric.SubjectRef{anchor.CanonicalID: anchor}
 	for k := 0; k < len(path); k++ {
@@ -465,7 +473,12 @@ func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principa
 			// The anchor's hop only feeds the link: read fused with it, so
 			// nodes with no link do not spend the budget.
 			out.hasLink = true
-			ends, far, err := a.linkSegment(ctx, key, orgID, state, anchor, hop, path[1], temporal)
+			segment := state
+			if k+1 < len(path)-1 {
+				// The link feeds a later hop: its far side is a frontier.
+				segment.collectLimit = state.frontierLimit
+			}
+			ends, far, err := a.linkSegment(ctx, key, orgID, segment, anchor, hop, path[1], temporal)
 			if err != nil {
 				return out, err
 			}
@@ -478,7 +491,7 @@ func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principa
 				}
 				return out, nil
 			}
-			frontier, subjects = state.cutRanked(ends), map[string]contextfabric.SubjectRef{}
+			frontier, subjects = state.cutRankedTo(ends, state.frontierLimit), map[string]contextfabric.SubjectRef{}
 			if len(frontier) == 0 {
 				return out, nil
 			}
@@ -488,6 +501,9 @@ func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principa
 		hopTemporal, budget := temporal, collectLimit
 		if hop.edge.ownership {
 			hopTemporal, budget = currentOwnership(temporal, a.now()), exactNameCandidateQueryLimit
+		}
+		if k < len(path)-1 {
+			budget = max(budget, state.frontierLimit)
 		}
 		step := hop.step
 		step.edgeWindowOnly = hop.edge.ownership && !temporal.active
@@ -616,6 +632,35 @@ func (s treeWalkState) linkMembers(ends []string, far map[string]*node) {
 	sort.Slice(s.out.linkSubjects, func(i, j int) bool {
 		return graphrank.SubjectKey(s.out.linkSubjects[i]) < graphrank.SubjectKey(s.out.linkSubjects[j])
 	})
+}
+
+// linkRowAuthorized is the decision on one row of the link read: the anchor,
+// for an anchored read the link and feed edges, and both nodes by the
+// work-item rule.
+func (s treeWalkState) linkRowAuthorized(r row, feed, link treeHop, near, far *node, tier linkTier) bool {
+	switch {
+	case s.anchorDenied:
+		return false
+	case s.ownershipEdges && !authorizedEdgeAttributes(s.principal, s.scope, walkEdge(r["rl"]).Properties):
+		return false
+	case s.ownershipEdges && !s.feedAuthorized(r["ra"]):
+		return false
+	case !s.admitted(feed.to, near, tier):
+		return false
+	}
+	return s.admitted(link.to, far, tier)
+}
+
+func distinctIDs(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // disclose adds the edge of one hit, oriented as projected: child -> parent.
@@ -807,16 +852,10 @@ func linkSegmentGrants(params map[string]interface{}, principal storage.Principa
 // links of the admitted tiers, before authorization: the link read's pattern
 // with no grant clause. It returns one number, never an id.
 func linkTargetCountCypher(feed, link treeHop, temporal temporalFilter) string {
-	return linkTargetCountCypherWith(feed, link, temporal, nodeStatusClause{})
-}
-
-// linkTargetCountCypherWith is linkTargetCountCypher with a status clause on
-// the far side of the link.
-func linkTargetCountCypherWith(feed, link treeHop, temporal temporalFilter, status nodeStatusClause) string {
 	mid := treeNodeVar{name: "m", param: "mtypes", position: feed.to}
 	end := treeNodeVar{name: "b", param: "btypes", position: link.to}
 	return linkSegmentMatch(feed) + fmt.Sprintf(hopArrow(link.step.direction, "rl")+"(b:%[2]s {%[3]s:$org, %[4]s:$endKind}) ", labelRelation, labelSubject, propOrgID, propKind) +
-		fmt.Sprintf("WHERE ra.%[1]s = $feedRel AND rl.%[1]s = $linkRel AND rl.%[2]s IN $tiers", propRelationType, propPropertyPrefix+linkTierProperty) + mid.typeClause() + end.typeClause() + status.predicate("b") +
+		fmt.Sprintf("WHERE ra.%[1]s = $feedRel AND rl.%[1]s = $linkRel AND rl.%[2]s IN $tiers", propRelationType, propPropertyPrefix+linkTierProperty) + mid.typeClause() + end.typeClause() +
 		temporal.predicate("ra") + temporal.predicate("m") + temporal.predicate("rl") + temporal.predicate("b") + " RETURN count(DISTINCT b) AS targets"
 }
 
@@ -894,7 +933,6 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	}
 	reviewed := status.set() && state.status.reviewDerived()
 	read := map[string]bool{}
-	filteredOut := map[string]bool{}
 	cypher := linkSegmentCypherWith(feed, link, temporal, restricted, state.ownershipEdges, status)
 	seen := map[string]bool{}
 	admitted := map[string]*node{}
@@ -902,6 +940,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	// ends are the admitted far-side nodes in the read's order: strongest
 	// link tier first, so a cut keeps the higher tiers.
 	var ends []string
+	stoppedFull := false
 	for page := 0; ; page++ {
 		if page >= linkSegmentPageCap {
 			out.truncated = true
@@ -918,11 +957,13 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 			return nil, nil, safeDependencyError("walk the entity tree", err)
 		}
 		type linkRow struct {
-			far  *node
-			id   string
-			tier linkTier
+			row       row
+			near, far *node
+			id        string
+			tier      linkTier
 		}
-		var authorized []linkRow
+		var links []linkRow
+		var ids []string
 		for _, r := range rows {
 			near := walkNode(r["m"])
 			far := walkNode(r["b"])
@@ -931,41 +972,29 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 				// No row, or an edge with no tier the table lists: not a link.
 				continue
 			}
-			id := canonicalIDOf(far)
-			seen[id] = true
-			switch {
-			case state.anchorDenied:
-				state.deny()
-			case state.ownershipEdges && !authorizedEdgeAttributes(state.principal, state.scope, walkEdge(r["rl"]).Properties):
-				state.deny()
-			case state.ownershipEdges && !state.feedAuthorized(r["ra"]):
-				state.deny()
-			case !state.admitted(feed.to, near, tier):
-				state.deny()
-			case !state.admitted(link.to, far, tier):
-				state.deny()
-			default:
-				authorized = append(authorized, linkRow{far: far, id: id, tier: tier})
-			}
+			links = append(links, linkRow{row: r, near: near, far: far, id: canonicalIDOf(far), tier: tier})
+			ids = append(ids, canonicalIDOf(far))
 		}
+		// A review status is decided before authorization, so a row that does
+		// not hold it is neither a member nor a denied one.
 		var holding map[string]bool
 		if reviewed {
-			var open []string
-			for _, r := range authorized {
-				if !read[r.id] {
-					read[r.id] = true
-					open = append(open, r.id)
-				}
-			}
-			if holding, err = a.pullRequestsHoldingReviewStatus(ctx, key, orgID, state.status.status, open); err != nil {
+			if holding, err = a.pullRequestsHoldingReviewStatus(ctx, key, orgID, state.status.status, distinctIDs(ids)); err != nil {
 				return nil, nil, err
 			}
 		}
-		for _, r := range authorized {
-			id, far, tier := r.id, r.far, r.tier
+		for _, l := range links {
+			id, far, tier := l.id, l.far, l.tier
+			authorized := state.linkRowAuthorized(l.row, feed, link, l.near, far, tier)
+			if reviewed && authorized {
+				read[id] = true
+			}
 			if reviewed && !holding[id] {
-				// Read, and not holding the status: not a member, not denied.
-				filteredOut[id] = true
+				continue
+			}
+			seen[id] = true
+			if !authorized {
+				state.deny()
 				continue
 			}
 			if admitted[id] == nil {
@@ -978,19 +1007,18 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 				out.endTiers[id] = tier.name
 			}
 		}
+		stoppedFull = len(rows) == pageSize
 		if len(rows) < pageSize || (state.collectLimit > 0 && len(admitted) > state.collectLimit) {
 			break
 		}
 	}
 	out.linkTargets = len(seen)
 	out.linkDeniedTargets = len(seen) - len(admitted)
-	for id := range filteredOut {
-		if admitted[id] == nil {
-			out.linkDeniedTargets--
-		}
-	}
 	if reviewed {
 		out.status.read = len(read)
+		// The pages stopped with rows unread: the status was not checked past
+		// them.
+		out.status.poolCut = out.status.poolCut || (stoppedFull && state.collectLimit > 0 && len(admitted) > state.collectLimit)
 	}
 	if link.to == treeIssue {
 		out.linkIssueTargets = max(unfiltered, len(seen))

@@ -74,11 +74,13 @@ type MemberStatusOutsideSet struct {
 }
 
 // MemberStatusPoolCut is a status filter decided within a cut read: Read
-// members of Kind were checked and members past the cut were not. A zero Read
-// states nothing.
+// members of Kind were checked and members past the cut were not; Pool, when
+// not zero, is how many members of the kind the caller may see the read could
+// have checked. An empty Kind states nothing.
 type MemberStatusPoolCut struct {
 	Kind SubjectKind
 	Read int
+	Pool int
 }
 
 // MemberStatusUnappliedOf reports whether frame states a status on members of
@@ -165,7 +167,7 @@ func withMemberStatusDisclosure(result InvestigationResult, frame *QuestionFrame
 // withMemberStatusPoolCut states that the status filter was decided within
 // the first members a cut read reached.
 func withMemberStatusPoolCut(result InvestigationResult, cut MemberStatusPoolCut) InvestigationResult {
-	sentence := contractsv1.ContextFabricMemberStatusPoolCutLimitation(string(cut.Kind), cut.Read)
+	sentence := contractsv1.ContextFabricMemberStatusPoolCutLimitation(string(cut.Kind), cut.Read, cut.Pool)
 	if sentence == "" {
 		return result
 	}

@@ -3,7 +3,6 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -87,15 +86,6 @@ func walkStepCypher(step walkStep, temporal temporalFilter) string {
 		propRelationType, typeClause, step.status.predicate("b"), temporal.predicate("r"), nodeWindow, column, propCanonicalID, propRelationshipID, page)
 }
 
-// walkStepCountCypher counts the distinct nodes one step reaches from the
-// batched ids, under the same pattern, type, status and window as the read.
-func walkStepCountCypher(step walkStep, temporal temporalFilter) string {
-	read := walkStepCypher(walkStep{fromKind: step.fromKind, toKind: step.toKind, relation: step.relation, direction: step.direction,
-		toTypes: step.toTypes, notToTypes: step.notToTypes, status: step.status, edgeWindowOnly: step.edgeWindowOnly}, temporal)
-	match, _, _ := strings.Cut(read, " RETURN ")
-	return match + " RETURN count(DISTINCT b) AS reached"
-}
-
 // walkStepParams binds one batch of a step read.
 func walkStepParams(orgID string, ids []interface{}, step walkStep, limit int, temporal temporalFilter) map[string]interface{} {
 	params := temporal.bind(map[string]interface{}{
@@ -170,39 +160,6 @@ func (a *Adapter) walkStepPage(ctx context.Context, key, orgID string, batch []i
 		return nil, 0, safeDependencyError("walk the entity tree", err)
 	}
 	return walkHitsOf(rows), len(rows), nil
-}
-
-// walkStepCount counts the distinct nodes a step reaches from ids. The count
-// is bounded by the ids the walk already reached, never organization-wide.
-func (a *Adapter) walkStepCount(ctx context.Context, key, orgID string, ids []string, step walkStep, temporal temporalFilter) (int, error) {
-	total := 0
-	for start := 0; start < len(ids); start += storedSubjectBatch {
-		end := min(start+storedSubjectBatch, len(ids))
-		batch := make([]interface{}, 0, end-start)
-		for _, id := range ids[start:end] {
-			batch = append(batch, id)
-		}
-		rows, err := a.api.query(ctx, key, walkStepCountCypher(step, temporal), walkStepParams(orgID, batch, step, 1, temporal), true)
-		if err != nil {
-			return 0, safeDependencyError("count the entity tree", err)
-		}
-		if len(rows) > 0 {
-			total += countValue(rows[0]["reached"])
-		}
-	}
-	return total, nil
-}
-
-func countValue(value interface{}) int {
-	switch n := value.(type) {
-	case int64:
-		return int(n)
-	case int:
-		return n
-	case float64:
-		return int(n)
-	}
-	return 0
 }
 
 // noRepositoryScope is the authorization scope a work item with no repository

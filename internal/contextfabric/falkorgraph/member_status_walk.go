@@ -119,9 +119,12 @@ type memberStatusWalk struct {
 	// poolCut: the review pages stopped at their cap with rows left, so the
 	// status was decided within the first read members only.
 	poolCut bool
-	// pool is the bounded count of members of the kind the anchor's walk
-	// reaches under the state clause, counted only when poolCut; -1 otherwise.
+	// pool is the count of authorized members of the kind the anchor's walk
+	// reaches under the state clause, counted only when poolCut; -1 otherwise
+	// or when that bounded count was itself cut.
 	pool int
+	// poolUnknown: a cut walk's pool could not be counted.
+	poolUnknown bool
 	// outsideSet counts the authorized members whose stored status is outside
 	// the kind's closed set.
 	outsideSet int
@@ -136,6 +139,7 @@ func (w *memberStatusWalk) add(other memberStatusWalk) {
 	if other.pool >= 0 {
 		w.pool = max(w.pool, 0) + other.pool
 	}
+	w.poolUnknown = w.poolUnknown || other.poolUnknown || (other.poolCut && other.pool < 0)
 	w.outsideSet += other.outsideSet
 }
 
@@ -164,10 +168,11 @@ func (a *Adapter) pullRequestsHoldingReviewStatus(ctx context.Context, key, orgI
 }
 
 // reviewedMemberHits is the member read of a review status: pages of open pull
-// requests, each page's authorized members decided by their review rows,
-// until more members hold the status than the walk serves or the pages end. A
-// hit the caller cannot see is returned for the walk to deny; a hit that does
-// not hold the status is not returned.
+// requests, each page decided by its review rows before authorization, until
+// more members hold the status than the walk serves or the pages end. A hit
+// that holds the status and that the caller cannot see is returned for the
+// walk to deny; a hit that does not hold it is not returned. Stopping with
+// rows unread is a pool cut: the status was not checked past them.
 func (a *Adapter) reviewedMemberHits(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, step walkStep, temporal temporalFilter) ([]walkHit, error) {
 	pageSize := 1 << 30
 	if state.collectLimit > 0 {
@@ -178,6 +183,10 @@ func (a *Adapter) reviewedMemberHits(ctx context.Context, key, orgID string, sta
 	kept := map[string]bool{}
 	pages := 0
 	defer func() { state.out.status.read = len(read) }()
+	cut := func() {
+		state.out.status.poolCut = true
+		state.out.truncated = true
+	}
 	for start := 0; start < len(frontier); start += storedSubjectBatch {
 		end := min(start+storedSubjectBatch, len(frontier))
 		batch := make([]interface{}, 0, end-start)
@@ -185,12 +194,8 @@ func (a *Adapter) reviewedMemberHits(ctx context.Context, key, orgID string, sta
 			batch = append(batch, id)
 		}
 		for skip := 0; ; skip += pageSize {
-			if state.collectLimit > 0 && len(kept) > state.collectLimit {
-				return hits, nil
-			}
-			if pages >= memberStatusPageCap {
-				state.out.status.poolCut = true
-				state.out.truncated = true
+			if (state.collectLimit > 0 && len(kept) > state.collectLimit) || pages >= memberStatusPageCap {
+				cut()
 				return hits, nil
 			}
 			pages++
@@ -198,27 +203,26 @@ func (a *Adapter) reviewedMemberHits(ctx context.Context, key, orgID string, sta
 			if err != nil {
 				return nil, err
 			}
-			var open []string
+			ids := make([]string, 0, len(page))
 			for _, h := range page {
-				if !state.authorizedHit(hop, h) {
-					hits = append(hits, h)
-					continue
-				}
-				id := canonicalIDOf(h.to)
-				if !read[id] {
-					read[id] = true
-					open = append(open, id)
-				}
+				ids = append(ids, canonicalIDOf(h.to))
 			}
-			holding, err := a.pullRequestsHoldingReviewStatus(ctx, key, orgID, state.status.status, open)
+			holding, err := a.pullRequestsHoldingReviewStatus(ctx, key, orgID, state.status.status, distinctIDs(ids))
 			if err != nil {
 				return nil, err
 			}
 			for _, h := range page {
 				id := canonicalIDOf(h.to)
-				if holding[id] && state.authorizedHit(hop, h) {
+				authorized := state.authorizedHit(hop, h)
+				if authorized {
+					read[id] = true
+				}
+				if !holding[id] {
+					continue
+				}
+				hits = append(hits, h)
+				if authorized {
 					kept[id] = true
-					hits = append(hits, h)
 				}
 			}
 			if rows < pageSize {
@@ -231,8 +235,8 @@ func (a *Adapter) reviewedMemberHits(ctx context.Context, key, orgID string, sta
 
 // finishMemberStatus records what the predicate did on a walk whose last hop
 // read the members with it: what was kept, whether the anchor reaches any
-// member of the kind at all (read only when none was kept), the bounded pool
-// count of a cut read, and the members outside the kind's closed set.
+// member of the kind at all (read only when none was kept), the authorized
+// pool of a cut review read, and the members outside the kind's closed set.
 // unfiltered is the member hop without the status clause.
 func (a *Adapter) finishMemberStatus(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, unfiltered, filtered walkStep, temporal temporalFilter, budget int) error {
 	out := state.out
@@ -257,29 +261,45 @@ func (a *Adapter) finishMemberStatus(ctx context.Context, key, orgID string, sta
 		}
 	}
 	if out.status.poolCut {
-		pool, err := a.walkStepCount(ctx, key, orgID, frontier, filtered, temporal)
+		pool := filtered
+		pool.projected = true
+		count, err := a.authorizedHitCount(ctx, key, orgID, state, hop, frontier, pool, temporal)
 		if err != nil {
 			return err
 		}
-		out.status.pool = pool
+		out.status.pool = count
 	}
 	if outside := state.status.outsideClause(); outside.set() {
 		probe := unfiltered
 		probe.status = outside
 		probe.projected = true
-		hits, _, err := a.walkStepHits(ctx, key, orgID, frontier, probe, temporal, exactNameCandidateQueryLimit)
+		count, err := a.authorizedHitCount(ctx, key, orgID, state, hop, frontier, probe, temporal)
 		if err != nil {
 			return err
 		}
-		counted := map[string]bool{}
-		for _, h := range hits {
-			if state.authorizedHit(hop, h) {
-				counted[canonicalIDOf(h.to)] = true
-			}
-		}
-		out.status.outsideSet = len(counted)
+		out.status.outsideSet = max(count, 0)
 	}
 	return nil
+}
+
+// authorizedHitCount counts the distinct nodes a step reaches from frontier
+// that the caller may see, bounded by the census bound: -1 when the read was
+// cut, so the count is not known.
+func (a *Adapter) authorizedHitCount(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, step walkStep, temporal temporalFilter) (int, error) {
+	hits, cut, err := a.walkStepHits(ctx, key, orgID, frontier, step, temporal, exactNameCandidateQueryLimit)
+	if err != nil {
+		return 0, err
+	}
+	counted := map[string]bool{}
+	for _, h := range hits {
+		if state.authorizedHit(hop, h) {
+			counted[canonicalIDOf(h.to)] = true
+		}
+	}
+	if cut {
+		return -1, nil
+	}
+	return len(counted), nil
 }
 
 // finishLinkMemberStatus is finishMemberStatus for a walk whose link read
@@ -293,9 +313,8 @@ func (a *Adapter) finishLinkMemberStatus(ctx context.Context, key, orgID string,
 	}
 	out.status.reached = out.status.kept > 0
 	if !out.status.reached {
-		probeOut := treeWalk{}
 		probe := state
-		probe.out = &probeOut
+		probe.out = &treeWalk{}
 		probe.status = memberStatusPredicate{}
 		ends, _, err := a.linkSegment(ctx, key, orgID, probe, anchor, feed, link, temporal)
 		if err != nil {
@@ -304,15 +323,20 @@ func (a *Adapter) finishLinkMemberStatus(ctx context.Context, key, orgID string,
 		out.status.reached = len(ends) > 0
 	}
 	if out.status.poolCut {
-		params := linkSegmentParams(orgID, anchor, feed, link, 0, 1, temporal)
-		status := state.status.clause()
-		status.bind(params)
-		rows, err := a.api.query(ctx, key, linkTargetCountCypherWith(feed, link, temporal, status), params, true)
+		// The authorized open pull requests the anchor's links reach: the same
+		// read with the state clause and no review decision, bounded.
+		probeOut := treeWalk{}
+		probe := state
+		probe.out = &probeOut
+		probe.status = memberStatusPredicate{kind: state.status.kind, status: contextfabric.PullRequestStatusOpen}
+		probe.collectLimit = exactNameCandidateQueryLimit
+		ends, _, err := a.linkSegment(ctx, key, orgID, probe, anchor, feed, link, temporal)
 		if err != nil {
-			return safeDependencyError("count link targets", err)
+			return err
 		}
-		if len(rows) > 0 {
-			out.status.pool = countValue(rows[0]["targets"])
+		out.status.pool = len(ends)
+		if probeOut.truncated {
+			out.status.pool = -1
 		}
 	}
 	return nil

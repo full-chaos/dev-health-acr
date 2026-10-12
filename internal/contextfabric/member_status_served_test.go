@@ -115,18 +115,24 @@ func TestServedProjectAnswerStatesTheMembersOutsideTheKnownSet(t *testing.T) {
 // that was not cut states nothing of the kind.
 func TestServedAnswerStatesWithinHowManyMembersACutStatusFilterRan(t *testing.T) {
 	t.Parallel()
-	served := investigateProjectCohort(t, MemberStatusOutsideSet{}, MemberStatusPoolCut{Kind: SubjectIncident, Read: 25})
-	want := contractsv1.ContextFabricMemberStatusPoolCutLimitation("incident", 25)
-	count := 0
-	for _, limitation := range served.Limitations {
-		if limitation == want {
-			count++
+	for _, cut := range []MemberStatusPoolCut{
+		{Kind: SubjectIncident, Read: 25},
+		{Kind: SubjectPullRequest, Read: 26, Pool: 60},
+		{Kind: SubjectIncident},
+	} {
+		served := investigateProjectCohort(t, MemberStatusOutsideSet{}, cut)
+		want := contractsv1.ContextFabricMemberStatusPoolCutLimitation(string(cut.Kind), cut.Read, cut.Pool)
+		count := 0
+		for _, limitation := range served.Limitations {
+			if limitation == want {
+				count++
+			}
+		}
+		if want == "" || count != 1 || !contractsv1.IsContextFabricMemberStatusLimitation(want) {
+			t.Fatalf("%+v: served limitations = %q, want exactly one %q", cut, served.Limitations, want)
 		}
 	}
-	if want == "" || count != 1 || !contractsv1.IsContextFabricMemberStatusLimitation(want) {
-		t.Fatalf("served limitations = %q, want exactly one %q", served.Limitations, want)
-	}
-	none := investigateProjectCohort(t, MemberStatusOutsideSet{}, MemberStatusPoolCut{Kind: SubjectIncident})
+	none := investigateProjectCohort(t, MemberStatusOutsideSet{}, MemberStatusPoolCut{})
 	for _, limitation := range none.Limitations {
 		if contractsv1.IsContextFabricMemberStatusLimitation(limitation) {
 			t.Fatalf("a read that was not cut served %q", limitation)

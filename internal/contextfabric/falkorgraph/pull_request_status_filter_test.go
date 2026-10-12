@@ -16,6 +16,12 @@ import (
 type pullRequestStatusFixture struct {
 	id, state string
 	reviews   []contextfabric.PullRequestReviewRow
+	// repo is the repository the pull request belongs to, owned by the team;
+	// empty is repository:alpha.
+	repo string
+	// hidden: the pull request carries a repository grant no requested scope
+	// names (the others carry full-chaos/alpha, the repository the team owns).
+	hidden bool
 }
 
 // pullRequestStatusFake serves a team that owns one repository whose pull
@@ -26,10 +32,22 @@ func pullRequestStatusFake(fixtures []pullRequestStatusFixture, stateReadErr err
 	nodes := []scopedAnchorNode{{"team", "team:alpha", "Alpha"}, {"repository", "repository:alpha", "full-chaos/alpha"}}
 	edges := []scopedAnchorEdge{{rel: "OWNED_BY_TEAM", srcKind: "repository", srcID: "repository:alpha", dstKind: "team", dstID: "team:alpha"}}
 	states := map[string]string{}
+	hidden := map[string]bool{}
 	reviews := map[string]contextfabric.PullRequestReviewRow{}
+	repos := map[string]bool{"repository:alpha": true}
 	for _, f := range fixtures {
+		repo := f.repo
+		if repo == "" {
+			repo = "repository:alpha"
+		}
+		if !repos[repo] {
+			repos[repo] = true
+			nodes = append(nodes, scopedAnchorNode{"repository", repo, repo})
+			edges = append(edges, scopedAnchorEdge{rel: "OWNED_BY_TEAM", srcKind: "repository", srcID: repo, dstKind: "team", dstID: "team:alpha"})
+		}
+		hidden[f.id] = f.hidden
 		nodes = append(nodes, scopedAnchorNode{"pull_request", f.id, f.id})
-		edges = append(edges, scopedAnchorEdge{rel: "BELONGS_TO_REPOSITORY", srcKind: "pull_request", srcID: f.id, dstKind: "repository", dstID: "repository:alpha"})
+		edges = append(edges, scopedAnchorEdge{rel: "BELONGS_TO_REPOSITORY", srcKind: "pull_request", srcID: f.id, dstKind: "repository", dstID: repo})
 		states[f.id] = f.state
 		for i, review := range f.reviews {
 			reviewID := f.id + ":review:" + string(rune('a'+i))
@@ -49,9 +67,17 @@ func pullRequestStatusFake(fixtures []pullRequestStatusFixture, stateReadErr err
 			}}}}, nil
 		}
 		rows, err := inner(ctx, graphKey, cypher, params, readOnly)
-		if state, ok := states[id]; ok && !strings.Contains(cypher, "UNION") {
+		if !strings.Contains(cypher, "UNION") {
 			for _, r := range rows {
-				if n, isNode := r["n"].(*node); isNode && n != nil {
+				n, isNode := r["n"].(*node)
+				if !isNode || n == nil {
+					continue
+				}
+				n.Properties[propAuthzRepos] = []string{"full-chaos/alpha"}
+				if hidden[id] {
+					n.Properties[propAuthzRepos] = []string{"acme/hidden"}
+				}
+				if state, ok := states[id]; ok {
 					n.Properties[propPropertyPrefix+"state"] = state
 				}
 			}

@@ -1426,19 +1426,23 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	var statusPoolCut contextfabric.MemberStatusPoolCut
 	switch {
 	case statusWalk.applied:
+		pool := -1
+		if statusWalk.poolCut && !statusWalk.poolUnknown {
+			pool = max(statusWalk.pool, 0)
+		}
 		if statusWalk.poolCut {
-			statusPoolCut = contextfabric.MemberStatusPoolCut{Kind: statusPredicate.kind, Read: statusWalk.read}
+			statusPoolCut = contextfabric.MemberStatusPoolCut{Kind: statusPredicate.kind, Read: statusWalk.read, Pool: max(pool, 0)}
 		}
 		if a.config.Telemetry != nil {
 			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
 				MemberKind: statusPredicate.kind, Status: statusPredicate.status, Site: PullRequestStatusFilterSiteWalk,
-				Candidates: statusWalk.read, Kept: statusWalk.kept, OutsideSet: statusWalk.outsideSet, PoolCut: statusWalk.poolCut, Pool: statusWalk.pool,
+				Candidates: statusWalk.read, Kept: statusWalk.kept, OutsideSet: statusWalk.outsideSet, PoolCut: statusWalk.poolCut, Pool: pool,
 			})
 		}
 	case pullRequestStatus != "":
 		filtered, filterErr := a.filterPullRequestsByStatus(ctx, key, principal.OrgID, pullRequestStatus, cohortNodes)
 		pullRequestFiltered = filtered
-		poolCut := filterErr == nil && cohortPoolTruncated && filtered.candidates > 0
+		poolCut := filterErr == nil && cohortPoolTruncated
 		if a.config.Telemetry != nil {
 			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
 				Status: pullRequestStatus, Site: PullRequestStatusFilterSitePool, Candidates: filtered.candidates, Kept: filtered.kept, PoolCut: poolCut, Pool: -1, Err: filterErr,
@@ -1454,7 +1458,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	case memberStatus != "":
 		filtered, filterErr := a.filterMembersByStoredStatus(ctx, key, principal.OrgID, memberStatusKind, memberStatus, cohortNodes)
 		memberFiltered = filtered
-		poolCut := filterErr == nil && cohortPoolTruncated && filtered.candidates > 0
+		poolCut := filterErr == nil && cohortPoolTruncated
 		if a.config.Telemetry != nil {
 			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
 				MemberKind: memberStatusKind, Status: memberStatus, Site: PullRequestStatusFilterSitePool, Candidates: filtered.candidates, Kept: filtered.kept, OutsideSet: filtered.outsideSet, PoolCut: poolCut, Pool: -1, Err: filterErr,
