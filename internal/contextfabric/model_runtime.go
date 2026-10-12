@@ -2535,6 +2535,11 @@ func (r RuntimeAnswerSynthesizer) vetSynthesisDraft(ctx context.Context, princip
 	if validateErr := draft.ValidateAgainst(input); validateErr != nil {
 		return draft, ClassifySynthesisRejection(draft, input, validateErr)
 	}
+	var sourceStatesCorrected int
+	draft.Drivers, sourceStatesCorrected = groundedDriverSourceStates(draft.Drivers, draft.ClaimedFacts, input.Facts.Facts)
+	if recorder, ok := r.Telemetry.(driverSourceStateCorrectionRecorder); ok && sourceStatesCorrected > 0 {
+		recorder.RecordDriverSourceStateCorrected(ctx, principal, sourceStatesCorrected)
+	}
 	return draft, nil
 }
 
