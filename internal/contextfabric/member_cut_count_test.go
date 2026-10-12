@@ -31,6 +31,7 @@ func TestAMemberCutAnswerToACountQuestionReconcilesItsCountRow(t *testing.T) {
 			InclusionReasons: []string{"matched"},
 		})
 	}
+	telemetry := &recordingTelemetry{}
 	frame := countingFrame(SubjectTeam)
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: familyInterpreter{
@@ -67,7 +68,7 @@ func TestAMemberCutAnswerToACountQuestionReconcilesItsCountRow(t *testing.T) {
 			}, nil
 		}),
 		Results:      &resultStoreStub{},
-		Telemetry:    &recordingTelemetry{},
+		Telemetry:    telemetry,
 		Requirements: registryDeriver{},
 	}, EngineOptions{
 		ServiceVersion: "acr-test", MaxItems: serverItemCeiling,
@@ -86,6 +87,9 @@ func TestAMemberCutAnswerToACountQuestionReconcilesItsCountRow(t *testing.T) {
 		t.Fatalf("Investigate() error = %v", err)
 	}
 	served := len(result.Cohort.Members)
+	for _, e := range telemetry.readRequirementObservationCovers {
+		t.Logf("cover pass=%d evaluated=%d served=%v req=%s", e.Pass, e.EvaluatedPass, e.Served, e.Requirement)
+	}
 	if served >= members {
 		t.Fatalf("served %d members: the case did not exercise the cut", served)
 	}

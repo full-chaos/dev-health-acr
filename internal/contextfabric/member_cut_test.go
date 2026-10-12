@@ -12,6 +12,10 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// memberCutExtraGoals adds goals to the fixture's frame; a row that needs a
+// derived read requirement sets it for its own duration.
+var memberCutExtraGoals []InvestigationGoal
+
 const (
 	memberCutPopulation = 60
 	memberCutCallerCap  = 50
@@ -28,16 +32,16 @@ func memberCutEngine(t *testing.T, gaps int, cited []int, reserve time.Duration,
 }
 
 func memberCutEngineAtCeiling(t *testing.T, gaps int, cited []int, reserve time.Duration, maxBytes int64, population int, telemetry *recordingTelemetry) *Engine {
-	return memberCutEngineNaming(t, gaps, cited, reserve, maxBytes, population, telemetry, nil)
+	return memberCutEngineNaming(t, gaps, cited, reserve, maxBytes, population, telemetry, nil, registryDeriver{})
 }
 
 // memberCutEngineNaming is the fixture with a hook that writes the draft's
 // current_state from the cohort it was given, so a row can have the prose name
 // a member that no claim, driver or finding does.
-func memberCutEngineNaming(t *testing.T, gaps int, cited []int, reserve time.Duration, maxBytes int64, population int, telemetry *recordingTelemetry, currentState func(*Cohort) string) *Engine {
+func memberCutEngineNaming(t *testing.T, gaps int, cited []int, reserve time.Duration, maxBytes int64, population int, telemetry *recordingTelemetry, currentState func(*Cohort) string, deriver RequirementDeriver) *Engine {
 	t.Helper()
 	frame := QuestionFrame{
-		Goals: []InvestigationGoal{GoalCountOrAggregate},
+		Goals: append([]InvestigationGoal{GoalCountOrAggregate}, memberCutExtraGoals...),
 		SubjectExpression: SubjectExpression{
 			Kind:   SubjectExpressionChildrenOfScope,
 			Scoped: &ScopedSetExpression{AnchorTerms: []string{"Platform"}, MemberKind: SubjectProject},
@@ -95,7 +99,7 @@ func memberCutEngineNaming(t *testing.T, gaps int, cited []int, reserve time.Dur
 				Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"},
 			}, nil
 		}),
-		Requirements: registryDeriver{},
+		Requirements: deriver,
 		Telemetry:    telemetry,
 	}, func() EngineOptions {
 		options := budgetStageOptions(serverItemCeiling, reserve)
@@ -376,7 +380,7 @@ func TestAMemberNamedOnlyInTheDraftProseIsNotCut(t *testing.T) {
 	named := fmt.Sprintf("project_%03d", last)
 	engine := memberCutEngineNaming(t, memberCutGaps, nil, 0, 0, memberCutPopulation, &recordingTelemetry{}, func(cohort *Cohort) string {
 		return "The review queue on " + strings.ToUpper(named) + " is the one to watch."
-	})
+	}, registryDeriver{})
 	result, err := investigateMemberCut(t, engine)
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
@@ -403,5 +407,65 @@ func TestAMemberNamedOnlyInTheDraftProseIsNotCut(t *testing.T) {
 		if member.Subject.CanonicalID == named {
 			t.Fatalf("control: %s was kept without the prose naming it; the row cannot discriminate", named)
 		}
+	}
+}
+
+// The cut pass is a pass of its own: its observation-cover events carry a pass
+// number above every discarded attempt's, are published once, and are the only
+// ones marked served; pass one's are kept as not served.
+func TestTheCutPassObservationCoverIsPublishedOnceAndMarkedServed(t *testing.T) {
+	memberCutExtraGoals = []InvestigationGoal{GoalAssessState}
+	defer func() { memberCutExtraGoals = nil }()
+	capability := FactCapability{
+		Kind: FactHealth, SupportedSubjectKinds: []SubjectKind{SubjectProject},
+		Obligations: map[SubjectKind][]AnswerObligation{SubjectProject: {ObligationState}},
+	}
+	telemetry := &recordingTelemetry{}
+	engine := memberCutEngineNaming(t, memberCutGaps, nil, 0, 0, memberCutPopulation, telemetry, nil, registryDeriver{capabilities: []FactCapability{capability}})
+	result, err := investigateMemberCut(t, engine)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(result.Cohort.Members) >= memberCutCallerCap {
+		t.Fatalf("served %d members: the case did not cut", len(result.Cohort.Members))
+	}
+	covers := telemetry.readRequirementObservationCovers
+	if len(covers) != 2 {
+		t.Fatalf("observation-cover lines = %d, want 2 (pass one not served, the cut pass served): %+v", len(covers), covers)
+	}
+	var served, discarded *ReadRequirementObservationCoverEvent
+	for index := range covers {
+		if covers[index].Served {
+			if served != nil {
+				t.Fatalf("two lines are marked served: %+v", covers)
+			}
+			served = &covers[index]
+		} else {
+			discarded = &covers[index]
+		}
+	}
+	if served == nil || discarded == nil {
+		t.Fatalf("want one served and one discarded line: %+v", covers)
+	}
+	if served.Pass != answerPassThird || discarded.Pass != answerPassFirst {
+		t.Fatalf("served pass %d, discarded pass %d, want %d and %d: the cut pass is numbered above every earlier attempt", served.Pass, discarded.Pass, answerPassThird, answerPassFirst)
+	}
+	if telemetry.memberCuts[0].Passes < 2 {
+		t.Fatalf("member-cut event reports %d assembly passes, want the search's count", telemetry.memberCuts[0].Passes)
+	}
+}
+
+// A one- or two-character label is matched as a whole word: "AI" in "the AI
+// team" keeps its member listed, and "said" does not.
+func TestAShortLabelIsMatchedAsAWholeWordInTheDraftProse(t *testing.T) {
+	member := SubjectRef{Kind: SubjectProject, CanonicalID: "project_001", Label: "AI"}
+	if !namedInProse(member, draftProse(InvestigationResult{CurrentState: "The AI team is stretched."})) {
+		t.Fatal("a one-word mention of the two-character label is not matched")
+	}
+	if namedInProse(member, draftProse(InvestigationResult{CurrentState: "Reviewers said it is fine."})) {
+		t.Fatal("the label matched inside another word")
+	}
+	if !namedInProse(SubjectRef{Kind: SubjectProject, CanonicalID: "x", Label: "A"}, draftProse(InvestigationResult{CurrentState: "Team A is late."})) {
+		t.Fatal("a one-character label mentioned as a word is not matched")
 	}
 }

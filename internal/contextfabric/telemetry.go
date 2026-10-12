@@ -2752,6 +2752,7 @@ func (t SlogEngineTelemetry) RecordMemberCut(ctx context.Context, principal stor
 		"uncited", event.Uncited,
 		"basis", string(event.Basis),
 		"chain_recorded", event.ChainRecorded,
+		"assembly_passes", event.Passes,
 		"served", event.Served,
 		"declined", string(event.Declined),
 	}

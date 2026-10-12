@@ -65,17 +65,19 @@ const (
 )
 
 type memberCutAttempt struct {
-	Result    InvestigationResult
-	Pending   assemblyTelemetry
-	Served    bool
-	Declined  MemberCutDeclined
-	Measured  MeasuredAttempt
-	Listed    int
-	Kept      int
-	Uncited   int
-	Basis     contractsv1.ContextFabricNarrowingBasis
-	StepKept  bool
-	ItemsHeld int
+	Result   InvestigationResult
+	Pending  assemblyTelemetry
+	Served   bool
+	Declined MemberCutDeclined
+	Measured MeasuredAttempt
+	Listed   int
+	Kept     int
+	Uncited  int
+	Basis    contractsv1.ContextFabricNarrowingBasis
+	StepKept bool
+	// Passes counts the assemblies the search ran (candidates and the served
+	// one): the CPU cost of the lever, a measurement.
+	Passes int
 }
 
 // MemberCutEvent is the operator record of ONE member-cut decision. Counts
@@ -95,8 +97,10 @@ type MemberCutEvent struct {
 	// ChainRecorded says the plan step was recorded, which is only true when
 	// the list the cut started from was the whole population.
 	ChainRecorded bool
-	Served        bool
-	Declined      MemberCutDeclined
+	// Passes is how many times the draft was assembled to find the cut.
+	Passes   int
+	Served   bool
+	Declined MemberCutDeclined
 }
 
 // memberCutBasis names the order the list is cut in, or false when the list
@@ -177,16 +181,48 @@ func draftProse(draft InvestigationResult) string {
 }
 
 // namedInProse reports whether the member's canonical id or label appears in
-// the prose. A label too short to be a name is not matched, and a spurious
+// the prose. A name of three or more characters matches as a substring; a
+// shorter one (the contract allows a one-character label) matches only as a
+// whole word, so "AI" is found in "the AI team" and not in "said". A spurious
 // match only keeps a member listed.
 func namedInProse(subject SubjectRef, prose string) bool {
 	for _, name := range []string{subject.CanonicalID, subject.Label} {
 		name = strings.ToLower(strings.TrimSpace(name))
-		if len(name) >= 3 && strings.Contains(prose, name) {
-			return true
+		switch {
+		case name == "":
+		case len(name) >= 3:
+			if strings.Contains(prose, name) {
+				return true
+			}
+		default:
+			if containsWord(prose, name) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// containsWord reports whether name appears in text with no letter or digit
+// beside it.
+func containsWord(text, name string) bool {
+	for from := 0; ; {
+		at := strings.Index(text[from:], name)
+		if at < 0 {
+			return false
+		}
+		start, end := from+at, from+at+len(name)
+		beforeOK := start == 0 || !isWordByte(text[start-1])
+		afterOK := end == len(text) || !isWordByte(text[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		from = start + 1
+	}
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || b >= 0x80
 }
 
 // memberCutOutcomeRow: NARROWED in SCOPE (fewer members listed; each that
@@ -330,6 +366,7 @@ func (e *Engine) planMemberCut(
 		cutParams.CohortSignalCitations = narrowed.Citations
 		draft := draftForCutCohort(*firstPass.Draft, cutMembers)
 		cutParams.Draft = &draft
+		attempt.Passes++
 		assembled, consumed, assembledPending, cardinality, err := e.synthesizeAndAssemble(ctx, principal, cutParams)
 		if err != nil {
 			return InvestigationResult{}, ItemAllocation{}, assemblyTelemetry{}, MembershipCardinality{}, cutParams, narrowed, stepped, err
@@ -341,7 +378,6 @@ func (e *Engine) planMemberCut(
 			assembled.Limitations = composed
 			assembled.LimitationsDisplaced += displaced
 		}
-		assembled.Completeness.Outcomes = appendOutcomeRows(assembled.Completeness.Outcomes, memberCutOutcomeRow(listed-n, listed))
 		assembled.Coverage.Partial = true
 		if assembled.Status == InvestigationComplete {
 			assembled.Status = InvestigationPartial
@@ -350,7 +386,14 @@ func (e *Engine) planMemberCut(
 		if pending == nil {
 			target = nil
 		}
-		assembled = e.finalizeResult(ctx, principal, assembled, stepped, params.Frame, narrowed.Facts, target, answerPassSecond, cardinality)
+		assembled = e.finalizeResult(ctx, principal, assembled, stepped, params.Frame, narrowed.Facts, target, answerPassThird, cardinality)
+		// The scope row is appended AFTER finalization: the finalizer seeds the
+		// planning rows only into an empty set, so a row placed before it would
+		// suppress every derived row. It carries no requirement identity, so
+		// nothing re-derives or drops it, and the completeness block is
+		// derived again over the set that includes it.
+		assembled.Completeness.Outcomes = appendOutcomeRows(assembled.Completeness.Outcomes, memberCutOutcomeRow(listed-n, listed))
+		assembled.Completeness = ComputeAnswerCompleteness(assembled)
 		return assembled, consumed, assembledPending, cardinality, cutParams, narrowed, stepped, nil
 	}
 	fitsItems := func(n int) (bool, error) {
@@ -417,7 +460,9 @@ func (e *Engine) planMemberCut(
 
 	switch {
 	case got.Overrun == contractsv1.ContextFabricBudgetFits && got.CertifiedFit():
-		doc = e.finalizeResult(ctx, principal, doc, stepped, params.Frame, narrowed.Facts, &pending, answerPassSecond, cardinality)
+		// The document was finalized once, in assemble, with this pass's
+		// pending telemetry: finalizing it again would append its observation
+		// cover events a second time.
 		if !servableLeverResult(doc) {
 			attempt.Declined = MemberCutInvalidResult
 			return attempt, nil
@@ -475,6 +520,7 @@ func (e *Engine) recordMemberCut(ctx context.Context, principal storage.Principa
 		Uncited:       attempt.Uncited,
 		Basis:         attempt.Basis,
 		ChainRecorded: attempt.StepKept && attempt.Served,
+		Passes:        attempt.Passes,
 		Served:        attempt.Served,
 		Declined:      attempt.Declined,
 	})
