@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	cf "github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -20,7 +21,13 @@ type memberStateClient struct {
 	reads  int
 }
 
-func (c *memberStateClient) Query(context.Context, string, []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+func (c *memberStateClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	// A pull request fact also reads the projects its linked issues reach;
+	// this client holds state rows only, so that read finds nothing and is
+	// not the state read this test counts.
+	if strings.Contains(statement, "FROM work_graph_issue_pr") {
+		return &memberStateScanner{done: true}, nil
+	}
 	c.reads++
 	return &memberStateScanner{values: c.values}, nil
 }
