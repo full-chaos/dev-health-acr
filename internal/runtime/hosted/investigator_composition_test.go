@@ -172,6 +172,32 @@ func TestBuildContextFabricInvestigator_wiresBothReuseSnapshottersWhenReuseIsEna
 	}
 }
 
+// TestBuildContextFabricInvestigator_wiresTheAnchorFreshnessReaderWithAnswerReuseOff:
+// the anchor binding's ownership freshness is read whether or not answer
+// reuse is enabled, so the production composition wires its reader with
+// reuse off, where the reuse snapshotter stays nil.
+func TestBuildContextFabricInvestigator_wiresTheAnchorFreshnessReaderWithAnswerReuseOff(t *testing.T) {
+	configureGraph(t)
+	request, postgres, clickhouse := investigatorBuildRequest(t)
+	request.config.AnswerReuseMaxAge = 0
+
+	investigator, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	if err != nil {
+		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
+	}
+	engine, ok := investigator.(*contextfabric.Engine)
+	if !ok {
+		t.Fatalf("investigator is a %T, want *contextfabric.Engine", investigator)
+	}
+	engineValue := reflect.ValueOf(engine).Elem()
+	if field := engineValue.FieldByName("reuseSnapshotter"); !field.IsNil() {
+		t.Fatal("premise: reuseSnapshotter is wired with answer reuse off")
+	}
+	if field := engineValue.FieldByName("anchorFreshness"); field.IsNil() {
+		t.Error("anchorFreshness is nil with answer reuse off; a pending anchor would carry no ownership freshness")
+	}
+}
+
 // TestBuildContextFabricInvestigator_wiresEveryReuseKeyVersionAuthority is
 // CHAOS-3862 sol round-2 finding F4: every prior test in this file that
 // touches reuse composition builds the engine and asserts a DEPENDENCY

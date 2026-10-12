@@ -997,6 +997,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// ReuseSnapshotter immediately above -- see that variable's
 		// declaration for why these two must never be set independently.
 		ReuseEpochSnapshotter: reuseEpochSnapshotter,
+		// Wired unconditionally: the anchor binding's ownership freshness is
+		// read whether or not answer reuse is enabled.
+		AnchorFreshness: investigationStore,
 		// CHAOS-3782 Codex round-2 finding #3: resolve the reuse lookup's
 		// model identity per-organization, from the SAME orgModelConfigStore
 		// wrapWithOrgModelRuntimeResolver above already uses for the actual
