@@ -853,15 +853,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// resolver leaves offerPhraser nil, the same "optional dependency
 	// absent" degradation every other EngineDependencies field uses.
 	var offerPhraser contextfabric.OfferPhraser
-	var phrasingRuntime contextfabric.OfferPhrasingModelRuntime
-	switch {
-	case evictor != nil:
-		phrasingRuntime = evictor
-	case deploymentDefaultRuntime != nil && !isNilRuntime(deploymentDefaultRuntime):
-		if _, ok := deploymentDefaultRuntime.(contextfabric.OfferPhrasingModelRuntime); ok {
-			phrasingRuntime = modelruntimeresolver.New(deploymentDefaultRuntime, nil, nil)
-		}
-	}
+	phrasingRuntime := offerPhrasingRuntimeFor(evictor, deploymentDefaultRuntime)
 	if phrasingRuntime != nil {
 		offerPhraser = contextfabric.RuntimeOfferPhraser{Runtime: phrasingRuntime, Sink: receiptSink, Logger: request.options.Logger}
 	}
@@ -1448,4 +1440,21 @@ func buildDirectRelationships(investigator contextfabric.Investigator, gate *dir
 		return nil
 	}
 	return reader
+}
+
+// offerPhrasingRuntimeFor picks the runtime offer phrasing resolves through:
+// the per-organization resolver when it is wired, otherwise a resolver over
+// the deployment default alone (so a withheld turn is still honored). It
+// returns nil when there is no usable deployment runtime and no resolver.
+func offerPhrasingRuntimeFor(resolver *modelruntimeresolver.Resolver, deploymentDefault contextfabric.ModelRuntime) contextfabric.OfferPhrasingModelRuntime {
+	if resolver != nil {
+		return resolver
+	}
+	if deploymentDefault == nil || isNilRuntime(deploymentDefault) {
+		return nil
+	}
+	if _, ok := deploymentDefault.(contextfabric.OfferPhrasingModelRuntime); !ok {
+		return nil
+	}
+	return modelruntimeresolver.New(deploymentDefault, nil, nil)
 }

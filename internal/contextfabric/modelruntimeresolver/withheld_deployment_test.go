@@ -93,3 +93,13 @@ func TestOfferPhrasingResolvesThroughTheOrganizationFirstAndHonorsAWithheldTurn(
 		t.Fatalf("withheld, own model: err = %v own calls = %d deployment calls = %d, want nil, 1, 1", err, own.calls, deployment.calls)
 	}
 }
+
+// A typed-nil runtime is treated as absent: offer phrasing does not call it.
+func TestOfferPhrasingTreatsATypedNilRuntimeAsAbsent(t *testing.T) {
+	var typedNil *phrasingRuntime
+	resolver := modelruntimeresolver.New(typedNil, nil, nil)
+	_, _, err := resolver.PhraseStructureOffers(context.Background(), storage.Principal{OrgID: "org_1"}, contextfabric.StructureOfferPhrasingInput{})
+	if !errors.Is(err, contextfabric.ErrModelUnavailable) {
+		t.Fatalf("err = %v, want model unavailable without a panic", err)
+	}
+}

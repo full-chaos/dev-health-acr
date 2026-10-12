@@ -75,6 +75,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strconv"
 	"sync"
 
@@ -188,7 +189,7 @@ func (r *Resolver) PhraseStructureOffers(ctx context.Context, principal storage.
 		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, err
 	}
 	phraser, ok := runtime.(contextfabric.OfferPhrasingModelRuntime)
-	if runtime == nil || !ok {
+	if !ok || isNilRuntime(runtime) {
 		logger := r.Logger
 		if logger == nil {
 			logger = slog.Default()
@@ -339,6 +340,21 @@ func (r *Resolver) deploymentDefault(ctx context.Context, orgID string) (context
 		return nil, errDeploymentModelWithheld
 	}
 	return r.Default, nil
+}
+
+// isNilRuntime reports a nil interface or an interface holding a nil pointer,
+// so a typed-nil runtime is treated as absent rather than called.
+func isNilRuntime(runtime any) bool {
+	if runtime == nil {
+		return true
+	}
+	value := reflect.ValueOf(runtime)
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // isTransientBuildError reports whether err reflects the CALLER's context
