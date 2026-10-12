@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -171,11 +170,11 @@ func TestAFlatCohortOverTheItemBudgetIsServedPartialNotRefusedWithA413(t *testin
 	}
 	named := false
 	for _, limitation := range served.Limitations {
-		if contractsv1.IsContextFabricCohortNarrowingLimitation(limitation) && strings.Contains(limitation, "exceeded the item budget") {
+		if contractsv1.IsContextFabricMemberCutLimitation(limitation) {
 			named = true
 		}
 	}
 	if !named {
-		t.Fatalf("the cut is not named in the limitations: %q", served.Limitations)
+		t.Fatalf("the member cut is not named in the limitations: %q", served.Limitations)
 	}
 }

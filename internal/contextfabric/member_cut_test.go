@@ -24,10 +24,10 @@ const (
 // retry is declined on.
 func memberCutEngine(t *testing.T, gaps int, cited []int, reserve time.Duration, telemetry *recordingTelemetry) *Engine {
 	t.Helper()
-	return memberCutEngineAtCeiling(t, gaps, cited, reserve, 0, telemetry)
+	return memberCutEngineAtCeiling(t, gaps, cited, reserve, 0, memberCutPopulation, telemetry)
 }
 
-func memberCutEngineAtCeiling(t *testing.T, gaps int, cited []int, reserve time.Duration, maxBytes int64, telemetry *recordingTelemetry) *Engine {
+func memberCutEngineAtCeiling(t *testing.T, gaps int, cited []int, reserve time.Duration, maxBytes int64, population int, telemetry *recordingTelemetry) *Engine {
 	t.Helper()
 	frame := QuestionFrame{
 		Goals: []InvestigationGoal{GoalCountOrAggregate},
@@ -48,7 +48,7 @@ func memberCutEngineAtCeiling(t *testing.T, gaps int, cited []int, reserve time.
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
 			context: GraphContext{Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}},
-		}, memberCutPopulation},
+		}, population},
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{}}, nil
 		}),
@@ -131,19 +131,19 @@ func TestAFlatCohortOverTheItemBudgetIsServedWithItsTrailingMembersCut(t *testin
 	if result.Status != InvestigationPartial || !result.Coverage.Partial {
 		t.Fatalf("status %q partial=%v: a cut answer is partial", result.Status, result.Coverage.Partial)
 	}
-	disclosed := false
+	// The caller's member limit cut 60 to 50 before planning and no plan step
+	// records it, so the cohort sentence (which would attribute the whole drop
+	// from 60 to the item budget) is not written; the cut's own sentence states
+	// the 5 of 50.
 	for _, limitation := range result.Limitations {
-		if contractsv1.IsContextFabricCohortNarrowingLimitation(limitation) && strings.Contains(limitation, "exceeded the item budget") {
-			disclosed = true
+		if contractsv1.IsContextFabricCohortNarrowingLimitation(limitation) {
+			t.Fatalf("a cohort-narrowing sentence blames the item budget for a drop the caller's limit began: %q", limitation)
 		}
-	}
-	if !disclosed {
-		t.Fatalf("no cohort-narrowing sentence naming the item budget: %q", result.Limitations)
 	}
 	if err := result.Validate(); err != nil {
 		t.Fatalf("the served answer is not valid: %v", err)
 	}
-	wantSentence, _ := contractsv1.ContextFabricMemberCutLimitation(memberCutCallerCap-len(result.Cohort.Members), memberCutCallerCap)
+	wantSentence, _ := contractsv1.ContextFabricMemberCutLimitation(memberCutCallerCap-len(result.Cohort.Members), memberCutCallerCap, result.Cohort.ScoreMeaning != "")
 	stated := 0
 	for _, limitation := range result.Limitations {
 		if limitation == wantSentence {
@@ -246,7 +246,7 @@ func TestAMemberCutDoesNotServeWhenTheOtherItemsAloneOverrun(t *testing.T) {
 func TestAnItemOverrunUnderACallerByteOptionIsServedAtTheServiceCeiling(t *testing.T) {
 	const ceiling = 65536
 	const option = 8192
-	engine := memberCutEngineAtCeiling(t, memberCutGaps, nil, 0, ceiling, &recordingTelemetry{})
+	engine := memberCutEngineAtCeiling(t, memberCutGaps, nil, 0, ceiling, memberCutPopulation, &recordingTelemetry{})
 	request := validInvestigationRequestWithConfirmedWindow()
 	request.Options.MaxCohortMembers = memberCutCallerCap
 	request.Options.AnswerBudgetBytes = option
@@ -305,7 +305,7 @@ func TestARankedListIsCutByAttentionRankNotByPoolPosition(t *testing.T) {
 	if cutIDs[0] != "project_002" || cutIDs[1] != "project_004" {
 		t.Fatalf("cut %v, want the two worst attention ranks, project_002 (6) then project_004 (5)", cutIDs)
 	}
-	cutResult, ok := cutMembers(result, order, cut)
+	cutResult, ok := cutMembers(result, order, cut, true)
 	if !ok {
 		t.Fatal("cutMembers declined")
 	}
@@ -323,5 +323,25 @@ func TestARankedListIsCutByAttentionRankNotByPoolPosition(t *testing.T) {
 	}
 	if len(kept) != 4 || cutResult.Cohort.Complete || !cutResult.Cohort.Truncated {
 		t.Fatalf("kept %d, complete=%v truncated=%v", len(kept), cutResult.Cohort.Complete, cutResult.Cohort.Truncated)
+	}
+}
+
+// With nothing cut before the plan (the population equals the list), the cut is
+// the whole chain and the cohort sentence states it from the population.
+func TestAMemberCutOverAWholePopulationStatesTheChainFromThePopulation(t *testing.T) {
+	engine := memberCutEngineAtCeiling(t, memberCutGaps, nil, 0, 0, memberCutCallerCap, &recordingTelemetry{})
+	result, err := investigateMemberCut(t, engine)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	served := len(result.Cohort.Members)
+	found := false
+	for _, limitation := range result.Limitations {
+		if contractsv1.IsContextFabricCohortNarrowingLimitation(limitation) && strings.Contains(limitation, fmt.Sprintf("lists %d of the %d ", served, memberCutCallerCap)) && strings.Contains(limitation, "exceeded the item budget") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no cohort sentence stating %d of %d after the item budget: %q", served, memberCutCallerCap, result.Limitations)
 	}
 }

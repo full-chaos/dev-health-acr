@@ -102,7 +102,7 @@ func TestAMemberCutAnswerToACountQuestionReconcilesItsCountRow(t *testing.T) {
 	if row.Outcome != contractsv1.ContextFabricRequirementNarrowed || row.CauseOverrun != contractsv1.ContextFabricBudgetOverrunItems || !row.CauseObserved {
 		t.Fatalf("count row = %+v, want narrowed, caused by the item budget, observed", row)
 	}
-	sentence, _ := contractsv1.ContextFabricMemberCutLimitation(members-served, members)
+	sentence, _ := contractsv1.ContextFabricMemberCutLimitation(members-served, members, result.Cohort.ScoreMeaning != "")
 	found := false
 	for _, limitation := range result.Limitations {
 		if limitation == sentence {

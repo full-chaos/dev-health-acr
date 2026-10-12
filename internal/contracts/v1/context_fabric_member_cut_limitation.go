@@ -17,22 +17,32 @@ import (
 const (
 	contextFabricMemberCutPrefix = "This answer leaves out "
 	contextFabricMemberCutOf     = " of the "
-	contextFabricMemberCutRule   = " listed members, because the assembled answer exceeded the item budget: members that no claim, driver or finding names were dropped first, from the end of the list. Ask a narrower question or allow a larger response budget to see the rest."
+	contextFabricMemberCutRule   = " listed members, because the assembled answer exceeded the item budget: members that no claim, driver or finding names were dropped first, "
+	contextFabricMemberCutByRank = "the lowest attention rank first"
+	contextFabricMemberCutByEnd  = "from the end of the list"
+	contextFabricMemberCutAsk    = ". Ask a narrower question or allow a larger response budget to see the rest."
 	contextFabricMemberCutNumber = `(0|[1-9][0-9]{0,8})`
 	contextFabricMemberCutMax    = 999999999
 )
 
 // ContextFabricMemberCutLimitation composes the disclosure. THE SOLE COMPOSER.
-// The second return is false unless the numbers describe a real cut.
-func ContextFabricMemberCutLimitation(cut, listed int) (string, bool) {
+// ranked says which order the cut followed: the lowest attention rank first for
+// a ranked list, the end of the list otherwise. The second return is false
+// unless the numbers describe a real cut.
+func ContextFabricMemberCutLimitation(cut, listed int, ranked bool) (string, bool) {
 	if cut < 1 || listed > contextFabricMemberCutMax || cut >= listed {
 		return "", false
 	}
-	return contextFabricMemberCutPrefix + strconv.Itoa(cut) + contextFabricMemberCutOf + strconv.Itoa(listed) + contextFabricMemberCutRule, true
+	order := contextFabricMemberCutByEnd
+	if ranked {
+		order = contextFabricMemberCutByRank
+	}
+	return contextFabricMemberCutPrefix + strconv.Itoa(cut) + contextFabricMemberCutOf + strconv.Itoa(listed) + contextFabricMemberCutRule + order + contextFabricMemberCutAsk, true
 }
 
 var contextFabricMemberCutPattern = regexp.MustCompile(`^` + regexp.QuoteMeta(contextFabricMemberCutPrefix) + contextFabricMemberCutNumber +
-	regexp.QuoteMeta(contextFabricMemberCutOf) + contextFabricMemberCutNumber + regexp.QuoteMeta(contextFabricMemberCutRule) + `$`)
+	regexp.QuoteMeta(contextFabricMemberCutOf) + contextFabricMemberCutNumber + regexp.QuoteMeta(contextFabricMemberCutRule) +
+	`(` + regexp.QuoteMeta(contextFabricMemberCutByRank) + `|` + regexp.QuoteMeta(contextFabricMemberCutByEnd) + `)` + regexp.QuoteMeta(contextFabricMemberCutAsk) + `$`)
 
 // IsContextFabricMemberCutLimitation reports whether a limitation is one
 // ContextFabricMemberCutLimitation could have composed.
@@ -46,6 +56,6 @@ func IsContextFabricMemberCutLimitation(limitation string) bool {
 	if errCut != nil || errListed != nil {
 		return false
 	}
-	recomposed, ok := ContextFabricMemberCutLimitation(cut, listed)
+	recomposed, ok := ContextFabricMemberCutLimitation(cut, listed, match[3] == contextFabricMemberCutByRank)
 	return ok && recomposed == limitation
 }

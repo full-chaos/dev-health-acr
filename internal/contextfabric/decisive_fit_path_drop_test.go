@@ -109,16 +109,44 @@ func TestADecisiveFitOverTheCeilingDropsPathsBeforeRefusing(t *testing.T) {
 	}
 }
 
-// The fewest drops: one fewer path must not have fit.
+// The fewest drops: the document with one fewer path dropped must not fit as
+// sent. The lever is run on the full 25-path document under a late writer, and
+// the same builder makes the one-fewer candidate that is measured the same way.
 func TestADecisivePathDropTakesTheFewestPathsThatFit(t *testing.T) {
-	result, err := investigateWithLateBytes(t, decisivePathDropCeiling, 6000, &recordingTelemetry{}, chaos6558PathShape{})
+	calls := 0
+	engine := chaos6558PathEngine(t, &calls, &recordingTelemetry{}, chaos6558PathShape{maxBytes: 0})
+	full, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, chaos6558Request())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
-	// One path measures about 1.9 kB; the served document must sit within one
-	// path's size of the ceiling or a drop was wasted.
-	if headroom := decisivePathDropCeiling - servedBytes(t, result); headroom >= 2300 {
-		t.Fatalf("served %d bytes against %d: %d bytes spare, more paths were dropped than needed", servedBytes(t, result), decisivePathDropCeiling, headroom)
+	if len(full.Paths) != chaos6558PathCount {
+		t.Fatalf("fixture served %d paths, want all %d", len(full.Paths), chaos6558PathCount)
+	}
+	engine.servedLateHook = lateWarnings(6000)
+	budget := ResponseBudget{MaxItems: 30, MaxSerializedBytes: decisivePathDropCeiling}
+	candidate, event, ok, err := engine.dropPathsToFitDecisive(context.Background(), storage.Principal{OrgID: "org_1"}, BudgetAssertDecisive, full, budget)
+	if err != nil || !ok {
+		t.Fatalf("dropPathsToFitDecisive ok=%v err=%v, want a fit", ok, err)
+	}
+	best := event.PathsBefore - event.PathsAfter
+	if best < 2 {
+		t.Fatalf("fixture drops %d path(s): the one-fewer comparison needs at least 2", best)
+	}
+	if _, err := engine.finalizeServedAs(context.Background(), storage.Principal{OrgID: "org_1"}, BudgetAssertDecisive, candidate, nil, budget, servedModeMeasureOnly); err != nil {
+		t.Fatalf("the chosen candidate does not fit as sent: %v", err)
+	}
+	_, build, droppable := pathDropCandidates(full)
+	if !droppable {
+		t.Fatal("no droppable path")
+	}
+	fewer, _, built := build(best - 1)
+	if !built {
+		t.Fatal("cannot build the one-fewer candidate")
+	}
+	_, err = engine.finalizeServedAs(context.Background(), storage.Principal{OrgID: "org_1"}, BudgetAssertDecisive, fewer, nil, budget, servedModeMeasureOnly)
+	var refusal AnswerBudgetRefusal
+	if !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+		t.Fatalf("with %d paths dropped instead of %d the document fits (err %v): the lever dropped more than needed", best-1, best, err)
 	}
 }
 

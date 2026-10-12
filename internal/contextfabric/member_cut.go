@@ -91,7 +91,7 @@ func memberCutOrder(result InvestigationResult) (contractsv1.ContextFabricNarrow
 
 // cutMembers drops the first n members of order. It returns false when order
 // holds fewer than n.
-func cutMembers(result InvestigationResult, order []int, n int) (InvestigationResult, bool) {
+func cutMembers(result InvestigationResult, order []int, n int, byRank bool) (InvestigationResult, bool) {
 	if n <= 0 || n > len(order) {
 		return result, false
 	}
@@ -130,7 +130,7 @@ func cutMembers(result InvestigationResult, order []int, n int) (InvestigationRe
 	result.EvidenceRefIDs = withoutCutMemberRefs(result, dropped)
 	// The cut states the rule it followed, once, and an outcome row says what
 	// kind of loss it is: fewer members, nothing else changed.
-	if sentence, ok := contractsv1.ContextFabricMemberCutLimitation(n, listed); ok {
+	if sentence, ok := contractsv1.ContextFabricMemberCutLimitation(n, listed, byRank); ok {
 		composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
 		result.Limitations = composed
 		result.LimitationsDisplaced += displaced
@@ -172,6 +172,14 @@ func (e *Engine) planMemberCut(
 		return attempt, nil
 	}
 	attempt.Before, attempt.Basis = len(result.Cohort.Members), basis
+	// The plan's member chain runs from the population retrieval found to the
+	// members served, and every step in it states its own cause. When the list
+	// this cut starts from was already shorter than that population (a caller's
+	// member limit cut it before the answer was planned, a loss no step
+	// records), a step recorded here would be read as the cause of the whole
+	// drop. The cut's own sentence states it exactly; the chain is left
+	// unrecorded and the cohort sentence says nothing it cannot back.
+	recordStep := population <= attempt.Before
 	over := measured.Measurement.Items.Budgeted() - budget.MaxItems
 	if over <= 0 || len(uncited) == 0 {
 		attempt.Declined = ClaimDepthNothingCuttable
@@ -179,20 +187,22 @@ func (e *Engine) planMemberCut(
 	}
 
 	build := func(n int, telemetry *assemblyTelemetry) (InvestigationResult, bool) {
-		cut, ok := cutMembers(result, uncited, n)
+		cut, ok := cutMembers(result, uncited, n, basis == contractsv1.ContextFabricNarrowingBasisAttentionRank)
 		if !ok {
 			return InvestigationResult{}, false
 		}
 		cut.Completeness.Outcomes = withoutDerivedAssembledRows(cut.Completeness.Outcomes)
 		stepped := *plan
 		stepped.Narrowing = slices.Clone(plan.Narrowing)
-		e.recordPlanNarrowingStep(&stepped, PlanNarrowing{
-			Stage:   contractsv1.ContextFabricPlanNarrowingAssembledResult,
-			Basis:   basis,
-			Before:  attempt.Before,
-			After:   attempt.Before - n,
-			Overrun: contractsv1.ContextFabricBudgetOverrunItems,
-		})
+		if recordStep {
+			e.recordPlanNarrowingStep(&stepped, PlanNarrowing{
+				Stage:   contractsv1.ContextFabricPlanNarrowingAssembledResult,
+				Basis:   basis,
+				Before:  attempt.Before,
+				After:   attempt.Before - n,
+				Overrun: contractsv1.ContextFabricBudgetOverrunItems,
+			})
+		}
 		cardinality, _ := ComputeMembershipCardinality(cut.Cohort, population, stepped.Narrowing)
 		return e.finalizeResult(ctx, principal, cut, stepped, frame, facts, telemetry, pass, cardinality), true
 	}
@@ -267,13 +277,15 @@ func (e *Engine) planMemberCut(
 	}
 	// The step reaches the plan only for a document that is used: served, or
 	// carried on to the byte levers, which finalize against this plan.
-	e.recordPlanNarrowingStep(plan, PlanNarrowing{
-		Stage:   contractsv1.ContextFabricPlanNarrowingAssembledResult,
-		Basis:   basis,
-		Before:  attempt.Before,
-		After:   attempt.After,
-		Overrun: contractsv1.ContextFabricBudgetOverrunItems,
-	})
+	if recordStep {
+		e.recordPlanNarrowingStep(plan, PlanNarrowing{
+			Stage:   contractsv1.ContextFabricPlanNarrowingAssembledResult,
+			Basis:   basis,
+			Before:  attempt.Before,
+			After:   attempt.After,
+			Overrun: contractsv1.ContextFabricBudgetOverrunItems,
+		})
+	}
 	return attempt, nil
 }
 

@@ -462,6 +462,9 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 				// cut's does.
 				event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
 					memberCut.Before, memberCut.After, grouped, false, overrun, memberCut.Basis)
+				// A flat list has no group axis, so the constructor defaults the
+				// basis; the cut chose its own and observed it.
+				event.Basis, event.BasisObserved = memberCut.Basis, true
 				event.PredictedItems = PredictedItemsForPlan(*plan, members)
 				event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 				event.RetryDeclined = declined
