@@ -163,3 +163,122 @@ func TestLiveProjectAndIncidentStatusFilterSelectsByStoredStatus(t *testing.T) {
 		})
 	}
 }
+
+// TestLiveMemberStatusFilterHonoursARestrictedCallersScope projects incidents
+// of one repository whose own authorization names a repository the caller
+// cannot read, beside readable ones, with edges the caller can see. A caller
+// restricted to the readable repository is served only the readable incident
+// holding the status, and the outside-set count includes only readable
+// incidents: the live adapter fills the node attributes the authorization test
+// reads, and the filter reads and counts nothing else.
+func TestLiveMemberStatusFilterHonoursARestrictedCallersScope(t *testing.T) {
+	ctx := context.Background()
+	adapter := newLiveAdapter(t, ctx)
+	orgID := "live-member-status-authz-" + time.Now().UTC().Format("20060102T150405.000000000")
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+
+	observed := time.Now().UTC()
+	started := observed.Add(-48 * time.Hour)
+	readable := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/api"}}
+	hidden := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/secret"}}
+	repository := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acme-api", Label: "acme/api"}
+	entity := func(subject contextfabric.SubjectRef, scope contextfabric.AuthorizationScope, status string) contextfabric.EntityProjection {
+		properties := map[string]contextfabric.ScalarValue{}
+		if status != "" {
+			v := status
+			properties["status"] = contextfabric.ScalarValue{String: &v}
+		}
+		return contextfabric.EntityProjection{
+			Subject: subject, Aliases: []string{}, PreviousNames: []string{}, ProviderIDs: map[string]string{},
+			Properties: properties, Authorization: scope, EvidenceRefIDs: []string{"evidence_" + subject.CanonicalID},
+			ObservedAt: observed, ValidFrom: &started, SourceVersion: "v1",
+		}
+	}
+	incidents := []struct {
+		id, status string
+		scope      contextfabric.AuthorizationScope
+	}{
+		{"incident:readable-open", "open", readable},
+		{"incident:readable-resolved", "resolved", readable},
+		{"incident:readable-unmapped", "Investigating", readable},
+		{"incident:hidden-open", "open", hidden},
+		{"incident:hidden-unmapped", "Paged", hidden},
+		{"incident:hidden-no-status", "", hidden},
+	}
+	entities := []contextfabric.EntityProjection{entity(repository, readable, "")}
+	var relationships []contextfabric.RelationshipProjection
+	for _, in := range incidents {
+		subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectIncident, CanonicalID: in.id, Label: in.id}
+		entities = append(entities, entity(subject, in.scope, in.status))
+		relationships = append(relationships, contextfabric.RelationshipProjection{
+			RelationshipID: "relationship_" + in.id, Type: "BELONGS_TO_REPOSITORY", From: subject, To: repository,
+			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+			Authorization: readable, EvidenceRefIDs: []string{"evidence_" + in.id}, ObservedAt: observed, ValidFrom: &started, SourceVersion: "v1",
+		})
+	}
+	batch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_member_status_authz_0001", OrgID: orgID, Source: "live-test",
+		SourceVersion: "v1", Cursor: "", NextCursor: "cursor-1", GeneratedAt: observed,
+		Entities: entities, Relationships: []contextfabric.RelationshipProjection{}, Contents: []contextfabric.ContentProjection{},
+		Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
+		t.Fatalf("entities ApplyProjectionBatch() error = %v", err)
+	}
+	edges := batch
+	edges.BatchID, edges.Cursor, edges.NextCursor = "batch_member_status_authz_0002", "cursor-1", "cursor-2"
+	edges.Entities, edges.Relationships = []contextfabric.EntityProjection{}, relationships
+	if _, err := adapter.ApplyProjectionBatch(ctx, edges); err != nil {
+		t.Fatalf("relationships ApplyProjectionBatch() error = %v", err)
+	}
+
+	bases := contextfabric.CommitBasisSet{}
+	bases.Record(repository, contextfabric.CommitBasisAuthoritativeIdentity)
+	request := contextfabric.GraphDiscoveryRequest{
+		Request: contextfabric.InvestigationRequest{
+			SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_member_status_authz",
+			Question: "which incidents of acme/api are open?", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Options: contextfabric.InvestigationOptions{
+				MaxSubjectCandidates: 10, MaxCohortMembers: 10, MaxRelationshipPaths: 50,
+				MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144,
+			},
+			Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
+		},
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeDiscoveredCohort, TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		},
+		Resolution: contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{repository}, Candidates: []contextfabric.SubjectCandidate{{
+			ReceiptID: "receipt_anchor", Subject: repository, State: contextfabric.ResolutionCommitted,
+			MatchedTerms: []string{"acme/api"}, MatchReasons: []string{"matched"}, Confidence: 1, EvidenceRefIDs: []string{},
+		}}},
+		Frame: &contextfabric.QuestionFrame{
+			Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+			SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionChildrenOfScope, Scoped: &contextfabric.ScopedSetExpression{
+				AnchorTerms: []string{"acme/api"}, MemberKind: contextfabric.SubjectIncident,
+				MemberQualifier: contextfabric.MemberQualifierStatus, MemberQualifierValue: "open",
+			}},
+			Temporal: contextfabric.TemporalIntentCurrent,
+			Version:  contextfabric.QuestionFrameVersion,
+		},
+		ScopeAnchorKind: contextfabric.SubjectRepository,
+		Bases:           bases,
+	}
+	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/api"}}
+	graphContext, err := adapter.DiscoverContext(ctx, principal, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	got := []string{}
+	if graphContext.Cohort != nil {
+		for _, member := range graphContext.Cohort.Members {
+			got = append(got, member.Subject.CanonicalID)
+		}
+	}
+	sort.Strings(got)
+	if want := []string{"incident:readable-open"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("served incidents = %v, want %v: an incident outside the caller's scope must not be served", got, want)
+	}
+	if want := (contextfabric.MemberStatusOutsideSet{Kind: contextfabric.SubjectIncident, Count: 1}); graphContext.MemberStatusOutsideSet != want {
+		t.Fatalf("outside the known set = %+v, want %+v: only the readable unmapped incident counts", graphContext.MemberStatusOutsideSet, want)
+	}
+}

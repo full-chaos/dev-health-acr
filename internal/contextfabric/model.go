@@ -366,6 +366,10 @@ type GraphContext struct {
 	// narration. Engine bookkeeping about what retrieval saw, never evidence
 	// the bundle carries.
 	CohortPopulation int `json:"-"`
+	// CohortPopulationLowerBound: the retrieval pool was itself cut, so
+	// CohortPopulation counts what was read and more may exist. `json:"-"`
+	// for the same reason as CohortPopulation.
+	CohortPopulationLowerBound bool `json:"-"`
 	// CohortMemberSource (CHAOS-5783) is which discovery arm served this
 	// call's cohort members -- ownership (the anchor's own declared
 	// ownership signal) or hop_walk (incidental graph proximity), empty

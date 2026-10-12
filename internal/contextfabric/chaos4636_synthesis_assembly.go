@@ -348,6 +348,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// Corrected here, once per pass, immediately before synthesis reads
 	// Coverage.Details, mirroring where the cardinality step reads it.
 	graphContext.Coverage = correctKindCensusTruncatedCoverage(graphContext.Coverage, graphContext.Cohort)
+	if params.WorkItemCensus == nil {
+		graphContext.Cohort = withCohortPopulation(graphContext.Cohort, graphContext.CohortPopulation, graphContext.CohortPopulationLowerBound)
+	}
 	inputGraph := graphContext
 	if graphContext.Cohort == nil && clientSynthesisRequested(request) {
 		if candidates, _, _ := projectStatusDrivers(interpretation, params.Resolution.Committed, facts.Facts, nil, nil, synthesisAllocation); len(candidates) > 0 {
@@ -452,6 +455,14 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	}
 	if result.Cohort == nil || params.WorkItemCensus != nil {
 		result.Cohort = graphContext.Cohort
+	}
+	if params.WorkItemCensus == nil {
+		result.Cohort = withCohortPopulation(result.Cohort, graphContext.CohortPopulation, graphContext.CohortPopulationLowerBound)
+		if sentence, ok := cohortListedLimitation(result.Cohort, params.Plan.Narrowing); ok {
+			composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+			result.Limitations = composed
+			result.LimitationsDisplaced += displaced
+		}
 	}
 	if strings.TrimSpace(result.Versions.ServiceVersion) == "" {
 		result.Versions.ServiceVersion = e.serviceVersion

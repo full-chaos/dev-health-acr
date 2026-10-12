@@ -1806,7 +1806,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphValidityUnbounded, false, &unboundedCount, validityReason, "context-fabric:graph-validity-windows")
 	}
 	return contextfabric.GraphContext{
-		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation,
+		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation, CohortPopulationLowerBound: cohortPoolTruncated,
 		CohortMemberSource:     cohortMemberSource,
 		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: statusOutsideSet, AtLeast: statusOutsideAtLeast},
 		MemberStatusPoolCut:    statusPoolCut,
