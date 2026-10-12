@@ -16,6 +16,12 @@ package contextfabric
 // its kind source says where the kind came from. Every stage then reads one
 // kind. A kind the frame refuses as its anchor (not a scoped frame, or the
 // member kind) is not applied. Switched off, nothing changes.
+//
+// THE PERSISTED READING KEEPS THE MODEL'S KIND. The bound kind is this turn's
+// decision, re-made from this turn's admission; persisting it as the reading
+// would let a continuation install it on a later turn whose own admission
+// refused the binding. BuildSemanticState stores the kind the reading stated
+// before the replacement.
 
 // ScopeAnchorKindAnchorBinding: the kind was applied from the anchor binding
 // (a redeemed anchor receipt or an admitted carried binding).
@@ -90,6 +96,8 @@ func (e *Engine) applyBoundAnchorKind(t *anchorBindingTracker, outcome QuestionF
 		t.boundKind = BoundAnchorKindRejectedByFrame
 		return outcome
 	}
+	outcome.WinningSample.ModelScopeAnchorKind = outcome.WinningSample.ScopeAnchorKind
+	outcome.WinningSample.ModelScopeAnchorKindSource = outcome.WinningSample.ScopeAnchorKindSource
 	outcome.WinningSample.ScopeAnchorKind = kind
 	outcome.WinningSample.ScopeAnchorKindSource = ScopeAnchorKindAnchorBinding
 	t.boundKind = BoundAnchorKindAppliedCarried

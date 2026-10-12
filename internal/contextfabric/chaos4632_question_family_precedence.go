@@ -146,6 +146,14 @@ type FamilySample struct {
 	// derived ScopeAnchorKind from the one committed subject, empty when the
 	// model declared it or none exists.
 	ScopeAnchorKindSource ScopeAnchorKindSource
+	// ModelScopeAnchorKind and ModelScopeAnchorKindSource are the kind and
+	// source the reading stated before the anchor binding's kind replaced
+	// them (ScopeAnchorKindSource == ScopeAnchorKindAnchorBinding,
+	// anchor_binding_kind.go); empty otherwise. The persisted reading keeps
+	// these: the binding's kind is decided again on every turn, never carried
+	// as a reading.
+	ModelScopeAnchorKind       SubjectKind
+	ModelScopeAnchorKindSource ScopeAnchorKindSource
 	// RequestedKind is the kind the question asks ABOUT, when one is
 	// determinable. Row 2's other half.
 	RequestedKind SubjectKind

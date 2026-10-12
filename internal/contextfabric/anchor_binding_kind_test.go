@@ -67,11 +67,10 @@ func TestTheBoundAnchorKindLetsTheCountServeTheCarriedRepository(t *testing.T) {
 			if (claims == 1) != tc.counted || claims > 1 {
 				t.Fatalf("served cardinality claims = %d, want counted=%v", claims, tc.counted)
 			}
-			if two.saved == nil || two.saved.ScopeAnchor.Kind != map[bool]SubjectKind{false: SubjectProject, true: SubjectRepository}[tc.on] {
-				t.Fatalf("persisted reading anchor kind = %+v, want the kind every stage read", two.saved.ScopeAnchor)
-			}
-			if tc.on && two.saved.ScopeAnchor.KindSource != ScopeAnchorKindAnchorBinding {
-				t.Fatalf("persisted kind source = %q, want %q", two.saved.ScopeAnchor.KindSource, ScopeAnchorKindAnchorBinding)
+			// The persisted reading is the model's, whatever the switch: the
+			// bound kind is re-decided from each turn's own admission.
+			if two.saved == nil || two.saved.ScopeAnchor.Kind != SubjectProject || two.saved.ScopeAnchor.KindSource != "" {
+				t.Fatalf("persisted reading anchor = %+v, want the model's own kind %q", two.saved.ScopeAnchor, SubjectProject)
 			}
 		})
 	}
@@ -125,32 +124,32 @@ func TestApplyBoundAnchorKindDecisionTable(t *testing.T) {
 	}
 }
 
-// TestABoundKindReadsAsTheSameScopeAnchorOnAContinuation: a kind the engine
-// applied from the binding does not make a continued reading differ from a
-// fresh proposal that states another kind; a committed-hint kind still
-// matches only a proposal that states none.
-func TestABoundKindReadsAsTheSameScopeAnchorOnAContinuation(t *testing.T) {
-	bound := SemanticScopeAnchor{Kind: SubjectRepository, Term: "a", KindSource: ScopeAnchorKindAnchorBinding}
-	hint := SemanticScopeAnchor{Kind: SubjectRepository, Term: "a", KindSource: ScopeAnchorKindCommittedHint}
+// TestThePersistedReadingKeepsTheModelsKind: a reading whose kind was applied
+// from the binding persists the kind the reading stated before it, so no
+// later turn can carry a bound kind its own admission did not make; and a
+// committed-hint kind persists as before.
+func TestThePersistedReadingKeepsTheModelsKind(t *testing.T) {
 	for name, tc := range map[string]struct {
-		carried, fresh SemanticScopeAnchor
-		want           bool
+		sample     FamilySample
+		wantKind   SubjectKind
+		wantSource ScopeAnchorKindSource
 	}{
-		"bound kind, fresh project":     {bound, SemanticScopeAnchor{Kind: SubjectProject, Term: "a"}, true},
-		"bound kind, another term":      {bound, SemanticScopeAnchor{Kind: SubjectRepository, Term: "b"}, false},
-		"committed hint, fresh project": {hint, SemanticScopeAnchor{Kind: SubjectProject, Term: "a"}, false},
-		"committed hint, fresh silent":  {hint, SemanticScopeAnchor{Term: "a"}, true},
+		"bound over a stated kind":    {FamilySample{ScopeAnchorKind: SubjectRepository, ScopeAnchorKindSource: ScopeAnchorKindAnchorBinding, ModelScopeAnchorKind: SubjectProject}, SubjectProject, ""},
+		"bound over a silent model":   {FamilySample{ScopeAnchorKind: SubjectRepository, ScopeAnchorKindSource: ScopeAnchorKindAnchorBinding}, "", ""},
+		"bound over a committed hint": {FamilySample{ScopeAnchorKind: SubjectRepository, ScopeAnchorKindSource: ScopeAnchorKindAnchorBinding, ModelScopeAnchorKind: SubjectTeam, ModelScopeAnchorKindSource: ScopeAnchorKindCommittedHint}, SubjectTeam, ScopeAnchorKindCommittedHint},
+		"a stated kind":               {FamilySample{ScopeAnchorKind: SubjectProject}, SubjectProject, ""},
+		"a committed hint":            {FamilySample{ScopeAnchorKind: SubjectTeam, ScopeAnchorKindSource: ScopeAnchorKindCommittedHint}, SubjectTeam, ScopeAnchorKindCommittedHint},
 	} {
-		if got := sameScopeAnchor(tc.carried, tc.fresh); got != tc.want {
-			t.Errorf("%s: sameScopeAnchor = %v, want %v", name, got, tc.want)
+		state := BuildSemanticState(SemanticStateInput{
+			Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone, WinningSample: tc.sample},
+			FamilyVersion:   QuestionFamilyTableVersion,
+			RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
+		})
+		if state.ScopeAnchor.Kind != tc.wantKind || state.ScopeAnchor.KindSource != tc.wantSource {
+			t.Errorf("%s: persisted anchor = %+v, want kind %q source %q", name, state.ScopeAnchor, tc.wantKind, tc.wantSource)
 		}
-	}
-	state := BuildSemanticState(SemanticStateInput{
-		Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone, WinningSample: FamilySample{ScopeAnchorKind: SubjectRepository, ScopeAnchorKindSource: ScopeAnchorKindAnchorBinding}},
-		FamilyVersion:   QuestionFamilyTableVersion,
-		RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
-	})
-	if _, err := EncodeSemanticState(state); err != nil {
-		t.Fatalf("a reading carrying the anchor-binding kind source does not persist: %v", err)
+		if _, err := EncodeSemanticState(state); err != nil {
+			t.Errorf("%s: the persisted reading does not encode: %v", name, err)
+		}
 	}
 }

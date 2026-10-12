@@ -95,12 +95,6 @@ func sameScopeAnchor(carried, fresh SemanticScopeAnchor) bool {
 	if carried.Kind == fresh.Kind {
 		return true
 	}
-	// A kind the engine applied from the anchor binding is the engine's
-	// decision, not the reading's: the continued turn re-decides it from the
-	// same binding, so the fresh proposal's own kind does not differ it.
-	if carried.KindSource == ScopeAnchorKindAnchorBinding {
-		return true
-	}
 	return carried.KindSource == ScopeAnchorKindCommittedHint && fresh.Kind == ""
 }
 
