@@ -194,7 +194,7 @@ func (r *Resolver) PhraseStructureOffers(ctx context.Context, principal storage.
 			logger = slog.Default()
 		}
 		logger.WarnContext(ctx, "context fabric offer phrasing withheld: no model runtime", "org_id", contextfabric.SanitizeLogAttr(principal.OrgID), "basis", "no_model_configured", "request_id", contextfabric.SanitizeLogAttr(input.RequestID))
-		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, contextfabric.ErrModelUnavailable
+		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, fmt.Errorf("%w: %w: no model runtime configured", contextfabric.ErrModelUnavailable, contextfabric.ErrPlatformModelWithheld)
 	}
 	return phraser.PhraseStructureOffers(ctx, principal, input)
 }

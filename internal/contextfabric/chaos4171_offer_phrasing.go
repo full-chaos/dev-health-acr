@@ -265,7 +265,7 @@ func (r RuntimeOfferPhraser) Phrase(ctx context.Context, principal storage.Princ
 // pass -- "fail-open to structure, never to the model" means a partially-
 // trusted model response is treated the same as an untrusted one.
 func classifyOfferPhrasingDraft(input StructureOfferPhrasingInput, draft StructureOfferPhrasingDraft, callErr error) (OfferPhrasingOutcome, map[string]string) {
-	if errors.Is(callErr, ErrPlatformModelWithheld) || errors.Is(callErr, ErrModelUnavailable) {
+	if errors.Is(callErr, ErrPlatformModelWithheld) {
 		return OfferPhrasingWithheld, nil
 	}
 	if callErr != nil {
