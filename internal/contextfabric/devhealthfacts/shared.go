@@ -919,6 +919,16 @@ import (
 // owning no repository; it is now served over every owned repository, and a set
 // above 2000 rows (per ownership window read) is a named failure. A candidate saved under v183 may hold the
 // truncated mix.
+//
+// v184 -> v185: the compounding-risk deficiency rule basis is also read from
+// the rule's partial-coverage sentence (", computed from N% of its inputs
+// (...)"), which was served as rationale_not_in_rule_sentence_form. A stored
+// answer can differ.
+//
+// -> v190: pull requests and blockers also serve a project subject (a rollup
+// over the project's issues and their linked pull requests), and an
+// investigation of a project keeps that rollup beside the expanded per-item
+// facts. A stored answer about a project can differ.
 const QueryVersion = "devhealthfacts.clickhouse.v190"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
