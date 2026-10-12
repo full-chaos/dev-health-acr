@@ -60,13 +60,21 @@ func TestPullRequestFactProjectRowsFollowTheStrictLinkReading(t *testing.T) {
 	link("stale link to PR 99", "I-stale", policyTreeRepoA, 99, "native")
 	// A pull request nothing links to.
 	pullRequest("PR 7", policyTreeRepoA, 7)
+	// One project id string under two providers: a jira work item must not
+	// reach the linear project that carries the same string.
+	exec("linear project SHARED", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"SHARED", policyTreeOrgID, "linear", nil, "Shared", uint8(1), "active", "", at)
+	exec("jira work item on SHARED", `INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, type, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"JIRA-SHARED", policyTreeRepoC, policyTreeOrgID, "jira", "jira issue", "issue", "open", "", "", "SHARED", at)
+	pullRequest("PR 8", policyTreeRepoA, 8)
+	link("cross-provider link to PR 8", "JIRA-SHARED", policyTreeRepoA, 8, "native")
 
 	subject := func(repoID string, number string) contextfabric.SubjectRef {
 		return pullRequestSubject(repoID, number)
 	}
 	subjects := []contextfabric.SubjectRef{
 		subject(policyTreeRepoA, "1"), subject(policyTreeRepoB, "2"), subject(policyTreeRepoB, "3"),
-		subject(policyTreeRepoA, "5"), subject(policyTreeRepoA, "6"), subject(policyTreeRepoA, "7"), subject(policyTreeRepoA, "99"),
+		subject(policyTreeRepoA, "5"), subject(policyTreeRepoA, "6"), subject(policyTreeRepoA, "7"), subject(policyTreeRepoA, "8"), subject(policyTreeRepoA, "99"),
 	}
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactPullRequests)
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: policyTreeOrgID, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
@@ -117,6 +125,7 @@ func TestPullRequestFactProjectRowsFollowTheStrictLinkReading(t *testing.T) {
 		{policyTreeRepoA, "5", "a pull-request-typed work item is never an issue"},
 		{policyTreeRepoA, "6", "an ambiguous project key is omitted"},
 		{policyTreeRepoA, "7", "no link is no row"},
+		{policyTreeRepoA, "8", "a work item reaches only a project of its own provider"},
 	} {
 		if tier, ok := tierOf(tc.repoID, tc.number); ok {
 			t.Fatalf("pull request %s:%s carries a project row (tier %q): %s", tc.repoID, tc.number, tier, tc.why)

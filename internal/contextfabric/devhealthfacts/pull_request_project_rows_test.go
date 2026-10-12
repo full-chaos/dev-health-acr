@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -113,4 +114,48 @@ func TestPullRequestProjectRowsDropAnUnknownTier(t *testing.T) {
 	if _, present := result.Facts[0].Fields["project_breakdown"]; present {
 		t.Fatalf("a tier outside the vocabulary was served: %+v", result.Facts[0].Fields)
 	}
+}
+
+func TestPullRequestProjectBreakdownReportsRowsItCapped(t *testing.T) {
+	t.Parallel()
+	var linked [][]any
+	for i := 0; i < 65; i++ {
+		linked = append(linked, []any{"repo-1:7", "jira", fmt.Sprintf("P%03d", i), "Project", uint8(3), "native"})
+	}
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(7), "open"}}},
+		{match: "FROM work_graph_issue_pr", rows: linked},
+	}}
+	result := readPullRequestFacts(t, client, pullRequestSubject("repo-1", "7"))
+	table := result.Facts[0].Fields["project_breakdown"].Table
+	if table == nil || len(table.Rows) != contextfabric.MaxFactValueRows {
+		t.Fatalf("project rows = %v, want the table cap %d", table, contextfabric.MaxFactValueRows)
+	}
+	if !result.Truncated {
+		t.Fatal("65 projects were capped to 64 and the result is not marked truncated")
+	}
+	projectRefs := 0
+	for _, ref := range result.Facts[0].EvidenceRefIDs {
+		if strings.Contains(ref, "project") {
+			projectRefs++
+		}
+	}
+	if projectRefs != contextfabric.MaxFactValueRows {
+		t.Fatalf("project evidence refs = %d, want one per kept row (%d)", projectRefs, contextfabric.MaxFactValueRows)
+	}
+}
+
+func TestPullRequestProjectReadAsksForOneMoreRowThanItAdmits(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(7), "open"}}}}}
+	readPullRequestFacts(t, client, pullRequestSubject("repo-1", "7"))
+	for _, query := range client.queries {
+		if strings.Contains(query.statement, "FROM work_graph_issue_pr") {
+			if !strings.Contains(query.statement, "LIMIT 5001") || !strings.Contains(query.statement, "p.provider = w.provider") {
+				t.Fatalf("project link read lacks the limit-plus-one or the provider pairing:\n%s", query.statement)
+			}
+			return
+		}
+	}
+	t.Fatal("no project link read was issued")
 }

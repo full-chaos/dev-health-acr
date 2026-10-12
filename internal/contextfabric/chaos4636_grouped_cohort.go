@@ -231,6 +231,9 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 		placed := make([]cohortGroupAssignment, 0, len(all))
 		for _, assignment := range all {
 			if assignment.kind == plan.GroupKind {
+				if assignment.canonicalID == "" {
+					continue
+				}
 				placed = append(placed, assignment)
 			} else if otherSourceKind == "" {
 				otherSourceKind = assignment.kind
@@ -420,6 +423,10 @@ func groupAssignmentsFromValue(value FactValue) []cohortGroupAssignment {
 			case groupScopeProjectKind:
 				projectID, present := rowString(row, "scope_id")
 				if !present || !isCanonicalProjectID(projectID) {
+					// Not placeable, and still a statement that the source
+					// names the project axis: kept with no identity so the
+					// refusal can name the kind it saw.
+					found = append(found, cohortGroupAssignment{kind: SubjectProject})
 					continue
 				}
 				projectLabel, _ := firstRowString(row, groupLabelColumnCandidates)

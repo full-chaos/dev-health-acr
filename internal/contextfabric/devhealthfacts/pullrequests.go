@@ -109,8 +109,11 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 		// The projects this pull request reaches through the issue link of
 		// record, with the link tier on each row. Absent when no link row is
 		// admitted: a missing link is not an empty project list.
-		if table, projectEvidence, ok := pullRequestProjectBreakdown(projectsByPullRequest[key]); ok {
+		if table, projectEvidence, omitted, ok := pullRequestProjectBreakdown(projectsByPullRequest[key]); ok {
 			fields["project_breakdown"] = table
+			if omitted > 0 {
+				projectLinksTruncated = true
+			}
 			evidence = append(evidence, projectEvidence...)
 		}
 		facts = append(facts, contextfabric.CanonicalFact{

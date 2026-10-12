@@ -26,7 +26,11 @@ const pullRequestProjectScope = "project"
 // One row per (pull request, project), with the strongest link tier among the
 // links that reach that project; the tier is named on the row so a consumer
 // never presents a lower tier as native.
-const pullRequestProjectRowLimit = "5000"
+// pullRequestProjectRowCap is the most rows one read admits; the statement
+// asks for one more so a full page is told apart from a cut one.
+const pullRequestProjectRowCap = 5000
+
+const pullRequestProjectRowLimit = "5001"
 
 var pullRequestProjectLinksSQL = `SELECT concat(toString(l.repo_id), ':', toString(l.pr_number)) AS pr_key,
        pj.provider, pj.id, any(pj.name),
@@ -35,8 +39,8 @@ var pullRequestProjectLinksSQL = `SELECT concat(toString(l.repo_id), ':', toStri
 FROM work_graph_issue_pr AS l FINAL
 INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
 INNER JOIN work_items AS w FINAL ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id
-INNER JOIN ` + projectKeyResolutionSubquery + ` AS p ON p.join_key = w.project_id
-INNER JOIN projects AS pj FINAL ON pj.org_id = l.org_id AND pj.id = p.id
+INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = w.provider AND p.join_key = w.project_id
+INNER JOIN projects AS pj FINAL ON pj.org_id = l.org_id AND pj.provider = p.provider AND pj.id = p.id
 WHERE l.org_id = {org_id:String}
   AND concat(toString(l.repo_id), ':', toString(l.pr_number)) IN {ids:Array(String)}
   AND ` + linkTierRankSQL + ` > 0
@@ -64,10 +68,15 @@ func (p *PullRequestsProvider) readPullRequestProjects(ctx context.Context, orgI
 		return out, false, nil
 	}
 	scanned := 0
+	skipped := 0
 	err = readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadPullRequestProjects", pullRequestProjectLinksSQL, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var key, provider, id, name, tier string
 		var rank uint8
 		scanned++
+		if scanned > pullRequestProjectRowCap {
+			skipped++
+			return nil
+		}
 		if err := row.Scan(&key, &provider, &id, &name, &rank, &tier); err != nil {
 			return err
 		}
@@ -85,7 +94,7 @@ func (p *PullRequestsProvider) readPullRequestProjects(ctx context.Context, orgI
 		rows := out[key]
 		sort.Slice(rows, func(i, j int) bool { return rows[i].canonicalID < rows[j].canonicalID })
 	}
-	return out, scanned >= 5000, nil
+	return out, skipped > 0, nil
 }
 
 // validLinkTier is the closed provenance vocabulary of the link of record.
@@ -100,9 +109,9 @@ func validLinkTier(tier string) bool {
 // pullRequestProjectBreakdown is the project_breakdown table of one pull
 // request: one row per project it reaches, carrying the project's canonical
 // id, its name and the link tier.
-func pullRequestProjectBreakdown(projects []pullRequestProjectRow) (value contextfabric.FactValue, evidence []string, ok bool) {
+func pullRequestProjectBreakdown(projects []pullRequestProjectRow) (value contextfabric.FactValue, evidence []string, omitted int, ok bool) {
 	if len(projects) == 0 {
-		return contextfabric.FactValue{}, nil, false
+		return contextfabric.FactValue{}, nil, 0, false
 	}
 	rows := make([]contextfabric.FactValueRow, 0, len(projects))
 	for _, project := range projects {
@@ -115,13 +124,17 @@ func pullRequestProjectBreakdown(projects []pullRequestProjectRow) (value contex
 			fields["scope_name"] = contextfabric.StringFactValue(project.label)
 		}
 		rows = append(rows, contextfabric.FactValueRow{Fields: fields})
+	}
+	rows, omitted = capFactValueRows(rows)
+	// Evidence only for the rows the table keeps: a cited project must be one
+	// the served table names.
+	for _, project := range projects[:len(rows)] {
 		evidence = append(evidence, evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, project.provider+":"+project.id))
 	}
-	rows, _ = capFactValueRows(rows)
 	return contextfabric.TableFactValue(contextfabric.FactTable{
 		Shape:        contextfabric.FactTableBreakdown,
 		Key:          []string{"scope_id"},
 		Observations: []string{"scope", "scope_name", "link_tier"},
 		Rows:         rows,
-	}), evidence, true
+	}), evidence, omitted, true
 }

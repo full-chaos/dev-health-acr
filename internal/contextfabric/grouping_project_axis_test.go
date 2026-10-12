@@ -100,3 +100,12 @@ func TestMixedTeamAndProjectRowsPlaceByTheAskedAxisOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestAProjectRowWithoutACanonicalIdStillNamesTheSourceKindForARefusal(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{pullRequestBreakdownFact("pull_request:r:1", map[string]string{"scope": "project", "scope_id": "raw-key"})}
+	groups, _, outcome := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, prCohort("pull_request:r:1"), facts)
+	if len(groups) != 0 || outcome.Refusal != CohortGroupingRefusalGroupKindSourceMismatch || outcome.SourceKind != SubjectProject {
+		t.Fatalf("groups=%d outcome=%+v, want a kind mismatch naming the project source", len(groups), outcome)
+	}
+}
