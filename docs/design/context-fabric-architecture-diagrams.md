@@ -565,8 +565,18 @@ it reads the link with the same strict semantics as the project scope
 expansion (the pull request must exist, pull-request-typed work items are not
 issues) and names the weakest counted tier (`link_tier` per repository,
 `repository_link_basis` per fact). Blocked items in no admitted link row are
-disclosed in `blocked_work_items_without_link_count`. The repository set is
-still the team's `team_repo_ownership` rows, like the other team rollups. The
+disclosed in `blocked_work_items_without_link_count`. A team reaches work
+through its `team_repo_ownership` rows AND through the projects it owns
+(`team_project_ownership`): the issues of an owned project reach repositories
+only through their linked pull request rows. The blocker total is the union of
+both arms, an item in an owned repository and an owned project counted once,
+and `project_blocked_work_items_current` says how many came through a project.
+The pull request rollup counts an owned repository whole and a repository
+reached only through an owned project by its linked pull requests alone
+(`reach_basis`, `link_tier`, `project_reached_repository_count`); deployments,
+incidents and metrics stay owned-repository rollups and name the
+project-reached repositories they have no rows for (`not_applicable` with the
+cause when nothing else was served). The
 CHAOS-4099 fact-scope expander
 (`devhealthfacts/chaos4099_scope_expander.go`, `projectRepositories`,
 `projectRepositoriesAsOf`; `teamRepositories` in
