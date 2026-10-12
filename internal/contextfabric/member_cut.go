@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"sort"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -122,15 +123,19 @@ func memberCutBasis(cohort *Cohort) (contractsv1.ContextFabricNarrowingBasis, bo
 // AttentionRank first (a member ranking did not run for counts as worst), as
 // the Members array stays in pool order and says nothing of attention; for an
 // unranked list sorted by canonical id, from the end of the list.
-func memberCutOrder(result InvestigationResult) (contractsv1.ContextFabricNarrowingBasis, []int, bool) {
+func memberCutOrder(result InvestigationResult, draft *InvestigationResult) (contractsv1.ContextFabricNarrowingBasis, []int, bool) {
 	basis, ok := memberCutBasis(result.Cohort)
 	if !ok {
 		return "", nil, false
 	}
 	cited := walkListSubjectCited(result)
+	prose := ""
+	if draft != nil {
+		prose = draftProse(*draft)
+	}
 	order := make([]int, 0, len(result.Cohort.Members))
 	for index, member := range result.Cohort.Members {
-		if !cited[member.Subject.CanonicalID] {
+		if !cited[member.Subject.CanonicalID] && !namedInProse(member.Subject, prose) {
 			order = append(order, index)
 		}
 	}
@@ -148,6 +153,40 @@ func memberCutOrder(result InvestigationResult) (contractsv1.ContextFabricNarrow
 		return order[a] > order[b]
 	})
 	return basis, order, true
+}
+
+// draftProse is every sentence the model wrote in the draft, lowercased, in one
+// string: the judgment, the current state, the pressures, the driver and
+// finding summaries, the limitations and the warnings. A member the prose names
+// is not a member the answer can lose without that prose describing a list it
+// no longer has.
+func draftProse(draft InvestigationResult) string {
+	parts := []string{draft.DirectJudgment, draft.CurrentState, draft.DeterministicAnswer}
+	parts = append(parts, draft.StrongestPressures...)
+	parts = append(parts, draft.Limitations...)
+	parts = append(parts, draft.Warnings...)
+	for _, driver := range draft.Drivers {
+		parts = append(parts, driver.Title, driver.Summary, driver.Qualification)
+	}
+	for _, findings := range [][]Finding{draft.RemainingWork, draft.ReadinessGaps, draft.Conflicts} {
+		for _, finding := range findings {
+			parts = append(parts, finding.Kind, finding.Summary)
+		}
+	}
+	return strings.ToLower(strings.Join(parts, "\n"))
+}
+
+// namedInProse reports whether the member's canonical id or label appears in
+// the prose. A label too short to be a name is not matched, and a spurious
+// match only keeps a member listed.
+func namedInProse(subject SubjectRef, prose string) bool {
+	for _, name := range []string{subject.CanonicalID, subject.Label} {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if len(name) >= 3 && strings.Contains(prose, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // memberCutOutcomeRow: NARROWED in SCOPE (fewer members listed; each that
@@ -226,7 +265,7 @@ func (e *Engine) planMemberCut(
 		attempt.Declined = MemberCutDraftCarriesCohort
 		return attempt, nil
 	}
-	basis, order, ok := memberCutOrder(result)
+	basis, order, ok := memberCutOrder(result, firstPass.Draft)
 	if !ok {
 		attempt.Declined = MemberCutNoStatedOrder
 		return attempt, nil

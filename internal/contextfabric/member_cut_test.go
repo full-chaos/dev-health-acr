@@ -28,6 +28,13 @@ func memberCutEngine(t *testing.T, gaps int, cited []int, reserve time.Duration,
 }
 
 func memberCutEngineAtCeiling(t *testing.T, gaps int, cited []int, reserve time.Duration, maxBytes int64, population int, telemetry *recordingTelemetry) *Engine {
+	return memberCutEngineNaming(t, gaps, cited, reserve, maxBytes, population, telemetry, nil)
+}
+
+// memberCutEngineNaming is the fixture with a hook that writes the draft's
+// current_state from the cohort it was given, so a row can have the prose name
+// a member that no claim, driver or finding does.
+func memberCutEngineNaming(t *testing.T, gaps int, cited []int, reserve time.Duration, maxBytes int64, population int, telemetry *recordingTelemetry, currentState func(*Cohort) string) *Engine {
 	t.Helper()
 	frame := QuestionFrame{
 		Goals: []InvestigationGoal{GoalCountOrAggregate},
@@ -80,7 +87,7 @@ func memberCutEngineAtCeiling(t *testing.T, gaps int, cited []int, reserve time.
 				findings = append(findings, finding)
 			}
 			return InvestigationResult{
-				Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: "Nominal.",
+				Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: currentStateFor(currentState, input.Graph.Cohort),
 				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{},
 				ReadinessGaps: findings, Paths: []RelationshipPath{}, Conflicts: []Finding{},
 				Limitations: []string{}, EvidenceRefIDs: refs, ClaimedFacts: claims,
@@ -305,7 +312,7 @@ func TestARankedListIsCutByAttentionRankNotByPoolPosition(t *testing.T) {
 		Cohort:        &Cohort{Kind: SubjectProject, Members: members, Rationale: "owned", Complete: true, ScoreMeaning: contractsv1.ContextFabricCohortScoreMeaningAttention},
 		ReadinessGaps: []Finding{{FindingID: "finding_gap_00", Kind: "relationship", Summary: "A gap.", Subjects: []SubjectRef{members[5].Subject}, EvidenceRefIDs: []string{"evidence_gap_01"}}},
 	}
-	basis, order, ok := memberCutOrder(result)
+	basis, order, ok := memberCutOrder(result, nil)
 	if !ok || basis != contractsv1.ContextFabricNarrowingBasisAttentionRank {
 		t.Fatalf("basis %q ok=%v, want attention_rank", basis, ok)
 	}
@@ -338,7 +345,7 @@ func TestAnUnrankedSortedListIsCutFromTheEndAndTheSentenceSaysSo(t *testing.T) {
 		Cohort:        &Cohort{Kind: SubjectProject, Members: members, Rationale: "owned", Complete: true},
 		ReadinessGaps: []Finding{{FindingID: "finding_gap_00", Kind: "relationship", Summary: "A gap.", Subjects: []SubjectRef{members[5].Subject}, EvidenceRefIDs: []string{"evidence_gap_01"}}},
 	}
-	basis, order, ok := memberCutOrder(result)
+	basis, order, ok := memberCutOrder(result, nil)
 	if !ok || basis != contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
 		t.Fatalf("basis %q ok=%v, want canonical_id_lexical", basis, ok)
 	}
@@ -352,5 +359,49 @@ func TestAnUnrankedSortedListIsCutFromTheEndAndTheSentenceSaysSo(t *testing.T) {
 	}
 	if !contractsv1.IsContextFabricMemberCutLimitation(wantSentence) {
 		t.Fatal("the end-of-list variant is not recognised by the parser")
+	}
+}
+
+func currentStateFor(hook func(*Cohort) string, cohort *Cohort) string {
+	if hook == nil {
+		return "Nominal."
+	}
+	return hook(cohort)
+}
+
+// A member the draft's prose names, and no claim, driver or finding does, is
+// not cuttable: the sentence would describe a list the answer no longer has.
+func TestAMemberNamedOnlyInTheDraftProseIsNotCut(t *testing.T) {
+	last := memberCutCallerCap - 1
+	named := fmt.Sprintf("project_%03d", last)
+	engine := memberCutEngineNaming(t, memberCutGaps, nil, 0, 0, memberCutPopulation, &recordingTelemetry{}, func(cohort *Cohort) string {
+		return "The review queue on " + strings.ToUpper(named) + " is the one to watch."
+	})
+	result, err := investigateMemberCut(t, engine)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(result.Cohort.Members) >= memberCutCallerCap {
+		t.Fatalf("served %d members: the case did not cut", len(result.Cohort.Members))
+	}
+	kept := false
+	for _, member := range result.Cohort.Members {
+		if member.Subject.CanonicalID == named {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Fatalf("%s is named in the draft's current_state and was cut", named)
+	}
+	// The same fixture without the prose cuts it: the lowest attention rank
+	// goes first, and with equal scores that is the last of the pool.
+	plain, err := investigateMemberCut(t, memberCutEngine(t, memberCutGaps, nil, 0, &recordingTelemetry{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, member := range plain.Cohort.Members {
+		if member.Subject.CanonicalID == named {
+			t.Fatalf("control: %s was kept without the prose naming it; the row cannot discriminate", named)
+		}
 	}
 }
