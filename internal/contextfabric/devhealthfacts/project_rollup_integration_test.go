@@ -269,6 +269,9 @@ SELECT concat(?, repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'issue
 		return out
 	}
 	filler("filler-", blockerMemoryFillerItems)
+	// The first read of a fresh server peaks high on cold caches; it is not
+	// measured.
+	read()
 	small := read()
 	filler("filler-more-", blockerMemoryMoreFillerItems)
 	large := read()
