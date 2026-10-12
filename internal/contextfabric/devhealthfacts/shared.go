@@ -868,7 +868,14 @@ import (
 // rule's own basis (score, band, time) beside the team's latest
 // compounding_risk_daily row and a moved-since-the-rule flag. An answer saved
 // under v175 quotes the rule-time score as the team's current risk.
-const QueryVersion = "devhealthfacts.clickhouse.v178"
+//
+// v177 -> v178: with the anchor binding carry switch on, a same-question
+// follow-up carries its anchor only from the admitted binding (never from the
+// confirmed-need ledger's engine-committed entry, which is withheld from
+// resolution when the binding does not carry it), and a carried anchor the
+// resolver offered but did not commit is listed first in the clarification,
+// so a stored answer can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v179"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

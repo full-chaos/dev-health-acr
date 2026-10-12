@@ -28,6 +28,11 @@ type EngineOptions struct {
 	// (anchor_binding.go): no binding is computed, persisted or reported.
 	// Zero value = the shadow runs. Served output is identical either way.
 	DisableAnchorBindingShadow bool
+	// AnchorBindingCarryEnabled makes the admitted anchor binding the only
+	// source of a same-question continuation's carried anchor
+	// (anchor_binding_carry.go). Zero value = off: the confirmed-need
+	// ledger's carry runs as before. Needs the shadow binding.
+	AnchorBindingCarryEnabled bool
 	// AnchorBindingMaxAge is the age past which a carried anchor proof is not
 	// admitted (anchor_admission.go). Zero selects
 	// DefaultAnchorBindingMaxAge; anything else must lie in
@@ -1294,6 +1299,7 @@ type Engine struct {
 	anchorFreshness                             AnchorFreshnessReader
 	anchorBindingMaxAgeSetting                  time.Duration
 	anchorBindingCountEnabled                   bool
+	anchorBindingCarryEnabled                   bool
 	reuseModelIdentityResolver                  ReuseModelIdentityResolver
 	reuseProjectionVersion                      string
 	reuseModelIdentities                        []string
@@ -1350,6 +1356,11 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 	if err := validateAnchorBindingMaxAge(options.AnchorBindingMaxAge); err != nil {
 		return nil, err
 	}
+	if options.AnchorBindingCarryEnabled && options.DisableAnchorBindingShadow {
+		// The carry is owned by the shadow binding; without one the switch
+		// would silently either carry nothing or fall back to the ledger.
+		return nil, errors.New("context fabric anchor binding carry needs the shadow anchor binding")
+	}
 	var recorder StoredResultAuthorizationRecorder
 	if dependencies.Telemetry != nil {
 		recorder = dependencies.Telemetry
@@ -1368,6 +1379,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		anchorFreshness:            dependencies.AnchorFreshness,
 		anchorBindingMaxAgeSetting: options.AnchorBindingMaxAge,
 		anchorBindingCountEnabled:  options.AnchorBindingCountEnabled,
+		anchorBindingCarryEnabled:  options.AnchorBindingCarryEnabled,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
 		structureSelectionSink:     dependencies.StructureSelectionSink,
@@ -2847,6 +2859,23 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// One anchor kind for every stage below: the binding's, when the switch
 	// is on and it names one the frame admits (anchor_binding_kind.go).
 	familyOutcome = e.applyBoundAnchorKind(anchorShadow, familyOutcome)
+	// WHO CARRIES THE ANCHOR, decided once, here, before EITHER resolution
+	// call reads the ledger (anchor_binding_carry.go). With the binding carry
+	// switched on, only the admitted binding carries: a ledger subject_anchor
+	// entry the binding does not carry is withheld from appliedNeeds now, so
+	// neither the offers-only call nor the decisive one receives it as a
+	// selection, and the served carried entry discloses it as withheld.
+	// Switched off, nothing changes here and the ledger's carry runs below.
+	var anchorSupersededEntry confirmedStructureMember
+	var anchorSupersededByCaller bool
+	var anchorWithheldDisposition contractsv1.ContextFabricStructureDisposition
+	carriedHint, carries := e.bindingCarryHint(anchorShadow, graphRequest.RequestedScope.SubjectHints, structureCanon.Confirmed)
+	if e.anchorBindingCarryEnabled {
+		if entry, disposition, withheld := withholdLedgerAnchor(anchorShadow, appliedNeeds, carriedHint, carries); withheld {
+			anchorSupersededEntry, anchorSupersededByCaller, anchorWithheldDisposition = entry, true, disposition
+			delete(appliedNeeds, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+		}
+	}
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,
 		// but it now composes kind/handle/candidate offers from an
@@ -3006,18 +3035,27 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// but the caller's own hint is owed priority over a carry this engine
 	// merely remembered, so the carry is dropped here, before it ever
 	// reaches resolution, rather than left to compete with it.
-	var anchorSupersededEntry confirmedStructureMember
-	var anchorSupersededByCaller bool
-	if hint, ok := engineCommittedAnchorHint(appliedNeeds); ok {
-		if callerSuppliedHintOfKind(graphRequest.RequestedScope.SubjectHints, hint.Kind) {
+	if !e.anchorBindingCarryEnabled {
+		// Switched off: the ledger's own carry, exactly as before. With the
+		// switch on, the binding decided the carry after admission above.
+		ledgerHint, ledgerCarries := engineCommittedAnchorHint(appliedNeeds)
+		if ledgerCarries && callerSuppliedHintOfKind(graphRequest.RequestedScope.SubjectHints, ledgerHint.Kind) {
 			anchorSupersededEntry = appliedNeeds[contractsv1.ContextFabricStructureNeedSubjectAnchor]
 			anchorSupersededByCaller = true
+			anchorWithheldDisposition = contractsv1.ContextFabricStructureDispositionSupersededByCaller
 			delete(appliedNeeds, contractsv1.ContextFabricStructureNeedSubjectAnchor)
-		} else if len(graphRequest.RequestedScope.SubjectHints) < 50 {
-			// 50: the same ContextFabricRequestedScope.SubjectHints v1 bound
-			// resolvePriorSubjectHints' own cap above enforces.
-			graphRequest.RequestedScope.SubjectHints = append(append([]SubjectHint(nil), graphRequest.RequestedScope.SubjectHints...), hint)
+			ledgerCarries = false
 		}
+		carriedHint, carries = ledgerHint, ledgerCarries
+	}
+	if carries {
+		// maxCarrySubjectHints: the same ContextFabricRequestedScope.SubjectHints
+		// v1 bound resolvePriorSubjectHints' own cap above enforces.
+		appended := len(graphRequest.RequestedScope.SubjectHints) < maxCarrySubjectHints
+		if appended {
+			graphRequest.RequestedScope.SubjectHints = append(append([]SubjectHint(nil), graphRequest.RequestedScope.SubjectHints...), carriedHint)
+		}
+		anchorShadow.recordCarryAppend(appended)
 	}
 	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed, appliedNeeds), familyOutcome.Frame, scopeAnchorKind)
 	if err != nil {
@@ -3072,6 +3110,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		captureSkipReasonForTelemetry = CaptureSkipReasonResolutionError
 		return InvestigationResult{}, stageError(StageSubjectResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
+	// A carried anchor resolution did not commit, on a turn that still asks
+	// which subject was meant: the remembered identity is offered first.
+	resolution = anchorShadow.offerRememberedAnchor(resolution)
 	anchorShadow.observeResolution(AnchorBindingEvaluationResolved, resolution, commitBases)
 	// CHAOS-5788: whether THIS turn's own resolution just bound a committed
 	// subject to the frame's own anchor -- computed here, once, from the
@@ -3104,6 +3145,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		haveDroppedAnchor = true
 	}
 	anchorDispositionForTelemetry = anchorLedgerDisposition(anchorAgreementForTelemetry, anchorSupersededByCaller)
+	if anchorSupersededByCaller {
+		// The entry was withheld before resolution ran: by the caller's own
+		// hint (switch off or on), or by the binding (switch on).
+		anchorDispositionForTelemetry = anchorWithheldDisposition
+	}
 	// The SAME ledgerForExit every pre-resolution exit above already reads
 	// through, resolutionRan=true this time: every exit below this point
 	// (the decisive save, the supersession veto, and every terminal that
