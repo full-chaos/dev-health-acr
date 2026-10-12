@@ -229,10 +229,13 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 	)
 	// Every carry decision with the carry switch on, through the real engine.
 	recommitted := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}}, bases: provenCommitBases(probeAlpha)}
-	betaOffered := needTurnResponse{resolution: SubjectResolution{Committed: []SubjectRef{}, Candidates: []SubjectCandidate{{
-		ReceiptID: "receipt_vocab_carry_beta", Subject: probeBeta, State: ResolutionAmbiguous,
-		MatchedTerms: []string{"a"}, MatchReasons: []string{"matched"}, Confidence: 0.4, EvidenceRefIDs: []string{},
-	}}}, bases: CommitBasisSet{}}
+	alphaOffered := offeringResponse(probeOffer("receipt_vocab_carry_beta", probeBeta), probeOffer("receipt_vocab_carry_alpha", probeAlpha))
+	capFull := func(r *InvestigationRequest) {
+		for i := 0; i < maxCarrySubjectHints; i++ {
+			id := fmt.Sprintf("team:vocab-cap-%02d", i)
+			r.RequestedScope.SubjectHints = append(r.RequestedScope.SubjectHints, SubjectHint{Kind: SubjectTeam, ID: id, Label: id, Source: "ask-dev"})
+		}
+	}
 	carryStep := func(id string, response needTurnResponse, mutate func(*InvestigationRequest), seed func(*staticResultStore)) anchorProbeStep {
 		return anchorProbeStep{request: followUp(id, "", mutate), seed: seed, verified: true, carryOn: true, response: response}
 	}
@@ -243,7 +246,28 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 			editBindingMember(s, func(b *AnchorBinding) { b.PolicyVersion = "" })
 		})))},
 		anchorSiteScenario{name: "carry caller superseded", run: anchorProbeScenario(first, carryStep("request_vocab_carry_caller", emptyProbeResponse(), betaHint, nil))},
-		anchorSiteScenario{name: "carry remembered offered", run: anchorProbeScenario(first, carryStep("request_vocab_carry_offered", betaOffered, nil, nil))},
+		anchorSiteScenario{name: "carry remembered offered", run: anchorProbeScenario(first, carryStep("request_vocab_carry_offered", alphaOffered, nil, nil))},
+		anchorSiteScenario{name: "carry cap full", run: anchorProbeScenario(first, carryStep("request_vocab_carry_cap", emptyProbeResponse(), capFull, nil))},
+		anchorSiteScenario{name: "carry receipt superseded", run: func(t *testing.T, sink EngineTelemetry, rec *recordingTelemetry, off bool) InvestigationResult {
+			rig := newAnchorProbeRig(t, off)
+			rig.telemetry, rig.engine.telemetry = rec, sink
+			rig.interpreter.read(SubjectRepository, false)
+			one := rig.turn(t, needTurnRequest("request_vocab_carry_receipt_one", true), identityProvenResponse(probeAlpha))
+			rig.verify()
+			rig.engine.anchorBindingCarryEnabled = !off
+			two := rig.turn(t, continuingNeedTurn(needTurnRequest("request_vocab_carry_receipt_two", true), one.result.ResultID), anchorOfferingResponse())
+			rig.engine.anchorVerifier = func(context.Context, string, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+				return true, AnchorVerificationValid
+			}
+			rig.engine.anchorMembershipVerifier = func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+				return true, AnchorVerificationValid
+			}
+			request := continuingNeedTurnAgain(needTurnRequest("request_vocab_carry_receipt_three", true), needTurnRequest("request_vocab_carry_receipt_two", true), two.result.ResultID)
+			if two.result.StructureNeeds != nil && len(two.result.StructureNeeds.AnchorOptions) == 1 {
+				request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: two.result.ResultID, ReceiptID: two.result.StructureNeeds.AnchorOptions[0].ReceiptID}}
+			}
+			return rig.turn(t, request, emptyProbeResponse()).result
+		}},
 	)
 	// The subject-substitution guard's firing and redeemed outcomes, through
 	// the real engine, so the line's substitution_guard key reaches each one.

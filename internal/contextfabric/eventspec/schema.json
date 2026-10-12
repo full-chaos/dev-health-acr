@@ -421,6 +421,8 @@
           "not_admitted",
           "injected",
           "caller_superseded",
+          "receipt_superseded",
+          "cap_full",
           "remembered_offered",
           "undeclared"
         ]

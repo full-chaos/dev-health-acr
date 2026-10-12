@@ -1344,6 +1344,11 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 	if err := validateAnchorBindingMaxAge(options.AnchorBindingMaxAge); err != nil {
 		return nil, err
 	}
+	if options.AnchorBindingCarryEnabled && options.DisableAnchorBindingShadow {
+		// The carry is owned by the shadow binding; without one the switch
+		// would silently either carry nothing or fall back to the ledger.
+		return nil, errors.New("context fabric anchor binding carry needs the shadow anchor binding")
+	}
 	var recorder StoredResultAuthorizationRecorder
 	if dependencies.Telemetry != nil {
 		recorder = dependencies.Telemetry
@@ -2838,6 +2843,23 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// The parent binding is admitted (or refused) once, here, after the
 	// ownership read it compares against and before any proof is weighed.
 	e.admitAnchorBindingParent(ctx, principal, request, binding, anchorShadow)
+	// WHO CARRIES THE ANCHOR, decided once, here, before EITHER resolution
+	// call reads the ledger (anchor_binding_carry.go). With the binding carry
+	// switched on, only the admitted binding carries: a ledger subject_anchor
+	// entry the binding does not carry is withheld from appliedNeeds now, so
+	// neither the offers-only call nor the decisive one receives it as a
+	// selection, and the served carried entry discloses it as withheld.
+	// Switched off, nothing changes here and the ledger's carry runs below.
+	var anchorSupersededEntry confirmedStructureMember
+	var anchorSupersededByCaller bool
+	var anchorWithheldDisposition contractsv1.ContextFabricStructureDisposition
+	carriedHint, carries := e.bindingCarryHint(anchorShadow, graphRequest.RequestedScope.SubjectHints, structureCanon.Confirmed)
+	if e.anchorBindingCarryEnabled {
+		if entry, disposition, withheld := withholdLedgerAnchor(anchorShadow, appliedNeeds, carriedHint, carries); withheld {
+			anchorSupersededEntry, anchorSupersededByCaller, anchorWithheldDisposition = entry, true, disposition
+			delete(appliedNeeds, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+		}
+	}
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,
 		// but it now composes kind/handle/candidate offers from an
@@ -2997,28 +3019,27 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// but the caller's own hint is owed priority over a carry this engine
 	// merely remembered, so the carry is dropped here, before it ever
 	// reaches resolution, rather than left to compete with it.
-	var anchorSupersededEntry confirmedStructureMember
-	var anchorSupersededByCaller bool
-	ledgerHint, ledgerCarries := engineCommittedAnchorHint(appliedNeeds)
-	if ledgerCarries && callerSuppliedHintOfKind(graphRequest.RequestedScope.SubjectHints, ledgerHint.Kind) {
-		anchorSupersededEntry = appliedNeeds[contractsv1.ContextFabricStructureNeedSubjectAnchor]
-		anchorSupersededByCaller = true
-		delete(appliedNeeds, contractsv1.ContextFabricStructureNeedSubjectAnchor)
-		ledgerCarries = false
-	}
-	// WHO CARRIES THE ANCHOR. With the binding carry switched on, only the
-	// admitted binding does (anchor_binding_carry.go): the ledger's
-	// engine_committed entry is never injected, and a refused or absent
-	// binding injects nothing. Switched off, the ledger's carry runs as
-	// before.
-	carriedHint, carries := e.bindingCarryHint(anchorShadow, graphRequest.RequestedScope.SubjectHints)
-	if !e.anchorBindingCarryEnabled || anchorShadow == nil {
+	if !e.anchorBindingCarryEnabled {
+		// Switched off: the ledger's own carry, exactly as before. With the
+		// switch on, the binding decided the carry after admission above.
+		ledgerHint, ledgerCarries := engineCommittedAnchorHint(appliedNeeds)
+		if ledgerCarries && callerSuppliedHintOfKind(graphRequest.RequestedScope.SubjectHints, ledgerHint.Kind) {
+			anchorSupersededEntry = appliedNeeds[contractsv1.ContextFabricStructureNeedSubjectAnchor]
+			anchorSupersededByCaller = true
+			anchorWithheldDisposition = contractsv1.ContextFabricStructureDispositionSupersededByCaller
+			delete(appliedNeeds, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+			ledgerCarries = false
+		}
 		carriedHint, carries = ledgerHint, ledgerCarries
 	}
-	if carries && len(graphRequest.RequestedScope.SubjectHints) < 50 {
-		// 50: the same ContextFabricRequestedScope.SubjectHints v1 bound
-		// resolvePriorSubjectHints' own cap above enforces.
-		graphRequest.RequestedScope.SubjectHints = append(append([]SubjectHint(nil), graphRequest.RequestedScope.SubjectHints...), carriedHint)
+	if carries {
+		// maxCarrySubjectHints: the same ContextFabricRequestedScope.SubjectHints
+		// v1 bound resolvePriorSubjectHints' own cap above enforces.
+		appended := len(graphRequest.RequestedScope.SubjectHints) < maxCarrySubjectHints
+		if appended {
+			graphRequest.RequestedScope.SubjectHints = append(append([]SubjectHint(nil), graphRequest.RequestedScope.SubjectHints...), carriedHint)
+		}
+		anchorShadow.recordCarryAppend(appended)
 	}
 	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed, appliedNeeds), familyOutcome.Frame, scopeAnchorKind)
 	if err != nil {
@@ -3108,6 +3129,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		haveDroppedAnchor = true
 	}
 	anchorDispositionForTelemetry = anchorLedgerDisposition(anchorAgreementForTelemetry, anchorSupersededByCaller)
+	if anchorSupersededByCaller {
+		// The entry was withheld before resolution ran: by the caller's own
+		// hint (switch off or on), or by the binding (switch on).
+		anchorDispositionForTelemetry = anchorWithheldDisposition
+	}
 	// The SAME ledgerForExit every pre-resolution exit above already reads
 	// through, resolutionRan=true this time: every exit below this point
 	// (the decisive save, the supersession veto, and every terminal that
