@@ -40,6 +40,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -155,6 +156,13 @@ type AnchorBinding struct {
 	// ProvenFreshness is omitted when not recorded, so a binding written with
 	// no freshness encodes exactly as one written before the field existed.
 	ProvenFreshness AnchorFreshness `json:"proven_freshness,omitzero"`
+	// PolicyVersion is the binding policy the identity was proven under
+	// (AnchorBindingPolicyVersion); ProvenAt the proving turn's clock; Witness
+	// every identity that turn proved, bounded (anchor_admission.go). All
+	// three travel with OriginResultID.
+	PolicyVersion string    `json:"policy_version,omitempty"`
+	ProvenAt      time.Time `json:"proven_at,omitzero"`
+	Witness       []string  `json:"witness,omitempty"`
 }
 
 // active reports whether the binding holds an identity.
@@ -199,14 +207,29 @@ func ValidateAnchorBinding(b AnchorBinding) error {
 	if err := validateAnchorFreshness(b.ProvenFreshness); err != nil {
 		return err
 	}
+	if len(b.PolicyVersion) > SemanticStateMaxTermBytes {
+		return invalid("policy_version is %d bytes, exceeds %d", len(b.PolicyVersion), SemanticStateMaxTermBytes)
+	}
+	if len(b.Witness) > AnchorBindingWitnessMax {
+		return invalid("witness holds %d identities, exceeds %d", len(b.Witness), AnchorBindingWitnessMax)
+	}
+	for _, id := range b.Witness {
+		if id == "" || len(id) > SemanticStateMaxTermBytes {
+			return invalid("a witness identity is empty or exceeds %d bytes", SemanticStateMaxTermBytes)
+		}
+	}
 	if !b.active() {
-		if b.Kind != "" || b.CanonicalID != "" || b.Proof != AnchorBindingProofNone || b.ContenderKind != "" || b.ContenderID != "" || b.ProvenFreshness.Recorded {
-			return invalid("an unbound binding carries an identity, a proof, a contender or a proven freshness")
+		if b.Kind != "" || b.CanonicalID != "" || b.Proof != AnchorBindingProofNone || b.ContenderKind != "" || b.ContenderID != "" || b.ProvenFreshness.Recorded ||
+			b.PolicyVersion != "" || !b.ProvenAt.IsZero() || len(b.Witness) > 0 {
+			return invalid("an unbound binding carries an identity, a proof, a contender or proof provenance")
 		}
 		return nil
 	}
 	if !contractsv1.ValidContextFabricSubjectKind(b.Kind) || b.CanonicalID == "" || b.Proof == AnchorBindingProofNone {
 		return invalid("a held binding needs a vocabulary kind, a canonical id and a proof")
+	}
+	if b.PolicyVersion == AnchorBindingPolicyVersion && b.Proof == AnchorBindingProofIdentityProven && !memberOf(b.Witness, string(b.Kind)+":"+b.CanonicalID) {
+		return invalid("an identity-proven binding's witness does not name the held identity")
 	}
 	if b.State != AnchorBindingContested {
 		if b.ContenderKind != "" || b.ContenderID != "" {
@@ -333,20 +356,6 @@ const anchorBindingUndeclared = "undeclared"
 // eventspec declaration.
 const AnchorBindingUndeclaredToken = anchorBindingUndeclared
 
-// AnchorBindingCarryChecks is the closed statement of which admission checks
-// a carried binding passed before the binder used it. The shadow carries on
-// the parent reference alone: no same-question admission, no live
-// re-authorization of the carried identity.
-type AnchorBindingCarryChecks string
-
-const (
-	// AnchorBindingCarryChecksNotApplicable: no parent binding was used.
-	AnchorBindingCarryChecksNotApplicable AnchorBindingCarryChecks = "not_applicable"
-	// AnchorBindingCarryChecksNotEvaluated: a parent binding was used, and
-	// neither admission check was evaluated.
-	AnchorBindingCarryChecksNotEvaluated AnchorBindingCarryChecks = "not_evaluated"
-)
-
 // storedEpoch is the parent binding's graph epoch for the line, -1 when the
 // parent carries no binding that was read.
 func (p anchorBindingParent) storedEpoch() int64 {
@@ -356,13 +365,6 @@ func (p anchorBindingParent) storedEpoch() int64 {
 	default:
 		return -1
 	}
-}
-
-func (p anchorBindingParent) carryChecks() AnchorBindingCarryChecks {
-	if p.Status == AnchorBindingParentPresent {
-		return AnchorBindingCarryChecksNotEvaluated
-	}
-	return AnchorBindingCarryChecksNotApplicable
 }
 
 // AnchorBindingTransitionLineVocabulary is the transition line's closed
@@ -415,8 +417,12 @@ func AnchorBindingTransitionLineVocabulary(key string) []string {
 		// Only a children_of_scope count is compared, so the organization and
 		// frame-absent decisions never reach the line.
 		return []string{"not_evaluated", string(CountPopulationScopeAnchorCommitted), string(CountPopulationScopeAnchorAmbiguous), string(CountPopulationScopeAnchorUnresolved), string(CountPopulationScopeSingleSubject)}
-	case "carry_checks":
-		return []string{string(AnchorBindingCarryChecksNotApplicable), string(AnchorBindingCarryChecksNotEvaluated)}
+	case "binding_admission":
+		admissions := anchorBindingAdmissions()
+		return strs(len(admissions), func(i int) string { return string(admissions[i]) })
+	case "admission_remembered_check":
+		checks := SubjectSubstitutionRememberedCheckVocabulary()
+		return strs(len(checks), func(i int) string { return string(checks[i]) })
 	case "freshness_acquisition":
 		acquisitions := anchorFreshnessAcquisitions()
 		return strs(len(acquisitions), func(i int) string { return string(acquisitions[i]) })
@@ -430,7 +436,11 @@ func AnchorBindingTransitionLineVocabulary(key string) []string {
 
 // anchorBindingInput is everything bindAnchor reads.
 type anchorBindingInput struct {
+	// From is the binding the binder starts from: the parent's when admitted
+	// (or when admission never ran), unbound when refused; Admission says
+	// which (anchor_admission.go).
 	From       AnchorBinding
+	Admission  AnchorBindingAdmission
 	Evaluation AnchorBindingEvaluation
 	// Frame and ModelAnchorKind are the accepted reading and the winning
 	// sample's stated scope anchor kind.
@@ -468,6 +478,10 @@ type anchorBindingProposal struct {
 	// the effective kind excludes. They can never be bound, and they are
 	// never silence: a proof of another kind contradicts the held anchor.
 	Contradicting []anchorRef
+	// Stream is every identity the turn proved, of any kind, in the order
+	// the turn proved them: Proven and Contradicting interleaved as they
+	// came. The witness records it.
+	Stream []anchorRef
 }
 
 // bindAnchor is the one binder. PURE.
@@ -519,14 +533,18 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 	}
 	if in.Evaluation != AnchorBindingEvaluationNotResolved {
 		proposal.Proven = provenAnchors(in.Frame, proposal.EffectiveKind, in.Resolution, in.Bases)
-		for _, ref := range provenAnchors(in.Frame, "", in.Resolution, in.Bases) {
+		proposal.Stream = provenAnchors(in.Frame, "", in.Resolution, in.Bases)
+		for _, ref := range proposal.Stream {
 			if !memberOf(proposal.Proven, ref) {
 				proposal.Contradicting = append(proposal.Contradicting, ref)
 			}
 		}
 	}
 	fresh := func(ref anchorRef, proof AnchorBindingProof, reason AnchorBindingReason) AnchorBinding {
-		return AnchorBinding{State: AnchorBindingBound, Kind: ref.Kind, CanonicalID: ref.ID, Proof: proof, Reason: reason, OriginResultID: in.ResultID, GraphEpoch: in.GraphEpoch, ProvenFreshness: in.Freshness}
+		return AnchorBinding{
+			State: AnchorBindingBound, Kind: ref.Kind, CanonicalID: ref.ID, Proof: proof, Reason: reason, OriginResultID: in.ResultID, GraphEpoch: in.GraphEpoch,
+			ProvenFreshness: in.Freshness, PolicyVersion: AnchorBindingPolicyVersion, Witness: anchorBindingWitness(proposal),
+		}
 	}
 	keep := func(state AnchorBindingState, reason AnchorBindingReason) AnchorBinding {
 		kept := from
@@ -807,6 +825,54 @@ type anchorBindingTracker struct {
 	// attempted.
 	freshness            AnchorFreshness
 	freshnessAcquisition AnchorFreshnessAcquisition
+	// now is this turn's clock, stamped as ProvenAt on an identity it
+	// proves. admission, admissionRemembered and admissionAgeSeconds are the
+	// parent binding's admission (anchor_admission.go); admission is empty
+	// until it runs.
+	now                 time.Time
+	admission           AnchorBindingAdmission
+	admissionRemembered rememberedSubjectCheck
+	admissionAgeSeconds int64
+}
+
+// admissionOutcome is the admission as the line publishes it.
+func (t *anchorBindingTracker) admissionOutcome() AnchorBindingAdmission {
+	if t.admission != "" {
+		return t.admission
+	}
+	if t.parent.Status == AnchorBindingParentPresent && t.parent.Binding.active() {
+		return AnchorBindingAdmissionNotEvaluated
+	}
+	return AnchorBindingAdmissionNotApplicable
+}
+
+// start is the binding the binder starts from: the parent's when it was
+// admitted, or when admission never ran (nothing was proven either way and a
+// later turn re-runs every check); unbound when it was refused.
+func (t *anchorBindingTracker) start() AnchorBinding {
+	switch t.admissionOutcome() {
+	case AnchorBindingAdmissionAdmitted, AnchorBindingAdmissionNotEvaluated:
+		return t.parent.from()
+	default:
+		return anchorBindingParent{}.from()
+	}
+}
+
+// rememberedCheck is the admission's live re-read as the line publishes it.
+func (t *anchorBindingTracker) rememberedCheck() rememberedSubjectCheck {
+	if t.admissionRemembered.Check == "" {
+		return rememberedSubjectCheck{Check: SubjectSubstitutionRememberedNotChecked}
+	}
+	return t.admissionRemembered
+}
+
+// ageSeconds is the held proof's age at admission, -1 when admission did not
+// measure one.
+func (t *anchorBindingTracker) ageSeconds() int64 {
+	if t.admission == "" || !t.parent.Binding.active() || t.parent.Status != AnchorBindingParentPresent {
+		return -1
+	}
+	return t.admissionAgeSeconds
 }
 
 // acquisition is the read's outcome as the line publishes it.
@@ -822,7 +888,12 @@ func (e *Engine) newAnchorBindingTracker(ctx context.Context, request Investigat
 	if e.anchorBindingShadowDisabled {
 		return nil
 	}
+	now := time.Now
+	if e.now != nil {
+		now = e.now
+	}
 	return &anchorBindingTracker{
+		now:         now().UTC().Round(0),
 		parent:      readAnchorBindingParent(ctx, request, binding.Epoch),
 		epoch:       binding.Epoch,
 		evaluation:  AnchorBindingEvaluationNotResolved,
@@ -909,8 +980,14 @@ type AnchorBindingTransitionEvent struct {
 	Site           BudgetAssertStage
 	Evaluation     AnchorBindingEvaluation
 	ParentBinding  AnchorBindingParentStatus
-	CarryChecks    AnchorBindingCarryChecks
-	From           AnchorBinding
+	// Admission is the parent binding's admission and what its live re-read
+	// found; AdmissionAgeSeconds is the held proof's age, -1 when none was
+	// measured. From is the parent's stored binding whatever admission
+	// decided; a refused binding is not what the binder started from.
+	Admission           AnchorBindingAdmission
+	AdmissionRemembered rememberedSubjectCheck
+	AdmissionAgeSeconds int64
+	From                AnchorBinding
 	// ParentGraphEpoch is the parent binding's graph epoch, -1 when none was
 	// read; GraphEpoch is this turn's.
 	ParentGraphEpoch int64
@@ -965,7 +1042,7 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 		return AnchorBinding{}, unrecordedAnchorBindingEvent(site, result)
 	}
 	in := anchorBindingInput{
-		From: t.parent.from(), Evaluation: t.evaluation, Frame: t.frame, ModelAnchorKind: t.modelAnchorKind,
+		From: t.start(), Admission: t.admissionOutcome(), Evaluation: t.evaluation, Frame: t.frame, ModelAnchorKind: t.modelAnchorKind,
 		Receipt: t.receipt, CallerHints: t.callerHints, Bases: t.bases,
 		ResultID: result.ResultID, GraphEpoch: t.epoch, Freshness: t.freshness,
 		SubstitutionGuard: t.substitution,
@@ -982,6 +1059,9 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 		in.Resolution = t.resolution
 	}
 	to, proposal := bindAnchor(in)
+	if to.active() && to.OriginResultID == result.ResultID && to.ProvenAt.IsZero() {
+		to.ProvenAt = t.now
+	}
 	event := t.lineFor(site, result, in, proposal, to)
 	event.SubstitutionGuard = t.substitutionGuard()
 	event.FreshnessAcquisition = t.acquisition()
@@ -1015,9 +1095,15 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 // lineFor is the transition line's pre-entry, proposal and decision: every
 // input the binder read, as it read it.
 func (t *anchorBindingTracker) lineFor(site BudgetAssertStage, result InvestigationResult, in anchorBindingInput, proposal anchorBindingProposal, to AnchorBinding) AnchorBindingTransitionEvent {
+	// The line's pre-entry is what the parent held, whatever admission
+	// decided: a refused binding is still the evidence the turn weighed.
+	if !in.From.active() {
+		in.From = t.parent.from()
+	}
 	event := AnchorBindingTransitionEvent{
 		ResultID: result.ResultID, ParentResultID: t.parent.ResultID, Site: site,
-		Evaluation: in.Evaluation, ParentBinding: t.parent.Status, CarryChecks: t.parent.carryChecks(), From: in.From,
+		Evaluation: in.Evaluation, ParentBinding: t.parent.Status, From: in.From,
+		Admission: in.Admission, AdmissionRemembered: t.rememberedCheck(), AdmissionAgeSeconds: t.ageSeconds(),
 		ParentGraphEpoch: t.parent.storedEpoch(), GraphEpoch: in.GraphEpoch,
 		CommittedSubjects:    committedSubjectIDs(in.Resolution, in.Bases),
 		AnchorTermMatchedIDs: anchorTermMatchedIDs(in.Frame, in.Resolution),
@@ -1218,7 +1304,8 @@ func unrecordedAnchorBindingEvent(site BudgetAssertStage, result InvestigationRe
 	none := AnchorBinding{State: AnchorBindingUnbound, Proof: AnchorBindingProofNone, Reason: AnchorBindingReasonUnrecorded}
 	return AnchorBindingTransitionEvent{
 		ResultID: result.ResultID, Site: site, Evaluation: AnchorBindingEvaluationNotResolved,
-		ParentBinding: AnchorBindingParentNoReference, CarryChecks: AnchorBindingCarryChecksNotApplicable, From: none, To: none,
+		ParentBinding: AnchorBindingParentNoReference, From: none, To: none,
+		Admission: AnchorBindingAdmissionNotApplicable, AdmissionRemembered: rememberedSubjectCheck{Check: SubjectSubstitutionRememberedNotChecked}, AdmissionAgeSeconds: -1,
 		ParentGraphEpoch: -1, CommittedSubjects: []string{}, CallerHintIDs: []string{}, ProvenAnchorIDs: []string{},
 		Agreement: AnchorBindingNotEvaluated, DisagreementField: AnchorBindingFieldNone, ServedCount: "not_evaluated",
 		SubstitutionGuard:    SubjectSubstitutionNotEvaluated,
@@ -1231,7 +1318,7 @@ func unrecordedAnchorBindingEvent(site BudgetAssertStage, result InvestigationRe
 // served is compared.
 func (t *anchorBindingTracker) reuseEvent(result InvestigationResult, reading storedCountReading) AnchorBindingTransitionEvent {
 	in := anchorBindingInput{
-		From: t.parent.from(), Evaluation: AnchorBindingEvaluationReused, Frame: reading.Frame, ModelAnchorKind: reading.AnchorKind,
+		From: t.start(), Admission: t.admissionOutcome(), Evaluation: AnchorBindingEvaluationReused, Frame: reading.Frame, ModelAnchorKind: reading.AnchorKind,
 		Receipt: t.receipt, CallerHints: t.callerHints,
 		Resolution: result.SubjectResolution, Bases: CommitBasisSetFromDigests(result.SubjectResolution.CommitDecisionDigests),
 		ResultID: result.ResultID, GraphEpoch: t.epoch,
@@ -1265,7 +1352,11 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"evaluation", SanitizeLogAttr(closed("evaluation", string(event.Evaluation))),
 		// PRE-ENTRY: the binding this turn started from.
 		"parent_binding", SanitizeLogAttr(closed("parent_binding", string(event.ParentBinding))),
-		"carry_checks", SanitizeLogAttr(closed("carry_checks", string(event.CarryChecks))),
+		"binding_admission", SanitizeLogAttr(closed("binding_admission", string(event.Admission))),
+		"admission_remembered_check", SanitizeLogAttr(closed("admission_remembered_check", string(event.AdmissionRemembered.Check))),
+		"admission_remembered_reason", SanitizeLogAttr(string(event.AdmissionRemembered.Reason)),
+		"admission_remembered_context_error", SanitizeLogAttr(event.AdmissionRemembered.ContextError),
+		"admission_age_seconds", event.AdmissionAgeSeconds,
 		"from_state", SanitizeLogAttr(closed("from_state", string(event.From.State))),
 		"from_kind", SanitizeLogAttr(string(event.From.Kind)),
 		"from_id", SanitizeLogAttr(event.From.CanonicalID),
@@ -1277,6 +1368,9 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"from_contender_id", SanitizeLogAttr(event.From.ContenderID),
 		"from_proven_freshness_epoch", anchorFreshnessEpoch(event.From.ProvenFreshness),
 		"from_proven_freshness_digest", SanitizeLogAttr(anchorFreshnessDigest(event.From.ProvenFreshness)),
+		"from_policy_version", SanitizeLogAttr(event.From.PolicyVersion),
+		"from_proven_at", SanitizeLogAttr(anchorBindingTime(event.From.ProvenAt)),
+		"from_witness", SanitizeLogStrings(nonNilStrings(event.From.Witness)),
 		"parent_graph_epoch", event.ParentGraphEpoch,
 		"graph_epoch", event.GraphEpoch,
 		// PROPOSAL: what the binder read.
@@ -1307,6 +1401,9 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"contender_id", SanitizeLogAttr(event.To.ContenderID),
 		"to_proven_freshness_epoch", anchorFreshnessEpoch(event.To.ProvenFreshness),
 		"to_proven_freshness_digest", SanitizeLogAttr(anchorFreshnessDigest(event.To.ProvenFreshness)),
+		"policy_version", SanitizeLogAttr(event.To.PolicyVersion),
+		"to_proven_at", SanitizeLogAttr(anchorBindingTime(event.To.ProvenAt)),
+		"witness", SanitizeLogStrings(nonNilStrings(event.To.Witness)),
 		"ownership_movement", SanitizeLogAttr(closed("ownership_movement", string(event.OwnershipMovement))),
 		// POST-DECISION: its fate and the served decision it is compared to.
 		"persisted", SanitizeLogAttr(closed("persisted", string(event.Persisted))),
@@ -1335,4 +1432,12 @@ func nonNilStrings(values []string) []string {
 		return []string{}
 	}
 	return values
+}
+
+// anchorBindingTime renders a proof time for the line, empty when none.
+func anchorBindingTime(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339Nano)
 }

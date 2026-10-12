@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -142,7 +143,7 @@ func TestTheShadowIsSafeWithoutATracker(t *testing.T) {
 	off.observeServedCount(CountPopulationScope{})
 	off.observeAnchorVeto(nil)
 	binding, event := off.decide(BudgetAssertDecisive, InvestigationResult{ResultID: "result_off"}, nil)
-	if binding != (AnchorBinding{}) || event.To.Reason != AnchorBindingReasonUnrecorded {
+	if !reflect.DeepEqual(binding, AnchorBinding{}) || event.To.Reason != AnchorBindingReasonUnrecorded {
 		t.Fatalf("a decision without a tracker: %+v / %+v", binding, event.To)
 	}
 	// And a decision with a tracker but no snapshot reads no served ledger.
