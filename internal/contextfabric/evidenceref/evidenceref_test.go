@@ -107,6 +107,9 @@ func TestParseRefusesWhatMintNeverProduces(t *testing.T) {
 		contractsv1.ContextFabricEvidenceEntityProjectTeamV2: {
 			"gitlab:p:t", "gitlab:p:t:s:x",
 		},
+		contractsv1.ContextFabricEvidenceEntityReviewV2: {
+			uuid + ":approval-42", uuid + ":1042:approval-42:x", uuid + ":1042:%",
+		},
 	}
 	for kind, ids := range cases {
 		for _, id := range ids {
@@ -143,6 +146,26 @@ func TestRetiredCollisionsMintDistinctRefs(t *testing.T) {
 		if a == b {
 			t.Fatalf("%s: %q and %q mint one ref %q", pair.kind, pair.a, pair.b, a)
 		}
+	}
+}
+
+// The retired review ref "<repo>:<review_id>" named one ref for a review id
+// on two pull requests of one repository (one provider names an approval by
+// its approver, so the id repeats on every pull request that approver
+// approves); review.v2 names two.
+func TestReviewRefCarriesThePullRequestNumber(t *testing.T) {
+	uuid := uuids[1]
+	retiredA, retiredB := uuid+":approval-42", uuid+":approval-42"
+	if retiredA != retiredB {
+		t.Fatal("the retired spelling does not collide")
+	}
+	a, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityReviewV2, uuid, "1042", "approval-42")
+	b, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityReviewV2, uuid, "1043", "approval-42")
+	if a == b {
+		t.Fatalf("two pull requests' reviews mint one ref %q", a)
+	}
+	if want := "acr:v1:review.v2:" + uuid + ":1042:approval-42"; a != want {
+		t.Fatalf("ref = %q, want %q", a, want)
 	}
 }
 
@@ -183,7 +206,7 @@ func TestGrammarsAreTheEncodedKindsAndLabelsDecode(t *testing.T) {
 		}
 	}
 	kinds := evidenceref.Kinds()
-	if len(kinds) != len(declared) || len(kinds) != 5 {
+	if len(kinds) != len(declared) || len(kinds) != 6 {
 		t.Fatalf("grammars %v, encoded kinds %v", kinds, declared)
 	}
 	for _, kind := range kinds {

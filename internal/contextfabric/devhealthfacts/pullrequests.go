@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -144,14 +145,16 @@ func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 		return contextfabric.FactProviderResult{}, readFailure("query pull request reviews", scanErr)
 	}
 	for _, row := range rows {
-		subject, ok := bySubject[row.RepoID+":"+row.ReviewID]
+		number := strconv.FormatUint(uint64(row.Number), 10)
+		subject, ok := bySubject[row.RepoID+":"+number+":"+row.ReviewID]
 		if !ok {
 			continue
 		}
+		ref, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityReviewV2, row.RepoID, number, row.ReviewID)
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactReviews, Subject: subject,
 			Fields:         map[string]contextfabric.FactValue{"state": stringOrNull(row.State)},
-			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityReview, row.RepoID+":"+row.ReviewID)},
+			EvidenceRefIDs: []string{ref},
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))
