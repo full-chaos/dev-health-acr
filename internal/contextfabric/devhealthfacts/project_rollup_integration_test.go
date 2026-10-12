@@ -179,9 +179,10 @@ func TestProjectRollupsCountThroughTheEntityTreeOnRealClickHouse(t *testing.T) {
 	wantInt(t, fields, "blocker_dependencies_excluded_by_status_current", 1)
 }
 
-// A pull request is open when its stored state is open, the same rule the
-// pull request fact and the status filter read; a closed state with no close
-// timestamp, and an unknown state, are not open.
+// A pull request is open when its stored state is exactly open (ops stores the
+// state normalized to lowercase and acr compares it exactly); a closed state
+// with no close timestamp, a state in another spelling and an unknown state
+// are not open.
 func TestProjectOpenPullRequestsFollowTheStoredStateOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
@@ -199,7 +200,7 @@ func TestProjectOpenPullRequestsFollowTheStoredStateOnRealClickHouse(t *testing.
 	if err != nil {
 		t.Fatalf("ReadFacts: %v: %s", err, readFailureCause(err))
 	}
-	wantInt(t, factFor(t, result, project).Fields, "pull_requests_open_current", 2)
+	wantInt(t, factFor(t, result, project).Fields, "pull_requests_open_current", 1)
 }
 
 // Supporting the project subject kind directly must not switch the project's
