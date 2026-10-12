@@ -320,6 +320,11 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "max_window_days": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "The widest range or trailing window, in days, one read_facts call takes for this kind. A read over several kinds is held to the smallest."
               }
             }
           }
