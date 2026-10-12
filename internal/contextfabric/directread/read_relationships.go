@@ -616,6 +616,9 @@ func (r *RelationshipsReader) frontier(ctx context.Context, principal storage.Pr
 			if EdgeGate(principal, candidate.Attributes, admitted[graphrank.SubjectKey(candidate.From.Subject)], admitted[graphrank.SubjectKey(candidate.To.Subject)]) != EdgeVisible {
 				continue
 			}
+			if plan.currentOnly && inactiveBlocker(candidate) {
+				continue
+			}
 			for _, end := range []contextfabric.SubjectRef{candidate.From.Subject, candidate.To.Subject} {
 				key := graphrank.SubjectKey(end)
 				if key == rootKey {
@@ -725,12 +728,10 @@ func (r *RelationshipsReader) gateEdges(ctx context.Context, principal storage.P
 		var active *bool
 		fromEnd, toEnd := servedEnd(candidate.From), servedEnd(candidate.To)
 		if candidate.RelationType == string(contractsv1.ContextFabricRelationshipBlocks) {
-			// From is the blocker: dependencyrelation swaps BLOCKED_BY and
-			// IS_BLOCKED_BY so the blocking item is always the stored start.
 			fromEnd.Status, fromEnd.StatusAsOf = endStatus(candidate.From)
 			toEnd.Status, toEnd.StatusAsOf = endStatus(candidate.To)
 			active = blockerActive(fromEnd.Status)
-			if currentOnly && active != nil && !*active {
+			if currentOnly && inactiveBlocker(candidate) {
 				record.EdgesDroppedInactive++
 				continue
 			}
@@ -816,6 +817,18 @@ func endStatus(end EdgeEnd) (status, asOf string) {
 		status = statusUnknown
 	}
 	return status, strings.TrimSpace(graphrank.StringAttribute(end.Attributes, "observed_at"))
+}
+
+// inactiveBlocker reports a BLOCKS edge whose blocking end is stored as done
+// or canceled. From is the blocker: dependencyrelation swaps BLOCKED_BY and
+// IS_BLOCKED_BY so the blocking item is always the stored start.
+func inactiveBlocker(candidate EdgeCandidate) bool {
+	if candidate.RelationType != string(contractsv1.ContextFabricRelationshipBlocks) {
+		return false
+	}
+	status, _ := endStatus(candidate.From)
+	active := blockerActive(status)
+	return active != nil && !*active
 }
 
 // blockerActive is nil for an unknown status, false for done or canceled,

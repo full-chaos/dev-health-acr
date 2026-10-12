@@ -268,3 +268,24 @@ func TestDroppedInactiveIsOnTheReadLogLine(t *testing.T) {
 	}
 	t.Fatalf("read log line lacks edges_dropped_inactive: %v", args)
 }
+
+func TestCurrentOnlyFrontierSkipsInactiveBlockerBridge(t *testing.T) {
+	f := newBlockerFixture()
+	f.addBlocks("bridge", str("done"))
+	bridge := subject(contractsv1.ContextFabricSubjectWorkItem, "work_item:bridge")
+	f.graph.edges = append(f.graph.edges, edgeBetween("rel-zz-behind", "BELONGS_TO_REPOSITORY", bridge, repoA, nil))
+	reader, _ := newRelReader(f.graph, nil)
+	walk := func(currentOnly bool) []string {
+		request := f.request(currentOnly, 10)
+		request.Types, request.Depth = nil, 2
+		_, ids := readAll(t, reader, unrestricted, request)
+		slices.Sort(ids)
+		return ids
+	}
+	if got, want := walk(false), []string{"rel-bridge", "rel-zz-behind"}; !slices.Equal(got, want) {
+		t.Fatalf("default depth-2 walk = %v, want %v", got, want)
+	}
+	if got := walk(true); len(got) != 0 {
+		t.Fatalf("current_only depth-2 walk = %v: a dropped inactive blocker still bridged to its neighbour", got)
+	}
+}
