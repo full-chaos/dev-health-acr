@@ -691,6 +691,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		})
 	}
 	var teamWalkTally teamAnchorWalkTally
+	// statusPredicate is the member status the frame states; an anchor's member
+	// read carries it inside the read, before any member cap.
+	statusPredicate := memberStatusPredicateOf(request.Frame)
+	statusWalk := memberStatusWalk{pool: -1}
 	anchoredMemberTiers := map[string]string{}
 	projectDeploymentsUnlinked := -1
 	projectDeploymentsDenied := -1
@@ -731,12 +735,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			}
 		} else if position, ok := teamAnchorMemberPosition(teamAnchors, subject, declaredCohortKindForRouting); ok {
 			var walk treeWalk
-			walk, err = a.teamAnchorMembers(ctx, key, principal.OrgID, principal, scope, subject, position, collectLimit, temporal)
+			walk, err = a.teamAnchorMembers(ctx, key, principal.OrgID, principal, scope, subject, position, collectLimit, temporal, statusPredicate)
 			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
 			if err != nil && a.config.Telemetry != nil {
 				a.config.Telemetry.RecordTeamAnchorWalk(ctx, principal.OrgID, teamWalkTally.decision(teamAnchors[0].Kind, declaredCohortKindForRouting, len(request.Resolution.Committed), err))
 			}
 			teamWalkTally.add(walk)
+			statusWalk.add(walk.status)
 			for id, tier := range walk.memberTiers {
 				if best, has := anchoredMemberTiers[id]; !has || tierRank(tier) < tierRank(best) {
 					anchoredMemberTiers[id] = tier
@@ -1411,39 +1416,66 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		cohortNodes = kept
 	}
-	// A pull request status the frame states is applied to the whole pool,
-	// before the cohort is cut, so every arm's members are filtered alike.
+	// A status the frame states was applied inside an anchor's member read
+	// when that read ran (statusWalk.applied); every other arm's pool is
+	// filtered here, after its own cut, and says so when the pool was cut.
 	pullRequestStatus := contextfabric.PullRequestStatusFilterOf(request.Frame)
+	memberStatusKind, memberStatus := contextfabric.MemberStatusFilterOf(request.Frame)
 	var pullRequestFiltered pullRequestStatusFilter
-	if status := pullRequestStatus; status != "" {
-		filtered, filterErr := a.filterPullRequestsByStatus(ctx, key, principal.OrgID, status, cohortNodes)
-		pullRequestFiltered = filtered
+	var memberFiltered memberStatusFilter
+	var statusPoolCut contextfabric.MemberStatusPoolCut
+	switch {
+	case statusWalk.applied:
+		if statusWalk.poolCut {
+			statusPoolCut = contextfabric.MemberStatusPoolCut{Kind: statusPredicate.kind, Read: statusWalk.read}
+		}
 		if a.config.Telemetry != nil {
 			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
-				Status: status, Candidates: filtered.candidates, Kept: filtered.kept, Err: filterErr,
+				MemberKind: statusPredicate.kind, Status: statusPredicate.status, Site: PullRequestStatusFilterSiteWalk,
+				Candidates: statusWalk.read, Kept: statusWalk.kept, OutsideSet: statusWalk.outsideSet, PoolCut: statusWalk.poolCut, Pool: statusWalk.pool,
+			})
+		}
+	case pullRequestStatus != "":
+		filtered, filterErr := a.filterPullRequestsByStatus(ctx, key, principal.OrgID, pullRequestStatus, cohortNodes)
+		pullRequestFiltered = filtered
+		poolCut := filterErr == nil && cohortPoolTruncated && filtered.candidates > 0
+		if a.config.Telemetry != nil {
+			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
+				Status: pullRequestStatus, Site: PullRequestStatusFilterSitePool, Candidates: filtered.candidates, Kept: filtered.kept, PoolCut: poolCut, Pool: -1, Err: filterErr,
 			})
 		}
 		if filterErr != nil {
 			return contextfabric.GraphContext{}, graphNotProjectedError(filterErr)
+		}
+		if poolCut {
+			statusPoolCut = contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: filtered.candidates}
+		}
+		cohortNodes = filtered.nodes
+	case memberStatus != "":
+		filtered, filterErr := a.filterMembersByStoredStatus(ctx, key, principal.OrgID, memberStatusKind, memberStatus, cohortNodes)
+		memberFiltered = filtered
+		poolCut := filterErr == nil && cohortPoolTruncated && filtered.candidates > 0
+		if a.config.Telemetry != nil {
+			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
+				MemberKind: memberStatusKind, Status: memberStatus, Site: PullRequestStatusFilterSitePool, Candidates: filtered.candidates, Kept: filtered.kept, OutsideSet: filtered.outsideSet, PoolCut: poolCut, Pool: -1, Err: filterErr,
+			})
+		}
+		if filterErr != nil {
+			return contextfabric.GraphContext{}, graphNotProjectedError(filterErr)
+		}
+		if poolCut {
+			statusPoolCut = contextfabric.MemberStatusPoolCut{Kind: memberStatusKind, Read: filtered.candidates}
 		}
 		cohortNodes = filtered.nodes
 	}
-	// A project or incident status the frame states is applied the same way: to
-	// the whole pool, before the cohort is cut.
-	memberStatusKind, memberStatus := contextfabric.MemberStatusFilterOf(request.Frame)
-	var memberFiltered memberStatusFilter
-	if memberStatus != "" {
-		filtered, filterErr := a.filterMembersByStoredStatus(ctx, key, principal.OrgID, memberStatusKind, memberStatus, cohortNodes)
-		memberFiltered = filtered
-		if a.config.Telemetry != nil {
-			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
-				MemberKind: memberStatusKind, Status: memberStatus, Candidates: filtered.candidates, Kept: filtered.kept, OutsideSet: filtered.outsideSet, Err: filterErr,
-			})
-		}
-		if filterErr != nil {
-			return contextfabric.GraphContext{}, graphNotProjectedError(filterErr)
-		}
-		cohortNodes = filtered.nodes
+	// statusNoMatch: members of the kind were reached and none holds the
+	// status. That is an answer (zero matches), not a question with no members.
+	statusNoMatch := (statusWalk.applied && statusWalk.reached && statusWalk.kept == 0) ||
+		(pullRequestFiltered.candidates > 0 && pullRequestFiltered.kept == 0) ||
+		(memberFiltered.candidates > 0 && memberFiltered.kept == 0)
+	statusOutsideSet := memberFiltered.outsideSet
+	if statusWalk.applied {
+		statusOutsideSet = statusWalk.outsideSet
 	}
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	cohortKindScopedAuthzDropped, anchorReachDenied := anchorReachDeniedCount(cohortKind, cohortNodes, principal, request, edgeFilters.ReachDenied, cohortKindScopedAuthzDropped)
@@ -1469,13 +1501,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		cohort.Rationale = teamAnchorCohortRationaleFor(teamAnchors[0].Kind, declaredCohortKindForRouting)
 	}
-	if cohort == nil && pullRequestStatus != "" && pullRequestFiltered.candidates > 0 && pullRequestFiltered.kept == 0 {
+	if cohort == nil && pullRequestStatus != "" && statusNoMatch {
 		// Pull requests were reached and none holds the status: that is an
 		// answer (zero matches), not a question with no members.
 		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectPullRequest, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{},
 			Rationale: pullRequestStatusNoMatchRationale, Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
 	}
-	if cohort == nil && memberStatus != "" && memberFiltered.candidates > 0 && memberFiltered.kept == 0 {
+	if cohort == nil && memberStatus != "" && statusNoMatch {
 		cohort = &contextfabric.Cohort{Kind: memberStatusKind, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{},
 			Rationale: memberStatusNoMatchRationale(memberStatusKind), Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
 	}
@@ -1766,7 +1798,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation,
 		CohortMemberSource:     cohortMemberSource,
-		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: memberFiltered.outsideSet},
+		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: statusOutsideSet},
+		MemberStatusPoolCut:    statusPoolCut,
 		Paths:                  admission.Paths, DriverCandidates: admission.Drivers,
 		EvidenceRefIDs: admission.EvidenceRefIDs, FactRequirements: factRequirements,
 		Coverage: contextfabric.Coverage{

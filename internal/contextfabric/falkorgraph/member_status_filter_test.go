@@ -62,7 +62,11 @@ func memberStatusFake(kind contextfabric.SubjectKind, fixtures []memberStatusFix
 		}
 		for _, f := range fixtures {
 			if f.id == id {
-				return []row{fakeSubjectNodeRow(string(kind), id, f.label)}, nil
+				r := fakeSubjectNodeRow(string(kind), id, f.label)
+				if n, ok := r["n"].(*node); ok && f.stored != "" {
+					n.Properties[propPropertyPrefix+property] = f.stored
+				}
+				return []row{r}, nil
 			}
 		}
 		return nil, nil
@@ -70,6 +74,9 @@ func memberStatusFake(kind contextfabric.SubjectKind, fixtures []memberStatusFix
 	fake = withWalkStepReads(fake)
 	inner := fake.queryFunc
 	fake.queryFunc = func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if readErr != nil && strings.Contains(cypher, "$bstatus") {
+			return nil, readErr
+		}
 		if cypher != storedNodePropertyCypher(property) {
 			return inner(ctx, graphKey, cypher, params, readOnly)
 		}
@@ -166,7 +173,12 @@ func TestProjectAndIncidentMembersAreFilteredByTheStatedStatus(t *testing.T) {
 			if want := (contextfabric.MemberStatusOutsideSet{Kind: tc.kind, Count: tc.outside}); result.MemberStatusOutsideSet != want {
 				t.Fatalf("outside the known set = %+v, want %+v", result.MemberStatusOutsideSet, want)
 			}
-			want := []PullRequestStatusFilterDecision{{MemberKind: tc.kind, Status: tc.status, Candidates: len(tc.fixtures), Kept: len(tc.want), OutsideSet: tc.outside}}
+			// Projects are the team's own reach: the member read carries the
+			// status. Incidents are off the tree: the pool is filtered.
+			want := []PullRequestStatusFilterDecision{{MemberKind: tc.kind, Status: tc.status, Site: PullRequestStatusFilterSiteWalk, Candidates: len(tc.want), Kept: len(tc.want), OutsideSet: tc.outside, Pool: -1}}
+			if tc.kind == contextfabric.SubjectIncident {
+				want[0].Site, want[0].Candidates = PullRequestStatusFilterSitePool, len(tc.fixtures)
+			}
 			if !reflect.DeepEqual(telemetry.pullRequestStatusFilters, want) {
 				t.Fatalf("status filter lines = %+v, want %+v", telemetry.pullRequestStatusFilters, want)
 			}
@@ -184,6 +196,12 @@ func TestMemberStatusFilterReadFailureEndsTheCall(t *testing.T) {
 		_, telemetry, err := discoverMemberStatus(t, memberStatusFake(kind, fixtures, errors.New("graph down")), kind, status)
 		if err == nil {
 			t.Fatalf("%s: a failed status read must fail the call, not serve an unfiltered set", kind)
+		}
+		if kind == contextfabric.SubjectProject {
+			if len(telemetry.teamAnchorWalks) != 1 || telemetry.teamAnchorWalks[0].Outcome != TeamAnchorWalkReadFailed || len(telemetry.pullRequestStatusFilters) != 0 {
+				t.Fatalf("%s: walk lines = %+v, status lines = %+v, want one read_failed walk line", kind, telemetry.teamAnchorWalks, telemetry.pullRequestStatusFilters)
+			}
+			continue
 		}
 		if len(telemetry.pullRequestStatusFilters) != 1 || telemetry.pullRequestStatusFilters[0].Err == nil {
 			t.Fatalf("%s: status filter lines = %+v, want one read_failed line", kind, telemetry.pullRequestStatusFilters)

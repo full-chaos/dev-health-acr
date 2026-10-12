@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -52,18 +53,53 @@ func withWalkStepReads(inner *fakeConn) *fakeConn {
 				if len(nodes) == 0 || (strings.Contains(cypher, "b."+propValidToNs) && !windowAdmits(nodes[0]["n"].(*node).Properties, params)) {
 					continue
 				}
+				if !walkStatusAdmits(cypher, params, nodes[0]["n"].(*node)) {
+					continue
+				}
 				out = append(out, row{"id": id, "b": nodes[0]["n"], "r": e})
 			}
 		}
 		sort.SliceStable(out, func(i, j int) bool {
 			return propStringValue(walkNode(out[i]["b"]).Properties[propCanonicalID]) < propStringValue(walkNode(out[j]["b"]).Properties[propCanonicalID])
 		})
+		if strings.Contains(cypher, "RETURN count(DISTINCT b)") {
+			reached := map[string]bool{}
+			for _, r := range out {
+				reached[propStringValue(walkNode(r["b"]).Properties[propCanonicalID])] = true
+			}
+			return []row{{"reached": int64(len(reached))}}, nil
+		}
+		if skip, ok := params["skip"].(int); ok && strings.Contains(cypher, "SKIP $skip") {
+			out = out[min(skip, len(out)):]
+		}
 		if limit, ok := params["limit"].(int); ok && len(out) > limit {
 			out = out[:limit]
 		}
 		return out, nil
 	}
 	return inner
+}
+
+var walkStatusProperty = regexp.MustCompile(`toLower\(trim\(b\.([A-Za-z0-9_]+)\)\) IN \$bstatus`)
+
+// walkStatusAdmits is the read's status clause on the reached node: its stored
+// status, lower case and trimmed, in $bstatus, or for the outside clause
+// absent or not in it.
+func walkStatusAdmits(cypher string, params map[string]interface{}, n *node) bool {
+	m := walkStatusProperty.FindStringSubmatch(cypher)
+	if m == nil {
+		return true
+	}
+	values, _ := params["bstatus"].([]interface{})
+	stored, has := n.Properties[m[1]].(string)
+	in := false
+	for _, value := range values {
+		in = in || (has && strings.ToLower(strings.TrimSpace(stored)) == value)
+	}
+	if strings.Contains(cypher, "IS NULL OR NOT toLower") {
+		return !in
+	}
+	return in
 }
 
 func newTeamAdapter(t *testing.T, fake *fakeConn) *Adapter {

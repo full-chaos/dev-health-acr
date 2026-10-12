@@ -4154,6 +4154,16 @@
         ]
       },
       {
+        "key": "site",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "walk",
+          "pool"
+        ],
+        "applicability": "written when outcome=applied: walk when the anchor's member read carried the status (before any member cap), pool when the status was applied to the pool after its arms"
+      },
+      {
         "key": "candidates",
         "type": "int",
         "presence": "conditional",
@@ -4166,10 +4176,22 @@
         "applicability": "written when outcome=applied"
       },
       {
+        "key": "pool_cut",
+        "type": "bool",
+        "presence": "conditional",
+        "applicability": "written when outcome=applied: the status was decided within a cut read, so members past the cut were not checked"
+      },
+      {
         "key": "outside_set",
         "type": "int",
         "presence": "conditional",
         "applicability": "written when outcome=applied and member_kind is project or incident: the candidates whose stored status is outside the kind's closed set"
+      },
+      {
+        "key": "pool",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when site=walk and pool_cut: the count of members of the kind the anchor's walk reaches under the state clause, bounded by the walked anchor"
       },
       {
         "key": "error",

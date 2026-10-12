@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -36,6 +37,11 @@ type walkStep struct {
 	// edgeWindowOnly: the window is applied to the edge alone. The edge says
 	// the owner owns the node; a node whose own validity ended is still owned.
 	edgeWindowOnly bool
+	// status keeps only the reached nodes whose stored status the clause
+	// names, inside the read and so before its limit.
+	status nodeStatusClause
+	// paged: the read starts at $skip.
+	paged bool
 }
 
 type walkHit struct {
@@ -72,9 +78,22 @@ func walkStepCypher(step walkStep, temporal temporalFilter) string {
 	if step.edgeWindowOnly {
 		nodeWindow = ""
 	}
-	return fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+arrow+"(b:%s {%s:$org, %s:$toKind}) WHERE r.%s = $rel%s%s%s RETURN id, %s, r ORDER BY id, b.%s, r.%s LIMIT $limit",
+	page := "LIMIT $limit"
+	if step.paged {
+		page = "SKIP $skip LIMIT $limit"
+	}
+	return fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+arrow+"(b:%s {%s:$org, %s:$toKind}) WHERE r.%s = $rel%s%s%s%s RETURN id, %s, r ORDER BY id, b.%s, r.%s %s",
 		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, propKind,
-		propRelationType, typeClause, temporal.predicate("r"), nodeWindow, column, propCanonicalID, propRelationshipID)
+		propRelationType, typeClause, step.status.predicate("b"), temporal.predicate("r"), nodeWindow, column, propCanonicalID, propRelationshipID, page)
+}
+
+// walkStepCountCypher counts the distinct nodes one step reaches from the
+// batched ids, under the same pattern, type, status and window as the read.
+func walkStepCountCypher(step walkStep, temporal temporalFilter) string {
+	read := walkStepCypher(walkStep{fromKind: step.fromKind, toKind: step.toKind, relation: step.relation, direction: step.direction,
+		toTypes: step.toTypes, notToTypes: step.notToTypes, status: step.status, edgeWindowOnly: step.edgeWindowOnly}, temporal)
+	match, _, _ := strings.Cut(read, " RETURN ")
+	return match + " RETURN count(DISTINCT b) AS reached"
 }
 
 // walkStepParams binds one batch of a step read.
@@ -88,6 +107,7 @@ func walkStepParams(orgID string, ids []interface{}, step walkStep, limit int, t
 	} else if len(step.notToTypes) > 0 {
 		params["btypes"] = step.notToTypes
 	}
+	step.status.bind(params)
 	return params
 }
 
@@ -120,17 +140,69 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 			rows = rows[:remaining]
 			cut = true
 		}
-		for _, r := range rows {
-			id, _ := r["id"].(string)
-			n := walkNode(r["b"])
-			e, _ := r["r"].(*edge)
-			if id == "" || n == nil || e == nil {
-				continue
-			}
-			hits = append(hits, walkHit{from: id, to: n, rel: e})
-		}
+		hits = append(hits, walkHitsOf(rows)...)
 	}
 	return hits, cut, nil
+}
+
+func walkHitsOf(rows []row) []walkHit {
+	hits := make([]walkHit, 0, len(rows))
+	for _, r := range rows {
+		id, _ := r["id"].(string)
+		n := walkNode(r["b"])
+		e, _ := r["r"].(*edge)
+		if id == "" || n == nil || e == nil {
+			continue
+		}
+		hits = append(hits, walkHit{from: id, to: n, rel: e})
+	}
+	return hits
+}
+
+// walkStepPage reads one page of one batch of a paged step: rows reports how
+// many rows the read returned, so a short page ends the batch.
+func (a *Adapter) walkStepPage(ctx context.Context, key, orgID string, batch []interface{}, step walkStep, temporal temporalFilter, skip, limit int) ([]walkHit, int, error) {
+	step.paged = true
+	params := walkStepParams(orgID, batch, step, limit, temporal)
+	params["skip"] = skip
+	rows, err := a.api.query(ctx, key, walkStepCypher(step, temporal), params, true)
+	if err != nil {
+		return nil, 0, safeDependencyError("walk the entity tree", err)
+	}
+	return walkHitsOf(rows), len(rows), nil
+}
+
+// walkStepCount counts the distinct nodes a step reaches from ids. The count
+// is bounded by the ids the walk already reached, never organization-wide.
+func (a *Adapter) walkStepCount(ctx context.Context, key, orgID string, ids []string, step walkStep, temporal temporalFilter) (int, error) {
+	total := 0
+	for start := 0; start < len(ids); start += storedSubjectBatch {
+		end := min(start+storedSubjectBatch, len(ids))
+		batch := make([]interface{}, 0, end-start)
+		for _, id := range ids[start:end] {
+			batch = append(batch, id)
+		}
+		rows, err := a.api.query(ctx, key, walkStepCountCypher(step, temporal), walkStepParams(orgID, batch, step, 1, temporal), true)
+		if err != nil {
+			return 0, safeDependencyError("count the entity tree", err)
+		}
+		if len(rows) > 0 {
+			total += countValue(rows[0]["reached"])
+		}
+	}
+	return total, nil
+}
+
+func countValue(value interface{}) int {
+	switch n := value.(type) {
+	case int64:
+		return int(n)
+	case int:
+		return n
+	case float64:
+		return int(n)
+	}
+	return 0
 }
 
 // noRepositoryScope is the authorization scope a work item with no repository

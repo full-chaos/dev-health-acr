@@ -3640,6 +3640,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Cohort:                   graphContext.Cohort,
 		Requirements:             mergedFactRequirements,
 		RequestedRepositoryScope: copyRequestedRepositoryScope(request.RequestedScope.RepositorySlugs),
+		PullRequestStatus:        PullRequestStatusFilterOf(familyOutcome.Frame),
 	}
 	// The invariant, asserted rather than assumed (CHAOS-3810). The guard
 	// above is what makes this unreachable today; this is what keeps it
