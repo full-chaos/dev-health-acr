@@ -842,13 +842,18 @@ import (
 // carries the pruned answer for such a question. The census also sheds rows under a small byte
 // budget and serves the count it cut.
 //
-// v171 -> v172: a not_applicable outcome row names why (fact_no_declaring_producer,
+// v171 -> v172: a scoped question whose anchor cannot be bound to one subject
+// (several committed subjects of the anchor kind and no anchor term matched
+// one, or none committed at that kind) is a clarification, not a generic
+// cohort. An answer saved under v171 for such a question holds the cohort.
+//
+// v172 -> v173: a not_applicable outcome row names why (fact_no_declaring_producer,
 // observed), and a grouped question whose group axis the source cannot place
 // states its group-axis requirement not_applicable with that cause instead of
 // unavailable or not_attempted, so the answer is no longer degraded by it. A
 // candidate saved under an earlier version holds the unexplained or degraded account and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v172"
+const QueryVersion = "devhealthfacts.clickhouse.v173"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
