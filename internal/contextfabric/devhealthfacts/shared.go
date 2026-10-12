@@ -836,11 +836,17 @@ import (
 // repository's pull requests) and cites review.v2. A candidate saved under
 // v169 may hold another pull request's review state and must not be reused.
 //
-// v170 -> v171: with the anchor binding count switch on, a follow-up whose
+// v170 -> v171: a team or project question for continuous integration, deployments, incidents or
+// operational deficiencies reaches those facts through the entity tree (ownership rows, and linked
+// pull request rows) where it was pruned with no reach; a candidate saved under an earlier version
+// carries the pruned answer for such a question. The census also sheds rows under a small byte
+// budget and serves the count it cut.
+//
+// v171 -> v172: with the anchor binding count switch on, a follow-up whose
 // admitted carried binding (or redeemed anchor receipt) names another anchor
 // kind than the model states counts, discovers and captures under the
 // binding's kind, so a stored count answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v171"
+const QueryVersion = "devhealthfacts.clickhouse.v172"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -66,14 +66,14 @@ func TestQueryVersionMovedPastTheFlowNotTrackedMeasure(t *testing.T) {
 
 // With the anchor binding count switch on, a follow-up counts, discovers and
 // captures under the binding's anchor kind, so an answer stored before it
-// (v170 and before) must not be reused.
+// (v171 and before) must not be reused.
 func TestQueryVersionMovedPastTheBoundAnchorKind(t *testing.T) {
 	const prefix = "devhealthfacts.clickhouse.v"
 	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
 	if !ok {
 		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
 	}
-	if n, err := strconv.Atoi(version); err != nil || n < 171 {
-		t.Fatalf("QueryVersion = %q: an answer saved before the bound anchor kind (v170 and before) must not be reused", devhealthfacts.QueryVersion)
+	if n, err := strconv.Atoi(version); err != nil || n < 172 {
+		t.Fatalf("QueryVersion = %q: an answer saved before the bound anchor kind (v171 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }
