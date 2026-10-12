@@ -49,3 +49,21 @@ func TestAssemblerGuidanceNamesTheItemsItRestsOn(t *testing.T) {
 		t.Fatalf("guidance does not name its item: %#v %#v", packet.RequiredChecks, packet.RecommendedNextSteps)
 	}
 }
+
+func TestAssemblerSummaryReadsABareGraphTokenAsWords(t *testing.T) {
+	request := fixtureRequest("req-graph-summary", "main", "")
+	edge := testEvidence("ev-graph-edge", "dev_health", time.Date(2026, 1, 15, 11, 0, 0, 0, time.UTC))
+	edge.Source.EntityType = "work_graph_edge"
+	edge.Citation = "linear_attachment"
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      []contractsv1.EvidenceRef{edge},
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if got := packet.Items[0].Summary; got != "linked via linear attachment" {
+		t.Fatalf("summary = %q", got)
+	}
+}

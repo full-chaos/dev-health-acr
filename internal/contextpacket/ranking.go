@@ -3,6 +3,7 @@ package contextpacket
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -179,11 +180,20 @@ func evidenceItem(ref contractsv1.EvidenceRef, scope contractsv1.ResolvedScope) 
 	rule := evidenceRule(ref)
 	logExplicitRuleRejection(ref)
 	return contractsv1.ContextPacketItem{SchemaVersion: contractsv1.ContextPacketItemSchema, PacketItemID: itemID(ref.EvidenceRefID),
-		Category: rule.category, ClaimKind: rule.claim, Title: truncateRunes(ref.Source.DisplayLabel, 500), Summary: ref.Citation,
+		Category: rule.category, ClaimKind: rule.claim, Title: truncateRunes(ref.Source.DisplayLabel, 500), Summary: evidenceSummary(ref),
 		WhyIncluded: "Untrusted retrieved evidence matched the resolved scope.", RuleID: rule.id, Confidence: ref.Confidence,
 		Severity: rule.severity, ValidityScope: contractsv1.ValidityScope{Branch: scope.Branch, CommitSHA: scope.CommitSHA},
 		Flags:           contractsv1.ItemFlags{Stale: ref.Availability == contractsv1.EvidenceStale, Uncertain: ref.Confidence < minimumEvidenceConfidence, UntrustedContent: true},
 		RelatedEntities: []contractsv1.RelatedEntity{{Type: ref.Source.EntityType, ID: ref.Source.EntityID, Label: ref.Source.DisplayLabel, URL: ref.Source.SafeURI}}, EvidenceRefIDs: []string{ref.EvidenceRefID}}
+}
+
+var bareTokenPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+func evidenceSummary(ref contractsv1.EvidenceRef) string {
+	if ref.Source.EntityType == "work_graph_edge" && bareTokenPattern.MatchString(ref.Citation) {
+		return "linked via " + strings.ReplaceAll(ref.Citation, "_", " ")
+	}
+	return ref.Citation
 }
 
 func itemID(evidenceRefID string) string {

@@ -97,9 +97,6 @@ func TestWorkGraphLabelsUseDisplayNamesAndWithholdUnreadableNames(t *testing.T) 
 			}
 		}
 	}
-	if got := byID["e-pr-issue"].Citation; got != "linked via linear attachment" {
-		t.Errorf("citation = %q, want words", got)
-	}
 }
 
 func TestWorkGraphLabelStatementMemoryFollowsItsOwnEdges(t *testing.T) {
