@@ -83,6 +83,7 @@ func TestDeficiencyFactRuleBasisAgainstLatestRows(t *testing.T) {
 		wantMoved          *bool
 		wantReason         string
 		wantSeverityReason string
+		wantScoreReason    string
 		wantSeverity       *string
 	}{
 		{name: "band changed", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "high", uint8(1), 0.55, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.55), wantMoved: ptrBool(true), wantSeverity: ptrStr("high")},
@@ -90,11 +91,11 @@ func TestDeficiencyFactRuleBasisAgainstLatestRows(t *testing.T) {
 		{name: "same band, small delta", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "elevated", uint8(1), 0.53, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.53), wantMoved: ptrBool(false), wantSeverity: ptrStr("elevated")},
 		{name: "unparsed rationale", rationale: "The team's risk is compounding.", latest: [][]any{{"team-1", "high", uint8(1), 0.72, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantLatest: ptrNum(0.72), wantSeverity: ptrStr("high")},
 		{name: "no latest row", rationale: ruleBasisRationale, wantBasis: ptrNum(0.509), wantReason: "no_compounding_risk_row"},
-		{name: "latest band unknown, no score", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "unknown", uint8(0), 0.0, "2026-10-12 00:30:00", "2026-10-11", uint8(0), uint8(1)}}, wantBasis: ptrNum(0.509), wantSeverityReason: "no_known_severity_breakdown_rows"},
+		{name: "latest band unknown, no score", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "unknown", uint8(0), 0.0, "2026-10-12 00:30:00", "2026-10-11", uint8(0), uint8(1)}}, wantBasis: ptrNum(0.509), wantSeverityReason: "no_known_severity_breakdown_rows", wantScoreReason: "compounding_risk_null_on_latest_row"},
 		{name: "latest band unknown, score present", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "unknown", uint8(1), 0.72, "2026-10-12 00:30:00", "2026-10-11", uint8(0), uint8(1)}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.72), wantMoved: ptrBool(true), wantSeverityReason: "no_known_severity_breakdown_rows"},
 		{name: "known band outside the freshness window", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "high", uint8(1), 0.72, "2026-10-12 00:30:00", "2026-08-01", uint8(1), uint8(0)}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.72), wantMoved: ptrBool(true), wantSeverityReason: "known_severity_stale_beyond_freshness_window"},
-		{name: "same band, score missing", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "elevated", uint8(0), 0.0, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantSeverity: ptrStr("elevated")},
-		{name: "different band, score missing", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "high", uint8(0), 0.0, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantMoved: ptrBool(true), wantSeverity: ptrStr("high")},
+		{name: "same band, score missing", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "elevated", uint8(0), 0.0, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantSeverity: ptrStr("elevated"), wantScoreReason: "compounding_risk_null_on_latest_row"},
+		{name: "different band, score missing", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "high", uint8(0), 0.0, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantMoved: ptrBool(true), wantSeverity: ptrStr("high"), wantScoreReason: "compounding_risk_null_on_latest_row"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -127,6 +128,13 @@ func TestDeficiencyFactRuleBasisAgainstLatestRows(t *testing.T) {
 				t.Fatalf("latest_unavailable_reason = %q, want absent", *reason)
 			case tc.wantReason != "" && (reason == nil || *reason != tc.wantReason):
 				t.Fatalf("latest_unavailable_reason = %#v, want %q", reason, tc.wantReason)
+			}
+			scoreReason := fields["latest_score_unavailable_reason"].String
+			switch {
+			case tc.wantScoreReason == "" && scoreReason != nil:
+				t.Fatalf("latest_score_unavailable_reason = %q, want absent", *scoreReason)
+			case tc.wantScoreReason != "" && (scoreReason == nil || *scoreReason != tc.wantScoreReason):
+				t.Fatalf("latest_score_unavailable_reason = %#v, want %q", scoreReason, tc.wantScoreReason)
 			}
 			severityReason := fields["latest_severity_unavailable_reason"].String
 			switch {

@@ -349,6 +349,7 @@ const compoundingRiskMovedDelta = 0.1
 
 const (
 	latestUnavailableNoRow              = "no_compounding_risk_row"
+	latestScoreUnavailableNull          = "compounding_risk_null_on_latest_row"
 	ruleBasisUnavailableNotRuleSentence = "rationale_not_in_rule_sentence_form"
 )
 
@@ -439,6 +440,8 @@ func (p *OperationalDeficienciesProvider) latestFields(latest latestCompoundingR
 	fields["latest_as_of_day"] = contextfabric.StringFactValue(latest.day)
 	if latest.hasRisk {
 		fields["latest_compounding_risk"] = contextfabric.NumberFactValue(latest.risk)
+	} else {
+		fields["latest_score_unavailable_reason"] = contextfabric.StringFactValue(latestScoreUnavailableNull)
 	}
 	bandServed := latest.known && latest.fresh
 	switch {

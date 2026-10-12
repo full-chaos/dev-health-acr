@@ -50,7 +50,7 @@ FactActualCompletion
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            749
+    calls followed            750
     calls accounted           13
     calls not_a_call          11
     calls excluded_by_design  107
@@ -66,7 +66,7 @@ FactBlockers
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            765
+    calls followed            766
     calls accounted           13
     calls not_a_call          9
     calls excluded_by_design  161
@@ -82,7 +82,7 @@ FactContinuousIntegration
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            730
+    calls followed            731
     calls accounted           13
     calls not_a_call          1
     calls excluded_by_design  84
@@ -98,7 +98,7 @@ FactDeployments
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            753
+    calls followed            754
     calls accounted           13
     calls not_a_call          5
     calls excluded_by_design  152
@@ -114,7 +114,7 @@ FactFlow
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            817
+    calls followed            818
     calls accounted           13
     calls not_a_call          11
     calls excluded_by_design  208
@@ -130,7 +130,7 @@ FactHealth
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            807
+    calls followed            808
     calls accounted           13
     calls not_a_call          9
     calls excluded_by_design  174
@@ -146,7 +146,7 @@ FactIdentity
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            741
+    calls followed            742
     calls accounted           13
     calls not_a_call          3
     calls excluded_by_design  101
@@ -162,7 +162,7 @@ FactIncidents
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            753
+    calls followed            754
     calls accounted           13
     calls not_a_call          5
     calls excluded_by_design  143
@@ -178,7 +178,7 @@ FactInvestment
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         7
-    calls followed            931
+    calls followed            932
     calls accounted           14
     calls not_a_call          26
     calls excluded_by_design  503
@@ -194,7 +194,7 @@ FactLandscape
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            746
+    calls followed            747
     calls accounted           13
     calls not_a_call          5
     calls excluded_by_design  118
@@ -210,7 +210,7 @@ FactMembership
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            730
+    calls followed            731
     calls accounted           13
     calls not_a_call          1
     calls excluded_by_design  75
@@ -226,7 +226,7 @@ FactMetrics
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            771
+    calls followed            772
     calls accounted           13
     calls not_a_call          4
     calls excluded_by_design  181
@@ -242,12 +242,12 @@ FactOperationalDeficiencies
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            753
+    calls followed            754
     calls accounted           13
     calls not_a_call          2
-    calls excluded_by_design  113
+    calls excluded_by_design  114
     calls leaked              8
-  fields             latest_as_of_day latest_compounding_risk latest_computed_at latest_severity latest_severity_unavailable_reason latest_unavailable_reason rationale rule_basis_compounding_risk rule_basis_severity rule_basis_unavailable_reason rule_computed_at rule_id rule_version score_moved_since_rule severity success_criterion title window_end window_start
+  fields             latest_as_of_day latest_compounding_risk latest_computed_at latest_score_unavailable_reason latest_severity latest_severity_unavailable_reason latest_unavailable_reason rationale rule_basis_compounding_risk rule_basis_severity rule_basis_unavailable_reason rule_computed_at rule_id rule_version score_moved_since_rule severity success_criterion title window_end window_start
 
 FactPullRequests
   reached_funcs      97
@@ -258,7 +258,7 @@ FactPullRequests
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            749
+    calls followed            750
     calls accounted           13
     calls not_a_call          6
     calls excluded_by_design  134
@@ -274,7 +274,7 @@ FactReadiness
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            764
+    calls followed            765
     calls accounted           13
     calls not_a_call          6
     calls excluded_by_design  150
@@ -290,7 +290,7 @@ FactRequiredChildren
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            731
+    calls followed            732
     calls accounted           13
     calls not_a_call          4
     calls excluded_by_design  87
@@ -306,7 +306,7 @@ FactReviews
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            720
+    calls followed            721
     calls accounted           13
     calls not_a_call          2
     calls excluded_by_design  65
@@ -322,7 +322,7 @@ FactSourceHealth
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            729
+    calls followed            730
     calls accounted           13
     calls not_a_call          1
     calls excluded_by_design  67
@@ -338,7 +338,7 @@ FactStatus
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            735
+    calls followed            736
     calls accounted           15
     calls not_a_call          5
     calls excluded_by_design  115
@@ -354,7 +354,7 @@ FactWork
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            728
+    calls followed            729
     calls accounted           13
     calls not_a_call          4
     calls excluded_by_design  79
@@ -370,7 +370,7 @@ FactWorkload
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            766
+    calls followed            767
     calls accounted           13
     calls not_a_call          9
     calls excluded_by_design  158

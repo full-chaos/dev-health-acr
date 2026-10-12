@@ -496,6 +496,7 @@ func deficiencyFields() []fieldDecl {
 		declFresh(fStr("latest_as_of_day")),
 		fStr("latest_unavailable_reason"),
 		fStr("latest_severity_unavailable_reason"),
+		fStr("latest_score_unavailable_reason"),
 		fStr("rule_basis_unavailable_reason"),
 		fBool("score_moved_since_rule"),
 	}
