@@ -446,6 +446,21 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			e.recordPlanNarrowing(ctx, principal, event)
 			return trim.Result, firstPass, nil
 		}
+		// MEMBER CUT: the retry is the only other lever that removes members,
+		// and it was declined. The pass-1 draft is assembled again over the
+		// cohort with its uncited trailing members removed -- one assembly, no
+		// model call -- so the count, the claim, the sentence and every row
+		// come from the cut cohort rather than from a patched document.
+		if overrun == contractsv1.ContextFabricBudgetOverrunItems && params.WorkItemCensus == nil && trim.Reduced.Status == "" {
+			memberCut, cutErr := e.planMemberCut(ctx, principal, plan, params, firstPass, result, budget, measured)
+			if cutErr != nil {
+				return InvestigationResult{}, firstPass, cutErr
+			}
+			e.recordMemberCut(ctx, principal, plan, measured, memberCut, budget)
+			if memberCut.Served {
+				return memberCut.Result, memberCut.Pending, nil
+			}
+		}
 		// The items cut left a document that fits the item ceiling and not
 		// the byte ceiling (items are reported first when both are over, so
 		// the byte levers above did not run): continue the byte ladder from
@@ -1019,6 +1034,16 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 		// order that did not execute.
 		return narrowedInput{Graph: graph, Facts: facts, Before: before, After: before, Basis: basis}
 	}
+	return narrowedInputOver(params, graph, facts, cohort, kept, before, basis)
+}
+
+// narrowedInputOver is the tail of every narrowing: the kept members become the
+// cohort, the cohort is re-ranked among itself (RankCohort normalizes workload
+// WITHIN the cohort, so scores computed against a wider member set do not
+// describe it), and the facts are retained for what is left. The cohort retry
+// and the member cut both end here, so a cut cohort is ranked, cited and
+// evidenced exactly as a retried one is.
+func narrowedInputOver(params synthesisAssemblyParams, graph GraphContext, facts CanonicalFactBundle, cohort *Cohort, kept []CohortMember, before int, basis contractsv1.ContextFabricNarrowingBasis) narrowedInput {
 	removed := RemovedCohortMembers(cohort.Members, kept)
 	cohort.Members = kept
 	if len(cohort.Groups) > 0 {

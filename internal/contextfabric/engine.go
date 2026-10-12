@@ -1321,7 +1321,11 @@ type Engine struct {
 	// after the stage-3 fit and the late writers, inside finalizeServed. Always
 	// nil in production. It lets a test prove the final fit does not depend on
 	// knowing which writers run last.
-	servedLateHook           func(InvestigationResult) InvestigationResult
+	servedLateHook func(InvestigationResult) InvestigationResult
+	// assemblyObserver is a test seam: it sees the params and the assembled
+	// document of every synthesizeAndAssemble pass, so a row can re-run a pass
+	// with its own draft and compare the two documents.
+	assemblyObserver         func(synthesisAssemblyParams, InvestigationResult, assemblyTelemetry)
 	maxItems                 int
 	maxSerializedBytes       int64
 	synthesisDeadlineReserve time.Duration
