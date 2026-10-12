@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"unicode/utf8"
@@ -98,8 +99,10 @@ const (
 	// (transport, provider, or context deadline). Structural labels ship
 	// unchanged.
 	OfferPhrasingCallFailed OfferPhrasingOutcome = "call_failed"
-	// OfferPhrasingWithheld: the turn may not run on the deployment model,
-	// so no call was made. Structural labels ship unchanged.
+	// OfferPhrasingWithheld: no model may or can serve this turn -- the
+	// deployment model is withheld and the organization has no model of its
+	// own, or no usable runtime is configured -- so no call was made.
+	// Structural labels ship unchanged.
 	OfferPhrasingWithheld OfferPhrasingOutcome = "withheld_platform_model"
 )
 
@@ -262,6 +265,9 @@ func (r RuntimeOfferPhraser) Phrase(ctx context.Context, principal storage.Princ
 // pass -- "fail-open to structure, never to the model" means a partially-
 // trusted model response is treated the same as an untrusted one.
 func classifyOfferPhrasingDraft(input StructureOfferPhrasingInput, draft StructureOfferPhrasingDraft, callErr error) (OfferPhrasingOutcome, map[string]string) {
+	if errors.Is(callErr, ErrPlatformModelWithheld) {
+		return OfferPhrasingWithheld, nil
+	}
 	if callErr != nil {
 		return OfferPhrasingCallFailed, nil
 	}
@@ -348,12 +354,6 @@ func (e *Engine) applyOfferPhrasing(ctx context.Context, principal storage.Princ
 	}
 	options := phrasableOptions(needs)
 	if len(options) == 0 {
-		return needs
-	}
-	if PlatformModelWithheld(ctx) {
-		if e.telemetry != nil {
-			e.telemetry.RecordOfferPhrasing(ctx, principal, OfferPhrasingWithheld)
-		}
 		return needs
 	}
 	result := e.offerPhraser.Phrase(ctx, principal, StructureOfferPhrasingInput{Options: options, RequestID: requestID})

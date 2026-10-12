@@ -852,14 +852,26 @@ import (
 // repository column; team totals count an item once across the team's repositories. A candidate
 // saved under v172 holds the column-based repositories and totals.
 //
-// v173 -> v174: a team reaches work through the projects it owns as well as the
+// v173 -> v174: a not_applicable outcome row names why (fact_no_declaring_producer,
+// observed), and a grouped question whose group axis the source cannot place
+// states its group-axis requirement not_applicable with that cause instead of
+// unavailable or not_attempted, so the answer is no longer degraded by it. A
+// candidate saved under an earlier version holds the unexplained or degraded account and must not be
+// reused.
+//
+// v174 -> v175: with the anchor binding count switch on, a follow-up whose
+// admitted carried binding (or redeemed anchor receipt) names another anchor
+// kind than the model states counts, discovers and captures under the
+// binding's kind, so a stored count answer can differ.
+//
+// v175 -> v176: a team reaches work through the projects it owns as well as the
 // repositories it owns. The pull request rollup adds the pull requests linked to
 // an owned project's issues (a reached repository counts its linked pull
 // requests only), the blockers total is the union of owned repositories and
 // owned-project items counted once, and deployments, incidents and metrics name
 // the project-reached repositories they have no rows for. A candidate saved
-// under v173 holds a team total over owned repositories alone.
-const QueryVersion = "devhealthfacts.clickhouse.v174"
+// under v175 holds a team total over owned repositories alone.
+const QueryVersion = "devhealthfacts.clickhouse.v176"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
