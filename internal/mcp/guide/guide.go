@@ -3,7 +3,10 @@
 // identical for every caller. This package links no engine code.
 package guide
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 //go:generate go run ./gen
 
@@ -58,11 +61,30 @@ func Resources() []Resource {
 	return out
 }
 
-// Text returns the embedded text of a resource.
+// VariantFile names the generated file served to a caller that cannot list
+// investigate_question.
+func VariantFile(file string) string {
+	return strings.TrimSuffix(file, ".md") + ".no-service-model.md"
+}
+
+// Text returns the embedded text of a resource for a caller that can list
+// investigate_question.
 func Text(uri string) (string, error) {
+	return TextFor(uri, true)
+}
+
+// TextFor returns the embedded text of a resource. A caller without the
+// service model gets the variant that does not name investigate_question,
+// where the generator wrote one.
+func TextFor(uri string, serviceModel bool) (string, error) {
 	for _, r := range resources {
 		if r.URI != uri {
 			continue
+		}
+		if !serviceModel {
+			if text, ok := generated[VariantFile(r.File)]; ok && text != "" {
+				return text, nil
+			}
 		}
 		text, ok := generated[r.File]
 		if !ok || text == "" {
