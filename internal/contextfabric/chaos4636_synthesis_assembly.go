@@ -348,9 +348,15 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// Corrected here, once per pass, immediately before synthesis reads
 	// Coverage.Details, mirroring where the cardinality step reads it.
 	graphContext.Coverage = correctKindCensusTruncatedCoverage(graphContext.Coverage, graphContext.Cohort)
+	inputGraph := graphContext
+	if graphContext.Cohort == nil && clientSynthesisRequested(request) {
+		if candidates, _, _ := projectStatusDrivers(interpretation, params.Resolution.Committed, facts.Facts, nil, nil, synthesisAllocation); len(candidates) > 0 {
+			inputGraph.DriverCandidates = append(append([]DriverJudgment(nil), graphContext.DriverCandidates...), projectStatusDriverCandidates(candidates)...)
+		}
+	}
 	synthesisInput, _ := canonicalizeSynthesisSubjectLabels(SynthesisInput{
 		Allocation: synthesisAllocation,
-		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
+		Request:    request, Interpretation: interpretation, Graph: inputGraph, Facts: facts,
 		EvidenceWindow: effectiveWindow, ReadTimeClamp: params.ReadTimeClamp,
 		EvidenceWindowFromClock: windowBoundsFromClock(effectiveWindow, params.WindowCanon.KeyEncoding, params.WindowCarried),
 	})
@@ -667,6 +673,22 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 		pending.CohortNarration = &narrationEvent
 	}
+	if graphContext.Cohort == nil {
+		statusDrivers, statusClaims, statusEvent := projectStatusDrivers(interpretation, result.SubjectResolution.Committed, facts.Facts, result.Drivers, result.ClaimedFacts, synthesisAllocation)
+		pending.ProjectStatusDrivers = statusEvent
+		if len(statusDrivers) > 0 {
+			if err := validateMintedClaimsGrounded(statusClaims, facts.Facts); err != nil {
+				return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+			}
+			result.Drivers = append(result.Drivers, statusDrivers...)
+			result.ClaimedFacts = append(result.ClaimedFacts, statusClaims...)
+			if !clientSynthesisWithoutDraft(request) {
+				result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
+				result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
+				result.CurrentState = composeCurrentState(SynthesisDraft{ClaimedFacts: result.ClaimedFacts})
+			}
+		}
+	}
 	// THE PROSE, COMPOSED AFTER THE RECOMPOSE -- and the split from the mint
 	// above is deliberate, not an accident of layout.
 	//
@@ -864,6 +886,7 @@ type assemblyTelemetry struct {
 	WindowCanonicalization  *WindowCanonicalizationOutcome
 	SynthesisStatusOverride *SynthesisStatusOverrideOutcome
 	CohortNarration         *CohortDriverNarrationEvent
+	ProjectStatusDrivers    *ProjectStatusDriverEvent
 	// CohortRanked is seeded by the engine from the pre-synthesis ranking and
 	// REPLACED by stage 3 when a retry re-ranks a narrowed cohort, so the
 	// event published always describes the cohort actually served.
@@ -927,6 +950,9 @@ func (e *Engine) emit(ctx context.Context, principal storage.Principal, pending 
 	}
 	if e.telemetry != nil && pending.CohortNarration != nil {
 		e.telemetry.RecordCohortDriverNarration(ctx, principal, *pending.CohortNarration)
+	}
+	if e.telemetry != nil && pending.ProjectStatusDrivers != nil {
+		e.telemetry.RecordProjectStatusDrivers(ctx, principal, *pending.ProjectStatusDrivers)
 	}
 	e.recordCommitAffirmation(ctx, principal, pending.CommitAffirmations)
 	e.recordCommitKeptByNoMemberFound(ctx, principal, pending.CommitKeptByNoMemberFound)

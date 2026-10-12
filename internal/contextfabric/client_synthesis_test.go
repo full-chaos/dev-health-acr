@@ -25,7 +25,7 @@ const clientTestMaxBytes = 128 << 10
 // production encoder does.
 func clientTestEncode(orgID string, input SynthesisInput, maxBytes int) ([]byte, error) {
 	encoded, err := json.Marshal(map[string]any{
-		"org_id": orgID, "question": input.Request.Question, "facts": input.Facts.Facts, "paths": input.Graph.Paths,
+		"org_id": orgID, "question": input.Request.Question, "facts": input.Facts.Facts, "paths": input.Graph.Paths, "driver_candidates": input.Graph.DriverCandidates,
 	})
 	if err != nil {
 		return nil, err

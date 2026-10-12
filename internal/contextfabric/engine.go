@@ -1135,6 +1135,9 @@ type EngineTelemetry interface {
 	// anything was actually emitted -- budget_exhausted and no_drivers are
 	// themselves the diagnosable event, not a silent no-op.
 	RecordCohortDriverNarration(ctx context.Context, principal storage.Principal, event CohortDriverNarrationEvent)
+	// RecordProjectStatusDrivers reports one project status driver decision:
+	// counts and closed fact kinds only.
+	RecordProjectStatusDrivers(ctx context.Context, principal storage.Principal, event ProjectStatusDriverEvent)
 	// RecordEvidenceLabelFallback (CHAOS-4690 item 4, design §3.2) reports
 	// how many entries in ONE result's EvidenceRefLabels map fell back to
 	// the generic "Evidence"/"Evidence: <id>" label because their

@@ -948,7 +948,11 @@ import (
 // raw text and degraded reason state the served member count (only Served did
 // before). The narrowing disclosures no longer advise a larger response
 // budget. A candidate saved under v188 may hold the stale fields.
-const QueryVersion = "devhealthfacts.clickhouse.v189"
+//
+// v189 -> v190: a project status answer now carries backlog, estimate coverage
+// and risk severity as drivers with minted claims. An answer saved under v189
+// has none.
+const QueryVersion = "devhealthfacts.clickhouse.v190"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
