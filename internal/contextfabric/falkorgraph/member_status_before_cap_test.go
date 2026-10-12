@@ -453,15 +453,15 @@ func TestAnOverBoundLinkPoolIsNotReportedAsExact(t *testing.T) {
 	}
 }
 
-// TestPoolSiteStatusCountsOnlyReadablePullRequests: an organization anchor is
-// off the entity tree, so its pull requests reach the pool through the
-// lexical arm and the status filters the pool. One open pull request is inside
-// the caller's grants and one outside; the status line counts and keeps only
-// the readable one.
-func TestPoolSiteStatusCountsOnlyReadablePullRequests(t *testing.T) {
-	type pr struct{ id, repo string }
-	pulls := []pr{{"pull_request:alpha:001", "full-chaos/alpha"}, {"pull_request:alpha:002", "acme/hidden"}}
-	pullNode := func(p pr) *node {
+type poolSitePullRequest struct{ id, repo string }
+
+// discoverPoolSitePullRequests asks for the open pull requests of an
+// organization anchor, off the entity tree, so they reach the pool through the
+// lexical arm and the status filters the pool. The caller may read
+// full-chaos/alpha only.
+func discoverPoolSitePullRequests(t *testing.T, pulls []poolSitePullRequest) (contextfabric.GraphContext, *recordingTelemetry) {
+	t.Helper()
+	pullNode := func(p poolSitePullRequest) *node {
 		return &node{Properties: map[string]interface{}{propKind: "pull_request", propCanonicalID: p.id, propLabel: p.id,
 			propAuthzRepos: []string{p.repo}, propPropertyPrefix + "state": "open"}}
 	}
@@ -502,9 +502,18 @@ func TestPoolSiteStatusCountsOnlyReadablePullRequests(t *testing.T) {
 	request.Request.Question = "which pull requests of Acme are open?"
 	telemetry := &recordingTelemetry{}
 	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/alpha"}}
-	if _, err := newFakeAdapterWithTelemetry(t, fake, telemetry).DiscoverContext(context.Background(), principal, request); err != nil {
+	result, err := newFakeAdapterWithTelemetry(t, fake, telemetry).DiscoverContext(context.Background(), principal, request)
+	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
+	return result, telemetry
+}
+
+// TestPoolSiteStatusCountsOnlyReadablePullRequests: one open pull request is
+// inside the caller's grants and one outside; the status line counts and keeps
+// only the readable one.
+func TestPoolSiteStatusCountsOnlyReadablePullRequests(t *testing.T) {
+	_, telemetry := discoverPoolSitePullRequests(t, []poolSitePullRequest{{"pull_request:alpha:001", "full-chaos/alpha"}, {"pull_request:alpha:002", "acme/hidden"}})
 	if len(telemetry.pullRequestStatusFilters) != 1 {
 		t.Fatalf("status filter lines = %+v, want one", telemetry.pullRequestStatusFilters)
 	}
@@ -512,4 +521,43 @@ func TestPoolSiteStatusCountsOnlyReadablePullRequests(t *testing.T) {
 	if line.Site != PullRequestStatusFilterSitePool || line.Candidates != 1 || line.Kept != 1 {
 		t.Fatalf("status filter line = %+v, want the pool site counting the one readable pull request", line)
 	}
+}
+
+// TestNoReadablePullRequestRevealsNone: the caller can read none of the pull
+// requests reached, on the pool site and on the anchor's member read. Nothing
+// is served, no empty complete set says pull requests were reached, and the
+// status line counts none.
+func TestNoReadablePullRequestRevealsNone(t *testing.T) {
+	assertNone := func(t *testing.T, result contextfabric.GraphContext, telemetry *recordingTelemetry) {
+		t.Helper()
+		if result.Cohort != nil && (len(result.Cohort.Members) != 0 || result.Cohort.Complete || result.Cohort.Rationale == pullRequestStatusNoMatchRationale) {
+			t.Fatalf("cohort = %+v, want no member set that says pull requests were reached", result.Cohort)
+		}
+		for _, line := range telemetry.pullRequestStatusFilters {
+			if line.Candidates != 0 || line.Kept != 0 {
+				t.Fatalf("status filter line = %+v, want no hidden pull request counted", line)
+			}
+		}
+	}
+	t.Run("pool site", func(t *testing.T) {
+		result, telemetry := discoverPoolSitePullRequests(t, []poolSitePullRequest{{"pull_request:alpha:001", "acme/hidden"}, {"pull_request:alpha:002", "acme/hidden"}})
+		assertNone(t, result, telemetry)
+	})
+	t.Run("member read", func(t *testing.T) {
+		fixtures := []pullRequestStatusFixture{
+			{id: "pull_request:alpha:001", state: "open", hidden: true},
+			{id: "pull_request:alpha:002", state: "merged", hidden: true},
+		}
+		adapter := newFakeAdapter(t, pullRequestStatusFake(fixtures, nil))
+		team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:alpha", Label: "Alpha"}
+		principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/alpha"}}
+		walk, err := adapter.treeMembersOf(context.Background(), "graph", "org-1", principal, contextfabric.RequestedScope{}, team, treePullRequest, 25,
+			temporalFilter{}, false, false, memberStatusPredicate{kind: contextfabric.SubjectPullRequest, status: "open"})
+		if err != nil {
+			t.Fatalf("treeMembersOf() error = %v", err)
+		}
+		if len(walk.nodes) != 0 || walk.status.reached || walk.status.read != 0 {
+			t.Fatalf("members=%d reached=%v read=%d, want none: the caller can read no pull request the anchor reaches", len(walk.nodes), walk.status.reached, walk.status.read)
+		}
+	})
 }

@@ -310,7 +310,7 @@ func TestMemberStatusForACallerWhoCanReadNoneOfTheReachedMembers(t *testing.T) {
 	if result.MemberStatusOutsideSet.Count != 0 {
 		t.Fatalf("outside the known set = %+v, want a count of 0", result.MemberStatusOutsideSet)
 	}
-	want := []PullRequestStatusFilterDecision{{MemberKind: contextfabric.SubjectIncident, Status: "open"}}
+	want := []PullRequestStatusFilterDecision{{MemberKind: contextfabric.SubjectIncident, Status: "open", Site: PullRequestStatusFilterSitePool, Pool: -1}}
 	if !reflect.DeepEqual(telemetry.pullRequestStatusFilters, want) {
 		t.Fatalf("status filter lines = %+v, want %+v (0 candidates)", telemetry.pullRequestStatusFilters, want)
 	}
