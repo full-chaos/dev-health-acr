@@ -190,9 +190,12 @@ func TestMemberStatusReadsCarryTheStatusInsideTheRead(t *testing.T) {
 	if !strings.Contains(link, clause) || strings.Index(link, clause) > strings.Index(link, "SKIP") {
 		t.Fatalf("link read %q does not carry the status before its pages", link)
 	}
-	outside := memberStatusPredicate{kind: contextfabric.SubjectProject, status: "started"}.outsideClause()
-	if got := outside.predicate("b"); !strings.Contains(got, "IS NULL OR NOT toLower(trim(b."+propPropertyPrefix+"state)) IN $bstatus") {
-		t.Fatalf("outside clause = %q", got)
+	project := memberStatusPredicate{kind: contextfabric.SubjectProject, status: "started"}
+	if got := project.clause().predicate("b"); got != " AND b."+propPropertyPrefix+"state IN $bstatus" {
+		t.Fatalf("project clause = %q, want an exact compare: acr holds no synonyms", got)
+	}
+	if got := project.outsideClause().predicate("b"); got != " AND (b."+propPropertyPrefix+"state IS NULL OR NOT b."+propPropertyPrefix+"state IN $bstatus)" {
+		t.Fatalf("outside clause = %q, want an exact compare", got)
 	}
 	if (memberStatusPredicate{kind: contextfabric.SubjectPullRequest, status: "open"}).outsideClause().set() {
 		t.Fatalf("pull requests have no outside count, so no outside clause")

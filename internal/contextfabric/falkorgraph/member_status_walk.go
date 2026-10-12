@@ -8,13 +8,16 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// nodeStatusClause keeps the reached nodes by a stored status, compared as
-// contextfabric.NormalizeStoredMemberStatus compares it (lower case, trimmed).
-// The zero value keeps every node.
+// nodeStatusClause keeps the reached nodes by a stored status. A project or
+// incident status is compared exactly (acr holds no synonyms); a pull request
+// state is compared as contextfabric.PullRequestStatusMatches compares it. The
+// zero value keeps every node.
 type nodeStatusClause struct {
 	// property is the stored node property, with its prefix.
 	property string
 	values   []interface{}
+	// fold compares the stored value lower case and trimmed.
+	fold bool
 	// outside inverts the clause: the nodes whose status is absent or not one
 	// of values.
 	outside bool
@@ -23,13 +26,17 @@ type nodeStatusClause struct {
 func (c nodeStatusClause) set() bool { return c.property != "" }
 
 func (c nodeStatusClause) predicate(variable string) string {
-	switch {
-	case !c.set():
+	if !c.set() {
 		return ""
-	case c.outside:
-		return fmt.Sprintf(" AND (%[1]s.%[2]s IS NULL OR NOT toLower(trim(%[1]s.%[2]s)) IN $bstatus)", variable, c.property)
 	}
-	return fmt.Sprintf(" AND toLower(trim(%s.%s)) IN $bstatus", variable, c.property)
+	value := variable + "." + c.property
+	if c.fold {
+		value = "toLower(trim(" + value + "))"
+	}
+	if c.outside {
+		return fmt.Sprintf(" AND (%s.%s IS NULL OR NOT %s IN $bstatus)", variable, c.property, value)
+	}
+	return fmt.Sprintf(" AND %s IN $bstatus", value)
 }
 
 func (c nodeStatusClause) bind(params map[string]interface{}) {
@@ -87,7 +94,7 @@ func (p memberStatusPredicate) clause() nodeStatusClause {
 	if p.reviewDerived() {
 		value = contextfabric.PullRequestStatusOpen
 	}
-	return nodeStatusClause{property: p.storedProperty(), values: []interface{}{value}}
+	return nodeStatusClause{property: p.storedProperty(), values: []interface{}{value}, fold: p.kind == contextfabric.SubjectPullRequest}
 }
 
 // outsideClause keeps the nodes whose stored status is outside the kind's
