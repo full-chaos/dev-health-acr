@@ -847,13 +847,18 @@ import (
 // one, or none committed at that kind) is a clarification, not a generic
 // cohort. An answer saved under v171 for such a question holds the cohort.
 //
-// v172 -> v173: a not_applicable outcome row names why (fact_no_declaring_producer,
+// v172 -> v173: a team's blockers fact places a blocked item in the repositories its
+// linked pull request rows name (the link tier is on the fact) instead of the work item's own
+// repository column; team totals count an item once across the team's repositories. A candidate
+// saved under v172 holds the column-based repositories and totals.
+//
+// v173 -> v174: a not_applicable outcome row names why (fact_no_declaring_producer,
 // observed), and a grouped question whose group axis the source cannot place
 // states its group-axis requirement not_applicable with that cause instead of
 // unavailable or not_attempted, so the answer is no longer degraded by it. A
 // candidate saved under an earlier version holds the unexplained or degraded account and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v173"
+const QueryVersion = "devhealthfacts.clickhouse.v174"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

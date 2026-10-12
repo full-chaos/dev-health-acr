@@ -308,11 +308,22 @@ func blockersFields() []fieldDecl {
 			declCallerScoped(fInt("blocker_dependencies_current", "count")),
 			declCallerScoped(fInt("blocker_dependencies_excluded_by_status_current", "count")),
 			fStr("blocker_status_basis"),
+			// Emitted only when the team has a repository with counted links.
+			// The weakest provenance tier (native > explicit_text >
+			// heuristic) of the issue <> pull request links that placed the
+			// blocked items in their repositories.
+			fStr("repository_link_basis"),
+			// Distinct blocked items in no link row: they reach no repository
+			// and are counted under no team. Organization-wide for the
+			// caller's authorized items; withheld from a repository-restricted
+			// caller.
+			declCallerScoped(fInt("blocked_work_items_without_link_count", "count")),
 			fTable("repository_breakdown",
 				cRef(declRepositoryRef, cStr("repository_id")),
 				cNullable(cStr("repository_name")),
 				cInt("blocked_work_items_current", "count"),
 				cInt("blocker_dependencies_current", "count"),
+				cNullable(cStr("link_tier")),
 			),
 		),
 	)
