@@ -666,6 +666,20 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 		pending.CohortNarration = &narrationEvent
 	}
+	if graphContext.Cohort == nil {
+		statusDrivers, statusClaims, _ := projectStatusDrivers(interpretation, result.SubjectResolution.Committed, facts.Facts, result.Drivers, len(result.ClaimedFacts), synthesisAllocation)
+		if len(statusDrivers) > 0 {
+			if err := validateMintedClaimsGrounded(statusClaims, facts.Facts); err != nil {
+				return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+			}
+			result.Drivers = append(result.Drivers, statusDrivers...)
+			result.ClaimedFacts = append(result.ClaimedFacts, statusClaims...)
+			if !clientSynthesisWithoutDraft(request) {
+				result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
+				result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
+			}
+		}
+	}
 	// THE PROSE, COMPOSED AFTER THE RECOMPOSE -- and the split from the mint
 	// above is deliberate, not an accident of layout.
 	//
