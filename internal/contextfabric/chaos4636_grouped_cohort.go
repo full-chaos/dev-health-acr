@@ -62,9 +62,17 @@ var groupLabelColumnCandidates = []string{"team_name", "scope_name"}
 // team whose id is a project's, which is a wrong grouping rather than a
 // missing one.
 const (
-	groupScopeColumn   = "scope"
-	groupScopeTeamKind = "team"
+	groupScopeColumn      = "scope"
+	groupScopeTeamKind    = "team"
+	groupScopeProjectKind = "project"
+	// projectGroupCanonicalIDPrefix is the canonical project identity prefix
+	// the graph mints project subjects under.
+	projectGroupCanonicalIDPrefix = "project:"
 )
+
+// groupProjectIDColumnCandidates are the columns a project-scoped row names
+// its project by. Only read for a row that DECLARES scope=project.
+var groupProjectIDColumnCandidates = []string{"project_id", "scope_id"}
 
 // cohortGroupAssignment is one member's derived group.
 type cohortGroupAssignment struct {
@@ -210,24 +218,25 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 	byGroup := make(map[string][]string, len(cohort.Members))
 	labels := make(map[string]string, len(cohort.Members))
 	kinds := make(map[string]SubjectKind, len(cohort.Members))
+	var otherSourceKind SubjectKind
 	for _, member := range cohort.Members {
-		placed := assignments[SubjectMapKey(member.Subject)]
+		all := assignments[SubjectMapKey(member.Subject)]
+		// Only the source rows of the ASKED axis place a member. A member
+		// whose rows name another axis only (a team row beside a project
+		// question) is ungrouped, not a mismatch by itself: the mismatch is
+		// decided below, once, when NO member was placed by the asked axis
+		// and the source named another one.
+		placed := make([]cohortGroupAssignment, 0, len(all))
+		for _, assignment := range all {
+			if assignment.kind == plan.GroupKind {
+				placed = append(placed, assignment)
+			} else if otherSourceKind == "" {
+				otherSourceKind = assignment.kind
+			}
+		}
 		if len(placed) == 0 {
 			ungrouped++
 			continue
-		}
-		// The kind check is per assignment and fails the WHOLE grouping, not
-		// just this member: a grouped answer that silently kept the members
-		// whose source happened to agree would present a partial group axis
-		// as a complete one.
-		for _, assignment := range placed {
-			if assignment.kind != plan.GroupKind {
-				return nil, 0, CohortGroupingOutcome{
-					Refusal:     CohortGroupingRefusalGroupKindSourceMismatch,
-					PlannedKind: plan.GroupKind,
-					SourceKind:  assignment.kind,
-				}
-			}
 		}
 		// EVERY owning group, not the first one seen. A project genuinely
 		// owned by two teams belongs under both, and dropping one would be
@@ -271,6 +280,15 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 		// zero-valued outcome for an empty or absent cohort, and
 		// TestAnEmptyCohortIsNotARefusal pins that, so the token cannot be
 		// stamped over a population of nobody.
+		if otherSourceKind != "" {
+			// The source named a different axis for the members and none for
+			// the asked one: the kind mismatch, with the source's kind named.
+			return nil, 0, CohortGroupingOutcome{
+				Refusal:     CohortGroupingRefusalGroupKindSourceMismatch,
+				PlannedKind: plan.GroupKind,
+				SourceKind:  otherSourceKind,
+			}
+		}
 		return nil, ungrouped, CohortGroupingOutcome{
 			Refusal:     CohortGroupingRefusalNoMemberPlaced,
 			PlannedKind: plan.GroupKind,
@@ -389,13 +407,21 @@ func groupAssignmentsFromValue(value FactValue) []cohortGroupAssignment {
 	}
 	found := make([]cohortGroupAssignment, 0, len(rows))
 	for _, row := range rows {
-		// health's breakdown is per-scope and only its team rows name a
-		// team. A row that declares a scope at all must declare the team
-		// scope, or its ids belong to something else entirely.
-		if scope, declared := rowString(row, groupScopeColumn); declared && scope != groupScopeTeamKind {
-			continue
+		// health's breakdown is per-scope: a row that declares a scope names
+		// that axis and nothing else. A team scope reads the team columns, a
+		// project scope the project columns, and any other scope names a
+		// group axis this reader does not place.
+		kind, columns := SubjectTeam, groupIDColumnCandidates
+		if scope, declared := rowString(row, groupScopeColumn); declared {
+			switch scope {
+			case groupScopeTeamKind:
+			case groupScopeProjectKind:
+				kind, columns = SubjectProject, groupProjectIDColumnCandidates
+			default:
+				continue
+			}
 		}
-		rawKey, ok := firstRowString(row, groupIDColumnCandidates)
+		rawKey, ok := firstRowString(row, columns)
 		if !ok || rawKey == "" {
 			continue
 		}
@@ -427,7 +453,11 @@ func groupAssignmentsFromValue(value FactValue) []cohortGroupAssignment {
 		// SubjectTeam, not the plan's kind: the scope filter above admitted
 		// this row precisely because it declares itself a team row, and the
 		// columns just read are team columns.
-		found = append(found, cohortGroupAssignment{canonicalID: TeamCanonicalID(rawKey), label: label, kind: SubjectTeam})
+		canonicalID := TeamCanonicalID(rawKey)
+		if kind == SubjectProject {
+			canonicalID = projectGroupCanonicalIDPrefix + rawKey
+		}
+		found = append(found, cohortGroupAssignment{canonicalID: canonicalID, label: label, kind: kind})
 	}
 	return found
 }
@@ -969,4 +999,44 @@ func applyGroupCoverageDisclosure(result *InvestigationResult, coverage CohortGr
 	composed, displaced := appendBoundedLimitations(result.Limitations, sentences)
 	result.Limitations = composed
 	result.LimitationsDisplaced += displaced
+}
+
+// appendGroupAxisNotApplicableRows states, for a grouping the request refused,
+// that the group-axis READ requirement of the asked kind does not apply: no
+// producer declares that axis for these members, so nothing could have served
+// it. The row names fact_no_declaring_producer as an observed cause.
+//
+// It is appended BEFORE the read evaluator runs, so the evaluator finds the
+// identity already accounted for and writes no unattempted row beside it. A
+// requirement that already carries an assembled row, or one the plan did not
+// publish as served, is left alone.
+func appendGroupAxisNotApplicableRows(rows []RequirementOutcomeRow, published []contractsv1.ContextFabricPlanRequirement, outcome CohortGroupingOutcome) []RequirementOutcomeRow {
+	if outcome.Refusal == CohortGroupingRefusalNone || outcome.PlannedKind == "" {
+		return rows
+	}
+	// A team axis that placed nobody is a data gap (the team producers
+	// declare it and its facts came back empty), not an axis nothing
+	// declares, so it keeps its unattempted account.
+	if outcome.Refusal == CohortGroupingRefusalNoMemberPlaced && outcome.PlannedKind == SubjectTeam {
+		return rows
+	}
+	var added []RequirementOutcomeRow
+	for _, requirement := range published {
+		if requirement.Kind != string(ObligationKindRead) || !requirement.Served() ||
+			requirement.Role != string(SubjectRoleGroup) ||
+			requirement.Subject != contractsv1.ContextFabricSubjectKind(outcome.PlannedKind) ||
+			hasEvaluatedReadOutcome(rows, requirement.Requirement) {
+			continue
+		}
+		added = append(added, RequirementOutcomeRow{
+			Stage:         contractsv1.ContextFabricOutcomeStageAssembledResult,
+			Requirement:   requirement.Requirement,
+			Obligation:    requirement.Obligation,
+			Outcome:       contractsv1.ContextFabricRequirementNotApplicable,
+			Impact:        contractsv1.ContextFabricAnswerImpactNone,
+			CauseCoverage: contractsv1.ContextFabricCoverageDetailFactNoDeclaringProducer,
+			CauseObserved: true,
+		})
+	}
+	return appendOutcomeRows(rows, added...)
 }

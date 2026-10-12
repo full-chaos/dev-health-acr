@@ -34,6 +34,9 @@ func (s undeclaredObligationSynthesizer) Synthesize(ctx context.Context, p stora
 	result.Coverage = s.bundle.Coverage
 	for i, fact := range s.bundle.Facts {
 		for field, value := range fact.Fields {
+			if value.String == nil {
+				continue
+			}
 			text := *value.String
 			result.ClaimedFacts = append(result.ClaimedFacts, cf.ClaimedFact{ClaimID: fmt.Sprintf("claim_undeclared_%02d", i+1), Kind: fact.Kind, Subject: fact.Subject, Field: field, Value: cf.ScalarValue{String: &text}})
 		}
@@ -67,11 +70,16 @@ func TestAnUndeclaredHealthObligationDoesNotDegradeACohortAnswerAtTheClient(t *t
 		value  string
 		family cf.QuestionFamily
 		expr   cf.SubjectExpression
+		// refuseGrouping serves team-only group rows for a question grouped by
+		// project and leaves cohort.Groups to the engine, which then refuses.
+		refuseGrouping bool
 	}{
 		{"pull requests grouped by project", cf.SubjectPullRequest, cf.FactPullRequests, "state", "open", cf.QuestionFamilyGroupedCohortStatus,
-			cf.SubjectExpression{Kind: cf.SubjectExpressionGroupedMembers, Grouped: &cf.GroupedSetExpression{MemberKind: cf.SubjectPullRequest, GroupKind: cf.SubjectProject}}},
+			cf.SubjectExpression{Kind: cf.SubjectExpressionGroupedMembers, Grouped: &cf.GroupedSetExpression{MemberKind: cf.SubjectPullRequest, GroupKind: cf.SubjectProject}}, false},
 		{"discovered incidents", cf.SubjectIncident, cf.FactIncidents, "status", "open", cf.QuestionFamilyDiscoveredCohortRanking,
-			cf.SubjectExpression{Kind: cf.SubjectExpressionDiscoveredKind, Discovered: &cf.DiscoveredSetExpression{MemberKind: cf.SubjectIncident}}},
+			cf.SubjectExpression{Kind: cf.SubjectExpressionDiscoveredKind, Discovered: &cf.DiscoveredSetExpression{MemberKind: cf.SubjectIncident}}, false},
+		{"pull requests grouped by project, team rows only", cf.SubjectPullRequest, cf.FactPullRequests, "state", "open", cf.QuestionFamilyGroupedCohortStatus,
+			cf.SubjectExpression{Kind: cf.SubjectExpressionGroupedMembers, Grouped: &cf.GroupedSetExpression{MemberKind: cf.SubjectPullRequest, GroupKind: cf.SubjectProject}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bundle := cf.CanonicalFactBundle{Facts: []cf.CanonicalFact{}, Coverage: cf.Coverage{Sources: []cf.SourceObservation{{Source: "canonical_fact:" + string(tc.fact), State: cf.SourceAvailable}}, DegradedReasons: []string{}}, Version: "ops-v1"}
@@ -89,7 +97,17 @@ func TestAnUndeclaredHealthObligationDoesNotDegradeACohortAnswerAtTheClient(t *t
 				bundle.Facts = append(bundle.Facts, cf.CanonicalFact{Kind: tc.fact, Subject: subject, Fields: map[string]cf.FactValue{tc.field: cf.StringFactValue(tc.value)}})
 			}
 			cohort := &cf.Cohort{Kind: tc.kind, Members: members, Rationale: "bounded cohort", Complete: true}
-			if tc.kind == cf.SubjectPullRequest {
+			if tc.refuseGrouping {
+				// The only group rows the source carries name TEAMS, so a
+				// project-grouped question has no axis to be grouped on.
+				str := func(v string) cf.FactValue { return cf.StringFactValue(v) }
+				for _, member := range members {
+					bundle.Facts = append(bundle.Facts, cf.CanonicalFact{Kind: cf.FactHealth, Subject: member.Subject, Fields: map[string]cf.FactValue{
+						"risk_breakdown": {Rows: []cf.FactValueRow{{Fields: map[string]cf.FactValue{"scope": str("team"), "scope_id": str("t1"), "scope_name": str("Platform")}}}},
+					}})
+				}
+			}
+			if tc.kind == cf.SubjectPullRequest && !tc.refuseGrouping {
 				ids := []string{members[0].Subject.CanonicalID, members[1].Subject.CanonicalID}
 				cohort.Groups = []v1.ContextFabricCohortGroup{{Subject: cf.SubjectRef{Kind: cf.SubjectProject, CanonicalID: "project:undeclared-group", Label: "Group"}, MemberCanonicalIDs: ids, Total: len(ids), Complete: true}}
 			}
@@ -150,8 +168,8 @@ func TestAnUndeclaredHealthObligationDoesNotDegradeACohortAnswerAtTheClient(t *t
 				seen = append(seen, row.Stage+":"+row.Requirement+"="+row.Outcome+"/"+row.Cause)
 				if row.Requirement == health {
 					found = true
-					if row.Outcome != "not_applicable" || row.Cause != "" {
-						t.Fatalf("%s = %s/%s, want not_applicable naming no cause", health, row.Outcome, row.Cause)
+					if row.Outcome != "not_applicable" || row.Cause != "fact_no_declaring_producer" {
+						t.Fatalf("%s = %s/%s, want not_applicable naming fact_no_declaring_producer", health, row.Outcome, row.Cause)
 					}
 				}
 			}
@@ -160,6 +178,20 @@ func TestAnUndeclaredHealthObligationDoesNotDegradeACohortAnswerAtTheClient(t *t
 			}
 			if node.Structured.Completeness.State == "degraded" {
 				t.Fatalf("completeness degraded by an obligation no producer declares: %v", seen)
+			}
+			if tc.refuseGrouping {
+				groupRow := false
+				for _, row := range node.Structured.Completeness.Outcomes {
+					if row.Requirement == "state/group/project" && row.Stage == "assembled_result" {
+						groupRow = true
+						if row.Outcome != "not_applicable" || row.Cause != "fact_no_declaring_producer" {
+							t.Fatalf("state/group/project = %s/%s, want not_applicable naming fact_no_declaring_producer", row.Outcome, row.Cause)
+						}
+					}
+				}
+				if !groupRow {
+					t.Fatalf("no assembled state/group/project outcome row served: %v", seen)
+				}
 			}
 			full := callRealMCPInvestigationResult(t, boot, node.Structured.ResultID)
 			disclosed := false

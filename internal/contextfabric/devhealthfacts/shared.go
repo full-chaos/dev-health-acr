@@ -841,7 +841,15 @@ import (
 // pull request rows) where it was pruned with no reach; a candidate saved under an earlier version
 // carries the pruned answer for such a question. The census also sheds rows under a small byte
 // budget and serves the count it cut.
-const QueryVersion = "devhealthfacts.clickhouse.v171"
+//
+// v171 -> v173: a not_applicable outcome row names why (fact_no_declaring_producer,
+// observed), and a grouped question whose group axis the source cannot place
+// states its group-axis requirement not_applicable with that cause instead of
+// unavailable or not_attempted, so the answer is no longer degraded by it; a
+// project-scoped group row builds a project group axis. A candidate saved under
+// an earlier version holds the unexplained or degraded account and must not be
+// reused. (v172 is claimed by open changes and skipped.)
+const QueryVersion = "devhealthfacts.clickhouse.v173"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

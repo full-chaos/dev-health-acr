@@ -384,8 +384,11 @@ type ContextFabricPlanRequirementOutcomeRow struct {
 	//
 	// CauseOverrun is the declared ceiling that forced the reduction.
 	// CauseCoverage is a coverage event that caused it. CauseNarrowing is
-	// the selection order that chose the survivors. A non-satisfied row
-	// carries at least one of them.
+	// the selection order that chose the survivors. A row that lost
+	// something carries at least one of them. A not_applicable row MAY carry
+	// CauseCoverage fact_no_declaring_producer, observed: it lost nothing, and
+	// the cause says why the requirement does not apply. A satisfied row
+	// carries none.
 	CauseOverrun   ContextFabricBudgetOverrun      `json:"cause_overrun,omitempty"`
 	CauseCoverage  ContextFabricCoverageDetailCode `json:"cause_coverage,omitempty"`
 	CauseNarrowing ContextFabricNarrowingBasis     `json:"cause_narrowing,omitempty"`
@@ -754,10 +757,18 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 		return fmt.Errorf("outcome row cause_narrowing %q is not a vocabulary member", row.CauseNarrowing)
 	}
 	named := row.CauseOverrun != "" || row.CauseCoverage != "" || row.CauseNarrowing != ""
+	// not_applicable is the one lossless outcome that may NAME why: it lost
+	// nothing, but "this does not apply" without the reason reads the same as
+	// a row nobody explained. Only the no-declaring-producer coverage cause is legal there, and
+	// only as an OBSERVED one -- a budget overrun or a narrowing basis states a
+	// reduction that did not happen. A satisfied row still names none.
+	notApplicableWhy := row.Outcome == ContextFabricRequirementNotApplicable &&
+		row.CauseCoverage == ContextFabricCoverageDetailFactNoDeclaringProducer &&
+		row.CauseOverrun == "" && row.CauseNarrowing == ""
 	// A loss with no named cause is the generic truncation bit this layer
 	// exists to replace, and a cause named on a row that lost nothing
 	// states that a mechanism fired when none did. Both directions.
-	if lossless == named {
+	if lossless == named && !notApplicableWhy {
 		if lossless {
 			return fmt.Errorf("outcome %q lost nothing and must name no cause", row.Outcome)
 		}
@@ -765,8 +776,12 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 	}
 	// CauseObserved says whether the cause was REPORTED or DEFAULTED. It
 	// describes a cause, so it is meaningless -- and misleading -- on a
-	// row that names none.
-	if lossless && row.CauseObserved {
+	// row that names none, and a not_applicable reason is always a reported
+	// one (the derivation said why), never a default.
+	if lossless && row.CauseObserved != notApplicableWhy {
+		if notApplicableWhy {
+			return fmt.Errorf("outcome %q names a cause and must claim it observed", row.Outcome)
+		}
 		return fmt.Errorf("outcome %q names no cause and must not claim an observed one", row.Outcome)
 	}
 	if row.Served < 0 || row.Declared < 0 || row.Served > row.Declared {
