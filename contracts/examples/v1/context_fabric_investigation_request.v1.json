@@ -34,6 +34,7 @@
     "max_drivers": 10,
     "max_evidence_refs": 100,
     "max_serialized_bytes": 262144,
+    "answer_budget_bytes": 65536,
     "allow_clarification": true,
     "include_debug": false
   },

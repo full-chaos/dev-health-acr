@@ -88,14 +88,15 @@ func TestWorkItemFinalCensusParticipatesInBudgetRetry(t *testing.T) {
 		name                           string
 		floor, reserve                 bool
 		members, budget, calls, status int
+		projected                      bool
 	}{
-		{"floor_retry", true, true, 12, budget, 2, http.StatusOK},
-		{"floor_retry_authority_on", true, true, 12, budget, 2, http.StatusOK},
-		{"exact_control", false, true, 12, budget, 1, http.StatusOK},
-		{"exact_control_authority_on", false, true, 12, budget, 1, http.StatusOK},
-		{"six_member_control", true, true, 6, budget, 1, http.StatusOK},
-		{"no_reserve", true, false, 12, budget, 1, http.StatusRequestEntityTooLarge},
-		{"impossible_fit", true, true, 12, 8192, 2, http.StatusRequestEntityTooLarge},
+		{"floor_retry", true, true, 12, budget, 2, http.StatusOK, false},
+		{"floor_retry_authority_on", true, true, 12, budget, 2, http.StatusOK, false},
+		{"exact_control", false, true, 12, budget, 1, http.StatusOK, false},
+		{"exact_control_authority_on", false, true, 12, budget, 1, http.StatusOK, false},
+		{"six_member_control", true, true, 6, budget, 1, http.StatusOK, false},
+		{"no_reserve", true, false, 12, budget, 1, http.StatusOK, true},
+		{"impossible_fit", true, true, 12, 8192, 2, http.StatusRequestEntityTooLarge, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, info, attempts := newFinalCensusBudgetFixture(t, tc.floor, tc.reserve)
@@ -128,6 +129,35 @@ func TestWorkItemFinalCensusParticipatesInBudgetRetry(t *testing.T) {
 			assertResponseOwnerGateFree(t, f.gate)
 			if tc.calls == 2 && !reflect.DeepEqual((*attempts)[1], (*attempts)[0][:tc.members/2]) {
 				t.Fatalf("retry did not retain the canonical lexical half: %v", *attempts)
+			}
+			if tc.name == "impossible_fit" {
+				// Not even the projection fits the caller's body bound: the one
+				// refusal left against a caller's option, naming that option.
+				var refusal struct {
+					Error struct {
+						Details map[string]any `json:"details"`
+					} `json:"error"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &refusal); err != nil {
+					t.Fatal(err)
+				}
+				if got, _ := refusal.Error.Details["max_serialized_bytes"].(float64); int(got) != tc.budget {
+					t.Fatalf("impossible_fit refusal names %v, want the caller's %d", refusal.Error.Details["max_serialized_bytes"], tc.budget)
+				}
+				return
+			}
+			if tc.projected {
+				// Over the caller's byte option and under the service
+				// ceiling: delivered as the projection sized to the option,
+				// naming the stored result, never refused.
+				var projection contractsv1.ContextFabricAnswerProjection
+				if err := json.Unmarshal(response.Body.Bytes(), &projection); err != nil {
+					t.Fatal(err)
+				}
+				if projection.SchemaVersion != contractsv1.ContextFabricAnswerProjectionSchema || !projection.ProjectionBudget.FullResultOmitted || response.Body.Len() > tc.budget {
+					t.Fatalf("projected: schema=%q full_result_omitted=%v bytes=%d budget=%d", projection.SchemaVersion, projection.ProjectionBudget.FullResultOmitted, response.Body.Len(), tc.budget)
+				}
+				return
 			}
 			var finalBytes int64
 			if tc.status == http.StatusOK {
@@ -271,6 +301,9 @@ func TestWorkItemFinalBudgetRefusalPreservesExecutionContext(t *testing.T) {
 			observer := f.model.observe
 			f.model.observe = func(input contextfabric.SynthesisInput) { observer(input); probe.cohort = input.Graph.Cohort }
 			f.dependencies.Telemetry = probe
+			// The service ceiling is the refusal line, so the fault is
+			// refused at it: the caller's option alone is not.
+			f.engineOptions.MaxSerializedBytes = 21000
 			engine, err := contextfabric.NewEngine(f.dependencies, f.engineOptions)
 			if err != nil {
 				t.Fatal(err)

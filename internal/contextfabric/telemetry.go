@@ -1610,6 +1610,7 @@ func planNarrowingLogAttrs(ctx context.Context, principal storage.Principal, eve
 		"quota_groups_measured", event.QuotaGroupsMeasured,
 		"quota_groups_over_allowance", event.QuotaGroupsOverAllowance,
 		"evidence_pinned_members", event.EvidencePinnedMembers,
+		"ceiling_fit", SanitizeLogAttr(string(event.CeilingFit)),
 	}
 	return append(args, requestIDLogAttrs(ctx)...)
 }
