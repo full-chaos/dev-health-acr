@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,7 @@ func TestReadFactsRequestSchemaDaysPointsAtCatalogNotNumbers(t *testing.T) {
 				Properties struct {
 					Days struct {
 						Description string `json:"description"`
+						Maximum     int    `json:"maximum"`
 					} `json:"days"`
 				} `json:"properties"`
 			} `json:"window"`
@@ -35,6 +37,9 @@ func TestReadFactsRequestSchemaDaysPointsAtCatalogNotNumbers(t *testing.T) {
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
+	}
+	if got, want := doc.Properties.Window.Properties.Days.Maximum, contractsv1.WidestRangeDays(); got != want {
+		t.Fatalf("schema days maximum %d differs from the widest window in the table %d", got, want)
 	}
 	text := doc.Properties.Window.Properties.Days.Description
 	if !strings.Contains(text, "max_window_days") {

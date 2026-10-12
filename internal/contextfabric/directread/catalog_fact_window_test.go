@@ -42,3 +42,40 @@ func TestCatalogFactKindMaxWindowEqualsWhatReadFactsEnforces(t *testing.T) {
 		}
 	}
 }
+
+func TestReadFactsMixedKindsAreHeldToTheSmallestCatalogMaximum(t *testing.T) {
+	byKind := map[contextfabric.FactKind]contextfabric.FactCapability{}
+	for _, capability := range productionCapabilities() {
+		byKind[capability.Kind] = capability
+	}
+	catalog := factsCatalogFor(ClassUnrestricted, productionCapabilities(), true)
+	smallest, widest := 0, 0
+	for _, entry := range catalog.Facts.Kinds {
+		if smallest == 0 || entry.MaxWindowDays < smallest {
+			smallest = entry.MaxWindowDays
+		}
+		widest = max(widest, entry.MaxWindowDays)
+	}
+	if widest <= smallest {
+		t.Fatalf("catalog has one maximum (%d) for every kind: the mixed read measured nothing", widest)
+	}
+	var kinds []string
+	for _, want := range []int{smallest, widest} {
+		for _, entry := range catalog.Facts.Kinds {
+			if entry.MaxWindowDays == want {
+				kinds = append(kinds, entry.Kind)
+				break
+			}
+		}
+	}
+	reader := &FactsReader{now: func() time.Time { return time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC) }}
+	_, err := reader.validate(FactsRequest{
+		Kinds:    kinds,
+		Subjects: []RequestSubject{{Kind: "repository", CanonicalID: "repository:x"}},
+		Window:   &RequestWindow{Mode: WindowTrailing, Days: smallest + 1},
+	}, byKind)
+	var requestErr *RequestError
+	if !errors.As(err, &requestErr) || requestErr.MaxDays != smallest {
+		t.Fatalf("mixed read of %v not held to the smallest listed maximum %d: %v", kinds, smallest, err)
+	}
+}
