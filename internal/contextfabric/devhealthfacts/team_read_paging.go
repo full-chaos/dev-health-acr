@@ -126,3 +126,15 @@ func forEachRepoKeyChunk(keys []string, fn func(chunk []string) error) error {
 	}
 	return nil
 }
+
+// forEachTeamIDChunk calls fn with consecutive chunks of team ids, each at
+// most teamRepoKeyChunk long, in order. A per-team grouped read emits at most
+// one row per team, so a chunk never exceeds the work-item reader's row cap.
+func forEachTeamIDChunk(teamIDs []string, fn func(chunk []string) error) error {
+	for start := 0; start < len(teamIDs); start += teamRepoKeyChunk {
+		if err := fn(teamIDs[start:min(start+teamRepoKeyChunk, len(teamIDs))]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
