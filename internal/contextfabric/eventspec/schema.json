@@ -4191,7 +4191,7 @@
         "key": "pool",
         "type": "int",
         "presence": "conditional",
-        "applicability": "written when site=walk and pool_cut: the count of members of the kind the anchor's walk reaches under the state clause, bounded by the walked anchor"
+        "applicability": "written when site=walk, pool_cut, and the bounded count finished: the count of members of the kind the caller may read that the anchor's walk reaches under the state clause; absent when that count was itself cut (unknown)"
       },
       {
         "key": "error",

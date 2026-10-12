@@ -148,7 +148,10 @@ func TestIncidentStatusOverACutPoolSaysWhereItWasDecided(t *testing.T) {
 	fixtures := []memberStatusFixture{}
 	for i := 1; i <= 30; i++ {
 		f := memberStatusFixture{id: fmt.Sprintf("incident:alpha-%03d", i), label: fmt.Sprintf("I%03d", i), stored: "resolved"}
-		if i%2 == 0 {
+		switch {
+		case i%5 == 0:
+			f.stored = "Investigating"
+		case i%2 == 0:
 			f.stored = "open"
 		}
 		fixtures = append(fixtures, f)
@@ -167,6 +170,9 @@ func TestIncidentStatusOverACutPoolSaysWhereItWasDecided(t *testing.T) {
 	if len(telemetry.pullRequestStatusFilters) != 1 || telemetry.pullRequestStatusFilters[0].Site != PullRequestStatusFilterSitePool || !telemetry.pullRequestStatusFilters[0].PoolCut ||
 		telemetry.pullRequestStatusFilters[0].Candidates != cut.Read {
 		t.Fatalf("status filter lines = %+v, want one cut pool line over %d incidents", telemetry.pullRequestStatusFilters, cut.Read)
+	}
+	if outside := result.MemberStatusOutsideSet; outside.Count < 1 || !outside.AtLeast {
+		t.Fatalf("outside the known set = %+v, want a count over the cut prefix served as a lower bound", outside)
 	}
 	sentence := contractsv1.ContextFabricMemberStatusPoolCutLimitation(string(cut.Kind), cut.Read, cut.Pool)
 	if !strings.Contains(sentence, fmt.Sprintf("first %d incidents", cut.Read)) || !contractsv1.IsContextFabricServiceAuthoredLimitation(sentence) {

@@ -2996,7 +2996,7 @@ var PullRequestStatusFilter = Event{
 		{Key: "kept", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when outcome=applied"},
 		{Key: "pool_cut", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when outcome=applied: the status was decided within a cut read, so members past the cut were not checked"},
 		{Key: "outside_set", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when outcome=applied and member_kind is project or incident: the candidates whose stored status is outside the kind's closed set"},
-		{Key: "pool", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when site=walk and pool_cut: the count of members of the kind the anchor's walk reaches under the state clause, bounded by the walked anchor"},
+		{Key: "pool", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when site=walk, pool_cut, and the bounded count finished: the count of members of the kind the caller may read that the anchor's walk reaches under the state clause; absent when that count was itself cut (unknown)"},
 		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},

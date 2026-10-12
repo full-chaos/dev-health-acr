@@ -1481,7 +1481,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	statusNoMatch := (statusWalk.applied && statusWalk.reached && statusWalk.kept == 0) ||
 		(pullRequestFiltered.candidates > 0 && pullRequestFiltered.kept == 0) ||
 		(memberFiltered.candidates > 0 && memberFiltered.kept == 0)
-	statusOutsideSet, statusOutsideAtLeast := memberFiltered.outsideSet, false
+	// A pool filtered after its arms were cut counted the outside set over the
+	// prefix only: a lower bound.
+	statusOutsideSet, statusOutsideAtLeast := memberFiltered.outsideSet, cohortPoolTruncated
 	if statusWalk.applied {
 		statusOutsideSet, statusOutsideAtLeast = statusWalk.outsideSet, statusWalk.outsideAtLeast
 	}
