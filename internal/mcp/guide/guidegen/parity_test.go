@@ -24,9 +24,12 @@ func embeddedFiles(t *testing.T) map[string]string {
 			t.Fatal(err)
 		}
 		files[res.File] = text
+		if variant, err := guide.TextFor(res.URI, false); err == nil && variant != text {
+			files[guide.VariantFile(res.File)] = variant
+		}
 	}
-	if len(files) != 5 {
-		t.Fatalf("expected 5 embedded guide files, got %d", len(files))
+	if len(files) != 9 {
+		t.Fatalf("expected 5 embedded guide files and 4 variants, got %d", len(files))
 	}
 	vocab, err := guide.PromptVocabText()
 	if err != nil {
@@ -504,4 +507,29 @@ func kindTable(vocabulary string) string {
 		end = len(vocabulary)
 	}
 	return vocabulary[start:end]
+}
+
+func TestGuideVariantsForCallersWithoutTheServiceModelNameNoHiddenTool(t *testing.T) {
+	files, err := Build(FromRegistries())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{FileQuestions, FileData, FileVocabulary, FileClientInterpretation} {
+		variant, ok := files[guide.VariantFile(file)]
+		if !ok {
+			t.Fatalf("%s has no variant for a caller without investigate_question", file)
+		}
+		if strings.Contains(variant, "investigate_question") {
+			t.Errorf("variant of %s names investigate_question", file)
+		}
+		if !strings.Contains(files[file], "investigate_question") {
+			t.Errorf("%s no longer names investigate_question for a caller that lists it", file)
+		}
+	}
+	if _, ok := files[guide.VariantFile(FileConversation)]; ok {
+		t.Error("conversation.md needs no variant")
+	}
+	if !strings.Contains(files[guide.VariantFile(FileQuestions)], "- Tool: `investigate_with_interpretation`") {
+		t.Error("the variant questions guide must point at investigate_with_interpretation")
+	}
 }

@@ -925,8 +925,14 @@ import (
 // (...)"), which was served as rationale_not_in_rule_sentence_form. A stored
 // answer can differ.
 //
-// v185 -> v192: a project status answer now carries backlog, estimate coverage
-// and risk severity as drivers with minted claims. An answer saved under v185
+// v185 -> v186: a degraded cohort answer (the model call failed) leaves cohort
+// driver narration its item grant. The degraded composition claimed that grant
+// too, so composition and narration together overran the item budget: the
+// answer was cut by the claim-depth lever, or refused when the byte budget was
+// also exceeded. A candidate saved under v185 may hold the cut answer.
+//
+// v186 -> v192: a project status answer now carries backlog, estimate coverage
+// and risk severity as drivers with minted claims. An answer saved under v186
 // has none.
 const QueryVersion = "devhealthfacts.clickhouse.v192"
 

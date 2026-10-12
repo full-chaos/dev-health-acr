@@ -38,11 +38,11 @@ func staticResourceMeta(text, promptVersion, serviceVersion string) mcpsdk.Meta 
 // catalogue registers only with data_catalog and is read live for the caller's
 // own credential.
 func registerInterpretResources(server *mcpsdk.Server, cfg *ProcessConfig, caller *CallerContext, serviceVersion string) {
-	if hostedToolEnabled(caller, toolInvestigateQuestion) {
-		addStaticResource(server, cfg, caller, []string{toolInvestigateQuestion}, uriInterpretationOutput, "interpretation-output", "Interpretation output schema",
+	if investigateSurface(caller) {
+		addStaticResource(server, cfg, caller, []string{toolInvestigateQuestion, toolInvestigateWithInterpretation}, uriInterpretationOutput, "interpretation-output", "Interpretation output schema",
 			"JSON schema of the object the interpretation prompt returns. Validate your own interpretation against it. Version "+interpretprompt.OutputVersion+".",
 			"application/schema+json", interpretprompt.OutputSchema(), interpretprompt.PromptVersion, serviceVersion)
-		addStaticResource(server, cfg, caller, []string{toolInvestigateQuestion}, uriFactKinds, "guide-fact-kinds", "Fact-kind glossary",
+		addStaticResource(server, cfg, caller, []string{toolInvestigateQuestion, toolInvestigateWithInterpretation}, uriFactKinds, "guide-fact-kinds", "Fact-kind glossary",
 			"What each fact kind holds, which subject kinds it serves, and what it is not; the same text the interpretation prompt states.",
 			guideMIME, interpretprompt.FactKindsGuide(), interpretprompt.PromptVersion, serviceVersion)
 	}
