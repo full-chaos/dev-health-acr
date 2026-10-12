@@ -431,6 +431,10 @@ func t4Cases() []t4Case {
 	add(t4Case{name: "pull_requests/pull_request", kind: contextfabric.FactPullRequests, subjects: []contextfabric.SubjectRef{pullRequestSubject("repo-1", "1042")}, tables: []fakeTable{
 		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(1042), "open"}, {"repo-1", uint32(1042), ""}}},
 	}})
+	add(t4Case{name: "pull_requests/pull_request_projects", kind: contextfabric.FactPullRequests, subjects: []contextfabric.SubjectRef{pullRequestSubject("repo-1", "1042")}, tables: []fakeTable{
+		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(1042), "open"}}},
+		{match: "FROM work_graph_issue_pr", rows: [][]any{{"repo-1:1042", "jira", "P1", "Payments", uint8(3), "native"}}},
+	}})
 	add(t4Case{name: "reviews/pull_request_review", kind: contextfabric.FactReviews, subjects: []contextfabric.SubjectRef{reviewSubject("repo-1", "review-1")}, tables: []fakeTable{
 		{match: "FROM git_pull_request_reviews", rows: [][]any{{"review-1", "approved", "repo-1", uint32(1)}, {"review-1", "", "repo-1", uint32(1)}}},
 	}})
@@ -770,10 +774,12 @@ func TestCHAOS7120SafetyMarksOnEntityDeclarations(t *testing.T) {
 			if field.Score || field.Aggregate {
 				t.Errorf("%s %s: Score=%v Aggregate=%v, want neither on an entity kind", kind, field.Name, field.Score, field.Aggregate)
 			}
-			// identity.owning_teams is the one entity table: a repository's
-			// owning teams, whose team_id column is a declared team reference
-			// the read gate checks like any other.
-			if field.Type == contextfabric.FactFieldTable && !(kind == contextfabric.FactIdentity && field.Name == "owning_teams") {
+			// identity.owning_teams and pull_requests.project_breakdown are the
+			// entity tables: a repository's owning teams and a pull request's
+			// projects, whose id columns are declared references the read gate
+			// checks like any other.
+			if field.Type == contextfabric.FactFieldTable && !(kind == contextfabric.FactIdentity && field.Name == "owning_teams") &&
+				!(kind == contextfabric.FactPullRequests && field.Name == "project_breakdown") {
 				t.Errorf("%s %s: entity kinds emit no tables", kind, field.Name)
 			}
 		}

@@ -900,6 +900,12 @@ import (
 // owned-project items counted once, and deployments, incidents and metrics name
 // the project-reached repositories they have no rows for. A candidate saved
 // under v180 holds a team total over owned repositories alone.
+//
+// v181 -> v182: a pull request fact carries project_breakdown, one row per
+// project its linked issues reach (work_graph_issue_pr, the shared link
+// reader), each with the link tier; a pull request cohort grouped by project
+// is grouped on those rows where it was served ungrouped. A candidate saved
+// under v181 holds the ungrouped answer.
 const QueryVersion = "devhealthfacts.clickhouse.v182"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for

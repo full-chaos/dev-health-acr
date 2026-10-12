@@ -10,6 +10,7 @@ import (
 
 	cf "github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	v1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -73,13 +74,18 @@ func TestAnUndeclaredHealthObligationDoesNotDegradeACohortAnswerAtTheClient(t *t
 		// refuseGrouping serves team-only group rows for a question grouped by
 		// project and leaves cohort.Groups to the engine, which then refuses.
 		refuseGrouping bool
+		// projectRows serves the pull requests' own project_breakdown rows
+		// (canonical project ids), so the question is grouped by project.
+		projectRows bool
 	}{
 		{"pull requests grouped by project", cf.SubjectPullRequest, cf.FactPullRequests, "state", "open", cf.QuestionFamilyGroupedCohortStatus,
-			cf.SubjectExpression{Kind: cf.SubjectExpressionGroupedMembers, Grouped: &cf.GroupedSetExpression{MemberKind: cf.SubjectPullRequest, GroupKind: cf.SubjectProject}}, false},
+			cf.SubjectExpression{Kind: cf.SubjectExpressionGroupedMembers, Grouped: &cf.GroupedSetExpression{MemberKind: cf.SubjectPullRequest, GroupKind: cf.SubjectProject}}, false, false},
 		{"discovered incidents", cf.SubjectIncident, cf.FactIncidents, "status", "open", cf.QuestionFamilyDiscoveredCohortRanking,
-			cf.SubjectExpression{Kind: cf.SubjectExpressionDiscoveredKind, Discovered: &cf.DiscoveredSetExpression{MemberKind: cf.SubjectIncident}}, false},
+			cf.SubjectExpression{Kind: cf.SubjectExpressionDiscoveredKind, Discovered: &cf.DiscoveredSetExpression{MemberKind: cf.SubjectIncident}}, false, false},
 		{"pull requests grouped by project, team rows only", cf.SubjectPullRequest, cf.FactPullRequests, "state", "open", cf.QuestionFamilyGroupedCohortStatus,
-			cf.SubjectExpression{Kind: cf.SubjectExpressionGroupedMembers, Grouped: &cf.GroupedSetExpression{MemberKind: cf.SubjectPullRequest, GroupKind: cf.SubjectProject}}, true},
+			cf.SubjectExpression{Kind: cf.SubjectExpressionGroupedMembers, Grouped: &cf.GroupedSetExpression{MemberKind: cf.SubjectPullRequest, GroupKind: cf.SubjectProject}}, true, false},
+		{"pull requests grouped by project, project rows on the facts", cf.SubjectPullRequest, cf.FactPullRequests, "state", "open", cf.QuestionFamilyGroupedCohortStatus,
+			cf.SubjectExpression{Kind: cf.SubjectExpressionGroupedMembers, Grouped: &cf.GroupedSetExpression{MemberKind: cf.SubjectPullRequest, GroupKind: cf.SubjectProject}}, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bundle := cf.CanonicalFactBundle{Facts: []cf.CanonicalFact{}, Coverage: cf.Coverage{Sources: []cf.SourceObservation{{Source: "canonical_fact:" + string(tc.fact), State: cf.SourceAvailable}}, DegradedReasons: []string{}}, Version: "ops-v1"}
@@ -107,7 +113,23 @@ func TestAnUndeclaredHealthObligationDoesNotDegradeACohortAnswerAtTheClient(t *t
 					}})
 				}
 			}
-			if tc.kind == cf.SubjectPullRequest && !tc.refuseGrouping {
+			projectID := ""
+			if tc.projectRows {
+				var err error
+				projectID, _, err = identity.Derive(identity.KindProject, []string{"jira", "P1"}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i := range bundle.Facts {
+					if bundle.Facts[i].Kind != tc.fact {
+						continue
+					}
+					bundle.Facts[i].Fields["project_breakdown"] = cf.TableFactValue(cf.FactTable{Shape: cf.FactTableBreakdown, Key: []string{"scope_id"}, Rows: []cf.FactValueRow{{Fields: map[string]cf.FactValue{
+						"scope": cf.StringFactValue("project"), "scope_id": cf.StringFactValue(projectID), "scope_name": cf.StringFactValue("Payments"), "link_tier": cf.StringFactValue("native"),
+					}}}})
+				}
+			}
+			if tc.kind == cf.SubjectPullRequest && !tc.refuseGrouping && !tc.projectRows {
 				ids := []string{members[0].Subject.CanonicalID, members[1].Subject.CanonicalID}
 				cohort.Groups = []v1.ContextFabricCohortGroup{{Subject: cf.SubjectRef{Kind: cf.SubjectProject, CanonicalID: "project:undeclared-group", Label: "Group"}, MemberCanonicalIDs: ids, Total: len(ids), Complete: true}}
 			}
@@ -194,6 +216,22 @@ func TestAnUndeclaredHealthObligationDoesNotDegradeACohortAnswerAtTheClient(t *t
 				}
 			}
 			full := callRealMCPInvestigationResult(t, boot, node.Structured.ResultID)
+			if tc.projectRows {
+				groups := 0
+				for _, group := range full.Cohort.Groups {
+					if group.Subject.Kind == cf.SubjectProject && group.Subject.CanonicalID == projectID && group.Total == 2 {
+						groups++
+					}
+				}
+				if groups != 1 || len(full.Cohort.Groups) != 1 {
+					t.Fatalf("cohort groups = %+v, want one project group %s of two members", full.Cohort.Groups, projectID)
+				}
+				for _, row := range node.Structured.Completeness.Outcomes {
+					if row.Requirement == "state/group/project" && row.Outcome == "not_applicable" {
+						t.Fatalf("a placed project axis is stated not_applicable: %v", seen)
+					}
+				}
+			}
 			disclosed := false
 			if full.AnswerPlan != nil {
 				for _, requirement := range full.AnswerPlan.Requirements {

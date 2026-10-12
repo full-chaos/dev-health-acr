@@ -208,7 +208,7 @@ func producerGrammars() []producerGrammar {
 		// colon-free enum (CHAOS-7227). The facts pass the joined key in one
 		// variable (concat/1 below: one opaque operand carrying both).
 		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/2", providerFirst: true, rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, columns: []string{"provider", "id"}, sites: sites(
-			"internal/contextfabric/chaos5990_period_delta.go|periodDeltaSubjectEvidenceRef", source+"teams_projects.go|queryProjects")},
+			"internal/contextfabric/chaos5990_period_delta.go|periodDeltaSubjectEvidenceRef", facts+"pull_request_project_rows.go|pullRequestProjectBreakdown", source+"teams_projects.go|queryProjects")},
 		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "sql/2", providerFirst: true, rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, columns: []string{"provider", "id"}, sites: sites(organizationRows)},
 		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/1", rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, columns: []string{"provider+id"}, sites: sites(
 			facts+"flow.go|readProjectFlow", facts+"health.go|readProjectHealth", facts+"investment.go|mergeProjectInvestmentFact",
