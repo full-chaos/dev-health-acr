@@ -1082,6 +1082,11 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				if outcome.WindowUnsupported {
 					row.KindState = KindStateWindowUnsupported
 				}
+			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind) && recorded && reachedSubjects(derived, kind, subject, served):
+				share, _ := derived.derivedCoverage(kind, subject, served)
+				row.KindState = string(outcome.State)
+				row.Reason = derivedReason(share)
+				row.Outcome = derivedOutcome(outcome, share)
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind) && recorded && outcome.UnreachedRoot != nil && outcome.UnreachedRoot.Kind == subject.Kind:
 				row.Outcome, row.KindState, row.Reason = OutcomeUnavailable, string(outcome.UnreachedRoot.State), outcome.UnreachedRoot.Reason
 				if outcome.UnreachedRoot.ScopeExpansionUnavailable {
@@ -1121,6 +1126,13 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 		}
 	}
 	return rows
+}
+
+// reachedSubjects reports a root that scope expansion reached subjects from
+// for kind: its row describes what was read, not a gap other roots hit.
+func reachedSubjects(derived derivedIndex, kind contextfabric.FactKind, root contextfabric.SubjectRef, served map[string]bool) bool {
+	share, expanded := derived.derivedCoverage(kind, root, served)
+	return expanded && share.targets > 0
 }
 
 // derivedOutcome is a root's outcome when its facts were read on the targets
