@@ -8,19 +8,23 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-func TestApplyOfferPhrasing_WithheldPlatformModelMakesNoCallAndKeepsStructuralLabels(t *testing.T) {
+type withheldRuntime struct{ calls int }
+
+func (r *withheldRuntime) PhraseStructureOffers(context.Context, storage.Principal, StructureOfferPhrasingInput) (StructureOfferPhrasingDraft, ModelExecutionReceipt, error) {
+	r.calls++
+	return StructureOfferPhrasingDraft{}, ModelExecutionReceipt{}, ErrPlatformModelWithheld
+}
+
+func TestApplyOfferPhrasing_WithheldPlatformModelKeepsStructuralLabelsAndReportsWithheld(t *testing.T) {
 	t.Parallel()
-	phraser := &fakeOfferPhraser{result: StructureOfferPhrasingResult{Outcome: OfferPhrasingGenerated, Phrasings: map[string]string{"opt_pr": "which pull request?"}}}
+	runtime := &withheldRuntime{}
 	telemetry := &recordingTelemetry{}
-	e := &Engine{offerPhraser: phraser, telemetry: telemetry}
+	e := &Engine{offerPhraser: RuntimeOfferPhraser{Runtime: runtime}, telemetry: telemetry}
 	needs := &contractsv1.ContextFabricStructureNeeds{
 		Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
 		KindOptions: []contractsv1.ContextFabricKindOption{{OptionID: "opt_pr", Label: "a pull request", Kind: contractsv1.ContextFabricSubjectPullRequest, OfferSource: contractsv1.ContextFabricStructureOfferEngine, ReceiptID: "kindr_x"}},
 	}
-	got := e.applyOfferPhrasing(WithPlatformModelWithheld(context.Background()), storage.Principal{OrgID: "org_1"}, "request_00000001", needs)
-	if len(phraser.calls) != 0 {
-		t.Fatalf("phraser called %d times with the platform model withheld, want 0", len(phraser.calls))
-	}
+	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, "request_00000001", needs)
 	if got.KindOptions[0].Phrasing != "" || got.KindOptions[0].Label != "a pull request" {
 		t.Fatalf("KindOptions[0] = %+v, want the structural label and no phrasing", got.KindOptions[0])
 	}
@@ -36,5 +40,12 @@ func TestPlatformModelWithheldIsUnsetOnAPlainContext(t *testing.T) {
 	}
 	if !PlatformModelWithheld(WithPlatformModelWithheld(context.Background())) {
 		t.Fatal("a marked context does not report the platform model withheld")
+	}
+}
+
+func TestPlatformModelWithheldCarriesTheGateBasis(t *testing.T) {
+	t.Parallel()
+	if got := PlatformModelWithheldBasis(WithPlatformModelWithheldBasis(context.Background(), "client_model")); got != "client_model" {
+		t.Fatalf("basis = %q, want client_model", got)
 	}
 }

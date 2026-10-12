@@ -111,7 +111,7 @@ func (a *App) gateServiceModel(w http.ResponseWriter, r *http.Request, principal
 		return nil, false
 	}
 	if !allowed {
-		ctx = contextfabric.WithPlatformModelWithheld(ctx)
+		ctx = contextfabric.WithPlatformModelWithheldBasis(ctx, string(basis))
 	}
 	return ctx, true
 }
