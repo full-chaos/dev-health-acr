@@ -43,12 +43,9 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 	if principal.AuthenticationMethod != storage.AuthenticationMethodCredential {
 		return serviceModelBasisWebAssertion, true, nil
 	}
-	if a.runtime.ServiceModelOpen {
-		return serviceModelBasisDeploymentOpen, true, nil
-	}
-	entitled, featureErr := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
-	if featureErr == nil && entitled {
-		return serviceModelBasisEntitlement, true, nil
+	basis, granted, featureErr := a.deploymentModelGrant(ctx, principal)
+	if granted {
+		return basis, true, nil
 	}
 	if featureErr != nil {
 		a.logger.WarnContext(ctx, "context fabric service model entitlement unavailable; deployment model withheld", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)))
@@ -67,6 +64,35 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 		return "", false, errServiceModelEntitlementUnavailable
 	}
 	return serviceModelBasisRefused, false, nil
+}
+
+// deploymentModelGrant reports whether a credential caller may use the
+// deployment's own model: the deployment is open, or the organization holds
+// acr_service_model. The error is the entitlement read failure, if any.
+func (a *App) deploymentModelGrant(ctx context.Context, principal storage.Principal) (serviceModelBasis, bool, error) {
+	if a.runtime.ServiceModelOpen {
+		return serviceModelBasisDeploymentOpen, true, nil
+	}
+	entitled, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
+	if err == nil && entitled {
+		return serviceModelBasisEntitlement, true, nil
+	}
+	return "", false, err
+}
+
+// serviceModelListable reports whether investigate_question can serve this
+// caller: the deployment model is granted, or the organization runs its own
+// model. A read failure keeps the tool listed, because the call itself still
+// answers the typed refusal or unavailability.
+func (a *App) serviceModelListable(ctx context.Context, principal storage.Principal) bool {
+	if principal.AuthenticationMethod != storage.AuthenticationMethodCredential {
+		return true
+	}
+	if _, granted, err := a.deploymentModelGrant(ctx, principal); granted || err != nil {
+		return true
+	}
+	own, err := a.orgHasOwnModel(ctx, principal)
+	return own || err != nil
 }
 
 // orgHasOwnModel reports whether the organization stored a model
