@@ -38,7 +38,7 @@ func TestServerListsAndReadsGuideResources(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", res.URI, err)
 		}
-		text, err := guide.Text(res.URI)
+		text, err := guide.TextFor(res.URI, false)
 		if err != nil || text == "" {
 			t.Fatalf("embedded text for %s: %v", res.URI, err)
 		}
@@ -51,7 +51,7 @@ func TestServerListsAndReadsGuideResources(t *testing.T) {
 	}
 }
 
-func TestGuideResourcesAreIdenticalForEveryCaller(t *testing.T) {
+func TestGuideResourcesAreIdenticalForEveryCallerWithTheSameCatalogue(t *testing.T) {
 	fx := newFixtureServer(t)
 	readAll := func(boot *Bootstrap) map[string]string {
 		client, closeFn := connectedClient(t, boot)
