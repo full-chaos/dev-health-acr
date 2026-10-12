@@ -68,6 +68,26 @@ func TestAdmitAnchorBindingDecisionTable(t *testing.T) {
 		{"no movement measured at all", with(func(in *anchorBindingAdmissionInput) { in.Movement = AnchorOwnershipNotApplicable }), &readable, AnchorBindingAdmissionRefusedOwnershipUnverified, 0},
 		{"the re-read refuses", with(func(*anchorBindingAdmissionInput) {}), &refused, AnchorBindingAdmissionRefusedSubjectUnreadable, 1},
 		{"no re-read wired", with(func(*anchorBindingAdmissionInput) {}), nil, AnchorBindingAdmissionRefusedSubjectUnreadable, 0},
+		// The follow-up switch: a changed question onto a bound binding.
+		{"a follow-up onto a bound binding", with(func(in *anchorBindingAdmissionInput) { in.Question, in.FollowUp = carryOriginDrifted, true }), &readable, AnchorBindingAdmissionAdmittedFollowUp, 1},
+		{"the follow-up switch leaves the same question admitted", with(func(in *anchorBindingAdmissionInput) { in.FollowUp = true }), &readable, AnchorBindingAdmissionAdmitted, 1},
+		{"a follow-up onto a pending binding", with(func(in *anchorBindingAdmissionInput) {
+			in.Question, in.FollowUp, in.Held.State = carryOriginDrifted, true, AnchorBindingPendingWindowConfirmation
+		}), &readable, AnchorBindingAdmissionRefusedQuestionChanged, 0},
+		{"a follow-up onto a contested binding", with(func(in *anchorBindingAdmissionInput) {
+			in.Question, in.FollowUp = carryOriginDrifted, true
+			in.Held.State, in.Held.ContenderKind, in.Held.ContenderID = AnchorBindingContested, bindBeta.Kind, bindBeta.ID
+		}), &readable, AnchorBindingAdmissionRefusedQuestionChanged, 0},
+		{"an indeterminate question is never a follow-up", with(func(in *anchorBindingAdmissionInput) {
+			in.Question, in.FollowUp = carryOriginIndeterminateQuestion, true
+		}), &readable, AnchorBindingAdmissionRefusedQuestionIndeterminate, 0},
+		{"a follow-up still ages out", with(func(in *anchorBindingAdmissionInput) {
+			in.Question, in.FollowUp, in.Held.ProvenAt = carryOriginDrifted, true, admissionNow.Add(-DefaultAnchorBindingMaxAge-time.Nanosecond)
+		}), &readable, AnchorBindingAdmissionRefusedExpired, 0},
+		{"a follow-up still needs unmoved ownership", with(func(in *anchorBindingAdmissionInput) {
+			in.Question, in.FollowUp, in.Movement = carryOriginDrifted, true, AnchorOwnershipMoved
+		}), &readable, AnchorBindingAdmissionRefusedOwnershipMoved, 0},
+		{"a follow-up still needs the re-read", with(func(in *anchorBindingAdmissionInput) { in.Question, in.FollowUp = carryOriginDrifted, true }), &refused, AnchorBindingAdmissionRefusedSubjectUnreadable, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reads := 0

@@ -172,6 +172,13 @@ type Config struct {
 	// turn. Needs AnchorBindingCarryEnabled. Default OFF; turned on per
 	// deployment after the corpus gate.
 	AnchorBindingPendingCarryEnabled bool
+	// AnchorBindingFollowUpEnabled
+	// (ACR_CONTEXT_FABRIC_ANCHOR_BINDING_FOLLOW_UP_ENABLED) admits a changed
+	// question under a continuation onto the bound anchor, so a follow-up
+	// that names no subject offers the remembered one first. Needs
+	// AnchorBindingCarryEnabled. Default OFF; turned on per deployment after
+	// the corpus gate.
+	AnchorBindingFollowUpEnabled bool
 	// ServerCompletenessAuthorityEnabled (CHAOS-5640,
 	// ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED) is the
 	// gated FLIP's master switch -- default OFF, same "ships dark"

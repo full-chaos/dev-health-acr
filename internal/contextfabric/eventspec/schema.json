@@ -186,6 +186,7 @@
           "not_applicable",
           "not_evaluated",
           "admitted",
+          "admitted_follow_up",
           "refused_policy_version",
           "refused_question_changed",
           "refused_question_indeterminate",
@@ -440,6 +441,11 @@
           "receipt_superseded",
           "cap_full",
           "remembered_offered",
+          "follow_up_offered",
+          "follow_up_offered_reconciled",
+          "follow_up_committed",
+          "follow_up_frame_refused",
+          "follow_up_parent_mismatch",
           "undeclared"
         ]
       },
