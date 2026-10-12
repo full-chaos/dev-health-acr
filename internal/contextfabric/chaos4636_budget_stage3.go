@@ -183,6 +183,28 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// takes the same exit -- never the budget refusal.
 		return InvestigationResult{}, firstPass, err
 	}
+	// THE CENSUS GIVES WAY FIRST. The composition-time row ceiling reserves
+	// room for the smallest valid answer only, so at a small budget an answer
+	// larger than that can overrun on the census's own bytes. The census is
+	// diagnostics, not evidence: before any answer lever runs, its least
+	// relevant rows are cut by the bytes of the overrun and the cut is
+	// counted in fact_scope_census_omitted.
+	// The test is the BYTES, not the overrun label: when items and bytes are
+	// both exceeded the items axis takes the label, and an answer that is
+	// also over on bytes still needs the census to give way.
+	if budget.MaxSerializedBytes > 0 && measured.Measurement.Bytes > budget.MaxSerializedBytes {
+		if shed, ok := shedFactScopeCensusToBytes(result, measured.Measurement.Bytes-budget.MaxSerializedBytes); ok {
+			shedInput := shed
+			if params.WorkItemCensus != nil {
+				shedInput = ApplyServerCompletenessAuthority(ApplyServedStatusFloors(shed), e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(ApplyServedStatusFloors(shed)))
+			}
+			remeasured, remeasureErr := e.measureAssembledAttempt(ctx, principal, "assembled_result", allocation, shedInput, budget)
+			if remeasureErr != nil {
+				return InvestigationResult{}, firstPass, remeasureErr
+			}
+			result, measured = shed, remeasured
+		}
+	}
 	overrun := measured.Overrun
 	if overrun == contractsv1.ContextFabricBudgetFits {
 		// A FIT is a decision, and this event's own doc comment calls it
@@ -664,6 +686,20 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	retryMeasured, err := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", consumedRetryAllocation, retryMeasurementInput, budget)
 	if err != nil {
 		return InvestigationResult{}, retryPending, err
+	}
+	// The census gives way first on the retry pass too; see the first pass.
+	if budget.MaxSerializedBytes > 0 && retryMeasured.Measurement.Bytes > budget.MaxSerializedBytes {
+		if shed, ok := shedFactScopeCensusToBytes(retried, retryMeasured.Measurement.Bytes-budget.MaxSerializedBytes); ok {
+			shedInput := shed
+			if params.WorkItemCensus != nil {
+				shedInput = ApplyServerCompletenessAuthority(ApplyServedStatusFloors(shed), e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(ApplyServedStatusFloors(shed)))
+			}
+			remeasured, remeasureErr := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", consumedRetryAllocation, shedInput, budget)
+			if remeasureErr != nil {
+				return InvestigationResult{}, retryPending, remeasureErr
+			}
+			retried, retryMeasured = shed, remeasured
+		}
 	}
 	retryMeasurement := retryMeasured.Measurement
 	retryOverrun := retryMeasured.Overrun
