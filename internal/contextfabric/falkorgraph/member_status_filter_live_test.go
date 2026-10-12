@@ -55,19 +55,29 @@ func TestLiveProjectAndIncidentStatusFilterSelectsByStoredStatus(t *testing.T) {
 		{contextfabric.SubjectIncident, "incident:raw", "Investigating"},
 		{contextfabric.SubjectIncident, "incident:no-status", ""},
 	}
+	started := observed.Add(-48 * time.Hour)
+	validFromOf := func(kind contextfabric.SubjectKind, at time.Time) *time.Time {
+		if kind == contextfabric.SubjectIncident {
+			return &at
+		}
+		return nil
+	}
 	entities := []contextfabric.EntityProjection{entity(team, "", ""), entity(repository, "", "")}
 	var relationships []contextfabric.RelationshipProjection
 	for _, s := range stored {
 		property := contextfabric.MemberStatusStoredProperty(s.kind)
 		subject := contextfabric.SubjectRef{Kind: s.kind, CanonicalID: s.id, Label: s.id}
 		entities = append(entities, entity(subject, property, s.value))
-		if s.kind == contextfabric.SubjectProject {
-			relationships = append(relationships, contextfabric.RelationshipProjection{
-				RelationshipID: "relationship_" + s.id + "_owned", Type: "OWNED_BY_TEAM", From: subject, To: team,
-				Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
-				Authorization: scope, EvidenceRefIDs: []string{"evidence_" + s.id}, ObservedAt: observed, SourceVersion: "v1",
-			})
+		relationType, target := "OWNED_BY_TEAM", team
+		if s.kind == contextfabric.SubjectIncident {
+			relationType, target = "BELONGS_TO_REPOSITORY", repository
+			entities[len(entities)-1].ValidFrom = &started
 		}
+		relationships = append(relationships, contextfabric.RelationshipProjection{
+			RelationshipID: "relationship_" + s.id, Type: contextfabric.RelationshipType(relationType), From: subject, To: target,
+			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+			Authorization: scope, EvidenceRefIDs: []string{"evidence_" + s.id}, ObservedAt: observed, ValidFrom: validFromOf(s.kind, started), SourceVersion: "v1",
+		})
 	}
 	batch := contextfabric.ProjectionBatch{
 		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_member_status_00000001", OrgID: orgID, Source: "live-test",
