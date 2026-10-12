@@ -414,7 +414,7 @@ func TestScopeExpanderAsOf_ZeroUUIDHistoryNeverInflatesTemporalDropped(t *testin
 	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
-	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
+	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions", "git_pull_requests", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
