@@ -1568,6 +1568,7 @@ func TestDecisionEventNeverCarriesCorpusText(t *testing.T) {
 		"draw_outcomes":         true,
 		"draw_output_digests":   true,
 		"draw_rejected_clauses": true,
+		"draw_rejected_reasons": true,
 	}
 
 	for _, event := range events {
