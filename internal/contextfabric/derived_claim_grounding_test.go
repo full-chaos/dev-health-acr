@@ -52,6 +52,9 @@ func TestDerivedClaimGroundsOnlyWhenEveryInputIsServedAndTheArithmeticReproduces
 		{"ratio outside tolerance", derivedClaim(facts, contractsv1.ContextFabricDerivationRatio, numberValue(7.0/3.0+1e-8), input(open, "open_items"), input(closed, "closed_items")), claimDerivationValueMismatch},
 		{"ratio rounded", derivedClaim(facts, contractsv1.ContextFabricDerivationRatio, numberValue(2.33), input(open, "open_items"), input(closed, "closed_items")), claimDerivationValueMismatch},
 		{"float sum", derivedClaim(facts, contractsv1.ContextFabricDerivationSum, numberValue(7.5), input(open, "open_items"), input(open, "rate")), claimGrounded},
+		{"same input twice", derivedClaim(facts, contractsv1.ContextFabricDerivationDifference, intValue(0), input(open, "open_items"), input(open, "open_items")), claimGrounded},
+		{"integer sum stated as a number", derivedClaim(facts, contractsv1.ContextFabricDerivationSum, numberValue(10), input(open, "open_items"), input(closed, "closed_items")), claimGrounded},
+		{"integer sum stated as a wrong number", derivedClaim(facts, contractsv1.ContextFabricDerivationSum, numberValue(10.5), input(open, "open_items"), input(closed, "closed_items")), claimDerivationValueMismatch},
 		{"wrong sum", derivedClaim(facts, contractsv1.ContextFabricDerivationSum, intValue(11), input(open, "open_items"), input(closed, "closed_items")), claimDerivationValueMismatch},
 		{"wrong operation for the value", derivedClaim(facts, contractsv1.ContextFabricDerivationDifference, intValue(10), input(open, "open_items"), input(closed, "closed_items")), claimDerivationValueMismatch},
 		{"ratio over zero", derivedClaim(facts, contractsv1.ContextFabricDerivationRatio, numberValue(0), input(open, "open_items"), input(closed, "zero")), claimDerivationValueMismatch},
@@ -118,7 +121,6 @@ func TestDerivedClaimShapeIsValidatedBeforeGrounding(t *testing.T) {
 			c.DerivedFrom = append(c.DerivedFrom, input(open, "rate"))
 		},
 		"fact id beside inputs": func(c *ClaimedFact) { c.FactID = open },
-		"duplicate input":       func(c *ClaimedFact) { c.DerivedFrom[1] = c.DerivedFrom[0] },
 		"string value":          func(c *ClaimedFact) { s := "10"; c.Value = ScalarValue{String: &s} },
 		"inputs without an op":  func(c *ClaimedFact) { c.Operation = "" },
 	}
@@ -131,5 +133,27 @@ func TestDerivedClaimShapeIsValidatedBeforeGrounding(t *testing.T) {
 				t.Fatal("malformed derivation passed Validate")
 			}
 		})
+	}
+}
+
+func TestDerivedIntegerSumThatOverflowsIsNeverGrounded(t *testing.T) {
+	subject := derivationSubject()
+	max := int64(1<<63 - 1)
+	one := int64(1)
+	facts := []CanonicalFact{
+		{Kind: FactReadiness, Subject: subject, Fields: map[string]FactValue{"big": IntegerFactValue(max)}},
+		{Kind: FactWork, Subject: subject, Fields: map[string]FactValue{"one": IntegerFactValue(one)}},
+	}
+	AssignFactIDs(facts)
+	inputs := []contractsv1.ContextFabricDerivationInput{input(facts[0].ID, "big"), input(facts[1].ID, "one")}
+	for name, value := range map[string]ScalarValue{"as a number": numberValue(9223372036854775808.0), "as an integer": intValue(-9223372036854775808)} {
+		claim := derivedClaim(facts, contractsv1.ContextFabricDerivationSum, value, inputs...)
+		if _, outcome := groundClaim(facts, claim); outcome != claimDerivationValueMismatch {
+			t.Fatalf("%s: an overflowing integer sum grounded: %v", name, outcome)
+		}
+	}
+	ok := derivedClaim(facts, contractsv1.ContextFabricDerivationDifference, intValue(max-1), inputs[0], inputs[1])
+	if _, outcome := groundClaim(facts, ok); outcome != claimGrounded {
+		t.Fatalf("a difference that fits was refused: %v", outcome)
 	}
 }

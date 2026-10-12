@@ -3716,7 +3716,10 @@ func groundDerivedClaim(facts []CanonicalFact, claim ClaimedFact, key string) cl
 	if len(floats) != len(claim.DerivedFrom) {
 		return claimDerivationInputUnknown
 	}
-	if allInt && claim.Value.Integer != nil && claim.Operation != contractsv1.ContextFabricDerivationRatio {
+	if allInt && claim.Operation != contractsv1.ContextFabricDerivationRatio {
+		// Integer inputs under sum or difference have an exact integer
+		// result whatever numeric type the claim states it in; a result
+		// that does not fit int64 is never reproducible.
 		var want int64
 		switch claim.Operation {
 		case contractsv1.ContextFabricDerivationSum:
@@ -3735,8 +3738,18 @@ func groundDerivedClaim(facts []CanonicalFact, claim ClaimedFact, key string) cl
 		default:
 			return claimDerivationValueMismatch
 		}
-		if *claim.Value.Integer == want {
-			return claimGrounded
+		switch {
+		case claim.Value.Integer != nil:
+			if *claim.Value.Integer == want {
+				return claimGrounded
+			}
+		case claim.Value.Number != nil:
+			// A number states an exact integer result only when it is that
+			// integer: the float of want must round-trip back to want.
+			claimed := *claim.Value.Number
+			if claimed == float64(want) && int64(claimed) == want {
+				return claimGrounded
+			}
 		}
 		return claimDerivationValueMismatch
 	}

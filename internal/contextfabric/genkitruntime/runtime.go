@@ -262,6 +262,11 @@ const (
 	// v22 -> v23: the investment line of the fact-kind glossary names
 	// organization among its subject kinds. A change to what the model is
 	// told, so the version bumps (same standing rule stated at v9 above).
+	// v23 -> v24: the reachability sentences of the fact-kind glossary:
+	// continuous_integration and deployments are reached through a team's or
+	// project's repositories, incidents through those repositories'
+	// deployments, and operational_deficiencies through a project's owning
+	// teams. A change to what the model is told, so the version bumps.
 	DefaultInterpretationPromptVersion = interpretprompt.PromptVersion
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3

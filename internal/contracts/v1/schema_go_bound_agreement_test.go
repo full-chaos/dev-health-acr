@@ -188,6 +188,11 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// Round-18's ruled mutation (minimum 0 -> 1) passed against that
 		// catch-all before this entry existed.
 		"result#properties.limitations_displaced.minimum": 0,
+		// The census omitted count: validateFactScopeCensusOmitted enforces
+		// non-negative and census rows + omitted <= the census maximum, so
+		// the count's own ceiling is that maximum.
+		"result#properties.fact_scope_census_omitted.minimum": 0,
+		"result#properties.fact_scope_census_omitted.maximum": ContextFabricFactScopeCensusMaxCount,
 		// CHAOS-4636: the answer plan's own bounds, every one mapped
 		// explicitly rather than left to a pattern classifier. The floors
 		// especially: Go rejects each of these with its own clause (see
@@ -624,6 +629,7 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.CohortMember.properties.attention_rank.minimum":                             1,
 		"common#$defs.CohortMember.properties.drivers.maxItems":                                   5,
 		"common#$defs.CohortMember.properties.inclusion_reasons.minItems":                         1,
+		"common#$defs.ClaimedFact.allOf.2.then.properties.derived_from.maxItems":                  2,
 		"common#$defs.ClaimedFact.properties.derived_from.minItems":                               2,
 		"common#$defs.ClaimedFact.properties.derived_from.items.properties.fact_id.minLength":     1,
 		"common#$defs.ClaimedFact.properties.derived_from.items.properties.field.minLength":       1,

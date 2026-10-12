@@ -1767,6 +1767,9 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	if err := validateFactScopeCensus(r.FactScopeCensus); err != nil {
 		return err
 	}
+	if err := validateFactScopeCensusOmitted(r.FactScopeCensus, r.FactScopeCensusOmitted); err != nil {
+		return err
+	}
 	// One entry per CARRIED member (design brief §2.1) -- bounded by the
 	// closed frame-member vocabulary's own size, not an offer-list cap.
 	if len(r.ConfirmedStructure) > ContextFabricStructureNeedKindCount {
@@ -2012,6 +2015,20 @@ func validateRowAgainstPlanRequirement(row ContextFabricPlanRequirementOutcomeRo
 	return nil
 }
 
+// validateFactScopeCensusOmitted is the one rule for the omitted count that
+// accompanies a census: non-negative, and the listed rows plus the omitted
+// ones can never exceed the number of decisions the resolver can make (each
+// named policy identifies exactly one cell).
+func validateFactScopeCensusOmitted(records []ContextFabricFactScopeCensusRecord, omitted int) error {
+	if omitted < 0 {
+		return fmt.Errorf("fact_scope_census_omitted must be non-negative")
+	}
+	if len(records)+omitted > ContextFabricFactScopeCensusMaxCount {
+		return fmt.Errorf("fact_scope_census exceeds v1 bounds")
+	}
+	return nil
+}
+
 // validateFactScopeCensus is the ONE rule for the served fact-scope census
 // (CHAOS-5405 D-d), called by BOTH the canonical result validator and the
 // answer-projection validator.
@@ -2205,15 +2222,10 @@ func (c ContextFabricClaimedFact) validateDerivation() error {
 	default:
 		return fmt.Errorf("claimed fact derivation operation is not in the closed set")
 	}
-	seen := make(map[ContextFabricDerivationInput]struct{}, len(c.DerivedFrom))
 	for _, input := range c.DerivedFrom {
 		if !stringLengthBetween(input.FactID, 1, ContextFabricModelMintedIDMaxLength) || !stringLengthBetween(input.Field, 1, ContextFabricClaimedFieldMaxLength) || strings.TrimSpace(input.Field) != input.Field {
 			return fmt.Errorf("claimed fact derivation input violates v1 bounds")
 		}
-		if _, dup := seen[input]; dup {
-			return fmt.Errorf("claimed fact derivation inputs must be distinct")
-		}
-		seen[input] = struct{}{}
 	}
 	if c.Value.Integer == nil && c.Value.Number == nil {
 		return fmt.Errorf("claimed fact derivation value must be numeric")

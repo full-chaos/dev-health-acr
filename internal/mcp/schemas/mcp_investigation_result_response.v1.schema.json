@@ -214,8 +214,14 @@
           "items": {
             "$ref": "#/$defs/context_fabric_common.v1/$defs/FactScopeCensusRecord"
           },
-          "maxItems": 21,
+          "maxItems": 26,
           "description": "CHAOS-5405 D-d: one record per attempted requirement/origin scope decision. Optional-first: absent on every result written before this field existed, and on any path that resolved no scope at all -- absent and empty are different documents."
+        },
+        "fact_scope_census_omitted": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 26,
+          "description": "Count of scope decisions the census does not list because the request's serialized byte budget could not carry every row beside the smallest valid answer. Absent when every decision is listed. Additive: absent on every result written before this field existed."
         },
         "evidence_ref_labels": {
           "additionalProperties": {
@@ -1372,6 +1378,76 @@
         },
         "ClaimedFact": {
           "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "derived_from"
+                ]
+              },
+              "then": {
+                "required": [
+                  "operation",
+                  "value"
+                ],
+                "not": {
+                  "required": [
+                    "fact_id"
+                  ]
+                },
+                "properties": {
+                  "value": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "integer"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "number"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "required": [
+                  "operation"
+                ]
+              },
+              "then": {
+                "required": [
+                  "derived_from"
+                ]
+              }
+            },
+            {
+              "if": {
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "enum": [
+                      "difference",
+                      "ratio"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "derived_from": {
+                    "maxItems": 2
+                  }
+                }
+              }
+            }
+          ],
           "properties": {
             "claim_id": {
               "maxLength": 256,
@@ -1453,16 +1529,31 @@
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["fact_id", "field"],
+                "required": [
+                  "fact_id",
+                  "field"
+                ],
                 "properties": {
-                  "fact_id": { "type": "string", "minLength": 1, "maxLength": 256 },
-                  "field": { "type": "string", "minLength": 1, "maxLength": 128 }
+                  "fact_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "field": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
                 }
               }
             },
             "operation": {
               "type": "string",
-              "enum": ["sum", "difference", "ratio"]
+              "enum": [
+                "sum",
+                "difference",
+                "ratio"
+              ]
             }
           },
           "required": [

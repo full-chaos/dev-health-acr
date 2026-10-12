@@ -3172,6 +3172,76 @@
     "ClaimedFact": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "derived_from"
+            ]
+          },
+          "then": {
+            "required": [
+              "operation",
+              "value"
+            ],
+            "not": {
+              "required": [
+                "fact_id"
+              ]
+            },
+            "properties": {
+              "value": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "integer"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "number"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "required": [
+              "derived_from"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "operation"
+            ],
+            "properties": {
+              "operation": {
+                "enum": [
+                  "difference",
+                  "ratio"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "derived_from": {
+                "maxItems": 2
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "claim_id": {
           "type": "string",
@@ -3229,16 +3299,31 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["fact_id", "field"],
+            "required": [
+              "fact_id",
+              "field"
+            ],
             "properties": {
-              "fact_id": { "type": "string", "minLength": 1, "maxLength": 256 },
-              "field": { "type": "string", "minLength": 1, "maxLength": 128 }
+              "fact_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "field": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
             }
           }
         },
         "operation": {
           "type": "string",
-          "enum": ["sum", "difference", "ratio"]
+          "enum": [
+            "sum",
+            "difference",
+            "ratio"
+          ]
         },
         "rows": {
           "description": "CHAOS-4347, additive: a renderable table for a fact whose evidence is genuinely a set of rows (e.g. a project's per-team metrics rollup) rather than one scalar. Optional; a claim carries `field`/`value` as its primary scalar either way.",

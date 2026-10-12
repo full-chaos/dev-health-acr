@@ -544,7 +544,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// neither. A census reachable on a different set of paths from the
 	// disclosure would make "no census" ambiguous between "no scope" and "this
 	// path forgot", which is the ambiguity D-d exists to remove.
-	applyFactScopeCensus(&result, facts.Scope)
+	applyFactScopeCensus(&result, facts.Scope, params.Plan.Budget.MaxSerializedBytes)
 	// CHAOS-4962: a grouped question answered ungrouped says so on the wire,
 	// not only in telemetry. Placed with the other disclosure composers and
 	// before the commit-affirmation gate, Validate and Save, so the sentence,
