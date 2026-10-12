@@ -52,6 +52,23 @@ func (p *anchorProbeInterpreter) read(anchorKind SubjectKind, windowed bool) {
 	}
 }
 
+// probeOwnership is the rig's ownership freshness reader: each turn reads
+// read, or fails with err, and calls counts the reads.
+type probeOwnership struct {
+	read  AnchorFreshnessRead
+	err   error
+	calls int
+}
+
+func (p *probeOwnership) ReadAnchorFreshness(context.Context, string) (AnchorFreshnessRead, error) {
+	p.calls++
+	return p.read, p.err
+}
+
+// probeOwnershipW1 is the rig's default read: the ownership source's
+// checkpoint at the probe graph's epoch.
+var probeOwnershipW1 = AnchorFreshnessRead{ServingEpoch: 0, OwnershipWatermark: "ownership-w1", Recorded: true}
+
 // anchorProbeRig is one engine over one persistent store, with the shadow on
 // or off.
 type anchorProbeRig struct {
@@ -60,6 +77,7 @@ type anchorProbeRig struct {
 	store       *staticResultStore
 	telemetry   *recordingTelemetry
 	interpreter *anchorProbeInterpreter
+	ownership   *probeOwnership
 }
 
 func newAnchorProbeRig(t *testing.T, shadowOff bool) *anchorProbeRig {
@@ -69,6 +87,7 @@ func newAnchorProbeRig(t *testing.T, shadowOff bool) *anchorProbeRig {
 		store:       &staticResultStore{results: map[string]InvestigationResult{}, states: map[string]*PersistedSemanticState{}},
 		telemetry:   &recordingTelemetry{},
 		interpreter: &anchorProbeInterpreter{},
+		ownership:   &probeOwnership{read: probeOwnershipW1},
 	}
 	rig.interpreter.read("", false)
 	engine, err := NewEngine(EngineDependencies{
@@ -80,9 +99,10 @@ func newAnchorProbeRig(t *testing.T, shadowOff bool) *anchorProbeRig {
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
 			return validInvestigationResult(), nil
 		}),
-		Results:      rig.store,
-		Telemetry:    rig.telemetry,
-		Requirements: registryDeriver{},
+		Results:         rig.store,
+		Telemetry:       rig.telemetry,
+		Requirements:    registryDeriver{},
+		AnchorFreshness: rig.ownership,
 	}, EngineOptions{
 		ServiceVersion:             "anchor-binding-probe",
 		Now:                        func() time.Time { return time.Unix(500, 0).UTC() },
@@ -168,8 +188,10 @@ type anchorProbeStep struct {
 	windowed   bool
 	gate       *FrameGate
 	// seed, when set, edits the store before the turn runs.
-	seed     func(*staticResultStore)
-	response needTurnResponse
+	seed func(*staticResultStore)
+	// ownership, when set, edits the rig's ownership reader before the turn.
+	ownership func(*probeOwnership)
+	response  needTurnResponse
 }
 
 // runAnchorProbe runs the same script on a shadow-on and a shadow-off rig and
@@ -182,6 +204,10 @@ func runAnchorProbe(t *testing.T, steps []anchorProbeStep) []anchorProbeTurn {
 	for i, step := range steps {
 		on.interpreter.read(step.anchorKind, step.windowed)
 		off.interpreter.read(step.anchorKind, step.windowed)
+		if step.ownership != nil {
+			step.ownership(on.ownership)
+			step.ownership(off.ownership)
+		}
 		onTurn := on.turn(t, step.request(onTurns), step.response)
 		offTurn := off.turn(t, step.request(offTurns), step.response)
 		if string(onTurn.served) != string(offTurn.served) {
@@ -291,6 +317,7 @@ func TestShadowBindingNeverBindsAnAliasThatWinsOnAFollowUp(t *testing.T) {
 		State: AnchorBindingContested, Kind: probeAlpha.Kind, CanonicalID: probeAlpha.CanonicalID,
 		Proof: AnchorBindingProofIdentityProven, Reason: AnchorBindingReasonContestedByResolution,
 		OriginResultID: turns[0].result.ResultID, ContenderKind: probeBeta.Kind, ContenderID: probeBeta.CanonicalID,
+		ProvenFreshness: AnchorFreshness{Recorded: true, OwnershipWatermark: probeOwnershipW1.OwnershipWatermark},
 	}
 	if !reflect.DeepEqual(binding, want) {
 		t.Fatalf("follow-up binding = %+v, want %+v", binding, want)
@@ -427,7 +454,7 @@ func anchorSiteArm(t *testing.T, scenario anchorSiteScenario, shadowOff bool, lo
 
 // unboundZero are the fields an unbound binding leaves empty on an engine
 // whose graph epoch is zero.
-var unboundZero = map[string]bool{"Kind": true, "CanonicalID": true, "OriginResultID": true, "GraphEpoch": true, "ContenderKind": true, "ContenderID": true}
+var unboundZero = map[string]bool{"Kind": true, "CanonicalID": true, "OriginResultID": true, "GraphEpoch": true, "ContenderKind": true, "ContenderID": true, "ProvenFreshness": true}
 
 // heldZero are the fields a held, uncontested binding leaves empty on an
 // engine whose graph epoch is zero.
@@ -448,6 +475,9 @@ func anchorProbeScenario(steps ...anchorProbeStep) func(*testing.T, EngineTeleme
 			}
 			if step.seed != nil {
 				step.seed(rig.store)
+			}
+			if step.ownership != nil {
+				step.ownership(rig.ownership)
 			}
 			turns = append(turns, rig.turn(t, step.request(turns), step.response))
 		}

@@ -596,6 +596,8 @@ func TestAnchorBindingLineVocabularyIsClosedOverItsProducers(t *testing.T) {
 		"persisted":             {"persisted", "payload_rejected", "replay_conflict", "superseded", "save_failed", "state_absent", "binding_unencodable", "not_saved"},
 		"served_count_decision": {"not_evaluated", "anchor_committed", "anchor_ambiguous", "anchor_unresolved", "single_subject"},
 		"carry_checks":          {"not_applicable", "not_evaluated"},
+		"freshness_acquisition": {"not_attempted", "acquired", "unwired", "read_failed", "source_absent", "unstorable"},
+		"ownership_movement":    {"not_applicable", "proven_unrecorded", "not_acquired", "unmoved", "moved"},
 	} {
 		if got := AnchorBindingTransitionLineVocabulary(key); !reflect.DeepEqual(got, members) {
 			t.Errorf("vocabulary %q = %v, want %v", key, got, members)

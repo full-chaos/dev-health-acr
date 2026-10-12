@@ -444,7 +444,7 @@ func TestServerInstructionsCarryTheTwoWaysTextForAdvertisedDataTools(t *testing.
 		b.Capabilities.EnabledTools = append(b.Capabilities.EnabledTools, toolInvestigateQuestion, toolInvestigationResult, toolReadFacts, toolReadRelationships)
 		return b
 	}()))
-	for _, want := range []string{"Two ways to use this server.", "A. You plan the reads yourself", "data_catalog:", "find_subjects:", "run_operation:", "B. You want our engine's narrative answer: investigate_question", "Rules for A:", "completeness \"unknown\" means unknown", "Missing is not healthy and not zero", "No person-level data is served", "A relation is not a cause", "Never build an id", "serves the organization only", "More data tools are planned."} {
+	for _, want := range []string{"Two ways to use this server.", "A. You plan the reads yourself", "data_catalog:", "find_subjects:", "run_operation:", "B. You want our engine's narrative answer and have no model of your own: investigate_question", "Rules for A:", "completeness \"unknown\" means unknown", "Missing is not healthy and not zero", "No person-level data is served", "A relation is not a cause", "Never build an id", "serves the organization only", "More data tools are planned."} {
 		if !strings.Contains(full, want) {
 			t.Errorf("instructions lack %q", want)
 		}
@@ -675,4 +675,48 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestModelCallerSteerPrecedesTheServiceModelSentence(t *testing.T) {
+	h := newDTHosted(t)
+	full := serverInstructions(bootHandlerHalvesConfig(func() *Bootstrap {
+		b := h.boot(t, dtAllTools...)
+		b.Capabilities.EnabledTools = append(b.Capabilities.EnabledTools, toolInvestigateQuestion, toolInvestigateWithInterpretation, toolInvestigationResult, toolReadFacts, toolReadRelationships)
+		return b
+	}()))
+	steer := []string{"find_subjects", "read_facts", "investigate_with_interpretation with synthesis \"client\""}
+	after := "service_model_not_entitled"
+	cut := strings.Index(full, after)
+	if cut < 0 {
+		t.Fatalf("instructions lack %q", after)
+	}
+	for _, want := range steer {
+		at := strings.Index(full, want)
+		if at < 0 || at > cut {
+			t.Errorf("instructions: %q at %d, want before %q at %d", want, at, after, cut)
+		}
+	}
+	if at := strings.Index(full, "callers with no model of their own"); at < 0 || at > cut {
+		t.Errorf("instructions: no-model sentence at %d, want before %d", at, cut)
+	}
+
+	var manifest toolManifest
+	data, _ := schemaFiles.ReadFile(toolManifestFile)
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range manifest.Tools {
+		if tool.Name != toolInvestigateQuestion {
+			continue
+		}
+		cut := strings.Index(tool.Description, "service's model")
+		if cut < 0 {
+			t.Fatal("investigate_question description lacks the service-model sentence")
+		}
+		for _, want := range append(steer, "callers with no model of their own") {
+			if at := strings.Index(tool.Description, want); at < 0 || at > cut {
+				t.Errorf("investigate_question description: %q at %d, want before service-model sentence at %d", want, at, cut)
+			}
+		}
+	}
 }

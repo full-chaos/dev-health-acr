@@ -138,6 +138,10 @@ var (
 		// resolution, and the withheld commit then appears under
 		// committed_subjects.
 		"substitution_guard",
+		// The parent's proven freshness and this turn's acquired one: the
+		// freshness an identity this turn proves is stamped with.
+		"from_proven_freshness_epoch", "from_proven_freshness_digest",
+		"freshness_acquisition", "freshness_serving_epoch", "freshness_ownership_digest",
 	}
 	anchorBindingLineOutputKeys = []string{
 		"proven_anchor_ids", "effective_kind",
@@ -146,6 +150,7 @@ var (
 		"persisted", "shadow_agreement", "disagreement_field",
 		"served_anchor_kind", "served_anchor_id",
 		"served_count_decision", "served_count_kind", "served_count_id",
+		"to_proven_freshness_epoch", "to_proven_freshness_digest", "ownership_movement",
 	}
 )
 
@@ -261,6 +266,12 @@ func TestTwoTurnsWithEqualLineInputsDecideTheSameBinding(t *testing.T) {
 		})},
 		{"the turn's result id", "ResultID", with(func(in *anchorBindingInput) { in.ResultID = "result_completeness_other" })},
 		{"the turn's graph epoch", "GraphEpoch", with(func(in *anchorBindingInput) { in.GraphEpoch = 9 })},
+		{"the turn's acquired ownership freshness", "Freshness", with(func(in *anchorBindingInput) {
+			in.Freshness = AnchorFreshness{Recorded: true, OwnershipWatermark: "ownership-w1"}
+		})},
+		{"another ownership watermark", "Freshness", with(func(in *anchorBindingInput) {
+			in.Freshness = AnchorFreshness{Recorded: true, OwnershipWatermark: "ownership-w2"}
+		})},
 	}
 
 	inputKeys := map[string]bool{}

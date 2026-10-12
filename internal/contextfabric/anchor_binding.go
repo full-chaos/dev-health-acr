@@ -138,7 +138,10 @@ func anchorBindingReasons() []AnchorBindingReason {
 // AnchorBinding is the persisted binding. Kind and CanonicalID are set
 // exactly when State is not unbound; ContenderKind and ContenderID exactly
 // when State is contested. OriginResultID is the result whose turn proved
-// the held identity. GraphEpoch is the graph epoch that proof stood on.
+// the held identity. GraphEpoch is the graph epoch that proof stood on, and
+// ProvenFreshness the ownership state it stood on (anchor_freshness.go),
+// unrecorded when that turn acquired none. Both travel with OriginResultID: they change
+// only when another turn proves the identity a binding holds.
 type AnchorBinding struct {
 	State          AnchorBindingState  `json:"state"`
 	Kind           SubjectKind         `json:"kind,omitempty"`
@@ -149,6 +152,9 @@ type AnchorBinding struct {
 	GraphEpoch     int64               `json:"graph_epoch"`
 	ContenderKind  SubjectKind         `json:"contender_kind,omitempty"`
 	ContenderID    string              `json:"contender_id,omitempty"`
+	// ProvenFreshness is omitted when not recorded, so a binding written with
+	// no freshness encodes exactly as one written before the field existed.
+	ProvenFreshness AnchorFreshness `json:"proven_freshness,omitzero"`
 }
 
 // active reports whether the binding holds an identity.
@@ -190,9 +196,12 @@ func ValidateAnchorBinding(b AnchorBinding) error {
 	if b.GraphEpoch < 0 {
 		return invalid("graph_epoch %d is negative", b.GraphEpoch)
 	}
+	if err := validateAnchorFreshness(b.ProvenFreshness); err != nil {
+		return err
+	}
 	if !b.active() {
-		if b.Kind != "" || b.CanonicalID != "" || b.Proof != AnchorBindingProofNone || b.ContenderKind != "" || b.ContenderID != "" {
-			return invalid("an unbound binding carries an identity, a proof or a contender")
+		if b.Kind != "" || b.CanonicalID != "" || b.Proof != AnchorBindingProofNone || b.ContenderKind != "" || b.ContenderID != "" || b.ProvenFreshness.Recorded {
+			return invalid("an unbound binding carries an identity, a proof, a contender or a proven freshness")
 		}
 		return nil
 	}
@@ -408,6 +417,12 @@ func AnchorBindingTransitionLineVocabulary(key string) []string {
 		return []string{"not_evaluated", string(CountPopulationScopeAnchorCommitted), string(CountPopulationScopeAnchorAmbiguous), string(CountPopulationScopeAnchorUnresolved), string(CountPopulationScopeSingleSubject)}
 	case "carry_checks":
 		return []string{string(AnchorBindingCarryChecksNotApplicable), string(AnchorBindingCarryChecksNotEvaluated)}
+	case "freshness_acquisition":
+		acquisitions := anchorFreshnessAcquisitions()
+		return strs(len(acquisitions), func(i int) string { return string(acquisitions[i]) })
+	case "ownership_movement":
+		movements := anchorOwnershipMovements()
+		return strs(len(movements), func(i int) string { return string(movements[i]) })
 	default:
 		return nil
 	}
@@ -435,6 +450,9 @@ type anchorBindingInput struct {
 	// ResultID and GraphEpoch stamp an identity this turn proves.
 	ResultID   string
 	GraphEpoch int64
+	// Freshness is this turn's acquired ownership freshness, unrecorded when
+	// none was acquired. An identity this turn proves is stamped with it.
+	Freshness AnchorFreshness
 	// SubstitutionGuard is the subject-substitution guard's decision. When
 	// it FIRED, Resolution is the resolution the guard withheld, every
 	// identity it commits is one the turn did not serve, and no path of the
@@ -508,7 +526,7 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 		}
 	}
 	fresh := func(ref anchorRef, proof AnchorBindingProof, reason AnchorBindingReason) AnchorBinding {
-		return AnchorBinding{State: AnchorBindingBound, Kind: ref.Kind, CanonicalID: ref.ID, Proof: proof, Reason: reason, OriginResultID: in.ResultID, GraphEpoch: in.GraphEpoch}
+		return AnchorBinding{State: AnchorBindingBound, Kind: ref.Kind, CanonicalID: ref.ID, Proof: proof, Reason: reason, OriginResultID: in.ResultID, GraphEpoch: in.GraphEpoch, ProvenFreshness: in.Freshness}
 	}
 	keep := func(state AnchorBindingState, reason AnchorBindingReason) AnchorBinding {
 		kept := from
@@ -784,6 +802,19 @@ type anchorBindingTracker struct {
 	// withheld identity reaches it as a contender and is never read as
 	// silence.
 	substitution SubjectSubstitutionOutcome
+	// freshness is this turn's ownership freshness, unrecorded until
+	// acquired; freshnessAcquisition is the read's outcome, empty until
+	// attempted.
+	freshness            AnchorFreshness
+	freshnessAcquisition AnchorFreshnessAcquisition
+}
+
+// acquisition is the read's outcome as the line publishes it.
+func (t *anchorBindingTracker) acquisition() AnchorFreshnessAcquisition {
+	if t.freshnessAcquisition == "" {
+		return AnchorFreshnessNotAttempted
+	}
+	return t.freshnessAcquisition
 }
 
 // newAnchorBindingTracker returns nil when the shadow is off.
@@ -916,6 +947,12 @@ type AnchorBindingTransitionEvent struct {
 	// turn, so a reader tells a contender the guard WITHHELD from one the
 	// turn never proved.
 	SubstitutionGuard SubjectSubstitutionOutcome
+	// FreshnessAcquisition is this turn's ownership read and Freshness what
+	// it acquired; OwnershipMovement compares the held binding's proven
+	// freshness with it.
+	FreshnessAcquisition AnchorFreshnessAcquisition
+	Freshness            AnchorFreshness
+	OwnershipMovement    AnchorOwnershipMovement
 }
 
 // decide runs the binder for one Save and returns the binding and the line
@@ -930,7 +967,7 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 	in := anchorBindingInput{
 		From: t.parent.from(), Evaluation: t.evaluation, Frame: t.frame, ModelAnchorKind: t.modelAnchorKind,
 		Receipt: t.receipt, CallerHints: t.callerHints, Bases: t.bases,
-		ResultID: result.ResultID, GraphEpoch: t.epoch,
+		ResultID: result.ResultID, GraphEpoch: t.epoch, Freshness: t.freshness,
 		SubstitutionGuard: t.substitution,
 	}
 	switch {
@@ -947,6 +984,7 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 	to, proposal := bindAnchor(in)
 	event := t.lineFor(site, result, in, proposal, to)
 	event.SubstitutionGuard = t.substitutionGuard()
+	event.FreshnessAcquisition = t.acquisition()
 	if state == nil {
 		event.Agreement, event.DisagreementField = AnchorBindingNotEvaluated, AnchorBindingFieldNone
 		return to, event
@@ -986,6 +1024,7 @@ func (t *anchorBindingTracker) lineFor(site BudgetAssertStage, result Investigat
 		ModelAnchorKind:      in.ModelAnchorKind, NamedExpectedKind: namedKindOf(in.Frame),
 		CallerHintIDs: hintIDs(in.CallerHints), ProvenAnchorIDs: refIDs(proposal.Proven),
 		EffectiveKind: proposal.EffectiveKind, To: to, ServedCount: "not_evaluated",
+		Freshness: in.Freshness, OwnershipMovement: anchorOwnershipMovement(in.From, in.Freshness),
 	}
 	if in.Frame != nil {
 		event.FrameExpressionKind = in.Frame.SubjectExpression.Kind
@@ -1182,7 +1221,8 @@ func unrecordedAnchorBindingEvent(site BudgetAssertStage, result InvestigationRe
 		ParentBinding: AnchorBindingParentNoReference, CarryChecks: AnchorBindingCarryChecksNotApplicable, From: none, To: none,
 		ParentGraphEpoch: -1, CommittedSubjects: []string{}, CallerHintIDs: []string{}, ProvenAnchorIDs: []string{},
 		Agreement: AnchorBindingNotEvaluated, DisagreementField: AnchorBindingFieldNone, ServedCount: "not_evaluated",
-		SubstitutionGuard: SubjectSubstitutionNotEvaluated,
+		SubstitutionGuard:    SubjectSubstitutionNotEvaluated,
+		FreshnessAcquisition: AnchorFreshnessNotAttempted, OwnershipMovement: AnchorOwnershipNotApplicable,
 	}
 }
 
@@ -1201,6 +1241,8 @@ func (t *anchorBindingTracker) reuseEvent(result InvestigationResult, reading st
 	event := t.lineFor(BudgetAssertReuse, result, in, proposal, to)
 	event.Persisted, event.Agreement, event.DisagreementField = AnchorBindingNotSaved, AnchorBindingNotEvaluated, AnchorBindingFieldNone
 	event.SubstitutionGuard = t.substitutionGuard()
+	// A reuse serve reads no graph and acquires nothing.
+	event.FreshnessAcquisition = AnchorFreshnessNotAttempted
 	return event
 }
 
@@ -1233,6 +1275,8 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"from_graph_epoch", event.From.GraphEpoch,
 		"from_contender_kind", SanitizeLogAttr(string(event.From.ContenderKind)),
 		"from_contender_id", SanitizeLogAttr(event.From.ContenderID),
+		"from_proven_freshness_epoch", anchorFreshnessEpoch(event.From.ProvenFreshness),
+		"from_proven_freshness_digest", SanitizeLogAttr(anchorFreshnessDigest(event.From.ProvenFreshness)),
 		"parent_graph_epoch", event.ParentGraphEpoch,
 		"graph_epoch", event.GraphEpoch,
 		// PROPOSAL: what the binder read.
@@ -1248,6 +1292,9 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"caller_hint_ids", SanitizeLogStrings(nonNilStrings(event.CallerHintIDs)),
 		"proven_anchor_ids", SanitizeLogStrings(nonNilStrings(event.ProvenAnchorIDs)),
 		"effective_kind", SanitizeLogAttr(string(event.EffectiveKind)),
+		"freshness_acquisition", SanitizeLogAttr(closed("freshness_acquisition", string(event.FreshnessAcquisition))),
+		"freshness_serving_epoch", anchorFreshnessEpoch(event.Freshness),
+		"freshness_ownership_digest", SanitizeLogAttr(anchorFreshnessDigest(event.Freshness)),
 		// DECISION.
 		"to_state", SanitizeLogAttr(closed("to_state", string(event.To.State))),
 		"to_kind", SanitizeLogAttr(string(event.To.Kind)),
@@ -1258,6 +1305,9 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"to_graph_epoch", event.To.GraphEpoch,
 		"contender_kind", SanitizeLogAttr(string(event.To.ContenderKind)),
 		"contender_id", SanitizeLogAttr(event.To.ContenderID),
+		"to_proven_freshness_epoch", anchorFreshnessEpoch(event.To.ProvenFreshness),
+		"to_proven_freshness_digest", SanitizeLogAttr(anchorFreshnessDigest(event.To.ProvenFreshness)),
+		"ownership_movement", SanitizeLogAttr(closed("ownership_movement", string(event.OwnershipMovement))),
 		// POST-DECISION: its fate and the served decision it is compared to.
 		"persisted", SanitizeLogAttr(closed("persisted", string(event.Persisted))),
 		"shadow_agreement", SanitizeLogAttr(closed("shadow_agreement", string(event.Agreement))),
