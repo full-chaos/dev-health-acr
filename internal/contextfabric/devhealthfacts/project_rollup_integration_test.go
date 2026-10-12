@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -40,8 +41,13 @@ func (s projectRollupSeed) workItem(id, repo, typ, status, project string) {
 
 func (s projectRollupSeed) pullRequest(repo string, number uint32, created time.Time, merged, closed any) {
 	s.t.Helper()
+	s.pullRequestWithState(repo, number, "open", created, merged, closed)
+}
+
+func (s projectRollupSeed) pullRequestWithState(repo string, number uint32, state any, created time.Time, merged, closed any) {
+	s.t.Helper()
 	s.exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		repoUUID(repo), projectRollupOrg, number, "pr", "open", s.at, created, merged, closed, "feature", "")
+		repoUUID(repo), projectRollupOrg, number, "pr", state, s.at, created, merged, closed, "feature", "")
 }
 
 func (s projectRollupSeed) link(repo, workItem string, number uint32, provenance string) {
@@ -171,6 +177,29 @@ func TestProjectRollupsCountThroughTheEntityTreeOnRealClickHouse(t *testing.T) {
 	wantInt(t, fields, "blocked_work_items_current", 1)
 	wantInt(t, fields, "blocker_dependencies_current", 1)
 	wantInt(t, fields, "blocker_dependencies_excluded_by_status_current", 1)
+}
+
+// A pull request is open when its stored state is open, the same rule the
+// pull request fact and the status filter read; a closed state with no close
+// timestamp, and an unknown state, are not open.
+func TestProjectOpenPullRequestsFollowTheStoredStateOnRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	s := newProjectRollupSeed(t, ctx, direct)
+	for i, state := range []any{"open", " OPEN ", "closed", nil} {
+		id := fmt.Sprintf("i-%d", i+1)
+		s.workItem(id, "repo-a", "issue", "open", "proj-p")
+		s.pullRequestWithState("repo-a", uint32(i+1), state, s.at, nil, nil)
+		s.link("repo-a", id, uint32(i+1), "native")
+	}
+	project := projectRollupRef(t, "proj-p")
+	result, err := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactPullRequests).ReadFacts(ctx, storage.Principal{OrgID: projectRollupOrg, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
+		Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{project}, Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v: %s", err, readFailureCause(err))
+	}
+	wantInt(t, factFor(t, result, project).Fields, "pull_requests_open_current", 2)
 }
 
 // Supporting the project subject kind directly must not switch the project's
