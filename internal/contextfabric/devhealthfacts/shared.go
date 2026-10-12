@@ -968,7 +968,13 @@ import (
 // A team has no state, so a team status qualifier is refused. The status used
 // to be admitted and served as the whole unfiltered member set. A candidate
 // saved under v192 may hold that unfiltered set.
-const QueryVersion = "devhealthfacts.clickhouse.v193"
+//
+// v193 -> v194: a coverage row carries the reason of its own subject. A
+// sentence about some of the requested teams (N of M own no repository) is
+// served once for the request and no longer on the row of a team it is false
+// for; a team that owns nothing gets its own reason. A stored answer can
+// differ.
+const QueryVersion = "devhealthfacts.clickhouse.v194"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
