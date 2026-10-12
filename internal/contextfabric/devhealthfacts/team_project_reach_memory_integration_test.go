@@ -104,7 +104,7 @@ SELECT concat('filler-more-', repeat('x', 96), '-', toString(number)), ?, ?, 'fi
 		repoUUID("repo-filler"), projectReachMemoryOrg, at, uint64(blockerMemoryMoreFillerItems))
 	large, largeResult, largeErr := read()
 	largeBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
-	t.Logf("read_bytes of the project-reached statements: %d at the smaller size, %d at the larger", smallBytes, largeBytes)
+	t.Errorf("PROBE read_bytes small=%d large=%d; memory small=%v large=%v", smallBytes, largeBytes, small, large)
 	// The reach read and the linked pull request read run on every read.
 	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team project-reached repository statements", small, large, 2)
 	for _, read := range []struct {
