@@ -205,7 +205,7 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 			},
 		)
 	}
-	registerGuideResources(server)
+	registerGuideResources(server, caller)
 	registerInvestigatePrompts(server, caller)
 	registerInterpretPrompt(server, cfg, caller, serverVersion)
 	registerInterpretResources(server, cfg, caller, serverVersion)
