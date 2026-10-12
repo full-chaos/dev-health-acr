@@ -15,7 +15,8 @@
     "axis": "current",
     "valid_at": "2026-09-28T00:00:00Z",
     "limit": 50,
-    "hop": 1
+    "hop": 1,
+    "current_only": false
   },
   "edges": [
     {
@@ -68,6 +69,33 @@
         "evidence_ref_ids": [],
         "link_tier": "heuristic"
       }
+    },
+    {
+      "relationship_id": "rel-3",
+      "type": "BLOCKS",
+      "hop": 1,
+      "from": {
+        "kind": "work_item",
+        "canonical_id": "work_item:issue-480",
+        "label": "Upgrade payment gateway SDK",
+        "status": "done",
+        "status_as_of": "2026-09-27T00:00:00Z"
+      },
+      "to": {
+        "kind": "work_item",
+        "canonical_id": "work_item:issue-482",
+        "label": "Retry failed charges",
+        "status": "in_progress",
+        "status_as_of": "2026-09-27T00:00:00Z"
+      },
+      "active": false,
+      "provenance": {
+        "source": "acr_graph",
+        "observed_at": "2026-09-27T00:00:00Z",
+        "valid_from": null,
+        "valid_to": null,
+        "evidence_ref_ids": []
+      }
     }
   ],
   "withheld": {
@@ -75,8 +103,9 @@
     "evidence_refs": 0
   },
   "page": {
-    "returned": 2,
-    "examined": 3,
+    "returned": 3,
+    "examined": 4,
+    "dropped_inactive": 0,
     "complete": true
   },
   "meaning": "An edge shows a relation. It does not show a cause.",
