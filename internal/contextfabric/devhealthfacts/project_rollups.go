@@ -30,30 +30,22 @@ const projectRollupBasis = "project_issues"
 const projectJoinKeysSQL = `(SELECT provider, join_key, concat(provider, ':', id) AS project_key FROM ` + resolvedProjectsSQL + `
   WHERE key_resolution_count = 1 AND concat(provider, ':', id) IN {ids:Array(String)})`
 
-// workItemAuthorizedAmongSQL is workItemAuthorizedIDsSQL over the work_items
-// rows whose id is in among only: the same every-row rule, read for the ids a
-// statement can name rather than for the whole organization.
-func workItemAuthorizedAmongSQL(scope readers.AuthorizationScope, among string) (string, []readers.Binding) {
-	rendered := readers.WorkItemScopeSQL(scope)
-	return `(SELECT w.work_item_id FROM work_items AS w FINAL ` + rendered.JoinSQL + ` WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + among + ` GROUP BY w.work_item_id HAVING min(toUInt8(` + rendered.AuthorizationExpr + `)) = 1)`, rendered.Bindings
-}
-
 // projectLinkedPullRequestsSQL is one row per (project, linked pull request)
 // with the strongest known link tier among the project's issues that link it.
 var projectLinkedPullRequestsSQL = `(
-  SELECT pi.project_key AS project_key, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, max(` + linkTierRankSQL + `) AS link_rank
-  FROM work_graph_issue_pr AS l FINAL
+  SELECT pi.project_key AS project_key, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, max(l.link_rank) AS link_rank
+  FROM ` + admittedIssueLinksAmongSQL(linkedWorkItemIDsSQL) + ` AS l
   INNER JOIN (
     SELECT DISTINCT w.work_item_id AS work_item_id, k.project_key AS project_key
     FROM work_items AS w FINAL
     INNER JOIN ` + projectJoinKeysSQL + ` AS k ON k.provider = w.provider AND k.join_key = w.project_id
-    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + `
-      AND w.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND w.work_item_id IN ` + linkedWorkItemIDsSQL + `
   ) AS pi ON pi.work_item_id = l.work_item_id
-  WHERE l.org_id = {org_id:String}
   GROUP BY project_key, pr_repo_id, pr_number
-  HAVING link_rank > 0
 )`
+
+// linkedWorkItemIDsSQL is every work item id a link row names.
+const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})`
 
 // projectPullRequestRollupRow is one (project, link tier) group.
 type projectPullRequestRollupRow struct {
@@ -180,30 +172,22 @@ func splitProjectKey(key string) (provider, id string) {
 
 // projectBlockerEdgeRowsSQL is the distinct (project, blocked issue, blocker)
 // rows of the requested projects' issues, with whether the blocker is open.
-// The blocked and blocking work_items reads are narrowed to the ids a blocker
-// edge names; both ends pass the work-item authorization rule.
+// Both work_items reads are narrowed to the blocker edge endpoints; both ends
+// pass the work-item authorization rule.
 func projectBlockerEdgeRowsSQL(authorized string) string {
-	edgeTargets := `(SELECT target_work_item_id FROM work_item_dependencies WHERE org_id = {org_id:String} AND lower(ifNull(relationship_type, '')) = '` + blockerRelationshipType + `')`
-	edgeSources := `(SELECT source_work_item_id FROM work_item_dependencies WHERE org_id = {org_id:String} AND lower(ifNull(relationship_type, '')) = '` + blockerRelationshipType + `')`
 	return `SELECT t.project_key AS project_key, d.target_work_item_id AS tgt, d.source_work_item_id AS src, toUInt8(` + blockerOpenPredicate + `) AS is_open
   FROM work_item_dependencies AS d FINAL
   INNER JOIN (
     SELECT DISTINCT w.work_item_id AS work_item_id, k.project_key AS project_key
     FROM work_items AS w FINAL
     INNER JOIN ` + projectJoinKeysSQL + ` AS k ON k.provider = w.provider AND k.join_key = w.project_id
-    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND w.work_item_id IN ` + edgeTargets + `
+    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND w.work_item_id IN ` + blockerEndpointIDsSQL + `
   ) AS t ON t.work_item_id = d.target_work_item_id
-  INNER JOIN (
-    SELECT work_item_id, status FROM work_items FINAL
-    WHERE org_id = {org_id:String} AND work_item_id IN ` + edgeSources + `
-  ) AS s ON s.work_item_id = d.source_work_item_id
+  INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
   WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'
     AND d.target_work_item_id IN ` + authorized + ` AND d.source_work_item_id IN ` + authorized + `
   GROUP BY project_key, tgt, src, is_open`
 }
-
-// projectBlockerEndpointsSQL is every id a blocker edge names, either end.
-const projectBlockerEndpointsSQL = `(SELECT arrayJoin([source_work_item_id, target_work_item_id]) FROM work_item_dependencies WHERE org_id = {org_id:String} AND lower(ifNull(relationship_type, '')) = '` + blockerRelationshipType + `')`
 
 // readProjectRollup serves a project subject on the current axis: the
 // project's issues blocked by an open blocker, the open blocker edges, and the
@@ -214,7 +198,7 @@ func (p *BlockersProvider) readProjectRollup(ctx context.Context, principal stor
 	if len(ids) == 0 {
 		return rejected, nil
 	}
-	authorized, authorizationBindings := workItemAuthorizedAmongSQL(workItemRepositoryAuthorization(principal, requestedScope), projectBlockerEndpointsSQL)
+	authorized, authorizationBindings := workItemAuthorizedIDsAmongSQL(workItemRepositoryAuthorization(principal, requestedScope), blockerEndpointIDsSQL)
 	settings, err := workItemReaderSettings(ctx)
 	if err != nil {
 		return rejected, err
