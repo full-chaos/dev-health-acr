@@ -131,7 +131,29 @@ func t4Cases() []t4Case {
 		nullDeficiency[i] = ""
 	}
 	add(t4Case{name: "operational_deficiencies/team", kind: contextfabric.FactOperationalDeficiencies, subjects: team, tables: []fakeTable{
-		{match: "WHERE rn = 1", rows: [][]any{deficiencyRow("CHAOS"), nullDeficiency}},
+		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{deficiencyRow("CHAOS"), nullDeficiency}},
+	}})
+	basisDeficiency := deficiencyRow("CHAOS")
+	basisDeficiency[5] = ruleBasisRationale
+	add(t4Case{name: "operational_deficiencies/team_rule_basis_latest", kind: contextfabric.FactOperationalDeficiencies, subjects: team, tables: []fakeTable{
+		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{basisDeficiency}},
+		{match: "compounding_risk, computed_at, day,\n\t\trow_number()", rows: [][]any{{"CHAOS", "high", uint8(1), 0.72, "2026-07-04 00:30:00", "2026-07-03", uint8(1), uint8(1)}}},
+	}})
+	staleLatest := []fakeTable{
+		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{basisDeficiency}},
+		{match: "compounding_risk, computed_at, day,\n\t\trow_number()", rows: [][]any{{"CHAOS", "high", uint8(1), 0.72, "2026-07-04 00:30:00", "2026-05-01", uint8(1), uint8(0)}}},
+	}
+	add(t4Case{name: "operational_deficiencies/team_rule_basis_stale_latest_band", kind: contextfabric.FactOperationalDeficiencies, subjects: team, tables: staleLatest})
+	add(t4Case{name: "operational_deficiencies/team_rule_basis_null_latest_score", kind: contextfabric.FactOperationalDeficiencies, subjects: team, tables: []fakeTable{
+		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{basisDeficiency}},
+		{match: "compounding_risk, computed_at, day,\n\t\trow_number()", rows: [][]any{{"CHAOS", "high", uint8(0), 0.0, "2026-07-04 00:30:00", "2026-07-03", uint8(1), uint8(1)}}},
+	}})
+	unparsedDeficiency := deficiencyRow("CHAOS")
+	add(t4Case{name: "operational_deficiencies/team_rule_basis_unparsed", kind: contextfabric.FactOperationalDeficiencies, subjects: team, tables: []fakeTable{
+		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{unparsedDeficiency}},
+	}})
+	add(t4Case{name: "operational_deficiencies/team_rule_basis_no_latest", kind: contextfabric.FactOperationalDeficiencies, subjects: team, tables: []fakeTable{
+		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{basisDeficiency}},
 	}})
 
 	// ---- landscape

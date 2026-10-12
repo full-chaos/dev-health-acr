@@ -3,6 +3,8 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"reflect"
+	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -124,6 +126,13 @@ func pathDropOrder(result InvestigationResult) (order []int, cited map[string]bo
 // order, their ids removed from every driver, and the drop disclosed. It
 // returns false when nothing is dropped.
 func dropPaths(result InvestigationResult, order []int, cited map[string]bool, count int) (InvestigationResult, int, bool) {
+	return dropPathsOf(result, order, cited, count, len(result.Paths))
+}
+
+// dropPathsOf is dropPaths with the declared total given: a document that an
+// earlier lever already cut states the paths the answer FOUND, never the
+// paths it held when this lever ran.
+func dropPathsOf(result InvestigationResult, order []int, cited map[string]bool, count, declared int) (InvestigationResult, int, bool) {
 	if count <= 0 {
 		return result, 0, false
 	}
@@ -144,11 +153,10 @@ func dropPaths(result InvestigationResult, order []int, cited map[string]bool, c
 			kept = append(kept, path)
 		}
 	}
-	sentence, ok := contractsv1.ContextFabricPathDropLimitation(len(kept), len(result.Paths))
+	sentence, ok := contractsv1.ContextFabricPathDropLimitation(len(kept), declared)
 	if !ok {
 		return result, 0, false
 	}
-	declared := len(result.Paths)
 	if citedDropped > 0 {
 		drivers := make([]DriverJudgment, len(result.Drivers))
 		for index, driver := range result.Drivers {
@@ -376,4 +384,52 @@ func (e *Engine) recordPathDrop(ctx context.Context, principal storage.Principal
 		Served:             attempt.Served,
 		Declined:           attempt.Declined,
 	})
+}
+
+// restatePathDrop removes the disclosure an earlier path drop wrote (its
+// limitation sentence and the one outcome row equal to the row it composed)
+// and returns the declared total that drop stated, so a second drop states
+// the paths the answer found, once.
+func restatePathDrop(result InvestigationResult) (InvestigationResult, int) {
+	declared := len(result.Paths)
+	for index, limitation := range slices.Clone(result.Limitations) {
+		priorServed, priorDeclared, ok := contractsv1.ParseContextFabricPathDropLimitation(limitation)
+		if !ok {
+			continue
+		}
+		declared = priorDeclared
+		kept := slices.Delete(slices.Clone(result.Limitations), index, index+1)
+		limitations, displaced := appendBoundedLimitations(kept, nil)
+		result.Limitations = limitations
+		result.LimitationsDisplaced += displaced
+		prior := pathDropOutcomeRow(priorServed, priorDeclared)
+		for rowIndex, row := range result.Completeness.Outcomes {
+			if reflect.DeepEqual(row, prior) {
+				result.Completeness.Outcomes = slices.Delete(slices.Clone(result.Completeness.Outcomes), rowIndex, rowIndex+1)
+				break
+			}
+		}
+		break
+	}
+	return result, declared
+}
+
+// pathDropCandidates returns, for a document, the drop order and a builder for
+// the document with the first n paths of it dropped. ok is false when no path
+// is droppable.
+func pathDropCandidates(result InvestigationResult) (order []int, build func(n int) (InvestigationResult, int, bool), ok bool) {
+	base, declared := restatePathDrop(result)
+	order, cited := pathDropOrder(base)
+	if len(order) == 0 {
+		return nil, nil, false
+	}
+	return order, func(n int) (InvestigationResult, int, bool) {
+		dropped, citedDropped, ok := dropPathsOf(base, order, cited, n, declared)
+		if ok {
+			// The document is past the display labels: the evidence closure
+			// shrank with the paths, and the label map must be exactly it.
+			applyCoverageDisplayLabels(&dropped)
+		}
+		return dropped, citedDropped, ok
+	}, true
 }

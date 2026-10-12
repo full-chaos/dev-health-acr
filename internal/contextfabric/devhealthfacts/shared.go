@@ -864,14 +864,19 @@ import (
 // kind than the model states counts, discovers and captures under the
 // binding's kind, so a stored count answer can differ.
 //
-// v175 -> v176: a team reaches work through the projects it owns as well as the
+// v175 -> v176: the compounding-risk operational-deficiency fact carries the
+// rule's own basis (score, band, time) beside the team's latest
+// compounding_risk_daily row and a moved-since-the-rule flag. An answer saved
+// under v175 quotes the rule-time score as the team's current risk.
+//
+// v177 -> v178: a team reaches work through the projects it owns as well as the
 // repositories it owns. The pull request rollup adds the pull requests linked to
 // an owned project's issues (a reached repository counts its linked pull
 // requests only), the blockers total is the union of owned repositories and
 // owned-project items counted once, and deployments, incidents and metrics name
 // the project-reached repositories they have no rows for. A candidate saved
-// under v175 holds a team total over owned repositories alone.
-const QueryVersion = "devhealthfacts.clickhouse.v176"
+// under v177 holds a team total over owned repositories alone.
+const QueryVersion = "devhealthfacts.clickhouse.v178"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
