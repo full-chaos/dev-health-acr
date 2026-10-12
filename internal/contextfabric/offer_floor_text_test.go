@@ -90,3 +90,32 @@ func TestAProjectNamedQuestionWithOnlyATeamNearMissServesTheRequestedKindSentenc
 		t.Fatalf("limitations = %q claim a search scope", result.Limitations)
 	}
 }
+
+// TestAProjectNamedQuestionServesTheRequestedKindFromTheWinningReading is the
+// same row with no caller expected kind: the requested project kind arrives
+// only on the winning reading of the question.
+func TestAProjectNamedQuestionServesTheRequestedKindFromTheWinningReading(t *testing.T) {
+	t.Parallel()
+	graph := &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		material:   StructureOfferMaterial{SubjectFloor: OfferFloorOutcome{Refused: true, SearchedKinds: []string{"team"}}},
+		context:    emptyGraphContext(),
+	}
+	interpretation := bootstrapInterpretation()
+	interpretation.SubjectTerms = []string{"Phantom"}
+	var family QuestionFamilyOutcome
+	family.WinningSample.RequestedKind = SubjectProject
+	engine := buildWindowGateEngine(t, &countingInterpreter{interpretation: interpretation, family: family}, graph, newMapResultStore())
+	request := validInvestigationRequestWithConfirmedWindow()
+	if len(request.ExpectedKinds) != 0 {
+		t.Fatalf("request carries expected kinds %v", request.ExpectedKinds)
+	}
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	served := strings.Join(result.Limitations, "|")
+	if result.Status != InvestigationNoMatch || !strings.Contains(served, `No project matched "Phantom"; the closest matches were teams. Nothing was offered`) {
+		t.Fatalf("status=%q limitations=%q", result.Status, result.Limitations)
+	}
+}
