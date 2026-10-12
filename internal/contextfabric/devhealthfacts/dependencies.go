@@ -342,14 +342,11 @@ const blockerPairSeparator = "\x1f"
 // read with the same strict link semantics as the project scope expansion
 // (linkedPullRequestOnSQL, workItemIsIssueSQL).
 func blockerEdgeRowsSQL(statusPredicate, authorized string) string {
-	return `SELECT l.repo_id AS rid, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(` + linkTierRankSQL + `) AS item_rank
+	return `SELECT l.pr_repo_id AS rid, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(l.link_rank) AS item_rank
   FROM work_item_dependencies AS d FINAL
-  INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-  INNER JOIN work_graph_issue_pr AS l FINAL ON l.org_id = t.org_id AND l.work_item_id = t.work_item_id
-  INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
+  INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = d.target_work_item_id
   INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
-  WHERE d.org_id = {org_id:String} AND toString(l.repo_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'
-    AND ` + workItemIsIssueSQL("t") + ` AND ` + linkTierRankSQL + ` > 0
+  WHERE d.org_id = {org_id:String} AND toString(l.pr_repo_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'
     AND d.target_work_item_id IN ` + authorized + ` AND d.source_work_item_id IN ` + authorized + `
   GROUP BY rid, tgt, src, is_open`
 }
