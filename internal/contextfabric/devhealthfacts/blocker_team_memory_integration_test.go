@@ -77,7 +77,7 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: blockerMemoryOrg, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
 			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{teamSubject(teamID)},
 		})
-		return statementMemorySince(t, ctx, direct, "work_item_dependencies", mark), result, err
+		return statementMemorySince(t, ctx, direct, statementFilter{Table: "work_item_dependencies"}, mark), result, err
 	}
 	small, smallResult, smallErr := read()
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
