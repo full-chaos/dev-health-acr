@@ -21,8 +21,10 @@ func TestTeamInvestmentMixCountsProjectLinkedPullRequestsOfUnownedRepositories(t
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
-	if err := direct.Exec(ctx, devhealthschema.DDL("work_graph_issue_pr")[0]); err != nil {
-		t.Fatalf("create work_graph_issue_pr: %v", err)
+	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
 	}
 	at := ts(2026, 9, 18, 0, 0, 0)
 	const orgID = "org-linked-investment"
