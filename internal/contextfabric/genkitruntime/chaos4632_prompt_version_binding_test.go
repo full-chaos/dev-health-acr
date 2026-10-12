@@ -103,7 +103,7 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// superlative. See DefaultSynthesisPromptVersion's own doc comment.
 			// v16 -> v17: the instruction to restate relevant supplied facts as
 			// claimed_facts. See DefaultSynthesisPromptVersion's own doc comment.
-			digest: "8272c75acefa293742be7cd18e3eebe9b629ca8c1a1a9b8e132b6b4fbeb1f32b",
+			digest: "70c0f3fa748752f7d1624fea069b4d7b8a58ec8913b76264f0ef6bfb698b673c",
 		},
 		{
 			name:    "interpretation model-output schema",

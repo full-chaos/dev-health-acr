@@ -23,7 +23,7 @@ func TestDeficiencyFactNamesRuleBasisAndLatestHealth(t *testing.T) {
 			"Compounding Risk score is 0.509 (severity: elevated). Churn, complexity trend, ownership concentration, and review latency are compounding above their tuned thresholds.",
 			"criterion", "2026-10-03", "2026-10-10", "2026-10-10 06:00:00",
 		}}},
-		{match: "toString(day)\nFROM (", rows: [][]any{{"team-1", "high", uint8(1), float64(0.72), "2026-10-12 00:30:00", "2026-10-11"}}},
+		{match: "compounding_risk, computed_at, day,\n\t\trow_number()", rows: [][]any{{"team-1", "high", uint8(1), float64(0.72), "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}},
 		{match: "toString(day),\n\ttoUInt8(", rows: [][]any{{
 			"team-1", "high", uint8(1), float64(0.72), "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1),
 			uint8(1), float64(0.3), float64(0.4), uint8(1), float64(0.2), float64(0.3),
@@ -75,20 +75,26 @@ const ruleBasisRationale = "Compounding Risk score is 0.509 (severity: elevated)
 func TestDeficiencyFactRuleBasisAgainstLatestRows(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name       string
-		rationale  string
-		latest     [][]any
-		wantBasis  *float64
-		wantLatest *float64
-		wantMoved  *bool
-		wantReason string
+		name               string
+		rationale          string
+		latest             [][]any
+		wantBasis          *float64
+		wantLatest         *float64
+		wantMoved          *bool
+		wantReason         string
+		wantSeverityReason string
+		wantSeverity       *string
 	}{
-		{name: "band changed", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "high", uint8(1), 0.55, "2026-10-12 00:30:00", "2026-10-11"}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.55), wantMoved: ptrBool(true)},
-		{name: "same band, delta at threshold", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "elevated", uint8(1), 0.609, "2026-10-12 00:30:00", "2026-10-11"}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.609), wantMoved: ptrBool(true)},
-		{name: "same band, small delta", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "elevated", uint8(1), 0.53, "2026-10-12 00:30:00", "2026-10-11"}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.53), wantMoved: ptrBool(false)},
-		{name: "unparsed rationale", rationale: "The team's risk is compounding.", latest: [][]any{{"team-1", "high", uint8(1), 0.72, "2026-10-12 00:30:00", "2026-10-11"}}, wantLatest: ptrNum(0.72)},
+		{name: "band changed", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "high", uint8(1), 0.55, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.55), wantMoved: ptrBool(true), wantSeverity: ptrStr("high")},
+		{name: "same band, delta at threshold", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "elevated", uint8(1), 0.609, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.609), wantMoved: ptrBool(true), wantSeverity: ptrStr("elevated")},
+		{name: "same band, small delta", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "elevated", uint8(1), 0.53, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.53), wantMoved: ptrBool(false), wantSeverity: ptrStr("elevated")},
+		{name: "unparsed rationale", rationale: "The team's risk is compounding.", latest: [][]any{{"team-1", "high", uint8(1), 0.72, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantLatest: ptrNum(0.72), wantSeverity: ptrStr("high")},
 		{name: "no latest row", rationale: ruleBasisRationale, wantBasis: ptrNum(0.509), wantReason: "no_compounding_risk_row"},
-		{name: "latest band unknown", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "unknown", uint8(0), 0.0, "2026-10-12 00:30:00", "2026-10-11"}}, wantBasis: ptrNum(0.509), wantReason: "no_known_severity_breakdown_rows"},
+		{name: "latest band unknown, no score", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "unknown", uint8(0), 0.0, "2026-10-12 00:30:00", "2026-10-11", uint8(0), uint8(1)}}, wantBasis: ptrNum(0.509), wantSeverityReason: "no_known_severity_breakdown_rows"},
+		{name: "latest band unknown, score present", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "unknown", uint8(1), 0.72, "2026-10-12 00:30:00", "2026-10-11", uint8(0), uint8(1)}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.72), wantMoved: ptrBool(true), wantSeverityReason: "no_known_severity_breakdown_rows"},
+		{name: "known band outside the freshness window", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "high", uint8(1), 0.72, "2026-10-12 00:30:00", "2026-08-01", uint8(1), uint8(0)}}, wantBasis: ptrNum(0.509), wantLatest: ptrNum(0.72), wantMoved: ptrBool(true), wantSeverityReason: "known_severity_stale_beyond_freshness_window"},
+		{name: "same band, score missing", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "elevated", uint8(0), 0.0, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantSeverity: ptrStr("elevated")},
+		{name: "different band, score missing", rationale: ruleBasisRationale, latest: [][]any{{"team-1", "high", uint8(0), 0.0, "2026-10-12 00:30:00", "2026-10-11", uint8(1), uint8(1)}}, wantBasis: ptrNum(0.509), wantMoved: ptrBool(true), wantSeverity: ptrStr("high")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -96,7 +102,7 @@ func TestDeficiencyFactRuleBasisAgainstLatestRows(t *testing.T) {
 			client := &fakeClient{tables: []fakeTable{
 				{match: "max(window_end) OVER (PARTITION BY team_id)", rows: [][]any{{"team-1", "2026-10-10", uint32(1), uint8(1), uint8(1)}}},
 				{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{{"team-1", "compounding-risk", "v1", "warning", "t", tc.rationale, "c", "2026-10-03", "2026-10-10", "2026-10-10 06:00:00"}}},
-				{match: "toString(day)\nFROM (", rows: tc.latest},
+				{match: "compounding_risk, computed_at, day,\n\t\trow_number()", rows: tc.latest},
 			}}
 			result, err := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactOperationalDeficiencies).ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -122,6 +128,27 @@ func TestDeficiencyFactRuleBasisAgainstLatestRows(t *testing.T) {
 			case tc.wantReason != "" && (reason == nil || *reason != tc.wantReason):
 				t.Fatalf("latest_unavailable_reason = %#v, want %q", reason, tc.wantReason)
 			}
+			severityReason := fields["latest_severity_unavailable_reason"].String
+			switch {
+			case tc.wantSeverityReason == "" && severityReason != nil:
+				t.Fatalf("latest_severity_unavailable_reason = %q, want absent", *severityReason)
+			case tc.wantSeverityReason != "" && (severityReason == nil || *severityReason != tc.wantSeverityReason):
+				t.Fatalf("latest_severity_unavailable_reason = %#v, want %q", severityReason, tc.wantSeverityReason)
+			}
+			severity := fields["latest_severity"].String
+			switch {
+			case tc.wantSeverity == nil && severity != nil:
+				t.Fatalf("latest_severity = %q, want absent", *severity)
+			case tc.wantSeverity != nil && (severity == nil || *severity != *tc.wantSeverity):
+				t.Fatalf("latest_severity = %#v, want %q", severity, *tc.wantSeverity)
+			}
+			if tc.rationale != ruleBasisRationale {
+				if got := fields["rule_basis_unavailable_reason"].String; got == nil || *got != "rationale_not_in_rule_sentence_form" {
+					t.Fatalf("rule_basis_unavailable_reason = %#v, want rationale_not_in_rule_sentence_form", got)
+				}
+			} else if _, present := fields["rule_basis_unavailable_reason"]; present {
+				t.Fatalf("rule_basis_unavailable_reason present on a parsed rationale: %#v", fields["rule_basis_unavailable_reason"])
+			}
 			if got := fields["rationale"].String; got == nil || *got != tc.rationale {
 				t.Fatalf("rationale = %#v, want the rule's text verbatim", got)
 			}
@@ -130,6 +157,7 @@ func TestDeficiencyFactRuleBasisAgainstLatestRows(t *testing.T) {
 }
 
 func ptrNum(v float64) *float64 { return &v }
+func ptrStr(v string) *string   { return &v }
 func ptrBool(v bool) *bool      { return &v }
 
 func assertNumberField(t *testing.T, fields map[string]contextfabric.FactValue, name string, want *float64) {

@@ -31,8 +31,8 @@ func (c ruleBasisClient) Query(_ context.Context, statement string, _ []contextp
 			"Compounding Risk score is 0.509 (severity: elevated). Churn, complexity trend, ownership concentration, and review latency are compounding above their tuned thresholds.",
 			"criterion", "2026-09-26", "2026-10-03", "2026-10-03 06:00:00",
 		}}}, nil
-	case strings.Contains(statement, "toString(day)\nFROM ("):
-		return &ruleBasisScanner{rows: [][]any{{"CHAOS", c.latestSeverity, uint8(1), c.latestRisk, "2026-10-04 00:30:00", "2026-10-03"}}}, nil
+	case strings.Contains(statement, "compounding_risk, computed_at, day,\n\t\trow_number()"):
+		return &ruleBasisScanner{rows: [][]any{{"CHAOS", c.latestSeverity, uint8(1), c.latestRisk, "2026-10-04 00:30:00", "2026-10-03", uint8(1), uint8(1)}}}, nil
 	case strings.Contains(statement, "ORDER BY (severity != 'unknown') DESC"):
 		return &ruleBasisScanner{rows: [][]any{{
 			"CHAOS", c.latestSeverity, uint8(1), c.latestRisk, "2026-10-04 00:30:00", "2026-10-03", uint8(1), uint8(1),
