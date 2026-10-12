@@ -2,17 +2,18 @@ package devhealthfacts_test
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 const projectRollupOrg = "6a2d9e41-0f7b-4c58-93e1-5b8c2d7f4a06"
@@ -219,61 +220,58 @@ func TestProjectPullRequestsAreServedAsRollupBesideTheExpandedPullRequestsOnReal
 	wantInt(t, rollup.Fields, "pull_requests_open_current", 2)
 }
 
-// The project rollups' cost follows the links and edges they serve: work items
-// of the project with no link and no blocker edge do not count against the
-// statement memory budget.
+// The project rollups' cost follows the links and edges they serve, not the
+// size of the project: growing the project's unlinked, edge-free work items
+// leaves each statement's peak memory flat and under the statement cap.
 func TestProjectRollupsServeAProjectWithManyWorkItemsOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
+		options.MaxBytesToRead = &maxBytesToRead
+	})
 	s := newProjectRollupSeed(t, ctx, direct)
 	s.workItem("i-linked", "repo-a", "issue", "open", "proj-p")
 	s.workItem("b-open", "repo-a", "issue", "open", "")
 	s.pullRequest("repo-a", 1, s.at, nil, nil)
 	s.link("repo-a", "i-linked", 1, "native")
 	s.blocks("b-open", "i-linked")
-	s.exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
-SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'issue', 'open', '', ?, ?, '', 'linear', 'proj-p', NULL, ? FROM numbers(?)`,
-		repoUUID("repo-a"), projectRollupOrg, s.at, s.at, s.at, uint64(blockerMemoryFillerItems))
-
+	filler := func(prefix string, count int) {
+		t.Helper()
+		s.exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
+SELECT concat(?, repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'issue', 'open', '', ?, ?, '', 'linear', 'proj-p', NULL, ? FROM numbers(?)`,
+			prefix, repoUUID("repo-a"), projectRollupOrg, s.at, s.at, s.at, uint64(count))
+	}
 	project := projectRollupRef(t, "proj-p")
 	providers := devhealthfacts.NewProviders(query)
 	principal := storage.Principal{OrgID: projectRollupOrg, RepositoryScopes: []string{"*"}}
-	current := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
-	pullRequests, prErr := findProvider(t, providers, contextfabric.FactPullRequests).ReadFacts(ctx, principal, contextfabric.FactQuery{Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{project}, Time: current})
-	blockers, blockerErr := findProvider(t, providers, contextfabric.FactBlockers).ReadFacts(ctx, principal, contextfabric.FactQuery{Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{project}, Time: current})
-
-	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
-		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
+	rollups := []struct {
+		label, table, field string
+		kind                contextfabric.FactKind
+	}{
+		{"project pull request rollup", "work_graph_issue_pr", "pull_requests_open_current", contextfabric.FactPullRequests},
+		{"project blocker rollup", "work_item_dependencies", "blocked_work_items_current", contextfabric.FactBlockers},
 	}
-	for _, statement := range []struct{ name, marker string }{
-		{"project pull request rollup", "lp.project_key"},
-		{"project blocker rollup", "uniqExactIf(tgt, is_open = 1)"},
-	} {
-		var count, peak uint64
-		if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage) FROM system.query_log
-WHERE type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select' AND position(query, ?) > 0 AND position(query, 'system.query_log') = 0`, statement.marker).Scan(&count, &peak); err != nil {
-			t.Fatalf("read query_log: %v", err)
-		}
-		if count == 0 {
-			t.Fatalf("%s: no statement in system.query_log (measurement did not happen)", statement.name)
-		}
-		if peak >= blockerMemoryPeakCeiling {
-			t.Errorf("%s peaked at %d bytes over %d unrelated work items, want under %d (a quarter of the 64 MiB statement cap)", statement.name, peak, blockerMemoryFillerItems, blockerMemoryPeakCeiling)
-		}
-	}
-	for _, read := range []struct {
-		name   string
-		err    error
-		result contextfabric.FactProviderResult
-		field  string
-	}{{"pull requests", prErr, pullRequests, "pull_requests_open_current"}, {"blockers", blockerErr, blockers, "blocked_work_items_current"}} {
-		if read.err != nil {
-			cause := readFailureCause(read.err)
-			if strings.Contains(cause, "code: 241") {
-				t.Fatalf("%s: project rollup exceeded its statement memory budget: %s", read.name, cause)
+	read := func() []statementMemory {
+		t.Helper()
+		out := make([]statementMemory, len(rollups))
+		for i, rollup := range rollups {
+			mark := serverNowMicros(t, ctx, direct)
+			result, err := findProvider(t, providers, rollup.kind).ReadFacts(ctx, principal, contextfabric.FactQuery{
+				Kind: rollup.kind, Subjects: []contextfabric.SubjectRef{project}, Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			})
+			out[i] = statementMemorySince(t, ctx, direct, rollup.table, mark)
+			if err != nil {
+				t.Fatalf("%s: %v: %s", rollup.label, err, readFailureCause(err))
 			}
-			t.Fatalf("%s: %v: %s", read.name, read.err, cause)
+			wantInt(t, factFor(t, result, project).Fields, rollup.field, 1)
 		}
-		wantInt(t, factFor(t, read.result, project).Fields, read.field, 1)
+		return out
+	}
+	filler("filler-", blockerMemoryFillerItems)
+	small := read()
+	filler("filler-more-", blockerMemoryMoreFillerItems)
+	large := read()
+	for i, rollup := range rollups {
+		assertStatementMemoryFollowsEvidence(t, ctx, direct, rollup.label, small[i], large[i], 1)
 	}
 }
