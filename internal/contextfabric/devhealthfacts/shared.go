@@ -959,12 +959,7 @@ import (
 //
 // v191 -> v192: a cohort cut below the population retrieval reached serves that
 // population and an N of M sentence. A stored answer lacks both.
-//
-// v192 -> v193: pull requests and blockers also serve a project subject (a
-// rollup over the project's issues and their linked pull requests), and an
-// investigation of a project keeps that rollup beside the expanded per-item
-// facts. A stored answer about a project can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v193"
+const QueryVersion = "devhealthfacts.clickhouse.v192"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

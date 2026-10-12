@@ -47,6 +47,11 @@ var projectLinkedPullRequestsSQL = `(
 // linkedWorkItemIDsSQL is every work item id a link row names.
 const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})`
 
+// pullRequestOpenStateSQL is the open rule of the pull request fact and the
+// status filter: the stored state is exactly open (ops stores it normalized).
+// An unknown state is not open.
+const pullRequestOpenStateSQL = `ifNull(pr.state, '') = 'open'`
+
 // projectPullRequestRollupRow is one (project, link tier) group.
 type projectPullRequestRollupRow struct {
 	tier                                 int64
@@ -65,13 +70,13 @@ func (p *PullRequestsProvider) readProjectRollup(ctx context.Context, orgID stri
 	}
 	window := resolveRollupWindow(timeBound, evidence, clock())
 	statement := `SELECT lp.project_key, toInt64(lp.link_rank),
-  toInt64(countIf(pr.merged_at IS NULL AND pr.closed_at IS NULL)),
+  toInt64(countIf(` + pullRequestOpenStateSQL + `)),
   toInt64(countIf(` + window.timestampExpr("pr.created_at") + `)),
   toInt64(countIf(pr.merged_at IS NOT NULL AND ` + window.timestampExpr("pr.merged_at") + `)),
   toInt64(countIf(pr.merged_at IS NULL AND pr.closed_at IS NOT NULL AND ` + window.timestampExpr("pr.closed_at") + `))
 FROM ` + projectLinkedPullRequestsSQL + ` AS lp
 INNER JOIN (
-  SELECT repo_id, number, created_at, merged_at, closed_at FROM git_pull_requests FINAL
+  SELECT repo_id, number, state, created_at, merged_at, closed_at FROM git_pull_requests FINAL
   WHERE org_id = {org_id:String} AND (repo_id, number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String})
 ) AS pr ON pr.repo_id = lp.pr_repo_id AND pr.number = lp.pr_number
 GROUP BY lp.project_key, lp.link_rank
