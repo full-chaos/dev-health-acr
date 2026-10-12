@@ -190,6 +190,8 @@ func TestTheScopedAnchorTurnClarifiesAndTheRedeemedAnchorServes(t *testing.T) {
 		roles      string
 		advanced   string
 		channel    string
+		// reason is the emitted terminal reason; empty reads ambiguous.
+		reason string
 	}{
 		{
 			// corpus row cv-scoped-projects-by-team-bounded, terminal turn:
@@ -233,6 +235,7 @@ func TestTheScopedAnchorTurnClarifiesAndTheRedeemedAnchorServes(t *testing.T) {
 			}, Committed: []SubjectRef{}},
 			redeem: roleCandidate("subr_role_repo_a", SubjectRepository, "repository:anchor-a"),
 			roles:  "anchor:repository:open,member:team:population", advanced: "anchor:repository", channel: "subject_candidate",
+			reason: unboundScopeAnchorTerminalReason,
 		},
 		{
 			cell: "legitimate ambiguous anchors offered on the anchor channel", frame: roleScopedFrame(SubjectProject), anchorKind: SubjectTeam,
@@ -272,7 +275,11 @@ func TestTheScopedAnchorTurnClarifiesAndTheRedeemedAnchorServes(t *testing.T) {
 			if first.RefusalBasis != "" || roleContains(first.Limitations, declaredKindTerminalLimitation) {
 				t.Fatalf("turn 1 carries the declared-kind refusal (basis %q, limitations %#v)", first.RefusalBasis, first.Limitations)
 			}
-			if want := []string{"ambiguous"}; !stringSlicesEqual(telemetry.subjectlessTerminalReasons, want) {
+			wantReason := "ambiguous"
+			if testCase.reason != "" {
+				wantReason = testCase.reason
+			}
+			if want := []string{wantReason}; !stringSlicesEqual(telemetry.subjectlessTerminalReasons, want) {
 				t.Fatalf("emitted reasons = %#v, want %#v", telemetry.subjectlessTerminalReasons, want)
 			}
 			observed := telemetry.subjectlessTerminalAnswerability[0]
