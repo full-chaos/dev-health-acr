@@ -26,7 +26,7 @@ func TestLiveMemberStatusIsAppliedBeforeTheMemberCap(t *testing.T) {
 	orgID := "live-member-status-before-cap-" + time.Now().UTC().Format("20060102T150405.000000000")
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
 
-	batch, edges, team, project := memberStatusCapFixture(orgID, time.Now().UTC())
+	batch, edges, team, project, wide := memberStatusCapFixture(orgID, time.Now().UTC())
 	if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
 		t.Fatalf("entities ApplyProjectionBatch() error = %v", err)
 	}
@@ -55,6 +55,8 @@ func TestLiveMemberStatusIsAppliedBeforeTheMemberCap(t *testing.T) {
 		{"project pull requests open", project, contextfabric.SubjectPullRequest, "open", ids(pullRequestID, 27, 28, 29, 30)},
 		{"project pull requests awaiting review", project, contextfabric.SubjectPullRequest, "awaiting_review", ids(pullRequestID, 27, 28, 30)},
 		{"team projects started", team, contextfabric.SubjectProject, "started", ids(ownedProjectID, 27, 28, 29, 30)},
+		{"wide team pull requests open", wide, contextfabric.SubjectPullRequest, "open", ids(memberStatusCapWidePullRequestID, 27, 28, 29, 30)},
+		{"wide team pull requests awaiting review", wide, contextfabric.SubjectPullRequest, "awaiting_review", ids(memberStatusCapWidePullRequestID, 27, 28, 29, 30)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -114,7 +116,7 @@ func TestLiveMemberStatusIsAppliedBeforeTheMemberCap(t *testing.T) {
 
 // memberStatusCapFixture is the projection of TestLiveMemberStatusIsAppliedBeforeTheMemberCap:
 // the entity batch, the relationship batch, the team and the linked project.
-func memberStatusCapFixture(orgID string, observed time.Time) (contextfabric.ProjectionBatch, contextfabric.ProjectionBatch, contextfabric.SubjectRef, contextfabric.SubjectRef) {
+func memberStatusCapFixture(orgID string, observed time.Time) (contextfabric.ProjectionBatch, contextfabric.ProjectionBatch, contextfabric.SubjectRef, contextfabric.SubjectRef, contextfabric.SubjectRef) {
 	created := observed.Add(-48 * time.Hour)
 	scope := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/api"}}
 	text := func(value string) contextfabric.ScalarValue { return contextfabric.ScalarValue{String: &value} }
@@ -159,6 +161,23 @@ func memberStatusCapFixture(orgID string, observed time.Time) (contextfabric.Pro
 			relationship(fmt.Sprintf("relationship_issue_%03d_pr", i), contractsv1.ContextFabricRelationshipLinksPullRequest, issue, pull, native),
 			relationship(fmt.Sprintf("relationship_project_%03d_team", i), contractsv1.ContextFabricRelationshipOwnedByTeam, owned, team, nil))
 	}
+	// A second team owns 30 repositories with one pull request each: the
+	// first 26 repositories by id hold a merged one, the last four an open
+	// one, so the matches are past the 25th repository.
+	wide := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:wide", Label: "Wide"}
+	entities = append(entities, entity(wide, nil, nil))
+	for i := 1; i <= 30; i++ {
+		state := "merged"
+		if i > 26 {
+			state = "open"
+		}
+		repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: fmt.Sprintf("repository:wide-%03d", i), Label: fmt.Sprintf("acme/wide-%03d", i)}
+		pull := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: memberStatusCapWidePullRequestID(i), Label: fmt.Sprintf("PR #%d", i)}
+		entities = append(entities, entity(repo, nil, nil), entity(pull, map[string]contextfabric.ScalarValue{"state": text(state)}, &created))
+		relationships = append(relationships,
+			relationship(fmt.Sprintf("relationship_wide_%03d_team", i), contractsv1.ContextFabricRelationshipOwnedByTeam, repo, wide, nil),
+			relationship(fmt.Sprintf("relationship_wide_pr_%03d_repository", i), contractsv1.ContextFabricRelationshipBelongsToRepository, pull, repo, nil))
+	}
 	approved := contextfabric.SubjectRef{Kind: contextfabric.SubjectKind(contractsv1.ContextFabricSubjectPullRequestReview), CanonicalID: "pull_request_review:acme-api:029:0", Label: "PR #29 review"}
 	submitted := observed.Add(-time.Hour)
 	entities = append(entities, entity(approved, map[string]contextfabric.ScalarValue{"state": text("APPROVED")}, &submitted))
@@ -173,7 +192,11 @@ func memberStatusCapFixture(orgID string, observed time.Time) (contextfabric.Pro
 	edges := batch
 	edges.BatchID, edges.Cursor, edges.NextCursor = "batch_member_status_cap_00000002", "cursor-1", "cursor-2"
 	edges.Entities, edges.Relationships = []contextfabric.EntityProjection{}, relationships
-	return batch, edges, team, project
+	return batch, edges, team, project, wide
+}
+
+func memberStatusCapWidePullRequestID(i int) string {
+	return fmt.Sprintf("pull_request:wide-%03d:1", i)
 }
 
 func memberStatusCapPullRequestID(i int) string { return fmt.Sprintf("pull_request:acme-api:%03d", i) }
@@ -183,13 +206,13 @@ func memberStatusCapProjectID(i int) string { return fmt.Sprintf("project:owned-
 // TestTheMemberStatusCapFixtureIsAValidProjectionBatch keeps the live fixture
 // valid where no graph store runs.
 func TestTheMemberStatusCapFixtureIsAValidProjectionBatch(t *testing.T) {
-	entities, edges, _, _ := memberStatusCapFixture("org-1", time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC))
+	entities, edges, _, _, _ := memberStatusCapFixture("org-1", time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC))
 	for name, batch := range map[string]contextfabric.ProjectionBatch{"entities": entities, "relationships": edges} {
 		if err := batch.Validate(); err != nil {
 			t.Errorf("%s batch is not a valid projection batch: %v", name, err)
 		}
 	}
-	if len(entities.Entities) != 3+3*30+1 || len(edges.Relationships) != 1+4*30+1 {
+	if len(entities.Entities) != 3+3*30+1+1+2*30 || len(edges.Relationships) != 1+4*30+1+2*30 {
 		t.Fatalf("fixture holds %d entities and %d relationships", len(entities.Entities), len(edges.Relationships))
 	}
 }
