@@ -1,6 +1,9 @@
 package contextfabric
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func unboundTestFrame() *QuestionFrame {
 	return &QuestionFrame{SubjectExpression: SubjectExpression{
@@ -73,10 +76,10 @@ func TestUnboundScopeAnchorTurnReadsAsItsOwnTerminalReason(t *testing.T) {
 			t.Fatalf("candidate %+v is not ambiguous", candidate)
 		}
 	}
-	if got := unboundAnchorAwareTerminalReason(frame, SubjectTeam, FrameGate{}, served, 0, declaredKindDecision{}); got != unboundScopeAnchorTerminalReason {
+	if got := unboundAnchorAwareTerminalReason(withUnboundScopeAnchorTurn(context.Background()), FrameGate{}, served, 0, declaredKindDecision{}); got != unboundScopeAnchorTerminalReason {
 		t.Fatalf("terminal reason = %q, want %q", got, unboundScopeAnchorTerminalReason)
 	}
-	if got := subjectlessTerminalReason(FrameGate{}, served, 0, declaredKindDecision{}); got != "ambiguous" {
-		t.Fatalf("generic reason = %q: the unbound class must be told apart from it", got)
+	if got := unboundAnchorAwareTerminalReason(context.Background(), FrameGate{}, served, 0, declaredKindDecision{}); got != "ambiguous" {
+		t.Fatalf("an unmarked ambiguous turn reads %q, want ambiguous", got)
 	}
 }

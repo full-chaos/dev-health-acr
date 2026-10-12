@@ -533,7 +533,7 @@ func (e *Engine) terminalResult(
 		// the answer would disagree about what happened. One decision value
 		// reaches both surfaces, and the served-document test asserts they
 		// agree.
-		reason := unboundAnchorAwareTerminalReason(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind, familyOutcome.Gate, resolution, subjectCandidatesAuthzDropped, declaredKind)
+		reason := unboundAnchorAwareTerminalReason(ctx, familyOutcome.Gate, resolution, subjectCandidatesAuthzDropped, declaredKind)
 		e.telemetry.RecordSubjectlessTerminal(ctx, principal, reason, observableRefusalBasis(refusalBasis), declaredKind.ObservableDeclaredKinds(), declaredKind.ObservableOfferedKinds(), declaredKind.ObservableAnswerability())
 	}
 	coverage := graphContext.Coverage

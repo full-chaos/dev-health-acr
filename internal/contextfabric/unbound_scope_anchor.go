@@ -1,5 +1,7 @@
 package contextfabric
 
+import "context"
+
 // unboundScopeAnchorTerminalReason is the subjectless-terminal reason of a turn
 // ended before discovery because the scope anchor could not be bound to one
 // subject.
@@ -64,17 +66,28 @@ func unboundScopeAnchorResolution(frame *QuestionFrame, declaredAnchorKind Subje
 	resolution.Candidates = candidates
 	resolution.Committed = []SubjectRef{}
 	resolution.CommitDecisionDigests = nil
-	resolution.ClarificationPrompt = ClarificationPrompt(candidates)
+	if resolution.ClarificationPrompt == "" {
+		resolution.ClarificationPrompt = ClarificationPrompt(candidates)
+	}
 	return resolution
 }
 
+type unboundScopeAnchorContextKey struct{}
+
+// withUnboundScopeAnchorTurn marks the context of a turn the unbound-anchor
+// guard ended, so the terminal's reason names the decision the turn took
+// rather than what retrieval found.
+func withUnboundScopeAnchorTurn(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unboundScopeAnchorContextKey{}, true)
+}
+
 // unboundAnchorAwareTerminalReason is subjectlessTerminalReason with the one
-// class the turn decided before discovery named: a pool that is non-empty only
-// because the scope anchor could not be bound reads unbound_scope_anchor, not
-// the generic ambiguous.
-func unboundAnchorAwareTerminalReason(frame *QuestionFrame, declaredAnchorKind SubjectKind, gate FrameGate, resolution SubjectResolution, subjectCandidatesAuthzDropped int, declaredKind declaredKindDecision) string {
+// class the guard decided before discovery named: a pool that is non-empty
+// only because the scope anchor could not be bound reads unbound_scope_anchor,
+// not the generic ambiguous. Every other ambiguous turn keeps its reason.
+func unboundAnchorAwareTerminalReason(ctx context.Context, gate FrameGate, resolution SubjectResolution, subjectCandidatesAuthzDropped int, declaredKind declaredKindDecision) string {
 	reason := subjectlessTerminalReason(gate, resolution, subjectCandidatesAuthzDropped, declaredKind)
-	if reason == "ambiguous" && unboundScopeAnchorNamed(frame, declaredAnchorKind, resolution, CommitBasisSet{}) {
+	if marked, _ := ctx.Value(unboundScopeAnchorContextKey{}).(bool); marked && reason == "ambiguous" {
 		return unboundScopeAnchorTerminalReason
 	}
 	return reason

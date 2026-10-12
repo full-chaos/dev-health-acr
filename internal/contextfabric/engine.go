@@ -3273,8 +3273,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			resolution.ClarificationPrompt = uncommittedTeamAnchorPrompt(resolution)
 			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
 		}
-		if unboundScopeAnchorNamed(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind, resolution, commitBases) {
+		if len(structureMaterial.AnchorOptions) == 0 && unboundScopeAnchorNamed(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind, resolution, commitBases) {
 			resolution = unboundScopeAnchorResolution(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind, resolution)
+			ctx = withUnboundScopeAnchorTurn(ctx)
 			if len(request.PriorSubjectReceipts) > 0 {
 				// Dispositions are composed against the resolution the caller
 				// receives, never against the commits the guard withdrew.
