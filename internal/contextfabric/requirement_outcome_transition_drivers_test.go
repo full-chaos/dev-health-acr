@@ -171,11 +171,11 @@ func TestAnUnservableStateNarrowedAtAssemblyNamesItsDerivationReason(t *testing.
 		seedCode contractsv1.ContextFabricCoverageDetailCode
 		// seedOutcome is the seed's account: a kind no producer reaches is
 		// unavailable; an obligation no producer declares for a reached kind
-		// is not_applicable and names no cause (the plan's token discloses it).
+		// is not_applicable and names fact_no_declaring_producer as its cause.
 		seedOutcome contractsv1.ContextFabricPlanRequirementOutcome
 	}{
 		{"no producer reaches teams", registryDeriver{}, RequirementReasonSubjectKindUnsupported, contractsv1.ContextFabricCoverageDetailFactPruned, contractsv1.ContextFabricRequirementUnavailable},
-		{"teams reached, state undeclared", registryDeriver{capabilities: teamStatusWithoutStateCapabilities()}, RequirementReasonNoDeclaringProducer, "", contractsv1.ContextFabricRequirementNotApplicable},
+		{"teams reached, state undeclared", registryDeriver{capabilities: teamStatusWithoutStateCapabilities()}, RequirementReasonNoDeclaringProducer, contractsv1.ContextFabricCoverageDetailFactNoDeclaringProducer, contractsv1.ContextFabricRequirementNotApplicable},
 	} {
 		cell := cell
 		t.Run(cell.name, func(t *testing.T) {

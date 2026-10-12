@@ -198,6 +198,24 @@ func TestBuildContextFabricInvestigator_wiresTheAnchorFreshnessReaderWithAnswerR
 	}
 }
 
+// TestBuildContextFabricInvestigator_wiresTheAnchorBindingCountSwitch: the
+// deployment switch reaches the engine, off by default.
+func TestBuildContextFabricInvestigator_wiresTheAnchorBindingCountSwitch(t *testing.T) {
+	configureGraph(t)
+	for _, on := range []bool{false, true} {
+		request, postgres, clickhouse := investigatorBuildRequest(t)
+		request.config.AnchorBindingCountEnabled = on
+		investigator, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+		if err != nil {
+			t.Fatalf("buildContextFabricInvestigator() = %v", err)
+		}
+		engine := investigator.(*contextfabric.Engine)
+		if got := reflect.ValueOf(engine).Elem().FieldByName("anchorBindingCountEnabled").Bool(); got != on {
+			t.Errorf("config %v reached the engine as %v", on, got)
+		}
+	}
+}
+
 // TestBuildContextFabricInvestigator_wiresEveryReuseKeyVersionAuthority is
 // CHAOS-3862 sol round-2 finding F4: every prior test in this file that
 // touches reuse composition builds the engine and asserts a DEPENDENCY

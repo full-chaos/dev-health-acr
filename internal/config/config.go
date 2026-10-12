@@ -156,6 +156,11 @@ type Config struct {
 	// request can mint a v2 (membership-verify) ambiguous-claimant anchor
 	// offer -- byte-identical to pre-CHAOS-4042 behavior.
 	AnchorMembershipOffersEnabled bool
+	// AnchorBindingCountEnabled (ACR_CONTEXT_FABRIC_ANCHOR_BINDING_COUNT_ENABLED)
+	// applies the anchor binding's kind to a turn's reading before any
+	// resolution, so retrieval, the count, discovery and the capture read
+	// one kind. Default OFF; turned on per deployment after the corpus gate.
+	AnchorBindingCountEnabled bool
 	// ServerCompletenessAuthorityEnabled (CHAOS-5640,
 	// ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED) is the
 	// gated FLIP's master switch -- default OFF, same "ships dark"
