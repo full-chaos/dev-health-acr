@@ -45,14 +45,14 @@ func TestTeamHealthOwningRepositoryWithoutRiskRowsStaysNoData(t *testing.T) {
 	}
 }
 
-func TestTeamHealthOwningNoRepositoryKeepsServedFactAndNamesCause(t *testing.T) {
+func TestTeamHealthServedFactWithoutOwnershipKeepsStateAndAddsNoCause(t *testing.T) {
 	t.Parallel()
 	result := readTeamHealth(t, &fakeClient{tables: []fakeTable{{match: healthScalarMatch, rows: [][]any{healthRow("CHAOS")}}}})
 	if len(result.Facts) != 1 || result.State != contextfabric.SourceAvailable {
 		t.Fatalf("state = %q facts = %d, want the served fact kept and available", result.State, len(result.Facts))
 	}
-	if !strings.Contains(result.Reason, "owns no repository") {
-		t.Fatalf("reason = %q, want the cause beside the fact", result.Reason)
+	if strings.Contains(result.Reason, "own no repository") || strings.Contains(result.Reason, "owns no repository") {
+		t.Fatalf("reason = %q, a team that holds a fact is not named as owning nothing", result.Reason)
 	}
 }
 
@@ -109,4 +109,41 @@ func teamOwningClient(kind contextfabric.FactKind, teamID string) *fakeClient {
 		return &fakeClient{tables: []fakeTable{{match: "team_repo_ownership", rows: [][]any{{teamID, "repo-1", "org/repo-1"}}}}}
 	}
 	return &fakeClient{}
+}
+
+func readTeamsKind(t *testing.T, client *fakeClient, kind contextfabric.FactKind, teams ...string) contextfabric.FactProviderResult {
+	t.Helper()
+	subjects := make([]contextfabric.SubjectRef, 0, len(teams))
+	for _, team := range teams {
+		subjects = append(subjects, teamSubject(team))
+	}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), kind)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: kind, Subjects: subjects,
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	return result
+}
+
+func TestMixedOwnershipDecidesTheStatePerTeam(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []contextfabric.FactKind{contextfabric.FactHealth, contextfabric.FactOperationalDeficiencies, contextfabric.FactInvestment} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			mixed := readTeamsKind(t, teamOwningClient(kind, "OWNER"), kind, "OWNER", "NOTHING")
+			if mixed.State != contextfabric.SourceNoData || len(mixed.Facts) != 0 {
+				t.Fatalf("owner without rows beside a team that owns nothing: state = %q facts = %d, want no_data", mixed.State, len(mixed.Facts))
+			}
+			if !strings.Contains(mixed.Reason, "1 of 2 requested teams own no repository") {
+				t.Fatalf("reason = %q, want the team that owns nothing named beside the owner's state", mixed.Reason)
+			}
+			none := readTeamsKind(t, &fakeClient{}, kind, "NOTHING", "ALSO-NOTHING")
+			if none.State != contextfabric.SourceNotApplicable || !strings.Contains(none.Reason, "owns no repository") {
+				t.Fatalf("every team owns nothing: state = %q reason = %q, want not_applicable with the cause", none.State, none.Reason)
+			}
+		})
+	}
 }
