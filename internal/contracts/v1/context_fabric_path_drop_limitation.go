@@ -46,18 +46,28 @@ var contextFabricPathDropPattern = func() *regexp.Regexp {
 		q(contextFabricPathDropOf) + number + q(contextFabricPathDropPaths) + `$`)
 }()
 
-// IsContextFabricPathDropLimitation reports whether a limitation is one
-// ContextFabricPathDropLimitation could have composed.
-func IsContextFabricPathDropLimitation(limitation string) bool {
+// ParseContextFabricPathDropLimitation returns the served and declared path
+// counts of a limitation ContextFabricPathDropLimitation composed.
+func ParseContextFabricPathDropLimitation(limitation string) (served, declared int, ok bool) {
 	match := contextFabricPathDropPattern.FindStringSubmatch(limitation)
 	if match == nil {
-		return false
+		return 0, 0, false
 	}
 	served, errServed := strconv.Atoi(match[1])
 	declared, errDeclared := strconv.Atoi(match[2])
 	if errServed != nil || errDeclared != nil {
-		return false
+		return 0, 0, false
 	}
-	recomposed, ok := ContextFabricPathDropLimitation(served, declared)
-	return ok && recomposed == limitation
+	recomposed, composed := ContextFabricPathDropLimitation(served, declared)
+	if !composed || recomposed != limitation {
+		return 0, 0, false
+	}
+	return served, declared, true
+}
+
+// IsContextFabricPathDropLimitation reports whether a limitation is one
+// ContextFabricPathDropLimitation could have composed.
+func IsContextFabricPathDropLimitation(limitation string) bool {
+	_, _, ok := ParseContextFabricPathDropLimitation(limitation)
+	return ok
 }

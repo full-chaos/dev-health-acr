@@ -417,12 +417,17 @@ func (e *Engine) finalizeServedFitting(ctx context.Context, principal storage.Pr
 	current := result
 	listedBefore := cohortMemberCount(result.Cohort)
 	walkCut := false
+	var pathDrop *PathDropEvent
 	for {
 		_, err := e.finalizeServedAs(ctx, principal, stage, current, nil, budget, servedModeMeasureOnly)
 		var refusal AnswerBudgetRefusal
 		if err == nil || !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
 			e.recordServedWalkListCut(ctx, principal, current, listedBefore, walkCut)
-			return e.finalizeServed(ctx, principal, stage, current, nil, budget)
+			served, serveErr := e.finalizeServed(ctx, principal, stage, current, nil, budget)
+			if serveErr == nil && pathDrop != nil {
+				e.recordServedPathDrop(ctx, principal, served, *pathDrop, budget)
+			}
+			return served, serveErr
 		}
 		_, longest := claimedFactTableRowCounts(current.ClaimedFacts)
 		if longest > 1 {
@@ -434,6 +439,19 @@ func (e *Engine) finalizeServedFitting(ctx context.Context, principal storage.Pr
 		if next, cut := cutWalkListMembers(current); cut {
 			current = next
 			walkCut = true
+			continue
+		}
+		if next, drop, ok, dropErr := e.dropPathsToFitDecisive(ctx, principal, stage, current, budget); dropErr != nil {
+			return InvestigationResult{}, dropErr
+		} else if ok {
+			if pathDrop == nil {
+				drop.BytesBefore = overrunBytes(refusal)
+				pathDrop = &drop
+			} else {
+				pathDrop.PathsAfter, pathDrop.CitedDropped = drop.PathsAfter, pathDrop.CitedDropped+drop.CitedDropped
+				pathDrop.DroppedPathIDs = append(pathDrop.DroppedPathIDs, drop.DroppedPathIDs...)
+			}
+			current = next
 			continue
 		}
 		_, final := e.finalizeServed(ctx, principal, stage, current, nil, budget)
@@ -484,4 +502,88 @@ func (e *Engine) recordServedWalkListCut(ctx context.Context, principal storage.
 		listedBefore, cohortMemberCount(served.Cohort), false, false, contractsv1.ContextFabricBudgetOverrunBytes, "")
 	event.EvidencePinnedMembers = walkListEvidencePinnedOnly(served)
 	e.recordPlanNarrowing(ctx, principal, event)
+}
+
+// overrunBytes is the size of the document a byte refusal measured.
+func overrunBytes(refusal AnswerBudgetRefusal) int64 { return refusal.MeasuredBytes }
+
+// dropPathsToFitDecisive is the path-drop lever of the decisive fit: relationship
+// paths go in the documented order (paths no driver cites first, then cited
+// paths whose drivers keep evidence, each from the end of the list), the
+// fewest that let the document as sent fit. Rows and the walk list have gone as
+// far as they go before it runs. Candidates are measured, never served; the
+// document returned is finalized again by the caller exactly once.
+//
+// ok is false when no path is droppable or when every droppable path gone
+// still overruns on bytes: that is the minimum answer, and the refusal stands.
+func (e *Engine) dropPathsToFitDecisive(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, current InvestigationResult, budget ResponseBudget) (InvestigationResult, PathDropEvent, bool, error) {
+	order, build, droppable := pathDropCandidates(current)
+	if !droppable {
+		return InvestigationResult{}, PathDropEvent{}, false, nil
+	}
+	fits := func(n int) (InvestigationResult, int, bool, error) {
+		candidate, cited, ok := build(n)
+		if !ok {
+			return InvestigationResult{}, 0, false, nil
+		}
+		finalized, err := e.finalizeServedAs(ctx, principal, stage, candidate, nil, budget, servedModeMeasureOnly)
+		var refusal AnswerBudgetRefusal
+		if err == nil {
+			// Fits as sent; it must also be a valid document as sent, which is
+			// the document the serving path validates.
+			return candidate, cited, servableLeverResult(finalized), nil
+		}
+		if errors.As(err, &refusal) && refusal.Overrun == contractsv1.ContextFabricBudgetOverrunBytes {
+			return candidate, cited, false, nil
+		}
+		return InvestigationResult{}, 0, false, err
+	}
+	if _, _, ok, err := fits(len(order)); err != nil || !ok {
+		return InvestigationResult{}, PathDropEvent{}, false, err
+	}
+	low, high, best := 1, len(order), len(order)
+	for low <= high {
+		mid := low + (high-low)/2
+		_, _, ok, err := fits(mid)
+		if err != nil {
+			return InvestigationResult{}, PathDropEvent{}, false, err
+		}
+		if ok {
+			best, high = mid, mid-1
+		} else {
+			low = mid + 1
+		}
+	}
+	candidate, cited, ok, err := fits(best)
+	if err != nil || !ok {
+		return InvestigationResult{}, PathDropEvent{}, false, err
+	}
+	ids := make([]string, 0, best)
+	for _, index := range order[:best] {
+		ids = append(ids, current.Paths[index].PathID)
+	}
+	return candidate, PathDropEvent{
+		PathsBefore: len(current.Paths), PathsAfter: len(candidate.Paths),
+		CitedDropped: cited, DroppedPathIDs: ids,
+	}, true, nil
+}
+
+// recordServedPathDrop records the decisive path drop once, for the document
+// served: the paths it dropped (ids, in drop order) and the bytes before the
+// first drop and as served.
+func (e *Engine) recordServedPathDrop(ctx context.Context, principal storage.Principal, served InvestigationResult, drop PathDropEvent, budget ResponseBudget) {
+	if e.telemetry == nil || served.AnswerPlan == nil {
+		return
+	}
+	drop.Family = served.AnswerPlan.Family
+	drop.Stage = contractsv1.ContextFabricPlanNarrowingAssembledResult
+	drop.Pass = answerPassDecisive
+	drop.Overrun = contractsv1.ContextFabricBudgetOverrunBytes
+	drop.MaxSerializedBytes = budget.MaxSerializedBytes
+	drop.Served = true
+	if measured, err := contractsv1.MeasureContextFabricResponse(served); err == nil {
+		drop.BytesAfter = measured.Bytes
+		drop.MinimumBytes = measured.Bytes
+	}
+	e.telemetry.RecordPathDrop(ctx, principal, drop)
 }
