@@ -847,11 +847,16 @@ import (
 // one, or none committed at that kind) is a clarification, not a generic
 // cohort. An answer saved under v171 for such a question holds the cohort.
 //
-// v172 -> v173: with the anchor binding count switch on, a follow-up whose
+// v172 -> v173: a team's blockers fact places a blocked item in the repositories its
+// linked pull request rows name (the link tier is on the fact) instead of the work item's own
+// repository column; team totals count an item once across the team's repositories. A candidate
+// saved under v172 holds the column-based repositories and totals.
+//
+// v173 -> v174: with the anchor binding count switch on, a follow-up whose
 // admitted carried binding (or redeemed anchor receipt) names another anchor
 // kind than the model states counts, discovers and captures under the
 // binding's kind, so a stored count answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v173"
+const QueryVersion = "devhealthfacts.clickhouse.v174"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
