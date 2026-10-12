@@ -62,7 +62,7 @@
         },
         "details": {
           "type": "object",
-          "description": "Closed safe keys only. For a 400 invalid_request about the request body, details.reason is malformed_json, schema_violation, unknown_field, trailing_json or body_too_large, and details.field, when present, is the JSON path of the failing field. A budget_refusal is a 413 for a valid request whose answer did not fit the response budget; details carry overrun, the measured and maximum counts and narrower_continuation.",
+          "description": "Closed safe keys only. For a 400 invalid_request about the request body, details.reason is malformed_json, schema_violation, unknown_field, trailing_json or body_too_large, and details.field, when present, is the JSON path of the failing field. A budget_refusal is a 413 for a valid request whose answer did not fit the response budget; details carry the closed budget keys that route measured (overrun, measured_items, measured_bytes, max_items, max_serialized_bytes, retry_attempted, narrower_continuation); every key is optional and a route sends only the ones it measured.",
           "properties": {
             "reason": {
               "type": "string",

@@ -626,7 +626,17 @@ func TestClientSynthesisResponseOverTheServiceCeilingIsRefused(t *testing.T) {
 	rig.app.config.MaxSerializedBytes = ceiling
 	recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeClient, withLimit)
 	if recorder.Code != http.StatusRequestEntityTooLarge || !containsJSONCode(recorder.Body.Bytes(), "budget_refusal") {
-		t.Fatalf("status = %d body=%s, want 413 invalid_request", recorder.Code, recorder.Body.String())
+		t.Fatalf("status = %d body=%s, want 413 budget_refusal", recorder.Code, recorder.Body.String())
+	}
+	var budgetBody contractsv1.ErrorEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &budgetBody); err != nil {
+		t.Fatal(err)
+	}
+	if measured, _ := budgetBody.Error.Details["measured_bytes"].(float64); int(measured) <= ceiling {
+		t.Fatalf("details.measured_bytes = %v, want the envelope with the synthesis input over the %d byte ceiling: %#v", budgetBody.Error.Details["measured_bytes"], ceiling, budgetBody.Error.Details)
+	}
+	if maximum, _ := budgetBody.Error.Details["max_serialized_bytes"].(float64); int(maximum) != ceiling {
+		t.Fatalf("details.max_serialized_bytes = %v, want %d", budgetBody.Error.Details["max_serialized_bytes"], ceiling)
 	}
 	if _, present := topLevelKeys(t, recorder.Body.Bytes())["synthesis_input"]; present || bytes.Contains(recorder.Body.Bytes(), []byte("synthesis_input")) {
 		t.Error("the refusal carries a synthesis_input")
