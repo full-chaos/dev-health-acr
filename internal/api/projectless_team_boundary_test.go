@@ -82,6 +82,7 @@ func (g projectlessTeamGraph) DiscoverContext(context.Context, storage.Principal
 type projectlessTeamModel struct {
 	freshTupleModel
 	anchorKind   contextfabric.SubjectKind
+	memberKind   contextfabric.SubjectKind
 	requirements []contextfabric.FactRequirement
 }
 
@@ -90,6 +91,9 @@ func (m projectlessTeamModel) InterpretQuestion(ctx context.Context, p storage.P
 	receipt.ScopeAnchorKind = m.anchorKind
 	receipt.ScopeAnchorTerm = "platform"
 	receipt.RequestedSubjectKind = contextfabric.SubjectProject
+	if m.memberKind != "" {
+		receipt.RequestedSubjectKind = m.memberKind
+	}
 	interpreted.SubjectTerms = []string{"platform"}
 	interpreted.FactRequirements = append([]contextfabric.FactRequirement{}, m.requirements...)
 	return interpreted, receipt, err
@@ -217,6 +221,11 @@ func askTeamOwnership(t *testing.T, graph contextfabric.GraphReader, requirement
 
 func askOwnershipAnchoredOn(t *testing.T, graph contextfabric.GraphReader, anchorKind contextfabric.SubjectKind, requirements ...contextfabric.FactRequirement) projectlessTeamNode {
 	t.Helper()
+	return askScopedAnchoredOn(t, graph, anchorKind, contextfabric.SubjectProject, requirements...)
+}
+
+func askScopedAnchoredOn(t *testing.T, graph contextfabric.GraphReader, anchorKind, memberKind contextfabric.SubjectKind, requirements ...contextfabric.FactRequirement) projectlessTeamNode {
+	t.Helper()
 	fixture := newFreshTupleProducerFixtureWithBudget(t, "", limits.ResourceBudget{MaxItems: 30, MaxTokens: 16000, MaxBytes: 1 << 20})
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(fixture.client), contextfabric.FactRegistryOptions{})
 	if err != nil {
@@ -229,12 +238,12 @@ func askOwnershipAnchoredOn(t *testing.T, graph contextfabric.GraphReader, ancho
 		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
 		SubjectExpression: contextfabric.SubjectExpression{
 			Kind:   contextfabric.SubjectExpressionChildrenOfScope,
-			Scoped: &contextfabric.ScopedSetExpression{AnchorTerms: []string{"platform"}, MemberKind: contextfabric.SubjectProject},
+			Scoped: &contextfabric.ScopedSetExpression{AnchorTerms: []string{"platform"}, MemberKind: memberKind},
 		},
 		Temporal: contextfabric.TemporalIntentCurrent,
 		Version:  contextfabric.QuestionFrameVersion,
 	}
-	dependencies.Interpreter = contextfabric.RuntimeQuestionInterpreter{Runtime: projectlessTeamModel{freshTupleModel: model, anchorKind: anchorKind, requirements: requirements}, Requirements: registry}
+	dependencies.Interpreter = contextfabric.RuntimeQuestionInterpreter{Runtime: projectlessTeamModel{freshTupleModel: model, anchorKind: anchorKind, memberKind: memberKind, requirements: requirements}, Requirements: registry}
 	dependencies.Graph = graph
 	dependencies.Results = store
 	options := fixture.engineOptions
