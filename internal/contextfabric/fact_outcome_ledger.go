@@ -36,6 +36,9 @@ type FactKindOutcome struct {
 	// Evaluated are subjects the provider showed it evaluated with no fact
 	// (a measured zero), keyed by FactSubjectKey.
 	Evaluated map[string]struct{}
+	// ScopeExpansionUnavailable is set on a scope_gap branch whose policy is
+	// declared and enabled but has no scope expander on this read path.
+	ScopeExpansionUnavailable bool
 }
 
 // FactOutcomeLedger maps a planned fact kind to its outcome.
