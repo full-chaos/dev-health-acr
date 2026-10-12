@@ -245,11 +245,12 @@ SELECT concat(?, repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'issue
 	providers := devhealthfacts.NewProviders(query)
 	principal := storage.Principal{OrgID: projectRollupOrg, RepositoryScopes: []string{"*"}}
 	rollups := []struct {
-		label, table, field string
-		kind                contextfabric.FactKind
+		label, field string
+		filter       statementFilter
+		kind         contextfabric.FactKind
 	}{
-		{"project pull request rollup", "work_graph_issue_pr", "pull_requests_open_current", contextfabric.FactPullRequests},
-		{"project blocker rollup", "work_item_dependencies", "blocked_work_items_current", contextfabric.FactBlockers},
+		{"project pull request rollup", "pull_requests_open_current", statementFilter{Table: "work_graph_issue_pr", QueryContains: "lp.project_key"}, contextfabric.FactPullRequests},
+		{"project blocker rollup", "blocked_work_items_current", statementFilter{Table: "work_item_dependencies", QueryContains: "uniqExactIf(tgt, is_open = 1)"}, contextfabric.FactBlockers},
 	}
 	read := func() []statementMemory {
 		t.Helper()
@@ -259,7 +260,7 @@ SELECT concat(?, repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'issue
 			result, err := findProvider(t, providers, rollup.kind).ReadFacts(ctx, principal, contextfabric.FactQuery{
 				Kind: rollup.kind, Subjects: []contextfabric.SubjectRef{project}, Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 			})
-			out[i] = statementMemorySince(t, ctx, direct, rollup.table, mark)
+			out[i] = statementMemorySince(t, ctx, direct, rollup.filter, mark)
 			if err != nil {
 				t.Fatalf("%s: %v: %s", rollup.label, err, readFailureCause(err))
 			}
