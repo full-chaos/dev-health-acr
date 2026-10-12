@@ -76,6 +76,7 @@ func TestChaos7073CoveragePerKindAndSubject(t *testing.T) {
 
 	t.Run("classifying provider serves its own per-subject states", func(t *testing.T) {
 		states := []string{"fired", "measured_zero", "stale", "before_range", "never_evaluated", "withheld_capped_read"}
+		wantOutcomes := []string{OutcomeFactServed, OutcomeMeasuredZero, OutcomeStale, OutcomeReadNoFact, OutcomeReadNoFact, OutcomeTruncated}
 		var teams []contextfabric.SubjectRef
 		for _, state := range states {
 			teams = append(teams, subject(contractsv1.ContextFabricSubjectTeam, "team:"+state))
@@ -106,7 +107,7 @@ func TestChaos7073CoveragePerKindAndSubject(t *testing.T) {
 			t.Fatalf("coverage rows = %d, want %d", len(response.Coverage), len(teams))
 		}
 		for index, team := range teams {
-			check(t, response, "operational_deficiencies", team, expectation{name: states[index], outcome: states[index], state: states[index]})
+			check(t, response, "operational_deficiencies", team, expectation{name: states[index], outcome: wantOutcomes[index], state: states[index]})
 		}
 	})
 
@@ -190,8 +191,7 @@ func TestChaos7073CoveragePerKindAndSubject(t *testing.T) {
 	})
 
 	// Rule 4: every outcome of the closed vocabulary was observed.
-	vocabulary := []string{OutcomeFactServed, OutcomeReadNoFact, OutcomeMeasuredZero, OutcomeNotApplicable, OutcomeUnavailable, OutcomeStale, OutcomeTruncated, OutcomeWithheldBudget,
-		"fired", "measured_zero", "stale", "before_range", "never_evaluated", "withheld_capped_read"}
+	vocabulary := []string{OutcomeFactServed, OutcomeReadNoFact, OutcomeMeasuredZero, OutcomeNotApplicable, OutcomeUnavailable, OutcomeStale, OutcomeTruncated, OutcomeWithheldBudget}
 	for _, outcome := range vocabulary {
 		if !covered[outcome] {
 			t.Errorf("coverage outcome %q has no case", outcome)

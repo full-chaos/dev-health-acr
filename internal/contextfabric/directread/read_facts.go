@@ -1082,6 +1082,14 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				if outcome.WindowUnsupported {
 					row.KindState = KindStateWindowUnsupported
 				}
+			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind) && recorded && outcome.UnreachedRoot != nil && outcome.UnreachedRoot.Kind == subject.Kind:
+				row.Outcome, row.KindState, row.Reason = OutcomeUnavailable, string(outcome.UnreachedRoot.State), outcome.UnreachedRoot.Reason
+				if outcome.UnreachedRoot.ScopeExpansionUnavailable {
+					row.KindState = KindStateScopeExpansionUnavailable
+				}
+				if outcome.UnreachedRoot.WindowUnsupported {
+					row.KindState = KindStateWindowUnsupported
+				}
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind):
 				share, expanded := derived.derivedCoverage(kind, subject, served)
 				if !expanded {
@@ -1170,7 +1178,7 @@ func subjectOutcome(outcome contextfabric.FactKindOutcome, key string, served bo
 	}
 	switch {
 	case providerState != "":
-		return providerState
+		return providerStateOutcome(providerState)
 	case served && outcome.State == contextfabric.SourceStale:
 		return OutcomeStale
 	case served && outcome.State == contextfabric.SourceTruncated:
@@ -1188,6 +1196,23 @@ func subjectOutcome(outcome contextfabric.FactKindOutcome, key string, served bo
 		return OutcomeNotApplicable
 	default:
 		return OutcomeUnavailable
+	}
+}
+
+// providerStateOutcome maps a provider's per-subject state onto the closed
+// coverage vocabulary; the exact state stays in CoverageRow.ProviderState.
+func providerStateOutcome(state string) string {
+	switch state {
+	case "fired":
+		return OutcomeFactServed
+	case "measured_zero":
+		return OutcomeMeasuredZero
+	case "stale":
+		return OutcomeStale
+	case "withheld_capped_read":
+		return OutcomeTruncated
+	default:
+		return OutcomeReadNoFact
 	}
 }
 
