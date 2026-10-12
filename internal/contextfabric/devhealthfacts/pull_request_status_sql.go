@@ -7,9 +7,10 @@ import (
 
 // pullRequestStatusSQL is the WHERE clause, on the pull request alias p, that
 // keeps the pull requests holding status now, the rule of
-// contextfabric.PullRequestStatusMatches: the state (lower case, trimmed) for
-// open, merged and closed; for a review status the state is open and the
-// review rows of the same repositories decide. Empty status, no clause. The
+// contextfabric.PullRequestStatusMatches: the stored state, exactly (ops writes
+// it canonical), for open, merged and closed; for a review status the state is
+// open and the review rows of the same repositories decide, their source enum
+// compared upper case and trimmed. Empty status, no clause. The
 // statement must bind org_id and repo_ids.
 func pullRequestStatusSQL(status string) (string, []contextpacket.ClickHouseBinding) {
 	if !contextfabric.InPullRequestStatusVocabulary(status) {
@@ -20,7 +21,7 @@ func pullRequestStatusSQL(status string) (string, []contextpacket.ClickHouseBind
 		state = contextfabric.PullRequestStatusOpen
 	}
 	clause := `
-  AND lower(trim(ifNull(p.state, ''))) = {pull_request_state:String}`
+  AND p.state = {pull_request_state:String}`
 	bindings := []contextpacket.ClickHouseBinding{{Name: "pull_request_state", Value: state}}
 	switch status {
 	case contextfabric.PullRequestStatusAwaitingReview:

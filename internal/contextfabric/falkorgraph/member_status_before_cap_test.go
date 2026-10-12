@@ -38,8 +38,13 @@ func pullRequestIDs(from, to int) []string {
 // requests by id are merged and the last four are open. The member read is cut
 // at 25, so a status applied after the cut sees only merged pull requests and
 // serves none; applied inside the read it serves the four open ones, complete.
+// A 31st pull request stores "OPEN", which is not the canonical state and is
+// never matched.
 func TestPullRequestStatusIsAppliedBeforeTheMemberCap(t *testing.T) {
-	fixtures := pullRequestPool(30, func(i int) (string, []contextfabric.PullRequestReviewRow) {
+	fixtures := pullRequestPool(31, func(i int) (string, []contextfabric.PullRequestReviewRow) {
+		if i == 31 {
+			return "OPEN", nil
+		}
 		if i <= 26 {
 			return "merged", []contextfabric.PullRequestReviewRow{{State: "APPROVED", SubmittedNs: int64(i)}}
 		}
@@ -178,7 +183,7 @@ func TestMemberStatusReadsCarryTheStatusInsideTheRead(t *testing.T) {
 	step := hopOf(entityTree[0], treeRepository).step
 	step.status = status
 	cypher := walkStepCypher(step, temporalFilter{})
-	clause := "toLower(trim(b." + propPropertyPrefix + "state)) IN $bstatus"
+	clause := " AND b." + propPropertyPrefix + "state IN $bstatus"
 	if !strings.Contains(cypher, clause) || strings.Index(cypher, clause) > strings.Index(cypher, "LIMIT") {
 		t.Fatalf("step read %q does not carry the status before its limit", cypher)
 	}

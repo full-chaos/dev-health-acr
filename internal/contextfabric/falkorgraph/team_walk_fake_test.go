@@ -80,21 +80,17 @@ func withWalkStepReads(inner *fakeConn) *fakeConn {
 	return inner
 }
 
-var walkStatusProperty = regexp.MustCompile(`(toLower\(trim\()?b\.([A-Za-z0-9_]+)(\)\))? IN \$bstatus`)
+var walkStatusProperty = regexp.MustCompile(`b\.([A-Za-z0-9_]+) IN \$bstatus`)
 
 // walkStatusAdmits is the read's status clause on the reached node: its stored
-// status (lower case and trimmed when the clause folds) in $bstatus, or for
-// the outside clause absent or not in it.
+// status, exactly, in $bstatus, or for the outside clause absent or not in it.
 func walkStatusAdmits(cypher string, params map[string]interface{}, n *node) bool {
 	m := walkStatusProperty.FindStringSubmatch(cypher)
 	if m == nil {
 		return true
 	}
 	values, _ := params["bstatus"].([]interface{})
-	stored, has := n.Properties[m[2]].(string)
-	if m[1] != "" {
-		stored = strings.ToLower(strings.TrimSpace(stored))
-	}
+	stored, has := n.Properties[m[1]].(string)
 	in := false
 	for _, value := range values {
 		in = in || (has && stored == value)

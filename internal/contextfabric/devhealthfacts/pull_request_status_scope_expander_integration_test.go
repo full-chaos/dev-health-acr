@@ -46,6 +46,8 @@ func TestScopeExpanderReadsOnlyThePullRequestsHoldingTheStatusBeforeItsLimit(t *
 	for number := uint32(100); number <= 107; number++ {
 		pull(number, "open")
 	}
+	// A state that is not the canonical value is not a synonym of it.
+	pull(108, "OPEN")
 	review("review-104", 104, "APPROVED", at.Add(-2*time.Hour))
 	review("review-105-approved", 105, "APPROVED", at.Add(-3*time.Hour))
 	review("review-105-changes", 105, "CHANGES_REQUESTED", at.Add(-2*time.Hour))
