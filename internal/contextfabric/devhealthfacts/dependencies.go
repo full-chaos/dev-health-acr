@@ -496,7 +496,7 @@ WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`
 			fields["blocker_dependencies_current"] = contextfabric.IntegerFactValue(blockerEdges)
 			fields["blocker_dependencies_excluded_by_status_current"] = contextfabric.IntegerFactValue(excludedEdges)
 			if table, omitted, ok := repositoryBreakdownFactValue(breakdown, "",
-				[]string{"blocked_work_items_current", "blocker_dependencies_current"}, []string{"repository_name"}); ok && tables {
+				[]string{"blocked_work_items_current", "blocker_dependencies_current"}, []string{"repository_name", "link_tier"}); ok && tables {
 				fields["repository_breakdown"] = table
 				if omitted > 0 {
 					outcome.truncated = true
