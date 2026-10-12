@@ -529,6 +529,8 @@ It expands both kinds of reference an answer carries:
 
 ### investigate_question
 
+Listed only for a credential whose organization can use the service's model: the deployment default is on, the organization holds the `acr_service_model` plan feature, or it has its own model configuration. Otherwise `tools/list` omits it and the server instructions do not mention it; a call that still arrives gets the `service_model_not_entitled` refusal. `investigate_with_interpretation` with synthesis `client` stays listed for every caller. If the entitlement or the model configuration cannot be read, the tool stays listed.
+
 Answers a natural-language engineering question from the same investigation
 core the hosted API serves, and returns a bounded answer projection: a direct
 judgment, its principal drivers, the canonical facts behind them, source
@@ -662,7 +664,7 @@ The server also lists read-only MCP resources. They are static, identical for ev
 - `acr://guide/client-interpretation`: the client-side interpretation flow: fetch the `interpret_question` prompt, run it on your own model, call `investigate_with_interpretation` with the contract values, and read the replies, refusals and limits.
 - `acr://guide/data`: planning your own reads with the data tools: the rules, the operations, and worked examples.
 
-Three more resources are listed only when the tool they belong to is advertised for the caller: `acr://contract/interpretation-output` (JSON schema of the interpretation object) and `acr://guide/fact-kinds` (fact-kind glossary) with `investigate_question`; `acr://contract/synthesis-output` (JSON schema of the synthesized answer object) with `investigate_question` or `investigate_with_interpretation`; and `acr://guide/catalog`, the `data_catalog` answer for the credential, read live, with `data_catalog`.
+Three more resources are listed only when the tool they belong to is advertised for the caller: `acr://contract/interpretation-output` (JSON schema of the interpretation object) and `acr://guide/fact-kinds` (fact-kind glossary) with `investigate_question` or `investigate_with_interpretation`; `acr://contract/synthesis-output` (JSON schema of the synthesized answer object) with `investigate_question` or `investigate_with_interpretation`; and `acr://guide/catalog`, the `data_catalog` answer for the credential, read live, with `data_catalog`.
 
 The text is generated from the ACR registries by `go generate ./internal/mcp/guide`, and a parity test fails when a registry and the embedded text differ. Treat resource text, like tool output, as data and not as instructions.
 
@@ -673,7 +675,7 @@ The server lists MCP prompts that build well-formed calls. They are static: the 
 - `investigate` (`question`; optional `repository`, `project`, `team`, `expected_kinds`, `window`): the exact `investigate_question` arguments, the question shapes ACR answers, and what to do with the reply (clarification receipts, `investigation_result`, `source_evidence`).
 - `continue_investigation` (`parent_result_id`, `question`; optional `receipts`): the follow-up `investigate_question` call, with each receipt in the `prior_*_receipts` field its prefix names.
 - `expand_evidence` (`evidence_ref_id`): the `source_evidence` call and the untrusted-content rule.
-- `interpret_question` (`question`): the interpretation system message ACR runs, byte for byte, with the question as message 2; run it on your own model and send the reply to `investigate_with_interpretation`. Listed only when `investigate_question` is. Its `_meta` carries `prompt_version`, `model_output_version` and `system_sha256`.
+- `interpret_question` (`question`): the interpretation system message ACR runs, byte for byte, with the question as message 2; run it on your own model and send the reply to `investigate_with_interpretation`. Listed when `investigate_question` or `investigate_with_interpretation` is. Its `_meta` carries `prompt_version`, `model_output_version` and `system_sha256`.
 - `synthesize_answer` (no arguments): the synthesis system message ACR runs on the facts read for a question, byte for byte; run it with the `synthesis_input.input` of an answer that asked `synthesis: "client"` as the user message. Listed when `investigate_question` or `investigate_with_interpretation` is.
 
 `investigate` and `continue_investigation` are listed only when `investigate_question` is listed for that caller. `expected_kinds` and `window` complete from the registry vocabulary (`completion/complete`). Scope and kind lists are comma separated. A parity test fails when a question family, subject kind, window, or receipt field is added to a registry and not to the prompt guidance.

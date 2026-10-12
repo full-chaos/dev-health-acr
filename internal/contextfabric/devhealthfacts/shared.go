@@ -920,6 +920,17 @@ import (
 // above 2000 rows (per ownership window read) is a named failure. A candidate saved under v183 may hold the
 // truncated mix.
 //
+// v184 -> v185: the compounding-risk deficiency rule basis is also read from
+// the rule's partial-coverage sentence (", computed from N% of its inputs
+// (...)"), which was served as rationale_not_in_rule_sentence_form. A stored
+// answer can differ.
+//
+// v185 -> v186: a degraded cohort answer (the model call failed) leaves cohort
+// driver narration its item grant. The degraded composition claimed that grant
+// too, so composition and narration together overran the item budget: the
+// answer was cut by the claim-depth lever, or refused when the byte budget was
+// also exceeded. A candidate saved under v185 may hold the cut answer.
+//
 // v186 -> v187: pull request members whose question states a status of the
 // closed set (open, merged, closed, awaiting_review, changes_requested,
 // approved) are filtered by it before the cohort is cut, and the answer states

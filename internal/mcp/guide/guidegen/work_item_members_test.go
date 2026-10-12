@@ -77,12 +77,12 @@ func TestWorkItemMemberGuideListsNoVerbTheBinderIgnores(t *testing.T) {
 func TestWorkItemMemberSectionFailsWhenStatusSetOrRolesAreEmpty(t *testing.T) {
 	in := FromRegistries()
 	in.WorkItemStatuses = nil
-	if _, err := workItemMemberSection(in); err == nil {
+	if _, err := workItemMemberSection(in, "investigate_question"); err == nil {
 		t.Error("empty status set did not fail")
 	}
 	in = FromRegistries()
 	in.MemberTimeRoles = nil
-	if _, err := workItemMemberSection(in); err == nil {
+	if _, err := workItemMemberSection(in, "investigate_question"); err == nil {
 		t.Error("empty role registry did not fail")
 	}
 }
@@ -93,7 +93,7 @@ func TestWorkItemMemberGuideDropsAVerbWhenTheRegistryDropsIt(t *testing.T) {
 	dropped := rows[0].Forms[1]
 	rows[0].Forms = append([]string{rows[0].Forms[0]}, rows[0].Forms[2:]...)
 	in.MemberTimeRoles = rows
-	section, err := workItemMemberSection(in)
+	section, err := workItemMemberSection(in, "investigate_question")
 	if err != nil {
 		t.Fatal(err)
 	}

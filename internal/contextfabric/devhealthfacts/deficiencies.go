@@ -353,7 +353,7 @@ const (
 	ruleBasisUnavailableNotRuleSentence = "rationale_not_in_rule_sentence_form"
 )
 
-var compoundingRiskRationalePattern = regexp.MustCompile(`^Compounding Risk score is (\d+\.\d+) \(severity: (elevated|high)\)\.`)
+var compoundingRiskRationalePattern = regexp.MustCompile(`^Compounding Risk score is (\d+\.\d+) \(severity: (elevated|high)\)(?:, computed from \d+% of its inputs \((?:churn|complexity trend|ownership concentration|review latency)(?:, (?:churn|complexity trend|ownership concentration|review latency))*\))?\.`)
 
 // ruleBasis is the score and band the Ops rule states it ran on, read from
 // the rule's own rationale text (Ops stores no structured column for it).
