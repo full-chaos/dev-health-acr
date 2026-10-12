@@ -52,7 +52,7 @@ func TestPullRequestStatusMatches(t *testing.T) {
 		want    bool
 	}{
 		{"open state", PullRequestStatusOpen, "open", nil, true},
-		{"open state any case", PullRequestStatusOpen, " OPEN ", nil, true},
+		{"open state compares exactly, no case folding", PullRequestStatusOpen, " OPEN ", nil, false},
 		{"merged is not open", PullRequestStatusOpen, "merged", nil, false},
 		{"merged state", PullRequestStatusMerged, "merged", nil, true},
 		{"closed state", PullRequestStatusClosed, "closed", nil, true},
