@@ -876,12 +876,22 @@ import (
 // resolver offered but did not commit is listed first in the clarification,
 // so a stored answer can differ.
 //
-// v178 -> v179: a pull request fact carries project_breakdown, one row per
-// project its linked issues reach (work_graph_issue_pr, strict reading), each
-// with the link tier; a pull request cohort grouped by project is grouped on
-// those rows where it was served ungrouped. A candidate saved under v178 holds
-// the ungrouped answer.
-const QueryVersion = "devhealthfacts.clickhouse.v179"
+// v178 -> v179: every reader of the issue <> pull request link of record
+// admits a link row the same way: the pull request it names exists and the
+// work item is an issue. A team or project scope no longer reaches a
+// repository through a link to a missing pull request or through a
+// pull-request-typed work item, and such an issue is counted as a missing next
+// hop (an issue whose only link row names a missing pull request is missing
+// although a row exists; a pull-request-typed work item is not an issue and is
+// no longer counted). An answer saved under v178 may rest on a repository so
+// reached.
+//
+// v179 -> v180: a pull request fact carries project_breakdown, one row per
+// project its linked issues reach (work_graph_issue_pr, the shared link
+// reader), each with the link tier; a pull request cohort grouped by project
+// is grouped on those rows where it was served ungrouped. A candidate saved
+// under v179 holds the ungrouped answer.
+const QueryVersion = "devhealthfacts.clickhouse.v180"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -33,28 +33,6 @@ import (
 // repository is never queried for incidents, and an incident that any
 // unauthorized (or unresolvable) repository also names is dropped whole.
 
-// Link provenance tiers, ops' spelling, and their rank. The same closed
-// vocabulary devhealthsource/issue_pull_request_link.go projects.
-const linkTierRankSQL = `multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0)`
-
-// The strict reading of the link of record, shared by every reader that
-// follows an issue to a repository: a link row counts only when the pull
-// request it names exists (a stale link is skipped), and a work item typed as
-// a pull request or merge request is never an issue.
-const linkedPullRequestOnSQL = `pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number`
-
-// workItemIsIssueSQL is the predicate that excludes pull-request-typed work
-// items; alias is the work_items alias.
-func workItemIsIssueSQL(alias string) string {
-	return `ifNull(` + alias + `.type, '') NOT IN ('pr', 'merge_request')`
-}
-
-// issuesWithLinkedPullRequestSQL is the set of work item ids that have at
-// least one admitted link row (an existing pull request, a known tier).
-const issuesWithLinkedPullRequestSQL = `(SELECT l.work_item_id FROM work_graph_issue_pr AS l FINAL
-  INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
-  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0)`
-
 // refuseNonCurrentEntityTreeAxis is the boundary check of the current-axis
 // only policies; the resolver already refuses a non-current axis at its gate.
 func refuseNonCurrentEntityTreeAxis(request contextfabric.FactScopeExpansionRequest) error {
@@ -210,22 +188,21 @@ func (e *ScopeExpander) projectLinkedRepositories(ctx context.Context, orgID str
 		return nil, contextfabric.FactScopeExpansionCounts{AmbiguousOriginCount: len(origins)}, nil
 	}
 	limitPlusOne := limit + 1
-	// link_state: 0 the issue has no link row, 1 it has one whose pull request
-	// does not exist (a stale link, skipped by the canonical link projection
-	// too), 2 a link to a pull request that exists. Only state 2 names a
-	// repository.
-	statement := `SELECT multiIf(ifNull(l.work_item_id, '') = '', 0, ifNull(pr.number, 0) = 0, 1, 2) AS link_state,
-       if(link_state = 2, toString(l.repo_id), '') AS repo_id_str,
+	// link_state: 0 the issue has no admitted link row (none at all, or only
+	// links whose pull request does not exist), 2 it has one. Only state 2
+	// names a repository; a stale link is skipped by the canonical link
+	// projection too.
+	statement := `SELECT multiIf(ifNull(l.work_item_id, '') = '', 0, 2) AS link_state,
+       if(link_state = 2, toString(l.pr_repo_id), '') AS repo_id_str,
        if(link_state = 2, ifNull(r.repo, ''), '') AS repo_slug,
        min(p.id),
-       toUInt8(max(` + linkTierRankSQL + `)),
-       argMax(ifNull(l.provenance, ''), ` + linkTierRankSQL + `),
+       toUInt8(max(l.link_rank)),
+       argMax(ifNull(l.provenance, ''), l.link_rank),
        toInt64(uniqExact(w.work_item_id))
 FROM work_items AS w FINAL
 INNER JOIN ` + projectKeyResolutionSubquery + ` AS p ON p.join_key = w.project_id
-LEFT JOIN work_graph_issue_pr AS l FINAL ON l.org_id = w.org_id AND l.work_item_id = w.work_item_id
-LEFT JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
-LEFT JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id
+LEFT JOIN ` + issueLinkRowsSQL + ` AS l ON l.work_item_id = w.work_item_id
+LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = w.org_id
 WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
   AND ` + workItemIsIssueSQL("w") + `
 GROUP BY link_state, repo_id_str, repo_slug
@@ -254,9 +231,8 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		groups++
 		switch {
 		case linkState < 2:
-			// Issues of the project with no link row, or whose link names a
-			// pull request that does not exist: the next hop is missing, and
-			// every such issue is counted.
+			// Issues of the project with no admitted link row: the next hop
+			// is missing, and every such issue is counted.
 			counts.MissingNextHopCount += int(issues)
 		case repoID == zeroRepositoryID, repoSlug == "":
 			counts.MissingNextHopCount++

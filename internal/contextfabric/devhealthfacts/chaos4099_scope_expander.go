@@ -448,7 +448,7 @@ func (e *ScopeExpander) projectRepositories(ctx context.Context, orgID string, o
 	statement := `SELECT toString(l.pr_repo_id), ifNull(r.repo, ''), min(p.id), argMax(l.provenance, l.link_rank)
 FROM work_items AS w FINAL
 INNER JOIN ` + currentResolvedProjectsSQL + ` AS p ON p.join_key = w.project_id
-INNER JOIN ` + issueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
+INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = w.org_id
 WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
 GROUP BY toString(l.pr_repo_id), ifNull(r.repo, '')
@@ -670,7 +670,7 @@ func (e *ScopeExpander) projectRepositoriesAsOf(ctx context.Context, orgID strin
 	// own identical comment for why "smallest id" is the tiebreak.
 	statement := `SELECT toString(l.pr_repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, max(a.via_history) AS via_history, min(a.origin_project_id) AS origin_project_id, argMax(l.provenance, l.link_rank) AS tier
 FROM (` + projectIssueArmsAsOfSQL + `) AS a
-INNER JOIN ` + issueLinksSQL + ` AS l ON l.work_item_id = a.work_item_id
+INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = a.work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = {org_id:String}
 GROUP BY repo_id_str, repo_slug
 ORDER BY repo_id_str
@@ -788,7 +788,7 @@ FROM (
     (iv.observed_at <= {window_end:DateTime64(6,'UTC')} AND (iv.valid_to IS NULL OR iv.valid_to > {window_start:DateTime64(6,'UTC')})) AS in_window
   FROM ` + membershipTouchesAsOfSQL + ` AS iv
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
-  INNER JOIN ` + issueLinksSQL + ` AS l ON l.work_item_id = iv.subject_id
+  INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = iv.subject_id
   LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = {org_id:String}
   WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
     AND toString(l.pr_repo_id) != {zero_repository_id:String} AND ifNull(r.repo, '') != ''

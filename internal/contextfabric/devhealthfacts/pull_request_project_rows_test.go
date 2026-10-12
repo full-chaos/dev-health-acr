@@ -90,7 +90,7 @@ func TestPullRequestProjectReadUsesTheStrictLinkReading(t *testing.T) {
 		t.Fatal("no project link read was issued")
 	}
 	for _, want := range []string{
-		"pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number", // an existing pull request only
+		"pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number", // an existing pull request only (the shared link reader)
 		"NOT IN ('pr', 'merge_request')",                                              // an issue, never a pull request item
 		"key_resolution_count = 1",                                                    // an ambiguous project key is omitted
 		"'explicit_text', 2",                                                          // the closed tier vocabulary

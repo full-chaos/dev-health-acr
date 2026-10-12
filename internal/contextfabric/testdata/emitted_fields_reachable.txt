@@ -66,7 +66,7 @@ FactBlockers
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            774
+    calls followed            773
     calls accounted           13
     calls not_a_call          9
     calls excluded_by_design  161
@@ -261,7 +261,7 @@ FactPullRequests
     calls followed            764
     calls accounted           13
     calls not_a_call          6
-    calls excluded_by_design  151
+    calls excluded_by_design  152
     calls leaked              4
   fields             link_tier owned_repositories owned_repositories_omitted_count owned_repository_count project_breakdown pull_requests_closed_unmerged_window pull_requests_merged_window pull_requests_opened_window repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_name repository_tables_basis rollup_basis scope scope_id scope_name state window_basis window_end window_start
 

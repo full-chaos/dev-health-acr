@@ -21,7 +21,8 @@ const pullRequestProjectScope = "project"
 // strict reading projectLinkedRepositories applies in the other direction: a
 // link counts only when the pull request it names exists and carries a known
 // tier, and a project key that resolves to more than one project is omitted
-// rather than guessed. An issue's own repository column is never used.
+// rather than guessed. An issue's own repository column is never used. The
+// link rows come from the one shared reader (admittedIssueLinksSQL).
 //
 // One row per (pull request, project), with the strongest link tier among the
 // links that reach that project; the tier is named on the row so a consumer
@@ -32,20 +33,16 @@ const pullRequestProjectRowCap = 5000
 
 const pullRequestProjectRowLimit = "5001"
 
-var pullRequestProjectLinksSQL = `SELECT concat(toString(l.repo_id), ':', toString(l.pr_number)) AS pr_key,
+var pullRequestProjectLinksSQL = `SELECT concat(toString(lk.pr_repo_id), ':', toString(lk.pr_number)) AS pr_key,
        pj.provider, pj.id, any(pj.name),
-       toUInt8(max(` + linkTierRankSQL + `)),
-       argMax(l.provenance, ` + linkTierRankSQL + `)
-FROM work_graph_issue_pr AS l FINAL
-INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
-INNER JOIN work_items AS w FINAL ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id
+       toUInt8(max(lk.link_rank)),
+       argMax(lk.provenance, lk.link_rank)
+FROM ` + admittedIssueLinksSQL + ` AS lk
+INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.work_item_id = lk.work_item_id
 INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = w.provider AND p.join_key = w.project_id
-INNER JOIN projects AS pj FINAL ON pj.org_id = l.org_id AND pj.provider = p.provider AND pj.id = p.id
-WHERE l.org_id = {org_id:String}
-  AND concat(toString(l.repo_id), ':', toString(l.pr_number)) IN {ids:Array(String)}
-  AND ` + linkTierRankSQL + ` > 0
+INNER JOIN projects AS pj FINAL ON pj.org_id = {org_id:String} AND pj.provider = p.provider AND pj.id = p.id
+WHERE concat(toString(lk.pr_repo_id), ':', toString(lk.pr_number)) IN {ids:Array(String)}
   AND p.key_resolution_count = 1
-  AND ` + workItemIsIssueSQL("w") + `
 GROUP BY pr_key, pj.provider, pj.id
 ORDER BY pr_key, pj.provider, pj.id
 LIMIT ` + pullRequestProjectRowLimit
