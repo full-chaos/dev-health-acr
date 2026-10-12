@@ -98,8 +98,25 @@ job_shard_union() {
   )
 
   : >"$out"
-  local index
+  local index split_first=0 split_out
+  local -a split_pkgs=()
+  if [ "$with_isolated" -eq 1 ]; then
+    # Heavy-half legs (test-shard.sh unit_split_packages) re-emit a dedicated
+    # package: they are not part of the union, they must each emit exactly
+    # their split package, and a split package must be a dedicated one.
+    mapfile -t split_pkgs < <("$repo_root/scripts/ci/test-shard.sh" --print-unit-split-packages | tr ' ' '\n' | grep -v '^$')
+    split_first=$((total + $("$repo_root/scripts/ci/test-shard.sh" --print-unit-dedicated-packages | wc -w | tr -d ' ') + 1))
+  fi
   for index in "${indices[@]}"; do
+    if [ "$with_isolated" -eq 1 ] && [ "$index" -ge "$split_first" ]; then
+      split_out="$("$repo_root/scripts/ci/test-shard.sh" --with-isolated "$index" "$total")"
+      if [ "$split_out" != "${split_pkgs[$((index - split_first))]:-}" ]; then
+        printf '%s: unit heavy-half leg %s must emit exactly its split package %s, got: %s\n' \
+          "${0##*/}" "$index" "${split_pkgs[$((index - split_first))]:-<none>}" "$split_out" >&2
+        return 1
+      fi
+      continue
+    fi
     if [ "$with_isolated" -eq 1 ]; then
       "$repo_root/scripts/ci/test-shard.sh" --with-isolated "$index" "$total" | tr ' ' '\n' >>"$out"
     else
