@@ -82,31 +82,29 @@ type teamOwnedRepo struct {
 // teamOwnedRepositories reads team -> owned repositories as of bound, deduped
 // and ordered by repository id. A team with none is absent from the map.
 func teamOwnedRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, bound factTimeBound) (map[string][]teamOwnedRepo, error) {
-	statement := `SELECT team_id, repo_key, any(repo_full_name) FROM ` +
-		ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)) + `
-GROUP BY team_id, repo_key
-ORDER BY team_id, repo_key
-LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows+1)
-	extra := make([]readers.Binding, 0, 2)
-	for _, binding := range bound.bindings() {
-		extra = append(extra, readers.Binding{Name: binding.Name, Value: binding.Value})
-	}
+	source := ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}` + ownershipValidityPredicate(bound))
 	owned := map[string][]teamOwnedRepo{}
-	rows := 0
-	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadTeamOwnedRepositoriesRollup", statement, orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
-		rows++
-		var teamID string
-		var repo teamOwnedRepo
-		if err := row.Scan(&teamID, &repo.key, &repo.name); err != nil {
-			return err
-		}
-		owned[teamID] = append(owned[teamID], repo)
-		return nil
-	}, extra...); err != nil {
+	err := pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamOwnedRepositoriesRollup", orgID, teamIDs,
+		teamRepoCursor{teamExpr: "team_id", repoExpr: "repo_key", repoType: "String"},
+		boundReaderBindings(bound),
+		func(having string, limit int) string {
+			return `SELECT team_id, repo_key, any(repo_full_name) FROM ` + source + `
+GROUP BY team_id, repo_key
+` + having + `
+ORDER BY team_id, repo_key
+LIMIT ` + fmt.Sprint(limit)
+		},
+		func(row contextpacket.ClickHouseRowScanner) (string, string, error) {
+			var teamID string
+			var repo teamOwnedRepo
+			if err := row.Scan(&teamID, &repo.key, &repo.name); err != nil {
+				return "", "", err
+			}
+			owned[teamID] = append(owned[teamID], repo)
+			return teamID, repo.key, nil
+		})
+	if err != nil {
 		return nil, err
-	}
-	if rows > maxTeamOwnedRepositoryRows {
-		return nil, fmt.Errorf("%s", teamOwnedRepositoriesOverflowReason)
 	}
 	return owned, nil
 }
@@ -170,28 +168,30 @@ func boundReaderBindings(bound factTimeBound) []readers.Binding {
 // A repository the team also owns appears here too; callers drop it with
 // reachedOnlyRepositories so it is counted once, as owned.
 func teamProjectReachedRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, bound factTimeBound) (map[string][]teamReachedRepo, error) {
-	statement := `SELECT lr.team_id, toString(lr.pr_repo_id), ifNull(any(r.repo), ''), toInt64(min(lr.link_rank)), toInt64(uniqExact(lr.pr_number))
+	reached := map[string][]teamReachedRepo{}
+	err := pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectReachedRepositories", orgID, teamIDs,
+		teamRepoCursor{teamExpr: "lr.team_id", repoExpr: "lr.pr_repo_id", repoType: "UUID"},
+		boundReaderBindings(bound),
+		func(having string, limit int) string {
+			return `SELECT lr.team_id, toString(lr.pr_repo_id), ifNull(any(r.repo), ''), toInt64(min(lr.link_rank)), toInt64(uniqExact(lr.pr_number))
 FROM ` + teamProjectLinkRowsSQL("ids", bound) + ` AS lr
 LEFT JOIN repos AS r FINAL ON r.id = lr.pr_repo_id AND r.org_id = {org_id:String}
 GROUP BY lr.team_id, lr.pr_repo_id
+` + having + `
 ORDER BY lr.team_id, lr.pr_repo_id
-LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows+1)
-	reached := map[string][]teamReachedRepo{}
-	rows := 0
-	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadTeamProjectReachedRepositories", statement, orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
-		rows++
-		var teamID string
-		var repo teamReachedRepo
-		if err := row.Scan(&teamID, &repo.key, &repo.name, &repo.linkRank, &repo.linkedPullRequests); err != nil {
-			return err
-		}
-		reached[teamID] = append(reached[teamID], repo)
-		return nil
-	}, boundReaderBindings(bound)...); err != nil {
+LIMIT ` + fmt.Sprint(limit)
+		},
+		func(row contextpacket.ClickHouseRowScanner) (string, string, error) {
+			var teamID string
+			var repo teamReachedRepo
+			if err := row.Scan(&teamID, &repo.key, &repo.name, &repo.linkRank, &repo.linkedPullRequests); err != nil {
+				return "", "", err
+			}
+			reached[teamID] = append(reached[teamID], repo)
+			return teamID, repo.key, nil
+		})
+	if err != nil {
 		return nil, err
-	}
-	if rows > maxTeamOwnedRepositoryRows {
-		return nil, fmt.Errorf("%s", teamOwnedRepositoriesOverflowReason)
 	}
 	return reached, nil
 }

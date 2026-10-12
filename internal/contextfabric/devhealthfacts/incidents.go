@@ -160,15 +160,17 @@ INNER JOIN (
 WHERE ` + window.timestampExpr(incidentTime) + `
 GROUP BY e.repo_id
 ORDER BY e.repo_id`
-		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamIncidentRollup", statement, orgID, repoKeys, func(row contextpacket.ClickHouseRowScanner) error {
-			var repoID string
-			var r incidentRollupRepo
-			if err := row.Scan(&repoID, &r.incidents, &r.resolved); err != nil {
-				return err
-			}
-			byRepo[repoID] = r
-			return nil
-		}, window.bindings()...); scanErr != nil {
+		if scanErr := forEachRepoKeyChunk(repoKeys, func(chunk []string) error {
+			return readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamIncidentRollup", statement, orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
+				var repoID string
+				var r incidentRollupRepo
+				if err := row.Scan(&repoID, &r.incidents, &r.resolved); err != nil {
+					return err
+				}
+				byRepo[repoID] = r
+				return nil
+			}, window.bindings()...)
+		}); scanErr != nil {
 			return outcome, scanErr
 		}
 	}

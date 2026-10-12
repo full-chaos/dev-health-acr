@@ -208,15 +208,17 @@ FROM git_pull_requests FINAL
 WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}
 GROUP BY repo_id
 ORDER BY repo_id`
-		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamPullRequestRollup", statement, orgID, repoKeys, func(row contextpacket.ClickHouseRowScanner) error {
-			var repoID string
-			var r pullRequestRollupRepo
-			if err := row.Scan(&repoID, &r.opened, &r.merged, &r.closedUnmerged); err != nil {
-				return err
-			}
-			byRepo[repoID] = r
-			return nil
-		}, window.bindings()...); scanErr != nil {
+		if scanErr := forEachRepoKeyChunk(repoKeys, func(chunk []string) error {
+			return readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamPullRequestRollup", statement, orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
+				var repoID string
+				var r pullRequestRollupRepo
+				if err := row.Scan(&repoID, &r.opened, &r.merged, &r.closedUnmerged); err != nil {
+					return err
+				}
+				byRepo[repoID] = r
+				return nil
+			}, window.bindings()...)
+		}); scanErr != nil {
 			return outcome, scanErr
 		}
 	}
@@ -347,30 +349,32 @@ func teamLinkedPullRequestCounts(ctx context.Context, client contextpacket.Click
 	if reachedRepositoryCount(reachedOnly) == 0 {
 		return counts, nil
 	}
-	statement := `SELECT lr.team_id, toString(lr.pr_repo_id),
+	err := pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectLinkedPullRequests", orgID, teamIDs,
+		teamRepoCursor{teamExpr: "lr.team_id", repoExpr: "lr.pr_repo_id", repoType: "UUID"},
+		append(window.bindings(), boundReaderBindings(bound)...),
+		func(having string, limit int) string {
+			return `SELECT lr.team_id, toString(lr.pr_repo_id),
 	toInt64(countIf(` + window.timestampExpr("pr.created_at") + `)),
 	toInt64(countIf(pr.merged_at IS NOT NULL AND ` + window.timestampExpr("pr.merged_at") + `)),
 	toInt64(countIf(pr.merged_at IS NULL AND pr.closed_at IS NOT NULL AND ` + window.timestampExpr("pr.closed_at") + `))
 FROM (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM ` + teamProjectLinkRowsSQL("ids", bound) + `) AS lr
 INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = {org_id:String} AND pr.repo_id = lr.pr_repo_id AND pr.number = lr.pr_number
 GROUP BY lr.team_id, lr.pr_repo_id
+` + having + `
 ORDER BY lr.team_id, lr.pr_repo_id
-LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows+1)
-	rows := 0
-	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadTeamProjectLinkedPullRequests", statement, orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
-		rows++
-		var teamID, repoID string
-		var r pullRequestRollupRepo
-		if err := row.Scan(&teamID, &repoID, &r.opened, &r.merged, &r.closedUnmerged); err != nil {
-			return err
-		}
-		counts[teamID+blockerPairSeparator+repoID] = r
-		return nil
-	}, append(window.bindings(), boundReaderBindings(bound)...)...); err != nil {
+LIMIT ` + fmt.Sprint(limit)
+		},
+		func(row contextpacket.ClickHouseRowScanner) (string, string, error) {
+			var teamID, repoID string
+			var r pullRequestRollupRepo
+			if err := row.Scan(&teamID, &repoID, &r.opened, &r.merged, &r.closedUnmerged); err != nil {
+				return "", "", err
+			}
+			counts[teamID+blockerPairSeparator+repoID] = r
+			return teamID, repoID, nil
+		})
+	if err != nil {
 		return nil, err
-	}
-	if rows > maxTeamOwnedRepositoryRows {
-		return nil, fmt.Errorf("%s", teamOwnedRepositoriesOverflowReason)
 	}
 	return counts, nil
 }

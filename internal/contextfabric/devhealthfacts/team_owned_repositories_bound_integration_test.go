@@ -1,12 +1,12 @@
 package devhealthfacts_test
 
 // The ownership read of a team rollup runs on the production ClickHouse client,
-// whose max_result_rows is 1000 with result_overflow_mode throw. That cap, not
-// the 2000 constant in team_rollup.go, is what a caller meets: a team owning
-// exactly 1000 repositories is served in full; one owning 1001 gets a read
-// failure (never a partial list). Executed against a real ClickHouse through the
-// real deployments provider. The container is mandatory: a missing one fails
-// the test, never skips it.
+// whose max_result_rows is 1000 with result_overflow_mode throw. The read pages
+// under that cap and the per-repository reads run in key chunks, so a team that
+// owns more than 1000 repositories is served in full up to the 2000 bound; one
+// past the bound is a named read failure, never a partial list. Executed
+// against a real ClickHouse through the real deployments provider. The
+// container is mandatory: a missing one fails the test, never skips it.
 
 import (
 	"context"
@@ -49,8 +49,21 @@ func TestTeamOwnershipReadMeetsTheClientRowCapOnRealClickHouse(t *testing.T) {
 			}
 		}
 	}
-	seed("team-at-bound", "at", 0, clientRowCap)
-	seed("team-over-bound", "over", clientRowCap, clientRowCap+1)
+	type teamCase struct {
+		team  string
+		count int
+	}
+	cases := []teamCase{
+		{"team-at-cap", clientRowCap},
+		{"team-over-cap", clientRowCap + 1},
+		{"team-at-bound", 2000},
+		{"team-over-bound", 2001},
+	}
+	offset := 0
+	for _, c := range cases {
+		seed(c.team, c.team, offset, c.count)
+		offset += c.count
+	}
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactDeployments)
 	read := func(team string) (contextfabric.FactProviderResult, error) {
@@ -60,18 +73,21 @@ func TestTeamOwnershipReadMeetsTheClientRowCapOnRealClickHouse(t *testing.T) {
 		})
 	}
 
-	t.Run("exactly the client row cap is served in full", func(t *testing.T) {
-		result, err := read("team-at-bound")
-		if err != nil {
-			t.Fatalf("a team owning exactly %d repositories must be served, got %v", clientRowCap, err)
-		}
-		wantInt(t, factFor(t, result, teamSubject("team-at-bound")).Fields, "owned_repository_count", clientRowCap)
-	})
+	for _, c := range cases[:3] {
+		c := c
+		t.Run(strconv.Itoa(c.count)+" owned repositories are served in full", func(t *testing.T) {
+			result, err := read(c.team)
+			if err != nil {
+				t.Fatalf("a team owning %d repositories must be served, got %v", c.count, err)
+			}
+			wantInt(t, factFor(t, result, teamSubject(c.team)).Fields, "owned_repository_count", int64(c.count))
+		})
+	}
 
-	t.Run("one past the client row cap is a read failure naming the ClickHouse limit", func(t *testing.T) {
+	t.Run("one past the 2000 bound is a named read failure", func(t *testing.T) {
 		result, err := read("team-over-bound")
 		if err == nil {
-			t.Fatalf("a team owning %d repositories must be rejected, got a served result", clientRowCap+1)
+			t.Fatalf("a team owning 2001 repositories must be rejected, got a served result")
 		}
 		var failure *contextfabric.FactReadFailure
 		if !errors.As(err, &failure) {
@@ -83,10 +99,8 @@ func TestTeamOwnershipReadMeetsTheClientRowCapOnRealClickHouse(t *testing.T) {
 		if !strings.Contains(failure.Reason, "query team deployments failed") {
 			t.Fatalf("Reason = %q", failure.Reason)
 		}
-		// deployments.go turns the readTeamRollup error into readFailure
-		// (shared.go); the cause carries the ClickHouse throw (code 396).
-		if got := readFailureCause(err); !strings.Contains(got, "code: 396") || !strings.Contains(got, "Limit for result exceeded") {
-			t.Fatalf("Cause = %q, want the ClickHouse result-rows limit (code 396)", got)
+		if got := readFailureCause(err); !strings.Contains(got, "query team owned repositories exceeded its bound") {
+			t.Fatalf("Cause = %q, want the named ownership bound failure", got)
 		}
 		if len(result.Facts) != 0 {
 			t.Fatalf("a failed read served facts: %#v", result.Facts)
