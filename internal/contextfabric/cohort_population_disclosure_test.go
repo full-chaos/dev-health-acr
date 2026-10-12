@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"strings"
 	"testing"
 	"time"
@@ -156,6 +157,32 @@ func TestAnUncutCohortStatesNoPopulationAndNoCut(t *testing.T) {
 	for _, limitation := range result.Limitations {
 		if strings.Contains(limitation, "Not every member is listed") {
 			t.Errorf("an uncut cohort served a cut limitation: %q", limitation)
+		}
+	}
+}
+
+func TestTheCutSentenceNamesTheCapThatCutTheList(t *testing.T) {
+	cohort := &Cohort{Kind: SubjectTeam, Population: 13, Members: make([]CohortMember, 5)}
+	const requestCap = "the request's max_cohort_members limits the list"
+	const itemBudget = "the server limits how many items one answer carries"
+	for name, tc := range map[string]struct {
+		narrowing []contractsv1.ContextFabricPlanNarrowing
+		want      string
+	}{
+		"no narrowing step: the caller's cap": {nil, requestCap},
+		"cardinality clamp to the item budget": {[]contractsv1.ContextFabricPlanNarrowing{
+			{Stage: contractsv1.ContextFabricPlanNarrowingCardinality, Before: 50, After: 5},
+		}, itemBudget},
+		"synthesis input narrowing": {[]contractsv1.ContextFabricPlanNarrowing{
+			{Stage: contractsv1.ContextFabricPlanNarrowingSynthesisInput, Before: 8, After: 5},
+		}, itemBudget},
+		"assembled result narrowing": {[]contractsv1.ContextFabricPlanNarrowing{
+			{Stage: contractsv1.ContextFabricPlanNarrowingAssembledResult, Before: 8, After: 5},
+		}, itemBudget},
+	} {
+		sentence, ok := cohortListedLimitation(cohort, tc.narrowing)
+		if !ok || !strings.Contains(sentence, tc.want) {
+			t.Errorf("%s: sentence %q (ok=%v), want it to name %q", name, sentence, ok, tc.want)
 		}
 	}
 }

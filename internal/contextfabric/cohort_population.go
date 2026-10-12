@@ -22,7 +22,9 @@ func cohortListedLimitation(cohort *Cohort, narrowing []contractsv1.ContextFabri
 		return "", false
 	}
 	cut := contractsv1.ContextFabricWorkItemListCutRequest
-	if _, clamped := renderClampNarrowing(narrowing); clamped {
+	_, clamped := renderClampNarrowing(narrowing)
+	_, narrowed := firstMemberNarrowing(narrowing)
+	if clamped || narrowed {
 		cut = contractsv1.ContextFabricWorkItemListCutItems
 	}
 	return contractsv1.ContextFabricWorkItemListedLimitation(len(cohort.Members), cohort.Population, cohort.PopulationLowerBound, cut, "")
