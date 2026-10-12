@@ -846,7 +846,12 @@ import (
 // (several committed subjects of the anchor kind and no anchor term matched
 // one, or none committed at that kind) is a clarification, not a generic
 // cohort. An answer saved under v171 for such a question holds the cohort.
-const QueryVersion = "devhealthfacts.clickhouse.v173"
+//
+// v172 -> v173: a team's blockers fact places a blocked item in the repositories its
+// linked pull request rows name (the link tier is on the fact) instead of the work item's own
+// repository column; team totals count an item once across the team's repositories. A candidate
+// saved under v172 holds the column-based repositories and totals.
+const QueryVersion = "devhealthfacts.clickhouse.v174"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
