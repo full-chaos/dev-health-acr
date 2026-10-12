@@ -91,7 +91,7 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 		}
 	}
 
-	teamsWithoutRepos := 0
+	teamsWithoutRepos, projectReachedWithoutRows := 0, 0
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		outcome, scanErr := p.readTeamRollup(ctx, orgID, teamSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if scanErr != nil {
@@ -100,6 +100,7 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 		truncated = truncated || outcome.truncated
 		rejectedCount += outcome.rejected
 		teamsWithoutRepos += outcome.teamsWithoutRepos
+		projectReachedWithoutRows += outcome.projectReachedWithoutRows
 		if outcome.contributed > 0 {
 			grain = grainDaily
 		}
@@ -108,6 +109,7 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 	state, retentionReason := timeBound.retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
 	applyNoOwnedRepositories(&result, teamsWithoutRepos)
+	applyProjectReachedWithoutRows(&result, projectReachedWithoutRows)
 	return result, nil
 }
 
@@ -202,6 +204,12 @@ func (p *DeploymentsProvider) readTeamRollup(ctx context.Context, orgID string, 
 	if err != nil {
 		return outcome, err
 	}
+	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, teamIDs)
+	if err != nil {
+		return outcome, err
+	}
+	reachedOnly := reachedOnlyRepositories(reached, owned)
+	outcome.projectReachedWithoutRows = reachedRepositoryCount(reachedOnly)
 	window := resolveRollupWindow(timeBound, evidence, clock())
 	byRepo := map[string]deploymentRollupRepo{}
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 {
@@ -288,6 +296,9 @@ ORDER BY repo_id`
 		}
 		if value, ok := window.endValue(); ok {
 			fields["window_end"] = value
+		}
+		if n := len(reachedOnly[teamID]); n > 0 {
+			fields["project_reached_repository_count"] = contextfabric.IntegerFactValue(int64(n))
 		}
 		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok && tables {
 			fields["owned_repositories"] = table

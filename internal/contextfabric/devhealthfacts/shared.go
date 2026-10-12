@@ -851,7 +851,15 @@ import (
 // linked pull request rows name (the link tier is on the fact) instead of the work item's own
 // repository column; team totals count an item once across the team's repositories. A candidate
 // saved under v172 holds the column-based repositories and totals.
-const QueryVersion = "devhealthfacts.clickhouse.v173"
+//
+// v173 -> v174: a team reaches work through the projects it owns as well as the
+// repositories it owns. The pull request rollup adds the pull requests linked to
+// an owned project's issues (a reached repository counts its linked pull
+// requests only), the blockers total is the union of owned repositories and
+// owned-project items counted once, and deployments, incidents and metrics name
+// the project-reached repositories they have no rows for. A candidate saved
+// under v173 holds a team total over owned repositories alone.
+const QueryVersion = "devhealthfacts.clickhouse.v174"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

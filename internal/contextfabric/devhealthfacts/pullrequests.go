@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -182,8 +183,19 @@ func (p *PullRequestsProvider) readTeamRollup(ctx context.Context, orgID string,
 	if err != nil {
 		return outcome, err
 	}
+	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, teamIDs)
+	if err != nil {
+		return outcome, err
+	}
+	reachedOnly := reachedOnlyRepositories(reached, owned)
 	window := resolveRollupWindow(timeBound, evidence, clock())
 	byRepo := map[string]pullRequestRollupRepo{}
+	// A repository reached only through an owned project counts the project's
+	// linked pull requests alone, never the repository's whole activity.
+	reachedCounts, err := teamLinkedPullRequestCounts(ctx, p.facts.client, orgID, teamIDs, reachedOnly, window)
+	if err != nil {
+		return outcome, err
+	}
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 {
 		statement := `SELECT toString(repo_id),
 	toInt64(countIf(` + window.timestampExpr("created_at") + `)),
@@ -209,7 +221,7 @@ ORDER BY repo_id`
 	for _, teamID := range teamIDs {
 		subject := bySubject[teamID]
 		repos := owned[teamID]
-		if len(repos) == 0 {
+		if len(repos) == 0 && len(reachedOnly[teamID]) == 0 {
 			outcome.teamsWithoutRepos++
 			continue
 		}
@@ -235,6 +247,39 @@ ORDER BY repo_id`
 				if repo.name != "" {
 					cells["repository_name"] = contextfabric.StringFactValue(repo.name)
 				}
+				cells["reach_basis"] = contextfabric.StringFactValue(repositoryReachOwned)
+				breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
+			}
+		}
+		var reachedWithData int64
+		weakestRank := int64(0)
+		for _, repo := range reachedOnly[teamID] {
+			r, ok := reachedCounts[teamID+blockerPairSeparator+repo.key]
+			if !ok {
+				continue
+			}
+			outcome.contributed++
+			reachedWithData++
+			opened += r.opened
+			merged += r.merged
+			closedUnmerged += r.closedUnmerged
+			if weakestRank == 0 || repo.linkRank < weakestRank {
+				weakestRank = repo.linkRank
+			}
+			if tables {
+				cells := map[string]contextfabric.FactValue{
+					"repository_id":                        contextfabric.StringFactValue(repo.key),
+					"pull_requests_opened_window":          contextfabric.IntegerFactValue(r.opened),
+					"pull_requests_merged_window":          contextfabric.IntegerFactValue(r.merged),
+					"pull_requests_closed_unmerged_window": contextfabric.IntegerFactValue(r.closedUnmerged),
+					"reach_basis":                          contextfabric.StringFactValue(repositoryReachOwnedProject),
+				}
+				if tier := blockerLinkTierName(repo.linkRank); tier != "" {
+					cells["link_tier"] = contextfabric.StringFactValue(tier)
+				}
+				if repo.name != "" {
+					cells["repository_name"] = contextfabric.StringFactValue(repo.name)
+				}
 				breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 			}
 		}
@@ -252,6 +297,12 @@ ORDER BY repo_id`
 		if value, ok := window.endValue(); ok {
 			fields["window_end"] = value
 		}
+		if n := len(reachedOnly[teamID]); n > 0 {
+			fields["project_reached_repository_count"] = contextfabric.IntegerFactValue(int64(n))
+		}
+		if tier := blockerLinkTierName(weakestRank); tier != "" {
+			fields["repository_link_basis"] = contextfabric.StringFactValue(tier)
+		}
 		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok && tables {
 			fields["owned_repositories"] = table
 			if omitted > 0 {
@@ -259,12 +310,12 @@ ORDER BY repo_id`
 				fields["owned_repositories_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 			}
 		}
-		if withData > 0 {
+		if withData+reachedWithData > 0 {
 			fields["pull_requests_opened_window"] = contextfabric.IntegerFactValue(opened)
 			fields["pull_requests_merged_window"] = contextfabric.IntegerFactValue(merged)
 			fields["pull_requests_closed_unmerged_window"] = contextfabric.IntegerFactValue(closedUnmerged)
 			if table, omitted, ok := repositoryBreakdownFactValue(breakdown, grainExact,
-				[]string{"pull_requests_opened_window", "pull_requests_merged_window", "pull_requests_closed_unmerged_window"}, []string{"repository_name"}); ok && tables {
+				[]string{"pull_requests_opened_window", "pull_requests_merged_window", "pull_requests_closed_unmerged_window"}, []string{"repository_name", "reach_basis", "link_tier"}); ok && tables {
 				fields["repository_breakdown"] = table
 				if omitted > 0 {
 					outcome.truncated = true
@@ -278,4 +329,42 @@ ORDER BY repo_id`
 		})
 	}
 	return outcome, nil
+}
+
+// teamLinkedPullRequestCounts counts, per (team, project-reached repository),
+// the distinct pull requests linked to an issue of a project the team owns,
+// by the same opened / merged / closed-unmerged rule the owned arm applies.
+// The key is team id + blockerPairSeparator + repository id. A repository
+// whose linked pull requests have no git_pull_requests row is absent.
+func teamLinkedPullRequestCounts(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, reachedOnly map[string][]teamReachedRepo, window rollupWindow) (map[string]pullRequestRollupRepo, error) {
+	counts := map[string]pullRequestRollupRepo{}
+	if reachedRepositoryCount(reachedOnly) == 0 {
+		return counts, nil
+	}
+	statement := `SELECT lr.team_id, toString(lr.pr_repo_id),
+	toInt64(countIf(` + window.timestampExpr("pr.created_at") + `)),
+	toInt64(countIf(pr.merged_at IS NOT NULL AND ` + window.timestampExpr("pr.merged_at") + `)),
+	toInt64(countIf(pr.merged_at IS NULL AND pr.closed_at IS NOT NULL AND ` + window.timestampExpr("pr.closed_at") + `))
+FROM (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM ` + teamProjectLinkRowsSQL("ids") + `) AS lr
+INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = {org_id:String} AND pr.repo_id = lr.pr_repo_id AND pr.number = lr.pr_number
+GROUP BY lr.team_id, lr.pr_repo_id
+ORDER BY lr.team_id, lr.pr_repo_id
+LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows+1)
+	rows := 0
+	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadTeamProjectLinkedPullRequests", statement, orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
+		rows++
+		var teamID, repoID string
+		var r pullRequestRollupRepo
+		if err := row.Scan(&teamID, &repoID, &r.opened, &r.merged, &r.closedUnmerged); err != nil {
+			return err
+		}
+		counts[teamID+blockerPairSeparator+repoID] = r
+		return nil
+	}, window.bindings()...); err != nil {
+		return nil, err
+	}
+	if rows > maxTeamOwnedRepositoryRows {
+		return nil, fmt.Errorf("%s", teamOwnedRepositoriesOverflowReason)
+	}
+	return counts, nil
 }

@@ -28,7 +28,7 @@ const issueLinkTierRankSQL = `multiIf(provenance = 'native', 3, provenance = 'ex
 // de-duplicated per issue: a caller aggregates per repository and takes the
 // strongest tier with argMax(provenance, link_rank).
 const issueLinksSQL = `(
-  SELECT work_item_id, repo_id AS pr_repo_id, provenance, ` + issueLinkTierRankSQL + ` AS link_rank
+  SELECT work_item_id, repo_id AS pr_repo_id, pr_number, provenance, ` + issueLinkTierRankSQL + ` AS link_rank
   FROM work_graph_issue_pr FINAL
   WHERE org_id = {org_id:String} AND ` + issueLinkTierRankSQL + ` > 0
 )`

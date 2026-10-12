@@ -318,12 +318,18 @@ func blockersFields() []fieldDecl {
 			// caller's authorized items; withheld from a repository-restricted
 			// caller.
 			declCallerScoped(fInt("blocked_work_items_without_link_count", "count")),
+			// Emitted only when items of the team's owned projects reached a
+			// repository through a linked pull request: how many of the
+			// distinct blocked items in the total came through that arm (an
+			// item also in an owned repository is counted once).
+			declCallerScoped(fInt("project_blocked_work_items_current", "count")),
 			fTable("repository_breakdown",
 				cRef(declRepositoryRef, cStr("repository_id")),
 				cNullable(cStr("repository_name")),
 				cInt("blocked_work_items_current", "count"),
 				cInt("blocker_dependencies_current", "count"),
 				cNullable(cStr("link_tier")),
+				cStr("reach_basis"),
 			),
 		),
 	)
@@ -349,6 +355,10 @@ func teamRollupCommonFields(windowed bool) []fieldDecl {
 		),
 		fInt("owned_repositories_omitted_count", "count"),
 		fInt("repository_breakdown_omitted_count", "count"),
+		// Emitted only when the team also reaches repositories it does not
+		// own, through the issues of its owned projects and their linked pull
+		// requests. Owned repositories are counted in owned_repository_count.
+		declAggregate(fInt("project_reached_repository_count", "count")),
 	}
 	if windowed {
 		fields = append(fields, fStr("window_basis"), fStr("window_start"), fStr("window_end"))
@@ -375,12 +385,19 @@ func pullRequestFields() []fieldDecl {
 			declAggregate(fInt("pull_requests_opened_window", "count")),
 			declAggregate(fInt("pull_requests_merged_window", "count")),
 			declAggregate(fInt("pull_requests_closed_unmerged_window", "count")),
+			// Emitted only when a project-reached repository contributed: the
+			// weakest provenance tier of the issue <> pull request links that
+			// reached it. A reached repository counts only its linked pull
+			// requests, never the repository's whole activity.
+			fStr("repository_link_basis"),
 			fTable("repository_breakdown",
 				cRef(declRepositoryRef, cStr("repository_id")),
 				cNullable(cStr("repository_name")),
 				cInt("pull_requests_opened_window", "count"),
 				cInt("pull_requests_merged_window", "count"),
 				cInt("pull_requests_closed_unmerged_window", "count"),
+				cStr("reach_basis"),
+				cNullable(cStr("link_tier")),
 			),
 		),
 	)

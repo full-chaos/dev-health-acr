@@ -19,6 +19,13 @@ import (
 // plus an explicit owned_repositories table so a client can continue per
 // repository. Every kind shares this one resolution and this one window rule;
 // each kind adds only its own per-repository query over the owned set.
+//
+// A team also owns projects (team_project_ownership), and a project reaches
+// repositories only through its issues' linked pull request rows
+// (teamProjectLinkRowsSQL). Pull requests and blockers add that reach (linked
+// pull requests, never a reached repository's whole activity); deployments,
+// incidents and metrics are repository-level and name the reached repositories
+// they have no rows for.
 
 // teamRollupBasis is the rollup_basis value every team rollup fact carries.
 const teamRollupBasis = "team_owned_repositories"
@@ -102,6 +109,117 @@ LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows+1)
 		return nil, fmt.Errorf("%s", teamOwnedRepositoriesOverflowReason)
 	}
 	return owned, nil
+}
+
+// teamReachedRepo is one repository a team reaches through an owned project:
+// the repository of a pull request linked to an issue of the project
+// (work_graph_issue_pr). linkRank is the weakest provenance tier among the
+// links that reached it (issueLinkTierRankSQL: native 3, explicit_text 2,
+// heuristic 1); linkedPullRequests counts the distinct linked pull requests.
+type teamReachedRepo struct {
+	key                string
+	name               string
+	linkRank           int64
+	linkedPullRequests int64
+}
+
+const (
+	repositoryReachOwned        = "owned_repository"
+	repositoryReachOwnedProject = "owned_project_link"
+)
+
+// teamProjectLinkRowsSQL is the one team-to-linked-pull-request reach: a
+// derived table (team_id, work_item_id, pr_repo_id, pr_number, link_rank) of
+// the issues of every project a team owns (team_project_ownership) joined to
+// their linked pull request rows. teamParam names the Array(String) binding
+// holding the team ids. It is the same chain teamRepositories walks.
+func teamProjectLinkRowsSQL(teamParam string) string {
+	return `(
+  SELECT DISTINCT t.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
+  FROM ` + teamOwnedProjectsSQL + ` AS t
+  INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
+  INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.provider = p.provider AND w.project_id = p.join_key
+  INNER JOIN ` + issueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
+  WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)}
+)`
+}
+
+// teamProjectReachedRepositories reads team -> repositories reached through
+// the team's owned projects' linked pull requests, ordered by repository id.
+// A repository the team also owns appears here too; callers drop it with
+// reachedOnlyRepositories so it is counted once, as owned.
+func teamProjectReachedRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string) (map[string][]teamReachedRepo, error) {
+	statement := `SELECT lr.team_id, toString(lr.pr_repo_id), ifNull(any(r.repo), ''), toInt64(min(lr.link_rank)), toInt64(uniqExact(lr.pr_number))
+FROM ` + teamProjectLinkRowsSQL("ids") + ` AS lr
+LEFT JOIN repos AS r FINAL ON r.id = lr.pr_repo_id AND r.org_id = {org_id:String}
+GROUP BY lr.team_id, lr.pr_repo_id
+ORDER BY lr.team_id, lr.pr_repo_id
+LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows+1)
+	reached := map[string][]teamReachedRepo{}
+	rows := 0
+	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadTeamProjectReachedRepositories", statement, orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
+		rows++
+		var teamID string
+		var repo teamReachedRepo
+		if err := row.Scan(&teamID, &repo.key, &repo.name, &repo.linkRank, &repo.linkedPullRequests); err != nil {
+			return err
+		}
+		reached[teamID] = append(reached[teamID], repo)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if rows > maxTeamOwnedRepositoryRows {
+		return nil, fmt.Errorf("%s", teamOwnedRepositoriesOverflowReason)
+	}
+	return reached, nil
+}
+
+// reachedOnlyRepositories drops, per team, the reached repositories the team
+// also owns: an owned repository is one repository, served as owned.
+func reachedOnlyRepositories(reached map[string][]teamReachedRepo, owned map[string][]teamOwnedRepo) map[string][]teamReachedRepo {
+	out := map[string][]teamReachedRepo{}
+	for teamID, repos := range reached {
+		ownedKeys := ownedNameByKey(owned[teamID])
+		for _, repo := range repos {
+			if _, ok := ownedKeys[repo.key]; ok {
+				continue
+			}
+			out[teamID] = append(out[teamID], repo)
+		}
+	}
+	return out
+}
+
+func reachedRepositoryCount(reached map[string][]teamReachedRepo) int {
+	total := 0
+	for _, repos := range reached {
+		total += len(repos)
+	}
+	return total
+}
+
+// teamProjectReachedOnlyReason is the coverage limitation of a kind whose
+// per-repository data is not linked to a project: the repositories reached
+// through owned projects carry no repo-level rows for it.
+func teamProjectReachedOnlyReason(count int) string {
+	return fmt.Sprintf("devhealthfacts: %d repositories reached through owned projects' linked pull requests contribute no repo-level rows for this kind; this is not a measured zero", count)
+}
+
+// applyProjectReachedWithoutRows names, on a repo-level kind, the project
+// reached repositories that contribute nothing: not_applicable with the cause
+// when no fact was served, a reason beside the facts otherwise.
+func applyProjectReachedWithoutRows(result *contextfabric.FactProviderResult, count int) {
+	if count <= 0 {
+		return
+	}
+	reason := teamProjectReachedOnlyReason(count)
+	if len(result.Facts) == 0 {
+		result.State = contextfabric.SourceNotApplicable
+		result.Reason = reason
+		return
+	}
+	mergeFactReadReason(result, reason)
 }
 
 // repoKeysOf is the sorted union of every team's owned repository ids.
@@ -283,4 +401,7 @@ type teamRollupOutcome struct {
 	truncated         bool
 	rejected          int
 	teamsWithoutRepos int
+	// projectReachedWithoutRows counts the repositories reached only through
+	// owned projects that a repo-level kind has no rows for.
+	projectReachedWithoutRows int
 }
