@@ -393,7 +393,7 @@ func TestAnchorBindingLineWritesAbsentListsAsEmptyLists(t *testing.T) {
 func TestEveryBinderInputIsOnTheTransitionLine(t *testing.T) {
 	inputKeys := map[string][]string{
 		"From":              {"from_state", "from_kind", "from_id", "from_proof", "from_reason", "from_origin_result_id", "from_graph_epoch", "from_contender_kind", "from_contender_id", "from_proven_freshness_epoch", "from_proven_freshness_digest", "from_policy_version", "from_proven_at", "from_witness", "parent_binding", "parent_graph_epoch"},
-		"Admission":         {"binding_admission", "admission_remembered_check", "admission_remembered_reason", "admission_age_seconds"},
+		"Admission":         {"binding_admission", "admission_remembered_check", "admission_remembered_reason", "admission_remembered_context_error", "admission_age_seconds"},
 		"Evaluation":        {"evaluation"},
 		"Frame":             {"frame_expression_kind", "frame_member_kind", "anchor_term_count", "anchor_term_matched_ids", "named_expected_kind"},
 		"ModelAnchorKind":   {"model_anchor_kind"},

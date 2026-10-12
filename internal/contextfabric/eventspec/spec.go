@@ -2039,6 +2039,7 @@ var SynthesisInput = Event{
 		{Key: "draw_outcomes", Type: FieldString, Presence: PresenceRequired},
 		{Key: "draw_claims", Type: FieldString, Presence: PresenceRequired},
 		{Key: "draw_output_digests", Type: FieldString, Presence: PresenceRequired},
+		{Key: "draw_rejected_reasons", Type: FieldString, Presence: PresenceRequired},
 		{Key: "claims", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "drivers", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "evidence_refs", Type: FieldInt, Presence: PresenceRequired},
@@ -3344,6 +3345,9 @@ var AnchorBindingTransition = Event{
 		{Key: "binding_admission", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("binding_admission")},
 		{Key: "admission_remembered_check", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("admission_remembered_check")},
 		{Key: "admission_remembered_reason", Type: FieldString, Presence: PresenceRequired},
+		// The turn's context error when the re-read was cancelled before or
+		// during the verifier, empty otherwise.
+		{Key: "admission_remembered_context_error", Type: FieldString, Presence: PresenceRequired},
 		{Key: "admission_age_seconds", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "from_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("from_state")},
 		// Open: subject-kind tokens drawn from contextfabric.SubjectKind and

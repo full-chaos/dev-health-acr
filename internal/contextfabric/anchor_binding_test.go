@@ -250,7 +250,7 @@ func TestBindAnchorTransitionTable(t *testing.T) {
 			// witness of every identity the turn proved, in proof order.
 			if tc.want.OriginResultID == in.ResultID && tc.want.State != AnchorBindingUnbound {
 				tc.want.PolicyVersion = AnchorBindingPolicyVersion
-				if witness := refIDs(append(append([]anchorRef{}, proposal.Proven...), proposal.Contradicting...)); len(witness) > 0 {
+				if witness := refIDs(proposal.Stream); len(witness) > 0 {
 					tc.want.Witness = witness
 				}
 			}

@@ -164,73 +164,74 @@ func (f OAuthStepFields) SlogArgs() []any {
 // AnchorBindingTransitionFields is contextfabric.anchor_binding_transition's generated typed construction interface
 // (CHAOS-5516): one Go field per Field AnchorBindingTransition.Fields declares in spec.go.
 type AnchorBindingTransitionFields struct {
-	OrgID                     string
-	ResultID                  string
-	ParentResultID            string
-	Site                      string
-	Evaluation                string
-	ParentBinding             string
-	BindingAdmission          string
-	AdmissionRememberedCheck  string
-	AdmissionRememberedReason string
-	AdmissionAgeSeconds       int
-	FromState                 string
-	FromKind                  string
-	FromID                    string
-	FromProof                 string
-	FromReason                string
-	FromOriginResultID        string
-	FromGraphEpoch            int
-	FromContenderKind         string
-	FromContenderID           string
-	FromProvenFreshnessEpoch  int
-	FromProvenFreshnessDigest string
-	FromPolicyVersion         string
-	FromProvenAt              string
-	FromWitness               []string
-	ParentGraphEpoch          int
-	GraphEpoch                int
-	FrameExpressionKind       string
-	FrameMemberKind           string
-	AnchorTermCount           int
-	AnchorTermMatchedIDs      []string
-	CommittedSubjects         []string
-	ModelAnchorKind           string
-	NamedExpectedKind         string
-	ReceiptAnchorKind         string
-	ReceiptAnchorID           string
-	CallerHintIDs             []string
-	ProvenAnchorIDs           []string
-	EffectiveKind             string
-	FreshnessAcquisition      string
-	BoundAnchorKind           string
-	FreshnessServingEpoch     int
-	FreshnessOwnershipDigest  string
-	ToState                   string
-	ToKind                    string
-	ToID                      string
-	Proof                     string
-	Reason                    string
-	OriginResultID            string
-	ToGraphEpoch              int
-	ContenderKind             string
-	ContenderID               string
-	ToProvenFreshnessEpoch    int
-	ToProvenFreshnessDigest   string
-	PolicyVersion             string
-	ToProvenAt                string
-	Witness                   []string
-	OwnershipMovement         string
-	Persisted                 string
-	ShadowAgreement           string
-	DisagreementField         string
-	ServedAnchorKind          string
-	ServedAnchorID            string
-	ServedCountDecision       string
-	ServedCountKind           string
-	ServedCountID             string
-	SubstitutionGuard         string
-	RequestID                 string
+	OrgID                           string
+	ResultID                        string
+	ParentResultID                  string
+	Site                            string
+	Evaluation                      string
+	ParentBinding                   string
+	BindingAdmission                string
+	AdmissionRememberedCheck        string
+	AdmissionRememberedReason       string
+	AdmissionRememberedContextError string
+	AdmissionAgeSeconds             int
+	FromState                       string
+	FromKind                        string
+	FromID                          string
+	FromProof                       string
+	FromReason                      string
+	FromOriginResultID              string
+	FromGraphEpoch                  int
+	FromContenderKind               string
+	FromContenderID                 string
+	FromProvenFreshnessEpoch        int
+	FromProvenFreshnessDigest       string
+	FromPolicyVersion               string
+	FromProvenAt                    string
+	FromWitness                     []string
+	ParentGraphEpoch                int
+	GraphEpoch                      int
+	FrameExpressionKind             string
+	FrameMemberKind                 string
+	AnchorTermCount                 int
+	AnchorTermMatchedIDs            []string
+	CommittedSubjects               []string
+	ModelAnchorKind                 string
+	NamedExpectedKind               string
+	ReceiptAnchorKind               string
+	ReceiptAnchorID                 string
+	CallerHintIDs                   []string
+	ProvenAnchorIDs                 []string
+	EffectiveKind                   string
+	FreshnessAcquisition            string
+	BoundAnchorKind                 string
+	FreshnessServingEpoch           int
+	FreshnessOwnershipDigest        string
+	ToState                         string
+	ToKind                          string
+	ToID                            string
+	Proof                           string
+	Reason                          string
+	OriginResultID                  string
+	ToGraphEpoch                    int
+	ContenderKind                   string
+	ContenderID                     string
+	ToProvenFreshnessEpoch          int
+	ToProvenFreshnessDigest         string
+	PolicyVersion                   string
+	ToProvenAt                      string
+	Witness                         []string
+	OwnershipMovement               string
+	Persisted                       string
+	ShadowAgreement                 string
+	DisagreementField               string
+	ServedAnchorKind                string
+	ServedAnchorID                  string
+	ServedCountDecision             string
+	ServedCountKind                 string
+	ServedCountID                   string
+	SubstitutionGuard               string
+	RequestID                       string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every AnchorBindingTransitionFields uniformly, set ONLY by NewAnchorBindingTransitionFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -244,7 +245,7 @@ type AnchorBindingTransitionFields struct {
 
 // NewAnchorBindingTransitionFields is the generated constructor for AnchorBindingTransitionFields -- every
 // field AnchorBindingTransition.Fields declares is a required parameter.
-func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResultID string, site string, evaluation string, parentBinding string, bindingAdmission string, admissionRememberedCheck string, admissionRememberedReason string, admissionAgeSeconds int, fromState string, fromKind string, fromID string, fromProof string, fromReason string, fromOriginResultID string, fromGraphEpoch int, fromContenderKind string, fromContenderID string, fromProvenFreshnessEpoch int, fromProvenFreshnessDigest string, fromPolicyVersion string, fromProvenAt string, fromWitness []string, parentGraphEpoch int, graphEpoch int, frameExpressionKind string, frameMemberKind string, anchorTermCount int, anchorTermMatchedIDs []string, committedSubjects []string, modelAnchorKind string, namedExpectedKind string, receiptAnchorKind string, receiptAnchorID string, callerHintIDs []string, provenAnchorIDs []string, effectiveKind string, freshnessAcquisition string, boundAnchorKind string, freshnessServingEpoch int, freshnessOwnershipDigest string, toState string, toKind string, toID string, proof string, reason string, originResultID string, toGraphEpoch int, contenderKind string, contenderID string, toProvenFreshnessEpoch int, toProvenFreshnessDigest string, policyVersion string, toProvenAt string, witness []string, ownershipMovement string, persisted string, shadowAgreement string, disagreementField string, servedAnchorKind string, servedAnchorID string, servedCountDecision string, servedCountKind string, servedCountID string, substitutionGuard string, requestID string) AnchorBindingTransitionFields {
+func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResultID string, site string, evaluation string, parentBinding string, bindingAdmission string, admissionRememberedCheck string, admissionRememberedReason string, admissionRememberedContextError string, admissionAgeSeconds int, fromState string, fromKind string, fromID string, fromProof string, fromReason string, fromOriginResultID string, fromGraphEpoch int, fromContenderKind string, fromContenderID string, fromProvenFreshnessEpoch int, fromProvenFreshnessDigest string, fromPolicyVersion string, fromProvenAt string, fromWitness []string, parentGraphEpoch int, graphEpoch int, frameExpressionKind string, frameMemberKind string, anchorTermCount int, anchorTermMatchedIDs []string, committedSubjects []string, modelAnchorKind string, namedExpectedKind string, receiptAnchorKind string, receiptAnchorID string, callerHintIDs []string, provenAnchorIDs []string, effectiveKind string, freshnessAcquisition string, boundAnchorKind string, freshnessServingEpoch int, freshnessOwnershipDigest string, toState string, toKind string, toID string, proof string, reason string, originResultID string, toGraphEpoch int, contenderKind string, contenderID string, toProvenFreshnessEpoch int, toProvenFreshnessDigest string, policyVersion string, toProvenAt string, witness []string, ownershipMovement string, persisted string, shadowAgreement string, disagreementField string, servedAnchorKind string, servedAnchorID string, servedCountDecision string, servedCountKind string, servedCountID string, substitutionGuard string, requestID string) AnchorBindingTransitionFields {
 	valid := true
 	if fromWitness == nil {
 		valid = false
@@ -265,74 +266,75 @@ func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResul
 		valid = false
 	}
 	return AnchorBindingTransitionFields{
-		OrgID:                     orgID,
-		ResultID:                  resultID,
-		ParentResultID:            parentResultID,
-		Site:                      site,
-		Evaluation:                evaluation,
-		ParentBinding:             parentBinding,
-		BindingAdmission:          bindingAdmission,
-		AdmissionRememberedCheck:  admissionRememberedCheck,
-		AdmissionRememberedReason: admissionRememberedReason,
-		AdmissionAgeSeconds:       admissionAgeSeconds,
-		FromState:                 fromState,
-		FromKind:                  fromKind,
-		FromID:                    fromID,
-		FromProof:                 fromProof,
-		FromReason:                fromReason,
-		FromOriginResultID:        fromOriginResultID,
-		FromGraphEpoch:            fromGraphEpoch,
-		FromContenderKind:         fromContenderKind,
-		FromContenderID:           fromContenderID,
-		FromProvenFreshnessEpoch:  fromProvenFreshnessEpoch,
-		FromProvenFreshnessDigest: fromProvenFreshnessDigest,
-		FromPolicyVersion:         fromPolicyVersion,
-		FromProvenAt:              fromProvenAt,
-		FromWitness:               fromWitness,
-		ParentGraphEpoch:          parentGraphEpoch,
-		GraphEpoch:                graphEpoch,
-		FrameExpressionKind:       frameExpressionKind,
-		FrameMemberKind:           frameMemberKind,
-		AnchorTermCount:           anchorTermCount,
-		AnchorTermMatchedIDs:      anchorTermMatchedIDs,
-		CommittedSubjects:         committedSubjects,
-		ModelAnchorKind:           modelAnchorKind,
-		NamedExpectedKind:         namedExpectedKind,
-		ReceiptAnchorKind:         receiptAnchorKind,
-		ReceiptAnchorID:           receiptAnchorID,
-		CallerHintIDs:             callerHintIDs,
-		ProvenAnchorIDs:           provenAnchorIDs,
-		EffectiveKind:             effectiveKind,
-		FreshnessAcquisition:      freshnessAcquisition,
-		BoundAnchorKind:           boundAnchorKind,
-		FreshnessServingEpoch:     freshnessServingEpoch,
-		FreshnessOwnershipDigest:  freshnessOwnershipDigest,
-		ToState:                   toState,
-		ToKind:                    toKind,
-		ToID:                      toID,
-		Proof:                     proof,
-		Reason:                    reason,
-		OriginResultID:            originResultID,
-		ToGraphEpoch:              toGraphEpoch,
-		ContenderKind:             contenderKind,
-		ContenderID:               contenderID,
-		ToProvenFreshnessEpoch:    toProvenFreshnessEpoch,
-		ToProvenFreshnessDigest:   toProvenFreshnessDigest,
-		PolicyVersion:             policyVersion,
-		ToProvenAt:                toProvenAt,
-		Witness:                   witness,
-		OwnershipMovement:         ownershipMovement,
-		Persisted:                 persisted,
-		ShadowAgreement:           shadowAgreement,
-		DisagreementField:         disagreementField,
-		ServedAnchorKind:          servedAnchorKind,
-		ServedAnchorID:            servedAnchorID,
-		ServedCountDecision:       servedCountDecision,
-		ServedCountKind:           servedCountKind,
-		ServedCountID:             servedCountID,
-		SubstitutionGuard:         substitutionGuard,
-		RequestID:                 requestID,
-		constructed:               valid,
+		OrgID:                           orgID,
+		ResultID:                        resultID,
+		ParentResultID:                  parentResultID,
+		Site:                            site,
+		Evaluation:                      evaluation,
+		ParentBinding:                   parentBinding,
+		BindingAdmission:                bindingAdmission,
+		AdmissionRememberedCheck:        admissionRememberedCheck,
+		AdmissionRememberedReason:       admissionRememberedReason,
+		AdmissionRememberedContextError: admissionRememberedContextError,
+		AdmissionAgeSeconds:             admissionAgeSeconds,
+		FromState:                       fromState,
+		FromKind:                        fromKind,
+		FromID:                          fromID,
+		FromProof:                       fromProof,
+		FromReason:                      fromReason,
+		FromOriginResultID:              fromOriginResultID,
+		FromGraphEpoch:                  fromGraphEpoch,
+		FromContenderKind:               fromContenderKind,
+		FromContenderID:                 fromContenderID,
+		FromProvenFreshnessEpoch:        fromProvenFreshnessEpoch,
+		FromProvenFreshnessDigest:       fromProvenFreshnessDigest,
+		FromPolicyVersion:               fromPolicyVersion,
+		FromProvenAt:                    fromProvenAt,
+		FromWitness:                     fromWitness,
+		ParentGraphEpoch:                parentGraphEpoch,
+		GraphEpoch:                      graphEpoch,
+		FrameExpressionKind:             frameExpressionKind,
+		FrameMemberKind:                 frameMemberKind,
+		AnchorTermCount:                 anchorTermCount,
+		AnchorTermMatchedIDs:            anchorTermMatchedIDs,
+		CommittedSubjects:               committedSubjects,
+		ModelAnchorKind:                 modelAnchorKind,
+		NamedExpectedKind:               namedExpectedKind,
+		ReceiptAnchorKind:               receiptAnchorKind,
+		ReceiptAnchorID:                 receiptAnchorID,
+		CallerHintIDs:                   callerHintIDs,
+		ProvenAnchorIDs:                 provenAnchorIDs,
+		EffectiveKind:                   effectiveKind,
+		FreshnessAcquisition:            freshnessAcquisition,
+		BoundAnchorKind:                 boundAnchorKind,
+		FreshnessServingEpoch:           freshnessServingEpoch,
+		FreshnessOwnershipDigest:        freshnessOwnershipDigest,
+		ToState:                         toState,
+		ToKind:                          toKind,
+		ToID:                            toID,
+		Proof:                           proof,
+		Reason:                          reason,
+		OriginResultID:                  originResultID,
+		ToGraphEpoch:                    toGraphEpoch,
+		ContenderKind:                   contenderKind,
+		ContenderID:                     contenderID,
+		ToProvenFreshnessEpoch:          toProvenFreshnessEpoch,
+		ToProvenFreshnessDigest:         toProvenFreshnessDigest,
+		PolicyVersion:                   policyVersion,
+		ToProvenAt:                      toProvenAt,
+		Witness:                         witness,
+		OwnershipMovement:               ownershipMovement,
+		Persisted:                       persisted,
+		ShadowAgreement:                 shadowAgreement,
+		DisagreementField:               disagreementField,
+		ServedAnchorKind:                servedAnchorKind,
+		ServedAnchorID:                  servedAnchorID,
+		ServedCountDecision:             servedCountDecision,
+		ServedCountKind:                 servedCountKind,
+		ServedCountID:                   servedCountID,
+		SubstitutionGuard:               substitutionGuard,
+		RequestID:                       requestID,
+		constructed:                     valid,
 	}
 }
 
@@ -358,6 +360,7 @@ func (f AnchorBindingTransitionFields) SlogArgs() []any {
 		"binding_admission", contextfabric.SanitizeLogAttr(f.BindingAdmission),
 		"admission_remembered_check", contextfabric.SanitizeLogAttr(f.AdmissionRememberedCheck),
 		"admission_remembered_reason", contextfabric.SanitizeLogAttr(f.AdmissionRememberedReason),
+		"admission_remembered_context_error", contextfabric.SanitizeLogAttr(f.AdmissionRememberedContextError),
 		"admission_age_seconds", f.AdmissionAgeSeconds,
 		"from_state", contextfabric.SanitizeLogAttr(f.FromState),
 		"from_kind", contextfabric.SanitizeLogAttr(f.FromKind),
@@ -2876,6 +2879,7 @@ type SynthesisInputFields struct {
 	DrawOutcomes             string
 	DrawClaims               string
 	DrawOutputDigests        string
+	DrawRejectedReasons      string
 	Claims                   int
 	Drivers                  int
 	EvidenceRefs             int
@@ -2894,7 +2898,7 @@ type SynthesisInputFields struct {
 
 // NewSynthesisInputFields is the generated constructor for SynthesisInputFields -- every
 // field SynthesisInput.Fields declares is a required parameter.
-func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion string, promptVersion string, inputDigest string, inputBytes int, facts int, factEvidenceRefs int, factEvidenceRefsDistinct int, paths int, driverCandidates int, cohortMembers int, labelCanonicalization string, labelKeysCollapsed int, labelKeysResidual int, outcome string, drawsTotal int, drawOutcomes string, drawClaims string, drawOutputDigests string, claims int, drivers int, evidenceRefs int, zeroClaimRedraw string, requestID string) SynthesisInputFields {
+func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion string, promptVersion string, inputDigest string, inputBytes int, facts int, factEvidenceRefs int, factEvidenceRefsDistinct int, paths int, driverCandidates int, cohortMembers int, labelCanonicalization string, labelKeysCollapsed int, labelKeysResidual int, outcome string, drawsTotal int, drawOutcomes string, drawClaims string, drawOutputDigests string, drawRejectedReasons string, claims int, drivers int, evidenceRefs int, zeroClaimRedraw string, requestID string) SynthesisInputFields {
 	return SynthesisInputFields{
 		OrgIDHash:                orgIDHash,
 		ModelID:                  modelID,
@@ -2916,6 +2920,7 @@ func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion stri
 		DrawOutcomes:             drawOutcomes,
 		DrawClaims:               drawClaims,
 		DrawOutputDigests:        drawOutputDigests,
+		DrawRejectedReasons:      drawRejectedReasons,
 		Claims:                   claims,
 		Drivers:                  drivers,
 		EvidenceRefs:             evidenceRefs,
@@ -2958,6 +2963,7 @@ func (f SynthesisInputFields) SlogArgs() []any {
 		"draw_outcomes", contextfabric.SanitizeLogAttr(f.DrawOutcomes),
 		"draw_claims", contextfabric.SanitizeLogAttr(f.DrawClaims),
 		"draw_output_digests", contextfabric.SanitizeLogAttr(f.DrawOutputDigests),
+		"draw_rejected_reasons", contextfabric.SanitizeLogAttr(f.DrawRejectedReasons),
 		"claims", f.Claims,
 		"drivers", f.Drivers,
 		"evidence_refs", f.EvidenceRefs,

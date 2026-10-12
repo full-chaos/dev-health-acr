@@ -211,12 +211,13 @@ func validateAnchorBindingMaxAge(age time.Duration) error {
 }
 
 // anchorBindingWitness is the bounded record of every identity the proving
-// turn proved, in proof order, "<kind>:<canonical id>".
+// turn proved, in the order it proved them whatever their kinds,
+// "<kind>:<canonical id>".
 func anchorBindingWitness(proposal anchorBindingProposal) []string {
 	// nil when the turn proved nothing, so a binding encodes and decodes to
 	// the same value.
 	var out []string
-	for _, ref := range append(append([]anchorRef{}, proposal.Proven...), proposal.Contradicting...) {
+	for _, ref := range proposal.Stream {
 		if len(out) == AnchorBindingWitnessMax {
 			break
 		}

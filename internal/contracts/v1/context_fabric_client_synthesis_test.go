@@ -18,7 +18,7 @@ func synthesisInputFixture() ContextFabricSynthesisInput {
 	sum := sha256.Sum256(input)
 	return ContextFabricSynthesisInput{
 		Contract: ContextFabricSynthesisContract{
-			ModelOutputVersion: "context-fabric-model-output.v8",
+			ModelOutputVersion: "context-fabric-model-output.v9",
 			PromptVersion:      "context-fabric-synthesis.v3",
 			SystemSHA256:       strings.Repeat("b", 64),
 		},
