@@ -980,7 +980,9 @@ import (
 // v194 -> v195: pull requests and blockers also serve a project subject (a
 // rollup over the project's issues and their linked pull requests), and an
 // investigation of a project keeps that rollup beside the expanded per-item
-// facts. A stored answer about a project can differ.
+// facts. A repository-restricted caller's investigation also labels the
+// aggregate scope of a team or project fact whose capability declares no
+// subject reference. A stored answer can differ.
 const QueryVersion = "devhealthfacts.clickhouse.v195"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
