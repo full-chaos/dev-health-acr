@@ -74,9 +74,9 @@ func keptInputRefs(graph GraphContext, facts []CanonicalFact) map[string]bool {
 }
 
 // graphWithoutRemovedMembers is the graph input of a narrowed pass, whose
-// cohort is already the narrowed one: every relationship path and driver
-// candidate that names a removed member is dropped, and a kept driver's
-// citation of a dropped path is removed. Synthesis derives the answer's paths,
+// cohort is already the narrowed one: every relationship path that names a
+// removed member is dropped, and every driver candidate that affects a removed
+// member or cites a dropped path. Synthesis derives the answer's paths,
 // drivers and evidence from this input, so what it does not carry the answer
 // cannot name. A graph evidence ref is removed only when a dropped member,
 // path or driver carried it and no holder left in the narrowed input
@@ -111,14 +111,17 @@ func graphWithoutRemovedMembers(graph GraphContext, removed []CohortMember, fact
 		}
 	}
 
+	// A driver candidate is a judgment about the paths it cites: graphrank's
+	// edge admission builds one per admitted edge, affecting the edge's From
+	// and naming its To in the title and summary. One that affects a removed
+	// member, or cites a dropped path, describes a member the pass no longer
+	// serves.
 	drivers := make([]DriverJudgment, 0, len(graph.DriverCandidates))
 	for _, driver := range graph.DriverCandidates {
-		if slices.ContainsFunc(driver.AffectedSubjects, func(subject SubjectRef) bool { return gone[SubjectMapKey(subject)] }) {
+		if slices.ContainsFunc(driver.AffectedSubjects, func(subject SubjectRef) bool { return gone[SubjectMapKey(subject)] }) ||
+			slices.ContainsFunc(driver.PathIDs, func(id string) bool { return droppedPaths[id] }) {
 			mark(driver.EvidenceRefIDs)
 			continue
-		}
-		if slices.ContainsFunc(driver.PathIDs, func(id string) bool { return droppedPaths[id] }) {
-			driver.PathIDs = slices.DeleteFunc(slices.Clone(driver.PathIDs), func(id string) bool { return droppedPaths[id] })
 		}
 		drivers = append(drivers, driver)
 	}

@@ -12,43 +12,49 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-func narrowedGraphPath(id string, nodes []SubjectRef, edgeTo SubjectRef, ref string) RelationshipPath {
-	return RelationshipPath{
-		PathID: id, Nodes: nodes, WhyRelevant: "fixture", EvidenceRefIDs: []string{ref},
-		Edges: []RelationshipEdge{{Type: contractsv1.ContextFabricRelationshipRelatedTo, From: nodes[0], To: edgeTo, EvidenceRefIDs: []string{ref}}},
-	}
-}
-
 // A narrowed pass's graph input carries nothing that names a removed member:
-// a path with the member as a node or an edge end, and a driver candidate that
-// affects it, are dropped; a kept driver loses its citation of a dropped
-// path. An evidence ref a dropped member, path or driver carried is removed
-// unless a holder left in the narrowed input carries it: a kept member, kept
-// path, kept driver, retained fact or resolution candidate. A ref nothing
-// dropped carried stays.
+// a path with the member as a node or as either edge end is dropped, and so is
+// a driver candidate that affects the member or cites a dropped path (the
+// shape graphrank's edge admission builds: the edge's From affected, its To
+// named in the title). An evidence ref a dropped member, path, edge or driver
+// carried is removed unless a holder left in the narrowed input carries it: a
+// kept member, kept path, kept driver, retained fact or resolution candidate.
+// A ref nothing dropped carried stays.
 func TestTheNarrowedGraphInputDropsWhatNamesARemovedMember(t *testing.T) {
 	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "team_a", Label: "A"}
 	keptSubject := SubjectRef{Kind: SubjectProject, CanonicalID: "project_kept", Label: "kept"}
 	goneSubject := SubjectRef{Kind: SubjectProject, CanonicalID: "project_gone", Label: "gone"}
+	blocker := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_item_1", Label: "PLAT-1"}
 	kept := []CohortMember{{Subject: keptSubject, EvidenceRefIDs: []string{"ref_kept_member", "ref_shared"}}}
 	removed := []CohortMember{{Subject: goneSubject, EvidenceRefIDs: []string{"ref_gone_member", "ref_shared", "ref_fact"}}}
+	path := func(id string, nodes []SubjectRef, from, to SubjectRef, pathRef, edgeRef string) RelationshipPath {
+		return RelationshipPath{
+			PathID: id, Nodes: nodes, WhyRelevant: "fixture", EvidenceRefIDs: []string{pathRef},
+			Edges: []RelationshipEdge{{Type: contractsv1.ContextFabricRelationshipRelatedTo, From: from, To: to, EvidenceRefIDs: []string{edgeRef}}},
+		}
+	}
 	graph := GraphContext{
 		Resolution: SubjectResolution{Candidates: []SubjectCandidate{{Subject: team, EvidenceRefIDs: []string{"ref_candidate"}}}},
 		Cohort:     &Cohort{Kind: SubjectProject, Members: kept},
 		Paths: []RelationshipPath{
-			narrowedGraphPath("path_kept_one", []SubjectRef{team, keptSubject}, keptSubject, "ref_path_kept"),
-			narrowedGraphPath("path_gone_node", []SubjectRef{team, goneSubject}, goneSubject, "ref_path_gone"),
-			narrowedGraphPath("path_gone_edge", []SubjectRef{team, keptSubject}, goneSubject, "ref_path_edge"),
-			narrowedGraphPath("path_gone_candidate", []SubjectRef{team, goneSubject}, goneSubject, "ref_candidate"),
+			path("path_kept_one", []SubjectRef{team, keptSubject}, team, keptSubject, "ref_path_kept", "ref_edge_kept"),
+			path("path_gone_node_only", []SubjectRef{team, goneSubject}, team, keptSubject, "ref_path_node", "ref_edge_node"),
+			path("path_gone_edge_to", []SubjectRef{team, keptSubject}, team, goneSubject, "ref_path_to", "ref_edge_to"),
+			path("path_gone_edge_from", []SubjectRef{team, keptSubject}, goneSubject, keptSubject, "ref_path_from", "ref_edge_from"),
+			path("path_blocks_gone", []SubjectRef{blocker, goneSubject}, blocker, goneSubject, "ref_candidate", "ref_edge_blocks"),
 		},
 		DriverCandidates: []DriverJudgment{
-			{DriverID: "driver_gone", AffectedSubjects: []SubjectRef{goneSubject}, EvidenceRefIDs: []string{"ref_driver_gone"}},
-			{DriverID: "driver_kept", AffectedSubjects: []SubjectRef{keptSubject}, PathIDs: []string{"path_kept_one", "path_gone_node"}, EvidenceRefIDs: []string{"ref_driver_kept"}},
+			{DriverID: "driver_affects_gone", AffectedSubjects: []SubjectRef{goneSubject}, EvidenceRefIDs: []string{"ref_driver_gone"}},
+			{DriverID: "driver_blocks_gone", Title: "Blocks: gone", Summary: "PLAT-1 blocks gone.", AffectedSubjects: []SubjectRef{blocker}, PathIDs: []string{"path_blocks_gone"}, EvidenceRefIDs: []string{"ref_driver_blocks"}},
+			{DriverID: "driver_kept", AffectedSubjects: []SubjectRef{keptSubject}, PathIDs: []string{"path_kept_one"}, EvidenceRefIDs: []string{"ref_driver_kept"}},
 		},
-		EvidenceRefIDs: []string{"ref_kept_member", "ref_shared", "ref_gone_member", "ref_fact", "ref_path_kept", "ref_path_gone", "ref_path_edge", "ref_candidate", "ref_driver_gone", "ref_driver_kept", "ref_unrelated"},
+		EvidenceRefIDs: []string{
+			"ref_kept_member", "ref_shared", "ref_gone_member", "ref_fact", "ref_path_kept", "ref_edge_kept",
+			"ref_path_node", "ref_edge_node", "ref_path_to", "ref_edge_to", "ref_path_from", "ref_edge_from",
+			"ref_candidate", "ref_edge_blocks", "ref_driver_gone", "ref_driver_blocks", "ref_driver_kept", "ref_unrelated",
+		},
 	}
 	facts := []CanonicalFact{{Subject: team, EvidenceRefIDs: []string{"ref_fact"}}}
-	original := slices.Clone(graph.DriverCandidates[1].PathIDs)
 
 	got := graphWithoutRemovedMembers(graph, removed, facts)
 
@@ -57,19 +63,23 @@ func TestTheNarrowedGraphInputDropsWhatNamesARemovedMember(t *testing.T) {
 		paths = append(paths, path.PathID)
 	}
 	if !slices.Equal(paths, []string{"path_kept_one"}) {
-		t.Errorf("paths = %v, want only the path that names no removed member", paths)
+		t.Errorf("paths = %v, want only the path that names no removed member (node, edge to, edge from)", paths)
 	}
-	if len(got.DriverCandidates) != 1 || got.DriverCandidates[0].DriverID != "driver_kept" || !slices.Equal(got.DriverCandidates[0].PathIDs, []string{"path_kept_one"}) {
-		t.Errorf("drivers = %+v, want driver_kept citing path_kept_one only", got.DriverCandidates)
+	drivers := []string{}
+	for _, driver := range got.DriverCandidates {
+		drivers = append(drivers, driver.DriverID)
 	}
-	wantRefs := []string{"ref_kept_member", "ref_shared", "ref_fact", "ref_path_kept", "ref_candidate", "ref_driver_kept", "ref_unrelated"}
+	if !slices.Equal(drivers, []string{"driver_kept"}) {
+		t.Errorf("drivers = %v, want driver_kept only: a driver affecting the removed member or citing a dropped path goes", drivers)
+	}
+	wantRefs := []string{"ref_kept_member", "ref_shared", "ref_fact", "ref_path_kept", "ref_edge_kept", "ref_candidate", "ref_driver_kept", "ref_unrelated"}
 	if !slices.Equal(got.EvidenceRefIDs, wantRefs) {
 		t.Errorf("refs = %v, want %v", got.EvidenceRefIDs, wantRefs)
 	}
-	if !slices.Equal(graph.DriverCandidates[1].PathIDs, original) || len(graph.Paths) != 4 || len(graph.EvidenceRefIDs) != 11 {
+	if len(graph.Paths) != 5 || len(graph.DriverCandidates) != 3 || len(graph.EvidenceRefIDs) != 18 {
 		t.Errorf("the caller's graph was changed: %+v", graph)
 	}
-	if same := graphWithoutRemovedMembers(graph, nil, facts); len(same.Paths) != 4 || len(same.DriverCandidates) != 2 || len(same.EvidenceRefIDs) != 11 {
+	if same := graphWithoutRemovedMembers(graph, nil, facts); len(same.Paths) != 5 || len(same.DriverCandidates) != 3 || len(same.EvidenceRefIDs) != 18 {
 		t.Errorf("nothing removed changed the graph: %+v", same)
 	}
 }

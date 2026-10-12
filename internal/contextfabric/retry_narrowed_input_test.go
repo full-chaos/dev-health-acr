@@ -51,6 +51,26 @@ func (g retryCensusGraph) DiscoverContext(ctx context.Context, principal storage
 			refs = append(refs, ref)
 		}
 		refs = append(refs, member.EvidenceRefIDs...)
+		blocker := SubjectRef{Kind: SubjectWorkItem, CanonicalID: fmt.Sprintf("work_item.v2:00000000-0000-0000-0000-000000000000:PLAT-%04d", index), Label: fmt.Sprintf("PLAT-%04d", index)}
+		blockRef := fmt.Sprintf("ref_blocks_%02d", index)
+		blockPath := fmt.Sprintf("path_blocks_%02d", index)
+		graph.Paths = append(graph.Paths, RelationshipPath{
+			PathID: blockPath, Nodes: []SubjectRef{blocker, member.Subject},
+			Edges: []RelationshipEdge{{
+				Type: contractsv1.ContextFabricRelationshipBlocks, From: blocker, To: member.Subject,
+				Derivation: DerivationGraphAssociated, EpistemicStatus: EpistemicInferred, EvidenceRefIDs: []string{blockRef},
+			}},
+			WhyRelevant: blocker.Label + " blocks " + member.Subject.Label + ".", EvidenceRefIDs: []string{blockRef},
+		})
+		// As graphrank's edge admission builds a driver: the edge's From is the
+		// affected subject, its To is named in the title and the summary.
+		graph.DriverCandidates = append(graph.DriverCandidates, DriverJudgment{
+			DriverID: fmt.Sprintf("driver_blocks_%02d", index), Standing: DriverPrincipal, Category: "relationship",
+			Title: "Blocks: " + member.Subject.Label, Summary: blocker.Label + " blocks " + member.Subject.Label + ".",
+			AffectedSubjects: []SubjectRef{blocker}, PathIDs: []string{blockPath}, EvidenceRefIDs: []string{blockRef},
+			Derivation: DerivationGraphAssociated, EpistemicStatus: EpistemicInferred, Confidence: 0.55, Current: true,
+		})
+		refs = append(refs, blockRef)
 	}
 	graph.EvidenceRefIDs = refs
 	declared, served := retryCensusDeclared, len(graph.Cohort.Members)
@@ -162,6 +182,29 @@ func TestTheCohortRetryServesNoFieldNamingTheMembersItLeftOut(t *testing.T) {
 				failures = append(failures, fmt.Sprintf("path %s names %s, a member the retry left out", path.PathID, node.CanonicalID))
 			}
 		}
+	}
+	retryPaths := map[string]bool{}
+	for _, path := range inputs[1].Graph.Paths {
+		retryPaths[path.PathID] = true
+	}
+	for _, driver := range inputs[1].Graph.DriverCandidates {
+		text := driver.Title + " " + driver.Summary
+		for _, subject := range driver.AffectedSubjects {
+			text += " " + subject.CanonicalID
+		}
+		for _, id := range left {
+			if strings.Contains(text, id) {
+				failures = append(failures, fmt.Sprintf("driver candidate %s names %s, a member the retry left out: %q", driver.DriverID, id, driver.Title))
+			}
+		}
+		for _, pathID := range driver.PathIDs {
+			if !retryPaths[pathID] {
+				failures = append(failures, fmt.Sprintf("driver candidate %s cites %s, a path the retry input does not carry", driver.DriverID, pathID))
+			}
+		}
+	}
+	if len(inputs[1].Graph.DriverCandidates) != len(served) {
+		failures = append(failures, fmt.Sprintf("retry driver candidates = %d, want one per kept member (%d)", len(inputs[1].Graph.DriverCandidates), len(served)))
 	}
 	want := KindCensusTruncatedReason(SubjectProject, retryCensusDeclared, len(served))
 	census := 0
