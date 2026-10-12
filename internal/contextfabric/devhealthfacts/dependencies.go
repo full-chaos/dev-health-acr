@@ -459,12 +459,8 @@ ORDER BY rid`, settings)
 		// team's owned repositories (one row per team and repository pair) and
 		// the items of its owned projects that reach a repository through a
 		// linked pull request row. One item in both arms is one blocked item.
-		pairs := make([]string, 0, len(repoKeys))
-		for _, teamID := range teamIDs {
-			for _, repo := range owned[teamID] {
-				pairs = append(pairs, teamID+blockerPairSeparator+repo.key)
-			}
-		}
+		// The read groups by team, so team ids go in chunks under the
+		// statement's result row cap; a team's rows live in one chunk only.
 		const projectArm = "arm = 'project'"
 		totalsStatement := readers.WithSettings(`SELECT team_id, toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)),
   toInt64(uniqExactIf(tgt, is_open AND `+projectArm+`)),
@@ -482,16 +478,26 @@ FROM (
 )
 GROUP BY team_id
 ORDER BY team_id`, settings)
-		extra := append([]readers.Binding{{Name: "team_repo_pairs", Value: pairs}, {Name: "team_ids", Value: teamIDs}}, authorizationBindings...)
-		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerTotals", totalsStatement, orgID, repoKeys, func(row readers.RowScanner) error {
-			var teamID string
-			var t blockerTeamTotals
-			if err := row.Scan(&teamID, &t.blockedItems, &t.blockerEdges, &t.excludedEdges, &t.projectBlockedItems, &t.projectWeakestRank); err != nil {
-				return err
+		if scanErr := forEachTeamIDChunk(teamIDs, func(teamChunk []string) error {
+			chunkOwned := make(map[string][]teamOwnedRepo, len(teamChunk))
+			var pairs []string
+			for _, teamID := range teamChunk {
+				chunkOwned[teamID] = owned[teamID]
+				for _, repo := range owned[teamID] {
+					pairs = append(pairs, teamID+blockerPairSeparator+repo.key)
+				}
 			}
-			totals[teamID] = t
-			return nil
-		}, extra...); scanErr != nil {
+			extra := append([]readers.Binding{{Name: "team_repo_pairs", Value: pairs}, {Name: "team_ids", Value: teamChunk}}, authorizationBindings...)
+			return readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerTotals", totalsStatement, orgID, repoKeysOf(chunkOwned), func(row readers.RowScanner) error {
+				var teamID string
+				var t blockerTeamTotals
+				if err := row.Scan(&teamID, &t.blockedItems, &t.blockerEdges, &t.excludedEdges, &t.projectBlockedItems, &t.projectWeakestRank); err != nil {
+					return err
+				}
+				totals[teamID] = t
+				return nil
+			}, extra...)
+		}); scanErr != nil {
 			return outcome, scanErr
 		}
 	}
