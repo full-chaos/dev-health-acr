@@ -106,7 +106,7 @@ func TestProjectStatusDriversStayUnderTheDefaultItemBudget(t *testing.T) {
 	project := acceptanceProject()
 	allocation := AllocateItems(AnswerPlan{Budget: AnswerPlanBudget{MaxItems: 30}}, 0, 0)
 	interpretation := InterpretedQuestion{FactRequirements: projectStatusRequirements}
-	drivers, claims, _ := projectStatusDrivers(interpretation, []SubjectRef{project}, projectStatusFacts(project), nil, 0, allocation)
+	drivers, claims, _ := projectStatusDrivers(interpretation, []SubjectRef{project}, projectStatusFacts(project), nil, nil, allocation)
 	if len(drivers)+len(claims) > allocation.NarrationGrant {
 		t.Errorf("items %d exceed narration grant %d", len(drivers)+len(claims), allocation.NarrationGrant)
 	}
@@ -114,7 +114,7 @@ func TestProjectStatusDriversStayUnderTheDefaultItemBudget(t *testing.T) {
 
 func TestTeamStatusQuestionServesNoProjectStatusDrivers(t *testing.T) {
 	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:CHAOS", Label: "Fullchaos"}
-	drivers, claims, _ := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{team}, projectStatusFacts(team), nil, 0, ItemAllocation{})
+	drivers, claims, _ := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{team}, projectStatusFacts(team), nil, nil, ItemAllocation{})
 	if len(drivers) != 0 || len(claims) != 0 {
 		t.Errorf("team drivers=%d claims=%d, want 0", len(drivers), len(claims))
 	}
@@ -122,7 +122,7 @@ func TestTeamStatusQuestionServesNoProjectStatusDrivers(t *testing.T) {
 
 func TestProjectStatusCandidatesKeepTheTrueCategoryAndEvidenceWithoutClaims(t *testing.T) {
 	project := acceptanceProject()
-	drivers, _, _ := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{project}, projectStatusFacts(project), nil, 0, ItemAllocation{})
+	drivers, _, _ := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{project}, projectStatusFacts(project), nil, nil, ItemAllocation{})
 	candidates := projectStatusDriverCandidates(drivers)
 	if len(candidates) != 3 {
 		t.Fatalf("candidates = %d, want 3", len(candidates))
@@ -164,5 +164,59 @@ func TestProjectStatusCandidatesNeverReachTheServedResult(t *testing.T) {
 				t.Errorf("served driver %q holds unresolved claim id %q", driver.DriverID, id)
 			}
 		}
+	}
+}
+
+func TestProjectStatusServerModeRecomposesCurrentStateFromTheMintedClaims(t *testing.T) {
+	rig := projectStatusRig(t, projectStatusRequirements, projectStatusFacts)
+	result, _, err := rig.investigate(serverRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(result.CurrentState, "No canonical facts were observed") || !strings.Contains(result.CurrentState, "backlog_size") {
+		t.Errorf("current_state = %q, want it to restate the minted claims", result.CurrentState)
+	}
+}
+
+func TestProjectStatusDecisionTelemetryNamesWhatWasOmitted(t *testing.T) {
+	rig := projectStatusRig(t, projectStatusRequirements, func(p SubjectRef) []CanonicalFact {
+		facts := projectStatusFacts(p)
+		facts[1].SourceState = SourceStale
+		return facts
+	})
+	if _, _, err := rig.investigate(serverRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if len(rig.telemetry.projectStatusDrivers) != 1 {
+		t.Fatalf("events = %#v, want exactly one", rig.telemetry.projectStatusDrivers)
+	}
+	event := rig.telemetry.projectStatusDrivers[0]
+	if event.Emitted != 2 || len(event.Missing) != 1 || event.Missing[0] != FactWorkload {
+		t.Errorf("event = %#v, want 2 emitted and workload missing", event)
+	}
+}
+
+func TestProjectStatusClaimIDCollisionSkipsTheDriverInsteadOfInvalidatingTheAnswer(t *testing.T) {
+	project := acceptanceProject()
+	interpretation := InterpretedQuestion{FactRequirements: projectStatusRequirements}
+	first, claims, _ := projectStatusDrivers(interpretation, []SubjectRef{project}, projectStatusFacts(project), nil, nil, ItemAllocation{})
+	if len(first) != 3 {
+		t.Fatalf("drivers = %d, want 3", len(first))
+	}
+	drivers, _, event := projectStatusDrivers(interpretation, []SubjectRef{project}, projectStatusFacts(project), nil, claims[:1], ItemAllocation{})
+	if len(drivers) != 2 || event.SkippedIDClash != 1 {
+		t.Errorf("drivers=%d clash=%d, want 2 and 1", len(drivers), event.SkippedIDClash)
+	}
+}
+
+func TestProjectStatusDriversAreBoundByTheNarrationGrant(t *testing.T) {
+	project := acceptanceProject()
+	allocation := AllocateItems(AnswerPlan{Budget: AnswerPlanBudget{MaxItems: 12}}, 0, 0)
+	if allocation.NarrationGrant != 4 {
+		t.Fatalf("narration grant = %d, want 4", allocation.NarrationGrant)
+	}
+	drivers, claims, event := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{project}, projectStatusFacts(project), nil, nil, allocation)
+	if len(drivers) != 2 || len(claims) != 2 || event.SkippedBudget != 1 {
+		t.Errorf("drivers=%d claims=%d skipped_budget=%d, want 2, 2 and 1", len(drivers), len(claims), event.SkippedBudget)
 	}
 }

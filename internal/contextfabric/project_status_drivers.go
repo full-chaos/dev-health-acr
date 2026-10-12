@@ -1,11 +1,13 @@
 package contextfabric
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 type projectStatusObservation struct {
@@ -53,9 +55,14 @@ var projectStatusObservations = []projectStatusObservation{
 }
 
 type ProjectStatusDriverEvent struct {
-	Emitted int
-	Skipped int
-	Missing []FactKind
+	Emitted        int
+	SkippedBudget  int
+	SkippedIDClash int
+	Missing        []FactKind
+}
+
+type projectStatusDriverRecorder interface {
+	RecordProjectStatusDrivers(ctx context.Context, principal storage.Principal, event ProjectStatusDriverEvent)
 }
 
 func projectStatusIntent(interpretation InterpretedQuestion) bool {
@@ -72,14 +79,14 @@ func projectStatusClaimID(subject SubjectRef, observation projectStatusObservati
 	return "claim_project_status_" + hex.EncodeToString(digest[:])[:32]
 }
 
-func projectStatusDrivers(interpretation InterpretedQuestion, committed []SubjectRef, facts []CanonicalFact, existingDrivers []DriverJudgment, existingClaims int, allocation ItemAllocation) ([]DriverJudgment, []ClaimedFact, ProjectStatusDriverEvent) {
-	var event ProjectStatusDriverEvent
+func projectStatusDrivers(interpretation InterpretedQuestion, committed []SubjectRef, facts []CanonicalFact, existingDrivers []DriverJudgment, existingClaims []ClaimedFact, allocation ItemAllocation) ([]DriverJudgment, []ClaimedFact, *ProjectStatusDriverEvent) {
 	if len(committed) != 1 || committed[0].Kind != SubjectProject || !projectStatusIntent(interpretation) {
-		return nil, nil, event
+		return nil, nil, nil
 	}
+	event := &ProjectStatusDriverEvent{}
 	project := committed[0]
 	allowed := contractsv1.ContextFabricDriversMaxCount - len(existingDrivers)
-	if claimRoom := contractsv1.ContextFabricClaimedFactsMaxCount - existingClaims; claimRoom < allowed {
+	if claimRoom := contractsv1.ContextFabricClaimedFactsMaxCount - len(existingClaims); claimRoom < allowed {
 		allowed = claimRoom
 	}
 	if allocation.InForce() {
@@ -90,6 +97,10 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 	taken := make(map[string]struct{}, len(existingDrivers))
 	for _, driver := range existingDrivers {
 		taken[driver.DriverID] = struct{}{}
+	}
+	takenClaims := make(map[string]struct{}, len(existingClaims))
+	for _, claim := range existingClaims {
+		takenClaims[claim.ClaimID] = struct{}{}
 	}
 	var drivers []DriverJudgment
 	var claims []ClaimedFact
@@ -114,16 +125,18 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 			continue
 		}
 		if len(drivers) >= allowed {
-			event.Skipped++
+			event.SkippedBudget++
 			continue
 		}
 		driverID := observation.id
-		if _, clash := taken[driverID]; clash {
-			event.Skipped++
+		claimID := projectStatusClaimID(project, observation)
+		_, driverClash := taken[driverID]
+		_, claimClash := takenClaims[claimID]
+		if driverClash || claimClash {
+			event.SkippedIDClash++
 			continue
 		}
 		taken[driverID] = struct{}{}
-		claimID := projectStatusClaimID(project, observation)
 		claims = append(claims, ClaimedFact{ClaimID: claimID, Kind: observation.kind, Subject: project, Field: observation.field, Value: convertFactValueScalar(claimValue)})
 		drivers = append(drivers, DriverJudgment{
 			DriverID: driverID, Standing: DriverPrincipal, Category: observation.category,
