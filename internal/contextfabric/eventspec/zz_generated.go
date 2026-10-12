@@ -2231,9 +2231,11 @@ func (f ProjectDeploymentWalkFields) SlogArgs() []any {
 type PullRequestStatusFilterFields struct {
 	OrgID      string
 	Outcome    string
+	MemberKind string
 	Status     string
 	Candidates int
 	Kept       int
+	OutsideSet int
 	Error      string
 	RequestID  string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
@@ -2249,13 +2251,15 @@ type PullRequestStatusFilterFields struct {
 
 // NewPullRequestStatusFilterFields is the generated constructor for PullRequestStatusFilterFields -- every
 // field PullRequestStatusFilter.Fields declares is a required parameter.
-func NewPullRequestStatusFilterFields(orgID string, outcome string, status string, candidates int, kept int, error string, requestID string) PullRequestStatusFilterFields {
+func NewPullRequestStatusFilterFields(orgID string, outcome string, memberKind string, status string, candidates int, kept int, outsideSet int, error string, requestID string) PullRequestStatusFilterFields {
 	return PullRequestStatusFilterFields{
 		OrgID:       orgID,
 		Outcome:     outcome,
+		MemberKind:  memberKind,
 		Status:      status,
 		Candidates:  candidates,
 		Kept:        kept,
+		OutsideSet:  outsideSet,
 		Error:       error,
 		RequestID:   requestID,
 		constructed: true,
@@ -2277,9 +2281,11 @@ func (f PullRequestStatusFilterFields) SlogArgs() []any {
 	return []any{
 		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"member_kind", contextfabric.SanitizeLogAttr(f.MemberKind),
 		"status", contextfabric.SanitizeLogAttr(f.Status),
 		"candidates", f.Candidates,
 		"kept", f.Kept,
+		"outside_set", f.OutsideSet,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}

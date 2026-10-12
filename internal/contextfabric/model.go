@@ -380,11 +380,16 @@ type GraphContext struct {
 	// SynthesisInput, and this value exists for a server step that runs
 	// after synthesis, never for the model.
 	CohortMemberSource CohortMemberSource `json:"-"`
-	Paths              []RelationshipPath `json:"paths"`
-	DriverCandidates   []DriverJudgment   `json:"driver_candidates"`
-	EvidenceRefIDs     []string           `json:"evidence_ref_ids"`
-	FactRequirements   []FactRequirement  `json:"fact_requirements"`
-	Coverage           Coverage           `json:"coverage"`
+	// MemberStatusOutsideSet is how many project or incident members the
+	// status filter could not match because their stored status is outside the
+	// kind's closed set. Engine bookkeeping, `json:"-"` like CohortPopulation:
+	// the model is not told a count the answer states in a limitation.
+	MemberStatusOutsideSet MemberStatusOutsideSet `json:"-"`
+	Paths                  []RelationshipPath     `json:"paths"`
+	DriverCandidates       []DriverJudgment       `json:"driver_candidates"`
+	EvidenceRefIDs         []string               `json:"evidence_ref_ids"`
+	FactRequirements       []FactRequirement      `json:"fact_requirements"`
+	Coverage               Coverage               `json:"coverage"`
 }
 
 type CanonicalFactRequest struct {

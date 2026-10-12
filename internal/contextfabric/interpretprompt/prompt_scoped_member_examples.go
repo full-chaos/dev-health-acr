@@ -46,9 +46,9 @@ var interpretationScopedMemberExamples = []scopedMemberExample{
 	},
 	{
 		Question:   "Show the Marram team's projects that are blocked.",
-		Expression: `{"kind":"children_of_scope","anchor_terms":["Marram"],"member_kind":"project","member_qualifier":"status","member_qualifier_value":"blocked"}`,
+		Expression: `{"kind":"children_of_scope","anchor_terms":["Marram"],"member_kind":"project","member_qualifier":"status"}`,
 		AnchorKind: "team",
-		Note:       "blocked is a state",
+		Note:       "blocked is a state no value of the six fits: member_qualifier_value is omitted",
 	},
 	{
 		Question:   "Which of the Marram team's projects are most at risk?",
@@ -79,14 +79,20 @@ var interpretationScopedMemberExamples = []scopedMemberExample{
 		AnchorKind: "project",
 	},
 	{
-		Question:   "Compare the open projects of the Marram team with the open projects of the Vesper team.",
-		Expression: `{"kind":"explicit_set","operands":[{"kind":"children_of_scope","anchor_terms":["Marram"],"member_kind":"project","member_qualifier":"status","member_qualifier_value":"open"},{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"project","member_qualifier":"status","member_qualifier_value":"open"}]}`,
+		Question:   "Compare the active projects of the Marram team with the active projects of the Vesper team.",
+		Expression: `{"kind":"explicit_set","operands":[{"kind":"children_of_scope","anchor_terms":["Marram"],"member_kind":"project","member_qualifier":"status","member_qualifier_value":"started"},{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"project","member_qualifier":"status","member_qualifier_value":"started"}]}`,
 		Note:       "one operand for each parent, never one children_of_scope with two anchor terms; no scope anchor",
 	},
 	{
-		Question:   "Which of the Vesper team's projects are open?",
-		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"project","member_qualifier":"status","member_qualifier_value":"open"}`,
+		Question:   "Which of the Vesper team's projects are active?",
+		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"project","member_qualifier":"status","member_qualifier_value":"started"}`,
 		AnchorKind: "team",
+	},
+	{
+		Question:   "Which incidents of the Vesper team are unresolved?",
+		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"incident","member_qualifier":"status","member_qualifier_value":"open"}`,
+		AnchorKind: "team",
+		Note:       "unresolved is open",
 	},
 	{
 		Question:   "Which pull requests of the Vesper team are waiting on review?",
@@ -97,6 +103,11 @@ var interpretationScopedMemberExamples = []scopedMemberExample{
 	{
 		Question:   "Which of the Vesper team's pull requests are stuck in review?",
 		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"pull_request","member_qualifier":"status"}`,
+		AnchorKind: "team",
+		Note:       "no value of the six fits: member_qualifier_value is omitted",
+	}, {
+		Question:   "Which of the Vesper team's incidents are being investigated?",
+		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"incident","member_qualifier":"status"}`,
 		AnchorKind: "team",
 		Note:       "no value of the six fits: member_qualifier_value is omitted",
 	},

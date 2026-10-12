@@ -63,7 +63,7 @@ func pullRequestStatusFake(fixtures []pullRequestStatusFixture, stateReadErr err
 		for _, raw := range ids {
 			id, _ := raw.(string)
 			if state, ok := states[id]; ok {
-				rows = append(rows, row{"id": id, "state": state})
+				rows = append(rows, row{"id": id, "value": state})
 			}
 		}
 		return rows, nil

@@ -33,7 +33,7 @@ func suppliedInvestigationHTTPRequest(t *testing.T, token string, supplied contr
 func validSuppliedInterpretation() contractsv1.ContextFabricSuppliedInterpretation {
 	return contractsv1.ContextFabricSuppliedInterpretation{
 		Output:             json.RawMessage(`{"shape":"open","requested_judgment":"status","time_context":{"axis":"current"},"fact_requirements":[],"clarification_needed":false}`),
-		ModelOutputVersion: "context-fabric-model-output.v9", PromptVersion: "context-fabric-interpretation.v25",
+		ModelOutputVersion: "context-fabric-model-output.v9", PromptVersion: "context-fabric-interpretation.v26",
 		ClientModel: "claude-test",
 	}
 }
@@ -42,7 +42,7 @@ func TestSuppliedInterpretationContractMismatchIsServedAsATypedRefusal(t *testin
 	refusal := contractsv1.ContextFabricInterpretationContractRefusal{
 		Mismatch: []string{contractsv1.ContextFabricInterpretationContractFieldPromptVersion},
 		Current: contractsv1.ContextFabricInterpretationContract{
-			ModelOutputVersion: "context-fabric-model-output.v9", PromptVersion: "context-fabric-interpretation.v25",
+			ModelOutputVersion: "context-fabric-model-output.v9", PromptVersion: "context-fabric-interpretation.v26",
 			SystemSHA256: strings.Repeat("a", 64),
 		},
 	}

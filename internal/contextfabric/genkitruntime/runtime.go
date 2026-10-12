@@ -271,6 +271,11 @@ const (
 	// set (open, merged, closed, awaiting_review, changes_requested,
 	// approved), with the review phrases mapped onto it, and two worked
 	// examples. A change to what the model is told, so the version bumps.
+	// v25 -> v26: a project member's status value is one of backlog, planned,
+	// started, paused, completed, canceled and an incident member's one of
+	// active, open, acknowledged, resolved, closed, suppressed, each with its
+	// phrases mapped onto it; a team member takes no status qualifier. A
+	// change to what the model is told, so the version bumps.
 	DefaultInterpretationPromptVersion = interpretprompt.PromptVersion
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
