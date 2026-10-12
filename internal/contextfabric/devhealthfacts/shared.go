@@ -912,7 +912,14 @@ import (
 // binding as a follow-up; when its own resolution commits nothing, it asks
 // which subject was meant with the earlier answer's subject offered first,
 // where it used to end without a match. A stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v183"
+//
+// v183 -> v184: a team investment mix reads its owned repositories to
+// completion. The read stopped at 200 ownership rows shared by every requested
+// team, so a team past the cut was served over a partial repository set, or as
+// owning no repository; it is now served over every owned repository, and a set
+// above 2000 rows is a named failure. A candidate saved under v183 may hold the
+// truncated mix.
+const QueryVersion = "devhealthfacts.clickhouse.v184"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

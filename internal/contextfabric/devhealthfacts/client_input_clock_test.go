@@ -232,7 +232,7 @@ func clockTestRules() []stringRule {
 		{"SELECT toString(team_id), toString(toDate(computed_at))", []string{"t1", day}, nil},
 		{"SELECT concat(p.provider, ':', p.id), cf.has_team", []string{"linear:P1", "T1", "Team One", "scope1", day + " 08:30:00"}, nil},
 		{"SELECT concat(p.provider, ':', p.id), toString(toDate(cf.computed_at))", []string{"linear:P1", day}, nil},
-		{"SELECT DISTINCT team_id, repo_key", []string{"t1", "r1"}, nil},
+		{"GROUP BY team_id, repo_key ORDER BY team_id, repo_key LIMIT", []string{"t1", "r1"}, nil},
 		{"SELECT team_id, work_scope_id, provider, toString(day)", []string{"t1", "scope1", "github", day}, nil},
 		{"SELECT toString(team_id), toString(day)", []string{"t1", day}, nil},
 		{"SELECT toString(team_id), map_name, toString(as_of_day)", []string{"t1", "map-1", day}, nil},
