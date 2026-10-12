@@ -194,6 +194,11 @@ func TestAFlatCohortOverTheItemBudgetIsServedWithItsTrailingMembersCut(t *testin
 	for _, event := range telemetry.planNarrowings {
 		if event.Overrun == contractsv1.ContextFabricBudgetOverrunItems && event.After < event.Before && event.RetryDeclined != RetryDeclinedNotApplicable {
 			cuts++
+			// The decision names the order it chose, observed: the ranked
+			// fixture is cut by attention rank, not the constructor's default.
+			if event.Basis != contractsv1.ContextFabricNarrowingBasisAttentionRank || !event.BasisObserved {
+				t.Fatalf("cut event basis %q observed=%v, want attention_rank observed", event.Basis, event.BasisObserved)
+			}
 		}
 	}
 	if cuts != 1 {
