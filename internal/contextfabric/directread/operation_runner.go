@@ -68,6 +68,7 @@ const (
 	OperationReadLogMessage    = "context fabric operation read"
 	OperationRowsForeignLog    = "context fabric operation row outside grant"
 	OperationPathsRemovedLog   = "context fabric operation output path removed"
+	OperationPathsWithheldLog  = "context fabric operation output path withheld by policy"
 	operationUnknownName       = "unknown"
 	operationRefusalPathMaxLen = 128
 )
@@ -310,8 +311,9 @@ type OperationRunner struct {
 	now       func() time.Time
 	limiter   *orgLimiter
 
-	rowsForeignTotal  atomic.Int64
-	pathsRemovedTotal atomic.Int64
+	rowsForeignTotal   atomic.Int64
+	pathsRemovedTotal  atomic.Int64
+	pathsWithheldTotal atomic.Int64
 }
 
 // NewOperationRunner validates the wiring. Catalogue, Gate and Client are
@@ -348,14 +350,17 @@ func NewOperationRunner(cfg OperationRunnerConfig) (*OperationRunner, error) {
 
 // OperationRunnerCounters are the runner's process counters.
 type OperationRunnerCounters struct {
-	RowsForeign  int64
-	PathsRemoved int64
+	RowsForeign   int64
+	PathsRemoved  int64
+	PathsWithheld int64
 }
 
-// Counters returns the process totals of foreign rows refused and output
-// values removed. Both must stay 0; any other value is an ERROR condition.
+// Counters returns the process totals of foreign rows refused, output values
+// removed that no policy declaration explains (both must stay 0; any other
+// value is an ERROR condition) and values removed because the policy declares
+// the path withheld (expected, not an error).
 func (r *OperationRunner) Counters() OperationRunnerCounters {
-	return OperationRunnerCounters{RowsForeign: r.rowsForeignTotal.Load(), PathsRemoved: r.pathsRemovedTotal.Load()}
+	return OperationRunnerCounters{RowsForeign: r.rowsForeignTotal.Load(), PathsRemoved: r.pathsRemovedTotal.Load(), PathsWithheld: r.pathsWithheldTotal.Load()}
 }
 
 // run is the per-request state.
@@ -594,18 +599,28 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 	if err != nil {
 		return x.upstream(CallUpstreamError, UpstreamDecode), nil
 	}
-	if filtered.RemovedValues > 0 {
-		x.read.PathsRemoved = filtered.RemovedValues
-		r.pathsRemovedTotal.Add(int64(filtered.RemovedValues))
-		removed := filtered.RemovedPaths
+	if filtered.WithheldValues > 0 {
+		r.pathsWithheldTotal.Add(int64(filtered.WithheldValues))
+		r.logger.InfoContext(ctx, OperationPathsWithheldLog,
+			"org_id", contextfabric.SanitizeLogAttr(x.principal.OrgID),
+			"operation", contextfabric.SanitizeLogAttr(op.Name),
+			"removed_values", filtered.WithheldValues,
+			"removed_path_count", len(filtered.WithheldPaths),
+			"removed_paths", contextfabric.SanitizeLogStrings(append([]string{}, filtered.WithheldPaths...)),
+		)
+	}
+	if undeclaredPaths, undeclaredValues := filtered.Undeclared(); undeclaredValues > 0 {
+		x.read.PathsRemoved = undeclaredValues
+		r.pathsRemovedTotal.Add(int64(undeclaredValues))
+		removed := undeclaredPaths
 		if len(removed) > 16 {
 			removed = removed[:16]
 		}
 		r.logger.ErrorContext(ctx, OperationPathsRemovedLog,
 			"org_id", contextfabric.SanitizeLogAttr(x.principal.OrgID),
 			"operation", contextfabric.SanitizeLogAttr(op.Name),
-			"removed_values", filtered.RemovedValues,
-			"removed_path_count", len(filtered.RemovedPaths),
+			"removed_values", undeclaredValues,
+			"removed_path_count", len(undeclaredPaths),
 			"removed_paths", contextfabric.SanitizeLogStrings(append([]string{}, removed...)),
 		)
 	}
