@@ -138,61 +138,13 @@ func PullRequestStatusFilterOf(frame *QuestionFrame) string {
 }
 
 // PullRequestStatusUnappliedOf reports whether frame states a status on pull
-// request members that no read applies: a status qualifier with no value, or
-// a value on an operand of an explicit set.
+// request members that no read applies.
 func PullRequestStatusUnappliedOf(frame *QuestionFrame) bool {
-	if frame == nil {
-		return false
-	}
-	switch frame.SubjectExpression.Kind {
-	case SubjectExpressionChildrenOfScope:
-		scoped := frame.SubjectExpression.Scoped
-		return scoped != nil && scoped.MemberKind == SubjectPullRequest && scoped.MemberQualifier == MemberQualifierStatus && scoped.MemberQualifierValue == ""
-	case SubjectExpressionExplicitSet:
-		if frame.SubjectExpression.Explicit == nil {
-			return false
-		}
-		for _, operand := range frame.SubjectExpression.Explicit.Operands {
-			if operand.Kind == SubjectOperandScoped && operand.Scoped != nil && operand.Scoped.MemberKind == SubjectPullRequest && operand.Scoped.MemberQualifier == MemberQualifierStatus {
-				return true
-			}
-		}
-	}
-	return false
+	return MemberStatusUnappliedOf(frame, SubjectPullRequest)
 }
 
 // PullRequestStatusFilterDisclosure is the sentence a served pull request
 // member set states for the status it was filtered by.
 func PullRequestStatusFilterDisclosure(value string) string {
 	return contractsv1.ContextFabricPullRequestStatusFilterLimitation(value)
-}
-
-// withPullRequestStatusDisclosure states, on a document that serves pull
-// request members, the status they were filtered by, or that the state the
-// question named was not applied. A status on an operand of an explicit set is
-// never applied, whatever the document serves, so it is stated on every such
-// document. It adds a sentence once; a re-finalized document keeps the one it
-// has.
-func withPullRequestStatusDisclosure(result InvestigationResult, frame *QuestionFrame) InvestigationResult {
-	servesPullRequests := result.Cohort != nil && result.Cohort.Kind == SubjectPullRequest
-	operandStatus := frame != nil && frame.SubjectExpression.Kind == SubjectExpressionExplicitSet && PullRequestStatusUnappliedOf(frame)
-	sentence := ""
-	switch status := PullRequestStatusFilterOf(frame); {
-	case status != "" && servesPullRequests:
-		sentence = PullRequestStatusFilterDisclosure(status)
-	case operandStatus || (servesPullRequests && PullRequestStatusUnappliedOf(frame)):
-		sentence = contractsv1.ContextFabricPullRequestStatusUnappliedLimitation
-	}
-	if sentence == "" {
-		return result
-	}
-	for _, limitation := range result.Limitations {
-		if limitation == sentence {
-			return result
-		}
-	}
-	composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
-	result.Limitations = composed
-	result.LimitationsDisplaced += displaced
-	return result
 }

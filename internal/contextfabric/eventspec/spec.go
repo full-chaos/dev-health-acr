@@ -2964,9 +2964,11 @@ var TeamAnchorWalk = Event{
 var pullRequestStatusFilterOutcome = []string{"applied", "read_failed"}
 
 // PullRequestStatusFilter is the Info line of one DiscoverContext call whose
-// frame filters pull request members by a status of the closed set
-// (contextfabric.PullRequestStatusVocabulary): candidates is how many pull
-// requests the member pool held and kept how many hold the status now.
+// frame filters pull request, project or incident members by a status of the
+// closed set of member_kind (contextfabric.MemberStatusVocabulary): candidates
+// is how many members of the kind the member pool held and kept how many hold
+// the status now; outside_set counts the project or incident candidates whose
+// stored status is outside the set.
 // outcome=read_failed carries the error and no count.
 //
 // The line carries counts and closed values only, never a subject name or id.
@@ -2980,9 +2982,11 @@ var PullRequestStatusFilter = Event{
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: pullRequestStatusFilterOutcome},
-		{Key: "status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"open", "merged", "closed", "awaiting_review", "changes_requested", "approved"}},
+		{Key: "member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"pull_request", "project", "incident"}},
+		{Key: "status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"open", "merged", "closed", "awaiting_review", "changes_requested", "approved", "backlog", "planned", "started", "paused", "completed", "canceled", "active", "acknowledged", "resolved", "suppressed"}},
 		{Key: "candidates", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when outcome=applied"},
 		{Key: "kept", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when outcome=applied"},
+		{Key: "outside_set", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when outcome=applied and member_kind is project or incident: the candidates whose stored status is outside the kind's closed set"},
 		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},

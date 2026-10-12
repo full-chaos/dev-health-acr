@@ -4116,6 +4116,16 @@
         ]
       },
       {
+        "key": "member_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "pull_request",
+          "project",
+          "incident"
+        ]
+      },
+      {
         "key": "status",
         "type": "string",
         "presence": "required",
@@ -4125,7 +4135,17 @@
           "closed",
           "awaiting_review",
           "changes_requested",
-          "approved"
+          "approved",
+          "backlog",
+          "planned",
+          "started",
+          "paused",
+          "completed",
+          "canceled",
+          "active",
+          "acknowledged",
+          "resolved",
+          "suppressed"
         ]
       },
       {
@@ -4139,6 +4159,12 @@
         "type": "int",
         "presence": "conditional",
         "applicability": "written when outcome=applied"
+      },
+      {
+        "key": "outside_set",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when outcome=applied and member_kind is project or incident: the candidates whose stored status is outside the kind's closed set"
       },
       {
         "key": "error",

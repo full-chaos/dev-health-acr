@@ -34,10 +34,10 @@ func TestPullRequestStatusValuesTheFrameAdmits(t *testing.T) {
 			t.Errorf("value %q outside the set: refused=%v failure=%+v, want i5 %s", value, bad, failure, FrameFailureMemberQualifierValueInvalid)
 		}
 	}
-	project := pullRequestStatusQuestionFrame("blocked")
+	project := pullRequestStatusQuestionFrame("open")
 	project.SubjectExpression.Scoped.MemberKind = SubjectProject
-	if _, bad := ValidateFramePhaseA1(project); bad {
-		t.Errorf("a project status word was refused; the closed set applies to pull_request members only")
+	if _, bad := ValidateFramePhaseA1(project); !bad {
+		t.Errorf("a pull request status value was admitted beside project members")
 	}
 }
 
@@ -114,7 +114,7 @@ func TestServedPullRequestMembersStateTheirStatusFilter(t *testing.T) {
 	served := InvestigationResult{Cohort: &Cohort{Kind: SubjectPullRequest}}
 	for _, value := range PullRequestStatusVocabulary() {
 		frame := pullRequestStatusQuestionFrame(value)
-		result := withPullRequestStatusDisclosure(withPullRequestStatusDisclosure(served, &frame), &frame)
+		result := withMemberStatusDisclosure(withMemberStatusDisclosure(served, &frame), &frame)
 		want := contractsv1.ContextFabricPullRequestStatusFilterLimitation(value)
 		if want == "" || len(result.Limitations) != 1 || result.Limitations[0] != want {
 			t.Fatalf("status %q: limitations = %q, want exactly [%q]", value, result.Limitations, want)
@@ -124,7 +124,7 @@ func TestServedPullRequestMembersStateTheirStatusFilter(t *testing.T) {
 		}
 	}
 	unapplied := pullRequestStatusQuestionFrame("")
-	result := withPullRequestStatusDisclosure(served, &unapplied)
+	result := withMemberStatusDisclosure(served, &unapplied)
 	if len(result.Limitations) != 1 || result.Limitations[0] != contractsv1.ContextFabricPullRequestStatusUnappliedLimitation {
 		t.Fatalf("unapplied status: limitations = %q", result.Limitations)
 	}
@@ -136,14 +136,14 @@ func TestServedPullRequestMembersStateTheirStatusFilter(t *testing.T) {
 		{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"Marram"}}},
 	}}}}
 	for _, document := range []InvestigationResult{{}, {Cohort: &Cohort{Kind: SubjectTeam}}} {
-		got := withPullRequestStatusDisclosure(document, &operands).Limitations
+		got := withMemberStatusDisclosure(document, &operands).Limitations
 		if len(got) != 1 || got[0] != contractsv1.ContextFabricPullRequestStatusUnappliedLimitation {
 			t.Fatalf("an explicit-set operand status on a document with cohort %+v: limitations = %q, want the unapplied sentence", document.Cohort, got)
 		}
 	}
 	frame := pullRequestStatusQuestionFrame(PullRequestStatusOpen)
 	projects := InvestigationResult{Cohort: &Cohort{Kind: SubjectProject}}
-	if got := withPullRequestStatusDisclosure(projects, &frame).Limitations; len(got) != 0 {
+	if got := withMemberStatusDisclosure(projects, &frame).Limitations; len(got) != 0 {
 		t.Fatalf("a project cohort carried a pull request disclosure: %q", got)
 	}
 }

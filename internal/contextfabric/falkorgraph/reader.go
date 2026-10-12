@@ -1428,6 +1428,23 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		cohortNodes = filtered.nodes
 	}
+	// A project or incident status the frame states is applied the same way: to
+	// the whole pool, before the cohort is cut.
+	memberStatusKind, memberStatus := contextfabric.MemberStatusFilterOf(request.Frame)
+	var memberFiltered memberStatusFilter
+	if memberStatus != "" {
+		filtered, filterErr := a.filterMembersByStoredStatus(ctx, key, principal.OrgID, memberStatusKind, memberStatus, cohortNodes)
+		memberFiltered = filtered
+		if a.config.Telemetry != nil {
+			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
+				MemberKind: memberStatusKind, Status: memberStatus, Candidates: filtered.candidates, Kept: filtered.kept, OutsideSet: filtered.outsideSet, Err: filterErr,
+			})
+		}
+		if filterErr != nil {
+			return contextfabric.GraphContext{}, graphNotProjectedError(filterErr)
+		}
+		cohortNodes = filtered.nodes
+	}
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	cohortKindScopedAuthzDropped, anchorReachDenied := anchorReachDeniedCount(cohortKind, cohortNodes, principal, request, edgeFilters.ReachDenied, cohortKindScopedAuthzDropped)
 	if cohort != nil && deploymentAnchor != nil {
@@ -1457,6 +1474,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// answer (zero matches), not a question with no members.
 		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectPullRequest, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{},
 			Rationale: pullRequestStatusNoMatchRationale, Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
+	}
+	if cohort == nil && memberStatus != "" && memberFiltered.candidates > 0 && memberFiltered.kept == 0 {
+		cohort = &contextfabric.Cohort{Kind: memberStatusKind, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{},
+			Rationale: memberStatusNoMatchRationale(memberStatusKind), Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
 	}
 	if cohort == nil && ownershipZeroOwnersResolved {
 		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectTeam, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{}, Rationale: ownershipZeroOwnersRationaleFor(ownershipExcludedOverCap), Complete: true}
@@ -1744,8 +1765,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation,
-		CohortMemberSource: cohortMemberSource,
-		Paths:              admission.Paths, DriverCandidates: admission.Drivers,
+		CohortMemberSource:     cohortMemberSource,
+		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: memberFiltered.outsideSet},
+		Paths:                  admission.Paths, DriverCandidates: admission.Drivers,
 		EvidenceRefIDs: admission.EvidenceRefIDs, FactRequirements: factRequirements,
 		Coverage: contextfabric.Coverage{
 			Sources:         sources,

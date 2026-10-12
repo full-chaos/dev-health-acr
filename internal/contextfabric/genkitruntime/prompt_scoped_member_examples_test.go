@@ -16,20 +16,22 @@ var scopedMemberExampleFrames = map[string]struct {
 	goals    string
 	temporal string
 }{
-	"Over the past quarter, how many incidents were there in the relay-gateway repository?":   {`["count_or_aggregate"]`, "bounded_window"},
-	"What fraction of the Brackwater project's work items are done?":                          {`["assess_state"]`, "current"},
-	"What explains the many open pull requests of the Marram team?":                           {`["explain_drivers"]`, "current"},
-	"Why does the ledger-api repository keep having incidents?":                               {`["explain_drivers"]`, "current"},
-	"Show the Marram team's projects that are blocked.":                                       {`["rank_or_survey"]`, "current"},
-	"Which of the Marram team's projects are most at risk?":                                   {`["rank_or_survey"]`, "current"},
-	"Why do deployments keep failing in the Brackwater project's repositories?":               {`["explain_drivers"]`, "current"},
-	"In the past month, how many pull requests has the Vesper team merged?":                   {`["count_or_aggregate"]`, "bounded_window"},
-	"List the work items assigned to the Vesper team.":                                        {`["rank_or_survey"]`, "current"},
-	"Which Brackwater project work items are still in progress?":                              {`["rank_or_survey"]`, "current"},
-	"Compare the open projects of the Marram team with the open projects of the Vesper team.": {`["compare"]`, "current"},
-	"Which of the Vesper team's projects are open?":                                           {`["rank_or_survey"]`, "current"},
-	"Which pull requests of the Vesper team are waiting on review?":                           {`["rank_or_survey"]`, "current"},
-	"Which of the Vesper team's pull requests are stuck in review?":                           {`["rank_or_survey"]`, "current"},
+	"Over the past quarter, how many incidents were there in the relay-gateway repository?":       {`["count_or_aggregate"]`, "bounded_window"},
+	"What fraction of the Brackwater project's work items are done?":                              {`["assess_state"]`, "current"},
+	"What explains the many open pull requests of the Marram team?":                               {`["explain_drivers"]`, "current"},
+	"Why does the ledger-api repository keep having incidents?":                                   {`["explain_drivers"]`, "current"},
+	"Show the Marram team's projects that are blocked.":                                           {`["rank_or_survey"]`, "current"},
+	"Which of the Marram team's projects are most at risk?":                                       {`["rank_or_survey"]`, "current"},
+	"Why do deployments keep failing in the Brackwater project's repositories?":                   {`["explain_drivers"]`, "current"},
+	"In the past month, how many pull requests has the Vesper team merged?":                       {`["count_or_aggregate"]`, "bounded_window"},
+	"List the work items assigned to the Vesper team.":                                            {`["rank_or_survey"]`, "current"},
+	"Which Brackwater project work items are still in progress?":                                  {`["rank_or_survey"]`, "current"},
+	"Compare the active projects of the Marram team with the active projects of the Vesper team.": {`["compare"]`, "current"},
+	"Which of the Vesper team's projects are active?":                                             {`["rank_or_survey"]`, "current"},
+	"Which incidents of the Vesper team are unresolved?":                                          {`["rank_or_survey"]`, "current"},
+	"Which pull requests of the Vesper team are waiting on review?":                               {`["rank_or_survey"]`, "current"},
+	"Which of the Vesper team's incidents are being investigated?":                                {`["rank_or_survey"]`, "current"},
+	"Which of the Vesper team's pull requests are stuck in review?":                               {`["rank_or_survey"]`, "current"},
 }
 
 // DecideFrameGate refuses these two examples and passes every other one.
