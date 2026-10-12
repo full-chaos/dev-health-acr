@@ -61,3 +61,32 @@ func TestTheOfferFloorTextsArePinned(t *testing.T) {
 		t.Fatalf("blank terms sentence = %q", blank)
 	}
 }
+
+// TestAProjectNamedQuestionWithOnlyATeamNearMissServesTheRequestedKindSentence
+// drives Investigate: the request asks about a project, only a weak team came
+// close, and the served limitation names the project and the team as the
+// closest match, without claiming a search scope.
+func TestAProjectNamedQuestionWithOnlyATeamNearMissServesTheRequestedKindSentence(t *testing.T) {
+	t.Parallel()
+	graph := &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		material:   StructureOfferMaterial{SubjectFloor: OfferFloorOutcome{Refused: true, SearchedKinds: []string{"team"}}},
+		context:    emptyGraphContext(),
+	}
+	interpretation := bootstrapInterpretation()
+	interpretation.SubjectTerms = []string{"Phantom"}
+	engine := buildWindowGateEngine(t, &countingInterpreter{interpretation: interpretation}, graph, newMapResultStore())
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.ExpectedKinds = []SubjectKind{SubjectProject}
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	served := strings.Join(result.Limitations, "|")
+	if result.Status != InvestigationNoMatch || !strings.Contains(served, `No project matched "Phantom"; the closest matches were teams. Nothing was offered`) {
+		t.Fatalf("status=%q limitations=%q", result.Status, result.Limitations)
+	}
+	if strings.Contains(served, "searched") {
+		t.Fatalf("limitations = %q claim a search scope", result.Limitations)
+	}
+}
