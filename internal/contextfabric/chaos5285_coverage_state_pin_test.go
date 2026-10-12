@@ -189,13 +189,13 @@ func allowanceLines(t *testing.T, raw string) []map[string]any {
 // TestTheClampedMemberAllowanceIsExplainedAtInfo pins the line that makes an
 // otherwise inexplicable answer explicable.
 //
-// A grouped plan reserves a synthesis headroom of twenty items, and the
-// cohort's member allowance is the budget minus that reserve. Every grouped
-// turn at or below a twenty-item budget therefore gets an allowance of ONE --
-// not because one member is what the budget affords, but because the
-// subtraction went to zero and the floor caught it. The set cover then leaves
-// one member per group, and a reader sees a single project under each team
-// with nothing anywhere saying why.
+// A grouped plan reserves a synthesis headroom that scales with a small
+// budget, and the cohort's member allowance is the budget minus that reserve.
+// Only a budget of one item leaves nothing after the reserve, so the floor
+// supplies the allowance of ONE -- not because one member is what the budget
+// affords, but because the subtraction went to zero and the floor caught it.
+// The set cover then leaves one member per group, and a reader sees a single
+// project under each team with nothing anywhere saying why.
 //
 // The values are what make it useful. An allowance of one is unremarkable
 // under a one-item budget and is a reserve swallowing the whole budget under a
@@ -218,15 +218,18 @@ func TestTheClampedMemberAllowanceIsExplainedAtInfo(t *testing.T) {
 		bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
 		return bundle
 	}}
-	// Below the grouped headroom, so the allowance is supplied by the floor.
-	options := EngineOptions{MaxItems: 6, SynthesisDeadlineReserve: time.Second}
+	// A one-item budget: the subtraction leaves nothing, so the floor supplies
+	// the allowance.
+	options := EngineOptions{MaxItems: 1, SynthesisDeadlineReserve: time.Second}
 	members := []CohortMember{
 		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
 		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
 	}
 	engine, request := groupReadEngineFixtureFull(t, logs.telemetry, recorder, members, nil, SubjectProject, &options, nil)
-	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
-		t.Fatalf("Investigate() error = %v", err)
+	// A one-item budget cannot hold any answer, so the turn ends in the planned
+	// budget refusal; the allowance line is emitted before it.
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err == nil || !strings.Contains(err.Error(), "exceeds the response budget") {
+		t.Fatalf("Investigate() error = %v, want the planned response budget refusal", err)
 	}
 
 	lines := allowanceLines(t, logs.configured.String())
@@ -247,14 +250,13 @@ func TestTheClampedMemberAllowanceIsExplainedAtInfo(t *testing.T) {
 		t.Errorf("allowance_clamped = %v, want true -- this budget is below the reserve, and without the flag a reader cannot tell the floor from a genuinely tiny budget", got)
 	}
 	// NON-TRIVIAL VALUES, and the pair that carries the explanation.
-	if got := line["max_items"]; got != float64(6) {
-		t.Errorf("max_items = %v, want 6", got)
+	if got := line["max_items"]; got != float64(1) {
+		t.Errorf("max_items = %v, want 1", got)
 	}
-	// THE RESERVE ATE THE WHOLE BUDGET. A grouped plan's profile reserve is
-	// twenty items and the contract forbids reserving more than the budget
-	// holds, so at any budget at or below the reserve the headroom lands on
-	// the budget itself and the subtraction leaves nothing for members. That
-	// is the entire explanation, and it is unrecoverable from the allowance
+	// THE RESERVE ATE THE WHOLE BUDGET. The contract forbids reserving more
+	// than the budget holds, so at a one-item budget the headroom lands on the
+	// budget itself and the subtraction leaves nothing for members. That is
+	// the entire explanation, and it is unrecoverable from the allowance
 	// alone -- which is why both numbers are on the line.
 	if got := line["synthesis_headroom"]; got != line["max_items"] {
 		t.Errorf("synthesis_headroom = %v against max_items = %v, want them equal -- below the profile reserve the headroom is the whole budget, and a reader without both numbers cannot tell that from a budget that was simply tiny",
@@ -298,7 +300,7 @@ func TestTheUnclampedMemberAllowanceReportsItselfUnclamped(t *testing.T) {
 		return bundle
 	}}
 	// ABOVE the grouped headroom, so the subtraction produces a real number.
-	options := EngineOptions{MaxItems: 26, SynthesisDeadlineReserve: time.Second}
+	options := EngineOptions{MaxItems: 36, SynthesisDeadlineReserve: time.Second}
 	members := []CohortMember{
 		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
 		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
@@ -322,9 +324,9 @@ func TestTheUnclampedMemberAllowanceReportsItselfUnclamped(t *testing.T) {
 		t.Fatalf("CONTROL BROKEN: member_allowance = %v above the reserve, which is the clamped value -- this fixture is not exercising the unclamped arm", got)
 	}
 	// THE VALUES THEMSELVES, through the log barrier the three budget fields
-	// cross: 26, 20 and 6 are pairwise distinct, so a barrier that zeroed,
+	// cross: 36, 20 and 16 are pairwise distinct, so a barrier that zeroed,
 	// swapped or dropped any one of them puts a wrong number on the line.
-	for field, want := range map[string]float64{"max_items": 26, "synthesis_headroom": 20, "member_allowance": 6} {
+	for field, want := range map[string]float64{"max_items": 36, "synthesis_headroom": 20, "member_allowance": 16} {
 		if got := line[field]; got != want {
 			t.Errorf("%s = %v, want %v -- the request-derived budget fields must reach the line unchanged through requestDerivedLogInt", field, got, want)
 		}
