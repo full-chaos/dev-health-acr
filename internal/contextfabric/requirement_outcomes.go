@@ -210,11 +210,13 @@ func planningStageOutcomeRow(identity, obligation string, unavailable Requiremen
 	if undeclaredReadObligation(obligation, unavailable) {
 		// No producer declares this READ obligation for the subject kind,
 		// so nothing exists that could have served it: it does not apply to
-		// that kind. The plan requirement keeps the derivation's
-		// no_declaring_producer token, which is the disclosure; a lossless
-		// row names no cause.
+		// that kind. The row names why in the same vocabulary the plan
+		// requirement's token maps to, as an observed cause: the derivation
+		// reported it, nothing here defaulted it.
 		row.Outcome = contractsv1.ContextFabricRequirementNotApplicable
 		row.Impact = contractsv1.ContextFabricAnswerImpactNone
+		row.CauseCoverage = unavailableRequirementCause(unavailable)
+		row.CauseObserved = true
 		return row
 	}
 	if unavailable != "" {

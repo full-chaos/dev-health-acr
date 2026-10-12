@@ -30,8 +30,8 @@ func TestUndeclaredHealthObligationSeedsNotApplicableForCohortMemberKinds(t *tes
 	} {
 		t.Run(name, func(t *testing.T) {
 			row := seedHealthRow(t, tc.frame, tc.subject)
-			if row.Outcome != v1.ContextFabricRequirementNotApplicable || row.Impact != v1.ContextFabricAnswerImpactNone || row.CauseCoverage != "" {
-				t.Fatalf("health seed row = %+v, want lossless not_applicable naming no cause", row)
+			if row.Outcome != v1.ContextFabricRequirementNotApplicable || row.Impact != v1.ContextFabricAnswerImpactNone || row.CauseCoverage != v1.ContextFabricCoverageDetailFactNoDeclaringProducer || !row.CauseObserved {
+				t.Fatalf("health seed row = %+v, want lossless not_applicable naming the no-declaring-producer cause as observed", row)
 			}
 			if err := v1.ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
 				t.Fatalf("row is not a legal outcome row: %v", err)

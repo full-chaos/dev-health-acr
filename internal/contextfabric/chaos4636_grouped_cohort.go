@@ -970,3 +970,43 @@ func applyGroupCoverageDisclosure(result *InvestigationResult, coverage CohortGr
 	result.Limitations = composed
 	result.LimitationsDisplaced += displaced
 }
+
+// appendGroupAxisNotApplicableRows states, for a grouping the request refused,
+// that the group-axis READ requirement of the asked kind does not apply: no
+// producer declares that axis for these members, so nothing could have served
+// it. The row names fact_no_declaring_producer as an observed cause.
+//
+// It is appended BEFORE the read evaluator runs, so the evaluator finds the
+// identity already accounted for and writes no unattempted row beside it. A
+// requirement that already carries an assembled row, or one the plan did not
+// publish as served, is left alone.
+func appendGroupAxisNotApplicableRows(rows []RequirementOutcomeRow, published []contractsv1.ContextFabricPlanRequirement, outcome CohortGroupingOutcome) []RequirementOutcomeRow {
+	if outcome.Refusal == CohortGroupingRefusalNone || outcome.PlannedKind == "" {
+		return rows
+	}
+	// A team axis that placed nobody is a data gap (the team producers
+	// declare it and its facts came back empty), not an axis nothing
+	// declares, so it keeps its unattempted account.
+	if outcome.Refusal == CohortGroupingRefusalNoMemberPlaced && outcome.PlannedKind == SubjectTeam {
+		return rows
+	}
+	var added []RequirementOutcomeRow
+	for _, requirement := range published {
+		if requirement.Kind != string(ObligationKindRead) || !requirement.Served() ||
+			requirement.Role != string(SubjectRoleGroup) ||
+			requirement.Subject != contractsv1.ContextFabricSubjectKind(outcome.PlannedKind) ||
+			hasEvaluatedReadOutcome(rows, requirement.Requirement) {
+			continue
+		}
+		added = append(added, RequirementOutcomeRow{
+			Stage:         contractsv1.ContextFabricOutcomeStageAssembledResult,
+			Requirement:   requirement.Requirement,
+			Obligation:    requirement.Obligation,
+			Outcome:       contractsv1.ContextFabricRequirementNotApplicable,
+			Impact:        contractsv1.ContextFabricAnswerImpactNone,
+			CauseCoverage: contractsv1.ContextFabricCoverageDetailFactNoDeclaringProducer,
+			CauseObserved: true,
+		})
+	}
+	return appendOutcomeRows(rows, added...)
+}
