@@ -160,6 +160,9 @@ var (
 		// Whether the binding's kind replaced the model's on the reading: a
 		// served-side decision the binder does not read.
 		"bound_anchor_kind",
+		// What the binding carried into resolution: a served-side decision the
+		// binder does not read.
+		"bound_anchor_carry",
 	}
 )
 

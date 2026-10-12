@@ -869,11 +869,19 @@ import (
 // compounding_risk_daily row and a moved-since-the-rule flag. An answer saved
 // under v175 quotes the rule-time score as the team's current risk.
 //
-// v177 -> v178: a pull request fact carries project_breakdown, one row per
+// v177 -> v178: with the anchor binding carry switch on, a same-question
+// follow-up carries its anchor only from the admitted binding (never from the
+// confirmed-need ledger's engine-committed entry, which is withheld from
+// resolution when the binding does not carry it), and a carried anchor the
+// resolver offered but did not commit is listed first in the clarification,
+// so a stored answer can differ.
+//
+// v178 -> v179: a pull request fact carries project_breakdown, one row per
 // project its linked issues reach (work_graph_issue_pr, strict reading), each
 // with the link tier; a pull request cohort grouped by project is grouped on
-// those rows where it was served ungrouped. A candidate saved under v177 holds
+// those rows where it was served ungrouped. A candidate saved under v178 holds
 // the ungrouped answer.
+const QueryVersion = "devhealthfacts.clickhouse.v179"
 const QueryVersion = "devhealthfacts.clickhouse.v178"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
