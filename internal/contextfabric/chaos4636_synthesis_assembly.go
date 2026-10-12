@@ -347,9 +347,15 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// Corrected here, once per pass, immediately before synthesis reads
 	// Coverage.Details, mirroring where the cardinality step reads it.
 	correctKindCensusTruncatedServedCounts(graphContext.Coverage.Details, graphContext.Cohort)
+	inputGraph := graphContext
+	if graphContext.Cohort == nil && clientSynthesisRequested(request) {
+		if candidates, _, _ := projectStatusDrivers(interpretation, params.Resolution.Committed, facts.Facts, nil, 0, synthesisAllocation); len(candidates) > 0 {
+			inputGraph.DriverCandidates = append(append([]DriverJudgment(nil), graphContext.DriverCandidates...), candidates...)
+		}
+	}
 	synthesisInput, _ := canonicalizeSynthesisSubjectLabels(SynthesisInput{
 		Allocation: synthesisAllocation,
-		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
+		Request:    request, Interpretation: interpretation, Graph: inputGraph, Facts: facts,
 		EvidenceWindow: effectiveWindow, ReadTimeClamp: params.ReadTimeClamp,
 		EvidenceWindowFromClock: windowBoundsFromClock(effectiveWindow, params.WindowCanon.KeyEncoding, params.WindowCarried),
 	})

@@ -67,6 +67,9 @@ func TestProjectStatusClientModeResultCarriesStatusDrivers(t *testing.T) {
 	if bundle == nil {
 		t.Fatal("no synthesis input")
 	}
+	if len(rig.encoded) == 0 || strings.Count(string(rig.encoded[0]), "project-status-") != 3 {
+		t.Errorf("synthesis_input carries %d project status driver candidates, want 3", strings.Count(string(rig.encoded[0]), "project-status-"))
+	}
 	if len(result.Drivers) != 3 || len(result.ClaimedFacts) != 3 {
 		t.Errorf("drivers=%d claims=%d, want 3 and 3", len(result.Drivers), len(result.ClaimedFacts))
 	}
