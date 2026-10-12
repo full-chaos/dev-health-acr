@@ -181,7 +181,7 @@ func yesNoCell(v bool) string {
 	return "no"
 }
 
-func buildData(in Inputs) (string, error) {
+func buildData(in Inputs, serviceModel bool) (string, error) {
 	if len(in.DataOperations) == 0 {
 		return "", fmt.Errorf("guidegen: the operations catalogue is empty")
 	}
@@ -192,8 +192,12 @@ func buildData(in Inputs) (string, error) {
 
 	b.WriteString("## Which way\n\n")
 	b.WriteString("- If you are a model, plan the reads yourself with `data_catalog`, `find_subjects` and `run_operation`. You choose the reads and you do the comparison, ranking, charting and explanation. These tools call no model on our side.\n")
-	b.WriteString("- `investigate_question` is for our own engine's narrative answers (Ask Dev, and callers with no model of their own). It runs a model on our side. Use it only when you want the engine's answer. With `synthesis` set to `client` it makes no synthesis call: see `acr://guide/client-interpretation`.\n")
-	b.WriteString("- `investigate_with_interpretation` is the same engine, with the interpretation step run on your own model: fetch the prompt `interpret_question`, run it, and send the reply as `interpretation` with the prompt's `_meta` values as `contract`. The steps and the replies are in `acr://guide/client-interpretation`.\n")
+	if serviceModel {
+		b.WriteString("- `investigate_question` is for our own engine's narrative answers (Ask Dev, and callers with no model of their own). It runs a model on our side. Use it only when you want the engine's answer. With `synthesis` set to `client` it makes no synthesis call: see `acr://guide/client-interpretation`.\n")
+		b.WriteString("- `investigate_with_interpretation` is the same engine, with the interpretation step run on your own model: fetch the prompt `interpret_question`, run it, and send the reply as `interpretation` with the prompt's `_meta` values as `contract`. The steps and the replies are in `acr://guide/client-interpretation`.\n")
+	} else {
+		b.WriteString("- `investigate_with_interpretation` is our engine's narrative answer, with the interpretation step run on your own model: fetch the prompt `interpret_question`, run it, and send the reply as `interpretation` with the prompt's `_meta` values as `contract`. The steps and the replies are in `acr://guide/client-interpretation`.\n")
+	}
 	b.WriteString("- A tool appears in `tools/list` only when the hosted API enables it for your credential. `run_operation` and `graphql_query` need the `data:read` scope. More data tools are planned; none is named here until it ships.\n\n")
 
 	b.WriteString("## The flow\n\n")
@@ -220,7 +224,7 @@ func buildData(in Inputs) (string, error) {
 		b.WriteString("- " + rule + "\n")
 	}
 
-	section, err := factKindsSection(in)
+	section, err := factKindsSection(in, serviceModel)
 	if err != nil {
 		return "", err
 	}
@@ -247,7 +251,7 @@ const factKindsGuideHeading = "# Fact kinds\n\n"
 // factKindsSection renders the fact-kind glossary and the word-to-kind rules
 // from the text the interpretation prompt states, so the two cannot differ.
 // It fails when a kind in the closed set has no glossary line.
-func factKindsSection(in Inputs) (string, error) {
+func factKindsSection(in Inputs, serviceModel bool) (string, error) {
 	if len(in.FactKinds) == 0 || !strings.HasPrefix(in.FactKindsGuide, factKindsGuideHeading) {
 		return "", fmt.Errorf("guidegen: the fact-kind glossary input is empty")
 	}
@@ -257,9 +261,13 @@ func factKindsSection(in Inputs) (string, error) {
 			return "", fmt.Errorf("guidegen: fact kind %q has no single glossary line", kind)
 		}
 	}
+	factKindsTools := "`investigate_with_interpretation`"
+	if serviceModel {
+		factKindsTools = "`investigate_question` or `investigate_with_interpretation`"
+	}
 	var b strings.Builder
 	b.WriteString("\n## Fact kinds\n\n")
-	b.WriteString("`data_catalog` section `facts` lists the fact kinds and fields served to your credential. The text below says what each kind means and which words name it. It is the text the interpretation prompt states (also `acr://guide/fact-kinds` with `investigate_question`). Read \"list the kinds\" as \"choose the kinds to read\". A kind the catalog does not list is not served to you.\n\n")
+	b.WriteString("`data_catalog` section `facts` lists the fact kinds and fields served to your credential. The text below says what each kind means and which words name it. It is the text the interpretation prompt states (also `acr://guide/fact-kinds` with " + factKindsTools + "). Read \"list the kinds\" as \"choose the kinds to read\". A kind the catalog does not list is not served to you.\n\n")
 	b.WriteString(body)
 	return b.String(), nil
 }

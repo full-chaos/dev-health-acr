@@ -118,7 +118,7 @@ func driftFindings(text string, vocab []string) []string {
 
 func TestClientInterpretationGuideNamesOnlyWhatTheCodeHas(t *testing.T) {
 	c := clientFlowInputs()
-	text, err := buildClientInterpretation(c)
+	text, err := buildClientInterpretation(c, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestClientInterpretationDriftPinFailsOnARenamedName(t *testing.T) {
 	c := clientFlowInputs()
 	renamed := c
 	renamed.InterpretTool = c.InterpretTool + "_v2"
-	text, err := buildClientInterpretation(c)
+	text, err := buildClientInterpretation(c, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestClientInterpretationErrorsMatchThePublishedExamples(t *testing.T) {
 
 func TestClientInterpretationGuideCarriesTheBuiltContract(t *testing.T) {
 	c := clientFlowInputs()
-	text, err := buildClientInterpretation(c)
+	text, err := buildClientInterpretation(c, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestClientInterpretationGuideCarriesTheBuiltContract(t *testing.T) {
 
 func TestClientInterpretationGuideHasTheSynthesisSection(t *testing.T) {
 	c := clientFlowInputs()
-	text, err := buildClientInterpretation(c)
+	text, err := buildClientInterpretation(c, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestClientInterpretationGuideHasTheSynthesisSection(t *testing.T) {
 
 func TestClientInterpretationGuideHasTheWriteBack(t *testing.T) {
 	c := clientFlowInputs()
-	text, err := buildClientInterpretation(c)
+	text, err := buildClientInterpretation(c, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestClientInterpretationRefusesAnEmptySynthesisInput(t *testing.T) {
 	} {
 		c := clientFlowInputs()
 		mutate(&c)
-		if _, err := buildClientInterpretation(c); err == nil {
+		if _, err := buildClientInterpretation(c, true); err == nil {
 			t.Errorf("empty %s: build did not fail", name)
 		}
 	}
