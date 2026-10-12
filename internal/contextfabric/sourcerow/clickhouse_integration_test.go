@@ -138,7 +138,9 @@ func seedIntegration(t *testing.T, ctx context.Context, direct clickhousedriver.
 		fmt.Sprintf(`INSERT INTO teams (id, name, updated_at, org_id, provider, is_active) VALUES ('team-a', 'Team A', %s, '%s', 'jira', 1)`, now, integrationOrg),
 		fmt.Sprintf(`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES ('%s', '00000000-0000-0000-0000-000000000000', 'jira:ABC-1', 'team-a', 'native_team', 1, 'high', %s)`, integrationOrg, now),
 		fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, number, title, state, created_at, last_synced, org_id) VALUES ('%s', 532, 'Fix the widget', 'merged', %s, %s, '%s')`, grantedID, now, now, integrationOrg),
-		fmt.Sprintf(`INSERT INTO git_pull_request_reviews (repo_id, number, review_id, state, submitted_at, last_synced, org_id) VALUES ('%s', 532, 'rev-9', 'APPROVED', %s, %s, '%s')`, grantedID, now, now, integrationOrg),
+		// One review id on two pull requests of one repository (one provider
+		// names an approval by its approver): two rows, two refs.
+		fmt.Sprintf(`INSERT INTO git_pull_request_reviews (repo_id, number, review_id, state, submitted_at, last_synced, org_id) VALUES ('%[1]s', 532, 'rev-9', 'APPROVED', %[2]s, %[2]s, '%[3]s'), ('%[1]s', 533, 'rev-9', 'CHANGES_REQUESTED', %[2]s, %[2]s, '%[3]s')`, grantedID, now, integrationOrg),
 		fmt.Sprintf(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id) VALUES ('%s', 'run-1', 'success', %s, %s, '%s')`, grantedID, now, now, integrationOrg),
 		fmt.Sprintf(`INSERT INTO deployments (repo_id, deployment_id, status, environment, started_at, deployed_at, last_synced, org_id) VALUES ('%s', 'dep-1', 'success', 'production', %s, %s, %s, '%s')`, grantedID, now, now, now, integrationOrg),
 		// The foreign organization: the SAME repository UUID and slug, rows of
@@ -208,7 +210,8 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 		{contractsv1.ContextFabricEvidenceEntityRepository, grantedID, grantedRep},
 		{contractsv1.ContextFabricEvidenceEntityWorkItem, grantedID + ":jira:ABC-1", "Fix login"},
 		{contractsv1.ContextFabricEvidenceEntityPullRequest, grantedID + ":532", "Fix the widget"},
-		{contractsv1.ContextFabricEvidenceEntityReview, grantedID + ":rev-9", "PR #532 review"},
+		{contractsv1.ContextFabricEvidenceEntityReviewV2, grantedID + ":532:rev-9", "PR #532 review"},
+		{contractsv1.ContextFabricEvidenceEntityReviewV2, grantedID + ":533:rev-9", "PR #533 review"},
 		{contractsv1.ContextFabricEvidenceEntityCI, grantedID + ":run-1", "CI run-1"},
 		{contractsv1.ContextFabricEvidenceEntityDeployment, grantedID + ":dep-1", "production deployment"},
 		{contractsv1.ContextFabricEvidenceEntityIncident, "INC-1", "Outage"},
@@ -250,7 +253,7 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 	}{
 		{contractsv1.ContextFabricEvidenceEntityWorkItem, grantedID + ":jira:FOR-1"},
 		{contractsv1.ContextFabricEvidenceEntityPullRequest, grantedID + ":990"},
-		{contractsv1.ContextFabricEvidenceEntityReview, grantedID + ":FOREIGN-REVIEW-990"},
+		{contractsv1.ContextFabricEvidenceEntityReviewV2, grantedID + ":990:FOREIGN-REVIEW-990"},
 		{contractsv1.ContextFabricEvidenceEntityCI, grantedID + ":FOREIGN-CI-990"},
 		{contractsv1.ContextFabricEvidenceEntityDeployment, grantedID + ":FOREIGN-DEP-990"},
 		{contractsv1.ContextFabricEvidenceEntityIncident, "INC-F"},
@@ -265,6 +268,13 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 		// The rows are real: the foreign organization reads its own.
 		if _, decision := resolve.ResolveSourceRow(ctx, storage.Principal{OrgID: foreignOrg}, string(foreign.kind), foreign.id); decision.Reason != contextfabric.SourceRowServed {
 			t.Fatalf("%s %s: the foreign organization's own row is not served: %+v", foreign.kind, foreign.id, decision)
+		}
+	}
+	// The retired review ref names no pull request, so it reads nothing: it
+	// stays on the record.
+	for _, principal := range []storage.Principal{granted, orgWide} {
+		if _, decision := resolve.ResolveSourceRow(ctx, principal, string(contractsv1.ContextFabricEvidenceEntityReview), grantedID+":rev-9"); decision.Reason != contextfabric.SourceRowKindOnRecord {
+			t.Fatalf("retired review ref: %+v", decision)
 		}
 	}
 	// The repository kind: the foreign repository row shares the UUID and

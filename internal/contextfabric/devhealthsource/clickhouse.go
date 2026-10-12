@@ -116,7 +116,13 @@ const SourceName = "dev_health_clickhouse"
 // while that is earlier than last_synced, or the earliest pull request or work
 // item created for it, and absent otherwise. Already-projected repositories
 // hold a re-stamped start; the bump forces the rebuild that replaces it.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v9"
+//
+// (v10, review evidence: a pull request review and its BELONGS_TO_PULL_REQUEST
+// edge cite review.v2 (repository, pull request number, review id) instead of
+// the retired "<repo>:<review_id>", which named one ref for a review id on two
+// pull requests of one repository. Already-projected reviews carry the retired
+// ref; the rebuild (acr-projector rebuild --org) re-projects them.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v10"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and

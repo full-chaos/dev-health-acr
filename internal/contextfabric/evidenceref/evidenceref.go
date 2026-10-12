@@ -1,11 +1,12 @@
 // Package evidenceref is the one grammar of the Context Fabric evidence refs
 // whose ids carry more than one component (CHAOS-7252).
 //
-// The five kinds it covers replace five retired kinds whose producers joined
+// The kinds it covers replace retired kinds whose producers joined
 // colon-capable ids with a bare ':' (a work item id "jira:A:B" and a target
 // "jira:C" gave the same text as "jira:A" and "B:jira:C"), so one ref could
 // name two rows and a source-row read by that text served whichever row was
-// left or admitted (CHAOS-7226 r2 P1). Here every segment goes through
+// left or admitted (CHAOS-7226 r2 P1). review.v2 replaces review, whose
+// id left out the pull request number of the review's key. Here every segment goes through
 // identity.EncodeSegment ('%' -> "%25" first, then ':' -> "%3A"), so no
 // segment holds a ':' and every ':' in an id is a separator. With a fixed
 // segment count per kind the id is injective, and Parse is its exact
@@ -96,6 +97,15 @@ var grammars = map[contractsv1.ContextFabricEvidenceEntityType]Grammar{
 		{Column: "deployment_id", Form: Encoded},
 		{Column: "incident_id", Form: Encoded},
 		{Column: "source", Form: Encoded},
+	}},
+	// The git_pull_request_reviews row, keyed (org_id, repo_id, number,
+	// review_id). A review id is not unique inside a repository (one
+	// provider names an approval by its approver), so the pull request
+	// number is part of the ref.
+	contractsv1.ContextFabricEvidenceEntityReviewV2: {Segments: []Segment{
+		{Column: "repo_id", Form: UUID},
+		{Column: "number", Form: Encoded},
+		{Column: "review_id", Form: Encoded},
 	}},
 	// One project -> team ownership GROUP as the projector forms it:
 	// (provider, projects.id, team_id, source) over the team_project_ownership

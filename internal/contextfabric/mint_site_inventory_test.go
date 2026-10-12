@@ -33,7 +33,8 @@ import (
 //     catalog's locators, N components read off the SQL concat).
 //
 // Every other call that passes a kind constant must be a known non-minting
-// use (a comparison, evidenceref.IDSQL's id-only column); an unknown one
+// use (a comparison, evidenceref.IDSQL's id-only column, evidenceref.Parse);
+// an unknown one
 // fails, because an unclassified use is where a new mint hides.
 
 // mintSite is one derived site: the file (repo-relative), the function or
@@ -303,9 +304,11 @@ func sqlSpliceShape(operands []ast.Expr, splice int) string {
 }
 
 // nonMintKindUses are the calls that may take a kind constant without
-// minting a ref, by callee: an id-only SQL column beside evidenceref.SQL.
+// minting a ref, by callee: an id-only SQL column beside evidenceref.SQL,
+// and evidenceref.Parse, which reads a ref's components back.
 var nonMintKindUses = map[string]bool{
 	"internal/contextfabric/evidenceref.IDSQL": true,
+	"internal/contextfabric/evidenceref.Parse": true,
 }
 
 // derivedMintSites is the inventory of the repository's production Go.
