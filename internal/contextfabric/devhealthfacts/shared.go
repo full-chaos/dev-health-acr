@@ -959,7 +959,11 @@ import (
 //
 // v191 -> v192: a cohort cut below the population retrieval reached serves that
 // population and an N of M sentence. A stored answer lacks both.
-const QueryVersion = "devhealthfacts.clickhouse.v192"
+//
+// v192 -> v193: a project status answer serves a truncated readiness fact as a
+// partial estimate coverage driver with source_state truncated. An answer saved
+// under v192 has no such driver.
+const QueryVersion = "devhealthfacts.clickhouse.v193"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
