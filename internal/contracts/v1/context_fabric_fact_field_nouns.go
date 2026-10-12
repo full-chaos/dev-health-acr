@@ -86,7 +86,7 @@ var contextFabricStringFieldClasses = func() map[string]ContextFabricStringField
 		"archived_items", "attribution", "attribution_basis", "basis", "blocker_status_basis", "change_failure_link_tier",
 		"change_failure_rate_state", "last_failure_stage", "daily_flow_omitted_reason", "incident_attribution_basis", "investment_mix_source",
 		"latest_score_unavailable_reason", "latest_severity_unavailable_reason", "latest_unavailable_reason", "link_tier",
-		"member_kind", "mix_source", "p50_basis", "p50_unavailable_reason", "population_window", "reach_basis",
+		"member_kind", "mix_source", "outcome", "window", "p50_basis", "p50_unavailable_reason", "population_window", "reach_basis",
 		"relationship_type", "repository_link_basis", "repository_tables_basis", "rollup_basis",
 		"rule_basis_unavailable_reason", "severity_basis", "severity_unavailable_reason", "signal", "source", "state",
 		"status", "status_basis", "status_provenance", "status_since_basis", "story_points_completed_unavailable_reason",
@@ -134,3 +134,18 @@ func ContextFabricDisplayString(field, value string) (text string, ok bool) {
 }
 
 var contextFabricLongDecimal = regexp.MustCompile(`\b\d+\.\d+\b`)
+
+var contextFabricCohortSignalNouns = map[string]string{
+	"investment_mix":                    "investment mix",
+	"health.compounding_risk":           "health risk",
+	"operational_deficiencies.severity": "operational deficiencies",
+	"readiness.coverage_gap":            "readiness gap",
+	"workload.forecast_pressure":        "workload pressure",
+}
+
+// ContextFabricCohortSignalNoun is the display noun of a cohort ranking
+// signal; ok is false for a signal outside the vocabulary.
+func ContextFabricCohortSignalNoun(signal string) (string, bool) {
+	noun, ok := contextFabricCohortSignalNouns[signal]
+	return noun, ok
+}
