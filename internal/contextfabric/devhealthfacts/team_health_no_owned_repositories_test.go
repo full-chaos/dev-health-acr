@@ -97,3 +97,16 @@ func TestTeamInvestmentOwningNoRepositoryIsNotApplicable(t *testing.T) {
 		}
 	}
 }
+
+// teamOwningClient seeds one owned repository for the team in the shape the
+// kind's ownership read scans, so a zero-row read is a team that owns
+// something and holds no rows.
+func teamOwningClient(kind contextfabric.FactKind, teamID string) *fakeClient {
+	switch kind {
+	case contextfabric.FactInvestment:
+		return &fakeClient{tables: []fakeTable{{match: "team_repo_ownership", rows: [][]any{{teamID, "repo-1"}}}}}
+	case contextfabric.FactOperationalDeficiencies, contextfabric.FactHealth:
+		return &fakeClient{tables: []fakeTable{{match: "team_repo_ownership", rows: [][]any{{teamID, "repo-1", "org/repo-1"}}}}}
+	}
+	return &fakeClient{}
+}
