@@ -7,10 +7,12 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 const blockerMemoryOrg = "5c1e8f2a-94d7-4b36-8a0e-2f6b9d3c7e14"
@@ -18,12 +20,16 @@ const blockerMemoryOrg = "5c1e8f2a-94d7-4b36-8a0e-2f6b9d3c7e14"
 // An organization's work items that are in no blocker edge must not count
 // against the team blocker reads' statement memory budget: the reads serve a
 // handful of edges, so their cost has to follow the edges, not the size of
-// the organization's work item table.
+// the organization's work item table. The query client runs under the hosted
+// runtime's per-statement read budget, as acr-api does.
 const blockerMemoryFillerItems = 250_000
 
 func TestTeamBlockerFactsServeAnOrganizationWithManyWorkItemsOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
+		options.MaxBytesToRead = &maxBytesToRead
+	})
 	for _, statement := range devhealthschema.DDL(
 		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
@@ -62,8 +68,8 @@ func TestTeamBlockerFactsServeAnOrganizationWithManyWorkItemsOnRealClickHouse(t 
 			blockerMemoryOrg, "blocker-open", blocked, "blocks", at)
 	}
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
-SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', ?, NULL FROM numbers(?)`,
-		repoUUID("repo-owned"), blockerMemoryOrg, at, project, uint64(blockerMemoryFillerItems))
+SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?)`,
+		repoUUID("repo-owned"), blockerMemoryOrg, at, uint64(blockerMemoryFillerItems))
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactBlockers)
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: blockerMemoryOrg, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
