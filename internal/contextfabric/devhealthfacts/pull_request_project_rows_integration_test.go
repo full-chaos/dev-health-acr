@@ -33,18 +33,25 @@ func TestPullRequestFactProjectRowsFollowTheStrictLinkReading(t *testing.T) {
 		exec(label, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			repoID, itemID, number, float32(0.9), provenance, "", at, policyTreeOrgID)
 	}
-	item := func(id, itemType, projectID string) {
-		exec("item "+id, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, policyTreeRepoC, policyTreeOrgID, "item "+id, itemType, "open", "", "", projectID, at)
+	item := func(id, provider, itemType, projectID string) {
+		exec("item "+id, `INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, type, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, policyTreeRepoC, policyTreeOrgID, provider, "item "+id, itemType, "open", "", "", projectID, at)
+	}
+	// The entity-tree seed writes issues with no provider, and the project is
+	// paired with the work item's own provider: re-seed the seeded issues with
+	// the project's provider.
+	exec("clear seeded issues", `TRUNCATE TABLE work_items`)
+	for _, id := range []string{"I-native-a", "I-heuristic-b", "I-text-b", "I-unlinked"} {
+		item(id, policyTreeProvider, "issue", policyTreeProject)
 	}
 
 	// PR 1 (seeded: a native link) also has a weaker explicit_text link from a
 	// second issue of the same project: one row, strongest tier native.
-	item("I-text-a", "issue", policyTreeProject)
+	item("I-text-a", policyTreeProvider, "issue", policyTreeProject)
 	link("extra explicit_text link to PR 1", "I-text-a", policyTreeRepoA, 1, "explicit_text")
 	// A pull-request-typed work item of the project, linked to an existing PR 5.
 	pullRequest("PR 5", policyTreeRepoA, 5)
-	item("I-pr-typed", "pr", policyTreeProject)
+	item("I-pr-typed", policyTreeProvider, "pr", policyTreeProject)
 	link("pr-typed item link to PR 5", "I-pr-typed", policyTreeRepoA, 5, "native")
 	// A project key that resolves to two projects: omitted, never guessed.
 	for _, id := range []string{"AMB-1", "AMB-2"} {
@@ -52,11 +59,11 @@ func TestPullRequestFactProjectRowsFollowTheStrictLinkReading(t *testing.T) {
 			id, policyTreeOrgID, policyTreeProvider, "AMB", id, uint8(1), "active", "", at)
 	}
 	pullRequest("PR 6", policyTreeRepoA, 6)
-	item("I-ambiguous", "issue", "AMB")
+	item("I-ambiguous", policyTreeProvider, "issue", "AMB")
 	link("ambiguous project link to PR 6", "I-ambiguous", policyTreeRepoA, 6, "native")
 	// A stale link: the pull request it names does not exist, so no pull
 	// request fact exists to carry a project row.
-	item("I-stale", "issue", policyTreeProject)
+	item("I-stale", policyTreeProvider, "issue", policyTreeProject)
 	link("stale link to PR 99", "I-stale", policyTreeRepoA, 99, "native")
 	// A pull request nothing links to.
 	pullRequest("PR 7", policyTreeRepoA, 7)
