@@ -115,6 +115,14 @@ const clientSynthesisFlowLine = "\n\nThe service wrote no answer text on this tu
 func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *CallerContext, surface string, input contractsv1.MCPInvestigateQuestionRequest, supplied *contractsv1.ContextFabricSuppliedInterpretation, suppliedSynthesis *contractsv1.ContextFabricSuppliedSynthesis) (*mcpsdk.CallToolResult, error) {
 	budget := answerBudget(input.Budget, caller.Capabilities().Limits)
 	hosted := hostedInvestigationRequest(input, budget)
+	// The answer budget is the shedding target (answer_budget_bytes); the body
+	// bound is the service's advertised ceiling, so the canonical result always
+	// comes back here and the tool projects to the budget itself. When the
+	// service advertised no ceiling the budget is both, as before.
+	if ceiling := caller.Capabilities().Limits.MaxSerializedBytes; ceiling > 0 {
+		hosted.Options.MaxSerializedBytes = min(ceiling, contractsv1.ContextFabricSerializedBytesMax)
+		hosted.Options.AnswerBudgetBytes = min(budget.MaxSerializedBytes, hosted.Options.MaxSerializedBytes)
+	}
 	hosted.SuppliedInterpretation = supplied
 	hosted.SuppliedSynthesis = suppliedSynthesis
 
