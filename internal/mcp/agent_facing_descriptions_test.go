@@ -248,7 +248,7 @@ func TestToolDescriptionsPointToFollowUpTools(t *testing.T) {
 		byName[tool.Name] = tool.Description
 	}
 	links := map[string][]string{
-		"context_for_task":                {"source_evidence", "investigate_question"},
+		"context_for_task":                {"source_evidence", "find_subjects", "read_facts", "investigate_with_interpretation", "investigate_question"},
 		"investigate_question":            {"investigation_result", "source_evidence", "context_for_task", "prior_", "result_id"},
 		"investigate_with_interpretation": {"investigate_question", "interpret_question", "prompts/get", "interpretation", "contract", "_meta"},
 		"investigation_result":            {"investigate_question"},
