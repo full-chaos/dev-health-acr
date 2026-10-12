@@ -266,6 +266,9 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 		})))},
 		anchorSiteScenario{name: "carry caller superseded", run: anchorProbeScenario(first, carryStep("request_vocab_carry_caller", emptyProbeResponse(), betaHint, nil))},
 		anchorSiteScenario{name: "carry remembered offered", run: anchorProbeScenario(first, carryStep("request_vocab_carry_offered", alphaOffered, nil, nil))},
+		anchorSiteScenario{name: "carry pending held", run: anchorProbeScenario(first, carryStep("request_vocab_carry_pending", emptyProbeResponse(), nil, mutateStoredBindings(func(s *PersistedSemanticState) {
+			editBindingMember(s, func(b *AnchorBinding) { b.State = AnchorBindingPendingWindowConfirmation })
+		})))},
 		anchorSiteScenario{name: "carry cap full", run: anchorProbeScenario(first, carryStep("request_vocab_carry_cap", emptyProbeResponse(), capFull, nil))},
 		anchorSiteScenario{name: "carry receipt superseded", run: func(t *testing.T, sink EngineTelemetry, rec *recordingTelemetry, off bool) InvestigationResult {
 			rig := newAnchorProbeRig(t, off)

@@ -1372,7 +1372,7 @@ func TestCaptureSkipReasonVocabularyIsClosed(t *testing.T) {
 			t.Fatalf("%q not valid", reason)
 		}
 	}
-	if ValidCaptureSkipReason("unassigned_exit") || ValidCaptureSkipReason("") || len(captureSkipReasons()) != 14 {
+	if ValidCaptureSkipReason("unassigned_exit") || ValidCaptureSkipReason("") || len(captureSkipReasons()) != 15 {
 		t.Fatal("CaptureSkipReason vocabulary membership is not closed")
 	}
 }

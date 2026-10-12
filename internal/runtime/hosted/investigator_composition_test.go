@@ -533,3 +533,22 @@ func TestBuildContextFabricInvestigator_wiresTheAnchorBindingCarrySwitch(t *test
 		}
 	}
 }
+
+// TestBuildContextFabricInvestigator_wiresTheAnchorBindingPendingCarrySwitch:
+// the deployment switch reaches the engine beside the carry, off by default.
+func TestBuildContextFabricInvestigator_wiresTheAnchorBindingPendingCarrySwitch(t *testing.T) {
+	configureGraph(t)
+	for _, on := range []bool{false, true} {
+		request, postgres, clickhouse := investigatorBuildRequest(t)
+		request.config.AnchorBindingCarryEnabled = true
+		request.config.AnchorBindingPendingCarryEnabled = on
+		investigator, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+		if err != nil {
+			t.Fatalf("buildContextFabricInvestigator() = %v", err)
+		}
+		engine := investigator.(*contextfabric.Engine)
+		if got := reflect.ValueOf(engine).Elem().FieldByName("anchorBindingPendingCarryEnabled").Bool(); got != on {
+			t.Errorf("config %v reached the engine as %v", on, got)
+		}
+	}
+}

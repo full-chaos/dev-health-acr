@@ -886,14 +886,21 @@ import (
 // no longer counted). An answer saved under v178 may rest on a repository so
 // reached.
 //
-// v179 -> v180: a team reaches work through the projects it owns as well as the
+// v179 -> v180: with the anchor binding pending carry switch on (beside the
+// carry switch), a binding pending window confirmation carries its anchor
+// into the confirming turn; with it off such a binding carries nothing. With
+// the carry switch on, an exit that ends before resolution (frame gate, graph
+// not projected, window gate) discloses a withheld ledger anchor as withheld
+// and does not pass it on. A stored answer can differ.
+//
+// v180 -> v181: a team reaches work through the projects it owns as well as the
 // repositories it owns. The pull request rollup adds the pull requests linked to
 // an owned project's issues (a reached repository counts its linked pull
 // requests only), the blockers total is the union of owned repositories and
 // owned-project items counted once, and deployments, incidents and metrics name
 // the project-reached repositories they have no rows for. A candidate saved
-// under v179 holds a team total over owned repositories alone.
-const QueryVersion = "devhealthfacts.clickhouse.v180"
+// under v180 holds a team total over owned repositories alone.
+const QueryVersion = "devhealthfacts.clickhouse.v181"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

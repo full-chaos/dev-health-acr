@@ -34,20 +34,41 @@ func carriedHintsOf(rig *anchorProbeRig) []SubjectHint {
 // mutate on its request.
 func bindingCarryTurns(t *testing.T, carryOn bool, edit func(*staticResultStore), mutate func(*InvestigationRequest), followUpResponse needTurnResponse) (*anchorProbeRig, anchorProbeTurn, anchorProbeTurn) {
 	t.Helper()
+	return bindingCarryTurnsWith(t, carryTurnOptions{carryOn: carryOn, edit: edit, mutate: mutate}, followUpResponse)
+}
+
+// carryTurnOptions is bindingCarryTurns' follow-up setup: the two switches,
+// a store edit, a request mutation, and a rig hook run just before the
+// follow-up.
+type carryTurnOptions struct {
+	carryOn, pendingOn bool
+	// unwindowed asks both turns without a window, so no window is carried
+	// into the follow-up.
+	unwindowed bool
+	edit       func(*staticResultStore)
+	mutate     func(*InvestigationRequest)
+	before     func(*anchorProbeRig)
+}
+
+func bindingCarryTurnsWith(t *testing.T, o carryTurnOptions, followUpResponse needTurnResponse) (*anchorProbeRig, anchorProbeTurn, anchorProbeTurn) {
+	t.Helper()
 	rig := newAnchorProbeRig(t, false)
 	rig.interpreter.read(SubjectRepository, false)
-	one := rig.turn(t, needTurnRequest("request_carry_one", true), identityProvenResponse(probeAlpha))
+	one := rig.turn(t, needTurnRequest("request_carry_one", !o.unwindowed), identityProvenResponse(probeAlpha))
 	if got := servedLedgerAnchor(one); got.ID != probeAlpha.CanonicalID {
 		t.Fatalf("premise: turn one's ledger holds %+v; it must capture alpha", got)
 	}
 	rig.verify()
-	rig.engine.anchorBindingCarryEnabled = carryOn
-	if edit != nil {
-		edit(rig.store)
+	rig.engine.anchorBindingCarryEnabled, rig.engine.anchorBindingPendingCarryEnabled = o.carryOn, o.pendingOn
+	if o.edit != nil {
+		o.edit(rig.store)
 	}
-	request := continuingNeedTurn(needTurnRequest("request_carry_two", true), one.result.ResultID)
-	if mutate != nil {
-		mutate(&request)
+	if o.before != nil {
+		o.before(rig)
+	}
+	request := continuingNeedTurn(needTurnRequest("request_carry_two", !o.unwindowed), one.result.ResultID)
+	if o.mutate != nil {
+		o.mutate(&request)
 	}
 	two := rig.turn(t, request, followUpResponse)
 	return rig, one, two
@@ -296,39 +317,41 @@ func TestTheRememberedOfferAndTheSubstitutionGuardNeverBothFire(t *testing.T) {
 	}
 }
 
+// expiredBinding ages the stored binding's proof past the maximum age, so
+// admission refuses it while the ledger still holds the same anchor.
+var expiredBinding = mutateStoredBindings(func(s *PersistedSemanticState) {
+	editBindingMember(s, func(b *AnchorBinding) { b.ProvenAt = b.ProvenAt.Add(-DefaultAnchorBindingMaxAge - time.Second) })
+})
+
 // TestAWithheldLedgerAnchorReachesNoResolutionCall: the binding is refused
 // (expired) while the ledger still holds the engine-committed alpha.
-// Switched off, the ledger's alpha reaches resolution as the anchor
-// selection. Switched on, no resolution call receives it, on the decisive
-// path or the window-gated offers-only path, and the served carried entry
-// discloses it as vetoed_unresolved on the decisive path.
+// Switched off, the ledger's alpha reaches the decisive resolution as the
+// anchor selection. Switched on, it does not, the served carried entry
+// discloses it as vetoed_unresolved, and the outgoing ledger drops it.
+//
+// The follow-up is a continuation, so it carries its parent's stated window
+// and never reaches the window gate: this row covers the decisive call only.
+// The exits that end before resolution are
+// TestAWithheldLedgerAnchorOnAnExitBeforeResolution's.
 func TestAWithheldLedgerAnchorReachesNoResolutionCall(t *testing.T) {
-	expire := mutateStoredBindings(func(s *PersistedSemanticState) {
-		editBindingMember(s, func(b *AnchorBinding) { b.ProvenAt = b.ProvenAt.Add(-DefaultAnchorBindingMaxAge - time.Second) })
-	})
 	for _, tc := range []struct {
-		name         string
-		carryOn      bool
-		statedWindow bool
-		wantAnchor   bool
+		name       string
+		carryOn    bool
+		wantAnchor bool
 	}{
-		{"switched off, decisive", false, true, true},
-		{"switched on, decisive", true, true, false},
-		{"switched off, window gated", false, false, true},
-		{"switched on, window gated", true, false, false},
+		{"switched off", false, true},
+		{"switched on", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rig, _, two := bindingCarryTurns(t, tc.carryOn, expire, func(r *InvestigationRequest) {
-				if !tc.statedWindow {
-					*r = continuingNeedTurn(needTurnRequest("request_carry_two", false), r.ParentResultID)
-				}
-			}, emptyProbeResponse())
-			calls := rig.graph.calls[len(rig.graph.calls)-1:]
-			gotAnchor := calls[0].anchor != nil && calls[0].anchor.CanonicalID == probeAlpha.CanonicalID
-			if gotAnchor != tc.wantAnchor {
-				t.Fatalf("resolution anchor selection = %+v, want alpha=%v", calls[0].anchor, tc.wantAnchor)
+			rig, _, two := bindingCarryTurns(t, tc.carryOn, expiredBinding, nil, emptyProbeResponse())
+			if two.transitions[0].Evaluation != AnchorBindingEvaluationResolved {
+				t.Fatalf("premise: evaluation = %s, want the decisive resolution", two.transitions[0].Evaluation)
 			}
-			if !tc.statedWindow || !tc.carryOn {
+			call := rig.graph.calls[len(rig.graph.calls)-1]
+			if got := call.anchor != nil && call.anchor.CanonicalID == probeAlpha.CanonicalID; got != tc.wantAnchor {
+				t.Fatalf("resolution anchor selection = %+v, want alpha=%v", call.anchor, tc.wantAnchor)
+			}
+			if !tc.carryOn {
 				return
 			}
 			got := memberEntries(two.result, contractsv1.ContextFabricStructureNeedSubjectAnchor)
@@ -339,6 +362,79 @@ func TestAWithheldLedgerAnchorReachesNoResolutionCall(t *testing.T) {
 				t.Fatalf("outgoing ledger anchor = %+v, want none: a withheld entry is not inherited", anchor)
 			}
 		})
+	}
+}
+
+// TestAWithheldLedgerAnchorOnAnExitBeforeResolution: the same refused
+// binding, on each exit a same-question continuation can reach before
+// resolution: the frame-gate refusal, graph not projected, and the window
+// gate (reached when no window is carried: the parent asked without one and
+// the follow-up reads as windowed). Switched off, the entry reads
+// not_evaluated and passes to the next turn (the behaviour on main).
+// Switched on, it reads vetoed_unresolved, is not passed on, no resolution
+// call receives it, and the ledger line's anchor_disposition says so.
+func TestAWithheldLedgerAnchorOnAnExitBeforeResolution(t *testing.T) {
+	refuseFrame := func(rig *anchorProbeRig) {
+		rig.interpreter.outcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectTeam}
+	}
+	notProjected := needTurnResponse{err: fmt.Errorf("query context graph: %w", ErrGraphNotProjected)}
+	windowed := func(rig *anchorProbeRig) { rig.interpreter.read(SubjectRepository, true) }
+	for _, exit := range []struct {
+		name       string
+		before     func(*anchorProbeRig)
+		response   needTurnResponse
+		calls      int
+		unwindowed bool
+		evaluation AnchorBindingEvaluation
+	}{
+		{"frame gate", refuseFrame, emptyProbeResponse(), 0, false, AnchorBindingEvaluationNotResolved},
+		{"graph not projected", nil, notProjected, 1, false, AnchorBindingEvaluationNotResolved},
+		{"window gate", windowed, emptyProbeResponse(), 1, true, AnchorBindingEvaluationWindowGated},
+	} {
+		for _, tc := range []struct {
+			carryOn     bool
+			disposition contractsv1.ContextFabricStructureDisposition
+			passedOn    bool
+		}{
+			{false, contractsv1.ContextFabricStructureDispositionNotEvaluated, true},
+			{true, contractsv1.ContextFabricStructureDispositionVetoedUnresolved, false},
+		} {
+			t.Run(fmt.Sprintf("%s carry=%v", exit.name, tc.carryOn), func(t *testing.T) {
+				var mark int
+				before := func(rig *anchorProbeRig) {
+					mark = len(rig.graph.calls)
+					if exit.before != nil {
+						exit.before(rig)
+					}
+				}
+				rig, _, two := bindingCarryTurnsWith(t, carryTurnOptions{carryOn: tc.carryOn, unwindowed: exit.unwindowed, edit: expiredBinding, before: before}, exit.response)
+				if got := two.transitions[0].Evaluation; got != exit.evaluation {
+					t.Fatalf("premise: evaluation = %s, want %s on this exit", got, exit.evaluation)
+				}
+				calls := rig.graph.calls[mark:]
+				if len(calls) != exit.calls {
+					t.Fatalf("premise: resolution calls = %d, want %d on this exit", len(calls), exit.calls)
+				}
+				for _, call := range calls {
+					if got := call.anchor != nil; got != !tc.carryOn {
+						t.Fatalf("resolution anchor selection = %+v, want present=%v", call.anchor, !tc.carryOn)
+					}
+				}
+				got := memberEntries(two.result, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+				if len(got) != 1 || got[0].Disposition != tc.disposition || got[0].AppliedValue != probeAlpha.CanonicalID {
+					t.Fatalf("served subject_anchor entry = %+v, want alpha %s", got, tc.disposition)
+				}
+				if passed := servedLedgerAnchor(two).ID == probeAlpha.CanonicalID; passed != tc.passedOn {
+					t.Fatalf("outgoing ledger anchor = %+v, want passed on=%v", servedLedgerAnchor(two), tc.passedOn)
+				}
+				if tc.carryOn {
+					ledgers := rig.telemetry.confirmedNeedLedgers
+					if line := ledgers[len(ledgers)-1]; line.AnchorDisposition != contractsv1.ContextFabricStructureDispositionVetoedUnresolved {
+						t.Fatalf("ledger line anchor_disposition = %q, want vetoed_unresolved", line.AnchorDisposition)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -407,16 +503,19 @@ func TestACarryAtTheHintCapIsRecordedAsCapFull(t *testing.T) {
 
 // TestAContestedOrPendingBindingCarry: a contested binding carries nothing;
 // a binding pending window confirmation is admitted and carries its held
-// identity.
+// identity only with the pending carry on, and reads pending_held without
+// it. Whatever carries nothing withholds the ledger's alpha too.
 func TestAContestedOrPendingBindingCarry(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		state     AnchorBindingState
+		pendingOn bool
 		carry     BoundAnchorCarry
 		wantHints int
 	}{
-		{"contested", AnchorBindingContested, BoundAnchorCarryNotAdmitted, 0},
-		{"pending window confirmation", AnchorBindingPendingWindowConfirmation, BoundAnchorCarryInjected, 1},
+		{"contested", AnchorBindingContested, true, BoundAnchorCarryNotAdmitted, 0},
+		{"pending, pending carry off", AnchorBindingPendingWindowConfirmation, false, BoundAnchorCarryPendingHeld, 0},
+		{"pending, pending carry on", AnchorBindingPendingWindowConfirmation, true, BoundAnchorCarryInjected, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			set := mutateStoredBindings(func(s *PersistedSemanticState) {
@@ -427,7 +526,7 @@ func TestAContestedOrPendingBindingCarry(t *testing.T) {
 					}
 				})
 			})
-			rig, _, two := bindingCarryTurns(t, true, set, nil, emptyProbeResponse())
+			rig, _, two := bindingCarryTurnsWith(t, carryTurnOptions{carryOn: true, pendingOn: tc.pendingOn, edit: set}, emptyProbeResponse())
 			if line := two.transitions[0]; line.BoundAnchorCarry != tc.carry {
 				t.Fatalf("line carry = %s, want %s", line.BoundAnchorCarry, tc.carry)
 			}
@@ -435,7 +534,7 @@ func TestAContestedOrPendingBindingCarry(t *testing.T) {
 				t.Fatalf("carried hints = %+v, want %d", hints, tc.wantHints)
 			}
 			// The ledger's alpha reaches the selection only beside a due carry
-			// of the same identity; the contested binding withholds it.
+			// of the same identity; otherwise it is withheld.
 			carried := tc.wantHints == 1
 			if call := rig.graph.calls[len(rig.graph.calls)-1]; (call.anchor != nil) != carried {
 				t.Fatalf("resolution anchor selection = %+v, want present=%v", call.anchor, carried)
@@ -451,7 +550,8 @@ func TestAContestedOrPendingBindingCarry(t *testing.T) {
 }
 
 // TestNewEngineRefusesTheCarryWithoutTheShadow: the carry is owned by the
-// shadow binding, so the switch with the shadow off is a configuration error.
+// shadow binding, so the switch with the shadow off is a configuration
+// error; the pending carry widens the carry, so it alone is one too.
 func TestNewEngineRefusesTheCarryWithoutTheShadow(t *testing.T) {
 	deps := EngineDependencies{
 		Interpreter: &anchorProbeInterpreter{},
@@ -467,6 +567,15 @@ func TestNewEngineRefusesTheCarryWithoutTheShadow(t *testing.T) {
 	if _, err := NewEngine(deps, options); err != nil {
 		t.Fatalf("premise: the carry with the shadow on must construct, got %v", err)
 	}
+	options.AnchorBindingPendingCarryEnabled = true
+	if _, err := NewEngine(deps, options); err != nil {
+		t.Fatalf("premise: the pending carry beside the carry must construct, got %v", err)
+	}
+	options.AnchorBindingCarryEnabled = false
+	if _, err := NewEngine(deps, options); err == nil || !strings.Contains(err.Error(), "pending carry needs the anchor binding carry") {
+		t.Fatalf("NewEngine() error = %v, want the pending-needs-carry refusal", err)
+	}
+	options.AnchorBindingCarryEnabled, options.AnchorBindingPendingCarryEnabled = true, false
 	options.DisableAnchorBindingShadow = true
 	_, err := NewEngine(deps, options)
 	if err == nil || !strings.Contains(err.Error(), "needs the shadow anchor binding") {
