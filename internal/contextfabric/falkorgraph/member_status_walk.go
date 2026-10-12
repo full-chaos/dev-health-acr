@@ -91,6 +91,15 @@ func (p memberStatusPredicate) clause() nodeStatusClause {
 	return nodeStatusClause{property: p.storedProperty(), values: []interface{}{value}}
 }
 
+// clausePredicate is the predicate the read's clause states with no review
+// decision: the status itself, or open for a status the review rows decide.
+func (p memberStatusPredicate) clausePredicate() memberStatusPredicate {
+	if p.reviewDerived() {
+		return memberStatusPredicate{kind: p.kind, status: contextfabric.PullRequestStatusOpen}
+	}
+	return p
+}
+
 // outsideClause keeps the nodes whose stored status is outside the kind's
 // closed set; empty for pull requests, whose outside count is not served.
 func (p memberStatusPredicate) outsideClause() nodeStatusClause {
@@ -116,9 +125,13 @@ type memberStatusWalk struct {
 	// reached: the anchor reaches at least one authorized member of the kind,
 	// whatever its status.
 	reached bool
-	// poolCut: the review pages stopped at their cap with rows left, so the
-	// status was decided within the first read members only.
+	// poolCut: the member read stopped with rows unread that could hold the
+	// status, so the status was decided within the first read members only.
 	poolCut bool
+	// pageCapped: the member read stopped at its page cap; capFilled: it
+	// stopped because more authorized members held the status than the walk
+	// serves. Both are decided into poolCut when the walk finishes.
+	pageCapped, capFilled bool
 	// pool is the count of authorized members of the kind the anchor's walk
 	// reaches under the state clause, counted only when poolCut; -1 otherwise
 	// or when that bounded count was itself cut.
@@ -143,8 +156,8 @@ func (w *memberStatusWalk) add(other memberStatusWalk) {
 	w.outsideSet += other.outsideSet
 }
 
-// memberStatusPageCap bounds how many review pages one member read takes. A
-// read that reaches it is cut.
+// memberStatusPageCap bounds how many pages one status member read takes. A
+// read that reaches it with members of the pool unread is cut.
 const memberStatusPageCap = 8
 
 // pullRequestsHoldingReviewStatus keeps the ids of open pull requests that hold
@@ -167,26 +180,24 @@ func (a *Adapter) pullRequestsHoldingReviewStatus(ctx context.Context, key, orgI
 	return kept, nil
 }
 
-// reviewedMemberHits is the member read of a review status: pages of open pull
-// requests, each page decided by its review rows before authorization, until
-// more members hold the status than the walk serves or the pages end. A hit
-// that holds the status and that the caller cannot see is returned for the
-// walk to deny; a hit that does not hold it is not returned. Stopping with
-// rows unread is a pool cut: the status was not checked past them.
-func (a *Adapter) reviewedMemberHits(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, step walkStep, temporal temporalFilter) ([]walkHit, error) {
+// statusMemberHits is the member read of a status: pages of the members whose
+// stored status the read's clause keeps, a review status decided per page by
+// the review rows, until more authorized members hold the status than the walk
+// serves or the pages end. Only authorized members count toward the cap, so
+// members the caller cannot see do not crowd out those it can. A hit that
+// holds the status and that the caller cannot see is returned for the walk to
+// deny; a hit that does not hold it is not returned.
+func (a *Adapter) statusMemberHits(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, step walkStep, temporal temporalFilter, budget int) ([]walkHit, error) {
 	pageSize := 1 << 30
-	if state.collectLimit > 0 {
-		pageSize = state.collectLimit + 1
+	if budget > 0 {
+		pageSize = budget + 1
 	}
+	reviewed := state.status.reviewDerived()
 	var hits []walkHit
 	read := map[string]bool{}
 	kept := map[string]bool{}
 	pages := 0
 	defer func() { state.out.status.read = len(read) }()
-	cut := func() {
-		state.out.status.poolCut = true
-		state.out.truncated = true
-	}
 	for start := 0; start < len(frontier); start += storedSubjectBatch {
 		end := min(start+storedSubjectBatch, len(frontier))
 		batch := make([]interface{}, 0, end-start)
@@ -194,8 +205,12 @@ func (a *Adapter) reviewedMemberHits(ctx context.Context, key, orgID string, sta
 			batch = append(batch, id)
 		}
 		for skip := 0; ; skip += pageSize {
-			if (state.collectLimit > 0 && len(kept) > state.collectLimit) || pages >= memberStatusPageCap {
-				cut()
+			if state.collectLimit > 0 && len(kept) > state.collectLimit {
+				state.out.status.capFilled = true
+				return hits, nil
+			}
+			if pages >= memberStatusPageCap {
+				state.out.status.pageCapped = true
 				return hits, nil
 			}
 			pages++
@@ -203,13 +218,15 @@ func (a *Adapter) reviewedMemberHits(ctx context.Context, key, orgID string, sta
 			if err != nil {
 				return nil, err
 			}
-			ids := make([]string, 0, len(page))
-			for _, h := range page {
-				ids = append(ids, canonicalIDOf(h.to))
-			}
-			holding, err := a.pullRequestsHoldingReviewStatus(ctx, key, orgID, state.status.status, distinctIDs(ids))
-			if err != nil {
-				return nil, err
+			var holding map[string]bool
+			if reviewed {
+				ids := make([]string, 0, len(page))
+				for _, h := range page {
+					ids = append(ids, canonicalIDOf(h.to))
+				}
+				if holding, err = a.pullRequestsHoldingReviewStatus(ctx, key, orgID, state.status.status, distinctIDs(ids)); err != nil {
+					return nil, err
+				}
 			}
 			for _, h := range page {
 				id := canonicalIDOf(h.to)
@@ -217,7 +234,7 @@ func (a *Adapter) reviewedMemberHits(ctx context.Context, key, orgID string, sta
 				if authorized {
 					read[id] = true
 				}
-				if !holding[id] {
+				if reviewed && !holding[id] {
 					continue
 				}
 				hits = append(hits, h)
@@ -233,18 +250,41 @@ func (a *Adapter) reviewedMemberHits(ctx context.Context, key, orgID string, sta
 	return hits, nil
 }
 
+// decidePoolCut turns how a status member read stopped into a pool cut. A read
+// stopped at its page cap is cut unless the bounded authorized pool count
+// shows it read the whole pool; a review read stopped by a filled cap is cut,
+// since the open pull requests past it were not decided. count reads the
+// authorized pool: its size, and whether that bounded read was itself cut.
+func (state treeWalkState) decidePoolCut(count func() (int, bool, error)) error {
+	out := state.out
+	if !out.status.pageCapped && !(out.status.capFilled && state.status.reviewDerived()) {
+		return nil
+	}
+	pool, poolCut, err := count()
+	if err != nil {
+		return err
+	}
+	if poolCut {
+		pool = -1
+	}
+	if out.status.pageCapped && !out.status.capFilled && pool >= 0 && pool == out.status.read {
+		return nil
+	}
+	out.status.poolCut = true
+	out.status.pool = pool
+	out.truncated = true
+	return nil
+}
+
 // finishMemberStatus records what the predicate did on a walk whose last hop
 // read the members with it: what was kept, whether the anchor reaches any
-// member of the kind at all (read only when none was kept), the authorized
-// pool of a cut review read, and the members outside the kind's closed set.
-// unfiltered is the member hop without the status clause.
+// member of the kind at all (read only when none was kept), whether the read
+// is a pool cut, and the members outside the kind's closed set. unfiltered is
+// the member hop without the status clause.
 func (a *Adapter) finishMemberStatus(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, unfiltered, filtered walkStep, temporal temporalFilter, budget int) error {
 	out := state.out
 	out.status.applied = true
 	out.status.kept = len(out.nodes)
-	if !state.status.reviewDerived() {
-		out.status.read = out.status.kept
-	}
 	out.status.reached = out.status.kept > 0
 	if !out.status.reached {
 		probe := unfiltered
@@ -260,35 +300,36 @@ func (a *Adapter) finishMemberStatus(ctx context.Context, key, orgID string, sta
 			}
 		}
 	}
-	if out.status.poolCut {
+	err := state.decidePoolCut(func() (int, bool, error) {
 		pool := filtered
 		pool.projected = true
-		count, err := a.authorizedHitCount(ctx, key, orgID, state, hop, frontier, pool, temporal)
-		if err != nil {
-			return err
-		}
-		out.status.pool = count
+		return a.authorizedHitCount(ctx, key, orgID, state, hop, frontier, pool, temporal)
+	})
+	if err != nil {
+		return err
 	}
 	if outside := state.status.outsideClause(); outside.set() {
 		probe := unfiltered
 		probe.status = outside
 		probe.projected = true
-		count, err := a.authorizedHitCount(ctx, key, orgID, state, hop, frontier, probe, temporal)
+		// A cut count is still a true lower bound: that many members hold a
+		// status outside the set.
+		count, _, err := a.authorizedHitCount(ctx, key, orgID, state, hop, frontier, probe, temporal)
 		if err != nil {
 			return err
 		}
-		out.status.outsideSet = max(count, 0)
+		out.status.outsideSet = count
 	}
 	return nil
 }
 
 // authorizedHitCount counts the distinct nodes a step reaches from frontier
-// that the caller may see, bounded by the census bound: -1 when the read was
-// cut, so the count is not known.
-func (a *Adapter) authorizedHitCount(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, step walkStep, temporal temporalFilter) (int, error) {
+// that the caller may see, bounded by the census bound, and reports whether
+// that read was cut.
+func (a *Adapter) authorizedHitCount(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, step walkStep, temporal temporalFilter) (int, bool, error) {
 	hits, cut, err := a.walkStepHits(ctx, key, orgID, frontier, step, temporal, exactNameCandidateQueryLimit)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	counted := map[string]bool{}
 	for _, h := range hits {
@@ -296,10 +337,7 @@ func (a *Adapter) authorizedHitCount(ctx context.Context, key, orgID string, sta
 			counted[canonicalIDOf(h.to)] = true
 		}
 	}
-	if cut {
-		return -1, nil
-	}
-	return len(counted), nil
+	return len(counted), cut, nil
 }
 
 // finishLinkMemberStatus is finishMemberStatus for a walk whose link read
@@ -308,9 +346,6 @@ func (a *Adapter) finishLinkMemberStatus(ctx context.Context, key, orgID string,
 	out := state.out
 	out.status.applied = true
 	out.status.kept = len(out.linkNodes)
-	if !state.status.reviewDerived() {
-		out.status.read = out.status.kept
-	}
 	out.status.reached = out.status.kept > 0
 	if !out.status.reached {
 		probe := state
@@ -322,22 +357,18 @@ func (a *Adapter) finishLinkMemberStatus(ctx context.Context, key, orgID string,
 		}
 		out.status.reached = len(ends) > 0
 	}
-	if out.status.poolCut {
-		// The authorized open pull requests the anchor's links reach: the same
-		// read with the state clause and no review decision, bounded.
+	return state.decidePoolCut(func() (int, bool, error) {
+		// The authorized members the anchor's links reach under the read's
+		// clause, with no review decision, bounded by the census bound.
 		probeOut := treeWalk{}
 		probe := state
 		probe.out = &probeOut
-		probe.status = memberStatusPredicate{kind: state.status.kind, status: contextfabric.PullRequestStatusOpen}
+		probe.status = state.status.clausePredicate()
 		probe.collectLimit = exactNameCandidateQueryLimit
 		ends, _, err := a.linkSegment(ctx, key, orgID, probe, anchor, feed, link, temporal)
 		if err != nil {
-			return err
+			return 0, false, err
 		}
-		out.status.pool = len(ends)
-		if probeOut.truncated {
-			out.status.pool = -1
-		}
-	}
-	return nil
+		return len(ends), probeOut.truncated || len(ends) > exactNameCandidateQueryLimit, nil
+	})
 }

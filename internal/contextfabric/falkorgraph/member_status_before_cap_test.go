@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -324,5 +325,99 @@ func TestADeniedPullRequestHoldsTheStatus(t *testing.T) {
 	}
 	if walk.denied != 1 {
 		t.Fatalf("denied = %d, want 1: only the hidden pull request that holds the status", walk.denied)
+	}
+}
+
+// TestHiddenMatchesDoNotCrowdOutVisibleOnes: the first 25 open pull requests
+// by id are outside the caller's grants and the last five inside them. Only
+// members the caller may see count toward the cap, so the five are served.
+func TestHiddenMatchesDoNotCrowdOutVisibleOnes(t *testing.T) {
+	fixtures := pullRequestPool(30, func(int) (string, []contextfabric.PullRequestReviewRow) { return "open", nil })
+	for i := range fixtures[:25] {
+		fixtures[i].hidden = true
+	}
+	adapter := newFakeAdapter(t, pullRequestStatusFake(fixtures, nil))
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:alpha", Label: "Alpha"}
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/alpha"}}
+	for _, status := range []string{"open", "awaiting_review"} {
+		walk, err := adapter.treeMembersOf(context.Background(), "graph", "org-1", principal, contextfabric.RequestedScope{}, team, treePullRequest, 25,
+			temporalFilter{}, false, false, memberStatusPredicate{kind: contextfabric.SubjectPullRequest, status: status})
+		if err != nil {
+			t.Fatalf("%s: treeMembersOf() error = %v", status, err)
+		}
+		got := []string{}
+		for _, n := range walk.nodes {
+			got = append(got, mustSubject(n).CanonicalID)
+		}
+		if want := pullRequestIDs(26, 30); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: members = %v, want %v", status, got, want)
+		}
+		if walk.truncated || walk.status.poolCut {
+			t.Fatalf("%s: truncated=%v pool cut=%v, want a whole read", status, walk.truncated, walk.status.poolCut)
+		}
+	}
+}
+
+// TestPagesThatExhaustThePoolAreNotACut: exactly eight full pages of open
+// pull requests, none awaiting a review. The page cap is reached, but the
+// authorized pool count shows every one was read, so the empty answer is
+// complete.
+func TestPagesThatExhaustThePoolAreNotACut(t *testing.T) {
+	pages := memberStatusPageCap * 26
+	fixtures := pullRequestPool(pages, func(i int) (string, []contextfabric.PullRequestReviewRow) {
+		return "open", []contextfabric.PullRequestReviewRow{{State: "COMMENTED", SubmittedNs: int64(i)}}
+	})
+	result, telemetry, err := discoverPullRequestMembers(t, pullRequestStatusFake(fixtures, nil), "awaiting_review")
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != 0 || !result.Cohort.Complete || result.Cohort.Truncated {
+		t.Fatalf("cohort = %+v, want an empty complete set", result.Cohort)
+	}
+	if result.MemberStatusPoolCut != (contextfabric.MemberStatusPoolCut{}) {
+		t.Fatalf("pool cut = %+v, want none", result.MemberStatusPoolCut)
+	}
+	if len(telemetry.pullRequestStatusFilters) != 1 || telemetry.pullRequestStatusFilters[0].PoolCut {
+		t.Fatalf("status filter lines = %+v, want one uncut line", telemetry.pullRequestStatusFilters)
+	}
+}
+
+// TestPoolFilterCountsOnlyPullRequestsTheCallerMayRead: the pool filter reads
+// and counts only pull requests the caller may read; one it may not passes
+// through untouched for the cohort to drop as an authorization drop.
+func TestPoolFilterCountsOnlyPullRequestsTheCallerMayRead(t *testing.T) {
+	fixtures := []pullRequestStatusFixture{
+		{id: "pull_request:alpha:001", state: "open"},
+		{id: "pull_request:alpha:002", state: "open", hidden: true},
+	}
+	adapter := newFakeAdapter(t, pullRequestStatusFake(fixtures, nil))
+	pool := []graphrank.CandidateNode{}
+	for _, f := range fixtures {
+		pool = append(pool, toCandidateNode(&node{Properties: map[string]interface{}{propKind: "pull_request", propCanonicalID: f.id, propLabel: f.id}}))
+	}
+	visible := func(n graphrank.CandidateNode) bool { return mustSubject(n).CanonicalID == "pull_request:alpha:001" }
+	filtered, err := adapter.filterPullRequestsByStatus(context.Background(), "graph", "org-1", "open", pool, visible)
+	if err != nil {
+		t.Fatalf("filterPullRequestsByStatus() error = %v", err)
+	}
+	if filtered.candidates != 1 || filtered.kept != 1 || len(filtered.nodes) != 2 {
+		t.Fatalf("candidates=%d kept=%d nodes=%d, want 1, 1 and both nodes passed on", filtered.candidates, filtered.kept, len(filtered.nodes))
+	}
+}
+
+// TestACutOutsideSetCountIsALowerBound: more projects than the bounded read
+// carry a state outside the set. The count served is the bound the read
+// reached, a true lower bound, never zero.
+func TestACutOutsideSetCountIsALowerBound(t *testing.T) {
+	fixtures := []memberStatusFixture{{id: "project:started", label: "Started", stored: "started"}}
+	for i := 0; i < exactNameCandidateQueryLimit+5; i++ {
+		fixtures = append(fixtures, memberStatusFixture{id: fmt.Sprintf("project:free-%05d", i), label: fmt.Sprintf("Free %d", i), stored: "In Progress"})
+	}
+	result, _, err := discoverMemberStatus(t, memberStatusFake(contextfabric.SubjectProject, fixtures, nil), contextfabric.SubjectProject, "started")
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.MemberStatusOutsideSet.Count < exactNameCandidateQueryLimit {
+		t.Fatalf("outside the known set = %+v, want at least %d", result.MemberStatusOutsideSet, exactNameCandidateQueryLimit)
 	}
 }

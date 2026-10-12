@@ -1440,7 +1440,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			})
 		}
 	case pullRequestStatus != "":
-		filtered, filterErr := a.filterPullRequestsByStatus(ctx, key, principal.OrgID, pullRequestStatus, cohortNodes)
+		filtered, filterErr := a.filterPullRequestsByStatus(ctx, key, principal.OrgID, pullRequestStatus, cohortNodes, func(n graphrank.CandidateNode) bool {
+			return graphrank.AuthorizedAttributes(principal, request.Request.RequestedScope, n.Attributes)
+		})
 		pullRequestFiltered = filtered
 		poolCut := filterErr == nil && cohortPoolTruncated
 		if a.config.Telemetry != nil {

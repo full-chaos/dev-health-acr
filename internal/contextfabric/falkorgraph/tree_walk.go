@@ -518,8 +518,8 @@ func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principa
 		var hits []walkHit
 		var hitsCut bool
 		var err error
-		if memberHop && status.reviewDerived() {
-			hits, err = a.reviewedMemberHits(ctx, key, orgID, state, hop, frontier, step, hopTemporal)
+		if memberHop {
+			hits, err = a.statusMemberHits(ctx, key, orgID, state, hop, frontier, step, hopTemporal, budget)
 		} else {
 			hits, hitsCut, err = a.walkStepHits(ctx, key, orgID, frontier, step, hopTemporal, budget)
 		}
@@ -943,8 +943,12 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	stoppedFull := false
 	for page := 0; ; page++ {
 		if page >= linkSegmentPageCap {
-			out.truncated = true
-			out.status.poolCut = reviewed
+			if status.set() {
+				// A status read decides its cut when the walk finishes.
+				out.status.pageCapped = true
+			} else {
+				out.truncated = true
+			}
 			break
 		}
 		params := linkSegmentParams(orgID, anchor, feed, link, page*pageSize, pageSize, temporal)
@@ -986,7 +990,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		for _, l := range links {
 			id, far, tier := l.id, l.far, l.tier
 			authorized := state.linkRowAuthorized(l.row, feed, link, l.near, far, tier)
-			if reviewed && authorized {
+			if status.set() && authorized {
 				read[id] = true
 			}
 			if reviewed && !holding[id] {
@@ -1014,11 +1018,9 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	}
 	out.linkTargets = len(seen)
 	out.linkDeniedTargets = len(seen) - len(admitted)
-	if reviewed {
+	if status.set() {
 		out.status.read = len(read)
-		// The pages stopped with rows unread: the status was not checked past
-		// them.
-		out.status.poolCut = out.status.poolCut || (stoppedFull && state.collectLimit > 0 && len(admitted) > state.collectLimit)
+		out.status.capFilled = stoppedFull && state.collectLimit > 0 && len(admitted) > state.collectLimit
 	}
 	if link.to == treeIssue {
 		out.linkIssueTargets = max(unfiltered, len(seen))

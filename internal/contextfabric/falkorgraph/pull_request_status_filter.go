@@ -72,12 +72,14 @@ func (a *Adapter) readStoredNodeProperty(ctx context.Context, key, orgID string,
 // node, because a link read returns members without their properties. The
 // status is as of now whatever window the question states, so the review rows
 // are read under no window, and every review row of every open pull request is
-// read: a cut read would leave a pull request's latest review unknown.
-func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, status string, pool []graphrank.CandidateNode) (pullRequestStatusFilter, error) {
+// read: a cut read would leave a pull request's latest review unknown. Only
+// pull requests the caller may read are read and counted; one it may not
+// passes through untouched for DiscoveredCohort to drop and count.
+func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, status string, pool []graphrank.CandidateNode, authorized func(graphrank.CandidateNode) bool) (pullRequestStatusFilter, error) {
 	out := pullRequestStatusFilter{}
 	ids := []string{}
 	for _, n := range pool {
-		if subject, ok := graphrank.NodeSubject(n); ok && subject.Kind == contextfabric.SubjectPullRequest {
+		if subject, ok := graphrank.NodeSubject(n); ok && subject.Kind == contextfabric.SubjectPullRequest && authorized(n) {
 			ids = append(ids, subject.CanonicalID)
 		}
 	}
@@ -105,7 +107,7 @@ func (a *Adapter) filterPullRequestsByStatus(ctx context.Context, key, orgID, st
 	out.nodes = make([]graphrank.CandidateNode, 0, len(pool))
 	for _, n := range pool {
 		subject, ok := graphrank.NodeSubject(n)
-		if !ok || subject.Kind != contextfabric.SubjectPullRequest {
+		if !ok || subject.Kind != contextfabric.SubjectPullRequest || !authorized(n) {
 			out.nodes = append(out.nodes, n)
 			continue
 		}
