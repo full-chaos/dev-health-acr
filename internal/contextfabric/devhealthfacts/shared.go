@@ -931,8 +931,19 @@ import (
 // answer was cut by the claim-depth lever, or refused when the byte budget was
 // also exceeded. A candidate saved under v185 may hold the cut answer.
 //
-// v186 -> v192: a project status answer now carries backlog, estimate coverage
-// and risk severity as drivers with minted claims. An answer saved under v186
+// v186 -> v187: pull request members whose question states a status of the
+// closed set (open, merged, closed, awaiting_review, changes_requested,
+// approved) are filtered by it before the cohort is cut, and the answer states
+// the filter. The status used to be refused for a value of three words or
+// more, and otherwise served as the whole unfiltered member set. A candidate
+// saved under v186 may hold that unfiltered set.
+//
+// v187 -> v188: a team that owns no repository is served not_applicable with
+// the cause on the health, operational deficiency and investment kinds, where
+// a stored answer holds no_data.
+//
+// v188 -> v192: a project status answer now carries backlog, estimate coverage
+// and risk severity as drivers with minted claims. An answer saved under v188
 // has none.
 const QueryVersion = "devhealthfacts.clickhouse.v192"
 

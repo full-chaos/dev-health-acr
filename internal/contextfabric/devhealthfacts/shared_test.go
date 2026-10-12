@@ -131,7 +131,7 @@ func TestTierABProvidersAnswerValidTime(t *testing.T) {
 		}
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			client := &fakeClient{}
+			client := teamOwningClient(tc.kind, "CHAOS")
 			provider := findProvider(t, devhealthfacts.NewProviders(client), tc.kind)
 			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"},
 				historicalQuery(tc, contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf}))
@@ -252,7 +252,7 @@ func TestProvidersAllowCurrentTimeAxis(t *testing.T) {
 	for _, tc := range timeAxisCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			client := &fakeClient{}
+			client := teamOwningClient(tc.kind, "CHAOS")
 			provider := findProvider(t, devhealthfacts.NewProviders(client), tc.kind)
 			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 				Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -321,7 +321,7 @@ func TestBoundedHistoricalQueryWithNoRowsReportsOutOfRetention(t *testing.T) {
 		}
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			client := &fakeClient{} // no tables seeded: every query returns zero rows
+			client := teamOwningClient(tc.kind, "CHAOS") // no tables seeded: every query returns zero rows
 			provider := findProvider(t, devhealthfacts.NewProviders(client), tc.kind)
 			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"},
 				historicalQuery(tc, contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf}))
@@ -361,7 +361,7 @@ func TestCurrentAxisWithNoRowsIsNoDataNotAvailable(t *testing.T) {
 	for _, tc := range timeAxisCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			client := &fakeClient{}
+			client := teamOwningClient(tc.kind, "CHAOS")
 			provider := findProvider(t, devhealthfacts.NewProviders(client), tc.kind)
 			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"},
 				historicalQuery(tc, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}))

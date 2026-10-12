@@ -9,6 +9,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,24 @@ func seedEvaluation(t *testing.T, ctx context.Context, direct interface {
 			teamID, orgID, rule, windowEnd.AddDate(0, 0, -14), windowEnd, fired[rule], severity, rule, "", "", windowEnd.Add(2*time.Hour)); err != nil {
 			t.Fatalf("seed evaluation %s/%s: %v", teamID, rule, err)
 		}
+	}
+}
+
+func seedTeamOwnsRepository(t *testing.T, ctx context.Context, direct interface {
+	Exec(context.Context, string, ...any) error
+}, orgID, teamID string) {
+	t.Helper()
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(orgID + "/" + teamID))
+	repoID := fmt.Sprintf("00000000-0000-4000-8000-%012d", hash.Sum64()%1000000000000)
+	name := "acme/" + teamID
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoID, orgID, name, "github", at); err != nil {
+		t.Fatalf("seed repo %s: %v", teamID, err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		orgID, "github", teamID, repoID, name, "exact", "native", uint8(1), uint16(1), int32(1), at, nil, at); err != nil {
+		t.Fatalf("seed ownership %s: %v", teamID, err)
 	}
 }
 
@@ -122,6 +141,8 @@ func TestCHAOS6031MeasuredZeroDomainAgainstRealClickHouse(t *testing.T) {
 	t.Run("no_measured_zero_reports_why", func(t *testing.T) {
 		const orgID = "org-6031-nodata"
 		seedEvaluation(t, ctx, direct, orgID, "OLD", day(-40))
+		seedTeamOwnsRepository(t, ctx, direct, orgID, "OLD")
+		seedTeamOwnsRepository(t, ctx, direct, orgID, "GHOST")
 		stale := readDeficiencyAsOf(t, ctx, orgID, asOf, "OLD")
 		if stale.State != contextfabric.SourceNoData || len(stale.EvaluatedSubjects) != 0 {
 			t.Fatalf("stale-only read = state %q evaluated %d, want no_data and none", stale.State, len(stale.EvaluatedSubjects))
@@ -156,6 +177,8 @@ func TestCHAOS6031MeasuredZeroDomainAgainstRealClickHouse(t *testing.T) {
 	t.Run("stale_and_never_evaluated_teams_are_both_named", func(t *testing.T) {
 		const orgID = "org-6031-mixed"
 		seedEvaluation(t, ctx, direct, orgID, "OLD", day(-40))
+		seedTeamOwnsRepository(t, ctx, direct, orgID, "OLD")
+		seedTeamOwnsRepository(t, ctx, direct, orgID, "GHOST")
 		result := readDeficiencyAsOf(t, ctx, orgID, asOf, "OLD", "GHOST")
 		if !strings.Contains(result.Reason, "1 evaluated outside the freshness window") || !strings.Contains(result.Reason, "1 never evaluated") {
 			t.Fatalf("reason = %q, want the stale and the never-evaluated counts together", result.Reason)

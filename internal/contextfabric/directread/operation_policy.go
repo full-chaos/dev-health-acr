@@ -306,6 +306,7 @@ type OperationPolicy struct {
 	outputs   map[string]OutputLeaf
 	nodes     map[string]bool
 	emits     map[string]*SubjectEmit
+	withheld  map[string]bool
 }
 
 // VariableRule is the rule for one input path.
@@ -771,10 +772,12 @@ func validateOperation(op *OperationPolicy) error {
 	if len(op.outputs) == 0 {
 		return errors.New("no output path")
 	}
+	op.withheld = map[string]bool{}
 	for _, w := range op.WithheldOutputs {
 		if _, listed := op.outputs[w.Path]; listed || w.Reason == "" {
 			return fmt.Errorf("withheld output %q is also allowed or has no reason", w.Path)
 		}
+		op.withheld[w.Path] = true
 	}
 	for _, d := range op.Disclosure {
 		if _, ok := op.outputs[d.Path]; !ok {
@@ -939,8 +942,28 @@ type FilterResult struct {
 	Data json.RawMessage
 	// RemovedPaths are the distinct generalized paths ("a.b[*].c") removed.
 	RemovedPaths []string
-	// RemovedValues counts every removed value. Non-zero = ERROR log.
+	// RemovedValues counts every removed value, declared withheld included.
 	RemovedValues int
+	// WithheldPaths and WithheldValues are the part of RemovedPaths and
+	// RemovedValues that the policy declares withheld: removed by design.
+	WithheldPaths  []string
+	WithheldValues int
+}
+
+// Undeclared returns the removed paths and the value count that no policy
+// declaration explains. Only these are an ERROR condition.
+func (r FilterResult) Undeclared() ([]string, int) {
+	declared := make(map[string]bool, len(r.WithheldPaths))
+	for _, p := range r.WithheldPaths {
+		declared[p] = true
+	}
+	paths := make([]string, 0, len(r.RemovedPaths))
+	for _, p := range r.RemovedPaths {
+		if !declared[p] {
+			paths = append(paths, p)
+		}
+	}
+	return paths, r.RemovedValues - r.WithheldValues
 }
 
 // FilterResponse removes from a GraphQL "data" object every path that is
@@ -978,11 +1001,16 @@ func FilterResponseFor(op *OperationPolicy, data []byte, vars map[string]any) (F
 		return FilterResult{}, fmt.Errorf("filter: encode: %w", err)
 	}
 	paths := make([]string, 0, len(f.removed))
+	var withheld []string
 	for p := range f.removed {
 		paths = append(paths, p)
+		if op.withheld[p] {
+			withheld = append(withheld, p)
+		}
 	}
 	sort.Strings(paths)
-	return FilterResult{Data: out, RemovedPaths: paths, RemovedValues: f.count}, nil
+	sort.Strings(withheld)
+	return FilterResult{Data: out, RemovedPaths: paths, RemovedValues: f.count, WithheldPaths: withheld, WithheldValues: f.withheldCount}, nil
 }
 
 type responseFilter struct {
@@ -990,6 +1018,8 @@ type responseFilter struct {
 	vars    map[string]any
 	removed map[string]bool
 	count   int
+
+	withheldCount int
 }
 
 func joinPath(parent, key string) string {
@@ -1002,6 +1032,9 @@ func joinPath(parent, key string) string {
 func (f *responseFilter) remove(path string) {
 	f.removed[path] = true
 	f.count++
+	if f.op.withheld[path] {
+		f.withheldCount++
+	}
 }
 
 func (f *responseFilter) object(path string, obj map[string]any) map[string]any {

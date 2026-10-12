@@ -173,6 +173,13 @@ ORDER BY team_id, rule_id`)
 	}
 	retentionReason = evaluation.reason(len(evaluated) > 0 || len(facts) > 0, retentionReason)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery, EvaluatedSubjects: evaluated, Evaluation: evaluation.coverage()}
+	if len(ids) > 0 {
+		owned, ownedErr := teamOwnedRepositories(ctx, p.facts.client, orgID, ids, timeBound)
+		if ownedErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query team owned repositories", ownedErr)
+		}
+		applyTeamsOwningNothing(&result, len(ids), teamsOwningNothingWithoutData(ids, bySubject, owned, facts, evaluated))
+	}
 	return result, nil
 }
 

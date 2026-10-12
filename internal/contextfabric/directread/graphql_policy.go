@@ -522,7 +522,7 @@ func (r *GraphQLRootPolicy) RootServedTo(class CallerClass) bool {
 // paths (each must already be allowed). The copy is filter-only: it is
 // never looked up by name.
 func (op *OperationPolicy) narrowedTo(paths []string) *OperationPolicy {
-	out := &OperationPolicy{Name: op.Name, outputs: map[string]OutputLeaf{}, nodes: map[string]bool{}}
+	out := &OperationPolicy{Name: op.Name, outputs: map[string]OutputLeaf{}, nodes: map[string]bool{}, withheld: op.withheld}
 	for _, path := range paths {
 		leaf, ok := op.outputs[path]
 		if !ok {
