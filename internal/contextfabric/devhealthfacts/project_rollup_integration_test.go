@@ -39,9 +39,18 @@ func (s projectRollupSeed) workItem(id, repo, typ, status, project string) {
 		id, repoUUID(repo), projectRollupOrg, "title "+id, typ, status, s.at, s.at, project, s.at)
 }
 
+// pullRequest seeds a pull request whose stored state agrees with its
+// timestamps, as ops writes it: merged wins over closed.
 func (s projectRollupSeed) pullRequest(repo string, number uint32, created time.Time, merged, closed any) {
 	s.t.Helper()
-	s.pullRequestWithState(repo, number, "open", created, merged, closed)
+	state := "open"
+	switch {
+	case merged != nil:
+		state = "merged"
+	case closed != nil:
+		state = "closed"
+	}
+	s.pullRequestWithState(repo, number, state, created, merged, closed)
 }
 
 func (s projectRollupSeed) pullRequestWithState(repo string, number uint32, state any, created time.Time, merged, closed any) {
