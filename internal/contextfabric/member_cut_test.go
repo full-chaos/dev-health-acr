@@ -58,11 +58,24 @@ func memberCutEngineAtCeiling(t *testing.T, gaps int, cited []int, reserve time.
 			if gaps > 0 {
 				refs = []string{"evidence_gap_01"}
 			}
+			// The result-level list is the union of what the answer was
+			// given, members' refs included, as a synthesis writes it.
+			if input.Graph.Cohort != nil {
+				for _, member := range input.Graph.Cohort.Members {
+					refs = append(refs, member.EvidenceRefIDs...)
+				}
+			}
 			findings := []Finding{}
 			for i := 0; i < gaps; i++ {
 				finding := Finding{FindingID: fmt.Sprintf("finding_gap_%02d", i), Kind: "relationship", Summary: "A readiness gap appears open.", EvidenceRefIDs: []string{"evidence_gap_01"}}
 				if i < len(cited) && input.Graph.Cohort != nil && cited[i] < len(input.Graph.Cohort.Members) {
 					finding.Subjects = []SubjectRef{input.Graph.Cohort.Members[cited[i]].Subject}
+				}
+				if i == 0 && input.Graph.Cohort != nil && len(input.Graph.Cohort.Members) > 0 {
+					// A kept finding cites the last member's ref although it
+					// names no subject: the ref stays when that member goes.
+					last := input.Graph.Cohort.Members[len(input.Graph.Cohort.Members)-1]
+					finding.EvidenceRefIDs = append(finding.EvidenceRefIDs, last.EvidenceRefIDs...)
 				}
 				findings = append(findings, finding)
 			}
@@ -129,6 +142,53 @@ func TestAFlatCohortOverTheItemBudgetIsServedWithItsTrailingMembersCut(t *testin
 	}
 	if err := result.Validate(); err != nil {
 		t.Fatalf("the served answer is not valid: %v", err)
+	}
+	wantSentence, _ := contractsv1.ContextFabricMemberCutLimitation(memberCutCallerCap-len(result.Cohort.Members), memberCutCallerCap)
+	stated := 0
+	for _, limitation := range result.Limitations {
+		if limitation == wantSentence {
+			stated++
+		}
+	}
+	if stated != 1 {
+		t.Fatalf("the cut rule is stated %d times (%q), want once: %q", stated, wantSentence, result.Limitations)
+	}
+	cutRows := 0
+	for _, row := range result.Completeness.Outcomes {
+		if row.Impact == contractsv1.ContextFabricAnswerImpactScope && row.CauseOverrun == contractsv1.ContextFabricBudgetOverrunItems &&
+			row.Declared == memberCutCallerCap && row.Served == len(result.Cohort.Members) {
+			cutRows++
+		}
+	}
+	if cutRows != 1 {
+		t.Fatalf("scope outcome rows for the cut = %d, want 1: %+v", cutRows, result.Completeness.Outcomes)
+	}
+	// Evidence refs: a cut member's ref leaves the closure unless a kept site
+	// cites it; a kept member's stays.
+	keptMembers := map[string]bool{}
+	for _, member := range result.Cohort.Members {
+		keptMembers[fmt.Sprintf("ref_member_%02d", member.Rank-1)] = true
+	}
+	inClosure := contractsv1.ContextFabricEvidenceRefClosure(result)
+	lastRef := fmt.Sprintf("ref_member_%02d", memberCutCallerCap-1)
+	for index := 0; index < memberCutCallerCap; index++ {
+		ref := fmt.Sprintf("ref_member_%02d", index)
+		_, present := inClosure[ref]
+		_, labelled := result.EvidenceRefLabels[ref]
+		switch {
+		case ref == lastRef:
+			if !present || !labelled {
+				t.Fatalf("%s is cited by a kept finding and must stay (closure %v, label %v)", ref, present, labelled)
+			}
+		case index < len(result.Cohort.Members):
+			if !present {
+				t.Fatalf("%s belongs to a kept member and left the closure", ref)
+			}
+		default:
+			if present || labelled {
+				t.Fatalf("%s belongs to a cut member nothing kept cites and is still on the result (closure %v, label %v)", ref, present, labelled)
+			}
+		}
 	}
 	cuts := 0
 	for _, event := range telemetry.planNarrowings {

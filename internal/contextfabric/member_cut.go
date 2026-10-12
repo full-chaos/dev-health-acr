@@ -62,8 +62,10 @@ func cutTrailingMembers(result InvestigationResult, uncited []int, n int) (Inves
 		return result, false
 	}
 	drop := map[int]bool{}
+	dropped := []CohortMember{}
 	for _, index := range uncited[len(uncited)-n:] {
 		drop[index] = true
+		dropped = append(dropped, result.Cohort.Members[index])
 	}
 	cohort := *result.Cohort
 	cohort.Members = make([]CohortMember, 0, len(result.Cohort.Members)-n)
@@ -92,7 +94,17 @@ func cutTrailingMembers(result InvestigationResult, uncited []int, n int) (Inves
 		cohort.Members[index].AttentionRank = position + 1
 	}
 	cohort.Complete, cohort.Truncated = false, true
+	listed := len(result.Cohort.Members)
 	result.Cohort = &cohort
+	result.EvidenceRefIDs = withoutCutMemberRefs(result, dropped)
+	// The cut states the rule it followed, once, and an outcome row says what
+	// kind of loss it is: fewer members, nothing else changed.
+	if sentence, ok := contractsv1.ContextFabricMemberCutLimitation(n, listed); ok {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
+	result.Completeness.Outcomes = appendOutcomeRows(result.Completeness.Outcomes, memberCutOutcomeRow(listed-n, listed))
 	// A cut answer is partial, as every other model-free lever serves it.
 	result.Coverage.Partial = true
 	if result.Status == InvestigationComplete {
@@ -230,4 +242,45 @@ func (e *Engine) planMemberCut(
 		Overrun: contractsv1.ContextFabricBudgetOverrunItems,
 	})
 	return attempt, nil
+}
+
+// memberCutOutcomeRow: NARROWED in SCOPE (fewer members listed; each that
+// remains is unchanged) because of the ITEM budget, observed.
+func memberCutOutcomeRow(served, declared int) RequirementOutcomeRow {
+	return contractsv1.ContextFabricWithReductionRefinement(RequirementOutcomeRow{
+		Stage:         contractsv1.ContextFabricOutcomeStageAssembledResult,
+		Outcome:       contractsv1.ContextFabricRequirementNarrowed,
+		Impact:        contractsv1.ContextFabricAnswerImpactScope,
+		CauseOverrun:  contractsv1.ContextFabricBudgetOverrunItems,
+		CauseObserved: true,
+		Served:        served,
+		Declared:      declared,
+	})
+}
+
+// withoutCutMemberRefs removes from the result-level evidence refs the refs
+// only a cut member carried. A ref some kept site still cites -- a driver, a
+// finding, a path or its edges, a candidate, a kept member -- stays, as a
+// dropped path's ids leave the drivers that cited them and nothing else.
+func withoutCutMemberRefs(result InvestigationResult, dropped []CohortMember) []string {
+	if len(result.EvidenceRefIDs) == 0 || len(dropped) == 0 {
+		return result.EvidenceRefIDs
+	}
+	cut := map[string]bool{}
+	for _, member := range dropped {
+		for _, ref := range member.EvidenceRefIDs {
+			cut[ref] = true
+		}
+	}
+	probe := result
+	probe.EvidenceRefIDs = nil
+	kept := contractsv1.ContextFabricEvidenceRefClosure(probe)
+	out := make([]string, 0, len(result.EvidenceRefIDs))
+	for _, ref := range result.EvidenceRefIDs {
+		if _, stays := kept[ref]; cut[ref] && !stays {
+			continue
+		}
+		out = append(out, ref)
+	}
+	return out
 }
