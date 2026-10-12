@@ -892,7 +892,13 @@ import (
 // the carry switch on, an exit that ends before resolution (frame gate, graph
 // not projected, window gate) discloses a withheld ledger anchor as withheld
 // and does not pass it on. A stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v180"
+//
+// v180 -> v181: with the anchor binding follow-up switch on (beside the carry
+// switch), a continuation whose question changed is admitted onto a bound
+// binding as a follow-up; when its own resolution commits nothing, it asks
+// which subject was meant with the earlier answer's subject offered first,
+// where it used to end without a match. A stored answer can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v181"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

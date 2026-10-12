@@ -863,7 +863,7 @@ func (t *anchorBindingTracker) admissionOutcome() AnchorBindingAdmission {
 // later turn re-runs every check); unbound when it was refused.
 func (t *anchorBindingTracker) start() AnchorBinding {
 	switch t.admissionOutcome() {
-	case AnchorBindingAdmissionAdmitted, AnchorBindingAdmissionNotEvaluated:
+	case AnchorBindingAdmissionAdmitted, AnchorBindingAdmissionAdmittedFollowUp, AnchorBindingAdmissionNotEvaluated:
 		return t.parent.from()
 	default:
 		return anchorBindingParent{}.from()

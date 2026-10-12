@@ -64,6 +64,12 @@ const (
 	AnchorBindingAdmissionNotEvaluated AnchorBindingAdmission = "not_evaluated"
 	// AnchorBindingAdmissionAdmitted: every check passed.
 	AnchorBindingAdmissionAdmitted AnchorBindingAdmission = "admitted"
+	// AnchorBindingAdmissionAdmittedFollowUp: the question changed under a
+	// continuation, the follow-up switch is on, the binding is bound, and
+	// every other check passed (anchor_binding_follow_up.go). It never feeds
+	// the carry hint or the count kind; it only lets the turn offer the
+	// remembered identity first when its own resolution commits nothing.
+	AnchorBindingAdmissionAdmittedFollowUp AnchorBindingAdmission = "admitted_follow_up"
 	// AnchorBindingAdmissionRefusedPolicy: decided under another policy.
 	AnchorBindingAdmissionRefusedPolicy AnchorBindingAdmission = "refused_policy_version"
 	// AnchorBindingAdmissionRefusedQuestionChanged: the proving turn asked
@@ -93,7 +99,7 @@ const (
 
 func anchorBindingAdmissions() []AnchorBindingAdmission {
 	return []AnchorBindingAdmission{
-		AnchorBindingAdmissionNotApplicable, AnchorBindingAdmissionNotEvaluated, AnchorBindingAdmissionAdmitted,
+		AnchorBindingAdmissionNotApplicable, AnchorBindingAdmissionNotEvaluated, AnchorBindingAdmissionAdmitted, AnchorBindingAdmissionAdmittedFollowUp,
 		AnchorBindingAdmissionRefusedPolicy, AnchorBindingAdmissionRefusedQuestionChanged, AnchorBindingAdmissionRefusedQuestionIndeterminate,
 		AnchorBindingAdmissionRefusedOriginUnverifiable, AnchorBindingAdmissionRefusedExpired, AnchorBindingAdmissionRefusedOwnershipMoved,
 		AnchorBindingAdmissionRefusedOwnershipUnverified, AnchorBindingAdmissionRefusedSubjectUnreadable,
@@ -107,6 +113,9 @@ type anchorBindingAdmissionInput struct {
 	Now      time.Time
 	MaxAge   time.Duration
 	Movement AnchorOwnershipMovement
+	// FollowUp admits a changed question onto a bound binding as
+	// admitted_follow_up (the follow-up switch).
+	FollowUp bool
 	// Remembered is the live re-read, asked only when every other check
 	// passed; nil means it was not asked.
 	Remembered func() rememberedSubjectCheck
@@ -131,10 +140,14 @@ func admitAnchorBinding(in anchorBindingAdmissionInput) anchorBindingAdmissionDe
 	case in.Held.PolicyVersion != AnchorBindingPolicyVersion:
 		return refuse(AnchorBindingAdmissionRefusedPolicy)
 	}
+	admitted := AnchorBindingAdmissionAdmitted
 	switch in.Question {
 	case carryOriginSameQuestion:
 	case carryOriginDrifted:
-		return refuse(AnchorBindingAdmissionRefusedQuestionChanged)
+		if !in.FollowUp || in.Held.State != AnchorBindingBound {
+			return refuse(AnchorBindingAdmissionRefusedQuestionChanged)
+		}
+		admitted = AnchorBindingAdmissionAdmittedFollowUp
 	case carryOriginIndeterminateQuestion:
 		return refuse(AnchorBindingAdmissionRefusedQuestionIndeterminate)
 	default:
@@ -157,7 +170,7 @@ func admitAnchorBinding(in anchorBindingAdmissionInput) anchorBindingAdmissionDe
 	if !remembered.readable() {
 		return anchorBindingAdmissionDecision{Outcome: AnchorBindingAdmissionRefusedSubjectUnreadable, Remembered: remembered}
 	}
-	return anchorBindingAdmissionDecision{Outcome: AnchorBindingAdmissionAdmitted, Remembered: remembered}
+	return anchorBindingAdmissionDecision{Outcome: admitted, Remembered: remembered}
 }
 
 // admitAnchorBindingParent runs admission for the tracker's parent binding,
@@ -174,6 +187,7 @@ func (e *Engine) admitAnchorBindingParent(ctx context.Context, principal storage
 	in := anchorBindingAdmissionInput{
 		Held: held, Now: t.now, MaxAge: e.anchorBindingMaxAge(),
 		Movement: anchorOwnershipMovement(held, t.freshness),
+		FollowUp: e.anchorBindingFollowUpEnabled,
 	}
 	if held.active() {
 		in.Question = e.carryOriginSameQuestionVerdict(ctx, principal, request, held.OriginResultID)

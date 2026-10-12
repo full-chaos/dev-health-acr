@@ -269,6 +269,14 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 		anchorSiteScenario{name: "carry pending held", run: anchorProbeScenario(first, carryStep("request_vocab_carry_pending", emptyProbeResponse(), nil, mutateStoredBindings(func(s *PersistedSemanticState) {
 			editBindingMember(s, func(b *AnchorBinding) { b.State = AnchorBindingPendingWindowConfirmation })
 		})))},
+		anchorSiteScenario{name: "follow-up offered", run: followUpVocabularyScenario(emptyProbeResponse(), nil, nil)},
+		anchorSiteScenario{name: "follow-up committed", run: followUpVocabularyScenario(needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}}, bases: provenCommitBases(probeAlpha)}, nil, nil)},
+		anchorSiteScenario{name: "follow-up frame refused", run: followUpVocabularyScenario(emptyProbeResponse(), func(rig *anchorProbeRig) { rig.interpreter.outcome.Frame = nil }, nil)},
+		anchorSiteScenario{name: "follow-up parent mismatch", run: followUpVocabularyScenario(emptyProbeResponse(), nil, mutateStoredBindings(func(s *PersistedSemanticState) {
+			editBindingMember(s, func(b *AnchorBinding) {
+				b.Kind, b.CanonicalID, b.Witness = probeBeta.Kind, probeBeta.CanonicalID, []string{string(probeBeta.Kind) + ":" + probeBeta.CanonicalID}
+			})
+		}))},
 		anchorSiteScenario{name: "carry cap full", run: anchorProbeScenario(first, carryStep("request_vocab_carry_cap", emptyProbeResponse(), capFull, nil))},
 		anchorSiteScenario{name: "carry receipt superseded", run: func(t *testing.T, sink EngineTelemetry, rec *recordingTelemetry, off bool) InvestigationResult {
 			rig := newAnchorProbeRig(t, off)
@@ -440,5 +448,29 @@ func guardedProbeScenario(verified, clarify bool, redeem func(InvestigationResul
 		}
 		rig.interpreter.read("", false)
 		return rig.turn(t, follow, identityProvenResponse(probeBeta)).result
+	}
+}
+
+// followUpVocabularyScenario runs turn one and a changed-question follow-up
+// with the carry and follow-up switches on (off only when the shadow is),
+// through the real engine, so the line reaches admitted_follow_up and each
+// follow-up carry decision.
+func followUpVocabularyScenario(response needTurnResponse, before func(*anchorProbeRig), edit func(*staticResultStore)) func(*testing.T, EngineTelemetry, *recordingTelemetry, bool) InvestigationResult {
+	return func(t *testing.T, sink EngineTelemetry, rec *recordingTelemetry, off bool) InvestigationResult {
+		rig := newAnchorProbeRig(t, off)
+		rig.telemetry, rig.engine.telemetry = rec, sink
+		rig.interpreter.read(SubjectRepository, false)
+		one := rig.turn(t, needTurnRequest("request_vocab_follow_one", true), identityProvenResponse(probeAlpha))
+		rig.verify()
+		rig.engine.anchorBindingCarryEnabled, rig.engine.anchorBindingFollowUpEnabled = !off, !off
+		if edit != nil {
+			edit(rig.store)
+		}
+		if before != nil {
+			before(rig)
+		}
+		request := continuingNeedTurn(needTurnRequest("request_vocab_follow_two", true), one.result.ResultID)
+		request.Question = followUpQuestion
+		return rig.turn(t, request, response).result
 	}
 }

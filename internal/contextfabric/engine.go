@@ -38,6 +38,12 @@ type EngineOptions struct {
 	// value = off: a pending parent carries nothing and reads pending_held.
 	// Needs AnchorBindingCarryEnabled.
 	AnchorBindingPendingCarryEnabled bool
+	// AnchorBindingFollowUpEnabled admits a changed question under a
+	// continuation onto a bound binding as admitted_follow_up, so a
+	// follow-up that names no subject offers the remembered one first
+	// (anchor_binding_follow_up.go). Zero value = off. Needs
+	// AnchorBindingCarryEnabled.
+	AnchorBindingFollowUpEnabled bool
 	// AnchorBindingMaxAge is the age past which a carried anchor proof is not
 	// admitted (anchor_admission.go). Zero selects
 	// DefaultAnchorBindingMaxAge; anything else must lie in
@@ -1306,6 +1312,7 @@ type Engine struct {
 	anchorBindingCountEnabled                   bool
 	anchorBindingCarryEnabled                   bool
 	anchorBindingPendingCarryEnabled            bool
+	anchorBindingFollowUpEnabled                bool
 	reuseModelIdentityResolver                  ReuseModelIdentityResolver
 	reuseProjectionVersion                      string
 	reuseModelIdentities                        []string
@@ -1368,6 +1375,11 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		// nothing and read as if it did.
 		return nil, errors.New("context fabric anchor binding pending carry needs the anchor binding carry")
 	}
+	if options.AnchorBindingFollowUpEnabled && !options.AnchorBindingCarryEnabled {
+		// The follow-up widens what the binding carry admits; alone it would
+		// admit nothing and read as if it did.
+		return nil, errors.New("context fabric anchor binding follow-up needs the anchor binding carry")
+	}
 	var recorder StoredResultAuthorizationRecorder
 	if dependencies.Telemetry != nil {
 		recorder = dependencies.Telemetry
@@ -1388,6 +1400,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		anchorBindingCountEnabled:        options.AnchorBindingCountEnabled,
 		anchorBindingCarryEnabled:        options.AnchorBindingCarryEnabled,
 		anchorBindingPendingCarryEnabled: options.AnchorBindingPendingCarryEnabled,
+		anchorBindingFollowUpEnabled:     options.AnchorBindingFollowUpEnabled,
 		reuseModelIdentityResolver:       dependencies.ReuseModelIdentityResolver,
 		clarificationSelectionSink:       dependencies.ClarificationSelectionSink,
 		structureSelectionSink:           dependencies.StructureSelectionSink,
@@ -3211,6 +3224,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// cancelled context all read the same way -- the offer is withheld and
 	// the turn refuses to serve the substitute, which is the fail-closed
 	// direction.
+	// A follow-up admitted onto the bound anchor whose own resolution
+	// committed nothing offers the remembered subject first: a clarification,
+	// never a serve on memory (anchor_binding_follow_up.go). It changes
+	// nothing a commit decides, so the guard below reads the same commits;
+	// it runs first so its decision is recorded on the guard's exit too.
+	resolution = anchorShadow.offerFollowUpAnchor(resolution, familyOutcome.Frame, confirmedNeedLedger.Parent, carryParentSeed(request))
 	substitutionCommitted := append([]SubjectRef(nil), resolution.Committed...)
 	substitutionInput := subjectSubstitutionInput{
 		Parent:             confirmedNeedLedger.Parent,

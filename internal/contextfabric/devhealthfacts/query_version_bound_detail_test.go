@@ -105,3 +105,17 @@ func TestQueryVersionMovedPastThePendingCarry(t *testing.T) {
 		t.Fatalf("QueryVersion = %q: an answer saved before the pending carry (v179 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+// With the anchor binding follow-up switch on, a changed-question follow-up
+// that names no subject offers the earlier answer's subject first, so an
+// answer stored before it (v180 and before) must not be reused.
+func TestQueryVersionMovedPastTheFollowUp(t *testing.T) {
+	const prefix = "devhealthfacts.clickhouse.v"
+	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
+	if !ok {
+		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
+	}
+	if n, err := strconv.Atoi(version); err != nil || n < 181 {
+		t.Fatalf("QueryVersion = %q: an answer saved before the follow-up (v180 and before) must not be reused", devhealthfacts.QueryVersion)
+	}
+}
