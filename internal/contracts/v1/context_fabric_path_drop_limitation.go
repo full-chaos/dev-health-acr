@@ -23,7 +23,7 @@ import (
 const (
 	contextFabricPathDropPrefix = "This answer shows "
 	contextFabricPathDropOf     = " of the "
-	contextFabricPathDropPaths  = " relationship paths it found, because the assembled answer exceeded the size budget after its fact tables were cut as far as they go (paths no driver cites are dropped first, then cited paths, each from the end of the list, and a dropped path's citation is removed from its driver). Ask a narrower question or allow a larger response budget to see the rest."
+	contextFabricPathDropPaths  = " relationship paths it found, because the assembled answer exceeded the size budget after its fact tables were cut as far as they go (paths no driver cites are dropped first, then cited paths, each from the end of the list, and a dropped path's citation is removed from its driver). Ask a narrower question to see the rest."
 	contextFabricPathDropNumber = `(0|[1-9][0-9]{0,8})`
 	contextFabricPathDropMax    = 999999999
 )

@@ -938,8 +938,19 @@ import (
 // more, and otherwise served as the whole unfiltered member set. A candidate
 // saved under v186 may hold that unfiltered set.
 //
-// -> v190: pull requests and blockers also serve a project subject (a rollup
-// over the project's issues and their linked pull requests), and an
+// v187 -> v188: a team that owns no repository is served not_applicable with
+// the cause on the health, operational deficiency and investment kinds, where
+// a stored answer holds no_data.
+//
+// v188 -> v189: a cohort answer re-synthesized over fewer members (the cohort
+// retry) no longer carries the relationship paths, driver candidates and
+// evidence refs of the members it left out, and its kind_census_truncated
+// raw text and degraded reason state the served member count (only Served did
+// before). The narrowing disclosures no longer advise a larger response
+// budget. A candidate saved under v188 may hold the stale fields.
+//
+// v189 -> v190: pull requests and blockers also serve a project subject (a
+// rollup over the project's issues and their linked pull requests), and an
 // investigation of a project keeps that rollup beside the expanded per-item
 // facts. A stored answer about a project can differ.
 const QueryVersion = "devhealthfacts.clickhouse.v190"

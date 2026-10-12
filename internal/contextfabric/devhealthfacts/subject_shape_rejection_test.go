@@ -39,7 +39,7 @@ func TestInvestmentProviderReportsSubjectIDShapeRejectionNotNoData(t *testing.T)
 		log.SetFlags(previousFlags)
 	})
 
-	client := &fakeClient{}
+	client := teamOwningClient(contextfabric.FactInvestment, "real-team-with-no-data")
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
 
 	// Positive control: a correctly-shaped team subject with genuinely no
