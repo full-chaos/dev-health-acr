@@ -52,11 +52,15 @@ func TestPairwiseMaxItemsByHeadroomAgreesWithTheClampFlag(t *testing.T) {
 			seen[maxItems] = true
 			planned := planBudget(p.profile, ResponseBudget{MaxItems: maxItems, MaxSerializedBytes: 262144}, 1000, false)
 			got := cohortMemberAllowanceClamped(planned)
-			want := maxItems > 0 && maxItems-p.headroom < 1
+			reserve := p.headroom
+			if p.headroom > 0 && maxItems > 0 && maxItems-10 < reserve {
+				reserve = max(1, maxItems-10)
+			}
+			want := maxItems > 0 && maxItems-reserve < 1
 			verdict := "ok"
 			if got != want {
 				verdict = "MISMATCH"
-				t.Errorf("profile %q max_items=%d: clamped=%v, want %v (the floor supplied the allowance iff max_items-%d < 1)", p.profile, maxItems, got, want, p.headroom)
+				t.Errorf("profile %q max_items=%d: clamped=%v, want %v (the floor supplied the allowance iff max_items-reserve %d < 1)", p.profile, maxItems, got, want, reserve)
 			}
 			if want && planned.MaxMembers != 1 {
 				verdict = "MISMATCH"

@@ -30,7 +30,7 @@ func assertFreshTupleSurfaces(t *testing.T, fixture *freshTupleProducerFixture, 
 	if stored.SemanticStateRead != contextfabric.SemanticStateReadAvailable || stored.SemanticState == nil || contextfabric.ValidateWorkItemTupleCensus(stored.SemanticState.WorkItemCensus) != contextfabric.WorkItemTupleCensusReadAvailable {
 		t.Fatalf("actual codec round trip lost available tuple census: %+v", stored)
 	}
-	if result.AnswerPlan == nil || result.AnswerPlan.FamilyVersion != "question-family.v3" || stored.SemanticState.FamilyTableVersion != "question-family.v3" {
+	if result.AnswerPlan == nil || result.AnswerPlan.FamilyVersion != "question-family.v4" || stored.SemanticState.FamilyTableVersion != "question-family.v4" {
 		t.Fatalf("current producer plan/capture must both use family v3: plan=%+v state=%+v", result.AnswerPlan, stored.SemanticState)
 	}
 	census := stored.SemanticState.WorkItemCensus

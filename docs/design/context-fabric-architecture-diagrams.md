@@ -2846,7 +2846,7 @@ uses `ServeStoredWorkItemTuple`; `response_owner_middleware.go` encloses recover
 ```mermaid
 flowchart TD
   REUSE["Try reuse first"] -->|"miss: release discarded lease"| INTERPRET["Validate and interpret frame + TimeContext"]
-  INTERPRET --> POLICY["LookupQuestionFamily: private tuple policy<br/>true only for scoped_cohort_status; unknown denies<br/>question-family.v3 reuse/carry fence"]
+  INTERPRET --> POLICY["LookupQuestionFamily: private tuple policy<br/>true only for scoped_cohort_status; unknown denies<br/>question-family.v4 reuse/carry fence"]
   POLICY --> INITIAL{"Initial tuple admission:<br/>children_of_scope + work_item<br/>assess_state/count_or_aggregate only<br/>current intent AND current axis<br/>qualifier absent, or a status qualifier<br/>whose value is in the closed status set<br/>(assignee and unrecognized stay refused).<br/>A bounded_window frame is admitted only with a<br/>server-committed window and exactly one time<br/>field bound from the question verb"}
   INITIAL -->|"refused / invalid"| REFUSE["existing refusal; no ResolveSubjects or S1"]
   INITIAL -->|"prospective"| FINAL["Final family routing + accepted continuation + plan carry<br/>lookup final family policy; tighten gate using policy and effective time"]

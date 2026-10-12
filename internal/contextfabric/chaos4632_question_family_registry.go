@@ -669,7 +669,13 @@ func LookupQuestionFamily(family QuestionFamily) (QuestionFamilyDefinition, bool
 //
 // v2 -> v3: the consumed work-item tuple policy admits scoped work-item
 // investigations. Old table versions cannot authorize reuse or semantic carry.
-const QuestionFamilyTableVersion = "question-family.v3"
+//
+// v3 -> v4: the synthesis headroom a budgeted profile reserves scales with a
+// small item budget (planSynthesisHeadroom), so a grouped, flat or
+// single-subject answer planned under MaxItems below the profile cap plus ten
+// serves more members than a v3 answer did. Stored answers planned at one
+// member per group must not be replayed as the v4 plan.
+const QuestionFamilyTableVersion = "question-family.v4"
 
 func allStructureNeedKinds() []StructureNeedKind {
 	wire := contractsv1.ContextFabricStructureNeedKindVocabulary()

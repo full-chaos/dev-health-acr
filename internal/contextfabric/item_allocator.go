@@ -8,8 +8,9 @@ import (
 // before synthesis and narration spend anything.
 //
 // WHAT PROBLEM IT SOLVES, as arithmetic rather than as a complaint. `planBudget`
-// sets MaxMembers = MaxItems - SynthesisHeadroom, and the grouped headroom is a
-// CONSTANT 20:
+// sets MaxMembers = MaxItems - SynthesisHeadroom, and the grouped headroom is
+// the CONSTANT 20 at every ceiling from 30 up (below 30 it scales with the
+// budget, see planSynthesisHeadroom):
 //
 //	ceiling 30 -> MaxMembers 10 -> 20 items left for everything else
 //	ceiling 45 -> MaxMembers 25 -> 20 items left for everything else

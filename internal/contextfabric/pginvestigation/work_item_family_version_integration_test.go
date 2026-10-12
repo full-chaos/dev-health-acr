@@ -33,7 +33,7 @@ func TestWorkItemFamilyVersionFencesReuseWithoutChangingStoredResult(t *testing.
 	require.NoError(t, err)
 
 	currentKey := reuseKeyFor(legacy)
-	require.Equal(t, "question-family.v3", currentKey.QuestionFamilyVersion)
+	require.Equal(t, "question-family.v4", currentKey.QuestionFamilyVersion)
 	_, found, _, err := store.FindReusable(ctx, principal, currentKey)
 	require.NoError(t, err)
 	require.False(t, found, "v3 lookup must decline the stored v2 answer")

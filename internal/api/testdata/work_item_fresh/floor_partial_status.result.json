@@ -65,7 +65,7 @@
   "answer_plan": {
     "family": "scoped_cohort_status",
     "family_source": "model",
-    "family_version": "question-family.v3",
+    "family_version": "question-family.v4",
     "member_kind": "work_item",
     "require_drivers": false,
     "require_ranking": false,

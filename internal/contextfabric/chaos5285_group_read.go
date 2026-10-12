@@ -864,13 +864,11 @@ func (e *Engine) recordGroupReadCoverageStates(ctx context.Context, principal st
 // budget actually admits, and whether that number was CLAMPED rather than
 // computed.
 //
-// The allowance is `MaxItems - SynthesisHeadroom`, and a grouped plan reserves
-// a headroom of twenty. So every grouped turn whose budget is at or below that
-// headroom gets an allowance of ONE -- not because one member is what the
-// budget affords, but because the subtraction went to zero or below and the
-// floor caught it. Stage 2's set cover then reduces the cohort to one member
-// per group, and a reader of the answer sees a single project under each team
-// with nothing anywhere saying why.
+// The allowance is `MaxItems - SynthesisHeadroom`. The headroom scales with a
+// small budget (planSynthesisHeadroom), so the allowance reaches ONE only when
+// the budget itself is down to one or two items: the subtraction went to zero
+// or below and the floor caught it. Stage 2's set cover then reduces the cohort
+// to one member per group, and Clamped is what says why.
 //
 // Every field is here because its absence leaves two states looking alike.
 // MaxItems and Headroom together are the only way to tell "this budget is
