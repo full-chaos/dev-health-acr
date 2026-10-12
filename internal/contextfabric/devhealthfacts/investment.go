@@ -321,10 +321,24 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		duration := timeBound.end.Sub(timeBound.start)
 		priorBound = &factTimeBound{active: true, hasStart: true, start: timeBound.start.Add(-duration), end: timeBound.start}
 	}
-	current, prior, owned, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
+	current, prior, owned, linked, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
 	if err != nil {
 		return shapeRejected, 0, 0, err
 	}
+	// A team also reaches repositories through its owned projects' linked
+	// pull requests: those count only their linked pull requests (linked), and
+	// a team that reaches any is not a team that "owns no repository".
+	ownedRepos := make(map[string][]teamOwnedRepo, len(owned))
+	for teamID, keys := range owned {
+		for _, key := range keys {
+			ownedRepos[teamID] = append(ownedRepos[teamID], teamOwnedRepo{key: key})
+		}
+	}
+	reachedRepos, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, ids, timeBound)
+	if err != nil {
+		return shapeRejected, 0, 0, err
+	}
+	reachedOnly := reachedOnlyRepositories(reachedRepos, ownedRepos)
 
 	teamIDs := make([]string, 0, len(ids))
 	for _, teamID := range ids {
@@ -338,7 +352,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		m, ok := current[teamID]
 		if !ok || m.total() <= 0 {
 			unavailable++
-			if len(owned[teamID]) == 0 {
+			if len(owned[teamID]) == 0 && len(reachedOnly[teamID]) == 0 {
 				noOwned++
 			}
 			continue
@@ -353,6 +367,19 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		fields["owned_repository_count"] = contextfabric.IntegerFactValue(m.repos)
 		fields["mix_source"] = contextfabric.StringFactValue(repoMixSource)
 		fields["attribution_basis"] = contextfabric.StringFactValue(repoMixBasis + "_over_team_repo_ownership")
+		if l, ok := linked[teamID]; ok && l.total() > 0 {
+			fields["attribution_basis"] = contextfabric.StringFactValue(repoMixBasis + "_over_team_repo_ownership_and_project_links")
+			fields["project_reached_repository_count"] = contextfabric.IntegerFactValue(int64(len(reachedOnly[teamID])))
+			weakest := int64(0)
+			for _, repo := range reachedOnly[teamID] {
+				if weakest == 0 || repo.linkRank < weakest {
+					weakest = repo.linkRank
+				}
+			}
+			if tier := blockerLinkTierName(weakest); tier != "" {
+				fields["repository_link_basis"] = contextfabric.StringFactValue(tier)
+			}
+		}
 
 		if priorMix, ok := prior[teamID]; ok && priorMix.total() > 0 {
 			priorTotal := priorMix.total()
@@ -447,7 +474,7 @@ func investmentMixUnavailableReason(unavailable, noOwned, requested int, waterma
 		reason += fmt.Sprintf("; %s for %d: the team owns no repository", investmentTeamNoOwnedRepository, noOwned)
 	}
 	if noUnit := unavailable - noOwned; noUnit > 0 {
-		reason += fmt.Sprintf("; %s for %d: no repository the team owns has persisted work unit effort in the requested window", investmentTeamNoUnitInWindow, noUnit)
+		reason += fmt.Sprintf("; %s for %d: no repository the team owns and no pull request linked to its owned projects has persisted work unit effort in the requested window", investmentTeamNoUnitInWindow, noUnit)
 	}
 	if watermark == "" {
 		return reason + "; work_unit_investments holds no rows for this organization"
