@@ -150,3 +150,40 @@ func TestAnUncommittedCarryOffersTheRememberedAnchorFirst(t *testing.T) {
 		t.Fatalf("committed = %+v, want none: the remembered anchor is an offer, never a silent serve", two.result.SubjectResolution.Committed)
 	}
 }
+
+// TestTheRememberedOfferAndTheSubstitutionGuardNeverBothFire: on one turn at
+// most one of the two lists the remembered subject. With zero commits the
+// carry offers it and the guard does not fire; with a commit of another
+// subject the guard fires and offers it, and the carry does not.
+func TestTheRememberedOfferAndTheSubstitutionGuardNeverBothFire(t *testing.T) {
+	betaCandidate := SubjectCandidate{
+		ReceiptID: "receipt_exclusive_beta", Subject: probeBeta, State: ResolutionAmbiguous,
+		MatchedTerms: []string{"a"}, MatchReasons: []string{"matched"}, Confidence: 0.4, EvidenceRefIDs: []string{},
+	}
+	for _, tc := range []struct {
+		name      string
+		response  needTurnResponse
+		carry     BoundAnchorCarry
+		guardFire bool
+	}{
+		{"zero commits: the carry offers it", needTurnResponse{resolution: SubjectResolution{Committed: []SubjectRef{}, Candidates: []SubjectCandidate{betaCandidate}}, bases: CommitBasisSet{}}, BoundAnchorCarryRememberedOffered, false},
+		{"another subject committed: the guard offers it", identityProvenResponse(probeBeta), BoundAnchorCarryInjected, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, two := bindingCarryTurns(t, true, nil, nil, tc.response)
+			line := two.transitions[0]
+			if line.BoundAnchorCarry != tc.carry || line.SubstitutionGuard.Fired() != tc.guardFire {
+				t.Fatalf("carry/guard fired = %s/%v, want %s/%v", line.BoundAnchorCarry, line.SubstitutionGuard.Fired(), tc.carry, tc.guardFire)
+			}
+			listed := 0
+			for _, candidate := range two.result.SubjectResolution.Candidates {
+				if candidate.Subject.CanonicalID == probeAlpha.CanonicalID {
+					listed++
+				}
+			}
+			if listed != 1 || two.result.SubjectResolution.Candidates[0].Subject.CanonicalID != probeAlpha.CanonicalID {
+				t.Fatalf("served candidates = %+v, want the remembered alpha listed exactly once, first", two.result.SubjectResolution.Candidates)
+			}
+		})
+	}
+}
