@@ -868,7 +868,14 @@ import (
 // rule's own basis (score, band, time) beside the team's latest
 // compounding_risk_daily row and a moved-since-the-rule flag. An answer saved
 // under v175 quotes the rule-time score as the team's current risk.
-const QueryVersion = "devhealthfacts.clickhouse.v176"
+//
+// v176 -> v177: every reader of the issue <> pull request link of record
+// admits a link row the same way: the pull request it names exists and the
+// work item is an issue. A team or project scope no longer reaches a
+// repository through a link to a missing pull request or through a
+// pull-request-typed work item, and such an issue is counted as a missing next
+// hop. An answer saved under v176 may rest on a repository so reached.
+const QueryVersion = "devhealthfacts.clickhouse.v177"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
