@@ -33,6 +33,11 @@ type EngineOptions struct {
 	// (anchor_binding_carry.go). Zero value = off: the confirmed-need
 	// ledger's carry runs as before. Needs the shadow binding.
 	AnchorBindingCarryEnabled bool
+	// AnchorBindingPendingCarryEnabled lets a binding still pending window
+	// confirmation carry its anchor too (anchor_binding_carry.go). Zero
+	// value = off: a pending parent carries nothing and reads pending_held.
+	// Needs AnchorBindingCarryEnabled.
+	AnchorBindingPendingCarryEnabled bool
 	// AnchorBindingMaxAge is the age past which a carried anchor proof is not
 	// admitted (anchor_admission.go). Zero selects
 	// DefaultAnchorBindingMaxAge; anything else must lie in
@@ -1300,6 +1305,7 @@ type Engine struct {
 	anchorBindingMaxAgeSetting                  time.Duration
 	anchorBindingCountEnabled                   bool
 	anchorBindingCarryEnabled                   bool
+	anchorBindingPendingCarryEnabled            bool
 	reuseModelIdentityResolver                  ReuseModelIdentityResolver
 	reuseProjectionVersion                      string
 	reuseModelIdentities                        []string
@@ -1361,6 +1367,11 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		// would silently either carry nothing or fall back to the ledger.
 		return nil, errors.New("context fabric anchor binding carry needs the shadow anchor binding")
 	}
+	if options.AnchorBindingPendingCarryEnabled && !options.AnchorBindingCarryEnabled {
+		// The pending carry widens the binding carry; alone it would carry
+		// nothing and read as if it did.
+		return nil, errors.New("context fabric anchor binding pending carry needs the anchor binding carry")
+	}
 	var recorder StoredResultAuthorizationRecorder
 	if dependencies.Telemetry != nil {
 		recorder = dependencies.Telemetry
@@ -1375,26 +1386,27 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		synthesizer: dependencies.Synthesizer, results: results, rawResults: dependencies.Results, telemetry: dependencies.Telemetry,
 		storedResultGate: gate,
 		reuseGate:        dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
-		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
-		anchorFreshness:            dependencies.AnchorFreshness,
-		anchorBindingMaxAgeSetting: options.AnchorBindingMaxAge,
-		anchorBindingCountEnabled:  options.AnchorBindingCountEnabled,
-		anchorBindingCarryEnabled:  options.AnchorBindingCarryEnabled,
-		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
-		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
-		structureSelectionSink:     dependencies.StructureSelectionSink,
-		handleVerifier:             dependencies.HandleVerifier,
-		anchorVerifier:             dependencies.AnchorVerifier,
-		anchorMembershipVerifier:   dependencies.AnchorMembershipVerifier,
-		candidateVerifier:          dependencies.CandidateVerifier,
-		workItemMembership:         dependencies.WorkItemMembership,
-		treeWorkItemMembership:     NewTreeWorkItemMembership(dependencies.TreeWorkItemGraph, dependencies.TreeWorkItemFilter, dependencies.TreeWorkItemGate),
-		priorConsultant:            dependencies.PriorConsultant,
-		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
-		offerPhraser:               dependencies.OfferPhraser,
-		requirements:               dependencies.Requirements,
-		observationKeys:            dependencies.ObservationKeys,
-		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
+		reuseEpochSnapshotter:            dependencies.ReuseEpochSnapshotter,
+		anchorFreshness:                  dependencies.AnchorFreshness,
+		anchorBindingMaxAgeSetting:       options.AnchorBindingMaxAge,
+		anchorBindingCountEnabled:        options.AnchorBindingCountEnabled,
+		anchorBindingCarryEnabled:        options.AnchorBindingCarryEnabled,
+		anchorBindingPendingCarryEnabled: options.AnchorBindingPendingCarryEnabled,
+		reuseModelIdentityResolver:       dependencies.ReuseModelIdentityResolver,
+		clarificationSelectionSink:       dependencies.ClarificationSelectionSink,
+		structureSelectionSink:           dependencies.StructureSelectionSink,
+		handleVerifier:                   dependencies.HandleVerifier,
+		anchorVerifier:                   dependencies.AnchorVerifier,
+		anchorMembershipVerifier:         dependencies.AnchorMembershipVerifier,
+		candidateVerifier:                dependencies.CandidateVerifier,
+		workItemMembership:               dependencies.WorkItemMembership,
+		treeWorkItemMembership:           NewTreeWorkItemMembership(dependencies.TreeWorkItemGraph, dependencies.TreeWorkItemFilter, dependencies.TreeWorkItemGate),
+		priorConsultant:                  dependencies.PriorConsultant,
+		priorHandleGrammarChecker:        dependencies.PriorHandleGrammarChecker,
+		offerPhraser:                     dependencies.OfferPhraser,
+		requirements:                     dependencies.Requirements,
+		observationKeys:                  dependencies.ObservationKeys,
+		reuseProjectionVersion:           options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
 		reuseRetrievalIdentity:                      options.ReuseRetrievalIdentity,
 		reusePromptVersions:                         options.ReusePromptVersions,
 		reuseVersionAuthorities:                     options.ReuseVersionAuthorities,
@@ -2874,6 +2886,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if entry, disposition, withheld := withholdLedgerAnchor(anchorShadow, appliedNeeds, carriedHint, carries); withheld {
 			anchorSupersededEntry, anchorSupersededByCaller, anchorWithheldDisposition = entry, true, disposition
 			delete(appliedNeeds, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+			// Every exit below that ends before resolution (the window gate,
+			// the frame-gate refusal, graph not projected) reads this pair:
+			// rebuilt now, the withheld entry carries its withheld
+			// disposition and is not passed on, the same as after resolution.
+			anchorDispositionForTelemetry = disposition
+			confirmedNeedsForUnevaluatedExit, carriedStructureEntriesUnevaluatedExit = withheldForUnevaluatedExit(confirmedNeedsForCapture, carriedStructureEntries, entry, disposition)
 		}
 	}
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
@@ -2893,6 +2911,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		captureSkipReasonForTelemetry = CaptureSkipReasonWindowConfirmationGatedDiscard
 		anchorShadow.observeResolution(AnchorBindingEvaluationWindowGated, SubjectResolution{}, nil)
 		gatedMaterial, gatedMaterialWindowExpandUnavailable := e.gatedOfferMaterial(ctx, principal, request, graphRequest, interpretation, familyOutcome, binding, structureCanon, kindCarry, appliedNeeds, priorEntries, anchorShadow)
+		if e.anchorBindingPendingCarryEnabled && anchorShadow.holdsPendingProof() {
+			// The proof is not discarded: the binding holds it pending, and
+			// the confirming turn may carry it (anchor_binding_carry.go).
+			// Nothing on this turn's served result changes.
+			captureSkipReasonForTelemetry = CaptureSkipReasonWindowConfirmationGatedPending
+		}
 		// CHAOS-3478/CHAOS-4234: priorOutcomes was already computed above
 		// (resolvePriorSubjectHints runs before Interpret, this gate fires
 		// after) but this gate's own resolution is offers-only and

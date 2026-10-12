@@ -49,6 +49,10 @@ const (
 	// BoundAnchorCarryNotAdmitted: the parent's binding was refused at
 	// admission, or is contested; nothing is injected.
 	BoundAnchorCarryNotAdmitted BoundAnchorCarry = "not_admitted"
+	// BoundAnchorCarryPendingHeld: the parent's admitted binding is still
+	// pending window confirmation and the pending carry is off; nothing is
+	// injected.
+	BoundAnchorCarryPendingHeld BoundAnchorCarry = "pending_held"
 	// BoundAnchorCarryInjected: the admitted binding's identity reached
 	// resolution as the carried anchor.
 	BoundAnchorCarryInjected BoundAnchorCarry = "injected"
@@ -69,7 +73,7 @@ const (
 
 func boundAnchorCarries() []BoundAnchorCarry {
 	return []BoundAnchorCarry{
-		BoundAnchorCarrySwitchOff, BoundAnchorCarryNotEvaluated, BoundAnchorCarryNone, BoundAnchorCarryNotAdmitted,
+		BoundAnchorCarrySwitchOff, BoundAnchorCarryNotEvaluated, BoundAnchorCarryNone, BoundAnchorCarryNotAdmitted, BoundAnchorCarryPendingHeld,
 		BoundAnchorCarryInjected, BoundAnchorCarryCallerSuperseded, BoundAnchorCarryReceiptSuperseded,
 		BoundAnchorCarryCapFull, BoundAnchorCarryRememberedOffered,
 	}
@@ -114,6 +118,9 @@ func (e *Engine) bindingCarryHint(t *anchorBindingTracker, hints []contractsv1.C
 		return contractsv1.ContextFabricSubjectHint{}, false
 	case !held.identifies():
 		t.carry = BoundAnchorCarryNotAdmitted
+		return contractsv1.ContextFabricSubjectHint{}, false
+	case t.parent.Binding.State == AnchorBindingPendingWindowConfirmation && !e.anchorBindingPendingCarryEnabled:
+		t.carry = BoundAnchorCarryPendingHeld
 		return contractsv1.ContextFabricSubjectHint{}, false
 	case confirmedAnchorReceipt(confirmed):
 		t.carry = BoundAnchorCarryReceiptSuperseded
@@ -226,4 +233,24 @@ func (t *anchorBindingTracker) carryDecision() BoundAnchorCarry {
 		return BoundAnchorCarryNotEvaluated
 	}
 	return t.carry
+}
+
+// holdsPendingProof reports whether the binding a window-gated turn will
+// persist is pending window confirmation, which the binder decides only on
+// an identity the offers-only pass proved (a held binding always names it).
+func (t *anchorBindingTracker) holdsPendingProof() bool {
+	if t == nil || t.evaluation != AnchorBindingEvaluationWindowGated {
+		return false
+	}
+	to, _ := bindAnchor(t.bindingInput(InvestigationResult{}))
+	return to.State == AnchorBindingPendingWindowConfirmation
+}
+
+// withheldForUnevaluatedExit is the outgoing ledger and carried-entry
+// disclosure of an exit that ends before resolution, once the binding
+// withheld the ledger's anchor: the anchor entry reads its withheld
+// disposition (every other entry not_evaluated, as before), and the
+// outgoing ledger drops it, exactly as a post-resolution drop does.
+func withheldForUnevaluatedExit(base []ConfirmedNeedEntry, entries []*contractsv1.ContextFabricConfirmedStructureEntry, withheld confirmedStructureMember, disposition contractsv1.ContextFabricStructureDisposition) ([]ConfirmedNeedEntry, []*contractsv1.ContextFabricConfirmedStructureEntry) {
+	return confirmedNeedsForCaptureWithoutVetoedAnchor(base, true), carriedStructureEntriesForDecisive(carriedStructureEntriesUnevaluated(entries), withheld, true, disposition)
 }

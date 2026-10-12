@@ -6,7 +6,8 @@ package contextfabric
 // captureSkipReasons()'s 15 members, distributed across
 // chaos5844_capture_skip_reason_test.go (10), chaos5788_committed_anchor_carry_test.go
 // (3: FrameGateRefused/GraphNotProjected/ResolutionError) and
-// chaos4234_regime_a_offers_test.go (1: WindowConfirmationGatedDiscard) --
+// chaos4234_regime_a_offers_test.go (1: WindowConfirmationGatedDiscard), and the
+// anchor probe rig (1: WindowConfirmationGatedPending, driven here) --
 // none of them certify the emitted line against eventspec.ConfirmedNeedLedger.
 // This file reuses each one's OWN rig verbatim (never a struct literal) and
 // returns the raw production JSON, so
@@ -257,6 +258,17 @@ func RunCaptureSkipReasonRealProducerScenarioForTest(t *testing.T, scenario stri
 		if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest()); err != nil {
 			t.Fatalf("Investigate() error = %v, want a confirmation-required result", err)
 		}
+		return buf.Bytes(), orgID
+
+	case CaptureSkipReasonWindowConfirmationGatedPending:
+		// The window gate with the pending carry on: the anchor binding
+		// holds the offers-only pass's identity proof as pending.
+		rig := newAnchorProbeRig(t, false)
+		var buf bytes.Buffer
+		rig.engine.telemetry = NewSlogEngineTelemetry(jsonSlogLoggerForTest(&buf))
+		rig.engine.anchorBindingCarryEnabled, rig.engine.anchorBindingPendingCarryEnabled = true, true
+		rig.interpreter.read(SubjectRepository, true)
+		rig.turn(t, needTurnRequest("request_capture_gated_pending", false), identityProvenResponse(probeAlpha))
 		return buf.Bytes(), orgID
 
 	case CaptureSkipReasonFrameGateRefused:

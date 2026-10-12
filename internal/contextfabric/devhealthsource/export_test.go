@@ -393,3 +393,11 @@ func CursorFactPositionMovedForTest(t interface{ Fatalf(string, ...any) }, curso
 	}
 	return state.Dim == nil && !state.Since.IsZero()
 }
+
+// DependencyRowKeyForTest is the sortKey queryWorkItemDependencies gives a row.
+func DependencyRowKeyForTest(repoID, sourceID, targetID, relationshipType string) string {
+	return dependencyRowKey(repoID, sourceID, targetID, relationshipType)
+}
+
+// DependencyRowKeySQLForTest is the keyset tiebreaker expression its statement uses.
+func DependencyRowKeySQLForTest() string { return dependencyRowKeySQL }

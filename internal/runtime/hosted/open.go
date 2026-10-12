@@ -1064,6 +1064,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		AnchorBindingCountEnabled: request.config.AnchorBindingCountEnabled,
 		// See Config.AnchorBindingCarryEnabled.
 		AnchorBindingCarryEnabled: request.config.AnchorBindingCarryEnabled,
+		// See Config.AnchorBindingPendingCarryEnabled.
+		AnchorBindingPendingCarryEnabled: request.config.AnchorBindingPendingCarryEnabled,
 		// See Config.ServerCompletenessAuthoritySymmetricEnabled's own doc
 		// comment.
 		ServerCompletenessAuthoritySymmetricEnabled: request.config.ServerCompletenessAuthoritySymmetricEnabled,
