@@ -139,3 +139,22 @@ func TestServedAnswerStatesWithinHowManyMembersACutStatusFilterRan(t *testing.T)
 		}
 	}
 }
+
+// TestServedAnswerStatesACutOutsideSetCountAsALowerBound: a count whose read
+// was cut is served as "at least N", never as an exact N.
+func TestServedAnswerStatesACutOutsideSetCountAsALowerBound(t *testing.T) {
+	t.Parallel()
+	served := investigateProjectCohort(t, MemberStatusOutsideSet{Kind: SubjectProject, Count: 2000, AtLeast: true})
+	want := contractsv1.ContextFabricMemberStatusOutsideSetAtLeastLimitation("project", 2000)
+	exact := contractsv1.ContextFabricMemberStatusOutsideSetLimitation("project", 2000)
+	found := false
+	for _, limitation := range served.Limitations {
+		found = found || limitation == want
+		if limitation == exact {
+			t.Fatalf("a lower bound was served as an exact count: %q", limitation)
+		}
+	}
+	if !found {
+		t.Fatalf("served limitations = %q, want %q", served.Limitations, want)
+	}
+}

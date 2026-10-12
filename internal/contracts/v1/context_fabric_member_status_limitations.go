@@ -52,6 +52,8 @@ var contextFabricMemberStatusCutKinds = map[string]struct{ plural, field string 
 
 var contextFabricMemberStatusPoolCutPattern = regexp.MustCompile(`^The (?:state|status) filter ran (?:within the first ([1-9][0-9]{0,8})(?: of ([1-9][0-9]{0,8}))?|over a cut read that reached no) (projects|incidents|pull requests)`)
 
+var contextFabricMemberStatusOutsideAtLeastPattern = regexp.MustCompile(`^At least ([1-9][0-9]{0,8}) (projects|incidents) have a (?:state|status) outside the known set and were not matched\.$`)
+
 var contextFabricMemberStatusOutsidePattern = regexp.MustCompile(`^([1-9][0-9]{0,8}) (projects|incidents) have a (?:state|status) outside the known set and were not matched\.$`)
 
 // ContextFabricMemberStatusFilterLimitation is the sentence for one status of a
@@ -77,6 +79,17 @@ func ContextFabricMemberStatusOutsideSetLimitation(kind string, count int) strin
 		article = "status"
 	}
 	return fmt.Sprintf("%d %s have a %s outside the known set and were not matched.", count, nouns.plural, article)
+}
+
+// ContextFabricMemberStatusOutsideSetAtLeastLimitation is the outside-set
+// sentence for a count whose read was cut: at least count members held a
+// stored status outside the known set.
+func ContextFabricMemberStatusOutsideSetAtLeastLimitation(kind string, count int) string {
+	exact := ContextFabricMemberStatusOutsideSetLimitation(kind, count)
+	if exact == "" {
+		return ""
+	}
+	return "At least " + exact
 }
 
 // ContextFabricMemberStatusUnappliedLimitation is served beside members of a
@@ -147,6 +160,11 @@ func IsContextFabricMemberStatusLimitation(limitation string) bool {
 		}
 		for _, status := range nouns.statuses {
 			if limitation == ContextFabricMemberStatusFilterLimitation(kind, status) {
+				return true
+			}
+		}
+		if match := contextFabricMemberStatusOutsideAtLeastPattern.FindStringSubmatch(limitation); match != nil && match[2] == nouns.plural {
+			if count, err := strconv.Atoi(match[1]); err == nil && limitation == ContextFabricMemberStatusOutsideSetAtLeastLimitation(kind, count) {
 				return true
 			}
 		}

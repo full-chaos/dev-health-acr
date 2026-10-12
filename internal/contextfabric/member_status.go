@@ -59,6 +59,8 @@ func MemberStatusFilterOf(frame *QuestionFrame) (SubjectKind, string) {
 type MemberStatusOutsideSet struct {
 	Kind  SubjectKind
 	Count int
+	// AtLeast: the count read was cut, so Count is a lower bound.
+	AtLeast bool
 }
 
 // MemberStatusPoolCut is a status filter decided within a cut read: Read
@@ -174,6 +176,9 @@ func withMemberStatusPoolCut(result InvestigationResult, cut MemberStatusPoolCut
 // filter could not match because their stored status is outside the kind's set.
 func withMemberStatusOutsideSet(result InvestigationResult, outside MemberStatusOutsideSet) InvestigationResult {
 	sentence := contractsv1.ContextFabricMemberStatusOutsideSetLimitation(string(outside.Kind), outside.Count)
+	if outside.AtLeast {
+		sentence = contractsv1.ContextFabricMemberStatusOutsideSetAtLeastLimitation(string(outside.Kind), outside.Count)
+	}
 	if sentence == "" {
 		return result
 	}

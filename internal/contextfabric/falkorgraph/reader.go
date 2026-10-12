@@ -1481,9 +1481,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	statusNoMatch := (statusWalk.applied && statusWalk.reached && statusWalk.kept == 0) ||
 		(pullRequestFiltered.candidates > 0 && pullRequestFiltered.kept == 0) ||
 		(memberFiltered.candidates > 0 && memberFiltered.kept == 0)
-	statusOutsideSet := memberFiltered.outsideSet
+	statusOutsideSet, statusOutsideAtLeast := memberFiltered.outsideSet, false
 	if statusWalk.applied {
-		statusOutsideSet = statusWalk.outsideSet
+		statusOutsideSet, statusOutsideAtLeast = statusWalk.outsideSet, statusWalk.outsideAtLeast
 	}
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	cohortKindScopedAuthzDropped, anchorReachDenied := anchorReachDeniedCount(cohortKind, cohortNodes, principal, request, edgeFilters.ReachDenied, cohortKindScopedAuthzDropped)
@@ -1806,7 +1806,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation,
 		CohortMemberSource:     cohortMemberSource,
-		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: statusOutsideSet},
+		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: statusOutsideSet, AtLeast: statusOutsideAtLeast},
 		MemberStatusPoolCut:    statusPoolCut,
 		Paths:                  admission.Paths, DriverCandidates: admission.Drivers,
 		EvidenceRefIDs: admission.EvidenceRefIDs, FactRequirements: factRequirements,

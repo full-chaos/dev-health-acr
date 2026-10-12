@@ -407,7 +407,7 @@ func TestPoolFilterCountsOnlyPullRequestsTheCallerMayRead(t *testing.T) {
 
 // TestACutOutsideSetCountIsALowerBound: more projects than the bounded read
 // carry a state outside the set. The count served is the bound the read
-// reached, a true lower bound, never zero.
+// reached, marked as a lower bound, never zero.
 func TestACutOutsideSetCountIsALowerBound(t *testing.T) {
 	fixtures := []memberStatusFixture{{id: "project:started", label: "Started", stored: "started"}}
 	for i := 0; i < exactNameCandidateQueryLimit+5; i++ {
@@ -417,7 +417,38 @@ func TestACutOutsideSetCountIsALowerBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
-	if result.MemberStatusOutsideSet.Count < exactNameCandidateQueryLimit {
-		t.Fatalf("outside the known set = %+v, want at least %d", result.MemberStatusOutsideSet, exactNameCandidateQueryLimit)
+	if result.MemberStatusOutsideSet.Count < exactNameCandidateQueryLimit || !result.MemberStatusOutsideSet.AtLeast {
+		t.Fatalf("outside the known set = %+v, want at least %d, marked as a lower bound", result.MemberStatusOutsideSet, exactNameCandidateQueryLimit)
+	}
+}
+
+// TestAnOverBoundLinkPoolIsNotReportedAsExact: a project's issues link 2,005
+// open pull requests, none reviewed, so more than the cap await a review and
+// the pages stop with pull requests unread. The pool count that decides the
+// cut reads up to the census bound; past it the total is unknown, so the
+// answer states the pull requests checked and no total.
+func TestAnOverBoundLinkPoolIsNotReportedAsExact(t *testing.T) {
+	nodes := []scopedAnchorNode{{"project", "project:alpha", "Alpha"}}
+	var edges []scopedAnchorEdge
+	for i := 1; i <= exactNameCandidateQueryLimit+5; i++ {
+		issue := fmt.Sprintf("work_item:alpha:%05d", i)
+		pull := fmt.Sprintf("pull_request:alpha:%05d", i)
+		nodes = append(nodes, scopedAnchorNode{"work_item", issue, issue}, scopedAnchorNode{"pull_request", pull, pull})
+		edges = append(edges,
+			scopedAnchorEdge{rel: "BELONGS_TO_PROJECT", srcKind: "work_item", srcID: issue, dstKind: "project", dstID: "project:alpha"},
+			scopedAnchorEdge{rel: "LINKS_PULL_REQUEST", srcKind: "work_item", srcID: issue, dstKind: "pull_request", dstID: pull, linkTier: "native"})
+	}
+	adapter := newFakeAdapter(t, withWalkStepReads(scopedAnchorFake(nodes, edges, nil)))
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project:alpha", Label: "Alpha"}
+	walk, err := adapter.teamAnchorMembers(context.Background(), "graph", "org-1", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{}, project, treePullRequest, 25,
+		temporalFilter{}, memberStatusPredicate{kind: contextfabric.SubjectPullRequest, status: "awaiting_review"})
+	if err != nil {
+		t.Fatalf("teamAnchorMembers() error = %v", err)
+	}
+	if !walk.status.poolCut || !walk.truncated {
+		t.Fatalf("pool cut=%v truncated=%v, want a cut read", walk.status.poolCut, walk.truncated)
+	}
+	if walk.status.pool != -1 {
+		t.Fatalf("pool = %d, want unknown (-1): the count read stopped past the census bound", walk.status.pool)
 	}
 }

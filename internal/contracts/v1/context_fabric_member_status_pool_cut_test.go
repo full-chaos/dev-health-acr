@@ -11,6 +11,7 @@ func TestMemberStatusPoolCutRecognizerMatchesOnlyTheGeneratedSentences(t *testin
 		ContextFabricMemberStatusPoolCutLimitation("incident", 25, 0),
 		ContextFabricMemberStatusPoolCutLimitation("pull_request", 26, 60),
 		ContextFabricMemberStatusPoolCutLimitation("project", 0, 0),
+		ContextFabricMemberStatusOutsideSetAtLeastLimitation("project", 2000),
 	}
 	for _, sentence := range generated {
 		if sentence == "" || !IsContextFabricMemberStatusLimitation(sentence) || !IsContextFabricServiceAuthoredLimitation(sentence) {
@@ -25,6 +26,8 @@ func TestMemberStatusPoolCutRecognizerMatchesOnlyTheGeneratedSentences(t *testin
 		"The status filter ran within the first 26 pull requests the read reached; pull requests past that bound were not checked.",
 		"The state filter ran within the first 25 incidents the read reached; incidents past that bound were not checked.",
 		"The status filter ran within the first 25 incidents the read reached; incidents past that bound were probably fine.",
+		"At least 2000 projects have a status outside the known set and were not matched.",
+		"At least 0 projects have a state outside the known set and were not matched.",
 	} {
 		if IsContextFabricMemberStatusLimitation(lookalike) {
 			t.Fatalf("lookalike %q is recognised", lookalike)

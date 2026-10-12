@@ -139,8 +139,10 @@ type memberStatusWalk struct {
 	// poolUnknown: a cut walk's pool could not be counted.
 	poolUnknown bool
 	// outsideSet counts the authorized members whose stored status is outside
-	// the kind's closed set.
-	outsideSet int
+	// the kind's closed set; outsideAtLeast: that count's read was cut, so it
+	// is a lower bound.
+	outsideSet     int
+	outsideAtLeast bool
 }
 
 func (w *memberStatusWalk) add(other memberStatusWalk) {
@@ -154,6 +156,7 @@ func (w *memberStatusWalk) add(other memberStatusWalk) {
 	}
 	w.poolUnknown = w.poolUnknown || other.poolUnknown || (other.poolCut && other.pool < 0)
 	w.outsideSet += other.outsideSet
+	w.outsideAtLeast = w.outsideAtLeast || other.outsideAtLeast
 }
 
 // memberStatusPageCap bounds how many pages one status member read takes. A
@@ -312,13 +315,13 @@ func (a *Adapter) finishMemberStatus(ctx context.Context, key, orgID string, sta
 		probe := unfiltered
 		probe.status = outside
 		probe.projected = true
-		// A cut count is still a true lower bound: that many members hold a
+		// A cut count is a lower bound: at least that many members hold a
 		// status outside the set.
-		count, _, err := a.authorizedHitCount(ctx, key, orgID, state, hop, frontier, probe, temporal)
+		count, cut, err := a.authorizedHitCount(ctx, key, orgID, state, hop, frontier, probe, temporal)
 		if err != nil {
 			return err
 		}
-		out.status.outsideSet = count
+		out.status.outsideSet, out.status.outsideAtLeast = count, cut
 	}
 	return nil
 }
@@ -369,6 +372,6 @@ func (a *Adapter) finishLinkMemberStatus(ctx context.Context, key, orgID string,
 		if err != nil {
 			return 0, false, err
 		}
-		return len(ends), probeOut.truncated || len(ends) > exactNameCandidateQueryLimit, nil
+		return len(ends), probeOut.truncated || probeOut.status.pageCapped || len(ends) > exactNameCandidateQueryLimit, nil
 	})
 }
