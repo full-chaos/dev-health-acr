@@ -44,8 +44,19 @@ func workItemRepositoryAuthorization(principal storage.Principal, requested []st
 // row is left out too. The rule is the library's, over its own aliases,
 // inside an uncorrelated subquery, so it never meets the caller's aliases.
 func workItemAuthorizedIDsSQL(scope readers.AuthorizationScope) (string, []readers.Binding) {
+	return workItemAuthorizedIDsAmongSQL(scope, "")
+}
+
+// workItemAuthorizedIDsAmongSQL is workItemAuthorizedIDsSQL over the ids
+// candidates (a subquery) names; "" is every id of the organization. Every
+// stored row of a kept id is still grouped, so the rule is unchanged.
+func workItemAuthorizedIDsAmongSQL(scope readers.AuthorizationScope, candidates string) (string, []readers.Binding) {
 	rendered := readers.WorkItemScopeSQL(scope)
-	return `(SELECT w.work_item_id FROM work_items AS w FINAL ` + rendered.JoinSQL + ` WHERE w.org_id = {org_id:String} GROUP BY w.work_item_id HAVING min(toUInt8(` + rendered.AuthorizationExpr + `)) = 1)`, rendered.Bindings
+	among := ""
+	if candidates != "" {
+		among = ` AND w.work_item_id IN ` + candidates
+	}
+	return `(SELECT w.work_item_id FROM work_items AS w FINAL ` + rendered.JoinSQL + ` WHERE w.org_id = {org_id:String}` + among + ` GROUP BY w.work_item_id HAVING min(toUInt8(` + rendered.AuthorizationExpr + `)) = 1)`, rendered.Bindings
 }
 
 // workItemRepositorySelectorSet normalizes the same exact and wildcard

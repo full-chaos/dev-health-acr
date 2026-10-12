@@ -144,12 +144,22 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // Array(String) binding holding the team ids; the bound's bindings must ride
 // with the statement. It is the same chain teamRepositories walks.
 func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
+	return teamProjectLinkRowsAmongSQL(teamParam, bound, "")
+}
+
+// teamProjectLinkRowsAmongSQL is teamProjectLinkRowsSQL over the work item
+// ids candidates (a subquery) names; "" is every issue of the owned projects.
+func teamProjectLinkRowsAmongSQL(teamParam string, bound factTimeBound, candidates string) string {
+	workItems := `work_items AS w FINAL`
+	if candidates != "" {
+		workItems = `(SELECT org_id, work_item_id, provider, project_id FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `) AS w`
+	}
 	return `(
   SELECT DISTINCT t.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
   FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
-  INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.provider = p.provider AND w.project_id = p.join_key
-  INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
+  INNER JOIN ` + workItems + ` ON w.org_id = {org_id:String} AND w.provider = p.provider AND w.project_id = p.join_key
+  INNER JOIN ` + admittedIssueLinksAmongSQL(candidates) + ` AS l ON l.work_item_id = w.work_item_id
   WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)}
 )`
 }
