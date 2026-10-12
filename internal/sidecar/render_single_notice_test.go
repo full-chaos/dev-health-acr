@@ -93,6 +93,45 @@ func TestInvestigationResultMarkdownCarriesOneNotice(t *testing.T) {
 	}
 }
 
+func TestAnswerMarkdownBudgetCutEndsWithClosingFenceAndNoticeOutsideIt(t *testing.T) {
+	build := func() v1.ContextFabricAnswerProjection {
+		p := hostileProjection()
+		p.Limitations = append(p.Limitations, "M1-SENT\nM2-SENT\nM3-SENT")
+		return p
+	}
+	full, _ := RenderAnswerProjectionMarkdown(build(), 48000)
+	cuts, closedAfterCut := 0, 0
+	for budget := len(truncationNotice) + 40; budget <= len(full)+len(truncationNotice); budget++ {
+		got, _ := RenderAnswerProjectionMarkdown(build(), budget)
+		if len(got) > budget {
+			t.Fatalf("budget=%d length=%d", budget, len(got))
+		}
+		if !strings.HasSuffix(got, truncationNotice) {
+			if got != full {
+				t.Fatalf("budget=%d: neither complete nor carrying the truncation notice", budget)
+			}
+			continue
+		}
+		cuts++
+		body := strings.TrimSuffix(got, truncationNotice)
+		outside, _ := outsideFences(t, body)
+		for _, line := range outside {
+			for _, sentinel := range []string{"-SENT", "all good", "injected", "Fake heading"} {
+				if strings.Contains(line, sentinel) {
+					t.Fatalf("budget=%d: hosted %q outside a fence: %q", budget, sentinel, line)
+				}
+			}
+		}
+		lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+		if fenceLineRE.MatchString(lines[len(lines)-1]) && strings.Contains(body, "M1-SENT") {
+			closedAfterCut++
+		}
+	}
+	if cuts == 0 || closedAfterCut == 0 {
+		t.Fatalf("cuts=%d closedAfterCut=%d: no budget cut a block that was then closed", cuts, closedAfterCut)
+	}
+}
+
 func TestAnswerMarkdownBudgetNeverLeavesAFenceOpen(t *testing.T) {
 	full, _ := RenderAnswerProjectionMarkdown(hostileProjection(), 48000)
 	for budget := 1; budget <= len(full)+len(truncationNotice); budget++ {
