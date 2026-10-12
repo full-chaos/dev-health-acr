@@ -2743,7 +2743,7 @@ func (t SlogEngineTelemetry) RecordMemberCut(ctx context.Context, principal stor
 		"stage", string(event.Stage),
 		"pass", event.Pass,
 		"axis", string(event.Overrun),
-		"max_items", event.MaxItems,
+		"item_budget", SanitizeLogInt(int64(event.MaxItems)),
 		"items_before", event.ItemsBefore,
 		"items_after", event.ItemsAfter,
 		"listed", event.Listed,
