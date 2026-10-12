@@ -2,9 +2,9 @@ package contextfabric
 
 import "testing"
 
-// CHAOS-6564: identical kind.field=value claims across many subjects were
+// CHAOS-6564: identical field noun: value claims across many subjects were
 // restated once per subject ("membership.organization_id=X for A; ...=X for B;
-// ..."). One statement per distinct kind.field=value naming every subject is
+// ..."). One statement per distinct field noun: value naming every subject is
 // the same information without the repetition.
 func TestComposeCurrentStateGroupsIdenticalValuesAcrossSubjects(t *testing.T) {
 	t.Parallel()
@@ -18,18 +18,18 @@ func TestComposeCurrentStateGroupsIdenticalValuesAcrossSubjects(t *testing.T) {
 	got := composeCurrentState(SynthesisDraft{ClaimedFacts: []ClaimedFact{
 		claim("c1", "org/a", "org_1"), claim("c2", "org/b", "org_1"), claim("c3", "org/c", "org_1"),
 	}})
-	want := "Current observed values: membership.organization_id=org_1 for org/a, org/b, org/c."
+	want := "Current observed values: organization id: org_1 (org/a, org/b, org/c)."
 	if got != want {
 		t.Fatalf("CurrentState = %q, want %q", got, want)
 	}
 	single := composeCurrentState(SynthesisDraft{ClaimedFacts: []ClaimedFact{claim("c1", "org/a", "org_1")}})
-	if single != "Current observed values: membership.organization_id=org_1 for org/a." {
+	if single != "Current observed values: organization id: org_1 (org/a)." {
 		t.Fatalf("single-subject CurrentState changed: %q", single)
 	}
 	mixed := composeCurrentState(SynthesisDraft{ClaimedFacts: []ClaimedFact{
 		claim("c1", "org/a", "org_1"), claim("c2", "org/b", "org_2"), claim("c3", "org/c", "org_1"),
 	}})
-	if mixed != "Current observed values: membership.organization_id=org_1 for org/a, org/c; membership.organization_id=org_2 for org/b." {
+	if mixed != "Current observed values: organization id: org_1 (org/a, org/c); organization id: org_2 (org/b)." {
 		t.Fatalf("mixed CurrentState = %q", mixed)
 	}
 }

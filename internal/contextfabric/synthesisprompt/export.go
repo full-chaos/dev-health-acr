@@ -23,7 +23,11 @@ const (
 	// v19 -> v20: the prompt names the compounding-risk deficiency rule's
 	// basis fields and the latest-value fields, so the rule-time score is
 	// never stated as the team's current risk.
-	PromptVersion = "context-fabric-synthesis.v20"
+	//
+	// v20 -> v21: the prompt asks for plain measure names and two-decimal
+	// display numbers in sentences a reader sees, with claimed_facts values
+	// kept verbatim.
+	PromptVersion = "context-fabric-synthesis.v21"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )

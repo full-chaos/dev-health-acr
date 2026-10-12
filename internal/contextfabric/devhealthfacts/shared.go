@@ -924,7 +924,7 @@ import (
 // the rule's partial-coverage sentence (", computed from N% of its inputs
 // (...)"), which was served as rationale_not_in_rule_sentence_form. A stored
 // answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v185"
+const QueryVersion = "devhealthfacts.clickhouse.v193"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

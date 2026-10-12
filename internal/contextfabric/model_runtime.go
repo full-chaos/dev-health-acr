@@ -3113,7 +3113,7 @@ func claimedFactSentences(claims []ClaimedFact) []string {
 	subjects := make([][]string, 0, len(sorted))
 	heads := make([]string, 0, len(sorted))
 	for _, claim := range sorted {
-		head := fmt.Sprintf("%s.%s=%s", claim.Kind, claim.Field, scalarValueString(claim.Value))
+		head := fmt.Sprintf("%s: %s", contractsv1.ContextFabricFactFieldNoun(claim.Field), scalarDisplayString(claim.Field, claim.Value))
 		i, ok := index[head]
 		if !ok {
 			i = len(heads)
@@ -3124,19 +3124,19 @@ func claimedFactSentences(claims []ClaimedFact) []string {
 		subjects[i] = append(subjects[i], claim.Subject.Label)
 	}
 	for i, head := range heads {
-		sentences = append(sentences, head+" for "+strings.Join(subjects[i], ", "))
+		sentences = append(sentences, head+" ("+strings.Join(subjects[i], ", ")+")")
 	}
 	return sentences
 }
 
-func scalarValueString(v ScalarValue) string {
+func scalarDisplayString(field string, v ScalarValue) string {
 	switch {
 	case v.String != nil:
-		return *v.String
+		return contractsv1.ContextFabricDisplayString(field, *v.String)
 	case v.Integer != nil:
 		return strconv.FormatInt(*v.Integer, 10)
 	case v.Number != nil:
-		return strconv.FormatFloat(*v.Number, 'g', -1, 64)
+		return contractsv1.ContextFabricDisplayNumber(*v.Number)
 	case v.Boolean != nil:
 		return strconv.FormatBool(*v.Boolean)
 	case v.Null:
