@@ -111,14 +111,32 @@ func TestTeamCohortBlockersMissingAndZeroServeNoDriver(t *testing.T) {
 	}
 }
 
-func TestTeamCohortTruncatedBlockersAreDisclosedNotCounted(t *testing.T) {
+func TestTeamCohortTruncatedBlockersAreServedAsALabelledLowerBound(t *testing.T) {
 	a, _, _ := teamsAB()
 	result := investigateTeamBlockers(t, []SubjectRef{a}, []CanonicalFact{blockersFact(a, SourceTruncated, intp(12), nil)})
-	if len(result.Drivers) != 0 || len(result.ClaimedFacts) != 0 {
-		t.Fatalf("drivers=%q claims=%d, want none for a partial read", driverTitles(result.Drivers), len(result.ClaimedFacts))
+	if got, want := driverTitles(result.Drivers), "At least 12 blocked work items (partial read)"; got != want {
+		t.Fatalf("drivers = %q, want %q", got, want)
 	}
-	if !strings.Contains(strings.Join(result.Limitations, "|"), "partial read") {
-		t.Fatalf("limitations = %q", result.Limitations)
+	if len(result.ClaimedFacts) != 1 || result.Drivers[0].Qualification == "" || result.Drivers[0].Confidence >= 0.95 {
+		t.Fatalf("claims=%d driver=%+v, want one claim and a qualified, lower-confidence driver", len(result.ClaimedFacts), result.Drivers[0])
+	}
+}
+
+func TestTeamBlockersDecisionTelemetryCountsEachReason(t *testing.T) {
+	a, b, c := teamsAB()
+	d := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:D", Label: "Delta"}
+	e := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:E", Label: "Eps"}
+	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{{Subject: a}, {Subject: b}, {Subject: c}, {Subject: d}, {Subject: e}}}
+	facts := []CanonicalFact{
+		blockersFact(a, SourceAvailable, intp(4), nil),
+		blockersFact(b, SourceTruncated, intp(6), nil),
+		blockersFact(c, SourceAvailable, intp(0), nil),
+		blockersFact(d, SourceAvailable, nil, nil),
+	}
+	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}, cohort, facts, nil, nil, ItemAllocation{})
+	want := TeamBlockersDriverEvent{Emitted: 2, TruncatedServed: 1, SkippedMissing: 2, SkippedZero: 1}
+	if got.Event == nil || *got.Event != want {
+		t.Fatalf("event = %+v, want %+v", got.Event, want)
 	}
 }
 
@@ -135,8 +153,8 @@ func TestTeamCohortBlockersOrderByCountThenLabelAndDiscloseTheCut(t *testing.T) 
 	if len(got.Drivers) != 2 || got.Drivers[0].AffectedSubjects[0].Label != "Gamma" || got.Drivers[1].AffectedSubjects[0].Label != "Alpha" {
 		t.Fatalf("drivers = %+v", got.Drivers)
 	}
-	if !strings.Contains(got.Limitation, "2 of 3 teams") {
-		t.Fatalf("limitation = %q", got.Limitation)
+	if !strings.Contains(got.Limitation, "2 of 3 teams") || got.Event.SkippedBudget != 1 {
+		t.Fatalf("limitation = %q event = %+v", got.Limitation, got.Event)
 	}
 }
 

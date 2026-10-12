@@ -1004,6 +1004,20 @@ func (t SlogEngineTelemetry) RecordProjectStatusDrivers(ctx context.Context, pri
 	}, requestIDLogAttrs(ctx)...)...)
 }
 
+// RecordTeamBlockersDrivers reports one team blockers driver decision:
+// closed counts only, never a team, a count value or an id.
+func (t SlogEngineTelemetry) RecordTeamBlockersDrivers(ctx context.Context, principal storage.Principal, event TeamBlockersDriverEvent) {
+	t.logger.InfoContext(ctx, "context fabric team blockers drivers", append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"emitted", event.Emitted,
+		"truncated_served", event.TruncatedServed,
+		"skipped_missing", event.SkippedMissing,
+		"skipped_zero", event.SkippedZero,
+		"skipped_budget", event.SkippedBudget,
+		"skipped_id_clash", event.SkippedIDClash,
+	}, requestIDLogAttrs(ctx)...)...)
+}
+
 // RecordEvidenceLabelFallback implements EngineTelemetry (CHAOS-4690 item
 // 4). Content-safe: org id and one closed count -- never the unlabeled
 // evidence ref or its entity-type segment (r2 F5; see the interface's own

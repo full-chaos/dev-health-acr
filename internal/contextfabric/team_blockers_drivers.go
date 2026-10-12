@@ -19,10 +19,20 @@ type teamBlockersObservation struct {
 	partial bool
 }
 
+type TeamBlockersDriverEvent struct {
+	Emitted         int
+	TruncatedServed int
+	SkippedMissing  int
+	SkippedZero     int
+	SkippedBudget   int
+	SkippedIDClash  int
+}
+
 type TeamBlockersDriverResult struct {
 	Drivers    []DriverJudgment
 	Claims     []ClaimedFact
 	Limitation string
+	Event      *TeamBlockersDriverEvent
 }
 
 func teamBlockersIntent(interpretation InterpretedQuestion) bool {
@@ -46,6 +56,9 @@ func teamBlockersClaimID(team SubjectRef) string {
 
 func teamBlockersTitle(observation teamBlockersObservation) string {
 	title := fmt.Sprintf("Blocked work items: %d", observation.count)
+	if observation.partial {
+		title = fmt.Sprintf("At least %d blocked work items (partial read)", observation.count)
+	}
 	if projectReached, ok := factInteger(observation.fact.Fields, "project_blocked_work_items_current"); ok && projectReached > 0 {
 		title += fmt.Sprintf(", %d of them reached through project-linked repositories", projectReached)
 		if basis, has := observation.fact.Fields["repository_link_basis"]; has && basis.String != nil && *basis.String != "" {
@@ -55,7 +68,7 @@ func teamBlockersTitle(observation teamBlockersObservation) string {
 	return title
 }
 
-func teamBlockersObservations(cohort *Cohort, facts []CanonicalFact) []teamBlockersObservation {
+func teamBlockersObservations(cohort *Cohort, facts []CanonicalFact, event *TeamBlockersDriverEvent) []teamBlockersObservation {
 	if cohort == nil || cohort.Kind != SubjectTeam {
 		return nil
 	}
@@ -64,18 +77,27 @@ func teamBlockersObservations(cohort *Cohort, facts []CanonicalFact) []teamBlock
 		if member.Subject.Kind != SubjectTeam {
 			continue
 		}
+		found := false
 		for index := range facts {
 			fact := &facts[index]
 			if fact.Kind != FactBlockers || fact.Subject.Kind != SubjectTeam || fact.Subject.CanonicalID != member.Subject.CanonicalID ||
 				len(fact.EvidenceRefIDs) == 0 || (fact.SourceState != SourceAvailable && fact.SourceState != SourceTruncated) {
 				continue
 			}
+			found = true
 			count, ok := factInteger(fact.Fields, teamBlockersField)
-			if !ok || count <= 0 {
-				break
+			switch {
+			case !ok:
+				event.SkippedMissing++
+			case count <= 0:
+				event.SkippedZero++
+			default:
+				observations = append(observations, teamBlockersObservation{team: member.Subject, fact: fact, count: count, partial: fact.SourceState == SourceTruncated})
 			}
-			observations = append(observations, teamBlockersObservation{team: member.Subject, fact: fact, count: count, partial: fact.SourceState == SourceTruncated})
 			break
+		}
+		if !found {
+			event.SkippedMissing++
 		}
 	}
 	sort.SliceStable(observations, func(i, j int) bool {
@@ -88,23 +110,12 @@ func teamBlockersObservations(cohort *Cohort, facts []CanonicalFact) []teamBlock
 }
 
 func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, facts []CanonicalFact, existingDrivers []DriverJudgment, existingClaims []ClaimedFact, allocation ItemAllocation) TeamBlockersDriverResult {
-	if !teamBlockersIntent(interpretation) {
+	if !teamBlockersIntent(interpretation) || cohort == nil || cohort.Kind != SubjectTeam {
 		return TeamBlockersDriverResult{}
 	}
-	all := teamBlockersObservations(cohort, facts)
-	observations := all[:0:0]
-	partial := 0
-	for _, observation := range all {
-		if observation.partial {
-			partial++
-			continue
-		}
-		observations = append(observations, observation)
-	}
-	var result TeamBlockersDriverResult
-	if partial > 0 {
-		result.Limitation = fmt.Sprintf("Blocked work items for %d teams come from a partial read and are not listed as a count.", partial)
-	}
+	event := &TeamBlockersDriverEvent{}
+	result := TeamBlockersDriverResult{Event: event}
+	observations := teamBlockersObservations(cohort, facts, event)
 	if len(observations) == 0 {
 		return result
 	}
@@ -127,13 +138,14 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 	}
 	for _, observation := range observations {
 		if len(result.Drivers) >= allowed {
-			break
-		}
-		driverID, claimID := teamBlockersDriverID(observation.team), teamBlockersClaimID(observation.team)
-		if _, clash := taken[driverID]; clash {
+			event.SkippedBudget++
 			continue
 		}
-		if _, clash := takenClaims[claimID]; clash {
+		driverID, claimID := teamBlockersDriverID(observation.team), teamBlockersClaimID(observation.team)
+		_, driverClash := taken[driverID]
+		_, claimClash := takenClaims[claimID]
+		if driverClash || claimClash {
+			event.SkippedIDClash++
 			continue
 		}
 		taken[driverID] = struct{}{}
@@ -144,11 +156,17 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 			AffectedSubjects: []SubjectRef{observation.team}, EvidenceRefIDs: observation.fact.EvidenceRefIDs,
 			Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.95, Current: true,
 		}
+		if observation.partial {
+			driver.Qualification = "The read was cut short, so the real count may be higher."
+			driver.Confidence = 0.6
+			event.TruncatedServed++
+		}
 		value := observation.fact.Fields[teamBlockersField]
 		result.Claims = append(result.Claims, ClaimedFact{ClaimID: claimID, Kind: FactBlockers, Subject: observation.team, Field: teamBlockersField, Value: convertFactValueScalar(value)})
 		driver.ClaimedFactIDs = []string{claimID}
 		result.Drivers = append(result.Drivers, driver)
 	}
+	event.Emitted = len(result.Drivers)
 	if len(result.Drivers) < len(observations) {
 		result.Limitation = strings.TrimSpace(result.Limitation + fmt.Sprintf(" Blocked work items are listed for %d of %d teams with blocked work; the teams with the most blocked work come first.", len(result.Drivers), len(observations)))
 	}

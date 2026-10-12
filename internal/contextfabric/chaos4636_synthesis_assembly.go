@@ -708,6 +708,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	}
 	if graphContext.Cohort != nil {
 		blockers := teamBlockersDrivers(interpretation, graphContext.Cohort, facts.Facts, result.Drivers, result.ClaimedFacts, synthesisAllocation)
+		pending.TeamBlockersDrivers = blockers.Event
 		if len(blockers.Drivers) > 0 || blockers.Limitation != "" {
 			if err := validateMintedClaimsGrounded(blockers.Claims, facts.Facts); err != nil {
 				return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
@@ -919,6 +920,7 @@ type assemblyTelemetry struct {
 	SynthesisStatusOverride *SynthesisStatusOverrideOutcome
 	CohortNarration         *CohortDriverNarrationEvent
 	ProjectStatusDrivers    *ProjectStatusDriverEvent
+	TeamBlockersDrivers     *TeamBlockersDriverEvent
 	// CohortRanked is seeded by the engine from the pre-synthesis ranking and
 	// REPLACED by stage 3 when a retry re-ranks a narrowed cohort, so the
 	// event published always describes the cohort actually served.
@@ -985,6 +987,9 @@ func (e *Engine) emit(ctx context.Context, principal storage.Principal, pending 
 	}
 	if e.telemetry != nil && pending.ProjectStatusDrivers != nil {
 		e.telemetry.RecordProjectStatusDrivers(ctx, principal, *pending.ProjectStatusDrivers)
+	}
+	if e.telemetry != nil && pending.TeamBlockersDrivers != nil {
+		e.telemetry.RecordTeamBlockersDrivers(ctx, principal, *pending.TeamBlockersDrivers)
 	}
 	e.recordCommitAffirmation(ctx, principal, pending.CommitAffirmations)
 	e.recordCommitKeptByNoMemberFound(ctx, principal, pending.CommitKeptByNoMemberFound)
