@@ -26,7 +26,7 @@ func TestTheFloorEmptiedTerminalReachesTheResultAsTheSubjectNotFoundSentence(t *
 	if result.Status != InvestigationNoMatch {
 		t.Fatalf("status = %q, want no_match", result.Status)
 	}
-	want := noMatchLimitationSubjectNotFound([]string{"Phantom", "Squad"}, []string{"team"})
+	want := noMatchLimitationSubjectNotFound([]string{"Phantom", "Squad"}, "", []string{"team"})
 	found := false
 	for _, limitation := range result.Limitations {
 		if limitation == noMatchLimitationOfferFloorEmptied {
@@ -39,7 +39,7 @@ func TestTheFloorEmptiedTerminalReachesTheResultAsTheSubjectNotFoundSentence(t *
 	if !found {
 		t.Fatalf("limitations = %q, want the subject-not-found sentence %q", result.Limitations, want)
 	}
-	if !strings.Contains(want, `"Phantom Squad"`) || !strings.Contains(want, "among the kinds searched (teams)") {
+	if !strings.Contains(want, `"Phantom Squad"`) || !strings.Contains(want, "the closest matches were teams") {
 		t.Fatalf("sentence = %q", want)
 	}
 }
@@ -51,16 +51,13 @@ func TestTheOfferFloorTextsArePinned(t *testing.T) {
 	if !strings.HasPrefix(noMatchLimitationOfferFloorEmptied, "No subject matching the name in the question was found, so nothing was offered") {
 		t.Fatalf("marker text = %q", noMatchLimitationOfferFloorEmptied)
 	}
-	got := noMatchLimitationSubjectNotFound([]string{"Phantom"}, []string{"team"})
-	want := `No subject matching "Phantom" was found among the kinds searched (teams), so nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one.`
+	got := noMatchLimitationSubjectNotFound([]string{"Phantom"}, "", []string{"team"})
+	want := `No subject matched "Phantom"; the closest matches were teams. Nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one.`
 	if got != want {
 		t.Fatalf("sentence = %q", got)
 	}
-	blank := noMatchLimitationSubjectNotFound([]string{"", ""}, []string{"team"})
-	if !strings.HasPrefix(blank, "No subject matching the subject named in the question was found") {
+	blank := noMatchLimitationSubjectNotFound([]string{"", ""}, "", []string{"team"})
+	if !strings.HasPrefix(blank, "No subject matched the name in the question") {
 		t.Fatalf("blank terms sentence = %q", blank)
-	}
-	if kindsSearchedText(nil) != "none" || kindsSearchedText([]string{"a", "b"}) != "a, b" {
-		t.Fatal("kindsSearchedText")
 	}
 }
