@@ -346,6 +346,8 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.subject_resolution.candidates[].match_reasons[]",
 	"structured.claimed_facts[].field",
 	"structured.claimed_facts[].fact_id",
+	"structured.claimed_facts[].derived_from[].fact_id",
+	"structured.claimed_facts[].derived_from[].field",
 	"structured.claimed_facts[].value.string",
 	// CHAOS-4347: same reasoning as claimed_facts[].value.string above --
 	// Rows carries the same producer-sourced fact data, table-shaped.
