@@ -919,7 +919,13 @@ import (
 // owning no repository; it is now served over every owned repository, and a set
 // above 2000 rows (per ownership window read) is a named failure. A candidate saved under v183 may hold the
 // truncated mix.
-const QueryVersion = "devhealthfacts.clickhouse.v184"
+//
+// v185 -> v186: a degraded cohort answer (the model call failed) leaves cohort
+// driver narration its item grant. The degraded composition claimed that grant
+// too, so composition and narration together overran the item budget: the
+// answer was cut by the claim-depth lever, or refused when the byte budget was
+// also exceeded. A candidate saved under v185 may hold the cut answer.
+const QueryVersion = "devhealthfacts.clickhouse.v186"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
