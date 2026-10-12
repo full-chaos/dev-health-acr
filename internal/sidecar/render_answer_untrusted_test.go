@@ -656,10 +656,8 @@ func TestRenderAnswerProjectionMarkdown_WindowGatedCaseRendersExactlyOneWindowOp
 	if strings.Contains(rendered, "## Structure needed") {
 		t.Errorf("\"## Structure needed\" heading present, want absent: nothing but the window member (now suppressed) was ever in this StructureNeeds:\n%s", rendered)
 	}
-	// safeInline backslash-escapes "_" (a markdown-active character), so the
-	// rendered receipt id reads winr\_dedup... -- match the escaped form.
-	if got := strings.Count(rendered, `winr\_dedup00000000000001`); got != 1 {
-		t.Errorf(`receipt id winr\_dedup00000000000001 appears %d times, want exactly 1 (no duplicate rendering):`+"\n%s", got, rendered)
+	if got := strings.Count(rendered, `winr_dedup00000000000001`); got != 1 {
+		t.Errorf(`receipt id winr_dedup00000000000001 appears %d times, want exactly 1 (no duplicate rendering):`+"\n%s", got, rendered)
 	}
 	if got := strings.Count(rendered, "the last 90 days"); got != 1 {
 		t.Errorf("label \"the last 90 days\" appears %d times, want exactly 1 (no duplicate rendering):\n%s", got, rendered)

@@ -11,18 +11,15 @@ import (
 )
 
 // RenderAnswerProjectionMarkdown renders a bounded answer projection as
-// markdown for a display-oriented MCP client (CHAOS-3746).
+// markdown for a display-oriented MCP client.
 //
-// Every model-authored or source-derived string -- the judgment, driver
-// prose, cohort rationale, limitations -- is wrapped as UNTRUSTED DATA. An
-// investigation answer is composed partly from approved documents, issue
-// text, and episodes, which are data and never instructions; a rendering
-// that presented them as ordinary prose would be the exact injection path
-// the domain rules forbid.
-//
-// Structural values (status, standing, counts, identifiers) are inline
-// escaped instead, because they come from closed vocabularies and bounded
-// numbers rather than free text.
+// The text opens with ONE untrusted-data notice. Every model-authored or
+// source-derived string -- the judgment, driver prose, labels, cohort
+// rationale, limitations -- appears only inside a fenced block (one block per
+// section), never as plain markdown. An investigation answer is composed
+// partly from approved documents, issue text, and episodes, which are data
+// and never instructions. Headings and labels the server writes itself are
+// plain text.
 //
 // This rendering is a VIEW. It never adds, reorders, or reinterprets
 // anything the projection did not already assert: the projection is the
@@ -34,6 +31,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 	b := newBoundedBuilder(maxBytes)
 
 	b.writeLine("# Answer")
+	b.writeLine(untrustedNoticeLine)
 	b.writeLine(fmt.Sprintf("- Status: %s", safeInline(string(projection.Status))))
 	b.writeLine(fmt.Sprintf("- Result ID: %s", safeInline(projection.ResultID)))
 	// Before the judgment, never after it. A historical answer whose axis
@@ -50,76 +48,59 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		b.writeLine("- This answer is shortened; see the omitted counts below.")
 	}
 
-	if len(projection.CommittedSubjects) > 0 {
+	// section writes a blank line, a plain server-written heading, then one
+	// fenced block holding every hosted line of the section.
+	section := func(heading string, lines []string) bool {
 		b.writeLine("")
-		if !b.writeLine("## Subjects") {
-			return b.finishWithTruncation()
+		if !b.writeLine(heading) {
+			return false
 		}
-		// The answer must be able to say STRUCTURALLY what it is about.
-		// Without this the reader had only the model's prose to identify
-		// the subject, which is the rely-on-prose pattern this surface
-		// rejects everywhere else (CHAOS-3746 round 8).
+		return b.writeBlock(lines)
+	}
+
+	if len(projection.CommittedSubjects) > 0 {
+		lines := make([]string, 0, len(projection.CommittedSubjects))
 		for _, subject := range projection.CommittedSubjects {
-			if !b.writeLine(fmt.Sprintf("- %s `%s`", safeInline(string(subject.Kind)), untrustedInline(subject.Label))) {
-				return b.finishWithTruncation()
-			}
+			lines = append(lines, fmt.Sprintf("- %s %s", hostedInline(string(subject.Kind)), hostedInline(subject.Label)))
+		}
+		if !section("## Subjects", lines) {
+			return b.finishWithTruncation()
 		}
 	}
 
 	if len(projection.InactiveHints) > 0 {
-		b.writeLine("")
-		if !b.writeLine("## Inactive teams") {
-			return b.finishWithTruncation()
-		}
+		lines := make([]string, 0, len(projection.InactiveHints))
 		for _, hint := range projection.InactiveHints {
-			line := fmt.Sprintf("- team `%s` is inactive; no data was read for it", untrustedInline(hint.Subject.Label))
+			line := fmt.Sprintf("- team %s is inactive; no data was read for it", hostedInline(hint.Subject.Label))
 			if hint.ActiveCanonicalID != "" {
-				line += fmt.Sprintf("; an active team of the same name is `%s`", safeInline(hint.ActiveCanonicalID))
+				line += fmt.Sprintf("; an active team of the same name is %s", hostedInline(hint.ActiveCanonicalID))
 			}
-			if !b.writeLine(line) {
-				return b.finishWithTruncation()
-			}
+			lines = append(lines, line)
+		}
+		if !section("## Inactive teams", lines) {
+			return b.finishWithTruncation()
 		}
 	}
 
 	if projection.DirectJudgment != "" {
-		b.writeLine("")
-		if !b.writeLine(fmt.Sprintf("## Judgment (%s)", untrustedDataHeader)) {
-			return b.finishWithTruncation()
-		}
-		if !b.writeLines(untrustedBlock("direct_judgment", projection.DirectJudgment)) {
+		if !section("## Judgment", []string{projection.DirectJudgment}) {
 			return b.finishWithTruncation()
 		}
 	}
 	if projection.CurrentState != "" {
-		b.writeLine("")
-		if !b.writeLine(fmt.Sprintf("## Current state (%s)", untrustedDataHeader)) {
-			return b.finishWithTruncation()
-		}
-		if !b.writeLines(untrustedBlock("current_state", projection.CurrentState)) {
+		if !section("## Current state", []string{projection.CurrentState}) {
 			return b.finishWithTruncation()
 		}
 	}
-
 	if projection.DeterministicAnswer != "" {
-		b.writeLine("")
-		if !b.writeLine(fmt.Sprintf("## Server-computed answer (%s; %s)", serverComputedNote, untrustedDataHeader)) {
-			return b.finishWithTruncation()
-		}
-		if !b.writeLines(untrustedBlock("deterministic_answer", projection.DeterministicAnswer)) {
+		if !section("## Server-computed answer ("+serverComputedNote+")", []string{projection.DeterministicAnswer}) {
 			return b.finishWithTruncation()
 		}
 	}
 
 	if len(projection.StrongestPressures) > 0 {
-		b.writeLine("")
-		if !b.writeLine(fmt.Sprintf("## Strongest pressures (%s)", untrustedDataHeader)) {
+		if !section("## Strongest pressures", joinBlankSeparated(projection.StrongestPressures)) {
 			return b.finishWithTruncation()
-		}
-		for _, pressure := range projection.StrongestPressures {
-			if !b.writeLines(untrustedBlock("pressure", pressure)) {
-				return b.finishWithTruncation()
-			}
 		}
 	}
 
@@ -127,72 +108,56 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 	// settle the subject, so it renders before the drivers rather than as
 	// a footnote a reader might miss.
 	if projection.Clarification != nil {
-		b.writeLine("")
-		if !b.writeLine(fmt.Sprintf("## Clarification needed (%s)", untrustedDataHeader)) {
-			return b.finishWithTruncation()
-		}
+		var lines []string
 		if projection.Clarification.Prompt != "" {
-			if !b.writeLines(untrustedBlock("clarification_prompt", projection.Clarification.Prompt)) {
-				return b.finishWithTruncation()
-			}
+			lines = append(lines, projection.Clarification.Prompt)
 		}
 		for _, candidate := range projection.Clarification.Candidates {
-			line := fmt.Sprintf("- %s `%s` (receipt `%s`, confidence %.2f)",
-				safeInline(string(candidate.Subject.Kind)), untrustedInline(candidate.Subject.Label),
-				safeInline(candidate.ReceiptID), candidate.Confidence)
+			line := fmt.Sprintf("- %s %s (receipt %s, confidence %.2f)",
+				hostedInline(string(candidate.Subject.Kind)), hostedInline(candidate.Subject.Label),
+				hostedInline(candidate.ReceiptID), candidate.Confidence)
 			if candidate.Provider != "" {
-				line += fmt.Sprintf(" provider %s", untrustedInline(candidate.Provider))
+				line += fmt.Sprintf(" provider %s", hostedInline(candidate.Provider))
 			}
-			if !b.writeLine(line) {
-				return b.finishWithTruncation()
-			}
+			lines = append(lines, line)
+		}
+		if !section("## Clarification needed", lines) {
+			return b.finishWithTruncation()
 		}
 	}
 
 	if len(projection.PrincipalDrivers) > 0 {
-		b.writeLine("")
-		if !b.writeLine(fmt.Sprintf("## Drivers (%s)", untrustedDataHeader)) {
-			return b.finishWithTruncation()
-		}
-		for _, driver := range projection.PrincipalDrivers {
-			header := fmt.Sprintf("### %s [%s / %s]",
-				untrustedInline(driver.Title), safeInline(string(driver.Standing)), safeInline(driver.Category))
-			if !b.writeLine(header) {
-				return b.finishWithTruncation()
+		var lines []string
+		for i, driver := range projection.PrincipalDrivers {
+			if i > 0 {
+				lines = append(lines, "")
 			}
-			if !b.writeLines(untrustedBlock("driver_summary", driver.Summary)) {
-				return b.finishWithTruncation()
-			}
+			lines = append(lines, fmt.Sprintf("%d. %s [%s / %s]", i+1,
+				hostedInline(driver.Title), hostedInline(string(driver.Standing)), hostedInline(driver.Category)))
+			lines = append(lines, driver.Summary)
 			if driver.Qualification != "" {
-				if !b.writeLines(untrustedBlock("driver_qualification", driver.Qualification)) {
-					return b.finishWithTruncation()
-				}
+				lines = append(lines, driver.Qualification)
 			}
 			if len(driver.EvidenceRefIDs) > 0 {
-				if !b.writeLine("- Evidence: " + safeInline(strings.Join(driver.EvidenceRefIDs, ", "))) {
-					return b.finishWithTruncation()
-				}
+				lines = append(lines, "- Evidence: "+hostedInline(strings.Join(driver.EvidenceRefIDs, ", ")))
 			}
-			// AffectedSubjects (CHAOS-4398 PR3, wired PR3b): which cohort
-			// member(s) this driver judgment ties back to -- kind/canonical_id
-			// are closed-vocabulary/opaque-id (inline-escaped, same
-			// discipline the Cohort member rows below already use); Label is
-			// source-derived text (untrusted-marked).
+			// AffectedSubjects: which cohort member(s) this driver
+			// judgment ties back to.
 			if len(driver.AffectedSubjects) > 0 {
 				subjects := make([]string, len(driver.AffectedSubjects))
-				for i, subject := range driver.AffectedSubjects {
-					subjects[i] = fmt.Sprintf("%s `%s` (%s)", safeInline(string(subject.Kind)), safeInline(subject.CanonicalID), untrustedInline(subject.Label))
+				for j, subject := range driver.AffectedSubjects {
+					subjects[j] = fmt.Sprintf("%s %s (%s)", hostedInline(string(subject.Kind)), hostedInline(subject.CanonicalID), hostedInline(subject.Label))
 				}
-				if !b.writeLine("- Affected: " + strings.Join(subjects, ", ")) {
-					return b.finishWithTruncation()
-				}
+				lines = append(lines, "- Affected: "+strings.Join(subjects, ", "))
 			}
+		}
+		if !section("## Drivers", lines) {
+			return b.finishWithTruncation()
 		}
 	}
 
 	displayedFacts := make(map[string]struct{})
 	if projection.Cohort != nil {
-		b.writeLine("")
 		size := strconv.Itoa(projection.Cohort.Total)
 		if projection.Cohort.Population > projection.Cohort.Total || projection.Cohort.PopulationLowerBound {
 			size = strconv.Itoa(max(projection.Cohort.Population, projection.Cohort.Total))
@@ -200,22 +165,14 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 				size = "at least " + size
 			}
 		}
-		if !b.writeLine(fmt.Sprintf("## Cohort (%s of %s shown)",
-			strconv.Itoa(len(projection.Cohort.Members)), size)) {
-			return b.finishWithTruncation()
-		}
-		if !b.writeLines(untrustedBlock("cohort_rationale", projection.Cohort.Rationale)) {
-			return b.finishWithTruncation()
-		}
+		lines := []string{projection.Cohort.Rationale}
 		plainWorkItems := projection.Cohort.Kind == contractsv1.ContextFabricSubjectWorkItem
 		for _, member := range projection.Cohort.Members {
 			if member.RankingComputed {
 				plainWorkItems = false
 			}
 		}
-		if plainWorkItems && !b.writeLine("### Work item / Status ("+untrustedDataHeader+")") {
-			return b.finishWithTruncation()
-		}
+		heading := fmt.Sprintf("## Cohort (%s of %s shown)", strconv.Itoa(len(projection.Cohort.Members)), size)
 		for _, member := range projection.Cohort.Members {
 			if plainWorkItems {
 				values := []string{}
@@ -224,7 +181,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 						continue
 					}
 					if fact.Kind == contractsv1.ContextFabricFactStatus {
-						values = append(values, untrustedInline(scalarValueText(fact.Value)))
+						values = append(values, hostedInline(scalarValueText(fact.Value)))
 						displayedFacts[fact.ClaimID] = struct{}{}
 					}
 					// The source title is already the member label. Do not print
@@ -237,49 +194,42 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 				if len(values) > 0 {
 					status = strings.Join(values, "; ")
 				}
-				if !b.writeLine("- Work item: " + untrustedInline(member.Subject.Label) + " — Status: " + status) {
-					return b.finishWithTruncation()
-				}
+				lines = append(lines, "- Work item: "+hostedInline(member.Subject.Label)+" — Status: "+status)
 				continue
 			}
-			line := fmt.Sprintf("%s. %s `%s`", strconv.Itoa(member.Rank),
-				safeInline(string(member.Subject.Kind)), untrustedInline(member.Subject.Label))
-			if !b.writeLine(line) {
-				return b.finishWithTruncation()
-			}
+			lines = append(lines, fmt.Sprintf("%s. %s %s", strconv.Itoa(member.Rank),
+				hostedInline(string(member.Subject.Kind)), hostedInline(member.Subject.Label)))
 			for _, reason := range member.InclusionReasons {
-				if !b.writeLine("   - " + untrustedInline(reason)) {
-					return b.finishWithTruncation()
-				}
+				lines = append(lines, "   - "+hostedInline(reason))
 			}
 		}
-		// RankingTable (CHAOS-4398 PR3, wired PR3b): the Rows-panel view,
-		// one line per RankingComputed member in AttentionRank order.
-		// Every field value is untrusted-marked regardless of its scalar
-		// variant -- the SAME conservative "generic scalar-bag, mark the
-		// whole leaf" treatment key_facts[].rows[].fields{}.string already
-		// gets (this row type is the identical
-		// ContextFabricClaimedFactRow shape). Field names themselves are
-		// fixed Go string literals (rankingTableFieldOrder), never wire
-		// data, so they render bare.
+		b.writeLine("")
+		if !b.writeLine(heading) {
+			return b.finishWithTruncation()
+		}
+		if plainWorkItems && !b.writeLine("### Work item / Status") {
+			return b.finishWithTruncation()
+		}
+		if !b.writeBlock(lines) {
+			return b.finishWithTruncation()
+		}
+		// RankingTable: the Rows-panel view, one line per RankingComputed
+		// member in AttentionRank order. Field names are fixed Go string
+		// literals (rankingTableFieldOrder), never wire data; every value
+		// is hosted text.
 		if len(projection.Cohort.RankingTable) > 0 {
-			b.writeLine("")
-			if !b.writeLine(fmt.Sprintf("## Rows (%s)", untrustedDataHeader)) {
-				return b.finishWithTruncation()
-			}
+			rows := make([]string, 0, len(projection.Cohort.RankingTable))
 			for _, row := range projection.Cohort.RankingTable {
-				if !b.writeLine(rankingTableRowLine(row)) {
-					return b.finishWithTruncation()
-				}
+				rows = append(rows, rankingTableRowLine(row))
+			}
+			if !section("## Rows", rows) {
+				return b.finishWithTruncation()
 			}
 		}
 	}
 
 	if len(projection.KeyFacts) > 0 {
-		b.writeLine("")
-		if !b.writeLine("## Canonical facts") {
-			return b.finishWithTruncation()
-		}
+		var lines []string
 		for _, fact := range projection.KeyFacts {
 			if _, shown := displayedFacts[fact.ClaimID]; shown {
 				continue
@@ -289,23 +239,15 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 				if basis == "floor" {
 					line = "- Work-item count: at least " + strconv.FormatInt(*fact.Value.Integer, 10) + "."
 				}
-				// Reserve the existing truncation notice before admitting this
-				// atomic unit. finish() can never cut its qualification later.
-				if b.buf.Len()+len(line)+1+len(truncationNotice) > b.maxBytes {
-					b.truncated = true
-					return b.finishWithTruncation()
-				}
-				if !b.writeLine(line) {
-					return b.finishWithTruncation()
-				}
+				lines = append(lines, line)
 				continue
 			}
-			line := fmt.Sprintf("- %s.%s = %s (`%s`)",
-				untrustedInline(fact.Subject.Label), untrustedInline(fact.Field),
-				untrustedInline(scalarValueText(fact.Value)), safeInline(string(fact.Kind)))
-			if !b.writeLine(line) {
-				return b.finishWithTruncation()
-			}
+			lines = append(lines, fmt.Sprintf("- %s.%s = %s (%s)",
+				hostedInline(fact.Subject.Label), hostedInline(fact.Field),
+				hostedInline(scalarValueText(fact.Value)), hostedInline(string(fact.Kind))))
+		}
+		if !section("## Canonical facts", lines) {
+			return b.finishWithTruncation()
 		}
 	}
 
@@ -313,54 +255,35 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 	// reader who cannot see that a source was missing cannot judge what
 	// the answer is worth.
 	if len(projection.CoverageSummary) > 0 {
-		b.writeLine("")
-		if !b.writeLine("## Source coverage") {
-			return b.finishWithTruncation()
-		}
+		lines := make([]string, 0, len(projection.CoverageSummary))
 		for _, entry := range projection.CoverageSummary {
-			line := fmt.Sprintf("- %s: %s", safeInline(entry.Source), safeInline(string(entry.State)))
+			line := fmt.Sprintf("- %s: %s", hostedInline(entry.Source), hostedInline(string(entry.State)))
 			if entry.Reason != "" {
-				line += " (" + untrustedInline(entry.Reason) + ")"
+				line += " (" + hostedInline(entry.Reason) + ")"
 			}
-			if !b.writeLine(line) {
-				return b.finishWithTruncation()
-			}
+			lines = append(lines, line)
+		}
+		if !section("## Source coverage", lines) {
+			return b.finishWithTruncation()
 		}
 	}
 	if len(projection.Limitations) > 0 {
-		b.writeLine("")
-		if !b.writeLine(fmt.Sprintf("## Limitations (%s)", untrustedDataHeader)) {
+		if !section("## Limitations", joinBlankSeparated(projection.Limitations)) {
 			return b.finishWithTruncation()
-		}
-		for _, limitation := range projection.Limitations {
-			if !b.writeLines(untrustedBlock("limitation", limitation)) {
-				return b.finishWithTruncation()
-			}
 		}
 	}
 
-	// Warnings render alongside limitations. Dropping them entirely meant
-	// an answer could carry a warning the reader never saw (codex round-4
-	// F5) -- the opposite of what a warning is for.
+	// Warnings render alongside limitations: an answer must never carry a
+	// warning the reader did not see.
 	if len(projection.Warnings) > 0 {
-		b.writeLine("")
-		if !b.writeLine(fmt.Sprintf("## Warnings (%s)", untrustedDataHeader)) {
+		if !section("## Warnings", joinBlankSeparated(projection.Warnings)) {
 			return b.finishWithTruncation()
-		}
-		for _, warning := range projection.Warnings {
-			if !b.writeLines(untrustedBlock("warning", warning)) {
-				return b.finishWithTruncation()
-			}
 		}
 	}
 
-	// CHAOS-3900 W2 / CHAOS-3972 P3 (design brief §2.3: "structure_needs...
-	// plus a bounded rendered_markdown section flagged untrusted, matching
-	// the existing response discipline"). Structural values (member/kind
-	// enums, receipt/option ids, pattern ids) are inline-escaped; every
-	// server-rendered label, the handle value span, and the source column
-	// name are untrusted-marked (same conservative leaf-name treatment
-	// MCPInvestigateQuestionUntrustedFields itself applies).
+	// Structural values (member/kind enums, receipt/option ids, pattern ids)
+	// and every server-rendered label, handle value span and source column
+	// name share one fenced block per section.
 	if we := projection.EffectiveEvidenceWindow; we != nil {
 		b.writeLine("")
 		if !b.writeLine(fmt.Sprintf("- Evidence window: %s (%s)", safeInline(windowBoundsText(we)), safeInline(string(we.Provenance)))) {
@@ -368,18 +291,12 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 	}
 	if needs := projection.StructureNeeds; needs != nil {
-		// CHAOS-4118 (team-lead ruling 2026-08-22): windowConfirmationRequiredResult
-		// (contextfabric/window.go) composes StructureNeeds' window member
-		// (Missing=[window], WindowOptions) and the legacy WindowClarification
-		// field in lockstep, from the identical option set -- rendering both
-		// would show every window option twice, under two different
-		// headings. The legacy "## Window options" rendering below stays
-		// canonical and byte-identical to pre-CHAOS-4118 behavior; this block
-		// skips the window member entirely -- both its Missing entry and its
-		// WindowOptions -- whenever WindowClarification is present, rather
-		// than deciding here which surface should ultimately own rendering
-		// (CHAOS-4121 follow-up). Skipping loses nothing: it is the SAME
-		// data, and every non-window member renders exactly as before.
+		// windowConfirmationRequiredResult composes StructureNeeds' window
+		// member (Missing=[window], WindowOptions) and the legacy
+		// WindowClarification field in lockstep, from the identical option
+		// set -- rendering both would show every window option twice. The
+		// "## Window options" section below stays canonical; this block
+		// skips the window member whenever WindowClarification is present.
 		skipWindow := projection.WindowClarification != nil
 		var missing []contractsv1.ContextFabricStructureNeedKind
 		for _, member := range needs.Missing {
@@ -393,78 +310,49 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 			windowOptions = nil
 		}
 		if len(missing) > 0 || len(needs.KindOptions) > 0 || len(needs.AnchorOptions) > 0 || len(needs.HandleOptions) > 0 || len(needs.CandidateOptions) > 0 || len(windowOptions) > 0 {
-			b.writeLine("")
-			if !b.writeLine("## Structure needed") {
-				return b.finishWithTruncation()
-			}
+			var lines []string
 			for _, member := range missing {
-				if !b.writeLine("- Missing: " + safeInline(string(member))) {
-					return b.finishWithTruncation()
-				}
+				lines = append(lines, "- Missing: "+hostedInline(string(member)))
 			}
 			for _, opt := range needs.KindOptions {
-				line := fmt.Sprintf("- Kind option `%s` (receipt `%s`): %s%s", safeInline(string(opt.Kind)), safeInline(opt.ReceiptID), untrustedInline(opt.Label), phrasingSuffix(opt.Phrasing))
-				if !b.writeLine(line) {
-					return b.finishWithTruncation()
-				}
+				lines = append(lines, fmt.Sprintf("- Kind option %s (receipt %s): %s%s", hostedInline(string(opt.Kind)), hostedInline(opt.ReceiptID), hostedInline(opt.Label), phrasingSuffix(opt.Phrasing)))
 			}
 			for _, opt := range needs.AnchorOptions {
-				line := fmt.Sprintf("- Anchor option `%s` (receipt `%s`): %s%s", safeInline(string(opt.Kind)), safeInline(opt.ReceiptID), untrustedInline(opt.Label), phrasingSuffix(opt.Phrasing))
-				if !b.writeLine(line) {
-					return b.finishWithTruncation()
-				}
+				lines = append(lines, fmt.Sprintf("- Anchor option %s (receipt %s): %s%s", hostedInline(string(opt.Kind)), hostedInline(opt.ReceiptID), hostedInline(opt.Label), phrasingSuffix(opt.Phrasing)))
 			}
 			for _, opt := range needs.HandleOptions {
-				line := fmt.Sprintf("- Handle option `%s`/`%s` (receipt `%s`): %s = %s (source %s)%s",
-					safeInline(string(opt.Kind)), safeInline(opt.PatternID), safeInline(opt.ReceiptID),
-					untrustedInline(opt.Label), untrustedInline(opt.Value), untrustedInline(opt.SourceColumn), phrasingSuffix(opt.Phrasing))
-				if !b.writeLine(line) {
-					return b.finishWithTruncation()
-				}
+				lines = append(lines, fmt.Sprintf("- Handle option %s/%s (receipt %s): %s = %s (source %s)%s",
+					hostedInline(string(opt.Kind)), hostedInline(opt.PatternID), hostedInline(opt.ReceiptID),
+					hostedInline(opt.Label), hostedInline(opt.Value), hostedInline(opt.SourceColumn), phrasingSuffix(opt.Phrasing)))
 			}
-			// CHAOS-4012: CandidateOptions is StructureNeeds' 5th member's
-			// own offer list -- same untrustedInline(opt.Label) discipline
-			// as every option list above, and the SAME "kind + canonical_id"
-			// shape AnchorOptions uses (CandidateOption is AnchorOption's
-			// field shape minus MatchedTermHash), never a
-			// MatchedTermHash line since this member has none.
 			for _, opt := range needs.CandidateOptions {
-				line := fmt.Sprintf("- Candidate option `%s`/`%s` (receipt `%s`): %s%s", safeInline(string(opt.Kind)), safeInline(opt.CanonicalID), safeInline(opt.ReceiptID), untrustedInline(opt.Label), phrasingSuffix(opt.Phrasing))
-				if !b.writeLine(line) {
-					return b.finishWithTruncation()
-				}
+				lines = append(lines, fmt.Sprintf("- Candidate option %s/%s (receipt %s): %s%s", hostedInline(string(opt.Kind)), hostedInline(opt.CanonicalID), hostedInline(opt.ReceiptID), hostedInline(opt.Label), phrasingSuffix(opt.Phrasing)))
 			}
 			for _, opt := range windowOptions {
-				line := fmt.Sprintf("- Window option (receipt `%s`): %s", safeInline(opt.ReceiptID), untrustedInline(opt.Label))
-				if !b.writeLine(line) {
-					return b.finishWithTruncation()
-				}
+				lines = append(lines, fmt.Sprintf("- Window option (receipt %s): %s", hostedInline(opt.ReceiptID), hostedInline(opt.Label)))
+			}
+			if !section("## Structure needed", lines) {
+				return b.finishWithTruncation()
 			}
 		}
 	}
 	if wc := projection.WindowClarification; wc != nil {
-		b.writeLine("")
-		if !b.writeLine("## Window options") {
-			return b.finishWithTruncation()
-		}
+		lines := make([]string, 0, len(wc.Options))
 		for _, opt := range wc.Options {
-			line := fmt.Sprintf("- (receipt `%s`): %s", safeInline(opt.ReceiptID), untrustedInline(opt.Label))
-			if !b.writeLine(line) {
-				return b.finishWithTruncation()
-			}
+			lines = append(lines, fmt.Sprintf("- (receipt %s): %s", hostedInline(opt.ReceiptID), hostedInline(opt.Label)))
+		}
+		if !section("## Window options", lines) {
+			return b.finishWithTruncation()
 		}
 	}
 	if len(projection.ConfirmedStructure) > 0 {
-		b.writeLine("")
-		if !b.writeLine("## Structure confirmed") {
-			return b.finishWithTruncation()
-		}
+		lines := make([]string, 0, len(projection.ConfirmedStructure))
 		for _, entry := range projection.ConfirmedStructure {
-			line := fmt.Sprintf("- %s = %s (%s, %s)", safeInline(string(entry.Member)), untrustedInline(entry.AppliedValue),
-				safeInline(string(entry.Source)), safeInline(string(entry.Provenance)))
-			if !b.writeLine(line) {
-				return b.finishWithTruncation()
-			}
+			lines = append(lines, fmt.Sprintf("- %s = %s (%s, %s)", hostedInline(string(entry.Member)), hostedInline(entry.AppliedValue),
+				hostedInline(string(entry.Source)), hostedInline(string(entry.Provenance))))
+		}
+		if !section("## Structure confirmed", lines) {
+			return b.finishWithTruncation()
 		}
 	}
 
@@ -488,6 +376,63 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 // composed from stored facts, as opposed to the model's own wording.
 const serverComputedNote = "computed by the server from stored facts, not written by a model"
 
+// untrustedNoticeLine is the single notice a rendering carries. Hosted text
+// appears only inside the fenced blocks below it.
+const untrustedNoticeLine = "> **" + untrustedDataHeader + ".** Hosted text appears only inside fenced blocks."
+
+// hostedInline makes one hosted (or structural) value safe to put on a
+// single line inside a fenced block: line breaks collapse and control/bidi
+// runes are escaped, so a value can neither start a new line nor end the
+// fence (the fence is longer than any backtick run in the block).
+func hostedInline(value string) string {
+	return sanitizeInlineContent(value)
+}
+
+// joinBlankSeparated places items one after another inside one block, with a
+// blank line between them.
+func joinBlankSeparated(items []string) []string {
+	out := make([]string, 0, len(items)*2)
+	for i, item := range items {
+		if i > 0 {
+			out = append(out, "")
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// writeBlock writes lines as one blockquoted fenced block. The fence is
+// longer than any backtick run in the content. Lines are added while they
+// fit; the closing fence is always written, and room for the truncation
+// notice stays reserved, so a fence is never left open. It reports false
+// when anything was dropped.
+func (b *boundedBuilder) writeBlock(lines []string) bool {
+	if b.truncated {
+		return false
+	}
+	sanitized := sanitizeUntrustedContent(strings.Join(lines, "\n"))
+	fence := fenceFor(sanitized)
+	open := "> " + fence + "\n"
+	reserve := len(open) + len(truncationNotice)
+	if b.buf.Len()+len(open)+reserve > b.maxBytes {
+		b.truncated = true
+		return false
+	}
+	b.buf.WriteString(open)
+	complete := true
+	for _, line := range strings.Split(sanitized, "\n") {
+		piece := "> " + line + "\n"
+		if b.buf.Len()+len(piece)+reserve > b.maxBytes {
+			b.truncated = true
+			complete = false
+			break
+		}
+		b.buf.WriteString(piece)
+	}
+	b.buf.WriteString(open)
+	return complete
+}
+
 // RenderInvestigationResultMarkdown renders the full canonical result as a
 // short header plus its judgment. It stays deliberately brief: a caller
 // reaching for the full result wants the STRUCTURED payload, and a
@@ -500,6 +445,7 @@ func RenderInvestigationResultMarkdown(result contractsv1.ContextFabricInvestiga
 	b := newBoundedBuilder(maxBytes)
 
 	b.writeLine("# Investigation result")
+	b.writeLine(untrustedNoticeLine)
 	b.writeLine(fmt.Sprintf("- Status: %s", safeInline(string(result.Status))))
 	b.writeLine(fmt.Sprintf("- Result ID: %s", safeInline(result.ResultID)))
 	b.writeLine(fmt.Sprintf("- Drivers: %s", strconv.Itoa(len(result.Drivers))))
@@ -509,19 +455,19 @@ func RenderInvestigationResultMarkdown(result contractsv1.ContextFabricInvestiga
 	}
 	if result.DirectJudgment != "" {
 		b.writeLine("")
-		if !b.writeLine(fmt.Sprintf("## Judgment (%s)", untrustedDataHeader)) {
+		if !b.writeLine("## Judgment") {
 			return b.finishWithTruncation()
 		}
-		if !b.writeLines(untrustedBlock("direct_judgment", result.DirectJudgment)) {
+		if !b.writeBlock([]string{result.DirectJudgment}) {
 			return b.finishWithTruncation()
 		}
 	}
 	if result.DeterministicAnswer != "" {
 		b.writeLine("")
-		if !b.writeLine(fmt.Sprintf("## Server-computed answer (%s; %s)", serverComputedNote, untrustedDataHeader)) {
+		if !b.writeLine("## Server-computed answer (" + serverComputedNote + ")") {
 			return b.finishWithTruncation()
 		}
-		if !b.writeLines(untrustedBlock("deterministic_answer", result.DeterministicAnswer)) {
+		if !b.writeBlock([]string{result.DeterministicAnswer}) {
 			return b.finishWithTruncation()
 		}
 	}
@@ -604,7 +550,7 @@ func rankingTableRowLine(row contractsv1.ContextFabricClaimedFactRow) string {
 		if !ok {
 			continue
 		}
-		parts = append(parts, safeInline(key)+"="+untrustedInline(scalarValueText(value)))
+		parts = append(parts, key+"="+hostedInline(scalarValueText(value)))
 	}
 	return "- " + strings.Join(parts, " ")
 }
@@ -661,13 +607,13 @@ func windowBoundsText(w *contractsv1.ContextFabricEffectiveEvidenceWindow) strin
 // alongside its structural Label, when phrasing was applied -- empty when
 // it was not (fail-open to structure never removes the Label line above,
 // this only ever ADDS to it). Phrasing is genuine model output, wrapped in
-// the SAME untrustedInline discipline as every other model- or
-// source-derived value on this line.
+// the same fenced-block discipline as every other model- or
+// source-derived value.
 func phrasingSuffix(phrasing string) string {
 	if phrasing == "" {
 		return ""
 	}
-	return fmt.Sprintf(" (phrasing: %s)", untrustedInline(phrasing))
+	return fmt.Sprintf(" (phrasing: %s)", hostedInline(phrasing))
 }
 
 // describeTimeContext renders the instants of one time context. The axis
