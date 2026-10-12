@@ -4104,7 +4104,7 @@
     "attribution": [
       "org_id"
     ],
-    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame filters pull request members by a status",
+    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame filters pull request, project or incident members by a status (member_kind says which; the message text keeps its certified pull request wording)",
     "fields": [
       {
         "key": "org_id",
@@ -4121,6 +4121,16 @@
         ]
       },
       {
+        "key": "member_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "pull_request",
+          "project",
+          "incident"
+        ]
+      },
+      {
         "key": "status",
         "type": "string",
         "presence": "required",
@@ -4130,7 +4140,17 @@
           "closed",
           "awaiting_review",
           "changes_requested",
-          "approved"
+          "approved",
+          "backlog",
+          "planned",
+          "started",
+          "paused",
+          "completed",
+          "canceled",
+          "active",
+          "acknowledged",
+          "resolved",
+          "suppressed"
         ]
       },
       {
@@ -4144,6 +4164,12 @@
         "type": "int",
         "presence": "conditional",
         "applicability": "written when outcome=applied"
+      },
+      {
+        "key": "outside_set",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when outcome=applied and member_kind is project or incident: the candidates whose stored status is outside the kind's closed set"
       },
       {
         "key": "error",

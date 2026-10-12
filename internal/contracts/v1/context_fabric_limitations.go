@@ -811,6 +811,7 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricPathDropLimitation(limitation) ||
 		IsContextFabricWorkItemMemberFilterLimitation(limitation) ||
 		IsContextFabricPullRequestStatusLimitation(limitation) ||
+		IsContextFabricMemberStatusLimitation(limitation) ||
 		IsContextFabricWorkItemRepositoryLimitation(limitation) ||
 		IsContextFabricWorkItemListedLimitation(limitation) ||
 		IsContextFabricWorkItemSynthesisCoverageLimitation(limitation) ||
