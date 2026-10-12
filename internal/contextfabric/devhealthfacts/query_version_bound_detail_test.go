@@ -119,3 +119,17 @@ func TestQueryVersionMovedPastTheFollowUp(t *testing.T) {
 		t.Fatalf("QueryVersion = %q: an answer saved before the follow-up (v182 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+// A team that owns no repository serves not_applicable with the cause on the
+// health, deficiency and investment kinds, so an answer stored before it
+// (v187 and before) holds no_data and must not be reused.
+func TestQueryVersionMovedPastTheTeamOwnsNoRepository(t *testing.T) {
+	const prefix = "devhealthfacts.clickhouse.v"
+	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
+	if !ok {
+		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
+	}
+	if n, err := strconv.Atoi(version); err != nil || n < 188 {
+		t.Fatalf("QueryVersion = %q: an answer saved before a team without repositories was served not_applicable (v187 and before) must not be reused", devhealthfacts.QueryVersion)
+	}
+}

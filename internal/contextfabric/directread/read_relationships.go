@@ -72,6 +72,8 @@ type RelationshipsRequest struct {
 	AsOf      string               `json:"as_of,omitempty"`
 	Limit     int                  `json:"limit,omitempty"`
 	Cursor    string               `json:"cursor,omitempty"`
+	// CurrentOnly drops BLOCKS edges whose blocking end is done or canceled.
+	CurrentOnly bool `json:"current_only,omitempty"`
 }
 
 // RelationshipsSubject is a canonical reference; the client never builds an
@@ -120,25 +122,30 @@ type RelationshipsResponse struct {
 
 // EffectiveRelationshipsRead echoes the request the server executed.
 type EffectiveRelationshipsRead struct {
-	Subject   RelationshipsSubject `json:"subject"`
-	Types     []string             `json:"types"`
-	Direction string               `json:"direction"`
-	Depth     int                  `json:"depth"`
-	Axis      string               `json:"axis"`
-	ValidAt   string               `json:"valid_at"`
-	Limit     int                  `json:"limit"`
-	Hop       int                  `json:"hop"`
+	Subject     RelationshipsSubject `json:"subject"`
+	Types       []string             `json:"types"`
+	Direction   string               `json:"direction"`
+	Depth       int                  `json:"depth"`
+	Axis        string               `json:"axis"`
+	ValidAt     string               `json:"valid_at"`
+	Limit       int                  `json:"limit"`
+	Hop         int                  `json:"hop"`
+	CurrentOnly bool                 `json:"current_only"`
 }
 
 // ServedEdge is one visible edge with self-contained provenance (C.7).
 type ServedEdge struct {
-	RelationshipID string             `json:"relationship_id"`
-	Type           string             `json:"type"`
-	Hop            int                `json:"hop"`
-	From           ServedEdgeEnd      `json:"from"`
-	To             ServedEdgeEnd      `json:"to"`
-	Fact           string             `json:"fact,omitempty"`
-	Provenance     RelationshipSource `json:"provenance"`
+	RelationshipID string        `json:"relationship_id"`
+	Type           string        `json:"type"`
+	Hop            int           `json:"hop"`
+	From           ServedEdgeEnd `json:"from"`
+	To             ServedEdgeEnd `json:"to"`
+	Fact           string        `json:"fact,omitempty"`
+	// Active is set on BLOCKS edges only: true when the blocking (from) end
+	// is not done or canceled, false when it is. Absent when that end's
+	// status is unknown.
+	Active     *bool              `json:"active,omitempty"`
+	Provenance RelationshipSource `json:"provenance"`
 }
 
 // ServedEdgeEnd is one visible end node.
@@ -146,6 +153,11 @@ type ServedEdgeEnd struct {
 	Kind        string `json:"kind"`
 	CanonicalID string `json:"canonical_id"`
 	Label       string `json:"label,omitempty"`
+	// Status and StatusAsOf are set on the ends of BLOCKS edges only. Status
+	// is a member of the work-item status vocabulary, or "unknown" when the
+	// end carries none. StatusAsOf is when the end node was last projected.
+	Status     string `json:"status,omitempty"`
+	StatusAsOf string `json:"status_as_of,omitempty"`
 }
 
 // RelationshipSource is the provenance of one edge, from its own stored
@@ -174,10 +186,14 @@ type RelationshipsWithheld struct {
 
 // RelationshipsPage is the page position.
 type RelationshipsPage struct {
-	Returned   int    `json:"returned"`
-	Examined   int    `json:"examined"`
-	Complete   bool   `json:"complete"`
-	NextCursor string `json:"next_cursor,omitempty"`
+	Returned int  `json:"returned"`
+	Examined int  `json:"examined"`
+	Complete bool `json:"complete"`
+	// DroppedInactive counts BLOCKS edges current_only removed from this
+	// page because the blocking end is done or canceled. Always 0 without
+	// current_only.
+	DroppedInactive int    `json:"dropped_inactive"`
+	NextCursor      string `json:"next_cursor,omitempty"`
 }
 
 // RelationshipsUntrustedLabel names the fields that carry source text.
@@ -211,9 +227,11 @@ type RelationshipsReadRecord struct {
 	// LinkTierUnserved counts LINKS_PULL_REQUEST edges served without
 	// link_tier because the stored tier was missing or outside the closed set.
 	LinkTierUnserved int
-	EndNodesGated    int
-	EndNodesRefused  int
-	TruncatedBy      string
+	// EdgesDroppedInactive counts BLOCKS edges current_only removed.
+	EdgesDroppedInactive int
+	EndNodesGated        int
+	EndNodesRefused      int
+	TruncatedBy          string
 	// CursorIn is what the page did with the cursor it was given (accepted,
 	// expired, stale, invalid, foreign_org), or "" when it had none.
 	CursorIn CursorOutcome
@@ -255,7 +273,9 @@ type relationshipsPlan struct {
 	depth     int
 	asOf      *time.Time
 	limit     int
-	digest    string
+	// currentOnly drops BLOCKS edges whose blocking end is done or canceled.
+	currentOnly bool
+	digest      string
 }
 
 func relInvalid(format string, args ...any) error {
@@ -357,13 +377,14 @@ func planRelationships(request RelationshipsRequest) (relationshipsPlan, error) 
 	// current-axis rule that keeps the edges of ended subjects, so a cursor
 	// issued under the strict rule cannot continue (it would skip edges that
 	// sort before it and are now read).
+	plan.currentOnly = request.CurrentOnly
 	asOfText := ""
 	if plan.asOf != nil {
 		asOfText = plan.asOf.Format(time.RFC3339Nano)
 	}
 	digest := sha256.Sum256([]byte(strings.Join([]string{
 		"read_relationships.v2", string(plan.root.Kind), plan.root.CanonicalID, strings.Join(plan.types, ","),
-		string(plan.direction), fmt.Sprint(plan.depth), asOfText,
+		string(plan.direction), fmt.Sprint(plan.depth), asOfText, fmt.Sprint(plan.currentOnly),
 	}, "\x00")))
 	plan.digest = hex.EncodeToString(digest[:16])
 	return plan, nil
@@ -491,7 +512,7 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 		record.FailureClass = gatevocab.RelationshipsFailureGraph
 		return RelationshipsResponse{}, fmt.Errorf("%w: edge page returned %d edges for limit %d", ErrRelationshipsUnavailable, len(page.Edges), plan.limit)
 	}
-	served, withheld, err := r.gateEdges(ctx, principal, page.Edges, hop, &record)
+	served, withheld, err := r.gateEdges(ctx, principal, page.Edges, hop, plan.currentOnly, &record)
 	if err != nil {
 		return RelationshipsResponse{}, err
 	}
@@ -499,6 +520,7 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 	response.Withheld = withheld
 	response.Page.Returned = len(served)
 	response.Page.Examined = len(page.Edges)
+	response.Page.DroppedInactive = record.EdgesDroppedInactive
 	record.EdgesExamined, record.EdgesReturned = len(page.Edges), len(served)
 	record.TruncatedBy = response.TruncatedBy
 
@@ -555,7 +577,7 @@ func (r *RelationshipsReader) baseResponse(plan relationshipsPlan, hop int, vali
 		Effective: EffectiveRelationshipsRead{
 			Subject: RelationshipsSubject{Kind: string(plan.root.Kind), CanonicalID: plan.root.CanonicalID},
 			Types:   types, Direction: string(plan.direction), Depth: plan.depth,
-			Axis: axis, ValidAt: validAt.UTC().Format(time.RFC3339Nano), Limit: plan.limit, Hop: hop,
+			Axis: axis, ValidAt: validAt.UTC().Format(time.RFC3339Nano), Limit: plan.limit, Hop: hop, CurrentOnly: plan.currentOnly,
 		},
 		Edges:       []ServedEdge{},
 		Meaning:     RelationshipsMeaning,
@@ -592,6 +614,9 @@ func (r *RelationshipsReader) frontier(ctx context.Context, principal storage.Pr
 		}
 		for _, candidate := range page.Edges {
 			if EdgeGate(principal, candidate.Attributes, admitted[graphrank.SubjectKey(candidate.From.Subject)], admitted[graphrank.SubjectKey(candidate.To.Subject)]) != EdgeVisible {
+				continue
+			}
+			if plan.currentOnly && inactiveBlocker(candidate) {
 				continue
 			}
 			for _, end := range []contextfabric.SubjectRef{candidate.From.Subject, candidate.To.Subject} {
@@ -676,7 +701,7 @@ func (r *RelationshipsReader) gateEnds(ctx context.Context, principal storage.Pr
 }
 
 // gateEdges applies the edge gate to one page and builds the served edges.
-func (r *RelationshipsReader) gateEdges(ctx context.Context, principal storage.Principal, candidates []EdgeCandidate, hop int, record *RelationshipsReadRecord) ([]ServedEdge, RelationshipsWithheld, error) {
+func (r *RelationshipsReader) gateEdges(ctx context.Context, principal storage.Principal, candidates []EdgeCandidate, hop int, currentOnly bool, record *RelationshipsReadRecord) ([]ServedEdge, RelationshipsWithheld, error) {
 	var refSubjects []contextfabric.SubjectRef
 	for _, candidate := range candidates {
 		for _, id := range graphrank.EvidenceRefs(candidate.Attributes) {
@@ -699,6 +724,17 @@ func (r *RelationshipsReader) gateEdges(ctx context.Context, principal storage.P
 			withheld.EdgesNotVisible++
 			record.EdgesWithheld[reason]++
 			continue
+		}
+		var active *bool
+		fromEnd, toEnd := servedEnd(candidate.From), servedEnd(candidate.To)
+		if candidate.RelationType == string(contractsv1.ContextFabricRelationshipBlocks) {
+			fromEnd.Status, fromEnd.StatusAsOf = endStatus(candidate.From)
+			toEnd.Status, toEnd.StatusAsOf = endStatus(candidate.To)
+			active = blockerActive(fromEnd.Status)
+			if currentOnly && inactiveBlocker(candidate) {
+				record.EdgesDroppedInactive++
+				continue
+			}
 		}
 		refs := make([]string, 0)
 		for _, id := range graphrank.EvidenceRefs(candidate.Attributes) {
@@ -729,8 +765,9 @@ func (r *RelationshipsReader) gateEdges(ctx context.Context, principal storage.P
 			RelationshipID: candidate.Key.RelationshipID,
 			Type:           candidate.RelationType,
 			Hop:            hop,
-			From:           servedEnd(candidate.From),
-			To:             servedEnd(candidate.To),
+			From:           fromEnd,
+			To:             toEnd,
+			Active:         active,
 			Fact:           graphrank.StringAttribute(candidate.Attributes, "fact"),
 			Provenance: RelationshipSource{
 				Source:          "acr_graph",
@@ -765,6 +802,49 @@ func linkTierOf(attributes map[string]interface{}) string {
 // linkTierVocabulary is the closed set of stored link tiers, the enum of
 // provenance.link_tier in the response schema.
 var linkTierVocabulary = []string{"explicit_text", "heuristic", "native"}
+
+const (
+	workItemStatusProperty = "property_status"
+	statusUnknown          = "unknown"
+)
+
+// endStatus returns the stored work-item status of an end node when it is in
+// the closed vocabulary, else "unknown" (never treated as done or open), and
+// the time that node was last projected.
+func endStatus(end EdgeEnd) (status, asOf string) {
+	status = strings.TrimSpace(graphrank.StringAttribute(end.Attributes, workItemStatusProperty))
+	if !contextfabric.InWorkItemStatusVocabulary(status) {
+		status = statusUnknown
+	}
+	return status, strings.TrimSpace(graphrank.StringAttribute(end.Attributes, "observed_at"))
+}
+
+// inactiveBlocker reports a BLOCKS edge whose blocking end is stored as done
+// or canceled. From is the blocker: dependencyrelation swaps BLOCKED_BY and
+// IS_BLOCKED_BY so the blocking item is always the stored start.
+func inactiveBlocker(candidate EdgeCandidate) bool {
+	if candidate.RelationType != string(contractsv1.ContextFabricRelationshipBlocks) {
+		return false
+	}
+	status, _ := endStatus(candidate.From)
+	active := blockerActive(status)
+	return active != nil && !*active
+}
+
+// blockerActive is nil for an unknown status, false for done or canceled,
+// true for every other member (blocked included).
+func blockerActive(status string) *bool {
+	var active bool
+	switch status {
+	case statusUnknown:
+		return nil
+	case "done", "canceled":
+		active = false
+	default:
+		active = true
+	}
+	return &active
+}
 
 func servedEnd(end EdgeEnd) ServedEdgeEnd {
 	label := strings.TrimSpace(graphrank.StringAttribute(end.Attributes, "label"))
