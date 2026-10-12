@@ -489,23 +489,32 @@ func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string,
 
 // readTeamOwnedRepositories reads team -> owned repository ids as of bound.
 // An ownership row with no repo_id is resolved by repository name
-// (ownedRepositoriesSource, CHAOS-7073 K11).
+// (ownedRepositoriesSource, CHAOS-7073 K11). The read is paged to completion:
+// a mix over a partial repository set would be a wrong total, and a team past
+// the cut would read as owning nothing. A set above maxTeamOwnedRepositoryRows
+// is a named failure.
 func (p *InvestmentProvider) readTeamOwnedRepositories(ctx context.Context, orgID string, teamIDs []string, bound factTimeBound) (map[string][]string, error) {
-	statement := withRowLimit(`SELECT DISTINCT team_id, repo_key FROM ` +
-		ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)) + "\nORDER BY team_id, repo_key")
-	extra := make([]readers.Binding, 0, 2)
-	for _, b := range bound.bindings() {
-		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
-	}
+	source := ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}` + ownershipValidityPredicate(bound))
 	owned := map[string][]string{}
-	if err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamOwnedRepositories", statement, orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
-		var teamID, repoID string
-		if err := row.Scan(&teamID, &repoID); err != nil {
-			return err
-		}
-		owned[teamID] = append(owned[teamID], repoID)
-		return nil
-	}, extra...); err != nil {
+	err := pagedOrgScopedTeamRepoRead(ctx, p.facts.client, "ReadTeamOwnedRepositories", orgID, teamIDs,
+		teamRepoCursor{teamExpr: "team_id", repoExpr: "repo_key", repoType: "String"},
+		boundReaderBindings(bound),
+		func(having string, limit int) string {
+			return `SELECT team_id, repo_key FROM ` + source + `
+GROUP BY team_id, repo_key
+` + having + `
+ORDER BY team_id, repo_key
+LIMIT ` + strconv.Itoa(limit)
+		},
+		func(row contextpacket.ClickHouseRowScanner) (string, string, error) {
+			var teamID, repoID string
+			if err := row.Scan(&teamID, &repoID); err != nil {
+				return "", "", err
+			}
+			owned[teamID] = append(owned[teamID], repoID)
+			return teamID, repoID, nil
+		})
+	if err != nil {
 		return nil, err
 	}
 	return owned, nil
