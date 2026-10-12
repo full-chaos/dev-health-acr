@@ -79,6 +79,11 @@ func TestTeamRollups_ReachWorkThroughOwnedProjectLinks(t *testing.T) {
 	item("i-weak", "proj-1")  // heuristic link into repo-r
 	item("i-other", "proj-2") // a project no team owns, linked into repo-r
 	item("blocker", "")       // the blocking item, in no project
+	item("i-stale", "proj-1") // links a pull request that does not exist
+	item("i-hist", "proj-1")  // links a pull request opened in the past window
+	// A pull-request-typed work item is no issue.
+	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, type) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL, 'pr')`,
+		"pr-typed", repoUUID("repo-x"), projectReachOrg, "pr-typed", at, "proj-1")
 	link("i-own", "repo-a", 1, "native")
 	link("i-reach", "repo-r", 2, "native")
 	link("i-weak", "repo-r", 3, "heuristic")
