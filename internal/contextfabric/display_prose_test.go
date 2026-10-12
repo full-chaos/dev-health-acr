@@ -82,3 +82,12 @@ func TestComposeCurrentStateLeavesNeverInProseFieldsOut(t *testing.T) {
 		t.Fatalf("CurrentState = %q, want %q", got, want)
 	}
 }
+
+func TestEveryRankingSignalHasADisplayNoun(t *testing.T) {
+	t.Parallel()
+	for _, signal := range []string{RankingSignalInvestmentMix, RankingSignalHealthRisk, RankingSignalDeficiencySeverity, RankingSignalReadinessGap, RankingSignalWorkloadPressure} {
+		if noun := cohortSignalDisplayName(signal); noun == "" || strings.Contains(noun, "_") || strings.Contains(noun, ".") {
+			t.Errorf("signal %q display noun = %q", signal, noun)
+		}
+	}
+}
