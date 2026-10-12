@@ -67,6 +67,55 @@ func TestAnAdmittedBindingCarriesItsAnchorIntoTheSameQuestion(t *testing.T) {
 	if line.Admission != AnchorBindingAdmissionAdmitted || line.BoundAnchorCarry != BoundAnchorCarryInjected || line.ServedCount != string(CountPopulationScopeAnchorCommitted) || line.ServedCountAnchor.ID != probeAlpha.CanonicalID {
 		t.Fatalf("line admission/carry/count = %s/%s/%s %s, want admitted/injected/anchor_committed on alpha", line.Admission, line.BoundAnchorCarry, line.ServedCount, line.ServedCountAnchor.ID)
 	}
+	// The ledger entry naming the same identity stays applied: the
+	// selection is alpha, the served entry is applied, and the outgoing
+	// ledger keeps it.
+	if call := rig.graph.calls[len(rig.graph.calls)-1]; call.anchor == nil || call.anchor.CanonicalID != probeAlpha.CanonicalID {
+		t.Fatalf("resolution anchor selection = %+v, want the agreeing ledger alpha", call.anchor)
+	}
+	got := memberEntries(two.result, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+	if len(got) != 1 || got[0].Disposition != contractsv1.ContextFabricStructureDispositionApplied || got[0].AppliedValue != probeAlpha.CanonicalID {
+		t.Fatalf("served subject_anchor entry = %+v, want alpha applied", got)
+	}
+	if anchor := servedLedgerAnchor(two); anchor.ID != probeAlpha.CanonicalID {
+		t.Fatalf("outgoing ledger anchor = %+v, want alpha kept", anchor)
+	}
+}
+
+// TestALedgerAnchorTheBindingDisagreesWithIsVetoedAsAConflict: the admitted
+// binding holds beta while the ledger holds alpha. Beta is carried; alpha is
+// withheld from resolution and served as vetoed_conflict.
+func TestALedgerAnchorTheBindingDisagreesWithIsVetoedAsAConflict(t *testing.T) {
+	holdBeta := mutateStoredBindings(func(s *PersistedSemanticState) {
+		editBindingMember(s, func(b *AnchorBinding) {
+			b.Kind, b.CanonicalID, b.Witness = probeBeta.Kind, probeBeta.CanonicalID, []string{string(probeBeta.Kind) + ":" + probeBeta.CanonicalID}
+		})
+	})
+	rig, _, two := bindingCarryTurns(t, true, holdBeta, nil, emptyProbeResponse())
+	if line := two.transitions[0]; line.Admission != AnchorBindingAdmissionAdmitted || line.BoundAnchorCarry != BoundAnchorCarryInjected {
+		t.Fatalf("line admission/carry = %s/%s, want admitted/injected", line.Admission, line.BoundAnchorCarry)
+	}
+	if hints := carriedHintsOf(rig); len(hints) != 1 || hints[0].ID != probeBeta.CanonicalID {
+		t.Fatalf("carried hints = %+v, want the binding's beta only", hints)
+	}
+	if call := rig.graph.calls[len(rig.graph.calls)-1]; call.anchor != nil {
+		t.Fatalf("resolution anchor selection = %+v, want none: the disagreeing ledger alpha is withheld", call.anchor)
+	}
+	got := memberEntries(two.result, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+	if len(got) != 1 || got[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedConflict || got[0].AppliedValue != probeAlpha.CanonicalID {
+		t.Fatalf("served subject_anchor entry = %+v, want alpha vetoed_conflict", got)
+	}
+}
+
+// TestTheRememberedOfferListsTheHeldIdentityOnce: the resolver lists the
+// held identity twice; the served list names it once, first.
+func TestTheRememberedOfferListsTheHeldIdentityOnce(t *testing.T) {
+	alpha, again, beta := probeOffer("receipt_dup_alpha", probeAlpha), probeOffer("receipt_dup_alpha_again", probeAlpha), probeOffer("receipt_dup_beta", probeBeta)
+	_, _, two := bindingCarryTurns(t, true, nil, nil, offeringResponse(beta, alpha, again))
+	served := two.result.SubjectResolution.Candidates
+	if len(served) != 2 || served[0].ReceiptID != alpha.ReceiptID || served[1].ReceiptID != beta.ReceiptID {
+		t.Fatalf("served candidates = %+v, want alpha once, first, then beta", served)
+	}
 }
 
 // TestARefusedBindingCarriesNothingEvenWithALedgerEntry: the binding's proof
@@ -384,6 +433,18 @@ func TestAContestedOrPendingBindingCarry(t *testing.T) {
 			}
 			if hints := carriedHintsOf(rig); len(hints) != tc.wantHints {
 				t.Fatalf("carried hints = %+v, want %d", hints, tc.wantHints)
+			}
+			// The ledger's alpha reaches the selection only beside a due carry
+			// of the same identity; the contested binding withholds it.
+			carried := tc.wantHints == 1
+			if call := rig.graph.calls[len(rig.graph.calls)-1]; (call.anchor != nil) != carried {
+				t.Fatalf("resolution anchor selection = %+v, want present=%v", call.anchor, carried)
+			}
+			if !carried {
+				got := memberEntries(two.result, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+				if len(got) != 1 || got[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedUnresolved {
+					t.Fatalf("served subject_anchor entry = %+v, want vetoed_unresolved", got)
+				}
 			}
 		})
 	}
