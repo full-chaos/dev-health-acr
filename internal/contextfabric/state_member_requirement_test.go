@@ -89,7 +89,7 @@ func TestStateMemberRequirementKeepsHealthIndependent(t *testing.T) {
 					}
 					if row.Requirement == "health/member/"+string(tc.kind) {
 						healthRows++
-						if row.Outcome != v1.ContextFabricRequirementNotApplicable || row.Stage != v1.ContextFabricOutcomeStagePlanning || row.Impact != v1.ContextFabricAnswerImpactNone || row.CauseCoverage != "" {
+						if row.Outcome != v1.ContextFabricRequirementNotApplicable || row.Stage != v1.ContextFabricOutcomeStagePlanning || row.Impact != v1.ContextFabricAnswerImpactNone || row.CauseCoverage != v1.ContextFabricCoverageDetailFactNoDeclaringProducer || !row.CauseObserved {
 							t.Errorf("undeclared health=%+v", row)
 						}
 					}
