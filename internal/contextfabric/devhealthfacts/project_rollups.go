@@ -35,7 +35,7 @@ const projectJoinKeysSQL = `(SELECT provider, join_key, concat(provider, ':', id
 // statement can name rather than for the whole organization.
 func workItemAuthorizedAmongSQL(scope readers.AuthorizationScope, among string) (string, []readers.Binding) {
 	rendered := readers.WorkItemScopeSQL(scope)
-	return `(SELECT w.work_item_id FROM work_items AS w FINAL ` + rendered.JoinSQL + ` WHERE w.org_id = {org_id:String} GROUP BY w.work_item_id HAVING min(toUInt8(` + rendered.AuthorizationExpr + `)) = 1)`, rendered.Bindings
+	return `(SELECT w.work_item_id FROM work_items AS w FINAL ` + rendered.JoinSQL + ` WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + among + ` GROUP BY w.work_item_id HAVING min(toUInt8(` + rendered.AuthorizationExpr + `)) = 1)`, rendered.Bindings
 }
 
 // projectLinkedPullRequestsSQL is one row per (project, linked pull request)
@@ -48,6 +48,7 @@ var projectLinkedPullRequestsSQL = `(
     FROM work_items AS w FINAL
     INNER JOIN ` + projectJoinKeysSQL + ` AS k ON k.provider = w.provider AND k.join_key = w.project_id
     WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + `
+      AND w.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
   ) AS pi ON pi.work_item_id = l.work_item_id
   WHERE l.org_id = {org_id:String}
   GROUP BY project_key, pr_repo_id, pr_number

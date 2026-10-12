@@ -1764,7 +1764,7 @@ func (r *FactReadScopeResolver) Resolve(
 var additiveRollupExpansionKinds = map[FactKind]bool{FactPullRequests: true, FactBlockers: true}
 
 // additiveRollupOrigins are the root kinds whose rollup is additive.
-var additiveRollupOrigins = []SubjectKind{SubjectTeam}
+var additiveRollupOrigins = []SubjectKind{SubjectTeam, SubjectProject}
 
 // additiveRollupRoots returns the team and project roots, among roots, that
 // still owe an expansion decision although their kind is directly readable.

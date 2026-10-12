@@ -258,7 +258,7 @@ WHERE type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Sele
 			t.Fatalf("%s: no statement in system.query_log (measurement did not happen)", statement.name)
 		}
 		if peak >= blockerMemoryPeakCeiling {
-			t.Fatalf("%s peaked at %d bytes over %d unrelated work items, want under %d (a quarter of the 64 MiB statement cap)", statement.name, peak, blockerMemoryFillerItems, blockerMemoryPeakCeiling)
+			t.Errorf("%s peaked at %d bytes over %d unrelated work items, want under %d (a quarter of the 64 MiB statement cap)", statement.name, peak, blockerMemoryFillerItems, blockerMemoryPeakCeiling)
 		}
 	}
 	for _, read := range []struct {

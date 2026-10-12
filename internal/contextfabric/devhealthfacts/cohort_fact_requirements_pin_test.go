@@ -181,7 +181,10 @@ func TestCohortDerivedFactKindsIsExactlyTheTablesUnion(t *testing.T) {
 // of incidents and pull requests are served for a team subject a question
 // names, beside the expanded per-item facts; no answer obligation requires
 // them for a discovered team cohort, and asking would add reads the planner
-// does not use (planning_authority_parity.txt shows the loss column).
+// does not use (planning_authority_parity.txt shows the loss column). The
+// project rollup of pull requests is the same case for a project subject: a
+// client model reads it through read_facts; a discovered project cohort does
+// not ask for it.
 //
 // The deployment rollups (repository aggregate, team rollup) are served for a
 // repository or team subject a question names. The deployment cohort asks for
@@ -191,6 +194,9 @@ func TestCohortDerivedFactKindsIsExactlyTheTablesUnion(t *testing.T) {
 func cohortOmissionIsDeliberate(factKind contextfabric.FactKind, subjectKind contextfabric.SubjectKind) bool {
 	if factKind == contextfabric.FactDeployments {
 		return subjectKind == contextfabric.SubjectRepository || subjectKind == contextfabric.SubjectTeam
+	}
+	if subjectKind == contextfabric.SubjectProject && factKind == contextfabric.FactPullRequests {
+		return true
 	}
 	return subjectKind == contextfabric.SubjectTeam && (factKind == contextfabric.FactIncidents || factKind == contextfabric.FactPullRequests)
 }

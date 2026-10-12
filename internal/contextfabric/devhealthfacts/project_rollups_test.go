@@ -187,3 +187,32 @@ func sameLevelWhereClause(text string) string {
 	}
 	return ""
 }
+
+// A project rollup field is a count, never a score: pull request counts are
+// aggregates over every linked pull request, blocker counts are over the
+// caller's authorized items.
+func TestProjectRollupDeclarationMarks(t *testing.T) {
+	t.Parallel()
+	for kind, mark := range map[contextfabric.FactKind]string{contextfabric.FactPullRequests: "aggregate", contextfabric.FactBlockers: "caller_scoped"} {
+		capability := findProvider(t, devhealthfacts.NewProviders(&fakeClient{}), kind).Capability()
+		counts := 0
+		for _, field := range capability.Fields {
+			if len(field.SubjectKinds) != 1 || field.SubjectKinds[0] != contextfabric.SubjectProject {
+				continue
+			}
+			if field.Score {
+				t.Errorf("%s %s: a project rollup field is a count, never a score", kind, field.Name)
+			}
+			if field.Type != contextfabric.FactFieldInteger {
+				continue
+			}
+			counts++
+			if (mark == "aggregate" && !field.Aggregate) || (mark == "caller_scoped" && !field.CallerScoped) {
+				t.Errorf("%s %s: Aggregate=%v CallerScoped=%v, want %s", kind, field.Name, field.Aggregate, field.CallerScoped, mark)
+			}
+		}
+		if counts == 0 {
+			t.Fatalf("%s declares no project count", kind)
+		}
+	}
+}
