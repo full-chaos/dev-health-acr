@@ -16,10 +16,10 @@ import (
 
 // The plan table is total over the closed evidence-entity vocabulary, names
 // only statements contextpacket declares, and routes exactly the kinds
-// CHAOS-7226 ruled after r2, CHAOS-7227's team and project, and the four
-// ".v2" kinds CHAOS-7252 re-admits (13 source kinds, 16 on the record: the
-// five retired kinds, project-team.v2 until its own change, and the 10
-// kinds with no source row). A kind moved between routes must move here too.
+// CHAOS-7226 ruled after r2, CHAOS-7227's team and project, the ".v2" kinds
+// CHAOS-7252 re-admits, and review.v2 (14 source kinds, 16 on the record: the
+// six retired kinds and the 10 kinds with no source row). A kind moved
+// between routes must move here too.
 func TestSourceRowPlansAreTotal(t *testing.T) {
 	plans := contextfabric.SourceRowPlans()
 	vocabulary := contractsv1.ContextFabricEvidenceEntityTypeVocabulary()
@@ -31,7 +31,6 @@ func TestSourceRowPlansAreTotal(t *testing.T) {
 		contractsv1.ContextFabricEvidenceEntityRepository:  contextfabric.SourceRowRouteRepository,
 		contractsv1.ContextFabricEvidenceEntityWorkItem:    contextfabric.SourceRowRouteRepository,
 		contractsv1.ContextFabricEvidenceEntityPullRequest: contextfabric.SourceRowRouteRepository,
-		contractsv1.ContextFabricEvidenceEntityReview:      contextfabric.SourceRowRouteRepository,
 		contractsv1.ContextFabricEvidenceEntityCI:          contextfabric.SourceRowRouteRepository,
 		contractsv1.ContextFabricEvidenceEntityDeployment:  contextfabric.SourceRowRouteRepository,
 		contractsv1.ContextFabricEvidenceEntityIncident:    contextfabric.SourceRowRouteRowRepository,
@@ -43,6 +42,7 @@ func TestSourceRowPlansAreTotal(t *testing.T) {
 		contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2:       contextfabric.SourceRowRouteEncoded,
 		contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2: contextfabric.SourceRowRouteEncoded,
 		contractsv1.ContextFabricEvidenceEntityProjectTeamV2:        contextfabric.SourceRowRouteProjectTeam,
+		contractsv1.ContextFabricEvidenceEntityReviewV2:             contextfabric.SourceRowRouteEncoded,
 	}
 	records := 0
 	for _, kind := range vocabulary {
@@ -72,8 +72,8 @@ func TestSourceRowPlansAreTotal(t *testing.T) {
 			}
 		}
 	}
-	if records != 15 || len(want) != 14 {
-		t.Fatalf("records = %d, source kinds = %d; want 15 and 14", records, len(want))
+	if records != 16 || len(want) != 14 {
+		t.Fatalf("records = %d, source kinds = %d; want 16 and 14", records, len(want))
 	}
 	// Every retired kind stays on the record, forever: its refs sit in stored
 	// results and no source row is read for a bare-':' join.

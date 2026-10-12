@@ -107,7 +107,7 @@ func TestPullRequestsProviderOrgScoped(t *testing.T) {
 func TestReviewsProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM git_pull_request_reviews", rows: [][]any{{"review-1", "approved", "repo-1"}}},
+		{match: "FROM git_pull_request_reviews", rows: [][]any{{"review-1", "approved", "repo-1", uint32(1)}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReviews)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{

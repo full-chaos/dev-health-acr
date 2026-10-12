@@ -28,6 +28,7 @@ var entityTypes = map[contractsv1.ContextFabricEvidenceEntityType]string{
 	contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2:  "work_item_hierarchy",
 	contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2:       "work_item_team",
 	contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2: "deployment_incident_edge",
+	contractsv1.ContextFabricEvidenceEntityReviewV2:             "pull_request_review",
 }
 
 var (
@@ -94,6 +95,14 @@ func encodedCases() []encodedCase {
 				w.discovered[incidentDiscovery+"|INC-1"] = []contractsv1.ResolvedScope{scope(grantedID, grantedRep)}
 			},
 			calls:            []string{"repository_by_id(org_1," + grantedID + ")", "discover(org_1,incident_repositories,INC-1)"},
+			restrictedServed: true,
+		},
+		{
+			kind: contractsv1.ContextFabricEvidenceEntityReviewV2, values: []string{grantedID, "1042", "approval-42"}, query: "pull_request_reviews.v2",
+			seed: func(w *world) {
+				w.repos[grantedID] = grantedRep
+			},
+			calls:            []string{"repository_by_id(org_1," + grantedID + ")"},
 			restrictedServed: true,
 		},
 	}
@@ -287,6 +296,9 @@ func TestEncodedMalformedIdsReadNothing(t *testing.T) {
 		{contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, grantedID + ":jira%3AABC-1:team-a"},
 		{contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, "edge-1"},
 		{contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, " " + grantedID + ":d:i:native"},
+		// The retired review shape under the new kind: no pull request number.
+		{contractsv1.ContextFabricEvidenceEntityReviewV2, grantedID + ":approval-42"},
+		{contractsv1.ContextFabricEvidenceEntityReviewV2, "A" + grantedID[1:] + ":1042:approval-42"},
 	}
 	for _, tc := range cases {
 		w := newWorld()
@@ -339,7 +351,7 @@ func TestEncodedSpecsMatchThePlans(t *testing.T) {
 			t.Fatalf("%s is routed encoded with no grammar", kind)
 		}
 	}
-	if routed != len(specs) || routed != 4 {
+	if routed != len(specs) || routed != 5 {
 		t.Fatalf("routed %d, specs %d", routed, len(specs))
 	}
 }

@@ -575,6 +575,10 @@ const (
 	ContextFabricEvidenceEntityPullRequest          ContextFabricEvidenceEntityType = "pull-request"
 	ContextFabricEvidenceEntityRepository           ContextFabricEvidenceEntityType = "repository"
 	ContextFabricEvidenceEntityReview               ContextFabricEvidenceEntityType = "review"
+	// review.v2 replaces review, whose id "<repo>:<review_id>" left out the
+	// pull request number of the review's key, so one ref could name the
+	// same review id on two pull requests of one repository.
+	ContextFabricEvidenceEntityReviewV2             ContextFabricEvidenceEntityType = "review.v2"
 	ContextFabricEvidenceEntityReviewOutcome        ContextFabricEvidenceEntityType = "review-outcome"
 	ContextFabricEvidenceEntityTeam                 ContextFabricEvidenceEntityType = "team"
 	ContextFabricEvidenceEntityWorkItem             ContextFabricEvidenceEntityType = "work-item"
@@ -613,6 +617,7 @@ var contextFabricEvidenceEntityTypes = [...]ContextFabricEvidenceEntityType{
 	ContextFabricEvidenceEntityPullRequest,
 	ContextFabricEvidenceEntityRepository,
 	ContextFabricEvidenceEntityReview,
+	ContextFabricEvidenceEntityReviewV2,
 	ContextFabricEvidenceEntityReviewOutcome,
 	ContextFabricEvidenceEntityTeam,
 	ContextFabricEvidenceEntityWorkItem,
@@ -626,13 +631,15 @@ var contextFabricEvidenceEntityTypes = [...]ContextFabricEvidenceEntityType{
 
 // contextFabricRetiredEvidenceEntityTypes are vocabulary members no producer
 // may mint any more (CHAOS-7252). Their ids joined two or more colon-capable
-// components with a bare ':', so one ref string could name two rows. Refs of
+// components with a bare ':' or (review) left out a column of the row's key,
+// so one ref string could name two rows. Refs of
 // these kinds already sit in stored results and client transcripts, so the
 // kinds stay in the vocabulary (labels, trace values, the persisted-record
 // route) -- but EvidenceRefID refuses them, and each has a ".v2" successor.
 var contextFabricRetiredEvidenceEntityTypes = map[ContextFabricEvidenceEntityType]ContextFabricEvidenceEntityType{
 	ContextFabricEvidenceEntityDeploymentIncident: ContextFabricEvidenceEntityDeploymentIncidentV2,
 	ContextFabricEvidenceEntityProjectTeam:        ContextFabricEvidenceEntityProjectTeamV2,
+	ContextFabricEvidenceEntityReview:             ContextFabricEvidenceEntityReviewV2,
 	ContextFabricEvidenceEntityWorkItemDependency: ContextFabricEvidenceEntityWorkItemDependencyV2,
 	ContextFabricEvidenceEntityWorkItemHierarchy:  ContextFabricEvidenceEntityWorkItemHierarchyV2,
 	ContextFabricEvidenceEntityWorkItemTeam:       ContextFabricEvidenceEntityWorkItemTeamV2,
