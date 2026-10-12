@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // ReachedFrom names a requested subject a derived fact was reached from by
@@ -32,13 +33,25 @@ type derivedIndex struct {
 	byRoot       map[contextfabric.FactKind]map[string][]contextfabric.SubjectRef
 	expansions   map[contextfabric.FactKind]map[contextfabric.SubjectKind]derivedExpansion
 	unauthorized int
+	// rootsOfKind counts admitted roots per kind; groupTargets counts, per
+	// fact kind and root kind, the targets attributed to any root of that
+	// kind. The resolver attributes a target several roots reach to ONE of
+	// them, so with two or more roots of a kind a root's own count is a lower
+	// bound.
+	rootsOfKind  map[contextfabric.SubjectKind]int
+	groupTargets map[contextfabric.FactKind]map[contextfabric.SubjectKind]int
 }
 
 func newDerivedIndex(scope *contextfabric.FactReadScope, admitted []contextfabric.SubjectRef) derivedIndex {
 	index := derivedIndex{
-		targets:    map[contextfabric.FactKind]map[string][]ReachedFrom{},
-		byRoot:     map[contextfabric.FactKind]map[string][]contextfabric.SubjectRef{},
-		expansions: map[contextfabric.FactKind]map[contextfabric.SubjectKind]derivedExpansion{},
+		targets:      map[contextfabric.FactKind]map[string][]ReachedFrom{},
+		byRoot:       map[contextfabric.FactKind]map[string][]contextfabric.SubjectRef{},
+		expansions:   map[contextfabric.FactKind]map[contextfabric.SubjectKind]derivedExpansion{},
+		rootsOfKind:  map[contextfabric.SubjectKind]int{},
+		groupTargets: map[contextfabric.FactKind]map[contextfabric.SubjectKind]int{},
+	}
+	for _, root := range admitted {
+		index.rootsOfKind[root.Kind]++
 	}
 	if scope == nil {
 		return index
@@ -85,6 +98,10 @@ func newDerivedIndex(scope *contextfabric.FactReadScope, admitted []contextfabri
 			return contextfabric.FactSubjectKey(subject) == targetKey
 		}) {
 			index.byRoot[kind][rootKey] = append(index.byRoot[kind][rootKey], derivation.Target)
+			if index.groupTargets[kind] == nil {
+				index.groupTargets[kind] = map[contextfabric.SubjectKind]int{}
+			}
+			index.groupTargets[kind][root.Kind]++
 		}
 	}
 	for _, byTarget := range index.targets {
@@ -127,29 +144,48 @@ func guardDerivedFacts(facts []contextfabric.CanonicalFact, admitted []contextfa
 	return kept, withheld
 }
 
+// derivedRow is one root's share of a kind read through scope expansion.
+type derivedRow struct {
+	targets, served int
+	expansion       derivedExpansion
+	rootKind        contextfabric.SubjectKind
+	// shared: other requested roots of the same kind took part in the same
+	// expansion and reached subjects, so a subject this root also reaches may
+	// be counted under one of them instead.
+	shared bool
+}
+
 // derivedCoverage reports one (kind, root) row for a root whose facts are
 // reached through scope expansion. ok is false when the kind has no
 // expansion decision for the root's kind.
-func (d derivedIndex) derivedCoverage(kind contextfabric.FactKind, root contextfabric.SubjectRef, servedKeys map[string]bool) (targets, served int, expansion derivedExpansion, ok bool) {
-	expansion, ok = d.expansions[kind][root.Kind]
+func (d derivedIndex) derivedCoverage(kind contextfabric.FactKind, root contextfabric.SubjectRef, servedKeys map[string]bool) (row derivedRow, ok bool) {
+	row.expansion, ok = d.expansions[kind][root.Kind]
 	if !ok {
-		return 0, 0, expansion, false
+		return row, false
 	}
+	row.rootKind = root.Kind
 	for _, target := range d.byRoot[kind][contextfabric.FactSubjectKey(root)] {
-		targets++
+		row.targets++
 		if servedKeys[string(kind)+"\x00"+string(target.Kind)+"\x00"+target.CanonicalID] {
-			served++
+			row.served++
 		}
 	}
-	return targets, served, expansion, true
+	row.shared = d.rootsOfKind[root.Kind] > 1 && d.groupTargets[kind][root.Kind] > row.targets
+	return row, true
 }
 
-func derivedReason(targets, served int, expansion derivedExpansion) string {
-	plural := subjectKindPlural(expansion.targetKind)
-	if targets == 0 {
-		return fmt.Sprintf("scope expansion reached no %s from this subject (expansion: %s; policy: %s)", plural, expansion.outcome, expansion.policy)
+func derivedReason(row derivedRow) string {
+	plural := subjectKindPlural(row.expansion.targetKind)
+	var reason string
+	if row.targets == 0 {
+		reason = fmt.Sprintf("scope expansion reached no %s from this subject (expansion: %s; policy: %s)", plural, row.expansion.outcome, row.expansion.policy)
+	} else {
+		reason = fmt.Sprintf("read through %d %s reached by scope expansion, %d with a fact (expansion: %s; policy: %s)", row.targets, plural, row.served, row.expansion.outcome, row.expansion.policy)
 	}
-	return fmt.Sprintf("read through %d %s reached by scope expansion, %d with a fact (expansion: %s; policy: %s)", targets, plural, served, expansion.outcome, expansion.policy)
+	if row.shared {
+		reason += fmt.Sprintf("; a %s that several requested %s reach is counted under only one of them, so this count may leave out %s that another requested %s's count holds", subjectKindNoun(row.expansion.targetKind), subjectKindPlural(row.rootKind), plural, subjectKindNoun(row.rootKind))
+	}
+	return reason
 }
 
 // expansionCut reports an expansion outcome that may have left targets out.
@@ -166,4 +202,11 @@ func joinReason(base, extra string) string {
 		return extra
 	}
 	return base + "; " + extra
+}
+
+func subjectKindNoun(kind contextfabric.SubjectKind) string {
+	if noun := contractsv1.ContextFabricSubjectKindNoun(kind, 1); noun != "" {
+		return noun
+	}
+	return string(kind)
 }

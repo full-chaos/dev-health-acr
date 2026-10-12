@@ -1083,15 +1083,15 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 					row.KindState = KindStateWindowUnsupported
 				}
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind):
-				targets, servedTargets, expansion, expanded := derived.derivedCoverage(kind, subject, served)
+				share, expanded := derived.derivedCoverage(kind, subject, served)
 				if !expanded {
 					row.Outcome = OutcomeNotApplicable
 					row.Reason = "this fact kind does not describe " + subjectKindPlural(subject.Kind)
 					break
 				}
 				row.KindState = string(outcome.State)
-				row.Reason = derivedReason(targets, servedTargets, expansion)
-				row.Outcome = derivedOutcome(outcome, targets, servedTargets, expansion)
+				row.Reason = derivedReason(share)
+				row.Outcome = derivedOutcome(outcome, share)
 			case !recorded:
 				// A planned kind with no ledger entry is a registry defect;
 				// say unknown loudly rather than claim a state.
@@ -1102,10 +1102,10 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 					row.ProviderState = state
 				}
 				row.Outcome = subjectOutcome(outcome, key, served[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID], row.ProviderState, subject, capability)
-				if targets, servedTargets, expansion, expanded := derived.derivedCoverage(kind, subject, served); expanded && (targets > 0 || expansionCut(expansion.outcome)) {
-					row.Reason = joinReason(row.Reason, derivedReason(targets, servedTargets, expansion))
-					if servedTargets > 0 && !servedOutcome(row.Outcome) {
-						row.Outcome = derivedOutcome(outcome, targets, servedTargets, expansion)
+				if share, expanded := derived.derivedCoverage(kind, subject, served); expanded && (share.targets > 0 || share.shared || expansionCut(share.expansion.outcome)) {
+					row.Reason = joinReason(row.Reason, derivedReason(share))
+					if (share.served > 0 || share.shared) && !servedOutcome(row.Outcome) {
+						row.Outcome = derivedOutcome(outcome, share)
 					}
 				}
 			}
@@ -1117,7 +1117,8 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 
 // derivedOutcome is a root's outcome when its facts were read on the targets
 // scope expansion derived from it.
-func derivedOutcome(outcome contextfabric.FactKindOutcome, targets, served int, expansion derivedExpansion) string {
+func derivedOutcome(outcome contextfabric.FactKindOutcome, share derivedRow) string {
+	served, expansion := share.served, share.expansion
 	switch outcome.Branch {
 	case "unconfigured", "scope_gap", "failed", "rejected":
 		return OutcomeUnavailable
@@ -1125,11 +1126,11 @@ func derivedOutcome(outcome contextfabric.FactKindOutcome, targets, served int, 
 	switch {
 	case served > 0 && outcome.State == contextfabric.SourceStale:
 		return OutcomeStale
-	case served > 0 && (outcome.State == contextfabric.SourceTruncated || expansionCut(expansion.outcome)):
+	case served > 0 && (outcome.State == contextfabric.SourceTruncated || expansionCut(expansion.outcome) || share.shared):
 		return OutcomeTruncated
 	case served > 0:
 		return OutcomeFactServed
-	case expansionCut(expansion.outcome):
+	case expansionCut(expansion.outcome), share.shared:
 		return OutcomeUnavailable
 	}
 	switch outcome.State {

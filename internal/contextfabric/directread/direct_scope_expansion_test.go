@@ -349,3 +349,76 @@ func TestDirectReadCutExpansionWithoutFactIsNotReadNoFact(t *testing.T) {
 		t.Fatalf("row %+v status %q", row, response.Status)
 	}
 }
+
+// A target two requested teams reach is attributed to one of them (the
+// expander gives one root). The fact is served once; neither team's row
+// claims a complete count: the team it was not attributed to reads
+// unavailable, never "no fact".
+func TestDirectReadDisclosesATargetSharedByTwoRequestedTeams(t *testing.T) {
+	shared := labelled(workA, "WI-A")
+	expander := &scriptedExpander{expand: func(request contextfabric.FactScopeExpansionRequest) contextfabric.FactScopeExpansionResult {
+		return contextfabric.FactScopeExpansionResult{
+			Targets:    []contextfabric.SubjectRef{shared},
+			TargetRoot: map[string]contextfabric.SubjectRef{contextfabric.FactSubjectKey(shared): teamT},
+			Counts:     contextfabric.FactScopeExpansionCounts{CandidateCount: 1},
+		}
+	}}
+	reader := directExpandingReader(t, graphOfOrgA(), expander, nil, perSubjectProvider(contextfabric.FactBlockers, contractsv1.ContextFabricSubjectWorkItem, contractsv1.ContextFabricSubjectTeam))
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"blockers"}, Subjects: []RequestSubject{
+		{Kind: "team", CanonicalID: teamT.CanonicalID}, {Kind: "team", CanonicalID: teamU.CanonicalID},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expander.requests) != 1 || len(expander.requests[0].Origins) != 2 {
+		t.Fatalf("expansion requests %+v, want one over both teams", expander.requests)
+	}
+	facts := 0
+	for _, fact := range response.Facts {
+		if fact.Kind == "blockers" && fact.Subject.CanonicalID == shared.CanonicalID {
+			facts++
+		}
+	}
+	if facts != 1 {
+		t.Fatalf("shared work item served %d times, want once: %s", facts, mustJSON(t, response.Facts))
+	}
+	const caveat = "is counted under only one of them"
+	attributed, other := coverageOf(t, response, "blockers", teamT), coverageOf(t, response, "blockers", teamU)
+	if attributed.Outcome != OutcomeFactServed || strings.Contains(attributed.Reason, caveat) {
+		t.Fatalf("attributed team row %+v", attributed)
+	}
+	if other.Outcome != OutcomeUnavailable || !strings.Contains(other.Reason, caveat) {
+		t.Fatalf("other team row %+v: must not read as a complete zero", other)
+	}
+	if response.Status != StatusPartial {
+		t.Fatalf("status %q, want partial", response.Status)
+	}
+}
+
+// With two requested teams that each hold their own targets, neither count
+// can be shown complete: a target both reach would sit under one of them.
+func TestDirectReadMarksEveryShareOfAMultiRootExpansionAsALowerBound(t *testing.T) {
+	a, b := labelled(workA, "WI-A"), labelled(workB, "WI-B")
+	expander := &scriptedExpander{expand: func(contextfabric.FactScopeExpansionRequest) contextfabric.FactScopeExpansionResult {
+		return contextfabric.FactScopeExpansionResult{
+			Targets:    []contextfabric.SubjectRef{a, b},
+			TargetRoot: map[string]contextfabric.SubjectRef{contextfabric.FactSubjectKey(a): teamT, contextfabric.FactSubjectKey(b): teamU},
+			Counts:     contextfabric.FactScopeExpansionCounts{CandidateCount: 2},
+		}
+	}}
+	reader := directExpandingReader(t, graphOfOrgA(), expander, nil, perSubjectProvider(contextfabric.FactBlockers, contractsv1.ContextFabricSubjectWorkItem, contractsv1.ContextFabricSubjectTeam))
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"blockers"}, Subjects: []RequestSubject{
+		{Kind: "team", CanonicalID: teamT.CanonicalID}, {Kind: "team", CanonicalID: teamU.CanonicalID},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, team := range []contextfabric.SubjectRef{teamT, teamU} {
+		if row := coverageOf(t, response, "blockers", team); row.Outcome != OutcomeTruncated || !strings.Contains(row.Reason, "is counted under only one of them") {
+			t.Fatalf("row %+v", row)
+		}
+	}
+	if len(response.Facts) != 2 || response.Status != StatusPartial {
+		t.Fatalf("facts %d status %q", len(response.Facts), response.Status)
+	}
+}
