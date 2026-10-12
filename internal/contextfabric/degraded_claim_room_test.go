@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -100,6 +101,8 @@ type degradedCohortFixture struct {
 	modelCalls int
 	inputs     []SynthesisInput
 	telemetry  *recordingTelemetry
+	// candidates are the subject candidates the resolution returns.
+	candidates []SubjectCandidate
 }
 
 func (f *degradedCohortFixture) engine(t *testing.T, maxBytes int64, reserve time.Duration, synthesizer AnswerSynthesizer) *Engine {
@@ -124,7 +127,7 @@ func (f *degradedCohortFixture) engine(t *testing.T, maxBytes int64, reserve tim
 			outcome:     QuestionFamilyOutcome{Frame: &validated.Frame, Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel},
 		},
 		Graph: pathedProjectsGraph{ownedProjectsGraph{&capturingGraphReader{
-			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+			resolution: SubjectResolution{Candidates: append([]SubjectCandidate{}, f.candidates...), Committed: []SubjectRef{}},
 			context: GraphContext{Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}, Details: []CoverageDetail{}}},
 		}, degradedCohortMembers}},
@@ -209,18 +212,63 @@ func TestTheDegradedClaimRoomReservesTheNarrationGrantOnlyWhenNarrationRuns(t *t
 		return cohort
 	}
 	base := maxItems - members - 1
+	candidates := []SubjectCandidate{{Subject: degradedCohortAnchor}, {Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team_platform_ops"}}}
 	for _, row := range []struct {
-		name   string
-		cohort *Cohort
-		want   int
+		name       string
+		cohort     *Cohort
+		candidates []SubjectCandidate
+		want       int
 	}{
-		{"ranked", cohort(true), base - allocation.NarrationGrant},
-		{"unranked", cohort(false), base},
-		{"no_cohort", nil, base},
+		{"ranked", cohort(true), nil, base - allocation.NarrationGrant},
+		{"ranked_with_candidates", cohort(true), candidates, base - allocation.NarrationGrant - len(candidates)},
+		{"unranked", cohort(false), nil, base},
+		{"no_cohort", nil, nil, base},
 	} {
-		input := SynthesisInput{Allocation: allocation, Graph: GraphContext{Cohort: row.cohort}}
+		input := SynthesisInput{Allocation: allocation, Graph: GraphContext{Cohort: row.cohort, Resolution: SubjectResolution{Candidates: row.candidates}}}
 		if got := degradedClaimLimit(input); got != row.want {
 			t.Errorf("%s: limit = %d, want %d", row.name, got, row.want)
+		}
+	}
+}
+
+// The claim room charges the subject candidates the served answer carries: the
+// candidates the composer reads (input.Graph.Resolution) are the ones the
+// answer serves (result.SubjectResolution), and with them charged the answer
+// still fits.
+func TestTheDegradedClaimRoomChargesTheCandidatesTheAnswerServes(t *testing.T) {
+	fixture := degradedCohortFixture{candidates: []SubjectCandidate{
+		{ReceiptID: "receipt_platform_1", Subject: degradedCohortAnchor, State: ResolutionProposed, MatchReasons: []string{"Label match."}, Confidence: 0.9, EvidenceRefIDs: []string{}},
+		{ReceiptID: "receipt_platform_2", Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team_platform_ops", Label: "Platform Ops"}, State: ResolutionProposed, MatchReasons: []string{"Label match."}, Confidence: 0.8, EvidenceRefIDs: []string{}},
+	}}
+	result, err := fixture.investigate(t, fixture.engine(t, 0, 0, nil))
+	if err != nil {
+		t.Fatalf("err = %v, want the degraded answer served", err)
+	}
+	ids := func(candidates []SubjectCandidate) []string {
+		out := []string{}
+		for _, candidate := range candidates {
+			out = append(out, candidate.Subject.CanonicalID)
+		}
+		return out
+	}
+	served := ids(result.SubjectResolution.Candidates)
+	if len(served) == 0 {
+		t.Fatal("the answer serves no candidate: the row does not discriminate")
+	}
+	if len(fixture.inputs) == 0 {
+		t.Fatal("the degraded composer never ran")
+	}
+	for index, input := range fixture.inputs {
+		if got := ids(input.Graph.Resolution.Candidates); !slices.Equal(got, served) {
+			t.Fatalf("composition %d read candidates %v, the answer serves %v", index, got, served)
+		}
+	}
+	if items := contractsv1.CountContextFabricResultItems(result).Budgeted(); items > 66 {
+		t.Fatalf("served items = %d with %d candidates, want at most 66", items, len(served))
+	}
+	for _, event := range fixture.telemetry.planNarrowings {
+		if event.Stage == contractsv1.ContextFabricPlanNarrowingAssembledResult && event.MeasuredItems > event.MaxItems {
+			t.Fatalf("first pass measured %d items against %d with %d candidates", event.MeasuredItems, event.MaxItems, len(served))
 		}
 	}
 }
