@@ -465,6 +465,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"retraction is idempotent across a re-run", "30000000-0000-4000-8000-000000000011", subRetractionIsIdempotentAcrossAReRun},
 		{"retraction follows a project inserted below the key partition max", "30000000-0000-4000-8000-000000000012", subRetractionFollowsAProjectInsertedBelowTheKeyPartitionMax},
 		{"the row-key SQL agrees with Go byte for byte", "30000000-0000-4000-8000-000000000013", subRowKeySQLAgreesWithGoByteForByte},
+		{"the dependency row-key SQL agrees with Go and orders colon-id rows apart", "30000000-0000-4000-8000-000000009338", subDependencyRowKeySQLAgreesWithGoAndSeparatesColonIDs},
 		{"two groups sharing a project id get distinct cursor keys", "30000000-0000-4000-8000-000000000014", subTwoGroupsSharingAProjectIDGetDistinctCursorKeys},
 		{"a repository->team edge orders rows that differ only in milliseconds", "30000000-0000-4000-8000-000000009022", subRepositoryTeamEdgeOrdersRowsThatDifferOnlyInMilliseconds},
 		{"a repository->team edge follows the open row of its fact", "30000000-0000-4000-8000-000000009021", subRepositoryTeamEdgeFollowsTheOpenRowOfAFact},
@@ -1689,5 +1690,56 @@ func subTwoGroupsSharingAProjectIDGetDistinctCursorKeys(t *testing.T, ctx contex
 	}
 	if !seen[wantGitHub] || !seen[wantGitLab] {
 		t.Errorf("an ownership edge is missing: github=%v gitlab=%v", seen[wantGitHub], seen[wantGitLab])
+	}
+}
+
+// subDependencyRowKeySQLAgreesWithGoAndSeparatesColonIDs executes the
+// work_item_dependencies keyset tiebreaker on a real server: it must equal the
+// Go sortKey byte for byte, and two rows whose ids re-split around ':' must get
+// different keys.
+func subDependencyRowKeySQLAgreesWithGoAndSeparatesColonIDs(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	const probe = `SELECT toString(%s) FROM (SELECT {repo_id:String} AS repo_id) AS w
+CROSS JOIN (SELECT {src:String} AS source_work_item_id, {tgt:String} AS target_work_item_id, nullIf({typ:String}, '\x01NULL') AS relationship_type) AS d`
+	type dependencyKeyCase struct{ name, repo, src, tgt, typ string }
+	cases := []dependencyKeyCase{
+		{"plain", "repo-1", "WI-1", "WI-2", "blocks"},
+		{"colon in source", "repo-1", "a:b", "c", "blocks"},
+		{"colon in target", "repo-1", "a", "b:c", "blocks"},
+		{"percent and a %3A preimage", "repo-1", "100%", "a%3Ab", "blocks"},
+		{"gitlab style ids", "gl:full.chaos", "linear:CHAOS-1", "gh:org/repo#2", "relates_to"},
+		{"a NULL type reads as related_to", "repo-1", "WI-1", "WI-2", "\x01NULL"},
+		{"unicode", "репо", "задача:一", "цель", "blocks"},
+	}
+	keyOf := func(c dependencyKeyCase) string {
+		rows, err := fixture.query.Query(ctx, fmt.Sprintf(probe, devhealthsource.DependencyRowKeySQLForTest()), []contextpacket.ClickHouseBinding{
+			{Name: "repo_id", Value: c.repo}, {Name: "src", Value: c.src}, {Name: "tgt", Value: c.tgt}, {Name: "typ", Value: c.typ},
+		})
+		if err != nil {
+			t.Fatalf("%s: run the row-key expression: %v", c.name, err)
+		}
+		defer rows.Close()
+		if !rows.Next() {
+			t.Fatalf("%s: no row", c.name)
+		}
+		var got string
+		if err := rows.Scan(&got); err != nil {
+			t.Fatalf("%s: scan: %v", c.name, err)
+		}
+		return got
+	}
+	for _, c := range cases {
+		typ := c.typ
+		if typ == "\x01NULL" {
+			typ = "related_to"
+		}
+		if got, want := keyOf(c), devhealthsource.DependencyRowKeyForTest(c.repo, c.src, c.tgt, typ); got != want {
+			t.Errorf("%s: SQL and Go disagree on the cursor key.\n  SQL: %q\n  Go:  %q", c.name, got, want)
+		}
+	}
+	first := dependencyKeyCase{"first", "repo-1", "a:b", "c", "blocks"}
+	second := dependencyKeyCase{"second", "repo-1", "a", "b:c", "blocks"}
+	firstKey, secondKey := keyOf(first), keyOf(second)
+	if firstKey == secondKey {
+		t.Fatalf("two distinct dependency rows share SQL cursor key %q", firstKey)
 	}
 }

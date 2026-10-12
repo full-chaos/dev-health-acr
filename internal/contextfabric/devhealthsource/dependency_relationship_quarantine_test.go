@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -131,9 +132,9 @@ func dependencyTablesOnly(t *testing.T, at time.Time, rows [][]any) []fakeTable 
 			// every row regardless of cursor (see fakeTable.cursorOf), which
 			// would make a "nothing was lost" assertion vacuously true.
 			// Mirrors queryWorkItemDependencies' own sincePredicate/orderBy
-			// pair: d.last_synced, and the repo:source:target:type row key.
+			// pair: d.last_synced, and the escaped repo/source/target/type row key.
 			tables[index].cursorOf = func(row []any) (time.Time, string) {
-				return row[5].(time.Time), row[3].(string) + ":" + row[0].(string) + ":" + row[1].(string) + ":" + row[2].(string)
+				return row[5].(time.Time), identity.JoinSegments(row[3].(string), row[0].(string), row[1].(string), row[2].(string))
 			}
 			continue
 		}
