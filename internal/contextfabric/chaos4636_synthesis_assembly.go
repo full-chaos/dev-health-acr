@@ -933,8 +933,8 @@ func (e *Engine) emit(ctx context.Context, principal storage.Principal, pending 
 	if e.telemetry != nil && pending.CohortNarration != nil {
 		e.telemetry.RecordCohortDriverNarration(ctx, principal, *pending.CohortNarration)
 	}
-	if recorder, ok := e.telemetry.(projectStatusDriverRecorder); ok && pending.ProjectStatusDrivers != nil {
-		recorder.RecordProjectStatusDrivers(ctx, principal, *pending.ProjectStatusDrivers)
+	if e.telemetry != nil && pending.ProjectStatusDrivers != nil {
+		e.telemetry.RecordProjectStatusDrivers(ctx, principal, *pending.ProjectStatusDrivers)
 	}
 	e.recordCommitAffirmation(ctx, principal, pending.CommitAffirmations)
 	e.recordCommitKeptByNoMemberFound(ctx, principal, pending.CommitKeptByNoMemberFound)

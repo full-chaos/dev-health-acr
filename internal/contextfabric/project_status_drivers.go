@@ -1,13 +1,11 @@
 package contextfabric
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 type projectStatusObservation struct {
@@ -59,10 +57,6 @@ type ProjectStatusDriverEvent struct {
 	SkippedBudget  int
 	SkippedIDClash int
 	Missing        []FactKind
-}
-
-type projectStatusDriverRecorder interface {
-	RecordProjectStatusDrivers(ctx context.Context, principal storage.Principal, event ProjectStatusDriverEvent)
 }
 
 func projectStatusIntent(interpretation InterpretedQuestion) bool {
