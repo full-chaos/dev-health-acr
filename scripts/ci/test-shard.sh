@@ -30,6 +30,8 @@ set -euo pipefail
 #   unit matrix must keep covering it, or sharding `unit` would quietly drop
 #   a package from the non-race suite. Never use this form for a -race job.
 #
+#   Indices after the dedicated legs (see unit_split_packages) re-emit a
+#   dedicated package for its heavy half.
 #   CHAOS-7282: indices total+1..total+N (N = len(unit_dedicated_packages)) are
 #   the dedicated legs: each prints ONLY its one package and is never part of
 #   the round-robin over legs 1..total. Only valid with --with-isolated.
@@ -182,6 +184,19 @@ unit_dedicated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 )
 
+# unit_split_packages is a SUBSET of unit_dedicated_packages whose dedicated
+# leg is split in two by scripts/ci/<name>-heavy-tests.txt (see
+# race-split.sh): the dedicated leg runs the rest half, and one extra leg per
+# entry, at index total+len(unit_dedicated_packages)+K, emits the SAME package
+# again and runs the heavy half. The two halves are disjoint by construction
+# (-skip vs -run of one regex), so these extra legs add no coverage to the
+# union of `go list ./...` and the closure proof does not count them.
+# Why: devhealthfacts ran 1539s of the 1800s package budget in one binary
+# after two real-ClickHouse cohort-cap tests joined it, over the 85% guard.
+unit_split_packages=(
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+)
+
 # heavy_exceptions names a package HEAVY (see is_heavy_package below) by hand,
 # whatever is_heavy_pattern says about it. internal/storage/postgres was
 # listed when it started a FRESH testcontainer per test (t.Cleanup, not a
@@ -250,6 +265,8 @@ usage() {
   printf '  named as a bare "isolated*" subcommand\n' >&2
   printf 'usage: %s --print-unit-dedicated-packages\n' "${0##*/}" >&2
   printf '  prints unit_dedicated_packages, the --with-isolated dedicated legs (total+1..)\n' >&2
+  printf 'usage: %s --print-unit-split-packages\n' "${0##*/}" >&2
+  printf '  prints unit_split_packages, the --with-isolated heavy-half legs (after the dedicated legs)\n' >&2
   printf 'usage: %s heavy\n' "${0##*/}" >&2
   printf '  prints the packages round-robin gives their own shard (see is_heavy_package)\n' >&2
 }
@@ -378,6 +395,19 @@ is_unit_dedicated() {
   return 1
 }
 
+# Every unit_split_packages entry must be a unit_dedicated_packages entry: the
+# split legs re-emit a dedicated package, never a round-robin one.
+assert_unit_split_subset_of_dedicated() {
+  local entry
+  for entry in "${unit_split_packages[@]}"; do
+    if ! is_unit_dedicated "$entry"; then
+      printf '%s: unit_split_packages entry is not also in unit_dedicated_packages: %s\n' \
+        "${0##*/}" "$entry" >&2
+      exit 1
+    fi
+  done
+}
+
 # Every unit_dedicated_packages entry must be an isolated_packages entry and
 # exist in the module (assert_hand_list_exists is called for it in main()).
 assert_unit_dedicated_subset_of_isolated() {
@@ -488,6 +518,12 @@ main() {
     return 0
   fi
 
+  if [ "$#" -eq 1 ] && [ "$1" = "--print-unit-split-packages" ]; then
+    assert_unit_split_subset_of_dedicated
+    printf '%s\n' "${unit_split_packages[*]}"
+    return 0
+  fi
+
   # isolated_packages minus dedicated_isolated_packages -- the
   # isolated package(s) meant to share ONE combined job/invocation
   # (race-devhealthschema in ci.yml).
@@ -568,7 +604,7 @@ main() {
   local dedicated_leg=""
   local max_index="$total"
   if [ "$include_isolated" -eq 1 ]; then
-    max_index=$((total + ${#unit_dedicated_packages[@]}))
+    max_index=$((total + ${#unit_dedicated_packages[@]} + ${#unit_split_packages[@]}))
   fi
   if [ "$index" -gt "$max_index" ]; then
     printf '%s: index (%s) must be <= %s\n' "${0##*/}" "$index" "$max_index" >&2
@@ -576,7 +612,12 @@ main() {
     exit 2
   fi
   if [ "$index" -gt "$total" ]; then
-    dedicated_leg="${unit_dedicated_packages[$((index - total - 1))]}"
+    local leg_pos=$((index - total - 1))
+    if [ "$leg_pos" -lt "${#unit_dedicated_packages[@]}" ]; then
+      dedicated_leg="${unit_dedicated_packages[$leg_pos]}"
+    else
+      dedicated_leg="${unit_split_packages[$((leg_pos - ${#unit_dedicated_packages[@]}))]}"
+    fi
   fi
 
   compute_all_packages
@@ -600,6 +641,8 @@ main() {
   # round-robin below (which skips it) also covers nothing.
   assert_hand_list_exists unit_dedicated_packages unit_dedicated_packages
   assert_unit_dedicated_subset_of_isolated
+  assert_hand_list_exists unit_split_packages unit_split_packages
+  assert_unit_split_subset_of_dedicated
   if [ -n "$dedicated_leg" ]; then
     printf '%s\n' "$dedicated_leg"
     return 0
