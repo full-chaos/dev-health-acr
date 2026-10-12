@@ -85,10 +85,10 @@ func TestTeamMixIsStandaloneAgainstRealClickHouse(t *testing.T) {
 		if len(result.Facts) != 0 {
 			t.Fatalf("facts = %#v, want none: nothing stands in for a missing mix", result.Facts)
 		}
-		if result.State != contextfabric.SourceNoData {
-			t.Fatalf("state = %q, want %q", result.State, contextfabric.SourceNoData)
+		if result.State != contextfabric.SourceNotApplicable {
+			t.Fatalf("state = %q, want %q: a team that owns no repository", result.State, contextfabric.SourceNotApplicable)
 		}
-		for _, want := range []string{"investment mix unavailable for 1 of 1 requested teams", "2026-09-18"} {
+		for _, want := range []string{"owns no repository", "investment mix unavailable for 1 of 1 requested teams", "2026-09-18"} {
 			if !strings.Contains(result.Reason, want) {
 				t.Fatalf("reason = %q, want it to contain %q", result.Reason, want)
 			}

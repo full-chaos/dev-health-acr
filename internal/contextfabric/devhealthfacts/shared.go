@@ -938,14 +938,18 @@ import (
 // more, and otherwise served as the whole unfiltered member set. A candidate
 // saved under v186 may hold that unfiltered set.
 //
-// v187 -> v194: project and incident members whose question states a status of
+// v187 -> v188: a team that owns no repository is served not_applicable with
+// the cause on the health, operational deficiency and investment kinds, where
+// a stored answer holds no_data.
+//
+// v188 -> v194: project and incident members whose question states a status of
 // the closed set of their kind (project: backlog, planned, started, paused,
 // completed, canceled; incident: active, open, acknowledged, resolved, closed,
 // suppressed) are filtered by it before the cohort is cut, and the answer
 // states the filter and how many members held a stored status outside the set.
 // A team has no state, so a team status qualifier is refused. The status used
 // to be admitted and served as the whole unfiltered member set. A candidate
-// saved under v187 may hold that unfiltered set.
+// saved under v188 may hold that unfiltered set.
 const QueryVersion = "devhealthfacts.clickhouse.v194"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
