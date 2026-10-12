@@ -359,8 +359,9 @@ const (
 	FrameFailureMemberKindInvalid      FrameFailureDetail = "member_kind_invalid"
 	FrameFailureMemberQualifierInvalid FrameFailureDetail = "member_qualifier_invalid"
 	// FrameFailureMemberQualifierValueInvalid: a qualifier value without a
-	// recognized qualifier, an unusable value, or (work_item status) a value
-	// outside WorkItemStatusVocabulary.
+	// recognized qualifier, an unusable value, or a status value outside the
+	// closed set of its member kind (WorkItemStatusVocabulary,
+	// PullRequestStatusVocabulary).
 	FrameFailureMemberQualifierValueInvalid FrameFailureDetail = "member_qualifier_value_invalid"
 	FrameFailureGroupKindUnset              FrameFailureDetail = "group_kind_unset"
 	FrameFailureGroupKindInvalid            FrameFailureDetail = "group_kind_invalid"

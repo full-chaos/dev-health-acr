@@ -1149,6 +1149,8 @@ type recordingTelemetry struct {
 
 	// teamAnchorWalks records every RecordTeamAnchorWalk call.
 	teamAnchorWalks []TeamAnchorWalkDecision
+	// pullRequestStatusFilters records every RecordPullRequestStatusFilter call.
+	pullRequestStatusFilters []PullRequestStatusFilterDecision
 	// projectDeploymentWalks records every RecordProjectDeploymentWalk call.
 	projectDeploymentWalks []ProjectDeploymentWalkDecision
 	// ownershipRoutings records every RecordOwnershipRouting call.
@@ -1364,6 +1366,10 @@ func (r *recordingTelemetry) RecordProjectDeploymentWalk(_ context.Context, _ st
 
 func (r *recordingTelemetry) RecordTeamAnchorWalk(_ context.Context, _ string, decision TeamAnchorWalkDecision) {
 	r.teamAnchorWalks = append(r.teamAnchorWalks, decision)
+}
+
+func (r *recordingTelemetry) RecordPullRequestStatusFilter(_ context.Context, _ string, decision PullRequestStatusFilterDecision) {
+	r.pullRequestStatusFilters = append(r.pullRequestStatusFilters, decision)
 }
 
 func (r *recordingTelemetry) RecordOwnershipRouting(_ context.Context, _ string, decision OwnershipRoutingDecision) {

@@ -88,6 +88,18 @@ var interpretationScopedMemberExamples = []scopedMemberExample{
 		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"project","member_qualifier":"status","member_qualifier_value":"open"}`,
 		AnchorKind: "team",
 	},
+	{
+		Question:   "Which pull requests of the Vesper team are waiting on review?",
+		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"pull_request","member_qualifier":"status","member_qualifier_value":"awaiting_review"}`,
+		AnchorKind: "team",
+		Note:       "waiting on review is awaiting_review",
+	},
+	{
+		Question:   "Which of the Vesper team's pull requests are stuck in review?",
+		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"pull_request","member_qualifier":"status"}`,
+		AnchorKind: "team",
+		Note:       "no value of the six fits: member_qualifier_value is omitted",
+	},
 }
 
 var interpretationScopedMemberExampleLines = func() string {

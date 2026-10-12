@@ -333,7 +333,8 @@ type ScopedSetExpression struct {
 	// MemberQualifierValue is the state word or the assignee the question
 	// names, typed and validated by invariant I5. Empty means the question
 	// did not state one. It is a value, unlike AnchorTerms: for a work_item
-	// member with a status qualifier it is one of WorkItemStatusVocabulary.
+	// member with a status qualifier it is one of WorkItemStatusVocabulary,
+	// and for a pull_request member one of PullRequestStatusVocabulary.
 	MemberQualifierValue string `json:"member_qualifier_value,omitempty"`
 }
 
