@@ -349,8 +349,10 @@ func TestSubstitutionGuardReceiptDomainAtTheEngine(t *testing.T) {
 // TestSubstitutionGuardNeverBindsTheSubjectItWithheld: on a turn the guard
 // fired on, the shadow binder never binds the withheld subject, whether the
 // parent's snapshot carries a binding or not, and whichever channel carried
-// the subject. With a parent binding the withheld subject contests it; with
-// none the binding stays unbound on ambiguous proof.
+// the subject. The follow-up asks another question, so a parent binding is
+// refused at admission and is never the starting point: either way the
+// binding stays unbound on ambiguous proof. (An admitted carry the withheld
+// subject contests is TestShadowBindingNeverBindsAnAliasThatWinsOnAFollowUp.)
 func TestSubstitutionGuardNeverBindsTheSubjectItWithheld(t *testing.T) {
 	t.Parallel()
 	for _, snapshot := range []string{"present", "absent"} {
@@ -387,14 +389,17 @@ func TestSubstitutionGuardNeverBindsTheSubjectItWithheld(t *testing.T) {
 					if line.To.CanonicalID == committedAnchorRepoOther.CanonicalID {
 						t.Errorf("the binder bound the withheld subject: %+v", line.To)
 					}
+					if line.To.State != AnchorBindingUnbound || line.To.Reason != AnchorBindingReasonAmbiguousProof {
+						t.Errorf("to = %+v, want unbound on ambiguous proof", line.To)
+					}
 					switch snapshot {
 					case "present":
-						if line.To.State != AnchorBindingContested || line.To.CanonicalID != committedAnchorRepo.CanonicalID || line.To.ContenderID != committedAnchorRepoOther.CanonicalID {
-							t.Errorf("to = %+v, want the parent's binding contested by the withheld subject", line.To)
+						if line.Admission != AnchorBindingAdmissionRefusedQuestionChanged || line.From.CanonicalID != committedAnchorRepo.CanonicalID {
+							t.Errorf("admission = %s from %+v, want the parent's binding refused for the changed question", line.Admission, line.From)
 						}
 					case "absent":
-						if line.To.State != AnchorBindingUnbound || line.To.Reason != AnchorBindingReasonAmbiguousProof {
-							t.Errorf("to = %+v, want unbound on ambiguous proof", line.To)
+						if line.Admission != AnchorBindingAdmissionNotApplicable {
+							t.Errorf("admission = %s, want not_applicable with no parent binding", line.Admission)
 						}
 					}
 				}

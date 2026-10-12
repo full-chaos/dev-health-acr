@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -105,27 +106,39 @@ func TestTheHeldBindingCarriesTheOwnershipItWasProvenUnderAcrossTurns(t *testing
 		second      func(*probeOwnership)
 		movement    AnchorOwnershipMovement
 		acquisition AnchorFreshnessAcquisition
-		held        AnchorFreshness
+		admission   AnchorBindingAdmission
 	}{
-		{"same ownership", set(probeOwnershipW1, nil), set(probeOwnershipW1, nil), AnchorOwnershipUnmoved, AnchorFreshnessAcquired, proven},
-		{"ownership moved", set(probeOwnershipW1, nil), set(w2, nil), AnchorOwnershipMoved, AnchorFreshnessAcquired, proven},
-		{"read failed", set(probeOwnershipW1, nil), set(AnchorFreshnessRead{}, errors.New("read failed")), AnchorOwnershipNotAcquired, AnchorFreshnessReadFailed, proven},
-		{"another serving epoch, read live", set(probeOwnershipW1, nil), set(otherEpoch, nil), AnchorOwnershipMoved, AnchorFreshnessAcquired, proven},
-		{"a serving epoch a lease ahead of the graph epoch on both turns", set(otherEpoch, nil), set(otherEpoch, nil), AnchorOwnershipUnmoved, AnchorFreshnessAcquired, AnchorFreshness{Recorded: true, ServingEpoch: otherEpoch.ServingEpoch, OwnershipWatermark: "ownership-w1"}},
-		{"proven under no recorded ownership", set(AnchorFreshnessRead{Recorded: false}, nil), set(probeOwnershipW1, nil), AnchorOwnershipProvenUnrecorded, AnchorFreshnessAcquired, AnchorFreshness{}},
+		{"same ownership", set(probeOwnershipW1, nil), set(probeOwnershipW1, nil), AnchorOwnershipUnmoved, AnchorFreshnessAcquired, AnchorBindingAdmissionAdmitted},
+		{"ownership moved", set(probeOwnershipW1, nil), set(w2, nil), AnchorOwnershipMoved, AnchorFreshnessAcquired, AnchorBindingAdmissionRefusedOwnershipMoved},
+		{"read failed", set(probeOwnershipW1, nil), set(AnchorFreshnessRead{}, errors.New("read failed")), AnchorOwnershipNotAcquired, AnchorFreshnessReadFailed, AnchorBindingAdmissionRefusedOwnershipUnverified},
+		{"another serving epoch, read live", set(probeOwnershipW1, nil), set(otherEpoch, nil), AnchorOwnershipMoved, AnchorFreshnessAcquired, AnchorBindingAdmissionRefusedOwnershipMoved},
+		{"a serving epoch a lease ahead of the graph epoch on both turns", set(otherEpoch, nil), set(otherEpoch, nil), AnchorOwnershipUnmoved, AnchorFreshnessAcquired, AnchorBindingAdmissionAdmitted},
+		{"proven under no recorded ownership", set(AnchorFreshnessRead{Recorded: false}, nil), set(probeOwnershipW1, nil), AnchorOwnershipProvenUnrecorded, AnchorFreshnessAcquired, AnchorBindingAdmissionRefusedOwnershipUnverified},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			turns := runAnchorProbe(t, []anchorProbeStep{
 				{request: firstTurnRequest("request_fresh_carry_one", true), ownership: tc.first, response: identityProvenResponse(probeAlpha)},
-				{request: followUp("request_fresh_carry_two", "And how many teams contribute to it?", nil), ownership: tc.second, response: emptyProbeResponse()},
+				{request: followUp("request_fresh_carry_two", "", nil), ownership: tc.second, verified: true, response: emptyProbeResponse()},
 			})
 			line := turns[1].transitions[0]
-			if line.OwnershipMovement != tc.movement || line.FreshnessAcquisition != tc.acquisition {
-				t.Fatalf("follow-up line movement/acquisition = %s/%s, want %s/%s", line.OwnershipMovement, line.FreshnessAcquisition, tc.movement, tc.acquisition)
+			if line.OwnershipMovement != tc.movement || line.FreshnessAcquisition != tc.acquisition || line.Admission != tc.admission {
+				t.Fatalf("follow-up line movement/acquisition/admission = %s/%s/%s, want %s/%s/%s", line.OwnershipMovement, line.FreshnessAcquisition, line.Admission, tc.movement, tc.acquisition, tc.admission)
 			}
 			binding := *bindingMember(turns[1].saved)
-			if binding.Reason != AnchorBindingReasonCarriedSilent || binding.ProvenFreshness != tc.held {
-				t.Fatalf("follow-up binding = %+v, want carried_silent keeping proven freshness %+v", binding, tc.held)
+			if tc.admission == AnchorBindingAdmissionAdmitted {
+				want := proven
+				if tc.first != nil {
+					probe := &probeOwnership{}
+					tc.first(probe)
+					want.ServingEpoch = probe.read.ServingEpoch
+				}
+				if binding.Reason != AnchorBindingReasonCarriedSilent || binding.ProvenFreshness != want {
+					t.Fatalf("follow-up binding = %+v, want carried_silent keeping turn one's proven freshness %+v", binding, want)
+				}
+				return
+			}
+			if binding.State != AnchorBindingUnbound {
+				t.Fatalf("follow-up binding = %+v, want unbound: a refused carry is not the starting point", binding)
 			}
 		})
 	}
@@ -200,7 +213,7 @@ func TestAProvenFreshnessIsPersistedOnlyWhenRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	back, present, err := storedAnchorBinding(withBinding)
-	if err != nil || !present || back != held {
+	if err != nil || !present || !reflect.DeepEqual(back, held) {
 		t.Fatalf("round trip = %+v present=%v err=%v, want %+v", back, present, err, held)
 	}
 	for name, bad := range map[string]AnchorBinding{
