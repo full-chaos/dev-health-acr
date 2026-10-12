@@ -920,8 +920,13 @@ import (
 // above 2000 rows (per ownership window read) is a named failure. A candidate saved under v183 may hold the
 // truncated mix.
 //
-// v184 -> v192: a project status answer now carries backlog, estimate coverage
-// and risk severity as drivers with minted claims. An answer saved under v184
+// v184 -> v185: the compounding-risk deficiency rule basis is also read from
+// the rule's partial-coverage sentence (", computed from N% of its inputs
+// (...)"), which was served as rationale_not_in_rule_sentence_form. A stored
+// answer can differ.
+//
+// v185 -> v192: a project status answer now carries backlog, estimate coverage
+// and risk severity as drivers with minted claims. An answer saved under v185
 // has none.
 const QueryVersion = "devhealthfacts.clickhouse.v192"
 
