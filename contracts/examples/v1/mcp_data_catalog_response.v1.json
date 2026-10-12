@@ -2,7 +2,8 @@
  "contract_version": "acr-data.v1",
  "sections": [
   "operations",
-  "limits"
+  "limits",
+  "facts"
  ],
  "operations": {
   "caller_class": "unrestricted",
@@ -99,7 +100,34 @@
    "operations.refused_shapes[].reason"
   ]
  },
- "notes": [
-  "facts: read_facts is not available in this deployment"
- ]
+ "notes": [],
+ "facts": {
+  "served": true,
+  "note": "facts: served by read_facts; kinds listed are the ones it accepts, each with max_window_days, the widest range or trailing window one read takes for it (read it before choosing a window)",
+  "kinds": [
+   {
+    "kind": "pull_requests",
+    "subject_kinds": [
+     "repository",
+     "team"
+    ],
+    "fields": [
+     "open_count"
+    ],
+    "max_window_days": 60
+   },
+   {
+    "kind": "investment",
+    "subject_kinds": [
+     "organization",
+     "repository",
+     "team"
+    ],
+    "fields": [
+     "theme_mix"
+    ],
+    "max_window_days": 365
+   }
+  ]
+ }
 }

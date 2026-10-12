@@ -103,7 +103,7 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 365,
-          "description": "Trailing days. Only with mode trailing. A range or trailing window spans at most 60 days, except that kind investment takes up to 365 days in one read (a read naming several kinds is held to the smallest maximum). 0 means not set, the same as leaving it out: a trailing window needs days from 1 to the maximum of the kinds asked."
+          "description": "Trailing days. Only with mode trailing. The widest window one read takes depends on the kind: read it from data_catalog facts.kinds[].max_window_days before choosing days (a read naming several kinds is held to the smallest maximum). 0 means not set, the same as leaving it out: a trailing window needs days from 1 to the maximum of the kinds asked."
         }
       },
       "description": "Time window. Omit it and each kind answers over its own default period; the response says so."
