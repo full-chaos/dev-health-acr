@@ -115,6 +115,12 @@ func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHous
 		}
 		return 0
 	}
+	idsFor := map[string][]string{
+		"repository mix": ids, "repository unit listing": ids,
+		"organization unit listing": {}, "organization mix": {}, "team linked pull request mix": {"team-none"},
+	}
+	repoScoped := map[string]bool{"repository mix": true, "repository unit listing": true}
+	pairs := devhealthfacts.InvestmentSplitStatementPairs(ts(2026, 8, 1, 0, 0, 0), ts(2026, 9, 1, 0, 0, 0), 101)
 	for _, s := range sizes {
 		var mark int64
 		for i := 0; i < 2; i++ {
@@ -133,6 +139,20 @@ func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHous
 		t.Logf("%s (%d units, %d PR refs): served repository mix peak %.2f MiB", s.org, s.units, s.prs, float64(served)/(1<<20))
 		if served >= repoScopedSplitMemoryCeiling {
 			t.Errorf("%s: served repository mix peaked at %d bytes, want under %d", s.org, served, repoScopedSplitMemoryCeiling)
+		}
+		for _, p := range pairs {
+			for i := 0; i < 2; i++ {
+				mark = serverNowMicros(t, ctx, direct)
+				err := readers.QueryOrgScopedNamed(ctx, query, "SplitMemory", p.New, s.org, idsFor[p.Name], func(readers.RowScanner) error { return nil }, p.Bindings...)
+				if err != nil {
+					t.Fatalf("%s %s: %v: %s", s.org, p.Name, err, readFailureCause(err))
+				}
+			}
+			peak := peakOf(s.org+" "+p.Name, statementMemorySince(t, ctx, direct, statementFilter{Table: "work_unit_investments"}, mark))
+			t.Logf("%s (%d units, %d PR refs): %s peak %.2f MiB", s.org, s.units, s.prs, p.Name, float64(peak)/(1<<20))
+			if repoScoped[p.Name] && peak >= repoScopedSplitMemoryCeiling {
+				t.Errorf("%s: %s peaked at %d bytes, want under %d", s.org, p.Name, peak, repoScopedSplitMemoryCeiling)
+			}
 		}
 	}
 }

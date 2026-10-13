@@ -25,9 +25,7 @@ func TestInvestmentUnitsStatementReadsWorkUnitInvestmentsOnceAndKeysetOnlyWithAC
 			if got := strings.Count(statement, "work_unit_investments"); got != 1 {
 				t.Errorf("%s/%s: statement names work_unit_investments %d times, want 1", name, label, got)
 			}
-			if got := strings.Count(statement, "FROM repos"); got != 1 {
-				t.Errorf("%s/%s: statement references repos %d times, want 1", name, label, got)
-			}
+			assertReposReadOnceBesidesTheRequestedLookup(t, name+"/"+label, statement)
 			if strings.Contains(statement, "WITH ") {
 				t.Errorf("%s/%s: statement uses a CTE; ClickHouse inlines it at every reference", name, label)
 			}
@@ -47,16 +45,16 @@ func TestInvestmentUnitsStatementReadsWorkUnitInvestmentsOnceAndKeysetOnlyWithAC
 }
 
 // The unit listing and the mix statement share one split: with no unit
-// columns repoSplitCore is the mix statement's own text.
+// columns the requested-repository split is the mix statement's own text.
 func TestRepoMixStatementEmbedsTheSharedSplit(t *testing.T) {
 	t.Parallel()
 	statement := repoMixStatement([]factTimeBound{{}})
-	core := repoSplitCore([]string{"if(1, 0, -1)"}, "", "", true)
+	core := repoSplitCoreRequested([]string{"if(1, 0, -1)"}, "", "", true, subqueryMembershipScope)
 	if !strings.Contains(statement, core) {
 		t.Fatal("the mix statement no longer embeds the shared split verbatim")
 	}
 	units := investmentUnitsStatement(factTimeBound{}, false)
-	withUnitColumns := repoSplitCore([]string{"if(1, 0, -1)"}, " from_ts, to_ts,", ",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts", false)
+	withUnitColumns := repoSplitCoreRequested([]string{"if(1, 0, -1)"}, " from_ts, to_ts,", ",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts", false, subqueryMembershipScope)
 	if !strings.Contains(units, withUnitColumns) {
 		t.Fatal("the unit statement does not embed the shared split")
 	}

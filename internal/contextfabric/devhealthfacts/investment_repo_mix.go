@@ -92,7 +92,9 @@ func mixWindowPredicate(i int, b factTimeBound) string {
 // unit's window memberships and PR/issue refs are derived from its own row
 // with array functions (no second reference to the latest set); the per-unit
 // ref total is a window function over the already-grouped rows; and the theme
-// and bugfix sums come out of a single aggregation. repos is referenced once.
+// and bugfix sums come out of a single aggregation. repos is joined once; its
+// only other read is the requested repositories' own lookup rows, bounded by
+// {ids} (repoSplitCoreRequested).
 //
 // CHAOS-7073 (K16): the latest-row selection matches ops'
 // LatestWorkUnitInvestmentsSource on three points. A superseded work unit
@@ -126,7 +128,7 @@ FROM (
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
 			effort_value, theme_distribution_json, bugfix_share, span_from
 		FROM (
-`+repoSplitCoreScoped(memberships, "", "", true, scope)+`		)
+`+repoSplitCoreRequested(memberships, "", "", true, scope)+`		)
 	)
 	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
 )
@@ -148,15 +150,45 @@ func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSen
 	return repoSplitCoreGrouped(memberships, unitCols, unitAgg, spanSentinel, scope, false)
 }
 
+// repoSplitCoreRequested is repoSplitCoreScoped for a read that keeps only the
+// repositories in {ids}: a unit none of whose references reaches one of them
+// is dropped before its references are expanded. The unit is kept or dropped
+// whole, so every kept unit's c and n are what the unfiltered split gives.
+func repoSplitCoreRequested(memberships []string, unitCols, unitAgg string, spanSentinel bool, scope membershipScope) string {
+	return repoSplitCoreFiltered(memberships, unitCols, unitAgg, spanSentinel, scope, false, true)
+}
+
 // repoSplitCoreGrouped is repoSplitCoreScoped; perRef also groups by the
 // pull request number, so each row is one (window, work unit, repository,
 // pull request) and c is 1 per resolved reference. The partition total n is
 // unchanged by the finer grouping.
 func repoSplitCoreGrouped(memberships []string, unitCols, unitAgg string, spanSentinel bool, scope membershipScope, perRef bool) string {
+	return repoSplitCoreFiltered(memberships, unitCols, unitAgg, spanSentinel, scope, perRef, false)
+}
+
+// requestedRepositoryUnitFilter keeps a unit when one of its references
+// reaches a repository in {ids} by the same rule the repos join below applies:
+// a direct repository id, or a (provider, name) lookup equal to a requested
+// repository's own lookup row.
+const requestedRepositoryUnitFilter = `
+					WHERE arrayExists(r -> if(r.1 != '', has({ids:Array(String)}, r.1), has((
+						SELECT groupArray((provider, repo)) FROM (
+							SELECT argMax(repo, last_synced) AS repo,
+								if(uniqExact(provider) = 1, argMax(provider, last_synced), '') AS provider
+							FROM repos
+							WHERE org_id = {org_id:String} AND toString(id) IN {ids:Array(String)}
+							GROUP BY id
+						)), (r.2, r.3))), refs)`
+
+func repoSplitCoreFiltered(memberships []string, unitCols, unitAgg string, spanSentinel bool, scope membershipScope, perRef, requestedOnly bool) string {
 	refCol, refGroup := "", ""
 	if perRef {
 		refCol = "\n\t\t\t\tparsed.pr_number AS pr_number,"
 		refGroup = ", pr_number"
+	}
+	unitFilter := ""
+	if requestedOnly {
+		unitFilter = requestedRepositoryUnitFilter
 	}
 	wins := "arrayFilter(w -> w >= 0, [" + strings.Join(memberships, ", ") + "])"
 	if spanSentinel {
@@ -174,30 +206,29 @@ func repoSplitCoreGrouped(memberships []string, unitCols, unitAgg string, spanSe
 					ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
 				FROM (
 					SELECT work_unit_id, repo_id, effort_value, theme_distribution_json, from_ts AS span_from,` + unitCols + `
-						ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS bugfix_share,
+						bugfix_share,
 						` + wins + ` AS wins,
-						arrayConcat(
-							arrayMap(r -> (splitByString('#pr', r)[1], '', '', splitByString('#pr', r)[2], r),
-								arrayFilter(r -> match(r, '^[0-9a-fA-F-]{36}#pr[0-9]+$'), JSONExtract(structural_evidence_json, 'prs', 'Array(String)'))),
-							arrayMap(r -> ('', 'github', substring(splitByChar('#', r)[1], 6), splitByChar('#', r)[2], r),
-								arrayFilter(r -> match(r, '^ghpr:[^#]+#[0-9]+$'), JSONExtract(structural_evidence_json, 'issues', 'Array(String)'))),
-							arrayMap(r -> ('', 'gitlab', substring(splitByChar('!', r)[1], 8), splitByChar('!', r)[2], r),
-								arrayFilter(r -> match(r, '^gitlab:[^!]+![0-9]+$'), JSONExtract(structural_evidence_json, 'issues', 'Array(String)')))
-						) AS pr_refs,
 						` + repoRefsExpression + ` AS refs
 					FROM (
-						SELECT work_unit_id,
-							(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
-							argMax(from_ts, computed_at) AS from_ts,
-							argMax(to_ts, computed_at) AS to_ts,
-							argMax(effort_value, computed_at) AS effort_value,
-							argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
-							argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
-							argMax(structural_evidence_json, computed_at) AS structural_evidence_json
-						FROM work_unit_investments
-						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
-						GROUP BY work_unit_id
-					)
+						SELECT work_unit_id, latest.1 AS repo_id, latest.2 AS from_ts, latest.3 AS to_ts, latest.4 AS effort_value,
+							latest.5 AS theme_distribution_json, latest.6 AS bugfix_share, latest.7 AS pr_refs
+						FROM (
+							SELECT work_unit_id,
+								argMax(tuple(repo_id, from_ts, to_ts, effort_value, theme_distribution_json,
+									ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0),
+									arrayConcat(
+										arrayMap(r -> (splitByString('#pr', r)[1], '', '', splitByString('#pr', r)[2], r),
+											arrayFilter(r -> match(r, '^[0-9a-fA-F-]{36}#pr[0-9]+$'), JSONExtract(structural_evidence_json, 'prs', 'Array(String)'))),
+										arrayMap(r -> ('', 'github', substring(splitByChar('#', r)[1], 6), splitByChar('#', r)[2], r),
+											arrayFilter(r -> match(r, '^ghpr:[^#]+#[0-9]+$'), JSONExtract(structural_evidence_json, 'issues', 'Array(String)'))),
+										arrayMap(r -> ('', 'gitlab', substring(splitByChar('!', r)[1], 8), splitByChar('!', r)[2], r),
+											arrayFilter(r -> match(r, '^gitlab:[^!]+![0-9]+$'), JSONExtract(structural_evidence_json, 'issues', 'Array(String)')))
+									)), computed_at) AS latest
+							FROM work_unit_investments
+							WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
+							GROUP BY work_unit_id
+						)
+					)` + unitFilter + `
 				)
 				ARRAY JOIN wins AS win
 				ARRAY JOIN refs AS ref

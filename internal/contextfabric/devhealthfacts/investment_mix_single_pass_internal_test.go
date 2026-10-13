@@ -25,12 +25,23 @@ func TestRepoMixStatementReadsWorkUnitInvestmentsOnce(t *testing.T) {
 		if got := strings.Count(statement, "work_unit_investments"); got != 1 {
 			t.Errorf("%s: statement references work_unit_investments %d times, want 1", name, got)
 		}
-		if got := strings.Count(statement, "FROM repos"); got != 1 {
-			t.Errorf("%s: statement references repos %d times, want 1", name, got)
-		}
+		assertReposReadOnceBesidesTheRequestedLookup(t, name, statement)
 		if strings.Contains(statement, "WITH ") {
 			t.Errorf("%s: statement uses a CTE; ClickHouse inlines it at every reference", name)
 		}
+	}
+}
+
+// assertReposReadOnceBesidesTheRequestedLookup: the repos join is read once
+// over the organization; the only other read is the requested repositories'
+// own lookup rows, bounded by {ids}.
+func assertReposReadOnceBesidesTheRequestedLookup(t *testing.T, name, statement string) {
+	t.Helper()
+	if got := strings.Count(statement, requestedRepositoryUnitFilter); got != 1 {
+		t.Errorf("%s: statement carries the requested repository unit filter %d times, want 1", name, got)
+	}
+	if got := strings.Count(strings.Replace(statement, requestedRepositoryUnitFilter, "", 1), "FROM repos"); got != 1 {
+		t.Errorf("%s: statement references repos %d times besides the requested lookup, want 1", name, got)
 	}
 }
 
