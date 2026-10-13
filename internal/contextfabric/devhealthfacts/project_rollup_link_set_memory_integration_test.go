@@ -11,12 +11,20 @@ import (
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
-const projectRollupLinkSetWarmRuns = 3
+const (
+	projectRollupLinkSetWarmRuns = 3
+	// Measured in CI (non-race job, smallest of three warm runs): 56.5 MB at
+	// 100k links, 122-124 MB at 200k, 135.5 MB at 300k, merged or not. The
+	// bound is 650 B per organization link plus 5 MiB.
+	projectRollupLinkSetBytesPerLink = 650
+	projectRollupLinkSetBaseBytes    = uint64(5 << 20)
+)
 
 // The project pull request rollup builds the organization's link-id set, so
 // its peak memory is linear in the organization's links and flat in the
-// project. This row measures the peak at three link counts, in both part
-// states, as the smallest of three warm runs.
+// project. This row bounds the peak at three link counts, in both part
+// states, as the smallest of three warm runs: a per-link cost above the
+// measured one (the set built twice) fails it.
 func TestProjectPullRequestRollupMemoryAgainstOrganizationLinksOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
@@ -77,6 +85,12 @@ SELECT ?, concat(?, repeat('x', 96), '-', toString(number)), toUInt32(number + 1
 			t.Fatalf("optimize: %v", err)
 		}
 		merged := peak()
-		t.Errorf("MEASURE links=%d unmerged_peak=%d merged_peak=%d", links, unmerged, merged)
+		t.Logf("links=%d unmerged_peak=%d merged_peak=%d", links, unmerged, merged)
+		bound := uint64(links)*projectRollupLinkSetBytesPerLink + projectRollupLinkSetBaseBytes
+		for state, got := range map[string]uint64{"unmerged": unmerged, "merged": merged} {
+			if got > bound {
+				t.Errorf("project pull request rollup peak %d bytes at %d organization links (%s parts), over the %d-byte bound", got, links, state, bound)
+			}
+		}
 	}
 }
