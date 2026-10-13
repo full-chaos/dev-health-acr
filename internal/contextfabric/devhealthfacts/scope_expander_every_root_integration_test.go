@@ -347,6 +347,10 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 			smallDelta := int64(small[label].with) - int64(small[label].base)
 			largeDelta := int64(large[label].with) - int64(large[label].base)
 			noise := large[label].withSpread + large[label].baseSpread
+			ratioMargin := func(r reading) int64 {
+				return int64(max(arrayMemoryShare*float64(r.base), float64(r.base+r.withSpread+r.baseSpread))) - int64(r.with)
+			}
+			t.Logf("MARGIN %s small_ratio=%d large_ratio=%d slope=%d", label, ratioMargin(small[label]), ratioMargin(large[label]), int64(statementMemorySlope*float64(max(smallDelta, 0))+float64(noise))-largeDelta)
 			if float64(largeDelta) > statementMemorySlope*float64(max(smallDelta, 0))+float64(noise) {
 				t.Errorf("%s: the origin arrays' cost grew with the organization: %d bytes at the larger size, %d at the smaller (noise %d)", label, largeDelta, smallDelta, noise)
 			}
