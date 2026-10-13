@@ -509,7 +509,8 @@ const irreducibleAnswerBytes = 1023
 //
 // 521555112 -> 521555762 (+650): driver rank, 10000 on 50 drivers.
 // 521555762 -> 521585712 (+29950): driver source_state_note at its 96 maximum on every driver.
-const maximalAnswerBytes = 521585712
+// 521585712 -> 521656901 (+71189): the fact-kind vocabulary gains commitment, so every full kind list is one member longer.
+const maximalAnswerBytes = 521656901
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
