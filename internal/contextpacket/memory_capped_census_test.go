@@ -7,10 +7,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // The only files allowed to open a ClickHouse connection. Each must hand the
@@ -19,15 +20,6 @@ import (
 var clickHouseConstructorAllowlist = map[string]bool{
 	"internal/runtime/hosted/clickhouse.go": true,
 	"cmd/acr-projector/runtime.go":          true,
-}
-
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate test file")
-	}
-	return filepath.Join(filepath.Dir(file), "..", "..")
 }
 
 func isCall(n ast.Node, name string) (*ast.CallExpr, bool) {
@@ -46,7 +38,7 @@ func isCall(n ast.Node, name string) (*ast.CallExpr, bool) {
 
 func TestEveryClickHouseConnectionIsMemoryCapped(t *testing.T) {
 	t.Parallel()
-	root := repoRoot(t)
+	root := repopath.Root(t)
 	var violations []string
 	opened := map[string]bool{}
 	querySites := 0
