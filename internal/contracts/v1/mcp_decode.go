@@ -137,7 +137,7 @@ var mcpContextForTaskRequestNullCheck = mcpNullCheck{
 }
 
 var mcpSourceEvidenceRequestNullCheck = mcpNullCheck{
-	keys: []string{"evidence_ref_id", "result_id"},
+	keys: []string{"evidence_ref_id", "evidence_ref_ids", "result_id"},
 }
 
 var mcpContextForTaskResponseNullCheck = mcpNullCheck{
@@ -150,7 +150,7 @@ var mcpContextForTaskResponseNullCheck = mcpNullCheck{
 }
 
 var mcpSourceEvidenceResponseNullCheck = mcpNullCheck{
-	keys: []string{"schema_version", "structured", "rendered_markdown"},
+	keys: []string{"schema_version", "structured", "rendered_markdown", "entries"},
 	nested: map[string]mcpNullCheck{
 		"rendered_markdown": mcpRenderedMarkdownNullCheck,
 	},
