@@ -187,27 +187,27 @@ func TestProjectTeamOwnershipStatementMemoryOnTheProdShape(t *testing.T) {
 	}
 }
 
-// The statement's memory must not follow the length of the ownership history:
-// the same 88 pairs with 100 versus 1,000 versions per pair.
+// The statement's memory must not follow the length of the ownership history.
+// The rule (fail when large > 1.15x small and large > small + 2 MiB) compares
+// 1,000 with 2,000 versions per pair: both are past the point where one block
+// of rows is full (about 65k rows), so the read buffers have stopped growing
+// with the table and what is left is the history's own cost. The 100 versions
+// per pair point is logged to show the climb to that point.
 func TestProjectTeamOwnershipStatementMemoryDoesNotGrowWithVersions(t *testing.T) {
 	query, direct := orgIsolationClickHouseFixture(t)
 	capped := contextpacket.NewMemoryCappedQueryClient(query, prodMaxMemoryUsage)
 	only := map[string]bool{"paged_statement": true}
-	var small, large float64
-	for i, versions := range []int{100, 1000} {
+	peaks := map[int]float64{}
+	for i, versions := range []int{100, 1000, 2000} {
 		f := newIngestColumnsFixture(t, fmt.Sprintf("95460000-0000-4000-8000-00000000010%d", i), nil, nil)
 		seedProjectTeamOwnershipShape(t, f, memoryShapePairs*versions, memoryShapeUnmerged)
 		// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.
 		mustExec(t, f.ctx, direct, "OPTIMIZE TABLE team_project_ownership FINAL")
 		peak := peakOf(t, measureProjectTeamsFragments(t, f, query, capped, fmt.Sprintf("slope%d", versions), only), "paged_statement")
 		t.Logf("slope: %d versions per pair (%d rows): paged statement peak %.2f MiB read_rows=%d", versions, memoryShapePairs*versions, peak.mib, peak.readRows)
-		if i == 0 {
-			small = peak.mib
-		} else {
-			large = peak.mib
-		}
+		peaks[versions] = peak.mib
 	}
-	if large > 1.15*small && large > small+2 {
-		t.Errorf("memory grows with the ownership history: %.2f MiB at 100 versions per pair, %.2f MiB at 1,000 (fail when large > 1.15x small and large > small + 2 MiB)", small, large)
+	if small, large := peaks[1000], peaks[2000]; large > 1.15*small && large > small+2 {
+		t.Errorf("memory grows with the ownership history: %.2f MiB at 1,000 versions per pair, %.2f MiB at 2,000 (fail when large > 1.15x small and large > small + 2 MiB)", small, large)
 	}
 }
