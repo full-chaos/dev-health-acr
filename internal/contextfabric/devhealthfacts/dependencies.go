@@ -349,10 +349,10 @@ type blockerTeamTotals struct {
 // blockerTeamAge is one team's open blocker edges by what is known of their
 // start: openEdges are the distinct open edges, edgesWithStart those with a
 // known start, edgesWithExactStart those whose start is the provider's own
-// time of the link. oldestStartUnix is the earliest known start in unix
-// seconds (0 when no open edge has one).
+// time of the link. oldestStartMillis is the earliest known start in unix
+// milliseconds (0 when no open edge has one).
 type blockerTeamAge struct {
-	openEdges, edgesWithStart, edgesWithExactStart, oldestStartUnix int64
+	openEdges, edgesWithStart, edgesWithExactStart, oldestStartMillis int64
 }
 
 const (
@@ -361,7 +361,7 @@ const (
 	blockerAgeNoneOpen         = "none_open"
 	blockerAgeNoRelationStart  = "no_relation_start"
 	blockerAgeStartUnavailable = "start_unavailable"
-	secondsPerDay              = int64(86400)
+	millisPerDay               = int64(86400000)
 )
 
 // ageReadFailure decides what a failed age statement does to the read: the age
@@ -395,10 +395,10 @@ func blockerOldestAge(a blockerTeamAge, now time.Time) (days int64, basis, reaso
 	switch {
 	case a.openEdges <= 0:
 		return 0, "", blockerAgeNoneOpen, false
-	case a.edgesWithStart <= 0 || a.oldestStartUnix <= 0:
+	case a.edgesWithStart <= 0 || a.oldestStartMillis <= 0:
 		return 0, "", blockerAgeNoRelationStart, false
 	}
-	days = (now.Unix() - a.oldestStartUnix) / secondsPerDay
+	days = (now.UnixMilli() - a.oldestStartMillis) / millisPerDay
 	if days < 0 {
 		days = 0
 	}
@@ -429,18 +429,18 @@ func blockerWorkItemsSQL(alias string) string {
 // sync time. The subselect reads the first-seen rows of the blocker edge
 // endpoints only, so its cost follows the blocker edges.
 const blockerStartJoinSQL = ` LEFT JOIN (SELECT source_work_item_id, target_work_item_id, relationship_type, min(first_seen_at) AS first_seen, 1 AS seen
-    FROM work_item_dependency_first_seen WHERE org_id = {org_id:String} AND source_work_item_id IN ` + blockerEndpointIDsSQL + `
+    FROM work_item_dependency_first_seen WHERE org_id = {org_id:String} AND lower(ifNull(relationship_type, '')) = '` + blockerRelationshipType + `' AND source_work_item_id IN ` + blockerEndpointIDsSQL + ` AND target_work_item_id IN ` + blockerEndpointIDsSQL + `
     GROUP BY source_work_item_id, target_work_item_id, relationship_type) AS fs
     ON fs.source_work_item_id = d.source_work_item_id AND fs.target_work_item_id = d.target_work_item_id AND fs.relationship_type = d.relationship_type`
 
 // blockerStartOutputSQL are the per-edge start columns carried through the
 // edge grouping: start_unix is the provider time of the link when the synced
 // payload carries one, else the first time a sync wrote the relation (never an
-// item's creation time), in whole unix seconds, NULL when neither is stored.
+// item's creation time), in unix milliseconds, NULL when neither is stored.
 // start_exact is 1 when the provider time is the source. The first sync time
 // is later than or equal to the true start, so an age from it never
 // overstates.
-const blockerStartOutputSQL = `, min(if(d.relation_started_at IS NOT NULL, toNullable(intDiv(toUnixTimestamp64Milli(d.relation_started_at), 1000)), if(fs.seen = 1, toNullable(intDiv(toUnixTimestamp64Milli(fs.first_seen), 1000)), NULL))) AS start_unix, min(toUInt8(d.relation_started_at IS NOT NULL)) AS start_exact`
+const blockerStartOutputSQL = `, min(if(d.relation_started_at IS NOT NULL, toNullable(toUnixTimestamp64Milli(d.relation_started_at)), if(fs.seen = 1, toNullable(toUnixTimestamp64Milli(fs.first_seen)), NULL))) AS start_unix, min(toUInt8(d.relation_started_at IS NOT NULL)) AS start_exact`
 
 // blockerEdgeRowsSQL is the one reading of a blocker edge's repository: the
 // distinct (repository, blocked item, blocker) rows with the item's strongest
@@ -631,7 +631,7 @@ ORDER BY team_id`, settings)
 			ageErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerOldestAge", ageStatement, orgID, repoKeysOf(chunkOwned), func(row readers.RowScanner) error {
 				var teamID string
 				var a blockerTeamAge
-				if err := row.Scan(&teamID, &a.openEdges, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartUnix); err != nil {
+				if err := row.Scan(&teamID, &a.openEdges, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartMillis); err != nil {
 					return err
 				}
 				chunkAges[teamID] = a

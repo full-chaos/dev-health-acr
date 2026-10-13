@@ -234,7 +234,7 @@ ORDER BY project_key`, settings)
 	ageErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadProjectBlockerOldestAge", ageStatement, orgID, ids, func(row readers.RowScanner) error {
 		var key string
 		var a blockerTeamAge
-		if err := row.Scan(&key, &a.openEdges, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartUnix); err != nil {
+		if err := row.Scan(&key, &a.openEdges, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartMillis); err != nil {
 			return err
 		}
 		ages[key] = a

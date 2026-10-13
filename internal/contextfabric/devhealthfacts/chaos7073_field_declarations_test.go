@@ -452,7 +452,7 @@ func t4Cases() []t4Case {
 	}})
 	add(t4Case{name: "blockers/project", kind: contextfabric.FactBlockers, subjects: proj, tables: []fakeTable{
 		{match: "uniqExactIf(tgt, is_open = 1)", rows: [][]any{{"linear:proj-1", int64(2), int64(3), int64(1)}}},
-		{match: "is_open = 1 AND start_unix IS NOT NULL", rows: [][]any{{"linear:proj-1", int64(3), int64(2), int64(1), int64(1760000000)}}},
+		{match: "is_open = 1 AND start_unix IS NOT NULL", rows: [][]any{{"linear:proj-1", int64(3), int64(2), int64(1), int64(1760000000000)}}},
 	}})
 	add(t4Case{name: "blockers/project_without_relation_start", kind: contextfabric.FactBlockers, subjects: proj, tables: []fakeTable{
 		{match: "uniqExactIf(tgt, is_open = 1)", rows: [][]any{{"linear:proj-1", int64(2), int64(3), int64(1)}}},
