@@ -17,9 +17,9 @@ import (
 type organizationPullRequest struct {
 	id, repo, state string
 	reviewed        bool
-	// project, when set, is the one project the pull request's authorization
-	// names.
-	project string
+	// project and team, when set, are the one project and the one team the
+	// pull request's authorization names.
+	project, team string
 }
 
 func organizationPullRequestNode(p organizationPullRequest) *node {
@@ -27,6 +27,9 @@ func organizationPullRequestNode(p organizationPullRequest) *node {
 		propAuthzRepos: []string{p.repo}, propPropertyPrefix + "state": p.state}
 	if p.project != "" {
 		properties[propAuthzProjects] = []string{p.project}
+	}
+	if p.team != "" {
+		properties[propAuthzTeams] = []string{p.team}
 	}
 	return &node{Properties: properties}
 }
@@ -716,5 +719,48 @@ func TestAnotherSubjectsCutWalkDoesNotCutTheOrganizationsPullRequests(t *testing
 	}
 	if result.Cohort == nil || len(result.Cohort.Members) != 6 || !result.Cohort.Complete || result.Cohort.Truncated {
 		t.Fatalf("cohort complete=%v truncated=%v members=%d (pool lines %+v), want the six open pull requests, complete", result.Cohort != nil && result.Cohort.Complete, result.Cohort != nil && result.Cohort.Truncated, len(result.Cohort.Members), telemetry.cohortKindBases)
+	}
+}
+
+// TestARequestedScopeNoReadNarrowsLeavesACutAnswer: the caller asks about
+// project alpha, or team alpha, which no read pushes down. More open pull
+// requests outside it than the read's pages hold come first by id, then ten
+// inside it. Whether the bounded count still sees the ten or is itself cut,
+// the answer is partial and says the read was cut: never no_match, never
+// complete.
+func TestARequestedScopeNoReadNarrowsLeavesACutAnswer(t *testing.T) {
+	for _, scope := range []struct {
+		name  string
+		scope contextfabric.RequestedScope
+		set   func(p *organizationPullRequest, inside bool)
+	}{
+		{"project", contextfabric.RequestedScope{ProjectIDs: []string{"project:alpha"}}, func(p *organizationPullRequest, inside bool) {
+			p.project = map[bool]string{true: "project:alpha", false: "project:other"}[inside]
+		}},
+		{"team", contextfabric.RequestedScope{TeamIDs: []string{"team:alpha"}}, func(p *organizationPullRequest, inside bool) {
+			p.team = map[bool]string{true: "team:alpha", false: "team:other"}[inside]
+		}},
+	} {
+		for _, outside := range []int{memberStatusPageCap*26 + 50, exactNameCandidateQueryLimit + 100} {
+			for _, anchored := range []bool{true, false} {
+				t.Run(fmt.Sprintf("%s/outside=%d/anchored=%v", scope.name, outside, anchored), func(t *testing.T) {
+					pulls := organizationPullRequests(outside+10, 0)
+					for i := range pulls {
+						scope.set(&pulls[i], i >= outside)
+					}
+					result, _ := investigateOrganizationPullRequests(t, pulls, "open", storage.Principal{OrgID: "org-1"}, anchored, scope.scope)
+					if result.Status != contextfabric.InvestigationPartial {
+						t.Fatalf("status = %q (limitations %q), want partial: the read was cut before the scope's pull requests", result.Status, result.Limitations)
+					}
+					cut := false
+					for _, limitation := range result.Limitations {
+						cut = cut || contractsv1.IsContextFabricMemberStatusPoolCutLimitation(limitation)
+					}
+					if !cut {
+						t.Fatalf("limitations %q, want the cut disclosed", result.Limitations)
+					}
+				})
+			}
+		}
 	}
 }

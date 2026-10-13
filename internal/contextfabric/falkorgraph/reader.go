@@ -1516,7 +1516,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	// statusNoMatch: members of the kind were reached and none holds the
 	// status. That is an answer (zero matches), not a question with no members.
-	statusNoMatch := (statusWalk.applied && statusWalk.reached && statusWalk.kept == 0) ||
+	// A status read cut before it kept any member is an empty, cut member set,
+	// whatever it reached: the members past the cut were not checked.
+	statusNoMatch := (statusWalk.applied && (statusWalk.reached || statusWalk.poolCut) && statusWalk.kept == 0) ||
 		(pullRequestFiltered.candidates > 0 && pullRequestFiltered.kept == 0) ||
 		(memberFiltered.candidates > 0 && memberFiltered.kept == 0)
 	// A pool filtered after its arms were cut counted the outside set over the
