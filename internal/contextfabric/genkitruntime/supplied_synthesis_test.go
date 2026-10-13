@@ -249,3 +249,21 @@ func TestSuppliedSynthesizerRejectionTextCarriesNothingTheCallerWrote(t *testing
 		t.Fatalf("error = %v, want a rejection whose text carries none of the caller's text", err)
 	}
 }
+
+func TestSynthesisDraftCannotStateADriverRank(t *testing.T) {
+	t.Parallel()
+	document := suppliedSynthesisFixture(t)
+	document["drivers"].([]any)[0].(map[string]any)["rank"] = 1
+	raw := marshalFixture(t, document)
+	_, err := newTestSuppliedSynthesizer(t, SuppliedSynthesizerConfig{}).Parse(raw)
+	if reason := requireClosedRejection(t, "a driver rank", err); reason != contextfabric.RejectionReasonOutputSchemaMismatch {
+		t.Fatalf("reason = %q, want output_schema_mismatch", reason)
+	}
+	if draft, err := ParseSynthesisOutput(raw); err == nil {
+		for _, driver := range draft.Drivers {
+			if driver.Rank != 0 {
+				t.Fatalf("model path kept a draft rank: %+v", driver)
+			}
+		}
+	}
+}

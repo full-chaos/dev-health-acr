@@ -1002,10 +1002,14 @@ import (
 // partial estimate coverage driver with source_state truncated. An answer saved
 // under v197 has no such driver.
 //
-// v198 -> v199: the scope expander names every requested origin that reached a
+// v198 -> v199: a team cohort answer to a blockers question now carries each
+// team's blocked work item count as a driver with a minted claim. An answer
+// saved under v198 has none.
+//
+// v199 -> v200: the scope expander names every requested origin that reached a
 // target, so a multi-root answer derives each shared target from every root.
-// An answer saved under v198 attributed it to one root only.
-const QueryVersion = "devhealthfacts.clickhouse.v199"
+// An answer saved under v199 attributed it to one root only.
+const QueryVersion = "devhealthfacts.clickhouse.v200"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
