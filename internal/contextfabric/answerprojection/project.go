@@ -355,7 +355,8 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 		}
 		ordered = append(ordered, driver)
 	}
-	// Standing first, then DriverID as a total tie-break. Without the
+	// Standing first, then the engine's stated Rank (a ranked driver before
+	// an unranked one), then DriverID as a total tie-break. Without the
 	// second key, two drivers of equal standing kept their canonical array
 	// order, so the SAME answer arriving with its drivers in a different
 	// order produced a different retained set under a limiting budget --
@@ -365,6 +366,11 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 		left, right := standingRank(ordered[i].Standing), standingRank(ordered[j].Standing)
 		if left != right {
 			return left < right
+		}
+		if lr, rr := ordered[i].Rank, ordered[j].Rank; (lr > 0) != (rr > 0) {
+			return lr > 0
+		} else if lr != rr {
+			return lr < rr
 		}
 		return ordered[i].DriverID < ordered[j].DriverID
 	})

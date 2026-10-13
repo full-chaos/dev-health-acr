@@ -45,9 +45,9 @@ func teamBlockersIntent(interpretation InterpretedQuestion) bool {
 	return false
 }
 
-func teamBlockersDriverID(team SubjectRef, rank int) string {
+func teamBlockersDriverID(team SubjectRef) string {
 	digest := sha256.Sum256([]byte(team.CanonicalID))
-	return fmt.Sprintf("team-blockers-%04d-%s", rank, hex.EncodeToString(digest[:])[:12])
+	return "team-blockers-" + hex.EncodeToString(digest[:])[:16]
 }
 
 func teamBlockersClaimID(team SubjectRef) string {
@@ -165,7 +165,7 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 			event.SkippedDuplicate++
 			continue
 		}
-		driverID, claimID := teamBlockersDriverID(observation.team, rank), teamBlockersClaimID(observation.team)
+		driverID, claimID := teamBlockersDriverID(observation.team), teamBlockersClaimID(observation.team)
 		_, driverClash := taken[driverID]
 		_, claimClash := takenClaims[claimID]
 		if driverClash || claimClash {
@@ -176,7 +176,7 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 		title := teamBlockersTitle(observation)
 		driver := DriverJudgment{
 			DriverID: driverID, Standing: DriverContributing, Category: "blockers",
-			Title: title, Summary: title + ".",
+			Rank: rank + 1, Title: title, Summary: title + ".",
 			AffectedSubjects: []SubjectRef{observation.team}, EvidenceRefIDs: observation.fact.EvidenceRefIDs,
 			Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.95, Current: true,
 		}

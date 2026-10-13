@@ -3237,6 +3237,11 @@
               "maxLength": 2000,
               "type": "string"
             },
+            "rank": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
             "standing": {
               "enum": [
                 "principal",

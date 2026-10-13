@@ -308,3 +308,26 @@ func TestTeamBlockersCoveredCheckKeysOnSubjectKindAndID(t *testing.T) {
 		t.Fatalf("drivers = %d, want the team driver kept", len(got.Drivers))
 	}
 }
+
+func TestTeamBlockersDriverIDStaysTheSameWhenItsCountRankChanges(t *testing.T) {
+	a, b, _ := teamsAB()
+	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{{Subject: a}, {Subject: b}}}
+	interpretation := InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}
+	idsAndRanks := func(countA, countB int64) map[string][2]int {
+		got := teamBlockersDrivers(interpretation, cohort, []CanonicalFact{blockersFact(a, SourceAvailable, intp(countA), nil), blockersFact(b, SourceAvailable, intp(countB), nil)}, nil, nil, ItemAllocation{}, 0)
+		out := map[string][2]int{}
+		for _, d := range got.Drivers {
+			out[d.AffectedSubjects[0].CanonicalID+"|"+d.DriverID] = [2]int{d.Rank, 0}
+		}
+		return out
+	}
+	before, after := idsAndRanks(9, 3), idsAndRanks(3, 9)
+	for key, rank := range before {
+		if _, same := after[key]; !same {
+			t.Fatalf("driver id changed with the count rank: %q not in %v", key, after)
+		}
+		if after[key] == rank {
+			t.Fatalf("rank did not follow the counts for %q: %v -> %v", key, rank, after[key])
+		}
+	}
+}

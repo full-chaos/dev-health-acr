@@ -3036,6 +3036,11 @@
           "type": "string",
           "maxLength": 2000
         },
+        "rank": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
         "current": {
           "type": "boolean"
         }

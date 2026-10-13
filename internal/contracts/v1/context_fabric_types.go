@@ -1709,6 +1709,8 @@ type ContextFabricRelationshipEdge struct {
 	EvidenceRefIDs  []string                      `json:"evidence_ref_ids"`
 }
 
+const ContextFabricDriverRankMaxValue = 10000
+
 type ContextFabricDriverJudgment struct {
 	DriverID         string                      `json:"driver_id"`
 	Standing         ContextFabricDriverStanding `json:"standing"`
@@ -1728,7 +1730,10 @@ type ContextFabricDriverJudgment struct {
 	EpistemicStatus ContextFabricEpistemicStatus  `json:"epistemic_status"`
 	Confidence      float64                       `json:"confidence"`
 	Qualification   string                        `json:"qualification,omitempty"`
-	Current         bool                          `json:"current"`
+	// Rank is the order the engine states among drivers of one standing,
+	// 1 first. Zero means the engine stated none. It is not a score.
+	Rank    int  `json:"rank,omitempty"`
+	Current bool `json:"current"`
 }
 
 type ContextFabricFinding struct {
