@@ -212,7 +212,11 @@ func TestLiveMembershipStatementRunsPerTick(t *testing.T) {
 		if _, _, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: changedOrg, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor}); err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("SLOPE steady call %d: membership statements=%d", call, counting.membership-before)
+		ran := counting.membership - before
+		t.Logf("SLOPE steady call %d: membership statements=%d", call, ran)
+		if limit := map[bool]int{true: 2, false: 1}[call == 0]; ran > limit {
+			t.Fatalf("steady call %d ran the membership statement %d times, want at most %d", call, ran, limit)
+		}
 	}
 	if err := direct.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatal(err)
@@ -224,4 +228,10 @@ WHERE type = 'QueryFinish' AND query_start_time_microseconds >= toDateTime64(?, 
 		t.Fatal(err)
 	}
 	t.Logf("SLOPE steady 4 calls: statements=%d peak_memory=%d", count, peak)
+	if count == 0 {
+		t.Fatal("the query log holds no membership statement: the measure did not happen")
+	}
+	if peak >= 32<<20 {
+		t.Fatalf("caught-up membership statement peaked at %d bytes at 4000 subjects, want under 32 MiB", peak)
+	}
 }

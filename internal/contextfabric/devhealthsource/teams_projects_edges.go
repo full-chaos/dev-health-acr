@@ -471,9 +471,15 @@ func membershipStatement(cursor cursorState, ingest, pruned bool) string {
 	// event_id in the tiebreaker, both the RelationshipID (below) and the
 	// keyset-pagination cursor would collide on it.
 	rowKey := rowKeySQL("subject_kind", "repo_id_str", "subject_id", "provider", "project_id", "event_id")
-	var changedTouches, changedSuperseded, changedPresence string
+	var changedTouches, changedSuperseded, changedPresence, incrementalSettings string
 	if pruned {
 		changedTouches, changedSuperseded, changedPresence = changedMembershipFilters(cursor, ingest)
+		if !cursor.Since.IsZero() {
+			// Measured on a real server: with the subjects pruned, the memory
+			// left is the per-thread buffers of the three arms (about 50 MB at
+			// 4 threads, 17 MB at one), not the data.
+			incrementalSettings = " SETTINGS max_threads = 1"
+		}
 	}
 	// toDateTime64(0, 3, 'UTC') matches project_membership_transitions.
 	// occurred_at's own declared scale (DateTime64(3)) -- the NULL branch of
@@ -512,7 +518,7 @@ FROM (
   LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
 )
-WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColumn, rowKey)
+WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColumn, rowKey) + incrementalSettings
 }
 
 func querySubjectProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, telemetry *presenceTelemetryLedger, ingest bool) ([]candidate, bool, error) {
