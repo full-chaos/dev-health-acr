@@ -818,6 +818,13 @@
             "pruned"
           ]
         },
+        "source_state_note": {
+          "type": "string",
+          "maxLength": 96
+        },
+        "summary_corrected": {
+          "type": "boolean"
+        },
         "confidence": {
           "type": "number",
           "minimum": 0,

@@ -1535,6 +1535,13 @@
                 "pruned"
               ]
             },
+            "source_state_note": {
+              "type": "string",
+              "maxLength": 96
+            },
+            "summary_corrected": {
+              "type": "boolean"
+            },
             "standing": {
               "type": "string",
               "description": "Open vocabulary; documented values: principal, contributing, symptom, context, withheld. A client must tolerate values it does not know.",
@@ -6357,6 +6364,13 @@
                 "not_applicable",
                 "pruned"
               ]
+            },
+            "source_state_note": {
+              "type": "string",
+              "maxLength": 96
+            },
+            "summary_corrected": {
+              "type": "boolean"
             },
             "standing": {
               "type": "string",
