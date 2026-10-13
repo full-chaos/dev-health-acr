@@ -1026,6 +1026,18 @@ func validateSemanticFrameBounds(frame QuestionFrame) error {
 			return fmt.Errorf("discovered member_qualifier_value is not valid beside its qualifier and member kind")
 		}
 	}
+	if expression.Org != nil {
+		kind := SubjectKind("")
+		if expression.Org.MemberKind != nil {
+			kind = *expression.Org.MemberKind
+		}
+		if !ValidMemberQualifier(expression.Org.MemberQualifier) {
+			return fmt.Errorf("organization member_qualifier %q is not a vocabulary member", expression.Org.MemberQualifier)
+		}
+		if (kind == "" && (expression.Org.MemberQualifier != "" || expression.Org.MemberQualifierValue != "")) || !ValidMemberQualifierValue(kind, expression.Org.MemberQualifier, expression.Org.MemberQualifierValue) {
+			return fmt.Errorf("organization member_qualifier_value is not valid beside its qualifier and member kind")
+		}
+	}
 	if expression.Explicit != nil {
 		if len(expression.Explicit.Operands) > SemanticStateMaxOperands {
 			return over(SemanticStateBoundOperands, "%d operands exceeds %d", len(expression.Explicit.Operands), SemanticStateMaxOperands)

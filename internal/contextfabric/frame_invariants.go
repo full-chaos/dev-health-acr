@@ -619,6 +619,9 @@ func checkI17(frame QuestionFrame) (FrameValidationFailure, bool) {
 	if org != nil && org.MemberKind != nil && !contractsv1.ValidContextFabricSubjectKind(*org.MemberKind) {
 		return FrameValidationFailure{Invariant: FrameInvariantI17, Phase: FrameValidationPhaseA1, Detail: FrameFailureMemberKindInvalid}, true
 	}
+	if org != nil && org.MemberKind == nil && (org.MemberQualifier != "" || org.MemberQualifierValue != "") {
+		return FrameValidationFailure{Invariant: FrameInvariantI17, Phase: FrameValidationPhaseA1, Detail: FrameFailureMemberQualifierInvalid}, true
+	}
 	if org != nil && org.MemberKind != nil {
 		if !ValidMemberQualifier(org.MemberQualifier) {
 			return FrameValidationFailure{Invariant: FrameInvariantI17, Phase: FrameValidationPhaseA1, Detail: FrameFailureMemberQualifierInvalid}, true

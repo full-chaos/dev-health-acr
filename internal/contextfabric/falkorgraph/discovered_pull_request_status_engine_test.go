@@ -67,6 +67,9 @@ func TestADiscoveredKindStatusNoValueFitsIsStatedNotServedAsFiltered(t *testing.
 		frame.SubjectExpression.Discovered.MemberQualifier = contextfabric.MemberQualifierStatus
 		return frame
 	})
+	if got := len(servedCohortIDs(result)); got != len(pulls) {
+		t.Fatalf("served %d pull requests, want the unfiltered %d", got, len(pulls))
+	}
 	want := contractsv1.ContextFabricMemberStatusUnappliedLimitation("pull_request")
 	for _, l := range result.Limitations {
 		if l == want {
