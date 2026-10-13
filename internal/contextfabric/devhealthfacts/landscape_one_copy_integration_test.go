@@ -6,6 +6,8 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -157,5 +159,16 @@ func TestLandscapeServesOneCopyOfTheStatsForTeamAndProject(t *testing.T) {
 	if peak == 0 {
 		t.Fatal("memory peak of the changed statements is 0: the measurement did not happen")
 	}
-	t.Logf("MEMORY-PEAK changed landscape statements: %d bytes", peak)
+	const peakBound = 256 << 20
+	figure := fmt.Sprintf("MEMORY-PEAK changed landscape statements: %d bytes (%.1f MiB), bound %d MiB", peak, float64(peak)/(1<<20), peakBound>>20)
+	t.Log(figure)
+	if summary := os.Getenv("GITHUB_STEP_SUMMARY"); summary != "" {
+		if file, openErr := os.OpenFile(summary, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644); openErr == nil {
+			fmt.Fprintln(file, figure)
+			_ = file.Close()
+		}
+	}
+	if peak > peakBound {
+		t.Fatalf("%s: the changed statements exceed the memory bound", figure)
+	}
 }
