@@ -56,6 +56,18 @@ func OrgWideScopeStatementForTest(statement string) (orgWide string, filtered, o
 	return out, out != statement, ok
 }
 
+// UnnarrowedAuthorizationStatementForTest replaces the candidate-narrowed
+// work-item authorization relation in a served statement with the
+// organization-wide one and changes nothing else. It reports whether a
+// narrowed relation was found.
+func UnnarrowedAuthorizationStatementForTest(statement string) (string, bool) {
+	out := statement
+	for _, candidates := range scopeCandidateSets() {
+		out = strings.ReplaceAll(out, authorizationJoinSQL(candidates), authorizationJoinSQL(""))
+	}
+	return out, out != statement
+}
+
 // OrgWideScopeReadsForTest names each organization-wide read a statement
 // still carries: the whole organization's link rows, a work item table joined
 // or streamed whole, the unfiltered membership touches or transition

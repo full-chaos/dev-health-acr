@@ -3,6 +3,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,9 +71,9 @@ func TestScopeExpanderWorkItemsAuthorizeRepoLessItemsForARestrictedPrincipalOnRe
 	// Repo-less items of a team and projects nobody requested, linked to the
 	// granted repository: rows the narrowed relation leaves out.
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at)
-SELECT concat('other-', toString(number)), ?, ?, 'linear', 'other', 'open', '', '', concat('OTHER-', toString(number % 50)), ? FROM numbers(2000)`, noRepo, orgID, at)
+SELECT concat('other-', toString(number)), ?, ?, 'linear', 'other', 'open', '', '', concat('OTHER-', toString(number % 50)), ? FROM numbers(20000)`, noRepo, orgID, at)
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
-SELECT ?, concat('other-', toString(number)), toUInt32(number + 100), 1, 'native', '', ?, ? FROM numbers(2000)`, granted, at, orgID)
+SELECT ?, concat('other-', toString(number)), toUInt32(number + 100), 1, 'native', '', ?, ? FROM numbers(20000)`, granted, at, orgID)
 
 	recorder := &recordingQueryClient{inner: query}
 	expander := devhealthfacts.NewScopeExpander(recorder)
@@ -116,6 +117,27 @@ SELECT ?, concat('other-', toString(number)), toUInt32(number + 100), 1, 'native
 			if !slices.Equal(scoped, whole) {
 				t.Errorf("rows differ from the organization-wide form:\nscoped   %q\norg-wide %q", scoped, whole)
 			}
+
+			// The gain on record, not a guard: the statement as served, and
+			// the same statement with the organization-wide authorization
+			// relation.
+			unnarrowed, found := devhealthfacts.UnnarrowedAuthorizationStatementForTest(captured.statement)
+			if !found {
+				t.Fatal("the served statement carries no candidate-narrowed authorization relation")
+			}
+			peak := func(statement string) uint64 {
+				mark := serverNowMicros(t, ctx, direct)
+				rows, err := query.Query(ctx, statement, captured.bindings)
+				if err != nil {
+					t.Fatalf("run statement: %v", err)
+				}
+				for rows.Next() {
+				}
+				_ = rows.Close()
+				fragment, _, _ := strings.Cut(tc.fragment, "\n")
+				return peakOf(t, ctx, direct, "work_items", fragment, mark)
+			}
+			t.Logf("PEAK %s restricted principal: served (narrowed) %d bytes, organization-wide authorization relation %d bytes", tc.name, peak(captured.statement), peak(unnarrowed))
 		})
 	}
 }
