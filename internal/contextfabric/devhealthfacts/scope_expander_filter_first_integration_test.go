@@ -30,20 +30,20 @@ const workItemSelectionCeiling = uint64(statementMemorySlope * 33_000_000)
 // it reads (query_log's tables).
 // devhealthschema:not-a-production-replica: these names select the guarded statements' query_log rows; they declare no table.
 var scopeExpanderStatements = []struct {
-	label, table, fragment string
-	threadBound            bool
+	label, table, fragment   string
+	threadBound, unmergedLog bool
 }{
-	{"projectRepositories", "work_items", "min(p.id), argMax(l.provenance, l.link_rank)", false},
-	{"projectRepositoriesAsOf", "work_items", "max(a.via_history) AS via_history", false},
-	{"teamRepositories", "team_repo_ownership", "argMin(source, source_rank) AS best_source", false},
-	{"teamWorkItems", "work_items", "min(a.team_id) AS origin_id", true},
-	{"projectWorkItems", "work_items", "p.id)) AS origin_id", true},
-	{"projectLinkedRepositories", "work_items", "AS link_state", false},
-	{"projectUnlinkedIssueCount", "work_items", "SELECT uniqExact(w.work_item_id)\nFROM work_items AS w FINAL", false},
-	{"projectUnlinkedIssueCountAsOf", "work_items", "SELECT uniqExact(a.work_item_id)", false},
-	{"teamUnlinkedIssueCount", "work_items", "SELECT uniqExact(w.work_item_id)\nFROM (SELECT provider, id, team_id", false},
-	{"historicalDropCount", "work_graph_issue_pr", "AS ever_matched", false},
-	{"historicalTouchCount", "project_membership_transitions", "AS malformed_touches", false},
+	{"projectRepositories", "work_items", "min(p.id), argMax(l.provenance, l.link_rank)", false, true},
+	{"projectRepositoriesAsOf", "work_items", "max(a.via_history) AS via_history", false, false},
+	{"teamRepositories", "team_repo_ownership", "argMin(source, source_rank) AS best_source", false, false},
+	{"teamWorkItems", "work_items", "min(a.team_id) AS origin_id", true, false},
+	{"projectWorkItems", "work_items", "p.id)) AS origin_id", true, false},
+	{"projectLinkedRepositories", "work_items", "AS link_state", false, true},
+	{"projectUnlinkedIssueCount", "work_items", "SELECT uniqExact(w.work_item_id)\nFROM work_items AS w FINAL", false, true},
+	{"projectUnlinkedIssueCountAsOf", "work_items", "SELECT uniqExact(a.work_item_id)", false, false},
+	{"teamUnlinkedIssueCount", "work_items", "SELECT uniqExact(w.work_item_id)\nFROM (SELECT provider, id, team_id", false, false},
+	{"historicalDropCount", "work_graph_issue_pr", "AS ever_matched", false, false},
+	{"historicalTouchCount", "project_membership_transitions", "AS malformed_touches", false, false},
 }
 
 // fillScopeOrganization adds the every-root filler (work items, attributions,
@@ -72,8 +72,12 @@ SELECT ?, NULL, ?, 'work_item', concat(?, '-', repeat('x', 64), '-', toString(nu
 			t.Fatalf("%s filler: %v", label, err)
 		}
 	}
-	// One part per table at both sizes: the readings then follow the rows,
-	// not how many parts the inserts happen to leave unmerged.
+}
+
+// mergeScopeTables leaves one part per filled table, so the guarded readings
+// follow the rows, not how many parts the inserts happen to leave unmerged.
+func mergeScopeTables(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
+	t.Helper()
 	for _, table := range []string{"work_items", "work_item_team_attributions", "team_repo_ownership", "work_graph_issue_pr", "git_pull_requests", "project_membership_transitions"} {
 		if err := direct.Exec(ctx, `OPTIMIZE TABLE `+table+` FINAL`); err != nil {
 			t.Fatalf("optimize %s: %v", table, err)
@@ -313,12 +317,34 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+max(arrayMemoryFloor, small.spread+large.spread)
 	}
 
+	// The guard reads merged parts; production tables are not one part, so
+	// the project statements are also logged on the layout the inserts
+	// leave, every run, at both sizes.
+	unmerged := func(t *testing.T, size string) {
+		statements := served(t)
+		for _, statement := range scopeExpanderStatements {
+			if !statement.unmergedLog {
+				continue
+			}
+			var peaks []uint64
+			for attempt := 0; attempt < 3; attempt++ {
+				peak, _ := runPeak(t, statement.table, statement.fragment, statements[statement.label].scoped)
+				peaks = append(peaks, peak)
+			}
+			t.Logf("UNMERGED %s %s peaks %v", statement.label, size, peaks)
+		}
+	}
+
 	fillScopeOrganization(t, ctx, direct, fixture, "small", 100_000)
+	unmerged(t, "small")
+	mergeScopeTables(t, ctx, direct)
 	smallStatements := served(t)
 	t.Run("rows at the smaller size", func(t *testing.T) { differential(t, smallStatements) })
 	measure(t, smallStatements)
 	small := measure(t, smallStatements)
 	fillScopeOrganization(t, ctx, direct, fixture, "large", 200_000)
+	unmerged(t, "large")
+	mergeScopeTables(t, ctx, direct)
 	largeStatements := served(t)
 	t.Run("rows at the larger size", func(t *testing.T) { differential(t, largeStatements) })
 	large := measure(t, largeStatements)
