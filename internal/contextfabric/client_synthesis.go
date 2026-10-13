@@ -593,17 +593,12 @@ func (t SlogEngineTelemetry) RecordClientSynthesisDecision(ctx context.Context, 
 	t.logger.Log(ctx, slog.LevelInfo, ClientSynthesisDecisionLogMessage, args...)
 }
 
-// clientSynthesisBodyShare is the share of the caller's byte budget the
-// synthesis input and its envelope may take. The answer is fitted to the rest
-// (see effectiveResponseBudget), so the two sum within the budget.
+// clientSynthesisBodyShare is the most of the caller's byte budget the
+// synthesis input and its envelope may take. The answer is fitted to what the
+// input actually leaves (see answerFitBytes), so the two sum within the budget
+// and the answer keeps at least the other half.
 func clientSynthesisBodyShare(budget int) int {
 	return budget / 2
-}
-
-// clientSynthesisAnswerBudget is the byte budget left for the answer of a
-// client synthesis turn that carries the input in the same body.
-func clientSynthesisAnswerBudget(budget int) int {
-	return budget - clientSynthesisBodyShare(budget)
 }
 
 // inputBoundWithin is the byte bound of the synthesis input for a caller byte

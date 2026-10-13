@@ -135,7 +135,7 @@ func (r AnswerBudgetRefusal) Unwrap() error { return ErrAnswerExceedsBudget }
 // member set, and therefore the count, it already had. The retry path below
 // computes its own, from its own pass.
 func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Principal, plan *AnswerPlan, result InvestigationResult, consumed ItemAllocation, firstPass assemblyTelemetry, params synthesisAssemblyParams, cardinality MembershipCardinality) (InvestigationResult, assemblyTelemetry, error) {
-	budget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: answerFitBytes(params.Request, plan.Budget.MaxSerializedBytes)}
+	budget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: answerFitBytes(params.Request, plan.Budget.MaxSerializedBytes, firstPass.ClientSynthesisInput)}
 	if budget.MaxItems <= 0 && budget.MaxSerializedBytes <= 0 {
 		// Nothing to measure against. An engine composed without either
 		// ceiling behaves exactly as it did before this slice: it plans,
@@ -578,6 +578,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	firstPass.RetryAttempted = true
 	retried, consumedRetryAllocation, retryPending, retryCardinality, retryErr := e.synthesizeAndAssemble(ctx, principal, retryParams)
 	retryPending.RetryAttempted = firstPass.RetryAttempted
+	budget.MaxSerializedBytes = answerFitBytes(params.Request, plan.Budget.MaxSerializedBytes, retryPending.ClientSynthesisInput)
 	if retryErr != nil {
 		// PROPAGATE the retry's own error. An earlier revision discarded it
 		// and returned a budget refusal, so a transient ErrModelUnavailable
@@ -1205,6 +1206,11 @@ func (e *Engine) refusalPlan(plan *AnswerPlan, measurement ResponseMeasurement) 
 func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Principal, plan *AnswerPlan, params synthesisAssemblyParams, stage string, doc, measurementInput InvestigationResult, finalize bool, allocation ItemAllocation, facts CanonicalFactBundle, pending *assemblyTelemetry, planPass, recordPass int, cardinality MembershipCardinality, budget ResponseBudget, overrun contractsv1.ContextFabricBudgetOverrun) (served InvestigationResult, ok bool, err error) {
 	// A zero service ceiling means unbounded, as everywhere else the engine
 	// reads it; a ceiling at or below the target leaves nothing to widen to.
+	if clientSynthesisWithoutDraft(params.Request) && params.Request.Options.MaxSerializedBytes > 0 {
+		// The body carries the synthesis input, so the caller's byte budget is
+		// the line: the answer is not widened to the service ceiling.
+		return InvestigationResult{}, false, nil
+	}
 	if overrun != contractsv1.ContextFabricBudgetOverrunBytes || budget.MaxSerializedBytes <= 0 ||
 		(e.maxSerializedBytes > 0 && e.maxSerializedBytes <= budget.MaxSerializedBytes) {
 		return InvestigationResult{}, false, nil

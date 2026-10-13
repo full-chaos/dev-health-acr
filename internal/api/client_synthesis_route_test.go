@@ -691,3 +691,112 @@ func TestClientSynthesisCoreOverTheCallerBudgetIsABudgetRefusal(t *testing.T) {
 		t.Fatalf("status = %d body=%s, want 413 budget_refusal", recorder.Code, recorder.Body.String())
 	}
 }
+
+// demoCohortFixture is the shape of a team cohort question put to a client
+// model: thirteen teams, each with health, operational deficiency and blocker
+// facts that carry prose and evidence references.
+func demoCohortFixture() clientRouteFixture { return heavyDemoCohortFixture(12) }
+
+func heavyDemoCohortFixture(repeat int) clientRouteFixture {
+	fixture := cohortFixture(13)
+	fixture.interpreted.FactRequirements = []contextfabric.FactRequirement{
+		{Kind: contextfabric.FactHealth}, {Kind: contextfabric.FactOperationalDeficiencies}, {Kind: contextfabric.FactBlockers},
+	}
+	facts := fixture.facts.Facts
+	for index, member := range fixture.cohort.Members {
+		note := strings.Repeat(fmt.Sprintf("rule %02d fired on the team repositories; ", index), repeat)
+		facts = append(facts,
+			contextfabric.CanonicalFact{
+				Kind: contextfabric.FactOperationalDeficiencies, Subject: member.Subject,
+				Fields:         map[string]contextfabric.FactValue{"severity": contextfabric.StringFactValue("high"), "rationale": contextfabric.StringFactValue(note)},
+				EvidenceRefIDs: []string{fmt.Sprintf("evidence_deficiency_%03d", index)}, SourceState: contextfabric.SourceAvailable, Source: "ops", SourceVersion: "v1",
+			},
+			contextfabric.CanonicalFact{
+				Kind: contextfabric.FactBlockers, Subject: member.Subject,
+				Fields:         map[string]contextfabric.FactValue{"blocked_work_item_count": contextfabric.IntegerFactValue(int64(3 + index)), "note": contextfabric.StringFactValue(note)},
+				EvidenceRefIDs: []string{fmt.Sprintf("evidence_blockers_%03d", index)}, SourceState: contextfabric.SourceAvailable, Source: "ops", SourceVersion: "v1",
+			},
+		)
+	}
+	fixture.facts.Facts = facts
+	fixture.facts.Coverage.Sources = append(fixture.facts.Coverage.Sources,
+		contextfabric.SourceObservation{Source: "canonical_fact:operational_deficiencies", State: contextfabric.SourceAvailable},
+		contextfabric.SourceObservation{Source: "canonical_fact:blockers", State: contextfabric.SourceAvailable})
+	return fixture
+}
+
+// The shape put to a client model is served, never refused, at every budget a
+// client sends: the answer and the synthesis input share the body.
+func TestClientSynthesisTeamCohortIsServedAtTheBudgetsClientsSend(t *testing.T) {
+	for _, budget := range []int{60000, 65536, 262144} {
+		t.Run(fmt.Sprint(budget), func(t *testing.T) {
+			rig := newClientRouteRig(t, demoCohortFixture())
+			recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeClient, func(r *contractsv1.ContextFabricInvestigationRequest) { r.Options.MaxSerializedBytes = budget })
+			if recorder.Code != http.StatusOK || recorder.Body.Len() > budget {
+				t.Fatalf("status = %d, %d body bytes, want 200 within %d: %.300s", recorder.Code, recorder.Body.Len(), budget, recorder.Body.String())
+			}
+			envelope := decodeEnvelope(t, recorder)
+			if envelope.SynthesisInput == nil || envelope.Status == contractsv1.ContextFabricInvestigationNoMatch {
+				t.Fatalf("status = %q synthesis input = %v: want a served answer with its input", envelope.Status, envelope.SynthesisInput != nil)
+			}
+			t.Logf("SIZE budget=%d body=%d input=%d bounded=%v drivers=%d", budget, recorder.Body.Len(), len(envelope.SynthesisInput.Input), envelope.SynthesisInput.Bounded, len(envelope.Drivers))
+		})
+	}
+}
+
+// A cohort whose facts are far larger than the budget share is still served:
+// the input is cut and the cut is stated, the answer is not refused.
+func TestClientSynthesisHeavyTeamCohortIsServedWithTheCutDisclosed(t *testing.T) {
+	const budget = 60000
+	rig := newClientRouteRig(t, heavyDemoCohortFixture(120))
+	recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeClient, func(r *contractsv1.ContextFabricInvestigationRequest) { r.Options.MaxSerializedBytes = budget })
+	if recorder.Code != http.StatusOK || recorder.Body.Len() > budget {
+		t.Fatalf("status = %d, %d body bytes, want 200 within %d: %.300s", recorder.Code, recorder.Body.Len(), budget, recorder.Body.String())
+	}
+	envelope := decodeEnvelope(t, recorder)
+	if envelope.SynthesisInput == nil || !envelope.SynthesisInput.Bounded || !slices.Contains(envelope.Limitations, contractsv1.ContextFabricSynthesisInputBoundedLimitation) {
+		t.Fatalf("bounded = %v limitations = %v: want the cut stated", envelope.SynthesisInput != nil && envelope.SynthesisInput.Bounded, envelope.Limitations)
+	}
+}
+
+// A team cohort answer is refused only where its body cannot fit: the smallest
+// budget that is served is the size of the body served there, so no band of
+// budgets is refused that the body would have fitted. Below it the refusal
+// comes from the engine and names the caller's budget.
+func TestClientSynthesisRefusesOnlyWhereTheBodyCannotFit(t *testing.T) {
+	for name, fixture := range map[string]func() clientRouteFixture{
+		"thirteen_teams": demoCohortFixture,
+		"twenty_five":    func() clientRouteFixture { return cohortFixture(25) },
+		"forty":          func() clientRouteFixture { return cohortFixture(40) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			post := func(budget int) *httptest.ResponseRecorder {
+				return newClientRouteRig(t, fixture()).post(t, contractsv1.ContextFabricSynthesisModeClient, func(r *contractsv1.ContextFabricInvestigationRequest) {
+					r.Options.MaxSerializedBytes = budget
+					r.Options.MaxCohortMembers = 200
+				})
+			}
+			low, high := contractsv1.ContextFabricSerializedBytesMin, 120000
+			for high-low > 50 {
+				if middle := (low + high) / 2; post(middle).Code == http.StatusOK {
+					high = middle
+				} else {
+					low = middle
+				}
+			}
+			served := post(high)
+			if served.Code != http.StatusOK || served.Body.Len() > high || high-served.Body.Len() > high/100 {
+				t.Fatalf("smallest served budget %d, body there %d (status %d): want the body to be within 1%% of the budget", high, served.Body.Len(), served.Code)
+			}
+			below := high - high/20
+			refused := post(below)
+			var refusal contractsv1.ErrorEnvelope
+			if refused.Code != http.StatusRequestEntityTooLarge || json.Unmarshal(refused.Body.Bytes(), &refusal) != nil {
+				t.Fatalf("budget %d: status = %d, want 413", below, refused.Code)
+			}
+			if maximum, _ := refusal.Error.Details["max_serialized_bytes"].(float64); int(maximum) != below {
+				t.Errorf("max_serialized_bytes = %v, want the caller's %d", refusal.Error.Details["max_serialized_bytes"], below)
+			}
+		})
+	}
+}
