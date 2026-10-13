@@ -43,11 +43,50 @@ const requestedRepositoryReach = `if(r.1 != '', has({ids:Array(String)}, r.1), h
 // (window, unit, repository), with n and the unresolved columns taken over
 // the unit's whole reference set.
 func requestedSplitRows(memberships []string, spanSentinel bool, scope membershipScope, unitColumns bool) string {
+	return foldedSplitRows(memberships, spanSentinel, scope, requestedRepositoryReach, unitColumns, "")
+}
+
+// linkedPullRequestSplitRows returns, per window, kept work unit and
+// resolved (repository, pull request) in linked: win, work_unit_id, repo_uuid,
+// pr_number, c, n, effort_value, theme_distribution_json, bugfix_share,
+// span_from. They are the whole-organization split's rows grouped per
+// reference as well, for those pull requests. linked is an Array(Tuple(String, String, String)) expression
+// of (repository id, PR number, team id).
+func linkedPullRequestSplitRows(memberships []string, scope membershipScope, linked string) string {
+	return foldedSplitRows(memberships, false, scope, linkedPullRequestReach(linked), false, linked)
+}
+
+// linkedPullRequestReach is true for a reference r that resolves to a linked
+// (repository, pull request): a direct repository id with its number, or a
+// (provider, name, number) lookup equal to a linked repository's own lookup
+// row with the linked number.
+func linkedPullRequestReach(linked string) string {
+	return `if(r.1 != '', has(arrayMap(x -> (x.1, x.2), ` + linked + `), (r.1, r.4)), has((
+						SELECT groupUniqArray((rl.provider, rl.repo, lx.lp_pr)) FROM (
+							SELECT arrayJoin(` + linked + `) AS lp, lp.1 AS lp_repo, lp.2 AS lp_pr
+						) AS lx
+						INNER JOIN ` + repoLookupRows + ` AS rl ON rl.repo_uuid = lx.lp_repo), (r.2, r.3, r.4)))`
+}
+
+// foldedSplitRows folds each kept unit's references once (see the top of this
+// file). reach decides which units are kept. With linked empty the rows are
+// per requested repository; otherwise per linked (repository, pull request).
+func foldedSplitRows(memberships []string, spanSentinel bool, scope membershipScope, reach string, unitColumns bool, linked string) string {
 	wins := "arrayFilter(w -> w >= 0, [" + strings.Join(memberships, ", ") + "])"
 	if spanSentinel {
 		wins = "arrayConcat([" + spanSentinelWindow + "], " + wins + ")"
 	}
 	rowCols, unitAgg := "", ""
+	head := `SELECT win, work_unit_id, repo_uuid,
+	countEqual(arrayMap(p -> p.1, pairs), repo_uuid) AS c, length(pairs) AS n,`
+	expand := "ARRAY JOIN " + requestedRepositories + " AS repo_uuid"
+	if linked != "" {
+		head = `SELECT win, work_unit_id, rp.1 AS repo_uuid, rp.2 AS pr_number,
+	countEqual(pairs, (rp.1, concat(rp.1, '#', rp.2))) AS c, length(pairs) AS n,`
+		unitAgg = `
+		groupUniqArray((ref_repo, pr_number)) AS repo_prs,`
+		expand = "ARRAY JOIN arrayFilter(x -> x.1 != '' AND has(arrayMap(l -> (l.1, l.2), " + linked + "), x), repo_prs) AS rp"
+	}
 	if unitColumns {
 		rowCols = `,
 	from_ts, to_ts,
@@ -58,8 +97,7 @@ func requestedSplitRows(memberships []string, spanSentinel bool, scope membershi
 		any(from_ts) AS from_ts, any(to_ts) AS to_ts,
 		groupUniqArray((ref_repo, pr_number)) AS repo_prs,`
 	}
-	return `SELECT win, work_unit_id, repo_uuid,
-	countEqual(arrayMap(p -> p.1, pairs), repo_uuid) AS c, length(pairs) AS n,
+	return head + `
 	effort_value, theme_distribution_json, bugfix_share, span_from` + rowCols + `
 FROM (
 	SELECT work_unit_id,
@@ -89,7 +127,7 @@ FROM (
 						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, effort_value, theme_distribution_json,
 							ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS unit_bugfix_share,
 							` + prRefsExpression + ` AS pr_refs,
-							arrayExists(r -> ` + requestedRepositoryReach + `, ` + repoRefsExpression + `) AS reaches
+							arrayExists(r -> ` + reach + `, ` + repoRefsExpression + `) AS reaches
 						FROM work_unit_investments
 						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
 					)
@@ -103,7 +141,7 @@ FROM (
 	)
 	GROUP BY work_unit_id
 )
-ARRAY JOIN ` + requestedRepositories + ` AS repo_uuid
+` + expand + `
 ARRAY JOIN wins AS win
 `
 }

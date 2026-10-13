@@ -185,12 +185,31 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 		"team-1", "team-1", s.at, splitDiffOrg, "linear", uint8(1))
 	s.exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
 		splitDiffOrg, "linear", "team-1", "proj-1", nil, "native", ts(2026, 1, 1, 0, 0, 0), nil, s.at)
-	s.exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL)`,
-		"i-1", repoUUID("sd-r3"), splitDiffOrg, "title", s.at, "proj-1")
-	s.exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		repoUUID("sd-r3"), "i-1", uint32(7), float32(1), "native", "", s.at, splitDiffOrg)
-	s.exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
-		repoUUID("sd-r3"), splitDiffOrg, uint32(7), "pr", "open", s.at, s.at, "feature", "")
+	s.exec(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"proj-2", splitDiffOrg, "linear", nil, "proj-2", uint8(1), "active", "", s.at)
+	s.exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
+		"team-2", "team-2", s.at, splitDiffOrg, "linear", uint8(1))
+	s.exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		splitDiffOrg, "linear", "team-2", "proj-2", nil, "native", ts(2026, 1, 1, 0, 0, 0), nil, s.at)
+	// Linked pull requests: direct and issue-side references, a pull request
+	// in a repository the team owns (counted by the owned arm, not here), one
+	// linked to both teams, and high fan-out units.
+	for i, link := range []struct {
+		project, repo string
+		number        int
+	}{
+		{"proj-1", "sd-r3", 7}, {"proj-1", "sd-r1", 1}, {"proj-2", "sd-r3", 7}, {"proj-2", "sd-r1", 9},
+		{"proj-2", "sd-b5", 1005}, {"proj-2", "sd-b3", 5010}, {"proj-2", "sd-b0", 20000}, {"proj-2", "sd-b1", 40000},
+		{"proj-1", "sd-b3", 20017}, {"proj-1", "sd-b6", 1006}, {"proj-1", "sd-dup1", 1}, {"proj-1", "sd-r2", 4},
+	} {
+		item := fmt.Sprintf("i-%d", i)
+		s.exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL)`,
+			item, repoUUID(link.repo), splitDiffOrg, "title", s.at, link.project)
+		s.exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoUUID(link.repo), item, uint32(link.number), float32(1), "native", "", s.at, splitDiffOrg)
+		s.exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+			repoUUID(link.repo), splitDiffOrg, uint32(link.number), "pr", "open", s.at, s.at, "feature", "")
+	}
 
 	rows := func(name, statement string, ids []string, bindings []readers.Binding) []string {
 		t.Helper()
@@ -220,7 +239,7 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 		"repository unit listing":      requested,
 		"organization unit listing":    {},
 		"organization mix":             {},
-		"team linked pull request mix": {"team-1"},
+		"team linked pull request mix": {"team-1", "team-2"},
 	}
 	pairs := devhealthfacts.InvestmentSplitStatementPairs(ts(2026, 8, 1, 0, 0, 0), ts(2026, 9, 1, 0, 0, 0), 900)
 	if len(pairs) != len(idsFor) {
@@ -232,21 +251,21 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 			t.Fatalf("no ids for split statement %q", p.Name)
 		}
 		if p.Old == p.New {
-			if p.Name == "repository mix" || p.Name == "repository unit listing" {
+			if p.Name != "organization mix" && p.Name != "organization unit listing" {
 				t.Fatalf("%s: the old and new statements are the same text", p.Name)
 			}
 			continue
 		}
 		old := rows(p.Name+" (old)", p.Old, ids, p.Bindings)
 		got := rows(p.Name+" (new)", p.New, ids, p.Bindings)
-		if len(old) < 10 {
+		if len(old) < 2 {
 			t.Errorf("%s: the old statement returned %d rows; the fixture proves nothing", p.Name, len(old))
 		}
 		if !slices.Equal(old, got) {
 			t.Errorf("%s: rows differ from the old statement\nold (%d):\n%s\nnew (%d):\n%s", p.Name, len(old), strings.Join(old, ""), len(got), strings.Join(got, ""))
 		}
 		t.Logf("%s: %d equal rows", p.Name, len(got))
-		for defect, swap := range devhealthfacts.RequestedReachDefects() {
+		for defect, swap := range devhealthfacts.ReachDefects(p.Name) {
 			if !strings.Contains(p.New, swap[0]) {
 				t.Fatalf("%s: defect %q does not apply to the statement", p.Name, defect)
 			}

@@ -124,6 +124,32 @@ ORDER BY share DESC, work_unit_id ASC, repo_uuid ASC
 LIMIT {` + unitLimitParam + `:UInt32}`
 }
 
+// legacyLinkedPullRequestMixStatement is the team linked pull request mix as
+// it stood before the folded split, over the frozen split.
+func legacyLinkedPullRequestMixStatement(bound factTimeBound, scope membershipScope, limit int) string {
+	memberships := []string{fmt.Sprintf("if(%s, 0, -1)", mixWindowPredicate(0, bound))}
+	return withRowLimitOf(`SELECT lr.team_id AS team_id,
+	uniqExact(m.repo_uuid) AS repos,
+	sumMap(mapApply((k, v) -> (k, v * m.effort), m.theme_distribution_json)) AS theme_effort,
+	sum(m.bugfix_share * m.effort) AS bugfix_effort
+FROM (
+	SELECT repo_uuid, pr_number, c / n * effort_value AS effort, theme_distribution_json, bugfix_share
+	FROM (
+		SELECT win, repo_uuid, pr_number, work_unit_id, c,
+			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
+			effort_value, theme_distribution_json, bugfix_share
+		FROM (
+`+legacySplitCore(memberships, "", "", false, scope, true)+`		)
+	)
+	WHERE repo_uuid != ''
+) AS m
+INNER JOIN (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM `+teamProjectLinkRowsSQL("ids", bound)+`) AS lr
+	ON m.repo_uuid = toString(lr.pr_repo_id) AND m.pr_number = toString(lr.pr_number)
+WHERE (lr.team_id, m.repo_uuid) NOT IN (SELECT team_id, repo_key FROM `+ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound))+`)
+GROUP BY lr.team_id
+ORDER BY lr.team_id`, limit)
+}
+
 // SplitStatementPair is one production statement built on a split, as it is
 // now (New) and as it was (Old), with the bindings both take besides org_id
 // and ids. Old equals New for a statement whose text did not change.
@@ -158,13 +184,21 @@ func InvestmentSplitStatementPairs(start, end time.Time, unitLimit int) []SplitS
 			Old: legacyRepositoryUnitsStatement(current, scope)},
 		{Name: "organization unit listing", Bindings: unitBindings, New: orgUnits, Old: orgUnits},
 		{Name: "organization mix", Bindings: boundReaderBindings(current), New: orgMix, Old: orgMix},
-		{Name: "team linked pull request mix", Bindings: boundReaderBindings(current), New: linked, Old: linked},
+		{Name: "team linked pull request mix", Bindings: boundReaderBindings(current), New: linked,
+			Old: legacyLinkedPullRequestMixStatement(current, scope, 1000)},
 	}
 }
 
-// RequestedReachDefects are the requested repository reach with one clause
-// removed; the differential must tell each apart from the old statement.
-func RequestedReachDefects() map[string][2]string {
+// ReachDefects are, per statement on the folded split, its reach with one
+// clause removed; the differential must tell each apart from the old
+// statement.
+func ReachDefects(statement string) map[string][2]string {
+	if statement == "team linked pull request mix" {
+		return map[string][2]string{
+			"direct references dropped": {"(r.1, r.4))", "(r.1, r.4)) AND 0"},
+			"lookup references dropped": {"(r.2, r.3, r.4)))", "(r.2, r.3, r.4)) AND 0)"},
+		}
+	}
 	return map[string][2]string{
 		"direct and fallback references dropped": {"has({ids:Array(String)}, r.1)", "0"},
 		"lookup references dropped":              {"(r.2, r.3)))", "(r.2, r.3)) AND 0)"},

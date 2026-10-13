@@ -142,25 +142,12 @@ func repoSplitCore(memberships []string, unitCols, unitAgg string, spanSentinel 
 
 // repoSplitCoreScoped is repoSplitCore with the resolved membership scope.
 func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSentinel bool, scope membershipScope) string {
-	return repoSplitCoreGrouped(memberships, unitCols, unitAgg, spanSentinel, scope, false)
-}
-
-// repoSplitCoreGrouped is repoSplitCoreScoped; perRef also groups by the
-// pull request number, so each row is one (window, work unit, repository,
-// pull request) and c is 1 per resolved reference. The partition total n is
-// unchanged by the finer grouping.
-func repoSplitCoreGrouped(memberships []string, unitCols, unitAgg string, spanSentinel bool, scope membershipScope, perRef bool) string {
-	refCol, refGroup := "", ""
-	if perRef {
-		refCol = "\n\t\t\t\tparsed.pr_number AS pr_number,"
-		refGroup = ", pr_number"
-	}
 	wins := "arrayFilter(w -> w >= 0, [" + strings.Join(memberships, ", ") + "])"
 	if spanSentinel {
 		wins = "arrayConcat([" + spanSentinelWindow + "], " + wins + ")"
 	}
 	return `			SELECT parsed.win AS win, parsed.work_unit_id AS work_unit_id,
-				if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')) AS repo_uuid,` + refCol + `
+				if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')) AS repo_uuid,
 				uniqExact(if(repo_uuid = '', parsed.ref_text, concat(repo_uuid, '#', parsed.pr_number))) AS c,
 				any(parsed.effort_value) AS effort_value,
 				any(parsed.theme_distribution_json) AS theme_distribution_json,
@@ -193,7 +180,7 @@ func repoSplitCoreGrouped(memberships []string, unitCols, unitAgg string, spanSe
 				ARRAY JOIN refs AS ref
 			) AS parsed
 			LEFT JOIN ` + repoLookupJoin + `
-			GROUP BY win, work_unit_id, repo_uuid` + refGroup + `
+			GROUP BY win, work_unit_id, repo_uuid
 `
 }
 
@@ -209,15 +196,20 @@ const prRefsExpression = `arrayConcat(
 								arrayFilter(r -> match(r, '^gitlab:[^!]+![0-9]+$'), JSONExtract(structural_evidence_json, 'issues', 'Array(String)')))
 						)`
 
-// repoLookupJoin resolves a lookup reference to the repositories of that
-// provider and name.
-const repoLookupJoin = `(
+// repoLookupRows are the organization's repositories by id with the
+// (provider, name) a lookup reference resolves them by; a repository seen
+// under more than one provider has provider ”.
+const repoLookupRows = `(
 				SELECT toString(id) AS repo_uuid, argMax(repo, last_synced) AS repo,
 					if(uniqExact(provider) = 1, argMax(provider, last_synced), '') AS provider
 				FROM repos
 				WHERE org_id = {org_id:String}
 				GROUP BY id
-			) AS rl ON rl.provider = parsed.lookup_provider AND rl.repo = parsed.lookup_repo`
+			)`
+
+// repoLookupJoin resolves a lookup reference to the repositories of that
+// provider and name.
+const repoLookupJoin = repoLookupRows + ` AS rl ON rl.provider = parsed.lookup_provider AND rl.repo = parsed.lookup_repo`
 
 // repoRefsExpression is the per-unit reference list: its PR references, else
 // its own persisted repository, else none (the unit then reaches no row).

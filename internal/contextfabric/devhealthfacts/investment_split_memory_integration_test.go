@@ -66,16 +66,32 @@ SELECT concat('wu-', toString(u)),
 	'%s'
 FROM (SELECT intDiv(number, 2) AS u, number %% 2 AS v FROM numbers(%d))`,
 		strings.Join(quoted, ","), readers.BugfixSubcategoryKey, splitMemoryRepos, splitMemoryRepos, prs, commits, edges, orgID, 2*units))
+	// One team owns a project whose issues link to every pull request the
+	// units name in the first five repositories: a high fan-out linked set.
+	exec(fmt.Sprintf(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES ('proj-mem', '%s', 'linear', NULL, 'proj-mem', 1, 'active', '', toDateTime64('2026-08-20 00:00:00', 3, 'UTC'))`, orgID))
+	exec(fmt.Sprintf(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES ('team-mem', 'team-mem', NULL, toDateTime64('2026-08-20 00:00:00', 3, 'UTC'), '%s', 'linear', [], 1)`, orgID))
+	exec(fmt.Sprintf(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES ('%s', 'linear', 'team-mem', 'proj-mem', NULL, 'native', toDateTime64('2026-01-01 00:00:00', 3, 'UTC'), NULL, toDateTime64('2026-08-20 00:00:00', 3, 'UTC'))`, orgID))
+	links := fmt.Sprintf(`WITH [%s] AS repos_arr
+SELECT u, j, repos_arr[1 + (u * 7 + j * 13) %% %d] AS repo, toUInt32(u * 16 + j) AS number
+FROM (SELECT number AS u FROM numbers(%d)) ARRAY JOIN range(%d) AS j
+WHERE (u * 7 + j * 13) %% %d < 5`, strings.Join(quoted, ","), splitMemoryRepos, units, prs, splitMemoryRepos)
+	exec(fmt.Sprintf(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
+SELECT concat('li-', toString(u), '-', toString(j)), repo, '%s', 'title', 'open', '', toDateTime64('2026-08-20 00:00:00', 3, 'UTC'), '', 'linear', 'proj-mem', NULL FROM (%s)`, orgID, links))
+	exec(fmt.Sprintf(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+SELECT repo, concat('li-', toString(u), '-', toString(j)), number, 1, 'native', '', toDateTime64('2026-08-20 00:00:00', 3, 'UTC'), '%s' FROM (%s)`, orgID, links))
+	exec(fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body)
+SELECT repo, '%s', number, 'pr', 'open', toDateTime64('2026-08-20 00:00:00', 3, 'UTC'), toDateTime64('2026-08-20 00:00:00', 3, 'UTC'), NULL, NULL, 'feature', '' FROM (%s)`, orgID, links))
 	exec(fmt.Sprintf(`INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES ('%s', 'run-1', toDateTime64('2026-08-21 00:00:00', 3, 'UTC'))`, orgID))
 	exec(fmt.Sprintf(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id)
 SELECT '%s', 'issue', concat('n', toString(number)), concat('wu-', toString(number)), 'theme', 'feature_delivery', toDateTime64('2026-08-21 00:00:00', 3, 'UTC'), 'run-1' FROM numbers(%d)`, orgID, units))
 }
 
-// The repository mix and the repository unit listing read the whole
-// organization's latest work units once, but expand only the units that
-// reach a requested repository, so their peak memory stays under the
-// repository-scoped ceiling at every organization size. The organization
-// statements are measured and logged beside them.
+// The repository mix, the repository unit listing and the team linked pull
+// request mix read the whole organization's latest work units once, but
+// expand only the units that reach a requested repository or a linked pull
+// request, so their peak memory stays under the ceiling at every organization
+// size, including units with many references. The organization statements
+// are measured and logged beside them.
 func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
@@ -117,9 +133,9 @@ func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHous
 	}
 	idsFor := map[string][]string{
 		"repository mix": ids, "repository unit listing": ids,
-		"organization unit listing": {}, "organization mix": {}, "team linked pull request mix": {"team-none"},
+		"organization unit listing": {}, "organization mix": {}, "team linked pull request mix": {"team-mem"},
 	}
-	repoScoped := map[string]bool{"repository mix": true, "repository unit listing": true}
+	repoScoped := map[string]bool{"repository mix": true, "repository unit listing": true, "team linked pull request mix": true}
 	pairs := devhealthfacts.InvestmentSplitStatementPairs(ts(2026, 8, 1, 0, 0, 0), ts(2026, 9, 1, 0, 0, 0), 101)
 	for _, s := range sizes {
 		var mark int64
