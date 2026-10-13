@@ -44,7 +44,7 @@ SELECT concat('linear:W-', toString(number)), toUUID(?), ?, 'item', 'open', '', 
 				`concat('60000000-0000-4000-8000-', leftPad(toString((number + 1) %% 40), 12, '0')), concat('60000000-0000-4000-8000-', leftPad(toString(number %% 40), 12, '0'))`,
 			} {
 				seed("transitions", fmt.Sprintf(`INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id)
-SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:W-', toString(number)), 'linear', %s, '', '', toDateTime64(?, 3, 'UTC') + toIntervalSecond(number * 3 + %d), toDateTime64(?, 3, 'UTC') + toIntervalSecond(number * 3 + %d), concat('ev-', toString(number), '-%d') FROM numbers(%d)`, tmpl, step, step, step, n), org, repo, base, base)
+SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:W-', toString(number)), 'linear', %s, '', '', '', toDateTime64(?, 3, 'UTC') + toIntervalSecond(number * 3 + %d), toDateTime64(?, 3, 'UTC') + toIntervalSecond(number * 3 + %d), concat('ev-', toString(number), '-%d') FROM numbers(%d)`, tmpl, step, step, step, n), org, repo, base, base)
 			}
 			source, err := devhealthsource.NewTeamsProjectsSource(query, true)
 			if err != nil {
