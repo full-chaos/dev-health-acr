@@ -88,7 +88,14 @@
    "data:read"
   ],
   "grant_class": "unrestricted",
-  "effective_access": "data_read"
+  "effective_access": "data_read",
+  "tool_access": {
+   "find_subjects": "available",
+   "graphql_query": "available",
+   "read_facts": "available",
+   "read_relationships": "available",
+   "run_operation": "available"
+  }
  },
  "consistency": "best_effort",
  "untrusted_content": {

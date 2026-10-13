@@ -95,6 +95,9 @@
           "score": {
             "number": 43.5
           },
+          "subject_kind": {
+            "string": "team"
+          },
           "team_canonical_id": {
             "string": "team:CHAOS"
           },
