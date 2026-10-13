@@ -16,7 +16,7 @@ func TestFactsRouteMixedSubjectProjectRowCarriesItsOwnCause(t *testing.T) {
 	setChaos7073Reader(t, h, reachingGraph{}, deploymentsRouteProvider{})
 	const subjects = `"subjects":[{"kind":"repository","canonical_id":"` + hostedTestRepository + `"},{"kind":"project","canonical_id":"project:a"}]`
 	cases := []struct{ name, body, wantState, wantCause string }{
-		{"current window", `{"kinds":["deployments"],` + subjects + `}`, directread.KindStateScopeExpansionUnavailable, "scope expansion is not available on this read path"},
+		{"current window", `{"kinds":["deployments"],` + subjects + `}`, directread.KindStateScopeExpansionUnavailable, "no scope expander is wired on this server"},
 		{"trailing window", `{"kinds":["deployments"],` + subjects + `,"window":{"mode":"trailing","days":30}}`, directread.KindStateWindowUnsupported, "supports the current window only"},
 	}
 	for _, tc := range cases {
