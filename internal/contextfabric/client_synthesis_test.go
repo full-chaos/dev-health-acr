@@ -74,6 +74,8 @@ type clientRig struct {
 	project   SubjectRef
 	graph     graphReaderStub
 	facts     []CanonicalFact
+	coverage  *Coverage
+	reader    CanonicalFactReader
 	assembly  *ClientSynthesisAssembly
 	// synthesizer replaces the production synthesizer when set.
 	synthesizer AnswerSynthesizer
@@ -136,6 +138,9 @@ func newClientRig(t *testing.T, mutate func(*clientRig)) *clientRig {
 			rig.factReads++
 			bundle := bootstrapFactBundle(rig.project)
 			bundle.Facts = rig.facts
+			if rig.coverage != nil {
+				bundle.Coverage = *rig.coverage
+			}
 			return bundle, nil
 		}),
 		Synthesizer: synthesizer,
@@ -150,6 +155,9 @@ func newClientRig(t *testing.T, mutate func(*clientRig)) *clientRig {
 		}),
 		ReuseSnapshotter:      orderTrackingSnapshotter{events: &events, snapshot: SourceWatermarkSnapshot{"linear": "wm-1"}},
 		ReuseEpochSnapshotter: orderTrackingEpochSnapshotter{events: &events, epoch: 7},
+	}
+	if rig.reader != nil {
+		deps.Facts = rig.reader
 	}
 	rig.engine = mustReuseTestEngine(t, deps)
 	return rig
