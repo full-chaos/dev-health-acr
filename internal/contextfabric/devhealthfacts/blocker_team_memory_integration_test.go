@@ -101,6 +101,9 @@ SELECT concat('filler-more-', repeat('x', 96), '-', toString(number)), ?, ?, 'fi
 	large, largeResult, largeErr := read()
 	// The roll-up, the totals, the oldest age and the unlinked count run on every read.
 	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team blocker statements", small, large, 4)
+	for hash, peak := range small {
+		t.Logf("team blocker statement %d peak memory at the smaller size: %d bytes (%.1f MiB)", hash, peak, float64(peak)/(1<<20))
+	}
 	for hash, peak := range large {
 		t.Logf("team blocker statement %d peak memory: %d bytes (%.1f MiB) against the 256 MiB API cap", hash, peak, float64(peak)/(1<<20))
 	}
