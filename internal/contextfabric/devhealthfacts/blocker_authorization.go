@@ -68,7 +68,11 @@ type blockerAuthorizationMemo struct {
 // endpoints exceeded the bound (the read stops one past the bound, so the count
 // is then a lower bound, marked by over_bound). mode is a closed vocabulary.
 func logBlockerAuthorization(ctx context.Context, mode string, ids int, overBound bool) {
-	slog.InfoContext(ctx, "devhealthfacts.blocker_authorization", "mode", contextfabric.SanitizeLogAttr(mode), "authorized_endpoint_count", ids, "over_bound", overBound, "bound", blockerAuthorizedIDsBound)
+	level := slog.LevelInfo
+	if overBound {
+		level = slog.LevelWarn
+	}
+	slog.Log(ctx, level, "devhealthfacts.blocker_authorization", "mode", contextfabric.SanitizeLogAttr(mode), "authorized_endpoint_count", ids, "over_bound", overBound, "bound", blockerAuthorizedIDsBound)
 }
 
 const blockerEndedLinksBinding = "blocker_ended_links"
@@ -118,5 +122,9 @@ func withMaxResultRows(settings readers.Settings, rows int) readers.Settings {
 // inside each statement because they exceeded the bound (the read stops one
 // past it, so the count is then a lower bound, marked by over_bound).
 func logBlockerEndedLinks(ctx context.Context, mode string, ended int, overBound bool) {
-	slog.InfoContext(ctx, "devhealthfacts.blocker_ended_links", "mode", contextfabric.SanitizeLogAttr(mode), "ended_link_count", ended, "over_bound", overBound, "bound", blockerEndedLinksBound)
+	level := slog.LevelInfo
+	if overBound {
+		level = slog.LevelWarn
+	}
+	slog.Log(ctx, level, "devhealthfacts.blocker_ended_links", "mode", contextfabric.SanitizeLogAttr(mode), "ended_link_count", ended, "over_bound", overBound, "bound", blockerEndedLinksBound)
 }

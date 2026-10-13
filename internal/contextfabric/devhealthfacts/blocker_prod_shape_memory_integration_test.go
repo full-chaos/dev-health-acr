@@ -64,7 +64,7 @@ SELECT `+repoUUIDExpr("number % 11")+`, ?, toUInt32(intDiv(number, 11) + 1), 'pr
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
 SELECT `+repoUUIDExpr("(number * 7) % 11")+`, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 14017), 12, '0')), toUInt32((number * 31) % 705 + 1), 1, multiIf(number % 3 = 0, 'native', number % 3 = 1, 'explicit_text', 'heuristic'), '', ?, ? FROM numbers(23905)`, at, org)
 	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
-SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 1602), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 37 + 5 + intDiv(number, 1602)) % 1602), 12, '0')), 'blocks', 'blocks', ?, ? - toIntervalDay(number % 90) FROM numbers(2103)`, org, at, at)
+SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 1602), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 37 + 5 + intDiv(number, 1602)) % 1602), 12, '0')), 'blocks', 'blocks', if(number % 9 = 0, ? - toIntervalHour(1), ?), ? - toIntervalDay(number % 90) FROM numbers(2103)`, org, at, at, at)
 	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
 SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 17000), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 11 + 3) % 17000), 12, '0')), 'relates_to', 'relates', ?, NULL FROM numbers(21142)`, org, at)
 	exec(`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at)
@@ -172,6 +172,35 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	mark = serverNowMicros(t, ctx, direct)
 	restrictedResult := read(restricted)
 	blockerProdShapeStatements(t, ctx, direct, "restricted", mark)
+
+	// The end rule kept inside each statement (the form above the bound) is
+	// measured under the same ceilings and must serve the same answer.
+	restoreEnded := devhealthfacts.SetBlockerEndedLinksBoundForTest(0)
+	read(orgWide)
+	mark = serverNowMicros(t, ctx, direct)
+	endedFallbackOrgWide := read(orgWide)
+	blockerProdShapeStatements(t, ctx, direct, "org-wide, end rule inside the statements", mark)
+	read(restricted)
+	mark = serverNowMicros(t, ctx, direct)
+	endedFallbackRestricted := read(restricted)
+	blockerProdShapeStatements(t, ctx, direct, "restricted, end rule inside the statements", mark)
+	restoreEnded()
+	for _, pair := range []struct {
+		label     string
+		got, want contextfabric.FactProviderResult
+	}{{"org-wide", orgWideResult, endedFallbackOrgWide}, {"restricted", restrictedResult, endedFallbackRestricted}} {
+		if len(pair.got.Facts) != len(pair.want.Facts) {
+			t.Fatalf("%s, ended links bound vs inside: %d facts vs %d", pair.label, len(pair.got.Facts), len(pair.want.Facts))
+		}
+		for index := range pair.got.Facts {
+			for _, name := range []string{"blocked_work_items_current", "blocker_dependencies_current", "oldest_blocked_age_days"} {
+				a, b := pair.got.Facts[index].Fields[name], pair.want.Facts[index].Fields[name]
+				if (a.Integer == nil) != (b.Integer == nil) || (a.Integer != nil && *a.Integer != *b.Integer) {
+					t.Errorf("%s, ended links bound vs inside: team fact %d field %s differs: %+v vs %+v", pair.label, index, name, a, b)
+				}
+			}
+		}
+	}
 
 	restore := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
 	inStatement := read(restricted)
@@ -377,4 +406,67 @@ func TestOrganizationWideAuthorizationEqualsTheLibraryRelationOnRealClickHouse(t
 	if equal(ids(restricted, nil, "fast"), ids(restricted, nil, "library")) {
 		t.Fatal("the organization-wide shape forced on a restricted scope authorizes the same work items as the library: the differential cannot tell a wrongly fired fast path")
 	}
+}
+
+// The ended-link list rides as one Array(String) binding. At the bound, with
+// long identifiers, it must still be accepted and give the same counts as the
+// end rule inside the statements.
+func TestBlockerEndedLinksAtTheBoundRideAsOneBindingOnRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	for _, statement := range devhealthschema.DDL(
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
+		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
+	) {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	org := blockerProdShapeOrg
+	at := ts(2026, 9, 29, 0, 0, 0)
+	repo := "00000000-0000-4000-8000-000000000001"
+	exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, 'acme/repo-1', 'github', ?)`, repo, org, at)
+	exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES ('team-1', 'team-1', NULL, ?, ?, 'linear', [], 1)`, at, org)
+	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'linear', 'team-1', ?, 'acme/repo-1', 'exact', 'native', 1, 100, 0, ?, NULL, ?)`, org, repo, ts(2026, 1, 1, 0, 0, 0), at)
+	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, 1, 'pr', 'open', ?, ?, NULL, NULL, 'feature', '')`, repo, org, at, at)
+	longID := func(expr string) string {
+		return "concat('linear:" + "', repeat('k', 100), '-', toString(" + expr + "))"
+	}
+	const links = 5000
+	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
+SELECT `+longID("number")+`, ?, ?, 't', 'issue', 'open', '', ?, ?, '', 'linear', '', NULL, ? FROM numbers(?)`, repo, org, at, at, at, uint64(2*links+2))
+	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+SELECT ?, `+longID("number")+`, 1, 1, 'native', '', ?, ? FROM numbers(?)`, repo, at, org, uint64(2*links+2))
+	// links removed at the provider (written before their endpoints' latest sync)
+	// plus one link it still reports.
+	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
+SELECT ?, `+longID("number")+`, `+longID("number + "+fmt.Sprint(links))+`, 'blocks', 'blocks', ? - toIntervalHour(1), NULL FROM numbers(?)`, org, at, uint64(links))
+	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
+VALUES (?, concat('linear:', repeat('k', 100), '-', toString(`+fmt.Sprint(2*links)+`)), concat('linear:', repeat('k', 100), '-', toString(`+fmt.Sprint(2*links+1)+`)), 'blocks', 'blocks', ?, NULL)`, org, at)
+
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactBlockers)
+	team := teamSubject("team-1")
+	read := func() map[string]contextfabric.FactValue {
+		t.Helper()
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: org, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{team},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts: %v: %s", err, readFailureCause(err))
+		}
+		return factFor(t, result, team).Fields
+	}
+	bound := read()
+	restore := devhealthfacts.SetBlockerEndedLinksBoundForTest(0)
+	inside := read()
+	restore()
+	wantInt(t, bound, "blocker_dependencies_current", 1)
+	wantInt(t, inside, "blocker_dependencies_current", 1)
+	t.Logf("PRODSHAPE ended-link binding at the bound: %d keys of about %d bytes each = about %d bytes in one Array(String) binding", links, 2*(len("linear:")+100+1+5)+len("blocks")+2, links*(2*(len("linear:")+100+1+5)+len("blocks")+2))
 }
