@@ -4,64 +4,60 @@ package fixturegraph
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
-
-func teamQuestionArgs(c *client, budget int) doc {
-	args := doc{
-		"question":        "Which teams need attention?",
-		"expected_kinds":  []string{"team"},
-		"evidence_window": doc{"relative_id": "trailing_365d"},
-		"interpretation": doc{
-			"shape": "discovered_cohort", "requested_judgment": "teams_under_pressure",
-			"time_context": doc{"axis": "current"}, "fact_requirements": []doc{{"kind": "health"}},
-			"clarification_needed": false,
-		},
-		"contract":  c.interpretContract(),
-		"synthesis": "client",
-	}
-	if budget > 0 {
-		args["budget"] = doc{"max_serialized_bytes": budget}
-	}
-	return args
-}
 
 func jsonLen(v any) int {
 	b, _ := json.Marshal(v)
 	return len(b)
 }
 
+func synthesisInputOf(d doc) map[string]any {
+	in, _ := structured(d).(map[string]any)["synthesis_input"].(map[string]any)
+	return in
+}
+
 // A caller byte budget on a client synthesis turn reaches the input cut through
-// the real MCP tool and the real API: the answer and its input stay within the
-// budget, and a cut input is a different input, disclosed as bounded.
+// the real MCP tool and the real API: a served answer stays within the budget
+// and a cut input is a different, disclosed input; a turn whose smallest input
+// cannot share the budget with its answer is a typed budget refusal.
 func TestCallerByteBudgetCutsTheClientSynthesisInputThroughTheMCPTool(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
-	c.requireTools("investigate_with_interpretation")
-	whole, _ := c.call("investigate_with_interpretation", teamQuestionArgs(c, 0))
-	wholeInput, _ := structured(whole).(doc)["synthesis_input"].(map[string]any)
-	if wholeInput == nil {
-		t.Fatalf("the unbudgeted call carries no synthesis_input: status=%s", str(structured(whole), "status"))
+	one, _ := slugs(t)
+	whole, raw, isErr := walkAt(t, c, one, 1048576)
+	if isErr || synthesisInputOf(whole) == nil {
+		t.Fatalf("the generous-budget call carries no synthesis_input: %.1500s", raw)
 	}
+	wholeInput := synthesisInputOf(whole)
 	wholeSize := jsonLen(wholeInput)
-	for _, budget := range []int{60000, max(8192, wholeSize)} {
-		d, raw := c.call("investigate_with_interpretation", teamQuestionArgs(c, budget))
-		in, _ := structured(d).(doc)["synthesis_input"].(map[string]any)
+	t.Logf("whole synthesis_input %d bytes, whole structured response %d bytes", wholeSize, jsonLen(structured(whole)))
+	served := 0
+	for _, budget := range []int{60000, 8192} {
+		d, raw, isErr := walkAt(t, c, one, budget)
+		if isErr {
+			if !strings.Contains(raw, "budget_refusal") {
+				t.Errorf("budget %d: a tool error that is not a budget refusal: %.800s", budget, raw)
+			}
+			t.Logf("budget %d: budget refusal", budget)
+			continue
+		}
+		in := synthesisInputOf(d)
 		if in == nil {
-			t.Fatalf("budget %d: no synthesis_input: %.1500s", budget, raw)
+			t.Errorf("budget %d: served without a synthesis_input: %.800s", budget, raw)
+			continue
 		}
+		served++
 		if size := jsonLen(structured(d)); size > budget {
-			t.Errorf("budget %d: the structured response is %d bytes", budget, size)
-		}
-		if size := jsonLen(in); size > budget/2 && wholeSize > budget/2 {
-			t.Errorf("budget %d: synthesis_input is %d bytes, above its half of the budget", budget, size)
+			t.Errorf("budget %d: the structured response is %d bytes, over the budget", budget, size)
 		}
 		cut := str(in, "input_sha256") != str(wholeInput, "input_sha256")
-		if wholeSize > budget/2 && !cut {
-			t.Errorf("budget %d: the whole input (%d bytes) is above half the budget but the input was not cut (sha equal)", budget, wholeSize)
-		}
 		if cut && get(in, "bounded") != true {
 			t.Errorf("budget %d: the input was cut and not disclosed as bounded", budget)
 		}
-		t.Logf("budget %d: whole input %d bytes, served input %d bytes, cut=%v", budget, wholeSize, jsonLen(in), cut)
+		t.Logf("budget %d: served input %d bytes, structured %d bytes, cut=%v", budget, jsonLen(in), jsonLen(structured(d)), cut)
+	}
+	if served == 0 {
+		t.Errorf("no budget served the turn")
 	}
 }
