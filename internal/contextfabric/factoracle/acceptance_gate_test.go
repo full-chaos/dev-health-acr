@@ -340,10 +340,11 @@ func acceptanceGateNullableArgmax(t *testing.T) {
 	controlOracle, control := gateRun(t, manifest, recording, reference, reference)
 	wantClean(t, control, ClassAttributionBasis)
 	// The control is not vacuous: the unit left the repository mix, so the
-	// residual grew by exactly its effort.
+	// residual grew by exactly its effort, up to the order the two residuals
+	// were summed in.
 	for theme, effort := range unitThemeEffort(t, source) {
 		got := controlOracle.Residual[theme] - manifest.Residual[theme]
-		if math.Abs(got-effort) > themeTolerance(effort) {
+		if math.Abs(got-effort) > math.Max(themeTolerance(effort), sumTolerance(controlOracle.Residual[theme], manifest.Residual[theme])) {
 			t.Fatalf("control: the unit %s must leave the repository mix; residual of %s grew by %v, want %v", id, theme, got, effort)
 		}
 	}

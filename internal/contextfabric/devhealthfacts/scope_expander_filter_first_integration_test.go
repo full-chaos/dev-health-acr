@@ -152,6 +152,28 @@ func seedMovedOwnership(t *testing.T, ctx context.Context, direct clickhousedriv
 		"issue-Q", "issue-P", "blocks", "Blocks", at, f.orgID)
 	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
 		f.shared, f.orgID, uint32(77), "unlinked", "open", at, at, "feature", "")
+	// Requested issues with membership transitions in a second repository:
+	// issue-Q moves into Q there too, and issue-P has transitions only there,
+	// so the as-of touches and the no-history arm's NOT IN set must read every
+	// repository of a kept subject.
+	for _, move := range []struct{ subject, project, event string }{{"issue-Q", "Q", "linear:issue-Q-own-add"}, {"issue-P", "P", "linear:issue-P-own-add"}} {
+		exec(`INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', '', ?, '', '', '', ?, ?, ?)`,
+			f.orgID, f.own, move.subject, move.project, since, since, move.event)
+	}
+	// A project whose id is empty, owned by requested team A: the library's
+	// ownership and identity readers match an empty id, so the fixture's
+	// project-less issues are its work items, and one of them links a pull
+	// request in a repository only that project reaches.
+	exec(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"", f.orgID, "linear", nil, "Project with an empty id", uint8(1), "active", "", at)
+	exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		f.orgID, "linear", "A", "", nil, "native", since, nil, at)
+	emptyProjectRepo := repoUUID(f.orgID + "-empty-project")
+	exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, emptyProjectRepo, f.orgID, "acme/empty-project", "github", at)
+	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+		emptyProjectRepo, f.orgID, uint32(5), "pr", "open", at, at, "feature", "")
+	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		emptyProjectRepo, "item-both-blocker", uint32(5), float32(1), "native", "", at, f.orgID)
 	return moved
 }
 
@@ -347,10 +369,11 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	}
 	// grew is the slope guard: the larger size's reading (the smallest of
 	// three warm runs, both sizes on one merged part per table) over 1.15x
-	// the smaller size's plus a fixed floor. A cost that grows with the rows
-	// lifts all three runs, so the minimum carries it; jitter does not.
+	// the smaller size's AND over it by more than a fixed floor. A cost that
+	// grows with the rows lifts all three runs, so the minimum carries it;
+	// the floor keeps a small statement's jitter out.
 	grew := func(small, large variant) bool {
-		return float64(large.peak) > statementMemorySlope*float64(small.peak)+float64(arrayMemoryFloor)
+		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+arrayMemoryFloor
 	}
 
 	// The guard reads merged parts; production tables are not one part, so

@@ -108,6 +108,11 @@ func (r *CatalogClickHouseRows) ResolveEvidenceReference(ctx context.Context, or
 		return nil, storage.ErrNotFound
 	}
 	plan := ReadPlan{OrgID: orgID, RepoID: scope.RepoID, RepoSlug: scope.RepoSlug}
+	gated, err := r.reresolutionIssueIDs(ctx, query.ID, plan)
+	if err != nil {
+		return nil, err
+	}
+	plan.ReadableRepositorylessIssueIDs = gated
 	if locatorHash == "" {
 		return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, confidence, citation, observed_at FROM (`+query.Statement+`) LIMIT 501`, plan.Bindings(), 501)
 	}

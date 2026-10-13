@@ -58,7 +58,7 @@ func projectIssueArmsAsOfAmongSQL(candidates string) string {
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = w.provider AND p.join_key = w.project_id
   WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + candidates + ` AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
     AND (w.repo_id, w.work_item_id) NOT IN (
-      SELECT repo_id, subject_id FROM project_membership_transitions FINAL WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND subject_id IN ` + candidates + `
+      SELECT repo_id, subject_id FROM project_membership_transitions FINAL WHERE org_id = {org_id:String} AND subject_kind = 'work_item'` + transitionSubjectsAmongSQL(candidates) + `
     )
 `
 }

@@ -592,7 +592,7 @@ func asOfWindow(timeContext contextfabric.TimeContext) (start, end time.Time, er
 func membershipTouchesAsOfAmongSQL(candidates string) string {
 	transitions := devhealthschema.DedupedMembershipTransitionsLastSynced
 	if candidates != "" {
-		transitions = devhealthschema.DedupedMembershipTransitionsFiltered(false, " AND subject_id IN "+candidates)
+		transitions = devhealthschema.DedupedMembershipTransitionsFiltered(false, transitionSubjectsAmongSQL(candidates))
 	}
 	return `(
   WITH touches AS (
