@@ -124,6 +124,7 @@ func investigateOrganizationPullRequestsWith(t *testing.T, synthesizer contextfa
 	t.Helper()
 	return investigatePullRequestsFramed(t, synthesizer, pulls, status, principal, anchored, func(status string) *contextfabric.QuestionFrame {
 		frame := pullRequestStatusFrame(status)
+		frame.Goals = []contextfabric.InvestigationGoal{contextfabric.GoalRankOrSurvey}
 		frame.SubjectExpression.Scoped.AnchorTerms = []string{"Acme"}
 		return frame
 	}, scope...)
