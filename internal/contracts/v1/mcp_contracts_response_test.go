@@ -63,8 +63,8 @@ func TestMCPContextForTaskResponseValidateRejectsOtherwiseEmptyStructured(t *tes
 func TestMCPSourceEvidenceResponseValidateRejectsOtherwiseEmptyStructured(t *testing.T) {
 	response := MCPSourceEvidenceResponse{
 		SchemaVersion:    MCPSourceEvidenceResponseSchema,
-		Structured:       ExpandedEvidence{SchemaVersion: ExpandedEvidenceSchema},
-		RenderedMarkdown: MCPRenderedMarkdown{Markdown: "placeholder", Untrusted: true},
+		Structured:       &ExpandedEvidence{SchemaVersion: ExpandedEvidenceSchema},
+		RenderedMarkdown: &MCPRenderedMarkdown{Markdown: "placeholder", Untrusted: true},
 	}
 	if err := response.Validate(); err == nil {
 		t.Fatal("validator accepted a structurally-empty structured ExpandedEvidence")
