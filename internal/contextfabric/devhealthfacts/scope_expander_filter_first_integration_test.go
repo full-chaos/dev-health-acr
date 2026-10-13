@@ -10,6 +10,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -73,6 +74,47 @@ SELECT ?, NULL, ?, 'work_item', concat(?, '-', repeat('x', 64), '-', toString(nu
 	}
 }
 
+type movedOwnership struct{ repo, projectRepo string }
+
+// seedMovedOwnership seeds ownership that moved from requested team B to
+// unrequested team C in a later version: a repository B owned (its row closed
+// by a later version of the same key) and a project B owned the same way,
+// whose issue links a pull request in a repository nobody else reaches.
+func seedMovedOwnership(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, f everyRootFixture) movedOwnership {
+	t.Helper()
+	at := time.Now().UTC().Truncate(time.Second)
+	since, closed := at.Add(-30*24*time.Hour), at.Add(-time.Hour)
+	moved := movedOwnership{repo: repoUUID(f.orgID + "-moved"), projectRepo: repoUUID(f.orgID + "-moved-project")}
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed moved ownership: %v\n%s", err, statement)
+		}
+	}
+	for _, repo := range []struct{ id, slug string }{{moved.repo, "acme/moved"}, {moved.projectRepo, "acme/moved-project"}} {
+		exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repo.id, f.orgID, repo.slug, "github", at)
+	}
+	for _, own := range []struct {
+		team    string
+		validTo any
+		updated time.Time
+	}{{"B", nil, since}, {"B", closed, at}, {"C", nil, at}} {
+		exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			f.orgID, "linear", own.team, moved.repo, "acme/moved", "exact", "native", uint8(1), uint16(100), int32(0), since, own.validTo, own.updated)
+		exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			f.orgID, "linear", own.team, "M", nil, "native", since, own.validTo, own.updated)
+	}
+	exec(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"M", f.orgID, "linear", nil, "Project M", uint8(1), "active", "", at)
+	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"issue-M", f.shared, f.orgID, "linear", "issue M", "open", "", "", "M", at)
+	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+		moved.projectRepo, f.orgID, uint32(4), "pr", "open", at, at, "feature", "")
+	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		moved.projectRepo, "issue-M", uint32(4), float32(1), "native", "", at, f.orgID)
+	return moved
+}
+
 // scopeRows runs a statement (its SETTINGS clause removed) and returns its rows
 // as sorted text, so two statements' results compare whole.
 func scopeRows(t *testing.T, ctx context.Context, client *runtimeclickhouse.Client, captured capturedStatement) []string {
@@ -121,8 +163,48 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		fixture.orgID, fixture.shared, since, since); err != nil {
 		t.Fatalf("seed transition: %v", err)
 	}
+	moved := seedMovedOwnership(t, ctx, direct, fixture)
 	recorder := &recordingQueryClient{inner: query}
 	expander := devhealthfacts.NewScopeExpander(recorder)
+
+	// A repository and a project team B owned in an earlier version and team
+	// C owns now never reach the requested teams; the same statement read
+	// without FINAL on the ownership tables does reach them, so this row sees
+	// a stale ownership version if a filter ever lets one through.
+	t.Run("ownership moved away from a requested team", func(t *testing.T) {
+		recorder.reset()
+		var teamRepositories contextfabric.FactScopeExpansionRequest
+		for _, tc := range fixture.cases() {
+			if tc.name == "team repositories" {
+				teamRepositories = tc.request
+			}
+		}
+		result, err := expander.ExpandFactScope(ctx, teamRepositories)
+		if err != nil {
+			t.Fatalf("ExpandFactScope: %v: %s", err, readFailureCause(err))
+		}
+		for _, target := range result.Targets {
+			for _, repo := range []string{moved.repo, moved.projectRepo} {
+				if strings.HasSuffix(target.CanonicalID, repo) {
+					t.Fatalf("target %s is reached through ownership the requested team no longer holds", target.CanonicalID)
+				}
+			}
+		}
+		captured, ok := recorder.find("argMin(source, source_rank) AS best_source")
+		if !ok {
+			t.Fatal("teamRepositories statement was not sent")
+		}
+		stale := strings.ReplaceAll(strings.ReplaceAll(captured.statement, "FROM team_repo_ownership FINAL", "FROM team_repo_ownership"), "FROM team_project_ownership FINAL", "FROM team_project_ownership")
+		if stale == captured.statement {
+			t.Fatal("the statement reads no ownership table with FINAL")
+		}
+		rows := strings.Join(scopeRows(t, ctx, query, capturedStatement{statement: stale, bindings: captured.bindings}), "\n")
+		for _, repo := range []string{moved.repo, moved.projectRepo} {
+			if !strings.Contains(rows, repo) {
+				t.Fatalf("the statement without FINAL does not reach %s, so this row cannot see a stale ownership version:\n%s", repo, rows)
+			}
+		}
+	})
 
 	// served sends every fixture request through the expander and returns
 	// each guarded statement as sent, with its organization-wide form.
