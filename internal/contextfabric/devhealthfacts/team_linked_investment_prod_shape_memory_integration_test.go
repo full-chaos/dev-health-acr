@@ -370,28 +370,35 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 	capped := contextpacket.NewMemoryCappedQueryClient(query, contextpacket.APIStatementMaxMemoryUsage)
 	provider := findProvider(t, devhealthfacts.NewProviders(capped), contextfabric.FactInvestment)
 
-	// The plan is read on the native connection (the query client sends
+	// The plans are read on the native connection (the query client sends
 	// SELECT statements only); a failure here is logged, not fatal.
-	explain := fragmentNamed(t, fragments, "statement")
-	parameters := clickhouse.Parameters{"org_id": orgID, "ids": "['" + linkedShapeTeam + "']"}
-	for _, binding := range explain.Bindings {
-		if value, ok := binding.Value.(string); ok {
-			parameters[binding.Name] = value
+	for _, name := range []string{"statement", "statement_sets"} {
+		explain := fragmentNamed(t, fragments, name)
+		parameters := clickhouse.Parameters{"org_id": orgID, "ids": "['" + linkedShapeTeam + "']"}
+		for _, binding := range explain.Bindings {
+			if value, ok := binding.Value.(string); ok {
+				parameters[binding.Name] = value
+			}
 		}
-	}
-	if rows, err := direct.Query(clickhouse.Context(ctx, clickhouse.WithParameters(parameters)), "EXPLAIN PLAN "+explain.SQL); err != nil {
-		t.Logf("explain did not run: %v", err)
-	} else {
-		var plan []string
-		for rows.Next() && len(plan) < 80 {
+		rows, err := direct.Query(clickhouse.Context(ctx, clickhouse.WithParameters(parameters)), "EXPLAIN PLAN header = 1 "+explain.SQL)
+		if err != nil {
+			t.Logf("explain %s did not run: %v", name, err)
+			continue
+		}
+		lines, bytes, longest := 0, 0, 0
+		for rows.Next() {
 			var line string
 			if err := rows.Scan(&line); err != nil {
 				break
 			}
-			plan = append(plan, line)
+			lines++
+			bytes += len(line)
+			if len(line) > longest {
+				longest = len(line)
+			}
 		}
 		_ = rows.Close()
-		t.Logf("plan head of the statement:\n%s", strings.Join(plan, "\n"))
+		t.Logf("plan of %s: %d lines, %d bytes, longest line %d bytes", name, lines, bytes, longest)
 	}
 	unmerged := measureLinkedMixFragments(t, ctx, query, direct, orgID, "unmerged", fragments)
 	servedUnmerged := servedLinkedMixPeak(t, ctx, provider, direct, orgID)
@@ -413,7 +420,7 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 		teams[i] = fmt.Sprintf("T-%d", i)
 	}
 	current := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "statement"))
-	candidate := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "candidate_per_pr_first"))
+	candidate := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "statement_sets"))
 	t.Logf("differential over %d teams: current statement served %d team rows, candidate %d", len(teams), len(current), len(candidate))
 	if len(current) == 0 {
 		t.Errorf("differential did not happen: the current statement returned no team row")

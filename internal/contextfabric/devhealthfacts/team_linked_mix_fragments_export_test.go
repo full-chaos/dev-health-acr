@@ -121,6 +121,21 @@ FROM (`+m+`) AS m INNER JOIN `+lr+` AS lr ON m.repo_uuid = lr.pr_repo AND m.pr_n
 GROUP BY lr.team_id`)
 	add("m_not_in_owned", "SELECT count(), sum(length(mapKeys(theme_distribution_json))), sum(effort) FROM ("+m+") AS m WHERE ({ids:Array(String)}[1], m.repo_uuid) NOT IN (SELECT team_id, repo_key FROM "+owned+")")
 	add("lr_rows", "SELECT count() FROM "+lr)
+	// The same statement with the linked set tested as IN sets, so the set is
+	// never a literal array inside an expression of the main pipeline.
+	directOld := "hasAny(direct_refs, arrayMap(x -> (x.1, x.2), " + linked + "))"
+	directNew := "arrayExists(r -> r IN (SELECT (l.1, l.2) FROM (SELECT arrayJoin(" + linked + ") AS l)), direct_refs)"
+	lookupOldHead := "hasAny(lookup_refs, (\n\t\t\t\t\t\tSELECT groupUniqArray((rl.provider, rl.repo, lx.lp_pr)) FROM ("
+	lookupNewHead := "arrayExists(r -> r IN (\n\t\t\t\t\t\tSELECT rl.provider, rl.repo, lx.lp_pr FROM ("
+	lookupOldTail := "AS rl ON rl.repo_uuid = lx.lp_repo)))"
+	lookupNewTail := "AS rl ON rl.repo_uuid = lx.lp_repo), lookup_refs))"
+	if strings.Count(statement, directOld) != 1 || strings.Count(statement, lookupOldHead) != 1 || strings.Count(statement, lookupOldTail) != 1 {
+		return nil, "statement_sets"
+	}
+	sets := strings.Replace(statement, directOld, directNew, 1)
+	sets = strings.Replace(sets, lookupOldHead, lookupNewHead, 1)
+	sets = strings.Replace(sets, lookupOldTail, lookupNewTail, 1)
+	add("statement_sets", sets)
 	fragments = append(fragments, LinkedMixFragment{Name: "statement_one_thread", SQL: statement, Bindings: bindings, Settings: "max_threads = 1"})
 	fragments = append(fragments, LinkedMixFragment{Name: "statement_no_join_swap", SQL: linkedPullRequestMixStatement(bound, scope, linkedMixTeamChunk+1), Bindings: bindings, Settings: "query_plan_join_swap_table = 0"})
 	add("owned_repositories", "SELECT count() FROM "+ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)))
