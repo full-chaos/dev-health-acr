@@ -14,6 +14,7 @@ import (
 // clientValidators are the Go Validate symbols a registry entry may name.
 var clientValidators = map[string]bool{
 	"contractsv1.ContextPacket.ValidateRead":              true,
+	"contractsv1.MCPRecordEpisodeResponse.ValidateRead":   true,
 	"contractsv1.EvidenceRef.ValidateRead":                true,
 	"contractsv1.ExpandedEvidence.ValidateRead":           true,
 	"contractsv1.ValidateStoredResult":                    true,
@@ -56,7 +57,7 @@ var clientResponses = []struct {
 	{"source_evidence", "mcp_source_evidence_response.v1.json", decodeAndValidate[contractsv1.MCPSourceEvidenceResponse], nil},
 	{"investigate_question", "mcp_investigate_question_response.v1.json", decodeAndValidate[contractsv1.MCPInvestigateQuestionResponse], contractsv1.MCPInvestigateQuestionUntrustedFields},
 	{"investigation_result", "mcp_investigation_result_response.v1.json", decodeAndValidate[contractsv1.MCPInvestigationResultResponse], contractsv1.MCPInvestigationResultUntrustedFields},
-	{"record_episode", "mcp_record_episode_response.v1.json", decodeAndValidate[contractsv1.MCPRecordEpisodeResponse], nil},
+	{"record_episode", "mcp_record_episode_response.v1.json", decodeAndValidateRead[contractsv1.MCPRecordEpisodeResponse], nil},
 }
 
 func decodeAndValidate[T interface{ Validate() error }](raw []byte) error {
@@ -65,6 +66,14 @@ func decodeAndValidate[T interface{ Validate() error }](raw []byte) error {
 		return err
 	}
 	return value.Validate()
+}
+
+func decodeAndValidateRead[T interface{ ValidateRead() error }](raw []byte) error {
+	var value T
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
+	}
+	return value.ValidateRead()
 }
 
 // vocabLeaf is one string in a golden example governed by a vocabulary site.
