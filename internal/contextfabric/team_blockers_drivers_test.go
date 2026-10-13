@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -217,5 +218,49 @@ func TestTeamBlockersPartialTitleDoesNotRestateTheProjectSubcountAsExact(t *test
 	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}, cohort, []CanonicalFact{blockersFact(a, SourceTruncated, intp(12), extra)}, nil, nil, ItemAllocation{}, 0)
 	if title := got.Drivers[0].Title; title != "At least 12 blocked work items (partial read)" {
 		t.Fatalf("title = %q", title)
+	}
+}
+
+func TestTeamCohortClientSynthesisInputCarriesTheBlockersDriverCandidate(t *testing.T) {
+	a, b, _ := teamsAB()
+	rig := newClientRig(t, func(r *clientRig) {
+		r.facts = []CanonicalFact{blockersFact(a, SourceAvailable, intp(30), nil), blockersFact(b, SourceAvailable, intp(2), nil)}
+		r.runtime.interpreted = InterpretedQuestion{
+			Shape: ShapeDiscoveredCohort, RequestedJudgment: "teams_blocked",
+			TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactBlockers}},
+		}
+		draft := bootstrapDraft(r.project)
+		draft.Status, draft.Drivers, draft.ClaimedFacts = InvestigationPartial, []DriverJudgment{}, []ClaimedFact{}
+		draft.EvidenceRefIDs = []string{}
+		r.runtime.draft = draft
+		r.graph.resolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+		r.graph.context.Cohort = &Cohort{Kind: SubjectTeam, Rationale: "kind census match", Members: []CohortMember{
+			{Subject: a, Rank: 1, InclusionReasons: []string{"matched"}, EvidenceRefIDs: []string{"evidence_team_roster"}},
+			{Subject: b, Rank: 2, InclusionReasons: []string{"matched"}, EvidenceRefIDs: []string{"evidence_team_roster"}},
+		}}
+	})
+	if _, _, err := rig.investigate(clientRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if len(rig.encoded) == 0 {
+		t.Fatal("no synthesis input was encoded")
+	}
+	var input struct {
+		DriverCandidates []DriverJudgment `json:"driver_candidates"`
+	}
+	if err := json.Unmarshal(rig.encoded[0], &input); err != nil {
+		t.Fatal(err)
+	}
+	var titles []string
+	for _, c := range input.DriverCandidates {
+		if c.Category == "blockers" {
+			titles = append(titles, c.Title)
+			if len(c.ClaimedFactIDs) != 0 || !strings.HasSuffix(c.DriverID, "-candidate") || len(c.EvidenceRefIDs) == 0 {
+				t.Errorf("candidate = %+v", c)
+			}
+		}
+	}
+	if got, want := strings.Join(titles, "|"), "Blocked work items: 30|Blocked work items: 2"; got != want {
+		t.Fatalf("blockers candidates = %q, want %q", got, want)
 	}
 }
