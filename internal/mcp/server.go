@@ -135,9 +135,19 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 		// credential's catalogue, so no shared cache may serve them to
 		// another caller.
 		options.SetCacheable = privateCacheable
+		// The hosted server is stateless: it holds no session to push a
+		// list-changed notification on, so it promises none. A client sees a
+		// change in the catalogue only when it lists again.
+		options.Capabilities = &mcpsdk.ServerCapabilities{
+			Logging:   &mcpsdk.LoggingCapabilities{},
+			Tools:     &mcpsdk.ToolCapabilities{},
+			Prompts:   &mcpsdk.PromptCapabilities{},
+			Resources: &mcpsdk.ResourceCapabilities{},
+		}
 	}
 	server := mcpsdk.NewServer(impl, options)
 	server.AddReceivingMiddleware(callerMiddleware(caller))
+	server.AddReceivingMiddleware(unlistedToolMiddleware(cfg, caller))
 	server.AddReceivingMiddleware(integerArgumentsMiddleware(cfg))
 
 	server.AddTool(

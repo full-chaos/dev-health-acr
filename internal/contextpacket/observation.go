@@ -148,7 +148,7 @@ func (a *Assembler) observePacket(ctx context.Context, request contractsv1.Conte
 	}
 	staleSources := 0
 	for _, watermark := range packet.Freshness.Watermarks {
-		if watermark.Status == "stale" {
+		if watermark.Status == contractsv1.SourceWatermarkStatusStale {
 			staleSources++
 		}
 	}
