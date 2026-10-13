@@ -1714,7 +1714,7 @@ the stream is drained and verify the projector env has no such variable.
 1. `purge --org <uuid> --dry-run` prints row counts (cascaded OAuth rows included), the number of graphs it would drop, and the `org_key`. It changes nothing.
 2. `purge --org <uuid> --attest-deleted --confirm-hash <org_key>` runs the purge in one Postgres transaction after the graphs are dropped.
 
-The verb fails closed. It refuses when the organization is in the projector set (the static list or discovery), when discovery cannot be read, when Dev Health still answers 200 for the organization, when another projector holds its lock, or when either flag is missing. A 404 from Dev Health cannot be told apart from an outage, so the operator attestation is required.
+The verb fails closed. It refuses when the organization is in the projector set (the static list or discovery), when discovery cannot be read, when Dev Health answers HTTP 200 for the organization (any body, even a malformed one), when another projector holds its lock, or when either flag is missing. A 404 from Dev Health cannot be told apart from an outage, so the operator attestation is required.
 
 If a run fails after it started removing data, the report says `"status": "incomplete"`, the verb exits non-zero, and an `org_purge_incomplete` audit event is written. The graphs may already be gone and the database rows are untouched (one transaction). Run `--dry-run` to see the residue, then run the purge again; the retry finishes it.
 

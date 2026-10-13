@@ -9,22 +9,23 @@ import (
 )
 
 type fakeSet struct {
-	allowed    bool
+	members    []string
 	refreshErr error
 }
 
 func (f fakeSet) RefreshOrgs(context.Context) error { return f.refreshErr }
-func (f fakeSet) AllowsOrg(string) bool             { return f.allowed }
+func (f fakeSet) EffectiveOrgs() []string           { return f.members }
 
-type fakeEntitlements struct{ err error }
+type fakeEntitlements struct{ answers bool }
 
-func (f fakeEntitlements) HasEntitlement(context.Context, string, string) (bool, error) {
-	return false, f.err
-}
+func (f fakeEntitlements) AnswersFor(context.Context, string) bool { return f.answers }
 
-type heldLocker struct{}
+type heldLocker struct{ seen *string }
 
-func (heldLocker) Lock(context.Context, string) (func() error, error) {
+func (h heldLocker) Lock(_ context.Context, org string) (func() error, error) {
+	if h.seen != nil {
+		*h.seen = org
+	}
 	return nil, errors.New("held")
 }
 
@@ -59,18 +60,22 @@ func refusalPurger(t *testing.T, set fakeSet, ent fakeEntitlements) *Purger {
 
 func TestRunRefusesBeforeTouchingAnything(t *testing.T) {
 	good := Options{AttestDeleted: true, ConfirmOrgKey: OrgKey(testOrg)}
+	gone := fakeEntitlements{}
 	cases := map[string]struct {
 		purger *Purger
 		org    string
 		opts   Options
 	}{
-		"not a uuid":            {refusalPurger(t, fakeSet{}, fakeEntitlements{err: errors.New("404")}), "acme", good},
-		"no attestation":        {refusalPurger(t, fakeSet{}, fakeEntitlements{err: errors.New("404")}), testOrg, Options{ConfirmOrgKey: OrgKey(testOrg)}},
-		"wrong confirm hash":    {refusalPurger(t, fakeSet{}, fakeEntitlements{err: errors.New("404")}), testOrg, Options{AttestDeleted: true, ConfirmOrgKey: "0000000000000000"}},
-		"in the projector set":  {refusalPurger(t, fakeSet{allowed: true}, fakeEntitlements{err: errors.New("404")}), testOrg, good},
-		"discovery failed":      {refusalPurger(t, fakeSet{refreshErr: errors.New("clickhouse down")}, fakeEntitlements{err: errors.New("404")}), testOrg, good},
-		"dev health knows org":  {refusalPurger(t, fakeSet{}, fakeEntitlements{}), testOrg, good},
-		"dry run still guarded": {refusalPurger(t, fakeSet{allowed: true}, fakeEntitlements{err: errors.New("404")}), testOrg, Options{DryRun: true}},
+		"not a uuid":             {refusalPurger(t, fakeSet{}, gone), "acme", good},
+		"no attestation":         {refusalPurger(t, fakeSet{}, gone), testOrg, Options{ConfirmOrgKey: OrgKey(testOrg)}},
+		"wrong confirm hash":     {refusalPurger(t, fakeSet{}, gone), testOrg, Options{AttestDeleted: true, ConfirmOrgKey: "0000000000000000"}},
+		"in the projector set":   {refusalPurger(t, fakeSet{members: []string{testOrg}}, gone), testOrg, good},
+		"set holds upper case":   {refusalPurger(t, fakeSet{members: []string{strings.ToUpper(testOrg)}}, gone), testOrg, good},
+		"set holds braced upper": {refusalPurger(t, fakeSet{members: []string{"{" + strings.ToUpper(testOrg) + "}"}}, gone), testOrg, good},
+		"input upper, set lower": {refusalPurger(t, fakeSet{members: []string{testOrg}}, gone), strings.ToUpper(testOrg), good},
+		"discovery failed":       {refusalPurger(t, fakeSet{refreshErr: errors.New("clickhouse down")}, gone), testOrg, good},
+		"dev health answers 200": {refusalPurger(t, fakeSet{}, fakeEntitlements{answers: true}), testOrg, good},
+		"dry run still guarded":  {refusalPurger(t, fakeSet{members: []string{testOrg}}, gone), testOrg, Options{DryRun: true}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -91,7 +96,7 @@ func TestOrgKeyIsStableAndHidesTheOrganization(t *testing.T) {
 
 func TestRunRefusesWhenAnotherProjectorHoldsTheOrganizationLock(t *testing.T) {
 	graph := &countingGraph{}
-	purger := &Purger{DB: &sql.DB{}, Graph: graph, Set: fakeSet{}, Entitlements: fakeEntitlements{err: errors.New("404")}, Locker: heldLocker{}}
+	purger := &Purger{DB: &sql.DB{}, Graph: graph, Set: fakeSet{}, Entitlements: fakeEntitlements{}, Locker: heldLocker{}}
 	_, err := purger.Run(context.Background(), testOrg, Options{AttestDeleted: true, ConfirmOrgKey: OrgKey(testOrg)})
 	if !errors.Is(err, ErrLocked) {
 		t.Fatalf("Run() error = %v, want ErrLocked", err)
@@ -102,16 +107,10 @@ func TestRunRefusesWhenAnotherProjectorHoldsTheOrganizationLock(t *testing.T) {
 }
 
 func TestRunUsesTheCanonicalUUIDSpelling(t *testing.T) {
-	upper := strings.ToUpper(testOrg)
 	seen := ""
-	purger := &Purger{DB: &sql.DB{}, Graph: noGraph{}, Set: recordingSet{seen: &seen}, Entitlements: fakeEntitlements{err: errors.New("404")}, Locker: heldLocker{}}
-	_, _ = purger.Run(context.Background(), "{"+upper+"}", Options{AttestDeleted: true, ConfirmOrgKey: OrgKey(testOrg)})
+	purger := &Purger{DB: &sql.DB{}, Graph: noGraph{}, Set: fakeSet{}, Entitlements: fakeEntitlements{}, Locker: heldLocker{seen: &seen}}
+	_, _ = purger.Run(context.Background(), "{"+strings.ToUpper(testOrg)+"}", Options{AttestDeleted: true, ConfirmOrgKey: OrgKey(testOrg)})
 	if seen != testOrg {
-		t.Fatalf("projector set asked about %q, want the canonical lowercase %q", seen, testOrg)
+		t.Fatalf("lock taken on %q, want the canonical lowercase %q", seen, testOrg)
 	}
 }
-
-type recordingSet struct{ seen *string }
-
-func (recordingSet) RefreshOrgs(context.Context) error { return nil }
-func (r recordingSet) AllowsOrg(org string) bool       { *r.seen = org; return false }

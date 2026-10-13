@@ -44,7 +44,7 @@ func TestFailureAfterTheGraphDropIsIncompleteNeverPurged(t *testing.T) {
 	drv := &failingDriver{}
 	db := sql.OpenDB(connectorFunc(func(context.Context) (driver.Conn, error) { return &failingConn{d: drv}, nil }))
 	t.Cleanup(func() { _ = db.Close() })
-	purger := &Purger{DB: db, Graph: droppingGraph{}, Set: fakeSet{}, Entitlements: fakeEntitlements{err: errors.New("404")}, Locker: freeLocker{}}
+	purger := &Purger{DB: db, Graph: droppingGraph{}, Set: fakeSet{}, Entitlements: fakeEntitlements{}, Locker: freeLocker{}}
 
 	report, err := purger.Run(context.Background(), testOrg, Options{AttestDeleted: true, ConfirmOrgKey: OrgKey(testOrg)})
 	if !errors.Is(err, ErrIncomplete) {

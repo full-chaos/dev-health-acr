@@ -40,13 +40,13 @@ type GraphDropper interface {
 // EffectiveSet is the projector's current organization set.
 type EffectiveSet interface {
 	RefreshOrgs(ctx context.Context) error
-	AllowsOrg(orgID string) bool
+	EffectiveOrgs() []string
 }
 
-// Entitlements is the Dev Health entitlement lookup. A nil error means Dev
-// Health answered 200 for the organization, so it still exists there.
+// Entitlements reports whether Dev Health answers HTTP 200 for the
+// organization, whatever the body holds: a 200 means it still exists there.
 type Entitlements interface {
-	HasEntitlement(ctx context.Context, orgID, entitlement string) (bool, error)
+	AnswersFor(ctx context.Context, orgID string) bool
 }
 
 type Locker interface {
@@ -105,29 +105,29 @@ type tableSpec struct {
 var purgeTables = []tableSpec{
 	{Name: "device_authorizations", Where: `authorized_org_id = $1::uuid
 		OR redeemed_credential_id IN (SELECT credential_id FROM acr.client_credentials WHERE org_id = $1::uuid)
-		OR lower(organization_id_hint) = $1::uuid::text
-		OR device_code_hash IN (SELECT device_code_hash FROM acr.oauth_authorization_requests WHERE bound_org_id = $1::uuid::text)`,
+		OR ` + matchOrg("organization_id_hint") + `
+		OR device_code_hash IN (SELECT device_code_hash FROM acr.oauth_authorization_requests WHERE ` + matchOrg("bound_org_id") + `)`,
 		CascadedByDeviceCode: []string{"oauth_authorization_requests", "oauth_device_grants"}},
 	{Name: "client_credentials", Where: `org_id = $1::uuid`},
 	{Name: "workload_bindings", Where: `org_id = $1::uuid`},
 	{Name: "context_packet_snapshots", Where: `org_id = $1::uuid`},
 	{Name: "agent_episodes", Where: `org_id = $1::uuid AND retention_class <> 'legal_hold'`},
-	{Name: "context_fabric_projection_checkpoints", Where: `org_id = $1`},
-	{Name: "context_fabric_projection_rebuild_markers", Where: `org_id = $1`},
-	{Name: "context_fabric_investigation_results", Where: `org_id = $1`},
-	{Name: "context_fabric_model_execution_receipts", Where: `org_id = $1`},
-	{Name: "context_fabric_org_model_config", Where: `org_id = $1`},
-	{Name: "context_fabric_reuse_invalidations", Where: `org_id = $1`},
-	{Name: "context_fabric_clarification_selections", Where: `org_id = $1`},
-	{Name: "context_fabric_structure_selections", Where: `org_id = $1`},
-	{Name: "context_fabric_structure_supersession_claims", Where: `org_id = $1`},
-	{Name: "context_fabric_structure_prior_pointer_history", Where: `org_id = $1`},
-	{Name: "context_fabric_structure_prior_pointer", Where: `org_id = $1`},
-	{Name: "context_fabric_structure_prior_revocations", Where: `org_id = $1`},
-	{Name: "context_fabric_structure_priors", Where: `org_id = $1`},
-	{Name: "context_fabric_graph_build_source_progress", Where: `org_id = $1`},
-	{Name: "context_fabric_graph_epoch_retirements", Where: `org_id = $1`},
-	{Name: "context_fabric_graph_lifecycle", Where: `org_id = $1`},
+	{Name: "context_fabric_projection_checkpoints", Where: matchOrg("org_id")},
+	{Name: "context_fabric_projection_rebuild_markers", Where: matchOrg("org_id")},
+	{Name: "context_fabric_investigation_results", Where: matchOrg("org_id")},
+	{Name: "context_fabric_model_execution_receipts", Where: matchOrg("org_id")},
+	{Name: "context_fabric_org_model_config", Where: matchOrg("org_id")},
+	{Name: "context_fabric_reuse_invalidations", Where: matchOrg("org_id")},
+	{Name: "context_fabric_clarification_selections", Where: matchOrg("org_id")},
+	{Name: "context_fabric_structure_selections", Where: matchOrg("org_id")},
+	{Name: "context_fabric_structure_supersession_claims", Where: matchOrg("org_id")},
+	{Name: "context_fabric_structure_prior_pointer_history", Where: matchOrg("org_id")},
+	{Name: "context_fabric_structure_prior_pointer", Where: matchOrg("org_id")},
+	{Name: "context_fabric_structure_prior_revocations", Where: matchOrg("org_id")},
+	{Name: "context_fabric_structure_priors", Where: matchOrg("org_id")},
+	{Name: "context_fabric_graph_build_source_progress", Where: matchOrg("org_id")},
+	{Name: "context_fabric_graph_epoch_retirements", Where: matchOrg("org_id")},
+	{Name: "context_fabric_graph_lifecycle", Where: matchOrg("org_id")},
 }
 
 // PurgedTables and KeptTables name every table the purge handles, for the
@@ -175,10 +175,12 @@ func (p *Purger) Run(ctx context.Context, orgID string, opts Options) (Report, e
 	if err := p.Set.RefreshOrgs(ctx); err != nil {
 		return report, fmt.Errorf("%w: cannot prove the organization is outside the projector set: discovery failed", ErrRefused)
 	}
-	if p.Set.AllowsOrg(orgID) {
-		return report, fmt.Errorf("%w: organization is in the projector set (static list or discovery)", ErrRefused)
+	for _, member := range p.Set.EffectiveOrgs() {
+		if member == orgID || sameUUID(member, orgID) {
+			return report, fmt.Errorf("%w: organization is in the projector set (static list or discovery)", ErrRefused)
+		}
 	}
-	if _, err := p.Entitlements.HasEntitlement(ctx, orgID, "agent_context_runtime"); err == nil {
+	if p.Entitlements.AnswersFor(ctx, orgID) {
 		return report, fmt.Errorf("%w: Dev Health still answers for this organization", ErrRefused)
 	}
 
@@ -202,6 +204,24 @@ func (p *Purger) Run(ctx context.Context, orgID string, opts Options) (Report, e
 		report.Status = StatusDryRun
 	}
 	return report, nil
+}
+
+// sameUUID reports whether two strings are the same UUID in any spelling
+// uuid.Parse accepts.
+func sameUUID(a, b string) bool {
+	left, err := uuid.Parse(strings.TrimSpace(a))
+	if err != nil {
+		return false
+	}
+	right, err := uuid.Parse(strings.TrimSpace(b))
+	return err == nil && left == right
+}
+
+// matchOrg is the predicate for a TEXT column that holds an organization id
+// in any UUID spelling: case, hyphens, braces and a urn:uuid: prefix are
+// ignored. $1 is the canonical UUID.
+func matchOrg(column string) string {
+	return "lower(regexp_replace(" + column + ", '^urn:uuid:|[{}-]', '', 'gi')) = replace($1::uuid::text, '-', '')"
 }
 
 func (p *Purger) removeOrganization(ctx context.Context, orgID string, opts Options, report *Report) error {
@@ -256,7 +276,7 @@ func (p *Purger) removeOrganization(ctx context.Context, orgID string, opts Opti
 	if opts.DryRun {
 		return nil
 	}
-	if report.TotalRows > 0 {
+	if report.TotalRows > 0 || report.Graphs > 0 {
 		if err := p.writeAudit(ctx, tx, orgID, *report); err != nil {
 			return err
 		}

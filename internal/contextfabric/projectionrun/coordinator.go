@@ -625,8 +625,8 @@ func (c *Coordinator) allowsOrg(orgID string) bool {
 	return false
 }
 
-// AllowsOrg reports whether orgID is in the effective organization set.
-func (c *Coordinator) AllowsOrg(orgID string) bool { return c.allowsOrg(orgID) }
+// EffectiveOrgs returns a snapshot of the effective organization set.
+func (c *Coordinator) EffectiveOrgs() []string { return c.orgs() }
 
 // RefreshOrgs re-runs discovery once and updates the effective organization
 // set, for a caller that has no Tick loop to do it: `acr-projector rebuild

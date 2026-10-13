@@ -3,7 +3,6 @@ package orgpurge_test
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"os"
 	"sort"
 	"strings"
@@ -30,25 +29,20 @@ const (
 	graphSource   = "purge-test"
 )
 
-type fakeSet struct{ allowed map[string]bool }
+type fakeSet struct{ members []string }
 
-func (fakeSet) RefreshOrgs(context.Context) error { return nil }
-func (f fakeSet) AllowsOrg(org string) bool       { return f.allowed[org] }
+func (*fakeSet) RefreshOrgs(context.Context) error { return nil }
+func (f *fakeSet) EffectiveOrgs() []string         { return f.members }
 
 type fakeEntitlements struct{ known map[string]bool }
 
-func (f fakeEntitlements) HasEntitlement(_ context.Context, org, _ string) (bool, error) {
-	if f.known[org] {
-		return true, nil
-	}
-	return false, errors.New("unavailable")
-}
+func (f *fakeEntitlements) AnswersFor(_ context.Context, org string) bool { return f.known[org] }
 
 type rig struct {
 	db      *sql.DB
 	adapter *falkorgraph.Adapter
-	set     fakeSet
-	ent     fakeEntitlements
+	set     *fakeSet
+	ent     *fakeEntitlements
 	purger  *orgpurge.Purger
 }
 
@@ -90,7 +84,7 @@ func newRig(t *testing.T) *rig {
 
 	locker, err := projectionrun.NewPostgresOrgLocker(db)
 	require.NoError(t, err)
-	r := &rig{db: db, adapter: adapter, set: fakeSet{allowed: map[string]bool{}}, ent: fakeEntitlements{known: map[string]bool{}}}
+	r := &rig{db: db, adapter: adapter, set: &fakeSet{}, ent: &fakeEntitlements{known: map[string]bool{}}}
 	r.purger = &orgpurge.Purger{DB: db, Graph: adapter, Set: r.set, Entitlements: r.ent, Locker: locker}
 	return r
 }
@@ -135,10 +129,10 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 	require.EqualValues(t, 1, dry.KeptLegalHold)
 
 	// guards on the real rig
-	r.set.allowed[orgGone] = true
+	r.set.members = []string{strings.ToUpper(orgGone)}
 	_, err = r.run(t, orgGone, opts)
 	require.ErrorIs(t, err, orgpurge.ErrRefused, "an org in the projector set")
-	delete(r.set.allowed, orgGone)
+	r.set.members = nil
 	r.ent.known[orgGone] = true
 	_, err = r.run(t, orgGone, opts)
 	require.ErrorIs(t, err, orgpurge.ErrRefused, "an org Dev Health still answers for")
@@ -215,12 +209,16 @@ WHERE table_schema = 'acr' AND column_name IN ('org_id', 'organization_id', 'aut
 }
 
 var countWhere = map[string]string{
-	"device_authorizations": `authorized_org_id::text = $1 OR lower(organization_id_hint) = $1
-		OR device_code_hash IN (SELECT device_code_hash FROM acr.oauth_authorization_requests WHERE bound_org_id = $1)`,
-	"oauth_authorization_requests": `bound_org_id = $1`,
+	"device_authorizations": `authorized_org_id::text = $1 OR ` + looseMatch("organization_id_hint") + `
+		OR device_code_hash IN (SELECT device_code_hash FROM acr.oauth_authorization_requests WHERE ` + looseMatch("bound_org_id") + `)`,
+	"oauth_authorization_requests": looseMatch("bound_org_id"),
 	"oauth_device_grants":          `device_code_hash IN (SELECT device_code_hash FROM acr.device_authorizations WHERE authorized_org_id::text = $1)`,
 	"client_credentials":           `org_id::text = $1`, "workload_bindings": `org_id::text = $1`,
 	"context_packet_snapshots": `org_id::text = $1`, "agent_episodes": `org_id::text = $1`,
+}
+
+func looseMatch(column string) string {
+	return "replace(lower(translate(replace(" + column + ", 'urn:uuid:', ''), '{}', '')), '-', '') = replace($1, '-', '')"
 }
 
 func countedTables() []string {
@@ -230,7 +228,7 @@ func countedTables() []string {
 func rowCounts(t *testing.T, db *sql.DB, org string) map[string]int64 {
 	counts := map[string]int64{}
 	for _, table := range countedTables() {
-		where := "org_id = $1"
+		where := looseMatch("org_id")
 		if w, ok := countWhere[table]; ok {
 			where = w
 		}
@@ -295,4 +293,18 @@ CREATE TRIGGER purge_test_fail BEFORE DELETE ON acr.context_fabric_structure_pri
 		require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.audit_events WHERE org_id = $1::uuid AND action = $2`, orgBroken, action).Scan(&n))
 		require.Equal(t, want, n, "audit rows for %s", action)
 	}
+}
+
+func TestGraphOnlyPurgeIsAudited(t *testing.T) {
+	r := newRig(t)
+	const orgGraphOnly = "dddddddd-0000-4000-8000-000000000004"
+	seedGraph(t, r.adapter, orgGraphOnly)
+	report, err := r.run(t, orgGraphOnly, orgpurge.Options{AttestDeleted: true, ConfirmOrgKey: orgpurge.OrgKey(orgGraphOnly)})
+	require.NoError(t, err)
+	require.Equal(t, 1, report.Graphs)
+	require.Zero(t, report.TotalRows)
+	require.True(t, report.AuditRowWritten, "a purge that only removed a graph is still audited")
+	var n int
+	require.NoError(t, r.db.QueryRowContext(context.Background(), `SELECT count(*) FROM acr.audit_events WHERE org_id = $1::uuid AND action = 'org_purged'`, orgGraphOnly).Scan(&n))
+	require.Equal(t, 1, n)
 }
