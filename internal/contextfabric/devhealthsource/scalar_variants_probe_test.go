@@ -33,7 +33,7 @@ func TestProbeScalarVariants(t *testing.T) {
 		}
 	}
 	a := strings.Index(s, "arrayElement(")
-	b := strings.Index(s, ", e.source_id)")
+	b := a + strings.Index(s[a:], ", e.source_id)")
 	if a < 0 || b < 0 {
 		t.Fatalf("statement shape changed")
 	}
