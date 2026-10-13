@@ -10,7 +10,11 @@ import (
 )
 
 func (s ContextFabricSubjectRef) Validate() error {
-	if !validContextFabricSubjectKind(s.Kind) || !stringLengthBetween(s.CanonicalID, 1, 256) || !stringLengthBetween(s.Label, 1, 512) {
+	return s.validate(contextFabricWriteBounds)
+}
+
+func (s ContextFabricSubjectRef) validate(bounds contextFabricBounds) error {
+	if !bounds.additiveOK(validContextFabricSubjectKind(s.Kind), string(s.Kind)) || !stringLengthBetween(s.CanonicalID, 1, 256) || !stringLengthBetween(s.Label, 1, 512) {
 		return fmt.Errorf("subject reference violates v1 bounds")
 	}
 	if strings.TrimSpace(s.CanonicalID) != s.CanonicalID || strings.TrimSpace(s.Label) != s.Label {
@@ -28,10 +32,10 @@ func (c ContextFabricSubjectCandidate) validateStored() error {
 }
 
 func (c ContextFabricSubjectCandidate) validate(bounds contextFabricBounds) error {
-	if !stringLengthBetween(c.ReceiptID, 8, 256) || !validResolutionState(c.State) || c.Confidence < 0 || c.Confidence > 1 {
+	if !stringLengthBetween(c.ReceiptID, 8, 256) || !bounds.additiveOK(validResolutionState(c.State), string(c.State)) || c.Confidence < 0 || c.Confidence > 1 {
 		return fmt.Errorf("subject candidate identity, state, or confidence violates v1 bounds")
 	}
-	if err := c.Subject.Validate(); err != nil {
+	if err := c.Subject.validate(bounds); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
 	if len(c.MatchedTerms) > bounds.matchedTerms || len(c.MatchReasons) < 1 || len(c.MatchReasons) > bounds.matchReasons || !uniqueTrimmedStrings(c.MatchedTerms, bounds.matchedTermLength) || !uniqueTrimmedStrings(c.MatchReasons, bounds.matchReasonLength) {
@@ -40,7 +44,7 @@ func (c ContextFabricSubjectCandidate) validate(bounds contextFabricBounds) erro
 	if utf8.RuneCountInString(c.Provider) > ContextFabricProviderMaxLength {
 		return fmt.Errorf("subject candidate provider violates v1 bounds")
 	}
-	if !validMatchMechanisms(c.MatchMechanisms) {
+	if !validMatchMechanisms(c.MatchMechanisms, bounds) {
 		return fmt.Errorf("subject candidate match mechanisms violate v1 bounds")
 	}
 	if !optionalEvidenceRefs(c.EvidenceRefIDs, bounds.candidateEvidenceRefs) {
@@ -67,7 +71,7 @@ func (r ContextFabricSubjectResolution) validate(bounds contextFabricBounds) err
 		}
 		seenReceipts[candidate.ReceiptID] = struct{}{}
 	}
-	if !uniqueSubjects(r.Committed) {
+	if !uniqueSubjectsWithin(r.Committed, bounds) {
 		return fmt.Errorf("committed subjects must be valid and unique")
 	}
 	// CommitDecisionDigests (CHAOS-4087) is additive-optional: nil is
@@ -95,7 +99,7 @@ func (r ContextFabricSubjectResolution) validate(bounds contextFabricBounds) err
 		// fail-closed-unrecorded because a duplicate consumed its slot.
 		seenDigestSubjects := make(map[string]struct{}, len(r.CommitDecisionDigests))
 		for _, digest := range r.CommitDecisionDigests {
-			if err := digest.Validate(); err != nil {
+			if err := digest.validate(bounds); err != nil {
 				return fmt.Errorf("commit decision digests: %w", err)
 			}
 			key := subjectKey(digest.Subject)
@@ -111,7 +115,7 @@ func (r ContextFabricSubjectResolution) validate(bounds contextFabricBounds) err
 	if !stringLengthBetween(r.ClarificationPrompt, 0, 2000) || strings.TrimSpace(r.ClarificationPrompt) != r.ClarificationPrompt {
 		return fmt.Errorf("clarification prompt violates v1 bounds")
 	}
-	if err := validateInactiveHints(r.InactiveHints); err != nil {
+	if err := validateInactiveHints(r.InactiveHints, bounds); err != nil {
 		return err
 	}
 	// PriorSubjectReceiptDispositions (CHAOS-3478/CHAOS-3813) is
@@ -125,7 +129,7 @@ func (r ContextFabricSubjectResolution) validate(bounds contextFabricBounds) err
 			return fmt.Errorf("prior subject receipt dispositions exceed v1 bounds")
 		}
 		for _, entry := range r.PriorSubjectReceiptDispositions {
-			if err := entry.Validate(); err != nil {
+			if err := entry.validate(bounds); err != nil {
 				return fmt.Errorf("prior subject receipt dispositions: %w", err)
 			}
 		}
@@ -140,13 +144,20 @@ func (r ContextFabricSubjectResolution) validate(bounds contextFabricBounds) err
 // unconstrained bool let a statistical gate like lone_floor claim a proven
 // identity, which a trusting consumer would misclassify).
 func (d ContextFabricCommitDecisionDigest) Validate() error {
-	if err := d.Subject.Validate(); err != nil {
+	return d.validate(contextFabricWriteBounds)
+}
+
+// validate skips the gate-to-identity and lookup-to-alias pairings for an
+// added gate or lookup token: those pairings are defined per known member.
+func (d ContextFabricCommitDecisionDigest) validate(bounds contextFabricBounds) error {
+	if err := d.Subject.validate(bounds); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
-	if !validCommitGate(d.CommitGate) {
+	gateKnown := validCommitGate(d.CommitGate)
+	if !bounds.additiveOK(gateKnown, d.CommitGate) {
 		return fmt.Errorf("commit gate is not a recognized value")
 	}
-	if !validCommitDecisionDigestIdentityProven(d.CommitGate, d.IdentityProven) {
+	if gateKnown && !validCommitDecisionDigestIdentityProven(d.CommitGate, d.IdentityProven) {
 		return fmt.Errorf("identity proven is not consistent with the commit gate")
 	}
 	switch d.IdentityLookup {
@@ -159,7 +170,9 @@ func (d ContextFabricCommitDecisionDigest) Validate() error {
 			return fmt.Errorf("alias lookup complete is not consistent with the identity lookup state")
 		}
 	default:
-		return fmt.Errorf("identity lookup is not a recognized value")
+		if !bounds.additiveOK(false, d.IdentityLookup) {
+			return fmt.Errorf("identity lookup is not a recognized value")
+		}
 	}
 	return nil
 }
@@ -211,7 +224,7 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 	// rest by name rather than constructing a document this validator would
 	// then reject. That seam is deliberately narrower than this bound and is
 	// pinned by its own tests.
-	if !validContextFabricSubjectKind(c.Kind) || c.Members == nil || len(c.Members) > 250 || len(c.Exclusions) > 250 || !boundedText(c.Rationale, 1, 4000, bounds) || (c.Complete && c.Truncated) {
+	if !bounds.additiveOK(validContextFabricSubjectKind(c.Kind), string(c.Kind)) || c.Members == nil || len(c.Members) > 250 || len(c.Exclusions) > 250 || !boundedText(c.Rationale, 1, 4000, bounds) || (c.Complete && c.Truncated) {
 		return fmt.Errorf("cohort violates v1 bounds")
 	}
 	seen := make(map[string]struct{}, len(c.Members))
@@ -287,7 +300,7 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 		if len(c.Groups) > ContextFabricCohortGroupsMaxCount {
 			return fmt.Errorf("cohort violates v1 bounds")
 		}
-		if err := ValidateCohortGroups(c.Groups, c.Members); err != nil {
+		if err := validateCohortGroups(c.Groups, c.Members, bounds); err != nil {
 			return fmt.Errorf("groups: %w", err)
 		}
 		groupComplete, groupTruncated := CohortCompletenessFromGroups(c.Groups)
@@ -373,6 +386,12 @@ type contextFabricBounds struct {
 	// property the rule exists for. Identical reasoning and identical shape
 	// to closedFindingKinds above.
 	planAuthorizedRenderKinds bool
+	// openVocabularies admits an unknown token in an ADDITIVE output
+	// vocabulary. FALSE on writes and on model output, which stay closed;
+	// TRUE on reads of a served or stored result, so a client built before
+	// the server added a member still reads the answer. Frozen vocabularies
+	// ignore it.
+	openVocabularies bool
 
 	cohortInclusionReasons      int
 	cohortInclusionReasonLength int
@@ -494,6 +513,7 @@ var contextFabricLegacyBounds = contextFabricBounds{
 	closedFindingKinds:                false,
 	rawTextLength:                     false,
 	planAuthorizedRenderKinds:         false,
+	openVocabularies:                  true,
 	cohortInclusionReasons:            50,
 	cohortInclusionReasonLength:       1024,
 	narrativeCount:                    250,
@@ -536,7 +556,7 @@ func (m ContextFabricCohortMember) validateStored() error {
 }
 
 func (m ContextFabricCohortMember) validate(bounds contextFabricBounds) error {
-	if err := m.Subject.Validate(); err != nil {
+	if err := m.Subject.validate(bounds); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
 	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > bounds.cohortInclusionReasons || !uniqueTrimmedStrings(m.InclusionReasons, bounds.cohortInclusionReasonLength) || !optionalEvidenceRefs(m.EvidenceRefIDs, bounds.memberEvidenceRefs) {
@@ -875,7 +895,7 @@ func (e ContextFabricCohortExclusion) Validate() error {
 }
 
 func (e ContextFabricCohortExclusion) validate(bounds contextFabricBounds) error {
-	if err := e.Subject.Validate(); err != nil {
+	if err := e.Subject.validate(bounds); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
 	if !boundedText(e.Reason, 1, bounds.cohortExclusionReasonLength, bounds) {
@@ -896,7 +916,7 @@ func (p ContextFabricRelationshipPath) validate(bounds contextFabricBounds) erro
 	if !stringLengthBetween(p.PathID, 8, 256) || len(p.Nodes) < 2 || len(p.Nodes) > contextFabricRelationshipPathMaxNodes || len(p.Edges) != len(p.Nodes)-1 || !boundedText(p.WhyRelevant, 1, bounds.pathWhyRelevantLength, bounds) || !boundedEvidenceRefs(p.EvidenceRefIDs, bounds.pathEvidenceRefs, false) {
 		return fmt.Errorf("relationship path violates v1 bounds")
 	}
-	if !uniqueSubjects(p.Nodes) {
+	if !uniqueSubjectsWithin(p.Nodes, bounds) {
 		return fmt.Errorf("relationship path nodes must be valid and unique")
 	}
 	for index, edge := range p.Edges {
@@ -915,16 +935,16 @@ func (e ContextFabricRelationshipEdge) Validate() error {
 }
 
 func (e ContextFabricRelationshipEdge) validate(bounds contextFabricBounds) error {
-	if !validDerivationMethod(e.Derivation) || !validEpistemicStatus(e.EpistemicStatus) || !boundedEvidenceRefs(e.EvidenceRefIDs, bounds.memberEvidenceRefs, false) {
+	if !bounds.additiveOK(validDerivationMethod(e.Derivation), string(e.Derivation)) || !bounds.additiveOK(validEpistemicStatus(e.EpistemicStatus), string(e.EpistemicStatus)) || !boundedEvidenceRefs(e.EvidenceRefIDs, bounds.memberEvidenceRefs, false) {
 		return fmt.Errorf("relationship edge violates v1 bounds")
 	}
-	if !validContextFabricRelationshipType(e.Type) {
+	if !bounds.additiveOK(validContextFabricRelationshipType(e.Type), string(e.Type)) {
 		return fmt.Errorf("%w: %q", ErrContextFabricUnknownRelationshipType, e.Type)
 	}
-	if err := e.From.Validate(); err != nil {
+	if err := e.From.validate(bounds); err != nil {
 		return fmt.Errorf("from: %w", err)
 	}
-	if err := e.To.Validate(); err != nil {
+	if err := e.To.validate(bounds); err != nil {
 		return fmt.Errorf("to: %w", err)
 	}
 	if err := validateTimeRange(e.ObservedAt, e.ValidFrom, e.ValidTo); err != nil {
@@ -938,10 +958,10 @@ func (d ContextFabricDriverJudgment) Validate() error {
 }
 
 func (d ContextFabricDriverJudgment) validate(bounds contextFabricBounds) error {
-	if !stringLengthBetween(d.DriverID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !validDriverStanding(d.Standing) || !validDriverCategory(ContextFabricDriverCategory(d.Category)) || !boundedText(d.Title, 1, ContextFabricDriverTitleMaxLength, bounds) || !boundedText(d.Summary, 1, ContextFabricDriverSummaryMaxLength, bounds) || !validDerivationMethod(d.Derivation) || !validEpistemicStatus(d.EpistemicStatus) || d.Confidence < 0 || d.Confidence > 1 || !stringLengthBetween(d.Qualification, 0, ContextFabricDriverQualificationMaxLength) {
+	if !stringLengthBetween(d.DriverID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !bounds.additiveOK(validDriverStanding(d.Standing), string(d.Standing)) || !bounds.additiveOK(validDriverCategory(ContextFabricDriverCategory(d.Category)), d.Category) || !boundedText(d.Title, 1, ContextFabricDriverTitleMaxLength, bounds) || !boundedText(d.Summary, 1, ContextFabricDriverSummaryMaxLength, bounds) || !bounds.additiveOK(validDerivationMethod(d.Derivation), string(d.Derivation)) || !bounds.additiveOK(validEpistemicStatus(d.EpistemicStatus), string(d.EpistemicStatus)) || d.Confidence < 0 || d.Confidence > 1 || !stringLengthBetween(d.Qualification, 0, ContextFabricDriverQualificationMaxLength) {
 		return fmt.Errorf("driver judgment violates v1 bounds")
 	}
-	if len(d.AffectedSubjects) < ContextFabricDriverAffectedSubjectsMinCount || len(d.AffectedSubjects) > ContextFabricDriverAffectedSubjectsMaxCount || !uniqueSubjects(d.AffectedSubjects) || len(d.PathIDs) > ContextFabricDriverPathIDsMaxCount || !uniqueTrimmedStrings(d.PathIDs, ContextFabricIdentifierRefMaxLength) || !boundedEvidenceRefs(d.EvidenceRefIDs, bounds.nestedEvidenceRefs, true) {
+	if len(d.AffectedSubjects) < ContextFabricDriverAffectedSubjectsMinCount || len(d.AffectedSubjects) > ContextFabricDriverAffectedSubjectsMaxCount || !uniqueSubjectsWithin(d.AffectedSubjects, bounds) || len(d.PathIDs) > ContextFabricDriverPathIDsMaxCount || !uniqueTrimmedStrings(d.PathIDs, ContextFabricIdentifierRefMaxLength) || !boundedEvidenceRefs(d.EvidenceRefIDs, bounds.nestedEvidenceRefs, true) {
 		return fmt.Errorf("driver subject, path, or evidence references violate v1 bounds")
 	}
 	if len(d.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount || !uniqueTrimmedStrings(d.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength) {
@@ -974,7 +994,7 @@ func (f ContextFabricFinding) Validate() error {
 }
 
 func (f ContextFabricFinding) validate(bounds contextFabricBounds) error {
-	if !stringLengthBetween(f.FindingID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !boundedText(f.Kind, 1, ContextFabricFindingKindMaxLength, bounds) || !boundedText(f.Summary, 1, ContextFabricFindingSummaryMaxLength, bounds) || len(f.Subjects) > ContextFabricFindingSubjectsMaxCount || !uniqueSubjects(f.Subjects) || !boundedEvidenceRefs(f.EvidenceRefIDs, bounds.nestedEvidenceRefs, false) {
+	if !stringLengthBetween(f.FindingID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !boundedText(f.Kind, 1, ContextFabricFindingKindMaxLength, bounds) || !boundedText(f.Summary, 1, ContextFabricFindingSummaryMaxLength, bounds) || len(f.Subjects) > ContextFabricFindingSubjectsMaxCount || !uniqueSubjectsWithin(f.Subjects, bounds) || !boundedEvidenceRefs(f.EvidenceRefIDs, bounds.nestedEvidenceRefs, false) {
 		return fmt.Errorf("finding violates v1 bounds")
 	}
 	if len(f.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount || !uniqueTrimmedStrings(f.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength) {
@@ -1000,7 +1020,11 @@ func (f ContextFabricFinding) validate(bounds contextFabricBounds) error {
 }
 
 func (c ContextFabricClaimedFact) Validate() error {
-	if !stringLengthBetween(c.ClaimID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !validClaimedFactKind(c.Kind) || !stringLengthBetween(c.Field, 1, ContextFabricClaimedFieldMaxLength) || strings.TrimSpace(c.Field) != c.Field {
+	return c.validate(contextFabricWriteBounds)
+}
+
+func (c ContextFabricClaimedFact) validate(bounds contextFabricBounds) error {
+	if !stringLengthBetween(c.ClaimID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !bounds.additiveOK(validClaimedFactKind(c.Kind), string(c.Kind)) || !stringLengthBetween(c.Field, 1, ContextFabricClaimedFieldMaxLength) || strings.TrimSpace(c.Field) != c.Field {
 		return fmt.Errorf("claimed fact identity violates v1 bounds")
 	}
 	if utf8.RuneCountInString(c.FactID) > ContextFabricModelMintedIDMaxLength {
@@ -1009,7 +1033,7 @@ func (c ContextFabricClaimedFact) Validate() error {
 	if err := c.validateDerivation(); err != nil {
 		return err
 	}
-	if err := c.Subject.Validate(); err != nil {
+	if err := c.Subject.validate(bounds); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
 	if err := c.Value.Validate(); err != nil {
@@ -1034,11 +1058,11 @@ func (c ContextFabricClaimedFact) Validate() error {
 }
 
 func (o ContextFabricSourceObservation) Validate() error {
-	return o.validate(true)
+	return o.validate(true, contextFabricWriteBounds)
 }
 
 func (o ContextFabricSourceObservation) validateStored() error {
-	return o.validate(false)
+	return o.validate(false, contextFabricLegacyBounds)
 }
 
 // validate optionally requires the source name to be exactly trimmed.
@@ -1048,11 +1072,15 @@ func (o ContextFabricSourceObservation) validateStored() error {
 // it (codex round-5 R5-5). Writes now reject the padding; stored rows keep
 // being accepted, and the projection trims on copy, so a legacy padded row
 // stays readable and projectable.
-func (o ContextFabricSourceObservation) validate(requireTrimmed bool) error {
+//
+// An added state token is admitted on a read; the reason requirement is keyed
+// to the known non-available states, so it does not apply to one.
+func (o ContextFabricSourceObservation) validate(requireTrimmed bool, bounds contextFabricBounds) error {
 	if requireTrimmed && strings.TrimSpace(o.Source) != o.Source {
 		return fmt.Errorf("source observation name must be trimmed")
 	}
-	if !stringLengthBetween(strings.TrimSpace(o.Source), 1, 128) || !validSourceState(o.State) || !stringLengthBetween(o.Watermark, 0, 512) || !stringLengthBetween(o.Reason, 0, ContextFabricSourceObservationReasonMaxLength) {
+	stateKnown := validSourceState(o.State)
+	if !stringLengthBetween(strings.TrimSpace(o.Source), 1, 128) || !bounds.additiveOK(stateKnown, string(o.State)) || !stringLengthBetween(o.Watermark, 0, 512) || !stringLengthBetween(o.Reason, 0, ContextFabricSourceObservationReasonMaxLength) {
 		return fmt.Errorf("source observation violates v1 bounds")
 	}
 	// CHAOS-4690: display labels are optional (absent on legacy rows) but
@@ -1064,7 +1092,7 @@ func (o ContextFabricSourceObservation) validate(requireTrimmed bool) error {
 	if o.ObservedAt != nil && o.ObservedAt.IsZero() {
 		return fmt.Errorf("source observation timestamp is invalid")
 	}
-	if o.State != ContextFabricSourceAvailable && strings.TrimSpace(o.Reason) == "" {
+	if stateKnown && o.State != ContextFabricSourceAvailable && strings.TrimSpace(o.Reason) == "" {
 		return fmt.Errorf("non-available source requires a reason")
 	}
 	return nil
@@ -1189,7 +1217,10 @@ func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFab
 	// called from here -- contextfabric imports this package, not the
 	// reverse) and requires an exact match, the same discipline every
 	// other completeness field already gets.
-	if want := expectedTerminalReason(r); c.TerminalReason != want {
+	// An added terminal_reason token names a disclosure channel this build
+	// cannot derive, so the equality check is left to known members.
+	if want := expectedTerminalReason(r); c.TerminalReason != want &&
+		!bounds.additiveUnknown(ValidContextFabricTerminalReason(c.TerminalReason), string(c.TerminalReason)) {
 		return fmt.Errorf("terminal_reason %q does not match the document's own disclosure (want %q)", c.TerminalReason, want)
 	}
 	if c.ClaimedFactsCount != len(r.ClaimedFacts) {
@@ -1210,14 +1241,14 @@ func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFab
 	if c.RefusalBasis != r.RefusalBasis {
 		return fmt.Errorf("completeness refusal_basis %q must equal the result's refusal_basis %q", c.RefusalBasis, r.RefusalBasis)
 	}
-	if err := r.validateStatusCorrection(); err != nil {
+	if err := r.validateStatusCorrection(bounds); err != nil {
 		return err
 	}
 	// Membership is checked on the NON-EMPTY value only: empty is the
 	// ordinary case (the turn was not refused) and is deliberately not a
 	// vocabulary member, so an allow-list membership test on it would
 	// refuse every unrefused answer ever produced.
-	if r.RefusalBasis != "" && !ValidContextFabricRefusalBasis(r.RefusalBasis) {
+	if r.RefusalBasis != "" && !bounds.additiveOK(ValidContextFabricRefusalBasis(r.RefusalBasis), string(r.RefusalBasis)) {
 		return fmt.Errorf("refusal_basis %q is not a vocabulary member", r.RefusalBasis)
 	}
 	// A REFUSAL CANNOT CLAIM TO HAVE ANSWERED. The gate refuses above
@@ -1284,9 +1315,13 @@ func validateAnswerOutcomes(c ContextFabricAnswerCompleteness, bounds contextFab
 	if len(c.Outcomes) > ContextFabricPlanRequirementOutcomeMaxCount {
 		return fmt.Errorf("outcomes exceeds v1 bounds")
 	}
+	addedOutcome := false
 	for index, row := range c.Outcomes {
-		if err := ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
+		if err := validatePlanRequirementOutcomeRow(row, bounds); err != nil {
 			return fmt.Errorf("outcomes[%d]: %w", index, err)
+		}
+		if bounds.additiveUnknown(ValidContextFabricPlanRequirementOutcome(row.Outcome), string(row.Outcome)) {
+			addedOutcome = true
 		}
 	}
 	if !bounds.completenessRequired && c.State == "" && len(c.Outcomes) == 0 {
@@ -1299,6 +1334,11 @@ func validateAnswerOutcomes(c ContextFabricAnswerCompleteness, bounds contextFab
 	// re-running that function here and requiring equality is what stops a
 	// producer from stamping a state and then changing the document, or
 	// from copying a state across a surface that narrowed again.
+	// The state is a function of known outcomes only; with an added outcome
+	// in the rows it cannot be re-derived here, so the stated one stands.
+	if addedOutcome {
+		return nil
+	}
 	want := DeriveContextFabricAnswerCompletenessState(c.Outcomes)
 	if c.State == want {
 		return nil
@@ -1391,10 +1431,10 @@ func (q ContextFabricInterpretedQuestion) Validate() error {
 }
 
 func (q ContextFabricInterpretedQuestion) validate(bounds contextFabricBounds) error {
-	if !validInvestigationShape(q.Shape) || !boundedText(q.RequestedJudgment, 1, ContextFabricRequestedJudgmentMaxLength, bounds) || len(q.SubjectTerms) > bounds.interpretationTerms || len(q.ComparisonTerms) > bounds.interpretationTerms || !uniqueTrimmedStrings(q.SubjectTerms, ContextFabricSubjectOrComparisonTermMaxLength) || !uniqueTrimmedStrings(q.ComparisonTerms, ContextFabricSubjectOrComparisonTermMaxLength) || len(q.FactRequirements) > ContextFabricFactRequirementsMaxCount || !stringLengthBetween(q.ClarificationReason, 0, ContextFabricClarificationReasonMaxLength) {
+	if !bounds.additiveOK(validInvestigationShape(q.Shape), string(q.Shape)) || !boundedText(q.RequestedJudgment, 1, ContextFabricRequestedJudgmentMaxLength, bounds) || len(q.SubjectTerms) > bounds.interpretationTerms || len(q.ComparisonTerms) > bounds.interpretationTerms || !uniqueTrimmedStrings(q.SubjectTerms, ContextFabricSubjectOrComparisonTermMaxLength) || !uniqueTrimmedStrings(q.ComparisonTerms, ContextFabricSubjectOrComparisonTermMaxLength) || len(q.FactRequirements) > ContextFabricFactRequirementsMaxCount || !stringLengthBetween(q.ClarificationReason, 0, ContextFabricClarificationReasonMaxLength) {
 		return fmt.Errorf("interpreted question violates v1 bounds")
 	}
-	if err := q.TimeContext.Validate(); err != nil {
+	if err := q.TimeContext.validate(bounds); err != nil {
 		return fmt.Errorf("time_context: %w", err)
 	}
 	seen := make(map[ContextFabricFactKind]struct{}, len(q.FactRequirements))
@@ -1413,17 +1453,17 @@ func (q ContextFabricInterpretedQuestion) validate(bounds contextFabricBounds) e
 	// CHAOS-3900 W1: the empty value is legitimate ("the model made no
 	// pick" -- see ContextFabricWindowClass's own doc comment), so only a
 	// NON-empty, out-of-vocabulary value is rejected.
-	if q.WindowClass != "" && !ValidContextFabricWindowClass(q.WindowClass) {
+	if q.WindowClass != "" && !bounds.additiveOK(ValidContextFabricWindowClass(q.WindowClass), string(q.WindowClass)) {
 		return fmt.Errorf("window_class is invalid")
 	}
-	if q.WindowConfidence != "" && !ValidContextFabricWindowConfidence(q.WindowConfidence) {
+	if q.WindowConfidence != "" && !bounds.additiveOK(ValidContextFabricWindowConfidence(q.WindowConfidence), string(q.WindowConfidence)) {
 		return fmt.Errorf("window_confidence is invalid")
 	}
 	// The empty value is legitimate ("the model made no pick"), same shape
 	// as WindowClass/WindowConfidence above -- see
 	// ContextFabricInterpretedQuestion.RequestedJudgmentKind's own doc
 	// comment.
-	if q.RequestedJudgmentKind != "" && !ValidContextFabricRequestedJudgmentKind(q.RequestedJudgmentKind) {
+	if q.RequestedJudgmentKind != "" && !bounds.additiveOK(ValidContextFabricRequestedJudgmentKind(q.RequestedJudgmentKind), string(q.RequestedJudgmentKind)) {
 		return fmt.Errorf("requested_judgment_kind is invalid")
 	}
 	return nil
@@ -1434,7 +1474,7 @@ func (r ContextFabricFactRequirement) Validate() error {
 }
 
 func (r ContextFabricFactRequirement) validate(bounds contextFabricBounds) error {
-	if !validFactKind(r.Kind) || len(r.Subjects) > 250 || !uniqueSubjects(r.Subjects) || len(r.Parameters) > ContextFabricFactRequirementParametersMaxCount {
+	if !bounds.additiveOK(validFactKind(r.Kind), string(r.Kind)) || len(r.Subjects) > 250 || !uniqueSubjectsWithin(r.Subjects, bounds) || len(r.Parameters) > ContextFabricFactRequirementParametersMaxCount {
 		return fmt.Errorf("fact requirement violates v1 bounds")
 	}
 	// Sorted, not a bare map range (CHAOS-3784 round-5 R5-1): Go
@@ -1465,7 +1505,7 @@ func (r ContextFabricFactRequirement) validate(bounds contextFabricBounds) error
 // accepted. Use it for every write and for anything a caller is about to
 // receive fresh.
 func (r ContextFabricInvestigationResult) Validate() error {
-	if err := validateSemanticReadingOnResult(r.SemanticReading, r.Status); err != nil {
+	if err := validateSemanticReadingOnResult(r.SemanticReading, r.Status, contextFabricWriteBounds); err != nil {
 		return err
 	}
 	return r.validate(contextFabricWriteBounds)
@@ -1484,7 +1524,7 @@ func (r ContextFabricInvestigationResult) Validate() error {
 // created at the legacy size. See the cohort inclusion-reason bounds block
 // for the specific allowance and its origin.
 func (r ContextFabricInvestigationResult) ValidateStored() error {
-	if err := validateSemanticReadingOnResult(r.SemanticReading, r.Status); err != nil {
+	if err := validateSemanticReadingOnResult(r.SemanticReading, r.Status, contextFabricLegacyBounds); err != nil {
 		return err
 	}
 	return r.validate(contextFabricLegacyBounds)
@@ -1501,7 +1541,7 @@ func (r ContextFabricInvestigationResult) ValidateStored() error {
 // versa (the ruling's "a v1 offer must never acquire v2 membership
 // semantics" / "do not reinterpret old persisted v1 receipts").
 func (r ContextFabricInvestigationResult) ValidateV2() error {
-	if err := validateSemanticReadingOnResult(r.SemanticReading, r.Status); err != nil {
+	if err := validateSemanticReadingOnResult(r.SemanticReading, r.Status, contextFabricWriteBounds); err != nil {
 		return err
 	}
 	return r.validateAgainstSchemaVersion(contextFabricWriteBounds, ContextFabricInvestigationResultSchemaV2)
@@ -1511,7 +1551,7 @@ func (r ContextFabricInvestigationResult) ValidateV2() error {
 // ValidateStored's own doc comment for the legacy-bounds rationale, which
 // applies identically here.
 func (r ContextFabricInvestigationResult) ValidateStoredV2() error {
-	if err := validateSemanticReadingOnResult(r.SemanticReading, r.Status); err != nil {
+	if err := validateSemanticReadingOnResult(r.SemanticReading, r.Status, contextFabricLegacyBounds); err != nil {
 		return err
 	}
 	return r.validateAgainstSchemaVersion(contextFabricLegacyBounds, ContextFabricInvestigationResultSchemaV2)
@@ -1573,7 +1613,7 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	// the same "legacy rows keep working" discipline LimitationsDisplaced
 	// below already applies.
 	if r.AnswerPlan != nil {
-		if err := r.AnswerPlan.Validate(); err != nil {
+		if err := r.AnswerPlan.validate(bounds); err != nil {
 			return fmt.Errorf("answer_plan: %w", err)
 		}
 	}
@@ -1680,7 +1720,7 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	if r.Status == ContextFabricInvestigationClarificationRequired && r.SubjectResolution.ClarificationPrompt == "" {
 		return fmt.Errorf("clarification result requires a prompt")
 	}
-	claimed, err := validateClaimedFacts(r.ClaimedFacts)
+	claimed, err := validateClaimedFacts(r.ClaimedFacts, bounds)
 	if err != nil {
 		return err
 	}
@@ -1725,7 +1765,7 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 		return fmt.Errorf("versions: %w", err)
 	}
 	if r.Temporal != nil {
-		if err := r.Temporal.Validate(); err != nil {
+		if err := r.Temporal.validate(bounds); err != nil {
 			return fmt.Errorf("temporal: %w", err)
 		}
 		// The label must describe the SAME question the interpretation
@@ -1750,21 +1790,21 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 		if r.Interpretation.TimeContext.Axis != ContextFabricTemporalCurrent {
 			return fmt.Errorf("%w: axis %q", ErrEvidenceWindowAxisInvalid, r.Interpretation.TimeContext.Axis)
 		}
-		if err := r.EffectiveEvidenceWindow.validate(); err != nil {
+		if err := r.EffectiveEvidenceWindow.validateWithin(bounds); err != nil {
 			return fmt.Errorf("effective_evidence_window: %w", err)
 		}
 	}
 	if r.WindowClarification != nil {
-		if err := r.WindowClarification.Validate(); err != nil {
+		if err := r.WindowClarification.validate(bounds); err != nil {
 			return fmt.Errorf("window_clarification: %w", err)
 		}
 	}
 	if r.StructureNeeds != nil {
-		if err := r.StructureNeeds.Validate(); err != nil {
+		if err := r.StructureNeeds.validate(bounds); err != nil {
 			return fmt.Errorf("structure_needs: %w", err)
 		}
 	}
-	if err := validateFactScopeCensus(r.FactScopeCensus); err != nil {
+	if err := validateFactScopeCensus(r.FactScopeCensus, bounds); err != nil {
 		return err
 	}
 	if err := validateFactScopeCensusOmitted(r.FactScopeCensus, r.FactScopeCensusOmitted); err != nil {
@@ -1777,7 +1817,7 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	}
 	seenConfirmedMembers := make(map[ContextFabricStructureNeedKind]struct{}, len(r.ConfirmedStructure))
 	for i, entry := range r.ConfirmedStructure {
-		if err := entry.Validate(); err != nil {
+		if err := entry.validate(bounds); err != nil {
 			return fmt.Errorf("confirmed_structure[%d]: %w", i, err)
 		}
 		if _, exists := seenConfirmedMembers[entry.Member]; exists {
@@ -1794,7 +1834,7 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 		return fmt.Errorf("structure_offer_snapshot exceeds v1 bounds")
 	}
 	for i, entry := range r.StructureOfferSnapshot {
-		if err := entry.Validate(); err != nil {
+		if err := entry.validate(bounds); err != nil {
 			return fmt.Errorf("structure_offer_snapshot[%d]: %w", i, err)
 		}
 	}
@@ -1863,10 +1903,14 @@ func validateRenderShapesAgainstPlan(shapes []ContextFabricRenderShape, plan *Co
 // ever appears on a historical axis, and Effective never widens beyond
 // Requested.
 func (l ContextFabricTemporalLabel) Validate() error {
-	if err := l.Requested.Validate(); err != nil {
+	return l.validate(contextFabricWriteBounds)
+}
+
+func (l ContextFabricTemporalLabel) validate(bounds contextFabricBounds) error {
+	if err := l.Requested.validate(bounds); err != nil {
 		return fmt.Errorf("requested: %w", err)
 	}
-	if err := l.Effective.Validate(); err != nil {
+	if err := l.Effective.validate(bounds); err != nil {
 		return fmt.Errorf("effective: %w", err)
 	}
 	if l.Requested.Axis == ContextFabricTemporalCurrent {
@@ -2042,7 +2086,7 @@ func validateFactScopeCensusOmitted(records []ContextFabricFactScopeCensusRecord
 // One function rather than a second copy: two lists of the same vocabulary is
 // how the two boundaries end up disagreeing about the same document, which is
 // the shape this file keeps removing.
-func validateFactScopeCensus(records []ContextFabricFactScopeCensusRecord) error {
+func validateFactScopeCensus(records []ContextFabricFactScopeCensusRecord, bounds contextFabricBounds) error {
 	// CHAOS-5405 D-d: the served fact-scope census. Bounded and range-checked
 	// here because the published schema declares these bounds, and a schema
 	// that promises what the write path does not enforce lets the service
@@ -2107,10 +2151,10 @@ func validateFactScopeCensus(records []ContextFabricFactScopeCensusRecord) error
 			valid func(string) bool
 		}{
 			{"requirement_kind", record.RequirementKind, func(v string) bool {
-				return validFactKind(ContextFabricFactKind(v))
+				return bounds.additiveOK(validFactKind(ContextFabricFactKind(v)), v)
 			}},
 			{"origin_kind", record.OriginKind, func(v string) bool {
-				return ValidContextFabricSubjectKind(ContextFabricSubjectKind(v))
+				return bounds.additiveOK(ValidContextFabricSubjectKind(ContextFabricSubjectKind(v)), v)
 			}},
 			{"policy", record.Policy, func(v string) bool {
 				return stringInVocabulary(v, contextFabricFactScopePolicies[:])
@@ -2133,12 +2177,12 @@ func validateFactScopeCensus(records []ContextFabricFactScopeCensusRecord) error
 	return nil
 }
 
-func validateInactiveHints(hints []ContextFabricInactiveHint) error {
+func validateInactiveHints(hints []ContextFabricInactiveHint, bounds contextFabricBounds) error {
 	if len(hints) > ContextFabricInactiveHintsMax {
 		return fmt.Errorf("inactive hints exceed v1 bounds")
 	}
 	for _, hint := range hints {
-		if err := hint.Subject.Validate(); err != nil {
+		if err := hint.Subject.validate(bounds); err != nil {
 			return fmt.Errorf("inactive hints: %w", err)
 		}
 		if hint.Answer != TeamInactiveReason || hint.Subject.Kind != ContextFabricSubjectTeam {
@@ -2156,7 +2200,9 @@ func validateInactiveHints(hints []ContextFabricInactiveHint) error {
 // authority is allowed to have served (never complete), a direction that
 // starts from the stated model status, and, when it names a deciding row,
 // one the completeness block carries.
-func (r ContextFabricInvestigationResult) validateStatusCorrection() error {
+// An added direction or replaced_status token skips the direction mapping,
+// which is defined per known direction.
+func (r ContextFabricInvestigationResult) validateStatusCorrection(bounds contextFabricBounds) error {
 	source, mirror := r.StatusCorrection, r.Completeness.StatusCorrection
 	if (source == nil) != (mirror == nil) || (source != nil && *source != *mirror) {
 		return fmt.Errorf("completeness status_correction must equal the result's status_correction")
@@ -2168,16 +2214,19 @@ func (r ContextFabricInvestigationResult) validateStatusCorrection() error {
 		return fmt.Errorf("status_correction cannot accompany status %q", r.Status)
 	}
 	from, ok := ContextFabricStatusCorrectionModelStatus(source.Direction)
-	if !ok {
+	if !bounds.additiveOK(ok, string(source.Direction)) {
 		return fmt.Errorf("status_correction direction %q is not a vocabulary member", source.Direction)
 	}
-	if source.ReplacedStatus != from {
-		return fmt.Errorf("status_correction replaced_status %q does not match direction %q", source.ReplacedStatus, source.Direction)
+	replacedAdded := bounds.additiveUnknown(validInvestigationStatus(source.ReplacedStatus), string(source.ReplacedStatus))
+	if ok && !replacedAdded {
+		if source.ReplacedStatus != from {
+			return fmt.Errorf("status_correction replaced_status %q does not match direction %q", source.ReplacedStatus, source.Direction)
+		}
+		if to, _ := ContextFabricStatusCorrectionServedStatus(source.Direction); to != r.Status {
+			return fmt.Errorf("status_correction direction %q does not end at the served status %q", source.Direction, r.Status)
+		}
 	}
-	if to, _ := ContextFabricStatusCorrectionServedStatus(source.Direction); to != r.Status {
-		return fmt.Errorf("status_correction direction %q does not end at the served status %q", source.Direction, r.Status)
-	}
-	if source.DecidingOutcome != "" && !ValidContextFabricPlanRequirementOutcome(source.DecidingOutcome) {
+	if source.DecidingOutcome != "" && !bounds.additiveOK(ValidContextFabricPlanRequirementOutcome(source.DecidingOutcome), string(source.DecidingOutcome)) {
 		return fmt.Errorf("status_correction deciding_outcome %q is not a vocabulary member", source.DecidingOutcome)
 	}
 	if (source.DecidingRequirement == "") != (source.DecidingOutcome == "") {

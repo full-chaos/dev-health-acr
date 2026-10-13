@@ -34,6 +34,11 @@ type outputVocabulary struct {
 	// schemaOnly names why no Go constant set can be pinned; it is reported
 	// as NOT pinned.
 	schemaOnly string
+	// clientValidate names, for an additive vocabulary, the Go Validate a
+	// client runs on a served response that carries it (a key of
+	// clientValidators), or "none: <reason>" when no Go client checks it.
+	// That Validate must admit an added value.
+	clientValidate string
 }
 
 var outputVocabularies []outputVocabulary

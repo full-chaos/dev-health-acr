@@ -24,22 +24,29 @@ func (i ContextPacketItem) Validate() error {
 	return nil
 }
 
+// validItemEnums admits an added token in each of the three item
+// vocabularies: all three are open, so a client keeps reading a packet whose
+// server added a member.
 func validItemEnums(item ContextPacketItem) bool {
 	switch item.Category {
 	case CategoryState, CategoryPressure, CategoryCause, CategoryEvidence, CategoryAction:
 	default:
-		return false
+		if !openVocabularyToken(string(item.Category)) {
+			return false
+		}
 	}
 	switch item.ClaimKind {
 	case ClaimObserved, ClaimInferred, ClaimRecommendation:
 	default:
-		return false
+		if !openVocabularyToken(string(item.ClaimKind)) {
+			return false
+		}
 	}
 	switch item.Severity {
 	case SeverityInfo, SeverityWarning, SeverityHigh, SeverityCritical:
 		return true
 	default:
-		return false
+		return openVocabularyToken(string(item.Severity))
 	}
 }
 

@@ -83,16 +83,20 @@ func validateNoStructureReceiptPrefix(fieldName, receiptID string, excludePrefix
 }
 
 func (o ContextFabricKindOption) Validate() error {
+	return o.validate(contextFabricWriteBounds)
+}
+
+func (o ContextFabricKindOption) validate(bounds contextFabricBounds) error {
 	if !stringLengthBetween(o.ReceiptID, 8, 256) || !hasKindReceiptPrefix(o.ReceiptID) {
 		return fmt.Errorf("kind option receipt_id must carry the %q namespace prefix and satisfy v1 bounds", ContextFabricKindOptionReceiptPrefix)
 	}
 	if !stringLengthBetween(o.OptionID, 1, 256) || !stringLengthBetween(o.Label, 1, 200) {
 		return fmt.Errorf("kind option option_id or label violates v1 bounds")
 	}
-	if !validContextFabricSubjectKind(o.Kind) {
+	if !bounds.additiveOK(validContextFabricSubjectKind(o.Kind), string(o.Kind)) {
 		return fmt.Errorf("kind option kind is invalid")
 	}
-	if !ValidContextFabricStructureOfferSource(o.OfferSource) {
+	if !bounds.additiveOK(ValidContextFabricStructureOfferSource(o.OfferSource), string(o.OfferSource)) {
 		return fmt.Errorf("kind option offer_source is invalid")
 	}
 	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
@@ -105,13 +109,17 @@ func (o ContextFabricKindOption) Validate() error {
 }
 
 func (o ContextFabricAnchorOption) Validate() error {
+	return o.validate(contextFabricWriteBounds)
+}
+
+func (o ContextFabricAnchorOption) validate(bounds contextFabricBounds) error {
 	if !stringLengthBetween(o.ReceiptID, 8, 256) || !hasAnchorReceiptPrefix(o.ReceiptID) {
 		return fmt.Errorf("anchor option receipt_id must carry the %q namespace prefix and satisfy v1 bounds", ContextFabricAnchorOptionReceiptPrefix)
 	}
 	if !stringLengthBetween(o.OptionID, 1, 256) || !stringLengthBetween(o.Label, 1, 200) {
 		return fmt.Errorf("anchor option option_id or label violates v1 bounds")
 	}
-	if !validContextFabricSubjectKind(o.Kind) {
+	if !bounds.additiveOK(validContextFabricSubjectKind(o.Kind), string(o.Kind)) {
 		return fmt.Errorf("anchor option kind is invalid")
 	}
 	if !stringLengthBetween(o.CanonicalID, 1, 256) {
@@ -120,7 +128,7 @@ func (o ContextFabricAnchorOption) Validate() error {
 	if !matchedTermHashPattern.MatchString(o.MatchedTermHash) {
 		return fmt.Errorf("anchor option matched_term_hash must be a 24-character lowercase hex digest")
 	}
-	if !ValidContextFabricStructureOfferSource(o.OfferSource) {
+	if !bounds.additiveOK(ValidContextFabricStructureOfferSource(o.OfferSource), string(o.OfferSource)) {
 		return fmt.Errorf("anchor option offer_source is invalid")
 	}
 	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
@@ -133,19 +141,23 @@ func (o ContextFabricAnchorOption) Validate() error {
 }
 
 func (o ContextFabricHandleOption) Validate() error {
+	return o.validate(contextFabricWriteBounds)
+}
+
+func (o ContextFabricHandleOption) validate(bounds contextFabricBounds) error {
 	if !stringLengthBetween(o.ReceiptID, 8, 256) || !hasHandleReceiptPrefix(o.ReceiptID) {
 		return fmt.Errorf("handle option receipt_id must carry the %q namespace prefix and satisfy v1 bounds", ContextFabricHandleOptionReceiptPrefix)
 	}
 	if !stringLengthBetween(o.OptionID, 1, 256) || !stringLengthBetween(o.Label, 1, 200) {
 		return fmt.Errorf("handle option option_id or label violates v1 bounds")
 	}
-	if !validContextFabricSubjectKind(o.Kind) {
+	if !bounds.additiveOK(validContextFabricSubjectKind(o.Kind), string(o.Kind)) {
 		return fmt.Errorf("handle option kind is invalid")
 	}
 	if !stringLengthBetween(o.PatternID, 1, 128) || !stringLengthBetween(o.Value, 1, 256) || !stringLengthBetween(o.SourceColumn, 1, 128) {
 		return fmt.Errorf("handle option pattern_id, value, or source_column violates v1 bounds")
 	}
-	if !ValidContextFabricStructureOfferSource(o.OfferSource) {
+	if !bounds.additiveOK(ValidContextFabricStructureOfferSource(o.OfferSource), string(o.OfferSource)) {
 		return fmt.Errorf("handle option offer_source is invalid")
 	}
 	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
@@ -158,19 +170,23 @@ func (o ContextFabricHandleOption) Validate() error {
 }
 
 func (o ContextFabricCandidateOption) Validate() error {
+	return o.validate(contextFabricWriteBounds)
+}
+
+func (o ContextFabricCandidateOption) validate(bounds contextFabricBounds) error {
 	if !stringLengthBetween(o.ReceiptID, 8, 256) || !hasCandidateReceiptPrefix(o.ReceiptID) {
 		return fmt.Errorf("candidate option receipt_id must carry the %q namespace prefix and satisfy v1 bounds", ContextFabricCandidateOptionReceiptPrefix)
 	}
 	if !stringLengthBetween(o.OptionID, 1, 256) || !stringLengthBetween(o.Label, 1, 200) {
 		return fmt.Errorf("candidate option option_id or label violates v1 bounds")
 	}
-	if !validContextFabricSubjectKind(o.Kind) {
+	if !bounds.additiveOK(validContextFabricSubjectKind(o.Kind), string(o.Kind)) {
 		return fmt.Errorf("candidate option kind is invalid")
 	}
 	if !stringLengthBetween(o.CanonicalID, 1, 256) {
 		return fmt.Errorf("candidate option canonical_id violates v1 bounds")
 	}
-	if !ValidContextFabricStructureOfferSource(o.OfferSource) {
+	if !bounds.additiveOK(ValidContextFabricStructureOfferSource(o.OfferSource), string(o.OfferSource)) {
 		return fmt.Errorf("candidate option offer_source is invalid")
 	}
 	if !optionalStringBetween(o.PriorVersionID, 1, 256) || !optionalStringBetween(o.PriorEntryID, 1, 256) {
@@ -183,10 +199,14 @@ func (o ContextFabricCandidateOption) Validate() error {
 }
 
 func (g ContextFabricAcceptedGrammar) Validate() error {
-	if !ValidContextFabricStructureNeedKind(g.Member) {
+	return g.validate(contextFabricWriteBounds)
+}
+
+func (g ContextFabricAcceptedGrammar) validate(bounds contextFabricBounds) error {
+	if !bounds.additiveOK(ValidContextFabricStructureNeedKind(g.Member), string(g.Member)) {
 		return fmt.Errorf("accepted grammar member is invalid")
 	}
-	if g.Kind != "" && !validContextFabricSubjectKind(g.Kind) {
+	if g.Kind != "" && !bounds.additiveOK(validContextFabricSubjectKind(g.Kind), string(g.Kind)) {
 		return fmt.Errorf("accepted grammar kind is invalid")
 	}
 	if !stringLengthBetween(g.PatternID, 1, 128) {
@@ -211,12 +231,16 @@ const contextFabricStructureNeedsMaxOptions = 20
 const ContextFabricStructureOfferPhrasingMaxLength = 200
 
 func (n ContextFabricStructureNeeds) Validate() error {
+	return n.validate(contextFabricWriteBounds)
+}
+
+func (n ContextFabricStructureNeeds) validate(bounds contextFabricBounds) error {
 	if len(n.Missing) == 0 || len(n.Missing) > ContextFabricStructureNeedKindCount {
 		return fmt.Errorf("structure needs missing violates v1 bounds")
 	}
 	seenMissing := make(map[ContextFabricStructureNeedKind]struct{}, len(n.Missing))
 	for _, need := range n.Missing {
-		if !ValidContextFabricStructureNeedKind(need) {
+		if !bounds.additiveOK(ValidContextFabricStructureNeedKind(need), string(need)) {
 			return fmt.Errorf("structure needs missing entry is invalid")
 		}
 		if _, exists := seenMissing[need]; exists {
@@ -246,7 +270,7 @@ func (n ContextFabricStructureNeeds) Validate() error {
 		return nil
 	}
 	for _, opt := range n.KindOptions {
-		if err := opt.Validate(); err != nil {
+		if err := opt.validate(bounds); err != nil {
 			return fmt.Errorf("kind_options: %w", err)
 		}
 		if err := addUnique(opt.ReceiptID, opt.OptionID); err != nil {
@@ -254,7 +278,7 @@ func (n ContextFabricStructureNeeds) Validate() error {
 		}
 	}
 	for _, opt := range n.AnchorOptions {
-		if err := opt.Validate(); err != nil {
+		if err := opt.validate(bounds); err != nil {
 			return fmt.Errorf("anchor_options: %w", err)
 		}
 		if err := addUnique(opt.ReceiptID, opt.OptionID); err != nil {
@@ -262,7 +286,7 @@ func (n ContextFabricStructureNeeds) Validate() error {
 		}
 	}
 	for _, opt := range n.HandleOptions {
-		if err := opt.Validate(); err != nil {
+		if err := opt.validate(bounds); err != nil {
 			return fmt.Errorf("handle_options: %w", err)
 		}
 		if err := addUnique(opt.ReceiptID, opt.OptionID); err != nil {
@@ -270,7 +294,7 @@ func (n ContextFabricStructureNeeds) Validate() error {
 		}
 	}
 	for _, opt := range n.WindowOptions {
-		if err := opt.Validate(); err != nil {
+		if err := opt.validate(bounds); err != nil {
 			return fmt.Errorf("window_options: %w", err)
 		}
 		if err := addUnique(opt.ReceiptID, opt.OptionID); err != nil {
@@ -278,7 +302,7 @@ func (n ContextFabricStructureNeeds) Validate() error {
 		}
 	}
 	for _, opt := range n.CandidateOptions {
-		if err := opt.Validate(); err != nil {
+		if err := opt.validate(bounds); err != nil {
 			return fmt.Errorf("candidate_options: %w", err)
 		}
 		if err := addUnique(opt.ReceiptID, opt.OptionID); err != nil {
@@ -286,7 +310,7 @@ func (n ContextFabricStructureNeeds) Validate() error {
 		}
 	}
 	for _, grammar := range n.AcceptedGrammars {
-		if err := grammar.Validate(); err != nil {
+		if err := grammar.validate(bounds); err != nil {
 			return fmt.Errorf("accepted_grammars: %w", err)
 		}
 	}
@@ -308,7 +332,7 @@ func (n ContextFabricStructureNeeds) Validate() error {
 		return fmt.Errorf("window_expand_options violates v1 bounds")
 	}
 	for _, opt := range n.WindowExpandOptions {
-		if err := opt.Validate(); err != nil {
+		if err := opt.validate(bounds); err != nil {
 			return fmt.Errorf("window_expand_options: %w", err)
 		}
 		if !windowOptionMatches(n.WindowOptions, opt) {
@@ -337,19 +361,24 @@ func windowOptionMatches(options []ContextFabricWindowOption, expand ContextFabr
 }
 
 func (e ContextFabricConfirmedStructureEntry) Validate() error {
-	if !ValidContextFabricStructureNeedKind(e.Member) {
+	return e.validate(contextFabricWriteBounds)
+}
+
+func (e ContextFabricConfirmedStructureEntry) validate(bounds contextFabricBounds) error {
+	if !bounds.additiveOK(ValidContextFabricStructureNeedKind(e.Member), string(e.Member)) {
 		return fmt.Errorf("confirmed structure entry member is invalid")
 	}
 	if !stringLengthBetween(e.AppliedValue, 1, 256) {
 		return fmt.Errorf("confirmed structure entry applied_value violates v1 bounds")
 	}
-	if !ValidContextFabricStructureSource(e.Source) {
+	sourceKnown := ValidContextFabricStructureSource(e.Source)
+	if !bounds.additiveOK(sourceKnown, string(e.Source)) {
 		return fmt.Errorf("confirmed structure entry source is invalid")
 	}
-	if !ValidContextFabricStructureProvenance(e.Provenance) {
+	if !bounds.additiveOK(ValidContextFabricStructureProvenance(e.Provenance), string(e.Provenance)) {
 		return fmt.Errorf("confirmed structure entry provenance is invalid")
 	}
-	if !ValidContextFabricStructureDisposition(e.Disposition) {
+	if !bounds.additiveOK(ValidContextFabricStructureDisposition(e.Disposition), string(e.Disposition)) {
 		return fmt.Errorf("confirmed structure entry disposition is invalid")
 	}
 	// A receipt-sourced entry must name the receipt it redeemed; a
@@ -363,7 +392,7 @@ func (e ContextFabricConfirmedStructureEntry) Validate() error {
 		if !stringLengthBetween(e.PriorResultID, 8, 256) || !stringLengthBetween(e.ReceiptID, 8, 256) {
 			return fmt.Errorf("confirmed structure entry with source=receipt must carry prior_result_id and receipt_id")
 		}
-		if e.OfferSource != "" && !ValidContextFabricStructureOfferSource(e.OfferSource) {
+		if e.OfferSource != "" && !bounds.additiveOK(ValidContextFabricStructureOfferSource(e.OfferSource), string(e.OfferSource)) {
 			return fmt.Errorf("confirmed structure entry offer_source is invalid")
 		}
 	case ContextFabricStructureSourceCarried:
@@ -374,7 +403,8 @@ func (e ContextFabricConfirmedStructureEntry) Validate() error {
 			return fmt.Errorf("confirmed structure entry with source=carried must not carry a receipt_id")
 		}
 	default:
-		if e.PriorResultID != "" || e.ReceiptID != "" {
+		// An added source token is not known to carry no receipt identity.
+		if sourceKnown && (e.PriorResultID != "" || e.ReceiptID != "") {
 			return fmt.Errorf("confirmed structure entry with source=%q must not carry a receipt identity", e.Source)
 		}
 	}
@@ -385,7 +415,11 @@ func (e ContextFabricConfirmedStructureEntry) Validate() error {
 }
 
 func (e ContextFabricStructureOfferSnapshotEntry) Validate() error {
-	if !ValidContextFabricStructureNeedKind(e.Member) {
+	return e.validate(contextFabricWriteBounds)
+}
+
+func (e ContextFabricStructureOfferSnapshotEntry) validate(bounds contextFabricBounds) error {
+	if !bounds.additiveOK(ValidContextFabricStructureNeedKind(e.Member), string(e.Member)) {
 		return fmt.Errorf("structure offer snapshot entry member is invalid")
 	}
 	if !stringLengthBetween(e.OfferID, 1, 256) {
@@ -394,7 +428,7 @@ func (e ContextFabricStructureOfferSnapshotEntry) Validate() error {
 	if e.Rank < 0 {
 		return fmt.Errorf("structure offer snapshot entry rank must be non-negative")
 	}
-	if !ValidContextFabricStructureOfferSource(e.OfferSource) {
+	if !bounds.additiveOK(ValidContextFabricStructureOfferSource(e.OfferSource), string(e.OfferSource)) {
 		return fmt.Errorf("structure offer snapshot entry offer_source is invalid")
 	}
 	if !optionalStringBetween(e.PriorVersionID, 1, 256) || !optionalStringBetween(e.PriorEntryID, 1, 256) {

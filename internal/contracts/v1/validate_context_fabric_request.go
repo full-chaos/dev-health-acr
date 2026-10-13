@@ -167,10 +167,14 @@ func (r ContextFabricBoundSubjectReceipt) Validate() error {
 // ContextFabricBoundSubjectReceipt's own bounds (this echoes a receipt the
 // caller sent, in the same shape) plus a closed Disposition.
 func (e ContextFabricPriorSubjectReceiptEntry) Validate() error {
+	return e.validate(contextFabricWriteBounds)
+}
+
+func (e ContextFabricPriorSubjectReceiptEntry) validate(bounds contextFabricBounds) error {
 	if !stringLengthBetween(e.PriorResultID, 8, 256) || !stringLengthBetween(e.ReceiptID, 8, 256) {
 		return fmt.Errorf("prior subject receipt disposition entry violates v1 bounds")
 	}
-	if !ValidContextFabricPriorSubjectReceiptDisposition(e.Disposition) {
+	if !bounds.additiveOK(ValidContextFabricPriorSubjectReceiptDisposition(e.Disposition), string(e.Disposition)) {
 		return fmt.Errorf("prior subject receipt disposition entry has an invalid disposition")
 	}
 	return nil
@@ -238,6 +242,10 @@ func representableInstant(value time.Time) bool {
 func RepresentableInstant(value time.Time) bool { return representableInstant(value) }
 
 func (t ContextFabricTimeContext) Validate() error {
+	return t.validate(contextFabricWriteBounds)
+}
+
+func (t ContextFabricTimeContext) validate(bounds contextFabricBounds) error {
 	// Every bound this axis requires must survive the epoch-nanosecond
 	// representation. An out-of-range instant is refused as a malformed
 	// request rather than clamped: clamping would answer a DIFFERENT
@@ -276,7 +284,7 @@ func (t ContextFabricTimeContext) Validate() error {
 		if t.Axis != ContextFabricTemporalCurrent {
 			return fmt.Errorf("%w: axis %q", ErrEvidenceWindowAxisInvalid, t.Axis)
 		}
-		if err := t.EvidenceWindow.validate(); err != nil {
+		if err := t.EvidenceWindow.validateWithin(bounds); err != nil {
 			return fmt.Errorf("evidence_window: %w", err)
 		}
 	}

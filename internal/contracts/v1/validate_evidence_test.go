@@ -25,7 +25,7 @@ func TestEvidenceRefValidate_matches_v1_boundaries(t *testing.T) {
 		{name: "source_entity_id_empty", mutate: func(v *EvidenceRef) { v.Source.EntityID = "" }},
 		{name: "source_display_label_empty", mutate: func(v *EvidenceRef) { v.Source.DisplayLabel = "" }},
 		{name: "source_safe_uri_invalid", mutate: func(v *EvidenceRef) { v.Source.SafeURI = "not-a-uri" }},
-		{name: "provenance_invalid", mutate: func(v *EvidenceRef) { v.Provenance = "guessed" }},
+		{name: "provenance_not_a_token", mutate: func(v *EvidenceRef) { v.Provenance = "not a token" }},
 		{name: "confidence_negative", mutate: func(v *EvidenceRef) { v.Confidence = -0.1 }},
 		{name: "confidence_over_one", mutate: func(v *EvidenceRef) { v.Confidence = 1.1 }},
 		{name: "confidence_nan", mutate: func(v *EvidenceRef) { v.Confidence = math.NaN() }},
@@ -33,7 +33,7 @@ func TestEvidenceRefValidate_matches_v1_boundaries(t *testing.T) {
 		{name: "citation_empty", mutate: func(v *EvidenceRef) { v.Citation = "" }},
 		{name: "citation_too_long", mutate: func(v *EvidenceRef) { v.Citation = strings.Repeat("c", 2001) }},
 		{name: "observed_at_zero", mutate: func(v *EvidenceRef) { v.ObservedAt = time.Time{} }},
-		{name: "availability_invalid", mutate: func(v *EvidenceRef) { v.Availability = "gone" }},
+		{name: "availability_not_a_token", mutate: func(v *EvidenceRef) { v.Availability = "not a token" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -67,7 +67,7 @@ func TestExpandedEvidenceValidate_matches_v1_boundaries(t *testing.T) {
 		{name: "schema_version", mutate: func(v *ExpandedEvidence) { v.SchemaVersion = "wrong" }},
 		{name: "nested_evidence_invalid", mutate: func(v *ExpandedEvidence) { v.Evidence.EvidenceRefID = "" }},
 		{name: "resolved_at_zero", mutate: func(v *ExpandedEvidence) { v.ResolvedAt = time.Time{} }},
-		{name: "availability_invalid", mutate: func(v *ExpandedEvidence) { v.Availability = "gone" }},
+		{name: "availability_not_a_token", mutate: func(v *ExpandedEvidence) { v.Availability = "not a token" }},
 		{name: "excerpt_too_long", mutate: func(v *ExpandedEvidence) { v.Excerpt = strings.Repeat("e", 1001) }},
 		{name: "structured_fields_nil", mutate: func(v *ExpandedEvidence) { v.Structured = nil }},
 		{name: "redaction_reason_too_long", mutate: func(v *ExpandedEvidence) { v.RedactionReason = strings.Repeat("r", 1001) }},

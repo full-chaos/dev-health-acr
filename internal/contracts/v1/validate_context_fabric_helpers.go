@@ -169,13 +169,13 @@ func validateFindings(name string, values []ContextFabricFinding, claimed map[st
 // bounds and ClaimID uniqueness, returning a ClaimID-indexed lookup map for
 // validateClaimedFactReferences to cross-check driver/finding references
 // against.
-func validateClaimedFacts(values []ContextFabricClaimedFact) (map[string]ContextFabricClaimedFact, error) {
+func validateClaimedFacts(values []ContextFabricClaimedFact, bounds contextFabricBounds) (map[string]ContextFabricClaimedFact, error) {
 	if values == nil || len(values) > ContextFabricClaimedFactsMaxCount {
 		return nil, fmt.Errorf("claimed facts violate v1 bounds")
 	}
 	seen := make(map[string]ContextFabricClaimedFact, len(values))
 	for _, value := range values {
-		if err := value.Validate(); err != nil {
+		if err := value.validate(bounds); err != nil {
 			return nil, fmt.Errorf("claimed_facts: %w", err)
 		}
 		if _, exists := seen[value.ClaimID]; exists {
@@ -494,9 +494,13 @@ func uniqueTrimmedStrings(values []string, maximum int) bool {
 }
 
 func uniqueSubjects(values []ContextFabricSubjectRef) bool {
+	return uniqueSubjectsWithin(values, contextFabricWriteBounds)
+}
+
+func uniqueSubjectsWithin(values []ContextFabricSubjectRef, bounds contextFabricBounds) bool {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if err := value.Validate(); err != nil {
+		if err := value.validate(bounds); err != nil {
 			return false
 		}
 		key := subjectKey(value)
@@ -908,13 +912,13 @@ func ValidContextFabricSubjectMatchMechanism(value ContextFabricSubjectMatchMech
 // enum member (six), every entry a recognized member, and no duplicates. An
 // EMPTY set is valid -- see ContextFabricSubjectCandidate.MatchMechanisms for
 // why absence must stay legal in v1.
-func validMatchMechanisms(values []ContextFabricSubjectMatchMechanism) bool {
+func validMatchMechanisms(values []ContextFabricSubjectMatchMechanism, bounds contextFabricBounds) bool {
 	if len(values) > 6 {
 		return false
 	}
 	seen := make(map[ContextFabricSubjectMatchMechanism]struct{}, len(values))
 	for _, value := range values {
-		if !ValidContextFabricSubjectMatchMechanism(value) {
+		if !bounds.additiveOK(ValidContextFabricSubjectMatchMechanism(value), string(value)) {
 			return false
 		}
 		if _, exists := seen[value]; exists {

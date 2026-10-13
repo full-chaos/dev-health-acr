@@ -26,12 +26,18 @@ var ErrEvidenceWindowAxisInvalid = errors.New("context fabric evidence window is
 // canonicalizeEvidenceWindow, not here). Every non-sentinel window must
 // carry BOTH bounds: no partial window is representable.
 func (w ContextFabricRequestedEvidenceWindow) validate() error {
+	return w.validateWithin(contextFabricWriteBounds)
+}
+
+// validateWithin admits an added relative_id token on a read; an added token
+// is not all_time, so the window must still carry both bounds or none.
+func (w ContextFabricRequestedEvidenceWindow) validateWithin(bounds contextFabricBounds) error {
 	for _, instant := range []*time.Time{w.Start, w.End} {
 		if instant != nil && !instant.IsZero() && !representableInstant(*instant) {
 			return fmt.Errorf("evidence window instant is outside the representable range")
 		}
 	}
-	if w.RelativeID != "" && !ValidContextFabricRelativeWindowID(w.RelativeID) {
+	if w.RelativeID != "" && !bounds.additiveOK(ValidContextFabricRelativeWindowID(w.RelativeID), string(w.RelativeID)) {
 		return fmt.Errorf("evidence window relative_id is invalid")
 	}
 	if w.RelativeID == ContextFabricRelativeWindowAllTime {
@@ -59,17 +65,21 @@ func (w ContextFabricRequestedEvidenceWindow) validate() error {
 // established), and a WindowClass/Confidence that are either absent or
 // closed-vocabulary members.
 func (e ContextFabricEffectiveEvidenceWindow) validate() error {
+	return e.validateWithin(contextFabricWriteBounds)
+}
+
+func (e ContextFabricEffectiveEvidenceWindow) validateWithin(bounds contextFabricBounds) error {
 	requested := ContextFabricRequestedEvidenceWindow{Start: e.Start, End: e.End, RelativeID: e.RelativeID}
-	if err := requested.validate(); err != nil {
+	if err := requested.validateWithin(bounds); err != nil {
 		return err
 	}
-	if !ValidContextFabricWindowProvenance(e.Provenance) {
+	if !bounds.additiveOK(ValidContextFabricWindowProvenance(e.Provenance), string(e.Provenance)) {
 		return fmt.Errorf("effective evidence window provenance is invalid")
 	}
-	if e.WindowClass != "" && !ValidContextFabricWindowClass(e.WindowClass) {
+	if e.WindowClass != "" && !bounds.additiveOK(ValidContextFabricWindowClass(e.WindowClass), string(e.WindowClass)) {
 		return fmt.Errorf("effective evidence window class is invalid")
 	}
-	if e.Confidence != "" && !ValidContextFabricWindowConfidence(e.Confidence) {
+	if e.Confidence != "" && !bounds.additiveOK(ValidContextFabricWindowConfidence(e.Confidence), string(e.Confidence)) {
 		return fmt.Errorf("effective evidence window confidence is invalid")
 	}
 	return nil
@@ -88,6 +98,12 @@ func hasWindowReceiptPrefix(id string) bool {
 // carried RelativeID/Start/End are a legitimate, ordered, representable
 // window shape.
 func (o ContextFabricWindowOption) Validate() error {
+	return o.validate(contextFabricWriteBounds)
+}
+
+// validate exempts an added relative_id token from the frozen-bounds rule:
+// whether a new window is boundless like all_time is not knowable here.
+func (o ContextFabricWindowOption) validate(bounds contextFabricBounds) error {
 	if !stringLengthBetween(o.ReceiptID, 8, 256) || !hasWindowReceiptPrefix(o.ReceiptID) {
 		return fmt.Errorf("window option receipt_id must carry the %q namespace prefix and satisfy v1 bounds", ContextFabricWindowOptionReceiptPrefix)
 	}
@@ -95,8 +111,11 @@ func (o ContextFabricWindowOption) Validate() error {
 		return fmt.Errorf("window option option_id or label violates v1 bounds")
 	}
 	window := ContextFabricRequestedEvidenceWindow{Start: o.Start, End: o.End, RelativeID: o.RelativeID}
-	if err := window.validate(); err != nil {
+	if err := window.validateWithin(bounds); err != nil {
 		return fmt.Errorf("window option bounds: %w", err)
+	}
+	if bounds.additiveUnknown(ValidContextFabricRelativeWindowID(o.RelativeID), string(o.RelativeID)) {
+		return nil
 	}
 	// CHAOS-3900 W1 (codex review round 5): unlike a bare
 	// ContextFabricRequestedEvidenceWindow -- where a caller legitimately
@@ -128,22 +147,26 @@ func (o ContextFabricWindowOption) Validate() error {
 // integrity check needs the sibling WindowOptions list, so it lives in
 // ContextFabricStructureNeeds.Validate instead.
 func (o ContextFabricWindowExpandOption) Validate() error {
+	return o.validate(contextFabricWriteBounds)
+}
+
+func (o ContextFabricWindowExpandOption) validate(bounds contextFabricBounds) error {
 	if !stringLengthBetween(o.ReceiptID, 8, 256) || !hasWindowReceiptPrefix(o.ReceiptID) {
 		return fmt.Errorf("window expand option receipt_id must carry the %q namespace prefix and satisfy v1 bounds", ContextFabricWindowOptionReceiptPrefix)
 	}
 	if !stringLengthBetween(o.OptionID, 1, 256) || !stringLengthBetween(o.Label, 1, 200) {
 		return fmt.Errorf("window expand option option_id or label violates v1 bounds")
 	}
-	if o.RelativeID != "" && !ValidContextFabricRelativeWindowID(o.RelativeID) {
+	if o.RelativeID != "" && !bounds.additiveOK(ValidContextFabricRelativeWindowID(o.RelativeID), string(o.RelativeID)) {
 		return fmt.Errorf("window expand option relative_id is invalid")
 	}
-	if o.WindowClass != "" && !ValidContextFabricWindowClass(o.WindowClass) {
+	if o.WindowClass != "" && !bounds.additiveOK(ValidContextFabricWindowClass(o.WindowClass), string(o.WindowClass)) {
 		return fmt.Errorf("window expand option window_class is invalid")
 	}
 	if !optionalStringBetween(o.CandidateLabel, 1, 200) {
 		return fmt.Errorf("window expand option candidate_label violates v1 bounds")
 	}
-	if o.CandidateKind != "" && !validContextFabricSubjectKind(o.CandidateKind) {
+	if o.CandidateKind != "" && !bounds.additiveOK(validContextFabricSubjectKind(o.CandidateKind), string(o.CandidateKind)) {
 		return fmt.Errorf("window expand option candidate_kind is invalid")
 	}
 	return nil
@@ -164,13 +187,17 @@ const contextFabricWindowClarificationMaxOptions = 20
 // redemption time. A duplicate here is a composition-time bug -- caught at
 // StageValidation before Save, never a first-match-wins runtime choice.
 func (c ContextFabricWindowClarification) Validate() error {
+	return c.validate(contextFabricWriteBounds)
+}
+
+func (c ContextFabricWindowClarification) validate(bounds contextFabricBounds) error {
 	if len(c.Options) == 0 || len(c.Options) > contextFabricWindowClarificationMaxOptions {
 		return fmt.Errorf("window clarification options violate v1 bounds")
 	}
 	seenReceipt := make(map[string]struct{}, len(c.Options))
 	seenOption := make(map[string]struct{}, len(c.Options))
 	for _, option := range c.Options {
-		if err := option.Validate(); err != nil {
+		if err := option.validate(bounds); err != nil {
 			return fmt.Errorf("window clarification: %w", err)
 		}
 		if _, exists := seenReceipt[option.ReceiptID]; exists {

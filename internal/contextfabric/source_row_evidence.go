@@ -290,6 +290,12 @@ func ExpandEvidence(ctx context.Context, principal storage.Principal, ref string
 					decision.Reason, decision.Err = EvidenceExpansionInvalid, err
 					return contractsv1.ExpandedEvidence{}, decision
 				}
+				if !contractsv1.ValidEvidenceProvenance(expanded.Evidence.Provenance) ||
+					!contractsv1.ValidEvidenceAvailability(expanded.Evidence.Availability) ||
+					!contractsv1.ValidEvidenceAvailability(expanded.Availability) {
+					decision.Reason, decision.Err = EvidenceExpansionInvalid, errSourceRowVocabulary
+					return contractsv1.ExpandedEvidence{}, decision
+				}
 				if expanded.Evidence.EvidenceRefID != ref || expanded.Evidence.Source.System != SourceRowSystem {
 					decision.Reason = EvidenceExpansionInvalid
 					decision.Err = errSourceRowMislabeled
@@ -316,3 +322,7 @@ type sourceRowError string
 func (e sourceRowError) Error() string { return string(e) }
 
 const errSourceRowMislabeled = sourceRowError("contextfabric: source-row expansion does not name the ref or the source system")
+
+// The service serves only the provenance and availability members it
+// documents, even though a reading client admits added ones.
+const errSourceRowVocabulary = sourceRowError("contextfabric: source-row expansion carries a provenance or availability the service does not serve")

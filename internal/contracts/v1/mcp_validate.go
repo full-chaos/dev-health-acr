@@ -198,7 +198,10 @@ func (r MCPRecordEpisodeResponse) Validate() error {
 	}
 	switch r.Status {
 	case "recorded":
-		if !stringLengthBetween(r.EpisodeID, 8, 256) || r.CreatedAt == nil || r.CreatedAt.IsZero() || r.Duplicate == nil || !validAgentEpisodeRedactionState(r.RedactionState) {
+		// redaction_state is copied from the hosted episode, so an added
+		// token passes; status and transcript_disposition are minted here.
+		if !stringLengthBetween(r.EpisodeID, 8, 256) || r.CreatedAt == nil || r.CreatedAt.IsZero() || r.Duplicate == nil ||
+			(!validAgentEpisodeRedactionState(r.RedactionState) && !openVocabularyToken(r.RedactionState)) {
 			return fmt.Errorf("recorded receipt violates v1 bounds")
 		}
 	case "no_persist":

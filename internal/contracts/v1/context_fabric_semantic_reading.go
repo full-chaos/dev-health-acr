@@ -62,13 +62,17 @@ type ContextFabricSemanticReading struct {
 
 // Validate admits exactly the closed members, both required.
 func (s ContextFabricSemanticReading) Validate() error {
+	return s.validate(contextFabricWriteBounds)
+}
+
+func (s ContextFabricSemanticReading) validate(bounds contextFabricBounds) error {
 	validStatus := false
 	for _, member := range ContextFabricSemanticReadingStatuses() {
 		if s.Status == member {
 			validStatus = true
 		}
 	}
-	if !validStatus {
+	if !bounds.additiveOK(validStatus, string(s.Status)) {
 		return fmt.Errorf("semantic_reading status %q is not a vocabulary member", s.Status)
 	}
 	for _, member := range ContextFabricSemanticReadingReasons() {
@@ -76,16 +80,19 @@ func (s ContextFabricSemanticReading) Validate() error {
 			return nil
 		}
 	}
+	if bounds.additiveOK(false, string(s.Reason)) {
+		return nil
+	}
 	return fmt.Errorf("semantic_reading reason %q is not a vocabulary member", s.Reason)
 }
 
 // validateSemanticReadingOnResult holds the disclosure to the one document it
 // describes: a clarification, whose answerability needed the reading.
-func validateSemanticReadingOnResult(reading *ContextFabricSemanticReading, status ContextFabricInvestigationStatus) error {
+func validateSemanticReadingOnResult(reading *ContextFabricSemanticReading, status ContextFabricInvestigationStatus, bounds contextFabricBounds) error {
 	if reading == nil {
 		return nil
 	}
-	if err := reading.Validate(); err != nil {
+	if err := reading.validate(bounds); err != nil {
 		return err
 	}
 	if status != ContextFabricInvestigationClarificationRequired {

@@ -19,7 +19,18 @@ import (
 // self-consistent document: every referenced claim and evidence ref it
 // carries actually appears in it, and every declared drop is coherent.
 func (p ContextFabricAnswerProjection) Validate() error {
-	if err := validateSemanticReadingOnResult(p.SemanticReading, p.Status); err != nil {
+	return p.validate(contextFabricWriteBounds)
+}
+
+// validateRead checks a projection made from a served result, as the local
+// MCP server does before it answers: added tokens in additive vocabularies
+// pass, exactly as they do on the stored result the projection came from.
+func (p ContextFabricAnswerProjection) validateRead() error {
+	return p.validate(contextFabricLegacyBounds)
+}
+
+func (p ContextFabricAnswerProjection) validate(bounds contextFabricBounds) error {
+	if err := validateSemanticReadingOnResult(p.SemanticReading, p.Status, bounds); err != nil {
 		return err
 	}
 	if p.SchemaVersion != ContextFabricAnswerProjectionSchema {
@@ -46,25 +57,25 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	if len(p.StrongestPressures) > ContextFabricProjectedPressuresMaxCount || !uniqueTrimmedStrings(p.StrongestPressures, 2000) {
 		return fmt.Errorf("answer projection strongest pressures violate v1 bounds")
 	}
-	if p.CommittedSubjects == nil || len(p.CommittedSubjects) > ContextFabricProjectedSubjectsMaxCount || !uniqueSubjects(p.CommittedSubjects) {
+	if p.CommittedSubjects == nil || len(p.CommittedSubjects) > ContextFabricProjectedSubjectsMaxCount || !uniqueSubjectsWithin(p.CommittedSubjects, bounds) {
 		return fmt.Errorf("answer projection committed subjects violate v1 bounds")
 	}
-	if err := p.validateClarification(); err != nil {
+	if err := p.validateClarification(bounds); err != nil {
 		return err
 	}
 	if p.Cohort != nil {
-		if err := p.Cohort.Validate(); err != nil {
+		if err := p.Cohort.validate(bounds); err != nil {
 			return fmt.Errorf("cohort: %w", err)
 		}
 	}
-	claims, err := p.validateFacts()
+	claims, err := p.validateFacts(bounds)
 	if err != nil {
 		return err
 	}
-	if err := p.validateDrivers(claims); err != nil {
+	if err := p.validateDrivers(claims, bounds); err != nil {
 		return err
 	}
-	if err := p.validateCoverage(); err != nil {
+	if err := p.validateCoverage(bounds); err != nil {
 		return err
 	}
 	// The same label the canonical result carries, so the same rules
@@ -80,7 +91,7 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	// Project drops it, which is what
 	// TestEveryHistoricalResultProjectsItsTemporalLabel proves it does not.
 	if p.Temporal != nil {
-		if err := p.Temporal.Validate(); err != nil {
+		if err := p.Temporal.validate(bounds); err != nil {
 			return fmt.Errorf("temporal: %w", err)
 		}
 	}
@@ -99,7 +110,7 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	if err := p.Versions.Validate(); err != nil {
 		return fmt.Errorf("versions: %w", err)
 	}
-	if err := p.ProjectionBudget.Validate(); err != nil {
+	if err := p.ProjectionBudget.validate(bounds); err != nil {
 		return err
 	}
 	// CHAOS-3900 W2 / CHAOS-3972 P3: mirrors
@@ -110,17 +121,17 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	// projection carries no Interpretation to read the axis from), exactly
 	// the same asymmetry Temporal's own doc comment already states.
 	if p.EffectiveEvidenceWindow != nil {
-		if err := p.EffectiveEvidenceWindow.validate(); err != nil {
+		if err := p.EffectiveEvidenceWindow.validateWithin(bounds); err != nil {
 			return fmt.Errorf("effective_evidence_window: %w", err)
 		}
 	}
 	if p.WindowClarification != nil {
-		if err := p.WindowClarification.Validate(); err != nil {
+		if err := p.WindowClarification.validate(bounds); err != nil {
 			return fmt.Errorf("window_clarification: %w", err)
 		}
 	}
 	if p.StructureNeeds != nil {
-		if err := p.StructureNeeds.Validate(); err != nil {
+		if err := p.StructureNeeds.validate(bounds); err != nil {
 			return fmt.Errorf("structure_needs: %w", err)
 		}
 	}
@@ -129,7 +140,7 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	}
 	seenConfirmedMembers := make(map[ContextFabricStructureNeedKind]struct{}, len(p.ConfirmedStructure))
 	for i, entry := range p.ConfirmedStructure {
-		if err := entry.Validate(); err != nil {
+		if err := entry.validate(bounds); err != nil {
 			return fmt.Errorf("confirmed_structure[%d]: %w", i, err)
 		}
 		if _, exists := seenConfirmedMembers[entry.Member]; exists {
@@ -137,7 +148,7 @@ func (p ContextFabricAnswerProjection) Validate() error {
 		}
 		seenConfirmedMembers[entry.Member] = struct{}{}
 	}
-	if err := validateInactiveHints(p.InactiveHints); err != nil {
+	if err := validateInactiveHints(p.InactiveHints, bounds); err != nil {
 		return err
 	}
 	// CHAOS-3478/CHAOS-3813: same bound as
@@ -146,7 +157,7 @@ func (p ContextFabricAnswerProjection) Validate() error {
 		return fmt.Errorf("prior_subject_receipt_dispositions exceeds v1 bounds")
 	}
 	for i, entry := range p.PriorSubjectReceiptDispositions {
-		if err := entry.Validate(); err != nil {
+		if err := entry.validate(bounds); err != nil {
 			return fmt.Errorf("prior_subject_receipt_dispositions[%d]: %w", i, err)
 		}
 	}
@@ -159,7 +170,7 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	if err := validateRenderShapes(p.RenderShapes, renderShapeSourcesFromProjection(p)); err != nil {
 		return fmt.Errorf("render shapes: %w", err)
 	}
-	if err := p.validateCompleteness(); err != nil {
+	if err := p.validateCompleteness(bounds); err != nil {
 		return fmt.Errorf("completeness: %w", err)
 	}
 	// THE SAME CENSUS RULE THE CANONICAL RESULT RUNS, through the same
@@ -178,7 +189,7 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	// validateFactScopeCensus, never a second copy of the rule here: two
 	// lists of one vocabulary is how two boundaries end up disagreeing about
 	// the same document.
-	if err := validateFactScopeCensus(p.FactScopeCensus); err != nil {
+	if err := validateFactScopeCensus(p.FactScopeCensus, bounds); err != nil {
 		return fmt.Errorf("answer projection %w", err)
 	}
 	if err := validateFactScopeCensusOmitted(p.FactScopeCensus, p.FactScopeCensusOmitted); err != nil {
@@ -187,7 +198,7 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	return nil
 }
 
-func (p ContextFabricAnswerProjection) validateClarification() error {
+func (p ContextFabricAnswerProjection) validateClarification(bounds contextFabricBounds) error {
 	if p.Clarification == nil {
 		return nil
 	}
@@ -200,7 +211,7 @@ func (p ContextFabricAnswerProjection) validateClarification() error {
 	}
 	seen := make(map[string]struct{}, len(clarification.Candidates))
 	for _, candidate := range clarification.Candidates {
-		if !stringLengthBetween(candidate.ReceiptID, 8, 256) || !validResolutionState(candidate.State) {
+		if !stringLengthBetween(candidate.ReceiptID, 8, 256) || !bounds.additiveOK(validResolutionState(candidate.State), string(candidate.State)) {
 			return fmt.Errorf("answer projection clarification candidate violates v1 bounds")
 		}
 		if utf8.RuneCountInString(candidate.Provider) > ContextFabricProviderMaxLength {
@@ -209,7 +220,7 @@ func (p ContextFabricAnswerProjection) validateClarification() error {
 		if candidate.Confidence < 0 || candidate.Confidence > 1 {
 			return fmt.Errorf("answer projection clarification candidate confidence violates v1 bounds")
 		}
-		if err := candidate.Subject.Validate(); err != nil {
+		if err := candidate.Subject.validate(bounds); err != nil {
 			return fmt.Errorf("clarification candidate subject: %w", err)
 		}
 		if len(candidate.MatchReasons) > 100 || !uniqueTrimmedStrings(candidate.MatchReasons, 1024) {
@@ -228,7 +239,11 @@ func (p ContextFabricAnswerProjection) validateClarification() error {
 // a value below the retained count would understate a cohort the caller can
 // already see in full.
 func (c ContextFabricProjectedCohort) Validate() error {
-	if !validContextFabricSubjectKind(c.Kind) {
+	return c.validate(contextFabricWriteBounds)
+}
+
+func (c ContextFabricProjectedCohort) validate(bounds contextFabricBounds) error {
+	if !bounds.additiveOK(validContextFabricSubjectKind(c.Kind), string(c.Kind)) {
 		return fmt.Errorf("projected cohort kind is not a member of the closed vocabulary")
 	}
 	if c.Members == nil || len(c.Members) > ContextFabricProjectedCohortMaxCount {
@@ -250,7 +265,7 @@ func (c ContextFabricProjectedCohort) Validate() error {
 		if member.RankingComputed {
 			rankedCount++
 		}
-		if err := member.Subject.Validate(); err != nil {
+		if err := member.Subject.validate(bounds); err != nil {
 			return fmt.Errorf("member subject: %w", err)
 		}
 		if member.Subject.Kind != c.Kind {
@@ -379,19 +394,19 @@ func (m ContextFabricProjectedCohortMember) validateRanking() error {
 
 // validateFacts checks KeyFacts bounds and ClaimID uniqueness, returning the
 // ClaimID set that validateDrivers cross-checks driver references against.
-func (p ContextFabricAnswerProjection) validateFacts() (map[string]struct{}, error) {
+func (p ContextFabricAnswerProjection) validateFacts(bounds contextFabricBounds) (map[string]struct{}, error) {
 	if p.KeyFacts == nil || len(p.KeyFacts) > ContextFabricProjectedFactsMaxCount {
 		return nil, fmt.Errorf("answer projection key facts violate v1 bounds")
 	}
 	claims := make(map[string]struct{}, len(p.KeyFacts))
 	for _, fact := range p.KeyFacts {
-		if !stringLengthBetween(fact.ClaimID, 8, 256) || !validClaimedFactKind(fact.Kind) {
+		if !stringLengthBetween(fact.ClaimID, 8, 256) || !bounds.additiveOK(validClaimedFactKind(fact.Kind), string(fact.Kind)) {
 			return nil, fmt.Errorf("answer projection key fact identity violates v1 bounds")
 		}
 		if !stringLengthBetween(fact.Field, 1, ContextFabricClaimedFieldMaxLength) || strings.TrimSpace(fact.Field) != fact.Field {
 			return nil, fmt.Errorf("answer projection key fact field violates v1 bounds")
 		}
-		if err := fact.Subject.Validate(); err != nil {
+		if err := fact.Subject.validate(bounds); err != nil {
 			return nil, fmt.Errorf("key fact subject: %w", err)
 		}
 		if err := fact.Value.Validate(); err != nil {
@@ -424,16 +439,16 @@ func (p ContextFabricAnswerProjection) validateFacts() (map[string]struct{}, err
 // claimed-fact references resolve inside this document. A driver citing a
 // claim the projection dropped would be unverifiable by the consumer that
 // received it, which defeats the point of carrying facts at value level.
-func (p ContextFabricAnswerProjection) validateDrivers(claims map[string]struct{}) error {
+func (p ContextFabricAnswerProjection) validateDrivers(claims map[string]struct{}, bounds contextFabricBounds) error {
 	if p.PrincipalDrivers == nil || len(p.PrincipalDrivers) > ContextFabricProjectedDriversMaxCount {
 		return fmt.Errorf("answer projection drivers violate v1 bounds")
 	}
 	seen := make(map[string]struct{}, len(p.PrincipalDrivers))
 	for _, driver := range p.PrincipalDrivers {
-		if !stringLengthBetween(driver.DriverID, 8, 256) || !validDriverStanding(driver.Standing) {
+		if !stringLengthBetween(driver.DriverID, 8, 256) || !bounds.additiveOK(validDriverStanding(driver.Standing), string(driver.Standing)) {
 			return fmt.Errorf("answer projection driver identity or standing violates v1 bounds")
 		}
-		if !validDriverCategory(ContextFabricDriverCategory(driver.Category)) {
+		if !bounds.additiveOK(validDriverCategory(ContextFabricDriverCategory(driver.Category)), driver.Category) {
 			return fmt.Errorf("answer projection driver category is not a member of the closed vocabulary")
 		}
 		if !stringLengthBetween(driver.Title, 1, 512) || !stringLengthBetween(driver.Summary, 1, 4000) {
@@ -461,7 +476,7 @@ func (p ContextFabricAnswerProjection) validateDrivers(claims map[string]struct{
 	return nil
 }
 
-func (p ContextFabricAnswerProjection) validateCoverage() error {
+func (p ContextFabricAnswerProjection) validateCoverage(bounds contextFabricBounds) error {
 	if p.CoverageSummary == nil || len(p.CoverageSummary) > ContextFabricProjectedCoverageMaxCount {
 		return fmt.Errorf("answer projection coverage violates v1 bounds")
 	}
@@ -470,7 +485,7 @@ func (p ContextFabricAnswerProjection) validateCoverage() error {
 		if !stringLengthBetween(entry.Source, 1, 128) || strings.TrimSpace(entry.Source) != entry.Source {
 			return fmt.Errorf("answer projection coverage source violates v1 bounds")
 		}
-		if !validSourceState(entry.State) {
+		if !bounds.additiveOK(validSourceState(entry.State), string(entry.State)) {
 			return fmt.Errorf("answer projection coverage state is not a member of the closed vocabulary")
 		}
 		// Matches the canonical SourceObservation.reason bound. A tighter
@@ -499,7 +514,7 @@ func (p ContextFabricAnswerProjection) validateCoverage() error {
 // UN-CLAMPED canonical totals (see the field's own doc comment) so, unlike
 // coverage_summary/key_facts above, they are NOT cross-checked against any
 // projected array length here -- only bounded to be non-negative.
-func (p ContextFabricAnswerProjection) validateCompleteness() error {
+func (p ContextFabricAnswerProjection) validateCompleteness(bounds contextFabricBounds) error {
 	c := p.Completeness
 	if c.TerminalStatus != p.Status {
 		return fmt.Errorf("terminal_status %q must equal status %q", c.TerminalStatus, p.Status)
@@ -508,7 +523,7 @@ func (p ContextFabricAnswerProjection) validateCompleteness() error {
 		if c.TerminalReason != "" {
 			return fmt.Errorf("terminal_reason must be empty for a complete result, got %q", c.TerminalReason)
 		}
-	} else if !ValidContextFabricTerminalReason(c.TerminalReason) {
+	} else if !bounds.additiveOK(ValidContextFabricTerminalReason(c.TerminalReason), string(c.TerminalReason)) {
 		return fmt.Errorf("terminal_reason %q is not a recognized closed value", c.TerminalReason)
 	}
 	if c.ClaimedFactsCount < 0 || c.RowsCount < 0 {
@@ -548,6 +563,10 @@ func (p ContextFabricAnswerProjection) validateReceipts() error {
 // answers; one that dropped content without saying so is the silent
 // truncation this contract exists to prevent.
 func (b ContextFabricProjectionBudget) Validate() error {
+	return b.validate(contextFabricWriteBounds)
+}
+
+func (b ContextFabricProjectionBudget) validate(bounds contextFabricBounds) error {
 	// CohortGroupsOmitted belongs here like every other counter: the
 	// invariant this function enforces is "Truncated iff ANY omitted count is
 	// non-zero", and a counter absent from this list is outside the invariant
@@ -582,7 +601,7 @@ func (b ContextFabricProjectionBudget) Validate() error {
 	// smaller than the cohort, so a basis without a member drop is
 	// unreachable from the producer and can only be a hand-built payload.
 	if b.CohortMemberSelectionBasis != "" {
-		if !ValidContextFabricCohortMemberSelectionBasis(b.CohortMemberSelectionBasis) {
+		if !bounds.additiveOK(ValidContextFabricCohortMemberSelectionBasis(b.CohortMemberSelectionBasis), string(b.CohortMemberSelectionBasis)) {
 			return fmt.Errorf("answer projection budget cohort member selection basis %q is not one of the two orders the group-aware clamp can select by", b.CohortMemberSelectionBasis)
 		}
 		if b.CohortMembersOmitted == 0 {

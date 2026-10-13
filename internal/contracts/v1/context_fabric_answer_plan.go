@@ -299,16 +299,22 @@ type ContextFabricPlanNarrowing struct {
 
 // Validate enforces the closed vocabularies and the count arithmetic.
 func (n ContextFabricPlanNarrowing) Validate() error {
-	if !ValidContextFabricPlanNarrowingStage(n.Stage) {
+	return n.validate(contextFabricWriteBounds)
+}
+
+// validate leaves the stage-by-basis legality table to known members: an
+// added stage or basis has no row in it.
+func (n ContextFabricPlanNarrowing) validate(bounds contextFabricBounds) error {
+	if !bounds.additiveOK(ValidContextFabricPlanNarrowingStage(n.Stage), string(n.Stage)) {
 		return fmt.Errorf("plan narrowing stage %q is not a member of the closed vocabulary", n.Stage)
 	}
-	if !ValidContextFabricNarrowingBasis(n.Basis) {
+	if !bounds.additiveOK(ValidContextFabricNarrowingBasis(n.Basis), string(n.Basis)) {
 		return fmt.Errorf("plan narrowing basis %q is not a member of the closed vocabulary", n.Basis)
 	}
 	if n.Before < 0 || n.After < 0 || n.After > n.Before {
 		return fmt.Errorf("plan narrowing must reduce a non-negative count, got before=%d after=%d", n.Before, n.After)
 	}
-	if n.Overrun != "" && !ValidContextFabricBudgetOverrun(n.Overrun) {
+	if n.Overrun != "" && !bounds.additiveOK(ValidContextFabricBudgetOverrun(n.Overrun), string(n.Overrun)) {
 		return fmt.Errorf("plan narrowing overrun %q is not a member of the closed vocabulary", n.Overrun)
 	}
 	// A stage cannot honestly claim a basis that does not exist yet at the
@@ -329,6 +335,9 @@ func (n ContextFabricPlanNarrowing) Validate() error {
 	// revision, stated here as something the contract refuses to
 	// represent -- for every stage x basis combination live code cannot
 	// produce, not just the ones earlier revisions happened to guard.
+	if bounds.additiveUnknown(ValidContextFabricPlanNarrowingStage(n.Stage), string(n.Stage)) {
+		return nil
+	}
 	switch n.Basis {
 	case ContextFabricNarrowingBasisAttentionRank:
 		if n.Stage != ContextFabricPlanNarrowingAssembledResult {
@@ -367,6 +376,10 @@ type ContextFabricAnswerPlanBudget struct {
 
 // Validate enforces the budget's own arithmetic.
 func (b ContextFabricAnswerPlanBudget) Validate() error {
+	return b.validate(contextFabricWriteBounds)
+}
+
+func (b ContextFabricAnswerPlanBudget) validate(bounds contextFabricBounds) error {
 	if b.MaxItems < 0 || b.MaxSerializedBytes < 0 || b.MaxMembers < 0 || b.SynthesisHeadroom < 0 {
 		return fmt.Errorf("answer plan budget fields must be non-negative")
 	}
@@ -375,7 +388,8 @@ func (b ContextFabricAnswerPlanBudget) Validate() error {
 	// the fact read -- so canonical_id_lexical is the only value it can
 	// ever honestly hold (codex round 4, EXECUTED: this check accepted any
 	// closed-vocabulary member, including bases stage 1 cannot run).
-	if b.NarrowingBasis != "" && b.NarrowingBasis != ContextFabricNarrowingBasisCanonicalIDLexical {
+	if b.NarrowingBasis != "" && b.NarrowingBasis != ContextFabricNarrowingBasisCanonicalIDLexical &&
+		!bounds.additiveUnknown(ValidContextFabricNarrowingBasis(b.NarrowingBasis), string(b.NarrowingBasis)) {
 		return fmt.Errorf("answer plan narrowing basis %q is not stage 1's own order (canonical_id_lexical is the only value this field can honestly hold)", b.NarrowingBasis)
 	}
 	if b.MaxItems > 0 && b.SynthesisHeadroom > b.MaxItems {
@@ -447,19 +461,23 @@ func (p ContextFabricAnswerPlan) Narrowed() bool { return len(p.Narrowing) > 0 }
 // Validate enforces every closed vocabulary the plan carries plus its own
 // internal consistency.
 func (p ContextFabricAnswerPlan) Validate() error {
-	if !ValidContextFabricQuestionFamily(p.Family) {
+	return p.validate(contextFabricWriteBounds)
+}
+
+func (p ContextFabricAnswerPlan) validate(bounds contextFabricBounds) error {
+	if !bounds.additiveOK(ValidContextFabricQuestionFamily(p.Family), string(p.Family)) {
 		return fmt.Errorf("answer plan family %q is not a member of the closed vocabulary", p.Family)
 	}
-	if !ValidContextFabricQuestionFamilySource(p.FamilySource) {
+	if !bounds.additiveOK(ValidContextFabricQuestionFamilySource(p.FamilySource), string(p.FamilySource)) {
 		return fmt.Errorf("answer plan family source %q is not a member of the closed vocabulary", p.FamilySource)
 	}
 	if p.FamilyVersion == "" || len(p.FamilyVersion) > 64 {
 		return fmt.Errorf("answer plan family version must be a non-empty string of at most 64 bytes")
 	}
-	if p.GroupKind != "" && !validContextFabricSubjectKind(p.GroupKind) {
+	if p.GroupKind != "" && !bounds.additiveOK(validContextFabricSubjectKind(p.GroupKind), string(p.GroupKind)) {
 		return fmt.Errorf("answer plan group kind %q is not a member of the closed vocabulary", p.GroupKind)
 	}
-	if p.MemberKind != "" && !validContextFabricSubjectKind(p.MemberKind) {
+	if p.MemberKind != "" && !bounds.additiveOK(validContextFabricSubjectKind(p.MemberKind), string(p.MemberKind)) {
 		return fmt.Errorf("answer plan member kind %q is not a member of the closed vocabulary", p.MemberKind)
 	}
 	// A grouped plan whose group kind equalled its member kind would be
@@ -479,7 +497,7 @@ func (p ContextFabricAnswerPlan) Validate() error {
 		return fmt.Errorf("answer plan declares more fact kinds than the closed vocabulary has")
 	}
 	for _, kind := range p.FactKinds {
-		if !validFactKind(kind) {
+		if !bounds.additiveOK(validFactKind(kind), string(kind)) {
 			return fmt.Errorf("answer plan fact kind %q is not a member of the closed vocabulary", kind)
 		}
 	}
@@ -487,18 +505,18 @@ func (p ContextFabricAnswerPlan) Validate() error {
 		return fmt.Errorf("answer plan declares more axes than the closed structure-need vocabulary has")
 	}
 	for _, axis := range p.Axes {
-		if !ValidContextFabricStructureNeedKind(axis) {
+		if !bounds.additiveOK(ValidContextFabricStructureNeedKind(axis), string(axis)) {
 			return fmt.Errorf("answer plan axis %q is not a member of the closed vocabulary", axis)
 		}
 	}
-	if err := p.Budget.Validate(); err != nil {
+	if err := p.Budget.validate(bounds); err != nil {
 		return fmt.Errorf("budget: %w", err)
 	}
 	if len(p.Narrowing) > ContextFabricPlanNarrowingMaxCount {
 		return fmt.Errorf("answer plan records %d narrowing steps, more than the %d a plan can honestly take", len(p.Narrowing), ContextFabricPlanNarrowingMaxCount)
 	}
 	for _, step := range p.Narrowing {
-		if err := step.Validate(); err != nil {
+		if err := step.validate(bounds); err != nil {
 			return fmt.Errorf("narrowing: %w", err)
 		}
 	}
@@ -517,7 +535,7 @@ func (p ContextFabricAnswerPlan) Validate() error {
 	// for one frame with MemberKind set and unset and asserts the two
 	// arrays are byte-identical. A comment claiming this validator enforced
 	// it would be a disclosure nothing verifies.
-	if err := ValidateContextFabricPlanRequirements(p.Requirements); err != nil {
+	if err := validatePlanRequirements(p.Requirements, bounds); err != nil {
 		return fmt.Errorf("requirements: %w", err)
 	}
 	return nil

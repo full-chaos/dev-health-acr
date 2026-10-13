@@ -126,7 +126,7 @@ func TestAgentEpisodeValidate_matches_v1_boundaries(t *testing.T) {
 		{name: "episode_id_missing", mutate: func(v *AgentEpisode) { v.EpisodeID = "" }},
 		{name: "episode_id_too_short", mutate: func(v *AgentEpisode) { v.EpisodeID = "short" }},
 		{name: "created_at_zero", mutate: func(v *AgentEpisode) { v.CreatedAt = time.Time{} }},
-		{name: "redaction_state_invalid", mutate: func(v *AgentEpisode) { v.RedactionState = "invalid" }},
+		{name: "redaction_state_not_a_token", mutate: func(v *AgentEpisode) { v.RedactionState = "not a token" }},
 		{name: "goal_missing", mutate: func(v *AgentEpisode) { v.Goal = "" }},
 		{name: "repository_slug_invalid", mutate: func(v *AgentEpisode) { v.Repository.Slug = "invalid-slug" }},
 		{name: "scope_branch_too_long", mutate: func(v *AgentEpisode) { v.Scope.Branch = strings.Repeat("b", 513) }},

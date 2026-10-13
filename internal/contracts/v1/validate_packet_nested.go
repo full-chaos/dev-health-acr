@@ -16,7 +16,7 @@ func (s ResolvedScope) Validate() error {
 	if !stringLengthBetween(s.Branch, 0, 512) || !stringLengthBetween(s.CommitSHA, 0, 64) {
 		return fmt.Errorf("resolved_scope string violates v1 bounds")
 	}
-	if !validScopeResolution(s.Resolution) {
+	if !validScopeResolution(s.Resolution) && !openVocabularyToken(string(s.Resolution)) {
 		return fmt.Errorf("resolution violates v1 bounds")
 	}
 	if s.FallbackReasons == nil {
@@ -94,7 +94,9 @@ func (w SourceWatermark) Validate() error {
 	switch w.Status {
 	case "fresh", "stale", "missing", "unavailable":
 	default:
-		return fmt.Errorf("status violates v1 bounds")
+		if !openVocabularyToken(w.Status) {
+			return fmt.Errorf("status violates v1 bounds")
+		}
 	}
 	return nil
 }

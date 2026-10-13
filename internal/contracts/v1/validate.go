@@ -42,7 +42,7 @@ func (a AgentEpisode) Validate() error {
 	if a.CreatedAt.IsZero() {
 		return errors.New("created_at is required")
 	}
-	if !validAgentEpisodeRedactionState(a.RedactionState) {
+	if !validAgentEpisodeRedactionState(a.RedactionState) && !openVocabularyToken(a.RedactionState) {
 		return errors.New("invalid redaction_state")
 	}
 	if err := validateAgentEpisodeCreateFields(a.AgentEpisodeCreate); err != nil {
