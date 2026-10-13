@@ -111,13 +111,14 @@ func repoMixStatement(bounds []factTimeBound) string {
 // mix, unit listing). The repository mix (normalized_query_hash
 // 1024715550238946426) measured p50 118 MiB and max 124.4 MiB on prod
 // (system.query_log, 3 runs since 2026-10-13 01:11Z), above the 64 MiB API
-// default, so those reads carry their own limit. The CI fixture needs more:
-// TestThemeMixReadBytesColdVersusWarmAndByOrgSizeAgainstRealClickHouse reached
-// 168.63 MiB on a small org, so the limit is 256 MiB. Temporary: the statement
-// shape is to be brought under the default and this override removed.
+// default, so those reads carry their own limit. The CI fixture needs far
+// more: TestThemeMixReadsScanWorkUnitInvestmentsOnceAgainstRealClickHouse
+// reached 288.76 MiB (and failed at 256 MiB), so the limit is 512 MiB.
+// Temporary: the statement shape is to be brought under the default and this
+// override removed.
 //
-// memory-limit-measured: 168.63 MiB 2026-10-13 CI fixture TestThemeMixReadBytesColdVersusWarmAndByOrgSizeAgainstRealClickHouse (prod 124.4 MiB hash 1024715550238946426)
-const investmentSplitMaxMemoryUsage = uint64(256 << 20)
+// memory-limit-measured: 288.76 MiB 2026-10-13 CI fixture TestThemeMixReadsScanWorkUnitInvestmentsOnceAgainstRealClickHouse (prod 124.4 MiB hash 1024715550238946426)
+const investmentSplitMaxMemoryUsage = uint64(512 << 20)
 
 func withInvestmentSplitMemory(statement string) string {
 	return readers.WithSettings(statement, readers.Settings{MaxMemoryUsage: investmentSplitMaxMemoryUsage})

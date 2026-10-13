@@ -18,7 +18,7 @@ func TestInvestmentSplitStatementsCarryTheirOwnMemoryLimit(t *testing.T) {
 		"organization units":  investmentUnitsStatementFor(bound, true, scope, true),
 	}
 	for name, statement := range statements {
-		if !strings.Contains(statement, "max_memory_usage = 268435456") {
+		if !strings.Contains(statement, "max_memory_usage = 536870912") {
 			t.Errorf("%s statement carries no investmentSplitMaxMemoryUsage limit:\n%.200s", name, statement)
 		}
 	}
