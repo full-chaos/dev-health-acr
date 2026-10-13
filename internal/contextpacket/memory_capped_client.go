@@ -88,7 +88,7 @@ func (c memoryCappedQueryClient) Query(ctx context.Context, statement string, bi
 	if c.observer != nil {
 		driverOptions = append(driverOptions, clickhousedriver.WithProfileEvents(func(events []clickhousedriver.ProfileEvent) {
 			for _, event := range events {
-				if event.Name != "peak_memory_usage" || event.Value <= 0 {
+				if event.Name != "MemoryTrackerPeakUsage" || event.Value <= 0 {
 					continue
 				}
 				for value := uint64(event.Value); ; {
