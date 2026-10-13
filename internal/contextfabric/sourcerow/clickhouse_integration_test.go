@@ -233,6 +233,11 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 			if expanded.Evidence.EvidenceRefID != contractsv1.EvidenceRefID(tc.kind, tc.id) || (!orgLevel && expanded.Structured["repository"] != grantedRep) {
 				t.Fatalf("%s: %+v %v", tc.kind, expanded.Evidence, expanded.Structured)
 			}
+			if tc.kind == contractsv1.ContextFabricEvidenceEntityPullRequest {
+				if want := grantedRep + ": PR #532 Fix the widget (merged)"; expanded.Excerpt != want {
+					t.Fatalf("pull request excerpt %q, want %q", expanded.Excerpt, want)
+				}
+			}
 			if tc.label != "" && expanded.Evidence.Source.DisplayLabel != tc.label {
 				t.Fatalf("%s: label %q, want %q", tc.kind, expanded.Evidence.Source.DisplayLabel, tc.label)
 			}
