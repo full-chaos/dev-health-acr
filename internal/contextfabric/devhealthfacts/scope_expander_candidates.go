@@ -16,10 +16,11 @@ const requestedProjectIDsPredicate = `id IN {project_ids:Array(String)}`
 const requestedProjectKeysPredicate = `concat(provider, '` + projectOriginKeySeparator + `', id) IN {project_ids:Array(String)}`
 
 // requestedProjectJoinKeysSQL is every value a work item's project_id can
-// carry to reach a project the predicate selects: the project's id and its
-// project key, in any stored version.
+// carry to reach a project the predicate selects: the project's id (even an
+// empty one, which the resolution also matches) and its non-empty project
+// key, in any stored version.
 func requestedProjectJoinKeysSQL(projectPredicate string) string {
-	return `(SELECT arrayJoin(arrayFilter(k -> k != '', [id, ifNull(project_key, '')])) FROM projects WHERE org_id = {org_id:String} AND ` + projectPredicate + `)`
+	return `(SELECT arrayJoin(if(ifNull(project_key, '') = '', [id], [id, ifNull(project_key, '')])) FROM projects WHERE org_id = {org_id:String} AND ` + projectPredicate + `)`
 }
 
 // requestedProjectWorkItemIDsSQL is the ids of the work items whose current
@@ -44,11 +45,12 @@ func requestedProjectHistoryWorkItemIDsSQL(projectPredicate string) string {
 // ownership row's project_id or project_key, with their ids and project keys.
 // It reads the ownership and project tables directly, so the statement's own
 // ownership resolution (teamOwnedProjectsSQL) still decides every row.
-const teamOwnedProjectJoinKeysSQL = `(SELECT provider, arrayJoin(arrayFilter(k -> k != '', [id, ifNull(project_key, '')])) FROM projects WHERE org_id = {org_id:String} AND ((provider, id) IN ` + teamOwnershipValuesSQL + ` OR (provider, ifNull(project_key, '')) IN ` + teamOwnershipValuesSQL + `))`
+const teamOwnedProjectJoinKeysSQL = `(SELECT provider, arrayJoin(if(ifNull(project_key, '') = '', [id], [id, ifNull(project_key, '')])) FROM projects WHERE org_id = {org_id:String} AND ((provider, id) IN ` + teamOwnershipValuesSQL + ` OR (provider, ifNull(project_key, '')) IN ` + teamOwnershipValuesSQL + `))`
 
 // teamOwnershipValuesSQL is every (provider, value) an ownership row of a
-// requested team names a project by.
-const teamOwnershipValuesSQL = `(SELECT provider, arrayJoin(arrayFilter(v -> v != '', [project_id, ifNull(project_key, '')])) FROM team_project_ownership WHERE org_id = {org_id:String} AND team_id IN {team_ids:Array(String)})`
+// requested team names a project by: its project_id (even an empty one, which
+// the library's ownership arm also matches) and its non-empty project_key.
+const teamOwnershipValuesSQL = `(SELECT provider, arrayJoin(if(ifNull(project_key, '') = '', [project_id], [project_id, ifNull(project_key, '')])) FROM team_project_ownership WHERE org_id = {org_id:String} AND team_id IN {team_ids:Array(String)})`
 
 // teamOwnedProjectWorkItemIDsSQL is the ids of the work items of the projects
 // the requested teams own (teamOwnedProjectJoinKeysSQL).
