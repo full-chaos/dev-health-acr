@@ -396,7 +396,7 @@ func openProjectorClickHouse(cfg config.ProjectorConfig) (projectorClickHouseCli
 		return projectorClickHouseClient{}, fmt.Errorf("open clickhouse: %w", err)
 	}
 	return projectorClickHouseClient{
-		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage),
+		query: contextpacket.ClickHouseQueryClient(clickhouseClient),
 		ping:  clickhouseClient.Ping, close: clickhouseClient.Close,
 	}, nil
 }
