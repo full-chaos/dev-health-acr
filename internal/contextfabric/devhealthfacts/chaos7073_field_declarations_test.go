@@ -443,6 +443,12 @@ func t4Cases() []t4Case {
 		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(1042), "open"}}},
 		{match: "FROM work_graph_issue_pr", rows: [][]any{{"repo-1:1042", "jira", "P1", "Payments", uint8(3), "native"}}},
 	}})
+	add(t4Case{name: "pull_requests/project", kind: contextfabric.FactPullRequests, subjects: proj, tables: []fakeTable{
+		{match: "lp.project_key", rows: [][]any{{"linear:proj-1", int64(3), int64(2), int64(1), int64(1), int64(0)}, {"linear:proj-1", int64(1), int64(1), int64(0), int64(0), int64(1)}}},
+	}})
+	add(t4Case{name: "blockers/project", kind: contextfabric.FactBlockers, subjects: proj, tables: []fakeTable{
+		{match: "uniqExactIf(tgt, is_open = 1)", rows: [][]any{{"linear:proj-1", int64(2), int64(3), int64(1)}}},
+	}})
 	add(t4Case{name: "reviews/pull_request_review", kind: contextfabric.FactReviews, subjects: []contextfabric.SubjectRef{reviewSubject("repo-1", "review-1")}, tables: []fakeTable{
 		{match: "FROM git_pull_request_reviews", rows: [][]any{{"review-1", "approved", "repo-1", uint32(1)}, {"review-1", "", "repo-1", uint32(1)}}},
 	}})
@@ -776,7 +782,10 @@ func TestCHAOS7120SafetyMarksOnEntityDeclarations(t *testing.T) {
 			// Team rollup declarations (deployments, incidents, pull requests,
 			// blockers) are a team-subject shape, pinned by
 			// TestTeamRollupDeclarationMarks; this pin covers the entity roots.
-			if len(field.SubjectKinds) == 1 && field.SubjectKinds[0] == contextfabric.SubjectTeam {
+			// Project rollups of pull requests and blockers are the same rollup
+			// shape on a project subject, pinned by
+			// TestProjectRollupDeclarationMarks.
+			if len(field.SubjectKinds) == 1 && (field.SubjectKinds[0] == contextfabric.SubjectTeam || field.SubjectKinds[0] == contextfabric.SubjectProject) {
 				continue
 			}
 			if field.Score || field.Aggregate {

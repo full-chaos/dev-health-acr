@@ -157,9 +157,12 @@ func (r *gatedFactReader) filter(ctx context.Context, principal storage.Principa
 	out := append([]CanonicalFact(nil), facts...)
 	for position, item := range gated {
 		fact := item.Fact
-		if item.Withheld() {
+		switch {
+		case item.Withheld():
 			decision.FactsWithheldFrom++
 			fact = labelWithheld(item, capabilities[fact.Kind])
+		case aggregateWithoutDeclaredReferences(fact, capabilities[fact.Kind]):
+			fact = labelAggregateScope(fact)
 		}
 		out[declaredAt[position]] = fact
 	}
@@ -216,6 +219,49 @@ func labelWithheld(item EmbeddedGatedFact, capability FactCapability) CanonicalF
 			break
 		}
 	}
+	fact.Fields = fields
+	return fact
+}
+
+// aggregateWithoutDeclaredReferences reports a fact that carries a declared
+// aggregate scalar while its capability declares no subject reference for the
+// fact's subject kind: the aggregate may span subjects outside the caller's
+// grant that the gate can never see, so nothing is withheld and labelWithheld
+// never runs for it (a project pull request rollup).
+func aggregateWithoutDeclaredReferences(fact CanonicalFact, capability FactCapability) bool {
+	aggregate := false
+	for name := range fact.Fields {
+		if declaration, ok := capability.FieldDeclaration(name, fact.Subject.Kind); ok && declaration.Aggregate {
+			aggregate = true
+			break
+		}
+	}
+	if !aggregate {
+		return false
+	}
+	for _, field := range capability.Fields {
+		if !field.AppliesTo(fact.Subject.Kind) {
+			continue
+		}
+		if field.SubjectRef != nil {
+			return false
+		}
+		for _, column := range field.Columns {
+			if column.SubjectRef != nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// labelAggregateScope adds the K2 aggregate label to a fact.
+func labelAggregateScope(fact CanonicalFact) CanonicalFact {
+	fields := make(map[string]FactValue, len(fact.Fields)+1)
+	for name, value := range fact.Fields {
+		fields[name] = value
+	}
+	fields[FactFieldAggregateScope] = StringFactValue(AggregateScopeAllOwnedRepositories)
 	fact.Fields = fields
 	return fact
 }
