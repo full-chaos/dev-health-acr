@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -53,7 +54,7 @@ func TestReadFactsServesTeamReachedOnlyThroughProjectLinksAgainstRealClickHouse(
 	}
 	gate := directread.NewSubjectGate(admitEverySubject{}, nil)
 	reader := directread.NewFactsReader(gate, directread.NewFactReader(registry.WithoutScopeExpansion()), nil)
-	response, err := reader.Read(ctx, storage.Principal{OrgID: orgID, Subject: "project-linked", CredentialID: "project-linked"}, directread.FactsRequest{
+	response, err := reader.Read(observability.WithRequestID(ctx, "req_00000000000000000000000000000001"), storage.Principal{OrgID: orgID, Subject: "project-linked", CredentialID: "project-linked"}, directread.FactsRequest{
 		Kinds:    []string{"health", "investment"},
 		Subjects: []directread.RequestSubject{{Kind: "team", CanonicalID: "team:team-project-only"}},
 	})
