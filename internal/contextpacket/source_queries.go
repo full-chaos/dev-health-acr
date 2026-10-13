@@ -27,7 +27,7 @@ func workGraphEndpointLabelSQL(id, kind, pr, issue, otherPR string) string {
 		"match(" + id + ", '^[0-9a-fA-F-]{36}$'), concat(replaceAll(" + kind + ", '_', ' '), ' ', substring(" + id + ", 1, 8)), " + id + ")"
 }
 
-const workGraphPullRequestsSQL = `SELECT concat(toString(p.repo_id), '#pr', toString(p.number)) ref, p.number number, ifNull(p.title, '') title, r.repo slug FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id WHERE p.org_id = {org_id:String} AND p.repo_id = {repo_id:UUID}`
+const workGraphPullRequestsSQL = `SELECT concat(toString(p.repo_id), '#pr', toString(p.number)) ref, p.number number, ifNull(p.title, '') title, r.repo slug FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id WHERE p.org_id = {org_id:String}`
 
 const workGraphIssuesSQL = `SELECT work_item_id, any(ifNull(title, '')) issue_title FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT arrayJoin([source_id, target_id]) FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}) GROUP BY work_item_id HAVING uniqExact(ifNull(title, '')) = 1`
 
