@@ -47,6 +47,7 @@ func rankingTableRow(member contractsv1.ContextFabricCohortMember) contractsv1.C
 	fields := map[string]contractsv1.ContextFabricScalarValue{
 		"team_canonical_id": stringScalar(member.Subject.CanonicalID),
 		"team_label":        stringScalar(member.Subject.Label),
+		"subject_kind":      stringScalar(string(member.Subject.Kind)),
 		"attention_rank":    intScalar(int64(member.AttentionRank)),
 		"outcome":           stringScalar(string(member.Outcome)),
 		// Score is ALWAYS present, even null -- "never a bare score" cuts
