@@ -2,33 +2,35 @@ package contextfabric
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// Widening past the preferred share is for an input no fact removal can shrink.
-// An input the pass limit stopped while facts were still being removed has a
-// smaller form, so it is not served whole.
-func TestAnInputThePassLimitStoppedIsNotWidened(t *testing.T) {
+// An input that needs more than the old pass limit of reductions is reduced
+// until it fits, not widened and not refused.
+func TestAnInputNeedingManyPassesKeepsReducing(t *testing.T) {
 	facts := make([]CanonicalFact, 100)
 	for index := range facts {
 		facts[index] = CanonicalFact{Kind: FactStatus, Subject: SubjectRef{Kind: SubjectWorkItem, CanonicalID: fmt.Sprintf("work_item_%03d", index)}}
 	}
 	input := SynthesisInput{}
 	input.Facts.Facts = facts
-	encode := func(_ string, _ SynthesisInput, max int) ([]byte, error) {
-		if max >= 1<<20 {
+	calls := 0
+	encode := func(_ string, given SynthesisInput, max int) ([]byte, error) {
+		calls++
+		if len(given.Facts.Facts) <= 1 {
 			return []byte(`{}`), nil
 		}
-		return nil, &ModelInputOverflow{Bytes: max + max/20, MaxBytes: max}
+		return nil, &ModelInputOverflow{Bytes: max + 1, MaxBytes: max}
 	}
-	_, _, _, err := RuntimeAnswerSynthesizer{}.encodeWithinInputBound(context.Background(), storage.Principal{}, input, encode, 1000, 1<<20)
-	var overflow *ModelInputOverflow
-	if !errors.As(err, &overflow) {
-		t.Fatalf("err = %v, want the overflow the pass limit ended on", err)
+	given, encoded, bound, err := RuntimeAnswerSynthesizer{}.encodeWithinInputBound(context.Background(), storage.Principal{}, input, encode, 1000, 1<<20)
+	if err != nil || string(encoded) != `{}` || bound == nil || len(given.Facts.Facts) != 1 {
+		t.Fatalf("encoded = %q, err = %v, bound nil = %v, facts = %d, want one fact fitted", encoded, err, bound == nil, len(given.Facts.Facts))
+	}
+	if calls <= maxSynthesisInputBoundPasses+1 {
+		t.Fatalf("encode calls = %d, want more than the old pass limit", calls)
 	}
 }
 

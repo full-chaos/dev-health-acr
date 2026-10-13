@@ -231,7 +231,9 @@ func (e *Engine) runClientSynthesis(ctx context.Context, principal storage.Princ
 // encodeWithinInputBound builds the synthesis input and, when it does not fit
 // the bound, reduces the facts and builds it again. It returns the input the
 // bytes were built from, so a later change can check a caller's draft
-// against the same facts.
+// against the same facts. It reduces until the input fits or no fact can be
+// removed. Each pass removes at least one fact, so the loop ends within the
+// number of facts read.
 func (r RuntimeAnswerSynthesizer) encodeWithinInputBound(ctx context.Context, principal storage.Principal, input SynthesisInput, encode func(string, SynthesisInput, int) ([]byte, error), maxBytes, widenTo int) (given SynthesisInput, encoded []byte, bound *synthesisInputBound, err error) {
 	given = input
 	var event SynthesisInputBoundEvent
@@ -256,13 +258,16 @@ func (r RuntimeAnswerSynthesizer) encodeWithinInputBound(ctx context.Context, pr
 		if selection == SynthesisInputSelectionRelevance || event.Selection == "" {
 			event.Selection = selection
 		}
-		if !reduced || event.Passes == maxSynthesisInputBoundPasses {
+		slog.Default().DebugContext(ctx, "context_fabric: client synthesis input bound pass",
+			"pass", event.Passes+1, "facts_before", len(given.Facts.Facts), "facts_after", len(reducedFacts),
+			"overflow_bytes", overflow.Bytes, "max_bytes", overflow.MaxBytes, "reduced", reduced)
+		if !reduced || event.Passes >= len(input.Facts.Facts) {
 			if !reduced && widenTo > maxBytes && overflow.Bytes <= widenTo {
 				// Nothing more can be removed: this smallest input is above its
 				// preferred share of the caller's budget but, with its envelope
 				// and the answer floor, fits the budget: serve it whole and say
-				// so. An input the pass limit stopped has a smaller form and is
-				// not widened.
+				// so. This branch ends the call and never feeds facts back into
+				// the loop.
 				if widened, widenErr := encode(principal.OrgID, given, widenTo); widenErr == nil {
 					event.Outcome = SynthesisInputBoundShareExceeded
 					event.InputBytes, event.MaxInputBytes = overflow.Bytes, maxBytes

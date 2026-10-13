@@ -87,10 +87,3 @@ func relationEndedKeysSQL() string {
 func relationCurrentSQL(d string) string {
 	return ` AND (` + d + `.source_work_item_id, ` + d + `.target_work_item_id, ` + d + `.relationship_type) NOT IN ` + relationEndedKeysSQL()
 }
-
-// relationLinkKeySQL is the string a blocker row is named by in the ended-link
-// list: source, target and stored relationship type, joined by the unit
-// separator, which is in none of them.
-func relationLinkKeySQL(d string) string {
-	return `concat(` + d + `.source_work_item_id, char(31), ` + d + `.target_work_item_id, char(31), ifNull(` + d + `.relationship_type, ''))`
-}

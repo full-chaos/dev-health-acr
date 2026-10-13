@@ -93,6 +93,9 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject, rejected := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
+	defer func() {
+		attachOwnershipNoteToFailure(ctx, p.facts.client, orgID, query.Subjects, teamOwnedOrReachedRepositories, factTimeBound{}, err)
+	}()
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
 	defer func() {

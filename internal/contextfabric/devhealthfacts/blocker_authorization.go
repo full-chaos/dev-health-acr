@@ -75,11 +75,20 @@ func logBlockerAuthorization(ctx context.Context, mode string, ids int, overBoun
 	slog.Log(ctx, level, "devhealthfacts.blocker_authorization", "mode", contextfabric.SanitizeLogAttr(mode), "authorized_endpoint_count", ids, "over_bound", overBound, "bound", blockerAuthorizedIDsBound)
 }
 
-const blockerEndedLinksBinding = "blocker_ended_links"
+const (
+	blockerEndedSourceBinding = "blocker_ended_source"
+	blockerEndedTargetBinding = "blocker_ended_target"
+	blockerEndedTypeBinding   = "blocker_ended_type"
+)
 
-// blockerEndedLinksBound is the most ended links that ride as one Array
-// binding; above it the end rule stays inside each statement.
-var blockerEndedLinksBound = 5000
+// blockerEndedLinksBound is the most ended links that ride as three Array
+// bindings; above it the end rule stays inside each statement.
+var blockerEndedLinksBound = 1000
+
+// blockerEndedLinksCurrentSQL keeps the rows whose (source, target, type) is
+// not in the bound ended links. The tuple set is built once from the three
+// arrays; no per-row string is materialized.
+const blockerEndedLinksCurrentSQL = ` AND (d.source_work_item_id, d.target_work_item_id, d.relationship_type) NOT IN (SELECT ended.1, ended.2, ended.3 FROM (SELECT arrayJoin(arrayZip({` + blockerEndedSourceBinding + `:Array(String)}, {` + blockerEndedTargetBinding + `:Array(String)}, {` + blockerEndedTypeBinding + `:Array(String)})) AS ended))`
 
 // blockerScope resolves, once per request, the two sets every blocker
 // statement is narrowed by: the authorized endpoints (blockerAuthorization) and
@@ -91,25 +100,27 @@ func (p *BlockersProvider) blockerScope(ctx context.Context, principal storage.P
 	if err != nil {
 		return "", "", nil, err
 	}
-	statement := readers.WithSettings(fmt.Sprintf("SELECT %s FROM %s ORDER BY 1 LIMIT %d", "concat(s, char(31), t, char(31), ifNull(rt, ''))", relationEndedKeysSQL(), blockerEndedLinksBound+1), withMaxResultRows(settings, blockerEndedLinksBound+1))
-	ended := []string{}
+	statement := readers.WithSettings(fmt.Sprintf("SELECT s, t, ifNull(rt, '') FROM %s ORDER BY s, t, rt LIMIT %d", relationEndedKeysSQL(), blockerEndedLinksBound+1), withMaxResultRows(settings, blockerEndedLinksBound+1))
+	sources, targets, types := []string{}, []string{}, []string{}
 	if err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadBlockerEndedLinks", statement, orgID, nil, func(row readers.RowScanner) error {
-		var key string
-		if err := row.Scan(&key); err != nil {
+		var source, target, relationType string
+		if err := row.Scan(&source, &target, &relationType); err != nil {
 			return err
 		}
-		ended = append(ended, key)
+		sources, targets, types = append(sources, source), append(targets, target), append(types, relationType)
 		return nil
 	}); err != nil {
 		return "", "", nil, err
 	}
-	if len(ended) > blockerEndedLinksBound {
-		logBlockerEndedLinks(ctx, "in_statement", len(ended), true)
+	if len(sources) > blockerEndedLinksBound {
+		logBlockerEndedLinks(ctx, "in_statement", len(sources), true)
 		return authorized, relationCurrentSQL("d"), bindings, nil
 	}
-	logBlockerEndedLinks(ctx, "materialized", len(ended), false)
-	current = ` AND ` + relationLinkKeySQL("d") + ` NOT IN {` + blockerEndedLinksBinding + `:Array(String)}`
-	return authorized, current, append(bindings, readers.Binding{Name: blockerEndedLinksBinding, Value: ended}), nil
+	logBlockerEndedLinks(ctx, "materialized", len(sources), false)
+	return authorized, blockerEndedLinksCurrentSQL, append(bindings,
+		readers.Binding{Name: blockerEndedSourceBinding, Value: sources},
+		readers.Binding{Name: blockerEndedTargetBinding, Value: targets},
+		readers.Binding{Name: blockerEndedTypeBinding, Value: types}), nil
 }
 
 func withMaxResultRows(settings readers.Settings, rows int) readers.Settings {

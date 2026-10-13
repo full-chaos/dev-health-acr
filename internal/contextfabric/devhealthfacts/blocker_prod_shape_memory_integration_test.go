@@ -408,7 +408,7 @@ func TestOrganizationWideAuthorizationEqualsTheLibraryRelationOnRealClickHouse(t
 	}
 }
 
-// The ended-link list rides as one Array(String) binding. At the bound, with
+// The ended-link list rides as three Array(String) bindings. At the bound, with
 // long identifiers, it must still be accepted and give the same counts as the
 // end rule inside the statements.
 func TestBlockerEndedLinksAtTheBoundRideAsOneBindingOnRealClickHouse(t *testing.T) {
@@ -435,20 +435,19 @@ func TestBlockerEndedLinksAtTheBoundRideAsOneBindingOnRealClickHouse(t *testing.
 	exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES ('team-1', 'team-1', NULL, ?, ?, 'linear', [], 1)`, at, org)
 	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'linear', 'team-1', ?, 'acme/repo-1', 'exact', 'native', 1, 100, 0, ?, NULL, ?)`, org, repo, ts(2026, 1, 1, 0, 0, 0), at)
 	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, 1, 'pr', 'open', ?, ?, NULL, NULL, 'feature', '')`, repo, org, at, at)
-	longID := func(expr string) string {
-		return "concat('linear:" + "', repeat('k', 100), '-', toString(" + expr + "))"
-	}
-	const links = 5000
+	// 100 sources x 10 targets = 1,000 distinct ended links (the bound) over 110 work items
+	// with 130-character ids, so the binding is large and the statements' own
+	// memory is not what the row measures.
+	const sources, targets = 100, 10
+	id := func(expr string) string { return "concat('linear:', repeat('k', 120), '-', toString(" + expr + "))" }
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
-SELECT `+longID("number")+`, ?, ?, 't', 'issue', 'open', '', ?, ?, '', 'linear', '', NULL, ? FROM numbers(?)`, repo, org, at, at, at, uint64(2*links+2))
+SELECT `+id("number")+`, ?, ?, 't', 'issue', 'open', '', ?, ?, '', 'linear', '', NULL, ? FROM numbers(?)`, repo, org, at, at, at, uint64(sources+targets+2))
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
-SELECT ?, `+longID("number")+`, 1, 1, 'native', '', ?, ? FROM numbers(?)`, repo, at, org, uint64(2*links+2))
-	// links removed at the provider (written before their endpoints' latest sync)
-	// plus one link it still reports.
+SELECT ?, `+id("number")+`, 1, 1, 'native', '', ?, ? FROM numbers(?)`, repo, at, org, uint64(sources+targets+2))
 	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
-SELECT ?, `+longID("number")+`, `+longID("number + "+fmt.Sprint(links))+`, 'blocks', 'blocks', ? - toIntervalHour(1), NULL FROM numbers(?)`, org, at, uint64(links))
+SELECT ?, `+id("number % 100")+`, `+id("100 + intDiv(number, 100)")+`, 'blocks', 'blocks', ? - toIntervalHour(1), NULL FROM numbers(1000)`, org, at)
 	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
-VALUES (?, concat('linear:', repeat('k', 100), '-', toString(`+fmt.Sprint(2*links)+`)), concat('linear:', repeat('k', 100), '-', toString(`+fmt.Sprint(2*links+1)+`)), 'blocks', 'blocks', ?, NULL)`, org, at)
+VALUES (?, `+id("110")+`, `+id("111")+`, 'blocks', 'blocks', ?, NULL)`, org, at)
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactBlockers)
 	team := teamSubject("team-1")
@@ -468,5 +467,5 @@ VALUES (?, concat('linear:', repeat('k', 100), '-', toString(`+fmt.Sprint(2*link
 	restore()
 	wantInt(t, bound, "blocker_dependencies_current", 1)
 	wantInt(t, inside, "blocker_dependencies_current", 1)
-	t.Logf("PRODSHAPE ended-link binding at the bound: %d keys of about %d bytes each = about %d bytes in one Array(String) binding", links, 2*(len("linear:")+100+1+5)+len("blocks")+2, links*(2*(len("linear:")+100+1+5)+len("blocks")+2))
+	t.Logf("PRODSHAPE ended-link binding at the bound: 1000 links, ids of %d bytes: about %d bytes in three Array(String) bindings", len("linear:")+120+1+3, 1000*(2*(len("linear:")+120+1+3)+len("blocks")))
 }

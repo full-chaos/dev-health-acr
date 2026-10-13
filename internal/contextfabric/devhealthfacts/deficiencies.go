@@ -62,6 +62,9 @@ func (p *OperationalDeficienciesProvider) ReadFacts(ctx context.Context, princip
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject, rejected := subjectIndex(query.Subjects, teamPrefix)
+	defer func() {
+		attachOwnershipNoteToFailure(ctx, p.facts.client, orgID, query.Subjects, teamOwnedOrReachedRepositories, timeBound, err)
+	}()
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
 	defer func() {
