@@ -336,7 +336,13 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 			}
 			_ = rows.Close()
 		}
-		return peakOf(t, ctx, direct, table, fragment, mark), durationOf(t, ctx, direct, table, fragment, mark)
+		peak := peakOf(t, ctx, direct, table, fragment, mark)
+		var rr, rb, nq uint64
+		_ = direct.QueryRow(ctx, `SELECT max(read_rows), max(read_bytes), count() FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.', ?)) AND position(query, ?) > 0`, mark, table, fragment).Scan(&rr, &rb, &nq)
+		t.Logf("PROBE %s peak=%d read_rows=%d read_bytes=%d logged=%d", table+"|"+fragment, peak, rr, rb, nq)
+		return peak, durationOf(t, ctx, direct, table, fragment, mark)
 	}
 	type variant struct{ peak, spread, duration uint64 }
 	type reading struct{ scoped, orgWide, unbounded variant }

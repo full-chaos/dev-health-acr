@@ -1,0 +1,26 @@
+name: slope-probe
+on:
+  pull_request:
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1,2,3,4,5,6]
+    runs-on: ubuntu-latest
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: true
+      - uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: probe
+        run: go test -count=1 -timeout 25m -v -run '^TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse$' ./internal/contextfabric/devhealthfacts/ 2>&1 | tee probe.log | grep -E "PEAK|PROBE|grew|--- |^(ok|FAIL)" || true
