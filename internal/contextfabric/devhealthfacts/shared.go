@@ -1017,7 +1017,29 @@ import (
 // repository", and its investment mix adds the work units of those linked
 // pull requests (never the whole mix of a repository it does not own). A
 // stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v201"
+//
+// v201 -> v202: a coverage row carries the reason of its own subject. A
+// sentence about some of the requested teams (N of M own no repository) is
+// served once for the request and no longer on the row of a team it is false
+// for; a team that owns nothing gets its own reason. A stored answer can
+// differ.
+//
+// v202 -> v203: a pull request, project or incident list question that names no
+// organization or parent now applies its stated status. An answer saved under
+// v202 listed the unfiltered set.
+//
+// v203 -> v204: the scope expander names every requested origin that reached a
+// target, so a multi-root answer derives each shared target from every root.
+// An answer saved under v203 attributed it to one root only.
+//
+// v204 -> v205: a client synthesis driver whose source_state the service
+// corrected carries source_state_note and summary_corrected beside its
+// untouched summary. An answer saved under v204 has neither.
+//
+// v205 -> v206: team and project blockers facts serve the age of the oldest
+// open blocker (oldest_blocked_age_days, with its basis or an unavailable
+// reason). An answer saved under v205 carries no age.
+const QueryVersion = "devhealthfacts.clickhouse.v206"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

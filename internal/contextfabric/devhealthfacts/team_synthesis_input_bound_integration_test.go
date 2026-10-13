@@ -34,7 +34,7 @@ func seedTeamAtTheExpansionCap(t *testing.T, ctx context.Context, direct interfa
 	Exec(ctx context.Context, query string, args ...any) error
 }, at time.Time) {
 	t.Helper()
-	for _, statement := range devhealthschema.DDL("work_item_dependencies") {
+	for _, statement := range devhealthschema.DDL("work_item_dependencies", "work_item_dependency_first_seen") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}

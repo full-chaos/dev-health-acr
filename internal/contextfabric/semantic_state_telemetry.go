@@ -50,6 +50,7 @@ func semanticStateLogGroup(key string, state *PersistedSemanticState) slog.Attr 
 	}
 	if expression.Discovered != nil {
 		memberKind = expression.Discovered.MemberKind
+		memberQualifier = expression.Discovered.MemberQualifier
 	}
 	if expression.Scoped != nil {
 		memberKind = expression.Scoped.MemberKind

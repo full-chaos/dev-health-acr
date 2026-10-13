@@ -159,3 +159,31 @@ func TestOperationalDeficienciesProviderTruncatesWhenRowCountReachesLimit(t *tes
 		t.Fatalf("query statement = %#v, want a LIMIT clause", client.queries)
 	}
 }
+
+func TestOperationalDeficienciesMissingCountStaysOffTheEvaluatedTeamsRow(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{deficiencyRow("CHAOS")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactOperationalDeficiencies)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactOperationalDeficiencies, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS"), teamSubject("OTHER")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want 1", result.Facts)
+	}
+	if strings.Contains(result.Reason, "evaluation missing") {
+		t.Fatalf("kind reason %q carries a count about the request; every subject row would inherit it", result.Reason)
+	}
+	if !strings.Contains(result.RequestNote, "operational deficiency evaluation missing for 1 of 2 requested teams") {
+		t.Fatalf("request note = %q", result.RequestNote)
+	}
+	if got := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("OTHER"))]; !strings.Contains(got, "never evaluated") {
+		t.Fatalf("the team that was never evaluated carries own reason %q", got)
+	}
+	if got, has := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("CHAOS"))]; has {
+		t.Fatalf("the evaluated team carries a reason %q", got)
+	}
+}
