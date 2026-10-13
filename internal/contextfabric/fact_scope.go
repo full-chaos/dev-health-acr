@@ -890,6 +890,14 @@ var factScopeEligibility = []factScopeEligibilityRow{
 		},
 	},
 
+	{
+		Requirement: FactCommitment, Origins: []SubjectKind{SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyNone, TargetKind: SubjectProject,
+			Basis: FactScopeBasisDirect, CurrentAxisOnly: true, Chain: factScopeChainProjectTeamOwnership,
+		},
+	},
+
 	// --- The entity-tree rows (project/team origin) ---
 	//
 	// ci, deployments, incidents and operational_deficiencies had no row, so a

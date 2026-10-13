@@ -1719,6 +1719,10 @@ func factKindSubjectObligations(kind contextfabric.FactKind) map[contextfabric.S
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
 			contextfabric.SubjectWorkItem: {contextfabric.ObligationRemainingWork},
 		}
+	case contextfabric.FactCommitment:
+		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
+			contextfabric.SubjectProject: {contextfabric.ObligationRemainingWork},
+		}
 	// Identity is the CHAOS-4347 REPOSITORY composition's third member:
 	// for a repository, "who owns and identifies this" is part of the
 	// closest thing to a current state. It is NOT a driver -- it explains

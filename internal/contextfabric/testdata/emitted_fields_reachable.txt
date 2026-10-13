@@ -85,9 +85,9 @@ FactCommitment
     calls followed            839
     calls accounted           13
     calls not_a_call          5
-    calls excluded_by_design  112
+    calls excluded_by_design  114
     calls leaked              5
-  fields             as_of commitment_status days_to_target items_closed items_open items_past_due_open items_total items_unavailable_reason items_unreadable_count items_unreadable_reason items_with_due_at items_without_due_at iteration_basis latest_sprint_end next_sprint_end project_state sprint_kind state_source target_date target_date_provider unknown_status_count
+  fields             as_of_day commitment_status days_to_target items_closed items_open items_past_due_open items_total items_unavailable_reason items_unreadable_count items_unreadable_reason items_with_due_at items_without_due_at iteration_basis latest_sprint_end next_sprint_end project_state sprint_kind state_source target_date target_date_provider unknown_status_count
 
 FactContinuousIntegration
   reached_funcs      82
