@@ -1061,10 +1061,14 @@ import (
 // the repositories whose owner table was cut. An answer saved under v209
 // carries both on repositories they are false for.
 //
-// v210 -> v211: a project subject serves the commitment kind (target date,
+// v210 -> v211: a team's workload forecast scalars are declared aggregate, so a
+// repository-restricted caller admitted to the team gets them labelled
+// all_owned_repositories. An answer saved under v210 carries them unlabelled.
+//
+// v211 -> v212: a project subject serves the commitment kind (target date,
 // issue due dates, sprint ends and the raw counts beside them). An answer
-// saved under v210 has no commitment fact.
-const QueryVersion = "devhealthfacts.clickhouse.v211"
+// saved under v211 has no commitment fact.
+const QueryVersion = "devhealthfacts.clickhouse.v212"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
