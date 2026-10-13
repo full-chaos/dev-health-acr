@@ -66,3 +66,33 @@ func TestOwningTeamsTruncatedSentenceRidesOnlyTheRepositoryWhoseOwnersWereCut(t 
 	requireOnly(t, "cut repository row reason", ownReason(result, cut), "owning_teams_truncated")
 	requireOnly(t, "fitting repository row reason", ownReason(result, fit), "", "owning_teams_truncated")
 }
+
+func TestRevertRateSeveralGapsPutTheReadWideCountInTheRequestNoteAndEachCountOnItsRow(t *testing.T) {
+	t.Parallel()
+	one, two := repoSubject("repo-one"), repoSubject("repo-two")
+	rows := [][]any{}
+	for _, repo := range []string{"repo-one", "repo-two"} {
+		for i, present := range []bool{false, true} {
+			row := metricsRow(repo)
+			row[1] = []string{"2026-02-21", "2026-02-20"}[i]
+			if !present {
+				row[5], row[6] = uint8(0), float64(0)
+			}
+			row[11], row[12] = int64(2), int64(1)
+			rows = append(rows, row)
+		}
+	}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: rows}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactMetrics,
+		Subjects: []contextfabric.SubjectRef{one, two},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	requireOnly(t, "kind reason", result.Reason, "", revertSentence)
+	requireOnly(t, "request note", result.RequestNote, "revert_rate not applicable on 2 of 4 days")
+	requireOnly(t, "first row reason", ownReason(result, one), "revert_rate not applicable on 1 of 2 days")
+	requireOnly(t, "second row reason", ownReason(result, two), "revert_rate not applicable on 1 of 2 days")
+}
