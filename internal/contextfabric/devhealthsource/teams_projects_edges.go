@@ -1267,7 +1267,7 @@ func projectTeamsRetractionArm(ambiguous string, ingest bool) string {
 	ownership := `(
 		SELECT provider, project_ref, project_key, team_id, source_name, first_valid_from, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "ingest_at") + `,
 		       if(project_key != '', project_key, project_ref) AS match_value
-		FROM ` + projectTeamsOwnershipRowsSQL(ingest, " AND (SELECT count() FROM "+ambiguous+" WHERE p.key_project_count > 1) > 0") + `
+		FROM ` + projectTeamsOwnershipRowsSQL(ingest, " AND (SELECT count() FROM "+ambiguous+" WHERE p.key_project_count > 1) > 1000000") + `
 	) AS o`
 	return `
 		SELECT p.id AS project_id, p.provider AS provider,
