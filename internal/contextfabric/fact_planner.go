@@ -6,28 +6,11 @@ import (
 	"strings"
 )
 
-// Closed reason codes for a planner decision (CHAOS-3783). A decision is
-// recorded in Coverage as a free-text Reason -- the contract has no
-// structured field for it -- so the code is a fixed prefix rather than
-// prose, and tests, operators, and downstream surfaces match on the prefix
-// instead of parsing a sentence. Never build a reason string by hand; go
-// through prunedReason/narrowedReason so the prefix cannot drift.
-const (
-	// FactPruneReasonSubjectKindUnsupported is the ONLY reason this planner
-	// prunes a whole capability today. It means no subject this
-	// investigation resolved has a kind the capability declares in
-	// SupportedSubjectKinds, so the capability could not have produced a
-	// single admissible fact -- see planFactReads for why that is a proof
-	// and not a heuristic.
-	FactPruneReasonSubjectKindUnsupported = "pruned:subject_kind_unsupported"
-	// FactNarrowReasonSubjectKindUnsupported marks the partial case: the
-	// capability DID run, but only against the subset of subjects whose
-	// kind it supports. The dropped subjects are absence too, and coverage
-	// source names must be unique (ContextFabricCoverage.Validate), so this
-	// cannot be a second Coverage entry -- it is prefixed onto the
-	// capability's own observation instead.
-	FactNarrowReasonSubjectKindUnsupported = "narrowed:subject_kind_unsupported"
-)
+// A planner decision is recorded in Coverage as a free-text Reason. The reason
+// is a plain sentence a reader can use; the machine-readable parts (outcome,
+// policy, origin, basis, supported and skipped kinds) ride on the structured
+// coverage detail, never as a token inside the sentence. Never build a reason
+// string by hand; go through prunedReason/narrowedReason/unexpandedReason.
 
 // factPlanRequirement is one requested fact family, reduced to the only two
 // things planning is allowed to consider: which family, and whether the
@@ -344,8 +327,8 @@ func partitionBySupportedSubjectKind(subjects []SubjectRef, supportedKinds []Sub
 
 func prunedReason(capability FactCapability, unsupported []SubjectKind) string {
 	return fmt.Sprintf(
-		"%s: no resolved subject has a kind this capability supports (resolved: %s; supported: %s)",
-		FactPruneReasonSubjectKindUnsupported, joinSubjectKinds(unsupported), joinSubjectKinds(capability.SupportedSubjectKinds),
+		"no resolved subject has a kind this capability supports (resolved kinds: %s; supported kinds: %s)",
+		joinSubjectKinds(unsupported), joinSubjectKinds(capability.SupportedSubjectKinds),
 	)
 }
 
@@ -375,10 +358,18 @@ func unexpandedReason(capability FactCapability, gap FactScopeGap, ownFactsRead 
 		}
 	case gap.ScopeExpansionUnavailable():
 		cause = "no scope expander is wired on this server"
+	case gap.Outcome == FactScopeExpandedPartial:
+		cause = "scope expansion reached only some of them"
+	case gap.Outcome == FactScopeFailed:
+		cause = "scope expansion failed"
+	case gap.Outcome == FactScopeTargetKindMismatch:
+		cause = "scope expansion found targets of a kind this capability cannot read"
+	case gap.Outcome == FactScopeMatchedUnauthorized:
+		cause = "scope expansion matched targets this credential may not read"
 	}
 	return fmt.Sprintf(
-		"%s %s (expansion: %s; origin: %s; supported: %s; policy: %s; basis: %s)",
-		lead, cause, gap.Outcome, gap.OriginKind, joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
+		"%s %s; this capability covers %s subjects and the request named a %s",
+		lead, cause, joinSubjectKinds(capability.SupportedSubjectKinds), gap.OriginKind,
 	)
 }
 
@@ -422,8 +413,8 @@ func appendDerivedReadSubjects(roots []SubjectRef, derived []SubjectRef) []Subje
 
 func narrowedReason(capability FactCapability, unsupported []SubjectKind, dropped int) string {
 	return fmt.Sprintf(
-		"%s: %d subject(s) were not queried because this capability does not support their kind (skipped: %s; supported: %s)",
-		FactNarrowReasonSubjectKindUnsupported, dropped, joinSubjectKinds(unsupported), joinSubjectKinds(capability.SupportedSubjectKinds),
+		"%d subject(s) were not queried because this capability does not support their kind (skipped kinds: %s; supported kinds: %s)",
+		dropped, joinSubjectKinds(unsupported), joinSubjectKinds(capability.SupportedSubjectKinds),
 	)
 }
 
@@ -445,7 +436,7 @@ func withNarrowingNote(planned factPlanEntry, reason string) string {
 	if !planned.Narrowed && planned.ScopeGap == nil {
 		return reason
 	}
-	return strings.TrimSpace(planned.Reason + " " + reason)
+	return strings.TrimSpace(planned.Reason + "; " + reason)
 }
 
 // withScopeGapDisclosure attaches a DEGRADING scope gap to a plan entry that

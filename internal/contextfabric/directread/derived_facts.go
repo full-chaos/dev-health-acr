@@ -177,15 +177,22 @@ func (d derivedIndex) derivedCoverage(kind contextfabric.FactKind, root contextf
 func derivedReason(row derivedRow) string {
 	plural := subjectKindPlural(row.expansion.targetKind)
 	var reason string
-	if row.targets == 0 {
-		reason = fmt.Sprintf("scope expansion reached no %s from this subject (expansion: %s; policy: %s)", plural, row.expansion.outcome, row.expansion.policy)
-	} else {
-		reason = fmt.Sprintf("scope expansion reached %d %s, %d with a served fact (expansion: %s; policy: %s)", row.targets, plural, row.served, row.expansion.outcome, row.expansion.policy)
+	switch {
+	case row.targets == 0 && row.expansion.outcome == contextfabric.FactScopePolicyUnavailable:
+		reason = fmt.Sprintf("scope expansion did not run for this subject, so no %s were added", plural)
+	case row.targets == 0:
+		reason = fmt.Sprintf("scope expansion reached no %s from this subject", plural)
+	default:
+		reason = fmt.Sprintf("scope expansion reached %d %s, %d with a served fact", row.targets, plural, row.served)
 	}
 	if row.shared {
 		reason += fmt.Sprintf("; a %s that several requested %s reach is counted under only one of them, so this count may leave out %s that another requested %s's count holds", subjectKindNoun(row.expansion.targetKind), subjectKindPlural(row.rootKind), plural, subjectKindNoun(row.rootKind))
 	}
 	return reason
+}
+
+func (row derivedRow) note() *RowExpansion {
+	return &RowExpansion{Outcome: string(row.expansion.outcome), Policy: row.expansion.policy}
 }
 
 // expansionCut reports an expansion outcome that may have left targets out.

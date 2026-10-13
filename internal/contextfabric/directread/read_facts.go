@@ -1092,6 +1092,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				if outcome.WindowUnsupported {
 					row.KindState = KindStateWindowUnsupported
 				}
+				row.Expansion = rowExpansionOf(outcome.Scope)
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind) && recorded && reachedSubjects(derived, kind, subject, served):
 				share, _ := derived.derivedCoverage(kind, subject, served)
 				row.KindState = string(outcome.State)
@@ -1100,6 +1101,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 					row.Reason = joinReason(outcome.Reason, row.Reason)
 				}
 				row.Outcome = derivedOutcome(outcome, share)
+				row.Expansion = share.note()
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind) && recorded && outcome.UnreachedRoot != nil && outcome.UnreachedRoot.Kind == subject.Kind:
 				row.Outcome, row.KindState, row.Reason = OutcomeUnavailable, string(outcome.UnreachedRoot.State), outcome.UnreachedRoot.Reason
 				if outcome.UnreachedRoot.ScopeExpansionUnavailable {
@@ -1108,6 +1110,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				if outcome.UnreachedRoot.WindowUnsupported {
 					row.KindState = KindStateWindowUnsupported
 				}
+				row.Expansion = rowExpansionOf(outcome.UnreachedRoot.Scope)
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind):
 				share, expanded := derived.derivedCoverage(kind, subject, served)
 				if !expanded {
@@ -1118,6 +1121,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				row.KindState = string(outcome.State)
 				row.Reason = derivedReason(share)
 				row.Outcome = derivedOutcome(outcome, share)
+				row.Expansion = share.note()
 			case !recorded:
 				// A planned kind with no ledger entry is a registry defect;
 				// say unknown loudly rather than claim a state.
@@ -1129,11 +1133,12 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				}
 				row.Outcome = subjectOutcome(outcome, key, served[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID], row.ProviderState, subject, capability)
 				if share, expanded := derived.derivedCoverage(kind, subject, served); expanded && share.targets == 0 && !share.shared && share.expansion.outcome == contextfabric.FactScopePolicyUnavailable {
-					row.Expansion = &RowExpansion{Outcome: string(share.expansion.outcome), Policy: share.expansion.policy}
+					row.Expansion = share.note()
 					if row.Outcome == OutcomeTruncated && row.ProviderState == "" && outcome.TruncatedOnlyByScopeGap {
 						row.Outcome = OutcomeFactServed
 					}
 				} else if expanded && (share.targets > 0 || share.shared || expansionCut(share.expansion.outcome)) {
+					row.Expansion = share.note()
 					row.Reason = joinReason(row.Reason, derivedReason(share))
 					lowerBound := share.shared || expansionCut(share.expansion.outcome)
 					switch {
@@ -1150,6 +1155,13 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 		}
 	}
 	return rows
+}
+
+func rowExpansionOf(note *contextfabric.FactScopeNote) *RowExpansion {
+	if note == nil {
+		return nil
+	}
+	return &RowExpansion{Outcome: note.Outcome, Policy: note.Policy}
 }
 
 // readFailed reports a kind whose provider read did not complete.

@@ -227,7 +227,7 @@
                 "type": "string"
               }
             },
-            "description": "Set when the row's own facts were read and the facts reachable only through scope expansion were not added on this read. The row outcome describes what was read; this note describes what expansion did not add, so the row's counts are a lower bound for the expanded part."
+            "description": "The scope-expansion decision behind the row: the machine-readable form of what the reason says in words. On a row whose own facts were read it names why the facts reachable only through expansion were not added; the row outcome describes what was read."
           },
           "withheld": {
             "type": "array",

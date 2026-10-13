@@ -204,8 +204,9 @@ func TestDirectReadDisclosesTargetsDroppedAsUnauthorized(t *testing.T) {
 	if len(response.Facts) != 0 {
 		t.Fatalf("facts served for unauthorized targets: %s", mustJSON(t, response.Facts))
 	}
+	assertRowsHonest(t, response)
 	row := coverageOf(t, response, "deployments", projectQ)
-	if row.Outcome != OutcomeUnavailable || !strings.Contains(row.Reason, string(contextfabric.FactScopeMatchedUnauthorized)) {
+	if row.Outcome != OutcomeUnavailable || row.Expansion == nil || row.Expansion.Outcome != string(contextfabric.FactScopeMatchedUnauthorized) {
 		t.Fatalf("row %+v", row)
 	}
 	if response.Status != StatusPartial {
@@ -344,8 +345,9 @@ func TestDirectReadCutExpansionWithoutFactIsNotReadNoFact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertRowsHonest(t, response)
 	row := coverageOf(t, response, "deployments", projectQ)
-	if row.Outcome != OutcomeUnavailable || !strings.Contains(row.Reason, string(contextfabric.FactScopeExpandedPartial)) || response.Status != StatusPartial {
+	if row.Outcome != OutcomeUnavailable || row.Expansion == nil || row.Expansion.Outcome != string(contextfabric.FactScopeExpandedPartial) || response.Status != StatusPartial {
 		t.Fatalf("row %+v status %q", row, response.Status)
 	}
 }
@@ -485,7 +487,7 @@ func TestDirectReadCutAdditiveExpansionWithoutFactIsNotComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row := coverageOf(t, response, "blockers", teamT); row.Outcome != OutcomeUnavailable || !strings.Contains(row.Reason, string(contextfabric.FactScopeExpandedPartial)) {
+	if row := coverageOf(t, response, "blockers", teamT); row.Outcome != OutcomeUnavailable || row.Expansion == nil || row.Expansion.Outcome != string(contextfabric.FactScopeExpandedPartial) {
 		t.Fatalf("row %+v, want unavailable naming the cut", row)
 	}
 	if response.Status != StatusPartial {
@@ -511,6 +513,7 @@ func TestDirectReadReachedRootKeepsTheProviderFailureCause(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertRowsHonest(t, response)
 	row := coverageOf(t, response, "deployments", projectQ)
 	ledger := ""
 	if row.Outcome != OutcomeUnavailable || strings.Contains(row.Reason, "read through") || !strings.Contains(row.Reason, "scope expansion reached 1 repositories") {
@@ -565,7 +568,7 @@ func TestDirectReadProjectRollupRootCountsItsDerivedPullRequests(t *testing.T) {
 	received, other := coverageOf(t, response, "pull_requests", projectP), coverageOf(t, response, "pull_requests", projectQ)
 	t.Logf("project rows: received=%+v other=%+v", received, other)
 	for _, row := range []CoverageRow{received, other} {
-		if strings.Contains(row.Reason, "unexpanded:") || strings.Contains(row.Reason, string(contextfabric.FactScopePolicyUnavailable)) {
+		if row.Expansion != nil && row.Expansion.Outcome == string(contextfabric.FactScopePolicyUnavailable) {
 			t.Fatalf("project row %+v reads as an unexpanded gap", row)
 		}
 	}

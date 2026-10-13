@@ -10,6 +10,11 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+const (
+	prunedSentence   = "no resolved subject has a kind this capability supports"
+	narrowedSentence = "were not queried because this capability does not support their kind"
+)
+
 func planCapability(kind FactKind, name string, kinds ...SubjectKind) FactCapability {
 	return FactCapability{Kind: kind, Name: name, Version: "v1", SupportedSubjectKinds: kinds, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}}
 }
@@ -131,7 +136,7 @@ func TestPlanFactReadsReasonsCarryClosedCodesAndNoContent(t *testing.T) {
 	}
 	plan := planFactReads(newFactPlanInput(request), planIndex(planCapability(FactMetrics, "metrics", SubjectRepository)))
 	entry := plan[0]
-	if !strings.HasPrefix(entry.Reason, FactPruneReasonSubjectKindUnsupported) {
+	if !strings.HasPrefix(entry.Reason, prunedSentence) {
 		t.Fatalf("reason = %q, want the closed prune code as its prefix", entry.Reason)
 	}
 	if strings.Contains(entry.Reason, secret) {
@@ -149,7 +154,7 @@ func TestPlanFactReadsReasonsCarryClosedCodesAndNoContent(t *testing.T) {
 		Requirements: []FactRequirement{{Kind: FactMetrics}},
 	}
 	narrowed := planFactReads(newFactPlanInput(narrowing), planIndex(planCapability(FactMetrics, "metrics", SubjectRepository)))[0]
-	if !strings.HasPrefix(narrowed.Reason, FactNarrowReasonSubjectKindUnsupported) {
+	if !strings.Contains(narrowed.Reason, narrowedSentence) {
 		t.Fatalf("reason = %q, want the closed narrowing code as its prefix", narrowed.Reason)
 	}
 	if strings.Contains(narrowed.Reason, secret) {
@@ -418,7 +423,7 @@ func TestReadFactsPrunesInsteadOfFailingTheWholeBundle(t *testing.T) {
 	if pruned.State != SourcePruned {
 		t.Fatalf("pruned state = %q, want %q", pruned.State, SourcePruned)
 	}
-	if !strings.HasPrefix(pruned.Reason, FactPruneReasonSubjectKindUnsupported) {
+	if !strings.HasPrefix(pruned.Reason, prunedSentence) {
 		t.Fatalf("pruned reason = %q, want the closed code prefix", pruned.Reason)
 	}
 	if _, ok := byKind["canonical_fact:workload"]; !ok {
@@ -504,11 +509,18 @@ func TestReadFactsNarrowsSubjectsAndSaysSo(t *testing.T) {
 		t.Fatalf("coverage = %+v, want exactly one entry -- source names must stay unique", bundle.Coverage.Sources)
 	}
 	reason := bundle.Coverage.Sources[0].Reason
-	if !strings.HasPrefix(reason, FactNarrowReasonSubjectKindUnsupported) {
+	if !strings.Contains(reason, narrowedSentence) {
 		t.Fatalf("reason = %q, want the narrowing code recorded first", reason)
 	}
-	if !strings.Contains(reason, string(FactScopePolicyUnavailable)) {
+	if !strings.Contains(reason, "no scope expander is wired") {
 		t.Fatalf("reason = %q, want it to ALSO name the team root's own expansion decision, not just the narrowed repository answer", reason)
+	}
+	structured := false
+	for _, detail := range bundle.Coverage.Details {
+		structured = structured || detail.ScopeOutcome == string(FactScopePolicyUnavailable)
+	}
+	if !structured {
+		t.Fatalf("details = %+v, want the team root's expansion outcome on a structured detail", bundle.Coverage.Details)
 	}
 	if !bundle.Coverage.Partial {
 		t.Fatal("Coverage.Partial = false, want true -- a real, enabled expansion policy exists for the narrowed-out team root and could not run (no expander wired); that is a genuine gap, not merely a narrowed answer")
@@ -587,7 +599,7 @@ func TestReadFactsProjectCohortNowAnswers(t *testing.T) {
 	// absence stands, non-degrading, exactly as written.
 	if got := byKind["canonical_fact:workload"]; got.State != SourcePruned {
 		t.Fatalf("workload state = %q, want pruned: no chain to a team-scoped fact is claimed from a project", got.State)
-	} else if !strings.HasPrefix(got.Reason, FactPruneReasonSubjectKindUnsupported) {
+	} else if !strings.HasPrefix(got.Reason, prunedSentence) {
 		t.Fatalf("workload reason = %q, want the prune vocabulary", got.Reason)
 	}
 }
@@ -663,7 +675,7 @@ func TestReadFactsNarrowedProviderThatFailsKeepsBothRecords(t *testing.T) {
 	if observation.State != SourceUnavailable {
 		t.Fatalf("state = %q, want the provider failure preserved as %q", observation.State, SourceUnavailable)
 	}
-	if !strings.HasPrefix(observation.Reason, FactNarrowReasonSubjectKindUnsupported) {
+	if !strings.Contains(observation.Reason, narrowedSentence) {
 		t.Fatalf("reason = %q, want the narrowing note kept on a FAILED narrowed read", observation.Reason)
 	}
 	if !strings.Contains(observation.Reason, "clickhouse is unreachable") {

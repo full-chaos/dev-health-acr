@@ -991,6 +991,11 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 				SupportedKinds: registered.capability.SupportedSubjectKinds,
 			})
 			bundle.recordOutcome(planned.Kind, factReadScopeGap, planned.Subjects, nil, nil)
+			{
+				outcome := bundle.Outcomes[planned.Kind]
+				outcome.Scope = scopeNoteOf(*planned.ScopeGap)
+				bundle.Outcomes[planned.Kind] = outcome
+			}
 			if planned.ScopeGap.ScopeExpansionUnavailable() {
 				outcome := bundle.Outcomes[planned.Kind]
 				outcome.ScopeExpansionUnavailable = true

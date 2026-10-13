@@ -9,7 +9,32 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-var internalTokenPattern = regexp.MustCompile(`(unexpanded|pruned|narrowed):|policy_unavailable:`)
+var internalTokenPattern = regexp.MustCompile(`^[a-z]+:|\b[a-z0-9]+(?:_[a-z0-9]+)+\b`)
+
+func internalToken(reason string) string { return internalTokenPattern.FindString(reason) }
+
+func TestInternalTokenCensusCatchesPlantedTokens(t *testing.T) {
+	planted := []string{
+		"unexpanded:policy_unavailable: no resolved subject holds this",
+		"pruned:subject_kind_unsupported: no resolved subject has a kind",
+		"narrowed: 1 subject(s) were not queried",
+		"scope expansion reached only some (expansion: expanded_partial; policy: x)",
+		"read failed (policy: project_work_item_pull_request_v1)",
+	}
+	for _, reason := range planted {
+		if internalToken(reason) == "" {
+			t.Errorf("census missed a planted token in %q", reason)
+		}
+	}
+	for _, plain := range []string{
+		"the requested subjects that hold this capability's facts directly were read; facts reachable only through scope expansion were not added because no scope expander is wired on this server; this capability covers project,team,repository subjects and the request named a project",
+		"no resolved subject has a kind this capability supports (resolved kinds: team; supported kinds: repository)",
+	} {
+		if token := internalToken(plain); token != "" {
+			t.Errorf("census flags a plain sentence for %q: %q", token, plain)
+		}
+	}
+}
 
 func rollupCapability(kind contextfabric.FactKind) contextfabric.FactCapability {
 	return contextfabric.FactCapability{
@@ -67,8 +92,8 @@ func assertRowsHonest(t *testing.T, response FactsResponse) {
 				}
 			}
 		}
-		if internalTokenPattern.MatchString(row.Reason) {
-			t.Errorf("row %s/%s reason carries an internal token: %q", row.Kind, row.Subject.CanonicalID, row.Reason)
+		if token := internalToken(row.Reason); token != "" {
+			t.Errorf("row %s/%s reason carries the internal token %q: %q", row.Kind, row.Subject.CanonicalID, token, row.Reason)
 		}
 	}
 }
@@ -135,5 +160,23 @@ func TestMixedSubjectsEachRowTellsItsOwnTruth(t *testing.T) {
 	}
 	if got := coverageOf(t, response, "pull_requests", teamT).Outcome; got != OutcomeReadNoFact {
 		t.Errorf("team with no fact: %q", got)
+	}
+}
+
+func TestKindOnlyReachableByExpansionServesAPlainReasonAndAStructuredNote(t *testing.T) {
+	capability := rollupCapability(contextfabric.FactDeployments)
+	capability.SupportedSubjectKinds = []contextfabric.SubjectKind{contractsv1.ContextFabricSubjectRepository}
+	provider := &stubProvider{capability: capability, read: func(contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable}, nil
+	}}
+	response, err := newTestFactsReader(t, graph7073(), provider).Read(requestContext(), unrestrictedA(), FactsRequest{
+		Kinds: []string{"deployments"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ7073.CanonicalID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRowsHonest(t, response)
+	row := coverageOf(t, response, "deployments", projectQ7073)
+	if row.Outcome != OutcomeUnavailable || row.Expansion == nil || row.Expansion.Outcome != "policy_unavailable" {
+		t.Errorf("row %+v, want unavailable with the expansion outcome on the structured note", row)
 	}
 }

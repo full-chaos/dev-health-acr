@@ -175,7 +175,7 @@ func TestChaos4099_ProjectSubjectNoLongerClaimsAProofOfAbsence(t *testing.T) {
 		if !factStateDegrades(observation.State) {
 			t.Fatalf("%s state = %q, want a degrading state: the answer IS missing evidence it could have had", kind, observation.State)
 		}
-		if strings.HasPrefix(observation.Reason, FactPruneReasonSubjectKindUnsupported) {
+		if strings.HasPrefix(observation.Reason, prunedSentence) {
 			t.Fatalf("%s reason = %q, want the unexpanded vocabulary, not the prune vocabulary", kind, observation.Reason)
 		}
 		if !strings.HasPrefix(observation.Reason, "no resolved subject holds this capability's facts directly and ") || strings.Contains(observation.Reason, "unexpanded:") {
@@ -569,7 +569,7 @@ func TestChaos4099_MixedDirectAndUnreachableSubjectsAlsoDecidesTheOtherRoot(t *t
 	if len(stubs[FactMetrics].queries) != 1 {
 		t.Fatalf("metrics queried %d time(s), want 1 -- the directly-supported root still runs", len(stubs[FactMetrics].queries))
 	}
-	if !strings.HasPrefix(bundle.Coverage.Sources[0].Reason, FactNarrowReasonSubjectKindUnsupported) {
+	if !strings.Contains(bundle.Coverage.Sources[0].Reason, narrowedSentence) {
 		t.Fatalf("reason = %q, want the narrowing note for the served repository answer", bundle.Coverage.Sources[0].Reason)
 	}
 	if len(bundle.Scope.Events) != 1 {

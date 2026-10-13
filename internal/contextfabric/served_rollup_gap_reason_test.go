@@ -2,12 +2,15 @@ package contextfabric
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
+
+var gapReasonTokenPattern = regexp.MustCompile(`^[a-z]+:|\b[a-z0-9]+(?:_[a-z0-9]+)+\b`)
 
 func TestServedRollupGapReasonCarriesNoInternalTokenOnEveryCoverageSurface(t *testing.T) {
 	observed := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
@@ -38,8 +41,8 @@ func TestServedRollupGapReasonCarriesNoInternalTokenOnEveryCoverageSurface(t *te
 	}
 	check := func(surface, text string) {
 		t.Helper()
-		if strings.Contains(text, "unexpanded:") || strings.Contains(text, "policy_unavailable:") || strings.Contains(text, "no resolved subject holds") {
-			t.Errorf("%s carries an internal token or a false sentence: %q", surface, text)
+		if token := gapReasonTokenPattern.FindString(text); token != "" || strings.Contains(text, "no resolved subject holds") {
+			t.Errorf("%s carries the internal token %q or a false sentence: %q", surface, token, text)
 		}
 	}
 	found := false
@@ -55,12 +58,13 @@ func TestServedRollupGapReasonCarriesNoInternalTokenOnEveryCoverageSurface(t *te
 	if !found {
 		t.Fatal("no pull_requests observation")
 	}
+	sourcePrefix := regexp.MustCompile(`^[a-z_]+: `)
 	for _, reason := range bundle.Coverage.DegradedReasons {
-		check("degraded reason", reason)
+		check("degraded reason", sourcePrefix.ReplaceAllString(reason, ""))
 	}
 	structured := false
 	for _, detail := range bundle.Coverage.Details {
-		check("coverage detail raw", detail.Raw)
+		check("coverage detail raw", sourcePrefix.ReplaceAllString(detail.Raw, ""))
 		check("coverage detail label", detail.Label)
 		if detail.ScopeOutcome == string(FactScopePolicyUnavailable) && detail.Policy != "" {
 			structured = true
@@ -68,5 +72,25 @@ func TestServedRollupGapReasonCarriesNoInternalTokenOnEveryCoverageSurface(t *te
 	}
 	if !structured {
 		t.Errorf("the scope outcome and policy are not on a structured coverage detail: %+v", bundle.Coverage.Details)
+	}
+}
+
+func TestPrunedAndNarrowedReasonsCarryNoInternalToken(t *testing.T) {
+	capability := planCapability(FactMetrics, "metrics", SubjectRepository)
+	pruned := planFactReads(newFactPlanInput(CanonicalFactRequest{
+		Subjects:     []SubjectRef{subject(SubjectIncident, "incident_1")},
+		Requirements: []FactRequirement{{Kind: FactMetrics}},
+	}), planIndex(capability))[0]
+	narrowed := planFactReads(newFactPlanInput(CanonicalFactRequest{
+		Subjects:     []SubjectRef{subject(SubjectIncident, "incident_1"), subject(SubjectRepository, "repo_api")},
+		Requirements: []FactRequirement{{Kind: FactMetrics}},
+	}), planIndex(capability))[0]
+	for name, entry := range map[string]factPlanEntry{"pruned": pruned, "narrowed": narrowed} {
+		if entry.Reason == "" {
+			t.Fatalf("%s entry has no reason: %+v", name, entry)
+		}
+		if token := gapReasonTokenPattern.FindString(entry.Reason); token != "" {
+			t.Errorf("%s reason carries the internal token %q: %q", name, token, entry.Reason)
+		}
 	}
 }
