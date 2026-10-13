@@ -129,7 +129,7 @@ func logFragmentTable(t *testing.T, stage string, peaks []fragmentPeak) {
 	for _, p := range peaks {
 		fmt.Fprintf(&b, "  %-24s peak=%7.2f MiB read_rows=%9d rows_out=%d\n", p.name, p.mib, p.readRows, p.rows)
 	}
-	t.Log(b.String())
+	t.Error("MEASUREMENT ONLY (temporary failure so the table shows in CI):\n" + b.String())
 }
 
 func TestProjectTeamOwnershipFragmentMemoryTable(t *testing.T) {
