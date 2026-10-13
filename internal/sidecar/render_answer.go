@@ -572,11 +572,35 @@ var rankingTableFieldOrder = []string{
 	"driver_2_signal", "driver_2_value", "driver_2_weight_contributed", "driver_2_threshold_label",
 }
 
+const rankingRowSubjectKindKey = "subject_kind"
+
+// rankingRowSubjectNoun is the display noun of the row's own subject kind.
+// The structured keys keep their team_ names; only the served wording follows
+// the kind. A row with no or an unknown kind keeps "team".
+func rankingRowSubjectNoun(row contractsv1.ContextFabricClaimedFactRow) string {
+	kind, ok := row.Fields[rankingRowSubjectKindKey]
+	if !ok || kind.String == nil {
+		return "team"
+	}
+	switch contractsv1.ContextFabricSubjectKind(*kind.String) {
+	case contractsv1.ContextFabricSubjectProject:
+		return "project"
+	case contractsv1.ContextFabricSubjectRepository:
+		return "repository"
+	case contractsv1.ContextFabricSubjectIncident:
+		return "incident"
+	case contractsv1.ContextFabricSubjectPullRequest:
+		return "pull request"
+	}
+	return "team"
+}
+
 // rankingTableRowLine renders one Rows-panel row as a single compact line.
 // See the "## Rows" call site's own comment for why every field is
 // untrusted-marked regardless of its scalar variant.
 func rankingTableRowLine(row contractsv1.ContextFabricClaimedFactRow) string {
 	parts := make([]string, 0, len(rankingTableFieldOrder))
+	subjectNoun := rankingRowSubjectNoun(row)
 	for _, key := range rankingTableFieldOrder {
 		value, ok := row.Fields[key]
 		if !ok {
@@ -586,11 +610,18 @@ func rankingTableRowLine(row contractsv1.ContextFabricClaimedFactRow) string {
 		if !shown {
 			continue
 		}
-		parts = append(parts, contractsv1.ContextFabricFactFieldNoun(key)+": "+hostedInline(display))
+		noun := contractsv1.ContextFabricFactFieldNoun(key)
+		switch key {
+		case "team_canonical_id":
+			noun = subjectNoun + " canonical id"
+		case "team_label":
+			noun = subjectNoun + " label"
+		}
+		parts = append(parts, noun+": "+hostedInline(display))
 	}
 	var extra []string
 	for key := range row.Fields {
-		if !slices.Contains(rankingTableFieldOrder, key) {
+		if key != rankingRowSubjectKindKey && !slices.Contains(rankingTableFieldOrder, key) {
 			extra = append(extra, key)
 		}
 	}
