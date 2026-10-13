@@ -42,9 +42,11 @@ func seedProjectTeamOwnershipShape(t *testing.T, f *ingestColumnsFixture, rows, 
 	mustExec(t, f.ctx, f.h.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced)
 SELECT concat('P-', toString(number)), ?, 'linear', concat('K', toString(number)), concat('project ', toString(number)), 1, 'started', '', ?, ? FROM numbers(?)`,
 		f.h.orgID, f.old, synced, uint64(memoryShapeProjects-1))
-	for team := 0; team < memoryShapeTeams; team++ {
-		f.team(fmt.Sprintf("T-%d", team), f.old, synced)
-	}
+	// One insert, one part: teams are joined with FINAL in both arms, and a
+	// part per team would put a fixture artifact into every layout's peak.
+	mustExec(t, f.ctx, f.h.direct, `INSERT INTO teams (id, name, description, updated_at, last_synced, org_id, provider, native_team_key, project_keys, is_active)
+SELECT concat('T-', toString(number)), concat('team T-', toString(number)), '', ?, ?, ?, 'linear', concat('T-', toString(number)), [], 1 FROM numbers(?)`,
+		f.old, synced, f.h.orgID, uint64(memoryShapeTeams))
 	slices := unmergedParts
 	if slices < 1 {
 		slices = 1
@@ -277,7 +279,7 @@ func TestProjectTeamOwnershipStatementMemoryDoesNotGrowWithVersions(t *testing.T
 			for i, versions := range []int{100, 1000, 2000} {
 				m := freshDatabaseFixture(t, fmt.Sprintf("95460000-0000-4000-8000-0000000001%d%d", len(layout), i), layout, versions)
 				capped := contextpacket.NewMemoryCappedQueryClient(m.query, prodMaxMemoryUsage)
-				only := map[string]bool{"ownership_raw_final_x1": true, "asserting_arm": true, "retraction_arm": true, "group_statement": true, "paged_statement": true, "exp_ownership_final_where_false": true, "exp_ownership_final_scalar_gate": true, "exp_ownership_final_pk_in_empty": true, "exp_ownership_final_pk_in_literal_empty": true, "exp_ownership_nofinal_gate": true}
+				only := map[string]bool{"ownership_raw_final_x1": true, "asserting_arm": true, "retraction_arm": true, "group_statement": true, "paged_statement": true}
 				all := measureProjectTeamsFragments(t, m.f, m.query, capped, fmt.Sprintf("slope-%s-%d", layout, versions), only)
 				peak := peakOf(t, all, "paged_statement")
 				report(t, fmt.Sprintf("slope %s: %d versions per pair (%d rows, %d parts):\n%s", layout, versions, memoryShapePairs*versions, m.parts, fragmentTable("slope", all)))
