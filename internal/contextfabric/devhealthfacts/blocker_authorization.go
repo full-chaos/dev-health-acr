@@ -28,6 +28,9 @@ func (p *BlockersProvider) blockerAuthorization(ctx context.Context, principal s
 	if organizationWideAuthorization(scope) {
 		return set, bindings, nil
 	}
+	// The statement's result is the id list itself, so its row cap is the bound
+	// (one past it tells "too many"), not the reader's per-fact probe cap.
+	settings.MaxResultRows = uint64(blockerAuthorizedIDsBound + 1)
 	statement := readers.WithSettings(fmt.Sprintf("SELECT work_item_id FROM %s ORDER BY work_item_id LIMIT %d", set, blockerAuthorizedIDsBound+1), settings)
 	ids := []string{}
 	if err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadBlockerAuthorizedIDs", statement, orgID, nil, func(row readers.RowScanner) error {
