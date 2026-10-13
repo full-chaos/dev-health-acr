@@ -1002,12 +1002,16 @@ import (
 // partial estimate coverage driver with source_state truncated. An answer saved
 // under v197 has no such driver.
 //
-// v198 -> v199: a coverage row carries the reason of its own subject. A
+// v198 -> v199: a team cohort answer to a blockers question now carries each
+// team's blocked work item count as a driver with a minted claim. An answer
+// saved under v198 has none.
+//
+// v199 -> v200: a coverage row carries the reason of its own subject. A
 // sentence about some of the requested teams (N of M own no repository) is
 // served once for the request and no longer on the row of a team it is false
 // for; a team that owns nothing gets its own reason. A stored answer can
 // differ.
-const QueryVersion = "devhealthfacts.clickhouse.v199"
+const QueryVersion = "devhealthfacts.clickhouse.v200"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
