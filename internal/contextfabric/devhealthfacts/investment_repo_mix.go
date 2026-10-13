@@ -106,6 +106,18 @@ func repoMixStatement(bounds []factTimeBound) string {
 	return repoMixStatementScoped(bounds, subqueryMembershipScope, maxFactRowsPerQuery)
 }
 
+// investmentSplitMaxMemoryUsage is the named per-statement memory limit of the
+// three statements built on repoSplitCore (repository/team mix, organization
+// mix, unit listing). The repository mix measured p50 118 MiB and max 124.4 MiB
+// on prod (system.query_log, 3 runs since 2026-10-13 01:11Z), above the 64 MiB
+// API default, so those reads carry their own limit: 256 MiB, about twice the
+// measured peak. Re-measure from query_log after the roll.
+const investmentSplitMaxMemoryUsage = uint64(256 << 20)
+
+func withInvestmentSplitMemory(statement string) string {
+	return readers.WithSettings(statement, readers.Settings{MaxMemoryUsage: investmentSplitMaxMemoryUsage})
+}
+
 // repoMixStatementScoped is repoMixStatement with the membership scope the
 // caller resolved: the run's unit ids as one bound array, no filter, or the
 // scope subqueries (investment_membership_scope.go).
@@ -114,7 +126,7 @@ func repoMixStatementScoped(bounds []factTimeBound, scope membershipScope, limit
 	for i, b := range bounds {
 		memberships = append(memberships, fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(i, b), i))
 	}
-	return withRowLimitOf(`SELECT toUInt8(if(win < 0, 255, win)) AS window, repo_uuid AS repo_id,
+	return withInvestmentSplitMemory(withRowLimitOf(`SELECT toUInt8(if(win < 0, 255, win)) AS window, repo_uuid AS repo_id,
 	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
 	sum(bugfix_share * effort) AS bugfix_effort,
 	uniqExact(work_unit_id) AS work_units,
@@ -131,7 +143,7 @@ FROM (
 	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
 )
 GROUP BY win, repo_uuid
-ORDER BY win, repo_uuid`, limit)
+ORDER BY win, repo_uuid`, limit))
 }
 
 // repoSplitCore is the per-(window, work unit, repository) split shared by the
