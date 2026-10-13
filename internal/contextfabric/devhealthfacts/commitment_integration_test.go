@@ -76,6 +76,9 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 	s.project("github", "gh-p", nil, nil, "", "")
 	s.project("gitlab", "gl-none", nil, nil, "", "")
 	s.project("github", "gh-empty", nil, nil, "", "")
+	s.project("gitlab", "gl-nullend", nil, nil, "", "")
+	s.project("jira", "jr-missing", nil, nil, "", "")
+	s.project("linear", "lin-mixed", nil, nil, "", "")
 
 	older, newer := commitmentDay(2026, 10, 1), commitmentDay(2026, 10, 11)
 	s.item("linear", "L1", "issue", "in_progress", "lin-p", commitmentDay(2026, 10, 1), "linear:cycle:c1", newer)
@@ -105,15 +108,29 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 	s.item("github", "H1", "issue", "todo", "gh-p", nil, "ghms:acme/x:3", newer)
 	s.sprint(commitmentOrg, "github", "ghms:acme/x:3", commitmentDay(2026, 11, 15))
 
-	s.item("gitlab", "N1", "issue", "todo", "gl-none", nil, "gitlab:acme/x:milestone:99", newer)
+	s.item("gitlab", "N1", "issue", "todo", "gl-none", nil, "", newer)
+	s.item("gitlab", "E1", "issue", "todo", "gl-nullend", nil, "gitlab:acme/x:milestone:99", newer)
+	s.item("jira", "R1", "issue", "todo", "jr-missing", nil, "77", newer)
+	s.item("linear", "X1", "issue", "todo", "lin-mixed", commitmentDay(2026, 12, 1), "", newer)
+	s.item("linear", "X2", "issue", "todo", "lin-mixed", nil, "linear:cycle:missing", newer)
 	s.itemIn("repo-hidden", "gitlab", "N2", "issue", "todo", "gl-none", nil, "", newer)
 	s.exec(`INSERT INTO sprints (provider, sprint_id, ended_at, last_synced, org_id) VALUES (?, ?, NULL, ?, ?)`, "gitlab", "gitlab:acme/x:milestone:99", s.at, commitmentOrg)
 
 	linear, jira, gitlab, github := projectSubject("linear", "lin-p"), projectSubject("jira", "10001"), projectSubject("gitlab", "gl-p"), projectSubject("github", "gh-p")
 	none, empty := projectSubject("gitlab", "gl-none"), projectSubject("github", "gh-empty")
-	response := readCommitmentFactsAs(t, query, storage.Principal{OrgID: commitmentOrg, Subject: "commitment", CredentialID: "commitment"}, linear, jira, gitlab, github, none, empty)
+	nullEnd, missing, mixed := projectSubject("gitlab", "gl-nullend"), projectSubject("jira", "jr-missing"), projectSubject("linear", "lin-mixed")
+	response := readCommitmentFactsAs(t, query, storage.Principal{OrgID: commitmentOrg, Subject: "commitment", CredentialID: "commitment"}, linear, jira, gitlab, github, none, empty, nullEnd, missing, mixed)
 
-	fact := servedCommitment(t, response, linear)
+	for _, subject := range []contextfabric.SubjectRef{nullEnd, missing} {
+		fact := servedCommitment(t, response, subject)
+		wantServed(t, fact, map[string]any{"items_total": "1", "items_open": "1", "items_with_due_at": "0", "sprint_refs_unresolved": "1", "sprint_refs_unresolved_reason": "sprint_not_found_or_without_end", "items_unreadable_count": "0"})
+		wantAbsent(t, fact, "commitment_status", "sprint_kind", "next_sprint_end", "latest_sprint_end")
+	}
+	fact := servedCommitment(t, response, mixed)
+	wantServed(t, fact, map[string]any{"items_total": "2", "items_with_due_at": "1", "sprint_refs_unresolved": "1", "sprint_refs_unresolved_reason": "sprint_not_found_or_without_end", "commitment_status": "stated"})
+	wantAbsent(t, fact, "sprint_kind")
+
+	fact = servedCommitment(t, response, linear)
 	wantServed(t, fact, map[string]any{
 		"as_of_day": "2026-10-13", "commitment_status": "stated",
 		"target_date": "2026-11-01", "target_date_provider": "linear", "days_to_target": "19",
@@ -149,7 +166,8 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 	wantAbsent(t, fact, "target_date")
 
 	fact = servedCommitment(t, response, none)
-	wantServed(t, fact, map[string]any{"commitment_status": "none_stated", "items_total": "2", "items_with_due_at": "0", "items_past_due_open": "0", "items_unreadable_count": "0"})
+	wantServed(t, fact, map[string]any{"commitment_status": "none_stated", "items_total": "2", "items_with_due_at": "0", "items_past_due_open": "0", "items_unreadable_count": "0", "sprint_refs_unresolved": "0"})
+	wantAbsent(t, fact, "sprint_refs_unresolved_reason")
 	wantAbsent(t, fact, "target_date", "sprint_kind", "next_sprint_end", "latest_sprint_end")
 
 	fact = servedCommitment(t, response, empty)

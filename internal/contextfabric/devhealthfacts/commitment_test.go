@@ -31,8 +31,8 @@ func commitmentProjectRow(provider, id, state, stateSource, targetDate string, r
 }
 
 type commitmentCounts struct {
-	all, total, open, closed, unknown, withDueAt, pastDueOpen, sprints, nextSprints int64
-	nextEnd, latestEnd                                                              time.Time
+	all, total, open, closed, unknown, withDueAt, pastDueOpen, sprints, nextSprints, unresolved int64
+	nextEnd, latestEnd                                                                          time.Time
 }
 
 func commitmentItemRow(provider, id string, c commitmentCounts) []any {
@@ -40,7 +40,7 @@ func commitmentItemRow(provider, id string, c commitmentCounts) []any {
 	if all == 0 {
 		all = c.total
 	}
-	return []any{provider + ":" + id, all, c.total, c.open, c.closed, c.unknown, c.withDueAt, c.pastDueOpen, c.sprints, c.nextSprints, c.nextEnd.UnixMilli(), c.latestEnd.UnixMilli()}
+	return []any{provider + ":" + id, all, c.total, c.open, c.closed, c.unknown, c.withDueAt, c.pastDueOpen, c.sprints, c.nextSprints, c.nextEnd.UnixMilli(), c.latestEnd.UnixMilli(), c.unresolved}
 }
 
 func commitmentClient(projects, items [][]any) *fakeClient {
@@ -308,6 +308,8 @@ func TestCommitmentStatementsCountOnlyOpenItemsPastDueOverTheProjectIssues(t *te
 		"countIf(status IN ('backlog', 'todo', 'in_progress', 'in_review', 'blocked') AND due_at IS NOT NULL AND due_at < {as_of:DateTime64(3, 'UTC')}) AS items_past_due_open",
 		"FROM sprints FINAL",
 		"sp.provider = pi.provider AND sp.sprint_id = pi.sprint_id",
+		"countIf(ifNull(ended.sprint_id, '') = '') AS sprint_refs_unresolved",
+		"ended.provider = pi.provider AND ended.sprint_id = pi.sprint_id",
 		"WHERE org_id = {org_id:String} AND isNotNull(ended_at)",
 	} {
 		if !strings.Contains(items.statement, fragment) {
@@ -496,5 +498,28 @@ func TestCommitmentForATeamIsDisclosedThroughItsOwnedProjectsNeverPruned(t *test
 	}
 	if !bundle.Coverage.Partial {
 		t.Errorf("a team commitment read that serves nothing reads as complete: %s", raw)
+	}
+}
+
+func TestCommitmentAnUnresolvedSprintReferenceIsNeverNoneStated(t *testing.T) {
+	for _, provider := range []string{"jira", "gitlab", "linear"} {
+		t.Run(provider, func(t *testing.T) {
+			unresolved, dated := projectSubject(provider, "proj-unresolved"), projectSubject(provider, "proj-dated")
+			client := commitmentClient(
+				[][]any{
+					commitmentProjectRow(provider, "proj-unresolved", "", "", "", true),
+					commitmentProjectRow(provider, "proj-dated", "", "", "", true),
+				},
+				[][]any{
+					commitmentItemRow(provider, "proj-unresolved", commitmentCounts{total: 2, open: 2, unresolved: 1}),
+					commitmentItemRow(provider, "proj-dated", commitmentCounts{total: 2, open: 2, withDueAt: 1, unresolved: 1}),
+				},
+			)
+			response := readCommitmentFacts(t, client, unresolved, dated)
+			fact := servedCommitment(t, response, unresolved)
+			wantServed(t, fact, map[string]any{"items_total": "2", "items_open": "2", "sprint_refs_unresolved": "1", "sprint_refs_unresolved_reason": "sprint_not_found_or_without_end", "items_unreadable_count": "0"})
+			wantAbsent(t, fact, "commitment_status", "sprint_kind", "latest_sprint_end")
+			wantServed(t, servedCommitment(t, response, dated), map[string]any{"sprint_refs_unresolved": "1", "sprint_refs_unresolved_reason": "sprint_not_found_or_without_end", "commitment_status": "stated"})
+		})
 	}
 }
