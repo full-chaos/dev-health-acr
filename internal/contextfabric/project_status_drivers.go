@@ -57,6 +57,23 @@ type ProjectStatusDriverEvent struct {
 	SkippedBudget  int
 	SkippedIDClash int
 	Missing        []FactKind
+	MissingStates  []string
+	Partial        []FactKind
+	PartialStates  []SourceState
+}
+
+func projectStatusUsableState(state SourceState) bool {
+	return state == SourceAvailable || state == SourceTruncated || state == SourceStale
+}
+
+func projectStatusStateLabel(state SourceState) string {
+	switch state {
+	case SourceTruncated:
+		return " (partial: the source read was truncated)."
+	case SourceStale:
+		return " (stale: the source read is out of date)."
+	}
+	return "."
 }
 
 func projectStatusIntent(interpretation InterpretedQuestion) bool {
@@ -73,7 +90,7 @@ func projectStatusClaimID(subject SubjectRef, observation projectStatusObservati
 	return "claim_project_status_" + hex.EncodeToString(digest[:])[:32]
 }
 
-func projectStatusDrivers(interpretation InterpretedQuestion, committed []SubjectRef, facts []CanonicalFact, existingDrivers []DriverJudgment, existingClaims []ClaimedFact, allocation ItemAllocation) ([]DriverJudgment, []ClaimedFact, *ProjectStatusDriverEvent) {
+func projectStatusDrivers(interpretation InterpretedQuestion, committed []SubjectRef, facts []CanonicalFact, coverage Coverage, existingDrivers []DriverJudgment, existingClaims []ClaimedFact, allocation ItemAllocation) ([]DriverJudgment, []ClaimedFact, *ProjectStatusDriverEvent) {
 	if len(committed) != 1 || committed[0].Kind != SubjectProject || !projectStatusIntent(interpretation) {
 		return nil, nil, nil
 	}
@@ -99,23 +116,40 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 	var drivers []DriverJudgment
 	var claims []ClaimedFact
 	for _, observation := range projectStatusObservations {
-		var fact *CanonicalFact
+		var fact, named *CanonicalFact
 		for index := range facts {
 			candidate := &facts[index]
-			if candidate.Kind == observation.kind && candidate.Subject.Kind == project.Kind && candidate.Subject.CanonicalID == project.CanonicalID &&
-				candidate.SourceState == SourceAvailable {
+			if candidate.Kind != observation.kind || candidate.Subject.Kind != project.Kind || candidate.Subject.CanonicalID != project.CanonicalID {
+				continue
+			}
+			if named == nil {
+				named = candidate
+			}
+			if projectStatusUsableState(candidate.SourceState) {
 				fact = candidate
 				break
 			}
 		}
-		if fact == nil || len(fact.EvidenceRefIDs) == 0 {
+		missing := func(state string) {
 			event.Missing = append(event.Missing, observation.kind)
+			event.MissingStates = append(event.MissingStates, state)
+		}
+		if fact == nil {
+			if named == nil {
+				missing(projectStatusCoverageState(coverage, observation.kind))
+			} else {
+				missing(string(named.SourceState))
+			}
+			continue
+		}
+		if len(fact.EvidenceRefIDs) == 0 {
+			missing("no_evidence")
 			continue
 		}
 		title, ok := observation.title(fact.Fields)
 		claimValue, hasValue := fact.Fields[observation.field]
 		if !ok || !hasValue || claimValue.Null {
-			event.Missing = append(event.Missing, observation.kind)
+			missing("no_value")
 			continue
 		}
 		if len(drivers) >= allowed {
@@ -131,12 +165,19 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 			continue
 		}
 		taken[driverID] = struct{}{}
+		summary := title + projectStatusStateLabel(fact.SourceState)
+		var sourceState SourceState
+		if fact.SourceState != SourceAvailable {
+			sourceState = fact.SourceState
+			event.Partial = append(event.Partial, observation.kind)
+			event.PartialStates = append(event.PartialStates, fact.SourceState)
+		}
 		claims = append(claims, ClaimedFact{ClaimID: claimID, Kind: observation.kind, Subject: project, Field: observation.field, Value: convertFactValueScalar(claimValue)})
 		drivers = append(drivers, DriverJudgment{
 			DriverID: driverID, Standing: DriverPrincipal, Category: observation.category,
-			Title: title, Summary: title + ".",
+			Title: title, Summary: summary,
 			AffectedSubjects: []SubjectRef{project}, EvidenceRefIDs: fact.EvidenceRefIDs, ClaimedFactIDs: []string{claimID},
-			Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.95, Current: true,
+			Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.95, SourceState: sourceState, Current: true,
 		})
 	}
 	event.Emitted = len(drivers)
@@ -155,4 +196,33 @@ func projectStatusDriverCandidates(drivers []DriverJudgment) []DriverJudgment {
 		candidates = append(candidates, driver)
 	}
 	return candidates
+}
+
+func projectStatusMissingLimitations(event *ProjectStatusDriverEvent) []string {
+	if event == nil || len(event.Missing) == 0 {
+		return nil
+	}
+	sentences := make([]string, 0, len(event.Missing))
+	for index, kind := range event.Missing {
+		sentences = append(sentences, contractsv1.ContextFabricProjectStatusMissingLimitation(string(kind), event.MissingStates[index]))
+	}
+	return sentences
+}
+
+func projectStatusCoverageState(coverage Coverage, kind FactKind) string {
+	source := "canonical_fact:" + string(kind)
+	observed := ""
+	for _, observation := range coverage.Sources {
+		if observation.Source != source || observation.State == "" {
+			continue
+		}
+		if observation.State != SourceAvailable {
+			return string(observation.State)
+		}
+		observed = string(observation.State)
+	}
+	if observed != "" {
+		return observed
+	}
+	return "not_read"
 }

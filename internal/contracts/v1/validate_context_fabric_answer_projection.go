@@ -442,6 +442,9 @@ func (p ContextFabricAnswerProjection) validateDrivers(claims map[string]struct{
 		if !stringLengthBetween(driver.Qualification, 0, 2000) {
 			return fmt.Errorf("answer projection driver qualification violates v1 bounds")
 		}
+		if driver.SourceState != "" && !validSourceState(driver.SourceState) {
+			return fmt.Errorf("answer projection driver source state is not a member of the closed vocabulary")
+		}
 		if driver.Confidence < 0 || driver.Confidence > 1 {
 			return fmt.Errorf("answer projection driver confidence violates v1 bounds")
 		}

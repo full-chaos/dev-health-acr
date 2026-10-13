@@ -941,6 +941,9 @@ func (d ContextFabricDriverJudgment) validate(bounds contextFabricBounds) error 
 	if !stringLengthBetween(d.DriverID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !validDriverStanding(d.Standing) || !validDriverCategory(ContextFabricDriverCategory(d.Category)) || !boundedText(d.Title, 1, ContextFabricDriverTitleMaxLength, bounds) || !boundedText(d.Summary, 1, ContextFabricDriverSummaryMaxLength, bounds) || !validDerivationMethod(d.Derivation) || !validEpistemicStatus(d.EpistemicStatus) || d.Confidence < 0 || d.Confidence > 1 || !stringLengthBetween(d.Qualification, 0, ContextFabricDriverQualificationMaxLength) {
 		return fmt.Errorf("driver judgment violates v1 bounds")
 	}
+	if d.SourceState != "" && !validSourceState(d.SourceState) {
+		return fmt.Errorf("driver source state is not a member of the closed vocabulary")
+	}
 	if len(d.AffectedSubjects) < ContextFabricDriverAffectedSubjectsMinCount || len(d.AffectedSubjects) > ContextFabricDriverAffectedSubjectsMaxCount || !uniqueSubjects(d.AffectedSubjects) || len(d.PathIDs) > ContextFabricDriverPathIDsMaxCount || !uniqueTrimmedStrings(d.PathIDs, ContextFabricIdentifierRefMaxLength) || !boundedEvidenceRefs(d.EvidenceRefIDs, bounds.nestedEvidenceRefs, true) {
 		return fmt.Errorf("driver subject, path, or evidence references violate v1 bounds")
 	}

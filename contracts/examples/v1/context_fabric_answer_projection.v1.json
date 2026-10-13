@@ -139,6 +139,7 @@
       "title": "Release acceptance remains incomplete",
       "summary": "The project cannot be treated as ready until the required real-product acceptance path succeeds.",
       "qualification": "This judgment is limited to currently visible project and acceptance evidence.",
+      "source_state": "truncated",
       "confidence": 0.96,
       "evidence_ref_ids": [
         "evidence_release_acceptance"
