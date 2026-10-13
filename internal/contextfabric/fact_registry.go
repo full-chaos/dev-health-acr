@@ -1754,14 +1754,14 @@ func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state Source
 	if degrades {
 		bundle.Coverage.Partial = true
 		// Codex round-2 R2-3: clamp the COMPOSED string, not its ingredients.
-		// Clamping reason first and then prefixing "<kind>: " pushed the
+		// Clamping reason first and then prefixing "<kind label>: " pushed the
 		// result back over the bound by exactly the prefix length, producing
 		// a DegradedReasons entry the contract validator rejects -- which
 		// fails the whole investigation, the outcome this clamping exists to
 		// prevent. A narrowed provider that fails with a long reason is the
 		// live path: the narrowing note and the failure reason are
 		// concatenated before they ever reach here.
-		degradedEntry = clampCoverageText(string(kind)+": "+reason, maxCoverageDegradedReasonLength)
+		degradedEntry = clampCoverageText(factKindPrefix(kind)+": "+reason, maxCoverageDegradedReasonLength)
 		bundle.Coverage.DegradedReasons = append(bundle.Coverage.DegradedReasons, degradedEntry)
 	}
 	// CHAOS-4690: the paired structured detail. Minted for every
@@ -2183,4 +2183,11 @@ func factCountOfKind(facts []CanonicalFact, kind FactKind) int {
 		}
 	}
 	return count
+}
+
+// factKindPrefix names a fact kind in plain words for a degraded-reason entry.
+func factKindPrefix(kind FactKind) string {
+	label := contractsv1.ContextFabricFactKindLabel(contractsv1.ContextFabricFactKind(kind))
+	first, size := utf8.DecodeRuneInString(label)
+	return string(unicode.ToUpper(first)) + label[size:]
 }

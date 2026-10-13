@@ -58,13 +58,15 @@ func TestServedRollupGapReasonCarriesNoInternalTokenOnEveryCoverageSurface(t *te
 	if !found {
 		t.Fatal("no pull_requests observation")
 	}
-	sourcePrefix := regexp.MustCompile(`^[a-z_]+: `)
 	for _, reason := range bundle.Coverage.DegradedReasons {
-		check("degraded reason", sourcePrefix.ReplaceAllString(reason, ""))
+		check("degraded reason", reason)
+		if !strings.HasPrefix(reason, "Pull request: ") {
+			t.Errorf("degraded reason does not name the fact kind in plain words: %q", reason)
+		}
 	}
 	structured := false
 	for _, detail := range bundle.Coverage.Details {
-		check("coverage detail raw", sourcePrefix.ReplaceAllString(detail.Raw, ""))
+		check("coverage detail raw", detail.Raw)
 		check("coverage detail label", detail.Label)
 		if detail.ScopeOutcome == string(FactScopePolicyUnavailable) && detail.Policy != "" {
 			structured = true
