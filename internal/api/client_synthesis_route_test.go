@@ -802,3 +802,46 @@ func TestClientSynthesisRefusesOnlyWhereTheBodyCannotFit(t *testing.T) {
 		})
 	}
 }
+
+// The MCP tool widens max_serialized_bytes to the service ceiling and names the
+// caller's budget as answer_budget_bytes. The input cut follows that budget.
+func TestClientSynthesisInputIsCutToTheAnswerBudgetBehindAWidenedBodyBound(t *testing.T) {
+	fixture := manyFactsFixture(40, 600)
+	ceiling := 262144
+	mcpShaped := func(budget int) func(*contractsv1.ContextFabricInvestigationRequest) {
+		return func(r *contractsv1.ContextFabricInvestigationRequest) {
+			r.Options.MaxSerializedBytes = ceiling
+			if budget > 0 {
+				r.Options.AnswerBudgetBytes = budget
+			}
+		}
+	}
+	whole := decodeEnvelope(t, newClientRouteRig(t, fixture).post(t, contractsv1.ContextFabricSynthesisModeClient, mcpShaped(0))).SynthesisInput
+	if whole == nil || whole.Bounded {
+		t.Fatalf("unbudgeted input = %v, want a whole input", whole)
+	}
+	for _, budget := range []int{contractsv1.ContextFabricSerializedBytesMin, 16384, 65536, 262144} {
+		recorder := newClientRouteRig(t, fixture).post(t, contractsv1.ContextFabricSynthesisModeClient, mcpShaped(budget))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("budget %d: status = %d: %s", budget, recorder.Code, recorder.Body.String())
+		}
+		bundle := decodeEnvelope(t, recorder).SynthesisInput
+		if bundle == nil {
+			t.Fatalf("budget %d: no synthesis_input", budget)
+		}
+		cutExpected := len(whole.Input) > budget/2
+		if cutExpected {
+			if !bundle.Bounded || bundle.InputSHA256 == whole.InputSHA256 || len(bundle.Input) > budget/2 {
+				t.Errorf("budget %d: bounded=%v sha-equal=%v input=%d bytes, want a disclosed cut within %d", budget, bundle.Bounded, bundle.InputSHA256 == whole.InputSHA256, len(bundle.Input), budget/2)
+			}
+		} else if bundle.Bounded || bundle.InputSHA256 != whole.InputSHA256 {
+			t.Errorf("budget %d: bounded=%v, want the whole input", budget, bundle.Bounded)
+		}
+		viaBodyBound := decodeEnvelope(t, newClientRouteRig(t, fixture).post(t, contractsv1.ContextFabricSynthesisModeClient, func(r *contractsv1.ContextFabricInvestigationRequest) {
+			r.Options.MaxSerializedBytes = budget
+		})).SynthesisInput
+		if viaBodyBound == nil || viaBodyBound.InputSHA256 != bundle.InputSHA256 {
+			t.Errorf("budget %d: the API form (max_serialized_bytes only) cut a different input than the MCP form", budget)
+		}
+	}
+}

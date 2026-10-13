@@ -1017,7 +1017,11 @@ import (
 // repository", and its investment mix adds the work units of those linked
 // pull requests (never the whole mix of a repository it does not own). A
 // stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v201"
+//
+// v201 -> v202: a client synthesis answer asked through a tool that widens the
+// body bound names the caller's budget as the answer budget; the input is now
+// cut to that budget. An answer saved under v201 carried the uncut input.
+const QueryVersion = "devhealthfacts.clickhouse.v202"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

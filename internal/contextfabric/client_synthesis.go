@@ -299,7 +299,7 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 		return InvestigationResult{}, nil, measure, ErrClientSynthesisUnavailable
 	}
 	assembly := r.ClientSynthesis
-	budget := input.Request.Options.MaxSerializedBytes
+	budget := effectiveCallerBudget(input.Request.Options)
 	maxBytes, err := assembly.inputBoundWithin(budget)
 	measure.MaxBytes = maxBytes
 	if err != nil {
@@ -595,6 +595,19 @@ func (t SlogEngineTelemetry) RecordClientSynthesisDecision(ctx context.Context, 
 		"commits_retracted", event.CommitsRetracted,
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.Log(ctx, slog.LevelInfo, ClientSynthesisDecisionLogMessage, args...)
+}
+
+// effectiveCallerBudget is the byte budget the caller asked for: the answer
+// budget when named, else the body bound. Every client-synthesis site that
+// cuts or fits to the caller's budget reads it here and never reads
+// Options.MaxSerializedBytes directly: a caller behind a tool that widens the
+// body bound to the service ceiling states its budget only as the answer
+// budget.
+func effectiveCallerBudget(options contractsv1.ContextFabricInvestigationOptions) int {
+	if options.AnswerBudgetBytes > 0 {
+		return options.AnswerBudgetBytes
+	}
+	return options.MaxSerializedBytes
 }
 
 // clientSynthesisBodyShare is the most of the caller's byte budget the

@@ -41,3 +41,13 @@ func TestAnAnswerByteBudgetIsTheSheddingTargetAndTheBodyBoundIsTheServiceCeiling
 		t.Errorf("result_id = %q, want %q so the caller can fetch the canonical result", response.Structured.ResultID, result.ResultID)
 	}
 }
+
+func TestTheMCPDefaultAnswerBudgetIsForwardedWhenTheCallerGivesNone(t *testing.T) {
+	var seen contractsv1.ContextFabricInvestigationRequest
+	result := parityResult()
+	boot := answerFixtureBootstrap(t, result, &seen)
+	callInvestigateQuestion(t, boot, contractsv1.MCPInvestigateQuestionRequest{Question: result.Question})
+	if want := min(defaultAnswerMaxSerializedBytes, seen.Options.MaxSerializedBytes); seen.Options.AnswerBudgetBytes != want {
+		t.Errorf("hosted answer_budget_bytes = %d, want the MCP default %d", seen.Options.AnswerBudgetBytes, want)
+	}
+}
