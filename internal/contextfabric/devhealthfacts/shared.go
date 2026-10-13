@@ -988,10 +988,20 @@ import (
 // limitations list; a status question over projects or incidents that reached
 // no member, or whose status no read applied, says which.
 //
-// v196 -> v197: a project status answer serves a truncated readiness fact as a
+// v196 -> v197: a pull request status question anchored on the caller's
+// organization, or naming no anchor, reads the organization's pull requests
+// with the status inside the read (the status census), before the walk cap or
+// the census bound. It used to filter the first pull requests the walk or the
+// census reached, so matches past them were missed; with no anchor, a read
+// that kept none served no_match. A read that keeps none is now a measured zero
+// (complete), and an answer whose status was decided within a cut read is
+// partial. A candidate saved under v196 may hold the cut, mismatched set, that
+// no_match, or a complete status over a cut read.
+//
+// v197 -> v198: a project status answer serves a truncated readiness fact as a
 // partial estimate coverage driver with source_state truncated. An answer saved
-// under v196 has no such driver.
-const QueryVersion = "devhealthfacts.clickhouse.v197"
+// under v197 has no such driver.
+const QueryVersion = "devhealthfacts.clickhouse.v198"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
