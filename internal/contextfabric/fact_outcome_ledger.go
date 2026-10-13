@@ -1,6 +1,9 @@
 package contextfabric
 
-import "slices"
+import (
+	"maps"
+	"slices"
+)
 
 // The fact outcome ledger (CHAOS-7073, design CHAOS-7036 section C.5).
 //
@@ -33,6 +36,8 @@ type FactKindOutcome struct {
 	// Members are the provider's own per-subject states, keyed by
 	// FactSubjectKey. Only a provider that classifies its subjects fills it.
 	Members map[string]string
+	// MemberReasons are reasons true of one subject, keyed by FactSubjectKey.
+	MemberReasons map[string]string
 	// Evaluated are subjects the provider showed it evaluated with no fact
 	// (a measured zero), keyed by FactSubjectKey.
 	Evaluated map[string]struct{}
@@ -100,6 +105,12 @@ func (bundle *CanonicalFactBundle) recordOutcome(kind FactKind, branch factReadO
 		}
 	}
 	if result != nil {
+		if reason, ok := bundle.kindReasons[kind]; ok {
+			outcome.Reason = reason
+		}
+		if len(result.SubjectReasons) > 0 {
+			outcome.MemberReasons = maps.Clone(result.SubjectReasons)
+		}
 		if result.Evaluation != nil && len(result.Evaluation.Members) > 0 {
 			outcome.Members = make(map[string]string, len(result.Evaluation.Members))
 			for _, member := range result.Evaluation.Members {

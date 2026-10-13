@@ -1018,10 +1018,17 @@ import (
 // pull requests (never the whole mix of a repository it does not own). A
 // stored answer can differ.
 //
-// v201 -> v202: a client synthesis answer asked through a tool that widens the
+// v201 -> v202: a coverage row carries the reason of its own subject. A
+// sentence about some of the requested teams (N of M own no repository) is
+// served once for the request and no longer on the row of a team it is false
+// for; a team that owns nothing gets its own reason. A stored answer can
+// differ.
+//
+// v202 -> v203: a client synthesis answer asked through a tool that widens the
 // body bound names the caller's budget as the answer budget; the input is now
-// cut to that budget. An answer saved under v201 carried the uncut input.
-const QueryVersion = "devhealthfacts.clickhouse.v202"
+// cut to that budget, or served whole when its smallest form fits beside the
+// answer. An answer saved under v202 carried the uncut input.
+const QueryVersion = "devhealthfacts.clickhouse.v203"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

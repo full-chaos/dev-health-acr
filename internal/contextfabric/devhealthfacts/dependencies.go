@@ -118,7 +118,7 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	if len(ids) == 0 {
 		state, emptyReason := currentAxisReadState(teamFactCount)
 		result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: teamOutcome.truncated}
-		applyNoOwnedRepositories(&result, teamOutcome.teamsWithoutRepos)
+		applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
 		return result, nil
 	}
 	// CHAOS-5438: ONE owner -- see factBudget, and WorkProvider's identical
@@ -198,7 +198,7 @@ LIMIT 1 BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id`), 
 	budget.observe(rowCount)
 	state, emptyReason := currentAxisReadState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated() || teamOutcome.truncated}
-	applyNoOwnedRepositories(&result, teamOutcome.teamsWithoutRepos)
+	applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
 	return result, nil
 }
 
@@ -430,6 +430,7 @@ const blockerOpenPredicate = "lower(s.status) NOT IN ('done', '" + workItemCance
 func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage.Principal, orgID string, requestedScope []string, orgWide bool, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) (outcome teamRollupOutcome, err error) {
 	teamIDs, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	outcome.rejected = rejected
+	outcome.teamsRequested = len(teamIDs)
 	if len(teamIDs) == 0 {
 		return outcome, nil
 	}
@@ -550,7 +551,7 @@ WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`
 		subject := bySubject[teamID]
 		repos := owned[teamID]
 		if len(repos) == 0 && len(reachedOnly[teamID]) == 0 {
-			outcome.teamsWithoutRepos++
+			outcome.teamsWithoutRepos = append(outcome.teamsWithoutRepos, subject)
 			continue
 		}
 		var blockedItems, blockerEdges, excludedEdges, withData int64

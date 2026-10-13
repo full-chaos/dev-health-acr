@@ -146,7 +146,7 @@ func TestCHAOS9197APseudoProjectOwnershipRowAttributesToNothingOnTheCanonicalBas
 	if len(result.Facts) != 0 {
 		t.Fatalf("facts = %#v, want none: a pseudo-project ownership row must attribute to nothing", result.Facts)
 	}
-	if !strings.Contains(result.Reason, "investment_project_no_canonical_mix") {
-		t.Fatalf("reason = %q, want the named investment_project_no_canonical_mix", result.Reason)
+	if served := contextfabric.CombineRequestNote(result.Reason, result.RequestNote); !strings.Contains(served, "investment_project_no_canonical_mix") {
+		t.Fatalf("reason = %q, want the named investment_project_no_canonical_mix", served)
 	}
 }

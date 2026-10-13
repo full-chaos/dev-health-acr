@@ -106,7 +106,7 @@ func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Pri
 		Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion,
 		Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery || teamOutcome.truncated,
 	}
-	applyNoOwnedRepositories(&result, teamOutcome.teamsWithoutRepos)
+	applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
 	applyProjectReachedWithoutRows(&result, teamOutcome.projectReachedWithoutRows)
 	// Retention wins over the severity note: with no rows at all there is
 	// no fact whose severity could have been omitted, and reporting the
@@ -129,6 +129,7 @@ type incidentRollupRepo struct{ incidents, resolved int64 }
 func (p *IncidentsProvider) readTeamRollup(ctx context.Context, orgID string, orgWide bool, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidence *contractsv1.ContextFabricRequestedEvidenceWindow) (outcome teamRollupOutcome, err error) {
 	teamIDs, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	outcome.rejected = rejected
+	outcome.teamsRequested = len(teamIDs)
 	if len(teamIDs) == 0 {
 		return outcome, nil
 	}
@@ -195,7 +196,7 @@ WHERE org_id = {org_id:String} AND is_deleted = 0 AND ` + window.timestampExpr("
 		subject := bySubject[teamID]
 		repos := owned[teamID]
 		if len(repos) == 0 {
-			outcome.teamsWithoutRepos++
+			outcome.teamsWithoutRepos = append(outcome.teamsWithoutRepos, subject)
 			continue
 		}
 		// An incident linked to two owned repositories counts once for the
