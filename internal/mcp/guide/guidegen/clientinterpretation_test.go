@@ -219,7 +219,7 @@ func TestClientInterpretationGuideHasTheSynthesisSection(t *testing.T) {
 	want = append(want, c.SynthesisInputFields...)
 	want = append(want, c.SynthesisContractFields...)
 	want = append(want, c.TextFields...)
-	want = append(want, "never `"+c.StatusComplete+"`", "either `"+c.ServerSideTool+"` or `"+c.InterpretTool+"`", "byte for byte")
+	want = append(want, "never `"+c.StatusComplete+"`", "either `"+c.ServerSideTool+"` (if listed) or `"+c.InterpretTool+"` (if listed)", "byte for byte")
 	for _, path := range synthesisprompt.ClientInputObservationPaths() {
 		want = append(want, "`"+path+"`")
 	}

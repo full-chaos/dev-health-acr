@@ -106,7 +106,7 @@ func buildQuestions(in Inputs, serviceModel bool) (string, error) {
 		b.WriteString("Do not choose a family; ACR chooses it. This table shows what shapes ACR answers.\n\n")
 	} else {
 		questionTool = "investigate_with_interpretation"
-		b.WriteString("Call the `investigate_with_interpretation` tool with the question as `question`, after you run the interpretation step on your own model: see `acr://guide/client-interpretation`. ")
+		b.WriteString("Call the `investigate_with_interpretation` tool (if listed) with the question as `question`, after you run the interpretation step on your own model: see `acr://guide/client-interpretation`. ")
 		b.WriteString("That tool appears in `tools/list` only when the hosted API enables it for your credential. ")
 		b.WriteString("Do not choose a family; ACR chooses it. This table shows what shapes ACR answers.\n\n")
 		b.WriteString("If you are a model that can plan its own reads, start with the data tools that `tools/list` shows (`data_catalog`, `find_subjects`, `read_facts`, `read_relationships`, `run_operation`; see `acr://guide/data`): they call no model and spend no model budget, and you choose the reads and do the comparison, ranking and explanation yourself.\n\n")
@@ -143,7 +143,7 @@ func buildQuestions(in Inputs, serviceModel bool) (string, error) {
 		} else {
 			fmt.Fprintf(&b, "- Answers: %s\n", text.Meaning)
 			fmt.Fprintf(&b, "- Example question: \"%s\"\n", text.Example)
-			b.WriteString("- Tool: `" + questionTool + "`\n")
+			b.WriteString("- Tool: `" + questionTool + "` (if listed)\n")
 		}
 		fmt.Fprintf(&b, "- Subjects: %s\n", axis)
 		fmt.Fprintf(&b, "- Health dimension: %s\n", dimension)
@@ -165,7 +165,7 @@ func buildQuestions(in Inputs, serviceModel bool) (string, error) {
 	b.WriteString("## Other tools\n\n")
 	b.WriteString("- `context_for_task`: an evidence-backed context packet for a coding task, scoped to a repository (see the tool schema). Use it for task context, not for organization, team, or project questions.\n")
 	b.WriteString("- `source_evidence`: expands one evidence reference from an answer. See `acr://guide/conversation`.\n")
-	b.WriteString("- `investigation_result`: fetches the full stored result of a prior answer. See `acr://guide/conversation`.\n\n")
+	b.WriteString("- `investigation_result` (if listed): fetches the full stored result of a prior answer. See `acr://guide/conversation`.\n\n")
 	b.WriteString("Vocabulary and handle grammar: `acr://guide/vocabulary`.\n")
 	return b.String(), nil
 }

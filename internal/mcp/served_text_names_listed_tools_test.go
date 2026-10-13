@@ -20,7 +20,7 @@ var optionalToolNames = []string{
 var toolQualifiers = []string{
 	"if this server offers", "if listed", "when listed", "when tools/list shows", "that tools/list shows",
 	"the server lists", "this server offers", "may be unavailable", "optional", "only when the hosted API enables",
-	"the ones this server offers", "if the server lists", "when it is listed", "appears in `tools/list`",
+	"the ones this server offers", "if the server lists", "when it is listed", "appears in tools/list", "tools/list offers",
 }
 
 var sentenceSplit = regexp.MustCompile(`\n|\. `)
@@ -28,7 +28,7 @@ var sentenceSplit = regexp.MustCompile(`\n|\. `)
 func unqualifiedUnlistedMentions(text string, listed []string) []string {
 	var bad []string
 	for _, sentence := range sentenceSplit.Split(text, -1) {
-		lower := strings.ToLower(sentence)
+		lower := strings.ReplaceAll(strings.ToLower(sentence), "`", "")
 		qualified := false
 		for _, q := range toolQualifiers {
 			if strings.Contains(lower, q) {
@@ -89,9 +89,6 @@ func TestServedTextNamesOnlyToolsTheCallerCanList(t *testing.T) {
 					bad = append(bad, res.URI+" description: "+b)
 				}
 				for _, c := range read.Contents {
-					if strings.Contains(c.Text, guide.ToolAvailabilityNote) {
-						continue
-					}
 					for _, b := range unqualifiedUnlistedMentions(c.Text, listed) {
 						bad = append(bad, res.URI+": "+b)
 					}
@@ -140,4 +137,12 @@ func TestEveryGuideThatNamesAToolCarriesTheAvailabilityNote(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestUnqualifiedMentionDetectorFlagsAPlantedSentence(t *testing.T) {
+	listed := []string{toolDataCatalog}
+	require.NotEmpty(t, unqualifiedUnlistedMentions("Plan the reads with `run_operation`. Then rank.", listed))
+	require.NotEmpty(t, unqualifiedUnlistedMentions("Line one.\n- `investigate_with_interpretation` answers it", listed))
+	require.Empty(t, unqualifiedUnlistedMentions("Plan the reads with `run_operation` (if listed). Use data_catalog", listed))
+	require.Empty(t, unqualifiedUnlistedMentions("Use `read_facts` when `tools/list` shows it", listed))
 }

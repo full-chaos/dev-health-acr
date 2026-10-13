@@ -162,7 +162,7 @@ var DataExamples = []DataExample{
 		Calls: []DataExampleCall{
 			{Tool: "run_operation", Args: `{"operation":"catalogValues","variables":{"dimension":"THEME"}}`, Comment: "the theme values that exist"},
 			{Tool: "run_operation", Args: `{"operation":"investmentBreakdown","variables":{"batch":{"breakdowns":[{"dimension":"THEME","measure":"COUNT","dateRange":{"startDate":"2026-06-29","endDate":"2026-09-28"},"topN":10}]}}}`, Comment: "the org-wide mix by theme"},
-			{Tool: "run_operation", Args: `{"operation":"investmentBreakdown","variables":{"batch":{"breakdowns":[{"dimension":"TEAM","measure":"COUNT","dateRange":{"startDate":"2026-06-29","endDate":"2026-09-28"},"topN":10}]}}}`, Refused: "basis_dependent_shape", Comment: "refused: run_operation serves no team shape"},
+			{Tool: "run_operation", Args: `{"operation":"investmentBreakdown","variables":{"batch":{"breakdowns":[{"dimension":"TEAM","measure":"COUNT","dateRange":{"startDate":"2026-06-29","endDate":"2026-09-28"},"topN":10}]}}}`, Refused: "basis_dependent_shape", Comment: "refused: run_operation (if listed) serves no team shape"},
 		},
 	},
 	{
@@ -193,21 +193,21 @@ func buildData(in Inputs, serviceModel bool) (string, error) {
 	b.WriteString(guide.ToolAvailabilityNote + "\n\n")
 
 	b.WriteString("## Which way\n\n")
-	b.WriteString("- If you are a model, plan the reads yourself with `data_catalog`, `find_subjects`, `read_facts`, `read_relationships` and `run_operation`. You choose the reads and you do the comparison, ranking, charting and explanation. These tools call no model on our side.\n")
+	b.WriteString("- If you are a model, plan the reads yourself with `data_catalog`, `find_subjects`, `read_facts`, `read_relationships` and `run_operation` (each if listed). You choose the reads and you do the comparison, ranking, charting and explanation. These tools call no model on our side.\n")
 	if serviceModel {
 		b.WriteString("- `investigate_question` is for our own engine's narrative answers (Ask Dev, and callers with no model of their own). It runs a model on our side. Use it only when you want the engine's answer. With `synthesis` set to `client` it makes no synthesis call: see `acr://guide/client-interpretation`.\n")
-		b.WriteString("- `investigate_with_interpretation` is the same engine, with the interpretation step run on your own model: fetch the prompt `interpret_question`, run it, and send the reply as `interpretation` with the prompt's `_meta` values as `contract`. The steps and the replies are in `acr://guide/client-interpretation`.\n")
+		b.WriteString("- `investigate_with_interpretation` (if listed) is the same engine, with the interpretation step run on your own model: fetch the prompt `interpret_question`, run it, and send the reply as `interpretation` with the prompt's `_meta` values as `contract`. The steps and the replies are in `acr://guide/client-interpretation`.\n")
 	} else {
-		b.WriteString("- `investigate_with_interpretation` is our engine's narrative answer, with the interpretation step run on your own model: fetch the prompt `interpret_question`, run it, and send the reply as `interpretation` with the prompt's `_meta` values as `contract`. The steps and the replies are in `acr://guide/client-interpretation`.\n")
+		b.WriteString("- `investigate_with_interpretation` (if listed) is our engine's narrative answer, with the interpretation step run on your own model: fetch the prompt `interpret_question`, run it, and send the reply as `interpretation` with the prompt's `_meta` values as `contract`. The steps and the replies are in `acr://guide/client-interpretation`.\n")
 	}
-	b.WriteString("- A tool appears in `tools/list` only when the hosted API enables it for your credential. `run_operation` and `graphql_query` need the `data:read` scope. More data tools are planned; none is named here until it ships.\n\n")
+	b.WriteString("- A tool appears in `tools/list` only when the hosted API enables it for your credential. `run_operation` and `graphql_query` (if listed) need the `data:read` scope. More data tools are planned; none is named here until it ships.\n\n")
 
 	b.WriteString("## The flow\n\n")
-	b.WriteString("1. `data_catalog`: what you may ask, for your credential (operations, variables, limits, refused shapes).\n")
-	b.WriteString("2. `find_subjects`: names to ids, a list of one kind, the repositories and projects a team owns (`owned_by`), or a PR number, work item key or CI run id to its id (`handle`; an optional `anchor` {kind, id} narrows the handle: a repository for a PR number or CI run id, a project for a work item key; an anchor you may not read gives the same empty answer as one with no match). Ids come from here or from a response. Never build one.\n")
-	b.WriteString("3. Read the data. Use `read_facts` (stored facts for ids you hold, with a coverage row for each) and `read_relationships` (the edges of one id); they call no model. Or `run_operation`: one allowlisted operation with its variables. You send no query text. Or `graphql_query`: one GraphQL query over the allowed schema (`data_catalog` section `schema`), selecting exactly the fields you need.\n")
+	b.WriteString("1. `data_catalog` (if listed): what you may ask, for your credential (operations, variables, limits, refused shapes).\n")
+	b.WriteString("2. `find_subjects` (if listed): names to ids, a list of one kind, the repositories and projects a team owns (`owned_by`), or a PR number, work item key or CI run id to its id (`handle`; an optional `anchor` {kind, id} narrows the handle: a repository for a PR number or CI run id, a project for a work item key; an anchor you may not read gives the same empty answer as one with no match). Ids come from here or from a response. Never build one.\n")
+	b.WriteString("3. Read the data. Use `read_facts` (if listed; stored facts for ids you hold, with a coverage row for each) and `read_relationships` (if listed; the edges of one id); they call no model. Or `run_operation` (if listed): one allowlisted operation with its variables. You send no query text. Or `graphql_query` (if listed): one GraphQL query over the allowed schema (`data_catalog` section `schema`), selecting exactly the fields you need.\n")
 	b.WriteString("4. You join the answers, compare, rank and explain.\n\n")
-	b.WriteString("Read each answer in this order: `call` (served, refused, operation_unavailable, upstream_error, upstream_timeout), `completeness`, `result`, then `data`. A refusal is a typed answer, not a failure: read `refusal.code`, change the request, and do not retry it unchanged. For `run_operation`, an operation with one list of rows and a `limit` variable is served cut to whole rows that fit when over `max_bytes`: `page.rows_returned` of `page.rows_read`, and `page.cut` states the cut and, when every row fits the largest `max_bytes`, the `max_bytes` that returns every row; a cut answer is `declared_partial` with `completeness_reason` `page_cut`. An operation with several lists is cut the same way when its `data_catalog` entry names a `primary_list`: that list is cut, and the other lists are carried whole or, when not even one row fits beside them, emptied and named in `page.cut`. Any other answer over `max_bytes` (`graphql_query`, or an operation with several lists and no `primary_list`, or no `limit`) is not served: `response_budget` means the data was over `max_bytes` and was not cut: ask for less. A refusal `invalid_request` with an `errors` entry carrying `graphql_code` `graphql_validation_failed` or `graphql_parse_failed` means the data service rejected your variables or document: `errors[0].variable` names the variable, for example one that is required and was not sent. An `upstream_error` `errors` entry carries the data service's HTTP `status` and, when it gave one, a closed `graphql_code`; it never carries the service's message text.\n\n")
+	b.WriteString("Read each answer in this order: `call` (served, refused, operation_unavailable, upstream_error, upstream_timeout), `completeness`, `result`, then `data`. A refusal is a typed answer, not a failure: read `refusal.code`, change the request, and do not retry it unchanged. For `run_operation` (if listed), an operation with one list of rows and a `limit` variable is served cut to whole rows that fit when over `max_bytes`: `page.rows_returned` of `page.rows_read`, and `page.cut` states the cut and, when every row fits the largest `max_bytes`, the `max_bytes` that returns every row; a cut answer is `declared_partial` with `completeness_reason` `page_cut`. An operation with several lists is cut the same way when its `data_catalog` (if listed) entry names a `primary_list`: that list is cut, and the other lists are carried whole or, when not even one row fits beside them, emptied and named in `page.cut`. Any other answer over `max_bytes` (`graphql_query` if listed, or an operation with several lists and no `primary_list`, or no `limit`) is not served: `response_budget` means the data was over `max_bytes` and was not cut: ask for less. A refusal `invalid_request` with an `errors` entry carrying `graphql_code` `graphql_validation_failed` or `graphql_parse_failed` means the data service rejected your variables or document: `errors[0].variable` names the variable, for example one that is required and was not sent. An `upstream_error` `errors` entry carries the data service's HTTP `status` and, when it gave one, a closed `graphql_code`; it never carries the service's message text.\n\n")
 
 	b.WriteString("## Rules\n\n")
 	for _, rule := range DataRules {
@@ -218,10 +218,10 @@ func buildData(in Inputs, serviceModel bool) (string, error) {
 	// resource is the same for every caller, so the lists live only in
 	// data_catalog, which is gated by scope and by the composed runners.
 	b.WriteString("\n## Which operations and fields\n\n")
-	b.WriteString("This guide lists no operation and no root field: what you may run depends on your credential. `data_catalog` (section `operations` for `run_operation`, section `schema` for `graphql_query`) gives the exact list, arguments, allowed fields and limits for your own credential, or says why a tool is not available to you.\n")
+	b.WriteString("This guide lists no operation and no root field: what you may run depends on your credential. `data_catalog` (if listed; section `operations` for `run_operation`, section `schema` for `graphql_query`) gives the exact list, arguments, allowed fields and limits for your own credential, or says why a tool is not available to you.\n")
 
-	b.WriteString("\n## Free-form queries: graphql_query\n\n")
-	b.WriteString("`graphql_query` runs one GraphQL query you write over the allowed part of the product analytics schema. The same rules as `run_operation` apply to every argument; the difference is that you choose the fields. Read `data_catalog` section `schema` first: it lists, for your credential, the root fields, each argument's allowed input paths, the fixed arguments, the allowed output paths, and an SDL text of only those.\n\n")
+	b.WriteString("\n## Free-form queries: graphql_query (if listed)\n\n")
+	b.WriteString("`graphql_query` (if listed) runs one GraphQL query you write over the allowed part of the product analytics schema. The same rules as `run_operation` (if listed) apply to every argument; the difference is that you choose the fields. Read `data_catalog` (if listed) section `schema` first: it lists, for your credential, the root fields, each argument's allowed input paths, the fixed arguments, the allowed output paths, and an SDL text of only those.\n\n")
 	for _, rule := range GraphQLRules {
 		b.WriteString("- " + rule + "\n")
 	}
@@ -242,7 +242,7 @@ func buildData(in Inputs, serviceModel bool) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("guidegen: example %d call %d is not JSON: %w", i+1, j+1, err)
 			}
-			fmt.Fprintf(&b, "%d. `%s` %s\n   - %s\n", j+1, call.Tool, "`"+string(encoded)+"`", call.Comment)
+			fmt.Fprintf(&b, "%d. `%s` (if listed) %s\n   - %s\n", j+1, call.Tool, "`"+string(encoded)+"`", call.Comment)
 		}
 	}
 	return b.String(), nil
@@ -269,7 +269,7 @@ func factKindsSection(in Inputs, serviceModel bool) (string, error) {
 	}
 	var b strings.Builder
 	b.WriteString("\n## Fact kinds\n\n")
-	b.WriteString("`data_catalog` section `facts` lists the fact kinds and fields served to your credential. The text below says what each kind means and which words name it. It is the text the interpretation prompt states (also `acr://guide/fact-kinds` with " + factKindsTools + "). Read \"list the kinds\" as \"choose the kinds to read\". A kind the catalog does not list is not served to you.\n\n")
+	b.WriteString("`data_catalog` (if listed) section `facts` lists the fact kinds and fields served to your credential. The text below says what each kind means and which words name it. It is the text the interpretation prompt states (also `acr://guide/fact-kinds` with " + factKindsTools + ", if listed). Read \"list the kinds\" as \"choose the kinds to read\". A kind the catalog does not list is not served to you.\n\n")
 	b.WriteString(body)
 	return b.String(), nil
 }

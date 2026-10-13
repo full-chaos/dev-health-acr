@@ -60,7 +60,7 @@ func buildConversation() string {
 	b.WriteString("- The MCP server keeps no conversation session. Send the receipts and ids you need on every call.\n\n")
 
 	b.WriteString("## Fetch a stored result\n\n")
-	b.WriteString("`investigation_result` takes one `result_id` and returns the full canonical result of a prior answer, ")
+	b.WriteString("`investigation_result` (if listed) takes one `result_id` and returns the full canonical result of a prior answer, ")
 	b.WriteString("when the bounded answer left out detail you need. Authorization is checked live on every call. ")
 	b.WriteString("A result you may not read looks the same as a result that does not exist. ")
 	b.WriteString("How long a `result_id` stays fetchable is unspecified. Do not depend on it.\n\n")
