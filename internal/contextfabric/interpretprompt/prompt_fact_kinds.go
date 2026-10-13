@@ -13,9 +13,9 @@ const interpretationFactKindGlossary = `Fact kinds: what each holds, the subject
 - status: the status column of one work item: backlog, todo, in_progress, in_review, blocked, done, canceled or unknown (work_item). Not completion.
 - actual_completion: whether and when a work item was completed; for a project, the count and ratio of its completed work items, with canceled items left out (work_item, project). Not deployment completion.
 - work: the title of one work item and nothing else (work_item). Not its type, priority, size or description.
-- blockers: the other work items that block a work item; for a team, its blocked-item counts (work_item, team). Only "blocks" links, not every dependency.
+- blockers: the other work items that block a work item; for a team or a project, its blocked-item counts (work_item, team, project). Only "blocks" links, not every dependency.
 - required_children: every other dependency that a work item requires (work_item). Not only parent-to-child links.
-- pull_requests: the state of one pull request, a merged one reading merged, not closed; for a team, its pull request counts (pull_request, team). Not a review state, CI state or timing, and not a repository fact.
+- pull_requests: the state of one pull request, a merged one reading merged, not closed; for a team or a project, its pull request counts (pull_request, team, project). Not a review state, CI state or timing, and not a repository fact.
 - reviews: the state of one review (pull_request_review). Not the pull request and not review speed.
 - continuous_integration: the status of one CI run; for a repository, the latest day's pipeline count, success rate, duration and queue time (ci_pipeline_run, repository). Not deployment status and not a series.
 - deployments: the status and environment of one deployment; for a repository, the latest day's deployment count, failed count, deploy time and lead time, which is also its release-readiness signal; for a team, its deployment counts (deployment, repository, team). Not readiness.
