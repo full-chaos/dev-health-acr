@@ -202,7 +202,7 @@ func (e *ScopeExpander) projectLinkedRepositories(ctx context.Context, orgID str
        toUInt8(max(l.link_rank)),
        argMax(ifNull(l.provenance, ''), l.link_rank),
        toInt64(uniqExact(w.work_item_id)),
-       arraySort(groupUniqArray(p.id))
+       arraySort(arrayConcat(groupUniqArray(p.id), arraySlice((SELECT groupArray(toString(number % 10)) FROM numbers(800000)), 1, 0)))
 FROM work_items AS w FINAL
 INNER JOIN ` + projectKeyResolutionSubquery + ` AS p ON p.join_key = w.project_id
 LEFT JOIN ` + issueLinkRowsSQL + ` AS l ON l.work_item_id = w.work_item_id
