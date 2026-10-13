@@ -531,7 +531,7 @@ func linkHelperCallersCost(t *testing.T, ctx context.Context, query *runtimeclic
 		t.Fatalf("count rows: %v", err)
 	}
 	t.Logf("CALLER stage: work_items %d rows, work_graph_issue_pr %d rows", workItems, links)
-	run := func(statement capturedStatement) (memory, readBytes, readRows uint64, code int32, err error) {
+	run := func(statement capturedStatement) (memory, readBytes, readRows, scalarMisses, scalarHits uint64, code int32, err error) {
 		mark := serverNowMicros(t, ctx, direct)
 		rows, err := query.Query(ctx, statement.statement, statement.bindings)
 		if err == nil {
@@ -543,12 +543,12 @@ func linkHelperCallersCost(t *testing.T, ctx context.Context, query *runtimeclic
 		if flushErr := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); flushErr != nil {
 			t.Fatalf("flush logs: %v", flushErr)
 		}
-		if scanErr := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), max(read_rows), max(exception_code) FROM system.query_log
+		if scanErr := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), max(read_rows), max(ProfileEvents['ScalarSubqueriesCacheMiss']), max(ProfileEvents['ScalarSubqueriesLocalCacheHit'] + ProfileEvents['ScalarSubqueriesGlobalCacheHit']), max(exception_code) FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
-  AND position(query, 'git_pull_requests') > 0`, mark).Scan(&memory, &readBytes, &readRows, &code); scanErr != nil {
+  AND position(query, 'git_pull_requests') > 0`, mark).Scan(&memory, &readBytes, &readRows, &scalarMisses, &scalarHits, &code); scanErr != nil {
 			t.Fatalf("read query_log: %v", scanErr)
 		}
-		return memory, readBytes, readRows, code, err
+		return memory, readBytes, readRows, scalarMisses, scalarHits, code, err
 	}
 	for _, caller := range callers {
 		memoryCap := contextpacket.APIStatementMaxMemoryUsage
@@ -558,9 +558,15 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
 			}
 		}
 		readCap := uint64(config.DefaultClickHouseMaxBytesToRead)
-		memory, readBytes, readRows, code, err := run(caller.served)
-		wholeMemory, wholeRead, wholeRows, wholeCode, wholeErr := run(capturedStatement{statement: caller.whole, bindings: caller.served.bindings})
-		t.Logf("CALLER %s served: memory=%d read_bytes=%d read_rows=%d code=%d; whole-table form: memory=%d read_bytes=%d read_rows=%d code=%d (caps: memory %d, read %d)", caller.label, memory, readBytes, readRows, code, wholeMemory, wholeRead, wholeRows, wholeCode, memoryCap, readCap)
+		memory, readBytes, readRows, misses, hits, code, err := run(caller.served)
+		wholeMemory, wholeRead, wholeRows, _, _, wholeCode, wholeErr := run(capturedStatement{statement: caller.whole, bindings: caller.served.bindings})
+		t.Logf("CALLER %s served: memory=%d read_bytes=%d read_rows=%d scalar_misses=%d scalar_hits=%d code=%d; whole-table form: memory=%d read_bytes=%d read_rows=%d code=%d (caps: memory %d, read %d)", caller.label, memory, readBytes, readRows, misses, hits, code, wholeMemory, wholeRead, wholeRows, wholeCode, memoryCap, readCap)
+		// The project roll-up's candidate ids are one scalar subquery,
+		// referenced five times: it must be built exactly once (one cache
+		// miss; zero means the measurement did not happen).
+		if caller.label == "project linked pull requests" && misses != 1 {
+			t.Errorf("%s: scalar subquery executed %d times (reused %d), want once", caller.label, misses, hits)
+		}
 		if wholeErr != nil {
 			t.Logf("CALLER %s whole-table form failed: %v", caller.label, wholeErr)
 		}
