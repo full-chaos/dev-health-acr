@@ -1076,7 +1076,13 @@ import (
 // identity's stats instead of the three per-map copies Ops writes, and its
 // rows no longer carry map_name. An answer saved under v212 holds every
 // churn, delivery and identity count three times.
-const QueryVersion = "devhealthfacts.clickhouse.v213"
+//
+// v213 -> v214: a team whose owned repositories hold work units that all have
+// zero persisted effort is named investment_team_effort_not_measurable, with
+// the unit count, instead of investment_team_no_unit_in_window. Still no fact
+// and no zero mix. An answer saved under v213 states the false reason that no
+// effort was persisted.
+const QueryVersion = "devhealthfacts.clickhouse.v214"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

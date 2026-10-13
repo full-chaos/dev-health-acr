@@ -117,6 +117,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	var projectsNoMix []contextfabric.SubjectRef
 	var teamsRequested int
 	var teamsOwningNothing, teamsNoUnit []contextfabric.SubjectRef
+	var teamsZeroEffort []teamZeroEffort
 	var teamLinksUnwindowed bool
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		// CHAOS-6559: a team's investment is ONLY the canonical theme mix
@@ -125,20 +126,20 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		// beside the mix they buried it (the model answered from the day rows
 		// and said no shares existed), and without a mix they stood in for
 		// it. A team with no mix is disclosed as unavailable instead.
-		teamRejected, unavailable, noOwned, noUnit, linksUnwindowed, scanErr := p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound)
+		teamRejected, unavailable, noOwned, noUnit, noEffort, linksUnwindowed, scanErr := p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team theme mix", scanErr)
 		}
 		rejectedCount += teamRejected
 		teamLinksUnwindowed = linksUnwindowed
-		teamsOwningNothing, teamsNoUnit = noOwned, noUnit
+		teamsOwningNothing, teamsNoUnit, teamsZeroEffort = noOwned, noUnit, noEffort
 		teamsRequested = len(teamSubjects) - teamRejected
 		if unavailable > 0 {
 			watermark, watermarkErr := p.readInvestmentWatermark(ctx, orgID)
 			if watermarkErr != nil {
 				return contextfabric.FactProviderResult{}, readFailure("query investment watermark", watermarkErr)
 			}
-			mixUnavailable = investmentMixUnavailableReason(unavailable, len(noOwned), len(teamSubjects)-teamRejected, watermark)
+			mixUnavailable = investmentMixUnavailableReason(unavailable, len(noOwned), noEffort, len(teamSubjects)-teamRejected, watermark)
 		}
 	}
 
@@ -247,6 +248,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if mixUnavailable != "" {
 		addRequestNote(&result, mixUnavailable)
 		addSubjectReasons(&result, teamsNoUnit, investmentTeamNoUnitReason)
+		for _, z := range teamsZeroEffort {
+			addSubjectReasons(&result, []contextfabric.SubjectRef{z.subject}, investmentTeamEffortNotMeasurableOwnReason(z.units))
+		}
 	}
 	if len(projectsNoMix) > 0 {
 		addRequestNote(&result, investmentProjectNoCanonicalMixReason(len(projectsNoMix), len(subjectsOfKind(query.Subjects, contextfabric.SubjectProject))-rejectedProjectCount(query.Subjects)))
@@ -320,10 +324,10 @@ var canonicalInvestmentThemes = [...]string{
 // exactly nothing" rather than "we have no mix to report". Such teams are
 // counted in unavailable so the caller can say so; shapeRejected counts
 // subjects whose id did not have the team shape (CHAOS-5026).
-func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (shapeRejected, unavailable int, noOwned, noUnit []contextfabric.SubjectRef, linksUnwindowed bool, err error) {
+func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (shapeRejected, unavailable int, noOwned, noUnit []contextfabric.SubjectRef, noEffort []teamZeroEffort, linksUnwindowed bool, err error) {
 	ids, bySubject, shapeRejected := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
-		return shapeRejected, 0, nil, nil, false, nil
+		return shapeRejected, 0, nil, nil, nil, false, nil
 	}
 	// CHAOS-6559 (chris ruling 2026-09-24): a team's mix is the SUM of the
 	// mixes of the repositories the team OWNS (team_repo_ownership), each
@@ -335,9 +339,9 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		duration := timeBound.end.Sub(timeBound.start)
 		priorBound = &factTimeBound{active: true, hasStart: true, start: timeBound.start.Add(-duration), end: timeBound.start}
 	}
-	current, prior, owned, linked, projectTeams, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
+	current, prior, owned, ownedUnits, linked, projectTeams, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
 	if err != nil {
-		return shapeRejected, 0, nil, nil, false, err
+		return shapeRejected, 0, nil, nil, nil, false, err
 	}
 	// A team also reaches repositories through its owned projects' linked
 	// pull requests: those count only their linked pull requests (linked), and
@@ -352,7 +356,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 	if len(projectTeams) > 0 {
 		reachedRepos, reachErr := teamProjectReachedRepositories(ctx, p.facts.client, orgID, projectTeams, timeBound)
 		if reachErr != nil {
-			return shapeRejected, 0, nil, nil, false, reachErr
+			return shapeRejected, 0, nil, nil, nil, false, reachErr
 		}
 		reachedOnly = reachedOnlyRepositories(reachedRepos, ownedRepos)
 	}
@@ -371,6 +375,8 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 			unavailable++
 			if len(owned[teamID]) == 0 && len(reachedOnly[teamID]) == 0 {
 				noOwned = append(noOwned, subject)
+			} else if units := ownedUnits[teamID]; units > 0 {
+				noEffort = append(noEffort, teamZeroEffort{subject: subject, units: units})
 			} else {
 				noUnit = append(noUnit, subject)
 			}
@@ -422,7 +428,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
-	return shapeRejected, unavailable, noOwned, noUnit, linksUnwindowed, nil
+	return shapeRejected, unavailable, noOwned, noUnit, noEffort, linksUnwindowed, nil
 }
 
 // investmentWatermarkStatement reads the newest computed_at of the org's
@@ -449,10 +455,11 @@ func (p *InvestmentProvider) readInvestmentWatermark(ctx context.Context, orgID 
 
 // Closed reason set of an empty team window.
 const (
-	investmentTeamNoOwnedRepository = "investment_team_no_owned_repository"
-	investmentTeamNoUnitInWindow    = "investment_team_no_unit_in_window"
-	investmentTeamNoUnitReason      = "the team owns repositories, and none of them has persisted work unit effort in the requested window"
-	investmentOwnershipAsSynced     = "investment_ownership_as_synced: team ownership is read from the synced ownership assertions (not historical); a past window includes every assertion not ended before the window start"
+	investmentTeamNoOwnedRepository   = "investment_team_no_owned_repository"
+	investmentTeamNoUnitInWindow      = "investment_team_no_unit_in_window"
+	investmentTeamEffortNotMeasurable = "investment_team_effort_not_measurable"
+	investmentTeamNoUnitReason        = "the team owns repositories, and none of them has persisted work unit effort in the requested window"
+	investmentOwnershipAsSynced       = "investment_ownership_as_synced: team ownership is read from the synced ownership assertions (not historical); a past window includes every assertion not ended before the window start"
 )
 
 // investmentProjectNoCanonicalMix is the closed reason token of a project that has no
@@ -498,15 +505,38 @@ func rejectedProjectCount(subjects []contextfabric.SubjectRef) int {
 	return n
 }
 
+// teamZeroEffort is a team whose owned repositories hold work units in the
+// window, all with zero persisted effort.
+type teamZeroEffort struct {
+	subject contextfabric.SubjectRef
+	units   int64
+}
+
+// investmentTeamEffortNotMeasurableOwnReason is the per-team reason of a team
+// whose units all carry zero effort. Effort is not measurable from this data
+// (no line counts, no linked commits, no cycle times). A unit whose commit
+// statistics were capped or never synced reads as effort 0, the same as a
+// measured zero: no partial marker is persisted, so the two are not told apart.
+func investmentTeamEffortNotMeasurableOwnReason(units int64) string {
+	return fmt.Sprintf("%s: %d work unit(s) attributed to the team's owned repositories in the requested window, all with zero persisted effort; effort not measurable (no line counts, no linked commits, no cycle times); an unmeasured or capped unit is not told apart from a measured zero, and no mix is served", investmentTeamEffortNotMeasurable, units)
+}
+
 // investmentMixUnavailableReason is the disclosure for teams that have no
 // canonical mix: unknown is not healthy and is not a zero mix (North Star
 // check 12), and the watermark says how fresh the data that was searched is.
-func investmentMixUnavailableReason(unavailable, noOwned, requested int, watermark string) string {
+func investmentMixUnavailableReason(unavailable, noOwned int, noEffort []teamZeroEffort, requested int, watermark string) string {
 	reason := fmt.Sprintf("investment mix unavailable for %d of %d requested teams", unavailable, requested)
 	if noOwned > 0 {
 		reason += fmt.Sprintf("; %s for %d: the team owns no repository", investmentTeamNoOwnedRepository, noOwned)
 	}
-	if noUnit := unavailable - noOwned; noUnit > 0 {
+	if len(noEffort) > 0 {
+		units := int64(0)
+		for _, z := range noEffort {
+			units += z.units
+		}
+		reason += fmt.Sprintf("; %s for %d: the team's owned repositories hold %d work unit(s) in the requested window, all with zero persisted effort; effort not measurable (no line counts, no linked commits, no cycle times); an unmeasured or capped unit is not told apart from a measured zero", investmentTeamEffortNotMeasurable, len(noEffort), units)
+	}
+	if noUnit := unavailable - noOwned - len(noEffort); noUnit > 0 {
 		reason += fmt.Sprintf("; %s for %d: no repository the team owns and no pull request linked to its owned projects has persisted work unit effort in the requested window", investmentTeamNoUnitInWindow, noUnit)
 	}
 	if watermark == "" {
