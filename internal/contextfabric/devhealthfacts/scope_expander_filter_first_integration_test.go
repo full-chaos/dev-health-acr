@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
@@ -352,7 +354,8 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 
 	fillScopeOrganization(t, ctx, direct, fixture, "small", 100_000)
 	unmerged(t, "small")
-	t.Run("link helper callers outside the expander", func(t *testing.T) { linkHelperCallersDifferential(t, ctx, query, fixture) })
+	var callers []linkHelperCaller
+	t.Run("link helper callers outside the expander", func(t *testing.T) { callers = linkHelperCallersDifferential(t, ctx, query, fixture) })
 	mergeScopeTables(t, ctx, direct)
 	smallStatements := served(t)
 	t.Run("rows at the smaller size", func(t *testing.T) { differential(t, smallStatements) })
@@ -360,6 +363,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	small := measure(t, smallStatements)
 	fillScopeOrganization(t, ctx, direct, fixture, "large", 200_000)
 	unmerged(t, "large")
+	t.Run("link helper callers at the larger size", func(t *testing.T) { linkHelperCallersCost(t, ctx, query, direct, callers) })
 	mergeScopeTables(t, ctx, direct)
 	largeStatements := served(t)
 	t.Run("rows at the larger size", func(t *testing.T) { differential(t, largeStatements) })
@@ -428,7 +432,15 @@ var linkHelperCallerSites = []struct{ label, fragment string }{
 // teams, projects and repository through the real providers, and compares
 // each statement that reads the narrowed pull request rows with the same
 // statement over the whole pull request table: the rows must be equal.
-func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, f everyRootFixture) {
+// linkHelperCaller is one statement outside the expander that reads the
+// narrowed pull request rows, with its whole-table reference form.
+type linkHelperCaller struct {
+	label  string
+	served capturedStatement
+	whole  string
+}
+
+func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, f everyRootFixture) []linkHelperCaller {
 	recorder := &recordingQueryClient{inner: query}
 	principal := storage.Principal{OrgID: f.orgID, RepositoryScopes: []string{"*"}}
 	subjects := []contextfabric.SubjectRef{f.teamA, f.teamB, f.projectP, f.projectQ, {Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + f.shared, Label: "acme/shared"}}
@@ -445,6 +457,7 @@ func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *run
 	recorder.mu.Unlock()
 	reached := map[string]int{}
 	compared := 0
+	var callers []linkHelperCaller
 	for _, statement := range captured {
 		whole, rewritten, ok := devhealthfacts.UnprunedPullRequestStatementForTest(statement.statement)
 		if !ok {
@@ -453,11 +466,14 @@ func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *run
 		if rewritten == 0 {
 			continue
 		}
+		label := "other"
 		for _, site := range linkHelperCallerSites {
 			if strings.Contains(statement.statement, site.fragment) {
 				reached[site.label]++
+				label = site.label
 			}
 		}
+		callers = append(callers, linkHelperCaller{label: label, served: statement, whole: whole})
 		head, _, _ := strings.Cut(strings.TrimSpace(statement.statement), "\n")
 		t.Logf("DIFFERENTIAL comparing %.120s", head)
 		narrowed := scopeRows(t, ctx, query, statement)
@@ -476,5 +492,59 @@ func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *run
 	}
 	if compared == 0 {
 		t.Fatal("no statement read the narrowed pull request rows")
+	}
+	return callers
+}
+
+// linkHelperCallersCost runs each link helper caller as served, and its
+// whole-table reference form, at the larger size, and holds the served form
+// under the caps production applies: its own max_memory_usage or the API
+// statement default, and the client's max_bytes_to_read.
+func linkHelperCallersCost(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, callers []linkHelperCaller) {
+	if len(callers) == 0 {
+		t.Fatal("no link helper caller was captured at the smaller size")
+	}
+	run := func(statement capturedStatement) (memory, readBytes uint64, code int32, err error) {
+		mark := serverNowMicros(t, ctx, direct)
+		rows, err := query.Query(ctx, statement.statement, statement.bindings)
+		if err == nil {
+			for rows.Next() {
+			}
+			err = rows.Err()
+			_ = rows.Close()
+		}
+		if flushErr := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); flushErr != nil {
+			t.Fatalf("flush logs: %v", flushErr)
+		}
+		if scanErr := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), max(exception_code) FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND position(query, 'git_pull_requests') > 0`, mark).Scan(&memory, &readBytes, &code); scanErr != nil {
+			t.Fatalf("read query_log: %v", scanErr)
+		}
+		return memory, readBytes, code, err
+	}
+	for _, caller := range callers {
+		memoryCap := contextpacket.APIStatementMaxMemoryUsage
+		if at := strings.Index(caller.served.statement, "max_memory_usage = "); at >= 0 {
+			if _, scanErr := fmt.Sscanf(caller.served.statement[at:], "max_memory_usage = %d", &memoryCap); scanErr != nil {
+				t.Fatalf("%s: unreadable max_memory_usage: %v", caller.label, scanErr)
+			}
+		}
+		readCap := uint64(config.DefaultClickHouseMaxBytesToRead)
+		memory, readBytes, code, err := run(caller.served)
+		wholeMemory, wholeRead, wholeCode, wholeErr := run(capturedStatement{statement: caller.whole, bindings: caller.served.bindings})
+		t.Logf("CALLER %s served: memory=%d read_bytes=%d code=%d; whole-table form: memory=%d read_bytes=%d code=%d (caps: memory %d, read %d)", caller.label, memory, readBytes, code, wholeMemory, wholeRead, wholeCode, memoryCap, readCap)
+		if wholeErr != nil {
+			t.Logf("CALLER %s whole-table form failed: %v", caller.label, wholeErr)
+		}
+		if err != nil || code != 0 {
+			t.Errorf("%s: the served statement failed at the larger size (code %d): %v", caller.label, code, err)
+		}
+		if memory == 0 || memory >= memoryCap {
+			t.Errorf("%s: served peak memory %d, want above 0 and under %d", caller.label, memory, memoryCap)
+		}
+		if readBytes >= readCap {
+			t.Errorf("%s: served read %d bytes, want under %d", caller.label, readBytes, readCap)
+		}
 	}
 }
