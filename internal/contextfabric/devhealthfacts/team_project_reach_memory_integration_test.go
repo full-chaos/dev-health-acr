@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -14,13 +15,22 @@ import (
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
-const projectReachMemoryOrg = "b7a41c9e-2d63-4f85-a1e0-6c93d8f20b47"
+const (
+	projectReachMemoryOrg            = "b7a41c9e-2d63-4f85-a1e0-6c93d8f20b47"
+	projectReachInterleavedMemoryOrg = "3e9d17b2-5a48-4c06-9f1d-8b27c4e6a053"
+	projectReachReadBytesSlope       = 1.15
+)
+
+var projectReachFillerPrefix = "filler-" + strings.Repeat("x", 96) + "-"
 
 // The repositories a team reaches through its owned projects' linked pull
 // requests are read from the issues of those projects only. The cost of the
 // reads follows the owned projects, not the size of the organization's work
 // item table; work items of other teams' projects, and work items of no
-// project, are never counted into the reach.
+// project, are never counted into the reach. The interleaved shape puts the
+// linked issues in the filler's repository with ids inside the filler's id
+// range and merges the table to one part, so linked and unlinked work items
+// share granules.
 func TestTeamProjectReachedRepositoriesFollowOwnedProjectsNotOrganizationSizeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
@@ -35,6 +45,15 @@ func TestTeamProjectReachedRepositoriesFollowOwnedProjectsNotOrganizationSizeOnR
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
+	t.Run("clustered", func(t *testing.T) {
+		measureProjectReachedRead(t, ctx, query, direct, projectReachMemoryOrg, false)
+	})
+	t.Run("interleaved", func(t *testing.T) {
+		measureProjectReachedRead(t, ctx, query, direct, projectReachInterleavedMemoryOrg, true)
+	})
+}
+
+func measureProjectReachedRead(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org string, interleaved bool) {
 	at := ts(2026, 9, 29, 0, 0, 0)
 	exec := func(statement string, args ...any) {
 		t.Helper()
@@ -42,46 +61,65 @@ func TestTeamProjectReachedRepositoriesFollowOwnedProjectsNotOrganizationSizeOnR
 			t.Fatalf("seed: %v\n%s", err, statement)
 		}
 	}
+	itemID := func(label, interleavedNumber string) string {
+		if interleaved {
+			return projectReachFillerPrefix + interleavedNumber + "-" + label
+		}
+		return label
+	}
+	reachedItem, weakItem := itemID("i-reached", "31000"), itemID("i-weak", "92000")
+	otherTeamItem, noProjectItem := itemID("i-other-team", "157000"), itemID("i-no-project", "218000")
 	const teamID, otherTeamID, project, otherProject = "team-owner", "team-other", "proj-owner", "proj-other"
 	for _, label := range []string{"repo-reached", "repo-other-team", "repo-filler"} {
-		exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID(label), projectReachMemoryOrg, "acme/"+label, "github", at)
+		exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID(label), org, "acme/"+label, "github", at)
 	}
 	for _, team := range []string{teamID, otherTeamID} {
 		exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
-			team, team, at, projectReachMemoryOrg, "linear", uint8(1))
+			team, team, at, org, "linear", uint8(1))
 	}
 	for _, owned := range []struct{ team, project string }{{teamID, project}, {otherTeamID, otherProject}} {
 		exec(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			owned.project, projectReachMemoryOrg, "linear", nil, owned.project, uint8(1), "active", "", at)
+			owned.project, org, "linear", nil, owned.project, uint8(1), "active", "", at)
 		exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			projectReachMemoryOrg, "linear", owned.team, owned.project, nil, "native", ts(2026, 1, 1, 0, 0, 0), nil, at)
+			org, "linear", owned.team, owned.project, nil, "native", ts(2026, 1, 1, 0, 0, 0), nil, at)
 	}
-	for _, item := range []struct{ id, project string }{{"i-reached", project}, {"i-weak", project}, {"i-other-team", otherProject}, {"i-no-project", ""}} {
+	for _, item := range []struct{ id, project string }{{reachedItem, project}, {weakItem, project}, {otherTeamItem, otherProject}, {noProjectItem, ""}} {
 		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL)`,
-			item.id, repoUUID("repo-filler"), projectReachMemoryOrg, "title "+item.id, at, item.project)
+			item.id, repoUUID("repo-filler"), org, "title "+item.id, at, item.project)
 	}
 	for _, pr := range []struct {
 		repo   string
 		number uint32
 	}{{"repo-reached", 1}, {"repo-reached", 2}, {"repo-other-team", 3}, {"repo-other-team", 4}} {
 		exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
-			repoUUID(pr.repo), projectReachMemoryOrg, pr.number, "pr", "open", at, at, "feature", "")
+			repoUUID(pr.repo), org, pr.number, "pr", "open", at, at, "feature", "")
 	}
 	for _, link := range []struct {
 		item, repo, tier string
 		number           uint32
 	}{
-		{"i-reached", "repo-reached", "native", 1},
-		{"i-weak", "repo-reached", "heuristic", 2},
-		{"i-other-team", "repo-other-team", "native", 3},
-		{"i-no-project", "repo-other-team", "native", 4},
+		{reachedItem, "repo-reached", "native", 1},
+		{weakItem, "repo-reached", "heuristic", 2},
+		{otherTeamItem, "repo-other-team", "native", 3},
+		{noProjectItem, "repo-other-team", "native", 4},
 	} {
 		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			repoUUID(link.repo), link.item, link.number, float32(1), link.tier, "", at, projectReachMemoryOrg)
+			repoUUID(link.repo), link.item, link.number, float32(1), link.tier, "", at, org)
 	}
-	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
-SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?)`,
-		repoUUID("repo-filler"), projectReachMemoryOrg, at, uint64(blockerMemoryFillerItems))
+	addFiller := func(suffix string, items int) {
+		t.Helper()
+		id := `concat('filler-` + suffix + `', repeat('x', 96), '-', toString(number))`
+		if interleaved {
+			id = `concat('` + projectReachFillerPrefix + `', toString(number), '` + suffix + `')`
+		}
+		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
+SELECT `+id+`, ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?)`,
+			repoUUID("repo-filler"), org, at, uint64(items))
+		if interleaved {
+			exec(`OPTIMIZE TABLE work_items FINAL`)
+		}
+	}
+	addFiller("", blockerMemoryFillerItems)
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactPullRequests)
 	window := contractsv1TimeContext(ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 30, 23, 59, 59))
@@ -89,7 +127,7 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 	read := func() (statementMemory, contextfabric.FactProviderResult, error) {
 		mark := serverNowMicros(t, ctx, direct)
 		lastMark = mark
-		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: projectReachMemoryOrg, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: org, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
 			Time: window, Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{teamSubject(teamID)},
 		})
 		return statementMemorySince(t, ctx, direct, statementFilter{Table: "team_project_ownership", QueryContains: "work_graph_issue_pr"}, mark), result, err
@@ -99,14 +137,18 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 	}
 	small, smallResult, smallErr := read()
 	smallBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
-	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
-SELECT concat('filler-more-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?)`,
-		repoUUID("repo-filler"), projectReachMemoryOrg, at, uint64(blockerMemoryMoreFillerItems))
+	addFiller("more-", blockerMemoryMoreFillerItems)
 	large, largeResult, largeErr := read()
 	largeBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
-	t.Logf("read_bytes of the project-reached statements: %d at the smaller size, %d at the larger", smallBytes, largeBytes)
+	t.Logf("read_bytes of the project-reached statements: %d at %d filler work items, %d at %d", smallBytes, blockerMemoryFillerItems, largeBytes, blockerMemoryFillerItems+blockerMemoryMoreFillerItems)
 	// The reach read and the linked pull request read run on every read.
 	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team project-reached repository statements", small, large, 2)
+	if smallBytes == 0 {
+		t.Fatalf("read_bytes measurement did not happen: no project-reached statement logged at the smaller size")
+	}
+	if float64(largeBytes) > projectReachReadBytesSlope*float64(smallBytes) {
+		t.Errorf("project-reached statements' read_bytes grew with the organization's work items: %d at the larger size, %d at the smaller, over the %.2fx slope", largeBytes, smallBytes, projectReachReadBytesSlope)
+	}
 	for _, read := range []struct {
 		result contextfabric.FactProviderResult
 		err    error
