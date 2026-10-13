@@ -38,24 +38,30 @@ func servedRoles(t *testing.T, evidence []contractsv1.EvidenceRef) (map[string]c
 	return roles, packet
 }
 
+func deploymentRow(id, deploymentID, status, pullRequest string, at time.Time) contractsv1.EvidenceRef {
+	ref := roleRow(id, "deployment", deploymentID, "production deployment", "status="+status, at)
+	ref.Metadata = map[string]any{"deployment_status": status, "pull_request_number": pullRequest}
+	return ref
+}
+
 func TestCheckoutShapeServesFailuresAsPressureAndOnlyLinkedChangesAsCause(t *testing.T) {
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	const featureA, featureB, regression, hotfix = "aaaaaaa1111111111111111111111111111111aa", "bbbbbbb2222222222222222222222222222222bb", "ccccccc3333333333333333333333333333333cc", "ddddddd4444444444444444444444444444444dd"
 	evidence := []contractsv1.EvidenceRef{
-		roleRow("ev-c-feat-a", "commit", featureA, "One-page checkout", "One-page checkout", at),
-		roleRow("ev-c-feat-b", "commit", featureB, "Saved payment methods at checkout", "Saved payment methods at checkout", at),
-		roleRow("ev-c-regress", "commit", regression, "Regression: delivery slots show past times", "Regression: delivery slots show past times", at),
-		roleRow("ev-c-hotfix", "commit", hotfix, "Hotfix: gift cards double-applied", "Hotfix: gift cards double-applied", at),
-		roleRow("ev-d-ok-1", "deployment", "dep-1", "production deployment", "status=success, release_ref="+featureA, at),
-		roleRow("ev-d-fail-1", "deployment", "dep-2", "production deployment", "status=failed, release_ref="+regression, at),
-		roleRow("ev-d-fail-2", "deployment", "dep-3", "production deployment", "status=failed, release_ref="+hotfix, at),
+		roleRow("ev-pr-feat-a", "pull_request", "41", "One-page checkout", "merged", at),
+		roleRow("ev-pr-feat-b", "pull_request", "40", "Saved payment methods at checkout", "merged", at),
+		roleRow("ev-pr-regress", "pull_request", "42", "Regression: delivery slots show past times", "merged", at),
+		roleRow("ev-pr-hotfix", "pull_request", "43", "Hotfix: gift cards double-applied", "merged", at),
+		roleRow("ev-c-feat-a", "commit", "aaaaaaa1111111111111111111111111111111aa", "One-page checkout", "One-page checkout", at),
+		deploymentRow("ev-d-ok-1", "9001", "success", "41", at),
+		deploymentRow("ev-d-fail-1", "9002", "failure", "42", at),
+		deploymentRow("ev-d-fail-2", "9003", "failed", "43", at),
 		roleRow("ev-ci-ok", "ci_pipeline_run", "run-1", "CI run-1", "success", at),
 		roleRow("ev-ci-bad", "ci_pipeline_run", "run-2", "CI run-2", "failed", at),
 	}
 	roles, packet := servedRoles(t, evidence)
 	want := map[string]contractsv1.PacketCategory{
-		"ev-c-feat-a": contractsv1.CategoryEvidence, "ev-c-feat-b": contractsv1.CategoryEvidence,
-		"ev-c-regress": contractsv1.CategoryCause, "ev-c-hotfix": contractsv1.CategoryCause,
+		"ev-pr-feat-a": contractsv1.CategoryEvidence, "ev-pr-feat-b": contractsv1.CategoryEvidence, "ev-c-feat-a": contractsv1.CategoryEvidence,
+		"ev-pr-regress": contractsv1.CategoryCause, "ev-pr-hotfix": contractsv1.CategoryCause,
 		"ev-d-ok-1": contractsv1.CategoryState, "ev-d-fail-1": contractsv1.CategoryPressure, "ev-d-fail-2": contractsv1.CategoryPressure,
 		"ev-ci-ok": contractsv1.CategoryEvidence, "ev-ci-bad": contractsv1.CategoryPressure,
 	}
@@ -93,20 +99,23 @@ func TestACommitIsNotCauseByTimeOrderOrOpenIncidentAlone(t *testing.T) {
 
 func TestIncidentLinkedDeploymentAndRevertMakeTheCarriedChangeACause(t *testing.T) {
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	const carried, reverted = "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "2222222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const reverted = "2222222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	edge := roleRow("ev-e-link", "deployment_incident_edge", "edge-1", "dep-9 linked to inc-9", "edge_id=edge-1", at)
+	edge.Metadata = map[string]any{"deployment_id": "dep-9"}
 	evidence := []contractsv1.EvidenceRef{
-		roleRow("ev-c-carried", "commit", carried, "slots", "slots", at),
+		roleRow("ev-pr-carried", "pull_request", "77", "Slots", "merged", at),
+		roleRow("ev-pr-other", "pull_request", "78", "Unrelated", "merged", at),
 		roleRow("ev-c-reverted", "commit", reverted, "gift cards", "gift cards", at),
 		roleRow("ev-c-revert", "commit", "3333333cccccccccccccccccccccccccccccccc", "Revert gift cards", "Revert gift cards\n\nThis reverts commit "+reverted+".", at),
-		roleRow("ev-d-green", "deployment", "dep-9", "production deployment", "status=success, release_ref="+carried, at),
-		roleRow("ev-e-link", "deployment_incident_edge", "edge-1", "dep-9 linked to inc-9", "edge_id=edge-1", at),
+		deploymentRow("ev-d-green", "dep-9", "success", "77", at),
+		edge,
 	}
 	roles, _ := servedRoles(t, evidence)
-	if roles["ev-c-carried"] != contractsv1.CategoryCause || roles["ev-c-reverted"] != contractsv1.CategoryCause {
+	if roles["ev-pr-carried"] != contractsv1.CategoryCause || roles["ev-c-reverted"] != contractsv1.CategoryCause {
 		t.Errorf("roles = %v", roles)
 	}
-	if roles["ev-c-revert"] != contractsv1.CategoryEvidence {
-		t.Errorf("the reverting commit served as %q, want evidence", roles["ev-c-revert"])
+	if roles["ev-pr-other"] != contractsv1.CategoryEvidence || roles["ev-c-revert"] != contractsv1.CategoryEvidence {
+		t.Errorf("roles = %v", roles)
 	}
 }
 
