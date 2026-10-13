@@ -6,6 +6,8 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -15,6 +17,7 @@ import (
 )
 
 func TestLandscapeDoesNotCountRetractedRows(t *testing.T) {
+	logs := captureDebugLogs(t)
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	for _, statement := range devhealthschema.DDL("ic_landscape_rolling_30d") {
@@ -81,5 +84,22 @@ func TestLandscapeDoesNotCountRetractedRows(t *testing.T) {
 	olderRow := older.Facts[0].Fields["area_breakdown"].Rows[0]
 	if got := *olderRow.Fields["as_of_day"].String; got != "2026-06-20" {
 		t.Fatalf("as_of_day = %s, want 2026-06-20: a retracted day is not the latest day", got)
+	}
+
+	var sawDropped, sawWithoutLive bool
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var entry map[string]any
+		if json.Unmarshal([]byte(line), &entry) != nil || entry["msg"] != "devhealthfacts.landscape_retracted_rows" {
+			continue
+		}
+		if entry["retracted_rows"] == float64(1) && entry["groups_without_live_rows"] == float64(0) {
+			sawDropped = true
+		}
+		if entry["retracted_rows"] == float64(1) && entry["groups_without_live_rows"] == float64(1) {
+			sawWithoutLive = true
+		}
+	}
+	if !sawDropped || !sawWithoutLive {
+		t.Fatalf("the retraction decision is not in the read's own log (dropped=%v, without live rows=%v): %s", sawDropped, sawWithoutLive, logs.String())
 	}
 }
