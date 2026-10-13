@@ -1079,7 +1079,13 @@ import (
 //
 // v213 -> v214: the security_alerts fact kind is served for a repository.
 // An answer saved under v213 cannot carry it.
-const QueryVersion = "devhealthfacts.clickhouse.v214"
+//
+// v214 -> v215: the blocker statements authorize their edge endpoints without
+// the library's organization-wide relation for an organization-wide grant, and
+// read it once, apart from the statements, for any other caller. The rows are
+// unchanged; the statements and their memory are not, so an answer saved under
+// v214 is not reused as one produced by the new statements.
+const QueryVersion = "devhealthfacts.clickhouse.v215"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
