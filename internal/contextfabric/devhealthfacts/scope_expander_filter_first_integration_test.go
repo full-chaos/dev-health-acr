@@ -23,6 +23,13 @@ import (
 // either size: half of the work-item reader's 64 MiB statement cap.
 const scopeStatementCeiling = uint64(32 << 20)
 
+// slopeFloors replaces the slope floor for the two historical statements:
+// their peak moves up to 6.6 MB between runs of one dataset
+// (hosted run 38463043081, 12 samples, 18.7-24.0 MB at both sizes, no trend
+// with size), so 8 MiB is the measured spread plus margin. The 1.15x rule is
+// unchanged, and growth the organization-wide form shows is +300 MB.
+var slopeFloors = map[string]uint64{"historicalDropCount": 8 << 20, "historicalTouchCount": 8 << 20}
+
 // workItemSelectionCeiling bounds the two work-item selections, whose
 // authorization relations cost a fixed amount per thread: the peak measured
 // at two threads on merged parts (21.8 MB at 100k and 300k unrelated work
@@ -378,8 +385,8 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
 	// the smaller size's AND over it by more than a fixed floor. A cost that
 	// grows with the rows lifts all three runs, so the minimum carries it;
 	// the floor keeps a small statement's jitter out.
-	grew := func(small, large variant) bool {
-		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+arrayMemoryFloor
+	grew := func(small, large variant, floor uint64) bool {
+		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+floor
 	}
 
 	// The guard reads merged parts; production tables are not one part, so
@@ -426,7 +433,11 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
 		if s.scoped.peak == 0 || l.scoped.peak == 0 || s.orgWide.peak == 0 || l.orgWide.peak == 0 {
 			t.Fatalf("%s: measurement did not happen (small %+v, large %+v)", label, s, l)
 		}
-		if grew(s.scoped, l.scoped) {
+		floor := arrayMemoryFloor
+		if own, ok := slopeFloors[label]; ok {
+			floor = own
+		}
+		if grew(s.scoped, l.scoped, floor) {
 			t.Errorf("%s grew with unrelated organization rows: %d bytes at the larger size, %d at the smaller", label, l.scoped.peak, s.scoped.peak)
 		}
 		ceiling := scopeStatementCeiling
@@ -439,7 +450,7 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
 			}
 		}
 		if !statement.threadBound {
-			if !grew(s.orgWide, l.orgWide) {
+			if !grew(s.orgWide, l.orgWide, floor) {
 				t.Errorf("%s: the organization-wide form did not grow (%d bytes at the larger size, %d at the smaller): the guard cannot fail on this data", label, l.orgWide.peak, s.orgWide.peak)
 			}
 			continue
