@@ -35,7 +35,7 @@ func evidenceCategoryRule(ref contractsv1.EvidenceRef) rule {
 			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1}
 		}
 	case "deployment":
-		if citationShowsFailure(ref.Citation) {
+		if deploymentFailed(ref) {
 			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1}
 		}
 		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0}

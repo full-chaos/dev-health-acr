@@ -40,40 +40,35 @@ func incidentIsOpen(citation string) bool {
 
 var revertedCommitPattern = regexp.MustCompile(`(?i)\breverts? commit ([0-9a-f]{7,64})\b`)
 
-func releaseRefOf(citation string) string {
-	index := strings.Index(citation, "release_ref=")
-	if index < 0 {
-		return ""
-	}
-	value := citation[index+len("release_ref="):]
-	value, _, _ = strings.Cut(value, ",")
-	return strings.TrimSpace(value)
-}
-
-// linkedCauseRefs returns the evidence ids of commits tied to a failure by a
-// persisted link inside the same evidence set: a failed or incident-linked
-// deployment whose release_ref is the commit, or a later commit whose message
-// reverts it. Time order alone never makes a cause.
+// linkedCauseRefs returns the evidence ids tied to a failure by a persisted
+// link inside the same evidence set:
+//   - a pull request that a failed or incident-linked deployment carried
+//     (deployments.pull_request_number, set by the provider sync from the
+//     deployed commit's merged pull request or merge request);
+//   - a commit that a later commit's message reverts.
+//
+// Time order alone never makes a cause. Providers store no deployed commit
+// sha on the deployment, so a commit is a cause only through a revert.
 func linkedCauseRefs(evidence []contractsv1.EvidenceRef) map[string]bool {
 	incidentLinked := map[string]bool{}
 	for _, ref := range evidence {
 		if ref.Source.EntityType != "deployment_incident_edge" {
 			continue
 		}
-		if deploymentID, _, found := strings.Cut(ref.Source.DisplayLabel, " linked to "); found && deploymentID != "" {
+		if deploymentID, _ := ref.Metadata[metadataDeploymentID].(string); deploymentID != "" {
 			incidentLinked[deploymentID] = true
 		}
 	}
-	carried := map[string]bool{}
+	carriedPullRequests := map[string]bool{}
 	for _, ref := range evidence {
-		if ref.Source.EntityType != "deployment" || ref.Confidence < minimumEvidenceConfidence {
+		if ref.Source.EntityType != "deployment" || ref.Confidence < 0 {
 			continue
 		}
-		if !citationShowsFailure(ref.Citation) && !incidentLinked[ref.Source.EntityID] {
+		if !deploymentFailed(ref) && !incidentLinked[ref.Source.EntityID] {
 			continue
 		}
-		if sha := strings.ToLower(releaseRefOf(ref.Citation)); sha != "" {
-			carried[sha] = true
+		if number, _ := ref.Metadata[metadataPullRequestNumber].(string); number != "" {
+			carriedPullRequests[number] = true
 		}
 	}
 	reverted := map[string]bool{}
@@ -87,25 +82,38 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) map[string]bool {
 	}
 	causes := map[string]bool{}
 	for _, ref := range evidence {
-		if ref.Source.EntityType != "commit" {
-			continue
-		}
-		sha := strings.ToLower(ref.Source.EntityID)
-		if carried[sha] {
-			causes[ref.EvidenceRefID] = true
-			continue
-		}
-		for prefix := range reverted {
-			if strings.HasPrefix(sha, prefix) {
+		switch ref.Source.EntityType {
+		case "pull_request":
+			if carriedPullRequests[ref.Source.EntityID] {
 				causes[ref.EvidenceRefID] = true
-				break
+			}
+		case "commit":
+			sha := strings.ToLower(ref.Source.EntityID)
+			for prefix := range reverted {
+				if strings.HasPrefix(sha, prefix) {
+					causes[ref.EvidenceRefID] = true
+					break
+				}
 			}
 		}
 	}
 	return causes
 }
 
+// deploymentFailed reads the stored status the deployments statement carries as
+// a typed column.
+func deploymentFailed(ref contractsv1.EvidenceRef) bool {
+	status, _ := ref.Metadata[metadataDeploymentStatus].(string)
+	return failureTokens[strings.ToLower(strings.TrimSpace(status))]
+}
+
 type roleResolver map[string]rule
+
+const (
+	metadataDeploymentStatus  = "deployment_status"
+	metadataPullRequestNumber = "pull_request_number"
+	metadataDeploymentID      = "deployment_id"
+)
 
 func newRoleResolver(evidence []contractsv1.EvidenceRef) roleResolver {
 	resolver := roleResolver{}
