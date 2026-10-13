@@ -63,6 +63,8 @@ func TestTeamInvestmentServesEveryProviderAgainstRealClickHouse(t *testing.T) {
 		runs [][]string
 		// extraEvidence replaces one unit's evidence (an unresolved reference).
 		want map[string]float64
+		// token is the closed empty-cause token a team with no mix must name.
+		token map[string]string
 	}
 	all := unitsFor("")
 	ids := func(units []matrixUnit, keep func(matrixUnit) bool) []string {
@@ -80,13 +82,15 @@ func TestTeamInvestmentServesEveryProviderAgainstRealClickHouse(t *testing.T) {
 		{name: "no run recorded", org: "org-matrix-no-run", units: all, runs: nil, want: each},
 		{
 			name: "latest run holds only the non-gitlab units", org: "org-matrix-split-run", units: all,
-			runs: [][]string{ids(all, nil), ids(all, func(u matrixUnit) bool { return u.team != "team-gitlab" })},
-			want: each,
+			runs:  [][]string{ids(all, nil), ids(all, func(u matrixUnit) bool { return u.team != "team-gitlab" })},
+			want:  map[string]float64{"team-gitlab": 0, "team-github": 2, "team-jira": 2, "team-linear": 2},
+			token: map[string]string{"team-gitlab": "investment_team_units_outside_membership_run"},
 		},
 		{
 			name: "latest run holds only the github units", org: "org-matrix-github-run", units: all,
-			runs: [][]string{ids(all, nil), ids(all, func(u matrixUnit) bool { return u.team == "team-github" })},
-			want: each,
+			runs:  [][]string{ids(all, nil), ids(all, func(u matrixUnit) bool { return u.team == "team-github" })},
+			want:  map[string]float64{"team-gitlab": 0, "team-github": 2, "team-jira": 0, "team-linear": 0},
+			token: map[string]string{"team-gitlab": "investment_team_units_outside_membership_run", "team-jira": "investment_team_units_outside_membership_run", "team-linear": "investment_team_units_outside_membership_run"},
 		},
 	}
 	unresolved := []matrixUnit{
@@ -96,7 +100,8 @@ func TestTeamInvestmentServesEveryProviderAgainstRealClickHouse(t *testing.T) {
 		{"unres-lin", "team-linear", `{"issues":["linear:CHK-9"],"prs":["00000000-0000-0000-0000-000000000009#pr9"]}`},
 	}
 	scenarios = append(scenarios, scenario{
-		name: "one reference resolves to no repository", org: "org-matrix-unresolved", units: unresolved, runs: [][]string{ids(unresolved, nil)}, want: map[string]float64{"team-gitlab": 1, "team-github": 1, "team-jira": 1, "team-linear": 1},
+		name: "one reference resolves to no repository", org: "org-matrix-unresolved", units: unresolved, runs: [][]string{ids(unresolved, nil)}, want: map[string]float64{"team-gitlab": 0, "team-github": 0, "team-jira": 0, "team-linear": 0},
+		token: map[string]string{"team-gitlab": "investment_team_units_unattributed", "team-github": "investment_team_units_unattributed", "team-jira": "investment_team_units_unattributed", "team-linear": "investment_team_units_unattributed"},
 	})
 	for _, sc := range scenarios {
 		t.Run(sc.name, func(t *testing.T) {
@@ -157,6 +162,14 @@ func TestTeamInvestmentServesEveryProviderAgainstRealClickHouse(t *testing.T) {
 				}
 				t.Logf("MATRIX repository scenario=%q repo=%s facts=%d effort=%v err=%v reason=%q note=%q", sc.name, tm.repoLabel, len(repoResult.Facts), repoGot, repoErr, repoResult.Reason, repoResult.RequestNote)
 				t.Logf("MATRIX team note=%q", result.RequestNote)
+				if wantToken := sc.token[tm.id]; wantToken != "" {
+					served := contextfabric.CombineRequestNote(result.Reason, result.RequestNote) + " " + result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject(tm.id))]
+					if !strings.Contains(served, wantToken) {
+						t.Errorf("%s: served reason lacks %s: %q", tm.id, wantToken, served)
+					}
+				} else if sc.want[tm.id] == 0 {
+					t.Errorf("%s: scenario expects no mix and names no token", tm.id)
+				}
 				if got != sc.want[tm.id] {
 					t.Errorf("%s (%s) effort = %v, want %v (facts=%d reason=%q)", tm.id, tm.provider, got, sc.want[tm.id], len(result.Facts), result.Reason)
 				}
