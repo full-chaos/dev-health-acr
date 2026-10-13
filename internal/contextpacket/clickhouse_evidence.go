@@ -43,7 +43,7 @@ func (s *ClickHouseEvidenceStore) ResolveEvidence(ctx context.Context, principal
 	if !ok {
 		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
 	}
-	references, err := rows.ResolveEvidenceReference(ctx, principal.OrgID, routed, handle.QueryID, handle.LocatorHash())
+	references, err := rows.ResolveEvidenceReference(WithWorkItemGrant(ctx, auth.WorkItemRepositorySelectorSet(principal.RepositoryScopes, true)), principal.OrgID, routed, handle.QueryID, handle.LocatorHash())
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return contractsv1.ExpandedEvidence{}, fmt.Errorf("resolve evidence reference: %w", err)
 	}
