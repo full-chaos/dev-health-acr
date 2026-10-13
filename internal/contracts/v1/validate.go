@@ -144,7 +144,7 @@ func validAgentEpisodeRetentionClass(value string) bool {
 
 func validAgentEpisodeRedactionState(value string) bool {
 	switch value {
-	case "active", "redacted", "purged_tombstone":
+	case AgentEpisodeRedactionActive, AgentEpisodeRedactionRedacted, AgentEpisodeRedactionPurgedTombstone:
 		return true
 	default:
 		return false

@@ -256,16 +256,16 @@ func (r MCPRecordEpisodeResponse) validate(open bool) error {
 		return fmt.Errorf("receipt scope violates v1 bounds")
 	}
 	switch r.TranscriptDisposition {
-	case "not_submitted", "accepted", "redacted":
+	case MCPTranscriptDispositionNotSubmitted, MCPTranscriptDispositionAccepted, MCPTranscriptDispositionRedacted:
 	default:
 		return fmt.Errorf("invalid transcript disposition")
 	}
 	switch r.Status {
-	case "recorded":
+	case MCPRecordEpisodeStatusRecorded:
 		if !stringLengthBetween(r.EpisodeID, 8, 256) || r.CreatedAt == nil || r.CreatedAt.IsZero() || r.Duplicate == nil || (!validAgentEpisodeRedactionState(r.RedactionState) && !(open && openVocabularyToken(r.RedactionState))) {
 			return fmt.Errorf("recorded receipt violates v1 bounds")
 		}
-	case "no_persist":
+	case MCPRecordEpisodeStatusNoPersist:
 		if r.EpisodeID != "" || r.CreatedAt != nil || r.RedactionState != "" || r.Duplicate != nil {
 			return fmt.Errorf("no_persist receipt must not include a persisted episode")
 		}
