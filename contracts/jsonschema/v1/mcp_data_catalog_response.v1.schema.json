@@ -46,8 +46,8 @@
       "properties": {
         "caller_class": {
           "type": "string",
-          "description": "The grant class of your credential: unrestricted, or restricted to a set of repositories.",
-          "enum": [
+          "description": "The grant class of your credential: unrestricted, or restricted to a set of repositories. Open vocabulary; documented values: unrestricted, restricted. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "unrestricted",
             "restricted"
           ]
@@ -99,8 +99,8 @@
               },
               "scope_class": {
                 "type": "string",
-                "description": "How the repository scope is decided: org_wide for an unrestricted credential, forced_grant when acr limits it to your granted repositories.",
-                "enum": [
+                "description": "How the repository scope is decided: org_wide for an unrestricted credential, forced_grant when acr limits it to your granted repositories. Open vocabulary; documented values: org_wide, forced_grant. A client must tolerate values it does not know.",
+                "x-documented-values": [
                   "org_wide",
                   "forced_grant"
                 ]
@@ -496,11 +496,11 @@
       "properties": {
         "caller_class": {
           "type": "string",
-          "enum": [
+          "description": "Your grant class. Open vocabulary; documented values: unrestricted, restricted. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "unrestricted",
             "restricted"
-          ],
-          "description": "Your grant class."
+          ]
         },
         "available": {
           "type": "boolean",
@@ -508,12 +508,12 @@
         },
         "reason": {
           "type": "string",
-          "enum": [
+          "description": "Why graphql_query is not available. Open vocabulary; documented values: scope_missing_data_read, data_graphql_not_configured, subject_gate_unavailable. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "scope_missing_data_read",
             "data_graphql_not_configured",
             "subject_gate_unavailable"
-          ],
-          "description": "Why graphql_query is not available."
+          ]
         },
         "schema_digest": {
           "type": "string",
@@ -555,24 +555,24 @@
               },
               "cost_class": {
                 "type": "string",
-                "enum": [
+                "description": "Cost class. Open vocabulary; documented values: compute, analytics_batch, list, series, catalog. A client must tolerate values it does not know.",
+                "x-documented-values": [
                   "compute",
                   "analytics_batch",
                   "list",
                   "series",
                   "catalog"
-                ],
-                "description": "Cost class."
+                ]
               },
               "scope_class": {
                 "type": "string",
-                "enum": [
+                "description": "forced_grant: acr limits the root to your granted repositories. Open vocabulary; documented values: org_wide, client_scope, forced_grant, not_reached. A client must tolerate values it does not know.",
+                "x-documented-values": [
                   "org_wide",
                   "client_scope",
                   "forced_grant",
                   "not_reached"
-                ],
-                "description": "forced_grant: acr limits the root to your granted repositories."
+                ]
               },
               "forced_argument": {
                 "type": "string",
@@ -736,16 +736,16 @@
         },
         "grant_class": {
           "type": "string",
-          "description": "Repository grant class only: unrestricted, or restricted to a set of repositories. It does not say whether run_operation can serve you; effective_access does.",
-          "enum": [
+          "description": "Repository grant class only: unrestricted, or restricted to a set of repositories. It does not say whether run_operation can serve you; effective_access does. Open vocabulary; documented values: unrestricted, restricted. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "unrestricted",
             "restricted"
           ]
         },
         "effective_access": {
           "type": "string",
-          "description": "What run_operation does for your credential now: data_read (can run), no_data_read (data:read scope missing), not_servable (not available in this deployment).",
-          "enum": [
+          "description": "What run_operation does for your credential now: data_read (can run), no_data_read (data:read scope missing), not_servable (not available in this deployment). Open vocabulary; documented values: data_read, no_data_read, not_servable. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "data_read",
             "no_data_read",
             "not_servable"

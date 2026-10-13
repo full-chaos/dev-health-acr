@@ -11,6 +11,17 @@ import "fmt"
 // ContextPacket can never pass validation just because only its
 // schema_version was inspected.
 func (p ContextPacket) Validate() error {
+	return p.validate(false)
+}
+
+// ValidateRead is Validate for a client reading a served packet: an added
+// token passes in the resolution, watermark status and item vocabularies.
+// Producers call Validate.
+func (p ContextPacket) ValidateRead() error {
+	return p.validate(true)
+}
+
+func (p ContextPacket) validate(open bool) error {
 	if p.SchemaVersion != ContextPacketSchema {
 		return fmt.Errorf("schema_version must be %q", ContextPacketSchema)
 	}
@@ -32,7 +43,7 @@ func (p ContextPacket) Validate() error {
 	if err := p.RequestedScope.Validate(); err != nil {
 		return fmt.Errorf("requested_scope: %w", err)
 	}
-	if err := p.ResolvedScope.Validate(); err != nil {
+	if err := p.ResolvedScope.validate(open); err != nil {
 		return fmt.Errorf("resolved_scope: %w", err)
 	}
 	if !stringLengthBetween(p.QueryVersion, 1, 200) || !stringLengthBetween(p.RankingVersion, 1, 200) {
@@ -41,7 +52,7 @@ func (p ContextPacket) Validate() error {
 	if !stringLengthBetween(p.Summary, 0, 4000) {
 		return fmt.Errorf("summary violates v1 bounds")
 	}
-	if err := validatePacketItems(p.Items); err != nil {
+	if err := validatePacketItems(p.Items, open); err != nil {
 		return err
 	}
 	if err := validateRequiredChecks(p.RequiredChecks); err != nil {
@@ -50,7 +61,7 @@ func (p ContextPacket) Validate() error {
 	if err := validateRecommendedSteps(p.RecommendedNextSteps); err != nil {
 		return err
 	}
-	if err := p.Freshness.Validate(); err != nil {
+	if err := p.Freshness.validate(open); err != nil {
 		return fmt.Errorf("freshness: %w", err)
 	}
 	if err := p.Coverage.Validate(); err != nil {
@@ -80,12 +91,12 @@ func validPacketStatus(status PacketStatus) bool {
 	}
 }
 
-func validatePacketItems(items []ContextPacketItem) error {
+func validatePacketItems(items []ContextPacketItem, open bool) error {
 	if items == nil || len(items) > 50 {
 		return fmt.Errorf("items violates v1 bounds")
 	}
 	for i, item := range items {
-		if err := item.Validate(); err != nil {
+		if err := item.validate(open); err != nil {
 			return fmt.Errorf("items[%d]: %w", i, err)
 		}
 	}
