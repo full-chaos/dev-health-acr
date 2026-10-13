@@ -72,6 +72,13 @@ SELECT ?, NULL, ?, 'work_item', concat(?, '-', repeat('x', 64), '-', toString(nu
 			t.Fatalf("%s filler: %v", label, err)
 		}
 	}
+	// One part per table at both sizes: the readings then follow the rows,
+	// not how many parts the inserts happen to leave unmerged.
+	for _, table := range []string{"work_items", "work_item_team_attributions", "team_repo_ownership", "work_graph_issue_pr", "git_pull_requests", "project_membership_transitions"} {
+		if err := direct.Exec(ctx, `OPTIMIZE TABLE `+table+` FINAL`); err != nil {
+			t.Fatalf("optimize %s: %v", table, err)
+		}
+	}
 }
 
 type movedOwnership struct{ repo, projectRepo string }
@@ -163,6 +170,14 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		fixture.orgID, fixture.shared, since, since); err != nil {
 		t.Fatalf("seed transition: %v", err)
 	}
+	// Merges stay off on the ownership tables until the moved-ownership row
+	// has read the stale versions it seeds: a background merge would remove
+	// them, and the row would no longer see one.
+	for _, table := range []string{"team_repo_ownership", "team_project_ownership"} {
+		if err := direct.Exec(ctx, `SYSTEM STOP MERGES `+table); err != nil {
+			t.Fatalf("stop merges on %s: %v", table, err)
+		}
+	}
 	moved := seedMovedOwnership(t, ctx, direct, fixture)
 	recorder := &recordingQueryClient{inner: query}
 	expander := devhealthfacts.NewScopeExpander(recorder)
@@ -205,6 +220,11 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 			}
 		}
 	})
+	for _, table := range []string{"team_repo_ownership", "team_project_ownership"} {
+		if err := direct.Exec(ctx, `SYSTEM START MERGES `+table); err != nil {
+			t.Fatalf("start merges on %s: %v", table, err)
+		}
+	}
 
 	// served sends every fixture request through the expander and returns
 	// each guarded statement as sent, with its organization-wide form.
