@@ -180,16 +180,19 @@ func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHous
 			peak := peakOf(s.org+" "+p.Name, statementMemorySince(t, ctx, direct, statementFilter{Table: "work_unit_investments"}, mark))
 			t.Logf("%s (%d units, %d PR refs): %s peak %.2f MiB", s.org, s.units, s.prs, p.Name, float64(peak)/(1<<20))
 			if p.Name == "team linked pull request mix" {
-				// The linked set appears in the statement several times as one
-				// scalar subquery; it must be built once per statement.
+				// The linked set appears in the statement four times as one
+				// scalar subquery; it must be built once per statement. The
+				// statement's scalar subqueries are the linked set, its lookup
+				// rows and the membership scope's run id: 3 builds when each is
+				// built once, 6 or more when the linked set is built per copy.
 				var misses uint64
 				if err := direct.QueryRow(ctx, `SELECT max(ProfileEvents['ScalarSubqueriesCacheMiss']) FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'uniqExact(m.repo_uuid)') > 0`, mark).Scan(&misses); err != nil {
 					t.Fatalf("%s: read scalar subquery events: %v", s.org, err)
 				}
 				t.Logf("%s: linked mix scalar subquery cache misses %d", s.org, misses)
-				if misses == 0 || misses > 2 {
-					t.Errorf("%s: linked mix built %d scalar subqueries, want the linked set and its lookup rows once each (2)", s.org, misses)
+				if misses == 0 || misses > 3 {
+					t.Errorf("%s: linked mix built %d scalar subqueries, want the linked set, its lookup rows and the scope run id once each (3)", s.org, misses)
 				}
 			}
 			if !repoScoped[p.Name] {
