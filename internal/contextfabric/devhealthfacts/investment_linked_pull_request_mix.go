@@ -25,6 +25,7 @@ const linkedMixTeamChunk = 100
 // repositories the team does not own (the owned arm counts those whole).
 func linkedPullRequestMixStatement(bound factTimeBound, scope membershipScope, limit int) string {
 	memberships := []string{fmt.Sprintf("if(%s, 0, -1)", mixWindowPredicate(0, bound))}
+	linked := linkedPullRequestsOf(bound)
 	return withRowLimitOf(`SELECT lr.team_id AS team_id,
 	uniqExact(m.repo_uuid) AS repos,
 	sumMap(mapApply((k, v) -> (k, v * m.effort), m.theme_distribution_json)) AS theme_effort,
@@ -32,19 +33,20 @@ func linkedPullRequestMixStatement(bound factTimeBound, scope membershipScope, l
 FROM (
 	SELECT repo_uuid, pr_number, c / n * effort_value AS effort, theme_distribution_json, bugfix_share
 	FROM (
-		SELECT win, repo_uuid, pr_number, work_unit_id, c,
-			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
-			effort_value, theme_distribution_json, bugfix_share
-		FROM (
-`+repoSplitCoreGrouped(memberships, "", "", false, scope, true)+`		)
-	)
-	WHERE repo_uuid != ''
+`+linkedPullRequestSplitRows(memberships, scope, linked)+`	)
 ) AS m
-INNER JOIN (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM `+teamProjectLinkRowsSQL("ids", bound)+`) AS lr
-	ON m.repo_uuid = toString(lr.pr_repo_id) AND m.pr_number = toString(lr.pr_number)
+INNER JOIN (SELECT l.1 AS pr_repo, l.2 AS pr_num, l.3 AS team_id FROM (SELECT arrayJoin(`+linked+`) AS l)) AS lr
+	ON m.repo_uuid = lr.pr_repo AND m.pr_number = lr.pr_num
 WHERE (lr.team_id, m.repo_uuid) NOT IN (SELECT team_id, repo_key FROM `+ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound))+`)
 GROUP BY lr.team_id
 ORDER BY lr.team_id`, limit)
+}
+
+// linkedPullRequestsOf is the distinct (repository id, PR number, team id) of
+// the pull requests linked to the issues of the {ids} teams' owned projects,
+// as one array the statement reads once.
+func linkedPullRequestsOf(bound factTimeBound) string {
+	return `(SELECT groupUniqArray((toString(pr_repo_id), toString(pr_number), team_id)) FROM ` + teamProjectLinkRowsSQL("ids", bound) + `)`
 }
 
 // readLinkedPullRequestMix returns, per team with positive linked effort, the
