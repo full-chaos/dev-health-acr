@@ -463,7 +463,7 @@ FROM work_items AS w FINAL
 INNER JOIN ` + currentResolvedProjectsSQL + ` AS p ON p.join_key = w.project_id
 INNER JOIN ` + admittedIssueLinksAmongSQL(workItemIDs) + ` AS l ON l.work_item_id = w.work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + workItemIDs + ` AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + workItemIDs + ` AND w.work_item_id IN (SELECT work_item_id FROM work_items WHERE org_id = {org_id:String}) AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
 GROUP BY toString(l.pr_repo_id), ifNull(r.repo, '')
 ORDER BY toString(l.pr_repo_id)
 LIMIT ` + strconv.Itoa(limitPlusOne)
