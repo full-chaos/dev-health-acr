@@ -1652,7 +1652,6 @@ func workItemScopeProjection(inner string, limit int) string {
   -- (only native links authorize), by kind, authorized or not.
   countIf(has(authorization_excluded_links, 'explicit_text')) OVER () AS excluded_explicit_text_link_population,
   countIf(has(authorization_excluded_links, 'heuristic')) OVER () AS excluded_heuristic_link_population,
-  -- Every requested origin that reached the item, masked like origin_id.
   if(authorized = 1, origin_ids, CAST([] AS Array(String))) AS origin_ids
 FROM (
 ` + inner + `

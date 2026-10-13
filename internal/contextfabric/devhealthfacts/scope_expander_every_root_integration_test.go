@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -268,29 +270,171 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 
 	fillEveryRootOrganization(t, ctx, direct, fixture, "small", 100_000)
 	t.Run("memory", func(t *testing.T) {
-		read := func() map[string]uint64 {
+		recorder := &recordingQueryClient{inner: query}
+		recordingExpander := devhealthfacts.NewScopeExpander(recorder)
+		// peaks measures each statement as served (with the origin id arrays)
+		// and the same statement text with the arrays removed, run with the
+		// same bindings at the same organization size.
+		peaks := func() (withArrays, withoutArrays map[string]uint64) {
+			recorder.reset()
 			mark := serverNowMicros(t, ctx, direct)
 			for _, tc := range fixture.cases() {
-				if _, err := expander.ExpandFactScope(ctx, tc.request); err != nil {
+				if _, err := recordingExpander.ExpandFactScope(ctx, tc.request); err != nil {
 					t.Fatalf("%s: ExpandFactScope: %v: %s", tc.name, err, readFailureCause(err))
 				}
 			}
-			peaks := map[string]uint64{}
+			withArrays, withoutArrays = map[string]uint64{}, map[string]uint64{}
 			for _, statement := range everyRootStatementFragments {
-				for _, peak := range statementMemorySince(t, ctx, direct, statementFilter{Table: statement.table, QueryContains: statement.fragment}, mark) {
-					if peak > peaks[statement.label] {
-						peaks[statement.label] = peak
+				withArrays[statement.label] = peakOf(t, ctx, direct, statement.table, statement.fragment, mark)
+			}
+			for _, statement := range everyRootStatementFragments {
+				captured, ok := recorder.find(statement.fragment)
+				if !ok {
+					t.Fatalf("%s: no statement carrying %q was sent", statement.label, statement.fragment)
+				}
+				stripped := stripOriginArrays(captured.statement)
+				if strings.Contains(stripped, "arraySort(groupUniqArray(") || strings.Contains(stripped, "origin_ids") {
+					t.Fatalf("%s: arrays left after stripping:\n%s", statement.label, stripped)
+				}
+				baseMark := serverNowMicros(t, ctx, direct)
+				rows, err := query.Query(ctx, stripped, captured.bindings)
+				if err != nil {
+					t.Fatalf("%s: base statement: %v", statement.label, err)
+				}
+				for rows.Next() {
+				}
+				if err := rows.Err(); err != nil {
+					t.Fatalf("%s: base statement rows: %v", statement.label, err)
+				}
+				_ = rows.Close()
+				withoutArrays[statement.label] = peakOf(t, ctx, direct, statement.table, statement.fragment, baseMark)
+			}
+			return withArrays, withoutArrays
+		}
+		peaks()
+		smallWith, smallWithout := peaks()
+		fillEveryRootOrganization(t, ctx, direct, fixture, "large", 200_000)
+		largeWith, largeWithout := peaks()
+		for _, statement := range everyRootStatementFragments {
+			label := statement.label
+			smallDelta := int64(smallWith[label]) - int64(smallWithout[label])
+			largeDelta := int64(largeWith[label]) - int64(largeWithout[label])
+			t.Logf("%s: small %d (base %d), large %d (base %d)", label, smallWith[label], smallWithout[label], largeWith[label], largeWithout[label])
+			for _, size := range []struct {
+				name       string
+				with, base uint64
+			}{{"small", smallWith[label], smallWithout[label]}, {"large", largeWith[label], largeWithout[label]}} {
+				if size.base == 0 || size.with == 0 {
+					t.Fatalf("%s %s: measurement did not happen (with %d, without %d)", label, size.name, size.with, size.base)
+				}
+				if float64(size.with) > arrayMemoryShare*float64(size.base) && size.with > size.base+arrayMemoryAllowance {
+					t.Errorf("%s at the %s size: %d bytes with the origin arrays, %d without: over %.2fx and over %d bytes", label, size.name, size.with, size.base, arrayMemoryShare, arrayMemoryAllowance)
+				}
+			}
+			if largeDelta > 0 && float64(largeDelta) > statementMemorySlope*float64(max(smallDelta, 0))+float64(arrayMemoryAllowance) {
+				t.Errorf("%s: the origin arrays' cost grew with the organization: %d bytes at the larger size, %d at the smaller", label, largeDelta, smallDelta)
+			}
+		}
+	})
+}
+
+// The origin id arrays may add at most this share over the same statement
+// without them, or this fixed allowance (aggregation arenas are allocated per
+// thread, so a statement with a few small groups still pays a fixed setup).
+const (
+	arrayMemoryShare     = 1.15
+	arrayMemoryAllowance = uint64(16 << 20)
+)
+
+func peakOf(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, table, fragment string, mark int64) uint64 {
+	t.Helper()
+	peak := uint64(0)
+	for _, measured := range statementMemorySince(t, ctx, direct, statementFilter{Table: table, QueryContains: fragment}, mark) {
+		peak = max(peak, measured)
+	}
+	return peak
+}
+
+type capturedStatement struct {
+	statement string
+	bindings  []contextpacket.ClickHouseBinding
+}
+
+// recordingQueryClient sends every statement to the real client and keeps
+// its text and bindings, so a test can re-run a statement it did not build.
+type recordingQueryClient struct {
+	inner    contextpacket.ClickHouseQueryClient
+	mu       sync.Mutex
+	captured []capturedStatement
+}
+
+func (c *recordingQueryClient) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	c.mu.Lock()
+	c.captured = append(c.captured, capturedStatement{statement: statement, bindings: append([]contextpacket.ClickHouseBinding(nil), bindings...)})
+	c.mu.Unlock()
+	return c.inner.Query(ctx, statement, bindings)
+}
+
+func (c *recordingQueryClient) reset() {
+	c.mu.Lock()
+	c.captured = nil
+	c.mu.Unlock()
+}
+
+func (c *recordingQueryClient) find(fragment string) (capturedStatement, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, captured := range c.captured {
+		if strings.Contains(captured.statement, fragment) {
+			return captured, true
+		}
+	}
+	return capturedStatement{}, false
+}
+
+// stripOriginArrays removes the origin id array expressions (and the
+// work-item projection's masked copy) with their list comma, leaving the
+// statement as it was before the arrays were added.
+func stripOriginArrays(statement string) string {
+	for _, open := range []string{"arraySort(groupUniqArray(", "if(authorized = 1, origin_ids,"} {
+		for {
+			start := strings.Index(statement, open)
+			if start < 0 {
+				break
+			}
+			depth, end := 0, start
+			for index := start; index < len(statement); index++ {
+				if statement[index] == '(' {
+					depth++
+				} else if statement[index] == ')' {
+					depth--
+					if depth == 0 {
+						end = index + 1
+						break
 					}
 				}
 			}
-			return peaks
+			rest := strings.TrimLeft(statement[end:], " ")
+			if strings.HasPrefix(rest, "AS ") {
+				alias := strings.TrimPrefix(rest, "AS ")
+				aliasEnd := strings.IndexAny(alias, " ,\n")
+				if aliasEnd < 0 {
+					aliasEnd = len(alias)
+				}
+				end = len(statement) - len(rest) + len("AS ") + aliasEnd
+			}
+			before := strings.TrimRight(statement[:start], " \n\t")
+			if strings.HasSuffix(before, ",") {
+				statement = strings.TrimSuffix(before, ",") + statement[end:]
+				continue
+			}
+			after := strings.TrimLeft(statement[end:], " \n\t")
+			if strings.HasPrefix(after, ",") {
+				statement = statement[:start] + strings.TrimLeft(strings.TrimPrefix(after, ","), " ")
+				continue
+			}
+			statement = statement[:start] + statement[end:]
 		}
-		read()
-		small := read()
-		fillEveryRootOrganization(t, ctx, direct, fixture, "large", 200_000)
-		large := read()
-		for _, statement := range everyRootStatementFragments {
-			t.Errorf("PROBE %s small=%d large=%d", statement.label, small[statement.label], large[statement.label])
-		}
-	})
+	}
+	return statement
 }
