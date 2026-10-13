@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgprojection"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
@@ -48,7 +49,7 @@ func (r *Runtime) Close() error {
 	return errors.Join(errs...)
 }
 
-func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.Logger) (*Runtime, error) {
+func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.Logger, metrics *hostedmetrics.Instruments) (*Runtime, error) {
 	runtime := &Runtime{}
 	if !cfg.ProjectionEnabled {
 		logger.InfoContext(ctx, "context fabric projection is disabled", cfg.SafeAttributes()...)
@@ -73,7 +74,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		return nil, errors.Join(fmt.Errorf("load postgres migration contract: %w", err), runtime.Close())
 	}
 
-	projectorClickHouse, err := openProjectorClickHouse(cfg, logger)
+	projectorClickHouse, err := openProjectorClickHouse(cfg, logger, metrics)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
@@ -380,7 +381,7 @@ type projectorClickHouseClient struct {
 	close func() error
 }
 
-func openProjectorClickHouse(cfg config.ProjectorConfig, logger *slog.Logger) (projectorClickHouseClient, error) {
+func openProjectorClickHouse(cfg config.ProjectorConfig, logger *slog.Logger, metrics *hostedmetrics.Instruments) (projectorClickHouseClient, error) {
 	tlsConfig, err := runtimeclickhouse.TLSConfigFromCABundle(cfg.ClickHouseCACertPath)
 	if err != nil {
 		return projectorClickHouseClient{}, err
@@ -398,11 +399,16 @@ func openProjectorClickHouse(cfg config.ProjectorConfig, logger *slog.Logger) (p
 		return projectorClickHouseClient{}, fmt.Errorf("open clickhouse: %w", err)
 	}
 	return projectorClickHouseClient{
-		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage,
-			contextpacket.WithMemoryNearCapObserver(contextpacket.NewSlogMemoryNearCapObserver(logger, nil)),
-			contextpacket.WithMemoryPeakUnobservedObserver(contextpacket.NewSlogMemoryPeakUnobservedObserver(logger, nil))),
-		ping: clickhouseClient.Ping, close: clickhouseClient.Close,
+		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage, projectorCapOptions(logger, metrics)...),
+		ping:  clickhouseClient.Ping, close: clickhouseClient.Close,
 	}, nil
+}
+
+func projectorCapOptions(logger *slog.Logger, metrics *hostedmetrics.Instruments) []contextpacket.MemoryCapOption {
+	return []contextpacket.MemoryCapOption{
+		contextpacket.WithMemoryNearCapObserver(contextpacket.NewSlogMemoryNearCapObserver(logger, metrics.ClickHouseNearMemoryCap)),
+		contextpacket.WithMemoryPeakUnobservedObserver(contextpacket.NewSlogMemoryPeakUnobservedObserver(logger, metrics.ClickHousePeakUnobserved)),
+	}
 }
 
 func clickhouseBackedSources(client contextpacket.ClickHouseQueryClient, cfg config.ProjectorConfig, logger *slog.Logger) (*devhealthsource.ClickHouseProjectionSource, *devhealthsource.TeamsProjectsSource, error) {
