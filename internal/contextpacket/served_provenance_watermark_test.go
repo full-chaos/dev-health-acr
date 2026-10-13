@@ -1,6 +1,7 @@
 package contextpacket
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"slices"
@@ -99,5 +100,70 @@ func TestProvenanceSQLEmitsOnlyServedValues(t *testing.T) {
 	}
 	if total < 8 || aliases < 15 {
 		t.Fatalf("found %d mapping outputs and %d alias literals; the measurement did not happen", total, aliases)
+	}
+}
+
+type oneRowClient struct{ provenance string }
+
+type oneRowScanner struct {
+	provenance string
+	done       bool
+}
+
+func (c oneRowClient) Query(context.Context, string, []ClickHouseBinding) (ClickHouseRowScanner, error) {
+	return &oneRowScanner{provenance: c.provenance}, nil
+}
+
+func (s *oneRowScanner) Next() bool {
+	if s.done {
+		return false
+	}
+	s.done = true
+	return true
+}
+
+func (s *oneRowScanner) Scan(dest ...any) error {
+	values := []any{"evidence-0001", "git", "commit", "abc123", "a commit", "", s.provenance, 1.0, "a citation", time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)}
+	for i, d := range dest {
+		switch p := d.(type) {
+		case *string:
+			*p = values[i].(string)
+		case *float64:
+			*p = values[i].(float64)
+		case *time.Time:
+			*p = values[i].(time.Time)
+		}
+	}
+	return nil
+}
+
+func (s *oneRowScanner) Err() error   { return nil }
+func (s *oneRowScanner) Close() error { return nil }
+
+// Every path a scanned provenance takes to a served answer ends in
+// validateEvidence: the packet path (QueryEvidence -> CatalogResult.Evidence ->
+// EvidenceBundle -> Assembler validateEvidenceBundle) and the expansion paths
+// (reference rows and organization rows -> EvidenceResolver.Expand).
+func TestScannedProvenanceOutsideTheSetNeverReachesAServedAnswer(t *testing.T) {
+	off := fmt.Sprintf("%s_%d", "native", 2)
+	executor := NewClickHouseSourceExecutor(oneRowClient{provenance: off})
+	refs, err := executor.QueryEvidence(context.Background(), SourceQueryCatalogV1[0], nil)
+	if err != nil || len(refs) != 1 || refs[0].Provenance != off {
+		t.Fatalf("the scan site must carry the scanned value unchanged: %v %+v", err, refs)
+	}
+	bundle := validateEvidenceBundle(refs, nil)
+	if len(bundle.valid) != 0 || len(bundle.quarantined) != 1 || bundle.quarantined[0].Rule != "invalid evidence provenance" {
+		t.Fatalf("packet path served an off-set provenance: %+v", bundle)
+	}
+	rows, err := scanEvidenceRow(&oneRowScanner{provenance: off})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewEvidenceResolver(EvidenceResolverOptions{}).Expand(context.Background(), EvidenceExpansionInput{Evidence: rows, Excerpt: "x"}); err == nil {
+		t.Fatal("the expansion path expanded an off-set provenance")
+	}
+	good, _ := scanEvidenceRow(&oneRowScanner{provenance: contractsv1.EvidenceProvenanceNative})
+	if _, err := NewEvidenceResolver(EvidenceResolverOptions{}).Expand(context.Background(), EvidenceExpansionInput{Evidence: good, Excerpt: "x"}); err != nil {
+		t.Fatalf("a served-set provenance was refused: %v", err)
 	}
 }
