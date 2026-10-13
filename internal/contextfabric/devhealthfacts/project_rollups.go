@@ -18,8 +18,9 @@ import (
 // an issue's own repository column, never a team's repositories.
 //
 // Every work_items read below is narrowed to the ids a link row or a blocker
-// edge names before it is joined, so a statement's cost follows the links and
-// edges it serves, not the size of the organization's work item table.
+// edge names, or to the requested projects' work items, before it is joined,
+// so a statement's cost follows the links, edges and projects it serves, not
+// the size of the organization's work item table.
 
 // projectRollupBasis is the rollup_basis value of a project rollup fact.
 const projectRollupBasis = "project_issues"
@@ -30,16 +31,25 @@ const projectRollupBasis = "project_issues"
 const projectJoinKeysSQL = `(SELECT provider, join_key, concat(provider, ':', id) AS project_key FROM ` + resolvedProjectsSQL + `
   WHERE key_resolution_count = 1 AND concat(provider, ':', id) IN {ids:Array(String)})`
 
+// projectRollupWorkItemIDsSQL is the ids of the requested projects' work
+// items (project_id, in any stored version, is a requested project's join
+// key) that carry a link row: a superset of the issues
+// projectLinkedPullRequestsSQL keeps. It is one scalar subquery, which
+// ClickHouse runs once per statement however often it is referenced, so the
+// statement reads the organization's link ids and the project's work items
+// once and every other read follows that small set.
+const projectRollupWorkItemIDsSQL = `(SELECT arrayJoin((SELECT groupUniqArray(work_item_id) FROM work_items WHERE org_id = {org_id:String} AND (provider, project_id) IN (SELECT provider, join_key FROM ` + projectJoinKeysSQL + `) AND work_item_id IN ` + linkedWorkItemIDsSQL + `)))`
+
 // projectLinkedPullRequestsSQL is one row per (project, linked pull request)
 // with the strongest known link tier among the project's issues that link it.
 var projectLinkedPullRequestsSQL = `(
   SELECT pi.project_key AS project_key, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, max(l.link_rank) AS link_rank
-  FROM ` + admittedIssueLinksAmongSQL(linkedWorkItemIDsSQL) + ` AS l
+  FROM ` + admittedIssueLinksAmongSQL(projectRollupWorkItemIDsSQL) + ` AS l
   INNER JOIN (
     SELECT DISTINCT w.work_item_id AS work_item_id, k.project_key AS project_key
     FROM work_items AS w FINAL
     INNER JOIN ` + projectJoinKeysSQL + ` AS k ON k.provider = w.provider AND k.join_key = w.project_id
-    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND w.work_item_id IN ` + linkedWorkItemIDsSQL + `
+    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND w.work_item_id IN ` + projectRollupWorkItemIDsSQL + `
   ) AS pi ON pi.work_item_id = l.work_item_id
   GROUP BY project_key, pr_repo_id, pr_number
 )`
@@ -74,7 +84,7 @@ func (p *PullRequestsProvider) readProjectRollup(ctx context.Context, orgID stri
 FROM ` + projectLinkedPullRequestsSQL + ` AS lp
 INNER JOIN (
   SELECT repo_id, number, state, created_at, merged_at, closed_at FROM git_pull_requests FINAL
-  WHERE org_id = {org_id:String} AND (repo_id, number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+  WHERE org_id = {org_id:String} AND (repo_id, number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN ` + projectRollupWorkItemIDsSQL + `)
 ) AS pr ON pr.repo_id = lp.pr_repo_id AND pr.number = lp.pr_number
 GROUP BY lp.project_key, lp.link_rank
 ORDER BY lp.project_key, lp.link_rank`
