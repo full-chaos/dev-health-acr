@@ -123,29 +123,19 @@ SELECT ?, concat('other-', toString(number)), toUInt32(number + 100), 1, 'native
 				t.Errorf("rows differ from the organization-wide form:\nscoped   %q\norg-wide %q", scoped, whole)
 			}
 
-			if !tc.narrowed {
-				return
-			}
-			// The served statement's peak is bounded by the scope statement
-			// ceiling; the same statement with the organization-wide
-			// authorization relation must exceed it on this data, or the
-			// bound could not fail. Each peak is the least of three warm runs.
-			unnarrowed, found := devhealthfacts.UnnarrowedAuthorizationStatementForTest(captured.statement)
-			if !found {
-				t.Fatal("the served statement carries no candidate-narrowed authorization relation")
-			}
-			peak := func(statement string) uint64 {
+			peak := func(statement string, strict bool) uint64 {
 				fragment, _, _ := strings.Cut(tc.fragment, "\n")
 				var least uint64
 				for run := 0; run < 3; run++ {
 					mark := serverNowMicros(t, ctx, direct)
 					rows, err := query.Query(ctx, statement, captured.bindings)
-					if err != nil {
+					if err == nil {
+						for rows.Next() {
+						}
+						_ = rows.Close()
+					} else if strict {
 						t.Fatalf("run statement: %v", err)
 					}
-					for rows.Next() {
-					}
-					_ = rows.Close()
 					measured := peakOf(t, ctx, direct, "work_items", fragment, mark)
 					if measured == 0 {
 						t.Fatal("no query_log peak for the statement: the measurement did not happen")
@@ -156,8 +146,49 @@ SELECT ?, concat('other-', toString(number)), toUInt32(number + 100), 1, 'native
 				}
 				return least
 			}
-			narrowed, orgWidePeak := peak(captured.statement), peak(unnarrowed)
 			mib := func(bytes uint64) float64 { return float64(bytes) / (1 << 20) }
+			if !tc.narrowed {
+				// projectWorkItems passes no candidates: its WHERE filter on
+				// w.work_item_id reaches the link aggregate only through the
+				// planner's filter push-down (ClickHouse 26.7). Its served peak
+				// must stay under the ceiling and must not grow with unrelated
+				// organization rows; the same statement with that push-down
+				// turned off is the control and must break one of the two.
+				off := strings.Replace(captured.statement, "\nSETTINGS ", "\nSETTINGS query_plan_filter_push_down = 0, ", 1)
+				if off == captured.statement {
+					t.Fatal("the served statement carries no SETTINGS clause to extend")
+				}
+				small, smallOff := peak(captured.statement, true), peak(off, false)
+				exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at)
+SELECT concat('more-', toString(number)), ?, ?, 'linear', 'other', 'open', '', '', concat('OTHER-', toString(number % 50)), ? FROM numbers(160000)`, noRepo, orgID, at)
+				exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+SELECT ?, concat('more-', toString(number)), toUInt32(number + 100000), 1, 'native', '', ?, ? FROM numbers(160000)`, granted, at, orgID)
+				large, largeOff := peak(captured.statement, true), peak(off, false)
+				grew := func(small, large uint64) bool {
+					return float64(large) > 1.15*float64(small) && large > small+(2<<20)
+				}
+				breaks := func(small, large uint64) bool {
+					return small >= scopeStatementCeiling || large >= scopeStatementCeiling || grew(small, large)
+				}
+				t.Run(fmt.Sprintf("served_%.1f_to_%.1fMiB_under_%dMiB_pushdown_off_%.1f_to_%.1fMiB", mib(small), mib(large), scopeStatementCeiling>>20, mib(smallOff), mib(largeOff)), func(t *testing.T) {
+					if breaks(small, large) {
+						t.Errorf("served statement peaked %.1f -> %.1f MiB with unrelated rows, want under %d MiB and not grown by 15%% and 2 MiB", mib(small), mib(large), scopeStatementCeiling>>20)
+					}
+					if !breaks(smallOff, largeOff) {
+						t.Errorf("with filter push-down off the statement peaked %.1f -> %.1f MiB, under the bound and not grown: the guard cannot fail on this data", mib(smallOff), mib(largeOff))
+					}
+				})
+				return
+			}
+			// The served statement's peak is bounded by the scope statement
+			// ceiling; the same statement with the organization-wide
+			// authorization relation must exceed it on this data, or the
+			// bound could not fail. Each peak is the least of three warm runs.
+			unnarrowed, found := devhealthfacts.UnnarrowedAuthorizationStatementForTest(captured.statement)
+			if !found {
+				t.Fatal("the served statement carries no candidate-narrowed authorization relation")
+			}
+			narrowed, orgWidePeak := peak(captured.statement, true), peak(unnarrowed, true)
 			t.Run(fmt.Sprintf("narrowed_%.1fMiB_under_%dMiB_org_wide_relation_%.1fMiB", mib(narrowed), scopeStatementCeiling>>20, mib(orgWidePeak)), func(t *testing.T) {
 				if narrowed >= scopeStatementCeiling {
 					t.Errorf("served statement peaked at %.1f MiB, want under %d MiB", mib(narrowed), scopeStatementCeiling>>20)
