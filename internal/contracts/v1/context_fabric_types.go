@@ -449,6 +449,9 @@ const (
 	// internal/contextfabric/devhealthfacts/flow.go and landscape.go.
 	ContextFabricFactFlow      ContextFabricFactKind = "flow"
 	ContextFabricFactLandscape ContextFabricFactKind = "landscape"
+	// ContextFabricFactSecurityAlerts is a v1 ADDITIVE fact kind: stored
+	// security alert counts per repository (security_alerts), counts only.
+	ContextFabricFactSecurityAlerts ContextFabricFactKind = "security_alerts"
 )
 
 // ContextFabricFactCardinality is a CLAIM kind and NOT a requestable one, and
@@ -517,6 +520,7 @@ var contextFabricFactKinds = [...]ContextFabricFactKind{
 	ContextFabricFactEvidence,
 	ContextFabricFactFlow,
 	ContextFabricFactLandscape,
+	ContextFabricFactSecurityAlerts,
 }
 
 // ContextFabricFactKindCount is the size of the closed fact-kind vocabulary,
