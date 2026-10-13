@@ -91,8 +91,8 @@ flowchart TD
   DISCOVER["DiscoverContext<br/>cohort + structure offers, falkorgraph/reader.go"]
   DISCOVER --> SCOPE["FactReadScopeResolver<br/>fact_scope.go -- CHAOS-4099, activated<br/>project/team origin -> activity-proxy / attributed-team expansion"]
   SCOPE --> PLAN["planFactReads<br/>fact_planner.go:183 -- per-capability<br/>SupportedSubjectKinds partition: prune / narrow / run"]
-  PLAN -->|"no supported subject, no scope gap"| PRUNE["pruned:subject_kind_unsupported<br/>proof of absence (CHAOS-3783)"]
-  PLAN -->|"no supported subject, scope gap disclosed"| UNEXP["unexpanded:&lt;outcome&gt;<br/>CHAOS-4099 -- honest 'reachable but not read'<br/>NEVER SourcePruned"]
+  PLAN -->|"no supported subject, no scope gap"| PRUNE["pruned (coverage detail code fact_pruned)<br/>proof of absence (CHAOS-3783)"]
+  PLAN -->|"no supported subject, scope gap disclosed"| UNEXP["unexpanded (outcome on the coverage detail)<br/>CHAOS-4099 -- honest 'reachable but not read'<br/>NEVER SourcePruned"]
   PLAN -->|"some/all subjects supported"| READ["FactCapabilityRegistry.ReadFacts<br/>fan-out over devhealthfacts providers (ClickHouse)<br/>-- see diagram 4"]
 
   READ --> ROUTE{"project subject:<br/>does the source carry work_scope_id?<br/>CHAOS-4521b"}
@@ -800,7 +800,7 @@ source for the SAME kind).
 | status | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join; **+`work_item_transitions`** (a second, keyed read over ONLY the (repository, work item) pairs the scoped status read returned in the same request — no authorization relation repeated, same SETTINGS, probe limit one past the output bound): `status_since` is the occurred_at of the item's latest transition when that transition enters its current status, `status_duration_seconds` is measured at read time, `status_since_basis` is `transition_observed`, `no_transition_recorded` (no rows) or `transition_inconsistent` (latest transition went elsewhere or is dated after the clock); null is never zero and never the creation time | work_item |
 | work | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
 | actual_completion | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
-| blockers | `work_item_dependencies`; team: ⋈ `work_items` over the repositories the team owns (`team_repo_ownership`), counting OPEN blockers only (blocking item not done or canceled; `blocker_status_basis`), the excluded edges counted apart | work_item, **team** |
+| blockers | `work_item_dependencies`; team: ⋈ `work_items` over the repositories the team owns (`team_repo_ownership`), counting OPEN blockers only (blocking item not done or canceled; `blocker_status_basis`), the excluded edges counted apart; `oldest_blocked_age_days` = whole days from the earliest known edge start (`relation_started_at`, else the first sync that wrote the relation, `work_item_dependency_first_seen`; never an item's creation time) to read time, with `oldest_blocked_age_basis` `exact` (every open edge has the provider time) or `lower_bound`, and `oldest_blocked_age_unavailable_reason` (`none_open` / `no_relation_start` / `start_unavailable` when the age statement failed and the counts are still served) instead when no age is known | work_item, **team** |
 | required_children | `work_item_dependencies` | work_item |
 | pull_requests | `git_pull_requests` (`state`: member state and drivers); team: rollup over the repositories the team owns | pull_request, **team** |
 | reviews | `git_pull_request_reviews` | pull_request_review |

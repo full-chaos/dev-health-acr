@@ -157,9 +157,10 @@ new enum value defaulting to "nothing is missing" would reintroduce this
 ticket's defect silently, one addition at a time.
 
 The contract's `SourceState` enum is **not** widened — that would require a
-new major contract. The expansion vocabulary rides in the structured reason
-prefix `unexpanded:<outcome>`, the same discipline CHAOS-3783's own
-`pruned:` / `narrowed:` prefixes established.
+new major contract. The expansion vocabulary rides in the structured coverage
+detail (`scope_outcome`, `policy`, `origin_kind`, `basis`) and, on a
+`read_facts` row, in the `expansion` note. The reason itself is a plain
+sentence with no token in it.
 
 ## 6. Eligibility is a closed table, not a rule
 
@@ -514,8 +515,8 @@ Ships the resolver, the vocabulary, the disclosure and the telemetry, with
 what the answer *says* about the facts it did not get.
 
 - Project and team origins for metrics/PRs/reviews resolve to
-  `policy_unavailable`, recorded with a degrading source state and the
-  `unexpanded:` reason prefix.
+  `policy_unavailable`, recorded with a degrading source state, a plain-sentence reason and the
+  outcome on the structured coverage detail.
 - The answer carries `ContextFabricFactScopeUnexpandedLimitation` and
   `Coverage.Partial`. The activity-proxy disclosure is wired and tested,
   though no stage-1 path admits a derived subject to trigger it.

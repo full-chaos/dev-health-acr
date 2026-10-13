@@ -1035,7 +1035,16 @@ import (
 // v204 -> v205: a client synthesis driver whose source_state the service
 // corrected carries source_state_note and summary_corrected beside its
 // untouched summary. An answer saved under v204 has neither.
-const QueryVersion = "devhealthfacts.clickhouse.v205"
+//
+// v205 -> v206: team and project blockers facts serve the age of the oldest
+// open blocker (oldest_blocked_age_days, with its basis or an unavailable
+// reason). An answer saved under v205 carries no age.
+//
+// v206 -> v207: a cohort anchored to a team, repository, project or the
+// caller's organization is no longer marked truncated by an unrelated
+// subject's failed lookup. An answer saved under v206 can mark a complete set
+// truncated.
+const QueryVersion = "devhealthfacts.clickhouse.v207"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

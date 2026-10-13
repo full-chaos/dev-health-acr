@@ -205,6 +205,33 @@
           "reason": {
             "type": "string"
           },
+          "expansion": {
+            "type": "object",
+            "required": [
+              "outcome",
+              "policy"
+            ],
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "description": "The scope-expansion decision for this row. Open vocabulary; documented values: not_needed, policy_unavailable, attempted_empty, target_kind_mismatch, expanded, expanded_partial, failed, matched_unauthorized. A client must tolerate values it does not know.",
+                "x-documented-values": [
+                  "not_needed",
+                  "policy_unavailable",
+                  "attempted_empty",
+                  "target_kind_mismatch",
+                  "expanded",
+                  "expanded_partial",
+                  "failed",
+                  "matched_unauthorized"
+                ]
+              },
+              "policy": {
+                "type": "string"
+              }
+            },
+            "description": "The scope-expansion decision behind the row: the machine-readable form of what the reason says in words. On a row whose own facts were read it names why the facts reachable only through expansion were not added; the row outcome describes what was read."
+          },
           "withheld": {
             "type": "array",
             "items": {

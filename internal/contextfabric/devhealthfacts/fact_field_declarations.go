@@ -310,6 +310,15 @@ func blockersFields() []fieldDecl {
 			declCallerScoped(fInt("blocker_dependencies_current", "count")),
 			declCallerScoped(fInt("blocker_dependencies_excluded_by_status_current", "count")),
 			fStr("blocker_status_basis"),
+			// Age of the oldest open blocker edge in whole days at read time,
+			// from the link's start (the provider's time, else the first sync
+			// that saw it). The basis says whether every open edge carried the
+			// provider's time (exact) or the age is a lower bound; the reason
+			// is served instead of the age when there is no open edge or none
+			// has a start.
+			declCallerScoped(fInt("oldest_blocked_age_days", "days")),
+			fStr("oldest_blocked_age_basis"),
+			fStr("oldest_blocked_age_unavailable_reason"),
 			// Emitted only when the team has a repository with counted links.
 			// The weakest provenance tier (native > explicit_text >
 			// heuristic) of the issue <> pull request links that placed the
@@ -344,6 +353,9 @@ func blockersFields() []fieldDecl {
 			declCallerScoped(fInt("blocked_work_items_current", "count")),
 			declCallerScoped(fInt("blocker_dependencies_current", "count")),
 			declCallerScoped(fInt("blocker_dependencies_excluded_by_status_current", "count")),
+			declCallerScoped(fInt("oldest_blocked_age_days", "days")),
+			fStr("oldest_blocked_age_basis"),
+			fStr("oldest_blocked_age_unavailable_reason"),
 		),
 	)
 }
