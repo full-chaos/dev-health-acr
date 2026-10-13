@@ -413,15 +413,22 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 			r.recorder.RecordDirectRelationshipsRead(ctx, principal, record)
 		}
 	}()
+	defer func() {
+		if err == nil {
+			if vocabErr := validateServedRelationshipsVocabulary(response); vocabErr != nil {
+				response, err = RelationshipsResponse{}, fmt.Errorf("%w: %w", ErrRelationshipsInternal, vocabErr)
+			}
+		}
+	}()
 
 	plan, err := planRelationships(request)
 	if err != nil {
 		return RelationshipsResponse{}, err
 	}
 	record.SubjectKind, record.Depth, record.TypeCount, record.Direction = string(plan.root.Kind), plan.depth, len(plan.types), string(plan.direction)
-	record.WindowMode = "current"
+	record.WindowMode = RelationshipsAxisCurrent
 	if plan.asOf != nil {
-		record.WindowMode = "as_of"
+		record.WindowMode = RelationshipsAxisAsOf
 	}
 	now := r.clock()
 	hop := 1
@@ -568,9 +575,9 @@ func (r *RelationshipsReader) baseResponse(plan relationshipsPlan, hop int, vali
 	if types == nil {
 		types = []string{}
 	}
-	axis := "current"
+	axis := RelationshipsAxisCurrent
 	if plan.asOf != nil {
-		axis = "as_of"
+		axis = RelationshipsAxisAsOf
 	}
 	return RelationshipsResponse{
 		ContractVersion: RelationshipsContractVersion,
@@ -801,7 +808,10 @@ func linkTierOf(attributes map[string]interface{}) string {
 
 // linkTierVocabulary is the closed set of stored link tiers, the enum of
 // provenance.link_tier in the response schema.
-var linkTierVocabulary = []string{"explicit_text", "heuristic", "native"}
+var linkTierVocabulary = []string{contextfabric.TreeLinkTierExplicitText, contextfabric.TreeLinkTierHeuristic, contextfabric.TreeLinkTierNative}
+
+// LinkTierVocabulary is the set of provenance.link_tier values read_relationships serves.
+func LinkTierVocabulary() []string { return slices.Clone(linkTierVocabulary) }
 
 const (
 	workItemStatusProperty = "property_status"

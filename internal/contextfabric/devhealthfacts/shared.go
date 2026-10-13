@@ -1032,12 +1032,30 @@ import (
 // target, so a multi-root answer derives each shared target from every root.
 // An answer saved under v203 attributed it to one root only.
 //
-// v204 -> v205: a secondary caveat sentence (project-reach absence, unwindowed
+// v204 -> v205: a client synthesis driver whose source_state the service
+// corrected carries source_state_note and summary_corrected beside its
+// untouched summary. An answer saved under v204 has neither.
+//
+// v205 -> v206: team and project blockers facts serve the age of the oldest
+// open blocker (oldest_blocked_age_days, with its basis or an unavailable
+// reason). An answer saved under v205 carries no age.
+//
+// v206 -> v207: a cohort anchored to a team, repository, project or the
+// caller's organization is no longer marked truncated by an unrelated
+// subject's failed lookup. An answer saved under v206 can mark a complete set
+// truncated.
+//
+// v207 -> v208: a client synthesis answer asked through a tool that widens the
+// body bound names the caller's budget as the answer budget; the input is now
+// cut to that budget, or served whole when its smallest form fits beside the
+// answer. An answer saved under v207 carried the uncut input.
+//
+// v208 -> v209: a secondary caveat sentence (project-reach absence, unwindowed
 // project links, revert-rate day count, investment units cursor, incident
 // severity omission, owning-teams cut) is served on the rows it describes and
-// no longer on every row of the kind. An answer saved under v204 carries each
+// no longer on every row of the kind. An answer saved under v208 carries each
 // on rows it is false for.
-const QueryVersion = "devhealthfacts.clickhouse.v205"
+const QueryVersion = "devhealthfacts.clickhouse.v209"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

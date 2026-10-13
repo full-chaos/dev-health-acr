@@ -39,7 +39,7 @@
 ## Source coverage
 > ```
 > - canonical_fact:status: available
-> - canonical_fact:work: unavailable (devhealthfacts: query work item work descriptors failed)
+> - canonical_fact:work: unavailable (The work read failed; the facts for it are not shown.)
 > ```
 
 ## Limitations
