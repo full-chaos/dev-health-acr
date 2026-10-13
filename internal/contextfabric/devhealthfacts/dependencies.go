@@ -152,7 +152,7 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", settingsErr)
 	}
 	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, toString(t.repo_id), `+counterpartRepositoryColumnsSQL+`
-FROM work_item_dependencies AS d FINAL`+relationCurrentJoinsSQL("d")+`
+FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
 `+counterpartRepositoryJoinSQL("d.source_work_item_id")+`
 WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'`+relationCurrentSQL("d")+`
@@ -455,7 +455,7 @@ const blockerStartOutputSQL = `, min(if(d.relation_started_at IS NOT NULL, toNul
 func blockerEdgeRowsSQL(statusPredicate, authorized string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
 	return `SELECT l.pr_repo_id AS rid, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(l.link_rank) AS item_rank, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
-  FROM work_item_dependencies AS d FINAL` + startJoin + relationCurrentJoinsSQL("d") + `
+  FROM work_item_dependencies AS d FINAL` + startJoin + `
   INNER JOIN ` + admittedIssueLinksAmongSQL(blockerEndpointIDsSQL) + ` AS l ON l.work_item_id = d.target_work_item_id
   INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
   WHERE d.org_id = {org_id:String} AND toString(l.pr_repo_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + relationCurrentSQL("d") + `
@@ -471,7 +471,7 @@ func blockerEdgeRowsSQL(statusPredicate, authorized string, withStart bool) stri
 func blockerProjectEdgeRowsSQL(statusPredicate, authorized string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
 	return `SELECT pl.team_id AS team_id, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(pl.link_rank) AS item_rank, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
-  FROM work_item_dependencies AS d FINAL` + startJoin + relationCurrentJoinsSQL("d") + `
+  FROM work_item_dependencies AS d FINAL` + startJoin + `
   INNER JOIN ` + blockerWorkItemsSQL("t") + ` ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
   INNER JOIN ` + teamProjectLinkRowsAmongSQL("team_ids", factTimeBound{}, blockerEndpointIDsSQL) + ` AS pl ON pl.work_item_id = d.target_work_item_id
   INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
@@ -671,7 +671,7 @@ ORDER BY team_id`, settings)
 			return outcome, settingsErr
 		}
 		statement := readers.WithSettings(`SELECT toInt64(uniqExact(d.target_work_item_id))
-FROM work_item_dependencies AS d FINAL`+relationCurrentJoinsSQL("d")+`
+FROM work_item_dependencies AS d FINAL
 INNER JOIN `+blockerWorkItemsSQL("t")+` ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
 INNER JOIN `+blockerWorkItemsSQL("s")+` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
 WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'`+relationCurrentSQL("d")+`

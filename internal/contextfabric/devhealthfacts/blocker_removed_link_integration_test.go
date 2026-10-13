@@ -103,6 +103,9 @@ func TestRemovedBlockerLinksAreNotCountedOnRealClickHouse(t *testing.T) {
 	fields := factFor(t, read(team), team).Fields
 	wantInt(t, fields, "blocked_work_items_current", counted)
 	wantInt(t, fields, "blocker_dependencies_current", counted)
+	if _, served := fields["oldest_blocked_age_days"]; !served {
+		t.Logf("age not served: reason=%+v basis=%+v", fields["oldest_blocked_age_unavailable_reason"], fields["oldest_blocked_age_basis"])
+	}
 	wantAgeDays(t, "oldest open blocker after the removed links", fields, 5)
 	// One kept link is a text relation whose writer cannot be told; it is
 	// counted and flagged, never dropped silently.

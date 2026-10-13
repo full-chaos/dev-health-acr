@@ -75,7 +75,16 @@ func relationCurrentJoinsSQL(d string) string {
   LEFT JOIN ` + relationItemReadSQL("rwt") + ` ON rwt.work_item_id = ` + d + `.target_work_item_id`
 }
 
+// relationEndedKeysSQL is the keys of the blocker rows the provider no longer
+// reports. Every reader tests membership in this one subquery, so the two item
+// read-time tables are built once per statement, however many arms read edges.
+func relationEndedKeysSQL() string {
+	return `(SELECT de.source_work_item_id, de.target_work_item_id, de.relationship_type
+    FROM work_item_dependencies AS de FINAL` + relationCurrentJoinsSQL("de") + `
+    WHERE de.org_id = {org_id:String} AND lower(ifNull(de.relationship_type, '')) = '` + blockerRelationshipType + `' AND ` + relationEndedSQL("de") + `)`
+}
+
 // relationCurrentSQL keeps the rows the provider still reports.
 func relationCurrentSQL(d string) string {
-	return ` AND NOT (` + relationEndedSQL(d) + `)`
+	return ` AND (` + d + `.source_work_item_id, ` + d + `.target_work_item_id, ` + d + `.relationship_type) NOT IN ` + relationEndedKeysSQL()
 }
