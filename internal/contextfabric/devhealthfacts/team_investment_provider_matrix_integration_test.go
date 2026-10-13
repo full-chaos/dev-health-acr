@@ -145,8 +145,8 @@ func TestTeamInvestmentServesEveryProviderAgainstRealClickHouse(t *testing.T) {
 				}
 				t.Logf("MATRIX scenario=%q team=%s provider=%s facts=%d effort=%v reason=%q", sc.name, tm.id, tm.provider, len(result.Facts), got, result.Reason)
 				repoResult, repoErr := provider.ReadFacts(ctx, storage.Principal{OrgID: sc.org}, contextfabric.FactQuery{
-					Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &stop},
-					Kind: contextfabric.FactInvestment,
+					Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &stop},
+					Kind:     contextfabric.FactInvestment,
 					Subjects: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoUUID(tm.repoLabel+sc.org), Label: tm.repoLabel}},
 				})
 				repoGot := 0.0
