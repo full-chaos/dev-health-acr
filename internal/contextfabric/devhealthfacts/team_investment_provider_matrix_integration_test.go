@@ -144,6 +144,19 @@ func TestTeamInvestmentServesEveryProviderAgainstRealClickHouse(t *testing.T) {
 					}
 				}
 				t.Logf("MATRIX scenario=%q team=%s provider=%s facts=%d effort=%v reason=%q", sc.name, tm.id, tm.provider, len(result.Facts), got, result.Reason)
+				repoResult, repoErr := provider.ReadFacts(ctx, storage.Principal{OrgID: sc.org}, contextfabric.FactQuery{
+					Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &stop},
+					Kind: contextfabric.FactInvestment,
+					Subjects: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoUUID(tm.repoLabel+sc.org), Label: tm.repoLabel}},
+				})
+				repoGot := 0.0
+				if repoErr == nil && len(repoResult.Facts) == 1 {
+					for _, row := range repoResult.Facts[0].Fields["theme_breakdown"].Table.Rows {
+						repoGot += *row.Fields["weighted_effort"].Number
+					}
+				}
+				t.Logf("MATRIX repository scenario=%q repo=%s facts=%d effort=%v err=%v reason=%q note=%q", sc.name, tm.repoLabel, len(repoResult.Facts), repoGot, repoErr, repoResult.Reason, repoResult.RequestNote)
+				t.Logf("MATRIX team note=%q", result.RequestNote)
 				if got != sc.want[tm.id] {
 					t.Errorf("%s (%s) effort = %v, want %v (facts=%d reason=%q)", tm.id, tm.provider, got, sc.want[tm.id], len(result.Facts), result.Reason)
 				}
