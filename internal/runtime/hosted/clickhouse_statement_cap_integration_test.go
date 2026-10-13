@@ -32,7 +32,7 @@ func readSetting(t *testing.T, client contextpacket.ClickHouseQueryClient, state
 }
 
 // Against a real server, a statement sent through the production API client
-// carries the 64 MiB memory cap, and a statement's own SETTINGS wins.
+// carries the 256 MiB memory cap, and a statement's own SETTINGS wins.
 func TestOpenClickHouseSendsTheStatementMemoryCapToTheServer(t *testing.T) {
 	dsn := chserver.StartDSN(t, context.Background())
 	components, err := openClickHouse(context.Background(), clickHouseOpenRequest{config: config.Config{

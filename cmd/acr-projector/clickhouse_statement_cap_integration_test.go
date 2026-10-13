@@ -11,7 +11,7 @@ import (
 )
 
 // Against a real server, a statement sent through the production projector
-// client carries the 128 MiB memory cap, and a statement's own SETTINGS wins.
+// client carries the 192 MiB memory cap, and a statement's own SETTINGS wins.
 func TestOpenProjectorClickHouseSendsTheStatementMemoryCapToTheServer(t *testing.T) {
 	dsn := chserver.StartDSN(t, context.Background())
 	client, err := openProjectorClickHouse(config.ProjectorConfig{ClickHouseDSN: dsn, ClickHouseMaxBytesToRead: 256 << 20}, slog.New(slog.NewTextHandler(io.Discard, nil)))
