@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"fmt"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"math"
 	"sort"
 
@@ -656,7 +657,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			// this function entirely) -- distinct from "exact_index" below,
 			// which is THIS function's own exact-label-match tier over
 			// candidates that arrived Proposed.
-			commitGate = "pre_committed_exact_hint"
+			commitGate = contractsv1.CommitGatePreCommittedExactHint
 			// CHAOS-4085: caller-canonical-id proof. The only producer of
 			// this arrival state is resolve.go's SubjectHint branch, which
 			// takes a canonical id the CALLER supplied, re-reads it from
@@ -838,7 +839,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		case refusal.refused:
 			ambiguous = true
 		case len(exactIndex) == 1 && !identityCrossClassRivalClaimant(SubjectKey(candidates[exactIndex[0]].Subject), identity, identityTerms):
-			commitAfterExactStep(exactIndex[0], "exact_index", contextfabric.CommitBasisStatistical)
+			commitAfterExactStep(exactIndex[0], contractsv1.CommitGateExactIndex, contextfabric.CommitBasisStatistical)
 		// CHAOS-3884: the identity fast path. Sits AFTER exactIndex
 		// (Finding 1's precedence: a candidate's own canonical label is a
 		// stronger identity claim than a derived alias/provider-key handle,
@@ -857,7 +858,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		case aliasIdentityComplete && len(identityIndex) == 1 &&
 			!identityCollision(SubjectKey(candidates[identityIndex[0]].Subject), identity, identityTerms) &&
 			!identityCrossClassRivalClaimant(SubjectKey(candidates[identityIndex[0]].Subject), identity, identityTerms):
-			commitAfterExactStep(identityIndex[0], "identity_fast_path", contextfabric.CommitBasisAuthoritativeIdentity)
+			commitAfterExactStep(identityIndex[0], contractsv1.CommitGateIdentityFastPath, contextfabric.CommitBasisAuthoritativeIdentity)
 		case searchTruncated:
 			// Codex round-3 review of D11/AC-3778-0: truncation is a
 			// property of the RESOLUTION, not of any one candidate's
@@ -898,7 +899,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// pair cannot slip through this gate merely because neither
 		// individually reached its own dedicated fast path.
 		case len(commitIndex) == 1 && gateValid && !isVectorOnlyCandidate(candidates[commitIndex[0]].MatchMechanisms) && !identityCollision(SubjectKey(candidates[commitIndex[0]].Subject), identity, identityTerms) && !identityCrossClassRivalClaimant(SubjectKey(candidates[commitIndex[0]].Subject), identity, identityTerms) && !identityTrustUnproven(candidates[commitIndex[0]], aliasIdentityComplete) && candidates[commitIndex[0]].Confidence >= gate.LoneFloor:
-			commitAfterExactStep(commitIndex[0], "lone_floor", contextfabric.CommitBasisStatistical)
+			commitAfterExactStep(commitIndex[0], contractsv1.CommitGateLoneFloor, contextfabric.CommitBasisStatistical)
 		case len(commitIndex) >= 2 && gateValid:
 			top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
 			// CHAOS-3884 spot-check item 1: identityCollision applied here
@@ -923,7 +924,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			// identityCrossClassRivalClaimant (CHAOS-3917) applied here too, same
 			// rationale as LoneFloor above.
 			if gap := top.Confidence - second.Confidence; !isVectorOnlyCandidate(top.MatchMechanisms) && !identityCollision(SubjectKey(top.Subject), identity, identityTerms) && !identityCrossClassRivalClaimant(SubjectKey(top.Subject), identity, identityTerms) && !identityTrustUnproven(top, aliasIdentityComplete) && top.Confidence >= gate.TopFloor && gap >= gate.TopGap {
-				commitAfterExactStep(commitIndex[0], "top_of_two", contextfabric.CommitBasisStatistical)
+				commitAfterExactStep(commitIndex[0], contractsv1.CommitGateTopOfTwo, contextfabric.CommitBasisStatistical)
 			} else {
 				ambiguous = true
 			}
@@ -1196,7 +1197,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			// rested on.
 			// identityCrossClassRivalClaimant (CHAOS-3917) applied here too, same
 			// rationale identityCollision's own comment just above already gives.
-			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok && !identityCollision(SubjectKey(candidates[index].Subject), identity, identityTerms) && !identityCrossClassRivalClaimant(SubjectKey(candidates[index].Subject), identity, identityTerms) && commitAfterExactStep(index, "vector_margin_rescue", contextfabric.CommitBasisStatistical) {
+			if index, ok := vectorMarginCommit(candidates, commitIndex, vectorArmSimilarity, vectorMarginCommitThreshold); ok && !identityCollision(SubjectKey(candidates[index].Subject), identity, identityTerms) && !identityCrossClassRivalClaimant(SubjectKey(candidates[index].Subject), identity, identityTerms) && commitAfterExactStep(index, contractsv1.CommitGateVectorMarginRescue, contextfabric.CommitBasisStatistical) {
 				ambiguous = false
 			}
 		}
@@ -1292,7 +1293,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// be mislabeled as either basis below.
 	populationBasis := "none"
 	switch commitGate {
-	case "exact_index", "lone_floor", "top_of_two", "vector_margin_rescue", "evidence_census":
+	case contractsv1.CommitGateExactIndex, contractsv1.CommitGateLoneFloor, contractsv1.CommitGateTopOfTwo, contractsv1.CommitGateVectorMarginRescue, contractsv1.CommitGateEvidenceCensus:
 		switch {
 		case confirmedKindScopedBasis:
 			// CHAOS-4154: this call's candidatesBySubject was the isolated,
@@ -2055,7 +2056,7 @@ func FinalizeExactResolution(candidatesBySubject map[string]contextfabric.Subjec
 // site (resolve.go) can stamp the IDENTICAL gate name onto the trace that
 // this function already stamps onto the CommitDecisionDigest, rather than a
 // second literal that could drift from it.
-const CommitGateCallerHintShortCircuit = "caller_hint_short_circuit"
+const CommitGateCallerHintShortCircuit = contractsv1.CommitGateCallerHintShortCircuit
 
 func FinalizeExactResolutionWithBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, callerSourced map[string]bool, max int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	resolution := FinalizeExactResolution(candidatesBySubject, callerSourced, max)

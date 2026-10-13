@@ -13,7 +13,7 @@ import (
 
 // The wire digest vocabulary is closed (validCommitGate): this commit is an
 // evidence-census commit, and the handle-explicit marker rides on the trace.
-const commitGateExplicitHandleCensus = "evidence_census"
+const commitGateExplicitHandleCensus = contractsv1.CommitGateEvidenceCensus
 
 var errCensusPanicked = errors.New("census panicked")
 

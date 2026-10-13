@@ -1,6 +1,9 @@
 package v1
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Validate enforces context_packet.v1.schema.json's "resolved_scope"
 // object: repo_id/repo_slug/resolution are required, fallback_reasons must
@@ -103,12 +106,8 @@ func (w SourceWatermark) validate(open bool) error {
 	if !stringLengthBetween(w.Source, 1, 100) {
 		return fmt.Errorf("source violates v1 bounds")
 	}
-	switch w.Status {
-	case "fresh", "stale", "missing", "unavailable":
-	default:
-		if !open || !openVocabularyToken(w.Status) {
-			return fmt.Errorf("status violates v1 bounds")
-		}
+	if !slices.Contains(SourceWatermarkStatusVocabulary(), w.Status) && !(open && openVocabularyToken(w.Status)) {
+		return fmt.Errorf("status violates v1 bounds")
 	}
 	return nil
 }
