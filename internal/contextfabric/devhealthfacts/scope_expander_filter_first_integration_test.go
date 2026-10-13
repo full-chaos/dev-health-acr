@@ -352,6 +352,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 
 	fillScopeOrganization(t, ctx, direct, fixture, "small", 100_000)
 	unmerged(t, "small")
+	t.Run("link helper callers outside the expander", func(t *testing.T) { linkHelperCallersDifferential(t, ctx, query, fixture) })
 	mergeScopeTables(t, ctx, direct)
 	smallStatements := served(t)
 	t.Run("rows at the smaller size", func(t *testing.T) { differential(t, smallStatements) })
@@ -359,7 +360,6 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	small := measure(t, smallStatements)
 	fillScopeOrganization(t, ctx, direct, fixture, "large", 200_000)
 	unmerged(t, "large")
-	t.Run("link helper callers outside the expander", func(t *testing.T) { linkHelperCallersDifferential(t, ctx, query, fixture) })
 	mergeScopeTables(t, ctx, direct)
 	largeStatements := served(t)
 	t.Run("rows at the larger size", func(t *testing.T) { differential(t, largeStatements) })
@@ -458,7 +458,10 @@ func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *run
 				reached[site.label]++
 			}
 		}
-		narrowed, wholeRows := scopeRows(t, ctx, query, statement), scopeRows(t, ctx, query, capturedStatement{statement: whole, bindings: statement.bindings})
+		head, _, _ := strings.Cut(strings.TrimSpace(statement.statement), "\n")
+		t.Logf("DIFFERENTIAL comparing %.120s", head)
+		narrowed := scopeRows(t, ctx, query, statement)
+		wholeRows := scopeRows(t, ctx, query, capturedStatement{statement: whole, bindings: statement.bindings})
 		if !slices.Equal(narrowed, wholeRows) {
 			t.Errorf("rows differ from the whole pull request table:\nnarrowed %q\nwhole    %q\n%s", narrowed, wholeRows, statement.statement)
 		}
