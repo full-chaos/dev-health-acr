@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
@@ -61,6 +62,21 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, type) VALUES (?, ?, ?, ?, 'open', '', ?, '', ?, ?, NULL, ?)`,
 			item.id, repoUUID("repo-x"), org, "t", at, item.provider, item.project, item.typ)
 	}
+	versions := []struct {
+		id, project string
+		lastSynced  time.Time
+	}{
+		{"i-moved-away", "proj-a", ts(2026, 9, 1, 0, 0, 0)}, {"i-moved-away", "proj-other", ts(2026, 9, 20, 0, 0, 0)},
+		{"i-moved-in", "proj-other", ts(2026, 9, 1, 0, 0, 0)}, {"i-moved-in", "proj-a", ts(2026, 9, 20, 0, 0, 0)},
+	}
+	for _, v := range versions {
+		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, type, last_synced) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL, 'issue', ?)`,
+			v.id, repoUUID("repo-x"), org, "t", at, v.project, v.lastSynced)
+	}
+	for _, id := range []string{"i-moved-away", "i-moved-in"} {
+		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoUUID("repo-y"), id, uint32(1), float32(1), "native", "", at, org)
+	}
 	for _, number := range []uint32{1, 2, 3, 4, 5, 6, 7} {
 		exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
 			repoUUID("repo-y"), org, number, "pr", "open", at, at, "feature", "")
@@ -95,11 +111,19 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 		return out
 	}
 	old, current := rowsOf(devhealthfacts.TeamProjectLinkRowsPreStreamingSQLForTest()), rowsOf(devhealthfacts.TeamProjectLinkRowsSQLForTest())
-	if len(old) < 6 {
+	if len(old) < 7 {
 		t.Fatalf("the seed reached %d link rows before the change, want at least 6: %v", len(old), old)
 	}
 	if !reflect.DeepEqual(old, current) {
 		t.Fatalf("link rows differ.\nbefore: %s\nafter:  %s", fmt.Sprint(old), fmt.Sprint(current))
+	}
+	var movedIn, movedAway bool
+	for _, row := range current {
+		movedIn = movedIn || row[1] == "i-moved-in"
+		movedAway = movedAway || row[1] == "i-moved-away"
+	}
+	if !movedIn || movedAway {
+		t.Fatalf("stale versions: i-moved-in served = %v (want true), i-moved-away served = %v (want false): %v", movedIn, movedAway, current)
 	}
 	reachedTwice := 0
 	for _, row := range current {

@@ -23,10 +23,11 @@ const (
 	orgLinksMemoryFillerLinks  = 24_000
 	orgLinksMemoryMoreLinks    = 60_000
 	orgLinksMemoryCeilingLinks = 400_000
+	prodShapeMemoryOrg         = "0a6f3c58-9d21-4b74-8e15-c2f0a7b94d63"
 	ownedLinksMemoryOrg        = "f2a96d41-3c85-4e07-a1b9-5d70c8e3b926"
 	prodLinkedIssues           = 24_000
 	prodEstimatePeakBytes      = uint64(48 << 20)
-	flatMemoryFloorBytes       = uint64(8 << 20)
+	historyFloorBytes          = uint64(2 << 20)
 	ownershipHistorySmall      = 100
 	ownershipHistoryLarge      = 1_000
 )
@@ -74,6 +75,13 @@ SELECT ?, concat('`+prefix+`-', repeat('x', 96), '-', toString(number)), toUInt3
 			measureTeamReachAxis(t, ctx, query, direct, orgLinksMemoryOrg+"-"+mode, merged, linkFiller("outside", "", "repo-filler"),
 				"organization links outside the owned projects "+mode, prodLinkedIssues, 90_000, orgLinksMemoryCeilingLinks, axisGuard{reportOnly: true})
 		})
+		t.Run("prod shape one quarter inside the owned projects "+mode, func(t *testing.T) {
+			inside, outside := linkFiller("owned", "proj-owner", "repo-reached"), linkFiller("outside", "", "repo-filler")
+			measureTeamReachAxis(t, ctx, query, direct, prodShapeMemoryOrg+"-"+mode, merged, func(exec func(string, ...any), org string, from, count int) {
+				inside(exec, org, from/4, count/4)
+				outside(exec, org, from-from/4, count-count/4)
+			}, "prod shape (6k inside, 18k outside; 4x) "+mode, prodLinkedIssues, 4*prodLinkedIssues, 0, axisGuard{reportOnly: true})
+		})
 		t.Run("links inside the owned projects "+mode, func(t *testing.T) {
 			measureTeamReachAxis(t, ctx, query, direct, ownedLinksMemoryOrg+"-"+mode, merged, linkFiller("owned", "proj-owner", "repo-reached"),
 				"links inside the owned projects "+mode, prodLinkedIssues, 4*prodLinkedIssues, orgLinksMemoryCeilingLinks, axisGuard{reportOnly: true})
@@ -87,7 +95,7 @@ SELECT ?, 'linear', 'team-owner', 'proj-owner', NULL, 'native', addSeconds(toDat
   addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ? + 1) * 3600), toDateTime64('2026-09-29 00:00:00', 3, 'UTC') FROM numbers(?)`,
 				org, uint64(from), uint64(from), uint64(n))
 
-		}, "project ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0, axisGuard{})
+		}, "project ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0, axisGuard{floor: historyFloorBytes})
 	})
 	t.Run("repository ownership history", func(t *testing.T) {
 		measureTeamReachAxis(t, ctx, query, direct, ownershipHistoryRepoOrg, false, func(exec func(string, ...any), org string, from, count int) {
@@ -97,7 +105,7 @@ SELECT ?, 'linear', 'team-owner', ?, 'acme/repo-filler', 'exact', 'native', 1, 1
   addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ? + 1) * 3600), toDateTime64('2026-09-29 00:00:00', 3, 'UTC') FROM numbers(?)`,
 				org, repoUUID("repo-filler"), uint64(from), uint64(from), uint64(n))
 
-		}, "repository ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0, axisGuard{})
+		}, "repository ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0, axisGuard{floor: historyFloorBytes})
 	})
 }
 
