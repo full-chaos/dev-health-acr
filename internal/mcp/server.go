@@ -304,7 +304,7 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 
 	b.WriteString(modelCallerLead(caller, investigate))
 
-	b.WriteString(dataToolsInstructions(caller))
+	b.WriteString(dataToolsInstructions(caller, hostedToolEnabled(caller, toolInvestigateWithInterpretation)))
 
 	// The guide names only tools this server registered, so it never sends
 	// an agent to a tool the hosted API did not advertise.

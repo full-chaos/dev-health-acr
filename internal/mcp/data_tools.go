@@ -73,7 +73,7 @@ func rawToolResult(raw json.RawMessage, text string) *mcpsdk.CallToolResult {
 // (design H, "Two ways to use this server"). It names only tools this server
 // registered, and says nothing about a tool that does not exist in this
 // release: more data tools are planned, none is named.
-func dataToolsInstructions(caller *CallerContext) string {
+func dataToolsInstructions(caller *CallerContext, ownModelRoute bool) string {
 	catalog := hostedToolEnabled(caller, toolDataCatalog)
 	find := hostedToolEnabled(caller, toolFindSubjects)
 	run := hostedToolEnabled(caller, toolRunOperation)
@@ -107,11 +107,11 @@ func dataToolsInstructions(caller *CallerContext) string {
 	b.WriteString("More data tools are planned.\n")
 	if hostedToolEnabled(caller, toolInvestigateQuestion) {
 		b.WriteString("B. You want our engine's narrative answer and have no model of your own: investigate_question. If you are a model, prefer A")
-		if hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
+		if ownModelRoute {
 			b.WriteString(", or investigate_with_interpretation with synthesis \"client\"")
 		}
 		b.WriteString(". investigate_question spends model budget: it runs on the service's model, which needs a plan feature, or on the organization's own model configuration when it has one.\n")
-	} else if hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
+	} else if ownModelRoute {
 		b.WriteString("B. You want our engine's narrative answer from an interpretation you ran on your own model: investigate_with_interpretation with synthesis \"client\".\n")
 	}
 	b.WriteString("Rules for A:\n")
