@@ -1006,12 +1006,17 @@ import (
 // team's blocked work item count as a driver with a minted claim. An answer
 // saved under v198 has none.
 //
-// v199 -> v200: a coverage row carries the reason of its own subject. A
+// v199 -> v200: a client synthesis answer with a caller byte budget is fitted
+// to what the synthesis input leaves of that budget, and the input is cut to
+// the budget with the cut stated. An answer saved under v199 was fitted to the
+// whole budget.
+//
+// v200 -> v201: a coverage row carries the reason of its own subject. A
 // sentence about some of the requested teams (N of M own no repository) is
 // served once for the request and no longer on the row of a team it is false
 // for; a team that owns nothing gets its own reason. A stored answer can
 // differ.
-const QueryVersion = "devhealthfacts.clickhouse.v200"
+const QueryVersion = "devhealthfacts.clickhouse.v201"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
