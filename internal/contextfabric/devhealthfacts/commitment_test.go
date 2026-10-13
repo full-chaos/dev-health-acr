@@ -17,7 +17,7 @@ import (
 
 const (
 	commitmentProjectsMatch = "FROM projects AS p FINAL"
-	commitmentItemsMatch    = "WITH project_items AS"
+	commitmentItemsMatch    = "WITH project_rows AS"
 )
 
 var commitmentAsOf = time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
@@ -31,12 +31,16 @@ func commitmentProjectRow(provider, id, state, stateSource, targetDate string, r
 }
 
 type commitmentCounts struct {
-	total, open, closed, withDueAt, pastDueOpen, sprints, nextSprints int64
-	nextEnd, latestEnd                                                time.Time
+	all, total, open, closed, unknown, withDueAt, pastDueOpen, sprints, nextSprints int64
+	nextEnd, latestEnd                                                              time.Time
 }
 
 func commitmentItemRow(provider, id string, c commitmentCounts) []any {
-	return []any{provider + ":" + id, c.total, c.open, c.closed, c.withDueAt, c.pastDueOpen, c.sprints, c.nextSprints, c.nextEnd, c.latestEnd}
+	all := c.all
+	if all == 0 {
+		all = c.total
+	}
+	return []any{provider + ":" + id, all, c.total, c.open, c.closed, c.unknown, c.withDueAt, c.pastDueOpen, c.sprints, c.nextSprints, c.nextEnd, c.latestEnd}
 }
 
 func commitmentClient(projects, items [][]any) *fakeClient {
@@ -117,24 +121,26 @@ func TestCommitmentServesTheStatedDatesOfAProjectAtTheReadFactsBoundary(t *testi
 	)
 	fact := servedCommitment(t, readCommitmentFacts(t, client, project), project)
 	wantServed(t, fact, map[string]any{
-		"as_of":                "2026-10-13T12:00:00Z",
-		"commitment_status":    "stated",
-		"target_date":          "2026-11-01",
-		"target_date_provider": "linear",
-		"days_to_target":       "19",
-		"project_state":        "started",
-		"state_source":         "linear.project.state",
-		"items_total":          "5",
-		"items_open":           "3",
-		"items_closed":         "2",
-		"items_with_due_at":    "3",
-		"items_without_due_at": "2",
-		"items_past_due_open":  "1",
-		"sprint_kind":          "cycle",
-		"next_sprint_end":      "2026-10-20T00:00:00Z",
-		"latest_sprint_end":    "2026-10-27T00:00:00Z",
+		"as_of":                  "2026-10-13T12:00:00Z",
+		"commitment_status":      "stated",
+		"target_date":            "2026-11-01",
+		"target_date_provider":   "linear",
+		"days_to_target":         "19",
+		"project_state":          "started",
+		"state_source":           "linear.project.state",
+		"items_total":            "5",
+		"items_open":             "3",
+		"items_closed":           "2",
+		"unknown_status_count":   "0",
+		"items_unreadable_count": "0",
+		"items_with_due_at":      "3",
+		"items_without_due_at":   "2",
+		"items_past_due_open":    "1",
+		"sprint_kind":            "cycle",
+		"next_sprint_end":        "2026-10-20T00:00:00Z",
+		"latest_sprint_end":      "2026-10-27T00:00:00Z",
 	})
-	wantAbsent(t, fact, "items_unavailable_reason", "at_risk", "score", "verdict")
+	wantAbsent(t, fact, "items_unavailable_reason", "items_unreadable_reason", "iteration_basis", "at_risk", "score", "verdict")
 	if fact.PopulationScope != "caller_authorized_items" {
 		t.Errorf("population_scope = %q, want caller_authorized_items over the item counts", fact.PopulationScope)
 	}
@@ -254,8 +260,10 @@ func TestCommitmentStatementsCountOnlyOpenItemsPastDueOverTheProjectIssues(t *te
 		"k.join_key = w.project_id",
 		"ifNull(w.type, '') NOT IN ('pr', 'merge_request')",
 		"argMax(tuple(lower(w.status), w.due_at, w.sprint_id), w.last_synced)",
-		"toInt64(countIf(status IN ('done', 'canceled'))) AS items_closed",
-		"toInt64(countIf(status NOT IN ('done', 'canceled') AND due_at IS NOT NULL AND due_at < {as_of:DateTime64(3, 'UTC')})) AS items_past_due_open",
+		"countIf(status IN ('backlog', 'todo', 'in_progress', 'in_review', 'blocked')) AS items_open",
+		"countIf(status IN ('done', 'canceled')) AS items_closed",
+		"countIf(status NOT IN ('backlog', 'todo', 'in_progress', 'in_review', 'blocked') AND status NOT IN ('done', 'canceled')) AS items_unknown_status",
+		"countIf(status IN ('backlog', 'todo', 'in_progress', 'in_review', 'blocked') AND due_at IS NOT NULL AND due_at < {as_of:DateTime64(3, 'UTC')}) AS items_past_due_open",
 		"FROM sprints FINAL",
 		"s.provider = pi.provider AND s.sprint_id = pi.sprint_id",
 	} {
@@ -275,5 +283,84 @@ func TestCommitmentStatementsCountOnlyOpenItemsPastDueOverTheProjectIssues(t *te
 	}
 	if !bound {
 		t.Errorf("as_of binding = %+v, want the request clock %s", items.bindings, commitmentAsOf)
+	}
+}
+
+func TestCommitmentUnknownStatusIsCountedApartAndNeverAsOpen(t *testing.T) {
+	project := projectSubject("jira", "proj-u")
+	client := commitmentClient(
+		[][]any{commitmentProjectRow("jira", "proj-u", "", "", "", true)},
+		[][]any{commitmentItemRow("jira", "proj-u", commitmentCounts{total: 5, open: 1, closed: 1, unknown: 3, withDueAt: 2, pastDueOpen: 1})},
+	)
+	fact := servedCommitment(t, readCommitmentFacts(t, client, project), project)
+	wantServed(t, fact, map[string]any{
+		"items_total": "5", "items_open": "1", "items_closed": "1", "unknown_status_count": "3",
+		"items_past_due_open": "1", "commitment_status": "stated",
+	})
+	readCommitmentFacts(t, client, project)
+	for _, query := range client.queries {
+		if !strings.Contains(query.statement, commitmentItemsMatch) {
+			continue
+		}
+		if strings.Contains(query.statement, "status NOT IN ('done', 'canceled')) AS items_open") || strings.Contains(query.statement, "countIf(status NOT IN ('done', 'canceled') AND due_at") {
+			t.Errorf("an item with an unknown status is counted as open:\n%s", query.statement)
+		}
+	}
+}
+
+func TestCommitmentGithubServesIterationsAsNotCollected(t *testing.T) {
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
+		t.Run(provider, func(t *testing.T) {
+			project := projectSubject(provider, "proj-i")
+			client := commitmentClient(
+				[][]any{commitmentProjectRow(provider, "proj-i", "", "", "", true)},
+				[][]any{commitmentItemRow(provider, "proj-i", commitmentCounts{total: 1, open: 1})},
+			)
+			fact := servedCommitment(t, readCommitmentFacts(t, client, project), project)
+			if provider == "github" {
+				wantServed(t, fact, map[string]any{"iteration_basis": "not_collected"})
+				return
+			}
+			wantAbsent(t, fact, "iteration_basis")
+		})
+	}
+}
+
+func TestCommitmentItemsTheCallerCannotReadWithholdNoneStated(t *testing.T) {
+	hidden := projectSubject("gitlab", "proj-hidden")
+	readable := projectSubject("gitlab", "proj-readable")
+	dated := projectSubject("gitlab", "proj-dated")
+	client := commitmentClient(
+		[][]any{
+			commitmentProjectRow("gitlab", "proj-hidden", "", "", "", true),
+			commitmentProjectRow("gitlab", "proj-readable", "", "", "", true),
+			commitmentProjectRow("gitlab", "proj-dated", "", "", "", true),
+		},
+		[][]any{
+			commitmentItemRow("gitlab", "proj-dated", commitmentCounts{all: 4, total: 1, open: 1, withDueAt: 1}),
+			commitmentItemRow("gitlab", "proj-hidden", commitmentCounts{all: 3, total: 1, open: 1}),
+			commitmentItemRow("gitlab", "proj-readable", commitmentCounts{total: 2, open: 2}),
+		},
+	)
+	response := readCommitmentFacts(t, client, hidden, readable, dated)
+	fact := servedCommitment(t, response, hidden)
+	wantServed(t, fact, map[string]any{"items_unreadable_count": "2", "items_unreadable_reason": "items_not_readable_for_caller", "items_total": "1"})
+	wantAbsent(t, fact, "commitment_status")
+	fact = servedCommitment(t, response, readable)
+	wantServed(t, fact, map[string]any{"items_unreadable_count": "0", "commitment_status": "none_stated"})
+	wantAbsent(t, fact, "items_unreadable_reason")
+	fact = servedCommitment(t, response, dated)
+	wantServed(t, fact, map[string]any{"items_unreadable_count": "3", "commitment_status": "stated"})
+	for _, query := range client.queries {
+		if !strings.Contains(query.statement, commitmentItemsMatch) {
+			continue
+		}
+		rows := query.statement[:strings.Index(query.statement, "project_items AS (")]
+		if strings.Contains(rows, "work_item_id IN (SELECT w.work_item_id FROM work_items AS w FINAL") || strings.Contains(rows, "HAVING min(") {
+			t.Errorf("the unfiltered project count applies the caller filter:\n%s", rows)
+		}
+		if !strings.Contains(query.statement, "FROM project_rows\n  WHERE work_item_id IN (SELECT w.work_item_id FROM work_items AS w FINAL") {
+			t.Errorf("the served counts do not apply the caller filter:\n%s", query.statement)
+		}
 	}
 }

@@ -78,6 +78,8 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 	s.item("linear", "L6", "pr", "in_progress", "lin-p", commitmentDay(2026, 10, 1), "", newer)
 	s.item("linear", "L7", "issue", "in_progress", "lin-p", commitmentDay(2026, 10, 2), "", older)
 	s.item("linear", "L7", "issue", "done", "lin-p", commitmentDay(2026, 10, 2), "", newer)
+	s.item("linear", "L8", "issue", "unknown", "lin-p", commitmentDay(2026, 10, 1), "", newer)
+	s.item("linear", "L9", "issue", "", "lin-p", nil, "", newer)
 	s.sprint(commitmentOrg, "linear", "linear:cycle:c1", commitmentDay(2026, 10, 6))
 	s.sprint(commitmentOrg, "linear", "linear:cycle:c2", commitmentDay(2026, 10, 27))
 	s.sprint(commitmentOrg, "linear", "linear:cycle:c3", commitmentDay(2026, 10, 20))
@@ -106,11 +108,11 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 		"as_of": "2026-10-13T12:00:00Z", "commitment_status": "stated",
 		"target_date": "2026-11-01", "target_date_provider": "linear", "days_to_target": "19",
 		"project_state": "started", "state_source": "linear.project.state",
-		"items_total": "6", "items_open": "3", "items_closed": "3",
-		"items_with_due_at": "5", "items_without_due_at": "1", "items_past_due_open": "1",
+		"items_total": "8", "items_open": "3", "items_closed": "3", "unknown_status_count": "2",
+		"items_with_due_at": "6", "items_without_due_at": "2", "items_past_due_open": "1", "items_unreadable_count": "0",
 		"sprint_kind": "cycle", "next_sprint_end": "2026-10-20T00:00:00Z", "latest_sprint_end": "2026-10-27T00:00:00Z",
 	})
-	wantAbsent(t, fact, "items_unavailable_reason")
+	wantAbsent(t, fact, "items_unavailable_reason", "items_unreadable_reason", "iteration_basis")
 
 	fact = servedCommitment(t, response, jira)
 	wantServed(t, fact, map[string]any{
@@ -132,6 +134,7 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 	wantServed(t, fact, map[string]any{
 		"commitment_status": "stated", "items_total": "1", "sprint_kind": "milestone",
 		"next_sprint_end": "2026-11-15T00:00:00Z", "latest_sprint_end": "2026-11-15T00:00:00Z",
+		"iteration_basis": "not_collected",
 	})
 	wantAbsent(t, fact, "target_date")
 
@@ -142,9 +145,14 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 	fact = servedCommitment(t, response, empty)
 	wantServed(t, fact, map[string]any{"commitment_status": "none_stated", "items_total": "0", "items_open": "0", "items_closed": "0"})
 
-	restricted := readCommitmentFactsAs(t, query, storage.Principal{OrgID: commitmentOrg, Subject: "commitment", CredentialID: "commitment", RepositoryScopes: []string{"acme/elsewhere"}}, linear)
+	restricted := readCommitmentFactsAs(t, query, storage.Principal{OrgID: commitmentOrg, Subject: "commitment", CredentialID: "commitment", RepositoryScopes: []string{"acme/elsewhere"}}, linear, none, empty)
+	fact = servedCommitment(t, restricted, none)
+	wantServed(t, fact, map[string]any{"items_total": "0", "items_unreadable_count": "1", "items_unreadable_reason": "items_not_readable_for_caller"})
+	wantAbsent(t, fact, "commitment_status")
+	fact = servedCommitment(t, restricted, empty)
+	wantServed(t, fact, map[string]any{"commitment_status": "none_stated", "items_unreadable_count": "0"})
 	fact = servedCommitment(t, restricted, linear)
-	wantServed(t, fact, map[string]any{"target_date": "2026-11-01", "commitment_status": "stated", "items_total": "0", "items_past_due_open": "0"})
+	wantServed(t, fact, map[string]any{"target_date": "2026-11-01", "commitment_status": "stated", "items_total": "0", "items_past_due_open": "0", "items_unreadable_count": "8"})
 	if fact.PopulationScope != "caller_authorized_items" {
 		t.Errorf("restricted population_scope = %q, want caller_authorized_items", fact.PopulationScope)
 	}

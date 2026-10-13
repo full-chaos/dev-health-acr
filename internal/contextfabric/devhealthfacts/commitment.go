@@ -19,6 +19,8 @@ const (
 	commitmentStatusNoneStated = "none_stated"
 
 	commitmentItemsUnreachableReason = "project_key_ambiguous"
+	commitmentItemsUnreadableReason  = "items_not_readable_for_caller"
+	commitmentNotCollected           = "not_collected"
 
 	commitmentAsOfParam = "as_of"
 )
@@ -47,30 +49,52 @@ const commitmentProjectItemIDsSQL = `(SELECT w.work_item_id FROM work_items AS w
 
 const commitmentClosedStatusSQL = `('done', '` + workItemCancelledStatus + `')`
 
+var commitmentOpenStatusSQL = func() string {
+	open := []string{}
+	for _, status := range contextfabric.WorkItemStatusVocabulary() {
+		switch status {
+		case "done", workItemCancelledStatus, "unknown":
+			continue
+		}
+		open = append(open, "'"+status+"'")
+	}
+	return "(" + strings.Join(open, ", ") + ")"
+}()
+
 func commitmentItemRowsSQL(authorized string) string {
-	return `WITH project_items AS (
+	return `WITH project_rows AS (
+  SELECT k.project_key AS project_key, w.provider AS provider, w.work_item_id AS work_item_id,
+    argMax(tuple(lower(w.status), w.due_at, w.sprint_id), w.last_synced) AS latest
+  FROM work_items AS w FINAL
+  INNER JOIN ` + projectJoinKeysSQL + ` AS k ON k.provider = w.provider AND k.join_key = w.project_id
+  WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + `
+  GROUP BY project_key, provider, work_item_id
+),
+project_items AS (
   SELECT project_key, provider, work_item_id, tupleElement(latest, 1) AS status, tupleElement(latest, 2) AS due_at, tupleElement(latest, 3) AS sprint_id
-  FROM (
-    SELECT k.project_key AS project_key, w.provider AS provider, w.work_item_id AS work_item_id,
-      argMax(tuple(lower(w.status), w.due_at, w.sprint_id), w.last_synced) AS latest
-    FROM work_items AS w FINAL
-    INNER JOIN ` + projectJoinKeysSQL + ` AS k ON k.provider = w.provider AND k.join_key = w.project_id
-    WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND w.work_item_id IN ` + authorized + `
-    GROUP BY project_key, provider, work_item_id
-  )
+  FROM project_rows
+  WHERE work_item_id IN ` + authorized + `
 )
-SELECT i.project_key, i.items_total, i.items_open, i.items_closed, i.items_with_due_at, i.items_past_due_open,
+SELECT a.project_key, a.items_all,
+  toInt64(ifNull(i.items_total, 0)), toInt64(ifNull(i.items_open, 0)), toInt64(ifNull(i.items_closed, 0)), toInt64(ifNull(i.items_unknown_status, 0)),
+  toInt64(ifNull(i.items_with_due_at, 0)), toInt64(ifNull(i.items_past_due_open, 0)),
   toInt64(ifNull(s.sprint_count, 0)), toInt64(ifNull(s.next_count, 0)), ifNull(s.next_end, toDateTime64(0, 3, 'UTC')), ifNull(s.latest_end, toDateTime64(0, 3, 'UTC'))
 FROM (
+  SELECT project_key, toInt64(count()) AS items_all
+  FROM project_rows
+  GROUP BY project_key
+) AS a
+LEFT JOIN (
   SELECT project_key,
-    toInt64(count()) AS items_total,
-    toInt64(countIf(status NOT IN ` + commitmentClosedStatusSQL + `)) AS items_open,
-    toInt64(countIf(status IN ` + commitmentClosedStatusSQL + `)) AS items_closed,
-    toInt64(countIf(due_at IS NOT NULL)) AS items_with_due_at,
-    toInt64(countIf(status NOT IN ` + commitmentClosedStatusSQL + ` AND due_at IS NOT NULL AND due_at < {` + commitmentAsOfParam + `:DateTime64(3, 'UTC')})) AS items_past_due_open
+    count() AS items_total,
+    countIf(status IN ` + commitmentOpenStatusSQL + `) AS items_open,
+    countIf(status IN ` + commitmentClosedStatusSQL + `) AS items_closed,
+    countIf(status NOT IN ` + commitmentOpenStatusSQL + ` AND status NOT IN ` + commitmentClosedStatusSQL + `) AS items_unknown_status,
+    countIf(due_at IS NOT NULL) AS items_with_due_at,
+    countIf(status IN ` + commitmentOpenStatusSQL + ` AND due_at IS NOT NULL AND due_at < {` + commitmentAsOfParam + `:DateTime64(3, 'UTC')}) AS items_past_due_open
   FROM project_items
   GROUP BY project_key
-) AS i
+) AS i ON i.project_key = a.project_key
 LEFT JOIN (
   SELECT pi.project_key AS project_key,
     uniqExact(s.sprint_id) AS sprint_count,
@@ -85,8 +109,8 @@ LEFT JOIN (
   ) AS s ON s.provider = pi.provider AND s.sprint_id = pi.sprint_id
   WHERE pi.sprint_id != ''
   GROUP BY project_key
-) AS s ON s.project_key = i.project_key
-ORDER BY i.project_key`
+) AS s ON s.project_key = a.project_key
+ORDER BY a.project_key`
 }
 
 type commitmentProjectRow struct {
@@ -95,9 +119,9 @@ type commitmentProjectRow struct {
 }
 
 type commitmentItemRow struct {
-	total, open, closed, withDueAt, pastDueOpen int64
-	sprintCount, nextCount                      int64
-	nextEnd, latestEnd                          time.Time
+	all, total, open, closed, unknownStatus, withDueAt, pastDueOpen int64
+	sprintCount, nextCount                                          int64
+	nextEnd, latestEnd                                              time.Time
 }
 
 type CommitmentProvider struct{ facts clickhouseFacts }
@@ -187,7 +211,7 @@ func (p *CommitmentProvider) readItemRows(ctx context.Context, principal storage
 	err = readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadProjectCommitmentItems", readers.WithSettings(commitmentItemRowsSQL(authorized), settings), orgID, ids, func(row readers.RowScanner) error {
 		var key string
 		var r commitmentItemRow
-		if err := row.Scan(&key, &r.total, &r.open, &r.closed, &r.withDueAt, &r.pastDueOpen, &r.sprintCount, &r.nextCount, &r.nextEnd, &r.latestEnd); err != nil {
+		if err := row.Scan(&key, &r.all, &r.total, &r.open, &r.closed, &r.unknownStatus, &r.withDueAt, &r.pastDueOpen, &r.sprintCount, &r.nextCount, &r.nextEnd, &r.latestEnd); err != nil {
 			return err
 		}
 		rows[key] = r
@@ -209,6 +233,9 @@ func commitmentFields(project commitmentProjectRow, items *commitmentItemRow, as
 		fields["target_date_provider"] = contextfabric.StringFactValue(project.provider)
 		fields["days_to_target"] = contextfabric.IntegerFactValue(commitmentDaysBetween(asOf, target))
 	}
+	if strings.EqualFold(strings.TrimSpace(project.provider), "github") {
+		fields["iteration_basis"] = contextfabric.StringFactValue(commitmentNotCollected)
+	}
 	if items == nil {
 		fields["items_unavailable_reason"] = contextfabric.StringFactValue(commitmentItemsUnreachableReason)
 		if stated {
@@ -219,6 +246,7 @@ func commitmentFields(project commitmentProjectRow, items *commitmentItemRow, as
 	fields["items_total"] = contextfabric.IntegerFactValue(items.total)
 	fields["items_open"] = contextfabric.IntegerFactValue(items.open)
 	fields["items_closed"] = contextfabric.IntegerFactValue(items.closed)
+	fields["unknown_status_count"] = contextfabric.IntegerFactValue(items.unknownStatus)
 	fields["items_with_due_at"] = contextfabric.IntegerFactValue(items.withDueAt)
 	fields["items_without_due_at"] = contextfabric.IntegerFactValue(items.total - items.withDueAt)
 	fields["items_past_due_open"] = contextfabric.IntegerFactValue(items.pastDueOpen)
@@ -233,9 +261,15 @@ func commitmentFields(project commitmentProjectRow, items *commitmentItemRow, as
 			fields["next_sprint_end"] = contextfabric.StringFactValue(items.nextEnd.UTC().Format(time.RFC3339))
 		}
 	}
-	if stated {
+	unreadable := max(items.all-items.total, 0)
+	fields["items_unreadable_count"] = contextfabric.IntegerFactValue(unreadable)
+	if unreadable > 0 {
+		fields["items_unreadable_reason"] = contextfabric.StringFactValue(commitmentItemsUnreadableReason)
+	}
+	switch {
+	case stated:
 		fields["commitment_status"] = contextfabric.StringFactValue(commitmentStatusStated)
-	} else {
+	case unreadable == 0:
 		fields["commitment_status"] = contextfabric.StringFactValue(commitmentStatusNoneStated)
 	}
 	return fields
