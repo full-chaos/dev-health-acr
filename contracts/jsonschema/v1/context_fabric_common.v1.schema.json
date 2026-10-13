@@ -3295,7 +3295,7 @@
         },
         "kind": {
           "type": "string",
-          "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, cardinality. A client must tolerate values it does not know.",
+          "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts, cardinality. A client must tolerate values it does not know.",
           "x-documented-values": [
             "identity",
             "membership",
@@ -3319,6 +3319,7 @@
             "evidence",
             "flow",
             "landscape",
+            "security_alerts",
             "cardinality"
           ]
         },
@@ -3777,7 +3778,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape. A client must tolerate values it does not know.",
+          "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts. A client must tolerate values it does not know.",
           "x-documented-values": [
             "identity",
             "membership",
@@ -3800,7 +3801,8 @@
             "source_health",
             "evidence",
             "flow",
-            "landscape"
+            "landscape",
+            "security_alerts"
           ]
         },
         "subjects": {
@@ -5082,7 +5084,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape. A client must tolerate values it does not know.",
+            "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts. A client must tolerate values it does not know.",
             "x-documented-values": [
               "identity",
               "membership",
@@ -5105,7 +5107,8 @@
               "source_health",
               "evidence",
               "flow",
-              "landscape"
+              "landscape",
+              "security_alerts"
             ]
           },
           "maxItems": 64
@@ -5202,7 +5205,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape. A client must tolerate values it does not know.",
+            "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts. A client must tolerate values it does not know.",
             "x-documented-values": [
               "identity",
               "membership",
@@ -5225,7 +5228,8 @@
               "source_health",
               "evidence",
               "flow",
-              "landscape"
+              "landscape",
+              "security_alerts"
             ]
           },
           "uniqueItems": true,
@@ -5259,7 +5263,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape. A client must tolerate values it does not know.",
+            "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts. A client must tolerate values it does not know.",
             "x-documented-values": [
               "identity",
               "membership",
@@ -5282,7 +5286,8 @@
               "source_health",
               "evidence",
               "flow",
-              "landscape"
+              "landscape",
+              "security_alerts"
             ]
           },
           "uniqueItems": true,

@@ -109,6 +109,9 @@
   "dropped_inactive": 0
  },
  "meaning": "An edge shows a relation. It does not show a cause.",
+ "not_collected": [
+  "repository_dependency"
+ ],
  "consistency": "best_effort",
  "untrusted_content": {
   "fields": [
@@ -230,6 +233,9 @@
   "dropped_inactive": 0
  },
  "meaning": "An edge shows a relation. It does not show a cause.",
+ "not_collected": [
+  "repository_dependency"
+ ],
  "consistency": "best_effort",
  "untrusted_content": {
   "fields": [

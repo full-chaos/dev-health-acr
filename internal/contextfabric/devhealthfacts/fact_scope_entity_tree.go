@@ -35,10 +35,18 @@ const currentResolvedProjectsSQL = `(
 // projectIssueArmsAsOfSQL is the as-of set of issues a project holds: the
 // membership-interval arm (history touches that overlap the window) and the
 // no-history arm (an issue with no transition rows, admitted on its current
-// project_id column). via_history says which arm produced the row.
-const projectIssueArmsAsOfSQL = `
+// project_id column). via_history says which arm produced the row. Both arms
+// read the requested projects' work items and transitions only
+// (requestedProjectHistoryWorkItemIDsSQL).
+var projectIssueArmsAsOfSQL = projectIssueArmsAsOfAmongSQL(requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate))
+
+// projectIssueArmsAsOfAmongSQL is projectIssueArmsAsOfSQL over the work item
+// ids candidates names, a superset of the arms' rows: the touches, the work
+// items and the transition subjects of a kept id are read whole.
+func projectIssueArmsAsOfAmongSQL(candidates string) string {
+	return `
   SELECT iv.subject_id AS work_item_id, 1 AS via_history, p.id AS origin_project_id
-  FROM ` + membershipTouchesAsOfSQL + ` AS iv
+  FROM ` + membershipTouchesAsOfAmongSQL(candidates) + ` AS iv
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
   WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
     AND NOT iv.is_malformed AND NOT iv.is_duplicate_add
@@ -48,11 +56,12 @@ const projectIssueArmsAsOfSQL = `
   SELECT w.work_item_id AS work_item_id, 0 AS via_history, p.id AS origin_project_id
   FROM work_items AS w FINAL
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = w.provider AND p.join_key = w.project_id
-  WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+  WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + candidates + ` AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
     AND (w.repo_id, w.work_item_id) NOT IN (
-      SELECT repo_id, subject_id FROM project_membership_transitions FINAL WHERE org_id = {org_id:String} AND subject_kind = 'work_item'
+      SELECT repo_id, subject_id FROM project_membership_transitions FINAL WHERE org_id = {org_id:String} AND subject_kind = 'work_item'` + transitionSubjectsAmongSQL(candidates) + `
     )
 `
+}
 
 // asOfBounds is the half-open window of a historical traversal.
 type asOfBounds struct {
@@ -88,18 +97,20 @@ func (e *ScopeExpander) projectUnlinkedIssueCount(ctx context.Context, orgID str
 		{Name: "project_ids", Value: projectIDs},
 	}
 	if bounds == nil {
+		candidates := requestedProjectWorkItemIDsSQL(requestedProjectIDsPredicate)
 		statement = `SELECT uniqExact(w.work_item_id)
 FROM work_items AS w FINAL
 INNER JOIN ` + currentResolvedProjectsSQL + ` AS p ON p.join_key = w.project_id
-WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + candidates + ` AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
   AND ` + workItemIsIssueSQL("w") + `
-  AND w.work_item_id NOT IN (SELECT work_item_id FROM ` + admittedIssueLinksSQL + `)`
+  AND w.work_item_id NOT IN (SELECT work_item_id FROM ` + admittedIssueLinksAmongSQL(candidates) + `)`
 	} else {
+		candidates := requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate)
 		statement = `SELECT uniqExact(a.work_item_id)
-FROM (` + projectIssueArmsAsOfSQL + `) AS a
-LEFT JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.work_item_id = a.work_item_id
+FROM (` + projectIssueArmsAsOfAmongSQL(candidates) + `) AS a
+LEFT JOIN (SELECT work_item_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `) AS w ON w.work_item_id = a.work_item_id
 WHERE ` + workItemIsIssueSQL("w") + `
-  AND a.work_item_id NOT IN (SELECT work_item_id FROM ` + admittedIssueLinksSQL + `)`
+  AND a.work_item_id NOT IN (SELECT work_item_id FROM ` + admittedIssueLinksAmongSQL(candidates) + `)`
 		bindings = append(bindings,
 			contextpacket.ClickHouseBinding{Name: "window_start", Value: bounds.start},
 			contextpacket.ClickHouseBinding{Name: "window_end", Value: bounds.end},
@@ -114,10 +125,10 @@ func (e *ScopeExpander) teamUnlinkedIssueCount(ctx context.Context, orgID string
 	statement := `SELECT uniqExact(w.work_item_id)
 FROM ` + teamOwnedProjectsSQL + ` AS t
 INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
-INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.provider = p.provider AND w.project_id = p.join_key
+INNER JOIN ` + teamOwnedProjectWorkItemsSQL + ` AS w ON w.provider = p.provider AND w.project_id = p.join_key
 WHERE p.key_resolution_count = 1 AND t.team_id IN {team_ids:Array(String)}
   AND ` + workItemIsIssueSQL("w") + `
-  AND w.work_item_id NOT IN (SELECT work_item_id FROM ` + admittedIssueLinksSQL + `)`
+  AND w.work_item_id NOT IN (SELECT work_item_id FROM ` + admittedIssueLinksAmongSQL(teamOwnedProjectWorkItemIDsSQL) + `)`
 	return e.scalarCount(ctx, statement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
 		{Name: "team_ids", Value: teamIDs},
@@ -142,10 +153,27 @@ func (e *ScopeExpander) scalarCount(ctx context.Context, statement string, bindi
 	return int(count), nil
 }
 
-// teamOwnedProjectsSQL is every (provider, project id, team) a team currently
-// owns through team_project_ownership, identity-resolved by the library's
-// two-armed project match.
-var teamOwnedProjectsSQL = "(SELECT provider, id, team_id FROM " + readers.ProjectOwnershipCatalogJoinSQL(readers.OwnershipValidityPredicate(readers.TimeBound{})) + ")"
+// teamOwnedProjectsSQL is every (provider, project id, team) a requested team
+// ({team_ids}) currently owns through team_project_ownership, identity-resolved
+// by the library's two-armed project match. The team filter is applied to the
+// ownership rows before their grouping, which is per team.
+var teamOwnedProjectsSQL = "(SELECT provider, id, team_id FROM " + readers.ProjectOwnershipCatalogJoinSQL(requestedTeamProjectKeysPredicate+requestedTeamsPredicate+readers.OwnershipValidityPredicate(readers.TimeBound{})) + ")"
+
+// requestedTeamRepositoryOwnershipSQL is the requested teams' current
+// repository ownership rows, filtered before their per-team grouping.
+var requestedTeamRepositoryOwnershipSQL = readers.TeamRepositoryOwnershipSQL(requestedTeamRepositoryKeysPredicate + requestedTeamsPredicate + readers.OwnershipValidityPredicate(readers.TimeBound{}))
+
+// requestedTeamsPredicate restricts an ownership table to the requested teams.
+const requestedTeamsPredicate = ` AND team_id IN {team_ids:Array(String)}`
+
+// requestedTeamRepositoryKeysPredicate and requestedTeamProjectKeysPredicate
+// restrict an ownership table's FINAL read to the sorting-key prefixes the
+// requested teams' rows carry in any version, so FINAL reads those keys
+// whole and nothing else of the organization.
+const (
+	requestedTeamRepositoryKeysPredicate = ` AND (provider, repo_full_name) IN (SELECT provider, repo_full_name FROM team_repo_ownership WHERE org_id = {org_id:String} AND team_id IN {team_ids:Array(String)})`
+	requestedTeamProjectKeysPredicate    = ` AND (provider, project_id) IN (SELECT provider, project_id FROM team_project_ownership WHERE org_id = {org_id:String} AND team_id IN {team_ids:Array(String)})`
+)
 
 // teamRepositoryOwnershipSource is the source label of a repository the team
 // owns directly, the one team target that is a Direct edge.
@@ -171,19 +199,18 @@ func (e *ScopeExpander) teamRepositories(ctx context.Context, orgID string, orig
 		return nil, contextfabric.FactScopeExpansionCounts{}, nil
 	}
 	limitPlusOne := limit + 1
-	current := readers.OwnershipValidityPredicate(readers.TimeBound{})
 	statement := `SELECT repo_id_str, repo_slug, argMin(source, source_rank) AS best_source, argMin(origin_team_id, (source_rank, origin_team_id)) AS best_origin_team_id, arraySort(groupUniqArray(origin_team_id)) AS origin_team_ids
 FROM (
   SELECT toString(o.repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, '` + teamRepositoryOwnershipSource + `' AS source, 0 AS source_rank, o.team_id AS origin_team_id
-  FROM ` + readers.TeamRepositoryOwnershipSQL(current) + ` AS o
+  FROM ` + requestedTeamRepositoryOwnershipSQL + ` AS o
   LEFT JOIN repos AS r FINAL ON r.id = o.repo_id AND r.org_id = {org_id:String}
   WHERE o.team_id IN {team_ids:Array(String)}
   UNION ALL
   SELECT toString(l.pr_repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, l.provenance AS source, 4 - l.link_rank AS source_rank, t.team_id AS origin_team_id
   FROM ` + teamOwnedProjectsSQL + ` AS t
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
-  INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.provider = p.provider AND w.project_id = p.join_key
-  INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
+  INNER JOIN ` + teamOwnedProjectWorkItemsSQL + ` AS w ON w.provider = p.provider AND w.project_id = p.join_key
+  INNER JOIN ` + admittedIssueLinksAmongSQL(teamOwnedProjectWorkItemIDsSQL) + ` AS l ON l.work_item_id = w.work_item_id
   LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = {org_id:String}
   WHERE p.key_resolution_count = 1 AND t.team_id IN {team_ids:Array(String)}
 )

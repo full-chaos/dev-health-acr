@@ -1,6 +1,8 @@
 package devhealthfacts
 
 import (
+	"sort"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -176,6 +178,8 @@ func factKindFields(kind contextfabric.FactKind) []contextfabric.FactFieldDeclar
 		return workloadFields()
 	case contextfabric.FactLandscape:
 		return landscapeFields()
+	case contextfabric.FactSecurityAlerts:
+		return securityAlertsFields()
 	case contextfabric.FactOperationalDeficiencies:
 		return deficiencyFields()
 	case contextfabric.FactSourceHealth:
@@ -590,19 +594,22 @@ func landscapeAreaColumns() []columnDecl {
 }
 
 func landscapeFields() []fieldDecl {
-	areaCols := append([]columnDecl{cStr("map_name"), cStr("as_of_day")}, landscapeAreaColumns()...)
-	teamCols := append([]columnDecl{cRef(declTeamRef, cStr("team_id")), cStr("map_name"), cStr("as_of_day")}, landscapeAreaColumns()...)
+	coordCols := []columnDecl{cStr("map_name"), cStr("as_of_day"), cNum("x_raw_mean", "axis"), cNum("y_raw_mean", "axis")}
+	teamCoordCols := []columnDecl{cRef(declTeamRef, cStr("team_id")), cStr("map_name"), cStr("as_of_day"), cNum("x_raw_mean", "axis"), cNum("y_raw_mean", "axis")}
+	areaCols := append([]columnDecl{cStr("as_of_day")}, landscapeAreaColumns()...)
+	teamCols := append([]columnDecl{cRef(declTeamRef, cStr("team_id")), cStr("as_of_day")}, landscapeAreaColumns()...)
 	return declJoin(
 		declOn(declTeamOnly,
-			fInt("area_count", "count"),
 			fTable("area_breakdown", areaCols...),
-			fInt("area_breakdown_omitted_count", "count"),
+			fTable("map_coordinates", coordCols...),
 		),
 		declOn(declProjectOnly,
 			fStr("rollup_basis"),
 			declAggregate(fInt("team_count", "count")),
 			fTable("team_breakdown", teamCols...),
 			fInt("team_breakdown_omitted_count", "count"),
+			fTable("map_coordinates", teamCoordCols...),
+			fInt("map_coordinates_omitted_count", "count"),
 		),
 	)
 }
@@ -1014,4 +1021,32 @@ func investmentUnitFields() []fieldDecl {
 		fields[i].Aggregate = pageAggregates[fields[i].Name]
 	}
 	return fields
+}
+
+func securityAlertsFields() []fieldDecl {
+	counts := []string{"open_alert_count", "open_critical_count", "open_high_count", "open_medium_count", "open_low_count", "open_other_severity_count"}
+	for _, sources := range securitySourcesByProvider {
+		for _, source := range sources {
+			if source == securityAdvisorySource {
+				counts = append(counts, "advisory_stored_count")
+				continue
+			}
+			counts = append(counts, "open_"+source+"_count")
+		}
+	}
+	sort.Strings(counts)
+	fields := []fieldDecl{
+		fStr("provider"),
+		fStr("collection_basis"),
+		fStr("closed_alert_basis"),
+		fStr("secret_scanning_basis"),
+		declNullable(fStr("alert_basis")),
+		declNullable(fStr("oldest_open_created_at")),
+		declNullable(fStr("newest_open_created_at")),
+		declNullable(declFresh(fStr("latest_synced_at"))),
+	}
+	for _, name := range counts {
+		fields = append(fields, declNullable(fInt(name, "count")))
+	}
+	return declOn(declRepositoryOnly, fields...)
 }
