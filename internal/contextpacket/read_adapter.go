@@ -41,6 +41,9 @@ type ReadPlan struct {
 	// WorkItemGrant is the caller's repository grant as the shared work-item
 	// authorization relation reads it. The zero value grants nothing.
 	WorkItemGrant readers.RepositorySelectorSet
+	// ReadableRepositorylessIssueIDs is the gate's answer for work_graph.v1;
+	// empty means no repository-less issue title is served.
+	ReadableRepositorylessIssueIDs []string
 }
 
 // BuildReadPlanV1 creates the only ClickHouse read shape used by this package.

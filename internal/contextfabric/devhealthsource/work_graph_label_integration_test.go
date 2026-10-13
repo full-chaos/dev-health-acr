@@ -71,17 +71,6 @@ func seedWorkGraphLabelRows(t *testing.T, ctx context.Context, direct interface 
 	edge("e-deploy", "pr", wgRepo+"#pr311", "deployment", wgDeployID, "deployed_as", "")
 }
 
-func workGraphCatalogQuery(t *testing.T) contextpacket.SourceQuery {
-	t.Helper()
-	for _, source := range contextpacket.SourceQueryCatalogV1 {
-		if source.ID == "work_graph.v1" {
-			return source
-		}
-	}
-	t.Fatal("work_graph.v1 is not in the catalog")
-	return contextpacket.SourceQuery{}
-}
-
 func workGraphLabelsFor(t *testing.T, grant []string) map[string]string {
 	t.Helper()
 	ctx := context.Background()
@@ -93,12 +82,20 @@ func workGraphLabelsFor(t *testing.T, grant []string) map[string]string {
 	}
 	seedWorkGraphLabelRows(t, ctx, direct)
 	plan := contextpacket.ReadPlan{OrgID: wgOrg, RepoID: wgRepo, RepoSlug: "acme/deploy-service", Branch: "main", TimeWindowDays: 30, WorkItemGrant: auth.WorkItemRepositorySelectorSet(grant, true)}
-	evidence, err := contextpacket.NewClickHouseSourceExecutor(query).QueryEvidence(ctx, workGraphCatalogQuery(t), plan.Bindings())
+	result, err := contextpacket.ExecuteCatalog(ctx, contextpacket.NewClickHouseSourceExecutor(query), plan)
 	if err != nil {
-		t.Fatalf("work_graph.v1: %v", err)
+		t.Fatalf("catalog: %v", err)
+	}
+	for _, unavailable := range result.Unavailable {
+		if unavailable.Source == "work_graph.v1" {
+			t.Fatalf("work_graph.v1 unavailable: %s", unavailable.Reason)
+		}
 	}
 	labels := map[string]string{}
-	for _, ref := range evidence {
+	for _, ref := range result.Evidence {
+		if ref.Source.EntityType != "work_graph_edge" {
+			continue
+		}
 		labels[ref.Source.EntityID] = ref.Source.DisplayLabel
 		for _, leak := range []string{"secret/private-repo", "Private roadmap", "Unlinked hidden title", "Private title of a colliding key", wgRepo, wgOther} {
 			if strings.Contains(ref.Source.DisplayLabel+" "+ref.Citation, leak) {
@@ -151,7 +148,7 @@ func TestWorkGraphLabelsServeIssueTitlesOnlyWhenReadable(t *testing.T) {
 	}
 }
 
-type workGraphCost struct{ memory, readBytes uint64 }
+type workGraphCost struct{ memory, readBytes, gateMemory, gateReadBytes uint64 }
 
 // workGraphStatementCost seeds one isolated database with the label rows plus
 // the requested extra rows, runs work_graph.v1 for a restricted caller (the
@@ -183,10 +180,15 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo int, noise bool) workGra
 	}
 	plan := contextpacket.ReadPlan{OrgID: wgOrg, RepoID: wgRepo, RepoSlug: "acme/deploy-service", Branch: "main", TimeWindowDays: 30, WorkItemGrant: auth.WorkItemRepositorySelectorSet([]string{"acme/deploy-service"}, true)}
 	executor := contextpacket.NewClickHouseSourceExecutor(query)
-	source := workGraphCatalogQuery(t)
 	for i := 0; i < 2; i++ {
-		if _, err := executor.QueryEvidence(ctx, source, plan.Bindings()); err != nil {
-			t.Fatalf("work_graph.v1: %v", err)
+		result, err := contextpacket.ExecuteCatalog(ctx, executor, plan)
+		if err != nil {
+			t.Fatalf("catalog: %v", err)
+		}
+		for _, unavailable := range result.Unavailable {
+			if unavailable.Source == "work_graph.v1" {
+				t.Fatalf("work_graph.v1 unavailable: %s", unavailable.Reason)
+			}
 		}
 	}
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
@@ -205,6 +207,14 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo int, noise bool) workGra
 	if statements < 2 || c.memory == 0 || c.readBytes == 0 {
 		t.Fatalf("measurement did not happen: %d statements, %+v", statements, c)
 	}
+	var gates uint64
+	row = direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND position(query, 'wia_link_auth') > 0 AND position(query, 'GROUP BY w.work_item_id') > 0`, database)
+	if err := row.Scan(&c.gateMemory, &c.gateReadBytes, &gates); err != nil {
+		t.Fatalf("read query_log for the gate: %v", err)
+	}
+	if gates < 2 || c.gateMemory == 0 || c.gateReadBytes == 0 {
+		t.Fatalf("gate measurement did not happen: %d statements, %+v", gates, c)
+	}
 	return c
 }
 
@@ -219,8 +229,8 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 	noise := workGraphStatementCost(t, 125000, true)
 	t.Logf("work_graph.v1 cost: base %+v, +375k work items %+v, +20k edges and pull requests %+v", base, filler, noise)
 	for name, stage := range map[string]workGraphCost{"base": base, "+work items": filler, "+edges and pull requests": noise} {
-		if stage.memory >= ceiling {
-			t.Errorf("%s: work_graph.v1 peaked at %d bytes, want under %d", name, stage.memory, ceiling)
+		if stage.memory >= ceiling || stage.gateMemory >= ceiling {
+			t.Errorf("%s: work_graph.v1 peaked at %d bytes and its issue gate at %d, want under %d", name, stage.memory, stage.gateMemory, ceiling)
 		}
 	}
 	for name, stage := range map[string]workGraphCost{"+work items": filler, "+edges and pull requests": noise} {
@@ -229,6 +239,9 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 		}
 		if float64(stage.readBytes) > 1.15*float64(base.readBytes) {
 			t.Errorf("%s: read volume %d bytes against %d at the base, over the 1.15x slope", name, stage.readBytes, base.readBytes)
+		}
+		if float64(stage.gateMemory) > 1.15*float64(base.gateMemory) || float64(stage.gateReadBytes) > 1.15*float64(base.gateReadBytes) {
+			t.Errorf("%s: issue gate memory %d / read %d bytes against %d / %d at the base, over the 1.15x slope", name, stage.gateMemory, stage.gateReadBytes, base.gateMemory, base.gateReadBytes)
 		}
 	}
 }

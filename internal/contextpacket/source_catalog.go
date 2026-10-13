@@ -97,8 +97,22 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 			result.Unavailable = append(result.Unavailable, contractsv1.UnavailableSource{Source: query.ID, Reason: reason})
 			continue
 		}
+		queryPlan := plan
+		if query.ID == workGraphSourceID {
+			if reader, ok := executor.(RepositorylessIssueReader); ok {
+				ids, gateErr := reader.ReadableRepositorylessIssueIDs(ctx, plan)
+				if gateErr != nil {
+					if ctx.Err() != nil {
+						return CatalogResult{}, ctx.Err()
+					}
+					slog.Warn("contextpacket: repository-less issue gate failed; issue titles are withheld", "source", query.ID)
+					ids = nil
+				}
+				queryPlan.ReadableRepositorylessIssueIDs = ids
+			}
+		}
 		started := time.Now()
-		rows, err := executor.QueryEvidence(ctx, query, plan.Bindings())
+		rows, err := executor.QueryEvidence(ctx, query, queryPlan.Bindings())
 		if observer != nil {
 			observer.ObserveStoreQuery(ctx, StoreQueryObservation{
 				Operation: StoreOperationEvidence, Backend: StoreBackendClickHouse,
@@ -115,7 +129,7 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 		if freshness != nil {
 			// A failed freshness read falls back to the evidence max; it must
 			// not turn a served source into an unavailable one.
-			if latest, found, ferr := freshness.QueryLatestObserved(ctx, query, plan.Bindings()); ferr == nil && found {
+			if latest, found, ferr := freshness.QueryLatestObserved(ctx, query, queryPlan.Bindings()); ferr == nil && found {
 				latestObserved[query.ID] = latest
 			} else if ctx.Err() != nil {
 				return CatalogResult{}, ctx.Err()

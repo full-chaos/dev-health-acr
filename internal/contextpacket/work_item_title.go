@@ -1,34 +1,78 @@
 package contextpacket
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
-const nilRepositoryUUID = "00000000-0000-0000-0000-000000000000"
+const (
+	nilRepositoryUUID = "00000000-0000-0000-0000-000000000000"
 
-// workItemTitleScope renders the shared work-item authorization relation for a
-// caller's repository grant. The SQL text does not depend on the grant, only
-// the bindings do.
-func workItemTitleScope(grant readers.RepositorySelectorSet) readers.WorkItemScopeSQLResult {
-	return readers.WorkItemScopeSQL(readers.AuthorizationScope{RepositorySelectors: &readers.RepositorySelectorScope{Granted: grant}})
-}
+	workGraphSourceID = "work_graph.v1"
+	// maxReadableRepositorylessIssueIDs bounds the gate result; an issue past
+	// the bound is named by its key alone.
+	maxReadableRepositorylessIssueIDs = 5000
+)
+
+// workGraphIssueEndpointIDsSQL is every issue key that is an endpoint of the
+// scoped repository's work-graph edges.
+const workGraphIssueEndpointIDsSQL = `(SELECT source_id FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND source_type = 'issue' ` +
+	`UNION ALL SELECT target_id FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND target_type = 'issue')`
 
 // workGraphIssueTitlesSQL yields one row per issue key that is an endpoint of
 // the scoped repository's edges, with the title only when exactly one distinct
-// title is readable for that key by the caller (an empty title otherwise).
-// Rows are read by the work_items key (org_id, repo_id, work_item_id): the
-// scoped repository's own rows and rows with no repository. A row with no
-// repository is readable only through the shared authorization relation (the
-// caller's project grant or a native pull request link into a granted
-// repository), so the grant decides, never the issue's own repository as a
-// relation.
-var workGraphIssueTitlesSQL = func() string {
-	scope := workItemTitleScope(readers.RepositorySelectorSet{})
-	readable := "(" + scope.AuthorizationExpr + ") AND lengthUTF8(w.title) BETWEEN 1 AND 1000"
-	return `SELECT w.work_item_id AS id, if(uniqExactIf(w.title, ` + readable + `) = 1, anyIf(w.title, ` + readable + `), '') AS title ` +
-		`FROM work_items AS w FINAL ` + scope.JoinSQL + ` ` +
-		`WHERE w.org_id = {org_id:String} AND w.repo_id IN ({repo_id:UUID}, toUUID('` + nilRepositoryUUID + `')) AND w.work_item_id IN ` +
-		`(SELECT source_id FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND source_type = 'issue' ` +
-		`UNION ALL SELECT target_id FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND target_type = 'issue') ` +
-		`GROUP BY w.work_item_id`
-}()
+// title is readable for that key (an empty title otherwise). The work_items
+// key (org_id, repo_id, work_item_id) bounds the read to the scoped
+// repository's own rows and rows with no repository. The scoped repository is
+// authorized upstream; a row with no repository is readable only when its key
+// is in readable_repositoryless_issue_ids, which the caller's grant decided
+// (ReadableRepositorylessIssueIDs).
+const workGraphIssueTitlesSQL = `SELECT w.work_item_id AS id, if(uniqExact(w.title) = 1, any(w.title), '') AS title ` +
+	`FROM work_items AS w FINAL ` +
+	`WHERE w.org_id = {org_id:String} AND w.repo_id IN ({repo_id:UUID}, toUUID('` + nilRepositoryUUID + `')) AND w.work_item_id IN ` + workGraphIssueEndpointIDsSQL + ` ` +
+	`AND (w.repo_id = {repo_id:UUID} OR w.work_item_id IN {readable_repositoryless_issue_ids:Array(String)}) ` +
+	`AND lengthUTF8(w.title) BETWEEN 1 AND 1000 GROUP BY w.work_item_id`
+
+// RepositorylessIssueReader is optionally implemented by an executor that can
+// decide which repository-less issues the caller may read.
+type RepositorylessIssueReader interface {
+	ReadableRepositorylessIssueIDs(context.Context, ReadPlan) ([]string, error)
+}
+
+// ReadableRepositorylessIssueIDs returns the keys of the scoped repository's
+// issue endpoints that have no repository of their own and that the caller's
+// repository grant authorizes: the shared work-item authorization relation
+// admits such an issue through its project's owning teams or through a native
+// pull request link into a granted repository. The relation reads whole
+// organization relations, so it runs once per packet, on one thread, apart
+// from the catalog statement.
+func (e *ClickHouseSourceExecutor) ReadableRepositorylessIssueIDs(ctx context.Context, plan ReadPlan) (_ []string, err error) {
+	if e == nil || e.client == nil {
+		return nil, fmt.Errorf("contextpacket: clickhouse query client is required")
+	}
+	scope := readers.WorkItemScopeSQL(readers.AuthorizationScope{RepositorySelectors: &readers.RepositorySelectorScope{Granted: plan.WorkItemGrant}})
+	statement := `SELECT w.work_item_id FROM work_items AS w FINAL ` + scope.JoinSQL + ` ` +
+		`WHERE w.org_id = {org_id:String} AND w.repo_id = toUUID('` + nilRepositoryUUID + `') AND w.work_item_id IN ` + workGraphIssueEndpointIDsSQL + ` ` +
+		`AND (` + scope.AuthorizationExpr + `) GROUP BY w.work_item_id LIMIT ` + fmt.Sprint(maxReadableRepositorylessIssueIDs) + ` SETTINGS max_threads = 1`
+	bindings := append([]ClickHouseBinding{{Name: "org_id", Value: plan.OrgID}, {Name: "repo_id", Value: plan.RepoID}}, scope.Bindings...)
+	rows, err := e.client.Query(ctx, statement, bindings)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}

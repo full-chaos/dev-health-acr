@@ -18,7 +18,7 @@ func (p ReadPlan) Bindings() []ClickHouseBinding {
 	if p.IncludeLowConfidence {
 		includeLowConfidence = 1
 	}
-	return append([]ClickHouseBinding{
+	return []ClickHouseBinding{
 		{Name: "org_id", Value: p.OrgID},
 		{Name: "repo_id", Value: p.RepoID},
 		{Name: "repo_slug", Value: p.RepoSlug},
@@ -29,7 +29,8 @@ func (p ReadPlan) Bindings() []ClickHouseBinding {
 		{Name: "as_of", Value: asOf},
 		{Name: "time_window_days", Value: uint16(p.TimeWindowDays)},
 		{Name: "include_low_confidence", Value: includeLowConfidence},
-	}, workItemTitleScope(p.WorkItemGrant).Bindings...)
+		{Name: "readable_repositoryless_issue_ids", Value: append([]string{}, p.ReadableRepositorylessIssueIDs...)},
+	}
 }
 
 func scopeBindings(plan ReadPlan) []ClickHouseBinding {
