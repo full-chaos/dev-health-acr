@@ -379,8 +379,9 @@ func newEpisodesSource(rows devhealthsource.EpisodeRows, writebackEnabled bool) 
 // (ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP, CHAOS-7263). A separate function so
 // a test can pin that the setting reaches both.
 // projectorStatementMaxMemoryUsage is the per-statement memory cap of every
-// projector ClickHouse read. 128 MiB sits above the measured 88 MiB peak of an
-// uncapped acr_ro statement; re-measure from system.query_log after the roll.
+// projector ClickHouse read. 128 MiB sits above the prod peak measured on
+// 2026-10-13 for the heaviest projector statement (94 MB, p50 85 MB,
+// querySubjectProjectMemberships); re-measure from system.query_log after the roll.
 const projectorStatementMaxMemoryUsage uint64 = 128 << 20
 
 func clickhouseBackedSources(client contextpacket.ClickHouseQueryClient, cfg config.ProjectorConfig, logger *slog.Logger) (*devhealthsource.ClickHouseProjectionSource, *devhealthsource.TeamsProjectsSource, error) {
