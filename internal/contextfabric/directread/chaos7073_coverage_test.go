@@ -276,7 +276,8 @@ func TestChaos7073BudgetAndTruncation(t *testing.T) {
 	}
 }
 
-// recordingExpander counts calls: the direct path must never expand scope.
+// recordingExpander counts calls: a registry without scope expansion must
+// never expand.
 type recordingExpander struct{ calls int }
 
 func (e *recordingExpander) ExpandFactScope(context.Context, contextfabric.FactScopeExpansionRequest) (contextfabric.FactScopeExpansionResult, error) {
@@ -284,11 +285,9 @@ func (e *recordingExpander) ExpandFactScope(context.Context, contextfabric.FactS
 	return contextfabric.FactScopeExpansionResult{Targets: []contextfabric.SubjectRef{repoB}}, nil
 }
 
-// The expander-off pin (FINDINGS 1, ruled by the lead): derived subjects are
-// not proved authorized on the direct path, so the direct registry runs with
-// no expander. A project root for a kind that only a scope expansion could
-// reach is disclosed as unavailable and never read.
-func TestChaos7073DirectPathNeverExpandsScope(t *testing.T) {
+// A registry without scope expansion: a project root for a kind that only a
+// scope expansion could reach is disclosed as unavailable and never read.
+func TestChaos7073UnexpandedRegistryNeverExpandsScope(t *testing.T) {
 	expander := &recordingExpander{}
 	capability := contextfabric.FactCapability{
 		Kind: contextfabric.FactMetrics, Name: "metrics_test", Version: "test.v1",
@@ -319,7 +318,7 @@ func TestChaos7073DirectPathNeverExpandsScope(t *testing.T) {
 	if row.Outcome != OutcomeUnavailable || row.KindState != KindStateScopeExpansionUnavailable {
 		t.Errorf("gap not disclosed as an unavailable scope expansion: %+v", row)
 	}
-	if !strings.Contains(row.Reason, "scope expansion is not available on this read path") || strings.Contains(row.Reason, "expander_unwired") {
+	if !strings.Contains(row.Reason, "no scope expander is wired on this server") || strings.Contains(row.Reason, "expander_unwired") {
 		t.Errorf("reason does not name the cause in plain words: %q", row.Reason)
 	}
 	// The engine's own registry still expands (the direct copy changed

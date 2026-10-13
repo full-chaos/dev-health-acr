@@ -1002,13 +1002,22 @@ import (
 // partial estimate coverage driver with source_state truncated. An answer saved
 // under v197 has no such driver.
 //
-// v198 -> v199: a team's health, deficiency and investment reads count the
+// v198 -> v199: a team cohort answer to a blockers question now carries each
+// team's blocked work item count as a driver with a minted claim. An answer
+// saved under v198 has none.
+//
+// v199 -> v200: a client synthesis answer with a caller byte budget is fitted
+// to what the synthesis input leaves of that budget, and the input is cut to
+// the budget with the cut stated. An answer saved under v199 was fitted to the
+// whole budget.
+//
+// v200 -> v201: a team's health, deficiency and investment reads count the
 // repositories its owned projects reach through linked pull requests, so a
 // team that owns a project and no repository is no longer served "owns no
 // repository", and its investment mix adds the work units of those linked
 // pull requests (never the whole mix of a repository it does not own). A
 // stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v199"
+const QueryVersion = "devhealthfacts.clickhouse.v201"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

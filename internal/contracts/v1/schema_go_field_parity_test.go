@@ -266,6 +266,7 @@ var schemaDefExemptions = map[string]string{
 	"mcp_investigate_with_interpretation_request.v1.schema.json#BareWindowReceiptID":       "a bare-string node (a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
 	"mcp_read_facts_response.v1.schema.json#ReadFactsSubjectRef":                           "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
 	"mcp_read_facts_response.v1.schema.json#Provenance":                                    "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
+	"mcp_read_facts_response.v1.schema.json#ReachedFrom":                                   "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
 	"mcp_read_facts_response.v1.schema.json#ServedFact":                                    "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
 	"mcp_read_facts_response.v1.schema.json#ServedSubject":                                 "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
 	"mcp_read_facts_response.v1.schema.json#ServedTable":                                   "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
@@ -1084,7 +1085,7 @@ func namedStringTypeName(rt reflect.Type) string {
 }
 
 func schemaEnumValues(node map[string]any) []string {
-	raw, ok := node["enum"].([]any)
+	raw, ok := schemaVocabulary(node)
 	if !ok {
 		return nil
 	}

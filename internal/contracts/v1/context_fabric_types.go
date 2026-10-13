@@ -523,6 +523,13 @@ var contextFabricFactKinds = [...]ContextFabricFactKind{
 // as a compile-time constant.
 const ContextFabricFactKindCount = len(contextFabricFactKinds)
 
+// ContextFabricFactKindListMaxItems is the published maxItems of every list of
+// fact kinds (and of fact_requirements). It is a fixed protocol bound, not the
+// vocabulary size: fact kinds are an additive vocabulary, so a server that adds
+// one must not break a client that cached the schema. Reads accept up to it;
+// writes still cap at ContextFabricFactKindCount.
+const ContextFabricFactKindListMaxItems = 64
+
 // ContextFabricFactKindVocabulary returns the closed fact-kind vocabulary in
 // published order.
 //
@@ -1709,6 +1716,8 @@ type ContextFabricRelationshipEdge struct {
 	EvidenceRefIDs  []string                      `json:"evidence_ref_ids"`
 }
 
+const ContextFabricDriverRankMaxValue = 10000
+
 type ContextFabricDriverJudgment struct {
 	DriverID         string                      `json:"driver_id"`
 	Standing         ContextFabricDriverStanding `json:"standing"`
@@ -1728,6 +1737,9 @@ type ContextFabricDriverJudgment struct {
 	EpistemicStatus ContextFabricEpistemicStatus  `json:"epistemic_status"`
 	Confidence      float64                       `json:"confidence"`
 	Qualification   string                        `json:"qualification,omitempty"`
+	// Rank is the order the engine states among drivers of one standing,
+	// 1 first. Zero means the engine stated none. It is not a score.
+	Rank int `json:"rank,omitempty"`
 	// SourceState is the state of the fact read this driver rests on, set
 	// only when the read is usable but not complete (truncated or stale).
 	// Absent means available.

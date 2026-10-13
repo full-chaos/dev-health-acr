@@ -12,14 +12,6 @@ import (
 
 // The glossary's per-kind subject lists are DERIVED from the fact capability
 // registry here, so the prompt cannot drift from what the providers serve.
-// notInterpretationFacing declares (fact kind, subject kind) pairs that
-// read_facts serves but the interpretation prompt does not yet name. The
-// prompt text is not changed by the change that adds the pair; adding it to
-// the glossary is a separate, deliberate prompt revision.
-var notInterpretationFacing = map[string]map[string]string{
-	"blockers":      {"project": "project rollup served to client models through read_facts; the interpretation prompt names it in its own revision"},
-	"pull_requests": {"project": "project rollup served to client models through read_facts; the interpretation prompt names it in its own revision"},
-}
 
 func TestInterpretationPromptGlossarySubjectKindsMatchCapabilities(t *testing.T) {
 	t.Parallel()
@@ -29,9 +21,6 @@ func TestInterpretationPromptGlossarySubjectKindsMatchCapabilities(t *testing.T)
 		capability := provider.Capability()
 		kinds := make([]string, 0, len(capability.SupportedSubjectKinds))
 		for _, kind := range capability.SupportedSubjectKinds {
-			if _, excluded := notInterpretationFacing[string(capability.Kind)][string(kind)]; excluded {
-				continue
-			}
 			kinds = append(kinds, string(kind))
 		}
 		sort.Strings(kinds)

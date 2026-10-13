@@ -97,6 +97,9 @@
           "score": {
             "number": 43.5
           },
+          "subject_kind": {
+            "string": "team"
+          },
           "team_canonical_id": {
             "string": "team:CHAOS"
           },
@@ -111,27 +114,6 @@
     ]
   },
   "principal_drivers": [
-    {
-      "driver_id": "cohort-driver-01-1",
-      "standing": "principal",
-      "category": "operational_deficiency",
-      "title": "CHAOS: operational deficiencies",
-      "summary": "operational deficiencies (weight 20, value 1.00) contributed 20.0 points to CHAOS's a 43.5 attention score.",
-      "confidence": 0.95,
-      "evidence_ref_ids": [
-        "evidence_team_chaos_roster"
-      ],
-      "claimed_fact_ids": [
-        "claim_cohort_88cad88367c815eae568ce1f979c1471"
-      ],
-      "affected_subjects": [
-        {
-          "kind": "team",
-          "canonical_id": "team:CHAOS",
-          "label": "CHAOS"
-        }
-      ]
-    },
     {
       "driver_id": "driver_12345678",
       "standing": "principal",
@@ -152,6 +134,27 @@
           "kind": "project",
           "canonical_id": "project_ask_dev",
           "label": "Ask Dev"
+        }
+      ]
+    },
+    {
+      "driver_id": "cohort-driver-01-1",
+      "standing": "principal",
+      "category": "operational_deficiency",
+      "title": "CHAOS: operational deficiencies",
+      "summary": "operational deficiencies (weight 20, value 1.00) contributed 20.0 points to CHAOS's a 43.5 attention score.",
+      "confidence": 0.95,
+      "evidence_ref_ids": [
+        "evidence_team_chaos_roster"
+      ],
+      "claimed_fact_ids": [
+        "claim_cohort_88cad88367c815eae568ce1f979c1471"
+      ],
+      "affected_subjects": [
+        {
+          "kind": "team",
+          "canonical_id": "team:CHAOS",
+          "label": "CHAOS"
         }
       ]
     },
@@ -200,19 +203,6 @@
   ],
   "key_facts": [
     {
-      "claim_id": "claim_cohort_88cad88367c815eae568ce1f979c1471",
-      "kind": "operational_deficiencies",
-      "subject": {
-        "kind": "team",
-        "canonical_id": "team:CHAOS",
-        "label": "CHAOS"
-      },
-      "field": "severity",
-      "value": {
-        "string": "critical"
-      }
-    },
-    {
       "claim_id": "claim_readiness_ask_dev",
       "kind": "readiness",
       "subject": {
@@ -246,6 +236,19 @@
           }
         }
       ]
+    },
+    {
+      "claim_id": "claim_cohort_88cad88367c815eae568ce1f979c1471",
+      "kind": "operational_deficiencies",
+      "subject": {
+        "kind": "team",
+        "canonical_id": "team:CHAOS",
+        "label": "CHAOS"
+      },
+      "field": "severity",
+      "value": {
+        "string": "critical"
+      }
     },
     {
       "claim_id": "claim_cohort_ff977441fb1cb96f9023dcff28d4a624",
@@ -294,8 +297,8 @@
   ],
   "warnings": [],
   "evidence_ref_ids": [
-    "evidence_team_chaos_roster",
     "evidence_release_acceptance",
+    "evidence_team_chaos_roster",
     "evidence_team_platform_roster"
   ],
   "subject_receipts": [

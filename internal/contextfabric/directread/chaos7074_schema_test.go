@@ -180,7 +180,7 @@ func TestChaos7074SchemaPropertiesMatchGoWireKeys(t *testing.T) {
 	// Every enum is the reader's own vocabulary.
 	enumOf := func(node map[string]any) []string {
 		var got []string
-		for _, v := range node["enum"].([]any) {
+		for _, v := range schemaVocab(node) {
 			got = append(got, v.(string))
 		}
 		sort.Strings(got)

@@ -175,7 +175,7 @@ func (r MCPInvestigateQuestionResponse) Validate() error {
 	if r.SchemaVersion != MCPInvestigateQuestionResponseSchema {
 		return fmt.Errorf("investigate_question response schema version must be %q", MCPInvestigateQuestionResponseSchema)
 	}
-	if err := r.Structured.Validate(); err != nil {
+	if err := r.Structured.validateRead(); err != nil {
 		return fmt.Errorf("structured: %w", err)
 	}
 	if r.FullResult != nil {
@@ -217,8 +217,8 @@ func (r MCPInvestigationResultResponse) Validate() error {
 	// This tool returns a RETRIEVED, immutable row, so it is validated
 	// leniently for the same reason the store and the client are: a result
 	// that predates a bound correction must stay reachable (codex round-4
-	// F1). The answer tool above stays strict, because its payload was
-	// produced now.
+	// F1). The answer tool above keeps its projection bounds strict, because
+	// its payload was produced now; both admit added vocabulary tokens.
 	if err := ValidateStoredResult(r.Structured); err != nil {
 		return fmt.Errorf("structured: %w", err)
 	}

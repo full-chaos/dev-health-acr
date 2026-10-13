@@ -775,7 +775,7 @@ func validSynthesisOutput() synthesisOutput {
 		Status: "complete", DirectJudgment: "Ask Dev is not release-ready.",
 		CurrentState:       "Tracked completion and release readiness diverge.",
 		StrongestPressures: []string{"Release acceptance remains open."},
-		Drivers: []contextfabric.DriverJudgment{{
+		Drivers: []synthesisDriverOutput{{
 			DriverID: "driver_12345678", Standing: contextfabric.DriverPrincipal,
 			Category: "relationship", Title: "Release acceptance remains open",
 			Summary: "Required acceptance has not completed.", AffectedSubjects: []contextfabric.SubjectRef{project},

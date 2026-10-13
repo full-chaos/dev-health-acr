@@ -68,9 +68,9 @@ func TestCanonicalFactsShowDisplayNounsAndTwoDecimals(t *testing.T) {
 func TestRankingRowsShowDisplayNounsAndValues(t *testing.T) {
 	t.Parallel()
 	score, weight, rank := 41.23456, 0.8187654321, int64(1)
-	label, signal := "Team A", "health.compounding_risk"
+	label, signal, teamKind := "Team A", "health.compounding_risk", "team"
 	row := contractsv1.ContextFabricClaimedFactRow{Fields: map[string]contractsv1.ContextFabricScalarValue{
-		"team_label": {String: &label}, "attention_rank": {Integer: &rank}, "score": {Number: &score},
+		"team_label": {String: &label}, "subject_kind": {String: &teamKind}, "attention_rank": {Integer: &rank}, "score": {Number: &score},
 		"driver_1_signal": {String: &signal}, "driver_1_weight_contributed": {Number: &weight},
 	}}
 	markdown, _ := RenderAnswerProjectionMarkdown(displayValuesProjection(nil, []contractsv1.ContextFabricClaimedFactRow{row}), 1<<20)
@@ -102,10 +102,10 @@ func TestCanonicalFactsKeepAHostileFieldNameFenced(t *testing.T) {
 
 func TestRankingRowsRenderAKeyOutsideTheFixedSetAsANoun(t *testing.T) {
 	t.Parallel()
-	label, unknownText, hostile := "Team A", "Some_Value", "x"
+	label, unknownText, hostile, teamKind := "Team A", "Some_Value", "x", "team"
 	ratio, cursor := 0.123456, "opaque"
 	row := contractsv1.ContextFabricClaimedFactRow{Fields: map[string]contractsv1.ContextFabricScalarValue{
-		"team_label": {String: &label}, "zz_unknown_key": {String: &unknownText}, "zz_unknown_ratio": {Number: &ratio},
+		"team_label": {String: &label}, "subject_kind": {String: &teamKind}, "zz_unknown_key": {String: &unknownText}, "zz_unknown_ratio": {Number: &ratio},
 		"next_cursor": {String: &cursor}, "evil\n# Row heading": {String: &hostile},
 	}}
 	markdown, _ := RenderAnswerProjectionMarkdown(displayValuesProjection(nil, []contractsv1.ContextFabricClaimedFactRow{row}), 1<<20)
