@@ -1076,7 +1076,16 @@ import (
 // identity's stats instead of the three per-map copies Ops writes, and its
 // rows no longer carry map_name. An answer saved under v212 holds every
 // churn, delivery and identity count three times.
-const QueryVersion = "devhealthfacts.clickhouse.v213"
+//
+// v213 -> v214: the security_alerts fact kind is served for a repository.
+// An answer saved under v213 cannot carry it.
+//
+// v214 -> v215: the blocker statements authorize their edge endpoints without
+// the library's organization-wide relation for an organization-wide grant, and
+// read it once, apart from the statements, for any other caller. The rows are
+// unchanged; the statements and their memory are not, so an answer saved under
+// v214 is not reused as one produced by the new statements.
+const QueryVersion = "devhealthfacts.clickhouse.v215"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1549,7 +1558,7 @@ func factKindDimension(kind contextfabric.FactKind) contextfabric.HealthDimensio
 	// code_ownership_risk: health.go's compounding_risk formula is
 	// literally w_churn/w_complexity/w_ownership/w_review-weighted risk --
 	// its own doc comment names ownership as one of the weighted inputs.
-	case contextfabric.FactHealth:
+	case contextfabric.FactHealth, contextfabric.FactSecurityAlerts:
 		return contextfabric.HealthDimensionCodeOwnershipRisk
 	// cognitive_workload_pressure: capacity forecasts (workload.go),
 	// IC-level churn/cycle/WIP throughput scatter (landscape.go), and
@@ -1782,6 +1791,12 @@ func factKindSubjectObligations(kind contextfabric.FactKind) map[contextfabric.S
 	case contextfabric.FactIncidents:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
 			contextfabric.SubjectIncident: {contextfabric.ObligationState, contextfabric.ObligationPrincipalDrivers},
+		}
+	// Stored security alert counts explain a repository's risk: a driver,
+	// never a state or a score.
+	case contextfabric.FactSecurityAlerts:
+		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
+			contextfabric.SubjectRepository: {contextfabric.ObligationPrincipalDrivers},
 		}
 	// Fired operational-deficiency rules explain pressure: a driver, never
 	// a state.
