@@ -406,7 +406,7 @@ func openProjectorClickHouse(cfg config.ProjectorConfig, logger *slog.Logger, me
 
 func projectorCapOptions(logger *slog.Logger, metrics *hostedmetrics.Instruments) []contextpacket.MemoryCapOption {
 	return []contextpacket.MemoryCapOption{
-		contextpacket.WithMemoryNearCapObserver(contextpacket.NewSlogMemoryNearCapObserver(logger, metrics.ClickHouseNearMemoryCap)),
+		contextpacket.WithMemoryNearCapObserver(contextpacket.NewSlogMemoryNearCapObserver(logger, nil)),
 		contextpacket.WithMemoryPeakUnobservedObserver(contextpacket.NewSlogMemoryPeakUnobservedObserver(logger, metrics.ClickHousePeakUnobserved)),
 	}
 }
