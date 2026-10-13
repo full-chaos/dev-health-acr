@@ -334,11 +334,14 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 			ownedRepos[teamID] = append(ownedRepos[teamID], teamOwnedRepo{key: key})
 		}
 	}
-	reachedRepos, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, projectTeams, timeBound)
-	if err != nil {
-		return shapeRejected, 0, 0, err
+	var reachedOnly map[string][]teamReachedRepo
+	if len(projectTeams) > 0 {
+		reachedRepos, reachErr := teamProjectReachedRepositories(ctx, p.facts.client, orgID, projectTeams, timeBound)
+		if reachErr != nil {
+			return shapeRejected, 0, 0, reachErr
+		}
+		reachedOnly = reachedOnlyRepositories(reachedRepos, ownedRepos)
 	}
-	reachedOnly := reachedOnlyRepositories(reachedRepos, ownedRepos)
 
 	teamIDs := make([]string, 0, len(ids))
 	for _, teamID := range ids {
