@@ -63,7 +63,9 @@
           "format": "date-time"
         },
         "availability": {
-          "enum": [
+          "type": "string",
+          "description": "Open vocabulary; documented values: available, stale, redacted, deleted, unauthorized. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "available",
             "stale",
             "redacted",
@@ -146,7 +148,9 @@
           }
         },
         "provenance": {
-          "enum": [
+          "type": "string",
+          "description": "Open vocabulary; documented values: native, explicit_text, heuristic, derived. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "native",
             "explicit_text",
             "heuristic",
@@ -184,7 +188,9 @@
           "maxLength": 256
         },
         "availability": {
-          "enum": [
+          "type": "string",
+          "description": "Open vocabulary; documented values: available, stale, redacted, deleted, unauthorized. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "available",
             "stale",
             "redacted",

@@ -31,6 +31,15 @@ make contract-write  # refresh deterministic derived artifacts
 make contract-test   # validate without writing
 ```
 
+## Output vocabularies: additive or frozen
+
+A client that cached `tools/list` output schemas validates every later response against that old copy, so a value added to a closed output `enum` breaks the whole response for it. Every enum-like field in an MCP output schema is therefore one of two kinds, and `internal/mcp/output_vocabulary_*_test.go` fails for any enum that is not classified.
+
+- **Additive** (the default): `"type": "string"` with no `enum`, a `description` that says `Open vocabulary; documented values: ...`, and the same list in `x-documented-values`. The server may add a value without a schema version bump or client update; clients must tolerate values they do not know. To add a value: add the Go constant, add the value to `x-documented-values` and the description in `contracts/jsonschema/v1` and `internal/mcp/schemas`, and add it to the Go set of the vocabulary in the registry. The registry test fails if a Go constant is missing from the documented list.
+- **Frozen**: the `enum` stays. Only a protocol, state-machine, request-echo or scoring set that a client branches on and that cannot grow qualifies, and the registry entry names which. Adding a value is a new schema version. The registry test pins the enum to its Go constant set exactly.
+
+An enum used as a request input, or inside an `if`/`then`/`not` condition, is not an output vocabulary and stays as written.
+
 ## Compatibility
 
 Additive optional fields may ship in a compatible v1 release. Removing fields, changing requiredness, narrowing accepted values, or changing semantics requires a new schema version.

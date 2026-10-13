@@ -1269,7 +1269,7 @@ func TestFactRequirementsBoundDerivesFromTheVocabulary(t *testing.T) {
 
 	// The schema's own enum must be the vocabulary, in order.
 	node := schemaNodeAt(t, documents, "common#$defs.FactRequirement.properties.kind")
-	raw, ok := node["enum"].([]any)
+	raw, ok := schemaVocabulary(node)
 	if !ok {
 		t.Fatal("common#$defs.FactRequirement.properties.kind declares no enum")
 	}

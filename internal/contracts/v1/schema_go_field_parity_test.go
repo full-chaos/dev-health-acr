@@ -1084,7 +1084,7 @@ func namedStringTypeName(rt reflect.Type) string {
 }
 
 func schemaEnumValues(node map[string]any) []string {
-	raw, ok := node["enum"].([]any)
+	raw, ok := schemaVocabulary(node)
 	if !ok {
 		return nil
 	}

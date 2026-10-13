@@ -97,7 +97,7 @@ func coverageDetailCodeEnums(node any) [][]string {
 	var found [][]string
 	switch typed := node.(type) {
 	case map[string]any:
-		if raw, ok := typed["enum"].([]any); ok {
+		if raw, ok := schemaVocabulary(typed); ok {
 			members := make([]string, 0, len(raw))
 			marker := false
 			for _, member := range raw {

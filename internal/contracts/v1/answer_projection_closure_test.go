@@ -909,7 +909,7 @@ func stringPathsIn(t *testing.T, documents map[string]map[string]any, root, pref
 			if _, isConst := object["const"]; isConst {
 				return
 			}
-			if _, isEnum := object["enum"]; isEnum {
+			if _, isEnum := schemaVocabulary(object); isEnum {
 				return
 			}
 			if combinators > 0 || onlyPresenceConstraint(object) {
