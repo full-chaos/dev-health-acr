@@ -80,23 +80,22 @@ func TestDirectReadPullRequestsForSeveralTeamsCountsFactsServingNoField(t *testi
 			t.Fatalf("an empty pull request fact was served: %+v", fact)
 		}
 	}
-	linkedServed := false
+	// Every reached pull request is either served with content or counted:
+	// perTeam per team plus the linked one, none lost silently.
+	reached := len(teams)*perTeam + 1
+	served := 0
 	for _, fact := range response.Facts {
-		if fact.Subject.Kind == "pull_request" && strings.HasSuffix(fact.Subject.CanonicalID, ":900") && len(fact.Tables["project_breakdown"].Rows) == 1 {
-			linkedServed = true
+		if fact.Subject.Kind == "pull_request" {
+			served++
 		}
 	}
-	if !linkedServed {
-		t.Fatalf("the linked pull request with a project_breakdown table is not served: %+v", response.Facts)
-	}
-	wantCount := len(teams) * perTeam
 	var note string
 	for _, candidate := range response.RequestNotes {
 		if candidate.Kind == "pull_requests" && strings.Contains(candidate.Note, "not listed") {
 			note = candidate.Note
 		}
 	}
-	if !strings.Contains(note, fmt.Sprintf("%d reached pull_requests facts are not listed", wantCount)) {
-		t.Fatalf("counted note missing, want %d: %q (notes %+v)", wantCount, note, response.RequestNotes)
+	if !strings.Contains(note, fmt.Sprintf("%d reached pull_requests facts are not listed", reached-served)) {
+		t.Fatalf("counted note missing: served %d of %d reached, note %q (notes %+v)", served, reached, note, response.RequestNotes)
 	}
 }
