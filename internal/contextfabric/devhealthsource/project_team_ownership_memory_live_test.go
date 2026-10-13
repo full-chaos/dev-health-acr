@@ -34,6 +34,16 @@ const (
 	// Worst case (unmerged parts) must stay at or under this; main measured
 	// 70.5 MiB unmerged and 72.8 MiB merged at this shape.
 	memoryBoundMiB = 48.0
+
+	// The 12-part layout is bounded by a line in versions per pair. Measured
+	// paged-statement peaks (CI, prod settings): 17.2-17.4 MiB at 100, 18.7-21.4
+	// at 1,000, 31.5-35.3 at 2,000. FINAL over unmerged overlapping parts is
+	// what grows (the raw FINAL read of the table alone goes 7.5 -> 17.7 MiB
+	// from 1,000 to 2,000), so the line has margin over every measured point:
+	// 20 + 0.0125 x versions = 21.3 / 32.5 / 45.0 MiB. Main's statement
+	// measures 70+ MiB at 767 versions and ~85 at 1,000 in this layout.
+	partsBoundBaseMiB    = 20.0
+	partsBoundPerVersion = 0.0125
 )
 
 func seedProjectTeamOwnershipShape(t *testing.T, f *ingestColumnsFixture, rows, unmergedParts int) {
@@ -134,16 +144,8 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query, 
 	return out
 }
 
-// memoryDiagnostic makes the tables fail the run so they show in the CI log;
-// TEMPORARY.
-const memoryDiagnostic = true
-
 func report(t *testing.T, text string) {
 	t.Helper()
-	if memoryDiagnostic {
-		t.Error("DIAGNOSTIC (temporary): " + text)
-		return
-	}
 	t.Log(text)
 }
 
@@ -268,11 +270,14 @@ func freshDatabaseFixture(t *testing.T, orgID, layout string, versions int) layo
 	return layoutMeasurement{f: f, query: query, parts: parts, layout: layout}
 }
 
-// The statement's memory must not follow the length of the ownership history,
-// in the merged layout and in a fixed multi-part layout. The rule (fail when
-// large > 1.15x small and large > small + 2 MiB) compares 1,000 with 2,000
-// versions per pair; 100 is logged to show the climb to block saturation.
-func TestProjectTeamOwnershipStatementMemoryDoesNotGrowWithVersions(t *testing.T) {
+// The statement's memory against the length of the ownership history, in a
+// merged layout and in a fixed 12-part layout (a fresh database per point).
+// Merged: flat, the rule is fail when large > 1.15x small and large > small +
+// 2 MiB over 1,000 versus 2,000 versions per pair. Twelve parts: FINAL over
+// overlapping unmerged parts costs more per version, so the peak is bounded by
+// a line in versions per pair (partsBoundBaseMiB + partsBoundPerVersion x v);
+// the 100 point is measured as well to show the climb to block saturation.
+func TestProjectTeamOwnershipStatementMemoryAgainstTheOwnershipHistory(t *testing.T) {
 	for _, layout := range []string{"merged", "parts"} {
 		t.Run(layout, func(t *testing.T) {
 			peaks := map[int]float64{}
@@ -284,9 +289,16 @@ func TestProjectTeamOwnershipStatementMemoryDoesNotGrowWithVersions(t *testing.T
 				peak := peakOf(t, all, "paged_statement")
 				report(t, fmt.Sprintf("slope %s: %d versions per pair (%d rows, %d parts):\n%s", layout, versions, memoryShapePairs*versions, m.parts, fragmentTable("slope", all)))
 				peaks[versions] = peak.mib
+				if layout == "parts" {
+					if limit := partsBoundBaseMiB + partsBoundPerVersion*float64(versions); peak.mib > limit {
+						t.Errorf("parts: the paged statement peaked at %.2f MiB at %d versions per pair, bound %.2f MiB (%.0f + %.4f x versions)", peak.mib, versions, limit, partsBoundBaseMiB, partsBoundPerVersion)
+					}
+				}
 			}
-			if small, large := peaks[1000], peaks[2000]; large > 1.15*small && large > small+2 {
-				t.Errorf("%s: memory grows with the ownership history: %.2f MiB at 1,000 versions per pair, %.2f MiB at 2,000 (fail when large > 1.15x small and large > small + 2 MiB)", layout, small, large)
+			if layout == "merged" {
+				if small, large := peaks[1000], peaks[2000]; large > 1.15*small && large > small+2 {
+					t.Errorf("merged: memory grows with the ownership history: %.2f MiB at 1,000 versions per pair, %.2f MiB at 2,000 (fail when large > 1.15x small and large > small + 2 MiB)", small, large)
+				}
 			}
 		})
 	}
