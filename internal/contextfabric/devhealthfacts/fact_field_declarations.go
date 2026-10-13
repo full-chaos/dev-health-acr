@@ -336,6 +336,15 @@ func blockersFields() []fieldDecl {
 				cNullable(cStr("link_tier")),
 			),
 		),
+		// The project's own issues (project -> issue membership, no link
+		// tier), current axis only, over the caller's authorized items.
+		declOn(declProjectOnly,
+			fStr("rollup_basis"),
+			fStr("blocker_status_basis"),
+			declCallerScoped(fInt("blocked_work_items_current", "count")),
+			declCallerScoped(fInt("blocker_dependencies_current", "count")),
+			declCallerScoped(fInt("blocker_dependencies_excluded_by_status_current", "count")),
+		),
 	)
 }
 
@@ -414,6 +423,29 @@ func pullRequestFields() []fieldDecl {
 				cInt("pull_requests_closed_unmerged_window", "count"),
 				cStr("reach_basis"),
 				cNullable(cStr("link_tier")),
+			),
+		),
+		// A project reaches pull requests only through its issues' linked
+		// pull request rows; each pull request counts once, under its
+		// strongest link tier. pull_request_link_basis is the weakest tier
+		// counted. Open is current-axis only; the window counts use each pull
+		// request's own event time.
+		declOn(declProjectOnly,
+			fStr("rollup_basis"),
+			fStr("window_basis"),
+			fStr("window_start"),
+			fStr("window_end"),
+			fStr("pull_request_link_basis"),
+			declAggregate(fInt("pull_requests_open_current", "count")),
+			declAggregate(fInt("pull_requests_opened_window", "count")),
+			declAggregate(fInt("pull_requests_merged_window", "count")),
+			declAggregate(fInt("pull_requests_closed_unmerged_window", "count")),
+			fTable("link_tier_breakdown",
+				cStr("link_tier"),
+				cNullable(cInt("pull_requests_open_current", "count")),
+				cInt("pull_requests_opened_window", "count"),
+				cInt("pull_requests_merged_window", "count"),
+				cInt("pull_requests_closed_unmerged_window", "count"),
 			),
 		),
 	)
