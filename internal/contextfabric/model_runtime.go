@@ -3259,7 +3259,8 @@ func MergeCoverage(orgID string, groups ...Coverage) Coverage {
 		sources[i].Label = contractsv1.ContextFabricSourceObservationLabel(sources[i].Source)
 		sources[i].StateLabel = contractsv1.ContextFabricSourceStateLabel(sources[i].State)
 	}
-	// reasons: EXACTLY today's computation (dedupe map + sort.Strings) --
+	// reasons: today's dedupe map ordered by the machine kind key then the
+	// served text (degradedSortKeys), so a label edit never reorders them --
 	// the golden anchor this ticket must never move. Computed independently
 	// of allDetails below, so a defect on the structured half can never
 	// touch the field every existing consumer already parses.

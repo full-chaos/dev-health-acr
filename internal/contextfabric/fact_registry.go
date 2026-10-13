@@ -1058,7 +1058,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// things. Recording only the failure would silently drop the
 			// record that subjects were dropped -- the unexplained absence
 			// the empty-states rule forbids.
-			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason),
+			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(plannedForFailedRead(planned, registered.capability), reason),
 				factDetailSpecForRead(planned, registered.capability, true, reason))
 			bundle.recordOutcome(planned.Kind, factReadFailed, planned.Subjects, query.Subjects, nil)
 			bundle.noteUnreachedRoot(planned.Kind, planned, registered.capability)
@@ -1088,7 +1088,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		// Coverage.Partial, and it permits facts. Same discipline as the
 		// registry fan-out cap and the R4-2 omission path, which reach this
 		// state for the same reason.
-		gapOnlyTruncation := planned.ScopeGap != nil && !result.Truncated && result.OmittedCount == 0
+		gapOnlyTruncation := planned.ScopeGap != nil && !result.Truncated && result.OmittedCount == 0 && result.State != SourceTruncated
 		if planned.ScopeGap != nil {
 			result.Truncated = true
 		}
@@ -1113,7 +1113,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			}
 			state, reason := classifyFactReadError(planned.Kind, rejection)
 			r.logFactReadFailure(ctx, planned.Kind, rejection)
-			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason),
+			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(plannedForFailedRead(planned, registered.capability), reason),
 				factDetailSpecForRead(planned, registered.capability, true, reason))
 			bundle.recordOutcome(planned.Kind, factReadRejected, planned.Subjects, query.Subjects, nil)
 			bundle.noteUnreachedRoot(planned.Kind, planned, registered.capability)

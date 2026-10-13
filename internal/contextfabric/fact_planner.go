@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // A planner decision is recorded in Coverage as a free-text Reason. The reason
@@ -328,7 +330,7 @@ func partitionBySupportedSubjectKind(subjects []SubjectRef, supportedKinds []Sub
 func prunedReason(capability FactCapability, unsupported []SubjectKind) string {
 	return fmt.Sprintf(
 		"no resolved subject has a kind this capability supports (resolved kinds: %s; supported kinds: %s)",
-		joinSubjectKinds(unsupported), joinSubjectKinds(capability.SupportedSubjectKinds),
+		joinSubjectKindNouns(unsupported), joinSubjectKindNouns(capability.SupportedSubjectKinds),
 	)
 }
 
@@ -349,6 +351,26 @@ func unexpandedReason(capability FactCapability, gap FactScopeGap, ownFactsRead 
 	if ownFactsRead {
 		lead = "the requested subjects that hold this capability's facts directly were read; facts reachable only through scope expansion were not added because"
 	}
+	return unexpandedReasonWithLead(capability, gap, lead)
+}
+
+// unexpandedReasonForFailedRead is the gap sentence for a kind whose direct read
+// then failed: it claims nothing about what was read.
+func unexpandedReasonForFailedRead(capability FactCapability, gap FactScopeGap) string {
+	return unexpandedReasonWithLead(capability, gap, "facts reachable only through scope expansion were not added because")
+}
+
+// plannedForFailedRead swaps the planning-time "were read" gap sentence of an
+// entry whose provider read then failed for one that does not claim the read.
+func plannedForFailedRead(planned factPlanEntry, capability FactCapability) factPlanEntry {
+	if planned.ScopeGap == nil || len(planned.Subjects) == 0 {
+		return planned
+	}
+	planned.Reason = strings.Replace(planned.Reason, unexpandedReason(capability, *planned.ScopeGap, true), unexpandedReasonForFailedRead(capability, *planned.ScopeGap), 1)
+	return planned
+}
+
+func unexpandedReasonWithLead(capability FactCapability, gap FactScopeGap, lead string) string {
 	cause := "scope expansion did not reach them"
 	switch {
 	case gap.WindowUnsupported():
@@ -368,8 +390,8 @@ func unexpandedReason(capability FactCapability, gap FactScopeGap, ownFactsRead 
 		cause = "scope expansion matched targets this credential may not read"
 	}
 	return fmt.Sprintf(
-		"%s %s; this capability covers %s subjects and the request named a %s",
-		lead, cause, joinSubjectKinds(capability.SupportedSubjectKinds), gap.OriginKind,
+		"%s %s (it covers %s; the request named a %s)",
+		lead, cause, joinSubjectKindNouns(capability.SupportedSubjectKinds), subjectKindNounSingular(gap.OriginKind),
 	)
 }
 
@@ -414,7 +436,7 @@ func appendDerivedReadSubjects(roots []SubjectRef, derived []SubjectRef) []Subje
 func narrowedReason(capability FactCapability, unsupported []SubjectKind, dropped int) string {
 	return fmt.Sprintf(
 		"%d subject(s) were not queried because this capability does not support their kind (skipped kinds: %s; supported kinds: %s)",
-		dropped, joinSubjectKinds(unsupported), joinSubjectKinds(capability.SupportedSubjectKinds),
+		dropped, joinSubjectKindNouns(unsupported), joinSubjectKindNouns(capability.SupportedSubjectKinds),
 	)
 }
 
@@ -436,7 +458,13 @@ func withNarrowingNote(planned factPlanEntry, reason string) string {
 	if !planned.Narrowed && planned.ScopeGap == nil {
 		return reason
 	}
-	return strings.TrimSpace(planned.Reason + "; " + reason)
+	if strings.TrimSpace(reason) == "" {
+		return strings.TrimSpace(planned.Reason)
+	}
+	if strings.TrimSpace(planned.Reason) == "" {
+		return strings.TrimSpace(reason)
+	}
+	return strings.TrimSpace(planned.Reason) + "; " + strings.TrimSpace(reason)
 }
 
 // withScopeGapDisclosure attaches a DEGRADING scope gap to a plan entry that
@@ -465,13 +493,29 @@ func withScopeGapDisclosure(entry factPlanEntry, scope *FactReadScope, capabilit
 	return entry
 }
 
-func joinSubjectKinds(kinds []SubjectKind) string {
+func joinSubjectKindNouns(kinds []SubjectKind) string {
 	if len(kinds) == 0 {
 		return "none"
 	}
 	values := make([]string, 0, len(kinds))
 	for _, kind := range kinds {
-		values = append(values, string(kind))
+		values = append(values, subjectKindNounPlural(kind))
 	}
-	return strings.Join(values, ",")
+	return strings.Join(values, ", ")
+}
+
+// subjectKindNounPlural names a subject kind in plain words ("pull requests"),
+// falling back to the kind itself for a value the noun table does not know.
+func subjectKindNounPlural(kind SubjectKind) string {
+	if noun := contractsv1.ContextFabricSubjectKindNoun(kind, 2); noun != "" {
+		return noun
+	}
+	return string(kind)
+}
+
+func subjectKindNounSingular(kind SubjectKind) string {
+	if noun := contractsv1.ContextFabricSubjectKindNoun(kind, 1); noun != "" {
+		return noun
+	}
+	return string(kind)
 }

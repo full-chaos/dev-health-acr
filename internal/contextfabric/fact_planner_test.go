@@ -142,7 +142,7 @@ func TestPlanFactReadsReasonsCarryClosedCodesAndNoContent(t *testing.T) {
 	if strings.Contains(entry.Reason, secret) {
 		t.Fatalf("reason = %q, want no canonical ID or label in a stored coverage reason", entry.Reason)
 	}
-	if !strings.Contains(entry.Reason, "team") || !strings.Contains(entry.Reason, "repository") {
+	if !strings.Contains(entry.Reason, "teams") || !strings.Contains(entry.Reason, "repositories") {
 		t.Fatalf("reason = %q, want both the resolved and supported subject kinds named", entry.Reason)
 	}
 

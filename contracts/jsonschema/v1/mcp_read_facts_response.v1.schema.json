@@ -207,7 +207,6 @@
           },
           "expansion": {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "outcome",
               "policy"

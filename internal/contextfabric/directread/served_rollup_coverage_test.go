@@ -27,7 +27,7 @@ func TestInternalTokenCensusCatchesPlantedTokens(t *testing.T) {
 		}
 	}
 	for _, plain := range []string{
-		"the requested subjects that hold this capability's facts directly were read; facts reachable only through scope expansion were not added because no scope expander is wired on this server; this capability covers project,team,repository subjects and the request named a project",
+		"the requested subjects that hold this capability's facts directly were read; facts reachable only through scope expansion were not added because no scope expander is wired on this server (it covers projects, teams, repositories; the request named a project)",
 		"no resolved subject has a kind this capability supports (resolved kinds: team; supported kinds: repository)",
 	} {
 		if token := internalToken(plain); token != "" {

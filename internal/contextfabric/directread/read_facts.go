@@ -1136,11 +1136,17 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 					row.ProviderState = state
 				}
 				row.Outcome = subjectOutcome(outcome, key, served[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID], row.ProviderState, subject, capability)
-				if share, expanded := derived.derivedCoverage(kind, subject, served, outcome.Evaluated); expanded && share.targets == 0 && !share.shared && share.expansion.outcome == contextfabric.FactScopePolicyUnavailable {
+				share, expanded := derived.derivedCoverage(kind, subject, served, outcome.Evaluated)
+				notRun := expanded && share.targets == 0 && !share.shared && share.expansion.outcome == contextfabric.FactScopePolicyUnavailable
+				ownCut := expanded && !notRun && (share.shared || expansionCut(share.expansion.outcome))
+				// The kind-level truncated state came from a scope gap alone:
+				// a row whose own expansion did not run, or completed, or was
+				// never asked for is not cut by it.
+				if row.Outcome == OutcomeTruncated && row.ProviderState == "" && outcome.TruncatedOnlyByScopeGap && !ownCut {
+					row.Outcome = OutcomeFactServed
+				}
+				if notRun {
 					row.Expansion = share.note()
-					if row.Outcome == OutcomeTruncated && row.ProviderState == "" && outcome.TruncatedOnlyByScopeGap {
-						row.Outcome = OutcomeFactServed
-					}
 				} else if expanded && (share.targets > 0 || share.shared || expansionCut(share.expansion.outcome)) {
 					row.Expansion = share.note()
 					row.Reason = joinReason(row.Reason, derivedReason(share))
@@ -1195,7 +1201,7 @@ func derivedOutcome(outcome contextfabric.FactKindOutcome, share derivedRow) str
 	switch {
 	case served > 0 && outcome.State == contextfabric.SourceStale:
 		return OutcomeStale
-	case served > 0 && (outcome.State == contextfabric.SourceTruncated || expansionCut(expansion.outcome) || share.shared):
+	case served > 0 && ((outcome.State == contextfabric.SourceTruncated && !outcome.TruncatedOnlyByScopeGap) || expansionCut(expansion.outcome) || share.shared):
 		return OutcomeTruncated
 	case served > 0:
 		return OutcomeFactServed

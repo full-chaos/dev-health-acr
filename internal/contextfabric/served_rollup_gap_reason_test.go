@@ -154,3 +154,38 @@ func TestFailedReadAndProviderReasonsAreServedAsPlainSentences(t *testing.T) {
 		})
 	}
 }
+
+func TestFailedReadAfterAScopeGapDoesNotClaimTheFactsWereRead(t *testing.T) {
+	project := subject(SubjectProject, "project.v2:jira:Q")
+	provider := &factProviderStub{
+		capability: planCapability(FactPullRequests, "pull_requests", SubjectProject, SubjectRepository),
+		err:        &FactReadFailure{State: SourceUnavailable, Reason: "devhealthfacts: query pull requests failed"},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{provider}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{project}, []FactRequirement{{Kind: FactPullRequests}}, TemporalCurrent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := append([]string{}, bundle.Coverage.DegradedReasons...)
+	for _, source := range bundle.Coverage.Sources {
+		texts = append(texts, source.Reason)
+	}
+	for _, detail := range bundle.Coverage.Details {
+		texts = append(texts, detail.Raw)
+	}
+	if len(texts) == 0 {
+		t.Fatal("no coverage text for a failed read")
+	}
+	for _, text := range texts {
+		if strings.Contains(text, "were read") {
+			t.Errorf("a failed read says the facts were read: %q", text)
+		}
+	}
+	if !strings.Contains(texts[0], "read failed") {
+		t.Errorf("failed read not named: %q", texts[0])
+	}
+}
