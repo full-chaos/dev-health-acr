@@ -35,13 +35,18 @@ const workGraphIssueTitlesSQL = `SELECT w.work_item_id AS id, if(uniqExact(w.tit
 	`AND (w.repo_id = {repo_id:UUID} OR w.work_item_id IN {readable_repositoryless_issue_ids:Array(String)}) ` +
 	`AND lengthUTF8(w.title) BETWEEN 1 AND 1000 GROUP BY w.work_item_id`
 
-// workGraphIssueTitlesMapSQL computes the titles once per statement as a
-// scalar map (issue key to title) that the endpoint labels look up. Joining
-// the lookup per endpoint held about 36 MB of join state; the scalar map costs
-// under 1 MB on the same rows.
-const workGraphIssueTitlesMapSQL = `(SELECT mapFromArrays(groupArray(id), groupArray(title)) AS titles FROM (` + workGraphIssueTitlesSQL + `)) AS wit`
+// workGraphIssueTitlesMapSQL is the issue titles as one scalar map (issue key
+// to title). ClickHouse evaluates identical scalar subqueries once per
+// statement, so the labels look the map up without a join: a title join per
+// endpoint held about 36 MB of join state and a single-row join about 18 MB,
+// where the scalar map costs about 1 MB on the same rows. It is inlined at
+// each use because a named alias would be an unqualified name the org-scope
+// sweep cannot tell from a column.
+const workGraphIssueTitlesMapSQL = `(SELECT mapFromArrays(groupArray(id), groupArray(title)) FROM (` + workGraphIssueTitlesSQL + `))`
 
-func workGraphIssueTitleOf(id string) string { return "wit.titles[" + id + "]" }
+func workGraphIssueTitleOf(id string) string {
+	return "arrayElement(" + workGraphIssueTitlesMapSQL + ", " + id + ")"
+}
 
 // RepositorylessIssueReader is optionally implemented by an executor that can
 // decide which repository-less issues the caller may read.
