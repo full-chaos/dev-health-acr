@@ -31,7 +31,7 @@ func TestTeamBlockerFactsServeAnOrganizationWithManyWorkItemsOnRealClickHouse(t 
 		options.MaxBytesToRead = &maxBytesToRead
 	})
 	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_graph_issue_pr",
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
@@ -87,8 +87,8 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 SELECT concat('filler-more-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?)`,
 		repoUUID("repo-owned"), blockerMemoryOrg, at, uint64(blockerMemoryMoreFillerItems))
 	large, largeResult, largeErr := read()
-	// The roll-up, the totals and the unlinked count run on every read.
-	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team blocker statements", small, large, 3)
+	// The roll-up, the totals, the oldest age and the unlinked count run on every read.
+	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team blocker statements", small, large, 4)
 	for _, read := range []struct {
 		result contextfabric.FactProviderResult
 		err    error
@@ -113,7 +113,7 @@ func TestTeamBlockerFactsRefuseAnEndpointWithAnUnauthorizedSiblingRowOnRealClick
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_graph_issue_pr",
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
