@@ -236,7 +236,8 @@ func (p *CommitmentProvider) commitmentFields(project commitmentProjectRow, item
 		fields["target_date_provider"] = contextfabric.StringFactValue(project.provider)
 		fields["days_to_target"] = contextfabric.IntegerFactValue(commitmentDaysBetween(asOf, target))
 	}
-	if strings.EqualFold(strings.TrimSpace(project.provider), "github") {
+	sourceNotCollected := strings.EqualFold(strings.TrimSpace(project.provider), "github")
+	if sourceNotCollected {
 		fields["iteration_basis"] = contextfabric.StringFactValue(commitmentNotCollected)
 	}
 	if items == nil {
@@ -272,7 +273,7 @@ func (p *CommitmentProvider) commitmentFields(project commitmentProjectRow, item
 	switch {
 	case stated:
 		fields["commitment_status"] = contextfabric.StringFactValue(commitmentStatusStated)
-	case unreadable == 0:
+	case unreadable == 0 && !sourceNotCollected:
 		fields["commitment_status"] = contextfabric.StringFactValue(commitmentStatusNoneStated)
 	}
 	return fields

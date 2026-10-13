@@ -152,7 +152,7 @@ func TestCommitmentServesTheStatedDatesOfAProjectAtTheReadFactsBoundary(t *testi
 }
 
 func TestCommitmentProjectWithNoStatedDateIsNoneStatedForEveryProvider(t *testing.T) {
-	for _, provider := range []string{"jira", "gitlab", "github", "linear"} {
+	for _, provider := range []string{"jira", "gitlab", "linear"} {
 		t.Run(provider, func(t *testing.T) {
 			project := projectSubject(provider, "proj-none")
 			client := commitmentClient(
@@ -175,10 +175,32 @@ func TestCommitmentProjectWithNoStatedDateIsNoneStatedForEveryProvider(t *testin
 }
 
 func TestCommitmentProjectWithNoIssuesIsNoneStatedWithMeasuredZeroCounts(t *testing.T) {
-	project := projectSubject("github", "proj-empty")
-	client := commitmentClient([][]any{commitmentProjectRow("github", "proj-empty", "", "", "", true)}, nil)
+	project := projectSubject("gitlab", "proj-empty")
+	client := commitmentClient([][]any{commitmentProjectRow("gitlab", "proj-empty", "", "", "", true)}, nil)
 	fact := servedCommitment(t, readCommitmentFacts(t, client, project), project)
 	wantServed(t, fact, map[string]any{"commitment_status": "none_stated", "items_total": "0", "items_open": "0", "items_closed": "0"})
+}
+
+func TestCommitmentGithubWithNothingStatedIsNeverNoneStated(t *testing.T) {
+	undated, empty, dated := projectSubject("github", "proj-undated"), projectSubject("github", "proj-empty"), projectSubject("github", "proj-dated")
+	client := commitmentClient(
+		[][]any{
+			commitmentProjectRow("github", "proj-undated", "", "", "", true),
+			commitmentProjectRow("github", "proj-empty", "", "", "", true),
+			commitmentProjectRow("github", "proj-dated", "", "", "", true),
+		},
+		[][]any{
+			commitmentItemRow("github", "proj-undated", commitmentCounts{total: 2, open: 2}),
+			commitmentItemRow("github", "proj-dated", commitmentCounts{total: 1, open: 1, sprints: 1, latestEnd: time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)}),
+		},
+	)
+	response := readCommitmentFacts(t, client, undated, empty, dated)
+	for _, subject := range []contextfabric.SubjectRef{undated, empty} {
+		fact := servedCommitment(t, response, subject)
+		wantServed(t, fact, map[string]any{"iteration_basis": "not_collected", "items_unreadable_count": "0"})
+		wantAbsent(t, fact, "commitment_status")
+	}
+	wantServed(t, servedCommitment(t, response, dated), map[string]any{"iteration_basis": "not_collected", "commitment_status": "stated"})
 }
 
 func TestCommitmentSprintKindIsNamedByTheProviderAndNeverMerged(t *testing.T) {

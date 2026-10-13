@@ -153,7 +153,8 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 	wantAbsent(t, fact, "target_date", "sprint_kind", "next_sprint_end", "latest_sprint_end")
 
 	fact = servedCommitment(t, response, empty)
-	wantServed(t, fact, map[string]any{"commitment_status": "none_stated", "items_total": "0", "items_open": "0", "items_closed": "0"})
+	wantServed(t, fact, map[string]any{"iteration_basis": "not_collected", "items_total": "0", "items_open": "0", "items_closed": "0"})
+	wantAbsent(t, fact, "commitment_status")
 
 	denied := readCommitmentFactsAs(t, query, storage.Principal{OrgID: commitmentOrg, Subject: "commitment", CredentialID: "commitment", RepositoryScopes: []string{"acme/elsewhere"}}, linear, none, empty)
 	wantCommitmentDenied(t, denied, linear, none, empty)
@@ -163,7 +164,8 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 	wantServed(t, fact, map[string]any{"items_total": "1", "items_unreadable_count": "1", "items_unreadable_reason": "items_not_readable_for_caller"})
 	wantAbsent(t, fact, "commitment_status")
 	fact = servedCommitment(t, restricted, empty)
-	wantServed(t, fact, map[string]any{"commitment_status": "none_stated", "items_unreadable_count": "0"})
+	wantServed(t, fact, map[string]any{"iteration_basis": "not_collected", "items_unreadable_count": "0"})
+	wantAbsent(t, fact, "commitment_status")
 	fact = servedCommitment(t, restricted, linear)
 	wantServed(t, fact, map[string]any{"target_date": "2026-11-01", "commitment_status": "stated", "items_total": "8", "items_past_due_open": "1", "items_unreadable_count": "0"})
 	if fact.PopulationScope != "caller_authorized_items" {
