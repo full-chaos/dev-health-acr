@@ -347,10 +347,11 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	}
 	// grew is the slope guard: the larger size's reading (the smallest of
 	// three warm runs, both sizes on one merged part per table) over 1.15x
-	// the smaller size's plus a fixed floor. A cost that grows with the rows
-	// lifts all three runs, so the minimum carries it; jitter does not.
+	// the smaller size's AND over it by more than a fixed floor. A cost that
+	// grows with the rows lifts all three runs, so the minimum carries it;
+	// the floor keeps a small statement's jitter out.
 	grew := func(small, large variant) bool {
-		return float64(large.peak) > statementMemorySlope*float64(small.peak)+float64(arrayMemoryFloor)
+		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+arrayMemoryFloor
 	}
 
 	// The guard reads merged parts; production tables are not one part, so
