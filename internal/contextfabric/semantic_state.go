@@ -1018,6 +1018,34 @@ func validateSemanticFrameBounds(frame QuestionFrame) error {
 			return fmt.Errorf("scoped member_qualifier_value is not valid beside its qualifier and member kind")
 		}
 	}
+	if expression.Discovered != nil {
+		if !ValidMemberQualifier(expression.Discovered.MemberQualifier) {
+			return fmt.Errorf("discovered member_qualifier %q is not a vocabulary member", expression.Discovered.MemberQualifier)
+		}
+		if !ValidMemberQualifierValue(expression.Discovered.MemberKind, expression.Discovered.MemberQualifier, expression.Discovered.MemberQualifierValue) {
+			return fmt.Errorf("discovered member_qualifier_value is not valid beside its qualifier and member kind")
+		}
+	}
+	if expression.Grouped != nil {
+		if !ValidMemberQualifier(expression.Grouped.MemberQualifier) {
+			return fmt.Errorf("grouped member_qualifier %q is not a vocabulary member", expression.Grouped.MemberQualifier)
+		}
+		if !ValidMemberQualifierValue(expression.Grouped.MemberKind, expression.Grouped.MemberQualifier, expression.Grouped.MemberQualifierValue) {
+			return fmt.Errorf("grouped member_qualifier_value is not valid beside its qualifier and member kind")
+		}
+	}
+	if expression.Org != nil {
+		kind := SubjectKind("")
+		if expression.Org.MemberKind != nil {
+			kind = *expression.Org.MemberKind
+		}
+		if !ValidMemberQualifier(expression.Org.MemberQualifier) {
+			return fmt.Errorf("organization member_qualifier %q is not a vocabulary member", expression.Org.MemberQualifier)
+		}
+		if (kind == "" && (expression.Org.MemberQualifier != "" || expression.Org.MemberQualifierValue != "")) || !ValidMemberQualifierValue(kind, expression.Org.MemberQualifier, expression.Org.MemberQualifierValue) {
+			return fmt.Errorf("organization member_qualifier_value is not valid beside its qualifier and member kind")
+		}
+	}
 	if expression.Explicit != nil {
 		if len(expression.Explicit.Operands) > SemanticStateMaxOperands {
 			return over(SemanticStateBoundOperands, "%d operands exceeds %d", len(expression.Explicit.Operands), SemanticStateMaxOperands)
