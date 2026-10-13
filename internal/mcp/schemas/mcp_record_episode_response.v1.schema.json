@@ -4,7 +4,6 @@
   "title": "ACR MCP record_episode Response v1",
   "description": "Safe write receipt. Submitted summary, artifacts, and transcript data are never echoed.",
   "type": "object",
-  "additionalProperties": false,
   "required": [
     "schema_version",
     "status",
@@ -56,7 +55,6 @@
     },
     "scope": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
         "branch": {
           "type": "string",

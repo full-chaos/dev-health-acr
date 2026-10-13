@@ -246,6 +246,8 @@ type clickHouseOpenRequest struct {
 	config            config.Config
 	assemblyObserver  contextpacket.AssemblyObserver
 	expansionObserver contextpacket.EvidenceExpansionObserver
+	logger            *slog.Logger
+	metrics           *hostedmetrics.Instruments
 }
 
 type episodeServiceRequest struct {

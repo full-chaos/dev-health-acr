@@ -363,7 +363,7 @@ func (c *repositoryCheck) validateMCPSchemaDefsSync() error {
 		if !ok {
 			return fmt.Errorf("canonical %s must be an object", sync.canonicalFile)
 		}
-		expected := localizeMCPSchemaRefs(stripSchemaIdentity(canonical), sync.refRewrites)
+		expected := openOutputObjects(localizeMCPSchemaRefs(stripSchemaIdentity(canonical), sync.refRewrites))
 		if !reflect.DeepEqual(expected, actual) {
 			return fmt.Errorf("%s: $defs.%s has drifted from canonical %s; regenerate the embedded copy", sync.responseFile, sync.defKey, sync.canonicalFile)
 		}
