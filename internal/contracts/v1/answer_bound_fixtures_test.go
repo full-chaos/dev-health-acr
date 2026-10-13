@@ -508,7 +508,8 @@ const irreducibleAnswerBytes = 1023
 // ceiling and the omitted count are additive and add nothing at the maximum.
 //
 // 521555112 -> 521555762 (+650): driver rank, 10000 on 50 drivers.
-const maximalAnswerBytes = 521555762
+// 521555762 -> 521585712 (+29950): driver source_state_note at its 96 maximum on every driver.
+const maximalAnswerBytes = 521585712
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
