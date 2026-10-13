@@ -997,7 +997,7 @@ import (
 // (complete), and an answer whose status was decided within a cut read is
 // partial. A candidate saved under v196 may hold the cut, mismatched set, that
 // no_match, or a complete status over a cut read.
-const QueryVersion = "devhealthfacts.clickhouse.v197"
+const QueryVersion = "devhealthfacts.clickhouse.v198"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
