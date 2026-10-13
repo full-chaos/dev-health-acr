@@ -127,6 +127,28 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 	if measured < 4 {
 		t.Fatalf("measured %d statements, want the team blocker statements: the measurement did not happen", measured)
 	}
+	fragmentMark := serverNowMicros(t, ctx, direct)
+	repoKeys := make([]string, 0, 11)
+	for repo := 0; repo < 11; repo++ {
+		repoKeys = append(repoKeys, fmt.Sprintf("00000000-0000-4000-8000-0000000000%02d", repo))
+	}
+	teamIDs := make([]string, 0, 39)
+	for team := 0; team < 39; team++ {
+		teamIDs = append(teamIDs, fmt.Sprintf("team-%d", team))
+	}
+	if err := devhealthfacts.RunBlockerFragmentsForTest(ctx, query, storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"*"}}, blockerProdShapeOrg, repoKeys, teamIDs); err != nil {
+		t.Fatalf("fragments: %v", err)
+	}
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs: %v", err)
+	}
+	for _, name := range devhealthfacts.BlockerFragmentNames {
+		var peak, readRows uint64
+		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows) FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select' AND position(query, ?) > 0`, fragmentMark, "'frag-"+name+"'").Scan(&peak, &readRows); err != nil {
+			t.Fatalf("fragment %s: %v", name, err)
+		}
+		t.Logf("PRODSHAPE fragment %-18s peak %d bytes (%.1f MiB) read_rows %d", name, peak, float64(peak)/(1<<20), readRows)
+	}
 	teamsServed := 0
 	for _, fact := range result.Facts {
 		if fact.Subject.Kind == contextfabric.SubjectTeam {
