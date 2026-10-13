@@ -333,6 +333,13 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	grew := func(small, large variant) bool {
 		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+max(arrayMemoryFloor, small.spread+large.spread)
 	}
+	// rose is the planted defect's growth: over the slope, and every run at the
+	// larger size above every run at the smaller size by more than the floor.
+	// The organization-wide forms are noisy at the larger size (spreads to
+	// 8 MB on 18-25 MB statements), so their own spread is not the yardstick.
+	rose := func(small, large variant) bool {
+		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+small.spread+arrayMemoryFloor
+	}
 
 	// The guard reads merged parts; production tables are not one part, so
 	// the project statements are also logged on the layout the inserts
@@ -389,7 +396,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 			}
 		}
 		if !statement.threadBound {
-			if !grew(s.orgWide, l.orgWide) {
+			if !rose(s.orgWide, l.orgWide) {
 				t.Errorf("%s: the organization-wide form did not grow (%d bytes at the larger size, %d at the smaller): the guard cannot fail on this data", label, l.orgWide.peak, s.orgWide.peak)
 			}
 			continue
