@@ -1083,7 +1083,6 @@ import (
 // the direction the row states. An answer saved under v213 omits those pairs.
 const QueryVersion = "devhealthfacts.clickhouse.v214"
 
-
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
 // ReadFacts call in a context with this deadline; providers here never add

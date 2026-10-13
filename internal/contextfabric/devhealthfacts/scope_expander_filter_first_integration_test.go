@@ -466,9 +466,9 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
 // linkHelperCallerSites names each statement outside the scope expander that
 // reads the link rows through issueLinkRowsAmongSQL with a candidate set.
 var linkHelperCallerSites = []struct{ label, fragment string }{
-	{"blocker repository edges", "AS rid, d.target_work_item_id AS tgt"},
-	{"blocker project edges", "SELECT pl.team_id AS team_id, d.target_work_item_id AS tgt"},
-	{"blocked items without a link", "d.target_work_item_id NOT IN (SELECT work_item_id FROM"},
+	{"blocker repository edges", "AS rid, d.blocked_id AS tgt"},
+	{"blocker project edges", "SELECT pl.team_id AS team_id, d.blocked_id AS tgt"},
+	{"blocked items without a link", "d.blocked_id NOT IN (SELECT work_item_id FROM"},
 	{"project linked pull requests", "SELECT pi.project_key AS project_key, l.pr_repo_id AS pr_repo_id"},
 }
 
