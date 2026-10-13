@@ -56,6 +56,15 @@ func OrgWideScopeStatementForTest(statement string) (orgWide string, filtered, o
 	return out, out != statement, ok
 }
 
+// TeamWorkItemsAuthorizationJoinForTest is teamWorkItems' authorization
+// relation, narrowed to the requested teams' work items or whole.
+func TeamWorkItemsAuthorizationJoinForTest(narrowed bool) string {
+	if narrowed {
+		return authorizationJoinSQL(teamAttributedWorkItemIDsSQL)
+	}
+	return authorizationJoinSQL("")
+}
+
 // UnnarrowedAuthorizationStatementForTest replaces the candidate-narrowed
 // work-item authorization relation in a served statement with the
 // organization-wide one and changes nothing else. It reports whether a
@@ -76,7 +85,6 @@ func OrgWideScopeReadsForTest(statement string) []string {
 	var found []string
 	for name, fragment := range map[string]string{
 		"organization link rows":           issueLinkRowsSQL,
-		"organization authorization":       authorizationJoinSQL(""),
 		"organization work items in link":  "work_items AS wi FINAL",
 		"organization touches":             membershipTouchesAsOfAmongSQL(""),
 		"organization transition subjects": "subject_kind = 'work_item'\n    )",

@@ -84,9 +84,13 @@ SELECT ?, concat('other-', toString(number)), toUInt32(number + 100), 1, 'native
 		name, fragment string
 		policy         contextfabric.FactScopePolicy
 		origins        []contextfabric.SubjectRef
+		narrowed       bool
 	}{
-		{"teamWorkItems", "min(a.team_id) AS origin_id", contextfabric.FactScopePolicyTeamPrimaryAttributionWorkItemStatus, []contextfabric.SubjectRef{teamSubject("TG")}},
-		{"projectWorkItems", "p.id)) AS origin_id", contextfabric.FactScopePolicyProjectWorkItemStatus, []contextfabric.SubjectRef{projectSubject("linear", "PG"), projectSubject("linear", "PD")}},
+		{"teamWorkItems", "min(a.team_id) AS origin_id", contextfabric.FactScopePolicyTeamPrimaryAttributionWorkItemStatus, []contextfabric.SubjectRef{teamSubject("TG")}, true},
+		// projectWorkItems filters w.work_item_id by its candidate set in its
+		// own WHERE, which the planner applies to the link aggregate; it
+		// passes no candidates, so only its rows and counts are checked.
+		{"projectWorkItems", "p.id)) AS origin_id", contextfabric.FactScopePolicyProjectWorkItemStatus, []contextfabric.SubjectRef{projectSubject("linear", "PG"), projectSubject("linear", "PD")}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder.reset()
@@ -119,6 +123,9 @@ SELECT ?, concat('other-', toString(number)), toUInt32(number + 100), 1, 'native
 				t.Errorf("rows differ from the organization-wide form:\nscoped   %q\norg-wide %q", scoped, whole)
 			}
 
+			if !tc.narrowed {
+				return
+			}
 			// The served statement's peak is bounded by the scope statement
 			// ceiling; the same statement with the organization-wide
 			// authorization relation must exceed it on this data, or the

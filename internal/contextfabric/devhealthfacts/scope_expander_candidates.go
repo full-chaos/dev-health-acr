@@ -72,6 +72,21 @@ const teamOwnedProjectWorkItemsSQL = `(SELECT work_item_id, provider, project_id
 // teamAttributedWorkItemKeysSQL.
 const teamAttributedWorkItemIDsSQL = `(SELECT work_item_id FROM work_item_team_attributions WHERE org_id = {org_id:String} AND team_id IN {team_ids:Array(String)})`
 
+// teamWorkItemScopeSQL renders teamWorkItems' authorization relation from
+// this call's grant. A repository-restricted grant narrows it to the
+// requested teams' attributed work items. An organization-wide grant leaves
+// it whole: no repository matches that grant's empty selector lists, so both
+// aggregates are empty and the candidate subqueries would only add work.
+// projectWorkItems passes no candidates: its WHERE already filters
+// w.work_item_id by the same set, which the planner applies to the link
+// aggregate.
+func teamWorkItemScopeSQL(scope readers.AuthorizationScope) readers.WorkItemScopeSQLResult {
+	if scope.RepositorySelectors == nil || scope.RepositorySelectors.Granted.All {
+		return readers.WorkItemScopeSQL(scope)
+	}
+	return readers.WorkItemScopeSQLAmong(scope, workItemCandidates(teamAttributedWorkItemIDsSQL))
+}
+
 // workItemCandidates narrows the work-item authorization relation to the
 // ids a parenthesized candidate subquery above names. Each work-item
 // selection already keeps only work items that subquery names, so the set
