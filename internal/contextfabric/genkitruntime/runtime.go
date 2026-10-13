@@ -3827,17 +3827,53 @@ func (o interpretationOutput) toDomain(defaultTime contextfabric.TimeContext) (c
 	return interpreted, nil
 }
 
+// synthesisDriverOutput is the driver a model or a client draft may state. It
+// carries every driver field but Rank: the order of the served drivers is the
+// service's, never the writer's.
+type synthesisDriverOutput struct {
+	DriverID         string                         `json:"driver_id"`
+	Standing         contextfabric.DriverStanding   `json:"standing"`
+	Category         string                         `json:"category"`
+	Title            string                         `json:"title"`
+	Summary          string                         `json:"summary"`
+	AffectedSubjects []contextfabric.SubjectRef     `json:"affected_subjects"`
+	PathIDs          []string                       `json:"path_ids,omitempty"`
+	EvidenceRefIDs   []string                       `json:"evidence_ref_ids"`
+	ClaimedFactIDs   []string                       `json:"claimed_fact_ids,omitempty"`
+	Derivation       contextfabric.DerivationMethod `json:"derivation"`
+	EpistemicStatus  contextfabric.EpistemicStatus  `json:"epistemic_status"`
+	Confidence       float64                        `json:"confidence"`
+	Qualification    string                         `json:"qualification,omitempty"`
+	SourceState      contextfabric.SourceState      `json:"source_state,omitempty"`
+	Current          bool                           `json:"current"`
+}
+
+func synthesisDriversToDomain(in []synthesisDriverOutput) []contextfabric.DriverJudgment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]contextfabric.DriverJudgment, 0, len(in))
+	for _, d := range in {
+		out = append(out, contextfabric.DriverJudgment{
+			DriverID: d.DriverID, Standing: d.Standing, Category: d.Category, Title: d.Title, Summary: d.Summary,
+			AffectedSubjects: d.AffectedSubjects, PathIDs: d.PathIDs, EvidenceRefIDs: d.EvidenceRefIDs, ClaimedFactIDs: d.ClaimedFactIDs,
+			Derivation: d.Derivation, EpistemicStatus: d.EpistemicStatus, Confidence: d.Confidence, Qualification: d.Qualification, SourceState: d.SourceState, Current: d.Current,
+		})
+	}
+	return out
+}
+
 type synthesisOutput struct {
-	Status             string                         `json:"status" jsonschema:"enum=complete,enum=partial,enum=degraded,enum=clarification_required,enum=no_match"`
-	DirectJudgment     string                         `json:"direct_judgment"`
-	CurrentState       string                         `json:"current_state"`
-	StrongestPressures []string                       `json:"strongest_pressures"`
-	Drivers            []contextfabric.DriverJudgment `json:"drivers"`
-	RemainingWork      []contextfabric.Finding        `json:"remaining_work"`
-	ReadinessGaps      []contextfabric.Finding        `json:"readiness_gaps"`
-	Conflicts          []contextfabric.Finding        `json:"conflicts"`
-	Limitations        []string                       `json:"limitations"`
-	EvidenceRefIDs     []string                       `json:"evidence_ref_ids"`
+	Status             string                  `json:"status" jsonschema:"enum=complete,enum=partial,enum=degraded,enum=clarification_required,enum=no_match"`
+	DirectJudgment     string                  `json:"direct_judgment"`
+	CurrentState       string                  `json:"current_state"`
+	StrongestPressures []string                `json:"strongest_pressures"`
+	Drivers            []synthesisDriverOutput `json:"drivers"`
+	RemainingWork      []contextfabric.Finding `json:"remaining_work"`
+	ReadinessGaps      []contextfabric.Finding `json:"readiness_gaps"`
+	Conflicts          []contextfabric.Finding `json:"conflicts"`
+	Limitations        []string                `json:"limitations"`
+	EvidenceRefIDs     []string                `json:"evidence_ref_ids"`
 	// ClaimedFacts is the model's restatement of the canonical fact field
 	// values (from the "canonical_facts" input) that its fact-shaped
 	// drivers/findings rely on. See ContextFabricClaimedFact's doc comment
@@ -3906,7 +3942,7 @@ func (o synthesisOutput) toDomain() (contextfabric.SynthesisDraft, error) {
 	draft := contextfabric.SynthesisDraft{
 		Status:         contextfabric.InvestigationStatus(strings.TrimSpace(o.Status)),
 		DirectJudgment: strings.TrimSpace(o.DirectJudgment), CurrentState: strings.TrimSpace(o.CurrentState),
-		StrongestPressures: trimmedUnique(o.StrongestPressures), Drivers: append([]contextfabric.DriverJudgment(nil), o.Drivers...),
+		StrongestPressures: trimmedUnique(o.StrongestPressures), Drivers: synthesisDriversToDomain(o.Drivers),
 		RemainingWork: append([]contextfabric.Finding(nil), o.RemainingWork...), ReadinessGaps: append([]contextfabric.Finding(nil), o.ReadinessGaps...),
 		Conflicts: append([]contextfabric.Finding(nil), o.Conflicts...), Limitations: trimmedUnique(o.Limitations),
 		EvidenceRefIDs: trimmedUnique(o.EvidenceRefIDs), ClaimedFacts: append([]contextfabric.ClaimedFact(nil), o.ClaimedFacts...),

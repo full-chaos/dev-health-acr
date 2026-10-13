@@ -506,7 +506,9 @@ const irreducibleAnswerBytes = 1023
 // 521553359 -> 521555112 (+1753): the fact-scope census carries one record per
 // policy and the vocabulary gained five entity-tree policies; the census row
 // ceiling and the omitted count are additive and add nothing at the maximum.
-const maximalAnswerBytes = 521555112
+//
+// 521555112 -> 521555762 (+650): driver rank, 10000 on 50 drivers.
+const maximalAnswerBytes = 521555762
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
