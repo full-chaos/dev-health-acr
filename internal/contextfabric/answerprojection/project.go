@@ -439,14 +439,16 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 			})
 		}
 		drivers = append(drivers, contractsv1.ContextFabricProjectedDriver{
-			DriverID:      driver.DriverID,
-			Standing:      driver.Standing,
-			Category:      driver.Category,
-			Title:         storedText(driver.Title),
-			Summary:       storedText(driver.Summary),
-			Qualification: storedText(driver.Qualification),
-			SourceState:   driver.SourceState,
-			Confidence:    driver.Confidence,
+			DriverID:         driver.DriverID,
+			Standing:         driver.Standing,
+			Category:         driver.Category,
+			Title:            storedText(driver.Title),
+			Summary:          storedText(driver.Summary),
+			Qualification:    storedText(driver.Qualification),
+			SourceState:      driver.SourceState,
+			SourceStateNote:  storedText(driver.SourceStateNote),
+			SummaryCorrected: driver.SummaryCorrected,
+			Confidence:       driver.Confidence,
 			// EvidenceRefIDs is a REQUIRED array; copying a canonical
 			// empty slice with append(nil, ...) would yield nil and
 			// serialize as null. ClaimedFactIDs is optional, so nil is

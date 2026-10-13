@@ -339,16 +339,20 @@ type ContextFabricProjectedCohortMember struct {
 // copied verbatim: driver standing is the judgment, and a projection that
 // promoted or demoted one would change the answer.
 type ContextFabricProjectedDriver struct {
-	DriverID       string                      `json:"driver_id"`
-	Standing       ContextFabricDriverStanding `json:"standing"`
-	Category       string                      `json:"category"`
-	Title          string                      `json:"title"`
-	Summary        string                      `json:"summary"`
-	Qualification  string                      `json:"qualification,omitempty"`
-	SourceState    ContextFabricSourceState    `json:"source_state,omitempty"`
-	Confidence     float64                     `json:"confidence"`
-	EvidenceRefIDs []string                    `json:"evidence_ref_ids"`
-	ClaimedFactIDs []string                    `json:"claimed_fact_ids,omitempty"`
+	DriverID      string                      `json:"driver_id"`
+	Standing      ContextFabricDriverStanding `json:"standing"`
+	Category      string                      `json:"category"`
+	Title         string                      `json:"title"`
+	Summary       string                      `json:"summary"`
+	Qualification string                      `json:"qualification,omitempty"`
+	SourceState   ContextFabricSourceState    `json:"source_state,omitempty"`
+	// SourceStateNote and SummaryCorrected copy the canonical driver's
+	// server-owned fields; Summary is never edited.
+	SourceStateNote  string   `json:"source_state_note,omitempty"`
+	SummaryCorrected bool     `json:"summary_corrected,omitempty"`
+	Confidence       float64  `json:"confidence"`
+	EvidenceRefIDs   []string `json:"evidence_ref_ids"`
+	ClaimedFactIDs   []string `json:"claimed_fact_ids,omitempty"`
 	// AffectedSubjects (CHAOS-4398 PR3, design doc §4a) names which cohort
 	// member(s) this driver judgment is about -- copied verbatim from the
 	// canonical ContextFabricDriverJudgment.AffectedSubjects. Without this,
@@ -516,6 +520,7 @@ const (
 	ContextFabricProjectedDriverTitleMaxLength         = 512
 	ContextFabricProjectedDriverSummaryMaxLength       = 4000
 	ContextFabricProjectedDriverQualificationMaxLength = 2000
+	ContextFabricDriverSourceStateNoteMaxLength        = 512
 	ContextFabricProjectedCohortRationaleMaxLength     = 4000
 	ContextFabricProjectedInclusionReasonsMaxCount     = 32
 	ContextFabricProjectedInclusionReasonMaxLength     = 1000

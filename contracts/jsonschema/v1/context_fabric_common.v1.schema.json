@@ -3073,6 +3073,13 @@
             "pruned"
           ]
         },
+        "source_state_note": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "summary_corrected": {
+          "type": "boolean"
+        },
         "current": {
           "type": "boolean"
         }

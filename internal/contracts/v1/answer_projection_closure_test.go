@@ -352,7 +352,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// it names subjects by their graph labels.
 		// 254 -> 255 and 375 -> 376 -- the driver's source_state, a closed
 		// SourceState enum: trusted-because-closed, never model prose.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 255},
+		// 255 -> 256 and 376 -> 377 -- the driver's source_state_note, a
+		// server-minted sentence from a fixed table.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 256},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -433,7 +435,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// 372 -> 375 -- claimed_facts[].derived_from[].fact_id and .field
 		// (untrusted like fact_id/field) and claimed_facts[].operation (a
 		// closed arithmetic vocabulary).
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 376},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 377},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -506,6 +508,9 @@ func trustedBecauseClosed(path string) bool {
 	case "kind", "state", "status", "standing", "category", "shape", "role",
 		"axis", "derivation", "epistemic_status", "type", "availability",
 		"provenance", "outcome", "source_state",
+		// source_state_note is minted by the service from a fixed two-entry
+		// table, never model prose.
+		"source_state_note",
 		// CHAOS-3900 W1: window_class/window_confidence/confidence are all
 		// closed-vocabulary strings (ContextFabricWindowClass,
 		// ContextFabricWindowConfidence) validated against their own
