@@ -55,6 +55,7 @@ and `—` says so honestly rather than leaving a placeholder.
 | execution_completion | readiness | devhealthfacts.readiness | readiness.coverage_gap |
 | dependencies_and_blockers | required_children | devhealthfacts.required_children | — |
 | review_and_ci_pressure | reviews | devhealthfacts.reviews | — |
+| code_ownership_risk | security_alerts | devhealthfacts.security_alerts | — |
 | data_trust | source_health | devhealthfacts.source_health | — |
 | execution_completion | status | devhealthfacts.status | — |
 | execution_completion | work | devhealthfacts.work | — |

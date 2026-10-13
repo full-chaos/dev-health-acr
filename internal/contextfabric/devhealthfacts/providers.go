@@ -40,5 +40,6 @@ func NewProvidersWithOperations(client contextpacket.ClickHouseQueryClient, oper
 		newSourceHealthProvider(operations),
 		newFlowProvider(client),
 		newLandscapeProvider(client),
+		newSecurityAlertsProvider(client),
 	}
 }
