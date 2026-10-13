@@ -194,7 +194,9 @@ func investigatePullRequestsFramed(t *testing.T, synthesizer contextfabric.Answe
 		return nil, nil
 	}}
 	frame := build(status)
-	frame.Goals = []contextfabric.InvestigationGoal{contextfabric.GoalRankOrSurvey}
+	if len(frame.Goals) == 0 {
+		frame.Goals = []contextfabric.InvestigationGoal{contextfabric.GoalRankOrSurvey}
+	}
 	derived := contextfabric.DeriveFrameObligations(*frame, nil)
 	telemetry := &recordingTelemetry{}
 	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
