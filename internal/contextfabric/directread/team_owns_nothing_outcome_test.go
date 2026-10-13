@@ -79,3 +79,28 @@ func TestTeamOwningNoRepositoryReadsNotApplicableBesideAnOwnerThatWasNeverEvalua
 		t.Errorf("empty team provider_state/reason = %q / %q", emptyRow.ProviderState, emptyRow.Reason)
 	}
 }
+
+func TestTeamOwningNoRepositoryThatScopeExpansionReachesItemsKeepsTheDerivedOutcome(t *testing.T) {
+	team := subject(contractsv1.ContextFabricSubjectTeam, "team:empty")
+	provider := perSubjectProvider(contextfabric.FactPullRequests, contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectTeam)
+	provider.read = func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		return contextfabric.FactProviderResult{
+			State:                 contextfabric.SourceAvailable,
+			NotApplicableSubjects: map[string]struct{}{contextfabric.FactSubjectKey(team): {}},
+			SubjectReasons:        map[string]string{contextfabric.FactSubjectKey(team): "the team owns no repository in synced ownership"},
+		}, nil
+	}
+	expander := &scriptedExpander{expand: expandTo(labelled(prA, "acme/a#532"))}
+	reader := directExpandingReader(t, teamGraph(team), expander, nil, provider)
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"pull_requests"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: team.CanonicalID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := coverageOf(t, response, "pull_requests", team)
+	if len(expander.requests) == 0 {
+		t.Fatal("scope expansion never ran")
+	}
+	if row.Outcome != OutcomeReadNoFact {
+		t.Errorf("outcome = %q, want read_no_fact: the expansion reached pull requests, so the kind applies to this team", row.Outcome)
+	}
+}
