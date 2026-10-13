@@ -3,6 +3,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -87,6 +88,11 @@ func TestReadFactsServesTeamReachedOnlyThroughProjectLinksAgainstRealClickHouse(
 			return float64(v)
 		case int:
 			return float64(v)
+		case string:
+			parsed, parseErr := strconv.ParseFloat(v, 64)
+			if parseErr == nil {
+				return parsed
+			}
 		}
 		t.Fatalf("field %s = %#v, want a number", name, investment.Fields[name])
 		return 0
