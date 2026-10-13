@@ -1055,7 +1055,37 @@ import (
 // severity omission, owning-teams cut) is served on the rows it describes and
 // no longer on every row of the kind. An answer saved under v208 carries each
 // on rows it is false for.
-const QueryVersion = "devhealthfacts.clickhouse.v209"
+//
+// v209 -> v210: the revert-rate day count rides each repository's own row (the
+// read-wide count only the request note), and owning_teams_truncated rides only
+// the repositories whose owner table was cut. An answer saved under v209
+// carries both on repositories they are false for.
+//
+// v210 -> v211: a team's workload forecast scalars are declared aggregate, so a
+// repository-restricted caller admitted to the team gets them labelled
+// all_owned_repositories. An answer saved under v210 carries them unlabelled.
+//
+// v211 -> v212: the repository and team investment mix, the repository and
+// team unit listing and the team linked pull request mix fold each kept work
+// unit's references once and expand only the requested repositories (or
+// linked pull requests). The rows are the same; a sum may differ from a v211
+// answer in its last digits (another summation order), and on two versions of
+// one unit with equal computed_at the version kept can differ.
+//
+// v212 -> v213: a team or project landscape fact reads one copy of each
+// identity's stats instead of the three per-map copies Ops writes, and its
+// rows no longer carry map_name. An answer saved under v212 holds every
+// churn, delivery and identity count three times.
+//
+// v213 -> v214: the security_alerts fact kind is served for a repository.
+// An answer saved under v213 cannot carry it.
+//
+// v214 -> v215: the blocker statements authorize their edge endpoints without
+// the library's organization-wide relation for an organization-wide grant, and
+// read it once, apart from the statements, for any other caller. The rows are
+// unchanged; the statements and their memory are not, so an answer saved under
+// v214 is not reused as one produced by the new statements.
+const QueryVersion = "devhealthfacts.clickhouse.v215"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1528,7 +1558,7 @@ func factKindDimension(kind contextfabric.FactKind) contextfabric.HealthDimensio
 	// code_ownership_risk: health.go's compounding_risk formula is
 	// literally w_churn/w_complexity/w_ownership/w_review-weighted risk --
 	// its own doc comment names ownership as one of the weighted inputs.
-	case contextfabric.FactHealth:
+	case contextfabric.FactHealth, contextfabric.FactSecurityAlerts:
 		return contextfabric.HealthDimensionCodeOwnershipRisk
 	// cognitive_workload_pressure: capacity forecasts (workload.go),
 	// IC-level churn/cycle/WIP throughput scatter (landscape.go), and
@@ -1761,6 +1791,12 @@ func factKindSubjectObligations(kind contextfabric.FactKind) map[contextfabric.S
 	case contextfabric.FactIncidents:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
 			contextfabric.SubjectIncident: {contextfabric.ObligationState, contextfabric.ObligationPrincipalDrivers},
+		}
+	// Stored security alert counts explain a repository's risk: a driver,
+	// never a state or a score.
+	case contextfabric.FactSecurityAlerts:
+		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
+			contextfabric.SubjectRepository: {contextfabric.ObligationPrincipalDrivers},
 		}
 	// Fired operational-deficiency rules explain pressure: a driver, never
 	// a state.

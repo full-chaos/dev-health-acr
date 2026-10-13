@@ -184,6 +184,10 @@ var ProductionColumns = map[string][]Column{
 		{Name: "identity_id", Type: "String"},
 		{Name: "team_id", Type: "LowCardinality(String)"},
 		{Name: "map_name", Type: "LowCardinality(String)"},
+		{Name: "x_raw", Type: "Float64"},
+		{Name: "y_raw", Type: "Float64"},
+		{Name: "x_norm", Type: "Float64"},
+		{Name: "y_norm", Type: "Float64"},
 		{Name: "churn_loc_30d", Type: "UInt64"},
 		{Name: "delivery_units_30d", Type: "UInt32"},
 		{Name: "cycle_p50_30d_hours", Type: "Float64"},
@@ -325,6 +329,16 @@ var ProductionColumns = map[string][]Column{
 		{Name: "deploy_time_p50_hours", Type: "Nullable(Float64)"},
 		{Name: "lead_time_p50_hours", Type: "Nullable(Float64)"},
 		{Name: "computed_at", Type: "DateTime('UTC')"},
+		{Name: "org_id", Type: "String"},
+	},
+	"security_alerts": {
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "alert_id", Type: "String"},
+		{Name: "source", Type: "String"},
+		{Name: "severity", Type: "Nullable(String)"},
+		{Name: "state", Type: "Nullable(String)"},
+		{Name: "created_at", Type: "DateTime64(3, 'UTC')"},
+		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
 		{Name: "org_id", Type: "String"},
 	},
 	"repos": {
@@ -708,6 +722,7 @@ var EngineFull = map[string]string{
 	"repo_change_failure_daily":               "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repo_metrics_daily":                      "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repos":                                   "ReplacingMergeTree(last_synced) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
+	"security_alerts":                         "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, alert_id) SETTINGS index_granularity = 8192",
 	// CHAOS-3802: valid_from is IN team_project_ownership's sorting key, so
 	// FINAL cannot collapse two windows of the same edge -- that is exactly
 	// what makes queryProjectTeams' GROUP BY load-bearing (its Trap C note).

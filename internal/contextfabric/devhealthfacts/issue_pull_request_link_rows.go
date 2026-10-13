@@ -35,19 +35,21 @@ func workItemIsIssueSQL(alias string) string {
 var issueLinkRowsSQL = issueLinkRowsAmongSQL("")
 
 // issueLinkRowsAmongSQL is issueLinkRowsSQL over the link rows of the work
-// item ids candidates (a subquery) names, with the work item rows read for
-// those ids only; "" is every link row of the organization. Every row of a
-// kept id is still read, so the rule over a kept id is unchanged.
+// item ids candidates (a subquery) names, with the work item rows and the pull
+// request rows read for those ids' links only; "" is every link row of the
+// organization. Every row of a kept id, and every version of a kept pull
+// request, is still read, so the rule over a kept id is unchanged.
 func issueLinkRowsAmongSQL(candidates string) string {
-	workItems, among := `work_items AS wi FINAL`, ``
+	workItems, pullRequests, among := `work_items AS wi FINAL`, `git_pull_requests AS pr FINAL`, ``
 	if candidates != "" {
 		workItems = `(SELECT org_id, work_item_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `) AS wi`
+		pullRequests = `(SELECT org_id, repo_id, number FROM git_pull_requests FINAL WHERE org_id = {org_id:String} AND (repo_id, number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `)) AS pr`
 		among = ` AND l.work_item_id IN ` + candidates
 	}
 	return `(
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, l.provenance AS provenance, ` + linkTierRankSQL + ` AS link_rank
   FROM work_graph_issue_pr AS l FINAL
-  INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
+  INNER JOIN ` + pullRequests + ` ON ` + linkedPullRequestOnSQL + `
   LEFT JOIN ` + workItems + ` ON wi.org_id = l.org_id AND wi.work_item_id = l.work_item_id
   WHERE l.org_id = {org_id:String}` + among + ` AND ` + workItemIsIssueSQL("wi") + `
 )`
