@@ -87,8 +87,8 @@ func TestInterpretationPromptDropsTheInferMayBeNeededContradiction(t *testing.T)
 func TestInterpretationPromptTeamServingMatchesCapabilities(t *testing.T) {
 	t.Parallel()
 	for _, line := range []string{
-		"(work_item, team)",
-		"(pull_request, team)",
+		"(work_item, team, project)",
+		"(pull_request, team, project)",
 		"(deployment, repository, team)",
 		"(incident, team)",
 		"A team also has its own rollups of blockers, pull_requests, incidents and deployments.",
