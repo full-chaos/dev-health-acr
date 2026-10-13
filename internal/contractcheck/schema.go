@@ -372,6 +372,7 @@ var annotations = map[string]bool{
 	"$schema": true, "$id": true, "$comment": true,
 	"title": true, "description": true, "default": true,
 	"examples": true, "deprecated": true, "readOnly": true, "writeOnly": true,
+	"x-documented-values": true,
 }
 
 var supportedAssertions = map[string]bool{
