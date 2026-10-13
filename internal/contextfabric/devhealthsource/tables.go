@@ -941,7 +941,7 @@ func dependencyRowKey(repoID, sourceID, targetID, relationshipType string) strin
 func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	seenNodeTombstones := make(map[string]struct{})
 	rowKey := dependencyRowKeySQL
-	isEnded := dependencyEndedSQL("d")
+	isEnded := dependencyEndedSQL()
 	position := dependencyCursorExpr()
 	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + dependencyRelationshipTypeExpr + `, toString(w.repo_id), ifNull(r.repo, ''), d.last_synced,
        w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
@@ -950,7 +950,8 @@ func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHo
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS w FINAL ON w.org_id = d.org_id AND w.work_item_id = d.source_work_item_id
 LEFT JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id` + relationcurrent.CurrentJoinsSQL("d") + `
+LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
+LEFT JOIN ` + relationcurrent.RowsSQL() + ` AS rr ON rr.s = d.source_work_item_id AND rr.t = d.target_work_item_id AND rr.rt = d.relationship_type
 WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, position, rowKey) + orderBy(position, rowKey)
 	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var sourceID, targetID, relationshipType, repoID, repoSlug, targetRepoID string
@@ -1451,14 +1452,15 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowK
 // row's ingest stamp, or for a row the provider no longer reports the time
 // the link ended.
 func dependencyCursorExpr() string {
-	return "if(" + dependencyEndedSQL("d") + ", " + relationcurrent.EndedAtSQL("d") + ", d.last_synced)"
+	return "if(" + dependencyEndedSQL() + ", rr.ended_at, d.last_synced)"
 }
 
 // dependencyEndedSQL is true for a work_item_dependencies row d that the
-// provider no longer reports: the shared relation-current rule, for the one
-// relationship type it covers.
-func dependencyEndedSQL(d string) string {
-	return "(lower(ifNull(" + d + ".relationship_type, '')) = '" + relationcurrent.RelationshipType + "' AND " + relationcurrent.EndedSQL(d) + ")"
+// provider no longer reports: the shared relation-current rule, read from the
+// join of relationcurrent.RowsSQL as rr, which holds the rule's one row per
+// relation of the type it covers.
+func dependencyEndedSQL() string {
+	return "ifNull(rr.ended, 0) = 1"
 }
 
 // endedDependencyCandidates retracts the edge of a link the provider removed.
