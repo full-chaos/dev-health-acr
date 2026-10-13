@@ -72,7 +72,7 @@ func TestEveryProviderStateMapsIntoTheClosedCoverageVocabulary(t *testing.T) {
 		}
 		props := doc["properties"].(map[string]any)["coverage"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
 		allowed := map[string]bool{}
-		for _, v := range props["outcome"].(map[string]any)["enum"].([]any) {
+		for _, v := range schemaVocab(props["outcome"].(map[string]any)) {
 			allowed[v.(string)] = true
 		}
 		for _, outcome := range []string{OutcomeFactServed, OutcomeReadNoFact, OutcomeMeasuredZero, OutcomeNotApplicable, OutcomeUnavailable, OutcomeStale, OutcomeTruncated, OutcomeWithheldBudget} {
@@ -86,4 +86,12 @@ func TestEveryProviderStateMapsIntoTheClosedCoverageVocabulary(t *testing.T) {
 			}
 		}
 	}
+}
+
+func schemaVocab(node map[string]any) []any {
+	if raw, ok := node["enum"].([]any); ok {
+		return raw
+	}
+	raw, _ := node["x-documented-values"].([]any)
+	return raw
 }

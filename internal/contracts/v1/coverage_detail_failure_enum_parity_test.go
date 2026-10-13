@@ -22,7 +22,7 @@ func failurePropertyEnums(node any, name string) [][]string {
 	case map[string]any:
 		if properties, ok := typed["properties"].(map[string]any); ok {
 			if property, ok := properties[name].(map[string]any); ok {
-				if raw, ok := property["enum"].([]any); ok {
+				if raw, ok := schemaVocabulary(property); ok {
 					members := make([]string, 0, len(raw))
 					for _, member := range raw {
 						if text, isText := member.(string); isText {

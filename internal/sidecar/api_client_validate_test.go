@@ -132,11 +132,13 @@ func TestClientAcceptsFullyValidContextPacket(t *testing.T) {
 	}
 }
 
-func TestClientRejectsEvidenceInvalidAvailability(t *testing.T) {
+// An added availability token is accepted (TestClientAcceptsAddedVocabularyValues);
+// a value that is not token-shaped is still refused.
+func TestClientRejectsEvidenceMalformedAvailability(t *testing.T) {
 	fixture := validExpandedEvidenceFixture("ev_abc123")
-	fixture.Availability = "bogus_state"
+	fixture.Availability = "bogus state"
 	if _, err := serveEvidence(t, fixture); !errors.Is(err, ErrInvalidResponse) {
-		t.Fatalf("evidence with an unrecognized availability value was accepted: %v", err)
+		t.Fatalf("evidence with a malformed availability value was accepted: %v", err)
 	}
 }
 

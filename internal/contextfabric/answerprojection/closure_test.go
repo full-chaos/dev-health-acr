@@ -491,7 +491,8 @@ func canonicalSourceStates(t *testing.T) []string {
 			SourceObservation struct {
 				Properties struct {
 					State struct {
-						Enum []string `json:"enum"`
+						Enum       []string `json:"enum"`
+						Documented []string `json:"x-documented-values"`
 					} `json:"state"`
 				} `json:"properties"`
 			} `json:"SourceObservation"`
@@ -501,6 +502,9 @@ func canonicalSourceStates(t *testing.T) []string {
 		t.Fatalf("decode canonical common schema: %v", err)
 	}
 	states := document.Defs.SourceObservation.Properties.State.Enum
+	if len(states) == 0 {
+		states = document.Defs.SourceObservation.Properties.State.Documented
+	}
 	if len(states) == 0 {
 		t.Fatal("the canonical schema declares no source states, so this test proves nothing")
 	}

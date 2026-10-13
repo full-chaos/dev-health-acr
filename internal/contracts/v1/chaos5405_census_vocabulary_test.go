@@ -236,7 +236,7 @@ func TestChaos5405_ThePublishedAxisEnumIsTheGoVocabulary(t *testing.T) {
 
 	documents := schemaDocuments(t)
 	node := schemaNodeAt(t, documents, "common#$defs.TimeContext.properties.axis")
-	raw, ok := node["enum"].([]any)
+	raw, ok := schemaVocabulary(node)
 	if !ok {
 		t.Fatal("common#$defs.TimeContext.properties.axis declares no enum")
 	}
