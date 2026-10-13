@@ -180,8 +180,8 @@ func TestCHAOS6031MeasuredZeroDomainAgainstRealClickHouse(t *testing.T) {
 		seedTeamOwnsRepository(t, ctx, direct, orgID, "OLD")
 		seedTeamOwnsRepository(t, ctx, direct, orgID, "GHOST")
 		result := readDeficiencyAsOf(t, ctx, orgID, asOf, "OLD", "GHOST")
-		if !strings.Contains(result.Reason, "1 evaluated outside the freshness window") || !strings.Contains(result.Reason, "1 never evaluated") {
-			t.Fatalf("reason = %q, want the stale and the never-evaluated counts together", result.Reason)
+		if !strings.Contains(result.RequestNote, "1 evaluated outside the freshness window") || !strings.Contains(result.RequestNote, "1 never evaluated") {
+			t.Fatalf("reason = %q, want the stale and the never-evaluated counts together", result.RequestNote)
 		}
 	})
 
@@ -284,8 +284,8 @@ func TestCHAOS6031DeficiencyWindowIsOnePredicateAgainstRealClickHouse(t *testing
 			t.Fatalf("state = %q, want available", result.State)
 		}
 		for _, want := range []string{"3 of 4", "1 evaluated outside the freshness window", "1 evaluated before the requested range", "1 never evaluated"} {
-			if !strings.Contains(result.Reason, want) {
-				t.Errorf("reason %q lacks %q", result.Reason, want)
+			if !strings.Contains(result.RequestNote, want) {
+				t.Errorf("reason %q lacks %q", result.RequestNote, want)
 			}
 		}
 		states := map[string]string{}
@@ -305,12 +305,12 @@ func TestCHAOS6031DeficiencyWindowIsOnePredicateAgainstRealClickHouse(t *testing
 		seedEvaluation(t, ctx, direct, orgID, "CLEAR", day(-1))
 		seedEvaluation(t, ctx, direct, orgID, "HOT", day(-1), "saturation")
 		measured := readDeficiencyAsOf(t, ctx, orgID, asOf, "CLEAR", "GHOST")
-		if !strings.Contains(measured.Reason, "1 of 2") || !strings.Contains(measured.Reason, "1 never evaluated") {
-			t.Fatalf("measured plus never reason = %q, want the never-evaluated team named", measured.Reason)
+		if !strings.Contains(measured.RequestNote, "1 of 2") || !strings.Contains(measured.RequestNote, "1 never evaluated") {
+			t.Fatalf("measured plus never reason = %q, want the never-evaluated team named", measured.RequestNote)
 		}
 		fired := readDeficiencyAsOf(t, ctx, orgID, asOf, "HOT", "GHOST")
-		if !strings.Contains(fired.Reason, "1 of 2") || !strings.Contains(fired.Reason, "1 never evaluated") {
-			t.Fatalf("fired plus never reason = %q, want the never-evaluated team named", fired.Reason)
+		if !strings.Contains(fired.RequestNote, "1 of 2") || !strings.Contains(fired.RequestNote, "1 never evaluated") {
+			t.Fatalf("fired plus never reason = %q, want the never-evaluated team named", fired.RequestNote)
 		}
 	})
 

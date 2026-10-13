@@ -171,8 +171,8 @@ ORDER BY team_id, rule_id`)
 		// is a measured "nothing found": the source answered.
 		state = contextfabric.SourceAvailable
 	}
-	retentionReason = evaluation.reason(len(evaluated) > 0 || len(facts) > 0, retentionReason)
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery, EvaluatedSubjects: evaluated, Evaluation: evaluation.coverage()}
+	retentionReason, missingNote := evaluation.reason(len(evaluated) > 0 || len(facts) > 0, retentionReason)
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, RequestNote: missingNote, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery, EvaluatedSubjects: evaluated, Evaluation: evaluation.coverage()}
 	if len(ids) > 0 {
 		owned, ownedErr := teamOwnedRepositories(ctx, p.facts.client, orgID, ids, timeBound)
 		if ownedErr != nil {
@@ -227,10 +227,12 @@ func (e deficiencyEvaluation) coverage() *contextfabric.FactEvaluationCoverage {
 	}
 }
 
-// reason names every requested team the read could not measure, whatever
-// other teams it did measure. A read where every requested team was simply
-// never evaluated keeps the generic empty-read reason.
-func (e deficiencyEvaluation) reason(answered bool, fallback string) string {
+// reason splits what a read says about teams it could not measure: the kind
+// reason (true of every subject) and the request note (a count over the
+// requested teams, which no single team's row may carry). A read where every
+// requested team was simply never evaluated keeps the generic empty-read
+// reason.
+func (e deficiencyEvaluation) reason(answered bool, fallback string) (kindReason, requestNote string) {
 	parts := make([]string, 0, 4)
 	missing := 0
 	for _, entry := range []struct{ state, text string }{
@@ -245,12 +247,12 @@ func (e deficiencyEvaluation) reason(answered bool, fallback string) string {
 		}
 	}
 	if missing == 0 {
-		return ""
+		return "", ""
 	}
 	if !answered && missing == e.counts[deficiencyStateNever] {
-		return fallback
+		return fallback, ""
 	}
-	return fmt.Sprintf("operational deficiency evaluation missing for %d of %d requested teams: %s", missing, len(e.members), strings.Join(parts, ", "))
+	return "", fmt.Sprintf("operational deficiency evaluation missing for %d of %d requested teams: %s", missing, len(e.members), strings.Join(parts, ", "))
 }
 
 // teamEvaluation is one team's latest evaluation at or before the as-of date.
