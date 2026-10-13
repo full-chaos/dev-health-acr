@@ -46,10 +46,10 @@ func (p *BlockersProvider) blockerAuthorization(ctx context.Context, principal s
 		return "", nil, err
 	}
 	if len(ids) > blockerAuthorizedIDsBound {
-		logBlockerAuthorization(ctx, "in_statement", len(ids))
+		logBlockerAuthorization(ctx, "in_statement", len(ids), true)
 		return set, bindings, nil
 	}
-	logBlockerAuthorization(ctx, "materialized", len(ids))
+	logBlockerAuthorization(ctx, "materialized", len(ids), false)
 	return "{" + blockerAuthorizedIDsBinding + ":Array(String)}", []readers.Binding{{Name: blockerAuthorizedIDsBinding, Value: ids}}, nil
 }
 
@@ -64,7 +64,8 @@ type blockerAuthorizationMemo struct {
 // logBlockerAuthorization records which way the blocker statements were
 // authorized: the organization-wide shape, the relation read once with its ids
 // carried as a binding, or the relation kept inside each statement because the
-// endpoints exceeded the bound. mode is a closed vocabulary; ids is a count.
-func logBlockerAuthorization(ctx context.Context, mode string, ids int) {
-	slog.InfoContext(ctx, "devhealthfacts.blocker_authorization", "mode", contextfabric.SanitizeLogAttr(mode), "authorized_endpoint_count", ids, "bound", blockerAuthorizedIDsBound)
+// endpoints exceeded the bound (the read stops one past the bound, so the count
+// is then a lower bound, marked by over_bound). mode is a closed vocabulary.
+func logBlockerAuthorization(ctx context.Context, mode string, ids int, overBound bool) {
+	slog.InfoContext(ctx, "devhealthfacts.blocker_authorization", "mode", contextfabric.SanitizeLogAttr(mode), "authorized_endpoint_count", ids, "over_bound", overBound, "bound", blockerAuthorizedIDsBound)
 }

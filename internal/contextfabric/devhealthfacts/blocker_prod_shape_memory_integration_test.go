@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 const blockerProdShapeOrg = "7d3a9c58-1e46-4f02-b8a7-5c20e9d14b63"
@@ -78,7 +79,11 @@ SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 1602)
 // of the 64 MiB cap, while this shape reads 86% and 80% of that. The budget for
 // the statement CI measures is therefore 48 MiB, the production target, scaled
 // by the 0.86 calibration ratio.
-const blockerProdShapeCeiling = uint64(41 << 20)
+const (
+	blockerProdShapeCeiling       = uint64(41 << 20)
+	blockerProdShapeTotalsCeiling = uint64(38 << 20)
+	blockerProdShapeTotalsHead    = "SELECT team_id, toInt64(uniqExactIf(tgt, is_open))"
+)
 
 type blockerProdShapeStatement struct {
 	hash, peak, readRows uint64
@@ -111,8 +116,12 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 		t.Fatalf("%s: measured %d statements, want the team blocker statements: the measurement did not happen", label, len(out))
 	}
 	for _, st := range out {
-		if st.peak >= blockerProdShapeCeiling {
-			t.Errorf("%s: statement %d peaked at %d bytes, want under %d (the production target of 48 MiB scaled by the calibration ratio): %s", label, st.hash, st.peak, blockerProdShapeCeiling, st.head)
+		ceiling := blockerProdShapeCeiling
+		if strings.HasPrefix(st.head, blockerProdShapeTotalsHead) {
+			ceiling = blockerProdShapeTotalsCeiling
+		}
+		if st.peak >= ceiling {
+			t.Errorf("%s: statement %d peaked at %d bytes, want under %d (the production target of 48 MiB scaled by the statement's calibration ratio: 0.86 age, 0.80 totals): %s", label, st.hash, st.peak, ceiling, st.head)
 		}
 	}
 	return out
@@ -175,7 +184,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 			t.Fatalf("%s: %d facts vs %d", pair.label, len(pair.got.Facts), len(pair.want.Facts))
 		}
 		for index := range pair.got.Facts {
-			for _, name := range []string{"blocked_work_items_current", "blocker_dependencies_current", "blocker_dependencies_excluded_by_status_current"} {
+			for _, name := range []string{"blocked_work_items_current", "blocker_dependencies_current", "blocker_dependencies_excluded_by_status_current", "blocker_dependencies_writer_unresolved_current", "project_blocked_work_items_current", "oldest_blocked_age_days"} {
 				a, b := pair.got.Facts[index].Fields[name], pair.want.Facts[index].Fields[name]
 				if (a.Integer == nil) != (b.Integer == nil) || (a.Integer != nil && *a.Integer != *b.Integer) {
 					t.Errorf("%s: team fact %d field %s differs: %+v vs %+v", pair.label, index, name, a, b)
@@ -250,6 +259,19 @@ func TestOrganizationWideAuthorizationIsDecidedFromTheLivePrincipal(t *testing.T
 		if carriesLibraryRelation := strings.Contains(sql, "wia_"); carriesLibraryRelation == c.want {
 			t.Errorf("%s: the served set carries the library relation = %v with the organization-wide shape = %v", c.name, carriesLibraryRelation, c.want)
 		}
+	}
+	// Repository-id dimensions are not expressible by a principal; the decision
+	// must still refuse them.
+	idDimension := readers.AuthorizationScope{
+		GrantedRepositoryIDs: []string{"00000000-0000-4000-8000-000000000001"},
+		RepositorySelectors:  &readers.RepositorySelectorScope{Granted: readers.RepositorySelectorSet{All: true}},
+	}
+	if devhealthfacts.OrganizationWideAuthorizationScopeForTest(idDimension) {
+		t.Error("an organization-wide grant with a granted repository id dimension took the organization-wide shape")
+	}
+	idDimension.GrantedRepositoryIDs, idDimension.RequestedRepositoryIDs = nil, []string{"00000000-0000-4000-8000-000000000001"}
+	if devhealthfacts.OrganizationWideAuthorizationScopeForTest(idDimension) {
+		t.Error("an organization-wide grant with a requested repository id dimension took the organization-wide shape")
 	}
 	// The same call, with a live principal whose grant changed, must follow it.
 	granted := storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"*"}}

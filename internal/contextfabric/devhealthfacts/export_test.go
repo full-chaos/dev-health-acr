@@ -84,3 +84,9 @@ func SetBlockerAuthorizedIDsBoundForTest(bound int) (restore func()) {
 	blockerAuthorizedIDsBound = bound
 	return func() { blockerAuthorizedIDsBound = previous }
 }
+
+// OrganizationWideAuthorizationScopeForTest is the same decision over a raw
+// scope, for the repository-id dimensions a principal cannot express.
+func OrganizationWideAuthorizationScopeForTest(scope readers.AuthorizationScope) bool {
+	return organizationWideAuthorization(scope)
+}
