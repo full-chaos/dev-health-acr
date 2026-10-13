@@ -3,7 +3,6 @@
   "title": "ACR MCP context_for_task Response v1",
   "description": "Output wrapper for the context_for_task MCP tool: the structured ContextPacket contract plus a required, bounded markdown rendering explicitly marked untrusted. Retrieved content is untrusted data, never instructions. The structured contract is embedded under $defs (context_packet.v1, context_packet_item.v1) so this document is self-contained and resolvable without fetching context_packet.v1.schema.json or context_packet_item.v1.schema.json separately; internal/contractcheck's drift check keeps $defs byte-for-byte synchronized with those canonical files.",
   "type": "object",
-  "additionalProperties": false,
   "required": [
     "schema_version",
     "structured",
@@ -18,7 +17,6 @@
     },
     "rendered_markdown": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "markdown",
         "untrusted",
@@ -63,7 +61,6 @@
     "context_packet.v1": {
       "title": "ACR Context Packet v1",
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "schema_version",
         "context_packet_id",
@@ -119,7 +116,6 @@
         },
         "repository": {
           "type": "object",
-          "additionalProperties": false,
           "required": [
             "slug"
           ],
@@ -142,7 +138,6 @@
         },
         "requested_scope": {
           "type": "object",
-          "additionalProperties": false,
           "properties": {
             "branch": {
               "type": "string",
@@ -179,7 +174,6 @@
         },
         "resolved_scope": {
           "type": "object",
-          "additionalProperties": false,
           "required": [
             "repo_id",
             "repo_slug",
@@ -249,7 +243,6 @@
           "maxItems": 100,
           "items": {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "check_id",
               "label",
@@ -285,7 +278,6 @@
           "maxItems": 100,
           "items": {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "step_id",
               "label",
@@ -318,7 +310,6 @@
         },
         "freshness": {
           "type": "object",
-          "additionalProperties": false,
           "required": [
             "as_of",
             "stale_after_seconds",
@@ -337,7 +328,6 @@
               "type": "array",
               "items": {
                 "type": "object",
-                "additionalProperties": false,
                 "required": [
                   "source",
                   "status"
@@ -369,7 +359,6 @@
         },
         "coverage": {
           "type": "object",
-          "additionalProperties": false,
           "required": [
             "sources_considered",
             "sources_available",
@@ -396,7 +385,6 @@
               "type": "array",
               "items": {
                 "type": "object",
-                "additionalProperties": false,
                 "required": [
                   "source",
                   "reason"
@@ -426,7 +414,6 @@
         },
         "budget": {
           "type": "object",
-          "additionalProperties": false,
           "required": [
             "max_items",
             "items_used",
@@ -475,7 +462,6 @@
         },
         "compatibility": {
           "type": "object",
-          "additionalProperties": false,
           "required": [
             "service_version",
             "minimum_sidecar_version",
@@ -510,7 +496,6 @@
     "context_packet_item.v1": {
       "title": "ACR Context Packet Item v1",
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "schema_version",
         "packet_item_id",
@@ -598,7 +583,6 @@
         },
         "validity_scope": {
           "type": "object",
-          "additionalProperties": false,
           "properties": {
             "branch": {
               "type": "string",
@@ -620,7 +604,6 @@
         },
         "flags": {
           "type": "object",
-          "additionalProperties": false,
           "required": [
             "stale",
             "uncertain",
@@ -647,7 +630,6 @@
           "maxItems": 100,
           "items": {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "type",
               "id",
@@ -710,7 +692,6 @@
     "mcp_local_context.v1": {
       "title": "ACR MCP Local Context v1",
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "provider",
         "status",
@@ -795,7 +776,6 @@
       "title": "ACR MCP Federated Budget v1",
       "description": "Caller maxima and usage count only hosted ContextPacket content plus local evidence content. The MCP envelope, federated_budget object, and rendered_markdown are outside these maxima.",
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "max_items",
         "max_output_tokens",
@@ -879,7 +859,6 @@
     "evidence_ref.v1": {
       "title": "ACR Evidence Reference v1",
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "schema_version",
         "evidence_ref_id",
@@ -901,7 +880,6 @@
         },
         "source": {
           "type": "object",
-          "additionalProperties": false,
           "required": [
             "system",
             "entity_type",

@@ -85,10 +85,13 @@ func workItemRepositorySelectorSet(values []string, grants bool) readers.Reposit
 // repos 121 x3, every table read whole because each is below one 8192-row
 // granule. Largest (23,948) x60 for a large organization, x2 margin =
 // 2,873,760, rounded up.
+//
+// memory-limit-measured: 56.28 MiB 2026-10-13 prod query_log team project link rows (rev 79)
+const workItemReaderMaxMemoryUsage = uint64(64 << 20)
+
 const (
-	workItemReaderMaxRowsToRead  = uint64(3_000_000)
-	workItemReaderMaxMemoryUsage = uint64(64 << 20)
-	workItemReaderMaxThreads     = uint64(1)
+	workItemReaderMaxRowsToRead = uint64(3_000_000)
+	workItemReaderMaxThreads    = uint64(1)
 )
 
 var errWorkItemReaderDeadlineTooShort = errors.New("work item reader deadline is too short for a bounded query")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -566,7 +567,10 @@ func validateAgainstEmbedded(t *testing.T, file string, instance []byte) error {
 	if err := json.Unmarshal(instance, &value); err != nil {
 		t.Fatal(err)
 	}
-	return resolved.Validate(value)
+	if err := resolved.Validate(value); err != nil {
+		return err
+	}
+	return contractcheck.ValidateSerializedStrict("", strings.TrimPrefix(file, "schemas/"), instance)
 }
 
 // The published schemas and the Go request bounds agree with the directread
