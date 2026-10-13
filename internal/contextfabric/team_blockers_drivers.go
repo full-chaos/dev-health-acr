@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
-	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -46,9 +45,9 @@ func teamBlockersIntent(interpretation InterpretedQuestion) bool {
 	return false
 }
 
-func teamBlockersDriverID(team SubjectRef) string {
+func teamBlockersDriverID(team SubjectRef, rank int) string {
 	digest := sha256.Sum256([]byte(team.CanonicalID))
-	return "team-blockers-" + hex.EncodeToString(digest[:])[:16]
+	return fmt.Sprintf("team-blockers-%04d-%s", rank, hex.EncodeToString(digest[:])[:12])
 }
 
 func teamBlockersClaimID(team SubjectRef) string {
@@ -144,12 +143,12 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 		}
 	}
 	taken := make(map[string]struct{}, len(existingDrivers))
-	covered := make(map[string]struct{})
+	covered := make(map[SubjectRef]struct{})
 	for _, driver := range existingDrivers {
 		taken[driver.DriverID] = struct{}{}
 		if driver.Category == "blockers" {
 			for _, subject := range driver.AffectedSubjects {
-				covered[subject.CanonicalID] = struct{}{}
+				covered[SubjectRef{Kind: subject.Kind, CanonicalID: subject.CanonicalID}] = struct{}{}
 			}
 		}
 	}
@@ -157,16 +156,16 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 	for _, claim := range existingClaims {
 		takenClaims[claim.ClaimID] = struct{}{}
 	}
-	for _, observation := range observations {
+	for rank, observation := range observations {
 		if len(result.Drivers) >= allowed {
 			event.SkippedBudget++
 			continue
 		}
-		if _, done := covered[observation.team.CanonicalID]; done {
+		if _, done := covered[SubjectRef{Kind: observation.team.Kind, CanonicalID: observation.team.CanonicalID}]; done {
 			event.SkippedDuplicate++
 			continue
 		}
-		driverID, claimID := teamBlockersDriverID(observation.team), teamBlockersClaimID(observation.team)
+		driverID, claimID := teamBlockersDriverID(observation.team, rank), teamBlockersClaimID(observation.team)
 		_, driverClash := taken[driverID]
 		_, claimClash := takenClaims[claimID]
 		if driverClash || claimClash {
@@ -191,8 +190,8 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 		result.Drivers = append(result.Drivers, driver)
 	}
 	event.Emitted = len(result.Drivers)
-	if len(result.Drivers) < len(observations) {
-		result.Limitation = strings.TrimSpace(result.Limitation + fmt.Sprintf(" Blocked work items are listed for %d of %d teams with blocked work; the teams with the most blocked work come first.", len(result.Drivers), len(observations)))
+	if event.SkippedBudget > 0 {
+		result.Limitation = fmt.Sprintf("Blocked work items are listed for %d of %d teams with blocked work; the teams with the most blocked work come first.", len(result.Drivers)+event.SkippedDuplicate, len(observations))
 	}
 	return result
 }

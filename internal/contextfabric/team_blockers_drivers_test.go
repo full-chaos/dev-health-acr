@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
 	"strings"
 	"testing"
 	"time"
@@ -262,5 +263,48 @@ func TestTeamCohortClientSynthesisInputCarriesTheBlockersDriverCandidate(t *test
 	}
 	if got, want := strings.Join(titles, "|"), "Blocked work items: 30|Blocked work items: 2"; got != want {
 		t.Fatalf("blockers candidates = %q, want %q", got, want)
+	}
+}
+
+func TestTeamCohortProjectionKeepsTheTeamsWithTheMostBlockedWork(t *testing.T) {
+	teams := make([]SubjectRef, 0, 14)
+	facts := make([]CanonicalFact, 0, 14)
+	for i := 0; i < 14; i++ {
+		team := SubjectRef{Kind: SubjectTeam, CanonicalID: fmt.Sprintf("team:%02d", (i*5)%14), Label: fmt.Sprintf("Team %02d", (i*5)%14)}
+		teams = append(teams, team)
+		facts = append(facts, blockersFact(team, SourceAvailable, intp(int64(100-(i*5)%14)), nil))
+	}
+	result := investigateTeamBlockers(t, teams, facts)
+	projection := answerprojection.Project(result, answerprojection.DefaultBudget)
+	if len(projection.PrincipalDrivers) != answerprojection.DefaultBudget.MaxDrivers {
+		t.Fatalf("projected drivers = %d, want %d", len(projection.PrincipalDrivers), answerprojection.DefaultBudget.MaxDrivers)
+	}
+	for i, driver := range projection.PrincipalDrivers {
+		if want := fmt.Sprintf("Blocked work items: %d", 100-i); driver.Title != want {
+			t.Fatalf("projected driver %d = %q, want %q", i, driver.Title, want)
+		}
+	}
+}
+
+func TestTeamBlockersLimitationCountsTeamsAlreadyCoveredAndStaysSilentWithoutACut(t *testing.T) {
+	a, b, _ := teamsAB()
+	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{{Subject: a}, {Subject: b}}}
+	facts := []CanonicalFact{blockersFact(a, SourceAvailable, intp(5), nil), blockersFact(b, SourceAvailable, intp(6), nil)}
+	existing := []DriverJudgment{{DriverID: "model-minted-driver", Category: "blockers", AffectedSubjects: []SubjectRef{a}}}
+	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}, cohort, facts, existing, nil, ItemAllocation{}, 0)
+	if got.Limitation != "" {
+		t.Fatalf("limitation = %q, want none without a budget cut", got.Limitation)
+	}
+}
+
+func TestTeamBlockersCoveredCheckKeysOnSubjectKindAndID(t *testing.T) {
+	a, _, _ := teamsAB()
+	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{{Subject: a}}}
+	facts := []CanonicalFact{blockersFact(a, SourceAvailable, intp(5), nil)}
+	sameIDOtherKind := SubjectRef{Kind: SubjectProject, CanonicalID: a.CanonicalID, Label: "Project"}
+	existing := []DriverJudgment{{DriverID: "project-blockers", Category: "blockers", AffectedSubjects: []SubjectRef{sameIDOtherKind}}}
+	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}, cohort, facts, existing, nil, ItemAllocation{}, 0)
+	if len(got.Drivers) != 1 {
+		t.Fatalf("drivers = %d, want the team driver kept", len(got.Drivers))
 	}
 }
