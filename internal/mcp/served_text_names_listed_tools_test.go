@@ -29,24 +29,39 @@ func unqualifiedUnlistedMentions(text string, listed []string) []string {
 	var bad []string
 	for _, sentence := range sentenceSplit.Split(text, -1) {
 		lower := strings.ReplaceAll(strings.ToLower(sentence), "`", "")
-		qualified := false
-		for _, q := range toolQualifiers {
-			if strings.Contains(lower, q) {
-				qualified = true
-				break
-			}
-		}
-		if qualified {
-			continue
-		}
+		plain := strings.ReplaceAll(sentence, "`", "")
 		for _, name := range optionalToolNames {
-			if !slices.Contains(listed, name) && strings.Contains(sentence, name) {
-				bad = append(bad, name+" in: "+strings.TrimSpace(sentence))
+			if slices.Contains(listed, name) {
+				continue
+			}
+			from := 0
+			for {
+				at := strings.Index(plain[from:], name)
+				if at < 0 {
+					break
+				}
+				at += from
+				from = at + len(name)
+				lo, hi := max(0, at-toolQualifierReach), min(len(lower), at+len(name)+toolQualifierReach)
+				window := lower[lo:hi]
+				qualified := false
+				for _, q := range toolQualifiers {
+					if strings.Contains(window, q) {
+						qualified = true
+						break
+					}
+				}
+				if !qualified {
+					bad = append(bad, name+" in: "+strings.TrimSpace(sentence))
+					break
+				}
 			}
 		}
 	}
 	return bad
 }
+
+const toolQualifierReach = 110
 
 func servedTextCaller(t *testing.T, tools ...string) (*ProcessConfig, *CallerContext) {
 	t.Helper()
@@ -61,6 +76,7 @@ func TestServedTextNamesOnlyToolsTheCallerCanList(t *testing.T) {
 		tools []string
 	}{
 		{"question without interpretation", []string{toolDataCatalog, toolFindSubjects, toolInvestigateQuestion}},
+		{"no find_subjects", []string{toolDataCatalog, toolReadFacts, toolReadRelationships, toolInvestigateWithInterpretation}},
 		{"data tools only", []string{toolDataCatalog, toolFindSubjects, toolReadFacts, toolReadRelationships, toolRunOperation}},
 		{"interpretation without question", []string{toolDataCatalog, toolFindSubjects, toolReadFacts, toolInvestigateWithInterpretation}},
 		{"no data catalog", []string{toolFindSubjects, toolReadFacts, toolInvestigateWithInterpretation, toolInvestigationResult}},
@@ -144,5 +160,7 @@ func TestUnqualifiedMentionDetectorFlagsAPlantedSentence(t *testing.T) {
 	require.NotEmpty(t, unqualifiedUnlistedMentions("Plan the reads with `run_operation`. Then rank.", listed))
 	require.NotEmpty(t, unqualifiedUnlistedMentions("Line one.\n- `investigate_with_interpretation` answers it", listed))
 	require.Empty(t, unqualifiedUnlistedMentions("Plan the reads with `run_operation` (if listed). Use data_catalog", listed))
+	far := "Use run_operation for the big reads, and plan them well before you call it, with the ids you hold and the windows you chose, then rank the rows (if listed)"
+	require.NotEmpty(t, unqualifiedUnlistedMentions(far, listed))
 	require.Empty(t, unqualifiedUnlistedMentions("Use `read_facts` when `tools/list` shows it", listed))
 }

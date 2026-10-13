@@ -311,7 +311,7 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 	b.WriteString("\nChoosing a tool:\n")
 	b.WriteString("- context_for_task: you are about to work on a task in one repository. Pass a goal; get a ranked context packet.\n")
 	if hostedToolEnabled(caller, toolReadFacts) {
-		b.WriteString("- read_facts: you have canonical subject ids (as returned by other tools) and want their stored facts, without a model run. Pass kinds, subjects and optionally a window. To rank a set (for example projects by open pull requests or blockers), list the subjects with find_subjects, read the kind over up to 25 subjects per call, and order the counts yourself.\n")
+		b.WriteString("- read_facts: you have canonical subject ids (as returned by other tools) and want their stored facts, without a model run. Pass kinds, subjects and optionally a window. To rank a set (for example projects by open pull requests or blockers), list the subjects with find_subjects (when listed), read the kind over up to 25 subjects per call, and order the counts yourself.\n")
 	}
 	if hostedToolEnabled(caller, toolReadRelationships) {
 		b.WriteString("- read_relationships: you have one canonical subject id (copied from another answer, never built) and want its edges, without a model run. Pass subject and optionally types, direction, depth.\n")

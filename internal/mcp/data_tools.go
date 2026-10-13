@@ -120,7 +120,11 @@ func dataToolsInstructions(caller *CallerContext, ownModelRoute bool) string {
 	b.WriteString("- No person-level data is served. Do not rank persons. A relation is not a cause.\n")
 	b.WriteString("- When you derive a number, say it is yours, show its inputs and state the measure you rank by. Use \"appears\", \"leans\", \"suggests\" for derived statements.\n")
 	b.WriteString("- \"last month\" = previous calendar month. \"in the last month\" = trailing 30 days.\n")
-	b.WriteString("- Never build an id. Take ids from find_subjects or from a response.\n")
+	if find {
+		b.WriteString("- Never build an id. Take ids from find_subjects or from a response.\n")
+	} else {
+		b.WriteString("- Never build an id. Take ids from a response.\n")
+	}
 	if hostedToolEnabled(caller, toolReadRelationships) {
 		b.WriteString("- " + GuidanceTeamOwnership + "\n")
 	}
