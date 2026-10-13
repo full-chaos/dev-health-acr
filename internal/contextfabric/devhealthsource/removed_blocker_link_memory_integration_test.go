@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -19,10 +21,19 @@ import (
 func TestRemovedBlockerLinkRuleStaysUnderTheProjectorStatementCap(t *testing.T) {
 	ctx := context.Background()
 	query, direct := orgIsolationClickHouseFixture(t)
+	const smallLinks, largeLinks = 5000, 20000
+	small := measureRuleStatements(t, ctx, query, direct, "95140000-0000-4000-8000-0000000000f1", "95140000-0000-4000-8000-0000000000f2", smallLinks)
+	large := measureRuleStatements(t, ctx, query, direct, "95140000-0000-4000-8000-0000000000f3", "95140000-0000-4000-8000-0000000000f4", largeLinks)
+	growth := float64(large) / float64(small)
+	t.Logf("SLOPE: peak %d bytes at %d links, %d bytes at %d links, growth %.2fx for %.0fx the links", small, smallLinks, large, largeLinks, growth, float64(largeLinks)/smallLinks)
+	if growth > 1.15*float64(largeLinks)/smallLinks {
+		t.Errorf("peak grew %.2fx for %.0fx the links, over the linear slope", growth, float64(largeLinks)/smallLinks)
+	}
+}
+
+func measureRuleStatements(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org, repo string, links int) uint64 {
+	t.Helper()
 	const (
-		org       = "95140000-0000-4000-8000-0000000000f1"
-		repo      = "95140000-0000-4000-8000-0000000000f2"
-		links     = 20000
 		cap       = uint64(192 << 20)
 		maxPeak   = cap / 8 * 7
 		wallLimit = 20 * time.Minute
@@ -71,4 +82,5 @@ WHERE type = 'QueryFinish' AND query_start_time_microseconds >= toDateTime64(?, 
 	if peak >= maxPeak {
 		t.Fatalf("a statement carrying the rule peaked at %d bytes, want under %d (7/8 of the projector cap)", peak, maxPeak)
 	}
+	return peak
 }
