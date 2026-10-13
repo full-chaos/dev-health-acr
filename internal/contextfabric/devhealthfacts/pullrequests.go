@@ -36,9 +36,10 @@ func newPullRequestsProvider(client contextpacket.ClickHouseQueryClient) *PullRe
 }
 
 func (p *PullRequestsProvider) Capability() contextfabric.FactCapability {
-	capability := newCapability(contextfabric.FactPullRequests, "devhealthfacts.pull_requests", []contextfabric.SubjectKind{contextfabric.SubjectPullRequest, contextfabric.SubjectTeam})
+	capability := newCapability(contextfabric.FactPullRequests, "devhealthfacts.pull_requests", []contextfabric.SubjectKind{contextfabric.SubjectPullRequest, contextfabric.SubjectTeam, contextfabric.SubjectProject})
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
 		contextfabric.SubjectTeam:        {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectProject:     {contextfabric.FactTableBreakdown},
 		contextfabric.SubjectPullRequest: {contextfabric.FactTableBreakdown},
 	}
 	return capability
@@ -70,6 +71,15 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 			return contextfabric.FactProviderResult{}, readFailure("query team pull requests", teamErr)
 		}
 		rejected += teamOutcome.rejected
+	}
+	var projectLinksUnwindowed bool
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+		projectRejected, unwindowed, projectErr := p.readProjectRollup(ctx, orgID, projectSubjects, &facts, timeBound, query.Time.EvidenceWindow)
+		if projectErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query project pull requests", projectErr)
+		}
+		rejected += projectRejected
+		projectLinksUnwindowed = unwindowed
 	}
 	teamFactCount := len(facts)
 	// CHAOS-4377: the SQL build + scan half (the "merged wins over closed"
@@ -126,7 +136,7 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 	state, retentionReason := timeBound.retentionState(len(rows) + teamFactCount)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery || teamOutcome.truncated || projectLinksTruncated}
 	applyNoOwnedRepositories(&result, teamOutcome.teamsWithoutRepos)
-	if teamOutcome.linkRowsUnwindowed {
+	if teamOutcome.linkRowsUnwindowed || projectLinksUnwindowed {
 		mergeFactReadReason(&result, teamProjectLinksUnwindowedReason)
 	}
 	return result, nil
