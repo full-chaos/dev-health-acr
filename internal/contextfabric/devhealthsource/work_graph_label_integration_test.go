@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 const workGraphEdgesDDL = `CREATE TABLE work_graph_edges (edge_id String, source_type String, source_id String, target_type String, target_id String, edge_type String, repo_id UUID, provider String, provenance String, confidence Float64, evidence Nullable(String), discovered_at DateTime64(3), last_synced DateTime64(3), org_id String) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, edge_id)`
@@ -302,6 +303,50 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 			if float64(pair[0]) > 1.15*float64(pair[1])+readSlack {
 				t.Errorf("%s: %s %d bytes against %d at the base, over the 1.15x slope", name, what, pair[0], pair[1])
 			}
+		}
+	}
+}
+
+// An evidence-reference or source-row re-resolution names a repository-less
+// issue exactly as the packet did for the same caller: by title where the
+// caller's grant admits it, by key alone without a grant on the context.
+func TestWorkGraphReresolutionServesTheSameRepositorylessTitlesAsThePacket(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	for _, statement := range append(devhealthschema.DDL(), workGraphEdgesDDL) {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	seedWorkGraphLabelRows(t, ctx, direct)
+	rows := contextpacket.NewCatalogClickHouseRows(query)
+	scope := contractsv1.ResolvedScope{RepoID: wgRepo, RepoSlug: "acme/deploy-service"}
+	restricted := contextpacket.WithWorkItemGrant(ctx, auth.WorkItemRepositorySelectorSet([]string{"acme/deploy-service"}, true))
+	const linked = "implements PROJ-6 Jira issue linked by a native pull request (repository-wide)"
+	for name, tc := range map[string]struct {
+		ctx       context.Context
+		wantTitle bool
+	}{"restricted caller with a grant": {restricted, true}, "no grant on the context": {ctx, false}} {
+		references, err := rows.ResolveEvidenceReference(tc.ctx, wgOrg, scope, "work_graph.v1", "")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		served := false
+		for _, reference := range references {
+			if strings.Contains(reference.Evidence.Source.DisplayLabel, "implements PROJ-6") {
+				served = true
+				if got := strings.HasSuffix(reference.Evidence.Source.DisplayLabel, "Jira issue linked by a native pull request (repository-wide)"); got != tc.wantTitle {
+					t.Errorf("%s: PROJ-6 label %q, title served = %v, want %v", name, reference.Evidence.Source.DisplayLabel, got, tc.wantTitle)
+				}
+				if tc.wantTitle {
+					if _, err := rows.ResolveSourceRow(tc.ctx, wgOrg, scope, contextpacket.SourceRowRead{QueryID: "work_graph.v1", Locator: reference.Evidence.EvidenceRefID}); err != nil {
+						t.Fatalf("source row: %v", err)
+					}
+				}
+			}
+		}
+		if !served {
+			t.Errorf("%s: no reference for PROJ-6 among %d (want a label like %q)", name, len(references), linked)
 		}
 	}
 }
