@@ -206,6 +206,16 @@ func TestProjectTeamOwnershipStatementMemoryDoesNotGrowWithVersions(t *testing.T
 		seedProjectTeamOwnershipShape(t, f, memoryShapePairs*versions, memoryShapeUnmerged)
 		// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.
 		mustExec(t, f.ctx, direct, "OPTIMIZE TABLE team_project_ownership FINAL")
+		var parts, activeRows uint64
+		pr, perr := direct.Query(f.ctx, "SELECT count(), sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table = 'team_project_ownership'")
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		if pr.Next() {
+			_ = pr.Scan(&parts, &activeRows)
+		}
+		_ = pr.Close()
+		t.Logf("slope: %d versions per pair: team_project_ownership holds %d active parts, %d rows", versions, parts, activeRows)
 		all := measureProjectTeamsFragments(t, f, query, capped, fmt.Sprintf("slope%d", versions), only)
 		peak := peakOf(t, all, "paged_statement")
 		t.Errorf("DIAGNOSTIC (temporary) %d versions:\n%s", versions, fragmentTable("slope", all))
