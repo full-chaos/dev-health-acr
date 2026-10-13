@@ -74,7 +74,7 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query c
 			if frag.Paged {
 				bindings = devhealthsource.ProjectTeamsPagedBindingsForTest(f.h.orgID, 500)
 			}
-			rows, err := query.Query(f.ctx, frag.SQL+"\nSETTINGS log_comment = '"+tag+"'", bindings)
+			rows, err := query.Query(f.ctx, frag.SQL+"\nSETTINGS max_result_rows = 0, log_comment = '"+tag+"'", bindings)
 			if err != nil {
 				t.Fatalf("%s %s: %v", stage, frag.Name, err)
 			}
