@@ -23,6 +23,25 @@ var clickHouseConstructorAllowlist = map[string]bool{
 	"cmd/acr-projector/runtime.go":          true,
 }
 
+// Files that open the raw driver (clickhouse-go Open) directly. Each must put
+// APIStatementMaxMemoryUsage on its statements as max_memory_usage.
+var rawDriverOpenAllowlist = map[string]bool{
+	"internal/contextfabric/factoracle/capture.go": true,
+}
+
+func importsClickHouseDriver(file *ast.File) (string, bool) {
+	for _, spec := range file.Imports {
+		if strings.Trim(spec.Path.Value, `"`) != "github.com/ClickHouse/clickhouse-go/v2" {
+			continue
+		}
+		if spec.Name != nil {
+			return spec.Name.Name, true
+		}
+		return "clickhouse", true
+	}
+	return "", false
+}
+
 func isCall(n ast.Node, name string) (*ast.CallExpr, bool) {
 	call, ok := n.(*ast.CallExpr)
 	if !ok {
@@ -43,6 +62,8 @@ func TestEveryClickHouseConnectionIsMemoryCapped(t *testing.T) {
 	var violations []string
 	opened := map[string]bool{}
 	querySites := 0
+	scanned := 0
+	rawOpened := map[string]bool{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -62,12 +83,32 @@ func TestEveryClickHouseConnectionIsMemoryCapped(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		scanned++
 		if !strings.Contains(string(src), "clickhouse") {
 			return nil
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, src, 0)
 		if err != nil {
 			return err
+		}
+		if driverName, ok := importsClickHouseDriver(file); ok && !strings.HasPrefix(rel, "internal/testsupport/") {
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := isCall(n, "Open")
+				if !ok {
+					return true
+				}
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+					if id, ok := sel.X.(*ast.Ident); ok && id.Name == driverName {
+						rawOpened[rel] = true
+						if !rawDriverOpenAllowlist[rel] {
+							violations = append(violations, rel+": opens the raw ClickHouse driver outside the capped constructors")
+						} else if !strings.Contains(string(src), "APIStatementMaxMemoryUsage") || !strings.Contains(string(src), `"max_memory_usage"`) {
+							violations = append(violations, rel+": opens the raw ClickHouse driver without sending max_memory_usage = APIStatementMaxMemoryUsage")
+						}
+					}
+				}
+				return true
+			})
 		}
 		clientVars := map[*ast.Object]bool{}
 		ast.Inspect(file, func(n ast.Node) bool {
@@ -119,6 +160,14 @@ func TestEveryClickHouseConnectionIsMemoryCapped(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if scanned == 0 {
+		violations = append(violations, "the census scanned no non-test Go file; the repository root is wrong")
+	}
+	for rel := range rawDriverOpenAllowlist {
+		if !rawOpened[rel] {
+			violations = append(violations, rel+": allowlisted raw-driver file no longer opens the driver; census is stale")
+		}
 	}
 	t.Logf("ClickHouse Query call sites reached through the capped constructors: %d", querySites)
 	for rel := range clickHouseConstructorAllowlist {
