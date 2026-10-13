@@ -86,7 +86,8 @@ func pr(label string, number int) string { return fmt.Sprintf("%s#pr%d", repoUUI
 // holds every reach rule: direct, issue-side github and gitlab, the repository fallback,
 // an older version that reached a requested repository, a superseded unit, a
 // unit outside the membership run, ambiguous and multi-provider names,
-// unresolved and duplicate references. Every value is dyadic, so equal rows
+// unresolved and duplicate references, and high fan-out units (16 references
+// over 16 repositories each). Every value is dyadic, so equal rows
 // are equal bytes whatever the summation order. The organization statements
 // keep their text (TestWholeOrganizationSplitTextIsUnchanged).
 func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T) {
@@ -152,6 +153,15 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 			s.unit(id, v1, from, from, "", 1000, risk, []string{pr(b(1), 1000+i)}, nil)
 		}
 		s.unit(id, v2, from, from, "", float64(1+i%9), half, prs, issues)
+	}
+	for i := 0; i < 300; i++ {
+		var prs, issues []string
+		for k := 0; k < 8; k++ {
+			prs = append(prs, pr(fmt.Sprintf("sd-b%d", (i+2*k)%16), 20000+i*16+k))
+			issues = append(issues, fmt.Sprintf("ghpr:acme/b%d#%d", (i+2*k+1)%16, 40000+i*16+k))
+		}
+		from := ts(2026, 8, 31, 0, 0, 0).Add(-time.Duration(i%45) * 24 * time.Hour)
+		s.unit(fmt.Sprintf("fan-%03d", i), v2, from, from, "", float64(1+i%7), half, prs, issues)
 	}
 	for _, id := range []string{"e09-superseded", "e10-superseded-older-reached"} {
 		s.exec(`INSERT INTO work_unit_supersessions (org_id, superseded_work_unit_id, superseded_at) VALUES (?,?,?)`, splitDiffOrg, id, s.at)
