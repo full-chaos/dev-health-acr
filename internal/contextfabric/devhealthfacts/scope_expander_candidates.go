@@ -100,5 +100,5 @@ func workItemCandidates(subquery string) readers.WorkItemCandidates {
 	if !ok {
 		panic("devhealthfacts: work item candidate subquery is not parenthesized")
 	}
-	return readers.WorkItemCandidateSubquery(inner)
+	return readers.WorkItemCandidateSubquery("SELECT work_item_id FROM " + subquery + " WHERE work_item_id = ''")
 }
