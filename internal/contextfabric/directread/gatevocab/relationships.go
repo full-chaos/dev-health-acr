@@ -74,9 +74,12 @@ const (
 	RelationshipsFailureGate  RelationshipsFailureClass = "gate_unavailable"
 	RelationshipsFailureGraph RelationshipsFailureClass = "graph_read"
 	RelationshipsFailureProof RelationshipsFailureClass = "gate_decision_refused"
+	// RelationshipsFailureVocabulary is a response refused because a served
+	// value fell outside its pinned value set.
+	RelationshipsFailureVocabulary RelationshipsFailureClass = "served_vocabulary_refused"
 )
 
 // RelationshipsFailureClassVocabulary is the closed set of failure classes.
-func RelationshipsFailureClassVocabulary() [3]RelationshipsFailureClass {
-	return [3]RelationshipsFailureClass{RelationshipsFailureGate, RelationshipsFailureGraph, RelationshipsFailureProof}
+func RelationshipsFailureClassVocabulary() [4]RelationshipsFailureClass {
+	return [4]RelationshipsFailureClass{RelationshipsFailureGate, RelationshipsFailureGraph, RelationshipsFailureProof, RelationshipsFailureVocabulary}
 }

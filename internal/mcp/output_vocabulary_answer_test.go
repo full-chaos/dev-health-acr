@@ -612,7 +612,8 @@ func init() {
 			clientValidate: "contractsv1.ValidateStoredResult",
 			sites:          []string{"CommitDecisionDigest.commit_gate"},
 			// schema: "", "caller_hint_short_circuit", "pre_committed_exact_hint", "exact_index", "identity_fast_path", "lone_floor", "top_of_two", "vector_margin_rescue", "evidence_census"
-			schemaOnly: "commit gates are bare strings in producers; the only validator, validCommitGate, is unexported",
+			goSet:      append([]string{""}, contractsv1.CommitGateVocabulary()...),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:  "ConversationTurn.role",

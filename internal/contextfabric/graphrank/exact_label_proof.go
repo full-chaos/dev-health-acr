@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"errors"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
@@ -137,7 +138,7 @@ func refuseExactLabel(candidates []contextfabric.SubjectCandidate, exactIndex []
 
 // evidenceCensusCommitGate is the commit gate of the evidence-census
 // re-decision.
-const evidenceCensusCommitGate = "evidence_census"
+const evidenceCensusCommitGate = contractsv1.CommitGateEvidenceCensus
 
 // allows reports whether a commit through gate of a subject of kind may be
 // made. With no refusal every commit may. After a refusal the one commit

@@ -83,7 +83,7 @@ func dataToolsInstructions(caller *CallerContext) string {
 	}
 	var b strings.Builder
 	b.WriteString("\nTwo ways to use this server.\n")
-	b.WriteString("A. You plan the reads yourself with the data tools, and do the comparison, ranking, charting and explanation:\n")
+	b.WriteString("A. You plan the reads yourself with the data tools, and do the comparison, ranking, charting and explanation. These tools call no model and spend no model budget:\n")
 	if catalog {
 		b.WriteString("- data_catalog: the operations, subject kinds and limits you may use.\n")
 	}
@@ -98,7 +98,7 @@ func dataToolsInstructions(caller *CallerContext) string {
 	}
 	b.WriteString("More data tools are planned.\n")
 	if hostedToolEnabled(caller, toolInvestigateQuestion) {
-		b.WriteString("B. You want our engine's narrative answer and have no model of your own: investigate_question. If you are a model, prefer A, or investigate_with_interpretation with synthesis \"client\". investigate_question runs on the service's model, which needs a plan feature, or on the organization's own model configuration when it has one.\n")
+		b.WriteString("B. You want our engine's narrative answer and have no model of your own: investigate_question. If you are a model, prefer A, or investigate_with_interpretation with synthesis \"client\". investigate_question spends model budget: it runs on the service's model, which needs a plan feature, or on the organization's own model configuration when it has one.\n")
 	}
 	b.WriteString("Rules for A:\n")
 	b.WriteString("- Read call, completeness, result and coverage first. Missing is not healthy and not zero.\n")

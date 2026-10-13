@@ -5,18 +5,30 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const entitlementSchemaVersion = "acr_entitlement.v1"
 
+// unknownOrganizationCode is the stable code Dev Health sends on the 404 for a
+// well-formed organization id that has no organization row.
+const unknownOrganizationCode = "acr_organization_unknown"
+
 var (
 	errUnavailable = errors.New("Dev Health entitlement service unavailable")
+
+	// ErrOrganizationUnknown means Dev Health positively answered that the
+	// organization does not exist. It is never a grant and never cached.
+	ErrOrganizationUnknown = errors.New("Dev Health does not know the organization")
 )
 
 // Client implements api.EntitlementProvider without exposing credentials or
@@ -143,6 +155,9 @@ func (c *Client) fetch(ctx context.Context, orgID string) (grants, error) {
 		return grants{}, errUnavailable
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound && isUnknownOrganizationBody(response.Body, c.maxBody) {
+		return grants{}, ErrOrganizationUnknown
+	}
 	if response.StatusCode != http.StatusOK {
 		return grants{}, errUnavailable
 	}
@@ -151,6 +166,49 @@ func (c *Client) fetch(ctx context.Context, orgID string) (grants, error) {
 		return grants{}, errUnavailable
 	}
 	return grants{runtime: parsed.AgentContextRuntime, serviceModel: parsed.ServiceModel}, nil
+}
+
+// OrganizationUnknown reports whether Dev Health positively says the
+// organization does not exist: true only for a 404 carrying the stable
+// unknown-organization code. An HTTP 200 (any body) is (false, nil). A
+// malformed id, a transport failure, a timeout, any 5xx, a 404 without the
+// code and every other status are (false, errUnavailable), so an outage can
+// never read as a deletion.
+func (c *Client) OrganizationUnknown(ctx context.Context, orgID string) (bool, error) {
+	if parsed, err := uuid.Parse(strings.TrimSpace(orgID)); err != nil || parsed.String() != orgID {
+		return false, errUnavailable
+	}
+	requestContext, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, entitlementURL(c.baseURL, orgID), nil)
+	if err != nil {
+		return false, errUnavailable
+	}
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	response, err := c.http.Do(request)
+	if err != nil {
+		return false, errUnavailable
+	}
+	defer response.Body.Close()
+	switch {
+	case response.StatusCode == http.StatusOK:
+		return false, nil
+	case response.StatusCode == http.StatusNotFound && isUnknownOrganizationBody(response.Body, c.maxBody):
+		return true, nil
+	default:
+		return false, errUnavailable
+	}
+}
+
+func isUnknownOrganizationBody(body io.Reader, maxBytes int64) bool {
+	payload, err := readBounded(body, maxBytes)
+	if err != nil {
+		return false
+	}
+	var parsed struct {
+		Code string `json:"code"`
+	}
+	return json.Unmarshal(payload, &parsed) == nil && parsed.Code == unknownOrganizationCode
 }
 
 func entitlementURL(baseURL *url.URL, orgID string) string {

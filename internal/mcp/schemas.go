@@ -101,3 +101,21 @@ func lookupManifestEntry(name string) (toolManifestEntry, bool) {
 	}
 	return toolManifestEntry{}, false
 }
+
+// manifestToolNames lists every tool the embedded manifest declares: the one
+// registry the server registers its tools from.
+func manifestToolNames() []string {
+	data, err := schemaFiles.ReadFile(toolManifestFile)
+	if err != nil {
+		panic(fmt.Sprintf("mcp: embedded tool manifest missing: %v", err))
+	}
+	var manifest toolManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		panic(fmt.Sprintf("mcp: embedded tool manifest invalid: %v", err))
+	}
+	names := make([]string, 0, len(manifest.Tools))
+	for _, entry := range manifest.Tools {
+		names = append(names, entry.Name)
+	}
+	return names
+}

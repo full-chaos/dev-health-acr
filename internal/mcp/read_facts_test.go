@@ -285,3 +285,16 @@ func TestReadFactsRefusesAWindowBeyondEveryKindWithAdviceLocally(t *testing.T) {
 		t.Fatal("a locally refused window must not call hosted")
 	}
 }
+
+func TestReadFactsBareStringSubjectGetsTheShapeSteeringError(t *testing.T) {
+	hosted := &readFactsHosted{respond: readFactsExample(t)}
+	args := `{"kinds":["actual_completion"],"subjects":["project.v2:jira:10001"]}`
+	result := callReadFacts(t, newReadFactsBootstrap(t, hosted, true), args)
+	text := toolResultText(result)
+	if !result.IsError || !strings.Contains(text, `{"kind"`) || !strings.Contains(text, "canonical_id") || !strings.Contains(text, "find_subjects") {
+		t.Fatalf("bare-string subject refusal lacks the expected shape: %v %s", result.IsError, text)
+	}
+	if hosted.calls != 0 {
+		t.Fatal("a locally refused request must not call hosted")
+	}
+}
