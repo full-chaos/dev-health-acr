@@ -689,6 +689,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	if graphContext.Cohort == nil {
 		statusDrivers, statusClaims, statusEvent := projectStatusDrivers(interpretation, result.SubjectResolution.Committed, facts.Facts, result.Drivers, result.ClaimedFacts, synthesisAllocation)
 		pending.ProjectStatusDrivers = statusEvent
+		if sentences := projectStatusMissingLimitations(statusEvent); len(sentences) > 0 {
+			composed, displaced := appendBoundedLimitations(result.Limitations, sentences)
+			result.Limitations = composed
+			result.LimitationsDisplaced += displaced
+		}
 		if len(statusDrivers) > 0 {
 			if err := validateMintedClaimsGrounded(statusClaims, facts.Facts); err != nil {
 				return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))

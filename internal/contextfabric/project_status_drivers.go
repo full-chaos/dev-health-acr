@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -196,4 +197,32 @@ func projectStatusDriverCandidates(drivers []DriverJudgment) []DriverJudgment {
 		candidates = append(candidates, driver)
 	}
 	return candidates
+}
+
+func projectStatusMissingLimitations(event *ProjectStatusDriverEvent) []string {
+	if event == nil || len(event.Missing) == 0 {
+		return nil
+	}
+	sentences := make([]string, 0, len(event.Missing))
+	for index, kind := range event.Missing {
+		var reason string
+		switch state := event.MissingStates[index]; state {
+		case string(SourceNoData):
+			reason = "no data"
+		case string(SourceConflicted):
+			reason = "conflicting sources"
+		case string(SourceUnavailable):
+			reason = "source unavailable"
+		case "not_read":
+			reason = "not read for this answer"
+		case "no_value":
+			reason = "no value reported"
+		case "no_evidence":
+			reason = "no evidence reference"
+		default:
+			reason = strings.ReplaceAll(state, "_", " ")
+		}
+		sentences = append(sentences, fmt.Sprintf("%s: %s.", kind, reason))
+	}
+	return sentences
 }

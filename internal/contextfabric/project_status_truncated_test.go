@@ -133,6 +133,9 @@ func TestProjectStatusStaleFactIsUsableWithAStaleLabel(t *testing.T) {
 }
 
 func TestProjectStatusUnusableFactStatesStayMissingAndNameTheState(t *testing.T) {
+	wantLimitation := map[SourceState]string{
+		SourceNoData: "readiness: no data.", SourceUnavailable: "readiness: source unavailable.", SourceConflicted: "readiness: conflicting sources.",
+	}
 	for _, state := range []SourceState{SourceNoData, SourceUnavailable, SourceConflicted} {
 		t.Run(string(state), func(t *testing.T) {
 			rig := projectStatusRig(t, projectStatusRequirements, func(p SubjectRef) []CanonicalFact {
@@ -146,6 +149,18 @@ func TestProjectStatusUnusableFactStatesStayMissingAndNameTheState(t *testing.T)
 			}
 			if got, want := driverTitles(result.Drivers), "Backlog: 40 items|Risk severity: medium"; got != want {
 				t.Errorf("drivers = %q, want %q", got, want)
+			}
+			served := 0
+			for _, limitation := range result.Limitations {
+				if strings.HasPrefix(limitation, "readiness: ") {
+					served++
+					if limitation != wantLimitation[state] {
+						t.Errorf("served limitation = %q, want %q", limitation, wantLimitation[state])
+					}
+				}
+			}
+			if served != 1 {
+				t.Errorf("served readiness limitations = %d (%v), want exactly one naming %s", served, result.Limitations, state)
 			}
 			event := rig.telemetry.projectStatusDrivers[0]
 			if len(event.Missing) != 1 || event.Missing[0] != FactReadiness || len(event.MissingStates) != 1 || event.MissingStates[0] != string(state) {
