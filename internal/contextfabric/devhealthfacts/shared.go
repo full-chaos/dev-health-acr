@@ -977,16 +977,23 @@ import (
 // status decided over a cut pool says within how many members it ran. A
 // candidate saved under v193 may hold the cut, mismatched set.
 //
-// v194 -> v195: a pull request status question anchored on the caller's
+// v194 -> v195: pull requests and blockers also serve a project subject (a
+// rollup over the project's issues and their linked pull requests), and an
+// investigation of a project keeps that rollup beside the expanded per-item
+// facts. A repository-restricted caller's investigation also labels the
+// aggregate scope of a team or project fact whose capability declares no
+// subject reference. A stored answer can differ.
+//
+// v195 -> v196: a pull request status question anchored on the caller's
 // organization, or naming no anchor, reads the organization's pull requests
 // with the status inside the read (the status census), before the walk cap or
 // the census bound. It used to filter the first pull requests the walk or the
 // census reached, so matches past them were missed; with no anchor, a read
 // that kept none served no_match. A read that keeps none is now a measured zero
 // (complete), and an answer whose status was decided within a cut read is
-// partial. A candidate saved under v194 may hold the cut, mismatched set, that
+// partial. A candidate saved under v195 may hold the cut, mismatched set, that
 // no_match, or a complete status over a cut read.
-const QueryVersion = "devhealthfacts.clickhouse.v195"
+const QueryVersion = "devhealthfacts.clickhouse.v196"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

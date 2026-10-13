@@ -40,7 +40,11 @@ import (
 // doc comment. FactPullRequests likewise gains SubjectTeam for a rollup over the
 // team's owned repositories (team_repo_ownership, a real table read with
 // the owned_repositories pointer, not a proxy join); the per-pull-request
-// expansion stays on beside it. FactReviews has no such source and stays
+// expansion stays on beside it. FactPullRequests also gains SubjectProject
+// for a rollup over the project's issues' linked pull request rows
+// (work_items -> work_graph_issue_pr -> git_pull_requests, a real join with a
+// disclosed rollup_basis and link tier); the project -> pull request expansion
+// stays on beside it. FactReviews has no such source and stays
 // exactly as CHAOS-4099 left it, so this test keeps pinning it.
 func TestChaos4099_RealProviderSubjectKindsStayUnwidened(t *testing.T) {
 	t.Parallel()
@@ -51,7 +55,7 @@ func TestChaos4099_RealProviderSubjectKindsStayUnwidened(t *testing.T) {
 	// own doc comment above.
 	want := map[contextfabric.FactKind][]contextfabric.SubjectKind{
 		contextfabric.FactMetrics:      {contextfabric.SubjectRepository, contextfabric.SubjectTeam, contextfabric.SubjectProject},
-		contextfabric.FactPullRequests: {contextfabric.SubjectPullRequest, contextfabric.SubjectTeam},
+		contextfabric.FactPullRequests: {contextfabric.SubjectPullRequest, contextfabric.SubjectTeam, contextfabric.SubjectProject},
 		contextfabric.FactReviews:      {contractsv1.ContextFabricSubjectPullRequestReview},
 	}
 	got := map[contextfabric.FactKind][]contextfabric.SubjectKind{
@@ -108,6 +112,12 @@ func TestChaos4099_RealProviderSubjectKindsStayUnwidened(t *testing.T) {
 // definition the work-item grain uses into a disclosed rollup_basis/
 // work_item_count/completed_count -- see workitems.go's
 // readProjectActualCompletion doc comment.
+//
+// FactPullRequests and FactBlockers are ALSO excluded: each answers for a
+// project directly over the project's own issues (work_items keyed on project
+// identity; pull requests only through those issues' linked pull request
+// rows), with a disclosed rollup_basis, and the project expansion to per-item
+// facts stays on beside the rollup (additiveRollupExpansionKinds).
 func TestChaos4099_NoCanonicalFactCapabilityAnswersForAProject(t *testing.T) {
 	t.Parallel()
 
@@ -120,6 +130,8 @@ func TestChaos4099_NoCanonicalFactCapabilityAnswersForAProject(t *testing.T) {
 		contextfabric.FactFlow:             true,
 		contextfabric.FactLandscape:        true,
 		contextfabric.FactActualCompletion: true,
+		contextfabric.FactPullRequests:     true,
+		contextfabric.FactBlockers:         true,
 	}
 	for _, provider := range allProvidersForKindAudit() {
 		capability := provider.Capability()
