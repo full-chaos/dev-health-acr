@@ -43,7 +43,7 @@ func schemaEnumAt(t *testing.T, document map[string]any, path ...string) []strin
 	if !ok {
 		t.Fatalf("path %v does not resolve to an object", path)
 	}
-	raw, ok := object["enum"].([]any)
+	raw, ok := schemaVocabulary(object)
 	if !ok {
 		t.Fatalf("path %v has no enum array", path)
 	}

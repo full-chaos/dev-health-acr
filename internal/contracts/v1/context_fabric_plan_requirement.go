@@ -354,6 +354,10 @@ func (r ContextFabricPlanRequirement) Served() bool { return r.Unavailable == ""
 // Validate enforces every mirrored vocabulary, the coordinate's agreement
 // with its own identity string, and the exactly-one-server invariant.
 func (r ContextFabricPlanRequirement) Validate() error {
+	return r.validate(contextFabricWriteBounds)
+}
+
+func (r ContextFabricPlanRequirement) validate(bounds contextFabricBounds) error {
 	if !stringLengthBetween(r.Requirement, 1, ContextFabricRequirementIdentityMaxLength) ||
 		!stringLengthBetween(r.Obligation, 1, ContextFabricRequirementObligationMaxLength) {
 		return fmt.Errorf("plan requirement identity or obligation violates v1 bounds")
@@ -361,22 +365,22 @@ func (r ContextFabricPlanRequirement) Validate() error {
 	// The VALUE DOMAIN, not just the length. A vocabulary is closed over
 	// its members; what may carry it is a separate question, and left
 	// unstated it is open by default.
-	if !ValidContextFabricAnswerObligation(r.Obligation) {
+	if !bounds.additiveOK(ValidContextFabricAnswerObligation(r.Obligation), r.Obligation) {
 		return fmt.Errorf("plan requirement obligation %q is not a vocabulary member", r.Obligation)
 	}
-	if !ValidContextFabricSubjectRole(r.Role) {
+	if !bounds.additiveOK(ValidContextFabricSubjectRole(r.Role), r.Role) {
 		return fmt.Errorf("plan requirement role %q is not a vocabulary member", r.Role)
 	}
 	if !validContextFabricSubjectKind(r.Subject) {
 		return fmt.Errorf("plan requirement subject kind %q is not a vocabulary member", r.Subject)
 	}
-	if !ValidContextFabricAnswerObligationKind(r.Kind) {
+	if !bounds.additiveOK(ValidContextFabricAnswerObligationKind(r.Kind), r.Kind) {
 		return fmt.Errorf("plan requirement kind %q is not a vocabulary member", r.Kind)
 	}
-	if !ValidContextFabricCompletionScope(r.Scope) {
+	if !bounds.additiveOK(ValidContextFabricCompletionScope(r.Scope), r.Scope) {
 		return fmt.Errorf("plan requirement scope %q is not a vocabulary member", r.Scope)
 	}
-	if !ValidContextFabricCompletionQuantifier(r.Quantifier) {
+	if !bounds.additiveOK(ValidContextFabricCompletionQuantifier(r.Quantifier), r.Quantifier) {
 		return fmt.Errorf("plan requirement quantifier %q is not a vocabulary member", r.Quantifier)
 	}
 	// The identity IS the coordinate, so the three copied fields must
@@ -393,41 +397,41 @@ func (r ContextFabricPlanRequirement) Validate() error {
 		return fmt.Errorf("plan requirement %q disagrees with its own obligation/role/subject %q/%q/%q",
 			r.Requirement, r.Obligation, r.Role, r.Subject)
 	}
-	if len(r.FactKinds) > ContextFabricFactKindCount {
+	if len(r.FactKinds) > bounds.factKindListMax() {
 		return fmt.Errorf("plan requirement declares more fact kinds than the closed vocabulary has")
 	}
 	for _, kind := range r.FactKinds {
-		if !validFactKind(kind) {
+		if !bounds.additiveOK(validFactKind(kind), string(kind)) {
 			return fmt.Errorf("plan requirement fact kind %q is not a vocabulary member", kind)
 		}
 	}
 	if duplicate, found := firstDuplicateFactKind(r.FactKinds); found {
 		return fmt.Errorf("plan requirement declares fact kind %q twice; the list names what CAN serve the requirement, and naming a kind twice states nothing the first naming did not", duplicate)
 	}
-	if len(r.InputFactKinds) > ContextFabricFactKindCount {
+	if len(r.InputFactKinds) > bounds.factKindListMax() {
 		return fmt.Errorf("plan requirement declares more input fact kinds than the closed vocabulary has")
 	}
 	for _, kind := range r.InputFactKinds {
-		if !validFactKind(kind) {
+		if !bounds.additiveOK(validFactKind(kind), string(kind)) {
 			return fmt.Errorf("plan requirement input fact kind %q is not a vocabulary member", kind)
 		}
 	}
 	if duplicate, found := firstDuplicateFactKind(r.InputFactKinds); found {
 		return fmt.Errorf("plan requirement declares input fact kind %q twice; the list names what the step CONSUMES, and naming a kind twice states nothing the first naming did not", duplicate)
 	}
-	if r.Step != "" && !ValidContextFabricComputedObligationStep(r.Step) {
+	if r.Step != "" && !bounds.additiveOK(ValidContextFabricComputedObligationStep(r.Step), r.Step) {
 		return fmt.Errorf("plan requirement step %q is not a vocabulary member", r.Step)
 	}
-	if r.StepExecution != "" && !ValidContextFabricComputedStepExecution(r.StepExecution) {
+	if r.StepExecution != "" && !bounds.additiveOK(ValidContextFabricComputedStepExecution(r.StepExecution), r.StepExecution) {
 		return fmt.Errorf("plan requirement step_execution %q is not a vocabulary member", r.StepExecution)
 	}
-	if r.InputClass != "" && !ValidContextFabricComputedStepInputClass(r.InputClass) {
+	if r.InputClass != "" && !bounds.additiveOK(ValidContextFabricComputedStepInputClass(r.InputClass), r.InputClass) {
 		return fmt.Errorf("plan requirement input_class %q is not a vocabulary member", r.InputClass)
 	}
-	if r.Unavailable != "" && !ValidContextFabricRequirementUnavailableReason(r.Unavailable) {
+	if r.Unavailable != "" && !bounds.additiveOK(ValidContextFabricRequirementUnavailableReason(r.Unavailable), r.Unavailable) {
 		return fmt.Errorf("plan requirement unavailable reason %q is not a vocabulary member", r.Unavailable)
 	}
-	return r.validateServerInvariant()
+	return r.validateServerInvariant(bounds)
 }
 
 // validateServerInvariant enforces EXACTLY ONE OF FactKinds / Step /
@@ -438,7 +442,9 @@ func (r ContextFabricPlanRequirement) Validate() error {
 // whose fields contradict each other are different defects with different
 // fixes, and one compound predicate covering both would emit one message for
 // either.
-func (r ContextFabricPlanRequirement) validateServerInvariant() error {
+// An added quantifier, input class or kind token skips the coupling keyed to
+// a specific member of that vocabulary; the exactly-one-server rule stays.
+func (r ContextFabricPlanRequirement) validateServerInvariant(bounds contextFabricBounds) error {
 	reads := len(r.FactKinds) > 0
 	computes := r.Step != ""
 	unavailable := r.Unavailable != ""
@@ -458,7 +464,7 @@ func (r ContextFabricPlanRequirement) validateServerInvariant() error {
 		// An unavailable cell serves none of its population. Any other
 		// quantifier would claim a completion the row's own reason token
 		// says did not happen.
-		if r.Quantifier != contextFabricCompletionQuantifierNone {
+		if r.Quantifier != contextFabricCompletionQuantifierNone && !bounds.additiveUnknown(ValidContextFabricCompletionQuantifier(r.Quantifier), r.Quantifier) {
 			return fmt.Errorf("plan requirement %q is unavailable and must carry quantifier %q, got %q",
 				r.Requirement, contextFabricCompletionQuantifierNone, r.Quantifier)
 		}
@@ -478,11 +484,12 @@ func (r ContextFabricPlanRequirement) validateServerInvariant() error {
 		// declares a consumption it does not name, and
 		// `resolved_member_set` with kinds names facts it says it does
 		// not read.
-		if (r.InputClass == contextFabricComputedInputFactKinds) != (len(r.InputFactKinds) > 0) {
+		if (r.InputClass == contextFabricComputedInputFactKinds) != (len(r.InputFactKinds) > 0) &&
+			!bounds.additiveUnknown(ValidContextFabricComputedStepInputClass(r.InputClass), r.InputClass) {
 			return fmt.Errorf("plan requirement %q input class %q disagrees with its %d declared input fact kinds",
 				r.Requirement, r.InputClass, len(r.InputFactKinds))
 		}
-		if r.Kind != contextFabricObligationKindComputed {
+		if r.Kind != contextFabricObligationKindComputed && !bounds.additiveUnknown(ValidContextFabricAnswerObligationKind(r.Kind), r.Kind) {
 			return fmt.Errorf("plan requirement %q names a server step but its kind is %q, not %q",
 				r.Requirement, r.Kind, contextFabricObligationKindComputed)
 		}
@@ -520,13 +527,17 @@ const (
 // the outcome array can be read together, so an ambiguous one is a defect in
 // the document, not a tidy-up.
 func ValidateContextFabricPlanRequirements(rows []ContextFabricPlanRequirement) error {
+	return validatePlanRequirements(rows, contextFabricWriteBounds)
+}
+
+func validatePlanRequirements(rows []ContextFabricPlanRequirement, bounds contextFabricBounds) error {
 	if len(rows) > ContextFabricPlanRequirementsMaxCount {
 		return fmt.Errorf("answer plan carries %d requirements, more than the %d bound",
 			len(rows), ContextFabricPlanRequirementsMaxCount)
 	}
 	seen := make(map[string]bool, len(rows))
 	for index, row := range rows {
-		if err := row.Validate(); err != nil {
+		if err := row.validate(bounds); err != nil {
 			return fmt.Errorf("requirement %d: %w", index, err)
 		}
 		if seen[row.Requirement] {

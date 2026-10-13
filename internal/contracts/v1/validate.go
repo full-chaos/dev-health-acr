@@ -33,6 +33,16 @@ func (e AgentEpisodeCreate) Validate() error {
 // reads the receiver's embedded value directly and never copies or
 // rewrites it, so calling it is side-effect-free for the caller.
 func (a AgentEpisode) Validate() error {
+	return a.validate(false)
+}
+
+// ValidateRead is Validate for a client reading a served episode: an added
+// redaction_state token passes. Producers call Validate.
+func (a AgentEpisode) ValidateRead() error {
+	return a.validate(true)
+}
+
+func (a AgentEpisode) validate(open bool) error {
 	if a.SchemaVersion != AgentEpisodeSchema {
 		return fmt.Errorf("schema_version must be %q", AgentEpisodeSchema)
 	}
@@ -42,7 +52,7 @@ func (a AgentEpisode) Validate() error {
 	if a.CreatedAt.IsZero() {
 		return errors.New("created_at is required")
 	}
-	if !validAgentEpisodeRedactionState(a.RedactionState) {
+	if !validAgentEpisodeRedactionState(a.RedactionState) && !(open && openVocabularyToken(a.RedactionState)) {
 		return errors.New("invalid redaction_state")
 	}
 	if err := validateAgentEpisodeCreateFields(a.AgentEpisodeCreate); err != nil {
