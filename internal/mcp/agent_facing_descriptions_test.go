@@ -178,7 +178,7 @@ func TestRequestSchemaExamplesValidate(t *testing.T) {
 // input of the tool it describes, so an agent can call the tool from the
 // description alone.
 // dataToolsWithOptionalInputs are the tools whose inputs are all optional.
-var dataToolsWithOptionalInputs = map[string]bool{toolDataCatalog: true, toolFindSubjects: true}
+var dataToolsWithOptionalInputs = map[string]bool{toolDataCatalog: true, toolFindSubjects: true, toolSourceEvidence: true}
 
 func TestToolDescriptionsNameTheirRequiredInputs(t *testing.T) {
 	var manifest toolManifest

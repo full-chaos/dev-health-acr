@@ -105,7 +105,7 @@ func TestDirectReadExpandsWithTheCallersPrincipal(t *testing.T) {
 				t.Fatalf("derived fact not served with its root: %s", mustJSON(t, response))
 			}
 			row := coverageOf(t, response, "blockers", teamT)
-			if row.Outcome != OutcomeFactServed || !strings.Contains(row.Reason, "scope expansion reached 1 work items, 1 with a served fact") {
+			if row.Outcome != OutcomeFactServed || !strings.Contains(row.Reason, "scope expansion reached 1 work items; their facts name this subject in reached_from") {
 				t.Fatalf("root row %+v", row)
 			}
 			validateAgainst(t, "mcp_read_facts_response.v1.schema.json", []byte(mustJSON(t, response)))
@@ -523,5 +523,121 @@ func TestDirectReadReachedRootKeepsTheProviderFailureCause(t *testing.T) {
 	}
 	if ledger == "" {
 		t.Fatalf("row reason %q does not keep the provider failure cause", row.Reason)
+	}
+}
+
+// A project anchor of a kind it answers directly with a rollup AND reaches
+// per item through its additive expansion (pull requests): the project's
+// coverage row is the derived row, never an unexpanded gap. The project that
+// received the shared pull request reads served; the other requested project
+// whose expansion lost it reads truncated with the lower-bound note.
+func TestDirectReadProjectRollupRootCountsItsDerivedPullRequests(t *testing.T) {
+	pull := contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: "pull_request:shared", Label: "#1"}
+	expander := &scriptedExpander{expand: func(request contextfabric.FactScopeExpansionRequest) contextfabric.FactScopeExpansionResult {
+		return contextfabric.FactScopeExpansionResult{
+			Targets:    []contextfabric.SubjectRef{pull},
+			TargetRoot: map[string]contextfabric.SubjectRef{contextfabric.FactSubjectKey(pull): projectP},
+			Counts:     contextfabric.FactScopeExpansionCounts{CandidateCount: 1},
+		}
+	}}
+	provider := perSubjectProvider(contextfabric.FactPullRequests, contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectProject)
+	provider.read = func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		result := contextfabric.FactProviderResult{State: contextfabric.SourceAvailable}
+		for _, subject := range query.Subjects {
+			result.Facts = append(result.Facts, contextfabric.CanonicalFact{Kind: contextfabric.FactPullRequests, Subject: subject, Fields: map[string]contextfabric.FactValue{"n": intValue(1)}})
+		}
+		return result, nil
+	}
+	reader := directExpandingReader(t, graphOfOrgA(), expander, nil, provider)
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"pull_requests"}, Subjects: []RequestSubject{
+		{Kind: "project", CanonicalID: projectP.CanonicalID}, {Kind: "project", CanonicalID: projectQ.CanonicalID},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expander.requests) != 1 {
+		t.Fatalf("expansions %d, want the additive project expansion once", len(expander.requests))
+	}
+	fact := servedOn(response, "pull_requests", pull)
+	if fact == nil || len(fact.ReachedFrom) != 1 || fact.ReachedFrom[0].CanonicalID != projectP.CanonicalID {
+		t.Fatalf("derived pull request fact %s", mustJSON(t, response.Facts))
+	}
+	received, other := coverageOf(t, response, "pull_requests", projectP), coverageOf(t, response, "pull_requests", projectQ)
+	t.Logf("project rows: received=%+v other=%+v", received, other)
+	for _, row := range []CoverageRow{received, other} {
+		if strings.Contains(row.Reason, "unexpanded:") || strings.Contains(row.Reason, string(contextfabric.FactScopePolicyUnavailable)) {
+			t.Fatalf("project row %+v reads as an unexpanded gap", row)
+		}
+	}
+	if received.Outcome != OutcomeFactServed || !strings.Contains(received.Reason, "scope expansion reached 1 pull requests; their facts name this subject in reached_from") {
+		t.Fatalf("receiving project row %+v", received)
+	}
+	if other.Outcome != OutcomeTruncated || !strings.Contains(other.Reason, "is counted under only one of them") {
+		t.Fatalf("other project row %+v", other)
+	}
+}
+
+// A work item a requested project and a requested team both reach is derived
+// from both: served once, both roots in reached_from, both rows complete.
+func TestDirectReadTargetSharedAcrossOriginKindsCountsForBothRoots(t *testing.T) {
+	shared := labelled(workA, "WI-A")
+	expander := &scriptedExpander{expand: func(request contextfabric.FactScopeExpansionRequest) contextfabric.FactScopeExpansionResult {
+		return contextfabric.FactScopeExpansionResult{
+			Targets:    []contextfabric.SubjectRef{shared},
+			TargetRoot: map[string]contextfabric.SubjectRef{contextfabric.FactSubjectKey(shared): request.Origins[0]},
+			Counts:     contextfabric.FactScopeExpansionCounts{CandidateCount: 1},
+		}
+	}}
+	provider := perSubjectProvider(contextfabric.FactBlockers, contractsv1.ContextFabricSubjectWorkItem, contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject)
+	provider.read = func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		result := contextfabric.FactProviderResult{State: contextfabric.SourceAvailable}
+		for _, subject := range query.Subjects {
+			result.Facts = append(result.Facts, contextfabric.CanonicalFact{Kind: contextfabric.FactBlockers, Subject: subject, Fields: map[string]contextfabric.FactValue{"n": intValue(1)}})
+		}
+		return result, nil
+	}
+	reader := directExpandingReader(t, graphOfOrgA(), expander, nil, provider)
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"blockers"}, Subjects: []RequestSubject{
+		{Kind: "project", CanonicalID: projectQ.CanonicalID}, {Kind: "team", CanonicalID: teamT.CanonicalID},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expander.requests) != 2 {
+		t.Fatalf("expansions %d, want the project and the team expansion", len(expander.requests))
+	}
+	fact := servedOn(response, "blockers", shared)
+	if fact == nil || len(fact.ReachedFrom) != 2 || fact.ReachedFrom[0].Kind != "project" || fact.ReachedFrom[1].Kind != "team" {
+		t.Fatalf("shared work item %s, want one fact derived from the project and the team", mustJSON(t, response.Facts))
+	}
+	for _, root := range []contextfabric.SubjectRef{projectQ, teamT} {
+		if row := coverageOf(t, response, "blockers", root); row.Outcome != OutcomeFactServed || strings.Contains(row.Reason, "counted under only one") {
+			t.Fatalf("row %+v, want fact_served with no lower-bound note", row)
+		}
+	}
+	if response.Status != StatusComplete {
+		t.Fatalf("status %q, want complete", response.Status)
+	}
+}
+
+// A budget cut that drops a root's derived facts leaves a reason that is
+// still true: it names what the expansion reached, never a served count.
+func TestDirectReadBudgetCutKeepsTheDerivedReasonTrue(t *testing.T) {
+	targets := make([]contextfabric.SubjectRef, 0, 40)
+	for i := 0; i < 40; i++ {
+		targets = append(targets, contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: fmt.Sprintf("work_item.v2:budget-%02d-%s", i, strings.Repeat("x", 60)), Label: strings.Repeat("L", 80)})
+	}
+	expander := &scriptedExpander{expand: expandTo(targets...)}
+	reader := directExpandingReader(t, graphOfOrgA(), expander, nil, perSubjectProvider(contextfabric.FactBlockers, contractsv1.ContextFabricSubjectWorkItem, contractsv1.ContextFabricSubjectTeam))
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"blockers"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}}, MaxBytes: MinMaxBytes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Truncation == nil || response.Truncation.FactsOmitted == 0 {
+		t.Fatalf("truncation %+v, want facts cut by the budget", response.Truncation)
+	}
+	row := coverageOf(t, response, "blockers", teamT)
+	if strings.Contains(row.Reason, "served") || !strings.Contains(row.Reason, "scope expansion reached 40 work items") {
+		t.Fatalf("row %+v: the reason must name what was reached, never a served count the budget changed", row)
 	}
 }

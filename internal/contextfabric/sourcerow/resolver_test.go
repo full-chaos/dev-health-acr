@@ -198,7 +198,11 @@ func assertSourceRowExpansion(t *testing.T, expanded contractsv1.ExpandedEvidenc
 			t.Fatalf("structured[%s] = %v, want %v", key, expanded.Structured[key], want)
 		}
 	}
-	if !strings.HasPrefix(expanded.Excerpt, "citation of ") || expanded.Availability != contractsv1.EvidenceAvailable {
+	wantPrefix := "citation of "
+	if kind == string(contractsv1.ContextFabricEvidenceEntityPullRequest) {
+		wantPrefix = slug + ": PR #"
+	}
+	if !strings.HasPrefix(expanded.Excerpt, wantPrefix) || expanded.Availability != contractsv1.EvidenceAvailable {
 		t.Fatalf("excerpt %q availability %q", expanded.Excerpt, expanded.Availability)
 	}
 }
@@ -696,5 +700,39 @@ func TestSubjectMismatchIsSetOnlyByAMismatchedRow(t *testing.T) {
 	}
 	if _, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, "team", "team-absent"); decision.Reason != contextfabric.SourceRowNoRow || decision.SubjectMismatch {
 		t.Fatalf("absent: %+v", decision)
+	}
+}
+
+func TestPullRequestExcerptNamesRepositoryAndTitleOnlyForAdmittedCaller(t *testing.T) {
+	const locator = "acr:v1:pull-request:7"
+	for _, tc := range []struct {
+		name      string
+		principal storage.Principal
+		served    bool
+	}{
+		{"admitted caller", restricted, true},
+		{"restricted caller without the grant", storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/other"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld()
+			w.repos[grantedID] = grantedRep
+			row := catalogRow("pull_requests.v1", locator, "pull_request", "7", grantedRep)
+			row.Excerpt = "merged"
+			row.Evidence.Source.DisplayLabel = "Rotate deploy keys"
+			w.addRow(grantedID, "pull_requests.v1", locator, row)
+			expanded, decision := resolver(t, w).ResolveSourceRow(context.Background(), tc.principal, "pull-request", grantedID+":7")
+			if got := decision.Reason == contextfabric.SourceRowServed; got != tc.served {
+				t.Fatalf("served = %v, want %v (%+v)", got, tc.served, decision)
+			}
+			if !tc.served {
+				if strings.Contains(expanded.Excerpt, "Rotate deploy keys") || strings.Contains(expanded.Excerpt, grantedRep) {
+					t.Fatalf("a refused row leaked %q", expanded.Excerpt)
+				}
+				return
+			}
+			if want := grantedRep + ": PR #7 Rotate deploy keys (merged)"; expanded.Excerpt != want {
+				t.Fatalf("excerpt = %q, want %q", expanded.Excerpt, want)
+			}
+		})
 	}
 }

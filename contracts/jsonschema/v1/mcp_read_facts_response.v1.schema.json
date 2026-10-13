@@ -507,7 +507,7 @@
           "items": {
             "$ref": "#/$defs/ReachedFrom"
           },
-          "description": "Set on a fact whose subject was reached by scope expansion from requested subjects (for example a work item of a requested team, or a repository of a requested project): names the requested subject the expansion attributed it to and the basis of the path. A subject several requested subjects of one kind reach is attributed to one of them; their coverage rows say so. A path shows relevance, not cause."
+          "description": "Set on a fact whose subject was reached by scope expansion from requested subjects (for example a work item of a requested team, or a repository of a requested project): names the requested subject the expansion attributed it to and the basis of the path. A subject several requested subjects reach is attributed to one of them; their coverage rows say so. A path shows relevance, not cause."
         },
         "withheld": {
           "type": "array",
