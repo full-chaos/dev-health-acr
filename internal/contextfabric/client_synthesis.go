@@ -232,7 +232,7 @@ func (e *Engine) runClientSynthesis(ctx context.Context, principal storage.Princ
 // the bound, reduces the facts and builds it again. It returns the input the
 // bytes were built from, so a later change can check a caller's draft
 // against the same facts.
-func (r RuntimeAnswerSynthesizer) encodeWithinInputBound(ctx context.Context, principal storage.Principal, input SynthesisInput, encode func(string, SynthesisInput, int) ([]byte, error), maxBytes int) (given SynthesisInput, encoded []byte, bound *synthesisInputBound, err error) {
+func (r RuntimeAnswerSynthesizer) encodeWithinInputBound(ctx context.Context, principal storage.Principal, input SynthesisInput, encode func(string, SynthesisInput, int) ([]byte, error), maxBytes, widenTo int) (given SynthesisInput, encoded []byte, bound *synthesisInputBound, err error) {
 	given = input
 	var event SynthesisInputBoundEvent
 	ranking := newFactRanking(input)
@@ -257,6 +257,20 @@ func (r RuntimeAnswerSynthesizer) encodeWithinInputBound(ctx context.Context, pr
 			event.Selection = selection
 		}
 		if !reduced || event.Passes == maxSynthesisInputBoundPasses {
+			if widenTo > maxBytes && overflow.Bytes <= widenTo {
+				// The smallest input is above its preferred share of the
+				// caller's budget but, with its envelope and the answer floor,
+				// fits the budget: serve it whole and say so.
+				if widened, widenErr := encode(principal.OrgID, given, widenTo); widenErr == nil {
+					event.Outcome = SynthesisInputBoundShareExceeded
+					event.InputBytes, event.MaxInputBytes = overflow.Bytes, maxBytes
+					r.recordSynthesisInputBound(ctx, principal, event, input, given)
+					if event.Passes > 0 {
+						return given, widened, newSynthesisInputBound(input.Facts.Facts, given.Facts.Facts), nil
+					}
+					return given, widened, nil, nil
+				}
+			}
 			event.Outcome = SynthesisInputBoundExhausted
 			r.recordSynthesisInputBound(ctx, principal, event, input, given)
 			return given, nil, nil, err
@@ -305,7 +319,7 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 	if err != nil {
 		return InvestigationResult{}, nil, measure, clientSynthesisBudgetRefusal(err, 0)
 	}
-	given, encoded, bound, err := r.encodeWithinInputBound(ctx, principal, input, assembly.Encode, maxBytes)
+	given, encoded, bound, err := r.encodeWithinInputBound(ctx, principal, input, assembly.Encode, maxBytes, assembly.widenedInputBound(budget, maxBytes))
 	if maxBytes < assembly.MaxBytes && err != nil {
 		envelope, envelopeErr := assembly.envelopeBytes()
 		if envelopeErr != nil {
@@ -636,6 +650,29 @@ func (a *ClientSynthesisAssembly) inputBoundWithin(budget int) (int, error) {
 		return 0, &ModelInputOverflow{Bytes: envelope, MaxBytes: clientSynthesisBodyShare(budget)}
 	}
 	return min(a.MaxBytes, share), nil
+}
+
+// ClientSynthesisAnswerFloorBytes is the least the answer takes of the body
+// beside a synthesis input: the smallest served answer of a one-subject turn
+// with no facts measured 4019 bytes of body beyond its input (see
+// TestClientSynthesisAnswerFloorCoversTheSmallestServedAnswer, which fails when
+// a served answer needs more). The exact answer is still fitted by the stage-3
+// path, which refuses typed when its smallest form does not fit.
+const ClientSynthesisAnswerFloorBytes = 4096
+
+// widenedInputBound is the largest the synthesis input may be when it cannot
+// be cut to its preferred share of the caller's budget (maxBytes): what the
+// budget leaves after the envelope and the answer floor. Zero means no
+// widening: no caller budget, or no room.
+func (a *ClientSynthesisAssembly) widenedInputBound(budget, maxBytes int) int {
+	if budget <= 0 || maxBytes >= a.MaxBytes {
+		return 0
+	}
+	envelope, err := a.envelopeBytes()
+	if err != nil {
+		return 0
+	}
+	return min(a.MaxBytes, budget-envelope-ClientSynthesisAnswerFloorBytes)
 }
 
 // envelopeBytes is what the synthesis input costs in the body beyond its own
