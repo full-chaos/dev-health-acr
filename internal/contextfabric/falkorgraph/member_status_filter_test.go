@@ -183,7 +183,7 @@ func TestProjectAndIncidentMembersAreFilteredByTheStatedStatus(t *testing.T) {
 			if got := servedMemberIDs(result); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("served %s = %v, want %v", tc.kind, got, tc.want)
 			}
-			if want := (contextfabric.MemberStatusOutsideSet{Kind: tc.kind, Count: tc.outside}); result.MemberStatusOutsideSet != want {
+			if want := (contextfabric.MemberStatusOutsideSet{Kind: tc.kind, Count: tc.outside, Filtered: true, Reached: true}); result.MemberStatusOutsideSet != want {
 				t.Fatalf("outside the known set = %+v, want %+v", result.MemberStatusOutsideSet, want)
 			}
 			// Projects are the team's own reach: the member read carries the
@@ -276,7 +276,7 @@ func TestMemberStatusCountsOnlyTheMembersTheCallerMayRead(t *testing.T) {
 	if got, want := servedMemberIDs(result), []string{"incident:readable-open"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("served incidents = %v, want %v", got, want)
 	}
-	if want := (contextfabric.MemberStatusOutsideSet{Kind: contextfabric.SubjectIncident, Count: 1}); result.MemberStatusOutsideSet != want {
+	if want := (contextfabric.MemberStatusOutsideSet{Kind: contextfabric.SubjectIncident, Count: 1, Filtered: true, Reached: true}); result.MemberStatusOutsideSet != want {
 		t.Fatalf("outside the known set = %+v, want %+v: the count must not include incidents the caller cannot read", result.MemberStatusOutsideSet, want)
 	}
 	if len(telemetry.pullRequestStatusFilters) != 1 || telemetry.pullRequestStatusFilters[0].Candidates != 2 {
