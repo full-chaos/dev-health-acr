@@ -197,7 +197,7 @@ const maxFactRowsPerQueryForTest = 200
 func blockerRows(n int) [][]any {
 	rows := make([][]any, n)
 	for i := 0; i < n; i++ {
-		rows[i] = []any{"blocker-" + strconv.Itoa(i), "WIDGET-101", "repo-1", "repo-1", uint64(1)}
+		rows[i] = []any{"blocker-" + strconv.Itoa(i), "WIDGET-101", "blocks", "repo-1", "repo-1", uint64(1)}
 	}
 	return rows
 }
@@ -515,7 +515,7 @@ func TestBlockerStatementsSelectEverySpellingAndNeverDoubleCount(t *testing.T) {
 	}
 	blockers, children := client.queries[0].statement, client.queries[1].statement
 	pred := dependencyrelation.KeySQL("d.relationship_type") + " IN ('" + dependencyrelation.Key("blocks") + "', '" + dependencyrelation.Key("blocked_by") + "')"
-	if !strings.Contains(blockers, pred) || strings.Contains(blockers, "lower(ifNull(d.relationship_type, '')) = 'blocks'") {
+	if !strings.Contains(blockers, dependencyrelation.KeySQL("r.relationship_type")+" AS rk") || !strings.Contains(blockers, "x.rk IN ('"+dependencyrelation.Key("blocks")+"', '"+dependencyrelation.Key("blocked_by")+"')") || strings.Contains(blockers, "lower(ifNull(d.relationship_type, '')) = 'blocks'") {
 		t.Fatalf("blockers statement does not select by the shared spelling map:\n%s", blockers)
 	}
 	if !strings.Contains(children, "NOT ("+pred+")") {
