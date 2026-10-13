@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 903e4636048fab4aad554495a515be874607ceaada6f0a02098113d72fd617e6
+# canonical-content-sha256: 3b9e8f3760dd18479562f0b0b333420645b2612b9c2b780426d66e58bed7d0f2
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1545,7 +1545,6 @@ components:
         - "query"
       type: "object"
     DataGraphQLResponse:
-      additionalProperties: false
       properties:
         call:
           enum:
@@ -1575,7 +1574,6 @@ components:
           type: "object"
         errors:
           items:
-            additionalProperties: false
             properties:
               class:
                 enum:
@@ -1621,7 +1619,6 @@ components:
             type: "object"
           type: "array"
         page:
-          additionalProperties: false
           properties:
             max_bytes:
               type: "integer"
@@ -1632,7 +1629,6 @@ components:
             - "max_bytes"
           type: "object"
         refusal:
-          additionalProperties: false
           properties:
             code:
               enum:
@@ -1675,7 +1671,6 @@ components:
             - "reason"
           type: "object"
         request:
-          additionalProperties: false
           properties:
             max_bytes:
               type: "integer"
@@ -1689,7 +1684,6 @@ components:
             - "empty_declared"
         root_fields:
           items:
-            additionalProperties: false
             properties:
               added_paths:
                 items:
@@ -1710,7 +1704,6 @@ components:
                   - "disclosure_absent"
                   - "limit_not_sent"
               effective_scope:
-                additionalProperties: false
                 properties:
                   forced_by_grant:
                     type: "boolean"
@@ -1738,7 +1731,6 @@ components:
             type: "object"
           type: "array"
         source:
-          additionalProperties: false
           properties:
             listener:
               const: "mcp"
@@ -1757,7 +1749,6 @@ components:
             - "schema_digest"
           type: "object"
         untrusted_content:
-          additionalProperties: false
           properties:
             fields:
               items:

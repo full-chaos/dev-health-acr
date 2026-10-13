@@ -2787,8 +2787,7 @@
                   "unknown"
                 ]
               }
-            },
-            "additionalProperties": false
+            }
           },
           "source": {
             "type": "object",
@@ -2814,8 +2813,7 @@
               "query_digest": {
                 "type": "string"
               }
-            },
-            "additionalProperties": false
+            }
           },
           "data": {
             "type": "object",
@@ -2876,8 +2874,7 @@
                   "maxLength": 512,
                   "description": "The upstream GraphQL error path, dot-joined; untrusted upstream text. Present with class graphql_errors."
                 }
-              },
-              "additionalProperties": false
+              }
             }
           },
           "page": {
@@ -2893,8 +2890,7 @@
               "max_bytes": {
                 "type": "integer"
               }
-            },
-            "additionalProperties": false
+            }
           },
           "consistency": {
             "const": "best_effort"
@@ -2915,8 +2911,7 @@
                   "type": "string"
                 }
               }
-            },
-            "additionalProperties": false
+            }
           },
           "request": {
             "type": "object",
@@ -2927,8 +2922,7 @@
               "max_bytes": {
                 "type": "integer"
               }
-            },
-            "additionalProperties": false
+            }
           },
           "root_fields": {
             "type": "array",
@@ -2986,8 +2980,7 @@
                     "forced_by_grant": {
                       "type": "boolean"
                     }
-                  },
-                  "additionalProperties": false
+                  }
                 },
                 "added_paths": {
                   "type": "array",
@@ -2995,12 +2988,10 @@
                     "type": "string"
                   }
                 }
-              },
-              "additionalProperties": false
+              }
             }
           }
-        },
-        "additionalProperties": false
+        }
       }
     },
     "securitySchemes": {
