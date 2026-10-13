@@ -54,7 +54,7 @@ func requestedRepositoryReach(refs string) string {
 // (window, unit, repository), with n and the unresolved columns taken over
 // the unit's whole reference set.
 func requestedSplitRows(memberships []string, spanSentinel bool, scope membershipScope, unitColumns bool) string {
-	return foldedSplitRows(memberships, spanSentinel, scope, requestedRepositoryReach, unitColumns, "")
+	return foldedSplitRows(memberships, spanSentinel, scope, unitColumns, "")
 }
 
 // linkedPullRequestSplitRows returns, per window, kept work unit and
@@ -64,28 +64,30 @@ func requestedSplitRows(memberships []string, spanSentinel bool, scope membershi
 // reference as well, for those pull requests. linked is an Array(Tuple(String, String, String)) expression
 // of (repository id, PR number, team id).
 func linkedPullRequestSplitRows(memberships []string, scope membershipScope, linked string) string {
-	return foldedSplitRows(memberships, false, scope, linkedPullRequestReach(linked), false, linked)
+	return foldedSplitRows(memberships, false, scope, false, linked)
 }
 
 // linkedPullRequestReach is true when one of refs resolves to a linked
 // (repository, pull request): a direct repository id with its number, or a
 // (provider, name, number) lookup equal to a linked repository's own lookup
 // row with the linked number.
-func linkedPullRequestReach(linked string) func(string) string {
-	return func(refs string) string {
-		return `(hasAny(arrayMap(r -> (r.1, r.4), arrayFilter(r -> r.1 != '', ` + refs + `)), arrayMap(x -> (x.1, x.2), ` + linked + `))
+func linkedPullRequestReach(linked, refs string) string {
+	return `(hasAny(arrayMap(r -> (r.1, r.4), arrayFilter(r -> r.1 != '', ` + refs + `)), arrayMap(x -> (x.1, x.2), ` + linked + `))
 							OR hasAny(arrayMap(r -> (r.2, r.3, r.4), arrayFilter(r -> r.1 = '', ` + refs + `)), (
 						SELECT groupUniqArray((rl.provider, rl.repo, lx.lp_pr)) FROM (
 							SELECT arrayJoin(` + linked + `) AS lp, lp.1 AS lp_repo, lp.2 AS lp_pr
 						) AS lx
 						INNER JOIN ` + repoLookupRows + ` AS rl ON rl.repo_uuid = lx.lp_repo)))`
-	}
 }
 
 // foldedSplitRows folds each kept unit's references once (see the top of this
-// file). reach decides which units are kept. With linked empty the rows are
-// per requested repository; otherwise per linked (repository, pull request).
-func foldedSplitRows(memberships []string, spanSentinel bool, scope membershipScope, reach func(string) string, unitColumns bool, linked string) string {
+// file). With linked empty a unit is kept and expanded per requested
+// repository; otherwise per linked (repository, pull request).
+func foldedSplitRows(memberships []string, spanSentinel bool, scope membershipScope, unitColumns bool, linked string) string {
+	reaches := requestedRepositoryReach(repoRefsExpression)
+	if linked != "" {
+		reaches = linkedPullRequestReach(linked, repoRefsExpression)
+	}
 	wins := "arrayFilter(w -> w >= 0, [" + strings.Join(memberships, ", ") + "])"
 	if spanSentinel {
 		wins = "arrayConcat([" + spanSentinelWindow + "], " + wins + ")"
@@ -141,7 +143,7 @@ FROM (
 						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, effort_value, theme_distribution_json,
 							ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS unit_bugfix_share,
 							` + prRefsExpression + ` AS pr_refs,
-							` + reach(repoRefsExpression) + ` AS reaches
+							` + reaches + ` AS reaches
 						FROM work_unit_investments
 						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
 					)
