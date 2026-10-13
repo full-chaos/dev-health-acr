@@ -82,7 +82,7 @@ func TestCatalogSourceQueries_useTruthfulIdentityFallbacksForOptionalText(t *tes
 		{"work_items.v1", "if(lengthUTF8(ifNull(title, '')) BETWEEN 1 AND 1000, ifNull(title, ''), concat('work item ', work_item_id)) display_label"},
 		{"work_item_dependencies.v1", "if(lengthUTF8(ifNull(d.relationship_type_raw, '')) BETWEEN 1 AND 2000, ifNull(d.relationship_type_raw, ''), concat('dependency=', d.source_work_item_id, ':', d.target_work_item_id)) citation"},
 		{"git_commit_files.v1", "if(lengthUTF8(ifNull(c.file_path, '')) BETWEEN 1 AND 1000, ifNull(c.file_path, ''), concat('commit file ', c.commit_hash)) display_label"},
-		{"pull_requests.v1", "if(lengthUTF8(ifNull(p.state, '')) BETWEEN 1 AND 2000, ifNull(p.state, ''), concat('PR #', toString(p.number))) citation"},
+		{"pull_requests.v1", "concat('PR #', toString(p.number), if(lengthUTF8(ifNull(p.title, '')) BETWEEN 1 AND 1000, concat(' ', substringUTF8(p.title, 1, 600)), ''), if(lengthUTF8(ifNull(p.state, '')) BETWEEN 1 AND 100, concat(' (', p.state, ')'), '')) citation"},
 		{"pull_request_reviews.v1", "if(lengthUTF8(ifNull(r.state, '')) BETWEEN 1 AND 2000, ifNull(r.state, ''), concat('review_id=', r.review_id)) citation"},
 		{"ci_pipeline_runs.v1", "if(lengthUTF8(ifNull(c.status, '')) BETWEEN 1 AND 2000, ifNull(c.status, ''), concat('run_id=', c.run_id)) citation"},
 		{"work_graph.v1", "if(lengthUTF8(ifNull(evidence, '')) BETWEEN 1 AND 2000, ifNull(evidence, ''), concat('edge_id=', edge_id)) citation"},

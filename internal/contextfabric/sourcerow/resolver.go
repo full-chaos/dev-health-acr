@@ -430,7 +430,11 @@ func (r *Resolver) readTargets(ctx context.Context, principal storage.Principal,
 // the current source row.
 func (r *Resolver) expand(ctx context.Context, entityType, entityID string, row found) (contractsv1.ExpandedEvidence, error) {
 	evidence := row.reference.Evidence
-	expanded, err := r.expander.Expand(ctx, contextpacket.EvidenceExpansionInput{Evidence: evidence, Excerpt: row.reference.Excerpt})
+	excerpt := row.reference.Excerpt
+	if entityType == string(contractsv1.ContextFabricEvidenceEntityPullRequest) && row.target.scope.RepoID != zeroRepositoryID && strings.TrimSpace(row.target.scope.RepoSlug) != "" {
+		excerpt = row.target.scope.RepoSlug + ": " + excerpt
+	}
+	expanded, err := r.expander.Expand(ctx, contextpacket.EvidenceExpansionInput{Evidence: evidence, Excerpt: excerpt})
 	if err != nil {
 		return contractsv1.ExpandedEvidence{}, fmt.Errorf("expand source row: %w", err)
 	}
