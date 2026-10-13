@@ -26,19 +26,20 @@ const linkedMixTeamChunk = 100
 func linkedPullRequestMixStatement(bound factTimeBound, scope membershipScope, limit int) string {
 	memberships := []string{fmt.Sprintf("if(%s, 0, -1)", mixWindowPredicate(0, bound))}
 	linked := linkedPullRequestsOf(bound)
-	return withRowLimitOf(`SELECT team_id,
-	uniqExact(repo_uuid) AS repos,
-	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
-	sum(bugfix_share * effort) AS bugfix_effort
+	return withRowLimitOf(`SELECT lr.team_id AS team_id,
+	uniqExact(m.repo_uuid) AS repos,
+	sumMap(mapApply((k, v) -> (k, v * m.effort), m.theme_distribution_json)) AS theme_effort,
+	sum(m.bugfix_share * m.effort) AS bugfix_effort
 FROM (
-	SELECT repo_uuid, c / n * effort_value AS effort, theme_distribution_json, bugfix_share,
-		arrayJoin(arrayMap(x -> x.3, arrayFilter(x -> x.1 = repo_uuid AND x.2 = pr_number, `+linked+`))) AS team_id
+	SELECT repo_uuid, pr_number, c / n * effort_value AS effort, theme_distribution_json, bugfix_share
 	FROM (
 `+linkedPullRequestSplitRows(memberships, scope, linked)+`	)
-)
-WHERE (team_id, repo_uuid) NOT IN (SELECT team_id, repo_key FROM `+ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound))+`)
-GROUP BY team_id
-ORDER BY team_id`, limit)
+) AS m
+INNER JOIN (SELECT l.1 AS pr_repo, l.2 AS pr_num, l.3 AS team_id FROM (SELECT arrayJoin(`+linked+`) AS l)) AS lr
+	ON m.repo_uuid = lr.pr_repo AND m.pr_number = lr.pr_num
+WHERE (lr.team_id, m.repo_uuid) NOT IN (SELECT team_id, repo_key FROM `+ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound))+`)
+GROUP BY lr.team_id
+ORDER BY lr.team_id`, limit)
 }
 
 // linkedPullRequestsOf is the distinct (repository id, PR number, team id) of

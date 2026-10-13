@@ -22,17 +22,28 @@ import (
 // id, or a (provider, name) lookup equal to a requested repository's own
 // lookup row.
 // requestedRepositories are the rows requestedSplitRows expands: the
-// resolved repositories of a unit's references that are in {ids}.
-const requestedRepositories = "arrayFilter(x -> x != '' AND has({ids:Array(String)}, x), arrayDistinct(arrayMap(p -> p.1, pairs)))"
+// resolved repositories of a unit's references that are in {ids}. Bound arrays
+// stay outside every lambda: a constant a lambda reads is copied per element.
+const requestedRepositories = "arrayFilter(x -> x != '', arrayIntersect(arrayDistinct(arrayMap(p -> p.1, pairs)), {ids:Array(String)}))"
 
-const requestedRepositoryReach = `if(r.1 != '', has({ids:Array(String)}, r.1), has((
+// requestedRepositoryLookups are the (provider, name) lookup rows of the
+// repositories in {ids}.
+const requestedRepositoryLookups = `(
 						SELECT groupArray((provider, repo)) FROM (
 							SELECT argMax(repo, last_synced) AS repo,
 								if(uniqExact(provider) = 1, argMax(provider, last_synced), '') AS provider
 							FROM repos
 							WHERE org_id = {org_id:String} AND toString(id) IN {ids:Array(String)}
 							GROUP BY id
-						)), (r.2, r.3)))`
+						))`
+
+// requestedRepositoryReach is true when one of refs reaches a repository in
+// {ids} by the rule repoLookupJoin applies: a direct repository id, or a
+// (provider, name) lookup equal to a requested repository's own lookup row.
+func requestedRepositoryReach(refs string) string {
+	return `(hasAny(arrayMap(r -> r.1, arrayFilter(r -> r.1 != '', ` + refs + `)), {ids:Array(String)})
+							OR hasAny(arrayMap(r -> (r.2, r.3), arrayFilter(r -> r.1 = '', ` + refs + `)), ` + requestedRepositoryLookups + `))`
+}
 
 // requestedSplitRows returns, per window, kept work unit and requested
 // repository: win, work_unit_id, repo_uuid, c, n, effort_value,
@@ -56,22 +67,25 @@ func linkedPullRequestSplitRows(memberships []string, scope membershipScope, lin
 	return foldedSplitRows(memberships, false, scope, linkedPullRequestReach(linked), false, linked)
 }
 
-// linkedPullRequestReach is true for a reference r that resolves to a linked
+// linkedPullRequestReach is true when one of refs resolves to a linked
 // (repository, pull request): a direct repository id with its number, or a
 // (provider, name, number) lookup equal to a linked repository's own lookup
 // row with the linked number.
-func linkedPullRequestReach(linked string) string {
-	return `if(r.1 != '', has(arrayMap(x -> (x.1, x.2), ` + linked + `), (r.1, r.4)), has((
+func linkedPullRequestReach(linked string) func(string) string {
+	return func(refs string) string {
+		return `(hasAny(arrayMap(r -> (r.1, r.4), arrayFilter(r -> r.1 != '', ` + refs + `)), arrayMap(x -> (x.1, x.2), ` + linked + `))
+							OR hasAny(arrayMap(r -> (r.2, r.3, r.4), arrayFilter(r -> r.1 = '', ` + refs + `)), (
 						SELECT groupUniqArray((rl.provider, rl.repo, lx.lp_pr)) FROM (
 							SELECT arrayJoin(` + linked + `) AS lp, lp.1 AS lp_repo, lp.2 AS lp_pr
 						) AS lx
-						INNER JOIN ` + repoLookupRows + ` AS rl ON rl.repo_uuid = lx.lp_repo), (r.2, r.3, r.4)))`
+						INNER JOIN ` + repoLookupRows + ` AS rl ON rl.repo_uuid = lx.lp_repo)))`
+	}
 }
 
 // foldedSplitRows folds each kept unit's references once (see the top of this
 // file). reach decides which units are kept. With linked empty the rows are
 // per requested repository; otherwise per linked (repository, pull request).
-func foldedSplitRows(memberships []string, spanSentinel bool, scope membershipScope, reach string, unitColumns bool, linked string) string {
+func foldedSplitRows(memberships []string, spanSentinel bool, scope membershipScope, reach func(string) string, unitColumns bool, linked string) string {
 	wins := "arrayFilter(w -> w >= 0, [" + strings.Join(memberships, ", ") + "])"
 	if spanSentinel {
 		wins = "arrayConcat([" + spanSentinelWindow + "], " + wins + ")"
@@ -85,7 +99,7 @@ func foldedSplitRows(memberships []string, spanSentinel bool, scope membershipSc
 	countEqual(pairs, (rp.1, concat(rp.1, '#', rp.2))) AS c, length(pairs) AS n,`
 		unitAgg = `
 		groupUniqArray((ref_repo, pr_number)) AS repo_prs,`
-		expand = "ARRAY JOIN arrayFilter(x -> x.1 != '' AND has(arrayMap(l -> (l.1, l.2), " + linked + "), x), repo_prs) AS rp"
+		expand = "ARRAY JOIN arrayFilter(x -> x.1 != '', arrayIntersect(repo_prs, arrayMap(l -> (l.1, l.2), " + linked + "))) AS rp"
 	}
 	if unitColumns {
 		rowCols = `,
@@ -112,7 +126,7 @@ FROM (
 			parsed.theme_distribution_json AS theme_distribution_json, parsed.bugfix_share AS bugfix_share,
 			parsed.span_from AS span_from, parsed.from_ts AS from_ts, parsed.to_ts AS to_ts, parsed.wins AS wins,
 			parsed.pr_number AS pr_number, parsed.ref_text AS ref_text,
-			if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')) AS ref_repo
+			ifNull(if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')), '') AS ref_repo
 		FROM (
 			SELECT work_unit_id, effort_value, theme_distribution_json, bugfix_share, from_ts AS span_from, from_ts, to_ts, wins,
 				ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
@@ -127,7 +141,7 @@ FROM (
 						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, effort_value, theme_distribution_json,
 							ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS unit_bugfix_share,
 							` + prRefsExpression + ` AS pr_refs,
-							arrayExists(r -> ` + reach + `, ` + repoRefsExpression + `) AS reaches
+							` + reach(repoRefsExpression) + ` AS reaches
 						FROM work_unit_investments
 						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
 					)

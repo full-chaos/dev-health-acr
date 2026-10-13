@@ -195,13 +195,13 @@ func InvestmentSplitStatementPairs(start, end time.Time, unitLimit int) []SplitS
 func ReachDefects(statement string) map[string][2]string {
 	if statement == "team linked pull request mix" {
 		return map[string][2]string{
-			"direct references dropped": {"(r.1, r.4))", "(r.1, r.4)) AND 0"},
-			"lookup references dropped": {"(r.2, r.3, r.4)))", "(r.2, r.3, r.4)) AND 0)"},
+			"direct references dropped": {"(hasAny(arrayMap(r -> (r.1, r.4),", "(0 AND hasAny(arrayMap(r -> (r.1, r.4),"},
+			"lookup references dropped": {"OR hasAny(arrayMap(r -> (r.2, r.3, r.4),", "OR 0 AND hasAny(arrayMap(r -> (r.2, r.3, r.4),"},
 		}
 	}
 	return map[string][2]string{
-		"direct and fallback references dropped": {"has({ids:Array(String)}, r.1)", "0"},
-		"lookup references dropped":              {"(r.2, r.3)))", "(r.2, r.3)) AND 0)"},
+		"direct and fallback references dropped": {"(hasAny(arrayMap(r -> r.1,", "(0 AND hasAny(arrayMap(r -> r.1,"},
+		"lookup references dropped":              {"OR hasAny(arrayMap(r -> (r.2, r.3),", "OR 0 AND hasAny(arrayMap(r -> (r.2, r.3),"},
 	}
 }
 

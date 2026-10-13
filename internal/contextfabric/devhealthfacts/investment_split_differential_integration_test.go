@@ -234,6 +234,19 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 		slices.Sort(out)
 		return out
 	}
+	columnTypes := func(name, statement string, ids []string, bindings []readers.Binding) string {
+		t.Helper()
+		var out string
+		err := readers.QueryOrgScopedNamed(ctx, query, "SplitDifferential", "SELECT toTypeName(tuple(*)) FROM (\n"+statement+"\n) LIMIT 1", splitDiffOrg, ids,
+			func(row readers.RowScanner) error { return row.Scan(&out) }, bindings...)
+		if err != nil {
+			t.Fatalf("%s: column types: %v: %s", name, err, readFailureCause(err))
+		}
+		if out == "" {
+			t.Fatalf("%s: column types: no row", name)
+		}
+		return out
+	}
 	idsFor := map[string][]string{
 		"repository mix":               requested,
 		"repository unit listing":      requested,
@@ -256,6 +269,9 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 			}
 			continue
 		}
+		if oldTypes, newTypes := columnTypes(p.Name+" (old)", p.Old, ids, p.Bindings), columnTypes(p.Name+" (new)", p.New, ids, p.Bindings); withoutNullable(oldTypes) != newTypes {
+			t.Errorf("%s: column types differ from the old statement: old %v, new %v", p.Name, oldTypes, newTypes)
+		}
 		old := rows(p.Name+" (old)", p.Old, ids, p.Bindings)
 		got := rows(p.Name+" (new)", p.New, ids, p.Bindings)
 		if len(old) < 2 {
@@ -275,4 +291,13 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 			}
 		}
 	}
+}
+
+// withoutNullable reads a top-level Nullable(String) column of a row type as
+// String: the old statements typed repository ids Nullable(String) though
+// they are never NULL, and both scan into a Go string. A Nullable nested in
+// an array is kept: it does not scan into a Go []string.
+func withoutNullable(rowType string) string {
+	rowType = strings.ReplaceAll(rowType, ", Nullable(String)", ", String")
+	return strings.Replace(rowType, "Tuple(Nullable(String)", "Tuple(String", 1)
 }

@@ -55,7 +55,7 @@ func TestRepoMixStatementEmbedsTheSharedSplit(t *testing.T) {
 	if !strings.Contains(investmentUnitsStatement(factTimeBound{}, false), requestedSplitRows(window, false, subqueryMembershipScope, true)) {
 		t.Fatal("the unit statement does not embed the requested split")
 	}
-	if strings.Contains(investmentOrgUnitsStatement(factTimeBound{}, false, subqueryMembershipScope), requestedRepositoryReach) {
+	if strings.Contains(investmentOrgUnitsStatement(factTimeBound{}, false, subqueryMembershipScope), requestedRepositoryLookups) {
 		t.Fatal("the organization unit statement is limited to requested repositories")
 	}
 }
