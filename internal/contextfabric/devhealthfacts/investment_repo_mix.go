@@ -114,10 +114,12 @@ func repoMixStatement(bounds []factTimeBound) string {
 // default, so those reads carry their own limit. The CI fixture needs far
 // more: TestThemeMixReadsScanWorkUnitInvestmentsOnceAgainstRealClickHouse
 // reached 288.76 MiB (and failed at 256 MiB), so the limit is 512 MiB.
-// Temporary: the statement shape is to be brought under the default and this
-// override removed.
+// This is a safety ceiling, not a fit: the statement's memory grows with org
+// units x refs (prod 124.4 MiB, CI fixture 288.76 MiB, 359 MiB measured at 12k
+// units x 14 refs), so no fixed number fits until its query shape is fixed
+// (CHAOS-9473); this override is then removed.
 //
-// memory-limit-measured: 288.76 MiB 2026-10-13 CI fixture TestThemeMixReadsScanWorkUnitInvestmentsOnceAgainstRealClickHouse (prod 124.4 MiB hash 1024715550238946426)
+// memory-limit-measured: 288.76 MiB 2026-10-13 CI fixture TestThemeMixReadsScanWorkUnitInvestmentsOnceAgainstRealClickHouse (prod 124.4 MiB hash 1024715550238946426; unbounded by org size until CHAOS-9473)
 const investmentSplitMaxMemoryUsage = uint64(512 << 20)
 
 func withInvestmentSplitMemory(statement string) string {
