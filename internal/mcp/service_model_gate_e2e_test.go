@@ -48,11 +48,20 @@ func TestServiceModelRefusalAtTheToolBoundaryLeavesTheDataToolsOpen(t *testing.T
 		{"question": "which teams need attention?", "synthesis": "client"},
 	} {
 		result, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "investigate_question", Arguments: args})
-		if err == nil && (result == nil || !result.IsError) {
+		if err != nil {
+			t.Fatalf("investigate_question %v reached the client as a protocol error: %v", args, err)
+		}
+		if result == nil || !result.IsError {
 			t.Fatalf("investigate_question %v served", args)
 		}
-		if err != nil && !strings.Contains(err.Error(), "unknown tool") {
-			t.Fatalf("investigate_question %v failed for another reason: %v", args, err)
+		var text string
+		for _, c := range result.Content {
+			if tc, ok := c.(*mcpsdk.TextContent); ok {
+				text += tc.Text
+			}
+		}
+		if !strings.Contains(text, "not enabled for this organization") || !strings.Contains(text, "data_catalog") {
+			t.Fatalf("investigate_question %v refusal text: %q", args, text)
 		}
 	}
 	if n := stack.seam.used.Load(); n != 0 {
