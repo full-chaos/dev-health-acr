@@ -118,21 +118,27 @@ func (f fixedActionFindings) ActionFindings(context.Context, storage.Principal, 
 	return f.result, nil
 }
 
+func dependencyRow(id, relationKey, blocker, status string, at time.Time) contractsv1.EvidenceRef {
+	ref := roleRow(id, "work_item_dependency", id, "dependency "+id, "BLOCKS", at)
+	ref.Metadata = map[string]any{"relation_key": relationKey, "blocker_work_item_id": blocker, "blocker_status": status}
+	return ref
+}
+
 func TestOnlyAnActiveBlockersDependencyIsServedAsPressure(t *testing.T) {
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	evidence := []contractsv1.EvidenceRef{
-		roleRow("ev-wi-open", "work_item", "PAY-12", "Payment retries", "in_progress", at),
-		roleRow("ev-wi-done", "work_item", "PAY-17", "Ledger export", "done", at),
-		roleRow("ev-dep-open", "work_item_dependency", "dep-a", "PAY-12 blocks PAY-13", "BLOCKS", at),
-		roleRow("ev-dep-done", "work_item_dependency", "dep-b", "PAY-17 blocks PAY-18", "BLOCKS", at),
-		roleRow("ev-dep-inv", "work_item_dependency", "dep-c", "PAY-19 blocked_by PAY-12", "BLOCKED_BY", at),
-		roleRow("ev-dep-unk", "work_item_dependency", "dep-d", "OTHER-1 blocks PAY-13", "BLOCKS", at),
-		roleRow("ev-dep-rel", "work_item_dependency", "dep-e", "PAY-12 relates_to PAY-13", "RELATES", at),
+		dependencyRow("ev-dep-open", "blocks:fwd", "PAY-12", "in_progress", at),
+		dependencyRow("ev-dep-inv", "blocks:inv", "PAY-12", "blocked", at),
+		dependencyRow("ev-dep-done", "blocks:fwd", "PAY-17", "done", at),
+		dependencyRow("ev-dep-cancel", "blocks:fwd", "PAY-18", "canceled", at),
+		dependencyRow("ev-dep-outside", "blocks:fwd", "OTHER-1", "", at),
+		dependencyRow("ev-dep-rel", "relates_to:fwd", "", "in_progress", at),
 	}
 	roles, _ := servedRoles(t, evidence)
 	want := map[string]contractsv1.PacketCategory{
 		"ev-dep-open": contractsv1.CategoryPressure, "ev-dep-inv": contractsv1.CategoryPressure,
-		"ev-dep-done": contractsv1.CategoryEvidence, "ev-dep-unk": contractsv1.CategoryEvidence, "ev-dep-rel": contractsv1.CategoryEvidence,
+		"ev-dep-done": contractsv1.CategoryEvidence, "ev-dep-cancel": contractsv1.CategoryEvidence,
+		"ev-dep-outside": contractsv1.CategoryEvidence, "ev-dep-rel": contractsv1.CategoryEvidence,
 	}
 	for id, category := range want {
 		if roles[id] != category {
@@ -191,5 +197,29 @@ func TestUnreadableFindingsServeNoActionAndNameTheReason(t *testing.T) {
 	}
 	if !slices.Contains(packet.Warnings, "action_items_unavailable:"+contextpacket.ActionUnavailableNoGrant) {
 		t.Fatalf("warnings = %v", packet.Warnings)
+	}
+}
+
+func TestOwningTeamWithNoFiredFindingServesNoActionAndNoWarning(t *testing.T) {
+	request := fixtureRequest("req-action-empty", "main", "")
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      []contractsv1.EvidenceRef{roleRow("ev-commit-1", "commit", "abcdef1", "work", "work", time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))},
+	}}
+	options := fixedOptions()
+	options.ActionFindings = fixedActionFindings{}
+	packet, err := contextpacket.NewAssembler(store, options).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	for _, item := range packet.Items {
+		if item.Category == contractsv1.CategoryAction {
+			t.Fatalf("action served with no finding: %s", item.Title)
+		}
+	}
+	for _, warning := range packet.Warnings {
+		if strings.HasPrefix(warning, "action_items_unavailable:") {
+			t.Fatalf("warning %q for an owning team with nothing fired", warning)
+		}
 	}
 }

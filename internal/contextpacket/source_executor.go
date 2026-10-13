@@ -77,7 +77,11 @@ func (e *ClickHouseSourceExecutor) QueryEvidence(ctx context.Context, query Sour
 	}()
 	evidence := []contractsv1.EvidenceRef{}
 	for len(evidence) < sourceEvidenceRowLimit && rows.Next() {
-		ref, scanErr := scanEvidenceRow(rows)
+		scan := scanEvidenceRow
+		if typedEvidenceSources[query.ID] {
+			scan = scanTypedDependencyRow
+		}
+		ref, scanErr := scan(rows)
 		if scanErr != nil {
 			return nil, &sourceExecutionError{phase: SourceQueryPhaseScan, sourceID: query.ID, cause: scanErr}
 		}
@@ -153,5 +157,29 @@ func scanEvidenceRow(rows ClickHouseRowScanner) (contractsv1.EvidenceRef, error)
 		Citation:      citation,
 		ObservedAt:    observedAt.UTC(),
 		Availability:  contractsv1.EvidenceAvailable,
+	}, nil
+}
+
+// typedEvidenceSources are the catalog sources whose statement returns the
+// three typed role columns after the standard ten.
+var typedEvidenceSources = map[string]bool{"work_item_dependencies.v1": true}
+
+func scanTypedDependencyRow(rows ClickHouseRowScanner) (contractsv1.EvidenceRef, error) {
+	var id, system, entityType, entityID, label, safeURI, provenance, citation, relationKey, blockerID, blockerStatus string
+	var confidence float64
+	var observedAt time.Time
+	if err := rows.Scan(&id, &system, &entityType, &entityID, &label, &safeURI, &provenance, &confidence, &citation, &observedAt, &relationKey, &blockerID, &blockerStatus); err != nil {
+		return contractsv1.EvidenceRef{}, err
+	}
+	return contractsv1.EvidenceRef{
+		SchemaVersion: contractsv1.EvidenceRefSchema,
+		EvidenceRefID: id,
+		Source:        contractsv1.EvidenceSource{System: system, EntityType: entityType, EntityID: entityID, DisplayLabel: label, SafeURI: safeURI},
+		Provenance:    provenance,
+		Confidence:    confidence,
+		Citation:      citation,
+		ObservedAt:    observedAt.UTC(),
+		Availability:  contractsv1.EvidenceAvailable,
+		Metadata:      map[string]any{metadataRelationKey: relationKey, metadataBlockerID: blockerID, metadataBlockerStatus: blockerStatus},
 	}, nil
 }

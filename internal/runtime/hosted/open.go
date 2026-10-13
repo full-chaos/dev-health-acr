@@ -159,12 +159,15 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize client address resolver: %w", err))
 	}
+	var actionFindingsGate *directread.SubjectGate
 	assembler := contextpacket.NewAssembler(clickhouse.evidence, contextpacket.Options{
 		Now: request.options.Now, ServiceVersion: request.options.ServiceVersion,
 		MinimumSidecarVersion: request.config.MinimumSidecarVersion, SnapshotStore: postgres.packets,
 		Observer: assemblyObserver, StoreBackend: contextpacket.StoreBackendClickHouse,
-		Tracer:         observability.NewAssemblyTraceBoundary(hooks, nil),
-		ActionFindings: devhealthfacts.NewActionFindingsSource(clickhouse.queryClient),
+		Tracer: observability.NewAssemblyTraceBoundary(hooks, nil),
+		ActionFindings: devhealthfacts.NewActionFindingsSource(clickhouse.queryClient, func(ctx context.Context, principal storage.Principal, teams []contextfabric.SubjectRef) (map[string]bool, error) {
+			return actionFindingsGate.AdmittedTeams(ctx, principal, teams), nil
+		}),
 	})
 	capabilities := api.StaticCapabilitiesProvider{Value: contractsv1.Capabilities{
 		SchemaVersion: contractsv1.CapabilitiesSchema, Service: "dev-health-acr", ServiceVersion: request.options.ServiceVersion,
@@ -242,6 +245,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	}
 	// CHAOS-7071: the direct-read subject gate and fact reader.
 	directReadGate, directFactReader := buildDirectReads(investigator, request.options.Logger)
+	actionFindingsGate = directReadGate
 	// CHAOS-7072 (S1a): data_catalog, find_subjects and run_operation.
 	dataReads, err := buildDataReads(request.config.DataQueryURL(), request.config.DataQueryPath(), request.config.DataGraphQLURL(), request.config.DataQueryTimeout(), investigator, directReadGate, request.options.Logger)
 	if err != nil {

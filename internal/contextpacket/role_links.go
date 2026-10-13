@@ -118,39 +118,32 @@ func newRoleResolver(evidence []contractsv1.EvidenceRef) roleResolver {
 	return resolver
 }
 
+const (
+	metadataRelationKey   = "relation_key"
+	metadataBlockerID     = "blocker_work_item_id"
+	metadataBlockerStatus = "blocker_status"
+)
+
 var closedWorkItemStatuses = map[string]bool{"done": true, "canceled": true, "cancelled": true, "closed": true, "resolved": true}
 
-// activeBlockerRefs returns the dependency rows that state a blocker whose
-// own stored work item is in the same evidence set with a non-closed status.
-// An unknown blocker (not in the set, empty status) is never pressure.
+// activeBlockerRefs returns the dependency rows that state a BLOCKS relation
+// whose blocking work item has a stored, non-closed status. The decision rests
+// on the typed columns the source statement carries (relation key, blocker id,
+// blocker status); an unknown blocker (no stored status) is never pressure.
 func activeBlockerRefs(evidence []contractsv1.EvidenceRef) map[string]bool {
-	status := map[string]string{}
-	for _, ref := range evidence {
-		if ref.Source.EntityType == "work_item" {
-			status[ref.Source.EntityID] = strings.ToLower(strings.TrimSpace(ref.Citation))
-		}
-	}
 	active := map[string]bool{}
 	for _, ref := range evidence {
 		if ref.Source.EntityType != "work_item_dependency" {
 			continue
 		}
-		parts := strings.Fields(ref.Source.DisplayLabel)
-		if len(parts) != 3 {
+		key, _ := ref.Metadata[metadataRelationKey].(string)
+		blocker, _ := ref.Metadata[metadataBlockerID].(string)
+		status, _ := ref.Metadata[metadataBlockerStatus].(string)
+		status = strings.ToLower(strings.TrimSpace(status))
+		if (key != "blocks:fwd" && key != "blocks:inv") || blocker == "" || status == "" || closedWorkItemStatuses[status] {
 			continue
 		}
-		var blocker string
-		switch strings.ToLower(parts[1]) {
-		case "blocks":
-			blocker = parts[0]
-		case "blocked_by", "is_blocked_by":
-			blocker = parts[2]
-		default:
-			continue
-		}
-		if current, known := status[blocker]; known && current != "" && !closedWorkItemStatuses[current] {
-			active[ref.EvidenceRefID] = true
-		}
+		active[ref.EvidenceRefID] = true
 	}
 	return active
 }

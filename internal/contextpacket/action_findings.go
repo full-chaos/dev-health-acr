@@ -15,7 +15,6 @@ const (
 	ActionUnavailableNoOwner    = "owning_team_unknown"
 	ActionUnavailableNoGrant    = "owning_team_not_readable"
 	ActionUnavailableReadFailed = "stored_findings_read_failed"
-	ActionUnavailableNoneFired  = "no_fired_finding_for_owning_team"
 	actionSourceVersion         = "operational_deficiencies.v1"
 )
 

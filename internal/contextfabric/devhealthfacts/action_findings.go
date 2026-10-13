@@ -16,16 +16,22 @@ import (
 // team_repo_ownership; the findings come from the existing provider, so no
 // finding is ever evaluated here.
 //
-// Grant: a team's findings describe every repository the team owns, so they
-// are served only when the caller may read ALL of them. A caller scoped to one
-// repository of a multi-repository team gets none and the closed reason.
+// Grant: the provider holds no per-caller rule, so the decision is the one
+// read_facts takes: the subject gate (directread.SubjectGate) decides each
+// owning team for the caller's principal on every call, injected as a
+// TeamAuthorizer. No decision is cached and no second rule is written here.
 type ActionFindingsSource struct {
-	facts    clickhouseFacts
-	provider *OperationalDeficienciesProvider
+	facts      clickhouseFacts
+	provider   *OperationalDeficienciesProvider
+	authorizer TeamAuthorizer
 }
 
-func NewActionFindingsSource(client contextpacket.ClickHouseQueryClient) *ActionFindingsSource {
-	return &ActionFindingsSource{facts: clickhouseFacts{client: client}, provider: newOperationalDeficienciesProvider(client)}
+// TeamAuthorizer returns the canonical ids of the requested team subjects the
+// principal may read; an error or a nil authorizer fails closed.
+type TeamAuthorizer func(ctx context.Context, principal storage.Principal, teams []contextfabric.SubjectRef) (map[string]bool, error)
+
+func NewActionFindingsSource(client contextpacket.ClickHouseQueryClient, authorizer TeamAuthorizer) *ActionFindingsSource {
+	return &ActionFindingsSource{facts: clickhouseFacts{client: client}, provider: newOperationalDeficienciesProvider(client), authorizer: authorizer}
 }
 
 func (s *ActionFindingsSource) ActionFindings(ctx context.Context, principal storage.Principal, repoID string) (contextpacket.ActionFindingsResult, error) {
@@ -37,39 +43,37 @@ func (s *ActionFindingsSource) ActionFindings(ctx context.Context, principal sto
 		return contextpacket.ActionFindingsResult{}, err
 	}
 	owned := ownedRepositoriesSource(ownershipValidityPredicate(factTimeBound{}))
-	statement := `SELECT team_id, repo_full_name FROM ` + owned + ` AS own
-WHERE team_id IN (SELECT team_id FROM ` + owned + ` AS mine WHERE repo_key = {repo_id:String})
-ORDER BY team_id, repo_full_name`
-	readable := map[string]bool{}
-	var teamIDs []string
+	statement := `SELECT DISTINCT team_id FROM ` + owned + ` AS own WHERE repo_key = {repo_id:String} ORDER BY team_id`
 	rows, queryErr := s.facts.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}, {Name: "repo_id", Value: repoID}})
 	if queryErr != nil {
 		return contextpacket.ActionFindingsResult{}, readFailure("query repository owning teams", queryErr)
 	}
 	defer rows.Close()
+	var requested []contextfabric.SubjectRef
 	for rows.Next() {
-		var teamID, slug string
-		if err := rows.Scan(&teamID, &slug); err != nil {
+		var teamID string
+		if err := rows.Scan(&teamID); err != nil {
 			return contextpacket.ActionFindingsResult{}, readFailure("scan repository owning teams", err)
 		}
-		if _, seen := readable[teamID]; !seen {
-			readable[teamID] = true
-			teamIDs = append(teamIDs, teamID)
-		}
-		if !authorizedForRepository(principal, slug) {
-			readable[teamID] = false
-		}
+		requested = append(requested, contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: teamPrefix + teamID, Label: teamID})
 	}
 	if err := rows.Err(); err != nil {
 		return contextpacket.ActionFindingsResult{}, readFailure("iterate repository owning teams", err)
 	}
-	if len(teamIDs) == 0 {
+	if len(requested) == 0 {
 		return contextpacket.ActionFindingsResult{Reason: contextpacket.ActionUnavailableNoOwner}, nil
 	}
-	subjects := make([]contextfabric.SubjectRef, 0, len(teamIDs))
-	for _, teamID := range teamIDs {
-		if readable[teamID] {
-			subjects = append(subjects, contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: teamPrefix + teamID, Label: teamID})
+	if s.authorizer == nil {
+		return contextpacket.ActionFindingsResult{Reason: contextpacket.ActionUnavailableNoGrant}, nil
+	}
+	admitted, authErr := s.authorizer(ctx, principal, requested)
+	if authErr != nil {
+		return contextpacket.ActionFindingsResult{}, authErr
+	}
+	subjects := make([]contextfabric.SubjectRef, 0, len(requested))
+	for _, subject := range requested {
+		if admitted[subject.CanonicalID] {
+			subjects = append(subjects, subject)
 		}
 	}
 	if len(subjects) == 0 {
@@ -108,9 +112,6 @@ ORDER BY team_id, repo_full_name`
 	sort.Strings(ids)
 	for _, id := range ids {
 		out.Teams = append(out.Teams, *byTeam[id])
-	}
-	if len(out.Teams) == 0 {
-		out.Reason = contextpacket.ActionUnavailableNoneFired
 	}
 	return out, nil
 }

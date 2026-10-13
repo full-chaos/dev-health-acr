@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -260,16 +261,17 @@ func (a *Assembler) actionEvidence(ctx context.Context, principal storage.Princi
 		return nil, ActionUnavailableReadFailed
 	}
 	served := []contractsv1.EvidenceRef{}
+	findingsRead := 0
 	for _, team := range result.Teams {
+		findingsRead += len(team.Findings)
 		if ref, ok := actionFindingEvidence(team, asOf); ok {
 			served = append(served, ref)
 		}
 	}
+	reason := ""
 	if len(served) == 0 {
-		if result.Reason == "" {
-			return nil, ActionUnavailableNoneFired
-		}
-		return nil, result.Reason
+		reason = result.Reason
 	}
-	return served, ""
+	slog.InfoContext(ctx, "context packet action findings", "teams_read", len(result.Teams), "findings_read", findingsRead, "items_served", len(served), "reason", reason)
+	return served, reason
 }
