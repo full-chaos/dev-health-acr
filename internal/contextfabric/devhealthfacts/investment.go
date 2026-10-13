@@ -115,6 +115,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 
 	var mixUnavailable string
 	var projectNoMix, teamsOwningNothing, teamsRequested int
+	var teamLinksUnwindowed bool
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		// CHAOS-6559: a team's investment is ONLY the canonical theme mix
 		// (work_unit_investments via owned repositories). The deprecated
@@ -122,11 +123,12 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		// beside the mix they buried it (the model answered from the day rows
 		// and said no shares existed), and without a mix they stood in for
 		// it. A team with no mix is disclosed as unavailable instead.
-		teamRejected, unavailable, noOwned, scanErr := p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound)
+		teamRejected, unavailable, noOwned, linksUnwindowed, scanErr := p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team theme mix", scanErr)
 		}
 		rejectedCount += teamRejected
+		teamLinksUnwindowed = linksUnwindowed
 		teamsOwningNothing = noOwned
 		teamsRequested = len(teamSubjects) - teamRejected
 		if unavailable > 0 {
@@ -245,6 +247,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if timeBound.active && len(subjectsOfKind(query.Subjects, contextfabric.SubjectTeam)) > 0 {
 		mergeFactReadReason(&result, investmentOwnershipAsSynced)
 	}
+	if teamLinksUnwindowed {
+		mergeFactReadReason(&result, teamProjectLinksUnwindowedReason)
+	}
 	// Every requested subject is checked, with or without a fact: a window
 	// with no overlapping unit serves no fact and must still say the window
 	// starts before the stored history.
@@ -306,10 +311,10 @@ var canonicalInvestmentThemes = [...]string{
 // exactly nothing" rather than "we have no mix to report". Such teams are
 // counted in unavailable so the caller can say so; shapeRejected counts
 // subjects whose id did not have the team shape (CHAOS-5026).
-func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (shapeRejected, unavailable, noOwned int, err error) {
+func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (shapeRejected, unavailable, noOwned int, linksUnwindowed bool, err error) {
 	ids, bySubject, shapeRejected := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
-		return shapeRejected, 0, 0, nil
+		return shapeRejected, 0, 0, false, nil
 	}
 	// CHAOS-6559 (chris ruling 2026-09-24): a team's mix is the SUM of the
 	// mixes of the repositories the team OWNS (team_repo_ownership), each
@@ -323,7 +328,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 	}
 	current, prior, owned, linked, projectTeams, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
 	if err != nil {
-		return shapeRejected, 0, 0, err
+		return shapeRejected, 0, 0, false, err
 	}
 	// A team also reaches repositories through its owned projects' linked
 	// pull requests: those count only their linked pull requests (linked), and
@@ -338,7 +343,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 	if len(projectTeams) > 0 {
 		reachedRepos, reachErr := teamProjectReachedRepositories(ctx, p.facts.client, orgID, projectTeams, timeBound)
 		if reachErr != nil {
-			return shapeRejected, 0, 0, reachErr
+			return shapeRejected, 0, 0, false, reachErr
 		}
 		reachedOnly = reachedOnlyRepositories(reachedRepos, ownedRepos)
 	}
@@ -373,6 +378,17 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		if l, ok := linked[teamID]; ok && l.total() > 0 {
 			fields["attribution_basis"] = contextfabric.StringFactValue(repoMixBasis + "_over_team_repo_ownership_and_project_links")
 			fields["project_reached_repository_count"] = contextfabric.IntegerFactValue(int64(len(reachedOnly[teamID])))
+			if timeBound.active {
+				linksUnwindowed = true
+			}
+			if teamRollupTablesIncluded(len(ids)) {
+				if table, omitted, ok := projectReachedRepositoriesFactValue(reachedOnly[teamID]); ok {
+					fields["project_reached_repositories"] = table
+					if omitted > 0 {
+						fields["project_reached_repositories_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+					}
+				}
+			}
 			weakest := int64(0)
 			for _, repo := range reachedOnly[teamID] {
 				if weakest == 0 || repo.linkRank < weakest {
@@ -395,7 +411,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
-	return shapeRejected, unavailable, noOwned, nil
+	return shapeRejected, unavailable, noOwned, linksUnwindowed, nil
 }
 
 // investmentWatermarkStatement reads the newest computed_at of the org's

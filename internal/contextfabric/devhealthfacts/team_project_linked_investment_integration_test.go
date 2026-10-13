@@ -157,6 +157,21 @@ func TestTeamInvestmentMixCountsProjectLinkedPullRequestsOfUnownedRepositories(t
 		}
 	})
 
+	t.Run("a historical window says the project links are read as they stand now", func(t *testing.T) {
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
+			Time: contractsv1TimeContext(ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 30, 23, 59, 59)), Kind: contextfabric.FactInvestment,
+			Subjects: []contextfabric.SubjectRef{teamSubject("team-project-only")},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts: %v", err)
+		}
+		fact := factFor(t, result, teamSubject("team-project-only"))
+		want(t, weighted(fact), map[string]float64{"feature_delivery": 10, "risk": 4})
+		if !strings.Contains(result.Reason, "link rows carry no validity window") {
+			t.Fatalf("reason = %q, want the unwindowed-links limitation", result.Reason)
+		}
+	})
+
 	t.Run("a team with neither ownership nor project is told so", func(t *testing.T) {
 		result := read("team-nothing")
 		if len(result.Facts) != 0 || !strings.Contains(result.Reason, "owns no repository") {

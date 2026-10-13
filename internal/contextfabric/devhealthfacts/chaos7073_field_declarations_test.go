@@ -70,6 +70,10 @@ func investmentFieldsNotExercised() map[string]string {
 	const reason = "project reach, exercised by team_project_linked_investment_integration_test.go"
 	out["team:project_reached_repository_count"] = reason
 	out["team:repository_link_basis"] = reason
+	out["team:project_reached_repositories_omitted_count"] = reason
+	for _, name := range []string{"project_reached_repositories", "project_reached_repositories.repository_id", "project_reached_repositories.repository_name", "project_reached_repositories.link_tier"} {
+		out["team:"+name] = reason
+	}
 	return out
 }
 

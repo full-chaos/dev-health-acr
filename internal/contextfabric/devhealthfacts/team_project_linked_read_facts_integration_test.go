@@ -113,4 +113,23 @@ func TestReadFactsServesTeamReachedOnlyThroughProjectLinksAgainstRealClickHouse(
 	if got, _ := investment.Fields["repository_link_basis"].(string); got != "heuristic" {
 		t.Fatalf("repository_link_basis = %#v, want the weakest tier heuristic, never native", investment.Fields["repository_link_basis"])
 	}
+	table, ok := investment.Tables["project_reached_repositories"]
+	if !ok {
+		t.Fatalf("project_reached_repositories table not served: %s", served)
+	}
+	tiers := map[string]string{}
+	for _, row := range table.Rows {
+		cells := map[string]any{}
+		for i, column := range table.Columns {
+			if i < len(row) {
+				cells[column] = row[i]
+			}
+		}
+		id, _ := cells["repository_id"].(string)
+		tier, _ := cells["link_tier"].(string)
+		tiers[id] = tier
+	}
+	if len(tiers) != 2 || tiers[repoUUID("repo-a")] != "native" || tiers[repoUUID("repo-r")] != "heuristic" {
+		t.Fatalf("project_reached_repositories = %v, want repo-a native and repo-r heuristic", tiers)
+	}
 }

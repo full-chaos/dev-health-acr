@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -51,4 +52,33 @@ func teamOwnedOrReachedRepositories(ctx context.Context, client contextpacket.Cl
 		}
 	}
 	return owned, nil
+}
+
+// projectReachedRepositoriesFactValue is the table naming the repositories a
+// team reaches only through its owned projects' linked pull requests, with
+// each one's weakest link tier. Each row is a repository subject reference the
+// subject gate checks. omitted counts the rows the table bound dropped;
+// project_reached_repository_count carries the full total.
+func projectReachedRepositoriesFactValue(repos []teamReachedRepo) (value contextfabric.FactValue, omitted int, ok bool) {
+	if len(repos) == 0 {
+		return contextfabric.FactValue{}, 0, false
+	}
+	rows := make([]contextfabric.FactValueRow, 0, len(repos))
+	for _, repo := range repos {
+		fields := map[string]contextfabric.FactValue{"repository_id": contextfabric.StringFactValue(repo.key)}
+		if repo.name != "" {
+			fields["repository_name"] = contextfabric.StringFactValue(repo.name)
+		}
+		if tier := blockerLinkTierName(repo.linkRank); tier != "" {
+			fields["link_tier"] = contextfabric.StringFactValue(tier)
+		}
+		rows = append(rows, contextfabric.FactValueRow{Fields: fields})
+	}
+	rows, omitted = capFactValueRows(rows)
+	return contextfabric.TableFactValue(contextfabric.FactTable{
+		Shape:        contextfabric.FactTableBreakdown,
+		Key:          []string{"repository_id"},
+		Observations: []string{"repository_name", "link_tier"},
+		Rows:         rows,
+	}), omitted, true
 }
