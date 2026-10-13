@@ -1,5 +1,11 @@
 package devhealthfacts
 
+import (
+	"strings"
+
+	"github.com/full-chaos/dev-health-go/readers"
+)
+
 // The scope expander's statements read the requested origins' work items,
 // links and transitions, never the organization's. Each set below is a
 // SUPERSET of the rows a statement keeps: it reads every stored version
@@ -61,3 +67,23 @@ const teamAttributedWorkItemKeysSQL = `(SELECT repo_id, work_item_id FROM work_i
 // teamOwnedProjectWorkItemsSQL is the work item rows (FINAL) of
 // teamOwnedProjectWorkItemIDsSQL, for a join on provider and project_id.
 const teamOwnedProjectWorkItemsSQL = `(SELECT work_item_id, provider, project_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + teamOwnedProjectWorkItemIDsSQL + `)`
+
+// teamAttributedWorkItemIDsSQL is the work_item_id column of
+// teamAttributedWorkItemKeysSQL.
+const teamAttributedWorkItemIDsSQL = `(SELECT work_item_id FROM work_item_team_attributions WHERE org_id = {org_id:String} AND team_id IN {team_ids:Array(String)})`
+
+// workItemCandidates narrows the work-item authorization relation to the
+// ids a parenthesized candidate subquery above names. Each work-item
+// selection already keeps only work items that subquery names, so the set
+// holds every item the selection can read. Its parameters are the
+// statement's own bindings.
+func workItemCandidates(subquery string) readers.WorkItemCandidates {
+	inner, ok := strings.CutPrefix(subquery, "(")
+	if ok {
+		inner, ok = strings.CutSuffix(inner, ")")
+	}
+	if !ok {
+		panic("devhealthfacts: work item candidate subquery is not parenthesized")
+	}
+	return readers.WorkItemCandidateSubquery(inner)
+}

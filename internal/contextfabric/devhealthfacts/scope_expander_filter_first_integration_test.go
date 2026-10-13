@@ -240,15 +240,15 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 				t.Errorf("%s peaked at %d bytes, want under %d", label, peak, ceiling)
 			}
 		}
+		if !grew(s.orgWide, l.orgWide) {
+			t.Errorf("%s: the organization-wide form did not grow (%d bytes at the larger size, %d at the smaller): the guard cannot fail on this data", label, l.orgWide.peak, s.orgWide.peak)
+		}
 		if !statement.threadBound {
-			if !grew(s.orgWide, l.orgWide) {
-				t.Errorf("%s: the organization-wide form did not grow (%d bytes at the larger size, %d at the smaller): the guard cannot fail on this data", label, l.orgWide.peak, s.orgWide.peak)
-			}
 			continue
 		}
-		// The selection's cost is fixed per thread, not grown with the
-		// organization: its planted defect is the unbounded statement, which
-		// must break the ceiling on the same data.
+		// The selection's remaining cost is fixed per thread: its second
+		// planted defect is the unbounded statement, which must break the
+		// ceiling on the same data.
 		t.Logf("DURATION %s small: %d ms at two threads, %d ms unbounded; large: %d ms at two threads, %d ms unbounded; unbounded peak small=%d large=%d", label, s.scoped.duration, s.unbounded.duration, l.scoped.duration, l.unbounded.duration, s.unbounded.peak, l.unbounded.peak)
 		for _, peak := range []uint64{s.unbounded.peak, l.unbounded.peak} {
 			if peak < ceiling {

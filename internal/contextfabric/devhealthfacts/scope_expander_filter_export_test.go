@@ -1,6 +1,10 @@
 package devhealthfacts
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/full-chaos/dev-health-go/readers"
+)
 
 // scopeCandidateSets is every candidate set a scope expander statement filters
 // by, rendered by the production builders.
@@ -10,7 +14,19 @@ func scopeCandidateSets() []string {
 		requestedProjectWorkItemIDsSQL(requestedProjectIDsPredicate),
 		requestedProjectWorkItemIDsSQL(requestedProjectKeysPredicate),
 		teamOwnedProjectWorkItemIDsSQL,
+		teamAttributedWorkItemIDsSQL,
 	}
+}
+
+// authorizationJoinSQL is the work-item authorization relation narrowed to
+// candidates ("" for the organization-wide form). Its text does not depend
+// on the grant, only on selector mode.
+func authorizationJoinSQL(candidates string) string {
+	scope := readers.AuthorizationScope{RepositorySelectors: &readers.RepositorySelectorScope{}}
+	if candidates == "" {
+		return readers.WorkItemScopeSQL(scope).JoinSQL
+	}
+	return readers.WorkItemScopeSQLAmong(scope, workItemCandidates(candidates)).JoinSQL
 }
 
 // OrgWideScopeStatementForTest rewrites a served scope expander statement to
@@ -23,6 +39,7 @@ func OrgWideScopeStatementForTest(statement string) (orgWide string, filtered, o
 	out := strings.ReplaceAll(statement, "INNER JOIN "+teamOwnedProjectWorkItemsSQL+" AS w ON ", "INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND ")
 	out = strings.ReplaceAll(out, " AND (repo_id, work_item_id) IN "+teamAttributedWorkItemKeysSQL, "")
 	for _, candidates := range scopeCandidateSets() {
+		out = strings.ReplaceAll(out, authorizationJoinSQL(candidates), authorizationJoinSQL(""))
 		out = strings.ReplaceAll(out, issueLinkRowsAmongSQL(candidates), issueLinkRowsSQL)
 		out = strings.ReplaceAll(out, membershipTouchesAsOfAmongSQL(candidates), membershipTouchesAsOfAmongSQL(""))
 		out = strings.ReplaceAll(out, "LEFT JOIN (SELECT work_item_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN "+candidates+") AS w ON w.work_item_id = a.work_item_id", "LEFT JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.work_item_id = a.work_item_id")
@@ -44,6 +61,7 @@ func OrgWideScopeReadsForTest(statement string) []string {
 	var found []string
 	for name, fragment := range map[string]string{
 		"organization link rows":           issueLinkRowsSQL,
+		"organization authorization":       authorizationJoinSQL(""),
 		"organization work items in link":  "work_items AS wi FINAL",
 		"organization touches":             membershipTouchesAsOfAmongSQL(""),
 		"organization transition subjects": "subject_kind = 'work_item'\n    )",

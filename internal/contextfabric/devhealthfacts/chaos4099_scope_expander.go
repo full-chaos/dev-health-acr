@@ -1512,7 +1512,7 @@ func (e *ScopeExpander) projectWorkItems(ctx context.Context, principal storage.
 		return nil, contextfabric.FactScopeExpansionCounts{AmbiguousOriginCount: len(origins)}, nil
 	}
 	scope := workItemRepositoryAuthorization(principal, nil)
-	rendered := readers.WorkItemScopeSQL(scope)
+	rendered := readers.WorkItemScopeSQLAmong(scope, workItemCandidates(requestedProjectWorkItemIDsSQL(requestedProjectKeysPredicate)))
 	statement := projectWorkItemSelectionSQL(rendered, limit)
 	return e.scanWorkItemCandidates(ctx, statement, orgID, scope, rendered, []contextpacket.ClickHouseBinding{
 		{Name: "project_ids", Value: projectKeys},
@@ -1540,7 +1540,7 @@ func (e *ScopeExpander) teamWorkItems(ctx context.Context, principal storage.Pri
 		return nil, contextfabric.FactScopeExpansionCounts{AmbiguousOriginCount: len(origins)}, nil
 	}
 	scope := workItemRepositoryAuthorization(principal, nil)
-	rendered := readers.WorkItemScopeSQL(scope)
+	rendered := readers.WorkItemScopeSQLAmong(scope, workItemCandidates(teamAttributedWorkItemIDsSQL))
 	statement := workItemScopeProjection(`  SELECT toString(w.repo_id) AS repo_id, w.work_item_id AS work_item_id, ifNull(r.repo, '') AS repo_slug, min(a.team_id) AS origin_id, arraySort(groupUniqArray(a.team_id)) AS origin_ids, argMin(toString(a.source), `+teamAttributionSourceRankSQL+`) AS attribution_source,
 `+workItemScopeAuthorizationColumnsSQL(rendered)+`,
     toUInt8(toString(w.repo_id) = '`+zeroRepositoryID+`') AS repo_less,
