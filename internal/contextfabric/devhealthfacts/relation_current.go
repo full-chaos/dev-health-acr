@@ -49,41 +49,38 @@ func relationWriterCodeSQL(d string) string {
     4)`
 }
 
-// relationEndedSQL is true when the provider no longer reports the row. It
-// needs the two joins of relationCurrentJoinsSQL.
-func relationEndedSQL(d string) string {
-	a := "(rws.present = 1 AND " + d + ".last_synced < rws.synced)"
-	b := "(rwt.present = 1 AND " + d + ".last_synced < rwt.synced)"
-	return `multiIf(` + relationWriterCodeSQL(d) + ` = 1, ` + a + `, ` + relationWriterCodeSQL(d) + ` = 2, ` + b + `, ` + relationWriterCodeSQL(d) + ` = 3, ` + a + ` OR ` + b + `, ` + a + ` AND ` + b + `)`
-}
-
 // relationItemReadSQL is, per blocker edge endpoint, the time its relations
 // were last read: max(relations_read_at) when a pass that reads relations
-// wrote it, else its latest work_items sync. The latest sync is max(last_synced) over the item's versions
-// (work_items is replaced by last_synced), so no FINAL merge is read. present
-// is 1 for an item with a
-// work_items row (a left join gives a default, not NULL, for a missing one).
+// wrote it, else its latest work_items sync (max(last_synced) over the item's
+// versions: work_items is replaced by last_synced, so no FINAL merge is read).
+// present is 1 for an item with a work_items row (a left join gives a default,
+// not NULL, for a missing one).
 func relationItemReadSQL(alias string) string {
 	return `(SELECT w.work_item_id AS work_item_id, if(r.seen = 1, r.read_at, w.synced) AS synced, 1 AS present
     FROM (SELECT work_item_id, max(last_synced) AS synced FROM work_items WHERE org_id = {org_id:String} AND work_item_id IN ` + blockerEndpointIDsSQL + ` GROUP BY work_item_id) AS w
     LEFT JOIN (SELECT work_item_id, max(relations_read_at) AS read_at, 1 AS seen FROM work_item_relations_read WHERE org_id = {org_id:String} AND work_item_id IN ` + blockerEndpointIDsSQL + ` GROUP BY work_item_id) AS r ON r.work_item_id = w.work_item_id) AS ` + alias
 }
 
-// relationCurrentJoinsSQL joins a blocker edge row d to the read time of its
-// source (rws) and target (rwt) item.
-func relationCurrentJoinsSQL(d string) string {
-	return `
-  LEFT JOIN ` + relationItemReadSQL("rws") + ` ON rws.work_item_id = ` + d + `.source_work_item_id
-  LEFT JOIN ` + relationItemReadSQL("rwt") + ` ON rwt.work_item_id = ` + d + `.target_work_item_id`
+// relationRowsSQL is one row per blocker relation with ended (the provider no
+// longer reports it) and code (relationWriterCodeSQL). Both items' read times
+// come from ONE read of the item tables: each relation is split into its two
+// ends, the ends are joined to the read times, and the ends are folded back.
+func relationRowsSQL() string {
+	return `(SELECT e.s AS s, e.t AS t, e.rt AS rt, e.code AS code,
+      multiIf(e.code = 1, sp = 1 AND e.ls < ssync, e.code = 2, tp = 1 AND e.ls < tsync, e.code = 3, (sp = 1 AND e.ls < ssync) OR (tp = 1 AND e.ls < tsync), (sp = 1 AND e.ls < ssync) AND (tp = 1 AND e.ls < tsync)) AS ended,
+      maxIf(w.synced, e.side = 1) AS ssync, maxIf(w.synced, e.side = 2) AS tsync, sumIf(w.present, e.side = 1) AS sp, sumIf(w.present, e.side = 2) AS tp
+    FROM (SELECT de.source_work_item_id AS s, de.target_work_item_id AS t, de.relationship_type AS rt, de.last_synced AS ls, ` + relationWriterCodeSQL("de") + ` AS code,
+        arrayJoin([(1, de.source_work_item_id), (2, de.target_work_item_id)]) AS end_pair, end_pair.1 AS side, end_pair.2 AS end_id
+      FROM work_item_dependencies AS de FINAL
+      WHERE de.org_id = {org_id:String} AND lower(ifNull(de.relationship_type, '')) = '` + blockerRelationshipType + `') AS e
+    LEFT JOIN ` + relationItemReadSQL("w") + ` ON w.work_item_id = e.end_id
+    GROUP BY e.s, e.t, e.rt, e.ls, e.code)`
 }
 
 // relationEndedKeysSQL is the keys of the blocker rows the provider no longer
-// reports. Every reader tests membership in this one subquery, so the two item
-// read-time tables are built once per statement, however many arms read edges.
+// reports. Every reader tests membership in this one subquery.
 func relationEndedKeysSQL() string {
-	return `(SELECT de.source_work_item_id, de.target_work_item_id, de.relationship_type
-    FROM work_item_dependencies AS de FINAL` + relationCurrentJoinsSQL("de") + `
-    WHERE de.org_id = {org_id:String} AND lower(ifNull(de.relationship_type, '')) = '` + blockerRelationshipType + `' AND ` + relationEndedSQL("de") + `)`
+	return `(SELECT s, t, rt FROM ` + relationRowsSQL() + ` WHERE ended)`
 }
 
 // relationCurrentSQL keeps the rows the provider still reports.
