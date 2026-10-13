@@ -983,7 +983,11 @@ import (
 // facts. A repository-restricted caller's investigation also labels the
 // aggregate scope of a team or project fact whose capability declares no
 // subject reference. A stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v195"
+//
+// v195 -> v196: a partial or degraded answer is never served with an empty
+// limitations list; a status question over projects or incidents that reached
+// no member, or whose status no read applied, says which.
+const QueryVersion = "devhealthfacts.clickhouse.v196"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

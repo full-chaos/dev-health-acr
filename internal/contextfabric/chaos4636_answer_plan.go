@@ -695,6 +695,7 @@ func (e *Engine) finalizeResult(
 	// pass, so it describes the last document this pending finalized) and
 	// published once by (*Engine).emit.
 	result = withMemberStatusDisclosure(result, frame)
+	result = withMemberStatusNotComputed(result, frame, Coverage{})
 	disclosure, decided := applyCohortNarrowingDisclosure(&result, stamped.Family, cardinality, stamped.Narrowing)
 	if pending != nil {
 		pending.CohortNarrowingDisclosure = nil
@@ -702,6 +703,7 @@ func (e *Engine) finalizeResult(
 			pending.CohortNarrowingDisclosure = &disclosure
 		}
 	}
+	result = withDegradedLimitationFallback(result)
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
 }
