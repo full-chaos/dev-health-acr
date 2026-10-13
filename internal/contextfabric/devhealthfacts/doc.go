@@ -98,8 +98,8 @@
 //     rolled up to project via team_project_ownership, plus a distinct
 //     repository shape reading repo_metrics_daily's PR pickup/
 //     review-timing columns.
-//   - FactLandscape from ic_landscape_rolling_30d (team, aggregated to
-//     (team_id, map_name) -- never per-identity, see landscape.go's
+//   - FactLandscape from ic_landscape_rolling_30d (one copy of each
+//     identity's stats, aggregated per team -- never per-identity, see landscape.go's
 //     package doc comment for why), rolled up to project via
 //     team_project_ownership.
 //   - FactSecurityAlerts from security_alerts (repository only): counts of

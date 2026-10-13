@@ -242,6 +242,26 @@
       },
       "description": "One row per (kind, admitted subject)."
     },
+    "request_notes": {
+      "type": "array",
+      "description": "Sentences true of one fact kind's read as a whole (for example how many of the requested subjects the read could not cover). A coverage row never carries them. Absent when no kind has a note.",
+      "items": {
+        "type": "object",
+        "required": [
+          "kind",
+          "note"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
     "truncation": {
       "type": "object",
       "required": [
