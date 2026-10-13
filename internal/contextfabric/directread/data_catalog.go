@@ -385,7 +385,10 @@ func catalogToolAccessIf(servable bool) CatalogToolAccess {
 // with the operations and schema sections; read_facts is served only when
 // the facts section lists a direct-servable kind; find_subjects and
 // read_relationships need their reader composed and only context:read, which
-// the catalogue route already required.
+// the catalogue route already required. The data-store readiness gate is not
+// a clause here because the API wraps the catalogue route and every tool route
+// in the same gate: a catalogue is never served while a tool would refuse
+// for a store outage.
 func catalogToolAccess(catalogue *Catalogue, caller CatalogCaller) map[string]CatalogToolAccess {
 	graphQLReason := catalogAccessReason(caller.GraphQL != nil && caller.GraphQLServable, CatalogUnavailableGraphQLNotConfigured, caller.GateComposed, caller.DataRead)
 	return map[string]CatalogToolAccess{
