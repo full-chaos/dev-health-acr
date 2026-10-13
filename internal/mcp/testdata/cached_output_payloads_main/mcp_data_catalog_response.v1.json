@@ -110,7 +110,7 @@
  "notes": [],
  "facts": {
   "served": true,
-  "note": "facts: served by read_facts; kinds listed are the ones it accepts, each with max_window_days, the widest range or trailing window one read takes for it (read it before choosing a window)",
+  "note": "facts: served by read_facts; kinds listed are the ones it accepts, each with max_window_days, the widest range or trailing window one read takes for it (read it before choosing a window); kind investment with one team or repository also takes units to list the work units behind the allocation, weighted by share_in_scope, at most 25 pull request references per row; kinds pull_requests and blockers with project subjects serve a project's open pull request and blocked work item counts; a project's pull request counts cover the pull requests linked to its issues (linked pull request rows, in any repository), and the weakest link tier counted is named; kind actual_completion with project subjects answers project progress: completion_ratio is the share of counted work items completed, over the work items the caller is authorized to see, cancelled items left out of both sides, current state only and not windowed",
   "kinds": [
    {
     "kind": "pull_requests",
