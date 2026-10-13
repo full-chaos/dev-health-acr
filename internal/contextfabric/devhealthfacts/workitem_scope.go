@@ -45,15 +45,39 @@ func workItemAuthorizedIDsSQL(scope readers.AuthorizationScope) (string, []reade
 	return workItemAuthorizedIDsAmongSQL(scope, "")
 }
 
+// organizationWideAuthorization reports the scope that authorizes every work
+// item of the organization: an organization-wide grant with no requested
+// restriction and no repository id dimension. The library renders its
+// expression as `{all} = 1 OR ...`, true for every row, yet still builds the
+// project-ownership and link relations; this scope needs neither.
+func organizationWideAuthorization(scope readers.AuthorizationScope) bool {
+	selectors := scope.RepositorySelectors
+	return selectors != nil && selectors.Granted.All && selectors.Requested == nil &&
+		scope.GrantedRepositoryIDs == nil && scope.RequestedRepositoryIDs == nil
+}
+
 // workItemAuthorizedIDsAmongSQL is workItemAuthorizedIDsSQL over the ids
 // candidates (a subquery) names; "" is every id of the organization. Every
 // stored row of a kept id is still grouped, so the rule is unchanged.
 func workItemAuthorizedIDsAmongSQL(scope readers.AuthorizationScope, candidates string) (string, []readers.Binding) {
-	rendered := readers.WorkItemScopeSQL(scope)
+	if organizationWideAuthorization(scope) {
+		among := ""
+		if candidates != "" {
+			among = ` AND w.work_item_id IN ` + candidates
+		}
+		return `(SELECT w.work_item_id FROM work_items AS w WHERE w.org_id = {org_id:String}` + among + ` GROUP BY w.work_item_id)`, nil
+	}
+	return workItemAuthorizedIDsLibrarySQL(scope, candidates)
+}
+
+// workItemAuthorizedIDsLibrarySQL is the library's authorization relation
+// over the ids candidates names, for every scope.
+func workItemAuthorizedIDsLibrarySQL(scope readers.AuthorizationScope, candidates string) (string, []readers.Binding) {
 	among := ""
 	if candidates != "" {
 		among = ` AND w.work_item_id IN ` + candidates
 	}
+	rendered := readers.WorkItemScopeSQL(scope)
 	return `(SELECT w.work_item_id FROM work_items AS w FINAL ` + rendered.JoinSQL + ` WHERE w.org_id = {org_id:String}` + among + ` GROUP BY w.work_item_id HAVING min(toUInt8(` + rendered.AuthorizationExpr + `)) = 1)`, rendered.Bindings
 }
 

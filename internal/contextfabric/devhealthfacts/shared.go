@@ -1080,10 +1080,16 @@ import (
 // v213 -> v214: the security_alerts fact kind is served for a repository.
 // An answer saved under v213 cannot carry it.
 //
-// v214 -> v215: a project subject serves the commitment kind (target date,
+// v214 -> v215: the blocker statements authorize their edge endpoints without
+// the library's organization-wide relation for an organization-wide grant, and
+// read it once, apart from the statements, for any other caller. The rows are
+// unchanged; the statements and their memory are not, so an answer saved under
+// v214 is not reused as one produced by the new statements.
+//
+// v215 -> v216: a project subject serves the commitment kind (target date,
 // sprint ends and the raw issue counts beside them). An answer saved under
-// v214 has no commitment fact.
-const QueryVersion = "devhealthfacts.clickhouse.v215"
+// v215 has no commitment fact.
+const QueryVersion = "devhealthfacts.clickhouse.v216"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
