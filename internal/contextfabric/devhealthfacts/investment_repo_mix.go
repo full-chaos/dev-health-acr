@@ -145,12 +145,25 @@ func repoSplitCore(memberships []string, unitCols, unitAgg string, spanSentinel 
 
 // repoSplitCoreScoped is repoSplitCore with the resolved membership scope.
 func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSentinel bool, scope membershipScope) string {
+	return repoSplitCoreGrouped(memberships, unitCols, unitAgg, spanSentinel, scope, false)
+}
+
+// repoSplitCoreGrouped is repoSplitCoreScoped; perRef also groups by the
+// pull request number, so each row is one (window, work unit, repository,
+// pull request) and c is 1 per resolved reference. The partition total n is
+// unchanged by the finer grouping.
+func repoSplitCoreGrouped(memberships []string, unitCols, unitAgg string, spanSentinel bool, scope membershipScope, perRef bool) string {
+	refCol, refGroup := "", ""
+	if perRef {
+		refCol = "\n\t\t\t\tparsed.pr_number AS pr_number,"
+		refGroup = ", pr_number"
+	}
 	wins := "arrayFilter(w -> w >= 0, [" + strings.Join(memberships, ", ") + "])"
 	if spanSentinel {
 		wins = "arrayConcat([" + spanSentinelWindow + "], " + wins + ")"
 	}
 	return `			SELECT parsed.win AS win, parsed.work_unit_id AS work_unit_id,
-				if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')) AS repo_uuid,
+				if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')) AS repo_uuid,` + refCol + `
 				uniqExact(if(repo_uuid = '', parsed.ref_text, concat(repo_uuid, '#', parsed.pr_number))) AS c,
 				any(parsed.effort_value) AS effort_value,
 				any(parsed.theme_distribution_json) AS theme_distribution_json,
@@ -196,7 +209,7 @@ func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSen
 				WHERE org_id = {org_id:String}
 				GROUP BY id
 			) AS rl ON rl.provider = parsed.lookup_provider AND rl.repo = parsed.lookup_repo
-			GROUP BY win, work_unit_id, repo_uuid
+			GROUP BY win, work_unit_id, repo_uuid` + refGroup + `
 `
 }
 
@@ -445,7 +458,7 @@ func (p *InvestmentProvider) readRepositoryThemeMix(ctx context.Context, orgID s
 // work, or whose owned repositories carry zero effort, is absent from the
 // result (never a fabricated zero mix). Ownership is read per window, but the
 // mix of both windows comes from ONE pass over work_unit_investments.
-func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string, teamIDs []string, timeBound factTimeBound, prior *factTimeBound) (current, priorMix map[string]*repoThemeTotals, owned map[string][]string, err error) {
+func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string, teamIDs []string, timeBound factTimeBound, prior *factTimeBound) (current, priorMix map[string]*repoThemeTotals, owned map[string][]string, linked map[string]*repoThemeTotals, projectTeams []string, err error) {
 	bounds := []factTimeBound{timeBound}
 	if prior != nil {
 		bounds = append(bounds, *prior)
@@ -455,7 +468,7 @@ func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string,
 	for i, b := range bounds {
 		owned, ownedErr := p.readTeamOwnedRepositories(ctx, orgID, teamIDs, b)
 		if ownedErr != nil {
-			return nil, nil, nil, ownedErr
+			return nil, nil, nil, nil, nil, ownedErr
 		}
 		ownedByWindow[i] = owned
 		for _, repos := range owned {
@@ -471,7 +484,7 @@ func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string,
 	sort.Strings(repoIDs)
 	windows, spans, err := p.readRepoMixRows(ctx, orgID, repoIDs, bounds...)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	for teamID, repos := range ownedByWindow[0] {
 		for _, repoID := range repos {
@@ -484,7 +497,23 @@ func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string,
 	if prior != nil {
 		priorMix = sumOwnedRepoMix(ownedByWindow[1], groupRepoMix(windows[1]))
 	}
-	return current, priorMix, ownedByWindow[0], nil
+	projectTeams, err = teamsOwningAnyProject(ctx, p.facts.client, orgID, teamIDs)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	linked, err = p.readLinkedPullRequestMix(ctx, orgID, projectTeams, timeBound)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	addLinkedMix(current, linked)
+	if prior != nil {
+		priorLinked, priorErr := p.readLinkedPullRequestMix(ctx, orgID, projectTeams, *prior)
+		if priorErr != nil {
+			return nil, nil, nil, nil, nil, priorErr
+		}
+		addLinkedMix(priorMix, priorLinked)
+	}
+	return current, priorMix, ownedByWindow[0], linked, projectTeams, nil
 }
 
 // readTeamOwnedRepositories reads team -> owned repository ids as of bound.

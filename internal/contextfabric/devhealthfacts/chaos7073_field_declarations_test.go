@@ -41,7 +41,7 @@ var declaredButNotExercised = map[contextfabric.FactKind]map[string]string{
 	// The work-unit listing is emitted only when the read asks for units (a
 	// context value no case here sets); investment_units_integration_test.go
 	// exercises every one of these fields against a real ClickHouse.
-	contextfabric.FactInvestment: investmentUnitFieldsNotExercised(),
+	contextfabric.FactInvestment: investmentFieldsNotExercised(),
 	// Emitted only for a team that owns a project whose issues link to pull
 	// requests in repositories it does not own; no fake-driven case here seeds
 	// that reach. team_project_reach_integration_test.go exercises each field
@@ -63,6 +63,18 @@ var declaredButNotExercised = map[contextfabric.FactKind]map[string]string{
 	contextfabric.FactIncidents: {
 		"team:project_reached_repository_count": "project reach, exercised by team_project_reach_integration_test.go",
 	},
+}
+
+func investmentFieldsNotExercised() map[string]string {
+	out := investmentUnitFieldsNotExercised()
+	const reason = "project reach, exercised by team_project_linked_investment_integration_test.go"
+	out["team:project_reached_repository_count"] = reason
+	out["team:repository_link_basis"] = reason
+	out["team:project_reached_repositories_omitted_count"] = reason
+	for _, name := range []string{"project_reached_repositories", "project_reached_repositories.repository_id", "project_reached_repositories.repository_name", "project_reached_repositories.link_tier"} {
+		out["team:"+name] = reason
+	}
+	return out
 }
 
 func investmentUnitFieldsNotExercised() map[string]string {

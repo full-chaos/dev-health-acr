@@ -135,7 +135,7 @@ func (r AnswerBudgetRefusal) Unwrap() error { return ErrAnswerExceedsBudget }
 // member set, and therefore the count, it already had. The retry path below
 // computes its own, from its own pass.
 func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Principal, plan *AnswerPlan, result InvestigationResult, consumed ItemAllocation, firstPass assemblyTelemetry, params synthesisAssemblyParams, cardinality MembershipCardinality) (InvestigationResult, assemblyTelemetry, error) {
-	budget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
+	budget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: answerFitBytes(params.Request, plan.Budget.MaxSerializedBytes, firstPass.ClientSynthesisInput)}
 	if budget.MaxItems <= 0 && budget.MaxSerializedBytes <= 0 {
 		// Nothing to measure against. An engine composed without either
 		// ceiling behaves exactly as it did before this slice: it plans,
@@ -518,7 +518,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		} else if ok {
 			return served, firstPass, nil
 		}
-		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
+		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement, budget.MaxSerializedBytes), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
 	}
 
 	// Selection records the first attempt's measured trigger. The retry has
@@ -578,6 +578,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	firstPass.RetryAttempted = true
 	retried, consumedRetryAllocation, retryPending, retryCardinality, retryErr := e.synthesizeAndAssemble(ctx, principal, retryParams)
 	retryPending.RetryAttempted = firstPass.RetryAttempted
+	budget.MaxSerializedBytes = answerFitBytes(params.Request, plan.Budget.MaxSerializedBytes, retryPending.ClientSynthesisInput)
 	if retryErr != nil {
 		// PROPAGATE the retry's own error. An earlier revision discarded it
 		// and returned a budget refusal, so a transient ErrModelUnavailable
@@ -917,7 +918,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// retries explicitly: they inherit the same deadline problem and
 		// merely move the terminal case, arriving at the same unanswered
 		// question with more latency.
-		return InvestigationResult{}, retryPending, e.refusalFromAxis(e.refusalPlan(plan, retryMeasurement), retryMeasurement, retryOverrun, true, continuationAxisForOverrun(*plan, retryRowLever))
+		return InvestigationResult{}, retryPending, e.refusalFromAxis(e.refusalPlan(plan, retryMeasurement, budget.MaxSerializedBytes), retryMeasurement, retryOverrun, true, continuationAxisForOverrun(*plan, retryRowLever))
 	}
 	// The SERVED answer is the retry's, so the ranking event that describes it
 	// is the retry's too. Emitting the first pass's would report a ranking
@@ -1182,7 +1183,16 @@ func (e *Engine) recordCeilingFit(ctx context.Context, principal storage.Princip
 // request's own target; when the document crossed the service ceiling as well,
 // the line it crossed is the ceiling, and the refusal names that one (the plan
 // itself is not changed: the next turn compares against the target).
-func (e *Engine) refusalPlan(plan *AnswerPlan, measurement ResponseMeasurement) *AnswerPlan {
+//
+// fitBytes is the ceiling the answer was fitted to. When it is below the plan's
+// (a client synthesis turn keeps part of the budget for its synthesis input),
+// the refusal names it, so measured and maximum are the same quantity.
+func (e *Engine) refusalPlan(plan *AnswerPlan, measurement ResponseMeasurement, fitBytes int64) *AnswerPlan {
+	if fitBytes > 0 && fitBytes < plan.Budget.MaxSerializedBytes && measurement.Bytes > fitBytes {
+		named := *plan
+		named.Budget.MaxSerializedBytes = fitBytes
+		return &named
+	}
 	if e.maxSerializedBytes <= 0 || measurement.Bytes <= e.maxSerializedBytes || plan.Budget.MaxSerializedBytes >= e.maxSerializedBytes {
 		return plan
 	}
@@ -1205,6 +1215,11 @@ func (e *Engine) refusalPlan(plan *AnswerPlan, measurement ResponseMeasurement) 
 func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Principal, plan *AnswerPlan, params synthesisAssemblyParams, stage string, doc, measurementInput InvestigationResult, finalize bool, allocation ItemAllocation, facts CanonicalFactBundle, pending *assemblyTelemetry, planPass, recordPass int, cardinality MembershipCardinality, budget ResponseBudget, overrun contractsv1.ContextFabricBudgetOverrun) (served InvestigationResult, ok bool, err error) {
 	// A zero service ceiling means unbounded, as everywhere else the engine
 	// reads it; a ceiling at or below the target leaves nothing to widen to.
+	if clientSynthesisWithoutDraft(params.Request) && params.Request.Options.MaxSerializedBytes > 0 {
+		// The body carries the synthesis input, so the caller's byte budget is
+		// the line: the answer is not widened to the service ceiling.
+		return InvestigationResult{}, false, nil
+	}
 	if overrun != contractsv1.ContextFabricBudgetOverrunBytes || budget.MaxSerializedBytes <= 0 ||
 		(e.maxSerializedBytes > 0 && e.maxSerializedBytes <= budget.MaxSerializedBytes) {
 		return InvestigationResult{}, false, nil

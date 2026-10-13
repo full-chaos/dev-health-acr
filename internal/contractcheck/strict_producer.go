@@ -93,7 +93,7 @@ func (r *schemaRegistry) undeclaredAt(schemaName string, schemas []map[string]an
 	for _, s := range schemas {
 		start = append(start, branch{schemaName, s})
 	}
-	bases, groups := r.resolve(start, depth)
+	bases, groups := r.resolve(start, 0)
 	return r.chooseAlternatives(bases, groups, instance, path, depth)
 }
 
@@ -118,7 +118,7 @@ func (r *schemaRegistry) chooseAlternatives(bases []branch, groups [][]branch, i
 	}
 	var first error
 	for _, alt := range matching {
-		altBases, altGroups := r.resolve([]branch{alt}, depth+1)
+		altBases, altGroups := r.resolve([]branch{alt}, 0)
 		nextBases := append(append([]branch(nil), bases...), altBases...)
 		nextGroups := append(append([][]branch(nil), rest...), altGroups...)
 		err := r.chooseAlternatives(nextBases, nextGroups, instance, path, depth)
@@ -194,10 +194,13 @@ func (r *schemaRegistry) descend(branches []branch, key string, value any, path 
 // descendBranches checks the value against every schema that applies to it as
 // one set: the property schemas of different branches all hold together.
 func (r *schemaRegistry) descendBranches(children []branch, value any, path string, depth int) error {
-	if depth > 64 || len(children) == 0 {
+	if len(children) == 0 {
 		return nil
 	}
-	bases, groups := r.resolve(children, depth+1)
+	if depth >= 64 {
+		return fmt.Errorf("%s: payload nests deeper than the strict producer check covers", path)
+	}
+	bases, groups := r.resolve(children, 0)
 	return r.chooseAlternatives(bases, groups, value, path, depth+1)
 }
 

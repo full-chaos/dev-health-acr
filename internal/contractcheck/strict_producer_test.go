@@ -38,3 +38,16 @@ func TestRejectUndeclaredChecksEachAlternativeOnItsOwn(t *testing.T) {
 		t.Fatal("an undeclared key must be refused")
 	}
 }
+
+func TestRejectUndeclaredFailsLoudPastTheDepthLimit(t *testing.T) {
+	schema := map[string]any{"type": "object", "properties": map[string]any{"child": map[string]any{"$ref": "#"}}}
+	registry := newSchemaRegistry()
+	registry.byName["s"] = schema
+	var instance any = map[string]any{"future": 1}
+	for i := 0; i < 70; i++ {
+		instance = map[string]any{"child": instance}
+	}
+	if err := registry.rejectUndeclared("s", instance); err == nil {
+		t.Fatal("a payload nested past the limit must be refused, not passed unchecked")
+	}
+}
