@@ -1044,7 +1044,12 @@ import (
 // caller's organization is no longer marked truncated by an unrelated
 // subject's failed lookup. An answer saved under v206 can mark a complete set
 // truncated.
-const QueryVersion = "devhealthfacts.clickhouse.v207"
+//
+// v207 -> v208: a client synthesis answer asked through a tool that widens the
+// body bound names the caller's budget as the answer budget; the input is now
+// cut to that budget, or served whole when its smallest form fits beside the
+// answer. An answer saved under v207 carried the uncut input.
+const QueryVersion = "devhealthfacts.clickhouse.v208"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
