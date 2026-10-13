@@ -28,10 +28,10 @@ func seedPostgres(t *testing.T, db *sql.DB, org string) {
 		 VALUES (repeat(md5('d2' || $2), 2), repeat(md5('u2' || $2), 2), 'redeemed', $1::uuid, now(), now() + interval '10 minutes', 5, 'device_authorization', now(), now(), 'cred-' || $2)`,
 		`INSERT INTO acr.device_authorizations (device_code_hash, user_code_hash, state, organization_id_hint, created_at, expires_at, poll_interval_seconds, issuance_provenance)
 		 VALUES (repeat(md5('d3' || $2), 2), repeat(md5('u3' || $2), 2), 'pending', $1, now(), now() + interval '10 minutes', 5, 'device_authorization')`,
-		`INSERT INTO acr.device_authorizations (device_code_hash, user_code_hash, state, created_at, expires_at, poll_interval_seconds, issuance_provenance)
-		 VALUES (repeat(md5('d4' || $2), 2), repeat(md5('u4' || $2), 2), 'pending', now(), now() + interval '10 minutes', 5, 'device_authorization')`,
+		`INSERT INTO acr.device_authorizations (device_code_hash, user_code_hash, state, approving_subject, created_at, expires_at, poll_interval_seconds, issuance_provenance)
+		 VALUES (repeat(md5('d4' || $2), 2), repeat(md5('u4' || $2), 2), 'pending', $1, now(), now() + interval '10 minutes', 5, 'device_authorization')`,
 		`INSERT INTO acr.oauth_device_grants (device_code_hash, client_id, client_kind, resource, created_at, expires_at)
-		 VALUES (repeat(md5('d1' || $2), 2), 'client', 'dynamic', 'res', now(), now() + interval '10 minutes')`,
+		 SELECT repeat(md5('d1' || $2), 2), 'client', 'dynamic', 'res', now(), now() + interval '10 minutes' WHERE $1::text <> ''`,
 		`INSERT INTO acr.oauth_authorization_requests (handle_hash, device_code_hash, client_id, client_kind, redirect_uri, code_challenge, resource, created_at, expires_at, bound_org_id, bound_subject)
 		 VALUES (repeat(md5('h' || $2), 2), repeat(md5('d4' || $2), 2), 'client', 'dynamic', 'http://localhost/cb', repeat('a', 43), 'res', now(), now() + interval '10 minutes', $1, 'subject')`,
 		`INSERT INTO acr.context_packet_snapshots (context_packet_id, org_id, repo_id, repo_slug, request_id, schema_version, query_version, ranking_version, scope_resolution, status, payload, generated_at, expires_at, created_at)
