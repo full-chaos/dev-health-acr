@@ -42,6 +42,7 @@ func TeamProjectLinkRowsPreStreamingSQLForTest() string {
   INNER JOIN ` + admittedLinkedPullRequestRowsSQL + ` AS l ON l.work_item_id = w.work_item_id
   WHERE p.key_resolution_count = 1 AND t.team_id IN {ids:Array(String)}
 )`
+}
 
 // BlockerFragmentNames are the parts RunBlockerFragmentsForTest runs on their
 // own; each statement carries its name as the literal 'frag-<name>'.
