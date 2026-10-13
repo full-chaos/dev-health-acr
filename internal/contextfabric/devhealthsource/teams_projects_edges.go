@@ -286,12 +286,12 @@ const resolvedProjectsSubquery = `(
 // silently skipped). event_id is this table's own tiebreaker for exactly
 // this case, so querySubjectProjectMemberships' own RelationshipID suffix
 // and rowSortKey both include it too, below.
-func membershipIntervalsSubquery(ingest bool) string {
+func membershipIntervalsSubquery(ingest bool, changed string) string {
 	touchIngest := "occurred_at"
 	if ingest {
 		touchIngest = "ingested_at"
 	}
-	return membershipIntervalsSQL(touchIngest, ingest)
+	return membershipIntervalsSQL(touchIngest, ingest, changed)
 }
 
 // membershipIntervalsSQL renders the interval source with ingestExpr (a
@@ -302,8 +302,8 @@ func membershipIntervalsSubquery(ingest bool) string {
 // interval's valid_to).
 // ingested says whether the transitions table has ingested_at (the dedupe
 // tie-break; see devhealthschema.DedupedMembershipTransitions).
-func membershipIntervalsSQL(ingestExpr string, ingested bool) string {
-	deduped := devhealthschema.DedupedMembershipTransitions(ingested)
+func membershipIntervalsSQL(ingestExpr string, ingested bool, changed string) string {
+	deduped := devhealthschema.DedupedMembershipTransitionsFiltered(ingested, changed)
 	return `(
   WITH touches AS (
     SELECT org_id, subject_kind, repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, ` + ingestExpr + ` AS ingest_at, 1 AS is_add
@@ -375,7 +375,7 @@ const columnSupersededSource = "column_superseded"
 // row names exactly the project whose column edge was projected.
 // observed_at / ingest_at carry the newer of the work item's own stamp and its
 // history's, so the row re-enters the cursor when either side changes.
-func supersededColumnsSubquery(ingest bool) string {
+func supersededColumnsSubquery(ingest bool, changed string) string {
 	historyStamp, workItemStamp := "occurred_at", "w.updated_at"
 	if ingest {
 		historyStamp, workItemStamp = "ingested_at", "w.ingested_at"
@@ -386,7 +386,7 @@ func supersededColumnsSubquery(ingest bool) string {
   FROM (SELECT * FROM work_items FINAL WHERE org_id = {org_id:String}) AS w
   INNER JOIN (
     SELECT org_id, repo_id, subject_id, max(occurred_at) AS latest_occurred, max(` + historyStamp + `) AS latest_stamp
-    FROM ` + devhealthschema.DedupedMembershipTransitions(ingest) + `
+    FROM ` + devhealthschema.DedupedMembershipTransitionsFiltered(ingest, changed) + `
     WHERE subject_kind = 'work_item'
     GROUP BY org_id, repo_id, subject_id
   ) AS h ON h.org_id = w.org_id AND h.repo_id = w.repo_id AND h.subject_id = w.work_item_id
@@ -435,13 +435,35 @@ func columnProjectRetractions(subjectKind, repoID, subjectID, source string, obs
 	return out, nil
 }
 
+// changedMembershipFilters bound the statement's cost to what the keyset
+// predicate can still return. The cursor column of every arm is built only
+// from the touches, the work item row, the presence row and their history --
+// never from the project or repository side -- so a subject none of those
+// stamped at or after the cursor yields no row past it. Whole subjects are
+// kept or dropped, so every window function runs over the full history of the
+// subjects it sees. An empty cursor keeps everything.
+func changedMembershipFilters(cursor cursorState, ingest bool) (touches, superseded, presence string) {
+	if cursor.Since.IsZero() {
+		return "", "", ""
+	}
+	transitionStamp, workItemStamp, presenceStamp := "occurred_at", "updated_at", "m.observed_at"
+	if ingest {
+		transitionStamp, workItemStamp, presenceStamp = "ingested_at", "ingested_at", "m.last_synced"
+	}
+	touches = " AND (subject_kind, repo_id, subject_id) IN (SELECT subject_kind, repo_id, subject_id FROM project_membership_transitions WHERE org_id = {org_id:String} AND " + transitionStamp + " >= " + sinceBoundSQL + ")"
+	superseded = " AND (repo_id, subject_id) IN (SELECT repo_id, subject_id FROM project_membership_transitions WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND " + transitionStamp + " >= " + sinceBoundSQL +
+		" UNION ALL SELECT repo_id, work_item_id FROM work_items FINAL WHERE org_id = {org_id:String} AND " + workItemStamp + " >= " + sinceBoundSQL + ")"
+	presence = " AND " + presenceStamp + " >= " + sinceBoundSQL
+	return touches, superseded, presence
+}
+
 func subjectProjectMembershipsQuery(telemetry *presenceTelemetryLedger, ingest bool) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
 	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 		return querySubjectProjectMemberships(ctx, client, orgID, cursor, limit, telemetry, ingest)
 	}
 }
 
-func querySubjectProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, telemetry *presenceTelemetryLedger, ingest bool) ([]candidate, bool, error) {
+func membershipStatement(cursor cursorState, ingest, pruned bool) string {
 	// event_id is part of the row key (codex xhigh review R1, HIGH,
 	// confirmed real -- see membershipIntervalsSubquery's own doc comment):
 	// two transition-arm intervals for the SAME (subject, project) pair CAN
@@ -449,6 +471,10 @@ func querySubjectProjectMemberships(ctx context.Context, client contextpacket.Cl
 	// event_id in the tiebreaker, both the RelationshipID (below) and the
 	// keyset-pagination cursor would collide on it.
 	rowKey := rowKeySQL("subject_kind", "repo_id_str", "subject_id", "provider", "project_id", "event_id")
+	var changedTouches, changedSuperseded, changedPresence string
+	if pruned {
+		changedTouches, changedSuperseded, changedPresence = changedMembershipFilters(cursor, ingest)
+	}
 	// toDateTime64(0, 3, 'UTC') matches project_membership_transitions.
 	// occurred_at's own declared scale (DateTime64(3)) -- the NULL branch of
 	// transition arm's `valid_to` (membershipIntervalsSubquery) is derived
@@ -462,12 +488,12 @@ func querySubjectProjectMemberships(ctx context.Context, client contextpacket.Cl
 		cursorColumn, ingestSelect = "ingest_at", ", ingest_at"
 		transitionIngest, columnIngest, supersededIngest = ", m.ingest_at AS ingest_at", ", m.last_synced AS ingest_at", ", m.ingest_at AS ingest_at"
 	}
-	statement := `SELECT subject_kind, repo_id_str, subject_id, repo_slug, observed_at, event_id, source, provider, project_id, resolved_project_id, key_resolution_count, valid_to_present, valid_to_value, is_malformed, is_duplicate_add` + ingestSelect + `
+	return `SELECT subject_kind, repo_id_str, subject_id, repo_slug, observed_at, event_id, source, provider, project_id, resolved_project_id, key_resolution_count, valid_to_present, valid_to_value, is_malformed, is_duplicate_add` + ingestSelect + `
 FROM (
   SELECT m.subject_kind AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
     m.observed_at AS observed_at, m.event_id AS event_id, m.source AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
     isNotNull(m.valid_to) AS valid_to_present, ifNull(m.valid_to, toDateTime64(0, 3, 'UTC')) AS valid_to_value, m.is_malformed AS is_malformed, m.is_duplicate_add AS is_duplicate_add` + transitionIngest + `
-  FROM ` + membershipIntervalsSubquery(ingest) + ` AS m
+  FROM ` + membershipIntervalsSubquery(ingest, changedTouches) + ` AS m
   LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
   UNION ALL
@@ -477,16 +503,20 @@ FROM (
   FROM project_membership_presence AS m
   LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
-  WHERE m.org_id = {org_id:String} AND m.source = 'work_item_column'
+  WHERE m.org_id = {org_id:String} AND m.source = 'work_item_column'` + changedPresence + `
   UNION ALL
   SELECT 'work_item' AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
     m.observed_at AS observed_at, '' AS event_id, 'column_superseded' AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
     0 AS valid_to_present, toDateTime64(0, 3, 'UTC') AS valid_to_value, 0 AS is_malformed, 0 AS is_duplicate_add` + supersededIngest + `
-  FROM ` + supersededColumnsSubquery(ingest) + ` AS m
+  FROM ` + supersededColumnsSubquery(ingest, changedSuperseded) + ` AS m
   LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
 )
 WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColumn, rowKey)
+}
+
+func querySubjectProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, telemetry *presenceTelemetryLedger, ingest bool) ([]candidate, bool, error) {
+	statement := membershipStatement(cursor, ingest, true)
 	fetchRows := fetch
 	if ingest {
 		fetchRows = fetchIngest

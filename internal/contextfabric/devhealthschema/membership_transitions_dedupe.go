@@ -1,5 +1,7 @@
 package devhealthschema
 
+import "strings"
+
 // DedupedMembershipTransitions is the relation every membership READER of
 // project_membership_transitions takes its touches from (CHAOS-7829).
 //
@@ -30,10 +32,18 @@ package devhealthschema
 // The org filter is applied here, before the dedupe, and again by the caller's
 // own WHERE (the callers keep their {org_id:String} predicate).
 func DedupedMembershipTransitions(ingested bool) string {
+	return DedupedMembershipTransitionsFiltered(ingested, "")
+}
+
+// DedupedMembershipTransitionsFiltered is DedupedMembershipTransitions with
+// extra, an " AND ..." predicate added to the pre-dedupe WHERE. It must keep
+// or drop whole subjects (every version of every event of a subject), so the
+// dedupe of the subjects it keeps is unchanged.
+func DedupedMembershipTransitionsFiltered(ingested bool, extra string) string {
 	if ingested {
-		return DedupedMembershipTransitionsIngested
+		return strings.Replace(DedupedMembershipTransitionsIngested, "WHERE org_id = {org_id:String} ", "WHERE org_id = {org_id:String}"+extra+" ", 1)
 	}
-	return DedupedMembershipTransitionsLastSynced
+	return strings.Replace(DedupedMembershipTransitionsLastSynced, "WHERE org_id = {org_id:String} ", "WHERE org_id = {org_id:String}"+extra+" ", 1)
 }
 
 // The two spellings of the relation, as constants so the SQL constants of the
