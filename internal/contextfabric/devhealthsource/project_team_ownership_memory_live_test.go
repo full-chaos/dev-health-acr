@@ -88,6 +88,9 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query, 
 				bindings = devhealthsource.ProjectTeamsPagedBindingsForTest(f.h.orgID, 500)
 			}
 			client, settings := query, "max_result_rows = 0, max_memory_usage = 0"
+			if frag.Settings != "" {
+				settings += ", " + frag.Settings
+			}
 			if frag.Paged {
 				client, settings = projectorCapped, fmt.Sprintf("max_bytes_to_read = %d", prodMaxBytesToRead)
 			}
@@ -196,14 +199,16 @@ func TestProjectTeamOwnershipStatementMemoryOnTheProdShape(t *testing.T) {
 func TestProjectTeamOwnershipStatementMemoryDoesNotGrowWithVersions(t *testing.T) {
 	query, direct := orgIsolationClickHouseFixture(t)
 	capped := contextpacket.NewMemoryCappedQueryClient(query, prodMaxMemoryUsage)
-	only := map[string]bool{"paged_statement": true}
+	only := map[string]bool(nil)
 	peaks := map[int]float64{}
 	for i, versions := range []int{100, 1000, 2000} {
 		f := newIngestColumnsFixture(t, fmt.Sprintf("95460000-0000-4000-8000-00000000010%d", i), nil, nil)
 		seedProjectTeamOwnershipShape(t, f, memoryShapePairs*versions, memoryShapeUnmerged)
 		// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.
 		mustExec(t, f.ctx, direct, "OPTIMIZE TABLE team_project_ownership FINAL")
-		peak := peakOf(t, measureProjectTeamsFragments(t, f, query, capped, fmt.Sprintf("slope%d", versions), only), "paged_statement")
+		all := measureProjectTeamsFragments(t, f, query, capped, fmt.Sprintf("slope%d", versions), only)
+		peak := peakOf(t, all, "paged_statement")
+		t.Errorf("DIAGNOSTIC (temporary) %d versions:\n%s", versions, fragmentTable("slope", all))
 		t.Logf("slope: %d versions per pair (%d rows): paged statement peak %.2f MiB read_rows=%d", versions, memoryShapePairs*versions, peak.mib, peak.readRows)
 		peaks[versions] = peak.mib
 	}

@@ -413,6 +413,7 @@ func MembershipStatementForTest(orgID string, since time.Time, after string, lim
 // ownership statement that a memory test runs on its own.
 type ProjectTeamsFragment struct {
 	Name, SQL string
+	Settings  string
 	Paged     bool
 }
 
@@ -423,6 +424,8 @@ func ProjectTeamsFragmentsForTest(ingest bool) []ProjectTeamsFragment {
 	arms := projectTeamsArmsFor(ingest)
 	return []ProjectTeamsFragment{
 		{Name: "ownership_raw_final_x1", SQL: "SELECT * FROM team_project_ownership FINAL WHERE org_id = {org_id:String}"},
+		{Name: "ownership_raw_final_threads1", SQL: "SELECT * FROM team_project_ownership FINAL WHERE org_id = {org_id:String}", Settings: "max_threads = 1"},
+		{Name: "ownership_raw_final_block8k", SQL: "SELECT * FROM team_project_ownership FINAL WHERE org_id = {org_id:String}", Settings: "max_block_size = 8192"},
 		{Name: "projects_identity_x1", SQL: "SELECT * FROM " + projectIdentityWithWatermarkSQL(ingest)},
 		{Name: "projects_ambiguous_x1", SQL: "SELECT * FROM " + ambiguousProjectIdentitySQL(ingest)},
 		{Name: "asserting_arm", SQL: arms[0]},
