@@ -238,7 +238,7 @@ func answerBoundTable() []answerBound {
 				res.Committed = append(res.Committed, distinctSubject(committedSubjectsMaxCount))
 				r.SubjectResolution = res
 			}},
-		{Field: "Coverage", Why: "Sources must be non-nil and 0..100; DegradedReasons 0..100 at ContextFabricCoverageDegradedReasonMaxLength, unique and trimmed. COUPLED: a source whose State is not available REQUIRES a reason, so state and reason cannot be maximized independently",
+		{Field: "Coverage", Why: "Sources must be non-nil and 0..ContextFabricCoverageEntriesMaxCount; DegradedReasons 0..ContextFabricCoverageEntriesMaxCount at ContextFabricCoverageDegradedReasonMaxLength, unique and trimmed. COUPLED: a source whose State is not available REQUIRES a reason, so state and reason cannot be maximized independently",
 			Min: func(r *ContextFabricInvestigationResult) { r.Coverage = minimalCoverage() },
 			Max: func(r *ContextFabricInvestigationResult) { r.Coverage = maximalCoverage() },
 			PastMax: func(r *ContextFabricInvestigationResult) {
@@ -512,7 +512,8 @@ const irreducibleAnswerBytes = 1023
 //
 // 521585712 -> 521657911 (+72199): the fact kind vocabulary gained security_alerts.
 // 521657911 -> 521729440 (+71529, CI-measured): the vocabulary gained commitment (+71189) and the census one record for team_project_ownership_commitment_v1 (+340).
-const maximalAnswerBytes = 521729440
+// 521729440 -> 521759242 (+29802): the coverage entry bound 100 -> 101, so the maximal coverage arrays each gain one entry.
+const maximalAnswerBytes = 521759242
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
