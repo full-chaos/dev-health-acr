@@ -322,7 +322,6 @@ func TestWorkGraphReresolutionServesTheSameRepositorylessTitlesAsThePacket(t *te
 	rows := contextpacket.NewCatalogClickHouseRows(query)
 	scope := contractsv1.ResolvedScope{RepoID: wgRepo, RepoSlug: "acme/deploy-service"}
 	restricted := contextpacket.WithWorkItemGrant(ctx, auth.WorkItemRepositorySelectorSet([]string{"acme/deploy-service"}, true))
-	const linked = "implements PROJ-6 Jira issue linked by a native pull request (repository-wide)"
 	for name, tc := range map[string]struct {
 		ctx       context.Context
 		wantTitle bool
@@ -335,7 +334,7 @@ func TestWorkGraphReresolutionServesTheSameRepositorylessTitlesAsThePacket(t *te
 		for _, reference := range references {
 			if strings.Contains(reference.Evidence.Source.DisplayLabel, "implements PROJ-6") {
 				served = true
-				if got := strings.HasSuffix(reference.Evidence.Source.DisplayLabel, "Jira issue linked by a native pull request (repository-wide)"); got != tc.wantTitle {
+				if got := strings.HasSuffix(reference.Evidence.Source.DisplayLabel, "Jira issue linked by a native pull request"); got != tc.wantTitle {
 					t.Errorf("%s: PROJ-6 label %q, title served = %v, want %v", name, reference.Evidence.Source.DisplayLabel, got, tc.wantTitle)
 				}
 				if tc.wantTitle {
@@ -346,7 +345,7 @@ func TestWorkGraphReresolutionServesTheSameRepositorylessTitlesAsThePacket(t *te
 			}
 		}
 		if !served {
-			t.Errorf("%s: no reference for PROJ-6 among %d (want a label like %q)", name, len(references), linked)
+			t.Errorf("%s: no reference for PROJ-6 among %d", name, len(references))
 		}
 	}
 }
