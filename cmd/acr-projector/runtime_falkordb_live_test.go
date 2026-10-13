@@ -124,7 +124,7 @@ func TestOpenRuntimeProjectsIntoRealFalkorDBAndRetrievalReadsItBack(t *testing.T
 	cfg.PostgresDSN = dsn
 	cfg.ClickHouseDSN = "clickhouse://redacted"
 
-	runtime, err := openRuntime(ctx, cfg, discardLogger())
+	runtime, err := openRuntime(ctx, cfg, discardLogger(), nil)
 	require.NoError(t, err, "openRuntime")
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 	require.NotNil(t, runtime.Coordinator, "coordinator must start once ACR_CONTEXT_FABRIC_FALKOR_ADDR is configured")
