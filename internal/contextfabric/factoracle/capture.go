@@ -17,7 +17,6 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
-	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
 // VenueConfig names the venue. Nothing in it is written to the repository.
@@ -53,9 +52,7 @@ const venueQueryTimeout = 25 * time.Second
 func (q clickHouseQuerier) QueryStrings(ctx context.Context, statement string, params map[string]string, each func(string) error) error {
 	ctx, cancel := context.WithTimeout(ctx, venueQueryTimeout)
 	defer cancel()
-	rows, err := q.conn.Query(clickhouse.Context(ctx,
-		clickhouse.WithParameters(clickhouse.Parameters(params)),
-		clickhouse.WithSettings(clickhouse.Settings{"max_memory_usage": contextpacket.APIStatementMaxMemoryUsage})), statement)
+	rows, err := q.conn.Query(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters(params))), statement)
 	if err != nil {
 		return fmt.Errorf("select failed: %s", safeClickHouseError(err))
 	}
