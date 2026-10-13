@@ -132,13 +132,16 @@ func TestMCPFederationContractRejects_CodeGraphPayloadLeak(t *testing.T) {
 	}
 
 	// When
-	schemaErr := contractcheck.ValidateSerialized("", "mcp_context_for_task_response.v1.schema.json", mutated)
+	schemaErr := contractcheck.ValidateSerializedStrict("", "mcp_context_for_task_response.v1.schema.json", mutated)
 	var decoded MCPContextForTaskResponse
 	decodeErr := json.Unmarshal(mutated, &decoded)
 
 	// Then
-	if schemaErr == nil || decodeErr == nil {
-		t.Fatal("local context must reject provider-specific payload fields at both contract boundaries")
+	if schemaErr == nil {
+		t.Fatal("the producer check must reject provider-specific payload fields in local context")
+	}
+	if decodeErr != nil {
+		t.Fatalf("a consumer must tolerate an added field in a response: %v", decodeErr)
 	}
 }
 

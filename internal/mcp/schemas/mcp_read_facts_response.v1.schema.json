@@ -4,7 +4,6 @@
   "title": "ACR MCP read_facts Response v1",
   "description": "Result of the read_facts tool: facts from the acr fact registry, one coverage row per (kind, subject), the request as served, and untrusted-content labels. It is the hosted acr-data.v1 document, published unchanged.",
   "type": "object",
-  "additionalProperties": false,
   "required": [
     "contract_version",
     "tool",
@@ -36,7 +35,6 @@
     },
     "request": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "kinds",
         "kinds_refused",
@@ -57,7 +55,6 @@
           "type": "array",
           "items": {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "kind",
               "reason"
@@ -82,7 +79,6 @@
           "type": "array",
           "items": {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "kind",
               "canonical_id",
@@ -107,7 +103,6 @@
         },
         "window": {
           "type": "object",
-          "additionalProperties": false,
           "required": [
             "mode",
             "axis",
@@ -148,7 +143,6 @@
         },
         "units": {
           "type": "object",
-          "additionalProperties": false,
           "required": [
             "max_units",
             "cursor"
@@ -175,7 +169,6 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": false,
         "required": [
           "kind",
           "subject",
@@ -224,7 +217,6 @@
     },
     "truncation": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "truncated_by",
         "facts_omitted"
@@ -244,7 +236,6 @@
     },
     "versions": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "contract",
         "registry",
@@ -267,7 +258,6 @@
     },
     "untrusted_content": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "fields",
         "note"
@@ -289,7 +279,6 @@
   "$defs": {
     "ReadFactsSubjectRef": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "kind",
         "canonical_id"
@@ -310,7 +299,6 @@
     },
     "ServedSubject": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "kind",
         "canonical_id"
@@ -330,7 +318,6 @@
     },
     "ServedTable": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "columns",
         "rows",
@@ -425,7 +412,6 @@
     },
     "ReachedFrom": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "kind",
         "canonical_id",
@@ -447,7 +433,6 @@
     },
     "ServedFact": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "kind",
         "subject",
@@ -524,7 +509,6 @@
     },
     "WithheldItem": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "field",
         "reason"
@@ -544,7 +528,6 @@
     },
     "Provenance": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "source",
         "source_version",
@@ -573,7 +556,6 @@
           "type": "array",
           "items": {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "entity",
               "id"

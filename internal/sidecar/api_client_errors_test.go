@@ -160,7 +160,7 @@ func TestClientResponseTooLargeIsRejected(t *testing.T) {
 	}
 }
 
-func TestClientRejectsUnknownFieldsInResponse(t *testing.T) {
+func TestClientToleratesAnAddedFieldInASuccessResponse(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -171,9 +171,24 @@ func TestClientRejectsUnknownFieldsInResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.Capabilities(context.Background())
-	if !errors.Is(err, ErrMalformedResponse) {
-		t.Fatalf("expected ErrMalformedResponse for an unknown field, got %v", err)
+	if _, err = client.Capabilities(context.Background()); errors.Is(err, ErrMalformedResponse) {
+		t.Fatalf("a hosted response with an added field must decode, got %v", err)
+	}
+}
+
+func TestClientStillRejectsAWrongTypeInResponse(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"schema_version":"capabilities.v1","service":7}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(newFixtureConfig(t, server), fixedCredentialSource(testBearerCanary))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Capabilities(context.Background()); !errors.Is(err, ErrMalformedResponse) {
+		t.Fatalf("expected ErrMalformedResponse for a wrong-typed field, got %v", err)
 	}
 }
 
