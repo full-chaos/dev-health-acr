@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -183,7 +184,7 @@ func TestProjectAndIncidentMembersAreFilteredByTheStatedStatus(t *testing.T) {
 			if got := servedMemberIDs(result); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("served %s = %v, want %v", tc.kind, got, tc.want)
 			}
-			if want := (contextfabric.MemberStatusOutsideSet{Kind: tc.kind, Count: tc.outside}); result.MemberStatusOutsideSet != want {
+			if want := (contextfabric.MemberStatusOutsideSet{Kind: tc.kind, Count: tc.outside, Filtered: true, Reached: true}); result.MemberStatusOutsideSet != want {
 				t.Fatalf("outside the known set = %+v, want %+v", result.MemberStatusOutsideSet, want)
 			}
 			// Projects are the team's own reach: the member read carries the
@@ -276,7 +277,7 @@ func TestMemberStatusCountsOnlyTheMembersTheCallerMayRead(t *testing.T) {
 	if got, want := servedMemberIDs(result), []string{"incident:readable-open"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("served incidents = %v, want %v", got, want)
 	}
-	if want := (contextfabric.MemberStatusOutsideSet{Kind: contextfabric.SubjectIncident, Count: 1}); result.MemberStatusOutsideSet != want {
+	if want := (contextfabric.MemberStatusOutsideSet{Kind: contextfabric.SubjectIncident, Count: 1, Filtered: true, Reached: true}); result.MemberStatusOutsideSet != want {
 		t.Fatalf("outside the known set = %+v, want %+v: the count must not include incidents the caller cannot read", result.MemberStatusOutsideSet, want)
 	}
 	if len(telemetry.pullRequestStatusFilters) != 1 || telemetry.pullRequestStatusFilters[0].Candidates != 2 {
@@ -313,5 +314,26 @@ func TestMemberStatusForACallerWhoCanReadNoneOfTheReachedMembers(t *testing.T) {
 	want := []PullRequestStatusFilterDecision{{MemberKind: contextfabric.SubjectIncident, Status: "open", Site: PullRequestStatusFilterSitePool, Pool: -1}}
 	if !reflect.DeepEqual(telemetry.pullRequestStatusFilters, want) {
 		t.Fatalf("status filter lines = %+v, want %+v (0 candidates)", telemetry.pullRequestStatusFilters, want)
+	}
+}
+
+// TestACutReachProbeIsNotReadAsNoMemberReached: more projects the caller cannot
+// read precede the one it can than the reach probe reads, and none holds the
+// status. The probe's prefix holds no readable project, so reached stays false;
+// the read says the probe was cut, so the answer does not claim none was reached.
+func TestACutReachProbeIsNotReadAsNoMemberReached(t *testing.T) {
+	fixtures := []memberStatusFixture{}
+	for i := 0; i < exactNameCandidateQueryLimit+5; i++ {
+		fixtures = append(fixtures, memberStatusFixture{id: fmt.Sprintf("project:a-hidden-%05d", i), label: "H", stored: "completed", repo: "acme/secret"})
+	}
+	fixtures = append(fixtures, memberStatusFixture{id: "project:z-readable", label: "R", stored: "completed", repo: "acme/granted"})
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/granted"}}
+	result, _, err := discoverMemberStatusAs(t, memberStatusFake(contextfabric.SubjectProject, fixtures, nil), contextfabric.SubjectProject, "started", principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := result.MemberStatusOutsideSet
+	if !outside.Filtered || (!outside.Reached && !outside.ReachCut) {
+		t.Fatalf("outside = %+v: a readable project exists past a cut probe, the read must report it reached or the probe cut", outside)
 	}
 }
