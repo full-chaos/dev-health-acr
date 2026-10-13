@@ -39,7 +39,7 @@ import (
 var walkMemoryTables = []string{
 	"repos", "work_items", "git_pull_requests", "git_pull_request_reviews",
 	"ci_pipeline_runs", "deployments", "operational_incidents",
-	"operational_service_repository_mappings", "work_item_dependencies",
+	"operational_service_repository_mappings", "work_item_dependencies", "work_item_relations_read",
 	"work_graph_deployment_incident_edges", "work_graph_issue_pr",
 }
 
