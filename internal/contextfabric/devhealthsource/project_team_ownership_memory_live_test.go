@@ -171,7 +171,7 @@ func TestProjectTeamOwnershipStatementMemoryOnTheProdShape(t *testing.T) {
 		mustExec(t, f.ctx, direct, "OPTIMIZE TABLE "+table+" FINAL")
 	}
 	merged := measureProjectTeamsFragments(t, f, query, capped, "optimized", nil)
-	t.Error("MEASUREMENT ONLY (temporary failure so the table shows in CI):\n" + fragmentTable("unmerged", unmerged) + fragmentTable("optimized", merged))
+	t.Log(fragmentTable("unmerged", unmerged) + fragmentTable("optimized", merged))
 
 	for stage, peaks := range map[string][]fragmentPeak{"unmerged": unmerged, "optimized": merged} {
 		paged := peakOf(t, peaks, "paged_statement")
@@ -200,7 +200,7 @@ func TestProjectTeamOwnershipStatementMemoryDoesNotGrowWithVersions(t *testing.T
 		// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.
 		mustExec(t, f.ctx, direct, "OPTIMIZE TABLE team_project_ownership FINAL")
 		peak := peakOf(t, measureProjectTeamsFragments(t, f, query, capped, fmt.Sprintf("slope%d", versions), only), "paged_statement")
-		t.Errorf("MEASUREMENT ONLY slope: %d versions per pair (%d rows): paged statement peak %.2f MiB read_rows=%d", versions, memoryShapePairs*versions, peak.mib, peak.readRows)
+		t.Logf("slope: %d versions per pair (%d rows): paged statement peak %.2f MiB read_rows=%d", versions, memoryShapePairs*versions, peak.mib, peak.readRows)
 		if i == 0 {
 			small = peak.mib
 		} else {
