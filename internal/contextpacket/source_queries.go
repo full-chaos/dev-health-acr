@@ -13,17 +13,18 @@ var dependencyRelationKeySQL = dependencyrelation.KeySQL("d.relationship_type")
 
 const standardColumns = `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, toFloat64(confidence) confidence, citation, observed_at FROM (`
 
-const SourceQueryCatalogVersionV1 = "dev-health-source-catalog.v2"
+const SourceQueryCatalogVersionV1 = "dev-health-source-catalog.v3"
 
 // workGraphEndpointLabelSQL renders one edge endpoint as words. Only a pull
 // request of the scoped repository carries the repository name and its title;
 // an endpoint in any other repository is named by kind and number alone, and a
-// bare identifier never reaches the label. An issue is named by its key: its
-// title would need a work_items lookup that no key prefix bounds.
+// bare identifier never reaches the label. An issue is named by its key, and
+// by its title only where workGraphIssueTitlesMapSQL served exactly one.
 func workGraphEndpointLabelSQL(id, kind, pr string) string {
 	return "multiIf(" + pr + ".ref != '', concat(" + pr + ".slug, '#', toString(" + pr + ".number), if(" + pr + ".title = '', '', concat(' ', " + pr + ".title))), " +
 		"match(" + id + ", '^[0-9a-fA-F-]{36}#pr[0-9]+$'), concat('pull request #', splitByString('#pr', " + id + ")[2]), " +
-		"match(" + id + ", '^[0-9a-fA-F-]{36}$'), concat(replaceAll(" + kind + ", '_', ' '), ' ', substring(" + id + ", 1, 8)), " + id + ")"
+		"match(" + id + ", '^[0-9a-fA-F-]{36}$'), concat(replaceAll(" + kind + ", '_', ' '), ' ', substring(" + id + ", 1, 8)), " +
+		kind + " = 'issue', trimRight(concat(" + id + ", ' ', " + workGraphIssueTitleOf(id) + ")), " + id + ")"
 }
 
 const workGraphPullRequestsSQL = `SELECT concat(toString(p.repo_id), '#pr', toString(p.number)) ref, p.number number, ifNull(p.title, '') title, r.repo slug FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id WHERE p.org_id = {org_id:String} AND p.repo_id = {repo_id:UUID}`

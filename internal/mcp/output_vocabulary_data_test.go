@@ -5,6 +5,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 func init() {
@@ -70,6 +71,15 @@ func init() {
 			sites:          []string{"data_catalog:caller.effective_access"},
 			// schema: "data_read", "no_data_read", "not_servable"
 			goSet:      strs(directread.EffectiveAccessDataRead, directread.EffectiveAccessNoDataRead, directread.EffectiveAccessNotServable),
+			exhaustive: true,
+		},
+		outputVocabulary{
+			name:           "caller.tool_access",
+			kind:           vocabAdditive,
+			clientValidate: "none: the sidecar passes data tool responses through as raw JSON and validates no field of them",
+			sites:          []string{"data_catalog:caller.tool_access.additionalProperties"},
+			// schema: "available", "no_data_read", "not_servable"
+			goSet:      strs(string(directread.ToolAccessAvailable), string(directread.ToolAccessNoDataRead), string(directread.ToolAccessNotServable)),
 			exhaustive: true,
 		},
 		outputVocabulary{
@@ -189,6 +199,15 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
+			name:           "expansion.outcome",
+			kind:           vocabAdditive,
+			clientValidate: "none: the sidecar passes data tool responses through as raw JSON and validates no field of them",
+			sites:          []string{"read_facts:coverage.items.expansion.outcome"},
+			// schema: "not_needed", "policy_unavailable", "attempted_empty", "target_kind_mismatch", "expanded", "expanded_partial", "failed", "matched_unauthorized"
+			goSet:      strs(contextfabric.FactScopeNotNeeded, contextfabric.FactScopePolicyUnavailable, contextfabric.FactScopeAttemptedEmpty, contextfabric.FactScopeTargetKindMismatch, contextfabric.FactScopeExpanded, contextfabric.FactScopeExpandedPartial, contextfabric.FactScopeFailed, contextfabric.FactScopeMatchedUnauthorized),
+			exhaustive: true,
+		},
+		outputVocabulary{
 			name:  "status#3",
 			kind:  vocabFrozen,
 			why:   "state-machine",
@@ -221,7 +240,8 @@ func init() {
 			why:   "protocol",
 			sites: []string{"read_relationships:effective.axis"},
 			// schema: "current", "as_of"
-			schemaOnly: "the current/as_of axis is served from string literals in directread/read_relationships.go with no constant",
+			goSet:      directread.RelationshipsAxisVocabulary(),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "from.status",
@@ -238,7 +258,8 @@ func init() {
 			clientValidate: "none: the sidecar passes data tool responses through as raw JSON and validates no field of them",
 			sites:          []string{"read_relationships:edges.items.provenance.link_tier"},
 			// schema: "native", "explicit_text", "heuristic"
-			schemaOnly: "directread.linkTierVocabulary is unexported",
+			goSet:      directread.LinkTierVocabulary(),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "truncated_by",
@@ -255,7 +276,8 @@ func init() {
 			why:   "state-machine",
 			sites: []string{"record_episode:status"},
 			// schema: "recorded", "no_persist"
-			schemaOnly: "recorded/no_persist are string literals in mcp/record_episode.go",
+			goSet:      contractsv1.MCPRecordEpisodeStatusVocabulary(),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "redaction_state",
@@ -263,7 +285,8 @@ func init() {
 			clientValidate: "contractsv1.MCPRecordEpisodeResponse.ValidateRead",
 			sites:          []string{"record_episode:redaction_state"},
 			// schema: "active", "redacted", "purged_tombstone"
-			schemaOnly: "active/redacted/purged_tombstone are string literals in contracts/v1/validate.go",
+			goSet:      contractsv1.AgentEpisodeRedactionStateVocabulary(),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "transcript_disposition",
@@ -271,7 +294,8 @@ func init() {
 			clientValidate: "none: minted by the local sidecar from the request and the hosted episode; it never carries a server-added value",
 			sites:          []string{"record_episode:transcript_disposition"},
 			// schema: "not_submitted", "accepted", "redacted"
-			schemaOnly: "not_submitted/accepted/redacted are string literals in contracts/v1/mcp_validate.go",
+			goSet:      contractsv1.MCPTranscriptDispositionVocabulary(),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "refusal.code#2",

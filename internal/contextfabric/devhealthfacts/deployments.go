@@ -91,7 +91,9 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 		}
 	}
 
-	teamsWithoutRepos, projectReachedWithoutRows := 0, 0
+	var teamsWithoutRepos []contextfabric.SubjectRef
+	teamsRequested := 0
+	var projectReachedTeams []projectReachedTeam
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		outcome, scanErr := p.readTeamRollup(ctx, orgID, teamSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if scanErr != nil {
@@ -99,8 +101,9 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 		}
 		truncated = truncated || outcome.truncated
 		rejectedCount += outcome.rejected
-		teamsWithoutRepos += outcome.teamsWithoutRepos
-		projectReachedWithoutRows += outcome.projectReachedWithoutRows
+		teamsWithoutRepos = append(teamsWithoutRepos, outcome.teamsWithoutRepos...)
+		teamsRequested += outcome.teamsRequested
+		projectReachedTeams = append(projectReachedTeams, outcome.projectReachedTeams...)
 		if outcome.contributed > 0 {
 			grain = grainDaily
 		}
@@ -108,8 +111,8 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 
 	state, retentionReason := timeBound.retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
-	applyNoOwnedRepositories(&result, teamsWithoutRepos)
-	applyProjectReachedWithoutRows(&result, projectReachedWithoutRows)
+	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsWithoutRepos)
+	applyProjectReachedWithoutRows(&result, query.Subjects, projectReachedTeams)
 	return result, nil
 }
 
@@ -197,6 +200,7 @@ type deploymentRollupRepo struct {
 func (p *DeploymentsProvider) readTeamRollup(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidence *contractsv1.ContextFabricRequestedEvidenceWindow) (outcome teamRollupOutcome, err error) {
 	teamIDs, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	outcome.rejected = rejected
+	outcome.teamsRequested = len(teamIDs)
 	if len(teamIDs) == 0 {
 		return outcome, nil
 	}
@@ -209,7 +213,7 @@ func (p *DeploymentsProvider) readTeamRollup(ctx context.Context, orgID string, 
 		return outcome, err
 	}
 	reachedOnly := reachedOnlyRepositories(reached, owned)
-	outcome.projectReachedWithoutRows = reachedRepositoryCount(reachedOnly)
+	outcome.projectReachedTeams = projectReachedTeamsOf(teamIDs, bySubject, reachedOnly)
 	window := resolveRollupWindow(timeBound, evidence, clock())
 	byRepo := map[string]deploymentRollupRepo{}
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 {
@@ -251,7 +255,7 @@ ORDER BY repo_id`
 		subject := bySubject[teamID]
 		repos := owned[teamID]
 		if len(repos) == 0 {
-			outcome.teamsWithoutRepos++
+			outcome.teamsWithoutRepos = append(outcome.teamsWithoutRepos, subject)
 			continue
 		}
 		var total, failed, withData int64

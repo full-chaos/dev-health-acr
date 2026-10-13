@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab"
 )
 
 // contextFabricDataRelationshipsMaxRequestBytes bounds the read_relationships
@@ -58,7 +59,8 @@ func (a *App) contextFabricDataRelationshipsHandler() http.HandlerFunc {
 				return
 			}
 			if errors.Is(err, directread.ErrRelationshipsInternal) {
-				a.logger.ErrorContext(r.Context(), "read_relationships internal error", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "gate_decision_refused")
+				failureClass := relationshipsInternalFailureClass(err)
+				a.logger.ErrorContext(r.Context(), "read_relationships internal error", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", string(failureClass))
 				writeError(w, r, http.StatusInternalServerError, "internal_error", "The read_relationships request failed", false, nil)
 				return
 			}
@@ -80,4 +82,11 @@ func (a *App) contextFabricDataRelationshipsHandler() http.HandlerFunc {
 
 func (a *App) writeDirectRelationshipsUnavailable(w http.ResponseWriter, r *http.Request) {
 	writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Direct relationship read is temporarily unavailable", true, map[string]any{"reason": "unavailable"})
+}
+
+func relationshipsInternalFailureClass(err error) gatevocab.RelationshipsFailureClass {
+	if errors.Is(err, directread.ErrRelationshipsServedVocabulary) {
+		return gatevocab.RelationshipsFailureVocabulary
+	}
+	return gatevocab.RelationshipsFailureProof
 }

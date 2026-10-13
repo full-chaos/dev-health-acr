@@ -193,7 +193,7 @@ func TestATeamQuestionWithARefusedFactReadAnswersPartial(t *testing.T) {
 			t.Fatalf("coverage states = %v, want %s available: the kinds around the refused one are still read", states, kind)
 		}
 	}
-	if len(result.Coverage.DegradedReasons) != 1 || !strings.HasPrefix(result.Coverage.DegradedReasons[0], "pull_requests: ") ||
+	if len(result.Coverage.DegradedReasons) != 1 || !strings.HasPrefix(result.Coverage.DegradedReasons[0], "Pull request: ") ||
 		!strings.Contains(result.Coverage.DegradedReasons[0], "canonical fact provider returned a result that was rejected") {
 		t.Fatalf("degraded reasons = %v, want exactly one, naming pull_requests as rejected", result.Coverage.DegradedReasons)
 	}

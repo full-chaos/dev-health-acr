@@ -178,7 +178,9 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
 	rejectedCount := 0
-	teamsWithoutRepos, projectReachedWithoutRows := 0, 0
+	var teamsWithoutRepos []contextfabric.SubjectRef
+	teamsRequested := 0
+	var projectReachedTeams []projectReachedTeam
 	var revertCoverage revertRateCoverage
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
@@ -205,14 +207,15 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	}
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		rowCount, rejected, withoutRepos, reachedWithoutRows, scanErr := p.readTeamMetrics(ctx, orgID, teamSubjects, &facts, timeBound, query.Time.EvidenceWindow)
+		rowCount, rejected, withoutRepos, reachedTeams, scanErr := p.readTeamMetrics(ctx, orgID, teamSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team metrics", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
 		rejectedCount += rejected
 		teamsWithoutRepos = withoutRepos
-		projectReachedWithoutRows = reachedWithoutRows
+		teamsRequested = len(teamSubjects) - rejected
+		projectReachedTeams = reachedTeams
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
@@ -226,11 +229,9 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 
 	state, retentionReason := timeBound.retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
-	applyNoOwnedRepositories(&result, teamsWithoutRepos)
-	applyProjectReachedWithoutRows(&result, projectReachedWithoutRows)
-	if reason := revertCoverage.reason(); reason != "" {
-		mergeFactReadReason(&result, reason)
-	}
+	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsWithoutRepos)
+	applyProjectReachedWithoutRows(&result, query.Subjects, projectReachedTeams)
+	addScopedReason(&result, query.Subjects, subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), revertCoverage.reason())
 	return result, nil
 }
 
@@ -555,24 +556,24 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 // readTeamMetrics reads team_metrics_daily directly -- a genuinely
 // team-scoped rollup, not a proxy through any repository the team touches.
 // The SQL/scan half now lives in readers.ReadTeamMetrics (CHAOS-4377).
-func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidenceWindow *contractsv1.ContextFabricRequestedEvidenceWindow) (int, int, int, int, error) {
+func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidenceWindow *contractsv1.ContextFabricRequestedEvidenceWindow) (int, int, []contextfabric.SubjectRef, []projectReachedTeam, error) {
 	ids, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
-		return 0, rejected, 0, 0, nil
+		return 0, rejected, nil, nil, nil
 	}
 	rows, err := readers.ReadTeamMetrics(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, rejected, 0, 0, err
+		return 0, rejected, nil, nil, err
 	}
 	owned, err := teamOwnedRepositories(ctx, p.facts.client, orgID, ids, timeBound)
 	if err != nil {
-		return 0, rejected, 0, 0, err
+		return 0, rejected, nil, nil, err
 	}
 	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, ids, timeBound)
 	if err != nil {
-		return 0, rejected, 0, 0, err
+		return 0, rejected, nil, nil, err
 	}
-	projectReachedWithoutRows := reachedRepositoryCount(reachedOnlyRepositories(reached, owned))
+	projectReachedTeams := projectReachedTeamsOf(ids, bySubject, reachedOnlyRepositories(reached, owned))
 	window := resolveRollupWindow(timeBound, evidenceWindow, clock())
 	for _, r := range rows {
 		subject, ok := bySubject[r.TeamID]
@@ -592,9 +593,9 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 		// per-repository or per-day medians; absent when none merged.
 		// A team that owns no repository has no repository keys, so the
 		// readers return empty and no window field is served for it; the
-		// caller names the reason through applyNoOwnedRepositories.
+		// caller names the reason through applyTeamsOwningNothing.
 		if err := p.setTeamWindowFamilies(ctx, orgID, r.TeamID, owned[r.TeamID], window, fields); err != nil {
-			return 0, rejected, 0, 0, err
+			return 0, rejected, nil, nil, err
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
@@ -615,7 +616,7 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 		seen[teamID] = struct{}{}
 		fields := map[string]contextfabric.FactValue{}
 		if err := p.setTeamWindowFamilies(ctx, orgID, teamID, owned[teamID], window, fields); err != nil {
-			return 0, rejected, 0, 0, err
+			return 0, rejected, nil, nil, err
 		}
 		if len(fields) == 0 {
 			continue
@@ -625,13 +626,7 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
-	withoutRepos := 0
-	for _, teamID := range ids {
-		if len(owned[teamID]) == 0 {
-			withoutRepos++
-		}
-	}
-	return len(rows), rejected, withoutRepos, projectReachedWithoutRows, nil
+	return len(rows), rejected, teamsOwningNothingWithoutData(ids, bySubject, owned, *facts, nil), projectReachedTeams, nil
 }
 
 // readProjectMetrics rolls FactMetrics up for a project through

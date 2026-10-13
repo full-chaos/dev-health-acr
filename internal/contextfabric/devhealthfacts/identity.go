@@ -148,13 +148,13 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		result.OmittedCount += ownersCut
 		result.Truncated = true
 		result.State = contextfabric.SourceTruncated
-		mergeFactReadReason(&result, owningTeamsTruncatedReason)
+		addScopedReason(&result, query.Subjects, subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), owningTeamsTruncatedReason)
 	}
 	if ownershipUnread > 0 {
 		result.OmittedCount += ownershipUnread
 		result.Truncated = true
 		result.State = contextfabric.SourceTruncated
-		mergeFactReadReason(&result, owningTeamsUnreadReason)
+		addScopedReason(&result, query.Subjects, subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), owningTeamsUnreadReason)
 	}
 	return result, nil
 }

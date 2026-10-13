@@ -157,3 +157,11 @@ func TestDataCatalogSummaryOldServerWithOperationsSectionNeverClaimsAccess(t *te
 		t.Errorf("claims access: %q", got)
 	}
 }
+
+func TestDataCatalogSummaryListsAccessPerTool(t *testing.T) {
+	raw := `{"contract_version":"acr-data.v1","sections":["limits"],"caller":{"scopes":["context:read"],"grant_class":"unrestricted","effective_access":"no_data_read","tool_access":{"run_operation":"no_data_read","read_facts":"available"}}}`
+	got := RenderDataCatalogSummary([]byte(raw), DataTextMaxBytes)
+	if want := "Tool access: read_facts available; run_operation no_data_read."; !strings.Contains(got, want) {
+		t.Errorf("%q lacks %q", got, want)
+	}
+}

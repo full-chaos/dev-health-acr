@@ -161,7 +161,7 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 	if decodeInto == nil {
 		return resp.StatusCode, nil
 	}
-	if err := decodeExact(data, decodeInto); err != nil {
+	if err := decodeTolerant(data, decodeInto); err != nil {
 		return resp.StatusCode, fmt.Errorf("%w: decode hosted API response: %w", ErrInvalidResponse, err)
 	}
 	// decodeExact alone cannot require any particular field to be present:
@@ -215,6 +215,26 @@ func readLimited(body io.Reader, limit int64) (data []byte, truncated bool, err 
 func decodeExact(data []byte, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("%w: %v", ErrMalformedResponse, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrMalformedResponse, err)
+		}
+		return fmt.Errorf("%w: response contains trailing JSON content", ErrMalformedResponse)
+	}
+	return nil
+}
+
+// decodeTolerant is decodeExact for a successful hosted response: a key the
+// target type does not declare is ignored, so an installed sidecar keeps
+// reading a hosted API that has since added a response field. Trailing JSON
+// content is still rejected. Error envelopes, device errors, credential
+// lifecycle responses and refusal details keep decodeExact.
+func decodeTolerant(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("%w: %v", ErrMalformedResponse, err)
 	}

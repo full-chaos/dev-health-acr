@@ -182,6 +182,7 @@ dedicated_isolated_packages=(
 # (GOTEST_DEVHEALTHFACTS_TIMEOUT in the Makefile).
 unit_dedicated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 )
 
 # unit_split_packages is a SUBSET of unit_dedicated_packages whose dedicated
@@ -195,7 +196,10 @@ unit_dedicated_packages=(
 # after two real-ClickHouse cohort-cap tests joined it, over the 85% guard.
 unit_split_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 )
+# devhealthsource joined both lists because its single unit binary ran 503s to
+# 526s against the 510s guard (85% of 600s) and failed unrelated PRs.
 
 # heavy_exceptions names a package HEAVY (see is_heavy_package below) by hand,
 # whatever is_heavy_pattern says about it. internal/storage/postgres was

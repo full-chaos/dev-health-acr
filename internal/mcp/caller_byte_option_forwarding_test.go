@@ -41,3 +41,29 @@ func TestAnAnswerByteBudgetIsTheSheddingTargetAndTheBodyBoundIsTheServiceCeiling
 		t.Errorf("result_id = %q, want %q so the caller can fetch the canonical result", response.Structured.ResultID, result.ResultID)
 	}
 }
+
+func TestTheMCPDefaultAnswerBudgetIsForwardedOnlyAsTheServerModeShedTarget(t *testing.T) {
+	for _, mode := range []contractsv1.ContextFabricSynthesisMode{"", contractsv1.ContextFabricSynthesisModeClient} {
+		var seen contractsv1.ContextFabricInvestigationRequest
+		result := parityResult()
+		boot := answerFixtureBootstrap(t, result, &seen)
+		callInvestigateQuestion(t, boot, contractsv1.MCPInvestigateQuestionRequest{Question: result.Question, Synthesis: mode})
+		want := min(defaultAnswerMaxSerializedBytes, seen.Options.MaxSerializedBytes)
+		if mode == contractsv1.ContextFabricSynthesisModeClient {
+			want = 0
+		}
+		if seen.Options.AnswerBudgetBytes != want {
+			t.Errorf("mode %q: hosted answer_budget_bytes = %d, want %d", mode, seen.Options.AnswerBudgetBytes, want)
+		}
+	}
+}
+
+func TestACallerBudgetOnAClientSynthesisTurnIsForwardedAsTheAnswerBudget(t *testing.T) {
+	var seen contractsv1.ContextFabricInvestigationRequest
+	result := parityResult()
+	boot := answerFixtureBootstrap(t, result, &seen)
+	callInvestigateQuestion(t, boot, contractsv1.MCPInvestigateQuestionRequest{Question: result.Question, Synthesis: contractsv1.ContextFabricSynthesisModeClient, Budget: &contractsv1.MCPInvestigationBudget{MaxSerializedBytes: 60000}})
+	if seen.Options.AnswerBudgetBytes != 60000 {
+		t.Errorf("hosted answer_budget_bytes = %d, want 60000", seen.Options.AnswerBudgetBytes)
+	}
+}

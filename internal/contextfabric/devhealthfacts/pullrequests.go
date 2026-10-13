@@ -72,7 +72,7 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 		}
 		rejected += teamOutcome.rejected
 	}
-	var projectLinksUnwindowed bool
+	var projectLinksUnwindowed []contextfabric.SubjectRef
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
 		projectRejected, unwindowed, projectErr := p.readProjectRollup(ctx, orgID, projectSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if projectErr != nil {
@@ -135,10 +135,9 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 	}
 	state, retentionReason := timeBound.retentionState(len(rows) + teamFactCount)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery || teamOutcome.truncated || projectLinksTruncated}
-	applyNoOwnedRepositories(&result, teamOutcome.teamsWithoutRepos)
-	if teamOutcome.linkRowsUnwindowed || projectLinksUnwindowed {
-		mergeFactReadReason(&result, teamProjectLinksUnwindowedReason)
-	}
+	applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
+	unwindowedLinkSubjects := append(append([]contextfabric.SubjectRef(nil), teamOutcome.linkUnwindowedTeams...), projectLinksUnwindowed...)
+	addScopedReason(&result, query.Subjects, unwindowedLinkSubjects, teamProjectLinksUnwindowedReason)
 	return result, nil
 }
 
@@ -211,6 +210,7 @@ type pullRequestRollupRepo struct{ opened, merged, closedUnmerged int64 }
 func (p *PullRequestsProvider) readTeamRollup(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidence *contractsv1.ContextFabricRequestedEvidenceWindow) (outcome teamRollupOutcome, err error) {
 	teamIDs, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	outcome.rejected = rejected
+	outcome.teamsRequested = len(teamIDs)
 	if len(teamIDs) == 0 {
 		return outcome, nil
 	}
@@ -259,7 +259,7 @@ ORDER BY repo_id`
 		subject := bySubject[teamID]
 		repos := owned[teamID]
 		if len(repos) == 0 && len(reachedOnly[teamID]) == 0 {
-			outcome.teamsWithoutRepos++
+			outcome.teamsWithoutRepos = append(outcome.teamsWithoutRepos, subject)
 			continue
 		}
 		var opened, merged, closedUnmerged, withData int64
@@ -289,6 +289,7 @@ ORDER BY repo_id`
 			}
 		}
 		var reachedWithData int64
+		teamLinkUnwindowed := false
 		weakestRank := int64(0)
 		for _, repo := range reachedOnly[teamID] {
 			r, ok := reachedCounts[teamID+blockerPairSeparator+repo.key]
@@ -297,8 +298,9 @@ ORDER BY repo_id`
 			}
 			outcome.contributed++
 			reachedWithData++
-			if timeBound.active {
-				outcome.linkRowsUnwindowed = true
+			if timeBound.active && !teamLinkUnwindowed {
+				teamLinkUnwindowed = true
+				outcome.linkUnwindowedTeams = append(outcome.linkUnwindowedTeams, subject)
 			}
 			opened += r.opened
 			merged += r.merged

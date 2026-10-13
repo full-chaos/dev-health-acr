@@ -63,14 +63,14 @@ type asOfBounds struct {
 // chain into the counts and candidates. A repository the link names that the
 // repos catalog does not hold (empty slug) or the zero UUID is a missing next
 // hop, never a fake target. It reports whether the row became a candidate.
-func classifyLinkedRepository(counts *contextfabric.FactScopeExpansionCounts, candidates *[]repositoryCandidate, repoID, repoSlug, tier string, root contextfabric.SubjectRef) bool {
+func classifyLinkedRepository(counts *contextfabric.FactScopeExpansionCounts, candidates *[]repositoryCandidate, repoID, repoSlug, tier string, roots []contextfabric.SubjectRef) bool {
 	if repoID == zeroRepositoryID || repoSlug == "" {
 		counts.MissingNextHopCount++
 		return false
 	}
 	counts.CandidateCount++
 	*candidates = append(*candidates, repositoryCandidate{
-		repoID: repoID, repoSlug: repoSlug, attributionSource: tier, originRoot: root,
+		repoID: repoID, repoSlug: repoSlug, attributionSource: tier, originRoot: firstRoot(roots), originRoots: roots,
 	})
 	return true
 }
@@ -172,7 +172,7 @@ func (e *ScopeExpander) teamRepositories(ctx context.Context, orgID string, orig
 	}
 	limitPlusOne := limit + 1
 	current := readers.OwnershipValidityPredicate(readers.TimeBound{})
-	statement := `SELECT repo_id_str, repo_slug, argMin(source, source_rank) AS best_source, argMin(origin_team_id, (source_rank, origin_team_id)) AS origin_team_id
+	statement := `SELECT repo_id_str, repo_slug, argMin(source, source_rank) AS best_source, argMin(origin_team_id, (source_rank, origin_team_id)) AS best_origin_team_id, arraySort(groupUniqArray(origin_team_id)) AS origin_team_ids
 FROM (
   SELECT toString(o.repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, '` + teamRepositoryOwnershipSource + `' AS source, 0 AS source_rank, o.team_id AS origin_team_id
   FROM ` + readers.TeamRepositoryOwnershipSQL(current) + ` AS o
@@ -205,7 +205,8 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	repositoryRows := 0
 	for rows.Next() {
 		var repoID, repoSlug, bestSource, originTeamID string
-		if err := rows.Scan(&repoID, &repoSlug, &bestSource, &originTeamID); err != nil {
+		var originTeamIDs []string
+		if err := rows.Scan(&repoID, &repoSlug, &bestSource, &originTeamID, &originTeamIDs); err != nil {
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		repositoryRows++
@@ -220,7 +221,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		}
 		candidates = append(candidates, repositoryCandidate{
 			repoID: repoID, repoSlug: repoSlug, basis: basis, attributionSource: bestSource,
-			originRoot: originsByID[originTeamID],
+			originRoot: originsByID[originTeamID], originRoots: originRootsOf(originsByID[originTeamID], originTeamIDs, originsByID),
 		})
 	}
 	if err := rows.Err(); err != nil {

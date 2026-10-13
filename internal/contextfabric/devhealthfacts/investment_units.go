@@ -133,7 +133,7 @@ LIMIT {` + unitLimitParam + `:UInt32}`
 		statement = strings.Replace(statement, "arrayFlatten(groupArray(if(repo_uuid = '', ref_texts, [])) OVER (PARTITION BY win, work_unit_id)) AS unresolved_refs",
 			"arrayFlatten(groupArray(if(repo_uuid = '', "+realRefs+", [])) OVER (PARTITION BY win, work_unit_id)) AS unresolved_refs", 1)
 	}
-	return statement
+	return withInvestmentSplitMemory(statement)
 }
 
 // readInvestmentUnits reads one page of the units behind the allocation of

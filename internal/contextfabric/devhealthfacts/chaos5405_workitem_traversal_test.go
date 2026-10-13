@@ -158,10 +158,10 @@ func (c chaos5405Census) columns() []any {
 		c.ExcludedExplicitText, c.ExcludedHeuristic}
 }
 
-// chaos5405Row builds one selection row in the TWENTY-column shape
+// chaos5405Row builds one selection row in the TWENTY-ONE-column shape
 // workItemScopeSelectionColumns documents: five masked identity columns, the
-// two per-row flags, the two authorization arrays, then the eleven window
-// aggregates. An authorized row with a repository names the direct path and
+// two per-row flags, the two authorization arrays, the eleven window
+// aggregates, then the masked origin id list. An authorized row with a repository names the direct path and
 // its slug; a repo-less one names the organization grant and no repository,
 // the only path a row with empty derived evidence can pass the second gate
 // on.
@@ -179,7 +179,7 @@ func chaos5405Row(repoID, workItemID, repoSlug, originID, source string, census 
 	if repoLess == 0 {
 		paths, repositories = []string{"direct_repo"}, []string{repoSlug}
 	}
-	return append([]any{repoID, workItemID, repoSlug, originID, source, uint8(1), repoLess, paths, repositories}, census.columns()...)
+	return append(append([]any{repoID, workItemID, repoSlug, originID, source, uint8(1), repoLess, paths, repositories}, census.columns()...), []string{originID})
 }
 
 // chaos5405MaskedRow is a DENIED row as the projection actually returns it:
@@ -189,7 +189,7 @@ func chaos5405MaskedRow(repoLess bool, census chaos5405Census) []any {
 	if repoLess {
 		flag = 1
 	}
-	return append([]any{"", "", "", "", "", uint8(0), flag, []string{}, []string{}}, census.columns()...)
+	return append(append([]any{"", "", "", "", "", uint8(0), flag, []string{}, []string{}}, census.columns()...), []string{})
 }
 
 func chaos5405Expand(t *testing.T, client *fakeClient, principal storage.Principal, policy contextfabric.FactScopePolicy, kind contextfabric.FactKind, origin contextfabric.SubjectRef, limit int) (contextfabric.FactScopeExpansionResult, error) {
@@ -479,8 +479,8 @@ func TestChaos5405_ControlAnUnknownPolicyStillErrors(t *testing.T) {
 func TestChaos5405_ControlTheRepositoryHopStillRefusesTheSentinels(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{{match: "argMax(l.provenance, l.link_rank)", rows: [][]any{
-		{chaos5405ZeroRepoID, "", chaos5405ProjectID, "native"},
-		{chaos5405OrphanRepoID, "", chaos5405ProjectID, "native"},
+		{chaos5405ZeroRepoID, "", chaos5405ProjectID, "native", []string{chaos5405ProjectID}},
+		{chaos5405OrphanRepoID, "", chaos5405ProjectID, "native", []string{chaos5405ProjectID}},
 	}}}}
 	result, err := devhealthfacts.NewScopeExpander(client).ExpandFactScope(context.Background(), contextfabric.FactScopeExpansionRequest{
 		Principal:       orgWidePrincipal(),

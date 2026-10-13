@@ -2435,7 +2435,7 @@ var DirectRelationshipsRead = Event{
 		{Key: "truncated_by", Type: FieldString, Presence: PresenceConditional, Applicability: "written when a bound cut a depth-2 walk", ClosedVocabulary: []string{"frontier_cap", "frontier_scan_cap"}},
 		{Key: "cursor_in", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request carried a cursor", ClosedVocabulary: arrayTokens(directRelationshipsCursorArr[:])},
 		{Key: "cursor_out", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the page returned a next cursor", ClosedVocabulary: []string{"issued"}},
-		{Key: "failure_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the read was unavailable or its gate proof was refused", ClosedVocabulary: arrayTokens(directRelationshipsFailureArr[:])},
+		{Key: "failure_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the read was unavailable, its gate proof was refused or a served value fell outside its pinned set", ClosedVocabulary: arrayTokens(directRelationshipsFailureArr[:])},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

@@ -769,7 +769,7 @@ const (
 // The plan keeps the caller's own budget, so the continuation decision does
 // not read the synthesis mode.
 func answerFitBytes(request InvestigationRequest, planBytes int64, input *contractsv1.ContextFabricSynthesisInput) int64 {
-	bodyBound := request.Options.MaxSerializedBytes
+	bodyBound := effectiveCallerBudget(request.Options)
 	if bodyBound <= 0 || input == nil || !clientSynthesisWithoutDraft(request) {
 		return planBytes
 	}
