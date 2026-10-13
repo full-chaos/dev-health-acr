@@ -216,21 +216,10 @@
     ],
     "partial": true,
     "degraded_reasons": [
-      "kind_census_truncated:work_item:2000:1",
-      "status: devhealthfacts: query work item status failed"
+      "Status: devhealthfacts: query work item status failed",
+      "kind_census_truncated:work_item:2000:1"
     ],
     "details": [
-      {
-        "detail_id": "cov-02",
-        "source": "context-fabric:graph",
-        "code": "kind_census_truncated",
-        "degrading": true,
-        "kind": "work_item",
-        "declared": 2000,
-        "served": 1,
-        "label": "At least 2000 work item found; 1 included",
-        "raw": "kind_census_truncated:work_item:2000:1"
-      },
       {
         "detail_id": "cov-01",
         "source": "canonical_fact:status",
@@ -242,7 +231,18 @@
           "work_item"
         ],
         "label": "Status facts could not be read",
-        "raw": "status: devhealthfacts: query work item status failed"
+        "raw": "Status: devhealthfacts: query work item status failed"
+      },
+      {
+        "detail_id": "cov-02",
+        "source": "context-fabric:graph",
+        "code": "kind_census_truncated",
+        "degrading": true,
+        "kind": "work_item",
+        "declared": 2000,
+        "served": 1,
+        "label": "At least 2000 work item found; 1 included",
+        "raw": "kind_census_truncated:work_item:2000:1"
       }
     ]
   },

@@ -88,17 +88,6 @@
   ],
   "coverage_details": [
     {
-      "detail_id": "cov-02",
-      "source": "context-fabric:graph",
-      "code": "kind_census_truncated",
-      "degrading": true,
-      "kind": "work_item",
-      "declared": 2000,
-      "served": 1,
-      "label": "At least 2000 work item found; 1 included",
-      "raw": "kind_census_truncated:work_item:2000:1"
-    },
-    {
       "detail_id": "cov-01",
       "source": "canonical_fact:status",
       "code": "fact_read_failed",
@@ -109,7 +98,18 @@
         "work_item"
       ],
       "label": "Status facts could not be read",
-      "raw": "status: devhealthfacts: query work item status failed"
+      "raw": "Status: devhealthfacts: query work item status failed"
+    },
+    {
+      "detail_id": "cov-02",
+      "source": "context-fabric:graph",
+      "code": "kind_census_truncated",
+      "degrading": true,
+      "kind": "work_item",
+      "declared": 2000,
+      "served": 1,
+      "label": "At least 2000 work item found; 1 included",
+      "raw": "kind_census_truncated:work_item:2000:1"
     }
   ],
   "evidence_ref_labels": {

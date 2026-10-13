@@ -96,7 +96,7 @@
         "work_item"
       ],
       "label": "Work facts could not be read",
-      "raw": "work: devhealthfacts: query work item work descriptors failed"
+      "raw": "Work: devhealthfacts: query work item work descriptors failed"
     }
   ],
   "evidence_ref_labels": {

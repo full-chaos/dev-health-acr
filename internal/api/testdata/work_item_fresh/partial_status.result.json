@@ -206,7 +206,7 @@
     ],
     "partial": true,
     "degraded_reasons": [
-      "status: devhealthfacts: query work item status failed"
+      "Status: devhealthfacts: query work item status failed"
     ],
     "details": [
       {
@@ -220,7 +220,7 @@
           "work_item"
         ],
         "label": "Status facts could not be read",
-        "raw": "status: devhealthfacts: query work item status failed"
+        "raw": "Status: devhealthfacts: query work item status failed"
       }
     ]
   },
