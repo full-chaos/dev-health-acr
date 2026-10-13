@@ -16,8 +16,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxGraphEpochs = 4096
-
 var (
 	ErrRefused = errors.New("orgpurge: purge refused")
 	ErrLocked  = errors.New("orgpurge: organization is locked by another projector")
@@ -29,8 +27,11 @@ func OrgKey(orgID string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// GraphDropper finds and removes the organization's graphs at every epoch,
+// by scanning the graph keys that exist rather than counting epochs.
 type GraphDropper interface {
-	DeleteEpochGraph(ctx context.Context, orgID string, epoch, activeEpoch int64) error
+	CountOrganizationGraphs(ctx context.Context, orgID string) (int, error)
+	DeleteOrganizationGraphs(ctx context.Context, orgID string) (int, error)
 }
 
 // EffectiveSet is the projector's current organization set.
@@ -69,7 +70,7 @@ type Options struct {
 type Report struct {
 	OrgKey            string           `json:"org_key"`
 	DryRun            bool             `json:"dry_run"`
-	GraphEpochs       int              `json:"graph_epochs_targeted"`
+	Graphs            int              `json:"graphs"`
 	Rows              map[string]int64 `json:"rows"`
 	TotalRows         int64            `json:"total_rows"`
 	KeptAuditEvents   int64            `json:"kept_audit_events"`
@@ -164,18 +165,13 @@ func (p *Purger) Run(ctx context.Context, orgID string, opts Options) (Report, e
 	}
 	defer func() { _ = unlock() }()
 
-	maxEpoch, err := p.maxEpoch(ctx, orgID)
-	if err != nil {
-		return report, err
+	if opts.DryRun {
+		report.Graphs, err = p.Graph.CountOrganizationGraphs(ctx, orgID)
+	} else {
+		report.Graphs, err = p.Graph.DeleteOrganizationGraphs(ctx, orgID)
 	}
-	report.GraphEpochs = int(maxEpoch) + 1
-
-	if !opts.DryRun {
-		for epoch := int64(0); epoch <= maxEpoch; epoch++ {
-			if err := p.Graph.DeleteEpochGraph(ctx, orgID, epoch, -1); err != nil {
-				return report, fmt.Errorf("drop graph epoch %d: %w", epoch, err)
-			}
-		}
+	if err != nil {
+		return report, fmt.Errorf("organization graphs: %w", err)
 	}
 
 	tx, err := p.DB.BeginTx(ctx, nil)
@@ -222,28 +218,12 @@ func (p *Purger) Run(ctx context.Context, orgID string, opts Options) (Report, e
 	return report, nil
 }
 
-func (p *Purger) maxEpoch(ctx context.Context, orgID string) (int64, error) {
-	var maxEpoch int64
-	err := p.DB.QueryRowContext(ctx, `
-SELECT GREATEST(
-  COALESCE((SELECT last_allocated_epoch FROM acr.context_fabric_graph_lifecycle WHERE org_id = $1), 0),
-  COALESCE((SELECT max(epoch) FROM acr.context_fabric_graph_epoch_retirements WHERE org_id = $1), 0),
-  COALESCE((SELECT max(epoch) FROM acr.context_fabric_graph_build_source_progress WHERE org_id = $1), 0))`, orgID).Scan(&maxEpoch)
-	if err != nil {
-		return 0, fmt.Errorf("read graph epochs: %w", err)
-	}
-	if maxEpoch < 0 || maxEpoch >= maxGraphEpochs {
-		return 0, fmt.Errorf("%w: graph epoch count out of range", ErrRefused)
-	}
-	return maxEpoch, nil
-}
-
 func (p *Purger) writeAudit(ctx context.Context, tx *sql.Tx, orgID string, report Report) error {
 	now := time.Now
 	if p.Now != nil {
 		now = p.Now
 	}
-	metadata, err := json.Marshal(map[string]any{"rows": report.Rows, "graph_epochs": report.GraphEpochs, "kept_legal_hold_episodes": report.KeptLegalHold})
+	metadata, err := json.Marshal(map[string]any{"rows": report.Rows, "graphs": report.Graphs, "kept_legal_hold_episodes": report.KeptLegalHold})
 	if err != nil {
 		return fmt.Errorf("encode audit metadata: %w", err)
 	}

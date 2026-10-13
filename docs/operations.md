@@ -1709,7 +1709,7 @@ the stream is drained and verify the projector env has no such variable.
 
 ### Purging a deleted organization
 
-`acr-projector purge --org <uuid>` removes everything ACR holds for an organization that has left Dev Health: every FalkorDB epoch graph and the org-keyed Postgres rows (the Context Fabric tables, credentials, workload bindings, device authorizations, packet snapshots and episodes). Run it as a one-off Job with the same environment as `rebuild`, plus `ACR_DEV_HEALTH_ENTITLEMENT_URL` and `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`.
+`acr-projector purge --org <uuid>` removes everything ACR holds for an organization that has left Dev Health: every FalkorDB graph of the organization at any epoch (found by scanning the existing graph keys, so an orphan epoch above the recorded one is dropped too) and the org-keyed Postgres rows (the Context Fabric tables, credentials, workload bindings, device authorizations, packet snapshots and episodes). Run it as a one-off Job with the same environment as `rebuild`, plus `ACR_DEV_HEALTH_ENTITLEMENT_URL` and `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`.
 
 1. `purge --org <uuid> --dry-run` prints row counts, the graph epochs it would drop, and the `org_key`. It changes nothing.
 2. `purge --org <uuid> --attest-deleted --confirm-hash <org_key>` runs the purge in one Postgres transaction after the graphs are dropped.

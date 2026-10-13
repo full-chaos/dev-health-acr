@@ -7,7 +7,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -44,23 +43,9 @@ func (f fakeEntitlements) HasEntitlement(_ context.Context, org, _ string) (bool
 	return false, errors.New("unavailable")
 }
 
-type recordingGraph struct {
-	inner  orgpurge.GraphDropper
-	mu     sync.Mutex
-	epochs map[string][]int64
-}
-
-func (r *recordingGraph) DeleteEpochGraph(ctx context.Context, org string, epoch, active int64) error {
-	r.mu.Lock()
-	r.epochs[org] = append(r.epochs[org], epoch)
-	r.mu.Unlock()
-	return r.inner.DeleteEpochGraph(ctx, org, epoch, active)
-}
-
 type rig struct {
 	db      *sql.DB
 	adapter *falkorgraph.Adapter
-	graph   *recordingGraph
 	set     fakeSet
 	ent     fakeEntitlements
 	purger  *orgpurge.Purger
@@ -104,9 +89,8 @@ func newRig(t *testing.T) *rig {
 
 	locker, err := projectionrun.NewPostgresOrgLocker(db)
 	require.NoError(t, err)
-	r := &rig{db: db, adapter: adapter, set: fakeSet{allowed: map[string]bool{}}, ent: fakeEntitlements{known: map[string]bool{}},
-		graph: &recordingGraph{inner: adapter, epochs: map[string][]int64{}}}
-	r.purger = &orgpurge.Purger{DB: db, Graph: r.graph, Set: r.set, Entitlements: r.ent, Locker: locker}
+	r := &rig{db: db, adapter: adapter, set: fakeSet{allowed: map[string]bool{}}, ent: fakeEntitlements{known: map[string]bool{}}}
+	r.purger = &orgpurge.Purger{DB: db, Graph: adapter, Set: r.set, Entitlements: r.ent, Locker: locker}
 	return r
 }
 
@@ -136,7 +120,7 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, beforeGone, rowCounts(t, r.db, orgGone), "dry run must change nothing")
 	require.True(t, graphExists(t, r.adapter, orgGone), "dry run must keep the graph")
-	require.Empty(t, r.graph.epochs[orgGone], "dry run must not drop a graph")
+	require.Equal(t, 1, dry.Graphs, "dry run counts the org's graph")
 	for table, n := range dry.Rows {
 		want := beforeGone[table]
 		if table == "agent_episodes" {
@@ -164,7 +148,13 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 	report, err := r.run(t, orgGone, opts)
 	require.NoError(t, err)
 	require.True(t, report.AuditRowWritten)
-	require.Equal(t, []int64{0, 1, 2}, r.graph.epochs[orgGone], "every allocated epoch graph is dropped")
+	require.Equal(t, 1, report.Graphs)
+	left, err := r.adapter.CountOrganizationGraphs(ctx, orgGone)
+	require.NoError(t, err)
+	require.Zero(t, left)
+	keptGraphs, err := r.adapter.CountOrganizationGraphs(ctx, orgKept)
+	require.NoError(t, err)
+	require.Equal(t, 1, keptGraphs)
 
 	after := rowCounts(t, r.db, orgGone)
 	for _, table := range append(orgpurge.PurgedTables(), "oauth_authorization_requests") {

@@ -164,6 +164,66 @@ func (a *Adapter) DeleteEpochGraph(ctx context.Context, orgID string, epoch, act
 
 var _ contextfabric.EpochGraphDeleter = (*Adapter)(nil)
 
+// organizationGraphKeys returns every existing graph key that belongs to
+// orgID at any epoch: the unsuffixed epoch-0 key and "<key>-e<digits>".
+// It scans GRAPH.LIST instead of counting up to a recorded epoch, so a graph
+// above the recorded epoch (an aborted build) is found too.
+func (a *Adapter) organizationGraphKeys(ctx context.Context, orgID string) ([]string, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return nil, errors.New("falkorgraph: organization is required")
+	}
+	names, err := a.api.listGraphs(ctx)
+	if err != nil {
+		return nil, safeDependencyError("list organization graphs", err)
+	}
+	return matchOrganizationGraphKeys(names, graphKey(a.config.GraphPrefix, orgID)), nil
+}
+
+// matchOrganizationGraphKeys keeps the names equal to base or to "<base>-e<digits>".
+func matchOrganizationGraphKeys(names []string, base string) []string {
+	var keys []string
+	for _, name := range names {
+		if name == base {
+			keys = append(keys, name)
+			continue
+		}
+		suffix, ok := strings.CutPrefix(name, base+"-e")
+		if ok && suffix != "" && strings.Trim(suffix, "0123456789") == "" {
+			keys = append(keys, name)
+		}
+	}
+	return keys
+}
+
+// CountOrganizationGraphs reports how many graphs exist for orgID at any epoch.
+func (a *Adapter) CountOrganizationGraphs(ctx context.Context, orgID string) (int, error) {
+	keys, err := a.organizationGraphKeys(ctx, orgID)
+	return len(keys), err
+}
+
+// DeleteOrganizationGraphs deletes every graph that exists for orgID at any
+// epoch and reports how many it removed. It is for an organization that has
+// left the deployment; it does not check the active epoch.
+func (a *Adapter) DeleteOrganizationGraphs(ctx context.Context, orgID string) (int, error) {
+	keys, err := a.organizationGraphKeys(ctx, orgID)
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, key := range keys {
+		err := a.api.deleteGraph(ctx, key)
+		a.bootstrapMu.Lock()
+		delete(a.bootstrapDone, key)
+		a.bootstrapMu.Unlock()
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return deleted, safeDependencyError("delete organization graph", err)
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
 // AssertResolvedPrefix is the CHAOS-3898 §2.0 startup/config assertion:
 // each process asserts a non-empty resolved graph-key prefix at boot and
 // logs the resolved value once. Config.validate() (already invoked by

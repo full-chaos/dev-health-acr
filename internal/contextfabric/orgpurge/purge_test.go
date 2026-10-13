@@ -30,7 +30,8 @@ func (l panicLocker) Lock(context.Context, string) (func() error, error) {
 
 type noGraph struct{}
 
-func (noGraph) DeleteEpochGraph(context.Context, string, int64, int64) error { return nil }
+func (noGraph) CountOrganizationGraphs(context.Context, string) (int, error)  { return 0, nil }
+func (noGraph) DeleteOrganizationGraphs(context.Context, string) (int, error) { return 0, nil }
 
 const testOrg = "11111111-2222-3333-4444-555555555555"
 

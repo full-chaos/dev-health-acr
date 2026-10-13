@@ -14,7 +14,6 @@ import (
 	"syscall"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/orgpurge"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 	"github.com/full-chaos/dev-health-acr/internal/entitlements"
@@ -63,9 +62,9 @@ func purge(args []string) error {
 	if runtime.Coordinator == nil || runtime.DB == nil {
 		return errors.New("acr-projector purge requires Postgres, ClickHouse, and a configured graph backend")
 	}
-	deleter, ok := runtime.Backend.(contextfabric.EpochGraphDeleter)
+	deleter, ok := runtime.Backend.(orgpurge.GraphDropper)
 	if !ok {
-		return errors.New("acr-projector purge: the graph backend cannot delete a graph by epoch")
+		return errors.New("acr-projector purge: the graph backend cannot list and delete organization graphs")
 	}
 	locker, err := projectionrun.NewPostgresOrgLocker(runtime.DB)
 	if err != nil {
@@ -76,7 +75,7 @@ func purge(args []string) error {
 	if err != nil {
 		return fmt.Errorf("purge organization %s: %w", report.OrgKey, err)
 	}
-	logger.InfoContext(ctx, "projection organization purged", "org_key", report.OrgKey, "dry_run", report.DryRun, "total_rows", report.TotalRows, "graph_epochs", report.GraphEpochs)
+	logger.InfoContext(ctx, "projection organization purged", "org_key", report.OrgKey, "dry_run", report.DryRun, "total_rows", report.TotalRows, "graphs", report.Graphs)
 	encoded, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return err
