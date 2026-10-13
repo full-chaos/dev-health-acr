@@ -199,14 +199,14 @@
       {
         "source": "canonical_fact:work",
         "state": "unavailable",
-        "reason": "devhealthfacts: query work item work descriptors failed",
+        "reason": "The work read failed; the facts for it are not shown.",
         "label": "Canonical facts — work",
         "state_label": "unavailable"
       }
     ],
     "partial": true,
     "degraded_reasons": [
-      "work: devhealthfacts: query work item work descriptors failed"
+      "Work: The work read failed; the facts for it are not shown."
     ],
     "details": [
       {
@@ -220,7 +220,7 @@
           "work_item"
         ],
         "label": "Work facts could not be read",
-        "raw": "work: devhealthfacts: query work item work descriptors failed"
+        "raw": "Work: The work read failed; the facts for it are not shown."
       }
     ]
   },

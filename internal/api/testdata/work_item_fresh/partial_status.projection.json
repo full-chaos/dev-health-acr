@@ -73,7 +73,7 @@
     {
       "source": "canonical_fact:status",
       "state": "unavailable",
-      "reason": "devhealthfacts: query work item status failed",
+      "reason": "The status read failed; the facts for it are not shown.",
       "label": "Canonical facts — status",
       "state_label": "unavailable"
     },
@@ -96,7 +96,7 @@
         "work_item"
       ],
       "label": "Status facts could not be read",
-      "raw": "status: devhealthfacts: query work item status failed"
+      "raw": "Status: The status read failed; the facts for it are not shown."
     }
   ],
   "evidence_ref_labels": {

@@ -26,7 +26,7 @@ func TestScopeGapCauseSeparatesUnsupportedWindowFromUnconfigured(t *testing.T) {
 		if got := gap.WindowUnsupported(); got != tc.windowUnsupport {
 			t.Errorf("%s: WindowUnsupported = %v, want %v", tc.name, got, tc.windowUnsupport)
 		}
-		reason := unexpandedReason(capability, gap)
+		reason := unexpandedReason(capability, gap, false)
 		if tc.windowUnsupport && !strings.Contains(reason, tc.wantText) {
 			t.Errorf("%s: reason %q lacks %q", tc.name, reason, tc.wantText)
 		}
