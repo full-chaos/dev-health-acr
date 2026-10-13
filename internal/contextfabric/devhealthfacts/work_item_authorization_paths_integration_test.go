@@ -109,7 +109,7 @@ func newAuthzPathsFixture(t *testing.T) authzPathsFixture {
 		t.Fatalf("open query client: %v", err)
 	}
 	t.Cleanup(func() { _ = query.Close() })
-	for _, statement := range devhealthschema.DDL("repos", "work_items", "work_item_transitions", "projects", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr", "work_item_dependencies") {
+	for _, statement := range devhealthschema.DDL("repos", "work_items", "work_item_transitions", "projects", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr", "work_item_dependencies", "work_item_dependency_first_seen") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create fixture table: %v\n%s", err, statement)
 		}

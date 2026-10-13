@@ -89,14 +89,14 @@ func recordEpisodeResponse(input contractsv1.MCPRecordEpisodeRequest, result sid
 		Scope:           *input.Scope,
 	}
 	if result.NoPersist {
-		response.Status = "no_persist"
+		response.Status = contractsv1.MCPRecordEpisodeStatusNoPersist
 		response.TranscriptDisposition = transcriptDisposition(input, nil)
 		return response, response.Validate()
 	}
 	if result.Episode == nil {
 		return contractsv1.MCPRecordEpisodeResponse{}, sidecar.ErrInvalidResponse
 	}
-	response.Status = "recorded"
+	response.Status = contractsv1.MCPRecordEpisodeStatusRecorded
 	response.EpisodeID = result.Episode.EpisodeID
 	response.CreatedAt = &result.Episode.CreatedAt
 	response.RedactionState = result.Episode.RedactionState
@@ -109,10 +109,10 @@ func recordEpisodeResponse(input contractsv1.MCPRecordEpisodeRequest, result sid
 
 func transcriptDisposition(input contractsv1.MCPRecordEpisodeRequest, episode *contractsv1.AgentEpisode) string {
 	if input.Transcript.Mode == "none" {
-		return "not_submitted"
+		return contractsv1.MCPTranscriptDispositionNotSubmitted
 	}
-	if episode != nil && (episode.RedactionState != "active" || episode.Transcript.Mode == "redacted_summary") {
-		return "redacted"
+	if episode != nil && (episode.RedactionState != contractsv1.AgentEpisodeRedactionActive || episode.Transcript.Mode == "redacted_summary") {
+		return contractsv1.MCPTranscriptDispositionRedacted
 	}
-	return "accepted"
+	return contractsv1.MCPTranscriptDispositionAccepted
 }

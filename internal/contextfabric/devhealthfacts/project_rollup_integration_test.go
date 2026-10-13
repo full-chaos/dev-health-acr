@@ -71,10 +71,16 @@ func (s projectRollupSeed) blocks(source, target string) {
 		projectRollupOrg, source, target, "blocks", s.at)
 }
 
+func (s projectRollupSeed) blocksSince(source, target string, started time.Time) {
+	s.t.Helper()
+	s.exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		projectRollupOrg, source, target, "blocks", "blocks", s.at, started)
+}
+
 func newProjectRollupSeed(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) projectRollupSeed {
 	t.Helper()
 	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_graph_issue_pr",
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
@@ -138,7 +144,7 @@ func TestProjectRollupsCountThroughTheEntityTreeOnRealClickHouse(t *testing.T) {
 	s.link("repo-a", "i-ghost", 9, "native")
 	s.link("repo-a", "pr-item", 4, "native")
 	s.link("repo-a", "i-dup", 5, "native")
-	s.blocks("b-open", "i-native")
+	s.blocksSince("b-open", "i-native", time.Now().UTC().Add(-12*24*time.Hour-3*time.Hour))
 	s.blocks("b-done", "i-heuristic")
 	s.blocks("b-secret", "i-text")
 	s.blocks("b-open", "pr-item")
@@ -186,6 +192,8 @@ func TestProjectRollupsCountThroughTheEntityTreeOnRealClickHouse(t *testing.T) {
 	wantInt(t, fields, "blocked_work_items_current", 1)
 	wantInt(t, fields, "blocker_dependencies_current", 1)
 	wantInt(t, fields, "blocker_dependencies_excluded_by_status_current", 1)
+	wantAgeDays(t, "project row", fields, 12)
+	wantAgeString(t, "project row", fields, "oldest_blocked_age_basis", "exact")
 }
 
 // A pull request is open when its stored state is exactly open (ops stores the

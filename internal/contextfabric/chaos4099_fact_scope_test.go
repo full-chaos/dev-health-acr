@@ -175,12 +175,11 @@ func TestChaos4099_ProjectSubjectNoLongerClaimsAProofOfAbsence(t *testing.T) {
 		if !factStateDegrades(observation.State) {
 			t.Fatalf("%s state = %q, want a degrading state: the answer IS missing evidence it could have had", kind, observation.State)
 		}
-		if strings.HasPrefix(observation.Reason, FactPruneReasonSubjectKindUnsupported) {
+		if strings.HasPrefix(observation.Reason, prunedSentence) {
 			t.Fatalf("%s reason = %q, want the unexpanded vocabulary, not the prune vocabulary", kind, observation.Reason)
 		}
-		wantPrefix := FactScopeReasonUnexpanded + ":" + string(FactScopePolicyUnavailable)
-		if !strings.HasPrefix(observation.Reason, wantPrefix) {
-			t.Fatalf("%s reason = %q, want prefix %q", kind, observation.Reason, wantPrefix)
+		if !strings.HasPrefix(observation.Reason, "no resolved subject holds this capability's facts directly and ") || strings.Contains(observation.Reason, "unexpanded:") {
+			t.Fatalf("%s reason = %q, want the plain unexpanded sentence with no internal token", kind, observation.Reason)
 		}
 	}
 	if !bundle.Coverage.Partial {
@@ -570,7 +569,7 @@ func TestChaos4099_MixedDirectAndUnreachableSubjectsAlsoDecidesTheOtherRoot(t *t
 	if len(stubs[FactMetrics].queries) != 1 {
 		t.Fatalf("metrics queried %d time(s), want 1 -- the directly-supported root still runs", len(stubs[FactMetrics].queries))
 	}
-	if !strings.HasPrefix(bundle.Coverage.Sources[0].Reason, FactNarrowReasonSubjectKindUnsupported) {
+	if !strings.Contains(bundle.Coverage.Sources[0].Reason, narrowedSentence) {
 		t.Fatalf("reason = %q, want the narrowing note for the served repository answer", bundle.Coverage.Sources[0].Reason)
 	}
 	if len(bundle.Scope.Events) != 1 {
@@ -1418,6 +1417,9 @@ func TestChaos4099_ExpansionTelemetryLeaksNoIdentityAndSplitsLevelByDegradation(
 		"excluded_explicit_text_link_count", "excluded_heuristic_link_count",
 		"authorization_grant_measured", "authorization_grant_organization_wide",
 		"authorization_grant_exact_selectors", "authorization_grant_owner_selectors",
+		// Whether every root of each target is known (a flag), and how many
+		// targets two or more origins reached (a count).
+		"roots_complete", "shared_target_count",
 	} { // "axis"/"unbounded_validity_count"/"malformed_touch_count"/"duplicate_add_count": CHAOS-4109
 		allowed[key] = struct{}{}
 	}
@@ -1504,6 +1506,8 @@ func TestChaos4099_EveryEventFieldReachesTheSink(t *testing.T) {
 		"AuthorizationGrantOrganizationWide": "authorization_grant_organization_wide",
 		"AuthorizationGrantExactSelectors":   "authorization_grant_exact_selectors",
 		"AuthorizationGrantOwnerSelectors":   "authorization_grant_owner_selectors",
+		"RootsComplete":                      "roots_complete",
+		"SharedTargetCount":                  "shared_target_count",
 	}
 	eventType := reflect.TypeOf(FactScopeExpansionEvent{})
 	if eventType.NumField() != len(fieldToKey) {
@@ -2058,11 +2062,16 @@ func TestChaos4101_ADuplicateAcrossOriginKindsUpgradesToTheWeakerBasis(t *testin
 	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)
 	}
-	if len(bundle.Scope.Derivations) != 1 {
-		t.Fatalf("derivations = %+v, want exactly one: the team traversal reached NOTHING new, only a duplicate of the project one", bundle.Scope.Derivations)
+	// One derivation per requested root: the team traversal reached nothing
+	// new, but it reached the project's target too, so its root is recorded
+	// beside the project's.
+	if len(bundle.Scope.Derivations) != 2 || len(bundle.Scope.DerivedSubjects[FactMetrics]) != 1 {
+		t.Fatalf("derivations = %+v, want the one shared target derived from the project and from the team", bundle.Scope.Derivations)
 	}
-	if got := bundle.Scope.Derivations[0].Basis; got != FactScopeBasisAttributedPrimaryTeam {
-		t.Fatalf("derivation basis = %q, want attributed_primary_team: the team traversal's own heuristic finding on this duplicate target must not be silently dropped in favor of the project traversal's cleaner activity_proxy claim", got)
+	for _, derivation := range bundle.Scope.Derivations {
+		if derivation.Basis != FactScopeBasisAttributedPrimaryTeam {
+			t.Fatalf("derivation %+v basis, want attributed_primary_team: the team traversal's own heuristic finding on this duplicate target must not be silently dropped in favor of the project traversal's cleaner activity_proxy claim", derivation)
+		}
 	}
 }
 
@@ -2119,11 +2128,15 @@ func TestChaos4101_TheWeakerBasisUpgradeAppliesEvenWhenThePriorOriginFilledTheCa
 	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)
 	}
-	if len(bundle.Scope.Derivations) != 1 {
-		t.Fatalf("derivations = %+v, want exactly one: the cap (1) was already filled by the project traversal, and the team traversal reached nothing new", bundle.Scope.Derivations)
+	// The cap (1) counts subjects: the team traversal reached nothing new, so
+	// the one subject stands, and the team's root of it is still recorded.
+	if len(bundle.Scope.DerivedSubjects[FactMetrics]) != 1 || len(bundle.Scope.Derivations) != 2 {
+		t.Fatalf("derived %+v derivations %+v, want one subject derived from the project and from the team", bundle.Scope.DerivedSubjects[FactMetrics], bundle.Scope.Derivations)
 	}
-	if got := bundle.Scope.Derivations[0].Basis; got != FactScopeBasisAttributedPrimaryTeam {
-		t.Fatalf("derivation basis = %q, want attributed_primary_team: the cap being already full must not stop the duplicate's own weaker-basis upgrade from applying", got)
+	for _, derivation := range bundle.Scope.Derivations {
+		if derivation.Basis != FactScopeBasisAttributedPrimaryTeam {
+			t.Fatalf("derivation %+v basis, want attributed_primary_team: the cap being already full must not stop the duplicate's own weaker-basis upgrade from applying", derivation)
+		}
 	}
 }
 
@@ -2553,7 +2566,7 @@ func TestChaos4099_APartiallyLostExpansionDegradesTheBundle(t *testing.T) {
 	if !factStateDegrades(observation.State) {
 		t.Fatalf("coverage state = %q does not degrade -- the gap is invisible to every bundle consumer", observation.State)
 	}
-	if !strings.Contains(observation.Reason, string(FactScopeReasonUnexpanded)) {
+	if !strings.Contains(observation.Reason, "scope expansion") || strings.Contains(observation.Reason, "unexpanded:") {
 		t.Fatalf("reason = %q, want the unexpanded note riding on the capability's own observation", observation.Reason)
 	}
 	if len(bundle.Coverage.DegradedReasons) == 0 {

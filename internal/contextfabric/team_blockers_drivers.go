@@ -70,6 +70,21 @@ func teamBlockersTitle(observation teamBlockersObservation) string {
 	return title
 }
 
+func teamBlockersOldestAgeSentence(fields map[string]FactValue) string {
+	days, ok := factInteger(fields, "oldest_blocked_age_days")
+	if !ok || days < 0 {
+		return ""
+	}
+	unit := "days"
+	if days == 1 {
+		unit = "day"
+	}
+	if basis, has := fields["oldest_blocked_age_basis"]; has && basis.String != nil && *basis.String == "exact" {
+		return fmt.Sprintf(" The oldest has been blocked about %d %s.", days, unit)
+	}
+	return fmt.Sprintf(" The oldest has been blocked at least %d %s.", days, unit)
+}
+
 func teamBlockersObservations(cohort *Cohort, facts []CanonicalFact, event *TeamBlockersDriverEvent) []teamBlockersObservation {
 	if cohort == nil || cohort.Kind != SubjectTeam {
 		return nil
@@ -184,7 +199,7 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 		title := teamBlockersTitle(observation)
 		driver := DriverJudgment{
 			DriverID: driverID, Standing: DriverContributing, Category: "blockers",
-			Rank: rank + 1, Title: title, Summary: title + ".",
+			Rank: rank + 1, Title: title, Summary: title + "." + teamBlockersOldestAgeSentence(observation.fact.Fields),
 			AffectedSubjects: []SubjectRef{observation.team}, EvidenceRefIDs: observation.fact.EvidenceRefIDs,
 			Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.95, Current: true,
 		}

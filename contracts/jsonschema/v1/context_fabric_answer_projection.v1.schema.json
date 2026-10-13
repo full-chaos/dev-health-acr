@@ -690,6 +690,7 @@
           "maxItems": 250
         },
         "ranking_table": {
+          "description": "One row per ranked member. Row keys: subject_canonical_id, subject_label, subject_kind, attention_rank, outcome, score, window, driver_<n>_*. team_canonical_id and team_label are served with the same values as subject_canonical_id and subject_label on every row of every kind; deprecated: use subject_canonical_id / subject_label; removed only after the ask-dev pin and the cfa client read the new keys (no version assigned).",
           "type": "array",
           "items": {
             "$ref": "#/$defs/ProjectedFactRow"
@@ -816,6 +817,13 @@
             "not_applicable",
             "pruned"
           ]
+        },
+        "source_state_note": {
+          "type": "string",
+          "maxLength": 96
+        },
+        "summary_corrected": {
+          "type": "boolean"
         },
         "confidence": {
           "type": "number",

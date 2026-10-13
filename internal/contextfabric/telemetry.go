@@ -747,11 +747,12 @@ func (t SlogEngineTelemetry) RecordDriverIdentityCollisions(ctx context.Context,
 }
 
 // RecordSynthesisInputBound implements EngineTelemetry. A fitted input is a
-// served, bounded answer and logs at Warn; an exhausted one ends the
-// investigation and logs at Error.
+// served, bounded answer and logs at Warn, as does share_exceeded (an input
+// above its share of the caller's budget served whole); an exhausted one ends
+// the investigation and logs at Error.
 func (t SlogEngineTelemetry) RecordSynthesisInputBound(ctx context.Context, principal storage.Principal, event SynthesisInputBoundEvent) {
 	level := slog.LevelWarn
-	if event.Outcome != SynthesisInputBoundFitted {
+	if event.Outcome != SynthesisInputBoundFitted && event.Outcome != SynthesisInputBoundShareExceeded {
 		level = slog.LevelError
 	}
 	args := append([]any{
@@ -907,6 +908,8 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 		"unknown_attribution_source_count", event.UnknownAttributionSourceCount,
 		"scope_query_count", event.ScopeQueryCount,
 		"scope_rows_returned", event.ScopeRowsReturned,
+		"roots_complete", event.RootsComplete,
+		"shared_target_count", event.SharedTargetCount,
 		"decision_reason", SanitizeLogAttr(string(loggableFactScopeDecisionReason(event.DecisionReason))),
 	}, requestIDLogAttrs(ctx)...)
 	if factScopeGapDegrades(event.Outcome) {

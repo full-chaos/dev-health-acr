@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
@@ -113,7 +114,7 @@ func rebuild(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	runtime, err := openRuntime(ctx, cfg, logger)
+	runtime, err := openRuntime(ctx, cfg, logger, nil)
 	if err != nil {
 		return fmt.Errorf("open runtime: %w", err)
 	}
@@ -170,7 +171,7 @@ func rollback(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	runtime, err := openRuntime(ctx, cfg, logger)
+	runtime, err := openRuntime(ctx, cfg, logger, nil)
 	if err != nil {
 		return fmt.Errorf("open runtime: %w", err)
 	}
@@ -227,7 +228,11 @@ func serve(args []string) error {
 	logger.Info("starting acr-projector", append([]any{"version", info.Version, "commit", info.Commit, "build_date", info.Date}, cfg.SafeAttributes()...)...)
 	exporter.LogStart(ctx, logger)
 
-	runtime, err := openRuntime(ctx, cfg, logger)
+	metrics, err := hostedmetrics.New(exporter.Meter(), hostedmetrics.Vocabularies{})
+	if err != nil {
+		return fmt.Errorf("initialize metrics: %w", err)
+	}
+	runtime, err := openRuntime(ctx, cfg, logger, metrics)
 	if err != nil {
 		return fmt.Errorf("open runtime: %w", err)
 	}
