@@ -13,6 +13,8 @@ type LinkedMixFragment struct {
 	Name     string
 	SQL      string
 	Bindings []readers.Binding
+	// Settings are extra statement settings ("name = value, ...").
+	Settings string
 }
 
 // TeamLinkedMixFragmentsForTest renders the team linked pull request mix as
@@ -70,6 +72,37 @@ func TeamLinkedMixFragmentsForTest(scopeIDs []string) (fragments []LinkedMixFrag
 	fold = strings.TrimSuffix(fold, ")")
 	add("fold_group", "SELECT count(), sum(length(pairs)), sum(length(repo_prs)) FROM ("+fold+")")
 	add("split_rows", "SELECT count() FROM ("+split+")")
+	m := `SELECT repo_uuid, pr_number, c / n * effort_value AS effort, theme_distribution_json, bugfix_share
+	FROM (
+` + split + `	)`
+	lr := `(SELECT l.1 AS pr_repo, l.2 AS pr_num, l.3 AS team_id FROM (SELECT arrayJoin(` + linked + `) AS l))`
+	owned := ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}` + ownershipValidityPredicate(bound))
+	add("m_rows", "SELECT count(), sum(length(mapKeys(theme_distribution_json))) FROM ("+m+")")
+	add("m_join_lr", "SELECT count() FROM ("+m+") AS m INNER JOIN "+lr+" AS lr ON m.repo_uuid = lr.pr_repo AND m.pr_number = lr.pr_num")
+	add("m_per_pr", `SELECT count() FROM (SELECT repo_uuid, pr_number,
+	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
+	sum(bugfix_share * effort) AS bugfix_effort
+FROM (`+m+`)
+GROUP BY repo_uuid, pr_number)`)
+	add("candidate_per_pr_first", withRowLimitOf(`SELECT lr.team_id AS team_id,
+	uniqExact(m.repo_uuid) AS repos,
+	sumMap(m.theme_effort) AS theme_effort,
+	sum(m.bugfix_effort) AS bugfix_effort
+FROM (
+	SELECT repo_uuid, pr_number,
+		sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
+		sum(bugfix_share * effort) AS bugfix_effort
+	FROM (
+`+m+`
+	)
+	GROUP BY repo_uuid, pr_number
+) AS m
+INNER JOIN `+lr+` AS lr
+	ON m.repo_uuid = lr.pr_repo AND m.pr_number = lr.pr_num
+WHERE (lr.team_id, m.repo_uuid) NOT IN (SELECT team_id, repo_key FROM `+owned+`)
+GROUP BY lr.team_id
+ORDER BY lr.team_id`, linkedMixTeamChunk+1))
+	fragments = append(fragments, LinkedMixFragment{Name: "statement_no_join_swap", SQL: linkedPullRequestMixStatement(bound, scope, linkedMixTeamChunk+1), Bindings: bindings, Settings: "query_plan_join_swap_table = 0"})
 	add("owned_repositories", "SELECT count() FROM "+ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)))
 	return fragments, ""
 }

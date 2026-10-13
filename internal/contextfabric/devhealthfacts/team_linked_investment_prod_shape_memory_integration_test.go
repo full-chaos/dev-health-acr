@@ -145,36 +145,40 @@ WITH `+repoArr+` AS repos_arr
 SELECT repos_arr[1 + pr % ?], concat('wi-', toString(k % ?)), toUInt32(1 + intDiv(pr, ?)), 1, if(k % 3 = 0, 'explicit_text', 'native'), '', ?, ?
 FROM (SELECT number AS k, (number * 7) % ? AS pr FROM numbers(?))`,
 		uint64(s.ownedRepos), uint64(s.linkedItems), uint64(s.ownedRepos), at, orgID, uint64(s.pullRequests), uint64(s.links))
-	exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
-WITH `+repoArr+` AS repos_arr, ['feature_delivery','operational','maintenance','quality','risk'] AS themes
-SELECT concat('wu-', toString(u)), ? - toIntervalDay(u % 300), ?, NULL, toFloat64(1 + u % 9),
-	map(themes[1 + u % 5], 0.6, themes[1 + (u + 2) % 5], 0.4),
-	map('`+readers.BugfixSubcategoryKey+`', 0.25, 'refactor', 0.15),
-	concat('{"issues":', toJSONString(arrayMap(j -> if(j < nl,
-			concat('ghpr:acme/shape-r-', toString((u + j) % ?), '#', toString(1 + intDiv((u * 3 + j) % ?, ?))),
-			concat('linear:CH-', toString(u * 1000 + j))), range(ni))),
-		',"prs":', toJSONString(arrayMap(j -> concat(repos_arr[1 + ((u * 5 + j) % ?) % ?], '#pr', toString(1 + intDiv((u * 5 + j) % ?, ?))), range(np))),
-		',"commits":', toJSONString(arrayMap(j -> lower(hex(SHA1(concat(toString(u), '-', toString(j))))), range(?))), '}'),
-	? + toIntervalHour(v), ?
-FROM (
-	SELECT u, v, np, ni, if(ni > 2, intDiv(ni, 4), if(u % 100 < ?, ni, 0)) AS nl
+	// One insert per version: a single insert block would collapse the two
+	// versions of a unit (optimize_on_insert).
+	for version := uint64(0); version < 2; version++ {
+		exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
+	WITH `+repoArr+` AS repos_arr, ['feature_delivery','operational','maintenance','quality','risk'] AS themes
+	SELECT concat('wu-', toString(u)), ? - toIntervalDay(u % 300), ?, NULL, toFloat64(1 + u % 9),
+		map(themes[1 + u % 5], 0.6, themes[1 + (u + 2) % 5], 0.4),
+		map('`+readers.BugfixSubcategoryKey+`', 0.25, 'refactor', 0.15),
+		concat('{"issues":', toJSONString(arrayMap(j -> if(j < nl,
+				concat('ghpr:acme/shape-r-', toString((u + j) % ?), '#', toString(1 + intDiv((u * 3 + j) % ?, ?))),
+				concat('linear:CH-', toString(u * 1000 + j))), range(ni))),
+			',"prs":', toJSONString(arrayMap(j -> concat(repos_arr[1 + ((u * 5 + j) % ?) % ?], '#pr', toString(1 + intDiv((u * 5 + j) % ?, ?))), range(np))),
+			',"commits":', toJSONString(arrayMap(j -> lower(hex(SHA1(concat(toString(u), '-', toString(j))))), range(?))), '}'),
+		? + toIntervalHour(v), ?
 	FROM (
-		SELECT u, v,
-			multiIf(u % ? = 0, ?, u % ? = 0, ?, toUInt64(u % 100 < ?)) AS np,
-			multiIf(u % ? = 1, ?, u % ? = 1, ?, 1 + toUInt64(u % 100 < ?)) AS ni
-		FROM (SELECT intDiv(number, 2) AS u, number % 2 AS v FROM numbers(?))
-		WHERE v = 0 OR u % 100 < ?
-	)
-)`,
-		at, at,
-		uint64(s.ownedRepos), uint64(s.pullRequests), uint64(s.ownedRepos),
-		uint64(s.pullRequests), uint64(s.ownedRepos), uint64(s.pullRequests), uint64(s.ownedRepos),
-		uint64(s.padHashes),
-		at, orgID,
-		uint64(s.lookupPct),
-		uint64(s.prTailEvery), uint64(s.prTailN), uint64(s.prMidEvery), uint64(s.prMidN), uint64(s.prBasePct),
-		uint64(s.issueTailEvery), uint64(s.issueTailN), uint64(s.issueMidEvery), uint64(s.issueMidN), uint64(s.issueBasePct),
-		uint64(2*s.units), uint64(s.secondVersionPct))
+		SELECT u, v, np, ni, if(ni > 2, intDiv(ni, 4), if(u % 100 < ?, ni, 0)) AS nl
+		FROM (
+			SELECT u, v,
+				multiIf(u % ? = 0, ?, u % ? = 0, ?, toUInt64(u % 100 < ?)) AS np,
+				multiIf(u % ? = 1, ?, u % ? = 1, ?, 1 + toUInt64(u % 100 < ?)) AS ni
+			FROM (SELECT intDiv(number, 2) AS u, number % 2 AS v FROM numbers(?))
+			WHERE v = ? AND (v = 0 OR u % 100 < ?)
+		)
+	)`,
+			at, at,
+			uint64(s.ownedRepos), uint64(s.pullRequests), uint64(s.ownedRepos),
+			uint64(s.pullRequests), uint64(s.ownedRepos), uint64(s.pullRequests), uint64(s.ownedRepos),
+			uint64(s.padHashes),
+			at, orgID,
+			uint64(s.lookupPct),
+			uint64(s.prTailEvery), uint64(s.prTailN), uint64(s.prMidEvery), uint64(s.prMidN), uint64(s.prBasePct),
+			uint64(s.issueTailEvery), uint64(s.issueTailN), uint64(s.issueMidEvery), uint64(s.issueMidN), uint64(s.issueBasePct),
+			uint64(2*s.units), version, uint64(s.secondVersionPct))
+	}
 	exec(`INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?, 'run-1', ?)`, orgID, at.Add(time.Hour))
 	exec(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id)
 SELECT ?, 'issue', concat('n', toString(number)), concat('wu-', toString(number)), 'theme', 'feature_delivery', ?, 'run-1' FROM numbers(?) WHERE number % 100 < ?`,
@@ -202,7 +206,11 @@ func measureLinkedMixFragments(t *testing.T, ctx context.Context, query contextp
 		best := linkedFragmentPeak{name: frag.Name, mib: -1}
 		for run := 0; run < linkedShapeRuns; run++ {
 			tag := fmt.Sprintf("linked-%s-%s-%d-%d", stage, frag.Name, run, time.Now().UnixNano())
-			statement := frag.SQL + "\nSETTINGS max_result_rows = 0, max_memory_usage = 0, log_comment = '" + tag + "'"
+			settings := "max_result_rows = 0, max_memory_usage = 0, log_comment = '" + tag + "'"
+			if frag.Settings != "" {
+				settings += ", " + frag.Settings
+			}
+			statement := frag.SQL + "\nSETTINGS " + settings
 			if err := readers.QueryOrgScopedNamed(ctx, query, "LinkedMixFragment", statement, orgID, []string{linkedShapeTeam},
 				func(readers.RowScanner) error { return nil }, frag.Bindings...); err != nil {
 				t.Fatalf("%s %s: %v: %s", stage, frag.Name, err, readFailureCause(err))
@@ -232,6 +240,53 @@ func linkedFragmentTable(stage string, peaks []linkedFragmentPeak) string {
 		fmt.Fprintf(&b, "  %-20s peak=%8.2f MiB read_rows=%10d scalar_misses=%d\n", p.name, p.mib, p.readRows, p.misses)
 	}
 	return b.String()
+}
+
+type linkedMixRow struct {
+	repos  uint64
+	theme  map[string]float64
+	bugfix float64
+}
+
+func readLinkedMixRows(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, orgID string, teams []string, frag devhealthfacts.LinkedMixFragment) map[string]linkedMixRow {
+	t.Helper()
+	out := map[string]linkedMixRow{}
+	statement := frag.SQL + "\nSETTINGS max_result_rows = 0, max_memory_usage = 0"
+	if err := readers.QueryOrgScopedNamed(ctx, query, "LinkedMixDifferential", statement, orgID, teams, func(row readers.RowScanner) error {
+		var team string
+		var r linkedMixRow
+		if err := row.Scan(&team, &r.repos, &r.theme, &r.bugfix); err != nil {
+			return err
+		}
+		out[team] = r
+		return nil
+	}, frag.Bindings...); err != nil {
+		t.Fatalf("%s: %v: %s", frag.Name, err, readFailureCause(err))
+	}
+	return out
+}
+
+func closeEnough(a, b float64) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	scale := a
+	if scale < 0 {
+		scale = -scale
+	}
+	return d <= 1e-9*scale+1e-12
+}
+
+func fragmentNamed(t *testing.T, fragments []devhealthfacts.LinkedMixFragment, name string) devhealthfacts.LinkedMixFragment {
+	t.Helper()
+	for _, f := range fragments {
+		if f.Name == name {
+			return f
+		}
+	}
+	t.Fatalf("no fragment named %s", name)
+	return devhealthfacts.LinkedMixFragment{}
 }
 
 // servedLinkedMixPeak drives the team investment read through the provider on
@@ -329,6 +384,31 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 	optimized := measureLinkedMixFragments(t, ctx, query, direct, orgID, "optimized", fragments)
 	servedOptimized := servedLinkedMixPeak(t, ctx, provider, direct, orgID)
 	t.Logf("%s%sserved (API settings, 256 MiB cap): unmerged %.2f MiB, optimized %.2f MiB", linkedFragmentTable("unmerged", unmerged), linkedFragmentTable("optimized", optimized), servedUnmerged, servedOptimized)
+	teams := make([]string, linkedMemoryProdShape.teams)
+	for i := range teams {
+		teams[i] = fmt.Sprintf("T-%d", i)
+	}
+	current := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "statement"))
+	candidate := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "candidate_per_pr_first"))
+	t.Logf("differential over %d teams: current statement served %d team rows, candidate %d", len(teams), len(current), len(candidate))
+	if len(current) == 0 {
+		t.Errorf("differential did not happen: the current statement returned no team row")
+	}
+	if len(candidate) != len(current) {
+		t.Errorf("candidate returned %d team rows, the current statement %d", len(candidate), len(current))
+	}
+	for team, want := range current {
+		got, ok := candidate[team]
+		if !ok || got.repos != want.repos || !closeEnough(got.bugfix, want.bugfix) || len(got.theme) != len(want.theme) {
+			t.Errorf("team %s: candidate %+v, current %+v", team, got, want)
+			continue
+		}
+		for theme, v := range want.theme {
+			if !closeEnough(got.theme[theme], v) {
+				t.Errorf("team %s theme %s: candidate %v, current %v", team, theme, got.theme[theme], v)
+			}
+		}
+	}
 	for stage, peak := range map[string]float64{"unmerged": servedUnmerged, "optimized": servedOptimized} {
 		if peak > linkedShapeBoundMiB {
 			t.Errorf("%s: the served team linked pull request mix peaked at %.2f MiB at the prod shape, bound %.0f MiB", stage, peak, linkedShapeBoundMiB)
