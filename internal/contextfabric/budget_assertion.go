@@ -396,6 +396,10 @@ func (e *Engine) servedLateWriters(ctx context.Context, result InvestigationResu
 	result.Completeness = ComputeAnswerCompleteness(result)
 	observation := DeriveCompletenessAuthority(result)
 	result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, observation)
+	if served := withDegradedLimitationFallback(result); len(served.Limitations) != len(result.Limitations) {
+		result = served
+		result.Completeness = ComputeAnswerCompleteness(result)
+	}
 	observation.StatusCorrectionDisclosed = result.StatusCorrection != nil
 	return result, observation
 }
