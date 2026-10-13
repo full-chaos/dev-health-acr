@@ -36,7 +36,7 @@ func seedWorkGraphLabelRows(t *testing.T, ctx context.Context, direct interface 
 	exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, wgOther, wgOrg, "secret/private-repo", "github", now)
 	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, wgRepo, wgOrg, uint32(311), "Rework deploy pipeline stages", "open", now)
 	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, wgOther, wgOrg, uint32(5), "Private roadmap", "open", now)
-	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "CHAOS-77", wgRepo, wgOrg, "Gate deploy stages on smoke tests", "open", "", "", "linear", "", now, now)
+	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "CHAOS-77", wgRepo, wgOrg, "Gate deploy stages on smoke tests", "Jira issue without a repository", "open", "", "", "linear", "", now, now)
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "CHAOS-78", wgRepo, wgOrg, "Gate deploy stages on smoke tests", "open", "", "", "linear", "", now, now)
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "CHAOS-77", wgOther, wgOrg, "Private title of a colliding key", "open", "", "", "linear", "", now, now)
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "CHAOS-99", wgOther, wgOrg, "Unlinked hidden title", "open", "", "", "linear", "", now, now)
@@ -45,6 +45,8 @@ func seedWorkGraphLabelRows(t *testing.T, ctx context.Context, direct interface 
 	}
 	edge("e-pr-issue", "pr", wgRepo+"#pr311", "issue", "CHAOS-77", "implements", "linear_attachment")
 	edge("e-pr-issue-unique", "pr", wgRepo+"#pr311", "issue", "CHAOS-78", "implements", "")
+	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "PROJ-5", "00000000-0000-0000-0000-000000000000", wgOrg, "Jira issue without a repository", "open", "", "", "jira", "", now, now)
+	edge("e-pr-jira-issue", "pr", wgRepo+"#pr311", "issue", "PROJ-5", "implements", "")
 	edge("e-foreign-pr", "pr", wgOther+"#pr5", "pr", wgRepo+"#pr311", "relates_to", "")
 	edge("e-commit-issue", "commit", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", "issue", "CHAOS-99", "implements", "")
 	edge("e-deploy", "pr", wgRepo+"#pr311", "deployment", wgDeployID, "deployed_as", "")
@@ -80,8 +82,9 @@ func TestWorkGraphLabelsUseDisplayNamesAndWithholdUnreadableNames(t *testing.T) 
 		byID[ref.Source.EntityID] = ref
 	}
 	for id, want := range map[string]string{
-		"e-pr-issue":        "acme/deploy-service#311 Rework deploy pipeline stages implements CHAOS-77 Gate deploy stages on smoke tests",
-		"e-pr-issue-unique": "acme/deploy-service#311 Rework deploy pipeline stages implements CHAOS-78 Gate deploy stages on smoke tests",
+		"e-pr-issue":        "acme/deploy-service#311 Rework deploy pipeline stages implements CHAOS-77",
+		"e-pr-jira-issue":   "acme/deploy-service#311 Rework deploy pipeline stages implements PROJ-5",
+		"e-pr-issue-unique": "acme/deploy-service#311 Rework deploy pipeline stages implements CHAOS-78",
 		"e-foreign-pr":      "pull request #5 relates to acme/deploy-service#311 Rework deploy pipeline stages",
 		"e-commit-issue":    "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 implements CHAOS-99",
 		"e-deploy":          "acme/deploy-service#311 Rework deploy pipeline stages deployed as deployment 40000000",
@@ -95,7 +98,7 @@ func TestWorkGraphLabelsUseDisplayNamesAndWithholdUnreadableNames(t *testing.T) 
 		}
 	}
 	for id, ref := range byID {
-		for _, leak := range []string{"secret/private-repo", "Private roadmap", "Unlinked hidden title", "Private title of a colliding key", wgRepo, wgOther} {
+		for _, leak := range []string{"secret/private-repo", "Private roadmap", "Unlinked hidden title", "Private title of a colliding key", "Gate deploy stages on smoke tests", wgRepo, wgOther} {
 			if strings.Contains(ref.Source.DisplayLabel+" "+ref.Citation, leak) {
 				t.Errorf("edge %s serves %q: %q / %q", id, leak, ref.Source.DisplayLabel, ref.Citation)
 			}
