@@ -1056,11 +1056,16 @@ import (
 // no longer on every row of the kind. An answer saved under v208 carries each
 // on rows it is false for.
 //
-// v209 -> v210: a team or project landscape fact reads one copy of each
+// v209 -> v210: the revert-rate day count rides each repository's own row (the
+// read-wide count only the request note), and owning_teams_truncated rides only
+// the repositories whose owner table was cut. An answer saved under v209
+// carries both on repositories they are false for.
+//
+// v210 -> v211: a team or project landscape fact reads one copy of each
 // identity's stats instead of the three per-map copies Ops writes, and its
-// rows no longer carry map_name. An answer saved under v209 holds every
+// rows no longer carry map_name. An answer saved under v210 holds every
 // churn, delivery and identity count three times.
-const QueryVersion = "devhealthfacts.clickhouse.v210"
+const QueryVersion = "devhealthfacts.clickhouse.v211"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

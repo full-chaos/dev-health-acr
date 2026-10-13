@@ -48,6 +48,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	budget := newFactBudget()
 	rejectedCount := 0
 	ownershipUnread, ownersCut := 0, 0
+	var cutRepositories []contextfabric.SubjectRef
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
 	defer func() {
@@ -95,7 +96,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		// An ownership read failure never fails the identity read: the facts
 		// are served without owning_teams and the result says ownership is
 		// unknown (owningTeamsUnreadReason), never that there are no owners.
-		omitted, err := p.attachOwningTeams(ctx, orgID, facts)
+		omitted, cutSubjects, err := p.attachOwningTeams(ctx, orgID, facts)
 		if err != nil {
 			ownershipUnread = len(repoIDs)
 			slog.Warn("context_fabric_owning_teams_read_failed",
@@ -105,6 +106,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 			)
 		}
 		ownersCut = omitted
+		cutRepositories = cutSubjects
 	}
 
 	workItemIDs, workItemBySubject, workItemRejected := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
@@ -148,7 +150,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		result.OmittedCount += ownersCut
 		result.Truncated = true
 		result.State = contextfabric.SourceTruncated
-		addScopedReason(&result, query.Subjects, subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), owningTeamsTruncatedReason)
+		addScopedReason(&result, query.Subjects, cutRepositories, owningTeamsTruncatedReason)
 	}
 	if ownershipUnread > 0 {
 		result.OmittedCount += ownershipUnread
@@ -316,7 +318,7 @@ LIMIT `+strconv.Itoa(ownerRowsPerRepo)+` BY repo_key`, ownerChunkRepos*ownerRows
 // attachOwningTeams adds the owning_teams table to every repository identity
 // fact in facts and returns how many owner rows the per-repository cap left
 // out. A repository no team owns keeps no table: missing is not empty.
-func (p *IdentityProvider) attachOwningTeams(ctx context.Context, orgID string, facts []contextfabric.CanonicalFact) (int, error) {
+func (p *IdentityProvider) attachOwningTeams(ctx context.Context, orgID string, facts []contextfabric.CanonicalFact) (int, []contextfabric.SubjectRef, error) {
 	byRepo := make(map[string]int, len(facts))
 	ids := make([]string, 0, len(facts))
 	for i, fact := range facts {
@@ -345,10 +347,11 @@ func (p *IdentityProvider) attachOwningTeams(ctx context.Context, orgID string, 
 			return nil
 		})
 		if err != nil {
-			return 0, readFailure("query repository owning teams", err)
+			return 0, nil, readFailure("query repository owning teams", err)
 		}
 	}
 	omittedTotal := 0
+	var cut []contextfabric.SubjectRef
 	for repoID, i := range byRepo {
 		rows := rowsByRepo[repoID]
 		if len(rows) == 0 {
@@ -365,10 +368,11 @@ func (p *IdentityProvider) attachOwningTeams(ctx context.Context, orgID string, 
 		if omitted := int(totalByRepo[repoID]) - len(rows); omitted > 0 {
 			emitted["owning_teams_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 			omittedTotal += omitted
+			cut = append(cut, facts[i].Subject)
 		}
 		for name, value := range emitted {
 			facts[i].Fields[name] = value
 		}
 	}
-	return omittedTotal, nil
+	return omittedTotal, cut, nil
 }
