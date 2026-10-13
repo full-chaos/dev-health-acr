@@ -63,7 +63,7 @@ SELECT concat('jira:PROJECTKEY-', toString(2 * number)), concat('jira:PROJECTKEY
 	for ; time.Now().Before(deadline); pages++ {
 		batch, ok, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: org, Source: devhealthsource.SourceName, Cursor: cursor})
 		if err != nil {
-			t.Fatalf("page %d: %v", pages, err)
+			t.Fatalf("page %d: %v%s", pages, err, rawCauses(err))
 		}
 		if !ok {
 			break
@@ -97,4 +97,26 @@ WHERE type = 'QueryFinish' AND query_start_time_microseconds >= toDateTime64(?, 
 		}
 	}
 	return setPeak, pagePeak
+}
+
+// rawCauses lists the unsanitized causes under err, for a failing read.
+func rawCauses(err error) string {
+	var out string
+	var walk func(error)
+	walk = func(e error) {
+		if e == nil {
+			return
+		}
+		out += "\n  cause: " + e.Error()
+		switch u := e.(type) {
+		case interface{ Unwrap() []error }:
+			for _, inner := range u.Unwrap() {
+				walk(inner)
+			}
+		case interface{ Unwrap() error }:
+			walk(u.Unwrap())
+		}
+	}
+	walk(err)
+	return out
 }

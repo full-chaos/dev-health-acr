@@ -251,9 +251,10 @@ func TestIngestTimeCursor(t *testing.T) {
 			t.Fatalf("a closed window re-read a row landing hours after its stamp: %v", second.items)
 		}
 		// A closed window costs nothing: the idle tick runs the paged read
-		// (one statement per table) and no window statement at all.
-		if tables := len(devhealthsource.EntityTableNamesForTest()); counting.statements != tables {
-			t.Fatalf("an idle tick over a closed window ran %d statements, want %d (the paged read only)", counting.statements, tables)
+		// (one statement per table), the removed-link set read once per call
+		// and no window statement at all.
+		if tables := len(devhealthsource.EntityTableNamesForTest()); counting.statements != tables+1 {
+			t.Fatalf("an idle tick over a closed window ran %d statements, want %d (the paged read and the removed-link set)", counting.statements, tables+1)
 		}
 	})
 
@@ -281,8 +282,8 @@ func TestIngestTimeCursor(t *testing.T) {
 		if again := h.drain(first.cursor); len(again.batches) != 0 {
 			t.Fatalf("an idle tick emitted %d batches", len(again.batches))
 		}
-		if tables := len(devhealthsource.EntityTableNamesForTest()); counting.statements != 2*tables {
-			t.Fatalf("an idle tick over an open one-row window ran %d statements, want %d (the paged read and one walk page)", counting.statements, 2*tables)
+		if tables := len(devhealthsource.EntityTableNamesForTest()); counting.statements != 2*tables+1 {
+			t.Fatalf("an idle tick over an open one-row window ran %d statements, want %d (the paged read, one walk page and the removed-link set read once)", counting.statements, 2*tables+1)
 		}
 	})
 
