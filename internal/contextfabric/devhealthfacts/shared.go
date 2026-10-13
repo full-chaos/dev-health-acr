@@ -1006,10 +1006,15 @@ import (
 // team's blocked work item count as a driver with a minted claim. An answer
 // saved under v198 has none.
 //
-// v199 -> v200: the scope expander names every requested origin that reached a
+// v199 -> v200: a client synthesis answer with a caller byte budget is fitted
+// to what the synthesis input leaves of that budget, and the input is cut to
+// the budget with the cut stated. An answer saved under v199 was fitted to the
+// whole budget.
+//
+// v200 -> v201: the scope expander names every requested origin that reached a
 // target, so a multi-root answer derives each shared target from every root.
-// An answer saved under v199 attributed it to one root only.
-const QueryVersion = "devhealthfacts.clickhouse.v200"
+// An answer saved under v200 attributed it to one root only.
+const QueryVersion = "devhealthfacts.clickhouse.v201"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
