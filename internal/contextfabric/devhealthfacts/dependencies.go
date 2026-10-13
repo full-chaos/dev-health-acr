@@ -74,7 +74,7 @@ func newBlockersProvider(client contextpacket.ClickHouseQueryClient) *BlockersPr
 }
 
 func (p *BlockersProvider) Capability() contextfabric.FactCapability {
-	capability := newCapability(contextfabric.FactBlockers, "devhealthfacts.blockers", []contextfabric.SubjectKind{contextfabric.SubjectWorkItem, contextfabric.SubjectTeam})
+	capability := newCapability(contextfabric.FactBlockers, "devhealthfacts.blockers", []contextfabric.SubjectKind{contextfabric.SubjectWorkItem, contextfabric.SubjectTeam, contextfabric.SubjectProject})
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
 		contextfabric.SubjectTeam: {contextfabric.FactTableBreakdown},
 	}
@@ -106,6 +106,13 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 			return contextfabric.FactProviderResult{}, readFailure("query team blockers", teamErr)
 		}
 		rejected += teamOutcome.rejected
+	}
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+		projectRejected, projectErr := p.readProjectRollup(ctx, principal, orgID, query.RequestedRepositoryScope, projectSubjects, &facts)
+		if projectErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query project blockers", projectErr)
+		}
+		rejected += projectRejected
 	}
 	teamFactCount := len(facts)
 	if len(ids) == 0 {

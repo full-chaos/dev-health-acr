@@ -143,15 +143,16 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // request exists). teamParam names the
 // Array(String) binding holding the team ids; the bound's bindings must ride
 // with the statement. It is the same chain teamRepositories walks. Work items
-// are read once, for the owned projects' issues only, so the statement's cost
-// follows the owned projects, not the size of the organization's work item
-// table.
+// are read once, for linked issues of the owned projects only: the link ids
+// prune work_items granules on its primary key, so the statement's cost
+// follows the organization's links, not the size of its work item table.
 func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 	owned := `(SELECT p.provider AS provider, p.join_key AS join_key FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
     INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
     WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)})`
 	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
-    WHERE cw.org_id = {org_id:String} AND (cw.provider, cw.project_id) IN ` + owned + ` AND ` + workItemIsIssueSQL("cw") + `)`
+    WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + linkedWorkItemIDsSQL + `
+      AND (cw.provider, cw.project_id) IN ` + owned + ` AND ` + workItemIsIssueSQL("cw") + `)`
 	return `(
   SELECT DISTINCT t.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
   FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
