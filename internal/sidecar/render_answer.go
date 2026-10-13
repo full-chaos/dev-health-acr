@@ -568,16 +568,20 @@ func scalarFieldText(field string, value contractsv1.ContextFabricScalarValue) (
 // Rendering in a fixed order, not map order, keeps this view byte-stable
 // across identical inputs.
 var rankingTableFieldOrder = []string{
-	"team_canonical_id", "team_label", "attention_rank", "outcome", "score", "window",
+	"subject_canonical_id", "subject_label", "team_canonical_id", "team_label", "attention_rank", "outcome", "score", "window",
 	"driver_1_signal", "driver_1_value", "driver_1_weight_contributed", "driver_1_threshold_label",
 	"driver_2_signal", "driver_2_value", "driver_2_weight_contributed", "driver_2_threshold_label",
+}
+
+var deprecatedRankingRowKeys = map[string]string{
+	"team_canonical_id": "subject_canonical_id",
+	"team_label":        "subject_label",
 }
 
 const rankingRowSubjectKindKey = "subject_kind"
 
 // rankingRowSubjectNouns is the display noun per cohort subject kind. The
-// structured keys keep their team_ names; only the served wording follows
-// the kind.
+// deprecated team_ keys render only for a row without subject_ keys.
 var rankingRowSubjectNouns = map[contractsv1.ContextFabricSubjectKind]string{
 	contractsv1.ContextFabricSubjectTeam:        "team",
 	contractsv1.ContextFabricSubjectProject:     "project",
@@ -614,15 +618,20 @@ func rankingTableRowLine(row contractsv1.ContextFabricClaimedFactRow) string {
 		if !ok {
 			continue
 		}
+		if newKey, deprecated := deprecatedRankingRowKeys[key]; deprecated {
+			if _, served := row.Fields[newKey]; served {
+				continue
+			}
+		}
 		display, shown := scalarFieldText(key, value)
 		if !shown {
 			continue
 		}
 		noun := contractsv1.ContextFabricFactFieldNoun(key)
 		switch key {
-		case "team_canonical_id":
+		case "subject_canonical_id", "team_canonical_id":
 			noun = subjectNoun + " canonical id"
-		case "team_label":
+		case "subject_label", "team_label":
 			noun = subjectNoun + " label"
 		}
 		parts = append(parts, noun+": "+hostedInline(display))
