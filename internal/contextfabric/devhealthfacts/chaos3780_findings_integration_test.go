@@ -574,8 +574,8 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		if len(result.Facts) != 0 {
 			t.Fatalf("facts = %#v, want none: nothing stands in for a missing mix", result.Facts)
 		}
-		if !strings.Contains(result.Reason, "investment mix unavailable for 1 of 1 requested teams") {
-			t.Fatalf("reason = %q, want the unavailable disclosure", result.Reason)
+		if !strings.Contains(result.RequestNote, "investment mix unavailable for 1 of 1 requested teams") {
+			t.Fatalf("request note = %q, want the unavailable disclosure", result.RequestNote)
 		}
 	})
 

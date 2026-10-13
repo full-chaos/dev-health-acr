@@ -171,14 +171,14 @@ ORDER BY team_id, rule_id`)
 		// is a measured "nothing found": the source answered.
 		state = contextfabric.SourceAvailable
 	}
-	retentionReason = evaluation.reason(len(evaluated) > 0 || len(facts) > 0, retentionReason)
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery, EvaluatedSubjects: evaluated, Evaluation: evaluation.coverage()}
+	retentionReason, missingNote := evaluation.reason(len(evaluated) > 0 || len(facts) > 0, retentionReason)
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, RequestNote: missingNote, SubjectReasons: evaluation.memberReasons(), Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery, EvaluatedSubjects: evaluated, Evaluation: evaluation.coverage()}
 	if len(ids) > 0 {
 		owned, ownedErr := teamOwnedOrReachedRepositories(ctx, p.facts.client, orgID, ids, timeBound)
 		if ownedErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team owned repositories", ownedErr)
 		}
-		applyTeamsOwningNothing(&result, len(ids), teamsOwningNothingWithoutData(ids, bySubject, owned, facts, evaluated))
+		applyTeamsOwningNothing(&result, query.Subjects, len(ids), teamsOwningNothingWithoutData(ids, bySubject, owned, facts, evaluated))
 	}
 	return result, nil
 }
@@ -227,30 +227,50 @@ func (e deficiencyEvaluation) coverage() *contextfabric.FactEvaluationCoverage {
 	}
 }
 
-// reason names every requested team the read could not measure, whatever
-// other teams it did measure. A read where every requested team was simply
-// never evaluated keeps the generic empty-read reason.
-func (e deficiencyEvaluation) reason(answered bool, fallback string) string {
+var deficiencyMissingStates = []struct{ state, text string }{
+	{deficiencyStateStale, "evaluated outside the freshness window"},
+	{deficiencyStateBeforeRange, "evaluated before the requested range"},
+	{deficiencyStateNever, "never evaluated"},
+	{deficiencyStateWithheld, "withheld by a capped read"},
+}
+
+// memberReasons is each unmeasured team's own state sentence.
+func (e deficiencyEvaluation) memberReasons() map[string]string {
+	out := map[string]string{}
+	for _, member := range e.members {
+		for _, entry := range deficiencyMissingStates {
+			if member.State == entry.state {
+				out[contextfabric.FactSubjectKey(member.Subject)] = "operational deficiency evaluation: " + entry.text
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// reason splits what a read says about teams it could not measure: the kind
+// reason (true of every subject) and the request note (a count over the
+// requested teams, which no single team's row may carry). A read where every
+// requested team was simply never evaluated keeps the generic empty-read
+// reason.
+func (e deficiencyEvaluation) reason(answered bool, fallback string) (kindReason, requestNote string) {
 	parts := make([]string, 0, 4)
 	missing := 0
-	for _, entry := range []struct{ state, text string }{
-		{deficiencyStateStale, "evaluated outside the freshness window"},
-		{deficiencyStateBeforeRange, "evaluated before the requested range"},
-		{deficiencyStateNever, "never evaluated"},
-		{deficiencyStateWithheld, "withheld by a capped read"},
-	} {
+	for _, entry := range deficiencyMissingStates {
 		if n := e.counts[entry.state]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", n, entry.text))
 			missing += n
 		}
 	}
 	if missing == 0 {
-		return ""
+		return "", ""
 	}
 	if !answered && missing == e.counts[deficiencyStateNever] {
-		return fallback
+		return fallback, ""
 	}
-	return fmt.Sprintf("operational deficiency evaluation missing for %d of %d requested teams: %s", missing, len(e.members), strings.Join(parts, ", "))
+	return "", fmt.Sprintf("operational deficiency evaluation missing for %d of %d requested teams: %s", missing, len(e.members), strings.Join(parts, ", "))
 }
 
 // teamEvaluation is one team's latest evaluation at or before the as-of date.
