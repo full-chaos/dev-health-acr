@@ -1055,7 +1055,12 @@ import (
 // severity omission, owning-teams cut) is served on the rows it describes and
 // no longer on every row of the kind. An answer saved under v208 carries each
 // on rows it is false for.
-const QueryVersion = "devhealthfacts.clickhouse.v209"
+//
+// v209 -> v210: the revert-rate day count rides each repository's own row (the
+// read-wide count only the request note), and owning_teams_truncated rides only
+// the repositories whose owner table was cut. An answer saved under v209
+// carries both on repositories they are false for.
+const QueryVersion = "devhealthfacts.clickhouse.v210"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
