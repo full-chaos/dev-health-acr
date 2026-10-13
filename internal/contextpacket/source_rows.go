@@ -276,6 +276,11 @@ func (r *CatalogClickHouseRows) ResolveSourceRow(ctx context.Context, orgID stri
 		return nil, storage.ErrNotFound
 	}
 	plan := ReadPlan{OrgID: orgID, RepoID: scope.RepoID, RepoSlug: scope.RepoSlug, TaskRef: read.TaskRef}
+	gated, err := r.reresolutionIssueIDs(ctx, query.ID, plan)
+	if err != nil {
+		return nil, err
+	}
+	plan.ReadableRepositorylessIssueIDs = gated
 	bindings := append(plan.Bindings(), ClickHouseBinding{Name: "evidence_locator", Value: read.Locator})
 	for index, component := range read.Components {
 		bindings = append(bindings, ClickHouseBinding{Name: "component_" + strconv.Itoa(index+1), Value: component})

@@ -3,6 +3,7 @@ package contextpacket
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -88,4 +89,52 @@ func (e *ClickHouseSourceExecutor) ReadableRepositorylessIssueIDs(ctx context.Co
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+type workItemGrantContextKey struct{}
+
+// WithWorkItemGrant carries the caller's repository grant to a read that has
+// no plan of its own (an evidence-reference or source-row re-resolution), so
+// it decides repository-less issue titles exactly as the packet did. Without
+// it such a read names a repository-less issue by key alone.
+func WithWorkItemGrant(ctx context.Context, grant readers.RepositorySelectorSet) context.Context {
+	return context.WithValue(ctx, workItemGrantContextKey{}, grant)
+}
+
+func workItemGrantFrom(ctx context.Context) (readers.RepositorySelectorSet, bool) {
+	grant, ok := ctx.Value(workItemGrantContextKey{}).(readers.RepositorySelectorSet)
+	return grant, ok
+}
+
+// gateRepositorylessIssues is the one place the repository-less issue gate
+// runs, for the packet and for both re-resolutions. A gate failure withholds
+// the titles (key only) and is logged; only a canceled context is returned.
+func gateRepositorylessIssues(ctx context.Context, executor SourceQueryExecutor, plan ReadPlan) ([]string, error) {
+	reader, ok := executor.(RepositorylessIssueReader)
+	if !ok {
+		return nil, nil
+	}
+	ids, err := reader.ReadableRepositorylessIssueIDs(ctx, plan)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		slog.WarnContext(ctx, "contextpacket: repository-less issue gate failed; issue titles are withheld", "source", workGraphSourceID)
+		return nil, nil
+	}
+	return ids, nil
+}
+
+// reresolutionIssueIDs is the gate's answer for a re-resolved work_graph.v1
+// row, from the grant the caller's context carries.
+func (r *CatalogClickHouseRows) reresolutionIssueIDs(ctx context.Context, queryID string, plan ReadPlan) ([]string, error) {
+	if queryID != workGraphSourceID {
+		return nil, nil
+	}
+	grant, ok := workItemGrantFrom(ctx)
+	if !ok {
+		return nil, nil
+	}
+	plan.WorkItemGrant = grant
+	return gateRepositorylessIssues(ctx, r.executor, plan)
 }
