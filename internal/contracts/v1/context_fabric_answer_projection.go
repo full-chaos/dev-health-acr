@@ -520,7 +520,7 @@ const (
 	ContextFabricProjectedDriverTitleMaxLength         = 512
 	ContextFabricProjectedDriverSummaryMaxLength       = 4000
 	ContextFabricProjectedDriverQualificationMaxLength = 2000
-	ContextFabricDriverSourceStateNoteMaxLength        = 512
+	ContextFabricDriverSourceStateNoteMaxLength        = 96
 	ContextFabricProjectedCohortRationaleMaxLength     = 4000
 	ContextFabricProjectedInclusionReasonsMaxCount     = 32
 	ContextFabricProjectedInclusionReasonMaxLength     = 1000
