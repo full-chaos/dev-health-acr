@@ -106,7 +106,7 @@
       },
       "outcome": "fact_served",
       "kind_state": "available",
-      "reason": "scope expansion reached 1 work items; their facts name this subject in reached_from (expansion: expanded; policy: team_primary_attribution_work_item_blockers_v1)"
+      "reason": "scope expansion reached 1 work items; their facts say they were reached from this subject"
     },
     {
       "kind": "deployments",
@@ -116,7 +116,17 @@
       },
       "outcome": "unavailable",
       "kind_state": "window_unsupported",
-      "reason": "unexpanded:policy_unavailable: no resolved subject holds this capability's facts directly and the scope policy supports the current window only; ask without a window to read it (origin: project; supported: repository; policy: project_issue_pull_request_deployments_v1; basis: activity_proxy)"
+      "reason": "no resolved subject holds this capability's facts directly and the scope policy supports the current window only; ask without a window to read it (it covers repositories; the request named a project)"
+    },
+    {
+      "kind": "pull_requests",
+      "subject": {
+        "kind": "project",
+        "canonical_id": "project-checkout"
+      },
+      "outcome": "fact_served",
+      "kind_state": "truncated",
+      "reason": "the requested subjects that hold this capability's facts directly were read; facts reachable only through scope expansion were not added because no scope expander is wired on this server (it covers projects, teams, repositories; the request named a project)"
     }
   ],
   "versions": {

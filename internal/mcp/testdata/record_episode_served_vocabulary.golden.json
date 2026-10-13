@@ -1,0 +1,118 @@
+[
+ {
+  "schema_version": "mcp_record_episode_response.v1",
+  "status": "no_persist",
+  "client_episode_id": "client-episode-1",
+  "idempotency_key": "idempotency-key-1",
+  "scope": {},
+  "transcript_disposition": "not_submitted"
+ },
+ {
+  "schema_version": "mcp_record_episode_response.v1",
+  "status": "recorded",
+  "client_episode_id": "client-episode-1",
+  "idempotency_key": "idempotency-key-1",
+  "episode_id": "episode-12345",
+  "created_at": "2026-10-13T00:00:00Z",
+  "redaction_state": "active",
+  "duplicate": false,
+  "scope": {},
+  "transcript_disposition": "not_submitted"
+ },
+ {
+  "schema_version": "mcp_record_episode_response.v1",
+  "status": "recorded",
+  "client_episode_id": "client-episode-1",
+  "idempotency_key": "idempotency-key-1",
+  "episode_id": "episode-12345",
+  "created_at": "2026-10-13T00:00:00Z",
+  "redaction_state": "active",
+  "duplicate": false,
+  "scope": {},
+  "transcript_disposition": "accepted"
+ },
+ {
+  "schema_version": "mcp_record_episode_response.v1",
+  "status": "recorded",
+  "client_episode_id": "client-episode-1",
+  "idempotency_key": "idempotency-key-1",
+  "episode_id": "episode-12345",
+  "created_at": "2026-10-13T00:00:00Z",
+  "redaction_state": "active",
+  "duplicate": false,
+  "scope": {},
+  "transcript_disposition": "redacted"
+ },
+ {
+  "schema_version": "mcp_record_episode_response.v1",
+  "status": "recorded",
+  "client_episode_id": "client-episode-1",
+  "idempotency_key": "idempotency-key-1",
+  "episode_id": "episode-12345",
+  "created_at": "2026-10-13T00:00:00Z",
+  "redaction_state": "redacted",
+  "duplicate": false,
+  "scope": {},
+  "transcript_disposition": "not_submitted"
+ },
+ {
+  "schema_version": "mcp_record_episode_response.v1",
+  "status": "recorded",
+  "client_episode_id": "client-episode-1",
+  "idempotency_key": "idempotency-key-1",
+  "episode_id": "episode-12345",
+  "created_at": "2026-10-13T00:00:00Z",
+  "redaction_state": "redacted",
+  "duplicate": false,
+  "scope": {},
+  "transcript_disposition": "redacted"
+ },
+ {
+  "schema_version": "mcp_record_episode_response.v1",
+  "status": "recorded",
+  "client_episode_id": "client-episode-1",
+  "idempotency_key": "idempotency-key-1",
+  "episode_id": "episode-12345",
+  "created_at": "2026-10-13T00:00:00Z",
+  "redaction_state": "redacted",
+  "duplicate": false,
+  "scope": {},
+  "transcript_disposition": "redacted"
+ },
+ {
+  "schema_version": "mcp_record_episode_response.v1",
+  "status": "recorded",
+  "client_episode_id": "client-episode-1",
+  "idempotency_key": "idempotency-key-1",
+  "episode_id": "episode-12345",
+  "created_at": "2026-10-13T00:00:00Z",
+  "redaction_state": "purged_tombstone",
+  "duplicate": false,
+  "scope": {},
+  "transcript_disposition": "not_submitted"
+ },
+ {
+  "schema_version": "mcp_record_episode_response.v1",
+  "status": "recorded",
+  "client_episode_id": "client-episode-1",
+  "idempotency_key": "idempotency-key-1",
+  "episode_id": "episode-12345",
+  "created_at": "2026-10-13T00:00:00Z",
+  "redaction_state": "purged_tombstone",
+  "duplicate": false,
+  "scope": {},
+  "transcript_disposition": "redacted"
+ },
+ {
+  "schema_version": "mcp_record_episode_response.v1",
+  "status": "recorded",
+  "client_episode_id": "client-episode-1",
+  "idempotency_key": "idempotency-key-1",
+  "episode_id": "episode-12345",
+  "created_at": "2026-10-13T00:00:00Z",
+  "redaction_state": "purged_tombstone",
+  "duplicate": false,
+  "scope": {},
+  "transcript_disposition": "redacted"
+ }
+]
