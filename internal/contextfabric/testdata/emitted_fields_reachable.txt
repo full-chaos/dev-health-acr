@@ -42,7 +42,7 @@
 # coverage claim that overclaims is itself a defect.
 
 FactActualCompletion
-  reached_funcs      93
+  reached_funcs      92
   dynamic_key_sites  0
   leaked_call_sites  3
     leak interface_method     3
@@ -50,15 +50,15 @@ FactActualCompletion
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            816
+    calls followed            815
     calls accounted           13
     calls not_a_call          11
-    calls excluded_by_design  107
+    calls excluded_by_design  92
     calls leaked              3
   fields             archived_items cancelled_count completed completed_at completed_count completion_ratio counted_work_items member_kind rollup_basis unknown_status_count work_item_count
 
 FactBlockers
-  reached_funcs      135
+  reached_funcs      134
   dynamic_key_sites  0
   leaked_call_sites  21
     leak interface_method     12
@@ -66,10 +66,10 @@ FactBlockers
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         1
-    calls followed            890
+    calls followed            889
     calls accounted           13
     calls not_a_call          10
-    calls excluded_by_design  226
+    calls excluded_by_design  211
     calls leaked              21
   fields             blocked_by_work_item_id blocked_by_work_item_ref blocked_work_items_current blocked_work_items_without_link_count blocker_dependencies_current blocker_dependencies_excluded_by_status_current blocker_status_basis link_tier oldest_blocked_age_basis oldest_blocked_age_days oldest_blocked_age_unavailable_reason owned_repositories owned_repositories_omitted_count owned_repository_count project_blocked_work_items_current project_reached_repository_count repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_limitation repository_breakdown_omitted_count repository_id repository_link_basis repository_name repository_tables_basis rollup_basis
 
@@ -282,7 +282,7 @@ FactReadiness
   fields             backlog_size basis daily_readiness daily_readiness_omitted_count day estimate_coverage_ratio estimated_count provider rollup_basis team_breakdown team_count team_id team_name unestimated_count work_scope_id
 
 FactRequiredChildren
-  reached_funcs      88
+  reached_funcs      87
   dynamic_key_sites  0
   leaked_call_sites  3
     leak interface_method     3
@@ -290,10 +290,10 @@ FactRequiredChildren
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            799
+    calls followed            798
     calls accounted           13
     calls not_a_call          4
-    calls excluded_by_design  87
+    calls excluded_by_design  72
     calls leaked              3
   fields             relationship_type required_child_work_item_id required_child_work_item_ref
 
@@ -330,7 +330,7 @@ FactSourceHealth
   fields             last_failure_occurred_at last_failure_stage last_sync_at provider scope
 
 FactStatus
-  reached_funcs      90
+  reached_funcs      89
   dynamic_key_sites  0
   leaked_call_sites  4
     leak interface_method     3
@@ -338,15 +338,15 @@ FactStatus
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            802
+    calls followed            801
     calls accounted           15
     calls not_a_call          5
-    calls excluded_by_design  115
+    calls excluded_by_design  100
     calls leaked              4
   fields             status status_basis status_duration_seconds status_in_vocabulary status_provenance status_since status_since_basis
 
 FactWork
-  reached_funcs      84
+  reached_funcs      83
   dynamic_key_sites  0
   leaked_call_sites  2
     leak interface_method     2
@@ -354,10 +354,10 @@ FactWork
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            795
+    calls followed            794
     calls accounted           13
     calls not_a_call          4
-    calls excluded_by_design  79
+    calls excluded_by_design  64
     calls leaked              2
   fields             title
 
