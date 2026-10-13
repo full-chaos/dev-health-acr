@@ -158,7 +158,6 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 		}
 		if observation.partial {
 			driver.Qualification = "The read was cut short, so the real count may be higher."
-			driver.Confidence = 0.6
 			event.TruncatedServed++
 		}
 		value := observation.fact.Fields[teamBlockersField]
