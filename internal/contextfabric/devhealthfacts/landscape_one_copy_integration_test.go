@@ -159,7 +159,7 @@ func TestLandscapeServesOneCopyOfTheStatsForTeamAndProject(t *testing.T) {
 	if peak == 0 {
 		t.Fatal("memory peak of the changed statements is 0: the measurement did not happen")
 	}
-	const peakBound = 256 << 20
+	const peakBound = 1
 	figure := fmt.Sprintf("MEMORY-PEAK changed landscape statements: %d bytes (%.1f MiB), bound %d MiB", peak, float64(peak)/(1<<20), peakBound>>20)
 	t.Log(figure)
 	if summary := os.Getenv("GITHUB_STEP_SUMMARY"); summary != "" {
