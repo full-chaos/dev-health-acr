@@ -1049,7 +1049,13 @@ import (
 // body bound names the caller's budget as the answer budget; the input is now
 // cut to that budget, or served whole when its smallest form fits beside the
 // answer. An answer saved under v207 carried the uncut input.
-const QueryVersion = "devhealthfacts.clickhouse.v208"
+//
+// v208 -> v209: a secondary caveat sentence (project-reach absence, unwindowed
+// project links, revert-rate day count, investment units cursor, incident
+// severity omission, owning-teams cut) is served on the rows it describes and
+// no longer on every row of the kind. An answer saved under v208 carries each
+// on rows it is false for.
+const QueryVersion = "devhealthfacts.clickhouse.v209"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
