@@ -2,6 +2,8 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -20,6 +22,7 @@ const (
 	ownershipHistoryRepoOrg    = "e8b25c70-1a93-4d6f-b042-7c3f8a9e5d16"
 	orgLinksMemoryFillerLinks  = 30_000
 	orgLinksMemoryMoreLinks    = 60_000
+	orgLinksMemoryCeilingLinks = 400_000
 	ownershipHistorySmall      = 100
 	ownershipHistoryLarge      = 1_000
 )
@@ -45,11 +48,8 @@ func TestTeamProjectReachedStatementMemoryFollowsOwnedProjectsNotOrganizationLin
 	}
 	t.Run("organization links", func(t *testing.T) {
 		var from uint64
-		measureTeamReachAxis(t, ctx, query, direct, orgLinksMemoryOrg, func(exec func(string, ...any), org string, count int, first bool) {
-			n := orgLinksMemoryFillerLinks
-			if !first {
-				n = orgLinksMemoryMoreLinks
-			}
+		measureTeamReachAxis(t, ctx, query, direct, orgLinksMemoryOrg, func(exec func(string, ...any), org string, count int) {
+			n := count
 			at := ts(2026, 9, 29, 0, 0, 0)
 			exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
 SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?, ?)`,
@@ -61,35 +61,29 @@ SELECT ?, ?, toUInt32(number + 1000), 'pr', 'open', ?, ?, NULL, NULL, 'feature',
 SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), toUInt32(number + 1000), 1, 'native', '', ?, ? FROM numbers(?, ?)`,
 				repoUUID("repo-filler"), at, org, from, uint64(n))
 			from += uint64(n)
-		}, "organization links", orgLinksMemoryFillerLinks, orgLinksMemoryFillerLinks+orgLinksMemoryMoreLinks)
+		}, "organization links", orgLinksMemoryFillerLinks, orgLinksMemoryFillerLinks+orgLinksMemoryMoreLinks, orgLinksMemoryCeilingLinks)
 	})
 	t.Run("project ownership history", func(t *testing.T) {
 		var versions uint64
-		measureTeamReachAxis(t, ctx, query, direct, ownershipHistoryProjectOrg, func(exec func(string, ...any), org string, count int, first bool) {
-			n := ownershipHistorySmall
-			if !first {
-				n = ownershipHistoryLarge - ownershipHistorySmall
-			}
+		measureTeamReachAxis(t, ctx, query, direct, ownershipHistoryProjectOrg, func(exec func(string, ...any), org string, count int) {
+			n := count
 			exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at)
 SELECT ?, 'linear', 'team-owner', 'proj-owner', NULL, 'native', addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ?) * 3600),
   addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ? + 1) * 3600), toDateTime64('2026-09-29 00:00:00', 3, 'UTC') FROM numbers(?)`,
 				org, versions, versions, uint64(n))
 			versions += uint64(n)
-		}, "project ownership history versions", ownershipHistorySmall, ownershipHistoryLarge)
+		}, "project ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0)
 	})
 	t.Run("repository ownership history", func(t *testing.T) {
 		var versions uint64
-		measureTeamReachAxis(t, ctx, query, direct, ownershipHistoryRepoOrg, func(exec func(string, ...any), org string, count int, first bool) {
-			n := ownershipHistorySmall
-			if !first {
-				n = ownershipHistoryLarge - ownershipHistorySmall
-			}
+		measureTeamReachAxis(t, ctx, query, direct, ownershipHistoryRepoOrg, func(exec func(string, ...any), org string, count int) {
+			n := count
 			exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
 SELECT ?, 'linear', 'team-owner', ?, 'acme/repo-filler', 'exact', 'native', 1, 100, 0, addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ?) * 3600),
   addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ? + 1) * 3600), toDateTime64('2026-09-29 00:00:00', 3, 'UTC') FROM numbers(?)`,
 				org, repoUUID("repo-filler"), versions, versions, uint64(n))
 			versions += uint64(n)
-		}, "repository ownership history versions", ownershipHistorySmall, ownershipHistoryLarge)
+		}, "repository ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0)
 	})
 }
 
@@ -98,7 +92,7 @@ SELECT ?, 'linear', 'team-owner', ?, 'acme/repo-filler', 'exact', 'native', 1, 1
 // size, and applies the slope guard to every statement the team pull request
 // read runs over team_project_ownership and team_repo_ownership.
 func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org string,
-	grow func(exec func(string, ...any), org string, count int, first bool), axis string, smallSize, largeSize int) {
+	grow func(exec func(string, ...any), org string, count int), axis string, smallSize, largeSize, ceilingSize int) {
 	t.Helper()
 	at := ts(2026, 9, 29, 0, 0, 0)
 	exec := func(statement string, args ...any) {
@@ -137,7 +131,7 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclick
 			Time: window, Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{teamSubject(teamID)},
 		})
 		if err != nil {
-			t.Fatalf("ReadFacts at the %s size of %s: %v: %s", label, axis, err, readFailureCause(err))
+			t.Fatalf("ReadFacts at the %s size of %s: %v: %s\nfailed statements:\n%s", label, axis, err, readFailureCause(err), failedStatementsSince(ctx, direct, mark))
 		}
 		wantInt(t, factFor(t, result, teamSubject(teamID)).Fields, "project_reached_repository_count", 1)
 		var out []statementMemory
@@ -146,10 +140,10 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclick
 		}
 		return out
 	}
-	grow(exec, org, smallSize, true)
+	grow(exec, org, smallSize)
 	read("warm-up")
 	small := read("smaller")
-	grow(exec, org, largeSize, false)
+	grow(exec, org, largeSize-smallSize)
 	large := read("larger")
 	for i := range filters {
 		for hash, peak := range small[i] {
@@ -157,4 +151,31 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclick
 		}
 		assertStatementMemoryFollowsEvidence(t, ctx, direct, axis+" / "+filters[i].Table+" statements", small[i], large[i], 1)
 	}
+	if ceilingSize > 0 {
+		grow(exec, org, ceilingSize-largeSize)
+		read(fmt.Sprintf("ceiling (%d)", ceilingSize))
+	}
+}
+
+// failedStatementsSince names, after the mark, every SELECT the server ended
+// with an exception: hash, code, read_bytes, memory and the query head.
+func failedStatementsSince(ctx context.Context, direct clickhousedriver.Conn, markMicros int64) string {
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		return "flush logs: " + err.Error()
+	}
+	rows, err := direct.Query(ctx, `SELECT concat('hash=', toString(normalized_query_hash), ' code=', toString(exception_code), ' read_bytes=', toString(read_bytes), ' memory=', toString(memory_usage), ' tables=', arrayStringConcat(tables, ','), ' || ', substring(replaceRegexpAll(query, '\\s+', ' '), 1, 300))
+FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select' ORDER BY event_time_microseconds`, markMicros)
+	if err != nil {
+		return "query_log unreadable: " + err.Error()
+	}
+	defer rows.Close()
+	var out strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			return out.String() + "scan: " + err.Error()
+		}
+		out.WriteString(line + "\n")
+	}
+	return out.String()
 }
