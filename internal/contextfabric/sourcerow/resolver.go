@@ -432,7 +432,7 @@ func (r *Resolver) expand(ctx context.Context, entityType, entityID string, row 
 	evidence := row.reference.Evidence
 	excerpt := row.reference.Excerpt
 	if entityType == string(contractsv1.ContextFabricEvidenceEntityPullRequest) {
-		excerpt = pullRequestExcerpt(row)
+		_ = pullRequestExcerpt(row)
 	}
 	expanded, err := r.expander.Expand(ctx, contextpacket.EvidenceExpansionInput{Evidence: evidence, Excerpt: excerpt})
 	if err != nil {
