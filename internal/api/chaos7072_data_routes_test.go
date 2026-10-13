@@ -510,7 +510,7 @@ func TestChaos7072CatalogPerCallerClass(t *testing.T) {
 			t.Fatalf("%s: the K14-A refusal is not listed", tc.class)
 		}
 		caller := body["caller"].(map[string]any)
-		if len(caller) != 3 || caller["grant_class"] != tc.class || caller["effective_access"] != "data_read" {
+		if len(caller) != 4 || caller["grant_class"] != tc.class || caller["effective_access"] != "data_read" {
 			t.Fatalf("%s: caller section %v", tc.class, caller)
 		}
 		if strings.Contains(response.Body.String(), hostedTestRepository) {
@@ -612,4 +612,33 @@ type c7072FailingFinder struct{ err error }
 
 func (f c7072FailingFinder) Find(context.Context, storage.Principal, directread.FindRequest) (directread.FindResponse, error) {
 	return directread.FindResponse{}, f.err
+}
+
+// Each tool_access value must agree with what that tool's route actually does
+// for the same credential: available means the route got past its
+// availability and scope checks, anything else means it refused.
+func TestCatalogToolAccessAgreesWithWhatEachToolServes(t *testing.T) {
+	h := newC7072Harness(t, c7072Options{})
+	tools := map[string]struct{ path, body string }{
+		"run_operation":      {ContextFabricDataOperationsPath, `{"operation":"compoundingRisk","variables":{"filter":{"breakout":"REPO"}}}`},
+		"graphql_query":      {ContextFabricDataGraphQLPath, `{"query":"{ __typename }"}`},
+		"read_facts":         {ContextFabricDataFactsPath, `{}`},
+		"find_subjects":      {ContextFabricDataSubjectsPath, `{"kind":"repository"}`},
+		"read_relationships": {ContextFabricDataRelationshipsPath, `{}`},
+	}
+	for name, scopes := range map[string][]string{"context-only": c7072Context, "context+data": c7072Data} {
+		token := h.issueFor(t, scopes, c7072AllRepos, nil).Token
+		body := decodeC7072(t, h.get(ContextFabricDataCatalogPath+"?sections=operations", token))
+		access := body["caller"].(map[string]any)["tool_access"].(map[string]any)
+		if len(access) != len(tools) {
+			t.Fatalf("%s: tool_access %v", name, access)
+		}
+		for tool, call := range tools {
+			response := h.post(call.path, token, call.body)
+			served := response.Code != http.StatusForbidden && response.Code != http.StatusNotImplemented && response.Code != http.StatusServiceUnavailable
+			if (access[tool] == "available") != served {
+				t.Errorf("%s: %s tool_access=%v but the route answered %d", name, tool, access[tool], response.Code)
+			}
+		}
+	}
 }

@@ -744,12 +744,14 @@
         },
         "effective_access": {
           "type": "string",
-          "description": "What run_operation does for your credential now: data_read (can run), no_data_read (data:read scope missing), not_servable (not available in this deployment).",
-          "enum": [
-            "data_read",
-            "no_data_read",
-            "not_servable"
-          ]
+          "description": "What run_operation does for your credential now: data_read (can run), no_data_read (data:read scope missing), not_servable (not available in this deployment). It describes run_operation only; see tool_access for the other tools. The set of values is open: treat an unknown value as not available."
+        },
+        "tool_access": {
+          "type": "object",
+          "description": "Access per data tool for your credential now, keyed by tool name (run_operation, graphql_query, read_facts, find_subjects, read_relationships). Each value is available, no_data_read (data:read scope missing) or not_servable (not available in this deployment). The key set and the value set are open: a new data tool adds a key; treat an unknown value as not available.",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },

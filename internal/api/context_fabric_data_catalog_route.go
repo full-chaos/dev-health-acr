@@ -48,15 +48,17 @@ func (a *App) contextFabricDataCatalogHandler() http.HandlerFunc {
 			graphqlPolicy = nil
 		}
 		catalog := directread.BuildDataCatalog(a.dataCatalogue(), directread.CatalogCaller{
-			GraphQL:            graphqlPolicy,
-			GraphQLServable:    a.dataGraphQL() != nil,
-			GateComposed:       a.dataGateComposed(),
-			PrincipalClass:     directread.ClassifyPrincipal(principal),
-			Scopes:             scopes,
-			DataRead:           auth.HasScope(principal.Permissions, auth.ScopeDataRead),
-			OperationsServable: a.dataOperations() != nil,
-			FactsServable:      facts != nil,
-			FactCapabilities:   factCapabilities,
+			GraphQL:               graphqlPolicy,
+			GraphQLServable:       a.dataGraphQL() != nil,
+			GateComposed:          a.dataGateComposed(),
+			PrincipalClass:        directread.ClassifyPrincipal(principal),
+			Scopes:                scopes,
+			DataRead:              auth.HasScope(principal.Permissions, auth.ScopeDataRead),
+			OperationsServable:    a.dataOperations() != nil,
+			FactsServable:         facts != nil,
+			SubjectsServable:      a.dataSubjects() != nil,
+			RelationshipsServable: a.directRelationships() != nil,
+			FactCapabilities:      factCapabilities,
 		}, sections)
 		encoded, err := encodeBounded(catalog, contextFabricDataResponseBytes)
 		if err != nil {

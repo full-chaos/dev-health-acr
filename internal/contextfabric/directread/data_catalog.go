@@ -134,6 +134,10 @@ type CatalogCaller struct {
 	// GateComposed reports the subject gate over a real graph; without it
 	// run_operation and graphql_query cannot authorize a subject.
 	GateComposed bool
+	// SubjectsServable and RelationshipsServable report that the find_subjects
+	// lookup and the read_relationships reader are composed.
+	SubjectsServable      bool
+	RelationshipsServable bool
 	// FactsServable is true when a read_facts reader object is composed. The
 	// section still says "not available" unless the registry it reads lists
 	// at least one direct-servable kind.
@@ -339,9 +343,58 @@ type CatalogCallerView struct {
 	// GrantClass is the repository grant class only. It says nothing about
 	// whether the credential can run an operation; EffectiveAccess does.
 	GrantClass CallerClass `json:"grant_class"`
-	// EffectiveAccess is what run_operation does for this credential now,
-	// derived from the same decision as operations.available/reason.
+	// EffectiveAccess is what run_operation (only) does for this credential
+	// now, derived from the same decision as operations.available/reason.
+	// The other tools are in ToolAccess.
 	EffectiveAccess CatalogEffectiveAccess `json:"effective_access"`
+	// ToolAccess is the access state per data tool for this credential now,
+	// each from the decision that tool applies. The key set is open: a new
+	// data tool adds a key.
+	ToolAccess map[string]CatalogToolAccess `json:"tool_access"`
+}
+
+// CatalogToolAccess is one tool's access state. The set of values is open.
+type CatalogToolAccess string
+
+const (
+	ToolAccessAvailable   CatalogToolAccess = "available"
+	ToolAccessNoDataRead  CatalogToolAccess = "no_data_read"
+	ToolAccessNotServable CatalogToolAccess = "not_servable"
+)
+
+func catalogToolAccessFor(reason string) CatalogToolAccess {
+	switch reason {
+	case "":
+		return ToolAccessAvailable
+	case CatalogUnavailableScopeMissing:
+		return ToolAccessNoDataRead
+	default:
+		return ToolAccessNotServable
+	}
+}
+
+func catalogToolAccessIf(servable bool) CatalogToolAccess {
+	if servable {
+		return ToolAccessAvailable
+	}
+	return ToolAccessNotServable
+}
+
+// catalogToolAccess states each data tool's access from the decision the tool
+// itself applies: run_operation and graphql_query share catalogAccessReason
+// with the operations and schema sections; read_facts is served only when
+// the facts section lists a direct-servable kind; find_subjects and
+// read_relationships need their reader composed and only context:read, which
+// the catalogue route already required.
+func catalogToolAccess(catalogue *Catalogue, caller CatalogCaller) map[string]CatalogToolAccess {
+	graphQLReason := catalogAccessReason(caller.GraphQL != nil && caller.GraphQLServable, CatalogUnavailableGraphQLNotConfigured, caller.GateComposed, caller.DataRead)
+	return map[string]CatalogToolAccess{
+		"run_operation":      catalogToolAccessFor(catalogOperationsReason(catalogue, caller)),
+		"graphql_query":      catalogToolAccessFor(graphQLReason),
+		"read_facts":         catalogToolAccessIf(buildCatalogFacts(caller).Served),
+		"find_subjects":      catalogToolAccessIf(caller.SubjectsServable),
+		"read_relationships": catalogToolAccessIf(caller.RelationshipsServable),
+	}
 }
 
 // CatalogEffectiveAccess is the closed vocabulary of the caller's effective
@@ -487,7 +540,7 @@ func BuildDataCatalog(catalogue *Catalogue, caller CatalogCaller, sections []str
 		ContractVersion: DataContractVersion,
 		Sections:        append([]string{}, sections...),
 		Versions:        CatalogVersions{Contract: DataContractVersion, CatalogueContract: OperationCatalogueContract},
-		Caller:          CatalogCallerView{Scopes: catalogScopes(caller.Scopes), GrantClass: class, EffectiveAccess: catalogEffectiveAccess(catalogOperationsReason(catalogue, caller))},
+		Caller:          CatalogCallerView{Scopes: catalogScopes(caller.Scopes), GrantClass: class, EffectiveAccess: catalogEffectiveAccess(catalogOperationsReason(catalogue, caller)), ToolAccess: catalogToolAccess(catalogue, caller)},
 		Consistency:     ConsistencyBestEffort,
 		UntrustedContent: CatalogUntrustedLabel{
 			Untrusted: true, Notice: DataCatalogUntrustedNotice,
