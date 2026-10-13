@@ -99,17 +99,11 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 		}
 		queryPlan := plan
 		if query.ID == workGraphSourceID {
-			if reader, ok := executor.(RepositorylessIssueReader); ok {
-				ids, gateErr := reader.ReadableRepositorylessIssueIDs(ctx, plan)
-				if gateErr != nil {
-					if ctx.Err() != nil {
-						return CatalogResult{}, ctx.Err()
-					}
-					slog.Warn("contextpacket: repository-less issue gate failed; issue titles are withheld", "source", query.ID)
-					ids = nil
-				}
-				queryPlan.ReadableRepositorylessIssueIDs = ids
+			ids, gateErr := gateRepositorylessIssues(ctx, executor, plan)
+			if gateErr != nil {
+				return CatalogResult{}, gateErr
 			}
+			queryPlan.ReadableRepositorylessIssueIDs = ids
 		}
 		started := time.Now()
 		rows, err := executor.QueryEvidence(ctx, query, queryPlan.Bindings())

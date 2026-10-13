@@ -275,7 +275,7 @@ func TestServerInstructionsAreAnAgentGuide(t *testing.T) {
 	// The four things the guide must say, each pinned by its own phrase.
 	for name, phrase := range map[string]string{
 		"tool choice":     "Choosing a tool:",
-		"question shapes": "Question shapes that work:",
+		"question shapes": "Question shapes that work (investigate tools only):",
 		"receipt flow":    "prior_window_receipts",
 		// CHAOS-6557: a stated period (evidence_window or a phrase in the
 		// question) is used as given; only a period the caller did NOT state
