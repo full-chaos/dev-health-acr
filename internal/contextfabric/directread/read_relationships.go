@@ -102,6 +102,10 @@ var ErrRelationshipsUnavailable = errors.New("direct relationship read is unavai
 // programming defect, never a caller answer). The route answers 500.
 var ErrRelationshipsInternal = errors.New("direct relationship read internal error")
 
+// ErrRelationshipsServedVocabulary marks an internal error whose cause is a
+// served value outside its pinned value set.
+var ErrRelationshipsServedVocabulary = errors.New("served value outside its pinned set")
+
 // RelationshipsResponse is one page.
 type RelationshipsResponse struct {
 	ContractVersion string              `json:"contract_version"`
@@ -413,13 +417,7 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 			r.recorder.RecordDirectRelationshipsRead(ctx, principal, record)
 		}
 	}()
-	defer func() {
-		if err == nil {
-			if vocabErr := validateServedRelationshipsVocabulary(response); vocabErr != nil {
-				response, err = RelationshipsResponse{}, fmt.Errorf("%w: %w", ErrRelationshipsInternal, vocabErr)
-			}
-		}
-	}()
+	defer func() { refuseOffSetServedVocabulary(&record, &response, &err) }()
 
 	plan, err := planRelationships(request)
 	if err != nil {
