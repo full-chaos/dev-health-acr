@@ -172,7 +172,7 @@ ORDER BY team_id, rule_id`)
 		state = contextfabric.SourceAvailable
 	}
 	retentionReason, missingNote := evaluation.reason(len(evaluated) > 0 || len(facts) > 0, retentionReason)
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, RequestNote: missingNote, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery, EvaluatedSubjects: evaluated, Evaluation: evaluation.coverage()}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, RequestNote: missingNote, SubjectReasons: evaluation.memberReasons(), Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery, EvaluatedSubjects: evaluated, Evaluation: evaluation.coverage()}
 	if len(ids) > 0 {
 		owned, ownedErr := teamOwnedRepositories(ctx, p.facts.client, orgID, ids, timeBound)
 		if ownedErr != nil {
@@ -227,6 +227,29 @@ func (e deficiencyEvaluation) coverage() *contextfabric.FactEvaluationCoverage {
 	}
 }
 
+var deficiencyMissingStates = []struct{ state, text string }{
+	{deficiencyStateStale, "evaluated outside the freshness window"},
+	{deficiencyStateBeforeRange, "evaluated before the requested range"},
+	{deficiencyStateNever, "never evaluated"},
+	{deficiencyStateWithheld, "withheld by a capped read"},
+}
+
+// memberReasons is each unmeasured team's own state sentence.
+func (e deficiencyEvaluation) memberReasons() map[string]string {
+	out := map[string]string{}
+	for _, member := range e.members {
+		for _, entry := range deficiencyMissingStates {
+			if member.State == entry.state {
+				out[contextfabric.FactSubjectKey(member.Subject)] = "operational deficiency evaluation: " + entry.text
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // reason splits what a read says about teams it could not measure: the kind
 // reason (true of every subject) and the request note (a count over the
 // requested teams, which no single team's row may carry). A read where every
@@ -235,12 +258,7 @@ func (e deficiencyEvaluation) coverage() *contextfabric.FactEvaluationCoverage {
 func (e deficiencyEvaluation) reason(answered bool, fallback string) (kindReason, requestNote string) {
 	parts := make([]string, 0, 4)
 	missing := 0
-	for _, entry := range []struct{ state, text string }{
-		{deficiencyStateStale, "evaluated outside the freshness window"},
-		{deficiencyStateBeforeRange, "evaluated before the requested range"},
-		{deficiencyStateNever, "never evaluated"},
-		{deficiencyStateWithheld, "withheld by a capped read"},
-	} {
+	for _, entry := range deficiencyMissingStates {
 		if n := e.counts[entry.state]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", n, entry.text))
 			missing += n

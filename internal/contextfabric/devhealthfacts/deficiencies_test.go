@@ -180,4 +180,10 @@ func TestOperationalDeficienciesMissingCountStaysOffTheEvaluatedTeamsRow(t *test
 	if !strings.Contains(result.RequestNote, "operational deficiency evaluation missing for 1 of 2 requested teams") {
 		t.Fatalf("request note = %q", result.RequestNote)
 	}
+	if got := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("OTHER"))]; !strings.Contains(got, "never evaluated") {
+		t.Fatalf("the team that was never evaluated carries own reason %q", got)
+	}
+	if got, has := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("CHAOS"))]; has {
+		t.Fatalf("the evaluated team carries a reason %q", got)
+	}
 }

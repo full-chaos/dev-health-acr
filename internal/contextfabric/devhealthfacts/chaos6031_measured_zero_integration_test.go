@@ -151,8 +151,10 @@ func TestCHAOS6031MeasuredZeroDomainAgainstRealClickHouse(t *testing.T) {
 		if never.State != contextfabric.SourceNoData || len(never.EvaluatedSubjects) != 0 {
 			t.Fatalf("never-only read = state %q evaluated %d, want no_data and none", never.State, len(never.EvaluatedSubjects))
 		}
-		if stale.Reason == never.Reason || stale.Reason == "" || never.Reason == "" || !strings.Contains(stale.Reason, "1 evaluated outside the freshness window") {
-			t.Fatalf("stale reason %q and never reason %q must both be set and differ", stale.Reason, never.Reason)
+		staleServed := contextfabric.CombineRequestNote(stale.Reason, stale.RequestNote)
+		neverServed := contextfabric.CombineRequestNote(never.Reason, never.RequestNote)
+		if staleServed == neverServed || staleServed == "" || neverServed == "" || !strings.Contains(staleServed, "1 evaluated outside the freshness window") {
+			t.Fatalf("stale reason %q and never reason %q must both be set and differ", staleServed, neverServed)
 		}
 	})
 
