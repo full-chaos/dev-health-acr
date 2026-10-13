@@ -313,7 +313,7 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 		return InvestigationResult{}, nil, measure, ErrClientSynthesisUnavailable
 	}
 	assembly := r.ClientSynthesis
-	budget := effectiveCallerBudget(input.Request.Options)
+	budget := input.Request.Options.MaxSerializedBytes
 	maxBytes, err := assembly.inputBoundWithin(budget)
 	measure.MaxBytes = maxBytes
 	if err != nil {
