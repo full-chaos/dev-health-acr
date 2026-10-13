@@ -158,7 +158,7 @@ func TestLandscapeServesOneCopyOfTheStatsForTeamAndProject(t *testing.T) {
 	if peak == 0 {
 		t.Fatal("memory peak of the changed statements is 0: the measurement did not happen")
 	}
-	const peakBound = 64 << 20
+	const peakBound = 20 << 20
 	figure := fmt.Sprintf("MEMORY-PEAK changed landscape statements: %d bytes (%.1f MiB), bound %d MiB", peak, float64(peak)/(1<<20), peakBound>>20)
 	t.Log(figure)
 	t.Run(fmt.Sprintf("memory_peak_%dKiB", (peak+1023)>>10), func(t *testing.T) {
