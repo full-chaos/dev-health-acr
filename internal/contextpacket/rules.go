@@ -89,20 +89,41 @@ func logExplicitRuleRejection(ref contractsv1.EvidenceRef) {
 func actionsFor(items []contractsv1.ContextPacketItem) ([]contractsv1.RequiredCheck, []contractsv1.RecommendedStep) {
 	rules := make([]string, 0, len(items))
 	seen := map[string]bool{}
+	titles := map[string][]string{}
 	for _, item := range items {
 		if !seen[item.RuleID] {
 			seen[item.RuleID] = true
 			rules = append(rules, item.RuleID)
+		}
+		if title := actionTitle(item.Title); title != "" && len(titles[item.RuleID]) < maxActionTitles {
+			titles[item.RuleID] = append(titles[item.RuleID], title)
 		}
 	}
 	sort.Strings(rules)
 	checks, steps := make([]contractsv1.RequiredCheck, 0, len(rules)), make([]contractsv1.RecommendedStep, 0, len(rules))
 	for _, ruleID := range rules {
 		subject := ruleSubject(ruleID)
-		checks = append(checks, contractsv1.RequiredCheck{CheckID: "check." + ruleID, Label: "Validate retrieved evidence for " + subject, Reason: "Retrieved content for " + subject + " is untrusted.", RuleID: ruleID})
-		steps = append(steps, contractsv1.RecommendedStep{StepID: "step." + ruleID, Label: "Investigate retrieved evidence for " + subject, Reason: "Use cited evidence for " + subject + " before changing code.", RuleID: ruleID})
+		named := subject
+		if len(titles[ruleID]) > 0 {
+			named = subject + " (retrieved titles, untrusted): " + strings.Join(titles[ruleID], "; ")
+		}
+		checks = append(checks, contractsv1.RequiredCheck{CheckID: "check." + ruleID, Label: "Validate retrieved evidence for " + named, Reason: "Retrieved content for " + subject + " is untrusted.", RuleID: ruleID})
+		steps = append(steps, contractsv1.RecommendedStep{StepID: "step." + ruleID, Label: "Investigate retrieved evidence for " + named, Reason: "Use cited evidence for " + subject + " before changing code.", RuleID: ruleID})
 	}
 	return checks, steps
+}
+
+const (
+	maxActionTitles     = 2
+	maxActionTitleRunes = 80
+)
+
+func actionTitle(title string) string {
+	title = strings.ReplaceAll(strings.Join(strings.Fields(title), " "), `"`, "'")
+	if title == "" {
+		return ""
+	}
+	return `"` + truncateRunes(title, maxActionTitleRunes) + `"`
 }
 
 var ruleSubjects = map[string]string{

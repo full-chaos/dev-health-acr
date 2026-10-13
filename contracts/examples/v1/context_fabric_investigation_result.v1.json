@@ -125,6 +125,7 @@
       "epistemic_status": "inferred",
       "confidence": 0.96,
       "qualification": "This judgment is limited to currently visible project and acceptance evidence.",
+      "source_state": "truncated",
       "current": true
     },
     {
