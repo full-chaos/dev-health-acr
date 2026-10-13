@@ -23,7 +23,7 @@ func TestScopeGapCauseSeparatesUnwiredFromUnconfigured(t *testing.T) {
 		if got := gap.ScopeExpansionUnavailable(); got != tc.unavailable {
 			t.Errorf("%s: ScopeExpansionUnavailable = %v, want %v", tc.name, got, tc.unavailable)
 		}
-		if got := strings.Contains(unexpandedReason(capability, gap), "scope expansion is not available on this read path"); got != tc.unavailable {
+		if got := strings.Contains(unexpandedReason(capability, gap), "no scope expander is wired on this server"); got != tc.unavailable {
 			t.Errorf("%s: reason names the unavailable expansion = %v, want %v", tc.name, got, tc.unavailable)
 		}
 		if got := factScopeGapSourceState(gap.Outcome); got != SourceUnconfigured {

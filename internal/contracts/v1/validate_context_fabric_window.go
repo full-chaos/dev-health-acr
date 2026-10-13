@@ -59,17 +59,21 @@ func (w ContextFabricRequestedEvidenceWindow) validate() error {
 // established), and a WindowClass/Confidence that are either absent or
 // closed-vocabulary members.
 func (e ContextFabricEffectiveEvidenceWindow) validate() error {
+	return e.validateWithin(contextFabricWriteBounds)
+}
+
+func (e ContextFabricEffectiveEvidenceWindow) validateWithin(bounds contextFabricBounds) error {
 	requested := ContextFabricRequestedEvidenceWindow{Start: e.Start, End: e.End, RelativeID: e.RelativeID}
 	if err := requested.validate(); err != nil {
 		return err
 	}
-	if !ValidContextFabricWindowProvenance(e.Provenance) {
+	if !bounds.additiveOK(ValidContextFabricWindowProvenance(e.Provenance), string(e.Provenance)) {
 		return fmt.Errorf("effective evidence window provenance is invalid")
 	}
-	if e.WindowClass != "" && !ValidContextFabricWindowClass(e.WindowClass) {
+	if e.WindowClass != "" && !bounds.additiveOK(ValidContextFabricWindowClass(e.WindowClass), string(e.WindowClass)) {
 		return fmt.Errorf("effective evidence window class is invalid")
 	}
-	if e.Confidence != "" && !ValidContextFabricWindowConfidence(e.Confidence) {
+	if e.Confidence != "" && !bounds.additiveOK(ValidContextFabricWindowConfidence(e.Confidence), string(e.Confidence)) {
 		return fmt.Errorf("effective evidence window confidence is invalid")
 	}
 	return nil
@@ -128,6 +132,10 @@ func (o ContextFabricWindowOption) Validate() error {
 // integrity check needs the sibling WindowOptions list, so it lives in
 // ContextFabricStructureNeeds.Validate instead.
 func (o ContextFabricWindowExpandOption) Validate() error {
+	return o.validate(contextFabricWriteBounds)
+}
+
+func (o ContextFabricWindowExpandOption) validate(bounds contextFabricBounds) error {
 	if !stringLengthBetween(o.ReceiptID, 8, 256) || !hasWindowReceiptPrefix(o.ReceiptID) {
 		return fmt.Errorf("window expand option receipt_id must carry the %q namespace prefix and satisfy v1 bounds", ContextFabricWindowOptionReceiptPrefix)
 	}
@@ -137,7 +145,7 @@ func (o ContextFabricWindowExpandOption) Validate() error {
 	if o.RelativeID != "" && !ValidContextFabricRelativeWindowID(o.RelativeID) {
 		return fmt.Errorf("window expand option relative_id is invalid")
 	}
-	if o.WindowClass != "" && !ValidContextFabricWindowClass(o.WindowClass) {
+	if o.WindowClass != "" && !bounds.additiveOK(ValidContextFabricWindowClass(o.WindowClass), string(o.WindowClass)) {
 		return fmt.Errorf("window expand option window_class is invalid")
 	}
 	if !optionalStringBetween(o.CandidateLabel, 1, 200) {

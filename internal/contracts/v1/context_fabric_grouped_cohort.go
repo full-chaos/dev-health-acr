@@ -95,7 +95,11 @@ type ContextFabricCohortGroup struct {
 // ContextFabricCohort's validation, so a grouped cohort cannot be persisted or
 // served in a state a reader would misread.
 func (g ContextFabricCohortGroup) Validate() error {
-	if err := g.Subject.Validate(); err != nil {
+	return g.validate(contextFabricWriteBounds)
+}
+
+func (g ContextFabricCohortGroup) validate(bounds contextFabricBounds) error {
+	if err := g.Subject.validate(bounds); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
 	if g.Complete && g.Truncated {
@@ -163,6 +167,10 @@ func (g ContextFabricCohortGroup) Validate() error {
 const ContextFabricCohortGroupsMaxCount = 250
 
 func ValidateCohortGroups(groups []ContextFabricCohortGroup, members []ContextFabricCohortMember) error {
+	return validateCohortGroups(groups, members, contextFabricWriteBounds)
+}
+
+func validateCohortGroups(groups []ContextFabricCohortGroup, members []ContextFabricCohortMember, bounds contextFabricBounds) error {
 	if len(groups) == 0 {
 		return nil
 	}
@@ -172,7 +180,7 @@ func ValidateCohortGroups(groups []ContextFabricCohortGroup, members []ContextFa
 	}
 	groupKeys := make(map[string]struct{}, len(groups))
 	for _, group := range groups {
-		if err := group.Validate(); err != nil {
+		if err := group.validate(bounds); err != nil {
 			return err
 		}
 		if _, duplicate := groupKeys[group.Subject.CanonicalID]; duplicate {

@@ -189,7 +189,9 @@
             "$ref": "#/$defs/ReadFactsSubjectRef"
           },
           "outcome": {
-            "enum": [
+            "description": "Outcome. Unknown, stale, sparse, not applicable and zero are distinct: a missing fact is not a healthy one. Open vocabulary; documented values: fact_served, read_no_fact, measured_zero, not_applicable, unavailable, stale, truncated, withheld_response_budget. A client must tolerate values it does not know.",
+            "type": "string",
+            "x-documented-values": [
               "fact_served",
               "read_no_fact",
               "measured_zero",
@@ -198,15 +200,14 @@
               "stale",
               "truncated",
               "withheld_response_budget"
-            ],
-            "description": "Closed outcome. Unknown, stale, sparse, not applicable and zero are distinct: a missing fact is not a healthy one."
+            ]
           },
           "provider_state": {
             "type": "string"
           },
           "kind_state": {
             "type": "string",
-            "description": "The fact kind's state for this read: available, no_data, stale, truncated, unavailable, unconfigured (no scope policy is configured for this kind), unauthorized, conflicted, not_applicable, pruned, scope_expansion_unavailable (the scope policy is configured, but scope expansion is not available on this read path), or window_unsupported (the scope policy is configured, but it does not serve the requested window; the reason names the supported window)."
+            "description": "The fact kind's state for this read: available, no_data, stale, truncated, unavailable, unconfigured (no scope policy is configured for this kind), unauthorized, conflicted, not_applicable, pruned, scope_expansion_unavailable (the scope policy is configured, but no scope expander is wired on this server), or window_unsupported (the scope policy is configured, but it does not serve the requested window; the reason names the supported window)."
           },
           "reason": {
             "type": "string"
@@ -422,6 +423,28 @@
       },
       "description": "One declared table. Each row is an array in columns order. Integers are strings."
     },
+    "ReachedFrom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "canonical_id",
+        "basis"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "canonical_id": {
+          "type": "string"
+        },
+        "basis": {
+          "type": "string",
+          "description": "How the path from the requested subject was formed: direct, activity_proxy or attributed_primary_team."
+        }
+      },
+      "description": "A requested subject a derived fact was reached from."
+    },
     "ServedFact": {
       "type": "object",
       "additionalProperties": false,
@@ -479,6 +502,13 @@
         "attribution_basis": {
           "type": "string",
           "description": "For an investment fact: how effort is attributed."
+        },
+        "reached_from": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReachedFrom"
+          },
+          "description": "Set on a fact whose subject was reached by scope expansion from requested subjects (for example a work item of a requested team, or a repository of a requested project): names the requested subject the expansion attributed it to and the basis of the path. A subject several requested subjects reach is attributed to one of them; their coverage rows say so. A path shows relevance, not cause."
         },
         "withheld": {
           "type": "array",

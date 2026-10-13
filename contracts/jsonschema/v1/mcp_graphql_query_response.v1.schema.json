@@ -39,8 +39,8 @@
     },
     "completeness_reason": {
       "type": "string",
-      "description": "Why completeness is not declared_complete: page_cut (answer cut to whole rows to fit max_bytes), bounded (a list reached the row cap sent or defaulted), coverage_below_one, insufficient_history, degraded (the payload states a degraded reason), disclosure_absent (a field the verdict needs was not selected or not returned), limit_not_sent (the row cap is unknown). Absent when completeness is declared_complete.",
-      "enum": [
+      "description": "Why completeness is not declared_complete: page_cut (answer cut to whole rows to fit max_bytes), bounded (a list reached the row cap sent or defaulted), coverage_below_one, insufficient_history, degraded (the payload states a degraded reason), disclosure_absent (a field the verdict needs was not selected or not returned), limit_not_sent (the row cap is unknown). Absent when completeness is declared_complete. Open vocabulary; documented values: page_cut, bounded, coverage_below_one, insufficient_history, degraded, disclosure_absent, limit_not_sent. A client must tolerate values it does not know.",
+      "x-documented-values": [
         "page_cut",
         "bounded",
         "coverage_below_one",
@@ -70,8 +70,8 @@
       "properties": {
         "code": {
           "type": "string",
-          "description": "Why the call was refused.",
-          "enum": [
+          "description": "Why the call was refused. Open vocabulary; documented values: variable_not_allowed, variable_out_of_range, person_scope_not_served, basis_dependent_shape, no_granted_scope, operation_not_served_for_caller, response_budget, invalid_request, scope_required, row_outside_grant, policy_stale, denied_or_not_found, query_invalid, operation_type_not_allowed, root_field_not_allowed, field_not_allowed, fragment_not_allowed, directive_not_allowed, query_limit_exceeded, read_budget_exceeded, team_inactive. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "variable_not_allowed",
             "variable_out_of_range",
             "person_scope_not_served",
@@ -113,8 +113,8 @@
         },
         "read_budget": {
           "type": "string",
-          "description": "For read_budget_exceeded: which ceiling of the data service was hit.",
-          "enum": [
+          "description": "For read_budget_exceeded: which ceiling of the data service was hit. Open vocabulary; documented values: bytes_ceiling, rows_ceiling, time_ceiling, unknown. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "bytes_ceiling",
             "rows_ceiling",
             "time_ceiling",
@@ -199,8 +199,8 @@
           },
           "completeness_reason": {
             "type": "string",
-            "description": "Why completeness is not declared_complete: page_cut (answer cut to whole rows to fit max_bytes), bounded (a list reached the row cap sent or defaulted), coverage_below_one, insufficient_history, degraded (the payload states a degraded reason), disclosure_absent (a field the verdict needs was not selected or not returned), limit_not_sent (the row cap is unknown). Absent when completeness is declared_complete.",
-            "enum": [
+            "description": "Why completeness is not declared_complete: page_cut (answer cut to whole rows to fit max_bytes), bounded (a list reached the row cap sent or defaulted), coverage_below_one, insufficient_history, degraded (the payload states a degraded reason), disclosure_absent (a field the verdict needs was not selected or not returned), limit_not_sent (the row cap is unknown). Absent when completeness is declared_complete. Open vocabulary; documented values: page_cut, bounded, coverage_below_one, insufficient_history, degraded, disclosure_absent, limit_not_sent. A client must tolerate values it does not know.",
+            "x-documented-values": [
               "page_cut",
               "bounded",
               "coverage_below_one",
@@ -260,8 +260,8 @@
         "properties": {
           "class": {
             "type": "string",
-            "description": "Safe error class. acr_deadline: acr's own deadline ended the call before the data service answered. carrier_refused and listener_refused: the data service refused acr's identity carrier or query (a defect or drift on the service path, not something to retry).",
-            "enum": [
+            "description": "Safe error class. acr_deadline: acr's own deadline ended the call before the data service answered. carrier_refused and listener_refused: the data service refused acr's identity carrier or query (a defect or drift on the service path, not something to retry). Open vocabulary; documented values: graphql_errors, decode, http_status, transport, canceled, acr_deadline, carrier_refused, listener_refused, not_found, concurrency_wait. A client must tolerate values it does not know.",
+            "x-documented-values": [
               "graphql_errors",
               "decode",
               "http_status",
@@ -282,8 +282,8 @@
           },
           "graphql_code": {
             "type": "string",
-            "description": "The GraphQL error code the data service returned, as a closed token; other for any code not listed. graphql_validation_failed and graphql_parse_failed mean the request variables or document were rejected (call refused, code invalid_request). Present with class http_status when the body is a GraphQL error envelope.",
-            "enum": [
+            "description": "The GraphQL error code the data service returned, as a token; other for any code not listed. graphql_validation_failed and graphql_parse_failed mean the request variables or document were rejected (call refused, code invalid_request). Present with class http_status when the body is a GraphQL error envelope. Open vocabulary; documented values: graphql_validation_failed, graphql_parse_failed, mcp_refused, mcp_read_budget_exceeded, other. A client must tolerate values it does not know.",
+            "x-documented-values": [
               "graphql_validation_failed",
               "graphql_parse_failed",
               "mcp_refused",
