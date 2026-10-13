@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 const projectStatusPartialLabel = "(partial: the source read was truncated)"
@@ -195,5 +198,58 @@ func TestSuppliedDraftCannotHideAStaleFact(t *testing.T) {
 	t.Parallel()
 	if got := suppliedDriverSourceState(t, SourceStale, ""); got != SourceStale {
 		t.Errorf("served driver source_state = %q, want stale from the grounded fact", got)
+	}
+}
+
+func TestProjectStatusRealRegistryReadNamesTheStateOfAnEmptyRead(t *testing.T) {
+	for _, state := range []SourceState{SourceNoData, SourceConflicted, SourceUnavailable} {
+		t.Run(string(state), func(t *testing.T) {
+			rig := newClientRig(t, func(r *clientRig) {
+				r.runtime.interpreted = InterpretedQuestion{
+					Shape: ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{"Ask Dev"},
+					TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: projectStatusRequirements,
+				}
+				draft := bootstrapDraft(r.project)
+				draft.Status, draft.Drivers, draft.ClaimedFacts = InvestigationPartial, []DriverJudgment{}, []ClaimedFact{}
+				draft.EvidenceRefIDs = []string{}
+				r.runtime.draft = draft
+				byKind := map[FactKind][]CanonicalFact{}
+				for _, fact := range projectStatusFacts(r.project) {
+					byKind[fact.Kind] = append(byKind[fact.Kind], fact)
+				}
+				observed := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+				provider := func(kind FactKind, result FactProviderResult) FactProvider {
+					return &factProviderStub{capability: planCapability(kind, string(kind), SubjectProject), result: result}
+				}
+				ok := func(kind FactKind) FactProvider {
+					return provider(kind, FactProviderResult{Facts: byKind[kind], State: SourceAvailable, Version: "v1", ObservedAt: &observed})
+				}
+				registry, err := NewFactCapabilityRegistry([]FactProvider{
+					ok(FactStatus), ok(FactWorkload), ok(FactHealth),
+					provider(FactReadiness, FactProviderResult{State: state, Reason: "provider reported " + string(state), Version: "v1", ObservedAt: &observed}),
+				}, FactRegistryOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.reader = registry
+			})
+			result, _, err := rig.investigate(serverRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := driverTitles(result.Drivers), "Backlog: 40 items|Risk severity: medium"; got != want {
+				t.Errorf("drivers = %q, want %q", got, want)
+			}
+			want := contractsv1.ContextFabricProjectStatusMissingLimitation("readiness", string(state))
+			found := false
+			for _, limitation := range result.Limitations {
+				if limitation == want {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("limitations = %v, want %q", result.Limitations, want)
+			}
+		})
 	}
 }
