@@ -151,30 +151,16 @@ func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
     INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
     WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)})`
 	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
-    WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + linkedWorkItemIDsSQL + `
+    LEFT SEMI JOIN ` + linkedWorkItemIDsDistinctSQL + ` AS k ON k.work_item_id = cw.work_item_id
+    WHERE cw.org_id = {org_id:String}
       AND (cw.provider, cw.project_id) IN ` + owned + ` AND ` + workItemIsIssueSQL("cw") + `)`
-	ownedIssues := `(
-    SELECT t.team_id AS team_id, w.work_item_id AS work_item_id
-    FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
-    INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
-    INNER JOIN ` + issues + ` AS w ON w.provider = p.provider AND w.project_id = p.join_key
-    WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)}
-  )`
-	// The organization's link rows and pull requests are the streamed (left)
-	// side of each join and the owned issues the hashed (right) side, so the
-	// statement holds the owned projects' links in memory, never the
-	// organization's.
-	ownedLinks := `(
-    SELECT o.team_id AS team_id, o.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, ` + linkTierRankSQL + ` AS link_rank
-    FROM work_graph_issue_pr AS l FINAL
-    INNER JOIN ` + ownedIssues + ` AS o ON o.work_item_id = l.work_item_id
-    WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0
-  )`
 	return `(
-  SELECT DISTINCT lw.team_id AS team_id, lw.work_item_id AS work_item_id, lw.pr_repo_id AS pr_repo_id, lw.pr_number AS pr_number, lw.link_rank AS link_rank
-  FROM git_pull_requests AS pr FINAL
-  INNER JOIN ` + ownedLinks + ` AS lw ON pr.repo_id = lw.pr_repo_id AND pr.number = lw.pr_number
-  WHERE pr.org_id = {org_id:String}
+  SELECT DISTINCT t.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
+  FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
+  INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
+  INNER JOIN ` + issues + ` AS w ON w.provider = p.provider AND w.project_id = p.join_key
+  INNER JOIN ` + admittedLinkedPullRequestRowsSQL + ` AS l ON l.work_item_id = w.work_item_id
+  WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)}
 )`
 }
 

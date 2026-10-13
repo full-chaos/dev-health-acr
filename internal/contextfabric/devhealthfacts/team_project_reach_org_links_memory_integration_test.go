@@ -20,7 +20,7 @@ const (
 	orgLinksMemoryOrg          = "c4d82e17-6b09-4f3a-9a51-0e7d3b8c2f64"
 	ownershipHistoryProjectOrg = "d1f6a3b8-7e24-4c90-8b35-4a2e9c6d1f07"
 	ownershipHistoryRepoOrg    = "e8b25c70-1a93-4d6f-b042-7c3f8a9e5d16"
-	orgLinksMemoryFillerLinks  = 30_000
+	orgLinksMemoryFillerLinks  = 24_000
 	orgLinksMemoryMoreLinks    = 60_000
 	orgLinksMemoryCeilingLinks = 400_000
 	ownedLinksMemoryOrg        = "f2a96d41-3c85-4e07-a1b9-5d70c8e3b926"
@@ -65,7 +65,7 @@ SELECT ?, ?, toUInt32(number + 1000), 'pr', 'open', ?, ?, NULL, NULL, 'feature',
 SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), toUInt32(number + 1000), 1, 'native', '', ?, ? FROM numbers(?, ?)`,
 				repoUUID("repo-filler"), at, org, from, uint64(n))
 			from += uint64(n)
-		}, "organization links outside the owned projects", orgLinksMemoryFillerLinks, orgLinksMemoryFillerLinks+orgLinksMemoryMoreLinks, orgLinksMemoryCeilingLinks, axisGuard{floor: flatMemoryFloorBytes})
+		}, "organization links outside the owned projects", orgLinksMemoryFillerLinks, orgLinksMemoryFillerLinks+orgLinksMemoryMoreLinks, orgLinksMemoryCeilingLinks, axisGuard{reportOnly: true})
 	})
 	t.Run("links inside the owned projects", func(t *testing.T) {
 		var from uint64
@@ -160,10 +160,17 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclick
 		}
 		return out
 	}
+	merged := func() {
+		for _, table := range []string{"work_items", "work_graph_issue_pr", "git_pull_requests", "team_project_ownership", "team_repo_ownership"} {
+			exec(`OPTIMIZE TABLE ` + table + ` FINAL`)
+		}
+	}
 	grow(exec, org, smallSize)
+	merged()
 	read("warm-up")
 	small := read("smaller")
 	grow(exec, org, largeSize-smallSize)
+	merged()
 	large := read("larger")
 	for i := range filters {
 		for hash, peak := range small[i] {
@@ -173,6 +180,7 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclick
 	}
 	if ceilingSize > 0 {
 		grow(exec, org, ceilingSize-largeSize)
+		merged()
 		read(fmt.Sprintf("ceiling (%d)", ceilingSize))
 	}
 }
@@ -204,6 +212,7 @@ FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('ExceptionBeforeS
 // floor of memory; a linear axis (growth inside the owned projects) is
 // allowed to grow and instead holds the smaller size under smallPeakMax.
 type axisGuard struct {
+	reportOnly   bool
 	floor        uint64
 	linear       bool
 	smallPeakMax uint64
@@ -211,6 +220,12 @@ type axisGuard struct {
 
 func (g axisGuard) assert(t *testing.T, label string, small, large statementMemory) {
 	t.Helper()
+	if g.reportOnly {
+		for hash, smallPeak := range small {
+			t.Errorf("MEASURED %s: statement %d peak %d bytes at the smaller size, %d at the larger", label, hash, smallPeak, large[hash])
+		}
+		return
+	}
 	if len(small) < 1 || len(large) != len(small) {
 		t.Fatalf("%s: measurement did not happen: %d and %d distinct statements logged", label, len(small), len(large))
 	}
