@@ -248,13 +248,13 @@ func catalogWatermarks(plan ReadPlan, evidence []contractsv1.EvidenceRef, unavai
 	watermarks := make([]contractsv1.SourceWatermark, 0, len(SourceQueryCatalogV1))
 	for _, query := range SourceQueryCatalogV1 {
 		observed, found := latest[query.ID]
-		status := "missing"
+		status := contractsv1.SourceWatermarkStatusMissing
 		if failed[query.ID] {
-			status = "unavailable"
+			status = contractsv1.SourceWatermarkStatusUnavailable
 		} else if found {
-			status = "fresh"
+			status = contractsv1.SourceWatermarkStatusFresh
 			if observed.Before(asOf.Add(-24 * time.Hour)) {
-				status = "stale"
+				status = contractsv1.SourceWatermarkStatusStale
 			}
 		}
 		watermarks = append(watermarks, contractsv1.SourceWatermark{Source: query.ID, LastIngestedAt: watermarkTime(found, observed), Status: status})

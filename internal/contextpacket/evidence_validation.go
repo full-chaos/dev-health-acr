@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -17,9 +18,7 @@ func validateEvidence(ref contractsv1.EvidenceRef) error {
 	if math.IsNaN(ref.Confidence) || math.IsInf(ref.Confidence, 0) || ref.Confidence < 0 || ref.Confidence > 1 {
 		return fmt.Errorf("invalid evidence confidence")
 	}
-	switch ref.Provenance {
-	case "native", "explicit_text", "heuristic", "derived":
-	default:
+	if !slices.Contains(contractsv1.EvidenceProvenanceVocabulary(), ref.Provenance) {
 		return fmt.Errorf("invalid evidence provenance")
 	}
 	switch ref.Availability {
