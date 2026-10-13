@@ -2,7 +2,6 @@ package devhealthfacts_test
 
 import (
 	"context"
-	"slices"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
@@ -79,58 +78,5 @@ SELECT ?, concat(?, repeat('x', 96), '-', toString(number)), toUInt32(number + 1
 	t.Logf("project pull request rollup peak memory: %d bytes at %d outside links, %d at %d", small, projectRollupLinkSetSmallLinks, large, projectRollupLinkSetSmallLinks+projectRollupLinkSetMoreLinks)
 	if float64(large) > projectRollupLinkSetSlope*float64(small) && large > small+projectRollupLinkSetFloor {
 		t.Errorf("project pull request rollup grew with links outside the project: peak %d bytes at the larger size, %d at the smaller", large, small)
-	}
-}
-
-// On one dataset the project pull request rollup returns the same rows when
-// its scalar reads the project's links as when it builds the organization's
-// link-id set, and the served fact carries the project's links per tier.
-func TestProjectPullRequestRollupRowsEqualTheOrgLinkSetFormOnRealClickHouse(t *testing.T) {
-	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
-	s := newProjectRollupSeed(t, ctx, direct)
-	s.workItem("i-native", "repo-a", "issue", "open", "proj-p")
-	s.workItem("i-heuristic", "repo-a", "issue", "open", "proj-p")
-	s.workItem("i-text", "repo-a", "issue", "open", "proj-p")
-	s.workItem("i-unlinked", "repo-a", "issue", "open", "proj-p")
-	s.workItem("pr-item", "repo-a", "pr", "open", "proj-p")
-	s.workItem("i-other", "repo-a", "issue", "open", "proj-q1")
-	s.workItem("i-none", "repo-a", "issue", "open", "")
-	for n := uint32(1); n <= 5; n++ {
-		s.pullRequest("repo-a", n, s.at, nil, nil)
-	}
-	s.link("repo-a", "i-native", 1, "native")
-	s.link("repo-a", "i-heuristic", 2, "heuristic")
-	s.link("repo-a", "i-heuristic", 1, "heuristic")
-	s.link("repo-a", "i-text", 3, "explicit_text")
-	s.link("repo-a", "pr-item", 4, "native")
-	s.link("repo-a", "i-other", 5, "native")
-	s.link("repo-a", "i-none", 5, "native")
-	s.link("repo-a", "i-native", 99, "native")
-	recorder := &recordingQueryClient{inner: query}
-	project := projectRollupRef(t, "proj-p")
-	provider := findProvider(t, devhealthfacts.NewProviders(recorder), contextfabric.FactPullRequests)
-	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: projectRollupOrg, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
-		Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{project}, Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-	})
-	if err != nil {
-		t.Fatalf("ReadFacts: %v: %s", err, readFailureCause(err))
-	}
-	wantInt(t, factFor(t, result, project).Fields, "pull_requests_open_current", 3)
-	served, ok := recorder.find("lp.project_key")
-	if !ok {
-		t.Fatal("the project rollup statement was not sent")
-	}
-	old, rewritten := devhealthfacts.OrgLinkSetProjectRollupStatementForTest(served.statement)
-	if !rewritten {
-		t.Fatal("the served statement does not carry the project scalar")
-	}
-	got := scopeRows(t, ctx, query, served)
-	want := scopeRows(t, ctx, query, capturedStatement{statement: old, bindings: served.bindings})
-	if len(got) == 0 {
-		t.Fatal("the statement returned no rows, the comparison did not happen")
-	}
-	if !slices.Equal(got, want) {
-		t.Errorf("rows differ from the organization link-set form:\nnew %q\nold %q", got, want)
 	}
 }

@@ -36,10 +36,9 @@ const projectJoinKeysSQL = `(SELECT provider, join_key, concat(provider, ':', id
 // key) that carry a link row: a superset of the issues
 // projectLinkedPullRequestsSQL keeps. It is one scalar subquery, which
 // ClickHouse runs once per statement however often it is referenced, so the
-// statement reads the project's work items and their link rows once and every
-// other read follows that small set; no set of the organization's link ids is
-// built.
-var projectRollupWorkItemIDsSQL = `(SELECT arrayJoin((SELECT groupUniqArray(work_item_id) FROM ` + linkedWorkItemIDsAmongSQL(`(SELECT work_item_id FROM work_items WHERE org_id = {org_id:String} AND (provider, project_id) IN (SELECT provider, join_key FROM `+projectJoinKeysSQL+`))`) + `)))`
+// statement reads the organization's link ids and the project's work items
+// once and every other read follows that small set.
+const projectRollupWorkItemIDsSQL = `(SELECT arrayJoin((SELECT groupUniqArray(work_item_id) FROM work_items WHERE org_id = {org_id:String} AND (provider, project_id) IN (SELECT provider, join_key FROM ` + projectJoinKeysSQL + `) AND work_item_id IN ` + linkedWorkItemIDsSQL + `)))`
 
 // projectLinkedPullRequestsSQL is one row per (project, linked pull request)
 // with the strongest known link tier among the project's issues that link it.
