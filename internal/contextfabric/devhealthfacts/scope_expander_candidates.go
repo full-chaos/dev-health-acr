@@ -38,13 +38,21 @@ func requestedProjectHistoryWorkItemIDsSQL(projectPredicate string) string {
   SELECT subject_id FROM project_membership_transitions WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND (to_project_id IN ` + keys + ` OR from_project_id IN ` + keys + `))`
 }
 
+// teamOwnedProjectJoinKeysSQL is every (provider, project_id) a work item can
+// carry to reach a project the requested teams ({team_ids}) own, in any
+// stored version or validity: the projects whose id or project key equals an
+// ownership row's project_id or project_key, with their ids and project keys.
+// It reads the ownership and project tables directly, so the statement's own
+// ownership resolution (teamOwnedProjectsSQL) still decides every row.
+const teamOwnedProjectJoinKeysSQL = `(SELECT provider, arrayJoin(arrayFilter(k -> k != '', [id, ifNull(project_key, '')])) FROM projects WHERE org_id = {org_id:String} AND ((provider, id) IN ` + teamOwnershipValuesSQL + ` OR (provider, ifNull(project_key, '')) IN ` + teamOwnershipValuesSQL + `))`
+
+// teamOwnershipValuesSQL is every (provider, value) an ownership row of a
+// requested team names a project by.
+const teamOwnershipValuesSQL = `(SELECT provider, arrayJoin(arrayFilter(v -> v != '', [project_id, ifNull(project_key, '')])) FROM team_project_ownership WHERE org_id = {org_id:String} AND team_id IN {team_ids:Array(String)})`
+
 // teamOwnedProjectWorkItemIDsSQL is the ids of the work items of the projects
-// the requested teams ({team_ids}) currently own, matched the way
-// teamRepositories matches them (provider and resolved join key).
-var teamOwnedProjectWorkItemIDsSQL = `(SELECT work_item_id FROM work_items WHERE org_id = {org_id:String} AND (provider, project_id) IN (
-    SELECT p.provider, p.join_key FROM ` + teamOwnedProjectsSQL + ` AS t
-    INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
-    WHERE p.key_resolution_count = 1 AND t.team_id IN {team_ids:Array(String)}))`
+// the requested teams own (teamOwnedProjectJoinKeysSQL).
+const teamOwnedProjectWorkItemIDsSQL = `(SELECT work_item_id FROM work_items WHERE org_id = {org_id:String} AND (provider, project_id) IN ` + teamOwnedProjectJoinKeysSQL + `)`
 
 // teamAttributedWorkItemKeysSQL is the (repo_id, work_item_id) keys of the
 // work items an attribution row names for a requested team.
@@ -52,4 +60,4 @@ const teamAttributedWorkItemKeysSQL = `(SELECT repo_id, work_item_id FROM work_i
 
 // teamOwnedProjectWorkItemsSQL is the work item rows (FINAL) of
 // teamOwnedProjectWorkItemIDsSQL, for a join on provider and project_id.
-var teamOwnedProjectWorkItemsSQL = `(SELECT work_item_id, provider, project_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + teamOwnedProjectWorkItemIDsSQL + `)`
+const teamOwnedProjectWorkItemsSQL = `(SELECT work_item_id, provider, project_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + teamOwnedProjectWorkItemIDsSQL + `)`

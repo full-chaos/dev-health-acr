@@ -1710,7 +1710,7 @@ func (e *ScopeExpander) scanWorkItemCandidates(
 	// reads the organization-wide authorization aggregates, and its result
 	// LIMIT bounds only what comes back, not what is read. A ceiling hit is
 	// reported as a read-limit failure, never as a generic backend fault.
-	statement = readers.WithSettings(statement, readers.Settings{MaxRowsToRead: workItemScopeSelectionMaxRowsToRead})
+	statement = readers.WithSettings(statement, readers.Settings{MaxRowsToRead: workItemScopeSelectionMaxRowsToRead, MaxThreads: workItemScopeSelectionMaxThreads})
 	rows, err := e.client.Query(ctx, statement, bindings)
 	if err != nil {
 		return nil, counts, workItemScopeReadError(err)
@@ -1957,6 +1957,12 @@ func refuseNonCurrentWorkItemAxis(request contextfabric.FactScopeExpansionReques
 // package var only so a real-ClickHouse test can lower it and observe the
 // read-limit classification.
 var workItemScopeSelectionMaxRowsToRead = workItemReaderMaxRowsToRead
+
+// workItemScopeSelectionMaxThreads bounds the selection's parallelism. The
+// authorization relations it joins (readers.WorkItemScopeSQL's JoinSQL) cost
+// a fixed amount per thread: 58 MB served, 33 MB at two threads, measured on
+// real ClickHouse at 100k and 300k unrelated work items.
+const workItemScopeSelectionMaxThreads = uint64(2)
 
 // workItemScopeReadError marks a physical read-limit failure of a work-item
 // selection so the resolver classifies it as such; any other error passes

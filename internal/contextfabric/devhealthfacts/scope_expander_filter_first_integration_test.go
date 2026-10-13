@@ -19,22 +19,30 @@ import (
 // either size: half of the work-item reader's 64 MiB statement cap.
 const scopeStatementCeiling = uint64(32 << 20)
 
+// workItemSelectionCeiling bounds the two work-item selections, whose
+// authorization relations cost a fixed amount per thread: the peak measured
+// at two threads (33 MB, 100k and 300k unrelated work items) plus the slope.
+const workItemSelectionCeiling = uint64(statementMemorySlope * 33_000_000)
+
 // scopeExpanderStatements names each scope expander statement that reads work
 // items, link rows or transitions by a fragment only it carries, and a table
 // it reads (query_log's tables).
 // devhealthschema:not-a-production-replica: these names select the guarded statements' query_log rows; they declare no table.
-var scopeExpanderStatements = []struct{ label, table, fragment string }{
-	{"projectRepositories", "work_items", "min(p.id), argMax(l.provenance, l.link_rank)"},
-	{"projectRepositoriesAsOf", "work_items", "max(a.via_history) AS via_history"},
-	{"teamRepositories", "team_repo_ownership", "argMin(source, source_rank) AS best_source"},
-	{"teamWorkItems", "work_items", "min(a.team_id) AS origin_id"},
-	{"projectWorkItems", "work_items", "p.id)) AS origin_id"},
-	{"projectLinkedRepositories", "work_items", "AS link_state"},
-	{"projectUnlinkedIssueCount", "work_items", "SELECT uniqExact(w.work_item_id)\nFROM work_items AS w FINAL"},
-	{"projectUnlinkedIssueCountAsOf", "work_items", "SELECT uniqExact(a.work_item_id)"},
-	{"teamUnlinkedIssueCount", "work_items", "SELECT uniqExact(w.work_item_id)\nFROM (SELECT provider, id, team_id"},
-	{"historicalDropCount", "work_graph_issue_pr", "AS ever_matched"},
-	{"historicalTouchCount", "project_membership_transitions", "AS malformed_touches"},
+var scopeExpanderStatements = []struct {
+	label, table, fragment string
+	threadBound            bool
+}{
+	{"projectRepositories", "work_items", "min(p.id), argMax(l.provenance, l.link_rank)", false},
+	{"projectRepositoriesAsOf", "work_items", "max(a.via_history) AS via_history", false},
+	{"teamRepositories", "team_repo_ownership", "argMin(source, source_rank) AS best_source", false},
+	{"teamWorkItems", "work_items", "min(a.team_id) AS origin_id", true},
+	{"projectWorkItems", "work_items", "p.id)) AS origin_id", true},
+	{"projectLinkedRepositories", "work_items", "AS link_state", false},
+	{"projectUnlinkedIssueCount", "work_items", "SELECT uniqExact(w.work_item_id)\nFROM work_items AS w FINAL", false},
+	{"projectUnlinkedIssueCountAsOf", "work_items", "SELECT uniqExact(a.work_item_id)", false},
+	{"teamUnlinkedIssueCount", "work_items", "SELECT uniqExact(w.work_item_id)\nFROM (SELECT provider, id, team_id", false},
+	{"historicalDropCount", "work_graph_issue_pr", "AS ever_matched", false},
+	{"historicalTouchCount", "project_membership_transitions", "AS malformed_touches", false},
 }
 
 // fillScopeOrganization adds the every-root filler (work items, attributions,
@@ -153,9 +161,10 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		}
 	}
 
-	// runPeak runs one statement as sent (a failed run is measured too: a
-	// statement over a limit is a peak, not a missing reading).
-	runPeak := func(t *testing.T, table, fragment string, captured capturedStatement) uint64 {
+	// runPeak runs one statement as sent and returns its peak memory and
+	// duration from query_log (a failed run is measured too: a statement over
+	// a limit is a peak, not a missing reading).
+	runPeak := func(t *testing.T, table, fragment string, captured capturedStatement) (uint64, uint64) {
 		// query_log is matched on the fragment's first line: one statement
 		// runs after the mark, and the logged text need not keep newlines.
 		fragment, _, _ = strings.Cut(fragment, "\n")
@@ -165,29 +174,41 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 			}
 			_ = rows.Close()
 		}
-		return peakOf(t, ctx, direct, table, fragment, mark)
+		return peakOf(t, ctx, direct, table, fragment, mark), durationOf(t, ctx, direct, table, fragment, mark)
 	}
-	type reading struct{ scoped, orgWide, scopedSpread, orgWideSpread uint64 }
+	type variant struct{ peak, spread, duration uint64 }
+	type reading struct{ scoped, orgWide, unbounded variant }
+	sample := func(t *testing.T, table, fragment string, captured capturedStatement, runs int) variant {
+		var peaks, durations []uint64
+		for attempt := 0; attempt < runs; attempt++ {
+			peak, duration := runPeak(t, table, fragment, captured)
+			peaks, durations = append(peaks, peak), append(durations, duration)
+		}
+		return variant{peak: slices.Min(peaks), spread: slices.Max(peaks) - slices.Min(peaks), duration: slices.Min(durations)}
+	}
 	measure := func(t *testing.T, statements map[string]servedStatement) map[string]reading {
 		readings := map[string]reading{}
 		for _, statement := range scopeExpanderStatements {
 			pair := statements[statement.label]
-			var scoped, orgWide []uint64
-			for attempt := 0; attempt < 3; attempt++ {
-				scoped = append(scoped, runPeak(t, statement.table, statement.fragment, pair.scoped))
-				orgWide = append(orgWide, runPeak(t, statement.table, statement.fragment, pair.orgWide))
+			r := reading{
+				scoped:  sample(t, statement.table, statement.fragment, pair.scoped, 3),
+				orgWide: sample(t, statement.table, statement.fragment, pair.orgWide, 3),
 			}
-			readings[statement.label] = reading{
-				scoped: slices.Min(scoped), orgWide: slices.Min(orgWide),
-				scopedSpread: slices.Max(scoped) - slices.Min(scoped), orgWideSpread: slices.Max(orgWide) - slices.Min(orgWide),
+			if statement.threadBound {
+				unbounded := strings.Replace(pair.scoped.statement, ", max_threads = 2", "", 1)
+				if unbounded == pair.scoped.statement {
+					t.Fatalf("%s: the served statement carries no max_threads = 2:\n%s", statement.label, pair.scoped.statement)
+				}
+				r.unbounded = sample(t, statement.table, statement.fragment, capturedStatement{statement: unbounded, bindings: pair.scoped.bindings}, 3)
 			}
+			readings[statement.label] = r
 		}
 		return readings
 	}
 	// grew applies the slope guard: the larger reading is over the slope AND
 	// beyond both sizes' run-to-run spread and the absolute floor.
-	grew := func(small, large, smallSpread, largeSpread uint64) bool {
-		return float64(large) > statementMemorySlope*float64(small) && large > small+max(arrayMemoryFloor, smallSpread+largeSpread)
+	grew := func(small, large variant) bool {
+		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+max(arrayMemoryFloor, small.spread+large.spread)
 	}
 
 	fillScopeOrganization(t, ctx, direct, fixture, "small", 100_000)
@@ -203,20 +224,49 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	for _, statement := range scopeExpanderStatements {
 		label := statement.label
 		s, l := small[label], large[label]
-		t.Logf("PEAK %s scoped small=%d large=%d (spread %d/%d) org-wide small=%d large=%d (spread %d/%d)", label, s.scoped, l.scoped, s.scopedSpread, l.scopedSpread, s.orgWide, l.orgWide, s.orgWideSpread, l.orgWideSpread)
-		if s.scoped == 0 || l.scoped == 0 || s.orgWide == 0 || l.orgWide == 0 {
+		t.Logf("PEAK %s scoped small=%d large=%d (spread %d/%d) org-wide small=%d large=%d (spread %d/%d)", label, s.scoped.peak, l.scoped.peak, s.scoped.spread, l.scoped.spread, s.orgWide.peak, l.orgWide.peak, s.orgWide.spread, l.orgWide.spread)
+		if s.scoped.peak == 0 || l.scoped.peak == 0 || s.orgWide.peak == 0 || l.orgWide.peak == 0 {
 			t.Fatalf("%s: measurement did not happen (small %+v, large %+v)", label, s, l)
 		}
-		if grew(s.scoped, l.scoped, s.scopedSpread, l.scopedSpread) {
-			t.Errorf("%s grew with unrelated organization rows: %d bytes at the larger size, %d at the smaller", label, l.scoped, s.scoped)
+		if grew(s.scoped, l.scoped) {
+			t.Errorf("%s grew with unrelated organization rows: %d bytes at the larger size, %d at the smaller", label, l.scoped.peak, s.scoped.peak)
 		}
-		for _, peak := range []uint64{s.scoped, l.scoped} {
-			if peak >= scopeStatementCeiling {
-				t.Errorf("%s peaked at %d bytes, want under %d", label, peak, scopeStatementCeiling)
+		ceiling := scopeStatementCeiling
+		if statement.threadBound {
+			ceiling = workItemSelectionCeiling
+		}
+		for _, peak := range []uint64{s.scoped.peak, l.scoped.peak} {
+			if peak >= ceiling {
+				t.Errorf("%s peaked at %d bytes, want under %d", label, peak, ceiling)
 			}
 		}
-		if !grew(s.orgWide, l.orgWide, s.orgWideSpread, l.orgWideSpread) {
-			t.Errorf("%s: the organization-wide form did not grow (%d bytes at the larger size, %d at the smaller): the guard cannot fail on this data", label, l.orgWide, s.orgWide)
+		if !statement.threadBound {
+			if !grew(s.orgWide, l.orgWide) {
+				t.Errorf("%s: the organization-wide form did not grow (%d bytes at the larger size, %d at the smaller): the guard cannot fail on this data", label, l.orgWide.peak, s.orgWide.peak)
+			}
+			continue
+		}
+		// The selection's cost is fixed per thread, not grown with the
+		// organization: its planted defect is the unbounded statement, which
+		// must break the ceiling on the same data.
+		t.Logf("DURATION %s small: %d ms at two threads, %d ms unbounded; large: %d ms at two threads, %d ms unbounded; unbounded peak small=%d large=%d", label, s.scoped.duration, s.unbounded.duration, l.scoped.duration, l.unbounded.duration, s.unbounded.peak, l.unbounded.peak)
+		for _, peak := range []uint64{s.unbounded.peak, l.unbounded.peak} {
+			if peak < ceiling {
+				t.Errorf("%s: the statement without max_threads peaked at %d bytes, under the %d ceiling: the guard cannot fail on this data", label, peak, ceiling)
+			}
 		}
 	}
+}
+
+// durationOf is the longest query_duration_ms of the statements matching
+// table and fragment logged after mark.
+func durationOf(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, table, fragment string, mark int64) uint64 {
+	t.Helper()
+	var duration uint64
+	if err := direct.QueryRow(ctx, `SELECT max(query_duration_ms) FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.', ?)) AND position(query, ?) > 0`, mark, table, fragment).Scan(&duration); err != nil {
+		t.Fatalf("read query_log duration: %v", err)
+	}
+	return duration
 }
