@@ -1711,7 +1711,7 @@ the stream is drained and verify the projector env has no such variable.
 
 `acr-projector purge --org <uuid>` removes everything ACR holds for an organization that has left Dev Health: every FalkorDB graph of the organization at any epoch (found by scanning the existing graph keys, so an orphan epoch above the recorded one is dropped too) and the org-keyed Postgres rows (the Context Fabric tables, credentials, workload bindings, device authorizations, packet snapshots and episodes). Run it as a one-off Job with the same environment as `rebuild`, plus `ACR_DEV_HEALTH_ENTITLEMENT_URL` and `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`.
 
-1. `purge --org <uuid> --dry-run` prints row counts, the graph epochs it would drop, and the `org_key`. It changes nothing.
+1. `purge --org <uuid> --dry-run` prints row counts (cascaded OAuth rows included), the number of graphs it would drop, and the `org_key`. It changes nothing.
 2. `purge --org <uuid> --attest-deleted --confirm-hash <org_key>` runs the purge in one Postgres transaction after the graphs are dropped.
 
 The verb fails closed. It refuses when the organization is in the projector set (the static list or discovery), when discovery cannot be read, when Dev Health still answers 200 for the organization, when another projector holds its lock, or when either flag is missing. A 404 from Dev Health cannot be told apart from an outage, so the operator attestation is required.

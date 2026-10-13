@@ -108,7 +108,7 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 
 	beforeGone := rowCounts(t, r.db, orgGone)
 	beforeKept := rowCounts(t, r.db, orgKept)
-	for _, table := range append(orgpurge.PurgedTables(), "oauth_authorization_requests") {
+	for _, table := range countedTables() {
 		require.NotZero(t, beforeGone[table], "seed must put a row in %s", table)
 	}
 	require.True(t, graphExists(t, r.adapter, orgGone))
@@ -121,13 +121,13 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 	require.Equal(t, beforeGone, rowCounts(t, r.db, orgGone), "dry run must change nothing")
 	require.True(t, graphExists(t, r.adapter, orgGone), "dry run must keep the graph")
 	require.Equal(t, 1, dry.Graphs, "dry run counts the org's graph")
+	require.Len(t, dry.Rows, len(countedTables()), "dry run counts the cascaded children too")
+	require.EqualValues(t, 1, beforeGone["oauth_device_grants"])
+	require.EqualValues(t, 1, beforeGone["oauth_authorization_requests"])
 	for table, n := range dry.Rows {
 		want := beforeGone[table]
 		if table == "agent_episodes" {
 			want-- // the legal_hold episode stays
-		}
-		if table == "device_authorizations" {
-			want++ // plus the unapproved request bound to the org
 		}
 		require.EqualValues(t, want, n, "dry-run count for %s", table)
 	}
@@ -145,9 +145,11 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 	require.Equal(t, beforeGone, rowCounts(t, r.db, orgGone), "refusals must change nothing")
 	require.True(t, graphExists(t, r.adapter, orgGone))
 
-	report, err := r.run(t, orgGone, opts)
+	report, err := r.run(t, strings.ToUpper(orgGone), opts)
 	require.NoError(t, err)
 	require.True(t, report.AuditRowWritten)
+	require.EqualValues(t, dry.TotalRows, report.TotalRows, "reported total includes the cascaded rows")
+	require.EqualValues(t, 1, report.Rows["oauth_device_grants"])
 	require.Equal(t, 1, report.Graphs)
 	left, err := r.adapter.CountOrganizationGraphs(ctx, orgGone)
 	require.NoError(t, err)
@@ -157,7 +159,7 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 	require.Equal(t, 1, keptGraphs)
 
 	after := rowCounts(t, r.db, orgGone)
-	for _, table := range append(orgpurge.PurgedTables(), "oauth_authorization_requests") {
+	for _, table := range countedTables() {
 		want := int64(0)
 		if table == "agent_episodes" {
 			want = 1 // legal_hold is kept
@@ -175,6 +177,10 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 	require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.audit_events WHERE org_id = $1::uuid AND action = 'seed'`, orgGone).Scan(&seeded))
 	require.Equal(t, 1, seeded, "audit_events are kept")
 
+	var auditRows int64
+	require.NoError(t, r.db.QueryRowContext(ctx, `SELECT (metadata->'rows'->>'oauth_device_grants')::int FROM acr.audit_events WHERE org_id = $1::uuid AND action = 'org_purged'`, orgGone).Scan(&auditRows))
+	require.EqualValues(t, 1, auditRows, "audit counts include cascaded rows")
+
 	again, err := r.run(t, orgGone, opts)
 	require.NoError(t, err)
 	require.Zero(t, again.TotalRows, "second run removes nothing")
@@ -187,7 +193,7 @@ func TestEveryOrgKeyedTableIsPurgedOrKept(t *testing.T) {
 	r := newRig(t)
 	rows, err := r.db.QueryContext(context.Background(), `
 SELECT DISTINCT table_name FROM information_schema.columns
-WHERE table_schema = 'acr' AND column_name IN ('org_id', 'organization_id', 'authorized_org_id', 'bound_org_id')`)
+WHERE table_schema = 'acr' AND column_name IN ('org_id', 'organization_id', 'authorized_org_id', 'bound_org_id', 'organization_id_hint')`)
 	require.NoError(t, err)
 	defer rows.Close()
 	known := map[string]bool{}
@@ -207,21 +213,28 @@ WHERE table_schema = 'acr' AND column_name IN ('org_id', 'organization_id', 'aut
 	require.Empty(t, missing, "org-keyed tables the purge neither deletes nor keeps: %s", strings.Join(missing, ", "))
 }
 
-var countColumn = map[string]string{
-	"device_authorizations":        "authorized_org_id::text",
-	"oauth_authorization_requests": "bound_org_id",
-	"client_credentials":           "org_id::text", "workload_bindings": "org_id::text", "context_packet_snapshots": "org_id::text", "agent_episodes": "org_id::text",
+var countWhere = map[string]string{
+	"device_authorizations": `authorized_org_id::text = $1 OR lower(organization_id_hint) = $1
+		OR device_code_hash IN (SELECT device_code_hash FROM acr.oauth_authorization_requests WHERE bound_org_id = $1)`,
+	"oauth_authorization_requests": `bound_org_id = $1`,
+	"oauth_device_grants":          `device_code_hash IN (SELECT device_code_hash FROM acr.device_authorizations WHERE authorized_org_id::text = $1)`,
+	"client_credentials":           `org_id::text = $1`, "workload_bindings": `org_id::text = $1`,
+	"context_packet_snapshots": `org_id::text = $1`, "agent_episodes": `org_id::text = $1`,
+}
+
+func countedTables() []string {
+	return append(orgpurge.PurgedTables(), orgpurge.CascadedTables()...)
 }
 
 func rowCounts(t *testing.T, db *sql.DB, org string) map[string]int64 {
 	counts := map[string]int64{}
-	for _, table := range append(orgpurge.PurgedTables(), "oauth_authorization_requests") {
-		column := "org_id"
-		if c, ok := countColumn[table]; ok {
-			column = c
+	for _, table := range countedTables() {
+		where := "org_id = $1"
+		if w, ok := countWhere[table]; ok {
+			where = w
 		}
 		var n int64
-		require.NoError(t, db.QueryRowContext(context.Background(), "SELECT count(*) FROM acr."+table+" WHERE "+column+" = $1", org).Scan(&n))
+		require.NoError(t, db.QueryRowContext(context.Background(), "SELECT count(*) FROM acr."+table+" WHERE "+where, org).Scan(&n))
 		counts[table] = n
 	}
 	return counts

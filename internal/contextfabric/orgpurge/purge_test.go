@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -19,6 +20,23 @@ type fakeEntitlements struct{ err error }
 
 func (f fakeEntitlements) HasEntitlement(context.Context, string, string) (bool, error) {
 	return false, f.err
+}
+
+type heldLocker struct{}
+
+func (heldLocker) Lock(context.Context, string) (func() error, error) {
+	return nil, errors.New("held")
+}
+
+type countingGraph struct{ calls int }
+
+func (g *countingGraph) CountOrganizationGraphs(context.Context, string) (int, error) {
+	g.calls++
+	return 0, nil
+}
+func (g *countingGraph) DeleteOrganizationGraphs(context.Context, string) (int, error) {
+	g.calls++
+	return 0, nil
 }
 
 type panicLocker struct{ t *testing.T }
@@ -70,3 +88,30 @@ func TestOrgKeyIsStableAndHidesTheOrganization(t *testing.T) {
 		t.Fatalf("OrgKey() = %q", key)
 	}
 }
+
+func TestRunRefusesWhenAnotherProjectorHoldsTheOrganizationLock(t *testing.T) {
+	graph := &countingGraph{}
+	purger := &Purger{DB: &sql.DB{}, Graph: graph, Set: fakeSet{}, Entitlements: fakeEntitlements{err: errors.New("404")}, Locker: heldLocker{}}
+	_, err := purger.Run(context.Background(), testOrg, Options{AttestDeleted: true, ConfirmOrgKey: OrgKey(testOrg)})
+	if !errors.Is(err, ErrLocked) {
+		t.Fatalf("Run() error = %v, want ErrLocked", err)
+	}
+	if graph.calls != 0 {
+		t.Fatalf("graph touched %d times while the lock was held", graph.calls)
+	}
+}
+
+func TestRunUsesTheCanonicalUUIDSpelling(t *testing.T) {
+	upper := strings.ToUpper(testOrg)
+	seen := ""
+	purger := &Purger{DB: &sql.DB{}, Graph: noGraph{}, Set: recordingSet{seen: &seen}, Entitlements: fakeEntitlements{err: errors.New("404")}, Locker: heldLocker{}}
+	_, _ = purger.Run(context.Background(), "{"+upper+"}", Options{AttestDeleted: true, ConfirmOrgKey: OrgKey(testOrg)})
+	if seen != testOrg {
+		t.Fatalf("projector set asked about %q, want the canonical lowercase %q", seen, testOrg)
+	}
+}
+
+type recordingSet struct{ seen *string }
+
+func (recordingSet) RefreshOrgs(context.Context) error { return nil }
+func (r recordingSet) AllowsOrg(org string) bool       { *r.seen = org; return false }

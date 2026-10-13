@@ -83,6 +83,9 @@ type tableSpec struct {
 	Name string
 	// Where is the predicate over $1 (the organization).
 	Where string
+	// Cascaded child tables keyed by device_code_hash, counted before the
+	// parent delete because the database removes them with it.
+	CascadedByDeviceCode []string
 }
 
 // purgeTables is the deletion order: dependents before the rows they point
@@ -90,29 +93,31 @@ type tableSpec struct {
 // cascades to the OAuth rows); client_credentials goes before
 // workload_bindings (its binding FK is ON DELETE RESTRICT).
 var purgeTables = []tableSpec{
-	{"device_authorizations", `authorized_org_id = $1::uuid
+	{Name: "device_authorizations", Where: `authorized_org_id = $1::uuid
 		OR redeemed_credential_id IN (SELECT credential_id FROM acr.client_credentials WHERE org_id = $1::uuid)
-		OR device_code_hash IN (SELECT device_code_hash FROM acr.oauth_authorization_requests WHERE bound_org_id = $1::uuid::text)`},
-	{"client_credentials", `org_id = $1::uuid`},
-	{"workload_bindings", `org_id = $1::uuid`},
-	{"context_packet_snapshots", `org_id = $1::uuid`},
-	{"agent_episodes", `org_id = $1::uuid AND retention_class <> 'legal_hold'`},
-	{"context_fabric_projection_checkpoints", `org_id = $1`},
-	{"context_fabric_projection_rebuild_markers", `org_id = $1`},
-	{"context_fabric_investigation_results", `org_id = $1`},
-	{"context_fabric_model_execution_receipts", `org_id = $1`},
-	{"context_fabric_org_model_config", `org_id = $1`},
-	{"context_fabric_reuse_invalidations", `org_id = $1`},
-	{"context_fabric_clarification_selections", `org_id = $1`},
-	{"context_fabric_structure_selections", `org_id = $1`},
-	{"context_fabric_structure_supersession_claims", `org_id = $1`},
-	{"context_fabric_structure_prior_pointer_history", `org_id = $1`},
-	{"context_fabric_structure_prior_pointer", `org_id = $1`},
-	{"context_fabric_structure_prior_revocations", `org_id = $1`},
-	{"context_fabric_structure_priors", `org_id = $1`},
-	{"context_fabric_graph_build_source_progress", `org_id = $1`},
-	{"context_fabric_graph_epoch_retirements", `org_id = $1`},
-	{"context_fabric_graph_lifecycle", `org_id = $1`},
+		OR lower(organization_id_hint) = $1::uuid::text
+		OR device_code_hash IN (SELECT device_code_hash FROM acr.oauth_authorization_requests WHERE bound_org_id = $1::uuid::text)`,
+		CascadedByDeviceCode: []string{"oauth_authorization_requests", "oauth_device_grants"}},
+	{Name: "client_credentials", Where: `org_id = $1::uuid`},
+	{Name: "workload_bindings", Where: `org_id = $1::uuid`},
+	{Name: "context_packet_snapshots", Where: `org_id = $1::uuid`},
+	{Name: "agent_episodes", Where: `org_id = $1::uuid AND retention_class <> 'legal_hold'`},
+	{Name: "context_fabric_projection_checkpoints", Where: `org_id = $1`},
+	{Name: "context_fabric_projection_rebuild_markers", Where: `org_id = $1`},
+	{Name: "context_fabric_investigation_results", Where: `org_id = $1`},
+	{Name: "context_fabric_model_execution_receipts", Where: `org_id = $1`},
+	{Name: "context_fabric_org_model_config", Where: `org_id = $1`},
+	{Name: "context_fabric_reuse_invalidations", Where: `org_id = $1`},
+	{Name: "context_fabric_clarification_selections", Where: `org_id = $1`},
+	{Name: "context_fabric_structure_selections", Where: `org_id = $1`},
+	{Name: "context_fabric_structure_supersession_claims", Where: `org_id = $1`},
+	{Name: "context_fabric_structure_prior_pointer_history", Where: `org_id = $1`},
+	{Name: "context_fabric_structure_prior_pointer", Where: `org_id = $1`},
+	{Name: "context_fabric_structure_prior_revocations", Where: `org_id = $1`},
+	{Name: "context_fabric_structure_priors", Where: `org_id = $1`},
+	{Name: "context_fabric_graph_build_source_progress", Where: `org_id = $1`},
+	{Name: "context_fabric_graph_epoch_retirements", Where: `org_id = $1`},
+	{Name: "context_fabric_graph_lifecycle", Where: `org_id = $1`},
 }
 
 // PurgedTables and KeptTables name every table the purge handles, for the
@@ -129,18 +134,26 @@ func KeptTables() []string { return []string{"audit_events"} }
 
 // CascadedTables are org-keyed tables whose rows go with their
 // device_authorizations parent (ON DELETE CASCADE).
-func CascadedTables() []string { return []string{"oauth_authorization_requests"} }
+func CascadedTables() []string {
+	return []string{"oauth_authorization_requests", "oauth_device_grants"}
+}
 
 // Run guards, then removes the organization's graphs and rows.
 func (p *Purger) Run(ctx context.Context, orgID string, opts Options) (Report, error) {
-	report := Report{OrgKey: OrgKey(orgID), DryRun: opts.DryRun, Rows: map[string]int64{}}
+	report := Report{DryRun: opts.DryRun, Rows: map[string]int64{}}
 	if p == nil || p.DB == nil || p.Graph == nil || p.Set == nil || p.Entitlements == nil || p.Locker == nil {
 		return report, errors.New("orgpurge: purger is not fully configured")
 	}
-	orgID = strings.TrimSpace(orgID)
-	if _, err := uuid.Parse(orgID); err != nil {
+	var err error
+	var parsed uuid.UUID
+	parsed, err = uuid.Parse(strings.TrimSpace(orgID))
+	if err != nil {
 		return report, fmt.Errorf("%w: organization id is not a UUID", ErrRefused)
 	}
+	// Every comparison below (projector set, lock, graph key, text-keyed
+	// rows) is exact-string, so only the canonical lowercase spelling is used.
+	orgID = parsed.String()
+	report.OrgKey = OrgKey(orgID)
 	if !opts.DryRun {
 		if !opts.AttestDeleted {
 			return report, fmt.Errorf("%w: --attest-deleted is required", ErrRefused)
@@ -181,6 +194,15 @@ func (p *Purger) Run(ctx context.Context, orgID string, opts Options) (Report, e
 	defer func() { _ = tx.Rollback() }()
 	for _, spec := range purgeTables {
 		var n int64
+		for _, child := range spec.CascadedByDeviceCode {
+			var c int64
+			err = tx.QueryRowContext(ctx, "SELECT count(*) FROM acr."+child+" WHERE device_code_hash IN (SELECT device_code_hash FROM acr."+spec.Name+" WHERE "+spec.Where+")", orgID).Scan(&c)
+			if err != nil {
+				return report, fmt.Errorf("count %s: %w", child, err)
+			}
+			report.Rows[child] = c
+			report.TotalRows += c
+		}
 		if opts.DryRun {
 			err = tx.QueryRowContext(ctx, "SELECT count(*) FROM acr."+spec.Name+" WHERE "+spec.Where, orgID).Scan(&n)
 		} else {
