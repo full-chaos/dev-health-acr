@@ -30,6 +30,7 @@ const interpretationFactKindGlossary = `Fact kinds: what each holds, the subject
 - evidence: holds nothing and has no provider. It is not the evidence references that other facts carry. It is in the closed set only so the vocabulary stays complete: never list it.
 - flow: delivery-flow signals. For a team or a project: items started and completed, work in progress and its age, cycle and lead time, bug share and story points completed. For a repository: pull request pickup and review timing (team, project, repository). Not flow efficiency.
 - landscape: aggregated statistics of a team's work areas: churn, cycle time and work in progress against throughput (team, project). Not a per-person list and not a ranking.
+- commitment: the dates a provider states for a project: its target date, its issues' due dates with the count still open past due, and the end of the cycle, milestone or sprint its issues are in, with the open, closed and dated issue counts beside them (project). Not a forecast and not a judgment of whether the date will be met.
 A team or project question also reaches the work-item kinds (status, work, actual_completion, blockers, required_children, identity, membership) through its work items, and pull_requests and reviews through its activity. A team or project question also reaches continuous_integration and deployments through its repositories, and incidents through the deployments of those repositories; a project question also reaches operational_deficiencies through the teams that own the project. A team also has its own rollups of blockers, pull_requests, incidents and deployments. source_health is not reached from a team or a project.
 These lines say what a kind means. They do not decide which kinds to list: list the kinds that the question's words name by the fact_requirements rules, also when a kind is not served for that kind of subject.`
 
@@ -46,6 +47,7 @@ const interpretationFactRequirementRules = `fact_requirements rules: list the ki
 - "ready to release" and the noun form "release readiness": actual_completion, deployments. Never readiness.
 - A closing verb on work items within a window ("closed last week"): actual_completion.
 - "on track", "on schedule", "behind", "delayed", "miss targets": actual_completion, status.
+- "target date", "due date", "deadline", "commitment", "sprint end", "cycle end", "milestone date": commitment.
 - "on-call load", "operational load": incidents. The word "load" never names workload.
 - "code ownership risk" named: metrics. "maintenance attention": investment. "security risk": health. "build health": continuous_integration. "release reliability": deployments, incidents. A repository "failure rate": continuous_integration, except "change failure rate", which is metrics and takes precedence over the failure-rate rule.
 - An output measure with no kind word ("most productive", "performed best on delivery"): flow.

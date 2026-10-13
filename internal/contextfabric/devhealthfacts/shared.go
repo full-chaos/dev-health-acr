@@ -1055,7 +1055,11 @@ import (
 // severity omission, owning-teams cut) is served on the rows it describes and
 // no longer on every row of the kind. An answer saved under v208 carries each
 // on rows it is false for.
-const QueryVersion = "devhealthfacts.clickhouse.v209"
+//
+// v209 -> v210: a project subject serves the commitment kind (target date,
+// issue due dates, sprint ends and the raw counts beside them). An answer
+// saved under v209 has no commitment fact.
+const QueryVersion = "devhealthfacts.clickhouse.v210"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1508,7 +1512,7 @@ func factKindDimension(kind contextfabric.FactKind) contextfabric.HealthDimensio
 	// raw work counts, and estimate coverage (readiness.go: "how much of
 	// this team's backlog is estimated") are all about whether committed
 	// work is actually landing.
-	case contextfabric.FactStatus, contextfabric.FactActualCompletion, contextfabric.FactWork, contextfabric.FactReadiness:
+	case contextfabric.FactStatus, contextfabric.FactActualCompletion, contextfabric.FactWork, contextfabric.FactReadiness, contextfabric.FactCommitment:
 		return contextfabric.HealthDimensionExecutionCompletion
 	// dependencies_and_blockers: named for exactly this dimension.
 	case contextfabric.FactBlockers, contextfabric.FactRequiredChildren:

@@ -46,6 +46,7 @@ var contextFabricFactKindLabels = map[ContextFabricFactKind]string{
 	ContextFabricFactEvidence:                "evidence",
 	ContextFabricFactFlow:                    "flow",
 	ContextFabricFactLandscape:               "landscape",
+	ContextFabricFactCommitment:              "commitment",
 }
 
 // contextFabricSourceStateLabels labels every member of the closed source

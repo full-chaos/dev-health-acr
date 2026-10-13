@@ -31,9 +31,14 @@ var (
 const (
 	// PromptVersion names the interpretation prompt text; bump it on every
 	// change to what the model is told.
-	PromptVersion = "context-fabric-interpretation.v28"
+	//
+	// v28 -> v29: the closed fact-kind set, the glossary and the word rules
+	// name commitment.
+	PromptVersion = "context-fabric-interpretation.v29"
 	// OutputVersion names the model-output contract the prompt asks for.
-	OutputVersion = "context-fabric-model-output.v9"
+	//
+	// v9 -> v10: the fact_requirements kind enum names commitment.
+	OutputVersion = "context-fabric-model-output.v10"
 )
 
 type interpretationInput struct {

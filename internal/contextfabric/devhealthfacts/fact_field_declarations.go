@@ -204,6 +204,8 @@ func factKindFields(kind contextfabric.FactKind) []contextfabric.FactFieldDeclar
 		return deploymentFields()
 	case contextfabric.FactIncidents:
 		return incidentFields()
+	case contextfabric.FactCommitment:
+		return commitmentFieldDecls()
 	default:
 		return nil
 	}
@@ -625,6 +627,28 @@ func readinessDailyColumns() []columnDecl {
 		out[i] = cNon(c)
 	}
 	return out
+}
+
+func commitmentFieldDecls() []fieldDecl {
+	return declOn(declProjectOnly,
+		fStr("as_of"),
+		declCallerScoped(fStr("commitment_status")),
+		fStr("target_date"),
+		fStr("target_date_provider"),
+		fInt("days_to_target", "days"),
+		declNullable(fStr("project_state")),
+		declNullable(fStr("state_source")),
+		declCallerScoped(fInt("items_total", "count")),
+		declCallerScoped(fInt("items_open", "count")),
+		declCallerScoped(fInt("items_closed", "count")),
+		declCallerScoped(fInt("items_with_due_at", "count")),
+		declCallerScoped(fInt("items_without_due_at", "count")),
+		declCallerScoped(fInt("items_past_due_open", "count")),
+		fStr("items_unavailable_reason"),
+		declCallerScoped(fStr("sprint_kind")),
+		declCallerScoped(fStr("next_sprint_end")),
+		declCallerScoped(fStr("latest_sprint_end")),
+	)
 }
 
 func readinessFields() []fieldDecl {

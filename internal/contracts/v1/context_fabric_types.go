@@ -447,8 +447,9 @@ const (
 	// project-keyed via real table joins/rollups the same way CHAOS-4347
 	// widened FactMetrics -- see
 	// internal/contextfabric/devhealthfacts/flow.go and landscape.go.
-	ContextFabricFactFlow      ContextFabricFactKind = "flow"
-	ContextFabricFactLandscape ContextFabricFactKind = "landscape"
+	ContextFabricFactFlow       ContextFabricFactKind = "flow"
+	ContextFabricFactLandscape  ContextFabricFactKind = "landscape"
+	ContextFabricFactCommitment ContextFabricFactKind = "commitment"
 )
 
 // ContextFabricFactCardinality is a CLAIM kind and NOT a requestable one, and
@@ -517,6 +518,7 @@ var contextFabricFactKinds = [...]ContextFabricFactKind{
 	ContextFabricFactEvidence,
 	ContextFabricFactFlow,
 	ContextFabricFactLandscape,
+	ContextFabricFactCommitment,
 }
 
 // ContextFabricFactKindCount is the size of the closed fact-kind vocabulary,

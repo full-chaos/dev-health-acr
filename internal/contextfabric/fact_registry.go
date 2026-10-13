@@ -2088,6 +2088,7 @@ func factKindOrder(kind FactKind) int {
 		FactIncidents: 11, FactMetrics: 12, FactHealth: 13, FactWorkload: 14,
 		FactInvestment: 15, FactReadiness: 16, FactOperationalDeficiencies: 17,
 		FactSourceHealth: 18, FactEvidence: 19, FactFlow: 20, FactLandscape: 21,
+		FactCommitment: 22,
 	}
 	if value, ok := order[kind]; ok {
 		return value
@@ -2149,7 +2150,7 @@ func validFactSourceState(state SourceState) bool {
 
 func validFactCapabilityKind(kind FactKind) bool {
 	switch kind {
-	case FactIdentity, FactMembership, FactStatus, FactActualCompletion, FactWork, FactBlockers, FactRequiredChildren, FactPullRequests, FactReviews, FactContinuousIntegration, FactDeployments, FactIncidents, FactMetrics, FactHealth, FactWorkload, FactInvestment, FactReadiness, FactOperationalDeficiencies, FactSourceHealth, FactEvidence, FactFlow, FactLandscape:
+	case FactIdentity, FactMembership, FactStatus, FactActualCompletion, FactWork, FactBlockers, FactRequiredChildren, FactPullRequests, FactReviews, FactContinuousIntegration, FactDeployments, FactIncidents, FactMetrics, FactHealth, FactWorkload, FactInvestment, FactReadiness, FactOperationalDeficiencies, FactSourceHealth, FactEvidence, FactFlow, FactLandscape, FactCommitment:
 		return true
 	default:
 		return false

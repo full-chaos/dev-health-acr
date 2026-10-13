@@ -765,7 +765,7 @@ erDiagram
     FACT_SCOPE_RESOLVER ||--|| FACT_PLANNER : "expands ReadSubjects before planning (CHAOS-4099)"
 ```
 
-**21 registered `FactProvider`s** (`internal/contextfabric/devhealthfacts`,
+**22 registered `FactProvider`s** (`internal/contextfabric/devhealthfacts`,
 wired at `NewProviders`, `providers.go:14-37`; composed at
 `internal/runtime/hosted/open.go:597`):
 
@@ -816,6 +816,7 @@ source for the SAME kind).
 | source_health | ops `sourceHealth` root via the direct-read operation runner (no ClickHouse table) | organization |
 | flow (CHAOS-4364) | `work_item_metrics_daily` (team, per-scope Rows; `work_item_cycle_times`'s flow_efficiency is DELIBERATELY NOT read -- ops sink omits it, see flow.go's doc comment); **+`team_project_ownership` ⋈ `work_item_metrics_daily`**, summed/averaged across a team's own (provider, work_scope_id) rows into one row per team (project, codex R2 fix); **+`repo_metrics_daily`** (repository, PR pickup/review timings, distinct shape) | team, project, repository |
 | landscape (CHAOS-4364) | `ic_landscape_rolling_30d` aggregated to (team, map_name) — never per-identity (no person-to-person ranking); **+`team_project_ownership` ⋈ `ic_landscape_rolling_30d`** (project, owning-teams rollup) | team, project |
+| commitment | `projects` (`target_date`, `state`, `state_source` as stored) ⋈ the project's issues in `work_items` FINAL (resolved project key, never an issue repository column or key prefix; latest row per item; caller-authorized items only) ⋈ `sprints` FINAL on (provider, `sprint_id`): provider-stated dates and raw counts as of the request (`items_past_due_open` = stored status not done or canceled and `due_at` before `as_of`), the sprint end named by kind (`cycle` linear, `milestone` github/gitlab, `sprint` jira), `commitment_status` `stated` or `none_stated`, never a risk verdict; current axis only | project |
 
 **Updated 2026-09-15 (request-carried work-item repository scope).** The
 status, work-title, and actual-completion providers now share this bounded
