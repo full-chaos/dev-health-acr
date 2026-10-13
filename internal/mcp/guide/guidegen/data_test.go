@@ -63,7 +63,7 @@ func TestDataGuideSaysWhichWayAndCarriesTheRules(t *testing.T) {
 	for _, want := range []string{
 		"`investigate_question` is for our own engine's narrative answers",
 		"If you are a model, plan the reads yourself",
-		"`run_operation` and `graphql_query` need the `data:read` scope",
+		"`run_operation` and `graphql_query` (if listed) need the `data:read` scope",
 		"More data tools are planned; none is named here until it ships.",
 		"use `read_facts` if your `tools/list` offers it (the `facts` section of `data_catalog` lists its kinds)",
 	} {

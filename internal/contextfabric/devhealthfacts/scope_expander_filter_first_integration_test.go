@@ -23,6 +23,15 @@ import (
 // either size: half of the work-item reader's 64 MiB statement cap.
 const scopeStatementCeiling = uint64(32 << 20)
 
+// slopeFloors replaces the slope floor for the statements whose peak moves
+// between runs of one dataset by more than the default floor: 8 MiB for the two
+// historical statements (spread up to 6.6 MB over 36 samples), 6 MiB for
+// projectRepositoriesAsOf (spread up to 4.5 MB, a +2.9 MB diff failed on CI).
+// All from hosted runs 38461148186, 38463043081, 38464327840: 18.7-24.0 MB at
+// both sizes, no trend with size. The 1.15x rule is unchanged, and each
+// statement's organization-wide form grows by 260 MB or more.
+var slopeFloors = map[string]uint64{"historicalDropCount": 8 << 20, "historicalTouchCount": 8 << 20, "projectRepositoriesAsOf": 6 << 20}
+
 // workItemSelectionCeiling bounds the two work-item selections, whose
 // authorization relations cost a fixed amount per thread: the peak measured
 // at two threads on merged parts (21.8 MB at 100k and 300k unrelated work
@@ -372,8 +381,8 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	// the smaller size's AND over it by more than a fixed floor. A cost that
 	// grows with the rows lifts all three runs, so the minimum carries it;
 	// the floor keeps a small statement's jitter out.
-	grew := func(small, large variant) bool {
-		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+arrayMemoryFloor
+	grew := func(small, large variant, floor uint64) bool {
+		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+floor
 	}
 
 	// The guard reads merged parts; production tables are not one part, so
@@ -420,7 +429,11 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		if s.scoped.peak == 0 || l.scoped.peak == 0 || s.orgWide.peak == 0 || l.orgWide.peak == 0 {
 			t.Fatalf("%s: measurement did not happen (small %+v, large %+v)", label, s, l)
 		}
-		if grew(s.scoped, l.scoped) {
+		floor := arrayMemoryFloor
+		if own, ok := slopeFloors[label]; ok {
+			floor = own
+		}
+		if grew(s.scoped, l.scoped, floor) {
 			t.Errorf("%s grew with unrelated organization rows: %d bytes at the larger size, %d at the smaller", label, l.scoped.peak, s.scoped.peak)
 		}
 		ceiling := scopeStatementCeiling
@@ -433,7 +446,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 			}
 		}
 		if !statement.threadBound {
-			if !grew(s.orgWide, l.orgWide) {
+			if !grew(s.orgWide, l.orgWide, floor) {
 				t.Errorf("%s: the organization-wide form did not grow (%d bytes at the larger size, %d at the smaller): the guard cannot fail on this data", label, l.orgWide.peak, s.orgWide.peak)
 			}
 			continue
