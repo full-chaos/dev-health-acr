@@ -369,6 +369,21 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 	capped := contextpacket.NewMemoryCappedQueryClient(query, contextpacket.APIStatementMaxMemoryUsage)
 	provider := findProvider(t, devhealthfacts.NewProviders(capped), contextfabric.FactInvestment)
 
+	explain := fragmentNamed(t, fragments, "statement")
+	var plan []string
+	if err := readers.QueryOrgScopedNamed(ctx, query, "LinkedMixExplain", "EXPLAIN PLAN "+explain.SQL+"\nSETTINGS max_result_rows = 0", orgID, []string{linkedShapeTeam}, func(row readers.RowScanner) error {
+		var line string
+		if err := row.Scan(&line); err != nil {
+			return err
+		}
+		if len(plan) < 70 {
+			plan = append(plan, line)
+		}
+		return nil
+	}, explain.Bindings...); err != nil {
+		t.Fatalf("explain: %v: %s", err, readFailureCause(err))
+	}
+	t.Logf("plan head of the statement:\n%s", strings.Join(plan, "\n"))
 	unmerged := measureLinkedMixFragments(t, ctx, query, direct, orgID, "unmerged", fragments)
 	servedUnmerged := servedLinkedMixPeak(t, ctx, provider, direct, orgID)
 	for _, table := range tables {
