@@ -467,6 +467,8 @@ var ProductionColumns = map[string][]Column{
 		{Name: "name", Type: "String"},
 		{Name: "is_active", Type: "UInt8"},
 		{Name: "state", Type: "LowCardinality(String)"},
+		{Name: "state_source", Type: "LowCardinality(String)"},
+		{Name: "target_date", Type: "Nullable(Date)"},
 		{Name: "url", Type: "String"},
 		{Name: "updated_at", Type: "DateTime64(3, 'UTC')"},
 		// CHAOS-7263: ingest stamp (ops 051_team_attribution_dimensions.sql:13,
@@ -626,6 +628,13 @@ var ProductionColumns = map[string][]Column{
 		{Name: "window_end", Type: "Date"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
 	},
+	"sprints": {
+		{Name: "provider", Type: "String"},
+		{Name: "sprint_id", Type: "String"},
+		{Name: "ended_at", Type: "Nullable(DateTime64(3))"},
+		{Name: "last_synced", Type: "DateTime64(3)"},
+		{Name: "org_id", Type: "String"},
+	},
 	"work_items": {
 		{Name: "repo_id", Type: "UUID"},
 		{Name: "work_item_id", Type: "String"},
@@ -661,9 +670,11 @@ var ProductionColumns = map[string][]Column{
 		// (19) and parent_id (24; unread story_points/sprint_* between
 		// them omitted). A real Array(String), scanned as []string.
 		{Name: "labels", Type: "Array(String)"},
+		{Name: "sprint_id", Type: "String"},
 		{Name: "parent_id", Type: "String"},
 		{Name: "url", Type: "String"},
 		{Name: "last_synced", Type: "DateTime64(3)"},
+		{Name: "due_at", Type: "Nullable(DateTime64(3))"},
 		{Name: "org_id", Type: "String"},
 		// Ops migration 100: server insert time the presence view's
 		// work_item_column arm exposes as last_synced. TEST DDL: defaults to
@@ -708,6 +719,7 @@ var EngineFull = map[string]string{
 	"repo_change_failure_daily":               "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repo_metrics_daily":                      "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repos":                                   "ReplacingMergeTree(last_synced) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
+	"sprints":                                 "ReplacingMergeTree(last_synced) ORDER BY (org_id, provider, sprint_id) SETTINGS index_granularity = 8192",
 	// CHAOS-3802: valid_from is IN team_project_ownership's sorting key, so
 	// FINAL cannot collapse two windows of the same edge -- that is exactly
 	// what makes queryProjectTeams' GROUP BY load-bearing (its Trap C note).
