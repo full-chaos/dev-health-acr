@@ -3461,7 +3461,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if workItemTuple {
 		subjects = workItemTupleSubjects(graphContext.Cohort)
 	}
-	if len(subjects) == 0 && !workItemTuple && statusMeasuredZero(familyOutcome.Frame, graphContext.Cohort) {
+	graphContext.StatusMeasuredZero = statusMeasuredZero(familyOutcome.Frame, graphContext.Cohort)
+	if len(subjects) == 0 && !workItemTuple && graphContext.StatusMeasuredZero {
 		// The status read reached members and kept none: a measured zero over
 		// the caller's organization, answered like an anchored one.
 		subjects = []SubjectRef{callerOrganizationSubject(principal)}

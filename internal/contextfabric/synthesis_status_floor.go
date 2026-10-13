@@ -24,6 +24,10 @@ const SynthesisStatusOverrideNoMatchOverCohortOutcome SynthesisStatusOverrideRea
 // committed subject.
 const SynthesisStatusOverrideNoMatchOverReadFacts SynthesisStatusOverrideReason = "no_match_over_read_facts"
 
+// SynthesisStatusOverrideNoMatchOverMeasuredZero: the model said no_match while
+// a status read reached members and kept none, a count of zero.
+const SynthesisStatusOverrideNoMatchOverMeasuredZero SynthesisStatusOverrideReason = "no_match_over_measured_zero"
+
 // SynthesisStatusOverrideNoMatchKeptUnaskedFactKinds: the model said no_match,
 // a subject is committed, and the only rows read for it are of kinds the
 // question did not ask for, so the no_match is kept. From and To are both
@@ -102,6 +106,17 @@ func committedFactRowRead(committed []SubjectRef, facts CanonicalFactBundle, ask
 func applyServerStatusFloor(result *InvestigationResult, graph GraphContext, facts CanonicalFactBundle, read []FactRequirement) *SynthesisStatusOverrideOutcome {
 	if result == nil || result.Status != InvestigationNoMatch || result.RefusalBasis != "" {
 		return nil
+	}
+	if graph.StatusMeasuredZero && graph.Cohort != nil {
+		// The status read is the answer: complete over a complete read,
+		// partial over a cut one.
+		floor := InvestigationComplete
+		if !graph.Cohort.Complete || graph.Cohort.Truncated {
+			floor = InvestigationPartial
+		}
+		outcome := &SynthesisStatusOverrideOutcome{From: result.Status, To: floor, Reason: SynthesisStatusOverrideNoMatchOverMeasuredZero, CommittedCount: len(graph.Resolution.Committed)}
+		floorNoMatchTo(result, floor)
+		return outcome
 	}
 	committed := result.SubjectResolution.Committed
 	if len(committed) == 0 {

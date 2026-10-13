@@ -96,6 +96,13 @@ func (o organizationStatusInterpreter) Interpret(context.Context, storage.Princi
 // census returns them in id order up to its LIMIT.
 func investigateOrganizationPullRequests(t *testing.T, pulls []organizationPullRequest, status string, principal storage.Principal, anchored bool, scope ...contextfabric.RequestedScope) (contextfabric.InvestigationResult, *recordingTelemetry) {
 	t.Helper()
+	return investigateOrganizationPullRequestsWith(t, countingSynthesizer{}, pulls, status, principal, anchored, scope...)
+}
+
+// investigateOrganizationPullRequestsWith is investigateOrganizationPullRequests
+// with the synthesizer the investigation answers through.
+func investigateOrganizationPullRequestsWith(t *testing.T, synthesizer contextfabric.AnswerSynthesizer, pulls []organizationPullRequest, status string, principal storage.Principal, anchored bool, scope ...contextfabric.RequestedScope) (contextfabric.InvestigationResult, *recordingTelemetry) {
+	t.Helper()
 	byID := map[string]organizationPullRequest{}
 	for _, p := range pulls {
 		byID[p.id] = p
@@ -176,7 +183,7 @@ func investigateOrganizationPullRequests(t *testing.T, pulls []organizationPullR
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter: organizationStatusInterpreter{frame: &derived, anchored: anchored},
 		Graph:       graph,
-		Facts:       emptyFactReader{}, Synthesizer: countingSynthesizer{}, Results: discardingResultStore{},
+		Facts:       emptyFactReader{}, Synthesizer: synthesizer, Results: discardingResultStore{},
 		Requirements: productionRequirementDeriver{},
 	}, contextfabric.EngineOptions{ServiceVersion: "acr-test", NewResultID: func() string { return "result_94390001" }})
 	if err != nil {
@@ -500,5 +507,57 @@ func TestAStatusQuestionThatReadNothingStaysNoMatch(t *testing.T) {
 	result, _ := investigateOrganizationPullRequests(t, nil, "open", storage.Principal{OrgID: "org-1"}, false)
 	if result.Status != contextfabric.InvestigationNoMatch || result.Cohort != nil {
 		t.Fatalf("status = %q cohort = %+v, want no_match and no member set", result.Status, result.Cohort)
+	}
+}
+
+// TestAMeasuredZeroIsNeverServedAsNoMatch: the synthesizer answers no_match
+// over a status read that read pull requests and kept none. The served status
+// is the read's: complete over a complete read, partial over a cut one.
+func TestAMeasuredZeroIsNeverServedAsNoMatch(t *testing.T) {
+	read := memberStatusPageCap * 26
+	cut := organizationPullRequests(read+1, 0)
+	for i := range cut {
+		cut[i].reviewed = i < read
+	}
+	for _, anchored := range []bool{true, false} {
+		for _, tc := range []struct {
+			name   string
+			pulls  []organizationPullRequest
+			status string
+			want   contextfabric.InvestigationStatus
+		}{
+			{"complete read", organizationPullRequests(40, 40), "open", contextfabric.InvestigationComplete},
+			{"cut read", cut, "awaiting_review", contextfabric.InvestigationPartial},
+		} {
+			t.Run(fmt.Sprintf("%s/anchored=%v", tc.name, anchored), func(t *testing.T) {
+				result, _ := investigateOrganizationPullRequestsWith(t, noMatchSynthesizer{}, tc.pulls, tc.status, storage.Principal{OrgID: "org-1"}, anchored)
+				if result.Status != tc.want {
+					t.Fatalf("status = %q (limitations %q), want %q: a measured zero is an answer", result.Status, result.Limitations, tc.want)
+				}
+				if result.Cohort == nil || len(result.Cohort.Members) != 0 {
+					t.Fatalf("cohort = %+v, want the empty pull request set", result.Cohort)
+				}
+			})
+		}
+	}
+}
+
+// TestMoreMatchesThanTheCapAreACappedSetNotACut: 40 open pull requests hold
+// the status and 25 are served. The status was decided for every pull request
+// read, so the set is truncated by the member cap and no sentence says the
+// status was decided within a cut read.
+func TestMoreMatchesThanTheCapAreACappedSetNotACut(t *testing.T) {
+	for _, anchored := range []bool{true, false} {
+		t.Run(fmt.Sprintf("anchored=%v", anchored), func(t *testing.T) {
+			result, _ := investigateOrganizationPullRequests(t, organizationPullRequests(60, 20), "open", storage.Principal{OrgID: "org-1"}, anchored)
+			if result.Cohort == nil || len(result.Cohort.Members) != 25 || !result.Cohort.Truncated {
+				t.Fatalf("cohort = %+v, want 25 open pull requests, truncated", result.Cohort)
+			}
+			for _, limitation := range result.Limitations {
+				if contractsv1.IsContextFabricMemberStatusPoolCutLimitation(limitation) {
+					t.Fatalf("limitations %q state a cut status read over a read that decided every pull request", result.Limitations)
+				}
+			}
+		})
 	}
 }
