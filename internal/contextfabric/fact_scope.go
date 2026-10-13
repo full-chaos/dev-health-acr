@@ -600,6 +600,12 @@ type FactScopeExpansionEvent struct {
 	// population instead of staying at one.
 	ScopeQueryCount   int
 	ScopeRowsReturned int
+	// RootsComplete is set when every admitted target is attributed to
+	// every requested origin that reached it: one origin, or an expander
+	// that returned TargetRoots for each target. SharedTargetCount is how
+	// many admitted targets two or more origins reached.
+	RootsComplete     bool
+	SharedTargetCount int
 	// DecisionReason names the gate or execution basis on a validated
 	// allow-list (see FactScopeDecisionReason). Without it every rung of the
 	// fail-closed ladder is indistinguishable in telemetry -- they all land
@@ -1464,6 +1470,11 @@ type FactScopeExpansionResult struct {
 	// origins[0], the same (documented, pre-existing) approximation as
 	// before.
 	TargetRoot map[string]SubjectRef
+	// TargetRoots lists EVERY requested origin that reached a target, keyed
+	// like TargetRoot. When a target has an entry, the resolver writes one
+	// Derivation per listed origin and ignores TargetRoot for it; an origin
+	// that is not among the request's origins is never recorded.
+	TargetRoots map[string][]SubjectRef
 }
 
 // FactScopeExpansionCounts is the diagnostic split. See
@@ -1825,7 +1836,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 	// freshly built per resolveRequirement call, so it never reaches across
 	// requirement kinds (codex xhigh review round 2, confirmed real, MEDIUM:
 	// see expand's own use of it below).
-	derivationIndex := map[string]int{}
+	derivationIndex := map[string][]int{}
 	for _, originKind := range originKinds {
 		rule, eligible := r.lookupFactScopePolicy(kind, originKind)
 		if !eligible {
@@ -2000,7 +2011,7 @@ func (r *FactReadScopeResolver) expand(
 	origins []SubjectRef,
 	rule factScopePolicyRule,
 	timeContext TimeContext,
-	derivationIndex map[string]int,
+	derivationIndex map[string][]int,
 ) {
 	// ADMISSION GATE (CHAOS-5405 D-a), work-item targets only. The repository
 	// and pull-request chains are unchanged and ungated: their fan-out is
@@ -2234,6 +2245,69 @@ func (r *FactReadScopeResolver) expand(
 	// telemetry reports the subjects the provider is really asked about
 	// rather than the subjects this origin group happened to produce.
 	existing := scope.DerivedSubjects[event.RequirementKind]
+	// ROOTS ARE EVERY REQUESTED ORIGIN THAT REACHED THE TARGET when the
+	// expander lists them (TargetRoots); otherwise the one TargetRoot, else
+	// origins[0], which is exact only for a single origin. An origin outside
+	// this call's origins is never recorded.
+	originKeys := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		originKeys[canonicalFactSubjectKey(origin)] = struct{}{}
+	}
+	rootsComplete, sharedTargets := true, 0
+	rootsOf := func(key string) []SubjectRef {
+		var roots []SubjectRef
+		listedKeys := map[string]struct{}{}
+		for _, root := range result.TargetRoots[key] {
+			rootKey := canonicalFactSubjectKey(root)
+			if _, requested := originKeys[rootKey]; !requested {
+				continue
+			}
+			if _, dup := listedKeys[rootKey]; dup {
+				continue
+			}
+			listedKeys[rootKey] = struct{}{}
+			roots = append(roots, root)
+		}
+		if len(roots) > 0 {
+			sort.Slice(roots, func(i, j int) bool {
+				return canonicalFactSubjectKey(roots[i]) < canonicalFactSubjectKey(roots[j])
+			})
+			if len(roots) > 1 {
+				sharedTargets++
+			}
+			return roots
+		}
+		if len(origins) > 1 {
+			rootsComplete = false
+		}
+		root := origins[0]
+		if override, ok := result.TargetRoot[key]; ok {
+			root = override
+		}
+		return []SubjectRef{root}
+	}
+	recordDerivations := func(target SubjectRef, key string, basis FactScopeBasis) {
+		recorded := map[string]struct{}{}
+		for _, idx := range derivationIndex[key] {
+			recorded[canonicalFactSubjectKey(scope.Derivations[idx].Root)] = struct{}{}
+		}
+		for _, root := range rootsOf(key) {
+			if _, dup := recorded[canonicalFactSubjectKey(root)]; dup {
+				continue
+			}
+			scope.Derivations = append(scope.Derivations, FactScopeDerivation{
+				Root:   root,
+				Target: target,
+				Policy: rule.Policy,
+				Basis:  basis,
+			})
+			derivationIndex[key] = append(derivationIndex[key], len(scope.Derivations)-1)
+		}
+	}
+	defer func() {
+		event.RootsComplete = rootsComplete
+		event.SharedTargetCount = sharedTargets
+	}()
 	seen := make(map[string]struct{}, len(existing)+len(admitted))
 	for _, target := range existing {
 		seen[canonicalFactSubjectKey(target)] = struct{}{}
@@ -2264,14 +2338,19 @@ func (r *FactReadScopeResolver) expand(
 			// alone here: it counts sources for targets admitted BY THIS
 			// EVENT (the R1 fix above), and a duplicate was not admitted by
 			// this event.
-			if idx, tracked := derivationIndex[key]; tracked {
+			if indexes, tracked := derivationIndex[key]; tracked {
 				basis := rule.Basis
 				if override, ok := result.TargetBasis[key]; ok {
 					basis = override
 				}
-				if factScopeBasisWeaker(basis, scope.Derivations[idx].Basis) {
-					scope.Derivations[idx].Basis = basis
+				for _, idx := range indexes {
+					if factScopeBasisWeaker(basis, scope.Derivations[idx].Basis) {
+						scope.Derivations[idx].Basis = basis
+					}
 				}
+				// This origin kind's roots reached the target too: each is
+				// recorded, so its row counts the target it reached.
+				recordDerivations(target, key, basis)
 			}
 			continue
 		}
@@ -2329,33 +2408,7 @@ func (r *FactReadScopeResolver) expand(
 		if source, ok := result.TargetAttributionSource[key]; ok && source != "" {
 			sourceCounts[source]++
 		}
-		// ROOT IS PER-TARGET WHEN THE EXPANDER CAN DETERMINE IT (CHAOS-4260):
-		// origins[0] is the fallback for an expander that cannot attribute a
-		// target to one specific origin among a same-kind group (every
-		// expander's behaviour before this ticket, and still correct when
-		// origins has exactly one element). result.TargetRoot lets an
-		// expander that CAN determine the true origin -- e.g. via a
-		// cardinality-preserving SQL aggregate -- override it, closing the
-		// bug where every admitted target across a multi-origin group was
-		// attributed to origins[0] regardless of which origin's own edge
-		// actually reached it. FactScopeDerivation.Root has no live reader
-		// today (grep confirms); this is a correctness fix for its
-		// definition, not a behaviour change any current consumer observes.
-		root := origins[0]
-		if override, ok := result.TargetRoot[key]; ok {
-			root = override
-		}
-		scope.Derivations = append(scope.Derivations, FactScopeDerivation{
-			Root:   root,
-			Target: target,
-			Policy: rule.Policy,
-			Basis:  basis,
-		})
-		// Recorded so a LATER origin kind's own dedup pass (above) can
-		// upgrade this entry's Basis in place instead of discarding what it
-		// found, rather than pointing at a stale index once Derivations
-		// grows further.
-		derivationIndex[key] = len(scope.Derivations) - 1
+		recordDerivations(target, key, basis)
 	}
 	// event.Basis is a MIX SUMMARY (see FactScopeExpansionEvent.Basis's own
 	// doc comment and AttributionSourceCounts' doc comment): it starts as

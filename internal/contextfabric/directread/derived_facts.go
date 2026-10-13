@@ -23,6 +23,9 @@ type derivedExpansion struct {
 	policy     string
 	targetKind contextfabric.SubjectKind
 	outcome    contextfabric.FactScopeExpansionOutcome
+	// rootsComplete: every target is attributed to every requested root
+	// that reached it, so no root's count is a lower bound.
+	rootsComplete bool
 }
 
 // derivedIndex holds, per fact kind, the targets the resolver derived from
@@ -35,9 +38,9 @@ type derivedIndex struct {
 	unauthorized int
 	// rootsOfKind counts admitted roots per kind; groupTargets counts, per
 	// fact kind and root kind, the targets attributed to any root of that
-	// kind. The resolver attributes a target several roots reach to ONE of
-	// them, so with two or more roots of a kind a root's own count is a lower
-	// bound.
+	// kind. When an expansion could not name every root of a target it
+	// attributed it to ONE of them, so with two or more roots of a kind a
+	// root's own count is then a lower bound.
 	rootsOfKind  map[contextfabric.SubjectKind]int
 	groupTargets map[contextfabric.FactKind]map[contextfabric.SubjectKind]int
 }
@@ -71,7 +74,7 @@ func newDerivedIndex(scope *contextfabric.FactReadScope, admitted []contextfabri
 			index.expansions[event.RequirementKind] = map[contextfabric.SubjectKind]derivedExpansion{}
 		}
 		index.expansions[event.RequirementKind][event.OriginKind] = derivedExpansion{
-			policy: string(event.Policy), targetKind: event.TargetKind, outcome: event.Outcome,
+			policy: string(event.Policy), targetKind: event.TargetKind, outcome: event.Outcome, rootsComplete: event.RootsComplete,
 		}
 	}
 	for _, derivation := range scope.Derivations {
@@ -170,7 +173,7 @@ func (d derivedIndex) derivedCoverage(kind contextfabric.FactKind, root contextf
 			row.served++
 		}
 	}
-	row.shared = d.rootsOfKind[root.Kind] > 1 && d.groupTargets[kind][root.Kind] > row.targets
+	row.shared = !row.expansion.rootsComplete && d.rootsOfKind[root.Kind] > 1 && d.groupTargets[kind][root.Kind] > row.targets
 	return row, true
 }
 

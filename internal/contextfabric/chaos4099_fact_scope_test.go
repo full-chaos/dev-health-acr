@@ -1504,6 +1504,8 @@ func TestChaos4099_EveryEventFieldReachesTheSink(t *testing.T) {
 		"AuthorizationGrantOrganizationWide": "authorization_grant_organization_wide",
 		"AuthorizationGrantExactSelectors":   "authorization_grant_exact_selectors",
 		"AuthorizationGrantOwnerSelectors":   "authorization_grant_owner_selectors",
+		"RootsComplete":                      "roots_complete",
+		"SharedTargetCount":                  "shared_target_count",
 	}
 	eventType := reflect.TypeOf(FactScopeExpansionEvent{})
 	if eventType.NumField() != len(fieldToKey) {
