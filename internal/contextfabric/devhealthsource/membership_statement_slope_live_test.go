@@ -38,10 +38,13 @@ func TestLiveMembershipStatementSlope(t *testing.T) {
 			stmt, bindings := devhealthsource.MembershipStatementForTest(changedOrg, cur.since, "", 100000, true, pruned)
 			head := strings.Index(stmt, "FROM (\n") + len("FROM (\n")
 			tail := strings.Index(stmt, "\n)\nWHERE 1 = 1")
-			arms := strings.Split(stmt[head:tail], "\n  UNION ALL\n")
-			if len(arms) != 3 {
-				t.Fatalf("expected 3 arms, got %d", len(arms))
+			body := stmt[head:tail]
+			columnAt := strings.Index(body, "\n  UNION ALL\n  SELECT m.subject_kind AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,\n    m.observed_at AS observed_at, '' AS event_id")
+			supersededAt := strings.Index(body, "\n  UNION ALL\n  SELECT 'work_item' AS subject_kind, toString(m.repo_id)")
+			if columnAt < 0 || supersededAt < columnAt {
+				t.Fatalf("arms not found: %d %d", columnAt, supersededAt)
 			}
+			arms := []string{body[:columnAt], body[columnAt+len("\n  UNION ALL\n"):supersededAt], body[supersededAt+len("\n  UNION ALL\n"):]}
 			variants := map[string]string{"full": stmt}
 			for i, arm := range arms {
 				variants[fmt.Sprintf("arm%d", i+1)] = stmt[:head] + arm + stmt[tail:]
