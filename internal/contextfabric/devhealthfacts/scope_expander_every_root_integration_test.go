@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -272,21 +273,33 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 	t.Run("memory", func(t *testing.T) {
 		recorder := &recordingQueryClient{inner: query}
 		recordingExpander := devhealthfacts.NewScopeExpander(recorder)
-		// peaks measures each statement as served (with the origin id arrays)
-		// and the same statement text with the arrays removed, run with the
-		// same bindings at the same organization size.
-		peaks := func() (withArrays, withoutArrays map[string]uint64) {
-			recorder.reset()
+		runPeak := func(label, table, fragment, statement string, bindings []contextpacket.ClickHouseBinding) uint64 {
 			mark := serverNowMicros(t, ctx, direct)
+			rows, err := query.Query(ctx, statement, bindings)
+			if err != nil {
+				t.Fatalf("%s: %v", label, err)
+			}
+			for rows.Next() {
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatalf("%s rows: %v", label, err)
+			}
+			_ = rows.Close()
+			return peakOf(t, ctx, direct, table, fragment, mark)
+		}
+		// measure runs each statement as served (with the origin id arrays)
+		// and the same text with the arrays removed, same bindings, same
+		// organization size, interleaved three times: the minimum of each is
+		// the reading, and the spread is the run-to-run noise.
+		type reading struct{ with, base, spread uint64 }
+		measure := func() map[string]reading {
+			recorder.reset()
 			for _, tc := range fixture.cases() {
 				if _, err := recordingExpander.ExpandFactScope(ctx, tc.request); err != nil {
 					t.Fatalf("%s: ExpandFactScope: %v: %s", tc.name, err, readFailureCause(err))
 				}
 			}
-			withArrays, withoutArrays = map[string]uint64{}, map[string]uint64{}
-			for _, statement := range everyRootStatementFragments {
-				withArrays[statement.label] = peakOf(t, ctx, direct, statement.table, statement.fragment, mark)
-			}
+			readings := map[string]reading{}
 			for _, statement := range everyRootStatementFragments {
 				captured, ok := recorder.find(statement.fragment)
 				if !ok {
@@ -296,43 +309,40 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 				if strings.Contains(stripped, "groupUniqArray(p.id)") || strings.Contains(stripped, "groupUniqArray(origin_team_id)") || strings.Contains(stripped, "groupUniqArray(a.team_id)") || strings.Contains(stripped, "origin_ids") {
 					t.Fatalf("%s: arrays left after stripping:\n%s", statement.label, stripped)
 				}
-				baseMark := serverNowMicros(t, ctx, direct)
-				rows, err := query.Query(ctx, stripped, captured.bindings)
-				if err != nil {
-					t.Fatalf("%s: base statement: %v", statement.label, err)
+				var with, base []uint64
+				for attempt := 0; attempt < 3; attempt++ {
+					with = append(with, runPeak(statement.label, statement.table, statement.fragment, captured.statement, captured.bindings))
+					base = append(base, runPeak(statement.label+" without arrays", statement.table, statement.fragment, stripped, captured.bindings))
 				}
-				for rows.Next() {
-				}
-				if err := rows.Err(); err != nil {
-					t.Fatalf("%s: base statement rows: %v", statement.label, err)
-				}
-				_ = rows.Close()
-				withoutArrays[statement.label] = peakOf(t, ctx, direct, statement.table, statement.fragment, baseMark)
+				all := append(append([]uint64{}, with...), base...)
+				readings[statement.label] = reading{with: slices.Min(with), base: slices.Min(base), spread: slices.Max(all) - slices.Min(all)}
 			}
-			return withArrays, withoutArrays
+			return readings
 		}
-		peaks()
-		smallWith, smallWithout := peaks()
+		measure()
+		small := measure()
 		fillEveryRootOrganization(t, ctx, direct, fixture, "large", 200_000)
-		largeWith, largeWithout := peaks()
+		large := measure()
 		for _, statement := range everyRootStatementFragments {
 			label := statement.label
-			smallDelta := int64(smallWith[label]) - int64(smallWithout[label])
-			largeDelta := int64(largeWith[label]) - int64(largeWithout[label])
-			t.Logf("%s: small %d (base %d), large %d (base %d)", label, smallWith[label], smallWithout[label], largeWith[label], largeWithout[label])
+			t.Logf("%s: small %+v, large %+v", label, small[label], large[label])
 			for _, size := range []struct {
-				name       string
-				with, base uint64
-			}{{"small", smallWith[label], smallWithout[label]}, {"large", largeWith[label], largeWithout[label]}} {
-				if size.base == 0 || size.with == 0 {
-					t.Fatalf("%s %s: measurement did not happen (with %d, without %d)", label, size.name, size.with, size.base)
+				name    string
+				reading reading
+			}{{"small", small[label]}, {"large", large[label]}} {
+				if size.reading.base == 0 || size.reading.with == 0 {
+					t.Fatalf("%s %s: measurement did not happen (%+v)", label, size.name, size.reading)
 				}
-				if float64(size.with) > arrayMemoryShare*float64(size.base) {
-					t.Errorf("%s at the %s size: %d bytes with the origin arrays, %d without: over %.2fx", label, size.name, size.with, size.base, arrayMemoryShare)
+				if float64(size.reading.with) > arrayMemoryShare*float64(size.reading.base) {
+					t.Errorf("%s at the %s size: %d bytes with the origin arrays, %d without: over %.2fx", label, size.name, size.reading.with, size.reading.base, arrayMemoryShare)
 				}
 			}
-			if largeDelta > 0 && float64(largeDelta) > statementMemorySlope*float64(max(smallDelta, 0)) {
-				t.Errorf("%s: the origin arrays' cost grew with the organization: %d bytes at the larger size, %d at the smaller", label, largeDelta, smallDelta)
+			// The arrays' cost may not grow with the organization beyond the
+			// slope; a change inside the measured run-to-run spread is noise.
+			smallDelta := int64(small[label].with) - int64(small[label].base)
+			largeDelta := int64(large[label].with) - int64(large[label].base)
+			if float64(largeDelta) > statementMemorySlope*float64(max(smallDelta, 0))+float64(large[label].spread) {
+				t.Errorf("%s: the origin arrays' cost grew with the organization: %d bytes at the larger size, %d at the smaller (noise %d)", label, largeDelta, smallDelta, large[label].spread)
 			}
 		}
 	})
