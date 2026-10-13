@@ -16,6 +16,7 @@ import (
 func projectReachFake() *fakeClient {
 	const reachedRepo = "00000000-0000-4000-8000-000000000042"
 	return &fakeClient{tables: []fakeTable{
+		{match: "SELECT DISTINCT team_id FROM team_project_ownership", rows: [][]any{{"CHAOS"}}},
 		{match: "uniqExact(lr.pr_number)", rows: [][]any{{"CHAOS", reachedRepo, "acme/linked", int64(2), int64(3)}}},
 		{match: "INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id", rows: [][]any{{"CHAOS", reachedRepo, int64(3), int64(1), int64(0)}}},
 	}}
