@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 )
@@ -849,13 +850,7 @@ func validResolutionState(value ContextFabricResolutionState) bool {
 // ContextFabricCommitDecisionDigest.CommitGate's own doc comment
 // establishes, not an omission to reject.
 func validCommitGate(value string) bool {
-	switch value {
-	case "", "caller_hint_short_circuit", "pre_committed_exact_hint", "exact_index",
-		"identity_fast_path", "lone_floor", "top_of_two", "vector_margin_rescue", "evidence_census":
-		return true
-	default:
-		return false
-	}
+	return value == "" || slices.Contains(CommitGateVocabulary(), value)
 }
 
 // validCommitDecisionDigestIdentityProven (CHAOS-4087, codex R1) rejects an
@@ -883,11 +878,11 @@ func validCommitDecisionDigestIdentityProven(gate string, identityProven bool) b
 	switch gate {
 	case "":
 		return !identityProven
-	case "pre_committed_exact_hint", "identity_fast_path":
+	case CommitGatePreCommittedExactHint, CommitGateIdentityFastPath:
 		return identityProven
-	case "exact_index", "lone_floor", "top_of_two", "vector_margin_rescue", "evidence_census":
+	case CommitGateExactIndex, CommitGateLoneFloor, CommitGateTopOfTwo, CommitGateVectorMarginRescue, CommitGateEvidenceCensus:
 		return !identityProven
-	case "caller_hint_short_circuit":
+	case CommitGateCallerHintShortCircuit:
 		return true
 	default:
 		return false

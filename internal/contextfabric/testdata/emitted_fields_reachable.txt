@@ -69,7 +69,7 @@ FactBlockers
     calls followed            889
     calls accounted           13
     calls not_a_call          10
-    calls excluded_by_design  211
+    calls excluded_by_design  214
     calls leaked              21
   fields             blocked_by_work_item_id blocked_by_work_item_ref blocked_work_items_current blocked_work_items_without_link_count blocker_dependencies_current blocker_dependencies_excluded_by_status_current blocker_status_basis link_tier oldest_blocked_age_basis oldest_blocked_age_days oldest_blocked_age_unavailable_reason owned_repositories owned_repositories_omitted_count owned_repository_count project_blocked_work_items_current project_reached_repository_count repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_limitation repository_breakdown_omitted_count repository_id repository_link_basis repository_name repository_tables_basis rollup_basis
 
@@ -101,7 +101,7 @@ FactDeployments
     calls followed            847
     calls accounted           13
     calls not_a_call          6
-    calls excluded_by_design  192
+    calls excluded_by_design  195
     calls leaked              10
   fields             day days_with_data_window deploy_time_p50_hours deploy_time_p50_hours_latest_day deployments_count deployments_count_window environment failed_deployments_count failed_deployments_count_window latest_day lead_time_p50_hours lead_time_p50_hours_latest_day owned_repositories owned_repositories_omitted_count owned_repository_count project_reached_repository_count repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_name repository_tables_basis rollup_basis status window_basis window_end window_start
 
@@ -133,7 +133,7 @@ FactHealth
     calls followed            903
     calls accounted           13
     calls not_a_call          9
-    calls excluded_by_design  220
+    calls excluded_by_design  223
     calls leaked              19
   fields             compounding_risk computed_at daily_health daily_health_omitted_count day norm_value repo_count risk_breakdown risk_breakdown_rows_shown risk_breakdown_rows_total risk_rules rollup_basis scope scope_id scope_name severity severity_as_of severity_basis severity_freshness_window_days severity_unavailable_reason signal team_count weight weighted_contribution
 
@@ -165,7 +165,7 @@ FactIncidents
     calls followed            853
     calls accounted           13
     calls not_a_call          6
-    calls excluded_by_design  182
+    calls excluded_by_design  185
     calls leaked              12
   fields             incident_attribution_basis incidents_count_window org_incidents_not_attributable_count_window owned_repositories owned_repositories_omitted_count owned_repository_count project_reached_repository_count repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_name repository_tables_basis resolved_incidents_count_window rollup_basis severity status window_basis window_end window_start
 
@@ -181,7 +181,7 @@ FactInvestment
     calls followed            1060
     calls accounted           14
     calls not_a_call          30
-    calls excluded_by_design  578
+    calls excluded_by_design  581
     calls leaked              57
   fields             attribution attribution_basis effort_unit_count investment_mix_source link_tier mix_source native_multi_placed_unit_count next_cursor owned_repository_count owning_team_rollup_work_unit_count page_share_total population_window project_reached_repositories project_reached_repositories_omitted_count project_reached_repository_count repo_count repositories_in_scope repository_id repository_link_basis repository_name rollup_basis scope scope_share_total scope_unattributed_rows scope_unattributed_total scope_unit_rows share share_in_scope source spanning_unit_count team_count theme theme_breakdown theme_quality_bugfix unattributed_effort_share unit_attribution_basis unit_effort_value unit_from unit_kind unit_mix_source unit_pull_request_count unit_refs_unresolved unit_to unit_unresolved_refs unit_weight units_refs_unresolved units_returned weighted_effort work_unit_count work_unit_id work_units_without_repo_link
 
@@ -229,7 +229,7 @@ FactMetrics
     calls followed            870
     calls accounted           13
     calls not_a_call          4
-    calls excluded_by_design  221
+    calls excluded_by_design  224
     calls leaked              13
   fields             after_hours_commit_ratio after_hours_commits_count bus_factor change_failure_deployments_count change_failure_failed_deployments_count change_failure_link_tier change_failure_rate change_failure_rate_state code_ownership_gini commits_count daily_metrics day day_count median_pr_cycle_hours mttr_hours prs_merged revert_rate revert_rate_days rollup_basis team_breakdown team_count team_id team_name weekend_commit_ratio weekend_commits_count window_pr_count window_pr_cycle_hours_median
 
@@ -245,7 +245,7 @@ FactOperationalDeficiencies
     calls followed            850
     calls accounted           13
     calls not_a_call          2
-    calls excluded_by_design  165
+    calls excluded_by_design  168
     calls leaked              17
   fields             latest_as_of_day latest_compounding_risk latest_computed_at latest_score_unavailable_reason latest_severity latest_severity_unavailable_reason latest_unavailable_reason rationale rule_basis_compounding_risk rule_basis_severity rule_basis_unavailable_reason rule_computed_at rule_id rule_version score_moved_since_rule severity success_criterion title window_end window_start
 
@@ -261,7 +261,7 @@ FactPullRequests
     calls followed            873
     calls accounted           13
     calls not_a_call          9
-    calls excluded_by_design  234
+    calls excluded_by_design  237
     calls leaked              15
   fields             link_tier link_tier_breakdown owned_repositories owned_repositories_omitted_count owned_repository_count project_breakdown project_reached_repository_count pull_request_link_basis pull_requests_closed_unmerged_window pull_requests_merged_window pull_requests_open_current pull_requests_opened_window reach_basis repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_link_basis repository_name repository_tables_basis rollup_basis scope scope_id scope_name state window_basis window_end window_start
 
