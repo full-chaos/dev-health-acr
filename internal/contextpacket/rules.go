@@ -15,6 +15,7 @@ type rule struct {
 	claim        contractsv1.ClaimKind
 	severity     contractsv1.Severity
 	categoryRank int
+	why          string
 }
 
 func evidenceRule(ref contractsv1.EvidenceRef) rule {
@@ -32,23 +33,23 @@ func evidenceCategoryRule(ref contractsv1.EvidenceRef) rule {
 	switch strings.ToLower(ref.Source.EntityType) {
 	case "ci_pipeline_run", "check", "check_run", "workflow_run", "build", "alert":
 		if citationShowsFailure(ref.Citation) {
-			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1}
+			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, ""}
 		}
 	case "deployment":
 		if deploymentFailed(ref) {
-			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1}
+			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, ""}
 		}
-		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0}
+		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, ""}
 	case "incident":
 		if incidentIsOpen(ref.Citation) {
-			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1}
+			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, ""}
 		}
 	case "recommendation", "review_action", "task":
-		return rule{"evidence.observed.action.v1", contractsv1.CategoryAction, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 4}
+		return rule{"evidence.observed.action.v1", contractsv1.CategoryAction, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 4, ""}
 	case "state", "release":
-		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0}
+		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, ""}
 	}
-	return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3}
+	return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, ""}
 }
 
 func pressureRule() rule {
@@ -56,7 +57,7 @@ func pressureRule() rule {
 }
 
 func causeRule() rule {
-	return rule{"evidence.observed.cause.v1", contractsv1.CategoryCause, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 2}
+	return rule{"evidence.observed.cause.v1", contractsv1.CategoryCause, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 2, ""}
 }
 
 type ruleOutcome struct {
