@@ -215,7 +215,7 @@ func TestLiveMembershipStatementRunsPerTick(t *testing.T) {
 		ran := counting.membership - before
 		t.Logf("SLOPE steady call %d: membership statements=%d", call, ran)
 		if limit := map[bool]int{true: 2, false: 1}[call == 0]; ran > limit {
-			t.Fatalf("steady call %d ran the membership statement %d times, want at most %d", call, ran, limit)
+			t.Errorf("steady call %d ran the membership statement %d times, want at most %d", call, ran, limit)
 		}
 	}
 	if err := direct.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
