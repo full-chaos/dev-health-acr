@@ -13,7 +13,7 @@ var dependencyRelationKeySQL = dependencyrelation.KeySQL("d.relationship_type")
 
 const standardColumns = `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, toFloat64(confidence) confidence, citation, observed_at FROM (`
 
-const SourceQueryCatalogVersionV1 = "dev-health-source-catalog.v3"
+const SourceQueryCatalogVersionV1 = "dev-health-source-catalog.v4"
 
 // workGraphEndpointLabelSQL renders one edge endpoint as words. Only a pull
 // request of the scoped repository carries the repository name and its title;
