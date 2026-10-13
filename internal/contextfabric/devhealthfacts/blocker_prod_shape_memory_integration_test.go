@@ -127,6 +127,29 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 	return out
 }
 
+func blockerProdShapeStatementsNoCeiling(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) {
+	t.Helper()
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs: %v", err)
+	}
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 70))
+FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
+GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
+	if err != nil {
+		t.Fatalf("read query_log: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hash, peak uint64
+		var head string
+		if err := rows.Scan(&hash, &peak, &head); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("PRODSHAPE[%s] statement %d peak %d bytes (%.1f MiB): %s", label, hash, peak, float64(peak)/(1<<20), head)
+	}
+}
+
 func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
@@ -172,6 +195,26 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	mark = serverNowMicros(t, ctx, direct)
 	restrictedResult := read(restricted)
 	blockerProdShapeStatements(t, ctx, direct, "restricted", mark)
+
+	// Measurement of the alternative bound form, logged (no ceiling assertion:
+	// the form is chosen on these numbers).
+	for _, form := range []string{"hash_pair"} {
+		restoreForm := devhealthfacts.SetBlockerEndedFormForTest(form)
+		read(restricted)
+		formMark := serverNowMicros(t, ctx, direct)
+		formResult := read(restricted)
+		blockerProdShapeStatementsNoCeiling(t, ctx, direct, "restricted, form "+form, formMark)
+		restoreForm()
+		if len(formResult.Facts) != len(restrictedResult.Facts) {
+			t.Errorf("form %s serves %d facts, the tuple form %d", form, len(formResult.Facts), len(restrictedResult.Facts))
+		}
+		for index := range formResult.Facts {
+			a, b := formResult.Facts[index].Fields["blocked_work_items_current"], restrictedResult.Facts[index].Fields["blocked_work_items_current"]
+			if (a.Integer == nil) != (b.Integer == nil) || (a.Integer != nil && *a.Integer != *b.Integer) {
+				t.Errorf("form %s: team fact %d blocked_work_items_current differs: %+v vs %+v", form, index, a, b)
+			}
+		}
+	}
 
 	// The end rule kept inside each statement (the form above the bound) is
 	// measured under the same ceilings and must serve the same answer.

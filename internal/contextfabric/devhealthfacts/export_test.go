@@ -121,3 +121,11 @@ func BlockerEndedLinksPlanProbeForTest(orgID string) string {
 func BlockerEndedLinkBindingNamesForTest() (source, target, relationType string) {
 	return blockerEndedSourceBinding, blockerEndedTargetBinding, blockerEndedTypeBinding
 }
+
+// SetBlockerEndedFormForTest selects how the bound ended links are tested, for
+// a measurement.
+func SetBlockerEndedFormForTest(form string) (restore func()) {
+	previous := blockerEndedForm
+	blockerEndedForm = form
+	return func() { blockerEndedForm = previous }
+}

@@ -85,6 +85,15 @@ const (
 // bindings; above it the end rule stays inside each statement.
 var blockerEndedLinksBound = 1000
 
+// blockerEndedForm selects how the bound ended links are tested: "tuple_arrays"
+// (the three string arrays as a tuple set) or "hash_pair" (two 64-bit hashes of
+// the key, no per-row string tuple). Measured in the production-shape test.
+var blockerEndedForm = "tuple_arrays"
+
+// blockerEndedLinksHashSQL keeps the rows whose key hashes (city and sip, both
+// must match) are not among the ended links' hashes.
+const blockerEndedLinksHashSQL = ` AND (cityHash64(d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, '')), sipHash64(d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''))) NOT IN (SELECT ended.1, ended.2 FROM (SELECT arrayJoin(arrayZip(arrayMap(x -> toUInt64(x), {` + blockerEndedSourceBinding + `:Array(String)}), arrayMap(x -> toUInt64(x), {` + blockerEndedTargetBinding + `:Array(String)}))) AS ended))`
+
 // blockerEndedLinksCurrentSQL keeps the rows whose (source, target, type) is
 // not in the bound ended links. The tuple set is built once from the three
 // arrays; no per-row string is materialized.
@@ -100,7 +109,11 @@ func (p *BlockersProvider) blockerScope(ctx context.Context, principal storage.P
 	if err != nil {
 		return "", "", nil, err
 	}
-	statement := readers.WithSettings(fmt.Sprintf("SELECT s, t, ifNull(rt, '') FROM %s ORDER BY s, t, rt LIMIT %d", relationEndedKeysSQL(), blockerEndedLinksBound+1), withMaxResultRows(settings, blockerEndedLinksBound+1))
+	columns := "s, t, ifNull(rt, '')"
+	if blockerEndedForm == "hash_pair" {
+		columns = "toString(cityHash64(s, t, ifNull(rt, ''))), toString(sipHash64(s, t, ifNull(rt, ''))), ''"
+	}
+	statement := readers.WithSettings(fmt.Sprintf("SELECT %s FROM %s ORDER BY 1, 2 LIMIT %d", columns, relationEndedKeysSQL(), blockerEndedLinksBound+1), withMaxResultRows(settings, blockerEndedLinksBound+1))
 	sources, targets, types := []string{}, []string{}, []string{}
 	if err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadBlockerEndedLinks", statement, orgID, nil, func(row readers.RowScanner) error {
 		var source, target, relationType string
@@ -117,6 +130,11 @@ func (p *BlockersProvider) blockerScope(ctx context.Context, principal storage.P
 		return authorized, relationCurrentSQL("d"), bindings, nil
 	}
 	logBlockerEndedLinks(ctx, "materialized", len(sources), false)
+	if blockerEndedForm == "hash_pair" {
+		return authorized, blockerEndedLinksHashSQL, append(bindings,
+			readers.Binding{Name: blockerEndedSourceBinding, Value: sources},
+			readers.Binding{Name: blockerEndedTargetBinding, Value: targets}), nil
+	}
 	return authorized, blockerEndedLinksCurrentSQL, append(bindings,
 		readers.Binding{Name: blockerEndedSourceBinding, Value: sources},
 		readers.Binding{Name: blockerEndedTargetBinding, Value: targets},
