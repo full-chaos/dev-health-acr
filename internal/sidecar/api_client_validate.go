@@ -42,21 +42,21 @@ func validateCapabilities(c contractsv1.Capabilities) error {
 }
 
 func validateContextPacket(p contractsv1.ContextPacket) error {
-	if err := p.Validate(); err != nil {
+	if err := p.ValidateRead(); err != nil {
 		return fmt.Errorf("%w: context packet: %w", ErrInvalidResponse, err)
 	}
 	return nil
 }
 
 func validateExpandedEvidence(e contractsv1.ExpandedEvidence) error {
-	if err := e.Validate(); err != nil {
+	if err := e.ValidateRead(); err != nil {
 		return fmt.Errorf("%w: evidence: %w", ErrInvalidResponse, err)
 	}
 	return nil
 }
 
 func validateAgentEpisode(episode contractsv1.AgentEpisode) error {
-	if err := episode.Validate(); err != nil {
+	if err := episode.ValidateRead(); err != nil {
 		return fmt.Errorf("%w: agent episode: %w", ErrInvalidResponse, err)
 	}
 	return nil

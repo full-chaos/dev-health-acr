@@ -23,11 +23,22 @@ func (s EvidenceSource) Validate() error {
 
 // Validate enforces evidence_ref.v1.schema.json exactly: every required
 // field must be present and within bounds, provenance and availability
-// must hold one of the schema's enum values, and confidence must be a
+// must hold one of the documented values, and confidence must be a
 // finite number in [0,1]. A canonical, single source of truth for this
 // evidence-shape validation so callers (MCP response validators today; the
 // hosted API and sidecar clients tomorrow) never re-derive these bounds.
 func (r EvidenceRef) Validate() error {
+	return r.validate(false)
+}
+
+// ValidateRead is Validate for a client reading a served evidence ref: an
+// added provenance or availability token passes, because both vocabularies
+// are open. Producers call Validate.
+func (r EvidenceRef) ValidateRead() error {
+	return r.validate(true)
+}
+
+func (r EvidenceRef) validate(open bool) error {
 	if r.SchemaVersion != EvidenceRefSchema {
 		return fmt.Errorf("schema_version must be %q", EvidenceRefSchema)
 	}
@@ -37,7 +48,7 @@ func (r EvidenceRef) Validate() error {
 	if err := r.Source.Validate(); err != nil {
 		return fmt.Errorf("source: %w", err)
 	}
-	if !validEvidenceProvenance(r.Provenance) {
+	if !validEvidenceProvenance(r.Provenance) && !(open && openVocabularyToken(r.Provenance)) {
 		return fmt.Errorf("provenance violates v1 bounds")
 	}
 	if math.IsNaN(r.Confidence) || math.IsInf(r.Confidence, 0) || r.Confidence < 0 || r.Confidence > 1 {
@@ -52,7 +63,7 @@ func (r EvidenceRef) Validate() error {
 	if !stringLengthBetween(r.SourceVersion, 0, 512) || !stringLengthBetween(r.SnapshotHash, 0, 256) || !stringLengthBetween(r.ContentDigest, 0, 256) {
 		return fmt.Errorf("evidence optional metadata fields violate v1 bounds")
 	}
-	if !validEvidenceAvailability(r.Availability) {
+	if !validEvidenceAvailability(r.Availability) && !(open && openVocabularyToken(string(r.Availability))) {
 		return fmt.Errorf("availability violates v1 bounds")
 	}
 	return nil
@@ -82,16 +93,26 @@ func validEvidenceAvailability(value EvidenceAvailability) bool {
 // "type": "object" rejects), and availability must hold a recognized
 // value independent of the nested evidence's own availability.
 func (e ExpandedEvidence) Validate() error {
+	return e.validate(false)
+}
+
+// ValidateRead is Validate for a client reading a served expansion; see
+// EvidenceRef.ValidateRead.
+func (e ExpandedEvidence) ValidateRead() error {
+	return e.validate(true)
+}
+
+func (e ExpandedEvidence) validate(open bool) error {
 	if e.SchemaVersion != ExpandedEvidenceSchema {
 		return fmt.Errorf("schema_version must be %q", ExpandedEvidenceSchema)
 	}
-	if err := e.Evidence.Validate(); err != nil {
+	if err := e.Evidence.validate(open); err != nil {
 		return fmt.Errorf("evidence: %w", err)
 	}
 	if e.ResolvedAt.IsZero() {
 		return fmt.Errorf("resolved_at is required")
 	}
-	if !validEvidenceAvailability(e.Availability) {
+	if !validEvidenceAvailability(e.Availability) && !(open && openVocabularyToken(string(e.Availability))) {
 		return fmt.Errorf("availability violates v1 bounds")
 	}
 	if !stringLengthBetween(e.Excerpt, 0, 1000) {

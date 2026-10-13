@@ -208,7 +208,8 @@
         },
         "reason": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: semantic_state_absent, semantic_state_unreadable. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "semantic_state_absent",
             "semantic_state_unreadable"
           ]
@@ -279,7 +280,8 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: organization, team, project, repository, work_item, pull_request, deployment, incident, document, decision, episode, metric, pull_request_review, ci_pipeline_run, work_item_ref. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "organization",
             "team",
             "project",
@@ -466,7 +468,8 @@
         },
         "state": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: committed, proposed, ambiguous, unresolved. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "committed",
             "proposed",
             "ambiguous",
@@ -638,7 +641,8 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: organization, team, project, repository, work_item, pull_request, deployment, incident, document, decision, episode, metric, pull_request_review, ci_pipeline_run, work_item_ref. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "organization",
             "team",
             "project",
@@ -752,7 +756,8 @@
         },
         "standing": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: principal, contributing, symptom, context, withheld. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "principal",
             "contributing",
             "symptom",
@@ -762,7 +767,8 @@
         },
         "category": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: status, actual_completion, work, blockers, reviews, continuous_integration, deployments, incidents, health, workload, investment, readiness, operational_deficiency, source_health, relationship, narrative. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "status",
             "actual_completion",
             "work",
@@ -797,7 +803,8 @@
         },
         "source_state": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: available, stale, unavailable, unconfigured, unauthorized, no_data, truncated, conflicted, not_applicable, pruned. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "available",
             "stale",
             "unavailable",
@@ -866,7 +873,8 @@
         },
         "kind": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, cardinality. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "identity",
             "membership",
             "status",
@@ -947,7 +955,8 @@
         },
         "state": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: available, stale, unavailable, unconfigured, unauthorized, no_data, truncated, conflicted, not_applicable, pruned. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "available",
             "stale",
             "unavailable",
@@ -1392,7 +1401,8 @@
         },
         "window_class": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: trend_assessment, recent_activity_lookup, state_snapshot, explicit_window. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "trend_assessment",
             "recent_activity_lookup",
             "state_snapshot",
@@ -1401,7 +1411,8 @@
         },
         "provenance": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: inferred_default, question_stated, clarification_confirmed. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "inferred_default",
             "question_stated",
             "clarification_confirmed"
@@ -1409,7 +1420,8 @@
         },
         "confidence": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: high, low. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "high",
             "low"
           ]
@@ -1639,7 +1651,8 @@
         },
         "window_class": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: trend_assessment, recent_activity_lookup, state_snapshot, explicit_window. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "trend_assessment",
             "recent_activity_lookup",
             "state_snapshot",
@@ -1692,17 +1705,17 @@
       ]
     },
     "StructureOfferSource": {
-      "description": "CHAOS-3900 P1: closed vocabulary distinguishing an engine-derived offer from a Bridge-proposed one (design brief section 2.1/2.4).",
+      "description": "CHAOS-3900 P1: vocabulary distinguishing an engine-derived offer from a Bridge-proposed one (design brief section 2.1/2.4). Open vocabulary; documented values: engine, prior. A client must tolerate values it does not know.",
       "type": "string",
-      "enum": [
+      "x-documented-values": [
         "engine",
         "prior"
       ]
     },
     "StructureSource": {
-      "description": "CHAOS-3900 P1: closed vocabulary for how a ConfirmedStructureEntry's value entered (design brief section 2.1's echo).",
+      "description": "CHAOS-3900 P1: vocabulary for how a ConfirmedStructureEntry's value entered (design brief section 2.1's echo). Open vocabulary; documented values: receipt, explicit, explicit_unattributed, carried. A client must tolerate values it does not know.",
       "type": "string",
-      "enum": [
+      "x-documented-values": [
         "receipt",
         "explicit",
         "explicit_unattributed",
@@ -1710,9 +1723,9 @@
       ]
     },
     "StructureProvenance": {
-      "description": "CHAOS-3900 P1: closed authority-tier vocabulary for a ConfirmedStructureEntry (design brief section 2.0's authority table). A distinct enum from WindowProvenance despite sharing the same three values -- each frame member owns its own authority vocabulary independently. engine_committed (v1-additive) is a carried subject_anchor member the engine bound to the frame's own anchor with no clarification ever offered.",
+      "description": "CHAOS-3900 P1: authority-tier vocabulary for a ConfirmedStructureEntry (design brief section 2.0's authority table). A distinct enum from WindowProvenance despite sharing the same three values -- each frame member owns its own authority vocabulary independently. engine_committed (v1-additive) is a carried subject_anchor member the engine bound to the frame's own anchor with no clarification ever offered. Open vocabulary; documented values: inferred_default, question_stated, clarification_confirmed, engine_committed. A client must tolerate values it does not know.",
       "type": "string",
-      "enum": [
+      "x-documented-values": [
         "inferred_default",
         "question_stated",
         "clarification_confirmed",
@@ -2454,14 +2467,14 @@
         },
         "terminal_reason": {
           "type": "string",
-          "enum": [
+          "description": "Absent (or empty) exactly when terminal_status is complete -- there is nothing to disclose. Present and one of these values on every other status; never the engine's or a model's own raw text. Open vocabulary; documented values: clarification_reason_disclosed, degraded_reason_disclosed, limitation_disclosed, warning_disclosed, undisclosed. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "clarification_reason_disclosed",
             "degraded_reason_disclosed",
             "limitation_disclosed",
             "warning_disclosed",
             "undisclosed"
-          ],
-          "description": "Absent (or empty) exactly when terminal_status is complete -- there is nothing to disclose. Present and one of these closed values on every other status; never the engine's or a model's own raw text."
+          ]
         },
         "claimed_facts_count": {
           "type": "integer",
@@ -2491,7 +2504,8 @@
         },
         "refusal_basis": {
           "type": "string",
-          "enum": [
+          "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both. `continuation_context_unverifiable` refuses a window-only continuation whose prior semantic context the server could not verify; it is not a frame refusal, and the document carries its own fixed limitation sentence. Open vocabulary; documented values: member_kind_unservable, frame_invariant_violated, unspecified, continuation_context_unverifiable, declared_kind_unmatched, organization_scope_unsupported, subject_identity_unconfirmed. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "member_kind_unservable",
             "frame_invariant_violated",
             "unspecified",
@@ -2499,8 +2513,7 @@
             "declared_kind_unmatched",
             "organization_scope_unsupported",
             "subject_identity_unconfirmed"
-          ],
-          "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a closed vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both. `continuation_context_unverifiable` refuses a window-only continuation whose prior semantic context the server could not verify; it is not a frame refusal, and the document carries its own fixed limitation sentence."
+          ]
         },
         "status_correction": {
           "type": "object",
@@ -2513,22 +2526,22 @@
           "properties": {
             "replaced_status": {
               "type": "string",
+              "description": "The status the server replaced: the model's authored status unless an earlier server step (claim-depth trim, served-status floors) had already lowered it, which that step discloses through its own limitation.",
               "enum": [
                 "complete",
                 "partial",
                 "degraded"
-              ],
-              "description": "The status the server replaced: the model's authored status unless an earlier server step (claim-depth trim, served-status floors) had already lowered it, which that step discloses through its own limitation."
+              ]
             },
             "direction": {
               "type": "string",
+              "description": "model_status paired with the served status.",
               "enum": [
                 "complete_to_partial",
                 "complete_to_degraded",
                 "partial_to_degraded",
                 "degraded_to_partial"
-              ],
-              "description": "model_status paired with the served status."
+              ]
             },
             "deciding_requirement": {
               "type": "string",
@@ -2536,14 +2549,14 @@
             },
             "deciding_outcome": {
               "type": "string",
+              "description": "That row's outcome.",
               "enum": [
                 "satisfied",
                 "narrowed",
                 "unavailable",
                 "not_applicable",
                 "not_attempted"
-              ],
-              "description": "That row's outcome."
+              ]
             }
           }
         }
@@ -2801,7 +2814,8 @@
         },
         "code": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: fact_unconfigured, fact_no_declaring_producer, fact_table_shape_undeclared, fact_scope_unexpanded, fact_read_failed, fact_provider_reported, fact_pruned, fact_narrowed, graph_endpoint_lookup_failed, graph_exact_name_candidates_truncated, graph_project_deployments_unlinked, work_item_repository_unlinked, graph_cohort_denied_by_authorization, graph_unknown_relationship_type, graph_validity_unbounded, reuse_auxiliary_refs_stripped, answer_terminated_before_attempt, population_truncated, requirement_read_not_planned, read_population_unverified, fact_read_origin_state, kind_census_truncated, graph_walk_cut_before_member, computed_population_absent, requirement_not_evaluable, graph_no_member_found, synthesis_input_bounded, synthesis_model_failed. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "fact_unconfigured",
             "fact_no_declaring_producer",
             "fact_table_shape_undeclared",
@@ -2889,7 +2903,8 @@
         },
         "kind": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: organization, team, project, repository, work_item, pull_request, deployment, incident, document, decision, episode, metric, pull_request_review, ci_pipeline_run, work_item_ref. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "organization",
             "team",
             "project",
@@ -2917,7 +2932,8 @@
         },
         "failure_class": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: model_output_invalid, synthesis_rejected, model_receipt_unrecorded, model_call_not_completed. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "model_output_invalid",
             "synthesis_rejected",
             "model_receipt_unrecorded",
@@ -2926,7 +2942,8 @@
         },
         "retry_hint": {
           "type": "string",
-          "enum": [
+          "description": "Open vocabulary; documented values: retry_may_succeed, retry_unlikely_to_help. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "retry_may_succeed",
             "retry_unlikely_to_help"
           ]
@@ -2947,13 +2964,13 @@
       "properties": {
         "stage": {
           "type": "string",
+          "description": "Which stage produced this row. Its own vocabulary, not the plan's cohort-narrowing stages: those name the three points at which the cohort is narrowed and have no member for planning or for the projection, so borrowing them would force every row to claim a stage it did not come from.",
           "enum": [
             "planning",
             "assembled_result",
             "projection",
             "reuse"
-          ],
-          "description": "Which stage produced this row. Its own vocabulary, not the plan's cohort-narrowing stages: those name the three points at which the cohort is narrowed and have no member for planning or for the projection, so borrowing them would force every row to claim a stage it did not come from."
+          ]
         },
         "requirement": {
           "type": "string",
@@ -2977,22 +2994,22 @@
         },
         "impact": {
           "type": "string",
+          "description": "What the reader loses. none exactly when the outcome is satisfied or not_applicable; any other outcome carries a real impact.",
           "enum": [
             "none",
             "scope",
             "depth",
             "dimension"
-          ],
-          "description": "What the reader loses. none exactly when the outcome is satisfied or not_applicable; any other outcome carries a real impact."
+          ]
         },
         "cause_overrun": {
           "type": "string",
+          "description": "The declared ceiling that forced the reduction, when a ceiling did.",
           "enum": [
             "fits",
             "items",
             "bytes"
-          ],
-          "description": "The declared ceiling that forced the reduction, when a ceiling did."
+          ]
         },
         "cause_coverage": {
           "type": "string",
@@ -3039,33 +3056,33 @@
       "properties": {
         "stage": {
           "type": "string",
+          "description": "Which stage took this step. The enclosing row's own vocabulary, not the plan's cohort-narrowing stages: those have no member for planning, the projection or a reuse degrade.",
           "enum": [
             "planning",
             "assembled_result",
             "projection",
             "reuse"
-          ],
-          "description": "Which stage took this step. The enclosing row's own vocabulary, not the plan's cohort-narrowing stages: those have no member for planning, the projection or a reuse degrade."
+          ]
         },
         "basis": {
           "type": "string",
+          "description": "The declared selection order that chose the survivors, when a selection ran. Absent when a ceiling forced the reduction and no order was consulted.",
           "enum": [
             "canonical_id_lexical",
             "largest_group_round_robin",
             "attention_rank",
             "overlap_aware_set_cover",
             "link_strength_then_id"
-          ],
-          "description": "The declared selection order that chose the survivors, when a selection ran. Absent when a ceiling forced the reduction and no order was consulted."
+          ]
         },
         "overrun": {
           "type": "string",
+          "description": "The declared ceiling that forced the reduction, when a ceiling did. A refinement must name at least one of basis and overrun: a reduction with no cause is the generic truncation this layer exists to replace.",
           "enum": [
             "fits",
             "items",
             "bytes"
-          ],
-          "description": "The declared ceiling that forced the reduction, when a ceiling did. A refinement must name at least one of basis and overrun: a reduction with no cause is the generic truncation this layer exists to replace."
+          ]
         },
         "coverage": {
           "type": "string",

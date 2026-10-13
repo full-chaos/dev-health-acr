@@ -1,8 +1,11 @@
 package sidecar
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -138,9 +141,7 @@ func TestClientRejectsContextPacketSchemaInvalidMutations(t *testing.T) {
 		{name: "missing_query_version", mutate: func(v *contractsv1.ContextPacket) { v.QueryVersion = "" }},
 		{name: "missing_ranking_version", mutate: func(v *contractsv1.ContextPacket) { v.RankingVersion = "" }},
 		{name: "status_invalid", mutate: func(v *contractsv1.ContextPacket) { v.Status = "bogus" }},
-		{name: "resolved_scope_resolution_invalid", mutate: func(v *contractsv1.ContextPacket) { v.ResolvedScope.Resolution = "guessed" }},
 		{name: "required_check_missing_check_id", mutate: func(v *contractsv1.ContextPacket) { v.RequiredChecks[0].CheckID = "" }},
-		{name: "freshness_watermark_invalid_status", mutate: func(v *contractsv1.ContextPacket) { v.Freshness.Watermarks[0].Status = "unknown" }},
 		{name: "coverage_degraded_reasons_nil", mutate: func(v *contractsv1.ContextPacket) { v.Coverage.DegradedReasons = nil }},
 		{name: "coverage_sources_considered_duplicate", mutate: func(v *contractsv1.ContextPacket) {
 			v.Coverage.SourcesConsidered = []string{"github", "github"}
@@ -172,12 +173,10 @@ func TestClientRejectsEvidenceSchemaInvalidMutations(t *testing.T) {
 		name   string
 		mutate func(*contractsv1.ExpandedEvidence)
 	}{
-		{name: "invalid_provenance", mutate: func(v *contractsv1.ExpandedEvidence) { v.Evidence.Provenance = "guessed" }},
 		{name: "missing_source_entity_id", mutate: func(v *contractsv1.ExpandedEvidence) { v.Evidence.Source.EntityID = "" }},
 		{name: "missing_citation", mutate: func(v *contractsv1.ExpandedEvidence) { v.Evidence.Citation = "" }},
 		{name: "nested_evidence_ref_id_too_short", mutate: func(v *contractsv1.ExpandedEvidence) { v.Evidence.EvidenceRefID = "short" }},
 		{name: "confidence_out_of_range", mutate: func(v *contractsv1.ExpandedEvidence) { v.Evidence.Confidence = 1.5 }},
-		{name: "top_level_availability_invalid", mutate: func(v *contractsv1.ExpandedEvidence) { v.Availability = "gone" }},
 		{name: "excerpt_too_long", mutate: func(v *contractsv1.ExpandedEvidence) { v.Excerpt = strings.Repeat("e", 1001) }},
 	}
 	for _, tc := range cases {
@@ -197,5 +196,90 @@ func TestClientAcceptsGoldenEvidence(t *testing.T) {
 	assertSchemaAccepts(t, "expanded_evidence.v1.schema.json", fixture)
 	if _, err := serveEvidence(t, fixture); err != nil {
 		t.Fatalf("the golden evidence fixture was rejected at the endpoint boundary: %v", err)
+	}
+}
+
+const addedVocabularyValue = "value_added_after_the_client_cached_the_schema"
+
+// TestClientAcceptsAddedVocabularyValues pins the other half of the parity
+// above: these four vocabularies are open in the schema, so a deployed sidecar
+// must keep reading a response whose server added a value.
+func TestClientAcceptsAddedVocabularyValues(t *testing.T) {
+	packetCases := []struct {
+		name   string
+		mutate func(*contractsv1.ContextPacket)
+	}{
+		{name: "resolved_scope_resolution", mutate: func(v *contractsv1.ContextPacket) {
+			v.ResolvedScope.Resolution = contractsv1.ScopeResolution(addedVocabularyValue)
+		}},
+		{name: "freshness_watermark_status", mutate: func(v *contractsv1.ContextPacket) { v.Freshness.Watermarks[0].Status = addedVocabularyValue }},
+	}
+	for _, tc := range packetCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := loadContractFixture[contractsv1.ContextPacket](t, "context_packet.v1.json")
+			tc.mutate(&fixture)
+			assertSchemaAccepts(t, "context_packet.v1.schema.json", fixture)
+			if _, err := serveContextPacket(t, fixture); err != nil {
+				t.Fatalf("a context packet carrying an added value was refused at the endpoint boundary: %v", err)
+			}
+		})
+	}
+	evidenceCases := []struct {
+		name   string
+		mutate func(*contractsv1.ExpandedEvidence)
+	}{
+		{name: "evidence_provenance", mutate: func(v *contractsv1.ExpandedEvidence) { v.Evidence.Provenance = addedVocabularyValue }},
+		{name: "expanded_evidence_availability", mutate: func(v *contractsv1.ExpandedEvidence) {
+			v.Availability = contractsv1.EvidenceAvailability(addedVocabularyValue)
+		}},
+	}
+	for _, tc := range evidenceCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := loadContractFixture[contractsv1.ExpandedEvidence](t, "expanded_evidence.v1.json")
+			tc.mutate(&fixture)
+			assertSchemaAccepts(t, "expanded_evidence.v1.schema.json", fixture)
+			if _, err := serveEvidence(t, fixture); err != nil {
+				t.Fatalf("an evidence response carrying an added value was refused at the endpoint boundary: %v", err)
+			}
+		})
+	}
+}
+
+func TestClientAcceptsAddedVocabularyValuesInAnInvestigationResult(t *testing.T) {
+	raw, err := os.ReadFile(contractFixturePath(t, "context_fabric_investigation_result.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetch := func(t *testing.T, edit func(map[string]any)) error {
+		t.Helper()
+		var doc map[string]any
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		edit(doc)
+		body, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+		}))
+		defer server.Close()
+		client, err := NewClient(newFixtureConfig(t, server), fixedCredentialSource(testBearerCanary))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.InvestigationResult(context.Background(), doc["result_id"].(string))
+		return err
+	}
+	edge := func(doc map[string]any) map[string]any {
+		return doc["paths"].([]any)[0].(map[string]any)["edges"].([]any)[0].(map[string]any)
+	}
+	if err := fetch(t, func(doc map[string]any) { edge(doc)["type"] = addedVocabularyValue }); err != nil {
+		t.Fatalf("a result whose relationship type was added after the client was built was refused: %v", err)
+	}
+	if err := fetch(t, func(doc map[string]any) { doc["status"] = addedVocabularyValue }); !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("a result with an unknown status (a frozen vocabulary) was accepted: %v", err)
 	}
 }
