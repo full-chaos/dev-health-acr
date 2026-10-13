@@ -32,6 +32,8 @@ func OrgWideScopeStatementForTest(statement string) (orgWide string, filtered, o
 	for _, candidates := range scopeCandidateSets() {
 		out = strings.ReplaceAll(out, issueLinkRowsAmongSQL(candidates), issueLinkRowsSQL)
 		out = strings.ReplaceAll(out, membershipTouchesAsOfAmongSQL(candidates), membershipTouchesAsOfAmongSQL(""))
+		out = strings.ReplaceAll(out, transitionSubjectsAmongSQL(candidates), "")
+		out = strings.ReplaceAll(out, membershipTouchesAsOfAmongSQL(candidates), membershipTouchesAsOfAmongSQL(""))
 		out = strings.ReplaceAll(out, "LEFT JOIN (SELECT work_item_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN "+candidates+") AS w ON w.work_item_id = a.work_item_id", "LEFT JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.work_item_id = a.work_item_id")
 		out = strings.ReplaceAll(out, " AND w.work_item_id IN "+candidates, "")
 		out = strings.ReplaceAll(out, " AND subject_id IN "+candidates, "")

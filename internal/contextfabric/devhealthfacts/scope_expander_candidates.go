@@ -63,3 +63,12 @@ const teamAttributedWorkItemKeysSQL = `(SELECT repo_id, work_item_id FROM work_i
 // teamOwnedProjectWorkItemsSQL is the work item rows (FINAL) of
 // teamOwnedProjectWorkItemIDsSQL, for a join on provider and project_id.
 const teamOwnedProjectWorkItemsSQL = `(SELECT work_item_id, provider, project_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + teamOwnedProjectWorkItemIDsSQL + `)`
+
+// transitionSubjectsAmongSQL restricts a project_membership_transitions read
+// to the sort-key prefixes (subject_kind, repo_id, subject_id) of the subject
+// ids candidates names, in any stored version: every row of a kept subject is
+// read, so its dedupe and window partitions are whole, and FINAL reads only
+// those subjects' granules.
+func transitionSubjectsAmongSQL(candidates string) string {
+	return ` AND (subject_kind, repo_id, subject_id) IN (SELECT subject_kind, repo_id, subject_id FROM project_membership_transitions WHERE org_id = {org_id:String} AND subject_id IN ` + candidates + `)`
+}
