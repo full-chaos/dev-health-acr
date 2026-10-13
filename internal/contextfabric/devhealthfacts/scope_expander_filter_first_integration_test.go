@@ -156,6 +156,9 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	// runPeak runs one statement as sent (a failed run is measured too: a
 	// statement over a limit is a peak, not a missing reading).
 	runPeak := func(t *testing.T, table, fragment string, captured capturedStatement) uint64 {
+		// query_log is matched on the fragment's first line: one statement
+		// runs after the mark, and the logged text need not keep newlines.
+		fragment, _, _ = strings.Cut(fragment, "\n")
 		mark := serverNowMicros(t, ctx, direct)
 		if rows, err := query.Query(ctx, captured.statement, captured.bindings); err == nil {
 			for rows.Next() {

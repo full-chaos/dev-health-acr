@@ -44,12 +44,20 @@ func TestScopeExpanderStatementsFilterToTheRequestedOriginsFirst(t *testing.T) {
 	}
 	checked := 0
 	for _, query := range client.queries {
+		// devhealthschema:not-a-production-replica: these names select the statements that read the scoped tables; they declare no table.
 		if !strings.Contains(query.statement, "work_items") && !strings.Contains(query.statement, "work_graph_issue_pr") && !strings.Contains(query.statement, "project_membership_transitions") {
 			continue
 		}
 		checked++
-		if _, filtered, clean := devhealthfacts.OrgWideScopeStatementForTest(query.statement); !filtered || !clean {
+		orgWide, filtered, clean := devhealthfacts.OrgWideScopeStatementForTest(query.statement)
+		if len(devhealthfacts.OrgWideScopeReadsForTest(orgWide)) == 0 {
+			t.Errorf("the organization-wide form carries no named organization-wide read, so this check cannot see one:\n%s", orgWide)
+		}
+		if !filtered || !clean {
 			t.Errorf("statement reads the organization's work items, links or transitions without the requested-origin filter (filtered %v, clean %v):\n%s", filtered, clean, query.statement)
+		}
+		if reads := devhealthfacts.OrgWideScopeReadsForTest(query.statement); len(reads) > 0 {
+			t.Errorf("statement still reads %v over the whole organization:\n%s", reads, query.statement)
 		}
 	}
 	// The exact count of expander statements that read those tables: a reader

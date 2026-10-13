@@ -35,3 +35,25 @@ func OrgWideScopeStatementForTest(statement string) (orgWide string, filtered, o
 	}
 	return out, out != statement, ok
 }
+
+// OrgWideScopeReadsForTest names each organization-wide read a statement
+// still carries: the whole organization's link rows, a work item table joined
+// or streamed whole, the unfiltered membership touches or transition
+// subjects.
+func OrgWideScopeReadsForTest(statement string) []string {
+	var found []string
+	for name, fragment := range map[string]string{
+		"organization link rows":           issueLinkRowsSQL,
+		"organization work items in link":  "work_items AS wi FINAL",
+		"organization touches":             membershipTouchesAsOfAmongSQL(""),
+		"organization transition subjects": "subject_kind = 'work_item'\n    )",
+		"work items joined whole":          "JOIN work_items AS w FINAL ON",
+		"organization work items joined":   "FROM work_items FINAL WHERE org_id = {org_id:String}) AS w",
+		"work items streamed whole":        "WHERE w.org_id = {org_id:String} AND p.key_resolution_count",
+	} {
+		if strings.Contains(statement, fragment) {
+			found = append(found, name)
+		}
+	}
+	return found
+}
