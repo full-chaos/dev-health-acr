@@ -137,6 +137,7 @@ func TestChaos7073SchemaPropertiesMatchGoWireKeys(t *testing.T) {
 		{"subject", node("ServedSubject"), reflect.TypeFor[ServedSubject]()},
 		{"table", node("ServedTable"), reflect.TypeFor[ServedTable]()},
 		{"withheld", node("WithheldItem"), reflect.TypeFor[WithheldItem]()},
+		{"reached from", node("ReachedFrom"), reflect.TypeFor[ReachedFrom]()},
 		{"provenance", node("Provenance"), reflect.TypeFor[Provenance]()},
 		{"natural key", items(props(node("Provenance"), "natural_keys")), reflect.TypeFor[NaturalKey]()},
 		{"coverage row", items(props(response, "coverage")), reflect.TypeFor[CoverageRow]()},
