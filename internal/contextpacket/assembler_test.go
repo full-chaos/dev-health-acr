@@ -161,7 +161,7 @@ func testEvidence(id, system string, observed time.Time) contractsv1.EvidenceRef
 	}
 	citation := "fixture"
 	if entityType == "check" {
-		citation = "failed"
+		citation = "fixture failed"
 	}
 	return contractsv1.EvidenceRef{SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: id, Source: contractsv1.EvidenceSource{System: system, EntityType: entityType, EntityID: id, DisplayLabel: id}, Provenance: "native", Confidence: 0.9, Citation: citation, ObservedAt: observed, Availability: contractsv1.EvidenceAvailable}
 }
