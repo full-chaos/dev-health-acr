@@ -321,7 +321,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		duration := timeBound.end.Sub(timeBound.start)
 		priorBound = &factTimeBound{active: true, hasStart: true, start: timeBound.start.Add(-duration), end: timeBound.start}
 	}
-	current, prior, owned, linked, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
+	current, prior, owned, linked, projectTeams, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
 	if err != nil {
 		return shapeRejected, 0, 0, err
 	}
@@ -334,7 +334,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 			ownedRepos[teamID] = append(ownedRepos[teamID], teamOwnedRepo{key: key})
 		}
 	}
-	reachedRepos, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, ids, timeBound)
+	reachedRepos, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, projectTeams, timeBound)
 	if err != nil {
 		return shapeRejected, 0, 0, err
 	}
