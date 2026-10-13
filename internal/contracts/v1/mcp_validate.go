@@ -1,6 +1,9 @@
 package v1
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // mcpRenderedMarkdownMaxLength bounds the markdown rendering wrapped around
 // every MCP read-tool response. It is intentionally smaller than
@@ -255,22 +258,21 @@ func (r MCPRecordEpisodeResponse) validate(open bool) error {
 	if !stringLengthBetween(r.Scope.Branch, 0, 512) || !stringLengthBetween(r.Scope.CommitSHA, 0, 64) {
 		return fmt.Errorf("receipt scope violates v1 bounds")
 	}
-	switch r.TranscriptDisposition {
-	case "not_submitted", "accepted", "redacted":
-	default:
+	if !slices.Contains(MCPTranscriptDispositionVocabulary(), r.TranscriptDisposition) {
 		return fmt.Errorf("invalid transcript disposition")
 	}
+	if !slices.Contains(MCPRecordEpisodeStatusVocabulary(), r.Status) {
+		return fmt.Errorf("invalid episode receipt status")
+	}
 	switch r.Status {
-	case "recorded":
+	case MCPRecordEpisodeStatusRecorded:
 		if !stringLengthBetween(r.EpisodeID, 8, 256) || r.CreatedAt == nil || r.CreatedAt.IsZero() || r.Duplicate == nil || (!validAgentEpisodeRedactionState(r.RedactionState) && !(open && openVocabularyToken(r.RedactionState))) {
 			return fmt.Errorf("recorded receipt violates v1 bounds")
 		}
-	case "no_persist":
+	case MCPRecordEpisodeStatusNoPersist:
 		if r.EpisodeID != "" || r.CreatedAt != nil || r.RedactionState != "" || r.Duplicate != nil {
 			return fmt.Errorf("no_persist receipt must not include a persisted episode")
 		}
-	default:
-		return fmt.Errorf("invalid episode receipt status")
 	}
 	return nil
 }

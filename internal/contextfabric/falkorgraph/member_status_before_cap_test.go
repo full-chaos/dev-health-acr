@@ -467,6 +467,11 @@ type poolSitePullRequest struct{ id, repo string }
 // full-chaos/alpha only.
 func discoverPoolSitePullRequests(t *testing.T, pulls []poolSitePullRequest) (contextfabric.GraphContext, *recordingTelemetry) {
 	t.Helper()
+	return discoverPoolSitePullRequestsWith(t, pulls, nil, false, "organization:acme")
+}
+
+func discoverPoolSitePullRequestsWith(t *testing.T, pulls []poolSitePullRequest, wrap func(*fakeConn) *fakeConn, withUnrelated bool, anchorID string) (contextfabric.GraphContext, *recordingTelemetry) {
+	t.Helper()
 	pullNode := func(p poolSitePullRequest) *node {
 		return &node{Properties: map[string]interface{}{propKind: "pull_request", propCanonicalID: p.id, propLabel: p.id,
 			propAuthzRepos: []string{p.repo}, propPropertyPrefix + "state": "open"}}
@@ -495,17 +500,23 @@ func discoverPoolSitePullRequests(t *testing.T, pulls []poolSitePullRequest) (co
 				return []row{{"n": pullNode(p)}}, nil
 			}
 		}
-		if id == "organization:acme" {
+		if id == anchorID {
 			return []row{fakeSubjectNodeRow("organization", id, "Acme")}, nil
 		}
 		return nil, nil
 	}}
-	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: "organization:acme", Label: "Acme"}
+	if wrap != nil {
+		fake = wrap(fake)
+	}
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: anchorID, Label: "Acme"}
 	frame := pullRequestStatusFrame("open")
 	frame.SubjectExpression.Scoped.AnchorTerms = []string{"Acme"}
 	request := ownershipRoutingRequest(frame, anchor)
 	request.ScopeAnchorKind = contextfabric.SubjectOrganization
 	request.Request.Question = "which pull requests of Acme are open?"
+	if withUnrelated {
+		request = withUnrelatedSubject(request)
+	}
 	telemetry := &recordingTelemetry{}
 	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/alpha"}}
 	result, err := newFakeAdapterWithTelemetry(t, fake, telemetry).DiscoverContext(context.Background(), principal, request)

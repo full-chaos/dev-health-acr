@@ -106,12 +106,12 @@ func (s *EpisodeStore) CreateIdempotent(ctx context.Context, principal storage.P
 	if err := ctx.Err(); err != nil {
 		return contractsv1.AgentEpisode{}, false, err
 	}
-	stored := contractsv1.AgentEpisode{AgentEpisodeCreate: cloneEpisodeCreate(create), EpisodeID: id, CreatedAt: s.now().UTC(), RedactionState: "active"}
+	stored := contractsv1.AgentEpisode{AgentEpisodeCreate: cloneEpisodeCreate(create), EpisodeID: id, CreatedAt: s.now().UTC(), RedactionState: contractsv1.AgentEpisodeRedactionActive}
 	if expiresAt != nil {
 		stored.CreatedAt = expiresAt.Add(-defaultRetention(create.RetentionClass))
 	}
 	if create.RetentionClass == "no_persist" {
-		stored = contractsv1.AgentEpisode{EpisodeID: id, RedactionState: "purged_tombstone"}
+		stored = contractsv1.AgentEpisode{EpisodeID: id, RedactionState: contractsv1.AgentEpisodeRedactionPurgedTombstone}
 	}
 	s.byID[id] = episodeRecord{
 		episode: stored, digest: digest, orgID: principal.OrgID, repoSlug: create.Repository.Slug, clientID: create.ClientEpisodeID,
@@ -125,12 +125,12 @@ func (s *EpisodeStore) Redact(_ context.Context, principal storage.Principal, ep
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, exists := s.byID[episodeID]
-	if !exists || record.orgID != principal.OrgID || record.episode.RedactionState == "purged_tombstone" || episodeExpired(record.episode, s.now().UTC()) || record.episode.AgentEpisodeCreate.Repository.Slug == "" || !episodeRepositoryAllowed(principal.RepositoryScopes, record.episode.Repository.Slug) {
+	if !exists || record.orgID != principal.OrgID || record.episode.RedactionState == contractsv1.AgentEpisodeRedactionPurgedTombstone || episodeExpired(record.episode, s.now().UTC()) || record.episode.AgentEpisodeCreate.Repository.Slug == "" || !episodeRepositoryAllowed(principal.RepositoryScopes, record.episode.Repository.Slug) {
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
-	if record.episode.RedactionState == "active" {
+	if record.episode.RedactionState == contractsv1.AgentEpisodeRedactionActive {
 		record.episode.AgentEpisodeCreate = redactedCreate(record.episode.AgentEpisodeCreate)
-		record.episode.RedactionState = "redacted"
+		record.episode.RedactionState = contractsv1.AgentEpisodeRedactionRedacted
 		record.updatedAt = s.now().UTC()
 		s.byID[episodeID] = record
 	}
@@ -173,7 +173,7 @@ func (s *EpisodeStore) ListSince(_ context.Context, orgID string, since time.Tim
 			Outcome: record.episode.Outcome, StartedAt: record.episode.StartedAt, EndedAt: record.episode.EndedAt,
 			CreatedAt: record.episode.CreatedAt, UpdatedAt: record.updatedAt,
 		}
-		if row.RedactionState == "active" {
+		if row.RedactionState == contractsv1.AgentEpisodeRedactionActive {
 			row.Goal, row.Summary, row.TaskRef = record.episode.Goal, record.episode.Summary, record.episode.TaskRef
 		}
 		result = append(result, row)
@@ -207,13 +207,13 @@ func (s *EpisodeStore) purgeExpired(before time.Time, limit int, orgID string, s
 	defer s.mu.Unlock()
 	purged := 0
 	for id, record := range s.byID {
-		if purged == limit || record.episode.RedactionState == "purged_tombstone" || record.orgID != orgID || !episodeRepositoryAllowed(scopes, record.episode.Repository.Slug) {
+		if purged == limit || record.episode.RedactionState == contractsv1.AgentEpisodeRedactionPurgedTombstone || record.orgID != orgID || !episodeRepositoryAllowed(scopes, record.episode.Repository.Slug) {
 			continue
 		}
 		expiresAt := episodeExpiry(record.episode)
 		if expiresAt != nil && !expiresAt.After(before) {
 			record.episode.AgentEpisodeCreate = contractsv1.AgentEpisodeCreate{}
-			record.episode.RedactionState = "purged_tombstone"
+			record.episode.RedactionState = contractsv1.AgentEpisodeRedactionPurgedTombstone
 			record.updatedAt = s.now().UTC()
 			s.byID[id] = record
 			purged++
@@ -267,7 +267,7 @@ func newEpisodeID() (string, error) {
 }
 
 func presentation(value contractsv1.AgentEpisode) contractsv1.AgentEpisode {
-	if value.RedactionState == "purged_tombstone" {
+	if value.RedactionState == contractsv1.AgentEpisodeRedactionPurgedTombstone {
 		return contractsv1.AgentEpisode{}
 	}
 	value.AgentEpisodeCreate = cloneEpisodeCreate(value.AgentEpisodeCreate)
@@ -290,7 +290,7 @@ func redactedCreate(value contractsv1.AgentEpisodeCreate) contractsv1.AgentEpiso
 }
 
 func episodeExpiry(value contractsv1.AgentEpisode) *time.Time {
-	if value.RedactionState == "purged_tombstone" {
+	if value.RedactionState == contractsv1.AgentEpisodeRedactionPurgedTombstone {
 		return nil
 	}
 	retention := defaultRetention(value.RetentionClass)
