@@ -166,8 +166,8 @@ func (s projectedRenderSources) carries(source contractsv1.ContextFabricRenderPo
 // breakdown the projection should claim to have made.
 func rankingTableCarriesDriverWeight(table []contractsv1.ContextFabricClaimedFactRow, canonicalID, signal string, value float64) bool {
 	for _, row := range table {
-		id, ok := row.Fields["team_canonical_id"]
-		if !ok || id.String == nil || *id.String != canonicalID {
+		id, ok := contractsv1.RankingRowSubjectID(row)
+		if !ok || id != canonicalID {
 			continue
 		}
 		for key, cell := range row.Fields {

@@ -25,6 +25,10 @@ const (
 	// when no further fact could be removed or the pass limit was reached.
 	// The investigation ends with ErrModelInputTooLarge.
 	SynthesisInputBoundExhausted SynthesisInputBoundOutcome = "exhausted"
+	// SynthesisInputBoundShareExceeded: the smallest input is above its
+	// preferred share of the caller's budget and was served whole because the
+	// input, its envelope and the answer floor fit the budget.
+	SynthesisInputBoundShareExceeded SynthesisInputBoundOutcome = "share_exceeded"
 )
 
 // SynthesisInputBoundEvent reports one bounding decision. Counts and a closed

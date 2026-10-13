@@ -187,7 +187,7 @@ func TestEveryMergeRefusalIsATypedFailureThatWritesNothing(t *testing.T) {
 			if failure.State != SourceUnavailable || failure.Reason != factResultRejectedReason {
 				t.Fatalf("failure = %+v, want state %q and the fixed sentence", failure, SourceUnavailable)
 			}
-			if state, reason := classifyFactReadError(rejection); state != SourceUnavailable || reason != factResultRejectedReason {
+			if state, reason := classifyFactReadError(FactMetrics, rejection); state != SourceUnavailable || reason != factResultRejectedReason {
 				t.Fatalf("classifyFactReadError = (%q, %q), want (%q, %q)", state, reason, SourceUnavailable, factResultRejectedReason)
 			}
 			if got := errors.Is(rejection, ErrFactTableMeasureNotNumeric); got != testCase.wantNonNumeric {

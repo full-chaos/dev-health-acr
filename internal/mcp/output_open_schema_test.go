@@ -162,7 +162,10 @@ func TestCachedOutputSchemaOfMainRejectsAddedFieldAndCurrentAdmitsIt(t *testing.
 			}
 			cached, current := cachedOutputSchema(t, cachedRaw), cachedOutputSchema(t, currentRaw)
 
-			exampleRaw, err := os.ReadFile(repopath.Path(t, "contracts", "examples", "v1", example))
+			// The payload is frozen with the cached schema: a contract change
+			// may show a new field in the live example without breaking the
+			// simulation of a client that cached the old schema.
+			exampleRaw, err := os.ReadFile(filepath.Join("testdata", "cached_output_payloads_main", example))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -171,7 +174,7 @@ func TestCachedOutputSchemaOfMainRejectsAddedFieldAndCurrentAdmitsIt(t *testing.
 				t.Fatal(err)
 			}
 			if err := cached.Validate(root); err != nil {
-				t.Fatalf("cached schema of main rejects the unchanged example: %v", err)
+				t.Fatalf("cached schema of main rejects its frozen payload: %v", err)
 			}
 
 			root["added_by_a_newer_server"] = "x"

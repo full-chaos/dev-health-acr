@@ -38,13 +38,13 @@ func TestFactsRouteMixedSubjectProjectRowCarriesItsOwnCause(t *testing.T) {
 					repo = &document.Coverage[i]
 				}
 			}
-			if repo == nil || repo.Outcome != directread.OutcomeReadNoFact || repo.KindState != "truncated" || !strings.Contains(repo.Reason, tc.wantCause) || !strings.HasPrefix(repo.Reason, "narrowed:subject_kind_unsupported: 1 subject(s) were not queried") {
+			if repo == nil || repo.Outcome != directread.OutcomeReadNoFact || repo.KindState != "truncated" || !strings.Contains(repo.Reason, tc.wantCause) || !strings.HasPrefix(repo.Reason, "1 subject(s) were not queried") {
 				t.Fatalf("repository row changed: %+v", repo)
 			}
 			if project == nil {
 				t.Fatalf("no project row: %s", response.Body.String())
 			}
-			if project.Outcome != directread.OutcomeUnavailable || project.KindState != tc.wantState || !strings.Contains(project.Reason, tc.wantCause) || strings.Contains(project.Reason, "narrowed:") {
+			if project.Outcome != directread.OutcomeUnavailable || project.KindState != tc.wantState || !strings.Contains(project.Reason, tc.wantCause) || strings.Contains(project.Reason, "were not queried") {
 				t.Fatalf("project row %+v, want unavailable/%s naming %q", *project, tc.wantState, tc.wantCause)
 			}
 		})
