@@ -778,16 +778,20 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// (CHAOS-5168, r1 finding 1): every walk appends into the same
 		// resolvedNodes that becomes cohortNodes, so this is an OR across
 		// subjects, never the last one's value.
-		hopWalkTruncated = hopWalkTruncated || walkTruncated
+		isTeamAnchor := false
+		for _, anchor := range anchoredMembers {
+			isTeamAnchor = isTeamAnchor || anchor == subject
+		}
+		// An anchor's own read is the member set; another subject's walk adds
+		// no member of the kind, so its cut is not a cut of this pool.
+		if !teamAnchoredMembers || isTeamAnchor {
+			hopWalkTruncated = hopWalkTruncated || walkTruncated
+		}
 		if deploymentAnchor != nil && subject == *deploymentAnchor {
 			deploymentAnchorReadCut = walkTruncated
 		}
 		edgeFilters.Authz += filters.Authz
 		edgeFilters.TemporalWindow += filters.TemporalWindow
-		isTeamAnchor := false
-		for _, anchor := range anchoredMembers {
-			isTeamAnchor = isTeamAnchor || anchor == subject
-		}
 		if !teamAnchoredMembers || isTeamAnchor {
 			edgeFilters.mergeReachDenied(filters.ReachDenied)
 		}

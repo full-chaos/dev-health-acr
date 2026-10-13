@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -32,14 +33,18 @@ func pullRequestStatusCensus(declaredKind contextfabric.SubjectKind, status memb
 }
 
 // statusCensusCypher reads the organization's pull requests, in id order,
-// keeping those the clause keeps inside the read, and for a restricted caller
-// only those its grants can admit (a necessary condition of the per-node
-// decision), so neither non-matching nor unreadable pull requests fill the
-// pages before the ones that count.
-func statusCensusCypher(clause nodeStatusClause, temporal temporalFilter, restricted, projected bool) string {
+// keeping those the clause keeps inside the read, and only those the caller's
+// grants and the requested repository scope can admit (necessary conditions of
+// the per-node decision), so neither non-matching nor unreadable pull requests
+// fill the pages before the ones that count.
+func statusCensusCypher(clause nodeStatusClause, temporal temporalFilter, restricted, scoped, projected bool) string {
+	b := treeNodeVar{name: "b", position: treePullRequest}
 	grant := ""
 	if restricted {
-		grant = treeNodeVar{name: "b", position: treePullRequest}.grantClause()
+		grant = b.grantClause()
+	}
+	if scoped {
+		grant += " AND " + b.repositoryMatchClause("scope")
 	}
 	column := "b"
 	if projected {
@@ -49,17 +54,40 @@ func statusCensusCypher(clause nodeStatusClause, temporal temporalFilter, restri
 		labelSubject, propOrgID, propKind, clause.predicate("b"), temporal.predicate("b"), grant, column, propCanonicalID)
 }
 
+// requestedRepositoryPushdown is the requested repository scope as selectors a
+// read can push down: nil when it narrows nothing a read can state (no
+// selector, a "*" selector, or only repository-absence sentinels), and the
+// per-node decision alone applies it.
+func requestedRepositoryPushdown(scope contextfabric.RequestedScope) []string {
+	var selectors []string
+	for _, selector := range scope.RepositorySlugs {
+		trimmed := strings.TrimSpace(selector)
+		if trimmed == "*" {
+			return nil
+		}
+		if contractsv1.ContextFabricIsRepositoryAbsenceSentinel(trimmed) {
+			continue
+		}
+		selectors = append(selectors, selector)
+	}
+	return selectors
+}
+
 // statusCensusPage reads one page of the status census. A census hit has no
 // edge: the organization reaches its pull requests by belonging, not by a
 // relationship.
-func (a *Adapter) statusCensusPage(ctx context.Context, key, orgID string, principal storage.Principal, clause nodeStatusClause, temporal temporalFilter, projected bool, skip, limit int) ([]walkHit, int, error) {
+func (a *Adapter) statusCensusPage(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, clause nodeStatusClause, temporal temporalFilter, projected bool, skip, limit int) ([]walkHit, int, error) {
 	restricted := needsProjectReach(principal)
+	requested := requestedRepositoryPushdown(scope)
 	params := temporal.bind(map[string]interface{}{"org": orgID, "toKind": string(contextfabric.SubjectPullRequest), "skip": skip, "limit": limit})
 	clause.bind(params)
 	if restricted {
 		linkSegmentGrants(params, principal)
 	}
-	rows, err := a.api.query(ctx, key, statusCensusCypher(clause, temporal, restricted, projected), params, true)
+	if len(requested) > 0 {
+		bindRepositoryMatch(params, "scope", requested)
+	}
+	rows, err := a.api.query(ctx, key, statusCensusCypher(clause, temporal, restricted, len(requested) > 0, projected), params, true)
 	if err != nil {
 		return nil, 0, safeDependencyError("read the pull request status census", err)
 	}
@@ -81,7 +109,7 @@ func (a *Adapter) statusCensusMembers(ctx context.Context, key, orgID string, pr
 	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit, frontierLimit: collectLimit, status: status}
 	census := func(clause nodeStatusClause, projected bool) statusPage {
 		return func(skip, limit int) ([]walkHit, int, error) {
-			return a.statusCensusPage(ctx, key, orgID, principal, clause, temporal, projected, skip, limit)
+			return a.statusCensusPage(ctx, key, orgID, principal, scope, clause, temporal, projected, skip, limit)
 		}
 	}
 	hits, err := a.statusPagedHits(ctx, key, orgID, state, treeHop{}, []statusPage{census(status.clause(), false)}, collectLimit)
@@ -90,7 +118,7 @@ func (a *Adapter) statusCensusMembers(ctx context.Context, key, orgID string, pr
 	}
 	state.members(treeHop{}, hits, nil)
 	out.status.kept = len(out.nodes)
-	out.status.reached = out.status.kept > 0
+	out.status.reached = out.status.kept > 0 || out.status.read > 0
 	if !out.status.reached {
 		probe, _, err := census(nodeStatusClause{}, true)(0, max(collectLimit, 1))
 		if err != nil {

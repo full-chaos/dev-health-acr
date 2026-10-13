@@ -119,9 +119,9 @@ type memberStatusWalk struct {
 	// applied: the walk's member read carried the predicate.
 	applied bool
 	// read counts the distinct authorized members the status-narrowed read
-	// returned (for a review status, the open pull requests read), and kept
-	// the members the walk served.
-	read, kept int
+	// returned (for a review status, the open pull requests read), held those
+	// of them holding the status, and kept the members the walk served.
+	read, held, kept int
 	// reached: the anchor reaches at least one authorized member of the kind,
 	// whatever its status.
 	reached bool
@@ -228,7 +228,7 @@ func (a *Adapter) statusPagedHits(ctx context.Context, key, orgID string, state 
 	read := map[string]bool{}
 	kept := map[string]bool{}
 	pages := 0
-	defer func() { state.out.status.read = len(read) }()
+	defer func() { state.out.status.read, state.out.status.held = len(read), len(kept) }()
 	for _, source := range sources {
 		for skip := 0; ; skip += pageSize {
 			if state.collectLimit > 0 && len(kept) > state.collectLimit {
@@ -288,7 +288,7 @@ func (a *Adapter) statusPagedHits(ctx context.Context, key, orgID string, state 
 func (state treeWalkState) decidePoolCut(count func() (int, bool, error)) error {
 	out := state.out
 	out.status.matched = out.status.kept
-	capped := out.status.capFilled && !state.status.reviewDerived()
+	out.status.reached = out.status.reached || out.status.read > 0
 	if !out.status.pageCapped && !out.status.capFilled {
 		return nil
 	}
@@ -296,15 +296,19 @@ func (state treeWalkState) decidePoolCut(count func() (int, bool, error)) error 
 	if err != nil {
 		return err
 	}
-	if capped {
+	out.status.reached = out.status.reached || pool > 0
+	if !poolCut && pool == out.status.read {
+		// Every authorized member under the read's clause was read and
+		// decided: a filled cap cut a decided set, never a pool.
+		out.status.matched = max(out.status.held, out.status.kept)
+		return nil
+	}
+	if out.status.capFilled && !state.status.reviewDerived() {
 		out.status.matched, out.status.matchedAtLeast = max(pool, out.status.kept), poolCut
 		return nil
 	}
 	if poolCut {
 		pool = -1
-	}
-	if out.status.pageCapped && !out.status.capFilled && pool >= 0 && pool == out.status.read {
-		return nil
 	}
 	out.status.poolCut = true
 	out.status.pool = pool
@@ -321,7 +325,7 @@ func (a *Adapter) finishMemberStatus(ctx context.Context, key, orgID string, sta
 	out := state.out
 	out.status.applied = true
 	out.status.kept = len(out.nodes)
-	out.status.reached = out.status.kept > 0
+	out.status.reached = out.status.kept > 0 || out.status.read > 0
 	if !out.status.reached {
 		probe := unfiltered
 		probe.projected = true
@@ -382,7 +386,7 @@ func (a *Adapter) finishLinkMemberStatus(ctx context.Context, key, orgID string,
 	out := state.out
 	out.status.applied = true
 	out.status.kept = len(out.linkNodes)
-	out.status.reached = out.status.kept > 0
+	out.status.reached = out.status.kept > 0 || out.status.read > 0
 	if !out.status.reached {
 		probe := state
 		probe.out = &treeWalk{}

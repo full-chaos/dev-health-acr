@@ -17,6 +17,18 @@ import (
 type organizationPullRequest struct {
 	id, repo, state string
 	reviewed        bool
+	// project, when set, is the one project the pull request's authorization
+	// names.
+	project string
+}
+
+func organizationPullRequestNode(p organizationPullRequest) *node {
+	properties := map[string]interface{}{propKind: "pull_request", propCanonicalID: p.id, propLabel: p.id,
+		propAuthzRepos: []string{p.repo}, propPropertyPrefix + "state": p.state}
+	if p.project != "" {
+		properties[propAuthzProjects] = []string{p.project}
+	}
+	return &node{Properties: properties}
 }
 
 // organizationPullRequests is n pull requests in id order: the first merged
@@ -38,12 +50,16 @@ func organizationPullRequests(n, merged int) []organizationPullRequest {
 func statusCensusRows(pulls []organizationPullRequest, pullNode func(organizationPullRequest) *node, params map[string]interface{}) []row {
 	states, _ := params["bstatus"].([]interface{})
 	grants, restricted := params["grantRaw"].([]interface{})
+	selectors, scoped := params["scopeRaw"].([]interface{})
 	var rows []row
 	for _, p := range pulls {
 		if len(states) > 0 && !containsValue(states, p.state) {
 			continue
 		}
 		if restricted && !containsValue(grants, p.repo) {
+			continue
+		}
+		if scoped && !containsValue(selectors, p.repo) {
 			continue
 		}
 		rows = append(rows, row{"b": pullNode(p)})
@@ -107,10 +123,7 @@ func investigateOrganizationPullRequestsWith(t *testing.T, synthesizer contextfa
 	for _, p := range pulls {
 		byID[p.id] = p
 	}
-	pullNode := func(p organizationPullRequest) *node {
-		return &node{Properties: map[string]interface{}{propKind: "pull_request", propCanonicalID: p.id, propLabel: p.id,
-			propAuthzRepos: []string{p.repo}, propPropertyPrefix + "state": p.state}}
-	}
+	pullNode := organizationPullRequestNode
 	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		switch {
 		case strings.Contains(cypher, "fulltext"):
@@ -484,7 +497,7 @@ func TestOnlyTheCallersOrganizationAnchorsTheStatusCensus(t *testing.T) {
 // for a restricted caller, the grants narrow the read before its LIMIT.
 func TestTheStatusCensusCarriesTheStatusAndTheGrantsInsideItsRead(t *testing.T) {
 	clause := memberStatusPredicate{kind: contextfabric.SubjectPullRequest, status: "awaiting_review"}.clause()
-	cypher := statusCensusCypher(clause, temporalFilter{}, true, false)
+	cypher := statusCensusCypher(clause, temporalFilter{}, true, true, false)
 	limit := strings.Index(cypher, "LIMIT")
 	for _, want := range []string{"b." + propPropertyPrefix + "state IN $bstatus", "$grantRaw"} {
 		at := strings.Index(cypher, want)
@@ -492,7 +505,7 @@ func TestTheStatusCensusCarriesTheStatusAndTheGrantsInsideItsRead(t *testing.T) 
 			t.Fatalf("census read %q does not carry %q before its LIMIT", cypher, want)
 		}
 	}
-	if strings.Contains(statusCensusCypher(clause, temporalFilter{}, false, false), "$grantRaw") {
+	if strings.Contains(statusCensusCypher(clause, temporalFilter{}, false, false, false), "$grantRaw") {
 		t.Fatal("an unrestricted caller's census read carries a grant clause")
 	}
 	if got := clause.values; !reflect.DeepEqual(got, []interface{}{contextfabric.PullRequestStatusOpen}) {
@@ -569,5 +582,139 @@ func TestMoreMatchesThanTheCapAreACappedSetNotACut(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestARequestedScopeNarrowsTheCensusRead: the caller may read every
+// repository but asks about full-chaos/alpha. 300 open pull requests of
+// acme/other come first by id, then ten of alpha. The read carries the
+// requested scope, so the other repository's pull requests do not fill its
+// pages, and the ten are served, complete.
+func TestARequestedScopeNarrowsTheCensusRead(t *testing.T) {
+	scope := contextfabric.RequestedScope{RepositorySlugs: []string{"full-chaos/alpha"}}
+	for _, anchored := range []bool{true, false} {
+		t.Run(fmt.Sprintf("anchored=%v", anchored), func(t *testing.T) {
+			pulls := organizationPullRequests(310, 0)
+			want := []string{}
+			for i := range pulls {
+				if i < 300 {
+					pulls[i].repo = "acme/other"
+					continue
+				}
+				want = append(want, pulls[i].id)
+			}
+			result, _ := investigateOrganizationPullRequests(t, pulls, "open", storage.Principal{OrgID: "org-1"}, anchored, scope)
+			if got := servedCohortIDs(result); !reflect.DeepEqual(got, want) {
+				t.Fatalf("served %v (status %q, limitations %q), want %v", got, result.Status, result.Limitations, want)
+			}
+			if result.Status != contextfabric.InvestigationComplete || !result.Cohort.Complete || result.Cohort.Truncated {
+				t.Fatalf("status %q complete=%v truncated=%v, want a complete answer", result.Status, result.Cohort.Complete, result.Cohort.Truncated)
+			}
+		})
+	}
+}
+
+// TestAReviewStatusReadThatDecidedNoneIsAMeasuredZero: the caller asks about
+// project alpha, which no read can push down. The first 25 open pull requests
+// by id belong to another project, the last five to alpha, all approved. The
+// review read reached the five and decided that none awaits a review: an
+// answer of zero, complete, whatever the first unfiltered pull requests are.
+func TestAReviewStatusReadThatDecidedNoneIsAMeasuredZero(t *testing.T) {
+	scope := contextfabric.RequestedScope{ProjectIDs: []string{"project:alpha"}}
+	for _, anchored := range []bool{true, false} {
+		t.Run(fmt.Sprintf("anchored=%v", anchored), func(t *testing.T) {
+			pulls := organizationPullRequests(30, 0)
+			for i := range pulls {
+				pulls[i].project, pulls[i].reviewed = "project:other", false
+				if i >= 25 {
+					pulls[i].project, pulls[i].reviewed = "project:alpha", true
+				}
+			}
+			result, _ := investigateOrganizationPullRequests(t, pulls, "awaiting_review", storage.Principal{OrgID: "org-1"}, anchored, scope)
+			if result.Status != contextfabric.InvestigationComplete {
+				t.Fatalf("status = %q (limitations %q), want complete: the read decided five pull requests", result.Status, result.Limitations)
+			}
+			if result.Cohort == nil || len(result.Cohort.Members) != 0 || !result.Cohort.Complete {
+				t.Fatalf("cohort = %+v, want an empty, complete pull request set", result.Cohort)
+			}
+		})
+	}
+}
+
+// TestAReviewReadThatDecidedEveryOpenPullRequestIsNotACut: 26 open pull
+// requests, none reviewed, and a member cap of 25. The read decided all 26, so
+// the answer lists 25 of 26 and says nothing was left unchecked.
+func TestAReviewReadThatDecidedEveryOpenPullRequestIsNotACut(t *testing.T) {
+	for _, anchored := range []bool{true, false} {
+		t.Run(fmt.Sprintf("anchored=%v", anchored), func(t *testing.T) {
+			pulls := organizationPullRequests(26, 0)
+			for i := range pulls {
+				pulls[i].reviewed = false
+			}
+			result, _ := investigateOrganizationPullRequests(t, pulls, "awaiting_review", storage.Principal{OrgID: "org-1"}, anchored)
+			if result.Cohort == nil || len(result.Cohort.Members) != 25 || result.Cohort.Population != 26 || result.Cohort.PopulationLowerBound {
+				t.Fatalf("cohort = %+v, want 25 of exactly 26", result.Cohort)
+			}
+			if result.Status != contextfabric.InvestigationComplete {
+				t.Fatalf("status = %q, want complete", result.Status)
+			}
+			for _, limitation := range result.Limitations {
+				if contractsv1.IsContextFabricMemberStatusPoolCutLimitation(limitation) {
+					t.Fatalf("limitations %q state a cut over a read that decided every open pull request", result.Limitations)
+				}
+			}
+		})
+	}
+}
+
+// TestAnotherSubjectsCutWalkDoesNotCutTheOrganizationsPullRequests: the
+// question also commits a project whose generic walk is cut at its edge cap.
+// That walk adds no pull request to the organization's member set, so the
+// census's complete answer stays complete.
+func TestAnotherSubjectsCutWalkDoesNotCutTheOrganizationsPullRequests(t *testing.T) {
+	pulls := organizationPullRequests(6, 0)
+	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "subject_kind = $toKind"):
+			return statusCensusRows(pulls, organizationPullRequestNode, params), nil
+		case strings.Contains(cypher, "UNION"):
+			if params["id"] != "p1" {
+				return nil, nil
+			}
+			var rows []row
+			for i := 0; i < 30; i++ {
+				rows = append(rows, row{"r": &edge{Properties: map[string]interface{}{
+					propRelationType: "BLOCKS", propRelationshipID: fmt.Sprintf("rel_%03d", i), propEvidenceRefs: []string{"evidence"},
+				}}, "srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": fmt.Sprintf("team_%03d", i)})
+			}
+			return rows, nil
+		case strings.Contains(cypher, "fulltext"), strings.HasPrefix(cypher, "UNWIND $ids"):
+			return nil, nil
+		}
+		id, _ := params["id"].(string)
+		switch {
+		case id == "organization:org-1":
+			return []row{fakeSubjectNodeRow("organization", id, "Acme")}, nil
+		case id == "p1":
+			return []row{fakeSubjectNodeRow("project", id, "Origin")}, nil
+		case strings.HasPrefix(id, "team_"):
+			return []row{fakeSubjectNodeRow("team", id, id)}, nil
+		}
+		return nil, nil
+	}}
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: "organization:org-1", Label: "Acme"}
+	frame := pullRequestStatusFrame("open")
+	frame.SubjectExpression.Scoped.AnchorTerms = []string{"Acme"}
+	request := ownershipRoutingRequest(frame, anchor)
+	request.Resolution.Committed = append(request.Resolution.Committed, contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "p1", Label: "Origin"})
+	request.ScopeAnchorKind = contextfabric.SubjectOrganization
+	request.Request.Question = "which pull requests of Acme are open?"
+	telemetry := &recordingTelemetry{}
+	result, err := newFakeAdapterWithTelemetry(t, fake, telemetry).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != 6 || !result.Cohort.Complete || result.Cohort.Truncated {
+		t.Fatalf("cohort complete=%v truncated=%v members=%d (pool lines %+v), want the six open pull requests, complete", result.Cohort != nil && result.Cohort.Complete, result.Cohort != nil && result.Cohort.Truncated, len(result.Cohort.Members), telemetry.cohortKindBases)
 	}
 }
