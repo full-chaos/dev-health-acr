@@ -58,7 +58,7 @@ FactActualCompletion
   fields             archived_items cancelled_count completed completed_at completed_count completion_ratio counted_work_items member_kind rollup_basis unknown_status_count work_item_count
 
 FactBlockers
-  reached_funcs      142
+  reached_funcs      143
   dynamic_key_sites  0
   leaked_call_sites  21
     leak interface_method     12
@@ -66,7 +66,7 @@ FactBlockers
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         1
-    calls followed            916
+    calls followed            913
     calls accounted           13
     calls not_a_call          10
     calls excluded_by_design  228
