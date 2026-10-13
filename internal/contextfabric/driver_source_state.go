@@ -27,7 +27,7 @@ func groundedDriverSourceStates(drivers []DriverJudgment, claims []ClaimedFact, 
 			if !ok {
 				continue
 			}
-			if fact, outcome := groundClaim(facts, claim); outcome == claimGrounded && fact.SourceState == SourceTruncated {
+			if claimRestsOnTruncatedFact(facts, claim) {
 				derived = SourceTruncated
 				break
 			}
@@ -38,4 +38,22 @@ func groundedDriverSourceStates(drivers []DriverJudgment, claims []ClaimedFact, 
 		}
 	}
 	return out, corrected
+}
+
+func claimRestsOnTruncatedFact(facts []CanonicalFact, claim ClaimedFact) bool {
+	if _, outcome := groundClaim(facts, claim); outcome != claimGrounded {
+		return false
+	}
+	if len(claim.DerivedFrom) == 0 {
+		fact, _ := groundClaim(facts, claim)
+		return fact.SourceState == SourceTruncated
+	}
+	for _, input := range claim.DerivedFrom {
+		for _, fact := range facts {
+			if fact.ID != "" && fact.ID == input.FactID && fact.SourceState == SourceTruncated {
+				return true
+			}
+		}
+	}
+	return false
 }
