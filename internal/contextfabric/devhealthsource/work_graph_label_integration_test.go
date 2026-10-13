@@ -242,6 +242,7 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 	filler := workGraphStatementCost(t, 125000, false)
 	noise := workGraphStatementCost(t, 50000, true)
 	t.Logf("work_graph.v1 cost: base %+v, +150k work items %+v, +20k edges and pull requests %+v", base, filler, noise)
+	t.Errorf("NUMBERS (throwaway): base %+v | +150k work items %+v | +20k edges and pull requests %+v", base, filler, noise)
 	for name, stage := range map[string]workGraphCost{"base": base, "+work items": filler, "+edges and pull requests": noise} {
 		if stage.memory >= ceiling || stage.gateMemory >= ceiling {
 			t.Errorf("%s: work_graph.v1 peaked at %d bytes and its issue gate at %d, want under %d", name, stage.memory, stage.gateMemory, ceiling)

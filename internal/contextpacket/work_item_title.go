@@ -45,7 +45,10 @@ const workGraphIssueTitlesSQL = `SELECT w.work_item_id AS id, if(uniqExact(w.tit
 const workGraphIssueTitlesMapSQL = `(SELECT mapFromArrays(groupArray(id), groupArray(title)) FROM (` + workGraphIssueTitlesSQL + `))`
 
 func workGraphIssueTitleOf(id string) string {
-	return "arrayElement(" + workGraphIssueTitlesMapSQL + ", " + id + ")"
+	if id == "e.source_id" {
+		return "wis.title"
+	}
+	return "wit.title"
 }
 
 // RepositorylessIssueReader is optionally implemented by an executor that can
