@@ -950,7 +950,7 @@ unit_mismatched_shards="$tmpdir/unit-mismatched-shards.yml"
 awk '
   /^  unit:/ { in_unit=1 }
   in_unit && /^  [A-Za-z0-9_-]+:/ && !/^  unit:/ { in_unit=0 }
-  in_unit && /shard: \[1, 2, 3, 4, 5, 6\]/ { sub(/shard: \[1, 2, 3, 4, 5, 6\]/, "shard: [1, 2, 3]") }
+  in_unit && /shard: \[1, 2, 3, 4, 5, 6, 7, 8\]/ { sub(/shard: \[1, 2, 3, 4, 5, 6, 7, 8\]/, "shard: [1, 2, 3]") }
   { print }
 ' "$workflow" > "$unit_mismatched_shards"
 assert_check_fails 'shrank the unit matrix to 3 shards without updating test-shard.sh total' \
@@ -964,24 +964,24 @@ unit_drops_dedicated_leg="$tmpdir/unit-drops-dedicated-leg.yml"
 awk '
   /^  unit:/ { in_unit=1 }
   in_unit && /^  [A-Za-z0-9_-]+:/ && !/^  unit:/ { in_unit=0 }
-  in_unit && /shard: \[1, 2, 3, 4, 5, 6\]/ { sub(/shard: \[1, 2, 3, 4, 5, 6\]/, "shard: [1, 2, 3, 4, 6]") }
+  in_unit && /shard: \[1, 2, 3, 4, 5, 6, 7, 8\]/ { sub(/shard: \[1, 2, 3, 4, 5, 6, 7, 8\]/, "shard: [1, 2, 3, 4, 6, 7, 8]") }
   { print }
 ' "$workflow" > "$unit_drops_dedicated_leg"
 cmp -s "$workflow" "$unit_drops_dedicated_leg" && { printf 'NEGATIVE CONTROL SETUP FAILED: unit_drops_dedicated_leg did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'removed the unit matrix'"'"'s dedicated leg (shard 5), leaving the round-robin legs intact' \
   check_unit_shard_agreement "$unit_drops_dedicated_leg"
 
-# (i2c) drop ONLY the heavy-half leg (6): devhealthfacts would then run its
+# (i2c) drop ONLY the heavy-half leg (8): devhealthfacts would then run its
 # rest half alone and the heavy tests in no non-race leg, every job green.
 unit_drops_heavy_half_leg="$tmpdir/unit-drops-heavy-half-leg.yml"
 awk '
   /^  unit:/ { in_unit=1 }
   in_unit && /^  [A-Za-z0-9_-]+:/ && !/^  unit:/ { in_unit=0 }
-  in_unit && /shard: \[1, 2, 3, 4, 5, 6\]/ { sub(/shard: \[1, 2, 3, 4, 5, 6\]/, "shard: [1, 2, 3, 4, 5]") }
+  in_unit && /shard: \[1, 2, 3, 4, 5, 6, 7, 8\]/ { sub(/shard: \[1, 2, 3, 4, 5, 6, 7, 8\]/, "shard: [1, 2, 3, 4, 5, 6, 7]") }
   { print }
 ' "$workflow" > "$unit_drops_heavy_half_leg"
 cmp -s "$workflow" "$unit_drops_heavy_half_leg" && { printf 'NEGATIVE CONTROL SETUP FAILED: unit_drops_heavy_half_leg did not change the workflow\n' >&2; exit 1; }
-assert_check_fails 'removed the unit matrix'"'"'s heavy-half leg (shard 6)' \
+assert_check_fails 'removed the unit matrix'"'"'s heavy-half leg (shard 8)' \
   check_unit_shard_agreement "$unit_drops_heavy_half_leg"
 
 # (i3) drop --with-isolated from the unit job's invocation. The matrix still
@@ -1023,13 +1023,13 @@ assert_check_fails 'gated the reports job on success(), so a failing shard skips
 
 # One subcommand's -expect edited alone.
 reports_expect_drift="$tmpdir/reports-expect-drift.yml"
-sed 's/mergetestreports coverage -dir .tmp\/unit-shards -expect 6/mergetestreports coverage -dir .tmp\/unit-shards -expect 5/' \
+sed 's/mergetestreports coverage -dir .tmp\/unit-shards -expect 8/mergetestreports coverage -dir .tmp\/unit-shards -expect 7/' \
   "$workflow" > "$reports_expect_drift"
 cmp -s "$workflow" "$reports_expect_drift" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_expect_drift did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'changed only the coverage merge'"'"'s -expect' check_reports_job "$reports_expect_drift"
 
 # The unit matrix changes size and the reports job does not follow.
-assert_check_fails 'shrank the unit matrix to 3 shards while reports still expects 5' \
+assert_check_fails 'shrank the unit matrix to 3 shards while reports still expects 8' \
   check_reports_job "$unit_mismatched_shards"
 
 # The behaviour step deleted: only the greps would be left standing guard.
@@ -1043,7 +1043,7 @@ cmp -s "$workflow" "$reports_without_crosscheck" && { printf 'NEGATIVE CONTROL S
 assert_check_fails 'deleted the crosscheck step from the reports job' check_reports_job "$reports_without_crosscheck"
 
 reports_crosscheck_expect_drift="$tmpdir/reports-crosscheck-expect-drift.yml"
-sed 's/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 6/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 5/' \
+sed 's/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 8/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 7/' \
   "$workflow" > "$reports_crosscheck_expect_drift"
 cmp -s "$workflow" "$reports_crosscheck_expect_drift" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_crosscheck_expect_drift did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'changed only the crosscheck step'"'"'s -expect' check_reports_job "$reports_crosscheck_expect_drift"
