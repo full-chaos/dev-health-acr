@@ -1001,7 +1001,11 @@ import (
 // v197 -> v198: a project status answer serves a truncated readiness fact as a
 // partial estimate coverage driver with source_state truncated. An answer saved
 // under v197 has no such driver.
-const QueryVersion = "devhealthfacts.clickhouse.v198"
+//
+// v198 -> v199: the scope expander names every requested origin that reached a
+// target, so a multi-root answer derives each shared target from every root.
+// An answer saved under v198 attributed it to one root only.
+const QueryVersion = "devhealthfacts.clickhouse.v199"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
