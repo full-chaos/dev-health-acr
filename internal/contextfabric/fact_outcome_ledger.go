@@ -129,6 +129,9 @@ func (bundle *CanonicalFactBundle) recordOutcome(kind FactKind, branch factReadO
 		}
 		if len(result.SubjectReasons) > 0 {
 			outcome.MemberReasons = maps.Clone(result.SubjectReasons)
+			for key, reason := range outcome.MemberReasons {
+				outcome.MemberReasons[key] = withoutProviderPackageLabel(reason)
+			}
 		}
 		if result.Evaluation != nil && len(result.Evaluation.Members) > 0 {
 			outcome.Members = make(map[string]string, len(result.Evaluation.Members))

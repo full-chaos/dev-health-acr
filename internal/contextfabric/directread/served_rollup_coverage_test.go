@@ -180,3 +180,23 @@ func TestKindOnlyReachableByExpansionServesAPlainReasonAndAStructuredNote(t *tes
 		t.Errorf("row %+v, want unavailable with the expansion outcome on the structured note", row)
 	}
 }
+
+func TestSubjectOwnReasonIsServedWithoutTheProviderPackageLabel(t *testing.T) {
+	empty := subject(contractsv1.ContextFabricSubjectTeam, "team:empty")
+	provider := &stubProvider{capability: deficiencyLikeCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		return contextfabric.FactProviderResult{
+			State:          contextfabric.SourceNotApplicable,
+			Reason:         "devhealthfacts: the team owns no repository in synced ownership, so no rollup applies",
+			SubjectReasons: map[string]string{contextfabric.FactSubjectKey(query.Subjects[0]): "devhealthfacts: the team owns no repository in synced ownership, so no rollup applies"},
+		}, nil
+	}}
+	response, err := newTestFactsReader(t, teamGraph(empty), provider).Read(requestContext(), unrestrictedA(), FactsRequest{
+		Kinds: []string{"operational_deficiencies"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: empty.CanonicalID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRowsHonest(t, response)
+	if row := coverageOf(t, response, "operational_deficiencies", empty); !strings.Contains(row.Reason, "owns no repository") {
+		t.Errorf("row reason %q lost its own sentence", row.Reason)
+	}
+}
