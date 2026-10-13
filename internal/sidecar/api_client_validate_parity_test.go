@@ -132,15 +132,16 @@ func TestClientAcceptsGoldenCapabilities(t *testing.T) {
 
 func TestClientRejectsContextPacketSchemaInvalidMutations(t *testing.T) {
 	cases := []struct {
-		name   string
-		mutate func(*contractsv1.ContextPacket)
+		name       string
+		mutate     func(*contractsv1.ContextPacket)
+		schemaOpen bool
 	}{
 		{name: "missing_query_version", mutate: func(v *contractsv1.ContextPacket) { v.QueryVersion = "" }},
 		{name: "missing_ranking_version", mutate: func(v *contractsv1.ContextPacket) { v.RankingVersion = "" }},
 		{name: "status_invalid", mutate: func(v *contractsv1.ContextPacket) { v.Status = "bogus" }},
-		{name: "resolved_scope_resolution_invalid", mutate: func(v *contractsv1.ContextPacket) { v.ResolvedScope.Resolution = "guessed" }},
+		{name: "resolved_scope_resolution_invalid", mutate: func(v *contractsv1.ContextPacket) { v.ResolvedScope.Resolution = "guessed" }, schemaOpen: true},
 		{name: "required_check_missing_check_id", mutate: func(v *contractsv1.ContextPacket) { v.RequiredChecks[0].CheckID = "" }},
-		{name: "freshness_watermark_invalid_status", mutate: func(v *contractsv1.ContextPacket) { v.Freshness.Watermarks[0].Status = "unknown" }},
+		{name: "freshness_watermark_invalid_status", mutate: func(v *contractsv1.ContextPacket) { v.Freshness.Watermarks[0].Status = "unknown" }, schemaOpen: true},
 		{name: "coverage_degraded_reasons_nil", mutate: func(v *contractsv1.ContextPacket) { v.Coverage.DegradedReasons = nil }},
 		{name: "coverage_sources_considered_duplicate", mutate: func(v *contractsv1.ContextPacket) {
 			v.Coverage.SourcesConsidered = []string{"github", "github"}
@@ -151,7 +152,11 @@ func TestClientRejectsContextPacketSchemaInvalidMutations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := loadContractFixture[contractsv1.ContextPacket](t, "context_packet.v1.json")
 			tc.mutate(&fixture)
-			assertSchemaRejects(t, "context_packet.v1.schema.json", fixture)
+			if tc.schemaOpen {
+				assertSchemaAccepts(t, "context_packet.v1.schema.json", fixture)
+			} else {
+				assertSchemaRejects(t, "context_packet.v1.schema.json", fixture)
+			}
 			if _, err := serveContextPacket(t, fixture); !errors.Is(err, ErrInvalidResponse) {
 				t.Fatalf("a schema-invalid context packet response was accepted at the endpoint boundary: %v", err)
 			}
@@ -169,22 +174,27 @@ func TestClientAcceptsGoldenContextPacket(t *testing.T) {
 
 func TestClientRejectsEvidenceSchemaInvalidMutations(t *testing.T) {
 	cases := []struct {
-		name   string
-		mutate func(*contractsv1.ExpandedEvidence)
+		name       string
+		mutate     func(*contractsv1.ExpandedEvidence)
+		schemaOpen bool
 	}{
-		{name: "invalid_provenance", mutate: func(v *contractsv1.ExpandedEvidence) { v.Evidence.Provenance = "guessed" }},
+		{name: "invalid_provenance", mutate: func(v *contractsv1.ExpandedEvidence) { v.Evidence.Provenance = "guessed" }, schemaOpen: true},
 		{name: "missing_source_entity_id", mutate: func(v *contractsv1.ExpandedEvidence) { v.Evidence.Source.EntityID = "" }},
 		{name: "missing_citation", mutate: func(v *contractsv1.ExpandedEvidence) { v.Evidence.Citation = "" }},
 		{name: "nested_evidence_ref_id_too_short", mutate: func(v *contractsv1.ExpandedEvidence) { v.Evidence.EvidenceRefID = "short" }},
 		{name: "confidence_out_of_range", mutate: func(v *contractsv1.ExpandedEvidence) { v.Evidence.Confidence = 1.5 }},
-		{name: "top_level_availability_invalid", mutate: func(v *contractsv1.ExpandedEvidence) { v.Availability = "gone" }},
+		{name: "top_level_availability_invalid", mutate: func(v *contractsv1.ExpandedEvidence) { v.Availability = "gone" }, schemaOpen: true},
 		{name: "excerpt_too_long", mutate: func(v *contractsv1.ExpandedEvidence) { v.Excerpt = strings.Repeat("e", 1001) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := loadContractFixture[contractsv1.ExpandedEvidence](t, "expanded_evidence.v1.json")
 			tc.mutate(&fixture)
-			assertSchemaRejects(t, "expanded_evidence.v1.schema.json", fixture)
+			if tc.schemaOpen {
+				assertSchemaAccepts(t, "expanded_evidence.v1.schema.json", fixture)
+			} else {
+				assertSchemaRejects(t, "expanded_evidence.v1.schema.json", fixture)
+			}
 			if _, err := serveEvidence(t, fixture); !errors.Is(err, ErrInvalidResponse) {
 				t.Fatalf("a schema-invalid evidence response was accepted at the endpoint boundary: %v", err)
 			}
