@@ -148,11 +148,10 @@ func (c memoryCappedQueryClient) observeRefused(ctx context.Context, statement s
 
 func (c memoryCappedQueryClient) observeRefusal(ctx context.Context, statement string, peak uint64) {
 	capBytes := effectiveStatementCap(statement, c.capBytes)
-	lowerBound := peak < capBytes
-	if lowerBound {
+	if peak < capBytes {
 		peak = capBytes
 	}
-	c.observer(ctx, MemoryNearCap{Statement: statement, PeakBytes: peak, CapBytes: capBytes, PeakIsLowerBound: lowerBound})
+	c.observer(ctx, MemoryNearCap{Statement: statement, PeakBytes: peak, CapBytes: capBytes, PeakIsLowerBound: true})
 }
 
 var statementMemorySetting = regexp.MustCompile(`(?i)\bmax_memory_usage\s*=\s*([0-9]+)`)

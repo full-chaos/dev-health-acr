@@ -83,3 +83,32 @@ func TestMemoryCappedQueryClientCountsAMemoryLimitRefusalRaisedWhileReadingTheFi
 		t.Fatalf("observer saw %+v (unobserved %d), want one lower-bound near-cap and no unobserved count", seen, unobserved)
 	}
 }
+
+type refusedOnCloseScanner struct {
+	ClickHouseRowScanner
+	err error
+}
+
+func (s refusedOnCloseScanner) Next() bool   { return false }
+func (s refusedOnCloseScanner) Err() error   { return nil }
+func (s refusedOnCloseScanner) Close() error { return s.err }
+
+func TestMemoryCappedQueryClientCountsAMemoryLimitRefusalReturnedByClose(t *testing.T) {
+	t.Parallel()
+	refusal := &clickhousedriver.Exception{Code: 241, Name: "DB::Exception", Message: "memory limit"}
+	var seen []MemoryNearCap
+	client := NewMemoryCappedQueryClient(scanningClient{scanner: refusedOnCloseScanner{err: refusal}}, 64<<20,
+		WithMemoryNearCapObserver(func(_ context.Context, near MemoryNearCap) { seen = append(seen, near) }))
+	rows, err := client.Query(context.Background(), "SELECT 1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+	}
+	if got := rows.Close(); !errors.Is(got, refusal) {
+		t.Fatalf("Close returned %v, want the unchanged refusal", got)
+	}
+	if len(seen) != 1 || !seen[0].PeakIsLowerBound {
+		t.Fatalf("observer saw %+v, want one lower-bound near-cap", seen)
+	}
+}
