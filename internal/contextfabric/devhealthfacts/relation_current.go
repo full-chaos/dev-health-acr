@@ -56,18 +56,10 @@ func relationWriterCodeSQL(d string) string {
 // present is 1 for an item with a work_items row (a left join gives a default,
 // not NULL, for a missing one).
 func relationItemReadSQL(alias string) string {
-	readsRestriction := ` AND work_item_id IN ` + blockerEndpointIDsSQL
-	if relationVariant == "reads_unrestricted" {
-		readsRestriction = ""
-	}
 	return `(SELECT w.work_item_id AS work_item_id, if(r.seen = 1, r.read_at, w.synced) AS synced, 1 AS present
     FROM (SELECT work_item_id, max(last_synced) AS synced FROM work_items WHERE org_id = {org_id:String} AND work_item_id IN ` + blockerEndpointIDsSQL + ` GROUP BY work_item_id) AS w
-    LEFT JOIN (SELECT work_item_id, max(relations_read_at) AS read_at, 1 AS seen FROM work_item_relations_read WHERE org_id = {org_id:String}` + readsRestriction + ` GROUP BY work_item_id) AS r ON r.work_item_id = w.work_item_id) AS ` + alias
+    LEFT JOIN (SELECT work_item_id, max(relations_read_at) AS read_at, 1 AS seen FROM work_item_relations_read WHERE org_id = {org_id:String} AND work_item_id IN ` + blockerEndpointIDsSQL + ` GROUP BY work_item_id) AS r ON r.work_item_id = w.work_item_id) AS ` + alias
 }
-
-// relationVariant selects an experimental shape of the item read; "" is the
-// shipped one.
-var relationVariant = ""
 
 // relationRowsSQL is one row per blocker relation with ended (the provider no
 // longer reports it) and code (relationWriterCodeSQL). Both items' read times
@@ -94,4 +86,11 @@ func relationEndedKeysSQL() string {
 // relationCurrentSQL keeps the rows the provider still reports.
 func relationCurrentSQL(d string) string {
 	return ` AND (` + d + `.source_work_item_id, ` + d + `.target_work_item_id, ` + d + `.relationship_type) NOT IN ` + relationEndedKeysSQL()
+}
+
+// relationLinkKeySQL is the string a blocker row is named by in the ended-link
+// list: source, target and stored relationship type, joined by the unit
+// separator, which is in none of them.
+func relationLinkKeySQL(d string) string {
+	return `concat(` + d + `.source_work_item_id, char(31), ` + d + `.target_work_item_id, char(31), ifNull(` + d + `.relationship_type, ''))`
 }

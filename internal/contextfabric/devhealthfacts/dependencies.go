@@ -453,13 +453,13 @@ const blockerStartOutputSQL = `, min(if(d.relation_started_at IS NOT NULL, toNul
 // request's repository), never through the work item's own repo_id column,
 // read with the same strict link semantics as the project scope expansion
 // (linkedPullRequestOnSQL, workItemIsIssueSQL).
-func blockerEdgeRowsSQL(statusPredicate, authorized string, withStart bool) string {
+func blockerEdgeRowsSQL(statusPredicate, authorized, current string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
 	return `SELECT l.pr_repo_id AS rid, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(l.link_rank) AS item_rank, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
   FROM work_item_dependencies AS d FINAL` + startJoin + `
   INNER JOIN ` + admittedIssueLinksAmongSQL(blockerEndpointIDsSQL) + ` AS l ON l.work_item_id = d.target_work_item_id
   INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
-  WHERE d.org_id = {org_id:String} AND toString(l.pr_repo_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + relationCurrentSQL("d") + `
+  WHERE d.org_id = {org_id:String} AND toString(l.pr_repo_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + current + `
     AND d.target_work_item_id IN ` + authorized + ` AND d.source_work_item_id IN ` + authorized + `
   GROUP BY rid, tgt, src, is_open`
 }
@@ -469,14 +469,14 @@ func blockerEdgeRowsSQL(statusPredicate, authorized string, withStart bool) stri
 // project the team owns and reach a repository through a linked pull request
 // row (teamProjectLinkRowsSQL), with the item's strongest link tier. Same
 // issue, status and authorization rules as blockerEdgeRowsSQL.
-func blockerProjectEdgeRowsSQL(statusPredicate, authorized string, withStart bool) string {
+func blockerProjectEdgeRowsSQL(statusPredicate, authorized, current string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
 	return `SELECT pl.team_id AS team_id, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(pl.link_rank) AS item_rank, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
   FROM work_item_dependencies AS d FINAL` + startJoin + `
   INNER JOIN ` + blockerWorkItemsSQL("t") + ` ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
   INNER JOIN ` + teamProjectLinkRowsAmongSQL("team_ids", factTimeBound{}, blockerEndpointIDsSQL) + ` AS pl ON pl.work_item_id = d.target_work_item_id
   INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
-  WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + relationCurrentSQL("d") + `
+  WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + current + `
     AND ` + workItemIsIssueSQL("t") + `
     AND d.target_work_item_id IN ` + authorized + ` AND d.source_work_item_id IN ` + authorized + `
   GROUP BY team_id, tgt, src, is_open`
@@ -549,12 +549,12 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 		if settingsErr != nil {
 			return outcome, settingsErr
 		}
-		authorized, authorizationBindings, authErr := p.blockerAuthorization(ctx, principal, orgID, requestedScope, settings)
+		authorized, current, authorizationBindings, authErr := p.blockerScope(ctx, principal, orgID, requestedScope, settings)
 		if authErr != nil {
 			return outcome, authErr
 		}
-		authorizedMemo = &blockerAuthorizationMemo{authorized, authorizationBindings, settings}
-		edgeRows := blockerEdgeRowsSQL(statusPredicate, authorized, false)
+		authorizedMemo = &blockerAuthorizationMemo{authorized, current, authorizationBindings, settings}
+		edgeRows := blockerEdgeRowsSQL(statusPredicate, authorized, current, false)
 		// The weakest tier of a repository's counted items; the per-repository
 		// counts feed the breakdown only. A team total is NOT the sum of these:
 		// an item linked to two owned repositories is one blocked item.
@@ -597,7 +597,7 @@ FROM (
   ) AS tp ON tp.rid_str = toString(e.rid)
   UNION ALL
   SELECT team_id, tgt, src, toUInt8(is_open) AS is_open, toInt64(item_rank) AS item_rank, toUInt8(writer_unresolved) AS writer_unresolved, 'project' AS arm
-  FROM (`+blockerProjectEdgeRowsSQL(statusPredicate, authorized, false)+`)
+  FROM (`+blockerProjectEdgeRowsSQL(statusPredicate, authorized, current, false)+`)
 )
 GROUP BY team_id
 ORDER BY team_id`, settings)
@@ -605,14 +605,14 @@ ORDER BY team_id`, settings)
   ifNull(toInt64(minIf(start_unix, is_open)), 0)
 FROM (
   SELECT tp.team_id AS team_id, e.tgt AS tgt, e.src AS src, toUInt8(e.is_open) AS is_open, e.start_unix AS start_unix, e.start_exact AS start_exact
-  FROM (`+blockerEdgeRowsSQL(statusPredicate, authorized, true)+`) AS e
+  FROM (`+blockerEdgeRowsSQL(statusPredicate, authorized, current, true)+`) AS e
   INNER JOIN (
     SELECT splitByChar(char(31), pair)[1] AS team_id, splitByChar(char(31), pair)[2] AS rid_str
     FROM (SELECT arrayJoin({team_repo_pairs:Array(String)}) AS pair)
   ) AS tp ON tp.rid_str = toString(e.rid)
   UNION ALL
   SELECT team_id, tgt, src, toUInt8(is_open) AS is_open, start_unix, start_exact
-  FROM (`+blockerProjectEdgeRowsSQL(statusPredicate, authorized, true)+`)
+  FROM (`+blockerProjectEdgeRowsSQL(statusPredicate, authorized, current, true)+`)
 )
 GROUP BY team_id
 ORDER BY team_id`, settings)
@@ -677,18 +677,18 @@ ORDER BY team_id`, settings)
 			if settingsErr != nil {
 				return outcome, settingsErr
 			}
-			authorized, authorizationBindings, authErr := p.blockerAuthorization(ctx, principal, orgID, requestedScope, settings)
+			authorized, current, authorizationBindings, authErr := p.blockerScope(ctx, principal, orgID, requestedScope, settings)
 			if authErr != nil {
 				return outcome, authErr
 			}
-			memo = &blockerAuthorizationMemo{authorized, authorizationBindings, settings}
+			memo = &blockerAuthorizationMemo{authorized, current, authorizationBindings, settings}
 		}
-		authorized, authorizationBindings, settings := memo.sql, memo.bindings, memo.settings
+		authorized, current, authorizationBindings, settings := memo.sql, memo.current, memo.bindings, memo.settings
 		statement := readers.WithSettings(`SELECT toInt64(uniqExact(d.target_work_item_id))
 FROM work_item_dependencies AS d FINAL
 INNER JOIN `+blockerWorkItemsSQL("t")+` ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
 INNER JOIN `+blockerWorkItemsSQL("s")+` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
-WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'`+relationCurrentSQL("d")+`
+WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'`+current+`
   AND `+statusPredicate+` AND `+workItemIsIssueSQL("t")+`
   AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
   AND d.target_work_item_id NOT IN (SELECT work_item_id FROM `+admittedIssueLinksAmongSQL(blockerEndpointIDsSQL)+`)`, settings)

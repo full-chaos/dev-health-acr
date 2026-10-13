@@ -186,7 +186,7 @@ func splitProjectKey(key string) (provider, id string) {
 // rows of the requested projects' issues, with whether the blocker is open.
 // Both work_items reads are narrowed to the blocker edge endpoints; both ends
 // pass the work-item authorization rule.
-func projectBlockerEdgeRowsSQL(authorized string, withStart bool) string {
+func projectBlockerEdgeRowsSQL(authorized, current string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
 	return `SELECT t.project_key AS project_key, d.target_work_item_id AS tgt, d.source_work_item_id AS src, toUInt8(` + blockerOpenPredicate + `) AS is_open, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
   FROM work_item_dependencies AS d FINAL` + startJoin + `
@@ -197,7 +197,7 @@ func projectBlockerEdgeRowsSQL(authorized string, withStart bool) string {
     WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND w.work_item_id IN ` + blockerEndpointIDsSQL + `
   ) AS t ON t.work_item_id = d.target_work_item_id
   INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
-  WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + relationCurrentSQL("d") + `
+  WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + current + `
     AND d.target_work_item_id IN ` + authorized + ` AND d.source_work_item_id IN ` + authorized + `
   GROUP BY project_key, tgt, src, is_open`
 }
@@ -215,12 +215,12 @@ func (p *BlockersProvider) readProjectRollup(ctx context.Context, principal stor
 	if err != nil {
 		return rejected, err
 	}
-	authorized, authorizationBindings, err := p.blockerAuthorization(ctx, principal, orgID, requestedScope, settings)
+	authorized, current, authorizationBindings, err := p.blockerScope(ctx, principal, orgID, requestedScope, settings)
 	if err != nil {
 		return rejected, err
 	}
 	statement := readers.WithSettings(`SELECT project_key, toInt64(uniqExactIf(tgt, is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 0)), toInt64(uniqExactIf((tgt, src), is_open = 1 AND writer_unresolved = 1))
-FROM (`+projectBlockerEdgeRowsSQL(authorized, false)+`)
+FROM (`+projectBlockerEdgeRowsSQL(authorized, current, false)+`)
 GROUP BY project_key
 ORDER BY project_key`, settings)
 	type totals struct{ blocked, edges, excluded, unresolved int64 }
@@ -239,7 +239,7 @@ ORDER BY project_key`, settings)
 	}
 	ageStatement := readers.WithSettings(`SELECT project_key, toInt64(uniqExactIf((tgt, src), is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 1 AND start_unix IS NOT NULL)), toInt64(uniqExactIf((tgt, src), is_open = 1 AND start_exact = 1)),
   ifNull(toInt64(minIf(start_unix, is_open = 1)), 0)
-FROM (`+projectBlockerEdgeRowsSQL(authorized, true)+`)
+FROM (`+projectBlockerEdgeRowsSQL(authorized, current, true)+`)
 GROUP BY project_key
 ORDER BY project_key`, settings)
 	ages := map[string]blockerTeamAge{}

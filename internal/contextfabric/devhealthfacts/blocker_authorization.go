@@ -57,6 +57,7 @@ func (p *BlockersProvider) blockerAuthorization(ctx context.Context, principal s
 // its later statements reuse it instead of reading the relation again.
 type blockerAuthorizationMemo struct {
 	sql      string
+	current  string
 	bindings []readers.Binding
 	settings readers.Settings
 }
@@ -68,4 +69,54 @@ type blockerAuthorizationMemo struct {
 // is then a lower bound, marked by over_bound). mode is a closed vocabulary.
 func logBlockerAuthorization(ctx context.Context, mode string, ids int, overBound bool) {
 	slog.InfoContext(ctx, "devhealthfacts.blocker_authorization", "mode", contextfabric.SanitizeLogAttr(mode), "authorized_endpoint_count", ids, "over_bound", overBound, "bound", blockerAuthorizedIDsBound)
+}
+
+const blockerEndedLinksBinding = "blocker_ended_links"
+
+// blockerEndedLinksBound is the most ended links that ride as one Array
+// binding; above it the end rule stays inside each statement.
+var blockerEndedLinksBound = 5000
+
+// blockerScope resolves, once per request, the two sets every blocker
+// statement is narrowed by: the authorized endpoints (blockerAuthorization) and
+// the links the provider no longer reports. Each is read in a statement of its
+// own and carried into the blocker statements as a binding, so none of them
+// builds either relation again.
+func (p *BlockersProvider) blockerScope(ctx context.Context, principal storage.Principal, orgID string, requestedScope []string, settings readers.Settings) (authorized, current string, bindings []readers.Binding, err error) {
+	authorized, bindings, err = p.blockerAuthorization(ctx, principal, orgID, requestedScope, settings)
+	if err != nil {
+		return "", "", nil, err
+	}
+	statement := readers.WithSettings(fmt.Sprintf("SELECT %s FROM %s ORDER BY 1 LIMIT %d", "concat(s, char(31), t, char(31), ifNull(rt, ''))", relationEndedKeysSQL(), blockerEndedLinksBound+1), withMaxResultRows(settings, blockerEndedLinksBound+1))
+	ended := []string{}
+	if err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadBlockerEndedLinks", statement, orgID, nil, func(row readers.RowScanner) error {
+		var key string
+		if err := row.Scan(&key); err != nil {
+			return err
+		}
+		ended = append(ended, key)
+		return nil
+	}); err != nil {
+		return "", "", nil, err
+	}
+	if len(ended) > blockerEndedLinksBound {
+		logBlockerEndedLinks(ctx, "in_statement", len(ended), true)
+		return authorized, relationCurrentSQL("d"), bindings, nil
+	}
+	logBlockerEndedLinks(ctx, "materialized", len(ended), false)
+	current = ` AND ` + relationLinkKeySQL("d") + ` NOT IN {` + blockerEndedLinksBinding + `:Array(String)}`
+	return authorized, current, append(bindings, readers.Binding{Name: blockerEndedLinksBinding, Value: ended}), nil
+}
+
+func withMaxResultRows(settings readers.Settings, rows int) readers.Settings {
+	settings.MaxResultRows = uint64(rows)
+	return settings
+}
+
+// logBlockerEndedLinks records how the end rule reached the blocker
+// statements: the ended links read once and bound (materialized), or kept
+// inside each statement because they exceeded the bound (the read stops one
+// past it, so the count is then a lower bound, marked by over_bound).
+func logBlockerEndedLinks(ctx context.Context, mode string, ended int, overBound bool) {
+	slog.InfoContext(ctx, "devhealthfacts.blocker_ended_links", "mode", contextfabric.SanitizeLogAttr(mode), "ended_link_count", ended, "over_bound", overBound, "bound", blockerEndedLinksBound)
 }

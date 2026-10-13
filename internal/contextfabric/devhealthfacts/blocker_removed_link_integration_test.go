@@ -107,6 +107,17 @@ func TestRemovedBlockerLinksAreNotCountedOnRealClickHouse(t *testing.T) {
 		t.Logf("age not served: reason=%+v basis=%+v", fields["oldest_blocked_age_unavailable_reason"], fields["oldest_blocked_age_basis"])
 	}
 	wantAgeDays(t, "oldest open blocker after the removed links", fields, 5)
+	// The ended links read once and bound give the same answer as the end rule
+	// kept inside each statement (the fallback above the bound).
+	restoreBound := devhealthfacts.SetBlockerEndedLinksBoundForTest(0)
+	inStatement := factFor(t, read(team), team).Fields
+	restoreBound()
+	for _, name := range []string{"blocked_work_items_current", "blocker_dependencies_current", "blocker_dependencies_excluded_by_status_current", "blocker_dependencies_writer_unresolved_current", "oldest_blocked_age_days"} {
+		a, b := fields[name], inStatement[name]
+		if (a.Integer == nil) != (b.Integer == nil) || (a.Integer != nil && *a.Integer != *b.Integer) {
+			t.Errorf("%s differs between the bound ended links and the in-statement end rule: %+v vs %+v", name, a, b)
+		}
+	}
 	// One kept link is a text relation whose writer cannot be told; it is
 	// counted and flagged, never dropped silently.
 	wantInt(t, fields, "blocker_dependencies_writer_unresolved_current", 1)

@@ -45,8 +45,8 @@ func RunBlockerFragmentsForTest(ctx context.Context, client contextpacket.ClickH
 		"endpoints":           blockerEndpointIDsSQL,
 		"authorized":          authorized,
 		"admitted_links":      admittedIssueLinksAmongSQL(blockerEndpointIDsSQL),
-		"edge_rows_repo":      "(" + blockerEdgeRowsSQL(blockerOpenPredicate, authorized, true) + ")",
-		"edge_rows_project":   "(" + blockerProjectEdgeRowsSQL(blockerOpenPredicate, authorized, true) + ")",
+		"edge_rows_repo":      "(" + blockerEdgeRowsSQL(blockerOpenPredicate, authorized, relationCurrentSQL("d"), true) + ")",
+		"edge_rows_project":   "(" + blockerProjectEdgeRowsSQL(blockerOpenPredicate, authorized, relationCurrentSQL("d"), true) + ")",
 		"owned_projects":      "(SELECT t.team_id FROM " + teamOwnedProjectsAsOfSQL(factTimeBound{}) + " AS t INNER JOIN " + resolvedProjectsSQL + " AS p ON p.provider = t.provider AND p.id = t.id WHERE p.key_resolution_count = 1 AND t.team_id IN {team_ids:Array(String)})",
 		"project_link_rows":   teamProjectLinkRowsAmongSQL("team_ids", factTimeBound{}, blockerEndpointIDsSQL),
 		"work_items_s":        "(SELECT * FROM " + blockerWorkItemsSQL("s") + ")",
@@ -101,10 +101,10 @@ func OrganizationWideAuthorizationScopeForTest(scope readers.AuthorizationScope)
 	return organizationWideAuthorization(scope)
 }
 
-// SetRelationVariantForTest selects an alternative shape of the relation item
-// read for a measurement.
-func SetRelationVariantForTest(variant string) (restore func()) {
-	previous := relationVariant
-	relationVariant = variant
-	return func() { relationVariant = previous }
+// SetBlockerEndedLinksBoundForTest moves the bound above which the blocker
+// statements carry the end rule themselves.
+func SetBlockerEndedLinksBoundForTest(bound int) (restore func()) {
+	previous := blockerEndedLinksBound
+	blockerEndedLinksBound = bound
+	return func() { blockerEndedLinksBound = previous }
 }
