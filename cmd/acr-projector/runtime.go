@@ -73,24 +73,12 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		return nil, errors.Join(fmt.Errorf("load postgres migration contract: %w", err), runtime.Close())
 	}
 
-	tlsConfig, err := runtimeclickhouse.TLSConfigFromCABundle(cfg.ClickHouseCACertPath)
+	projectorClickHouse, err := openProjectorClickHouse(cfg)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
-	// dev-health-go v0.6.2 (CHAOS-4651) made MaxBytesToRead *uint64 so a
-	// caller can express "explicitly unlimited" (a pointer to 0) distinct
-	// from "unset, use the package default" (nil). cfg.Validate() rejects
-	// ClickHouseMaxBytesToRead == 0, so this is always an explicit
-	// positive ceiling; taking its address preserves that meaning exactly.
-	maxBytesToRead := cfg.ClickHouseMaxBytesToRead
-	clickhouseClient, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
-		DSN: cfg.ClickHouseDSN, TLS: tlsConfig, MaxBytesToRead: &maxBytesToRead,
-	})
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("open clickhouse: %w", err), runtime.Close())
-	}
-	runtime.closers = append(runtime.closers, clickhouseClient.Close)
-	cappedClickhouse := contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage)
+	runtime.closers = append(runtime.closers, projectorClickHouse.close)
+	cappedClickhouse := projectorClickHouse.query
 
 	// CHAOS-3898 S2a-2 (design brief §3.1/§3.5): the build-aside-and-swap
 	// conversion's master switch -- see pglifecycle.EnvConfig's own doc
@@ -243,7 +231,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	runtime.Coordinator = coordinator
 	runtime.Checks = []api.ReadinessCheck{
 		api.CheckFunc{CheckName: "postgres", Fn: func(ctx context.Context) error { return checkPostgresRuntime(ctx, db, runner) }},
-		api.CheckFunc{CheckName: "clickhouse", Fn: clickhouseClient.Ping},
+		api.CheckFunc{CheckName: "clickhouse", Fn: projectorClickHouse.ping},
 		api.CheckFunc{CheckName: "falkordb", Fn: falkorCheck},
 		// CHAOS-3882: the readiness-path leg of the checkpoint-vs-store
 		// divergence signal -- Tick's own recovery (see
@@ -383,6 +371,35 @@ func newEpisodesSource(rows devhealthsource.EpisodeRows, writebackEnabled bool) 
 // 2026-10-13 for the heaviest projector statement (94 MB, p50 85 MB,
 // querySubjectProjectMemberships); re-measure from system.query_log after the roll.
 const projectorStatementMaxMemoryUsage uint64 = 128 << 20
+
+type projectorClickHouseClient struct {
+	query contextpacket.ClickHouseQueryClient
+	ping  func(context.Context) error
+	close func() error
+}
+
+func openProjectorClickHouse(cfg config.ProjectorConfig) (projectorClickHouseClient, error) {
+	tlsConfig, err := runtimeclickhouse.TLSConfigFromCABundle(cfg.ClickHouseCACertPath)
+	if err != nil {
+		return projectorClickHouseClient{}, err
+	}
+	// dev-health-go v0.6.2 (CHAOS-4651) made MaxBytesToRead *uint64 so a
+	// caller can express "explicitly unlimited" (a pointer to 0) distinct
+	// from "unset, use the package default" (nil). cfg.Validate() rejects
+	// ClickHouseMaxBytesToRead == 0, so this is always an explicit
+	// positive ceiling; taking its address preserves that meaning exactly.
+	maxBytesToRead := cfg.ClickHouseMaxBytesToRead
+	clickhouseClient, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
+		DSN: cfg.ClickHouseDSN, TLS: tlsConfig, MaxBytesToRead: &maxBytesToRead,
+	})
+	if err != nil {
+		return projectorClickHouseClient{}, fmt.Errorf("open clickhouse: %w", err)
+	}
+	return projectorClickHouseClient{
+		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage),
+		ping:  clickhouseClient.Ping, close: clickhouseClient.Close,
+	}, nil
+}
 
 func clickhouseBackedSources(client contextpacket.ClickHouseQueryClient, cfg config.ProjectorConfig, logger *slog.Logger) (*devhealthsource.ClickHouseProjectionSource, *devhealthsource.TeamsProjectsSource, error) {
 	clickhouseSource, err := devhealthsource.NewClickHouseProjectionSource(client)
