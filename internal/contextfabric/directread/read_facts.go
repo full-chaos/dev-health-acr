@@ -1086,6 +1086,10 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				// and the expansion delivered nothing readable: disclosed,
 				// not "not applicable".
 				row.Outcome, row.KindState, row.Reason = OutcomeUnavailable, string(outcome.State), outcome.Reason
+				if outcome.State == contextfabric.SourceNoData {
+					// The expansion ran to completion and reached nothing.
+					row.Outcome = OutcomeReadNoFact
+				}
 				if outcome.ScopeExpansionUnavailable {
 					row.KindState = KindStateScopeExpansionUnavailable
 				}
@@ -1094,7 +1098,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				}
 				row.Expansion = rowExpansionOf(outcome.Scope)
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind) && recorded && reachedSubjects(derived, kind, subject, served):
-				share, _ := derived.derivedCoverage(kind, subject, served)
+				share, _ := derived.derivedCoverage(kind, subject, served, outcome.Evaluated)
 				row.KindState = string(outcome.State)
 				row.Reason = derivedReason(share)
 				if readFailed(outcome) {
@@ -1112,7 +1116,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				}
 				row.Expansion = rowExpansionOf(outcome.UnreachedRoot.Scope)
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind):
-				share, expanded := derived.derivedCoverage(kind, subject, served)
+				share, expanded := derived.derivedCoverage(kind, subject, served, outcome.Evaluated)
 				if !expanded {
 					row.Outcome = OutcomeNotApplicable
 					row.Reason = "this fact kind does not describe " + subjectKindPlural(subject.Kind)
@@ -1132,7 +1136,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 					row.ProviderState = state
 				}
 				row.Outcome = subjectOutcome(outcome, key, served[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID], row.ProviderState, subject, capability)
-				if share, expanded := derived.derivedCoverage(kind, subject, served); expanded && share.targets == 0 && !share.shared && share.expansion.outcome == contextfabric.FactScopePolicyUnavailable {
+				if share, expanded := derived.derivedCoverage(kind, subject, served, outcome.Evaluated); expanded && share.targets == 0 && !share.shared && share.expansion.outcome == contextfabric.FactScopePolicyUnavailable {
 					row.Expansion = share.note()
 					if row.Outcome == OutcomeTruncated && row.ProviderState == "" && outcome.TruncatedOnlyByScopeGap {
 						row.Outcome = OutcomeFactServed
@@ -1176,7 +1180,7 @@ func readFailed(outcome contextfabric.FactKindOutcome) bool {
 // reachedSubjects reports a root that scope expansion reached subjects from
 // for kind: its row describes what was read, not a gap other roots hit.
 func reachedSubjects(derived derivedIndex, kind contextfabric.FactKind, root contextfabric.SubjectRef, served map[string]bool) bool {
-	share, expanded := derived.derivedCoverage(kind, root, served)
+	share, expanded := derived.derivedCoverage(kind, root, served, nil)
 	return expanded && share.targets > 0
 }
 
@@ -1195,8 +1199,10 @@ func derivedOutcome(outcome contextfabric.FactKindOutcome, share derivedRow) str
 		return OutcomeTruncated
 	case served > 0:
 		return OutcomeFactServed
-	case expansionCut(expansion.outcome), share.shared:
+	case expansionCut(expansion.outcome), share.shared, outcome.State == contextfabric.SourceTruncated:
 		return OutcomeUnavailable
+	case share.targets > 0 && share.evaluated == share.targets:
+		return OutcomeMeasuredZero
 	}
 	switch outcome.State {
 	case contextfabric.SourceAvailable, contextfabric.SourceNoData, contextfabric.SourceStale, contextfabric.SourceTruncated:

@@ -737,11 +737,24 @@ func newRepositoryGrants(scopes []string) repositoryGrants {
 // fill the pages before the ones it can. An issue with no repository is kept
 // only on a link of a tier that grants authority, as the per-row rule has it.
 func (v treeNodeVar) grantClause() string {
-	clause := fmt.Sprintf("ANY(s IN %s.%s WHERE s IN $grantRaw OR toLower(trim(s)) IN $grantNorm OR ANY(o IN $grantOwners WHERE toLower(trim(s)) STARTS WITH o))", v.name, propAuthzRepos)
+	clause := v.repositoryMatchClause("grant")
 	if v.position == treeIssue {
 		clause = fmt.Sprintf("(%s OR ($noRepository IN %s.%s AND rl.%s IN $authorityTiers))", clause, v.name, propAuthzRepos, propPropertyPrefix+linkTierProperty)
 	}
 	return " AND " + clause
+}
+
+// repositoryMatchClause keeps the nodes whose repository list matches one of
+// the selectors bound under prefix (bindRepositoryMatch): a necessary
+// condition of graphrank.ScopeMatch, so it drops no node a selector admits.
+func (v treeNodeVar) repositoryMatchClause(prefix string) string {
+	return fmt.Sprintf("ANY(s IN %[1]s.%[2]s WHERE s IN $%[3]sRaw OR toLower(trim(s)) IN $%[3]sNorm OR ANY(o IN $%[3]sOwners WHERE toLower(trim(s)) STARTS WITH o))", v.name, propAuthzRepos, prefix)
+}
+
+// bindRepositoryMatch binds the selectors of repositoryMatchClause under prefix.
+func bindRepositoryMatch(params map[string]interface{}, prefix string, selectors []string) {
+	match := newRepositoryGrants(selectors)
+	params[prefix+"Raw"], params[prefix+"Norm"], params[prefix+"Owners"] = match.raw, match.norm, match.owners
 }
 
 func hopArrow(direction walkDirection, rel string) string {
@@ -841,8 +854,7 @@ func linkSegmentParams(orgID string, anchor contextfabric.SubjectRef, feed, link
 
 // linkSegmentGrants binds a restricted caller's grants to the link read.
 func linkSegmentGrants(params map[string]interface{}, principal storage.Principal) map[string]interface{} {
-	grants := newRepositoryGrants(principal.RepositoryScopes)
-	params["grantRaw"], params["grantNorm"], params["grantOwners"] = grants.raw, grants.norm, grants.owners
+	bindRepositoryMatch(params, "grant", principal.RepositoryScopes)
 	params["noRepository"] = noRepositoryScope
 	params["authorityTiers"] = authorityLinkTiers()
 	return params
@@ -1020,6 +1032,10 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	out.linkDeniedTargets = len(seen) - len(admitted)
 	if status.set() {
 		out.status.read = len(read)
+		out.status.held = map[string]bool{}
+		for id := range admitted {
+			out.status.held[id] = true
+		}
 		out.status.capFilled = stoppedFull && state.collectLimit > 0 && len(admitted) > state.collectLimit
 	}
 	if link.to == treeIssue {

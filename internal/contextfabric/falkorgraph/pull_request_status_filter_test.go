@@ -29,8 +29,18 @@ type pullRequestStatusFixture struct {
 // review row is a review node that belongs to its pull request. stateReadErr
 // fails every read that carries a status clause, and the stored state read.
 func pullRequestStatusFake(fixtures []pullRequestStatusFixture, stateReadErr error) *fakeConn {
+	return pullRequestStatusFakeOwnedBy(fixtures, stateReadErr)
+}
+
+// pullRequestStatusFakeOwnedBy is pullRequestStatusFake with further teams
+// that also own repository:alpha.
+func pullRequestStatusFakeOwnedBy(fixtures []pullRequestStatusFixture, stateReadErr error, coOwners ...scopedAnchorNode) *fakeConn {
 	nodes := []scopedAnchorNode{{"team", "team:alpha", "Alpha"}, {"repository", "repository:alpha", "full-chaos/alpha"}}
 	edges := []scopedAnchorEdge{{rel: "OWNED_BY_TEAM", srcKind: "repository", srcID: "repository:alpha", dstKind: "team", dstID: "team:alpha"}}
+	for _, team := range coOwners {
+		nodes = append(nodes, team)
+		edges = append(edges, scopedAnchorEdge{rel: "OWNED_BY_TEAM", srcKind: "repository", srcID: "repository:alpha", dstKind: "team", dstID: team.id})
+	}
 	states := map[string]string{}
 	hidden := map[string]bool{}
 	reviews := map[string]contextfabric.PullRequestReviewRow{}

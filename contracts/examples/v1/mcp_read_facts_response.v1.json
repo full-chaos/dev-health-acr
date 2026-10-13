@@ -63,6 +63,30 @@
         "source_state": "current",
         "natural_keys": []
       }
+    },
+    {
+      "kind": "blockers",
+      "subject": {
+        "kind": "work_item",
+        "canonical_id": "work_item.v2:7f3c0a9e",
+        "label": "PAY-412"
+      },
+      "fields": {
+        "blocked_by_work_item_id": "PAY-398"
+      },
+      "reached_from": [
+        {
+          "kind": "team",
+          "canonical_id": "team-payments",
+          "basis": "direct"
+        }
+      ],
+      "provenance": {
+        "source": "blockers",
+        "source_version": "v1",
+        "source_state": "available",
+        "natural_keys": []
+      }
     }
   ],
   "coverage": [
@@ -73,6 +97,16 @@
         "canonical_id": "team-payments"
       },
       "outcome": "fact_served"
+    },
+    {
+      "kind": "blockers",
+      "subject": {
+        "kind": "team",
+        "canonical_id": "team-payments"
+      },
+      "outcome": "fact_served",
+      "kind_state": "available",
+      "reason": "scope expansion reached 1 work items; their facts name this subject in reached_from (expansion: expanded; policy: team_primary_attribution_work_item_blockers_v1)"
     },
     {
       "kind": "deployments",
