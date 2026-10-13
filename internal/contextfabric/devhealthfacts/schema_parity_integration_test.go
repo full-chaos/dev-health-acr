@@ -44,7 +44,7 @@ import (
 // being declared there fails loudly rather than silently going unasserted.
 var factSchemaTables = []string{
 	"repos", "work_items", "work_item_transitions", "git_pull_requests", "git_pull_request_reviews",
-	"ci_pipeline_runs", "deployments", "operational_incidents", "work_item_dependencies", "work_item_dependency_first_seen",
+	"ci_pipeline_runs", "deployments", "operational_incidents", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen",
 	"repo_metrics_daily", "repo_change_failure_daily", "compounding_risk_daily", "estimate_coverage_metrics_daily",
 	"capacity_forecasts", "recommendations_daily",
 	// CHAOS-4364: FlowProvider/LandscapeProvider's tables (flow.go,

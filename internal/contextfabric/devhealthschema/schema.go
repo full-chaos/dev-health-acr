@@ -389,6 +389,17 @@ var ProductionColumns = map[string][]Column{
 		{Name: "last_synced", Type: "DateTime64(3)"},
 		{Name: "org_id", Type: "String"},
 		{Name: "relation_started_at", Type: "Nullable(DateTime64(3))"},
+		// ops migration 103_work_item_relation_writer_and_read.sql.
+		{Name: "relation_writer", Type: "Nullable(String)"},
+	},
+	// ops migration 103_work_item_relation_writer_and_read.sql: per item, the
+	// latest last_synced of a work_items row written by a pass that reads the
+	// item's relations; read it as max(relations_read_at) per item.
+	"work_item_relations_read": {
+		{Name: "org_id", Type: "String"},
+		{Name: "provider", Type: "String"},
+		{Name: "work_item_id", Type: "String"},
+		{Name: "relations_read_at", Type: "DateTime64(3)"},
 	},
 	"work_item_dependency_first_seen": {
 		{Name: "org_id", Type: "String"},
@@ -722,6 +733,7 @@ var EngineFull = map[string]string{
 	"work_graph_deployment_incident_edges": "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192",
 	"work_item_transitions":                "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id, occurred_at) SETTINGS index_granularity = 8192",
 	"work_item_dependencies":               "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
+	"work_item_relations_read":             "ReplacingMergeTree(relations_read_at) ORDER BY (org_id, work_item_id) SETTINGS index_granularity = 8192",
 	"work_item_dependency_first_seen":      "AggregatingMergeTree ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
 	"work_item_measure_capability":         "ReplacingMergeTree(computed_at) ORDER BY (org_id, provider, measure, window_end) SETTINGS index_granularity = 8192",
 	"work_item_metrics_daily":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id) SETTINGS index_granularity = 8192",
