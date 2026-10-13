@@ -26,7 +26,7 @@ func (scannerClient) Query(context.Context, string, []contextpacket.ClickHouseBi
 func TestProjectorCountsStatementsThatFinishWithNoPeakMemoryValue(t *testing.T) {
 	t.Parallel()
 	metrics, collect := hostedmetricstest.New(t, hostedmetrics.Vocabularies{})
-	client := capProjectorQueries(scannerClient{}, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics)
+	client := contextpacket.NewMemoryCappedQueryClient(scannerClient{}, projectorStatementMaxMemoryUsage, projectorCapOptions(slog.New(slog.NewTextHandler(io.Discard, nil)), metrics)...)
 	rows, err := client.Query(context.Background(), "SELECT 1", nil)
 	if err != nil {
 		t.Fatal(err)

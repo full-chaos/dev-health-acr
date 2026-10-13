@@ -399,15 +399,16 @@ func openProjectorClickHouse(cfg config.ProjectorConfig, logger *slog.Logger, me
 		return projectorClickHouseClient{}, fmt.Errorf("open clickhouse: %w", err)
 	}
 	return projectorClickHouseClient{
-		query: capProjectorQueries(clickhouseClient, logger, metrics),
+		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage, projectorCapOptions(logger, metrics)...),
 		ping:  clickhouseClient.Ping, close: clickhouseClient.Close,
 	}, nil
 }
 
-func capProjectorQueries(inner contextpacket.ClickHouseQueryClient, logger *slog.Logger, metrics *hostedmetrics.Instruments) contextpacket.ClickHouseQueryClient {
-	return contextpacket.NewMemoryCappedQueryClient(inner, projectorStatementMaxMemoryUsage,
+func projectorCapOptions(logger *slog.Logger, metrics *hostedmetrics.Instruments) []contextpacket.MemoryCapOption {
+	return []contextpacket.MemoryCapOption{
 		contextpacket.WithMemoryNearCapObserver(contextpacket.NewSlogMemoryNearCapObserver(logger, metrics.ClickHouseNearMemoryCap)),
-		contextpacket.WithMemoryPeakUnobservedObserver(contextpacket.NewSlogMemoryPeakUnobservedObserver(logger, metrics.ClickHousePeakUnobserved)))
+		contextpacket.WithMemoryPeakUnobservedObserver(contextpacket.NewSlogMemoryPeakUnobservedObserver(logger, metrics.ClickHousePeakUnobserved)),
+	}
 }
 
 func clickhouseBackedSources(client contextpacket.ClickHouseQueryClient, cfg config.ProjectorConfig, logger *slog.Logger) (*devhealthsource.ClickHouseProjectionSource, *devhealthsource.TeamsProjectsSource, error) {
