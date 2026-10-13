@@ -165,7 +165,10 @@ func TestIdentityOwningTeamsSentenceRidesOnlyRepositoryRows(t *testing.T) {
 func TestPullRequestUnwindowedLinkSentenceRidesOnlyTheTeamWhoseLinksAreUnwindowed(t *testing.T) {
 	t.Parallel()
 	client := projectReachFake()
-	client.tables = append([]fakeTable{{match: "SELECT team_id, repo_key, any(repo_full_name)", rows: [][]any{{"OTHER", "repo-own", "acme/own"}}}}, client.tables...)
+	client.tables = append([]fakeTable{
+		{match: "SELECT team_id, repo_key, any(repo_full_name)", rows: [][]any{{"OTHER", "repo-own", "acme/own"}}},
+		{match: "AND toString(repo_id) IN {ids:Array(String)}\nGROUP BY repo_id", rows: [][]any{{"repo-own", int64(4), int64(2), int64(1)}}},
+	}, client.tables...)
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactPullRequests)
 	flagged, clean := teamSubject("CHAOS"), teamSubject("OTHER")
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -176,6 +179,11 @@ func TestPullRequestUnwindowedLinkSentenceRidesOnlyTheTeamWhoseLinksAreUnwindowe
 	}
 	if len(result.Facts) != 2 {
 		t.Fatalf("facts = %d, want a fact for each team", len(result.Facts))
+	}
+	for _, fact := range result.Facts {
+		if fact.Subject.CanonicalID == clean.CanonicalID {
+			wantInt(t, fact.Fields, "pull_requests_opened_window", 4)
+		}
 	}
 	const sentence = "issue-to-pull-request links as they stand now"
 	requireOnly(t, "kind reason", result.Reason, "", sentence)
