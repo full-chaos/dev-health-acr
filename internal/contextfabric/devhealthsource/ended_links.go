@@ -2,6 +2,8 @@ package devhealthsource
 
 import (
 	"context"
+	"encoding/hex"
+	"strconv"
 	"sync"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
@@ -14,8 +16,11 @@ import (
 // and the page statements receive only its result (the removed links), never
 // the endpoint tables.
 type endedLinks struct {
-	source, target, relationshipType []string
-	endedAtMicros                    []int64
+	// keys holds one element per ended link: hex(source) hex(target)
+	// hex(type) and the end time in unix microseconds, dot separated. Hex
+	// keeps any work item id (a backslash included) inside the binding
+	// encoding the client accepts.
+	keys []string
 }
 
 type endedLinksKey struct{}
@@ -55,30 +60,24 @@ func readEndedLinks(ctx context.Context, client contextpacket.ClickHouseQueryCli
 		return nil, err
 	}
 	defer rows.Close()
-	links := &endedLinks{source: []string{}, target: []string{}, relationshipType: []string{}, endedAtMicros: []int64{}}
+	links := &endedLinks{keys: []string{}}
 	for rows.Next() {
 		var source, target, relationshipType string
 		var at int64
 		if err := rows.Scan(&source, &target, &relationshipType, &at); err != nil {
 			return nil, err
 		}
-		links.source = append(links.source, source)
-		links.target = append(links.target, target)
-		links.relationshipType = append(links.relationshipType, relationshipType)
-		links.endedAtMicros = append(links.endedAtMicros, at)
+		links.keys = append(links.keys, hex.EncodeToString([]byte(source))+"."+hex.EncodeToString([]byte(target))+"."+hex.EncodeToString([]byte(relationshipType))+"."+strconv.FormatInt(at, 10))
 	}
 	return links, rows.Err()
 }
 
 func (l *endedLinks) bindings() []contextpacket.ClickHouseBinding {
-	return []contextpacket.ClickHouseBinding{
-		{Name: "ended_source", Value: l.source}, {Name: "ended_target", Value: l.target},
-		{Name: "ended_type", Value: l.relationshipType}, {Name: "ended_at_us", Value: l.endedAtMicros},
-	}
+	return []contextpacket.ClickHouseBinding{{Name: "ended_links", Value: l.keys}}
 }
 
 // endedLinksJoinSQL joins a dependency row d to its entry in the set, as rr:
 // rr.ended_at is set where the link ended.
-const endedLinksJoinSQL = `LEFT JOIN (SELECT z.1 AS s, z.2 AS t, z.3 AS rt, fromUnixTimestamp64Micro(z.4, 'UTC') AS ended_at, 1 AS ended
-  FROM (SELECT arrayJoin(arrayZip({ended_source:Array(String)}, {ended_target:Array(String)}, {ended_type:Array(String)}, {ended_at_us:Array(Int64)})) AS z)) AS rr
+const endedLinksJoinSQL = `LEFT JOIN (SELECT unhex(p[1]) AS s, unhex(p[2]) AS t, unhex(p[3]) AS rt, fromUnixTimestamp64Micro(toInt64(p[4]), 'UTC') AS ended_at, 1 AS ended
+  FROM (SELECT splitByChar('.', e) AS p FROM (SELECT arrayJoin({ended_links:Array(String)}) AS e))) AS rr
   ON rr.s = d.source_work_item_id AND rr.t = d.target_work_item_id AND rr.rt = d.relationship_type`

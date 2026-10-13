@@ -55,7 +55,17 @@ var errStatementRecorded = errors.New("statement recorded")
 
 type statementRecorder struct{ statements []string }
 
+type noRows struct{}
+
+func (noRows) Next() bool        { return false }
+func (noRows) Scan(...any) error { return nil }
+func (noRows) Err() error        { return nil }
+func (noRows) Close() error      { return nil }
+
 func (r *statementRecorder) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if strings.Contains(statement, "AS ended_links") {
+		return noRows{}, nil
+	}
 	r.statements = append(r.statements, statement)
 	return nil, errStatementRecorded
 }
