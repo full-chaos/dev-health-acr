@@ -88,9 +88,10 @@ func TestTeamMixIsStandaloneAgainstRealClickHouse(t *testing.T) {
 		if result.State != contextfabric.SourceNotApplicable {
 			t.Fatalf("state = %q, want %q: a team that owns no repository", result.State, contextfabric.SourceNotApplicable)
 		}
+		served := contextfabric.CombineRequestNote(result.Reason, result.RequestNote)
 		for _, want := range []string{"owns no repository", "investment mix unavailable for 1 of 1 requested teams", "2026-09-18"} {
-			if !strings.Contains(result.Reason, want) {
-				t.Fatalf("reason = %q, want it to contain %q", result.Reason, want)
+			if !strings.Contains(served, want) {
+				t.Fatalf("reason = %q, want it to contain %q", served, want)
 			}
 		}
 	})

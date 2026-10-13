@@ -153,7 +153,7 @@ func TestInvestmentProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T
 		t.Fatalf("result = %+v", result)
 	}
 	// Missing is not healthy (CHAOS-9195): the absence is NAMED, never silent.
-	if !strings.Contains(result.Reason, "investment_project_no_canonical_mix") {
-		t.Fatalf("reason = %q, want the named investment_project_no_canonical_mix", result.Reason)
+	if served := contextfabric.CombineRequestNote(result.Reason, result.RequestNote); !strings.Contains(served, "investment_project_no_canonical_mix") {
+		t.Fatalf("reason = %q, want the named investment_project_no_canonical_mix", served)
 	}
 }

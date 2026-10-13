@@ -114,7 +114,8 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}()
 
 	var mixUnavailable string
-	var projectNoMix, teamsRequested int
+	var projectsNoMix []contextfabric.SubjectRef
+	var teamsRequested int
 	var teamsOwningNothing, teamsNoUnit []contextfabric.SubjectRef
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		// CHAOS-6559: a team's investment is ONLY the canonical theme mix
@@ -168,7 +169,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		truncated = truncated || nativeRowCount > maxFactRowsPerQuery
 		// Missing is not healthy: a project with no canonical mix serves no
 		// fact, and says so by a NAMED reason instead of a silent absence.
-		projectNoMix = projectsWithoutInvestmentFact(projectSubjects, &facts)
+		projectsNoMix = projectsWithoutInvestmentFact(projectSubjects, &facts)
 	}
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
@@ -238,35 +239,33 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
 	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsOwningNothing)
 	if mixUnavailable != "" {
-		if onlyTeamSubjects(query.Subjects) && len(teamsOwningNothing)+len(teamsNoUnit) >= teamsRequested {
-			mergeFactReadReason(&result, mixUnavailable)
-		} else {
-			addRequestNote(&result, mixUnavailable)
-		}
+		addRequestNote(&result, mixUnavailable)
 		addSubjectReasons(&result, teamsNoUnit, investmentTeamNoUnitReason)
 	}
-	if projectNoMix > 0 {
-		mergeFactReadReason(&result, investmentProjectNoCanonicalMixReason(projectNoMix, len(subjectsOfKind(query.Subjects, contextfabric.SubjectProject))-rejectedProjectCount(query.Subjects)))
+	if len(projectsNoMix) > 0 {
+		addRequestNote(&result, investmentProjectNoCanonicalMixReason(len(projectsNoMix), len(subjectsOfKind(query.Subjects, contextfabric.SubjectProject))-rejectedProjectCount(query.Subjects)))
+		addSubjectReasons(&result, projectsNoMix, investmentProjectNoCanonicalMixOwnReason)
 	}
-	if timeBound.active && len(subjectsOfKind(query.Subjects, contextfabric.SubjectTeam)) > 0 {
-		mergeFactReadReason(&result, investmentOwnershipAsSynced)
+	if timeBound.active {
+		addScopedReason(&result, query.Subjects, subjectsOfKind(query.Subjects, contextfabric.SubjectTeam), investmentOwnershipAsSynced)
 	}
 	// Every requested subject is checked, with or without a fact: a window
 	// with no overlapping unit serves no fact and must still say the window
 	// starts before the stored history.
 	for _, subject := range query.Subjects {
 		if reason := span.reasonFor(subject.CanonicalID, projectSpanKey(subject), subject.Kind == contextfabric.SubjectProject, timeBound); reason != "" {
-			mergeFactReadReason(&result, reason)
+			addScopedReason(&result, query.Subjects, []contextfabric.SubjectRef{subject}, reason)
 		}
 	}
+	orgSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization)
 	if orgUnattributedOnly {
-		mergeFactReadReason(&result, investmentOrgUnattributedOnlyReason)
+		addScopedReason(&result, query.Subjects, orgSubjects, investmentOrgUnattributedOnlyReason)
 	}
 	if orgRestricted {
 		if len(facts) == 0 {
 			result.State = contextfabric.SourceNotApplicable
 		}
-		mergeFactReadReason(&result, investmentOrgRestrictedReason)
+		addScopedReason(&result, query.Subjects, orgSubjects, investmentOrgRestrictedReason)
 	}
 	if unitsCut {
 		result.Truncated = true
@@ -411,26 +410,28 @@ const (
 // native attribution carries positive effort. It is not a zero mix and not a healthy project.
 const investmentProjectNoCanonicalMix = "investment_project_no_canonical_mix"
 
+const investmentProjectNoCanonicalMixOwnReason = investmentProjectNoCanonicalMix + ": no canonical theme mix (work_unit_investments) for the project in the requested window"
+
 func investmentProjectNoCanonicalMixReason(noMix, requested int) string {
 	return fmt.Sprintf("%s for %d of %d requested projects: no canonical theme mix (work_unit_investments) for the project in the requested window; the deprecated per-team investment_area breakdown is not served", investmentProjectNoCanonicalMix, noMix, requested)
 }
 
-// projectsWithoutInvestmentFact counts the project subjects of valid shape that have no
+// projectsWithoutInvestmentFact lists the project subjects of valid shape that have no
 // FactInvestment fact after the project reads.
-func projectsWithoutInvestmentFact(subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) int {
+func projectsWithoutInvestmentFact(subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) []contextfabric.SubjectRef {
 	have := map[string]bool{}
 	for _, f := range *facts {
 		if f.Kind == contextfabric.FactInvestment {
 			have[contextfabric.FactSubjectKey(f.Subject)] = true
 		}
 	}
-	missing := 0
+	var missing []contextfabric.SubjectRef
 	for _, subject := range subjects {
 		if projectSpanKey(subject) == "" {
 			continue
 		}
 		if !have[contextfabric.FactSubjectKey(subject)] {
-			missing++
+			missing = append(missing, subject)
 		}
 	}
 	return missing

@@ -464,7 +464,7 @@ func applyTeamsOwningNothing(result *contextfabric.FactProviderResult, queried [
 		return
 	}
 	addSubjectReasons(result, without, teamNoOwnedRepositoriesReason)
-	if onlyTeamSubjects(queried) && len(without) >= requested && len(result.Facts) == 0 && len(result.EvaluatedSubjects) == 0 {
+	if coversEveryQueriedSubject(queried, without) && len(result.Facts) == 0 && len(result.EvaluatedSubjects) == 0 {
 		result.State = contextfabric.SourceNotApplicable
 		result.Reason = teamNoOwnedRepositoriesReason
 		return
@@ -472,15 +472,38 @@ func applyTeamsOwningNothing(result *contextfabric.FactProviderResult, queried [
 	addRequestNote(result, teamsOwningNoRepositoriesReason(len(without), requested))
 }
 
-// onlyTeamSubjects reports whether every queried subject is a team: only then
-// is a statement about the teams true of every subject the kind answers for.
-func onlyTeamSubjects(subjects []contextfabric.SubjectRef) bool {
-	for _, subject := range subjects {
-		if subject.Kind != contextfabric.SubjectTeam {
+// coversEveryQueriedSubject reports whether every queried subject is in scope:
+// only then is a statement about the scope subjects true of every subject the
+// kind answers for.
+func coversEveryQueriedSubject(queried, scope []contextfabric.SubjectRef) bool {
+	if len(queried) == 0 {
+		return false
+	}
+	in := make(map[string]struct{}, len(scope))
+	for _, subject := range scope {
+		in[contextfabric.FactSubjectKey(subject)] = struct{}{}
+	}
+	for _, subject := range queried {
+		if _, ok := in[contextfabric.FactSubjectKey(subject)]; !ok {
 			return false
 		}
 	}
-	return len(subjects) > 0
+	return true
+}
+
+// addScopedReason serves a sentence true of each scope subject. It joins the
+// kind reason only when every queried subject is in scope; otherwise it rides
+// the request note and the scope subjects' own rows.
+func addScopedReason(result *contextfabric.FactProviderResult, queried, scope []contextfabric.SubjectRef, text string) {
+	if text == "" || len(scope) == 0 {
+		return
+	}
+	if coversEveryQueriedSubject(queried, scope) {
+		mergeFactReadReason(result, text)
+		return
+	}
+	addRequestNote(result, text)
+	addSubjectReasons(result, scope, text)
 }
 
 // addSubjectReasons records reason as the own reason of each subject.
@@ -489,7 +512,13 @@ func addSubjectReasons(result *contextfabric.FactProviderResult, subjects []cont
 		result.SubjectReasons = make(map[string]string, len(subjects))
 	}
 	for _, subject := range subjects {
-		result.SubjectReasons[contextfabric.FactSubjectKey(subject)] = reason
+		key := contextfabric.FactSubjectKey(subject)
+		switch old := result.SubjectReasons[key]; {
+		case old == "":
+			result.SubjectReasons[key] = reason
+		case !strings.Contains(old, reason):
+			result.SubjectReasons[key] = old + "; " + reason
+		}
 	}
 }
 
