@@ -42,3 +42,28 @@ func TestTheDeployedTelemetryReportsTheProjectStatusDriverDecision(t *testing.T)
 		t.Errorf("missing_kinds = %v, want [workload]", rec["missing_kinds"])
 	}
 }
+
+func TestTheDeployedTelemetryReportsTheTeamBlockersDriverDecision(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	telemetry := contextFabricEngineTelemetry(Options{Logger: logger})
+	if telemetry == nil {
+		t.Fatal("the hosted installation returned no engine telemetry")
+	}
+	telemetry.RecordTeamBlockersDrivers(context.Background(), storage.Principal{OrgID: "org_obs"}, contextfabric.TeamBlockersDriverEvent{
+		Emitted: 2, TruncatedServed: 1, SkippedMissing: 3, SkippedZero: 4, SkippedBudget: 5,
+	})
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimRight(buf.Bytes(), "\n"), &rec); err != nil {
+		t.Fatalf("captured line is not JSON: %v", err)
+	}
+	if level, _ := rec["level"].(string); level != "INFO" {
+		t.Errorf("level = %q, want INFO", level)
+	}
+	for key, want := range map[string]float64{"emitted": 2, "truncated_served": 1, "skipped_missing": 3, "skipped_zero": 4, "skipped_budget": 5} {
+		if got, _ := rec[key].(float64); got != want {
+			t.Errorf("%s = %v, want %v", key, rec[key], want)
+		}
+	}
+}

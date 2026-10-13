@@ -290,8 +290,8 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 		// measure runs each statement as served (with the origin id arrays)
 		// and the same text with the arrays removed, same bindings, same
 		// organization size, interleaved three times: the minimum of each is
-		// the reading, and the spread is the run-to-run noise.
-		type reading struct{ with, base, spread uint64 }
+		// the reading, and each variant's own spread is its run-to-run noise.
+		type reading struct{ with, base, withSpread, baseSpread uint64 }
 		measure := func() map[string]reading {
 			recorder.reset()
 			for _, tc := range fixture.cases() {
@@ -314,8 +314,10 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 					with = append(with, runPeak(statement.label, statement.table, statement.fragment, captured.statement, captured.bindings))
 					base = append(base, runPeak(statement.label+" without arrays", statement.table, statement.fragment, stripped, captured.bindings))
 				}
-				all := append(append([]uint64{}, with...), base...)
-				readings[statement.label] = reading{with: slices.Min(with), base: slices.Min(base), spread: slices.Max(all) - slices.Min(all)}
+				readings[statement.label] = reading{
+					with: slices.Min(with), base: slices.Min(base),
+					withSpread: slices.Max(with) - slices.Min(with), baseSpread: slices.Max(base) - slices.Min(base),
+				}
 			}
 			return readings
 		}
@@ -338,11 +340,13 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 				}
 			}
 			// The arrays' cost may not grow with the organization beyond the
-			// slope; a change inside the measured run-to-run spread is noise.
+			// slope. Each cost is a difference of two minimums, so its noise
+			// is the two variants' own run-to-run spreads at both sizes.
 			smallDelta := int64(small[label].with) - int64(small[label].base)
 			largeDelta := int64(large[label].with) - int64(large[label].base)
-			if float64(largeDelta) > statementMemorySlope*float64(max(smallDelta, 0))+float64(large[label].spread) {
-				t.Errorf("%s: the origin arrays' cost grew with the organization: %d bytes at the larger size, %d at the smaller (noise %d)", label, largeDelta, smallDelta, large[label].spread)
+			noise := small[label].withSpread + small[label].baseSpread + large[label].withSpread + large[label].baseSpread
+			if float64(largeDelta) > statementMemorySlope*float64(max(smallDelta, 0))+float64(noise) {
+				t.Errorf("%s: the origin arrays' cost grew with the organization: %d bytes at the larger size, %d at the smaller (noise %d)", label, largeDelta, smallDelta, noise)
 			}
 		}
 	})
