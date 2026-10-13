@@ -152,6 +152,14 @@ func seedMovedOwnership(t *testing.T, ctx context.Context, direct clickhousedriv
 		"issue-Q", "issue-P", "blocks", "Blocks", at, f.orgID)
 	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
 		f.shared, f.orgID, uint32(77), "unlinked", "open", at, at, "feature", "")
+	// Requested issues with membership transitions in a second repository:
+	// issue-Q moves into Q there too, and issue-P has transitions only there,
+	// so the as-of touches and the no-history arm's NOT IN set must read every
+	// repository of a kept subject.
+	for _, move := range []struct{ subject, project, event string }{{"issue-Q", "Q", "linear:issue-Q-own-add"}, {"issue-P", "P", "linear:issue-P-own-add"}} {
+		exec(`INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', '', ?, '', '', '', ?, ?, ?)`,
+			f.orgID, f.own, move.subject, move.project, since, since, move.event)
+	}
 	// A project whose id is empty, owned by requested team A: the library's
 	// ownership and identity readers match an empty id, so the fixture's
 	// project-less issues are its work items, and one of them links a pull
