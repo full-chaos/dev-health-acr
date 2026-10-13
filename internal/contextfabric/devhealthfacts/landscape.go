@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -17,7 +18,7 @@ import (
 // for the project rollup. This provider never recomputes a landscape
 // coordinate or a percentile itself (§19.6.3): it reads Ops' own
 // already-computed per-identity 30-day rolling stats and aggregates them by
-// (team_id, map_name) only -- it NEVER emits a per-identity row. That is
+// team only -- it NEVER emits a per-identity row. That is
 // deliberate, not an economy: the platform's visualization guardrail bars
 // person-to-person rankings (root AGENTS.md, "No person-to-person
 // rankings"), and a Rows table is exactly the renderable surface a ranking
@@ -107,12 +108,13 @@ func (p *LandscapeProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	return result, nil
 }
 
-// landscapeAreaRow is one (map_name, as_of_day) area's aggregate for a
-// single team -- already collapsed across every identity/repo the team's
-// people touched that day, never a per-identity row (see the package doc
-// comment).
+// landscapeAreaRow is one as_of_day's aggregate for a single team --
+// already collapsed across every identity/repo the team's people touched
+// that day, never a per-identity row (see the package doc comment). Ops
+// writes the same four stats on each of an identity's three map rows, so
+// the statements below take ONE copy per identity before they aggregate.
 type landscapeAreaRow struct {
-	mapName, asOfDay              string
+	asOfDay                       string
 	identityCount                 int64
 	churnLOC30d, deliveryUnits30d int64
 	cycleP50Avg30dHours           float64
@@ -121,7 +123,6 @@ type landscapeAreaRow struct {
 
 func (r landscapeAreaRow) toFactValueRow() contextfabric.FactValueRow {
 	return contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
-		"map_name":                contextfabric.StringFactValue(r.mapName),
 		"as_of_day":               contextfabric.StringFactValue(r.asOfDay),
 		"identity_count":          contextfabric.IntegerFactValue(r.identityCount),
 		"churn_loc_30d":           contextfabric.IntegerFactValue(r.churnLOC30d),
@@ -131,92 +132,219 @@ func (r landscapeAreaRow) toFactValueRow() contextfabric.FactValueRow {
 	}}
 }
 
-// readTeamLandscape aggregates ic_landscape_rolling_30d to (team_id,
-// map_name) at each team's own latest retained as_of_day -- never averaged
-// or summed ACROSS as_of_day, and never emitted per-identity.
+// landscapeOneCopyColumns takes one copy of an identity's four stats out of
+// its map rows. Ops writes the same churn, delivery, cycle and WIP values on
+// each of the identity's three map rows (icfinalize/landscape.go copies one
+// RollingStat into every map); only the map coordinates differ. Summing the
+// rows of all maps would count every person three times. argMin(., map_name)
+// names the copy, so the pick is the same on every read and an identity with
+// fewer map rows still counts once.
+const landscapeOneCopyColumns = `argMinIf(churn_loc_30d, map_name, is_live AND as_of_day = latest_day) AS one_churn, argMinIf(delivery_units_30d, map_name, is_live AND as_of_day = latest_day) AS one_delivery, argMinIf(cycle_p50_30d_hours, map_name, is_live AND as_of_day = latest_day) AS one_cycle, argMinIf(wip_max_30d, map_name, is_live AND as_of_day = latest_day) AS one_wip`
+
+// landscapeLiveRowSQL keeps a row the compute produced and drops the row of
+// zeros Ops writes to retract a key (teamkeytables.ICLandscapeRolling30d's
+// LiveRow). x_norm and y_norm are the markers: a computed row never holds 0
+// in them, and a retraction row holds the column default 0 in every measure.
+const landscapeLiveRowSQL = `(x_raw != 0 OR y_raw != 0 OR x_norm != 0 OR y_norm != 0 OR churn_loc_30d != 0 OR delivery_units_30d != 0 OR cycle_p50_30d_hours != 0 OR wip_max_30d != 0)`
+
+// landscapeRowsSQL reads the rows of the requested teams with three flags
+// per row: is_live (the row is not a retraction), latest_day (the team's own
+// latest day that holds a live row; a retracted day is never the latest) and
+// retracted_rows (the retraction rows the read met for the team). Nothing is
+// dropped here, so a team with only retracted rows still reports its count.
+func landscapeRowsSQL(teamPredicate string, timeBound factTimeBound) string {
+	return `SELECT team_id, map_name, as_of_day, identity_id, x_raw, y_raw, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d, is_live, latest_day, retracted_rows
+	FROM (
+		SELECT team_id, map_name, as_of_day, identity_id, x_raw, y_raw, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d,
+			` + landscapeLiveRowSQL + ` AS is_live,
+			max(if(is_live, as_of_day, toDate(0))) OVER (PARTITION BY team_id) AS latest_day,
+			sum(toUInt64(is_live = 0)) OVER (PARTITION BY team_id) AS retracted_rows
+		FROM ic_landscape_rolling_30d FINAL
+		WHERE org_id = {org_id:String}` + teamPredicate + timeBound.dayPredicate("as_of_day") + `
+	)`
+}
+
+// landscapeLatestRowsSQL is the live rows of each team's own latest retained
+// as_of_day, one row per (team, map, identity).
+func landscapeLatestRowsSQL(teamPredicate string, timeBound factTimeBound) string {
+	return `SELECT team_id, map_name, as_of_day, identity_id, x_raw, y_raw
+FROM (
+` + landscapeRowsSQL(teamPredicate, timeBound) + `
+)
+WHERE is_live AND as_of_day = latest_day`
+}
+
+// landscapeOneCopySQL reduces landscapeRowsSQL to one row per (team,
+// identity): live_identity says the identity holds a live row on the team's
+// latest day, and its four stats are one copy taken from those rows.
+func landscapeOneCopySQL(teamPredicate string, timeBound factTimeBound) string {
+	return `SELECT team_id, identity_id, max(latest_day) AS team_latest_day, max(retracted_rows) AS team_retracted,
+	max(toUInt8(is_live AND as_of_day = latest_day)) AS live_identity,
+	` + landscapeOneCopyColumns + `
+FROM (
+` + landscapeRowsSQL(teamPredicate, timeBound) + `
+)
+GROUP BY team_id, identity_id`
+}
+
+// landscapeStatsColumns are the shared stats of the live identities of one
+// group of landscapeOneCopySQL rows, then the group's retraction count.
+func landscapeStatsColumns(alias string) string {
+	return `toInt64(sum(` + alias + `live_identity)), toInt64(sumIf(` + alias + `one_churn, ` + alias + `live_identity = 1)), toInt64(sumIf(` + alias + `one_delivery, ` + alias + `live_identity = 1)), avgIf(` + alias + `one_cycle, ` + alias + `live_identity = 1), toInt64(maxIf(` + alias + `one_wip, ` + alias + `live_identity = 1)), toInt64(max(` + alias + `team_retracted))`
+}
+
+// landscapeRetractions is the decision basis of the retraction filter: how
+// many retraction rows (Ops' rows of zeros) a read dropped, for how many
+// teams, and for how many of them no live row was left to serve.
+type landscapeRetractions struct {
+	rows              int64
+	groupsWith        int
+	groupsWithoutLive int
+}
+
+func (r *landscapeRetractions) add(retractedRows int64, withoutLive bool) {
+	if retractedRows > 0 {
+		r.rows += retractedRows
+		r.groupsWith++
+	}
+	if withoutLive {
+		r.groupsWithoutLive++
+	}
+}
+
+func (r landscapeRetractions) log(ctx context.Context, subjectKind string) {
+	if r.rows == 0 && r.groupsWithoutLive == 0 {
+		return
+	}
+	slog.LogAttrs(ctx, slog.LevelDebug, "devhealthfacts.landscape_retracted_rows",
+		slog.String("subject_kind", contextfabric.SanitizeLogAttr(subjectKind)),
+		slog.String("basis", "retraction_row_of_zeros"),
+		slog.Int64("retracted_rows", r.rows),
+		slog.Int("groups_with_retracted_rows", r.groupsWith),
+		slog.Int("groups_without_live_rows", r.groupsWithoutLive))
+}
+
+// landscapeCoordinateRow is one map's mean raw coordinate for a team. A
+// coordinate is aggregated per team and map and never per identity, so the
+// table is no ranking surface.
+type landscapeCoordinateRow struct {
+	mapName, asOfDay string
+	xRawAvg, yRawAvg float64
+}
+
+func (r landscapeCoordinateRow) toFactValueRow() contextfabric.FactValueRow {
+	return contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
+		"map_name":   contextfabric.StringFactValue(r.mapName),
+		"as_of_day":  contextfabric.StringFactValue(r.asOfDay),
+		"x_raw_mean": contextfabric.NumberFactValue(r.xRawAvg),
+		"y_raw_mean": contextfabric.NumberFactValue(r.yRawAvg),
+	}}
+}
+
+func landscapeCoordinatesTable(rows []contextfabric.FactValueRow, key []string, timeBound factTimeBound) contextfabric.FactValue {
+	return contextfabric.TableFactValue(contextfabric.FactTable{
+		Shape:    contextfabric.FactTableBreakdown,
+		Key:      key,
+		Measures: []string{"x_raw_mean", "y_raw_mean"},
+		Grain:    timeBound.effectiveGrain(grainDaily),
+		Rows:     rows,
+	})
+}
+
+// readTeamLandscape aggregates ic_landscape_rolling_30d to one row per team
+// at each team's own latest retained as_of_day -- never averaged or summed
+// ACROSS as_of_day, and never emitted per-identity. The stats are read once
+// per team; the per-map raw coordinates ride in map_coordinates.
 func (p *LandscapeProvider) readTeamLandscape(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, int, error) {
 	ids, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
 		return 0, 0, rejected, nil
 	}
-	statement := withRowLimit(`SELECT toString(team_id), map_name, toString(as_of_day), toInt64(count()), toInt64(sum(churn_loc_30d)), toInt64(sum(delivery_units_30d)), avg(cycle_p50_30d_hours), toInt64(max(wip_max_30d))
+	teamPredicate := ` AND toString(team_id) IN {ids:Array(String)}`
+	statement := withRowLimit(`SELECT toString(team_id), toString(max(team_latest_day)), ` + landscapeStatsColumns("") + `
 FROM (
-	SELECT team_id, map_name, as_of_day, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d,
-		max(as_of_day) OVER (PARTITION BY team_id) AS latest_day
-	FROM ic_landscape_rolling_30d FINAL
-	WHERE org_id = {org_id:String} AND toString(team_id) IN {ids:Array(String)}` + timeBound.dayPredicate("as_of_day") + `
+` + landscapeOneCopySQL(teamPredicate, timeBound) + `
 )
-WHERE as_of_day = latest_day
-GROUP BY team_id, map_name, as_of_day
-ORDER BY team_id, map_name`)
+GROUP BY team_id
+ORDER BY team_id`)
 	rowCount := 0
-	byTeam := make(map[string][]landscapeAreaRow)
+	var retractions landscapeRetractions
+	byTeam := make(map[string]landscapeAreaRow)
 	var teamOrder []string
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var teamID string
 		var r landscapeAreaRow
-		if err := row.Scan(&teamID, &r.mapName, &r.asOfDay, &r.identityCount, &r.churnLOC30d, &r.deliveryUnits30d, &r.cycleP50Avg30dHours, &r.wipMax30d); err != nil {
+		var retracted int64
+		if err := row.Scan(&teamID, &r.asOfDay, &r.identityCount, &r.churnLOC30d, &r.deliveryUnits30d, &r.cycleP50Avg30dHours, &r.wipMax30d, &retracted); err != nil {
 			return err
 		}
 		if _, ok := bySubject[teamID]; !ok {
 			return nil
 		}
+		retractions.add(retracted, r.identityCount == 0)
+		if r.identityCount == 0 {
+			return nil
+		}
 		if _, seen := byTeam[teamID]; !seen {
 			teamOrder = append(teamOrder, teamID)
 		}
-		byTeam[teamID] = append(byTeam[teamID], r)
+		byTeam[teamID] = r
 		return nil
 	}, timeBound.bindings()...)
+	retractions.log(ctx, "team")
 	if scanErr != nil {
 		return rowCount, 0, rejected, scanErr
 	}
-	totalOmitted := 0
-	for _, teamID := range teamOrder {
-		rows := byTeam[teamID]
-		subject := bySubject[teamID]
-		areaRows := make([]contextfabric.FactValueRow, 0, len(rows))
-		for _, r := range rows {
-			areaRows = append(areaRows, r.toFactValueRow())
+	coordinateStatement := withRowLimit(`SELECT toString(team_id), map_name, toString(as_of_day), avg(x_raw), avg(y_raw)
+FROM (
+` + landscapeLatestRowsSQL(teamPredicate, timeBound) + `
+)
+GROUP BY team_id, map_name, as_of_day
+ORDER BY team_id, map_name`)
+	coordinatesByTeam := make(map[string][]contextfabric.FactValueRow)
+	coordinateRows := 0
+	scanErr = p.facts.query(ctx, coordinateStatement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		coordinateRows++
+		var teamID string
+		var c landscapeCoordinateRow
+		if err := row.Scan(&teamID, &c.mapName, &c.asOfDay, &c.xRawAvg, &c.yRawAvg); err != nil {
+			return err
 		}
-		areaRows, omitted := capFactValueRows(areaRows)
-		totalOmitted += omitted
+		coordinatesByTeam[teamID] = append(coordinatesByTeam[teamID], c.toFactValueRow())
+		return nil
+	}, timeBound.bindings()...)
+	if scanErr != nil {
+		return max(rowCount, coordinateRows), 0, rejected, scanErr
+	}
+	for _, teamID := range teamOrder {
 		fields := map[string]contextfabric.FactValue{
-			"area_count": contextfabric.IntegerFactValue(int64(len(rows))),
-			// CHAOS-4633 P1: Key = [map_name, as_of_day] -- GROUP BY
-			// team_id, map_name, as_of_day above already yields one row per
-			// map for this team's own latest as_of_day, so map_name alone
-			// identifies a row here; as_of_day rides along even though it
-			// is the same value across this particular team's whole table
-			// (a known Fable-F3 case kept in Key rather than hoisted to a
-			// sibling scalar, so as not to change Rows' shape in this
-			// additive P1; flagged as follow-up).
 			"area_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
 				Shape: contextfabric.FactTableBreakdown,
-				Key:   []string{"map_name", "as_of_day"},
+				Key:   []string{"as_of_day"},
 				Measures: []string{
 					"identity_count", "churn_loc_30d", "delivery_units_30d",
 					"cycle_p50_30d_hours_avg", "wip_max_30d",
 				},
 				Grain: timeBound.effectiveGrain(grainDaily),
-				Rows:  areaRows,
+				Rows:  []contextfabric.FactValueRow{byTeam[teamID].toFactValueRow()},
 			}),
 		}
-		if omitted > 0 {
-			fields["area_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+		if coordinates := coordinatesByTeam[teamID]; len(coordinates) > 0 {
+			fields["map_coordinates"] = landscapeCoordinatesTable(coordinates, []string{"map_name", "as_of_day"}, timeBound)
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactLandscape, Subject: subject, Fields: fields,
+			Kind: contextfabric.FactLandscape, Subject: bySubject[teamID], Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
-	return rowCount, totalOmitted, rejected, nil
+	return max(rowCount, coordinateRows), 0, rejected, nil
 }
 
 // readProjectLandscape rolls FactLandscape up for a project through
 // projects -> team_project_ownership -> ic_landscape_rolling_30d: every team
 // currently (or, for a bounded historical query, AS OF the requested
-// instant) owning the project contributes its own (team_id, map_name)
+// instant) owning the project contributes its own team
 // landscape aggregate -- see metrics.go's readProjectMetrics for why the
 // join is on (provider, project_key), never project_id.
 func (p *LandscapeProvider) readProjectLandscape(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, int, error) {
@@ -232,17 +360,15 @@ func (p *LandscapeProvider) readProjectLandscape(ctx context.Context, orgID stri
 	// health and investment kept working. That is the duplicated-SQL drift
 	// in its most literal form: one copy was updated and the other was not,
 	// and nothing failed.
-	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), il.team_id, il.map_name, toString(il.as_of_day), toInt64(count()), toInt64(sum(il.churn_loc_30d)), toInt64(sum(il.delivery_units_30d)), avg(il.cycle_p50_30d_hours), toInt64(max(il.wip_max_30d))
+	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), il.team_id, toString(max(il.team_latest_day)), ` + landscapeStatsColumns("il.") + `
 FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
 INNER JOIN (
-	SELECT team_id, map_name, as_of_day, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d,
-		max(as_of_day) OVER (PARTITION BY team_id) AS latest_day
-	FROM ic_landscape_rolling_30d FINAL
-	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("as_of_day") + `
-) AS il ON il.team_id = p.team_id AND il.as_of_day = il.latest_day
-GROUP BY p.id, p.provider, il.team_id, il.map_name, il.as_of_day
-ORDER BY p.id, il.team_id, il.map_name`)
+` + landscapeOneCopySQL("", timeBound) + `
+) AS il ON il.team_id = p.team_id
+GROUP BY p.id, p.provider, il.team_id
+ORDER BY p.provider, p.id, il.team_id`)
 	rowCount := 0
+	var retractions landscapeRetractions
 	type projectAreaRow struct {
 		teamID string
 		row    landscapeAreaRow
@@ -253,10 +379,15 @@ ORDER BY p.id, il.team_id, il.map_name`)
 		rowCount++
 		var projectSubjectKey, teamID string
 		var r landscapeAreaRow
-		if err := row.Scan(&projectSubjectKey, &teamID, &r.mapName, &r.asOfDay, &r.identityCount, &r.churnLOC30d, &r.deliveryUnits30d, &r.cycleP50Avg30dHours, &r.wipMax30d); err != nil {
+		var retracted int64
+		if err := row.Scan(&projectSubjectKey, &teamID, &r.asOfDay, &r.identityCount, &r.churnLOC30d, &r.deliveryUnits30d, &r.cycleP50Avg30dHours, &r.wipMax30d, &retracted); err != nil {
 			return err
 		}
 		if _, ok := bySubject[projectSubjectKey]; !ok {
+			return nil
+		}
+		retractions.add(retracted, r.identityCount == 0)
+		if r.identityCount == 0 {
 			return nil
 		}
 		if _, seen := byProject[projectSubjectKey]; !seen {
@@ -265,8 +396,33 @@ ORDER BY p.id, il.team_id, il.map_name`)
 		byProject[projectSubjectKey] = append(byProject[projectSubjectKey], projectAreaRow{teamID: teamID, row: r})
 		return nil
 	}, timeBound.bindings()...)
+	retractions.log(ctx, "project")
 	if scanErr != nil {
 		return rowCount, 0, rejected, scanErr
+	}
+	coordinateStatement := withRowLimit(`SELECT concat(p.provider, ':', p.id), il.team_id, il.map_name, toString(il.as_of_day), avg(il.x_raw), avg(il.y_raw)
+FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
+INNER JOIN (
+` + landscapeLatestRowsSQL("", timeBound) + `
+) AS il ON il.team_id = p.team_id
+GROUP BY p.id, p.provider, il.team_id, il.map_name, il.as_of_day
+ORDER BY p.provider, p.id, il.team_id, il.map_name`)
+	coordinatesByProject := make(map[string][]contextfabric.FactValueRow)
+	coordinateRows := 0
+	scanErr = p.facts.query(ctx, coordinateStatement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		coordinateRows++
+		var projectSubjectKey, teamID string
+		var c landscapeCoordinateRow
+		if err := row.Scan(&projectSubjectKey, &teamID, &c.mapName, &c.asOfDay, &c.xRawAvg, &c.yRawAvg); err != nil {
+			return err
+		}
+		coordinate := c.toFactValueRow()
+		coordinate.Fields["team_id"] = contextfabric.StringFactValue(teamID)
+		coordinatesByProject[projectSubjectKey] = append(coordinatesByProject[projectSubjectKey], coordinate)
+		return nil
+	}, timeBound.bindings()...)
+	if scanErr != nil {
+		return max(rowCount, coordinateRows), 0, rejected, scanErr
 	}
 	totalOmitted := 0
 	for _, projectKey := range projectOrder {
@@ -293,12 +449,9 @@ ORDER BY p.id, il.team_id, il.map_name`)
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis": contextfabric.StringFactValue("team_project_ownership_landscape"),
 			"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
-			// CHAOS-4633 P1: Key = [team_id, map_name, as_of_day] -- the
-			// SQL's own GROUP BY p.id, il.team_id, il.map_name, il.as_of_day
-			// already yields one row per (team, map) for the project.
 			"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
 				Shape: contextfabric.FactTableBreakdown,
-				Key:   []string{"team_id", "map_name", "as_of_day"},
+				Key:   []string{"team_id", "as_of_day"},
 				Measures: []string{
 					"identity_count", "churn_loc_30d", "delivery_units_30d",
 					"cycle_p50_30d_hours_avg", "wip_max_30d",
@@ -310,10 +463,18 @@ ORDER BY p.id, il.team_id, il.map_name`)
 		if omitted > 0 {
 			fields["team_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 		}
+		if coordinates := coordinatesByProject[projectKey]; len(coordinates) > 0 {
+			coordinates, coordinatesOmitted := capFactValueRows(coordinates)
+			totalOmitted += coordinatesOmitted
+			fields["map_coordinates"] = landscapeCoordinatesTable(coordinates, []string{"team_id", "map_name", "as_of_day"}, timeBound)
+			if coordinatesOmitted > 0 {
+				fields["map_coordinates_omitted_count"] = contextfabric.IntegerFactValue(int64(coordinatesOmitted))
+			}
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactLandscape, Subject: subject, Fields: fields,
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, totalOmitted, rejected, nil
+	return max(rowCount, coordinateRows), totalOmitted, rejected, nil
 }

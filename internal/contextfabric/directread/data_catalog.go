@@ -492,7 +492,7 @@ var catalogRelationshipOrder = []contractsv1.ContextFabricRelationshipType{
 
 // CatalogRelationshipNote is the fixed meaning line of the relationships
 // section (design C.6).
-const CatalogRelationshipNote = "An edge shows a relation. It does not show a cause."
+const CatalogRelationshipNote = "An edge shows a relation. It does not show a cause. Dependency edges between repositories or services are not collected: no edge here shows what depends on a repository."
 
 // ErrCatalogSection: the sections parameter names a section that does not
 // exist. The route answers invalid_request.

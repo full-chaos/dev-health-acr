@@ -815,7 +815,7 @@ source for the SAME kind).
 | operational_deficiencies | `recommendations_daily` | team |
 | source_health | ops `sourceHealth` root via the direct-read operation runner (no ClickHouse table) | organization |
 | flow (CHAOS-4364) | `work_item_metrics_daily` (team, per-scope Rows; `work_item_cycle_times`'s flow_efficiency is DELIBERATELY NOT read -- ops sink omits it, see flow.go's doc comment); **+`team_project_ownership` ⋈ `work_item_metrics_daily`**, summed/averaged across a team's own (provider, work_scope_id) rows into one row per team (project, codex R2 fix); **+`repo_metrics_daily`** (repository, PR pickup/review timings, distinct shape) | team, project, repository |
-| landscape (CHAOS-4364) | `ic_landscape_rolling_30d` aggregated to (team, map_name) — never per-identity (no person-to-person ranking); **+`team_project_ownership` ⋈ `ic_landscape_rolling_30d`** (project, owning-teams rollup) | team, project |
+| landscape (CHAOS-4364) | `ic_landscape_rolling_30d` aggregated to team, one copy of each identity's stats — never per-identity (no person-to-person ranking); **+`team_project_ownership` ⋈ `ic_landscape_rolling_30d`** (project, owning-teams rollup) | team, project |
 
 **Updated 2026-09-15 (request-carried work-item repository scope).** The
 status, work-title, and actual-completion providers now share this bounded

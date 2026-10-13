@@ -678,3 +678,15 @@ func TestQueryVersionMovedPastTheStatusWithoutTimeInState(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want it moved past v167 -- an answer saved with a status fact that carries no time in the current status must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+func TestQueryVersionMovedPastTheThreeCopyLandscape(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 213 {
+		t.Fatalf("QueryVersion = %q, want v213 or later -- an answer saved when a landscape fact held each identity's stats once per map must not be reused", devhealthfacts.QueryVersion)
+	}
+}
