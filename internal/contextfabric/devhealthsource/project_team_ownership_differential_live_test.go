@@ -115,7 +115,7 @@ func requireSameProjectTeamsRows(t *testing.T, f *ingestColumnsFixture, query co
 		if wantSuppressed && suppressed == 0 {
 			t.Errorf("%s ingest=%v: no suppressed or conflicting group among the rows, so the retraction and conflict cases are not exercised:\n%s", label, ingest, strings.Join(old, "\n"))
 		}
-		t.Logf("%s ingest=%v: %d rows equal", label, ingest, len(old))
+		t.Logf("%s ingest=%v: %d rows compared", label, ingest, len(old))
 	}
 }
 
