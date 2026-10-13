@@ -172,7 +172,7 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	teamIDs, teamBySubject, teamRejected := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectTeam), teamPrefix)
 	rejectedCount += teamRejected
 	if len(teamIDs) > 0 {
-		owned, ownedErr := teamOwnedRepositories(ctx, p.facts.client, orgID, teamIDs, timeBound)
+		owned, ownedErr := teamOwnedOrReachedRepositories(ctx, p.facts.client, orgID, teamIDs, timeBound)
 		if ownedErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team owned repositories", ownedErr)
 		}

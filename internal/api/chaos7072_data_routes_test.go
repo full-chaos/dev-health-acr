@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -149,6 +150,7 @@ func compoundingRiskAnswer(ids ...string) string {
 type c7072Options struct {
 	noQueryURL bool
 	noGraph    bool
+	storeDown  bool
 }
 
 type c7072Harness struct {
@@ -165,6 +167,9 @@ func newC7072Harness(t *testing.T, opts c7072Options) *c7072Harness {
 	upstream := newC7072Upstream(t)
 	configure := func(deps *RuntimeDependencies) {
 		deps.DataCatalogue = catalogue
+		if opts.storeDown {
+			deps.DataStoreChecks = []ReadinessCheck{CheckFunc{CheckName: "clickhouse", Fn: func(context.Context) error { return errors.New("clickhouse: connection refused") }}}
+		}
 		graph := c7072Graph{}
 		var gate *directread.SubjectGate
 		if !opts.noGraph {
@@ -510,7 +515,7 @@ func TestChaos7072CatalogPerCallerClass(t *testing.T) {
 			t.Fatalf("%s: the K14-A refusal is not listed", tc.class)
 		}
 		caller := body["caller"].(map[string]any)
-		if len(caller) != 3 || caller["grant_class"] != tc.class || caller["effective_access"] != "data_read" {
+		if len(caller) != 4 || caller["grant_class"] != tc.class || caller["effective_access"] != "data_read" {
 			t.Fatalf("%s: caller section %v", tc.class, caller)
 		}
 		if strings.Contains(response.Body.String(), hostedTestRepository) {
@@ -612,4 +617,56 @@ type c7072FailingFinder struct{ err error }
 
 func (f c7072FailingFinder) Find(context.Context, storage.Principal, directread.FindRequest) (directread.FindResponse, error) {
 	return directread.FindResponse{}, f.err
+}
+
+// Each tool_access value must agree with what that tool's route actually does
+// for the same credential: available means the route got past its
+// availability and scope checks, anything else means it refused.
+func TestCatalogToolAccessAgreesWithWhatEachToolServes(t *testing.T) {
+	h := newC7072Harness(t, c7072Options{})
+	tools := map[string]struct{ path, body string }{
+		"run_operation":      {ContextFabricDataOperationsPath, `{"operation":"compoundingRisk","variables":{"filter":{"breakout":"REPO"}}}`},
+		"graphql_query":      {ContextFabricDataGraphQLPath, `{"query":"{ __typename }"}`},
+		"read_facts":         {ContextFabricDataFactsPath, `{}`},
+		"find_subjects":      {ContextFabricDataSubjectsPath, `{"kind":"repository"}`},
+		"read_relationships": {ContextFabricDataRelationshipsPath, `{}`},
+	}
+	for name, scopes := range map[string][]string{"context-only": c7072Context, "context+data": c7072Data} {
+		token := h.issueFor(t, scopes, c7072AllRepos, nil).Token
+		body := decodeC7072(t, h.get(ContextFabricDataCatalogPath+"?sections=operations", token))
+		access := body["caller"].(map[string]any)["tool_access"].(map[string]any)
+		if len(access) != len(tools) {
+			t.Fatalf("%s: tool_access %v", name, access)
+		}
+		for tool, call := range tools {
+			response := h.post(call.path, token, call.body)
+			served := response.Code != http.StatusForbidden && response.Code != http.StatusNotImplemented && response.Code != http.StatusServiceUnavailable
+			if (access[tool] == "available") != served {
+				t.Errorf("%s: %s tool_access=%v but the route answered %d", name, tool, access[tool], response.Code)
+			}
+		}
+	}
+}
+
+// Every data route, the catalogue included, sits behind the same data-store
+// readiness gate. A catalogue is therefore never served while a tool it
+// describes would refuse for a store outage: with the store down all of them
+// answer the same typed store_unavailable, and with it up the catalogue's
+// claim and the routes agree (the guard above).
+func TestCatalogAndEveryDataToolRefuseTheSameWayWhenTheStoreIsDown(t *testing.T) {
+	h := newC7072Harness(t, c7072Options{storeDown: true})
+	token := h.issueFor(t, c7072Data, c7072AllRepos, nil).Token
+	assertErrorResponse(t, h.get(ContextFabricDataCatalogPath, token), http.StatusServiceUnavailable, "store_unavailable")
+	for name, call := range map[string]struct{ path, body string }{
+		"run_operation":      {ContextFabricDataOperationsPath, `{"operation":"compoundingRisk","variables":{"filter":{"breakout":"REPO"}}}`},
+		"graphql_query":      {ContextFabricDataGraphQLPath, `{"query":"{ __typename }"}`},
+		"read_facts":         {ContextFabricDataFactsPath, `{}`},
+		"find_subjects":      {ContextFabricDataSubjectsPath, `{"kind":"repository"}`},
+		"read_relationships": {ContextFabricDataRelationshipsPath, `{}`},
+	} {
+		response := h.post(call.path, token, call.body)
+		if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "store_unavailable") {
+			t.Errorf("%s: store down answered %d %s, want 503 store_unavailable", name, response.Code, response.Body.String())
+		}
+	}
 }
