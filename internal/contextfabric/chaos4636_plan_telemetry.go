@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"encoding/json"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -761,3 +762,24 @@ const (
 	CeilingFitWalkListCut   CeilingFitStep = "walk_list_cut"
 	CeilingFitDecisive      CeilingFitStep = "decisive_fit"
 )
+
+// answerFitBytes is the byte ceiling the answer is fitted to: the plan's, less
+// what the synthesis input served in the same body of a client synthesis turn
+// costs.
+// The plan keeps the caller's own budget, so the continuation decision does
+// not read the synthesis mode.
+func answerFitBytes(request InvestigationRequest, planBytes int64, input *contractsv1.ContextFabricSynthesisInput) int64 {
+	bodyBound := request.Options.MaxSerializedBytes
+	if bodyBound <= 0 || input == nil || !clientSynthesisWithoutDraft(request) {
+		return planBytes
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return planBytes
+	}
+	answer := int64(bodyBound) - int64(len(encoded)+len(`,"synthesis_input":`))
+	if planBytes <= 0 || answer < planBytes {
+		return answer
+	}
+	return planBytes
+}

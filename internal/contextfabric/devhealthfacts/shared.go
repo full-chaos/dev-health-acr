@@ -1005,7 +1005,12 @@ import (
 // v198 -> v199: a team cohort answer to a blockers question now carries each
 // team's blocked work item count as a driver with a minted claim. An answer
 // saved under v198 has none.
-const QueryVersion = "devhealthfacts.clickhouse.v199"
+//
+// v199 -> v200: a client synthesis answer with a caller byte budget is fitted
+// to what the synthesis input leaves of that budget, and the input is cut to
+// the budget with the cut stated. An answer saved under v199 was fitted to the
+// whole budget.
+const QueryVersion = "devhealthfacts.clickhouse.v200"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
