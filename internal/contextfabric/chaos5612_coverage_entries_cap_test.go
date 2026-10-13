@@ -197,9 +197,10 @@ func TestCapCoverageEntriesToWriteBoundDropsSyntheticKindsPastTheCapDeterministi
 	}
 
 	// DETERMINISTIC: the kept non-degrading rows are the PREFIX of the
-	// original non-degrading order (the first 30 of the 40), never a
+	// original non-degrading order (every retained one of the 40), never a
 	// random or arrival-order subset.
-	for i := 0; i < 30; i++ {
+	retained := contractsv1.ContextFabricCoverageEntriesMaxCount - 70
+	for i := 0; i < retained; i++ {
 		got := result.Coverage.Details[70+i]
 		want := original[70+i]
 		if got.Source != want.Source || got.Degrading {
