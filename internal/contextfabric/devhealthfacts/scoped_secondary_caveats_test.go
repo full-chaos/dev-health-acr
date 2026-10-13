@@ -161,3 +161,24 @@ func TestIdentityOwningTeamsSentenceRidesOnlyRepositoryRows(t *testing.T) {
 	requireOnly(t, "repository row reason", ownReason(result, repo), "owning_teams_unread")
 	requireOnly(t, "work item row reason", ownReason(result, item), "", "owning_teams_unread")
 }
+
+func TestPullRequestUnwindowedLinkSentenceRidesOnlyTheTeamWhoseLinksAreUnwindowed(t *testing.T) {
+	t.Parallel()
+	client := projectReachFake()
+	client.tables = append([]fakeTable{{match: "SELECT team_id, repo_key, any(repo_full_name)", rows: [][]any{{"OTHER", "repo-own", "acme/own"}}}}, client.tables...)
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactPullRequests)
+	flagged, clean := teamSubject("CHAOS"), teamSubject("OTHER")
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: historicalTime(), Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{flagged, clean},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(result.Facts) != 2 {
+		t.Fatalf("facts = %d, want a fact for each team", len(result.Facts))
+	}
+	const sentence = "issue-to-pull-request links as they stand now"
+	requireOnly(t, "kind reason", result.Reason, "", sentence)
+	requireOnly(t, "flagged team row reason", ownReason(result, flagged), sentence)
+	requireOnly(t, "clean team row reason", ownReason(result, clean), "", sentence)
+}

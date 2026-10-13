@@ -573,7 +573,7 @@ type teamRollupOutcome struct {
 	// linkRowsUnwindowed is set when a historical read counted work through
 	// the issue <> pull request link rows, which carry no validity window:
 	// they are read as they stand now.
-	linkRowsUnwindowed bool
+	linkUnwindowedTeams []contextfabric.SubjectRef
 }
 
 // teamProjectLinksUnwindowedReason is the limitation served beside a

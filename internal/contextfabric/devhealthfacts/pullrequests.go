@@ -72,7 +72,7 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 		}
 		rejected += teamOutcome.rejected
 	}
-	var projectLinksUnwindowed bool
+	var projectLinksUnwindowed []contextfabric.SubjectRef
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
 		projectRejected, unwindowed, projectErr := p.readProjectRollup(ctx, orgID, projectSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if projectErr != nil {
@@ -136,13 +136,7 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 	state, retentionReason := timeBound.retentionState(len(rows) + teamFactCount)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery || teamOutcome.truncated || projectLinksTruncated}
 	applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
-	var unwindowedLinkSubjects []contextfabric.SubjectRef
-	if teamOutcome.linkRowsUnwindowed {
-		unwindowedLinkSubjects = append(unwindowedLinkSubjects, subjectsOfKind(query.Subjects, contextfabric.SubjectTeam)...)
-	}
-	if projectLinksUnwindowed {
-		unwindowedLinkSubjects = append(unwindowedLinkSubjects, subjectsOfKind(query.Subjects, contextfabric.SubjectProject)...)
-	}
+	unwindowedLinkSubjects := append(append([]contextfabric.SubjectRef(nil), teamOutcome.linkUnwindowedTeams...), projectLinksUnwindowed...)
 	addScopedReason(&result, query.Subjects, unwindowedLinkSubjects, teamProjectLinksUnwindowedReason)
 	return result, nil
 }
@@ -295,6 +289,7 @@ ORDER BY repo_id`
 			}
 		}
 		var reachedWithData int64
+		teamLinkUnwindowed := false
 		weakestRank := int64(0)
 		for _, repo := range reachedOnly[teamID] {
 			r, ok := reachedCounts[teamID+blockerPairSeparator+repo.key]
@@ -303,8 +298,9 @@ ORDER BY repo_id`
 			}
 			outcome.contributed++
 			reachedWithData++
-			if timeBound.active {
-				outcome.linkRowsUnwindowed = true
+			if timeBound.active && !teamLinkUnwindowed {
+				teamLinkUnwindowed = true
+				outcome.linkUnwindowedTeams = append(outcome.linkUnwindowedTeams, subject)
 			}
 			opened += r.opened
 			merged += r.merged
