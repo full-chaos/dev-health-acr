@@ -151,6 +151,7 @@ func TestProjectStatusUnusableReadStatesStayMissingAndNameTheState(t *testing.T)
 				facts := projectStatusFacts(p)
 				return append(facts[:2:2], facts[3:]...)
 			})
+			rig.coverage = &Coverage{}
 			if state != "" {
 				rig.coverage = coverageForRead(FactReadiness, state)
 			}
@@ -202,7 +203,7 @@ func TestSuppliedDraftCannotHideAStaleFact(t *testing.T) {
 }
 
 func TestProjectStatusRealRegistryReadNamesTheStateOfAnEmptyRead(t *testing.T) {
-	for _, state := range []SourceState{SourceNoData, SourceConflicted, SourceUnavailable} {
+	for _, state := range []SourceState{SourceNoData, SourceConflicted, SourceUnavailable, SourceStale, SourceTruncated, SourceAvailable} {
 		t.Run(string(state), func(t *testing.T) {
 			rig := newClientRig(t, func(r *clientRig) {
 				r.runtime.interpreted = InterpretedQuestion{
@@ -241,6 +242,13 @@ func TestProjectStatusRealRegistryReadNamesTheStateOfAnEmptyRead(t *testing.T) {
 				t.Errorf("drivers = %q, want %q", got, want)
 			}
 			want := contractsv1.ContextFabricProjectStatusMissingLimitation("readiness", string(state))
+			pinned := map[SourceState]string{
+				SourceStale: "readiness: stale, nothing retained.", SourceTruncated: "readiness: truncated, nothing retained.", SourceAvailable: "readiness: no fact returned.",
+				SourceNoData: "readiness: no data.", SourceConflicted: "readiness: conflicting sources.", SourceUnavailable: "readiness: source unavailable.",
+			}
+			if want != pinned[state] {
+				t.Fatalf("builder sentence = %q, want %q", want, pinned[state])
+			}
 			found := false
 			for _, limitation := range result.Limitations {
 				if limitation == want {

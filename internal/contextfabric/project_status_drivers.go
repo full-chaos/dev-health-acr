@@ -211,10 +211,18 @@ func projectStatusMissingLimitations(event *ProjectStatusDriverEvent) []string {
 
 func projectStatusCoverageState(coverage Coverage, kind FactKind) string {
 	source := "canonical_fact:" + string(kind)
+	observed := ""
 	for _, observation := range coverage.Sources {
-		if observation.Source == source && observation.State != SourceAvailable && observation.State != "" {
+		if observation.Source != source || observation.State == "" {
+			continue
+		}
+		if observation.State != SourceAvailable {
 			return string(observation.State)
 		}
+		observed = string(observation.State)
+	}
+	if observed != "" {
+		return observed
 	}
 	return "not_read"
 }

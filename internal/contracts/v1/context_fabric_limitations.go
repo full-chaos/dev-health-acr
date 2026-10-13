@@ -778,6 +778,7 @@ var contextFabricProjectStatusMissingKinds = []string{"workload", "readiness", "
 var contextFabricProjectStatusMissingReasons = []string{
 	"no data", "conflicting sources", "source unavailable", "not read for this answer", "no value reported",
 	"no evidence reference", "unconfigured", "unauthorized", "pruned", "not applicable",
+	"stale, nothing retained", "truncated, nothing retained", "no fact returned",
 }
 
 // ContextFabricProjectStatusMissingLimitation is the sentence a project status
@@ -800,6 +801,12 @@ func ContextFabricProjectStatusMissingLimitation(kind, state string) string {
 		reason = state
 	case "not_applicable":
 		reason = "not applicable"
+	case "stale":
+		reason = "stale, nothing retained"
+	case "truncated":
+		reason = "truncated, nothing retained"
+	case "available":
+		reason = "no fact returned"
 	}
 	return kind + ": " + reason + "."
 }

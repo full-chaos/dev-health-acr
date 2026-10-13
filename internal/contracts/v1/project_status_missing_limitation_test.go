@@ -3,7 +3,7 @@ package v1
 import "testing"
 
 func TestEveryProjectStatusMissingLimitationIsServiceAuthored(t *testing.T) {
-	states := []string{"no_data", "conflicted", "unavailable", "no_value", "no_evidence", "unconfigured", "unauthorized", "pruned", "not_applicable", "not_read", "other_state"}
+	states := []string{"stale", "truncated", "available", "no_data", "conflicted", "unavailable", "no_value", "no_evidence", "unconfigured", "unauthorized", "pruned", "not_applicable", "not_read", "other_state"}
 	for _, kind := range []string{"workload", "readiness", "health"} {
 		for _, state := range states {
 			sentence := ContextFabricProjectStatusMissingLimitation(kind, state)
