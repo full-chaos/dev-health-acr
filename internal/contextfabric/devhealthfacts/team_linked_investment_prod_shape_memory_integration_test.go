@@ -29,37 +29,46 @@ type linkedProdShape struct {
 	workItems, linkedItems        int
 	teamLinkedItems               int
 	links, pullRequests           int
-	// units carry a second version when u % 100 < secondVersionPct. A unit
-	// names 1 pull request by repository id, plus one more when
-	// u % 100 < extraPRPct, and 3 issue references (lookupIssues of them
-	// GitHub lookups, the rest tracker keys), plus one more when
-	// u % 100 < extraIssuePct. Every tailEvery-th unit is a wide one with
-	// tailPRs and tailIssues references. padHashes commit hashes widen the
-	// evidence to prod's average size.
-	units, secondVersionPct        int
-	extraPRPct, extraIssuePct      int
-	lookupIssues                   int
-	tailEvery, tailPRs, tailIssues int
-	padHashes                      int
+	// units carry a second version when u % 100 < secondVersionPct; the
+	// membership run holds the units with u % 100 < scopePct. A unit names
+	// prTailN pull requests by repository id when u % prTailEvery = 0,
+	// prMidN when u % prMidEvery = 0, else one when u % 100 < prBasePct. It
+	// names issueTailN issue references when u % issueTailEvery = 1,
+	// issueMidN when u % issueMidEvery = 1, else one plus one more when
+	// u % 100 < issueBasePct. Of a narrow unit's issue references all are
+	// GitHub lookups when u % 100 < lookupPct; a wide unit's first quarter
+	// are. padHashes commit hashes widen the evidence to prod's average size.
+	units, secondVersionPct, scopePct int
+	prTailEvery, prTailN              int
+	prMidEvery, prMidN, prBasePct     int
+	issueTailEvery, issueTailN        int
+	issueMidEvery, issueMidN          int
+	issueBasePct, lookupPct           int
+	padHashes                         int
 }
 
 // Largest real prod organization (read-only counts, 2026-10-13):
-// work_unit_investments 32,049 rows / 26,304 units, PR refs avg 1.39 max 205,
-// issue refs avg 3.47 max 776, evidence avg 641 B; work_graph_issue_pr 24,024
+// work_unit_investments 32,049 rows / 26,304 units, 12,643 units in the
+// latest membership run; PR refs 44,465 (avg 1.39, max 205; 858 units with 10
+// or more, 94 with 50 or more); issue refs 111,075 (avg 3.47, max 776; 1,413
+// units with 10 or more, 90 with 100 or more), 29,289 of them GitHub lookups
+// over 13,281 rows; evidence avg 641 B, max 172 KB. work_graph_issue_pr 24,024
 // rows / 14,111 items / 7,134 PRs; git_pull_requests 7,816 rows / 7,782 PRs;
 // work_items 17,238 rows / 17,035 items / 42 projects; repos 11;
-// team_project_ownership 67,486 rows / 88 pairs / 36 teams; the read team owns
-// 20 projects and 10 repositories.
+// team_project_ownership 67,486 rows / 88 pairs / 36 teams. The read team
+// owns 20 projects and 10 repositories and reaches about 6,000 linked items
+// and 5,900 linked pull requests.
 var linkedMemoryProdShape = linkedProdShape{
 	repos: 11, ownedRepos: 10, teams: 39,
 	projects: 42, projectRows: 47,
 	teamProjects:  20,
 	ownershipRows: 67486, ownershipPairs: 88, ownershipOpen: 60,
-	workItems: 17035, linkedItems: 14111, teamLinkedItems: 12000,
+	workItems: 17035, linkedItems: 14111, teamLinkedItems: 6010,
 	links: 24024, pullRequests: 7782,
-	units: 26304, secondVersionPct: 22,
-	extraPRPct: 19, extraIssuePct: 7, lookupIssues: 1,
-	tailEvery: 1000, tailPRs: 200, tailIssues: 400,
+	units: 26304, secondVersionPct: 22, scopePct: 48,
+	prTailEvery: 280, prTailN: 100, prMidEvery: 34, prMidN: 20, prBasePct: 46,
+	issueTailEvery: 290, issueTailN: 300, issueMidEvery: 19, issueMidN: 20,
+	issueBasePct: 50, lookupPct: 41,
 	padHashes: 9,
 }
 
@@ -141,30 +150,40 @@ WITH `+repoArr+` AS repos_arr, ['feature_delivery','operational','maintenance','
 SELECT concat('wu-', toString(u)), ? - toIntervalDay(u % 300), ?, NULL, toFloat64(1 + u % 9),
 	map(themes[1 + u % 5], 0.6, themes[1 + (u + 2) % 5], 0.4),
 	map('`+readers.BugfixSubcategoryKey+`', 0.25, 'refactor', 0.15),
-	concat('{"issues":', toJSONString(arrayMap(j -> if(j < ?,
+	concat('{"issues":', toJSONString(arrayMap(j -> if(j < nl,
 			concat('ghpr:acme/shape-r-', toString((u + j) % ?), '#', toString(1 + intDiv((u * 3 + j) % ?, ?))),
 			concat('linear:CH-', toString(u * 1000 + j))), range(ni))),
 		',"prs":', toJSONString(arrayMap(j -> concat(repos_arr[1 + ((u * 5 + j) % ?) % ?], '#pr', toString(1 + intDiv((u * 5 + j) % ?, ?))), range(np))),
 		',"commits":', toJSONString(arrayMap(j -> lower(hex(SHA1(concat(toString(u), '-', toString(j))))), range(?))), '}'),
 	? + toIntervalHour(v), ?
 FROM (
-	SELECT u, v, if(u % ? = 0, ?, 1 + (u % 100 < ?)) AS np, if(u % ? = 0, ?, 3 + (u % 100 < ?)) AS ni
-	FROM (SELECT intDiv(number, 2) AS u, number % 2 AS v FROM numbers(?))
-	WHERE v = 0 OR u % 100 < ?
+	SELECT u, v, np, ni, if(ni > 2, intDiv(ni, 4), if(u % 100 < ?, ni, 0)) AS nl
+	FROM (
+		SELECT u, v,
+			multiIf(u % ? = 0, ?, u % ? = 0, ?, toUInt64(u % 100 < ?)) AS np,
+			multiIf(u % ? = 1, ?, u % ? = 1, ?, 1 + toUInt64(u % 100 < ?)) AS ni
+		FROM (SELECT intDiv(number, 2) AS u, number % 2 AS v FROM numbers(?))
+		WHERE v = 0 OR u % 100 < ?
+	)
 )`,
 		at, at,
-		uint64(s.lookupIssues), uint64(s.ownedRepos), uint64(s.pullRequests), uint64(s.ownedRepos),
+		uint64(s.ownedRepos), uint64(s.pullRequests), uint64(s.ownedRepos),
 		uint64(s.pullRequests), uint64(s.ownedRepos), uint64(s.pullRequests), uint64(s.ownedRepos),
 		uint64(s.padHashes),
 		at, orgID,
-		uint64(s.tailEvery), uint64(s.tailPRs), uint64(s.extraPRPct), uint64(s.tailEvery), uint64(s.tailIssues), uint64(s.extraIssuePct),
+		uint64(s.lookupPct),
+		uint64(s.prTailEvery), uint64(s.prTailN), uint64(s.prMidEvery), uint64(s.prMidN), uint64(s.prBasePct),
+		uint64(s.issueTailEvery), uint64(s.issueTailN), uint64(s.issueMidEvery), uint64(s.issueMidN), uint64(s.issueBasePct),
 		uint64(2*s.units), uint64(s.secondVersionPct))
 	exec(`INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?, 'run-1', ?)`, orgID, at.Add(time.Hour))
 	exec(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id)
-SELECT ?, 'issue', concat('n', toString(number)), concat('wu-', toString(number)), 'theme', 'feature_delivery', ?, 'run-1' FROM numbers(?)`, orgID, at.Add(time.Hour), uint64(s.units))
-	ids := make([]string, s.units)
-	for i := range ids {
-		ids[i] = fmt.Sprintf("wu-%d", i)
+SELECT ?, 'issue', concat('n', toString(number)), concat('wu-', toString(number)), 'theme', 'feature_delivery', ?, 'run-1' FROM numbers(?) WHERE number % 100 < ?`,
+		orgID, at.Add(time.Hour), uint64(s.units), uint64(s.scopePct))
+	var ids []string
+	for i := 0; i < s.units; i++ {
+		if i%100 < s.scopePct {
+			ids = append(ids, fmt.Sprintf("wu-%d", i))
+		}
 	}
 	return ids
 }
@@ -276,6 +295,18 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 		}
 	}
 	ids := seedLinkedProdShape(t, ctx, direct, orgID, linkedMemoryProdShape)
+	var rows, units, prRefs, issueRefs, lookupRefs, maxPRs, maxIssues uint64
+	var avgJSON float64
+	if err := direct.QueryRow(ctx, `SELECT count(), uniqExact(work_unit_id), sum(np), sum(ni), sum(nl), max(np), max(ni), avg(jl) FROM (
+	SELECT length(JSONExtract(structural_evidence_json, 'prs', 'Array(String)')) AS np,
+		length(JSONExtract(structural_evidence_json, 'issues', 'Array(String)')) AS ni,
+		length(arrayFilter(r -> startsWith(r, 'ghpr:'), JSONExtract(structural_evidence_json, 'issues', 'Array(String)'))) AS nl,
+		length(structural_evidence_json) AS jl, work_unit_id
+	FROM work_unit_investments WHERE org_id = ?)`, orgID).Scan(&rows, &units, &prRefs, &issueRefs, &lookupRefs, &maxPRs, &maxIssues, &avgJSON); err != nil {
+		t.Fatalf("read the seeded shape: %v", err)
+	}
+	t.Logf("seeded: %d unit rows / %d units (%d in scope), PR refs %d (max %d), issue refs %d (max %d), lookups %d, evidence avg %.0f B",
+		rows, units, len(ids), prRefs, maxPRs, issueRefs, maxIssues, lookupRefs, avgJSON)
 	fragments, missing := devhealthfacts.TeamLinkedMixFragmentsForTest(ids)
 	if missing != "" {
 		t.Fatalf("fragment %s: cut marker not in the rendered statement", missing)
