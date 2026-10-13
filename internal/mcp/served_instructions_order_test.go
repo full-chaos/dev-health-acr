@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"slices"
 	"strings"
 	"testing"
 
@@ -19,22 +18,6 @@ func dataFirstCaller(t *testing.T, withInvestigateQuestion bool) (*ProcessConfig
 		caps.EnabledTools = append(caps.EnabledTools, toolInvestigateQuestion)
 	}
 	return (&Bootstrap{Capabilities: caps}).split(nil)
-}
-
-func TestServedToolsListNamesTheDataToolsBeforeInvestigateQuestion(t *testing.T) {
-	cfg, caller := dataFirstCaller(t, true)
-	session := connectedClientForCaller(t, cfg, caller)
-	names := listedToolNames(t, session)
-	last := slices.Index(names, toolInvestigateQuestion)
-	require.GreaterOrEqual(t, last, 0)
-	for _, data := range []string{toolDataCatalog, toolFindSubjects, toolReadFacts, toolReadRelationships, toolRunOperation, toolGraphQLQuery} {
-		at := slices.Index(names, data)
-		require.GreaterOrEqual(t, at, 0, data)
-		require.Less(t, at, slices.Index(names, toolInvestigateWithInterpretation), data)
-		require.Less(t, at, last, data)
-	}
-	require.Less(t, slices.Index(names, toolInvestigateWithInterpretation), last)
-	require.Equal(t, len(names)-1, last, "investigate_question is the last listed tool: %v", names)
 }
 
 func TestServedInstructionsLeadWithTheDataToolsAndPutInvestigateQuestionLast(t *testing.T) {
