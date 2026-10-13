@@ -581,8 +581,12 @@ func TestDataToolContractsMatchTheDirectreadVocabularies(t *testing.T) {
 				t.Fatalf("%s: no %v", file, path)
 			}
 		}
+		list, ok := node.(map[string]any)["enum"].([]any)
+		if !ok {
+			list = node.(map[string]any)["x-documented-values"].([]any)
+		}
 		var out []string
-		for _, v := range node.(map[string]any)["enum"].([]any) {
+		for _, v := range list {
 			out = append(out, v.(string))
 		}
 		return out
@@ -593,8 +597,13 @@ func TestDataToolContractsMatchTheDirectreadVocabularies(t *testing.T) {
 		for _, key := range path {
 			node = node.(map[string]any)[key]
 		}
+		items := node.(map[string]any)["items"].(map[string]any)
+		list, ok := items["enum"].([]any)
+		if !ok {
+			list = items["x-documented-values"].([]any)
+		}
 		var out []string
-		for _, v := range node.(map[string]any)["items"].(map[string]any)["enum"].([]any) {
+		for _, v := range list {
 			out = append(out, v.(string))
 		}
 		return out

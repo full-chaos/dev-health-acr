@@ -447,10 +447,14 @@ func (p ContextFabricAnswerPlan) Narrowed() bool { return len(p.Narrowing) > 0 }
 // Validate enforces every closed vocabulary the plan carries plus its own
 // internal consistency.
 func (p ContextFabricAnswerPlan) Validate() error {
-	if !ValidContextFabricQuestionFamily(p.Family) {
+	return p.validate(contextFabricWriteBounds)
+}
+
+func (p ContextFabricAnswerPlan) validate(bounds contextFabricBounds) error {
+	if !bounds.additiveOK(ValidContextFabricQuestionFamily(p.Family), string(p.Family)) {
 		return fmt.Errorf("answer plan family %q is not a member of the closed vocabulary", p.Family)
 	}
-	if !ValidContextFabricQuestionFamilySource(p.FamilySource) {
+	if !bounds.additiveOK(ValidContextFabricQuestionFamilySource(p.FamilySource), string(p.FamilySource)) {
 		return fmt.Errorf("answer plan family source %q is not a member of the closed vocabulary", p.FamilySource)
 	}
 	if p.FamilyVersion == "" || len(p.FamilyVersion) > 64 {
@@ -475,11 +479,11 @@ func (p ContextFabricAnswerPlan) Validate() error {
 			return fmt.Errorf("answer plan render kind %q is not a member of the closed vocabulary", kind)
 		}
 	}
-	if len(p.FactKinds) > ContextFabricFactKindCount {
+	if len(p.FactKinds) > bounds.factKindListMax() {
 		return fmt.Errorf("answer plan declares more fact kinds than the closed vocabulary has")
 	}
 	for _, kind := range p.FactKinds {
-		if !validFactKind(kind) {
+		if !bounds.additiveOK(validFactKind(kind), string(kind)) {
 			return fmt.Errorf("answer plan fact kind %q is not a member of the closed vocabulary", kind)
 		}
 	}
@@ -517,7 +521,7 @@ func (p ContextFabricAnswerPlan) Validate() error {
 	// for one frame with MemberKind set and unset and asserts the two
 	// arrays are byte-identical. A comment claiming this validator enforced
 	// it would be a disclosure nothing verifies.
-	if err := ValidateContextFabricPlanRequirements(p.Requirements); err != nil {
+	if err := validatePlanRequirements(p.Requirements, bounds); err != nil {
 		return fmt.Errorf("requirements: %w", err)
 	}
 	return nil

@@ -333,7 +333,7 @@ func TestPublishedSelectionBasisEnumMatchesWhatTheClampCanProduce(t *testing.T) 
 	if !ok {
 		t.Fatal("the published schema declares no cohort_member_selection_basis")
 	}
-	raw, ok := field["enum"].([]any)
+	raw, ok := schemaVocabulary(field)
 	if !ok {
 		t.Fatal("cohort_member_selection_basis declares no enum")
 	}
