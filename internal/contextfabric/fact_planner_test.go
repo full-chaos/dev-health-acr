@@ -678,8 +678,8 @@ func TestReadFactsNarrowedProviderThatFailsKeepsBothRecords(t *testing.T) {
 	if !strings.Contains(observation.Reason, narrowedSentence) {
 		t.Fatalf("reason = %q, want the narrowing note kept on a FAILED narrowed read", observation.Reason)
 	}
-	if !strings.Contains(observation.Reason, "clickhouse is unreachable") {
-		t.Fatalf("reason = %q, want the provider's own failure reason kept too", observation.Reason)
+	if !strings.Contains(observation.Reason, "read failed") || strings.Contains(observation.Reason, "clickhouse") {
+		t.Fatalf("reason = %q, want the plain failure sentence and none of the provider's wording", observation.Reason)
 	}
 }
 

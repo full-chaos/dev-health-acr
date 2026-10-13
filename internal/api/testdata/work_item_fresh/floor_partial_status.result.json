@@ -203,7 +203,7 @@
       {
         "source": "canonical_fact:status",
         "state": "unavailable",
-        "reason": "devhealthfacts: query work item status failed",
+        "reason": "The status read failed; the facts for it are not shown.",
         "label": "Canonical facts — status",
         "state_label": "unavailable"
       },
@@ -217,7 +217,7 @@
     "partial": true,
     "degraded_reasons": [
       "kind_census_truncated:work_item:2000:1",
-      "Status: devhealthfacts: query work item status failed"
+      "Status: The status read failed; the facts for it are not shown."
     ],
     "details": [
       {
@@ -242,7 +242,7 @@
           "work_item"
         ],
         "label": "Status facts could not be read",
-        "raw": "Status: devhealthfacts: query work item status failed"
+        "raw": "Status: The status read failed; the facts for it are not shown."
       }
     ]
   },
