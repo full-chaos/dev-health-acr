@@ -175,6 +175,7 @@ func (f everyRootFixture) cases() []everyRootCase {
 
 // everyRootStatementFragments names each expander statement by a fragment its
 // text carries with or without the origin id arrays.
+// devhealthschema:not-a-production-replica: these names select the probed statements' query_log rows; they declare no table.
 var everyRootStatementFragments = []struct{ label, table, fragment string }{
 	{"projectRepositories", "work_items", "min(p.id), argMax(l.provenance, l.link_rank)"},
 	{"projectRepositoriesAsOf", "work_items", "max(a.via_history) AS via_history"},
@@ -223,7 +224,9 @@ func TestProbeScopeExpanderStatementMemoryByOrganizationSize(t *testing.T) {
 	small := read()
 	fillEveryRootOrganization(t, ctx, direct, fixture, "large", 200_000)
 	large := read()
+	// Reported as an error so CI prints it: this probe measures, it guards
+	// nothing, and it is closed after one run.
 	for _, statement := range everyRootStatementFragments {
-		t.Logf("PROBE %s small=%d large=%d", statement.label, small[statement.label], large[statement.label])
+		t.Errorf("PROBE %s small=%d large=%d", statement.label, small[statement.label], large[statement.label])
 	}
 }
