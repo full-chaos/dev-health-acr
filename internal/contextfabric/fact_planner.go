@@ -377,8 +377,8 @@ func unexpandedReason(capability FactCapability, gap FactScopeGap, ownFactsRead 
 		cause = "no scope expander is wired on this server"
 	}
 	return fmt.Sprintf(
-		"%s %s (origin: %s; supported: %s; policy: %s; basis: %s)",
-		lead, cause, gap.OriginKind, joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
+		"%s %s (expansion: %s; origin: %s; supported: %s; policy: %s; basis: %s)",
+		lead, cause, gap.Outcome, gap.OriginKind, joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
 	)
 }
 

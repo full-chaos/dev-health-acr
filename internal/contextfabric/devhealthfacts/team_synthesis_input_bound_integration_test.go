@@ -229,12 +229,18 @@ func TestATeamAtTheExpansionCapIsSynthesizedWithinTheModelInputBound(t *testing.
 		perKind[fact.Kind]++
 	}
 	share := perKind[contextfabric.FactIdentity]
+	for _, kind := range kinds {
+		share = min(share, perKind[kind])
+	}
 	if share == 0 || share >= expansionCap {
 		t.Fatalf("facts given = %v, want a part of the %d read for every kind", perKind, expansionCap)
 	}
+	// A kind that also serves the team's own rollup fact holds one more fact
+	// than the others (201 against 200), so the integer quota can round it up
+	// by one: the shares are equal to within that one fact.
 	for _, kind := range kinds {
-		if perKind[kind] != share {
-			t.Fatalf("facts given = %v, want %d of every kind: the same share", perKind, share)
+		if perKind[kind] < share || perKind[kind] > share+1 {
+			t.Fatalf("facts given = %v, want %d or %d of every kind: the same share", perKind, share, share+1)
 		}
 	}
 	if result.Status != contextfabric.InvestigationPartial || !result.Coverage.Partial {
