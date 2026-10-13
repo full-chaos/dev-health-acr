@@ -23,6 +23,9 @@ type derivedExpansion struct {
 	policy     string
 	targetKind contextfabric.SubjectKind
 	outcome    contextfabric.FactScopeExpansionOutcome
+	// rootsComplete: every target is attributed to every requested root
+	// that reached it, so no root's count is a lower bound.
+	rootsComplete bool
 }
 
 // derivedIndex holds, per fact kind, the targets the resolver derived from
@@ -67,7 +70,7 @@ func newDerivedIndex(scope *contextfabric.FactReadScope, admitted []contextfabri
 			index.expansions[event.RequirementKind] = map[contextfabric.SubjectKind]derivedExpansion{}
 		}
 		index.expansions[event.RequirementKind][event.OriginKind] = derivedExpansion{
-			policy: string(event.Policy), targetKind: event.TargetKind, outcome: event.Outcome,
+			policy: string(event.Policy), targetKind: event.TargetKind, outcome: event.Outcome, rootsComplete: event.RootsComplete,
 		}
 	}
 	for _, derivation := range scope.Derivations {
@@ -166,8 +169,19 @@ func (d derivedIndex) derivedCoverage(kind contextfabric.FactKind, root contextf
 			row.evaluated++
 		}
 	}
-	row.shared = d.expandedRoots(kind) > 1 && len(d.targets[kind]) > row.targets
+	row.shared = !d.rootsComplete(kind) && d.expandedRoots(kind) > 1 && len(d.targets[kind]) > row.targets
 	return row, true
+}
+
+// rootsComplete reports that every expansion for kind named every root of
+// each target, across origin kinds.
+func (d derivedIndex) rootsComplete(kind contextfabric.FactKind) bool {
+	for _, expansion := range d.expansions[kind] {
+		if !expansion.rootsComplete {
+			return false
+		}
+	}
+	return true
 }
 
 // expandedRoots counts the admitted roots whose kind expanded for kind.
