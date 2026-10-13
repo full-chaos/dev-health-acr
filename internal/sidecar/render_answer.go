@@ -561,7 +561,8 @@ func scalarFieldText(field string, value contractsv1.ContextFabricScalarValue) (
 // rankingTableFieldOrder is the FIXED, deterministic key order
 // rankingTableRowLine reads a Rows-panel row in -- ContextFabricClaimedFactRow.Fields
 // is a map (Go iteration order is random), and answerprojection's own
-// buildRankingTable (ranking_table.go) always writes exactly this key set
+// buildRankingTable (ranking_table.go) always writes exactly this visible key set
+// plus the hidden subject_kind, which only picks the noun of the first two
 // (rankingTableTopDrivers=2, so only driver_1_*/driver_2_* ever appear;
 // *_threshold_label is present only when that driver claimed one).
 // Rendering in a fixed order, not map order, keeps this view byte-stable
