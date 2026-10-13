@@ -132,7 +132,11 @@ func (r *CatalogClickHouseRows) queryEvidenceReferences(ctx context.Context, rep
 	defer rows.Close()
 	references := make([]EvidenceReference, 0, min(saturationLimit-1, 16))
 	for rows.Next() {
-		evidence, scanErr := scanEvidenceRow(rows)
+		scan := scanEvidenceRow
+		if names, typed := typedEvidenceColumns[queryID]; typed {
+			scan = scanTypedEvidenceRow(names)
+		}
+		evidence, scanErr := scan(rows)
 		if scanErr != nil {
 			return nil, fmt.Errorf("scan evidence locator: %w", scanErr)
 		}
