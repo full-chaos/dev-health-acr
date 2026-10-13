@@ -735,7 +735,7 @@ func querySubjectProjectMemberships(ctx context.Context, client contextpacket.Cl
 	return rows, more, err
 }
 
-// queryWorkItemTeams projects work_item -> team (OWNED_BY_TEAM) from
+// queryWorkItemTeams (statement: workItemTeamsStatement) projects work_item -> team (OWNED_BY_TEAM) from
 // work_item_team_attributions: the primary row (is_primary = 1) and the
 // co-owner rows (is_primary = 2), one edge per team.
 //
@@ -771,19 +771,65 @@ func querySubjectProjectMemberships(ctx context.Context, client contextpacket.Cl
 // work_items, NOT from work_item_team_attributions.repo_id: 5077 of that
 // column's 5089 rows are the zero UUID (CHAOS-3785's trap), so scoping on it
 // would be meaningless.
-func queryWorkItemTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	rowKey := rowKeySQL("toString(w.repo_id)", "a.work_item_id", "ifNull(a.team_id, '')")
-	statement := `SELECT a.work_item_id, ifNull(a.team_id, ''), toString(a.source), toString(a.confidence), toString(w.repo_id), ifNull(r.repo, ''), a.computed_at, toString(a.repo_id)
+func workItemTeamsQuery(ledger *presenceTelemetryLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
+	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+		return queryWorkItemTeams(ctx, client, orgID, cursor, limit, ledger)
+	}
+}
+
+// workItemTeamsGroupColumns is the GROUP BY of workItemTeamsStatement and the
+// column list of its row key: one list, so the two cannot drift.
+var workItemTeamsGroupColumns = []string{"toString(w.repo_id)", "ifNull(r.repo, '')", "a.work_item_id", "ifNull(a.team_id, '')"}
+
+var workItemTeamsRowKey = rowKeySQL("toString(w.repo_id)", "a.work_item_id", "ifNull(a.team_id, '')")
+
+// workItemTeamsWatermark is the page position: the newest computed_at of the
+// group, so a later row of the pair moves the edge past the cursor.
+const workItemTeamsWatermark = "max(a.computed_at)"
+
+// workItemTeamsCurrentOrder picks the row that represents one (work item,
+// team): the primary row before a co-owner row (the is_primary meaning
+// TeamAttributionPredicate fixes), then the latest computed_at (the table is
+// ReplacingMergeTree(computed_at)), then source and the attribution repo_id
+// for a total order. It is minimised with ONE argMin over the winner's fields
+// (workItemTeamsWinner), so the source, confidence and evidence ref always
+// come from the same row.
+const workItemTeamsCurrentOrder = "tuple(toUInt8(a.is_primary != 1), -toUnixTimestamp64Micro(a.computed_at), toString(a.source), toString(a.repo_id))"
+
+// workItemTeamsWinner is the winning row's (source, confidence, attribution
+// repo_id).
+const workItemTeamsWinner = "argMin(tuple(toString(a.source), toString(a.confidence), toString(a.repo_id)), " + workItemTeamsCurrentOrder + ")"
+
+// workItemTeamsStatement reads one row per (work item, team). The table keys
+// on source, so a pair can hold a primary row and a co-owner row, or rows of
+// two sources, and the edge id is per pair: left apart, they reach the batch
+// as one id twice and the batch pass quarantines the second.
+func workItemTeamsStatement(cursor cursorState) string {
+	return `SELECT a.work_item_id, ifNull(a.team_id, '') AS owning_team_id,
+       ` + workItemTeamsWinner + `.1 AS current_source,
+       ` + workItemTeamsWinner + `.2 AS current_confidence,
+       toString(w.repo_id) AS work_item_repo_id, ifNull(r.repo, '') AS work_item_repo_slug,
+       ` + workItemTeamsWatermark + ` AS observed_at,
+       ` + workItemTeamsWinner + `.3 AS attribution_repo_id,
+       count() AS group_rows
 FROM work_item_team_attributions AS a FINAL
 INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
 INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = ifNull(a.team_id, '')
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE a.org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam) + ` AND ifNull(a.team_id, '') != ''` + sincePredicate(cursor, "a.computed_at", rowKey) + orderBy("a.computed_at", rowKey)
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE a.org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam) + ` AND ifNull(a.team_id, '') != ''
+GROUP BY ` + strings.Join(workItemTeamsGroupColumns, ", ") + havingSincePredicate(cursor, workItemTeamsWatermark, workItemTeamsRowKey) + orderBy(workItemTeamsWatermark, workItemTeamsRowKey)
+}
+
+func queryWorkItemTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, ledger *presenceTelemetryLedger) ([]candidate, bool, error) {
+	return fetch(ctx, client, workItemTeamsStatement(cursor), rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var workItemID, teamID, source, confidence, repoID, repoSlug, attributionRepoID string
 		var observedAt time.Time
-		if err := r.Scan(&workItemID, &teamID, &source, &confidence, &repoID, &repoSlug, &observedAt, &attributionRepoID); err != nil {
+		var groupRows uint64
+		if err := r.Scan(&workItemID, &teamID, &source, &confidence, &repoID, &repoSlug, &observedAt, &attributionRepoID, &groupRows); err != nil {
 			return nil, err
+		}
+		if groupRows > 1 {
+			ledger.recordWorkItemTeamCollapsed(int(groupRows - 1))
 		}
 		observedAt = observedAt.UTC()
 		rowSortKey := identity.JoinSegments(repoID, workItemID, teamID)

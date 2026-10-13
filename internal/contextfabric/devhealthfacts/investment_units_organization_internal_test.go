@@ -12,13 +12,13 @@ func TestOrganizationUnitsStatementKeepsUnattributedRowsAndNoRepositoryFilter(t 
 	t.Parallel()
 	organization := investmentOrgUnitsStatement(factTimeBound{}, false, subqueryMembershipScope)
 	repository := investmentUnitsStatementScoped(factTimeBound{}, false, subqueryMembershipScope)
-	if strings.Contains(organization, "repo_uuid IN {ids:Array(String)}") || strings.Contains(organization, "WHERE repo_uuid != ''") {
+	if strings.Contains(organization, "repo_uuid IN {ids:Array(String)}") || strings.Contains(organization, "WHERE repo_uuid != ''") || strings.Contains(organization, requestedRepositories) {
 		t.Error("the organization statement filters out unattributed rows or by a repository set")
 	}
 	if !strings.Contains(organization, "unit:") {
 		t.Error("the organization statement gives a unit with no reference and no repository no unattributed row")
 	}
-	if strings.Contains(repository, "unit:") || !strings.Contains(repository, "WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}") {
+	if strings.Contains(repository, "unit:") || !strings.Contains(repository, requestedRepositories) {
 		t.Error("the repository and team listing changed: it must keep selecting only resolved repositories of its set")
 	}
 	if strings.Count(organization, "x -> x != concat('unit:', work_unit_id)") != 2 {
