@@ -4299,7 +4299,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			result = degraded
 		}
 	}
-	decisiveBudget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
+	decisiveBudget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: answerFitBytes(request, plan.Budget.MaxSerializedBytes)}
 	if pendingTelemetry.CeilingFitted && e.maxSerializedBytes > decisiveBudget.MaxSerializedBytes {
 		// Stage 3 fitted the answer against the service ceiling because the
 		// request's target could not be reached: the decisive fit is against

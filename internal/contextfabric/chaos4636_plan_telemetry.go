@@ -667,11 +667,6 @@ func (e *Engine) effectiveResponseBudget(request InvestigationRequest) ResponseB
 			budget.MaxSerializedBytes = int64(requested)
 		}
 	}
-	if bodyBound := request.Options.MaxSerializedBytes; bodyBound > 0 && clientSynthesisWithoutDraft(request) {
-		if answer := int64(clientSynthesisAnswerBudget(bodyBound)); budget.MaxSerializedBytes <= 0 || answer < budget.MaxSerializedBytes {
-			budget.MaxSerializedBytes = answer
-		}
-	}
 	return budget
 }
 
@@ -766,3 +761,18 @@ const (
 	CeilingFitWalkListCut   CeilingFitStep = "walk_list_cut"
 	CeilingFitDecisive      CeilingFitStep = "decisive_fit"
 )
+
+// answerFitBytes is the byte ceiling the answer is fitted to: the plan's, less
+// the half of the caller's byte budget a client synthesis turn keeps for the
+// synthesis input served in the same body. The plan keeps the caller's own
+// budget, so the continuation decision does not read the synthesis mode.
+func answerFitBytes(request InvestigationRequest, planBytes int64) int64 {
+	bodyBound := request.Options.MaxSerializedBytes
+	if bodyBound <= 0 || !clientSynthesisWithoutDraft(request) {
+		return planBytes
+	}
+	if answer := int64(clientSynthesisAnswerBudget(bodyBound)); planBytes <= 0 || answer < planBytes {
+		return answer
+	}
+	return planBytes
+}

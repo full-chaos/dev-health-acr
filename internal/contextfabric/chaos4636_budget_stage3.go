@@ -135,7 +135,7 @@ func (r AnswerBudgetRefusal) Unwrap() error { return ErrAnswerExceedsBudget }
 // member set, and therefore the count, it already had. The retry path below
 // computes its own, from its own pass.
 func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Principal, plan *AnswerPlan, result InvestigationResult, consumed ItemAllocation, firstPass assemblyTelemetry, params synthesisAssemblyParams, cardinality MembershipCardinality) (InvestigationResult, assemblyTelemetry, error) {
-	budget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
+	budget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: answerFitBytes(params.Request, plan.Budget.MaxSerializedBytes)}
 	if budget.MaxItems <= 0 && budget.MaxSerializedBytes <= 0 {
 		// Nothing to measure against. An engine composed without either
 		// ceiling behaves exactly as it did before this slice: it plans,
