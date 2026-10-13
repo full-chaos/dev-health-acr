@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -215,7 +216,7 @@ func (e *Engine) runClientSynthesis(ctx context.Context, principal storage.Princ
 	} else if err != nil {
 		event := ClientSynthesisDecisionEvent{MaxBytes: measure.MaxBytes, Bounded: measure.Bounded, FactsRead: measure.FactsRead, FactsGiven: measure.FactsGiven}
 		switch {
-		case errors.Is(err, ErrModelInputTooLarge):
+		case errors.Is(err, ErrModelInputTooLarge), errors.Is(err, ErrAnswerExceedsBudget):
 			event.Outcome = ClientSynthesisInputTooLarge
 		case errors.Is(err, ErrClientSynthesisUnavailable):
 			event.Outcome = ClientSynthesisUnavailable
@@ -298,8 +299,16 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 		return InvestigationResult{}, nil, measure, ErrClientSynthesisUnavailable
 	}
 	assembly := r.ClientSynthesis
-	measure.MaxBytes = assembly.MaxBytes
-	given, encoded, bound, err := r.encodeWithinInputBound(ctx, principal, input, assembly.Encode, assembly.MaxBytes)
+	budget := input.Request.Options.MaxSerializedBytes
+	maxBytes, err := assembly.inputBoundWithin(budget)
+	measure.MaxBytes = maxBytes
+	if err != nil {
+		return InvestigationResult{}, nil, measure, clientSynthesisBudgetRefusal(budget, err)
+	}
+	given, encoded, bound, err := r.encodeWithinInputBound(ctx, principal, input, assembly.Encode, maxBytes)
+	if maxBytes < assembly.MaxBytes {
+		err = clientSynthesisBudgetRefusal(budget, err)
+	}
 	bounded := bound != nil
 	measure.FactsGiven, measure.Bounded = len(given.Facts.Facts), bounded
 	if err != nil {
@@ -582,4 +591,67 @@ func (t SlogEngineTelemetry) RecordClientSynthesisDecision(ctx context.Context, 
 		"commits_retracted", event.CommitsRetracted,
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.Log(ctx, slog.LevelInfo, ClientSynthesisDecisionLogMessage, args...)
+}
+
+// clientSynthesisBodyShare is the share of the caller's byte budget the
+// synthesis input and its envelope may take. The answer is fitted to the rest
+// (see effectiveResponseBudget), so the two sum within the budget.
+func clientSynthesisBodyShare(budget int) int {
+	return budget / 2
+}
+
+// clientSynthesisAnswerBudget is the byte budget left for the answer of a
+// client synthesis turn that carries the input in the same body.
+func clientSynthesisAnswerBudget(budget int) int {
+	return budget - clientSynthesisBodyShare(budget)
+}
+
+// inputBoundWithin is the byte bound of the synthesis input for a caller byte
+// budget: the service bound, or what the caller's share leaves after the
+// envelope. It depends on the budget alone, so a write-back rebuilds the same
+// input as the turn it answers. A share that cannot hold the envelope is an
+// input that cannot fit.
+func (a *ClientSynthesisAssembly) inputBoundWithin(budget int) (int, error) {
+	if budget <= 0 {
+		return a.MaxBytes, nil
+	}
+	envelope, err := a.envelopeBytes()
+	if err != nil {
+		return 0, err
+	}
+	share := clientSynthesisBodyShare(budget) - envelope
+	if share <= 0 {
+		return 0, &ModelInputOverflow{Bytes: envelope, MaxBytes: clientSynthesisBodyShare(budget)}
+	}
+	return min(a.MaxBytes, share), nil
+}
+
+// envelopeBytes is what the synthesis input costs in the body beyond its own
+// input bytes: the contract, rules, digest, flag and field names.
+func (a *ClientSynthesisAssembly) envelopeBytes() (int, error) {
+	bundle := contractsv1.ContextFabricSynthesisInput{
+		Contract: contractsv1.ContextFabricSynthesisContract{
+			ModelOutputVersion: a.ModelOutputVersion, PromptVersion: a.PromptVersion, SystemSHA256: a.SystemSHA256,
+		},
+		Input: json.RawMessage("null"), InputSHA256: strings.Repeat("0", 64), Bounded: true, Rules: a.Rules,
+	}
+	marshaled, err := json.Marshal(bundle)
+	if err != nil {
+		return 0, err
+	}
+	return len(marshaled) + len(`,"synthesis_input":`), nil
+}
+
+// clientSynthesisBudgetRefusal turns "the input cannot be cut to the caller's
+// share" into the budget refusal the route serves as a 413: the smallest input
+// the facts reduce to is larger than the budget leaves. Any other error passes.
+func clientSynthesisBudgetRefusal(budget int, err error) error {
+	var overflow *ModelInputOverflow
+	if !errors.As(err, &overflow) {
+		return err
+	}
+	return AnswerBudgetRefusal{
+		Overrun: contractsv1.ContextFabricBudgetOverrunBytes, MeasuredBytes: int64(overflow.Bytes), MaxSerializedBytes: int64(budget),
+		NothingLeftToCut: true, Stage: StageSynthesis,
+	}
 }

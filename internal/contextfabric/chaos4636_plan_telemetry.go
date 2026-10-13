@@ -667,6 +667,11 @@ func (e *Engine) effectiveResponseBudget(request InvestigationRequest) ResponseB
 			budget.MaxSerializedBytes = int64(requested)
 		}
 	}
+	if bodyBound := request.Options.MaxSerializedBytes; bodyBound > 0 && clientSynthesisWithoutDraft(request) {
+		if answer := int64(clientSynthesisAnswerBudget(bodyBound)); budget.MaxSerializedBytes <= 0 || answer < budget.MaxSerializedBytes {
+			budget.MaxSerializedBytes = answer
+		}
+	}
 	return budget
 }
 
