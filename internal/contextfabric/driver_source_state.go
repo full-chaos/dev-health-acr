@@ -31,10 +31,16 @@ func groundedDriverSourceStates(drivers []DriverJudgment, claims []ClaimedFact, 
 			}
 			derived = worseDriverSourceState(derived, claimSourceState(facts, claim))
 		}
+		note, wasCorrected := "", false
 		if out[index].SourceState != derived {
 			out[index].SourceState = derived
 			corrected++
+			if note = driverSourceStateNote(derived); note != "" {
+				wasCorrected = true
+			}
 		}
+		out[index].SourceStateNote = note
+		out[index].SummaryCorrected = wasCorrected
 	}
 	return out, corrected
 }
@@ -77,14 +83,32 @@ func claimSourceState(facts []CanonicalFact, claim ClaimedFact) SourceState {
 	return derived
 }
 
-func driverSourceStateQualifier(state SourceState) string {
+func driverSourceStateCause(state SourceState) (label, cause string) {
 	switch state {
 	case SourceTruncated:
-		return " (partial: the source read was truncated)"
+		return "partial", "the source read was truncated"
 	case SourceStale:
-		return " (stale: the source read is out of date)"
+		return "stale", "the source read is out of date"
 	}
-	return ""
+	return "", ""
+}
+
+func driverSourceStateQualifier(state SourceState) string {
+	label, cause := driverSourceStateCause(state)
+	if label == "" {
+		return ""
+	}
+	return " (" + label + ": " + cause + ")"
+}
+
+// driverSourceStateNote is the sentence served beside a driver whose draft
+// state the service corrected. The draft's own Summary is never edited.
+func driverSourceStateNote(state SourceState) string {
+	label, cause := driverSourceStateCause(state)
+	if label == "" {
+		return ""
+	}
+	return "The service marks this driver as " + label + ": " + cause + "."
 }
 
 func qualifiedDriverCategories(drivers []DriverJudgment) []string {

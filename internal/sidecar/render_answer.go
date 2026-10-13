@@ -137,6 +137,9 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 			lines = append(lines, fmt.Sprintf("%d. %s [%s / %s]", i+1,
 				hostedInline(driver.Title), hostedInline(strings.ReplaceAll(string(driver.Standing), "_", " ")), hostedInline(strings.ReplaceAll(driver.Category, "_", " "))))
 			lines = append(lines, driver.Summary)
+			if driver.SourceStateNote != "" {
+				lines = append(lines, hostedInline(driver.SourceStateNote))
+			}
 			if driver.Qualification != "" {
 				lines = append(lines, driver.Qualification)
 			}

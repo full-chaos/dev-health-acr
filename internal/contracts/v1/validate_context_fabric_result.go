@@ -971,6 +971,9 @@ func (d ContextFabricDriverJudgment) validate(bounds contextFabricBounds) error 
 	if d.SourceState != "" && !bounds.additiveOK(validSourceState(d.SourceState), string(d.SourceState)) {
 		return fmt.Errorf("driver source state is not a member of the closed vocabulary")
 	}
+	if !stringLengthBetween(d.SourceStateNote, 0, ContextFabricDriverSourceStateNoteMaxLength) {
+		return fmt.Errorf("driver source state note violates v1 bounds")
+	}
 	if len(d.AffectedSubjects) < ContextFabricDriverAffectedSubjectsMinCount || len(d.AffectedSubjects) > ContextFabricDriverAffectedSubjectsMaxCount || !uniqueSubjectsWithin(d.AffectedSubjects, bounds) || len(d.PathIDs) > ContextFabricDriverPathIDsMaxCount || !uniqueTrimmedStrings(d.PathIDs, ContextFabricIdentifierRefMaxLength) || !boundedEvidenceRefs(d.EvidenceRefIDs, bounds.nestedEvidenceRefs, true) {
 		return fmt.Errorf("driver subject, path, or evidence references violate v1 bounds")
 	}
