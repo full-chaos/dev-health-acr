@@ -108,6 +108,7 @@
    {
     "kind": "pull_requests",
     "subject_kinds": [
+     "project",
      "repository",
      "team"
     ],

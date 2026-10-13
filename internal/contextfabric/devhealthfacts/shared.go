@@ -977,10 +977,17 @@ import (
 // status decided over a cut pool says within how many members it ran. A
 // candidate saved under v193 may hold the cut, mismatched set.
 //
-// v194 -> v195: a project status answer serves a truncated readiness fact as a
+// v194 -> v195: pull requests and blockers also serve a project subject (a
+// rollup over the project's issues and their linked pull requests), and an
+// investigation of a project keeps that rollup beside the expanded per-item
+// facts. A repository-restricted caller's investigation also labels the
+// aggregate scope of a team or project fact whose capability declares no
+// subject reference. A stored answer can differ.
+//
+// v195 -> v196: a project status answer serves a truncated readiness fact as a
 // partial estimate coverage driver with source_state truncated. An answer saved
-// under v194 has no such driver.
-const QueryVersion = "devhealthfacts.clickhouse.v195"
+// under v195 has no such driver.
+const QueryVersion = "devhealthfacts.clickhouse.v196"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
