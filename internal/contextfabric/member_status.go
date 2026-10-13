@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // MemberStatusKinds are the member kinds whose status qualifier a read applies
@@ -200,6 +201,27 @@ func withMemberStatusOutsideSet(result InvestigationResult, outside MemberStatus
 	result.Limitations = composed
 	result.LimitationsDisplaced += displaced
 	return result
+}
+
+// statusMeasuredZero reports whether a turn with no subject still read members:
+// the graph context carries the empty member set of a status read that reached
+// members of the kind and kept none. That is a count of zero, not an empty
+// search.
+func statusMeasuredZero(frame *QuestionFrame, cohort *Cohort) bool {
+	if cohort == nil || len(cohort.Members) != 0 {
+		return false
+	}
+	if PullRequestStatusFilterOf(frame) != "" {
+		return cohort.Kind == SubjectPullRequest
+	}
+	kind, status := MemberStatusFilterOf(frame)
+	return status != "" && kind == cohort.Kind
+}
+
+// callerOrganizationSubject is the caller's organization as a subject, in the
+// graph's key form.
+func callerOrganizationSubject(principal storage.Principal) SubjectRef {
+	return SubjectRef{Kind: SubjectOrganization, CanonicalID: "organization:" + principal.OrgID, Label: principal.OrgID}
 }
 
 // coverageReason is the closed reason phrase for the first degrading coverage
