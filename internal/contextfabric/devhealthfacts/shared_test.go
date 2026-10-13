@@ -686,7 +686,7 @@ func TestQueryVersionMovedPastTheThreeCopyLandscape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 212 {
-		t.Fatalf("QueryVersion = %q, want v212 or later -- an answer saved when a landscape fact held each identity's stats once per map must not be reused", devhealthfacts.QueryVersion)
+	if number < 213 {
+		t.Fatalf("QueryVersion = %q, want v213 or later -- an answer saved when a landscape fact held each identity's stats once per map must not be reused", devhealthfacts.QueryVersion)
 	}
 }

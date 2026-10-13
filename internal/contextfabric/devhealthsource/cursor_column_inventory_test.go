@@ -36,7 +36,7 @@ var ingestCursorColumns = map[string]struct{ expr, writer string }{
 	"ci_pipeline_runs":                     {"c.last_synced", "metrics/sinks/clickhouse/ci.py:116-134"},
 	"teams":                                {queryTeamsIngestExpr, "teams.last_synced (011_ensure_teams.sql:8 DEFAULT now()) or the team_repo_ownership write-time watermark"},
 	"projects":                             {"last_synced", "migrations/clickhouse/051_team_attribution_dimensions.sql:13 DEFAULT now64(3)"},
-	"work_item_team_attributions":          {"a.computed_at", "migrations/clickhouse/051_team_attribution_dimensions.sql:89 ReplacingMergeTree(computed_at) (unchanged)"},
+	"work_item_team_attributions":          {workItemTeamsWatermark, "migrations/clickhouse/051_team_attribution_dimensions.sql:89 ReplacingMergeTree(computed_at) (unchanged), max over the rows of one work item and team"},
 	"team_repo_ownership":                  {repositoryTeamsWatermark, "updated_at = write time on every writer (team_repo_ownership_derivation_clickhouse.go:89,692; github_team_catalog.go:269; linear_reference_catalog_route.go:487) folded with repos.last_synced"},
 }
 
