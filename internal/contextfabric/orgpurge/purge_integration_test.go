@@ -308,3 +308,25 @@ func TestGraphOnlyPurgeIsAudited(t *testing.T) {
 	require.NoError(t, r.db.QueryRowContext(context.Background(), `SELECT count(*) FROM acr.audit_events WHERE org_id = $1::uuid AND action = 'org_purged'`, orgGraphOnly).Scan(&n))
 	require.Equal(t, 1, n)
 }
+
+func TestPurgeDurationOnALargeTable(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	const big = "eeeeeeee-0000-4000-8000-000000000005"
+	for _, org := range []string{big, orgKept} {
+		_, err := r.db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at)
+SELECT 'result-' || $1 || '-' || g, $1, '{}', now() FROM generate_series(1, 100000) g`, org)
+		require.NoError(t, err)
+	}
+	started := time.Now()
+	report, err := r.run(t, big, orgpurge.Options{AttestDeleted: true, ConfirmOrgKey: orgpurge.OrgKey(big)})
+	elapsed := time.Since(started)
+	require.NoError(t, err)
+	require.EqualValues(t, 100000, report.Rows["context_fabric_investigation_results"])
+	t.Logf("purge of 100000 rows beside 100000 rows of another organization (investigation_results, 200000 rows scanned by the normalised predicate): %s", elapsed)
+	require.Less(t, elapsed, time.Minute)
+	var kept int
+	require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_investigation_results WHERE org_id = $1`, orgKept).Scan(&kept))
+	require.Equal(t, 100000, kept)
+}
