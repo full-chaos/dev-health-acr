@@ -92,7 +92,8 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 	}
 
 	var teamsWithoutRepos []contextfabric.SubjectRef
-	teamsRequested, projectReachedWithoutRows := 0, 0
+	teamsRequested := 0
+	var projectReachedTeams []projectReachedTeam
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		outcome, scanErr := p.readTeamRollup(ctx, orgID, teamSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if scanErr != nil {
@@ -102,7 +103,7 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 		rejectedCount += outcome.rejected
 		teamsWithoutRepos = append(teamsWithoutRepos, outcome.teamsWithoutRepos...)
 		teamsRequested += outcome.teamsRequested
-		projectReachedWithoutRows += outcome.projectReachedWithoutRows
+		projectReachedTeams = append(projectReachedTeams, outcome.projectReachedTeams...)
 		if outcome.contributed > 0 {
 			grain = grainDaily
 		}
@@ -111,7 +112,7 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 	state, retentionReason := timeBound.retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
 	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsWithoutRepos)
-	applyProjectReachedWithoutRows(&result, projectReachedWithoutRows)
+	applyProjectReachedWithoutRows(&result, query.Subjects, projectReachedTeams)
 	return result, nil
 }
 
@@ -212,7 +213,7 @@ func (p *DeploymentsProvider) readTeamRollup(ctx context.Context, orgID string, 
 		return outcome, err
 	}
 	reachedOnly := reachedOnlyRepositories(reached, owned)
-	outcome.projectReachedWithoutRows = reachedRepositoryCount(reachedOnly)
+	outcome.projectReachedTeams = projectReachedTeamsOf(teamIDs, bySubject, reachedOnly)
 	window := resolveRollupWindow(timeBound, evidence, clock())
 	byRepo := map[string]deploymentRollupRepo{}
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 {

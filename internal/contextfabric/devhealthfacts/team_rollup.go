@@ -253,20 +253,54 @@ func teamProjectReachedOnlyReason(count int) string {
 	return fmt.Sprintf("devhealthfacts: %d repositories reached through owned projects' linked pull requests contribute no repo-level rows for this kind; this is not a measured zero", count)
 }
 
+// projectReachedTeam is one requested team with the repositories reached only
+// through its owned projects.
+type projectReachedTeam struct {
+	subject contextfabric.SubjectRef
+	count   int
+}
+
+// projectReachedTeamsOf lists, in request order, the requested teams that
+// reach a repository only through a project.
+func projectReachedTeamsOf(ids []string, bySubject map[string]contextfabric.SubjectRef, reachedOnly map[string][]teamReachedRepo) []projectReachedTeam {
+	var out []projectReachedTeam
+	for _, id := range ids {
+		if n := len(reachedOnly[id]); n > 0 {
+			out = append(out, projectReachedTeam{subject: bySubject[id], count: n})
+		}
+	}
+	return out
+}
+
 // applyProjectReachedWithoutRows names, on a repo-level kind, the project
-// reached repositories that contribute nothing: not_applicable with the cause
-// when no fact was served, a reason beside the facts otherwise.
-func applyProjectReachedWithoutRows(result *contextfabric.FactProviderResult, count int) {
-	if count <= 0 {
+// reached repositories that contribute nothing. The sentence is true of the
+// teams that reach them, so it rides those teams' own rows; it takes the kind
+// reason (and not_applicable when no fact was served) only when every queried
+// subject is such a team. The request note carries the request-wide count.
+func applyProjectReachedWithoutRows(result *contextfabric.FactProviderResult, queried []contextfabric.SubjectRef, teams []projectReachedTeam) {
+	total := 0
+	scope := make([]contextfabric.SubjectRef, 0, len(teams))
+	for _, team := range teams {
+		total += team.count
+		scope = append(scope, team.subject)
+	}
+	if total <= 0 {
 		return
 	}
-	reason := teamProjectReachedOnlyReason(count)
-	if len(result.Facts) == 0 {
-		result.State = contextfabric.SourceNotApplicable
-		result.Reason = reason
+	if coversEveryQueriedSubject(queried, scope) {
+		reason := teamProjectReachedOnlyReason(total)
+		if len(result.Facts) == 0 && len(result.EvaluatedSubjects) == 0 {
+			result.State = contextfabric.SourceNotApplicable
+			result.Reason = reason
+			return
+		}
+		mergeFactReadReason(result, reason)
 		return
 	}
-	mergeFactReadReason(result, reason)
+	addRequestNote(result, teamProjectReachedOnlyReason(total))
+	for _, team := range teams {
+		addSubjectReasons(result, []contextfabric.SubjectRef{team.subject}, teamProjectReachedOnlyReason(team.count))
+	}
 }
 
 // repoKeysOf is the sorted union of every team's owned repository ids.
@@ -532,9 +566,10 @@ type teamRollupOutcome struct {
 	rejected          int
 	teamsRequested    int
 	teamsWithoutRepos []contextfabric.SubjectRef
-	// projectReachedWithoutRows counts the repositories reached only through
-	// owned projects that a repo-level kind has no rows for.
-	projectReachedWithoutRows int
+	// projectReachedTeams names, with their counts, the teams that reach
+	// repositories only through owned projects that a repo-level kind has no
+	// rows for.
+	projectReachedTeams []projectReachedTeam
 	// linkRowsUnwindowed is set when a historical read counted work through
 	// the issue <> pull request link rows, which carry no validity window:
 	// they are read as they stand now.
