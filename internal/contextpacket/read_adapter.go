@@ -12,6 +12,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/evalfixture"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 const QueryVersionV1 = "context-query.v1"
@@ -37,6 +38,12 @@ type ReadPlan struct {
 	Statement            string
 	// RequestID is for log correlation only; it is not a query binding.
 	RequestID string
+	// WorkItemGrant is the caller's repository grant as the shared work-item
+	// authorization relation reads it. The zero value grants nothing.
+	WorkItemGrant readers.RepositorySelectorSet
+	// ReadableRepositorylessIssueIDs is the gate's answer for work_graph.v1;
+	// empty means no repository-less issue title is served.
+	ReadableRepositorylessIssueIDs []string
 }
 
 // BuildReadPlanV1 creates the only ClickHouse read shape used by this package.
@@ -68,6 +75,7 @@ func BuildReadPlanV1(principal storage.Principal, request contractsv1.ContextPac
 		TimeWindowDays:       request.Scope.TimeWindowDays,
 		IncludeLowConfidence: request.Options.IncludeLowConfidence,
 		Statement:            clickHouseEvidenceQueryV1,
+		WorkItemGrant:        auth.WorkItemRepositorySelectorSet(principal.RepositoryScopes, true),
 	}, nil
 }
 

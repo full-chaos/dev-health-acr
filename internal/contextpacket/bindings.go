@@ -29,6 +29,7 @@ func (p ReadPlan) Bindings() []ClickHouseBinding {
 		{Name: "as_of", Value: asOf},
 		{Name: "time_window_days", Value: uint16(p.TimeWindowDays)},
 		{Name: "include_low_confidence", Value: includeLowConfidence},
+		{Name: "readable_repositoryless_issue_ids", Value: append([]string{}, p.ReadableRepositorylessIssueIDs...)},
 	}
 }
 

@@ -68,11 +68,13 @@ func EndedSQL(d string) string {
 
 // itemReadSQL is, per blocker edge endpoint, the time its relations
 // were last read: max(relations_read_at) when a pass that reads relations
-// wrote it, else its latest work_items sync. present is 1 for an item with a
+// wrote it, else its latest work_items sync. The latest sync is max(last_synced) over the item's versions
+// (work_items is replaced by last_synced), so no FINAL merge is read. present
+// is 1 for an item with a
 // work_items row (a left join gives a default, not NULL, for a missing one).
 func itemReadSQL(alias string) string {
 	return `(SELECT w.work_item_id AS work_item_id, if(r.seen = 1, r.read_at, w.synced) AS synced, 1 AS present
-    FROM (SELECT work_item_id, max(last_synced) AS synced FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + EndpointIDsSQL + ` GROUP BY work_item_id) AS w
+    FROM (SELECT work_item_id, max(last_synced) AS synced FROM work_items WHERE org_id = {org_id:String} AND work_item_id IN ` + EndpointIDsSQL + ` GROUP BY work_item_id) AS w
     LEFT JOIN (SELECT work_item_id, max(relations_read_at) AS read_at, 1 AS seen FROM work_item_relations_read WHERE org_id = {org_id:String} AND work_item_id IN ` + EndpointIDsSQL + ` GROUP BY work_item_id) AS r ON r.work_item_id = w.work_item_id) AS ` + alias
 }
 
