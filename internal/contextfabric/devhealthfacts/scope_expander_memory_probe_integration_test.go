@@ -1,0 +1,229 @@
+package devhealthfacts_test
+
+import (
+	"context"
+	"sort"
+	"testing"
+	"time"
+
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+)
+
+// everyRootFixture: teams A and B both own repository "shared" (A also owns
+// "own") and both own project P; A also owns project Q. Projects P and Q each
+// have an issue linked to a pull request in "shared". Work item "both" is
+// attributed to A and to B and is blocked by "both-blocker". Team C and
+// project R reach the same subjects but are never requested: they must never
+// appear as a root.
+type everyRootFixture struct {
+	orgID                  string
+	shared, own            string
+	teamA, teamB, teamC    contextfabric.SubjectRef
+	projectP, projectQ     contextfabric.SubjectRef
+	projectR               contextfabric.SubjectRef
+	bothItem, pItem, qItem contextfabric.SubjectRef
+}
+
+func seedEveryRootFixture(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string) everyRootFixture {
+	t.Helper()
+	at := time.Now().UTC().Truncate(time.Second)
+	since := at.Add(-30 * 24 * time.Hour)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	f := everyRootFixture{
+		orgID: orgID, shared: repoUUID(orgID + "-shared"), own: repoUUID(orgID + "-own"),
+		teamA: teamSubject("A"), teamB: teamSubject("B"), teamC: teamSubject("C"),
+		projectP: projectSubject("linear", "P"), projectQ: projectSubject("linear", "Q"), projectR: projectSubject("linear", "R"),
+	}
+	for _, repo := range []struct{ id, slug string }{{f.shared, "acme/shared"}, {f.own, "acme/own"}} {
+		exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repo.id, orgID, repo.slug, "github", at)
+	}
+	for _, team := range []string{"A", "B", "C"} {
+		exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
+			team, team, at, orgID, "linear", uint8(1))
+	}
+	for _, own := range []struct{ team, repo, slug string }{{"A", f.shared, "acme/shared"}, {"B", f.shared, "acme/shared"}, {"C", f.shared, "acme/shared"}, {"A", f.own, "acme/own"}} {
+		exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			orgID, "linear", own.team, own.repo, own.slug, "exact", "native", uint8(1), uint16(100), int32(0), since, nil, at)
+	}
+	for _, project := range []string{"P", "Q", "R"} {
+		exec(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			project, orgID, "linear", nil, "Project "+project, uint8(1), "active", "", at)
+	}
+	for _, own := range []struct{ team, project string }{{"A", "P"}, {"B", "P"}, {"C", "P"}, {"A", "Q"}} {
+		exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			orgID, "linear", own.team, own.project, nil, "native", since, nil, at)
+	}
+	for _, item := range []struct{ id, project string }{{"issue-P", "P"}, {"issue-Q", "Q"}, {"issue-R", "R"}, {"item-both", ""}, {"item-both-blocker", ""}} {
+		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			item.id, f.shared, orgID, "linear", "issue "+item.id, "open", "", "", item.project, at)
+	}
+	for number, issue := range map[uint32]string{1: "issue-P", 2: "issue-Q", 3: "issue-R"} {
+		exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+			f.shared, orgID, number, "pr", "open", at, at, "feature", "")
+		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			f.shared, issue, number, float32(1), "native", "", at, orgID)
+	}
+	for _, attribution := range []struct {
+		team    string
+		primary uint8
+	}{{"A", 1}, {"B", 2}, {"C", 2}} {
+		exec(`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			orgID, f.shared, "item-both", attribution.team, "native_team", attribution.primary, "high", at)
+	}
+	exec(`INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		"item-both-blocker", "item-both", "blocks", "Blocks", at, orgID)
+	workItem := func(id string) contextfabric.SubjectRef {
+		canonical, _, err := identity.Derive(identity.KindWorkItem, []string{f.shared, id}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: canonical}
+	}
+	f.bothItem, f.pItem, f.qItem = workItem("item-both"), workItem("issue-P"), workItem("issue-Q")
+	return f
+}
+
+// fillEveryRootOrganization adds rows the guarded statements must not scale
+// with: work items, attributions, ownership and link rows of teams and
+// projects nobody requested.
+func fillEveryRootOrganization(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, f everyRootFixture, prefix string, rows uint64) {
+	t.Helper()
+	at := time.Now().UTC().Truncate(time.Second)
+	for label, statement := range map[string]struct {
+		sql  string
+		args []any
+	}{
+		"work items": {`INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at)
+SELECT concat(?, '-', repeat('x', 64), '-', toString(number)), ?, ?, 'linear', 'filler', 'open', '', '', concat('FILLER-', toString(number % 500)), ? FROM numbers(?)`,
+			[]any{prefix, f.shared, f.orgID, at, rows}},
+		"attributions": {`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at)
+SELECT ?, ?, concat(?, '-', repeat('x', 64), '-', toString(number)), concat('FILLER-', toString(number % 500)), 'native_team', 1, 'high', ? FROM numbers(?)`,
+			[]any{f.orgID, f.shared, prefix, at, rows}},
+		"ownership": {`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+SELECT ?, 'linear', concat('FILLER-', toString(number % 500)), generateUUIDv4(), concat('filler/', ?, toString(number)), 'exact', 'native', 1, 100, 0, ?, NULL, ? FROM numbers(?)`,
+			[]any{f.orgID, prefix, at, at, rows / 10}},
+		"links": {`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+SELECT ?, concat(?, '-', repeat('x', 64), '-', toString(number)), toUInt32(number % 1000 + 10), 1, 'native', '', ?, ? FROM numbers(?)`,
+			[]any{f.shared, prefix, at, f.orgID, rows}},
+	} {
+		if err := direct.Exec(ctx, statement.sql, statement.args...); err != nil {
+			t.Fatalf("%s filler: %v", label, err)
+		}
+	}
+}
+
+type everyRootCase struct {
+	name    string
+	request contextfabric.FactScopeExpansionRequest
+	want    map[string][]string
+}
+
+func (f everyRootFixture) cases() []everyRootCase {
+	repository := func(id string) string {
+		return contextfabric.FactSubjectKey(contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + id})
+	}
+	key := contextfabric.FactSubjectKey
+	ids := func(refs ...contextfabric.SubjectRef) []string {
+		out := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			out = append(out, ref.CanonicalID)
+		}
+		sort.Strings(out)
+		return out
+	}
+	now := time.Now().UTC()
+	request := func(policy contextfabric.FactScopePolicy, kind contextfabric.FactKind, target contextfabric.SubjectKind, axis contextfabric.TimeContext, origins ...contextfabric.SubjectRef) contextfabric.FactScopeExpansionRequest {
+		return contextfabric.FactScopeExpansionRequest{
+			Principal: storage.Principal{OrgID: f.orgID}, RequirementKind: kind, Origins: origins,
+			Policy: policy, TargetKind: target, TimeContext: axis, Limit: 200,
+		}
+	}
+	current := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
+	validTime := contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &now}
+	return []everyRootCase{
+		{"project repositories", request(contextfabric.FactScopePolicyProjectWorkItemRepository, contextfabric.FactMetrics, contextfabric.SubjectRepository, current, f.projectP, f.projectQ),
+			map[string][]string{repository(f.shared): ids(f.projectP, f.projectQ)}},
+		{"project repositories as of", request(contextfabric.FactScopePolicyProjectWorkItemRepository, contextfabric.FactMetrics, contextfabric.SubjectRepository, validTime, f.projectP, f.projectQ),
+			map[string][]string{repository(f.shared): ids(f.projectP, f.projectQ)}},
+		{"team repositories", request(contextfabric.FactScopePolicyTeamPrimaryAttributionRepository, contextfabric.FactMetrics, contextfabric.SubjectRepository, current, f.teamA, f.teamB),
+			map[string][]string{repository(f.shared): ids(f.teamA, f.teamB), repository(f.own): ids(f.teamA)}},
+		{"team work items", request(contextfabric.FactScopePolicyTeamPrimaryAttributionWorkItemStatus, contextfabric.FactStatus, contextfabric.SubjectWorkItem, current, f.teamA, f.teamB),
+			map[string][]string{key(f.bothItem): ids(f.teamA, f.teamB)}},
+		{"project work items", request(contextfabric.FactScopePolicyProjectWorkItemStatus, contextfabric.FactStatus, contextfabric.SubjectWorkItem, current, f.projectP, f.projectQ),
+			map[string][]string{key(f.pItem): ids(f.projectP), key(f.qItem): ids(f.projectQ)}},
+		{"team owned repositories", request(contextfabric.FactScopePolicyTeamRepositoryOwnershipContinuousIntegration, contextfabric.FactContinuousIntegration, contextfabric.SubjectRepository, current, f.teamA, f.teamB),
+			map[string][]string{repository(f.shared): ids(f.teamA, f.teamB), repository(f.own): ids(f.teamA)}},
+		{"project linked repositories", request(contextfabric.FactScopePolicyProjectIssuePullRequestDeployments, contextfabric.FactDeployments, contextfabric.SubjectRepository, current, f.projectP, f.projectQ),
+			map[string][]string{repository(f.shared): ids(f.projectP, f.projectQ)}},
+		{"project owning teams", request(contextfabric.FactScopePolicyProjectTeamOwnershipOperationalDeficiencies, contextfabric.FactOperationalDeficiencies, contextfabric.SubjectTeam, current, f.projectP, f.projectQ),
+			map[string][]string{key(f.teamA): ids(f.projectP, f.projectQ), key(f.teamB): ids(f.projectP), key(f.teamC): ids(f.projectP)}},
+	}
+}
+
+// everyRootStatementFragments names each expander statement by a fragment its
+// text carries with or without the origin id arrays.
+var everyRootStatementFragments = []struct{ label, table, fragment string }{
+	{"projectRepositories", "work_items", "min(p.id), argMax(l.provenance, l.link_rank)"},
+	{"projectRepositoriesAsOf", "work_items", "max(a.via_history) AS via_history"},
+	{"teamRepositories", "team_repo_ownership", "argMin(source, source_rank) AS best_source"},
+	{"teamWorkItems", "work_items", "min(a.team_id) AS origin_id"},
+	{"projectWorkItems", "work_items", "p.id)) AS origin_id"},
+	{"teamOwnedRepositoryCandidates", "team_repo_ownership", "min(own.team_id)"},
+	{"projectLinkedRepositories", "work_items", "AS link_state"},
+	{"projectOwningTeams", "team_project_ownership", "AS project_key, ifNull(any(t.name)"},
+}
+
+// A measurement probe, not a guard: each expander statement's peak memory at
+// two sizes of unrelated organization data, logged per statement.
+func TestProbeScopeExpanderStatementMemoryByOrganizationSize(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
+		options.MaxBytesToRead = &maxBytesToRead
+	})
+	for _, statement := range devhealthschema.DDL(append(append([]string{}, sharedClickHouseTables...), "project_membership_transitions", "work_item_dependencies")...) {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	fixture := seedEveryRootFixture(t, ctx, direct, "6a3e1f90-7b2c-4d58-9e14-3c8b5f0a2d71")
+	expander := devhealthfacts.NewScopeExpander(query)
+	read := func() map[string]uint64 {
+		mark := serverNowMicros(t, ctx, direct)
+		for _, tc := range fixture.cases() {
+			if _, err := expander.ExpandFactScope(ctx, tc.request); err != nil {
+				t.Fatalf("%s: ExpandFactScope: %v: %s", tc.name, err, readFailureCause(err))
+			}
+		}
+		peaks := map[string]uint64{}
+		for _, statement := range everyRootStatementFragments {
+			for _, peak := range statementMemorySince(t, ctx, direct, statementFilter{Table: statement.table, QueryContains: statement.fragment}, mark) {
+				if peak > peaks[statement.label] {
+					peaks[statement.label] = peak
+				}
+			}
+		}
+		return peaks
+	}
+	fillEveryRootOrganization(t, ctx, direct, fixture, "small", 100_000)
+	read()
+	small := read()
+	fillEveryRootOrganization(t, ctx, direct, fixture, "large", 200_000)
+	large := read()
+	for _, statement := range everyRootStatementFragments {
+		t.Logf("PROBE %s small=%d large=%d", statement.label, small[statement.label], large[statement.label])
+	}
+}
