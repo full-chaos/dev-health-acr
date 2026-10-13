@@ -45,7 +45,10 @@ type linkedProdShape struct {
 	issueTailEvery, issueTailN        int
 	issueMidEvery, issueMidN          int
 	issueBasePct, lookupPct           int
-	padHashes                         int
+	// Every unit with u % extremeEvery = 3 is as wide as the widest in prod:
+	// extremePRs pull requests and extremeIssues issue references.
+	extremeEvery, extremePRs, extremeIssues int
+	padHashes                               int
 }
 
 // Largest real prod organization (read-only counts, 2026-10-13):
@@ -70,6 +73,7 @@ var linkedMemoryProdShape = linkedProdShape{
 	prTailEvery: 280, prTailN: 100, prMidEvery: 34, prMidN: 20, prBasePct: 46,
 	issueTailEvery: 290, issueTailN: 300, issueMidEvery: 19, issueMidN: 20,
 	issueBasePct: 50, lookupPct: 41,
+	extremeEvery: 6000, extremePRs: 205, extremeIssues: 776,
 	padHashes: 9,
 }
 
@@ -164,8 +168,8 @@ FROM (SELECT number AS k, (number * 7) % ? AS pr FROM numbers(?))`,
 		SELECT u, v, np, ni, if(ni > 2, intDiv(ni, 4), if(u % 100 < ?, ni, 0)) AS nl
 		FROM (
 			SELECT u, v,
-				multiIf(u % ? = 0, ?, u % ? = 0, ?, toUInt64(u % 100 < ?)) AS np,
-				multiIf(u % ? = 1, ?, u % ? = 1, ?, 1 + toUInt64(u % 100 < ?)) AS ni
+				multiIf(u % ? = 3, ?, u % ? = 0, ?, u % ? = 0, ?, toUInt64(u % 100 < ?)) AS np,
+				multiIf(u % ? = 3, ?, u % ? = 1, ?, u % ? = 1, ?, 1 + toUInt64(u % 100 < ?)) AS ni
 			FROM (SELECT intDiv(number, 2) AS u, number % 2 AS v FROM numbers(?))
 			WHERE v = ? AND (v = 0 OR u % 100 < ?)
 		)
@@ -176,8 +180,8 @@ FROM (SELECT number AS k, (number * 7) % ? AS pr FROM numbers(?))`,
 			uint64(s.padHashes),
 			at, orgID,
 			uint64(s.lookupPct),
-			uint64(s.prTailEvery), uint64(s.prTailN), uint64(s.prMidEvery), uint64(s.prMidN), uint64(s.prBasePct),
-			uint64(s.issueTailEvery), uint64(s.issueTailN), uint64(s.issueMidEvery), uint64(s.issueMidN), uint64(s.issueBasePct),
+			uint64(s.extremeEvery), uint64(s.extremePRs), uint64(s.prTailEvery), uint64(s.prTailN), uint64(s.prMidEvery), uint64(s.prMidN), uint64(s.prBasePct),
+			uint64(s.extremeEvery), uint64(s.extremeIssues), uint64(s.issueTailEvery), uint64(s.issueTailN), uint64(s.issueMidEvery), uint64(s.issueMidN), uint64(s.issueBasePct),
 			uint64(2*s.units), version, uint64(s.secondVersionPct))
 	}
 	exec(`INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?, 'run-1', ?)`, orgID, at.Add(time.Hour))
