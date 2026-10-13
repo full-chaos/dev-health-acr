@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"regexp"
 	"strconv"
@@ -42,7 +43,15 @@ type MemoryNearCap struct {
 	Statement string
 	PeakBytes uint64
 	CapBytes  uint64
+	// PeakIsLowerBound is true when the server refused the statement with a
+	// memory-limit exception before any peak value was read: PeakBytes is then
+	// the cap, and the real peak is at least that.
+	PeakIsLowerBound bool
 }
+
+// memoryLimitExceededCode is the ClickHouse exception code of a statement that
+// went over max_memory_usage.
+const memoryLimitExceededCode = 241
 
 // MemoryNearCapObserver is called once per finished statement above the
 // near-cap share. It must not block.
@@ -115,10 +124,30 @@ func (c memoryCappedQueryClient) Query(ctx context.Context, statement string, bi
 		}))
 	}
 	rows, err := c.inner.Query(clickhousedriver.Context(ctx, driverOptions...), statement, bindings)
-	if err != nil || rows == nil || (c.observer == nil && c.unobserved == nil) {
+	if err != nil {
+		c.observeRefused(ctx, statement, err, peak.Load())
+		return rows, err
+	}
+	if rows == nil || (c.observer == nil && c.unobserved == nil) {
 		return rows, err
 	}
 	return &memoryObservedRows{ClickHouseRowScanner: rows, ctx: ctx, statement: statement, client: c, peak: &peak}, nil
+}
+
+func (c memoryCappedQueryClient) observeRefused(ctx context.Context, statement string, err error, peak uint64) {
+	if c.observer == nil {
+		return
+	}
+	var exception *clickhousedriver.Exception
+	if !errors.As(err, &exception) || exception.Code != memoryLimitExceededCode {
+		return
+	}
+	capBytes := effectiveStatementCap(statement, c.capBytes)
+	lowerBound := peak < capBytes
+	if lowerBound {
+		peak = capBytes
+	}
+	c.observer(ctx, MemoryNearCap{Statement: statement, PeakBytes: peak, CapBytes: capBytes, PeakIsLowerBound: lowerBound})
 }
 
 var statementMemorySetting = regexp.MustCompile(`(?i)\bmax_memory_usage\s*=\s*([0-9]+)`)
@@ -180,7 +209,7 @@ func NewSlogMemoryNearCapObserver(logger *slog.Logger, count func(context.Contex
 		}
 		logger.WarnContext(ctx, "clickhouse statement memory near cap",
 			"statement_sha", hex.EncodeToString(sum[:6]), "statement_head", head,
-			"peak_bytes", near.PeakBytes, "cap_bytes", near.CapBytes)
+			"peak_bytes", near.PeakBytes, "cap_bytes", near.CapBytes, "peak_is_lower_bound", near.PeakIsLowerBound)
 	}
 }
 
