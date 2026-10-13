@@ -375,6 +375,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	unmerged(t, "small")
 	var callers []linkHelperCaller
 	t.Run("link helper callers outside the expander", func(t *testing.T) { callers = linkHelperCallersDifferential(t, ctx, query, fixture) })
+	t.Run("link helper callers at the smaller size", func(t *testing.T) { linkHelperCallersCost(t, ctx, query, direct, callers) })
 	mergeScopeTables(t, ctx, direct)
 	smallStatements := served(t)
 	t.Run("rows at the smaller size", func(t *testing.T) { differential(t, smallStatements) })
@@ -525,7 +526,12 @@ func linkHelperCallersCost(t *testing.T, ctx context.Context, query *runtimeclic
 	if len(callers) == 0 {
 		t.Fatal("no link helper caller was captured at the smaller size")
 	}
-	run := func(statement capturedStatement) (memory, readBytes uint64, code int32, err error) {
+	var workItems, links uint64
+	if err := direct.QueryRow(ctx, `SELECT (SELECT count() FROM work_items), (SELECT count() FROM work_graph_issue_pr)`).Scan(&workItems, &links); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	t.Logf("CALLER stage: work_items %d rows, work_graph_issue_pr %d rows", workItems, links)
+	run := func(statement capturedStatement) (memory, readBytes, readRows uint64, code int32, err error) {
 		mark := serverNowMicros(t, ctx, direct)
 		rows, err := query.Query(ctx, statement.statement, statement.bindings)
 		if err == nil {
@@ -537,12 +543,12 @@ func linkHelperCallersCost(t *testing.T, ctx context.Context, query *runtimeclic
 		if flushErr := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); flushErr != nil {
 			t.Fatalf("flush logs: %v", flushErr)
 		}
-		if scanErr := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), max(exception_code) FROM system.query_log
+		if scanErr := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), max(read_rows), max(exception_code) FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
-  AND position(query, 'git_pull_requests') > 0`, mark).Scan(&memory, &readBytes, &code); scanErr != nil {
+  AND position(query, 'git_pull_requests') > 0`, mark).Scan(&memory, &readBytes, &readRows, &code); scanErr != nil {
 			t.Fatalf("read query_log: %v", scanErr)
 		}
-		return memory, readBytes, code, err
+		return memory, readBytes, readRows, code, err
 	}
 	for _, caller := range callers {
 		memoryCap := contextpacket.APIStatementMaxMemoryUsage
@@ -552,9 +558,9 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
 			}
 		}
 		readCap := uint64(config.DefaultClickHouseMaxBytesToRead)
-		memory, readBytes, code, err := run(caller.served)
-		wholeMemory, wholeRead, wholeCode, wholeErr := run(capturedStatement{statement: caller.whole, bindings: caller.served.bindings})
-		t.Logf("CALLER %s served: memory=%d read_bytes=%d code=%d; whole-table form: memory=%d read_bytes=%d code=%d (caps: memory %d, read %d)", caller.label, memory, readBytes, code, wholeMemory, wholeRead, wholeCode, memoryCap, readCap)
+		memory, readBytes, readRows, code, err := run(caller.served)
+		wholeMemory, wholeRead, wholeRows, wholeCode, wholeErr := run(capturedStatement{statement: caller.whole, bindings: caller.served.bindings})
+		t.Logf("CALLER %s served: memory=%d read_bytes=%d read_rows=%d code=%d; whole-table form: memory=%d read_bytes=%d read_rows=%d code=%d (caps: memory %d, read %d)", caller.label, memory, readBytes, readRows, code, wholeMemory, wholeRead, wholeRows, wholeCode, memoryCap, readCap)
 		if wholeErr != nil {
 			t.Logf("CALLER %s whole-table form failed: %v", caller.label, wholeErr)
 		}
