@@ -143,6 +143,11 @@ type memberStatusWalk struct {
 	// is a lower bound.
 	outsideSet     int
 	outsideAtLeast bool
+	// matched counts the authorized members holding the status: the members
+	// kept, or when the member cap cut a set whose every member was decided,
+	// the bounded count of the matches; matchedAtLeast: that count was cut.
+	matched        int
+	matchedAtLeast bool
 }
 
 func (w *memberStatusWalk) add(other memberStatusWalk) {
@@ -157,6 +162,8 @@ func (w *memberStatusWalk) add(other memberStatusWalk) {
 	w.poolUnknown = w.poolUnknown || other.poolUnknown || (other.poolCut && other.pool < 0)
 	w.outsideSet += other.outsideSet
 	w.outsideAtLeast = w.outsideAtLeast || other.outsideAtLeast
+	w.matched += other.matched
+	w.matchedAtLeast = w.matchedAtLeast || other.matchedAtLeast
 }
 
 // memberStatusPageCap bounds how many pages one status member read takes. A
@@ -274,14 +281,24 @@ func (a *Adapter) statusPagedHits(ctx context.Context, key, orgID string, state 
 // shows it read the whole pool; a review read stopped by a filled cap is cut,
 // since the open pull requests past it were not decided. count reads the
 // authorized pool: its size, and whether that bounded read was itself cut.
+//
+// A read of a stored status stopped by a filled cap is not a cut: every member
+// it read holds the status, so the cap cut a decided set. The count is then the
+// number of matches the answer states it listed some of.
 func (state treeWalkState) decidePoolCut(count func() (int, bool, error)) error {
 	out := state.out
-	if !out.status.pageCapped && !(out.status.capFilled && state.status.reviewDerived()) {
+	out.status.matched = out.status.kept
+	capped := out.status.capFilled && !state.status.reviewDerived()
+	if !out.status.pageCapped && !out.status.capFilled {
 		return nil
 	}
 	pool, poolCut, err := count()
 	if err != nil {
 		return err
+	}
+	if capped {
+		out.status.matched, out.status.matchedAtLeast = max(pool, out.status.kept), poolCut
+		return nil
 	}
 	if poolCut {
 		pool = -1

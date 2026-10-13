@@ -1522,6 +1522,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		statusOutsideSet, statusOutsideAtLeast = statusWalk.outsideSet, statusWalk.outsideAtLeast
 	}
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
+	cohortPopulationLowerBound := cohortPoolTruncated
+	if statusWalk.applied && statusWalk.matched > cohortPopulation {
+		// The member cap cut a set of decided matches: the population is the
+		// counted matches, a lower bound only when that count was cut.
+		cohortPopulation, cohortPopulationLowerBound = statusWalk.matched, statusWalk.matchedAtLeast
+	}
 	cohortKindScopedAuthzDropped, anchorReachDenied := anchorReachDeniedCount(cohortKind, cohortNodes, principal, request, edgeFilters.ReachDenied, cohortKindScopedAuthzDropped)
 	if cohort != nil && deploymentAnchor != nil {
 		// Every member was reached from the anchor, so the member says so
@@ -1840,7 +1846,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphValidityUnbounded, false, &unboundedCount, validityReason, "context-fabric:graph-validity-windows")
 	}
 	return contextfabric.GraphContext{
-		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation, CohortPopulationLowerBound: cohortPoolTruncated,
+		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation, CohortPopulationLowerBound: cohortPopulationLowerBound,
 		CohortMemberSource:     cohortMemberSource,
 		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: statusOutsideSet, AtLeast: statusOutsideAtLeast},
 		MemberStatusPoolCut:    statusPoolCut,

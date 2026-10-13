@@ -544,14 +544,24 @@ func TestAMeasuredZeroIsNeverServedAsNoMatch(t *testing.T) {
 
 // TestMoreMatchesThanTheCapAreACappedSetNotACut: 40 open pull requests hold
 // the status and 25 are served. The status was decided for every pull request
-// read, so the set is truncated by the member cap and no sentence says the
-// status was decided within a cut read.
+// read, so the set is truncated by the member cap: the answer states 25 of the
+// 40 matches, and no sentence says the status was decided within a cut read.
 func TestMoreMatchesThanTheCapAreACappedSetNotACut(t *testing.T) {
 	for _, anchored := range []bool{true, false} {
 		t.Run(fmt.Sprintf("anchored=%v", anchored), func(t *testing.T) {
 			result, _ := investigateOrganizationPullRequests(t, organizationPullRequests(60, 20), "open", storage.Principal{OrgID: "org-1"}, anchored)
 			if result.Cohort == nil || len(result.Cohort.Members) != 25 || !result.Cohort.Truncated {
 				t.Fatalf("cohort = %+v, want 25 open pull requests, truncated", result.Cohort)
+			}
+			if result.Cohort.Population != 40 || result.Cohort.PopulationLowerBound {
+				t.Fatalf("population = %d (lower bound %v), want exactly the 40 matches", result.Cohort.Population, result.Cohort.PopulationLowerBound)
+			}
+			listed := false
+			for _, limitation := range result.Limitations {
+				listed = listed || strings.Contains(limitation, "25 of 40")
+			}
+			if !listed {
+				t.Fatalf("limitations %q, want the 25 of 40 listed disclosure", result.Limitations)
 			}
 			for _, limitation := range result.Limitations {
 				if contractsv1.IsContextFabricMemberStatusPoolCutLimitation(limitation) {
