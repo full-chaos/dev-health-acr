@@ -58,6 +58,7 @@ var factSchemaTables = []string{
 	// ownership chain and the issue-to-pull-request links into every
 	// work-item reader's statement.
 	"team_repo_ownership", "work_graph_issue_pr",
+	"sprints",
 }
 
 // TestLiveSchemaParityAcrossEveryFactProvider is the round-2 F1 guard: no
@@ -150,6 +151,12 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		"proj-parity", orgID, "github", "PARITY", "Parity Project", uint8(1), "active", "", at)
 	seed("team_project_ownership", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		orgID, "github", "CHAOS", "proj-parity", "PARITY", "native", at, nil, at)
+	seed("projects", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, state_source, target_date, url, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"proj-commitment", orgID, "github", nil, "Commitment Project", uint8(1), "started", "github.project.state", at, "", at)
+	seed("work_items", `INSERT INTO work_items (work_item_id, org_id, repo_id, provider, type, status, title, project_id, created_at, due_at, sprint_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"WI-C", orgID, repoID, "github", "issue", "todo", "Commitment work item", "proj-commitment", at, at, "ghms:parity:1")
+	seed("sprints", `INSERT INTO sprints (provider, sprint_id, ended_at, last_synced, org_id) VALUES (?, ?, ?, ?, ?)`,
+		"github", "ghms:parity:1", at, at, orgID)
 	// CHAOS-4398: readTeamThemeMix's own tables -- work_unit_investments'
 	// evidence names WI-1 (already seeded above), and
 	// work_item_team_attributions attributes WI-1 to team CHAOS
@@ -186,6 +193,7 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		contextfabric.FactSourceHealth:            organizationSubject(orgID),
 		contextfabric.FactFlow:                    teamSubject("CHAOS"),
 		contextfabric.FactLandscape:               teamSubject("CHAOS"),
+		contextfabric.FactCommitment:              projectSubject("github", "proj-commitment"),
 	}
 
 	providers := devhealthfacts.NewProviders(client)
