@@ -2,6 +2,7 @@ package hosted
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"testing"
@@ -110,4 +111,35 @@ func profileEventNames(t *testing.T, dsn string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Against a real server, a statement the server refuses with a memory-limit
+// exception is counted as near its cap with a peak that is a lower bound, and
+// the caller still gets the server's error.
+func TestMemoryNearCapObserverSeesAMemoryLimitRefusal(t *testing.T) {
+	ctx := context.Background()
+	dsn := chserver.StartDSN(t, ctx)
+	raw, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{DSN: dsn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	var seen []contextpacket.MemoryNearCap
+	client := contextpacket.NewMemoryCappedQueryClient(raw, contextpacket.APIStatementMaxMemoryUsage,
+		contextpacket.WithMemoryNearCapObserver(func(_ context.Context, near contextpacket.MemoryNearCap) { seen = append(seen, near) }))
+	const statement = "SELECT toString(count()) FROM (SELECT number FROM numbers(2000000) GROUP BY number) SETTINGS max_memory_usage = 1048576"
+	rows, err := client.Query(ctx, statement, nil)
+	if err == nil {
+		for rows.Next() {
+		}
+		err = rows.Err()
+		_ = rows.Close()
+	}
+	var exception *clickhousedriver.Exception
+	if !errors.As(err, &exception) || exception.Code != 241 {
+		t.Fatalf("caller got %v, want the server's 241 exception", err)
+	}
+	if len(seen) != 1 || seen[0].CapBytes != 1048576 || seen[0].PeakBytes < 1048576 {
+		t.Fatalf("observer saw %+v, want one near-cap at the 1 MiB statement cap", seen)
+	}
 }
