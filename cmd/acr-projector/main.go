@@ -36,8 +36,9 @@ Commands:
                      disaster-recovery lever for a flip that should not have
                      happened. Refused outside the grace window.
   purge --org ID    remove every graph and Postgres trace of an organization that
-                     left Dev Health (--dry-run counts first; needs --attest-deleted
-                     and --confirm-hash from the dry run; audit_events are kept;
+                     left Dev Health (--dry-run counts first; needs
+                     --confirm-hash from the dry run and a positive
+                     unknown-organization answer from Dev Health; audit_events are kept;
                      legal_hold episodes are kept).
   priors <sub>       CHAOS-3977 P5's own Bridge prior store operator surface
                      (curate/flip/rollback/revoke) -- see 'priors --help'.

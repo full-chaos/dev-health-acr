@@ -43,10 +43,13 @@ type EffectiveSet interface {
 	EffectiveOrgs() []string
 }
 
-// Entitlements reports whether Dev Health answers HTTP 200 for the
-// organization, whatever the body holds: a 200 means it still exists there.
+// Entitlements asks Dev Health whether the organization is gone. It returns
+// true only on a positive unknown-organization answer; false with a nil error
+// means Dev Health still answers for it, and an error means the answer is
+// unavailable (outage, timeout, malformed id, an answer without the stable
+// code). Only true lets a purge proceed.
 type Entitlements interface {
-	AnswersFor(ctx context.Context, orgID string) bool
+	OrganizationUnknown(ctx context.Context, orgID string) (bool, error)
 }
 
 type Locker interface {
@@ -64,7 +67,6 @@ type Purger struct {
 
 type Options struct {
 	DryRun          bool
-	AttestDeleted   bool
 	ConfirmOrgKey   string
 	DeleteBatchHint int
 }
@@ -165,9 +167,6 @@ func (p *Purger) Run(ctx context.Context, orgID string, opts Options) (Report, e
 	orgID = parsed.String()
 	report.OrgKey = OrgKey(orgID)
 	if !opts.DryRun {
-		if !opts.AttestDeleted {
-			return report, fmt.Errorf("%w: --attest-deleted is required", ErrRefused)
-		}
 		if opts.ConfirmOrgKey != report.OrgKey {
 			return report, fmt.Errorf("%w: --confirm-hash does not match the organization key (run --dry-run to read it)", ErrRefused)
 		}
@@ -180,7 +179,11 @@ func (p *Purger) Run(ctx context.Context, orgID string, opts Options) (Report, e
 			return report, fmt.Errorf("%w: organization is in the projector set (static list or discovery)", ErrRefused)
 		}
 	}
-	if p.Entitlements.AnswersFor(ctx, orgID) {
+	unknown, err := p.Entitlements.OrganizationUnknown(ctx, orgID)
+	if err != nil {
+		return report, fmt.Errorf("%w: cannot prove Dev Health no longer knows this organization: Dev Health is unavailable or gave no positive answer", ErrRefused)
+	}
+	if !unknown {
 		return report, fmt.Errorf("%w: Dev Health still answers for this organization", ErrRefused)
 	}
 
