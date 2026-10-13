@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -114,7 +116,7 @@ func handleReadFacts(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.CallTo
 	raw := rawArgs(req)
 	var input readFactsInput
 	if err := decodeToolArguments(raw, &input, false); err != nil {
-		return toolErrorResult(&classifiedError{category: "validation", message: toolArgumentsMessage(toolReadFacts, err)}), nil
+		return toolErrorResult(&classifiedError{category: "validation", message: readFactsDecodeMessage(err)}), nil
 	}
 	if err := input.validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "read_facts arguments failed schema validation: " + err.Error()}), nil
@@ -136,4 +138,14 @@ func handleReadFacts(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.CallTo
 		return toolErrorResult(&classifiedError{category: "internal", message: "the hosted read_facts response was not valid JSON"}), nil
 	}
 	return buildToolResult(json.RawMessage(compact.Bytes()), compact.String())
+}
+
+const readFactsSubjectShapeMessage = "read_facts subjects must be objects of the form {\"kind\": \"project\", \"canonical_id\": \"...\"}; find_subjects returns each subject in this shape, copy it unchanged"
+
+func readFactsDecodeMessage(err error) string {
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) && strings.HasPrefix(typeErr.Field, "subjects") {
+		return readFactsSubjectShapeMessage
+	}
+	return toolArgumentsMessage(toolReadFacts, err)
 }
