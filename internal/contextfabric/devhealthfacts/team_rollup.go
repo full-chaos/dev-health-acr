@@ -150,9 +150,14 @@ func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 	owned := `(SELECT p.provider AS provider, p.join_key AS join_key FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
     INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
     WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)})`
+	// The linked ids are intersected with the owned projects' work items on
+	// the unmerged rows first (a row of any version carrying an owned project
+	// is a superset of the work items whose latest version does), so the FINAL
+	// read below holds only those candidates, not every linked work item.
+	candidates := `(SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN ` + linkedWorkItemIDsSQL + `
+      AND (cp.provider, cp.project_id) IN ` + owned + `)`
 	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
-    LEFT SEMI JOIN ` + linkedWorkItemIDsDistinctSQL + ` AS k ON k.work_item_id = cw.work_item_id
-    WHERE cw.org_id = {org_id:String}
+    WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + candidates + `
       AND (cw.provider, cw.project_id) IN ` + owned + ` AND ` + workItemIsIssueSQL("cw") + `)`
 	return `(
   SELECT DISTINCT t.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank

@@ -50,59 +50,53 @@ func TestTeamProjectReachedStatementMemoryFollowsOwnedProjectsNotOrganizationLin
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
-	t.Run("organization links", func(t *testing.T) {
-		var from uint64
-		measureTeamReachAxis(t, ctx, query, direct, orgLinksMemoryOrg, func(exec func(string, ...any), org string, count int) {
-			n := count
+	linkFiller := func(prefix, project, prRepo string) func(exec func(string, ...any), org string, from, count int) {
+		return func(exec func(string, ...any), org string, from, count int) {
 			at := ts(2026, 9, 29, 0, 0, 0)
-			exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
-SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?, ?)`,
-				repoUUID("repo-filler"), org, at, from, uint64(n))
-			exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body)
+			const batches = 20
+			for b := 0; b < batches; b++ {
+				first, n := uint64(from+b*count/batches), uint64((b+1)*count/batches-b*count/batches)
+				exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
+SELECT concat('`+prefix+`-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', ?, NULL FROM numbers(?, ?)`,
+					repoUUID("repo-filler"), org, at, project, first, n)
+				exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body)
 SELECT ?, ?, toUInt32(number + 1000), 'pr', 'open', ?, ?, NULL, NULL, 'feature', '' FROM numbers(?, ?)`,
-				repoUUID("repo-filler"), org, at, at, from, uint64(n))
-			exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
-SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), toUInt32(number + 1000), 1, 'native', '', ?, ? FROM numbers(?, ?)`,
-				repoUUID("repo-filler"), at, org, from, uint64(n))
-			from += uint64(n)
-		}, "organization links outside the owned projects", orgLinksMemoryFillerLinks, orgLinksMemoryFillerLinks+orgLinksMemoryMoreLinks, orgLinksMemoryCeilingLinks, axisGuard{reportOnly: true})
-	})
-	t.Run("links inside the owned projects", func(t *testing.T) {
-		var from uint64
-		measureTeamReachAxis(t, ctx, query, direct, ownedLinksMemoryOrg, func(exec func(string, ...any), org string, count int) {
-			at := ts(2026, 9, 29, 0, 0, 0)
-			exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
-SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'owned', 'open', '', ?, '', 'linear', 'proj-owner', NULL FROM numbers(?, ?)`,
-				repoUUID("repo-filler"), org, at, from, uint64(count))
-			exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body)
-SELECT ?, ?, toUInt32(number + 1000), 'pr', 'open', ?, ?, NULL, NULL, 'feature', '' FROM numbers(?, ?)`,
-				repoUUID("repo-reached"), org, at, at, from, uint64(count))
-			exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
-SELECT ?, concat('owned-', repeat('x', 96), '-', toString(number)), toUInt32(number + 1000), 1, 'native', '', ?, ? FROM numbers(?, ?)`,
-				repoUUID("repo-reached"), at, org, from, uint64(count))
-			from += uint64(count)
-		}, "links inside the owned projects", prodLinkedIssues, 4*prodLinkedIssues, orgLinksMemoryCeilingLinks, axisGuard{linear: true, smallPeakMax: prodEstimatePeakBytes})
-	})
+					repoUUID(prRepo), org, at, at, first, n)
+				exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+SELECT ?, concat('`+prefix+`-', repeat('x', 96), '-', toString(number)), toUInt32(number + 1000), 1, 'native', '', ?, ? FROM numbers(?, ?)`,
+					repoUUID(prRepo), at, org, first, n)
+			}
+		}
+	}
+	for _, merged := range []bool{false, true} {
+		mode := map[bool]string{false: "unmerged", true: "merged"}[merged]
+		t.Run("organization links outside the owned projects "+mode, func(t *testing.T) {
+			measureTeamReachAxis(t, ctx, query, direct, orgLinksMemoryOrg+"-"+mode, merged, linkFiller("outside", "", "repo-filler"),
+				"organization links outside the owned projects "+mode, prodLinkedIssues, 90_000, orgLinksMemoryCeilingLinks, axisGuard{reportOnly: true})
+		})
+		t.Run("links inside the owned projects "+mode, func(t *testing.T) {
+			measureTeamReachAxis(t, ctx, query, direct, ownedLinksMemoryOrg+"-"+mode, merged, linkFiller("owned", "proj-owner", "repo-reached"),
+				"links inside the owned projects "+mode, prodLinkedIssues, 4*prodLinkedIssues, orgLinksMemoryCeilingLinks, axisGuard{reportOnly: true})
+		})
+	}
 	t.Run("project ownership history", func(t *testing.T) {
-		var versions uint64
-		measureTeamReachAxis(t, ctx, query, direct, ownershipHistoryProjectOrg, func(exec func(string, ...any), org string, count int) {
+		measureTeamReachAxis(t, ctx, query, direct, ownershipHistoryProjectOrg, false, func(exec func(string, ...any), org string, from, count int) {
 			n := count
 			exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at)
 SELECT ?, 'linear', 'team-owner', 'proj-owner', NULL, 'native', addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ?) * 3600),
   addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ? + 1) * 3600), toDateTime64('2026-09-29 00:00:00', 3, 'UTC') FROM numbers(?)`,
-				org, versions, versions, uint64(n))
-			versions += uint64(n)
+				org, uint64(from), uint64(from), uint64(n))
+
 		}, "project ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0, axisGuard{})
 	})
 	t.Run("repository ownership history", func(t *testing.T) {
-		var versions uint64
-		measureTeamReachAxis(t, ctx, query, direct, ownershipHistoryRepoOrg, func(exec func(string, ...any), org string, count int) {
+		measureTeamReachAxis(t, ctx, query, direct, ownershipHistoryRepoOrg, false, func(exec func(string, ...any), org string, from, count int) {
 			n := count
 			exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
 SELECT ?, 'linear', 'team-owner', ?, 'acme/repo-filler', 'exact', 'native', 1, 100, 0, addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ?) * 3600),
   addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ? + 1) * 3600), toDateTime64('2026-09-29 00:00:00', 3, 'UTC') FROM numbers(?)`,
-				org, repoUUID("repo-filler"), versions, versions, uint64(n))
-			versions += uint64(n)
+				org, repoUUID("repo-filler"), uint64(from), uint64(from), uint64(n))
+
 		}, "repository ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0, axisGuard{})
 	})
 }
@@ -111,8 +105,8 @@ SELECT ?, 'linear', 'team-owner', ?, 'acme/repo-filler', 'exact', 'native', 1, 1
 // owned project, grows the axis grow names from the smaller to the larger
 // size, and applies the slope guard to every statement the team pull request
 // read runs over team_project_ownership and team_repo_ownership.
-func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org string,
-	grow func(exec func(string, ...any), org string, count int), axis string, smallSize, largeSize, ceilingSize int, guard axisGuard) {
+func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org string, mergedParts bool,
+	grow func(exec func(string, ...any), org string, from, count int), axis string, smallSize, largeSize, ceilingSize int, guard axisGuard) {
 	t.Helper()
 	at := ts(2026, 9, 29, 0, 0, 0)
 	exec := func(statement string, args ...any) {
@@ -161,16 +155,23 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclick
 		return out
 	}
 	merged := func() {
+		if !mergedParts {
+			return
+		}
 		for _, table := range []string{"work_items", "work_graph_issue_pr", "git_pull_requests", "team_project_ownership", "team_repo_ownership"} {
 			exec(`OPTIMIZE TABLE ` + table + ` FINAL`)
 		}
 	}
-	grow(exec, org, smallSize)
-	merged()
+	grown := 0
+	growTo := func(size int) {
+		grow(exec, org, grown, size-grown)
+		grown = size
+		merged()
+	}
+	growTo(smallSize)
 	read("warm-up")
 	small := read("smaller")
-	grow(exec, org, largeSize-smallSize)
-	merged()
+	growTo(largeSize)
 	large := read("larger")
 	for i := range filters {
 		for hash, peak := range small[i] {
@@ -179,9 +180,13 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclick
 		guard.assert(t, axis+" / "+filters[i].Table+" statements", small[i], large[i])
 	}
 	if ceilingSize > 0 {
-		grow(exec, org, ceilingSize-largeSize)
-		merged()
-		read(fmt.Sprintf("ceiling (%d)", ceilingSize))
+		growTo(ceilingSize)
+		ceiling := read(fmt.Sprintf("ceiling (%d)", ceilingSize))
+		for i := range filters {
+			for hash, peak := range ceiling[i] {
+				t.Logf("CEILING %s: statement %d (%s) peak memory %d bytes at %d", axis, hash, filters[i].Table, peak, ceilingSize)
+			}
+		}
 	}
 }
 

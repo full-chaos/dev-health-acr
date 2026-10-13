@@ -74,12 +74,6 @@ var issuesWithLinkedPullRequestSQL = `(SELECT work_item_id FROM ` + admittedIssu
 // work items, used to prune work_items by primary key before a join to them.
 const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})`
 
-// linkedWorkItemIDsDistinctSQL is linkedWorkItemIDsSQL with one row per id,
-// the hashed side of a semi join to work_items: the join keeps the linked
-// ids out of an IN set, whose hash table cost several hundred bytes per
-// organization link.
-const linkedWorkItemIDsDistinctSQL = `(SELECT DISTINCT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})`
-
 // admittedLinkedPullRequestRowsSQL is the admitted link rows (known tier) whose
 // pull request exists, columns work_item_id, pr_repo_id, pr_number, link_rank,
 // without reading work_items: a caller that has already restricted the work
