@@ -102,6 +102,33 @@
       }
     }
   },
+  "if": {
+    "required": [
+      "entries"
+    ]
+  },
+  "then": {
+    "not": {
+      "anyOf": [
+        {
+          "required": [
+            "structured"
+          ]
+        },
+        {
+          "required": [
+            "rendered_markdown"
+          ]
+        }
+      ]
+    }
+  },
+  "else": {
+    "required": [
+      "structured",
+      "rendered_markdown"
+    ]
+  },
   "$defs": {
     "expanded_evidence.v1": {
       "title": "ACR Expanded Evidence v1",
