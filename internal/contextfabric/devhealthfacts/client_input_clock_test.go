@@ -235,7 +235,10 @@ func clockTestRules() []stringRule {
 		{"GROUP BY team_id, repo_key ORDER BY team_id, repo_key LIMIT", []string{"t1", "r1"}, nil},
 		{"SELECT team_id, work_scope_id, provider, toString(day)", []string{"t1", "scope1", "github", day}, nil},
 		{"SELECT toString(team_id), toString(day)", []string{"t1", day}, nil},
+		{"SELECT toString(team_id), toString(as_of_day)", []string{"t1", day}, nil},
 		{"SELECT toString(team_id), map_name, toString(as_of_day)", []string{"t1", "map-1", day}, nil},
+		{"SELECT concat(p.provider, ':', p.id), il.team_id, toString(il.as_of_day)", []string{"linear:P1", "t1", day}, nil},
+		{"SELECT concat(p.provider, ':', p.id), il.team_id, il.map_name, toString(il.as_of_day)", []string{"linear:P1", "t1", "map-1", day}, nil},
 		{"SELECT lp.project_key, toInt64(lp.link_rank)", []string{"linear:P1"}, []float64{3, 1, 1, 1, 0}},
 	}
 }

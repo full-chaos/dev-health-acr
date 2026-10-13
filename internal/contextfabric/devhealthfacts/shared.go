@@ -1071,7 +1071,18 @@ import (
 // linked pull requests). The rows are the same; a sum may differ from a v211
 // answer in its last digits (another summation order), and on two versions of
 // one unit with equal computed_at the version kept can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v213"
+//
+// v212 -> v213: a team or project landscape fact reads one copy of each
+// identity's stats instead of the three per-map copies Ops writes, and its
+// rows no longer carry map_name. An answer saved under v212 holds every
+// churn, delivery and identity count three times.
+//
+// v213 -> v214: the blocker facts (work item, team and project) read a blocker
+// stored under any spelling the graph projection maps onto a blocks edge
+// (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
+// the direction the row states. An answer saved under v213 omits those pairs.
+const QueryVersion = "devhealthfacts.clickhouse.v214"
+
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

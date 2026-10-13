@@ -398,6 +398,17 @@
       "type": "string",
       "description": "What an edge means. An edge shows a relation. It does not show a cause."
     },
+    "not_collected": {
+      "type": "array",
+      "items": {
+        "description": "Relation kind no source writes for this subject kind. Open vocabulary; documented values: repository_dependency (which repositories depend on a repository). A client must tolerate values it does not know.",
+        "type": "string",
+        "x-documented-values": [
+          "repository_dependency"
+        ]
+      },
+      "description": "Relation kinds no source writes for this subject kind. Present only when the subject has such a kind. An empty edges list does not show that the relation is absent."
+    },
     "consistency": {
       "const": "best_effort",
       "description": "Consistency of the read."
