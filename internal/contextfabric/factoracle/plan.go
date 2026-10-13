@@ -266,7 +266,6 @@ var factPlan = map[string]map[string]string{
 		"owned_repository_count":                       "a count of the ownership rows; the roll-up compares the mix of the owned repositories",
 		"project_reached_repository_count":             "a count of repositories reached only through an owned project's linked pull requests; the roll-up compares the mix of the owned repositories",
 		"repository_link_basis":                        "the weakest link tier among those repositories; ops serves no tier",
-		"project_reached_repositories":                 "the repositories reached only through an owned project; ops serves no such table",
 		"project_reached_repositories.repository_id":   "a column of project_reached_repositories",
 		"project_reached_repositories.repository_name": "a column of project_reached_repositories",
 		"project_reached_repositories.link_tier":       "a column of project_reached_repositories",
